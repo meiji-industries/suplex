@@ -68,6 +68,27 @@ test("still rejects loopback direct production binding", () => {
   expect(() => loadConfig({ ...baseEnvironment, FORGE_BIND_ADDRESS: "127.0.0.1" })).toThrow(UnsafeBindingError);
 });
 
+test("local access mode binds loopback and ignores the Tailscale settings", () => {
+  const config = loadConfig({
+    FORGE_ACCESS_MODE: "local",
+    FORGE_DATA_ROOT: "/tmp/forge-test-data",
+    FORGE_TAILSCALE_ADDRESS: "forge.tailnet.ts.net",
+    FORGE_TAILSCALE_EXPOSURE: "serve",
+    FORGE_PORT: "4222",
+  });
+
+  expect(config.accessMode).toBe("local");
+  expect(config.tailscaleExposure).toBe("direct");
+  expect(config.bindAddress).toBe("127.0.0.1");
+  expect(config.reachableAddress).toBe("http://127.0.0.1:4222");
+});
+
+test("rejects a non-loopback bind address in local access mode", () => {
+  for (const address of ["0.0.0.0", "100.101.102.103", "forge.tailnet.ts.net"]) {
+    expect(() => loadConfig({ FORGE_ACCESS_MODE: "local", FORGE_DATA_ROOT: "/tmp/forge-test-data", FORGE_BIND_ADDRESS: address })).toThrow(UnsafeBindingError);
+  }
+});
+
 test("rejects a non-Tailscale access mode", () => {
   expect(() => loadConfig({ ...baseEnvironment, FORGE_ACCESS_MODE: "lan" })).toThrow(UnsafeBindingError);
 });

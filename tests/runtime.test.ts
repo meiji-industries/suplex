@@ -1,8 +1,11 @@
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+
 import { expect, test } from "vitest";
 
 import { createTestConfig } from "../src/platform/config.js";
 import type { OwnedProcess, ProcessController, ProcessInspection } from "../src/platform/process-manager.js";
-import { forgeProcessArguments, healthProbeAddress, readinessProbePath, reconcileExistingRegistry, type RuntimeReconciliationController } from "../src/platform/runtime.js";
+import { forgeProcessArguments, healthProbeAddress, readinessProbePath, reconcileExistingRegistry, supervisorEntryPath, type RuntimeReconciliationController } from "../src/platform/runtime.js";
 
 function ownedProcess(name: "worker" | "server", pid: number): OwnedProcess {
   return {
@@ -43,6 +46,10 @@ function reconciliationController(process: ProcessController, overrides: Partial
 
 test("probes the actual health page for startup readiness", () => {
   expect(readinessProbePath()).toBe("/health");
+});
+
+test("the supervisor entry follows the running module rather than the working directory", () => {
+  expect(supervisorEntryPath()).toBe(resolve(dirname(fileURLToPath(import.meta.url)), "../src/platform/updates/supervisor.ts"));
 });
 
 test("the stable runtime launches the dependency-free supervisor directly", () => {

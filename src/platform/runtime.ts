@@ -1,6 +1,8 @@
 import { spawn, type ChildProcess } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { mkdir, open, rm } from "node:fs/promises";
+import { extname } from "node:path";
+import { fileURLToPath } from "node:url";
 
 import type { ForgeConfig } from "./config.js";
 import { defaultProcessController, hasCompleteProcessIdentity, ownedProcessIsRunning, processIdentityMatches, readProcessRegistry, type OwnedProcess, type ProcessController, type ProcessInspection, type ProcessRegistry, signalOwnedProcess, stopOwnedProcesses, writeProcessRegistry } from "./process-manager.js";
@@ -62,6 +64,12 @@ async function waitForProcessIdentity(pid: number, attempts = 10, delayMs = 50):
     await new Promise((resolve) => setTimeout(resolve, delayMs));
   }
   return undefined;
+}
+
+/** The desktop app runs the CLI with cwd set to the packaged app directory, so the entry follows this module rather than the working directory. */
+export function supervisorEntryPath(): string {
+  const self = fileURLToPath(import.meta.url);
+  return fileURLToPath(new URL(`updates/supervisor${extname(self)}`, import.meta.url));
 }
 
 export function forgeProcessArguments(script: string): string[] {
@@ -210,7 +218,7 @@ export async function startForge(config: ForgeConfig, foreground: boolean): Prom
       } : {}),
     };
     await writeProcessRegistry(`${config.runtimeRoot}/owned-processes.json`, registry);
-    const server = await spawnForgeProcess("server", "src/platform/updates/supervisor.ts", config, config.runtimeRoot, foreground);
+    const server = await spawnForgeProcess("server", supervisorEntryPath(), config, config.runtimeRoot, foreground);
     registry.processes.push(server.owned);
     await writeProcessRegistry(`${config.runtimeRoot}/owned-processes.json`, registry);
     if (config.tailscaleExposure === "serve") {

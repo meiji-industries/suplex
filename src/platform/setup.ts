@@ -64,8 +64,21 @@ async function askChoice(question: string, choices: ReadonlySet<string>, fallbac
   }
 }
 
-export async function runSetup(): Promise<void> {
+export async function runLocalSetup(envFile: string): Promise<void> {
+  const values = {
+    FORGE_ACCESS_MODE: "local",
+    FORGE_BIND_ADDRESS: "127.0.0.1",
+    FORGE_PORT: process.env.FORGE_PORT ?? "4111",
+  };
+  const config = loadConfig({ ...process.env, ...values, FORGE_ENV_FILE: envFile });
+  await upsertForgeEnvironment(envFile, values);
+  output.write(`Saved local Forge configuration to ${envFile}\n`);
+  output.write(`Start Forge with: pnpm run forge start\nOpen: ${config.reachableAddress}/health\n`);
+}
+
+export async function runSetup(options: { local?: boolean } = {}): Promise<void> {
   const envFile = resolve(process.env.FORGE_ENV_FILE ?? ".forge/forge.env");
+  if (options.local) return runLocalSetup(envFile);
   const readline = createInterface({ input, output });
   try {
     let hostname = "";

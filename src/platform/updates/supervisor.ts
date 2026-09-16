@@ -12,6 +12,7 @@ type ChildMessage = ChildRequest | { kind: "ready"; instanceId: string; currentR
 type CommandResult = { code: number; stdout: string; stderr: string };
 
 const FORGE_REPOSITORY = "meiji-industries/forge";
+const PACKAGED_UPDATE_MESSAGE = "Updates come with the desktop app.";
 const MAIN_BRANCH = "main";
 const READY_TIMEOUT_MS = 30_000;
 
@@ -79,9 +80,14 @@ export function canonicalForgeRepository(rawUrl: string): boolean {
   }
 }
 
+function packagedStatus(action: "check" | "apply"): UpdateStatus {
+  return { kind: "failed", action, message: PACKAGED_UPDATE_MESSAGE, error: "This Forge ships inside Forge.app; install the new app to update it." };
+}
+
 export class ForgeSupervisor {
   private readonly root: string;
   private readonly watchMode: boolean;
+  private readonly packaged: boolean;
   private child: ChildProcess | undefined;
   private watcher: FSWatcher | undefined;
   private activeCommand: ChildProcess | undefined;
@@ -98,20 +104,21 @@ export class ForgeSupervisor {
   private watchTimer: NodeJS.Timeout | undefined;
   private watchFlight: Promise<void> | undefined;
 
-  constructor(root: string, watchMode: boolean) {
+  constructor(root: string, watchMode: boolean, packaged = process.env.FORGE_PACKAGED === "1") {
     this.root = root;
     this.watchMode = watchMode;
+    this.packaged = packaged;
   }
 
   async run(): Promise<void> {
     this.installSignalHandlers();
-    try { this.currentRevision = await this.readHead(); } catch { this.currentRevision = undefined; }
+    try { this.currentRevision = this.packaged ? undefined : await this.readHead(); } catch { this.currentRevision = undefined; }
     await this.startChild();
     if (this.watchMode) this.startWatcher();
   }
 
 
-  private snapshot(): UpdateSnapshot {
+  snapshot(): UpdateSnapshot {
     return {
       status: this.status,
       ...(this.currentRevision ? { currentRevision: this.currentRevision } : {}),
@@ -132,7 +139,7 @@ export class ForgeSupervisor {
     if (this.stopping) return;
     const entry = this.childEntry();
     let startRevision: string | undefined;
-    try { startRevision = await this.readHead(); } catch { startRevision = undefined; }
+    try { startRevision = this.packaged ? undefined : await this.readHead(); } catch { startRevision = undefined; }
     const child = fork(entry.modulePath, [], { cwd: this.root, env: process.env, execArgv: entry.execArgv, stdio: ["inherit", "inherit", "inherit", "ipc"] });
     this.child = child;
     await new Promise<void>((resolveReady, reject) => {
@@ -190,7 +197,8 @@ export class ForgeSupervisor {
     await this.send(child, { kind: "update:apply-result", requestId: request.requestId, value: { accepted: true, status: this.status } });
   }
 
-  private async check(): Promise<void> {
+  async check(): Promise<void> {
+    if (this.packaged) { this.status = packagedStatus("check"); return; }
     if (this.applyFlight || this.updating) return;
     if (this.checkFlight) return this.checkFlight;
     this.checkFlight = this.performCheck().finally(() => { this.checkFlight = undefined; });
@@ -213,7 +221,8 @@ export class ForgeSupervisor {
     }
   }
 
-  private async apply(): Promise<void> {
+  async apply(): Promise<void> {
+    if (this.packaged) { this.status = packagedStatus("apply"); return; }
     this.updating = true;
     this.pauseWatcher();
     let childStopped = false;

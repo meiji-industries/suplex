@@ -125,9 +125,18 @@ const herdr: InstallStage = {
       context.progress("Starting the Herdr server");
       // `herdr` attaches a TUI and needs a terminal; `herdr server` is the headless entry point.
       await context.run("sh", ["-c", "nohup herdr server >/dev/null 2>&1 &"]);
+      let reported = "";
       for (let attempt = 0; attempt < HERDR_READY_ATTEMPTS && !herdrIsReachable(readiness); attempt += 1) {
         await context.wait(1_000);
         readiness = await context.herdrReadiness();
+        const detail = `${readiness.summary} (${String(readiness.details?.failure ?? "")}; server ${String(readiness.details?.serverVersion ?? "unknown")})`;
+        if (detail !== reported) { context.progress(detail); reported = detail; }
+      }
+      if (!herdrIsReachable(readiness)) {
+        const probe = await context.run("herdr", ["workspace", "list"]);
+        context.progress(`herdr workspace list exited ${probe.exitCode}: ${(probe.stderr || probe.stdout).trim()}`);
+        const status = await context.run("herdr", ["status", "server", "--json"]);
+        context.progress(`herdr status server: ${status.stdout.trim()}`);
       }
     }
     if (!herdrIsReachable(readiness)) {

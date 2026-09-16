@@ -15,7 +15,7 @@ const hrefs = (groups: SettingsNavGroup[]): Record<string, string> =>
 test("admin sees Company, AI, and System groups in order", () => {
   const groups = buildSettingsGroups("company-1", admin);
   expect(titles(groups)).toEqual(["Company", "AI", "System"]);
-  expect(items(groups, "Company")).toEqual(["Profile", "Templates", "Workspace", "Workflows", "Triggers"]);
+  expect(items(groups, "Company")).toEqual(["Onboarding", "Profile", "Templates", "Workspace", "Workflows", "Triggers"]);
   expect(items(groups, "AI")).toEqual(["Agents", "Models", "Providers"]);
   expect(items(groups, "System")).toEqual(["Users", "Companies", "Passkeys", "Invitations", "Environment", "Host health"]);
 });
@@ -35,6 +35,7 @@ test("signed-out user sees only System with Host health", () => {
 
 test("items keep their existing hrefs", () => {
   expect(hrefs(buildSettingsGroups("company-1", admin))).toEqual({
+    Onboarding: "/admin/onboarding?company=company-1",
     Profile: "/profile?company=company-1",
     Templates: "/templates?company=company-1",
     Workspace: "/companies/company-1/settings?company=company-1",

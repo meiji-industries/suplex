@@ -18,6 +18,8 @@ import { ProviderSettingsView } from "../features/settings/provider-settings.js"
 import { EnvironmentSettingsView } from "../features/settings/environment-settings.js";
 import { WorkflowSettingsView } from "../features/settings/workflow-settings.js";
 import { TriggerSettingsView } from "../features/settings/trigger-settings.js";
+import { OnboardingSettingsView } from "../features/settings/onboarding-settings.js";
+import { OnboardingView } from "../features/onboarding/onboarding-wizard.js";
 import { ApplicationShell } from "./application-frame.js";
 
 export function activityShellKey(pathname: string): "activity" | undefined {
@@ -29,10 +31,12 @@ import { SetupView } from "../features/settings/setup.js";
 function AppView(): ReactElement {
   const pathname = window.location.pathname;
   if (pathname === "/setup") return <SetupView />;
+  if (pathname === "/onboarding") return <OnboardingView />;
   if (pathname === "/admin/profiles") {
     window.history.replaceState({}, "", "/admin/agents");
     return <AdminView />;
   }
+  if (pathname === "/admin/onboarding") return <OnboardingSettingsView />;
   if (pathname === "/admin/providers") return <ProviderSettingsView />;
   if (pathname === "/admin/environment") return <EnvironmentSettingsView />;
   if (pathname === "/admin/workflows") return <WorkflowSettingsView />;

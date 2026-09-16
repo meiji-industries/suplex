@@ -1,4 +1,4 @@
-import { Building2, Cpu, FileText, HardDrive, KeyRound, Mail, Plug, ShieldCheck, UserRound, Users, Webhook, Workflow, type LucideIcon } from "lucide-react";
+import { Building2, Cpu, FileText, HardDrive, KeyRound, ListChecks, Mail, Plug, ShieldCheck, UserRound, Users, Webhook, Workflow, type LucideIcon } from "lucide-react";
 
 import { companySettingsPath, withCompany, type ApiUser } from "../../lib/api.js";
 
@@ -9,6 +9,7 @@ export type SettingsNavGroup = { title: string; items: SettingsNavItem[] };
 export function buildSettingsGroups(companyId: string, user?: ApiUser): SettingsNavGroup[] {
   const admin = user?.role === "admin";
   const companyItems: SettingsNavItem[] = [
+    ...(admin ? [{ label: "Onboarding", href: withCompany("/admin/onboarding", companyId), icon: ListChecks }] : []),
     { label: "Profile", href: withCompany("/profile", companyId), icon: UserRound },
     { label: "Templates", href: withCompany("/templates", companyId), icon: FileText },
     ...(admin && companyId ? [{ label: "Workspace", href: companySettingsPath(companyId), icon: Building2 }] : []),

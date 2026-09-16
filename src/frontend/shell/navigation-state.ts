@@ -1,10 +1,10 @@
 const applicationPaths = [
-  /^\/admin(?:\/(?:agents|models|companies|invitations|passkeys|providers|prompts|environment|workflows|triggers))?$/,
+  /^\/admin(?:\/(?:agents|models|companies|invitations|passkeys|providers|prompts|environment|workflows|triggers|onboarding))?$/,
   /^\/companies\/[^/]+\/settings$/,
   /^\/profile$/,
   /^\/templates$/,
   /^\/projects(?:\/[^/]+(?:\/templates)?)?$/,
-  /^\/(?:tasks|board|timeline|analytics|health|setup)(?:\/[^/]+)?$/,
+  /^\/(?:tasks|board|timeline|analytics|health|setup|onboarding)(?:\/[^/]+)?$/,
 ];
 
 export function isApplicationPath(pathname: string): boolean {

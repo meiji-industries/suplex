@@ -12,6 +12,8 @@ test("only Forge views are eligible for client-side navigation", () => {
   expect(isApplicationPath("/projects/project-1/templates")).toBe(true);
   expect(isApplicationPath("/profile")).toBe(true);
   expect(isApplicationPath("/setup")).toBe(true);
+  expect(isApplicationPath("/onboarding")).toBe(true);
+  expect(isApplicationPath("/admin/onboarding")).toBe(true);
   expect(isApplicationPath("/admin/agents")).toBe(true);
   expect(isApplicationPath("/api/tasks/task-1/artifacts/artifact-1")).toBe(false);
   expect(isApplicationPath("/auth")).toBe(false);

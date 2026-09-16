@@ -126,6 +126,24 @@ test("developer tools fail fast when macOS says they are installed but git does 
   expect(outcome).toMatchObject({ ok: false, reason: expect.stringContaining("invalid active developer path"), remedy: expect.stringContaining("xcode-select --install") });
 });
 
+test("herdr stops a stale server that needs a restart before starting the new one", async () => {
+  const commands: string[] = [];
+  let stopped = false;
+  const outcome = await stage("herdr").run(context({
+    run: async (command, args) => {
+      const line = [command, ...args].join(" ");
+      commands.push(line);
+      if (line === "herdr server stop") stopped = true;
+      if (line === "herdr status server --json") return { exitCode: 0, stdout: JSON.stringify({ running: true, restart_needed: !stopped, compatible: stopped, version: "0.8.2" }), stderr: "" };
+      return { exitCode: 0, stdout: "herdr 0.9.0", stderr: "" };
+    },
+    herdrReadiness: async () => herdrHealth(stopped),
+  }));
+  expect(commands.indexOf("herdr server stop")).toBeGreaterThan(-1);
+  expect(commands.indexOf("herdr server stop")).toBeLessThan(commands.findIndex(line => line.includes("nohup herdr server")));
+  expect(outcome).toMatchObject({ ok: true });
+});
+
 test("herdr skips itself when the CLI is installed and the server answers", async () => {
   const commands: string[] = [];
   const outcome = await stage("herdr").run(context({
@@ -150,7 +168,7 @@ test("herdr starts the server headlessly and waits for the socket API", async ()
     herdrReadiness: async () => herdrHealth(reachable),
     wait: async () => { reachable = true; },
   }));
-  expect(commands).toEqual(["herdr --version", "sh -c nohup herdr server >/dev/null 2>&1 &"]);
+  expect(commands).toEqual(["herdr --version", "herdr status server --json", "sh -c nohup herdr server >/dev/null 2>&1 &"]);
   expect(outcome).toMatchObject({ ok: true, skipped: false });
 });
 

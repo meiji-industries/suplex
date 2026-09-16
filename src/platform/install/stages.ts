@@ -122,6 +122,13 @@ const herdr: InstallStage = {
     let readiness = await context.herdrReadiness();
     const running = herdrIsReachable(readiness);
     if (!running) {
+      const status = await context.run("herdr", ["status", "server", "--json"]);
+      let stale = false;
+      try { const parsed = JSON.parse(status.stdout) as { running?: boolean; restart_needed?: boolean; compatible?: boolean; version?: string }; stale = parsed.running === true && (parsed.restart_needed === true || parsed.compatible === false); if (stale) context.progress(`Stopping the old Herdr server (${parsed.version ?? "unknown version"}) so the new one can start`); } catch {}
+      if (stale) {
+        const stop = await context.run("herdr", ["server", "stop"], 30_000);
+        if (stop.exitCode !== 0) context.progress(`herdr server stop exited ${stop.exitCode}: ${(stop.stderr || stop.stdout).trim()}`);
+      }
       context.progress("Starting the Herdr server");
       // `herdr` attaches a TUI and needs a terminal; `herdr server` is the headless entry point.
       await context.run("sh", ["-c", "nohup herdr server >/dev/null 2>&1 &"]);

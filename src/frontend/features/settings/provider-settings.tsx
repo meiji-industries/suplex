@@ -43,8 +43,6 @@ export function ProviderSettingsView(): ReactElement {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   const [deleteTarget, setDeleteTarget] = useState<ProviderInstance | null>(null);
-  const [login, setLogin] = useState<LoginSession | null>(null);
-  const [loginPending, setLoginPending] = useState<string | null>(null);
   const load = useCallback(async (silent = false): Promise<void> => {
     if (!silent) setView({ status: "loading" });
     try {

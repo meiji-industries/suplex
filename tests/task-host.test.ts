@@ -9,11 +9,33 @@ import { RootController } from "../src/coordination/root-controller.js";
 import { TaskControlStore } from "../src/coordination/root-session-store.js";
 import { TaskHost } from "../src/tasks/host.js";
 import { prepareTaskWorktree } from "../src/tasks/worktree.js";
+import { taskPreparationDirectory } from "../src/tasks/preparation.js";
 import { FakeTaskHarness } from "./helpers/fake-task-harness.js";
 import { insertNativeTaskRow } from "./helpers/native-task-row.js";
+import { IssueTracker, IssueTrackerScopeFailure } from "../src/integrations/issue-tracker.js";
+import { ProviderHttpFailure } from "../src/integrations/provider-http.js";
+import { MissingIntegrationCredential } from "../src/projects/integration-configuration.js";
 
 const cleanups: Array<() => Promise<void>> = [];
-afterEach(async () => { for (const cleanup of cleanups.splice(0)) await cleanup(); });
+afterEach(async () => { vi.restoreAllMocks(); for (const cleanup of cleanups.splice(0)) await cleanup(); });
+
+test.each([new MissingIntegrationCredential("Credential is not available"), new IssueTrackerScopeFailure("Issue moved"), new ProviderHttpFailure(401), new ProviderHttpFailure(403), new ProviderHttpFailure(404), new ProviderHttpFailure(503)])("issue intake handles $message without starting a native session", async error => {
+  const f = await fixture();
+  const issue = { kind: "github", repository: "owner/repo", number: 42, id: "42", key: "#42", title: "Fix", url: "https://github.com/owner/repo/issues/42" };
+  f.database.authTransaction(db => db.prepare("UPDATE forge_tasks SET issue_json = ? WHERE id = 'task'").run(JSON.stringify(issue)));
+  vi.spyOn(IssueTracker.prototype, "read").mockRejectedValue(error);
+  await f.host.recover("task");
+  const control = f.store.get("task");
+  expect(f.harness.dispatched).toHaveLength(0);
+  if (error instanceof ProviderHttpFailure && error.status === 503) {
+    expect(control.status).toBe("active");
+    expect(control.wakeAt).not.toBeNull();
+    expect(control.humanQuestion).toBeNull();
+  } else {
+    expect(control.status).toBe("waiting_human");
+    expect(control.humanQuestion).toContain("Check the issue and tracker access");
+  }
+});
 
 async function fixture() {
   const directory = await mkdtemp(join(tmpdir(), "forge-task-host-"));
@@ -48,6 +70,25 @@ test("native recovery prepares the Git worktree and delivers captured instructio
   expect(f.harness.dispatched).toHaveLength(1);
   expect(f.harness.dispatched[0]?.prompt).toContain("pnpm install");
   expect(f.harness.dispatched[0]?.prompt).toContain("pnpm test");
+});
+
+test("project preparation and skill context exist before the first native session and survive restart", async () => {
+  const f = await fixture();
+  f.database.authTransaction(db => db.prepare("UPDATE forge_tasks SET configuration_json = json_set(configuration_json, '$.execution', json(?), '$.setupCommand', ?) WHERE id = 'task'").run(JSON.stringify({ instructions: "Use the Acme workflow", skillDirectories: [], environment: {}, mcp: [] }), "printf prepared > setup-ready"));
+  const ensure = f.harness.ensureSession.bind(f.harness);
+  vi.spyOn(f.harness, "ensureSession").mockImplementation(async (scope, nativeId) => {
+    expect(await readFile(join(scope.directory, "setup-ready"), "utf8")).toBe("prepared");
+    expect(await readFile(join(taskPreparationDirectory(f.database.filename(), "task"), "context.md"), "utf8")).toContain("Configured setup exited 0");
+    expect(scope.projectContext).toContain("Acme");
+    return ensure(scope, nativeId);
+  });
+  await f.host.recover("task");
+  const worktree = f.store.get("task").worktree!;
+  await writeFile(join(worktree.path, "setup-ready"), "preserved");
+  f.harness.ensureSession = ensure;
+  const restarted = new TaskHost(f.database, { controller: f.controller, delivery: f.delivery });
+  try { await restarted.recover("task"); } finally { await restarted.stop(); }
+  expect(await readFile(join(worktree.path, "setup-ready"), "utf8")).toBe("preserved");
 });
 
 test("restart adopts dirty out-of-band work without replacing the native session", async () => {

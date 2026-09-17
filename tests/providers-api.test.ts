@@ -127,7 +127,7 @@ test("provider login endpoints create, reuse, and close Herdr sign-in panes", as
     const instance = created.json();
     const instanceLogin = await app.inject({ method: "POST", url: `/api/admin/provider-instances/${instance.id}/login`, headers });
     expect(instanceLogin.statusCode, instanceLogin.body).toBe(200);
-    expect(herdr.runPaneCommand).toHaveBeenLastCalledWith("pane-login-4", `CLAUDE_CONFIG_DIR='${instance.homeDirectory}' '/opt/claude/bin/claude' auth login`);
+    expect(herdr.runPaneCommand).toHaveBeenLastCalledWith("pane-login-4", expect.stringContaining(`CLAUDE_CONFIG_DIR='${instance.homeDirectory}' ANTHROPIC_CONFIG_DIR='${instance.homeDirectory}/anthropic' '/opt/claude/bin/claude' auth login --setting-sources ''`));
     expect((await app.inject({ method: "POST", url: "/api/admin/provider-instances/instance_missing/login", headers })).statusCode).toBe(404);
 
     const listed = await app.inject({ method: "GET", url: "/api/admin/provider-instances", headers });

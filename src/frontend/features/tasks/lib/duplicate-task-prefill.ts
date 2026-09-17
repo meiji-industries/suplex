@@ -37,6 +37,7 @@ export async function duplicateTaskDraft(task: Task): Promise<NewTaskDraft> {
 export function taskDraftFields(task: Task): Omit<NewTaskDraft, "title" | "idempotencyKey"> {
   return {
     projectId: task.projectId, description: task.description,
+    ...(task.issue ? { issue: task.issue } : {}),
     rootProfileId: task.rootProfile.profileId, workerProfileId: task.workerProfile.profileId,
     deliveryTarget: task.deliveryTarget, runProjectTests: task.configuration.runProjectTests, visualEvidence: task.configuration.visualEvidence,
     workflow: task.workflow, advisorProfileIds: Object.fromEntries(Object.entries(task.advisorProfiles).map(([role, profile]) => [role, profile.profileId])),

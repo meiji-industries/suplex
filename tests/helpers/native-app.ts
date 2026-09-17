@@ -8,7 +8,7 @@ import { createFastifyLogger } from "../../src/platform/logging.js";
 import { createTestConfig } from "../../src/platform/config.js";
 import { createTestDatabase } from "./test-database.js";
 import { ProjectService } from "../../src/projects/projects.js";
-import { TaskService } from "../../src/tasks/tasks.js";
+import { TaskService, type TaskServicePorts } from "../../src/tasks/tasks.js";
 import { TaskTemplateService } from "../../src/tasks/templates.js";
 import { WorkflowRecordService } from "../../src/coordination/workflow-records.js";
 import { HermesAgentService } from "../../src/identity/hermes-agents.js";
@@ -34,7 +34,7 @@ const webAuthn: WebAuthnAdapter = {
   async verifyAuthenticationResponse() { return { verified: true, newCounter: 1 }; },
 };
 
-export async function nativeApp(fixtureOptions: { githubTrigger?: GithubTriggerPort; herdr?: TaskPanePort; logSink?: (line: string) => void } = {}) {
+export async function nativeApp(fixtureOptions: { githubTrigger?: GithubTriggerPort; herdr?: TaskPanePort; logSink?: (line: string) => void; issueTracker?: TaskServicePorts["issueTracker"] } = {}) {
   const directory = await mkdtemp(join(tmpdir(), "forge-native-app-"));
   const config = createTestConfig(directory, { reachableAddress: "http://127.0.0.1:4111" });
   const database = createTestDatabase(config.databasePath);
@@ -51,7 +51,7 @@ export async function nativeApp(fixtureOptions: { githubTrigger?: GithubTriggerP
       { id: "claude-code" as const, label: "Claude Code", status: "configured" as const, modelCount: 1, models: [{ id: "claude-sonnet-5", label: "Claude Sonnet 5" }], connection: { status: "connected" as const, summary: "Signed in" } },
     ] }),
   });
-  const tasks = new TaskService(database, auth, projects, config, fixtureOptions.herdr ? { herdr: fixtureOptions.herdr } : {});
+  const tasks = new TaskService(database, auth, projects, config, { ...(fixtureOptions.herdr ? { herdr: fixtureOptions.herdr } : {}), ...(fixtureOptions.issueTracker ? { issueTracker: fixtureOptions.issueTracker } : {}) });
   const templates = new TaskTemplateService(database, auth, tasks);
   const workflows = new WorkflowRecordService(database, auth);
   const hermes = new HermesAgentService(database, auth);

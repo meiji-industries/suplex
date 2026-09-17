@@ -1,10 +1,12 @@
 import { randomUUID } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { claudeAssistantText, claudeConfigDirectory, claudeExecution, claudeMessageEntries, ClaudeStreamInitSchema, ClaudeStreamResultSchema, claudeUnsettledToolIds, findClaudeTranscript, parseJsonLines, type ClaudeStreamResult } from "./transcript.js";
 import { resolveClaudeExecutable } from "../../platform/executable-resolver.js";
 import { PromptDispatchAttemptSchema, type PromptDispatchAttempt } from "../../tasks/control.js";
-import { instanceEnvironment, taskSessionRuntimeDirectory, writeAdvisorReportBridgeBinding, writeRootBridgeBinding, type PromptIntent, type PromptObservation, type TaskHarness, type TaskScope } from "../task-harness.js";
+import { taskSessionRuntimeDirectory, writeAdvisorReportBridgeBinding, writeRootBridgeBinding, type PromptIntent, type PromptObservation, type TaskHarness, type TaskScope } from "../task-harness.js";
+import { claudeEnvironment, claudeSettingsArguments } from "./environment.js";
+import { projectMcpServers, projectMcpTools } from "../project-mcp.js";
 import { attachTaskDisplay, type TaskPanePort } from "../task-display.js";
 import { taskRolePrompt } from "../../tasks/execution/role-prompt.js";
 import { createGitCommandGuard, type GitCommandGuard } from "../../coordination/worker-environment.js";
@@ -29,16 +31,21 @@ const ROOT_TOOLS = "Read,Glob,Grep,WebFetch,WebSearch,TodoWrite";
 
 export function claudeArguments(input: { scope: TaskScope; sessionID: string; resume: boolean; print: boolean; runtimeDirectory: string }): string[] {
   const { scope } = input;
+  const mcpTools = projectMcpTools(scope.projectMcp, scope.role);
   return [
     ...(input.print ? ["-p", "--output-format", "stream-json", "--verbose", "--include-partial-messages", "--permission-prompts", "none"] : []),
     input.resume ? "--resume" : "--session-id", input.sessionID,
     "--model", scope.profile.modelID, "--effort", scope.profile.reasoningEffort,
+    ...claudeSettingsArguments(Boolean(scope.profile.instanceHomeDirectory || scope.projectMcp?.length)),
     "--append-system-prompt", taskRolePrompt(scope.role, { workflow: scope.workflow, ...(scope.role === "worker" ? { workerMode: scope.workerMode, purpose: scope.purpose } : {}) }),
-    "--strict-mcp-config", "--mcp-config", scope.role !== "worker" ? join(input.runtimeDirectory, "mcp.json") : '{"mcpServers":{}}',
-    ...(scope.role !== "worker" && scope.workflow !== "standard" && scope.evidenceRoot ? ["--add-dir", scope.evidenceRoot] : []),
+    "--strict-mcp-config", "--mcp-config", scope.role !== "worker" || mcpTools.length > 0 ? join(input.runtimeDirectory, "mcp.json") : '{"mcpServers":{}}',
+    ...(scope.evidenceRoot && (scope.projectContextPath || scope.role !== "worker" && scope.workflow !== "standard") ? ["--add-dir", scope.evidenceRoot] : []),
+    ...(scope.projectContextPath ? ["--add-dir", dirname(scope.projectContextPath)] : []),
     ...(scope.role !== "worker"
-      ? ["--tools", ROOT_TOOLS, "--allowedTools", `${scope.role === "root" ? "mcp__forge_root" : "mcp__forge_advisor__submit_report"},WebFetch,WebSearch`]
-      : ["--disallowedTools", "Agent,AskUserQuestion", "--dangerously-skip-permissions"]),
+      ? ["--tools", ROOT_TOOLS, "--permission-mode", "dontAsk", "--allowedTools", [scope.role === "root" ? "mcp__forge_root" : "mcp__forge_advisor__submit_report", "WebFetch", "WebSearch", ...mcpTools].join(",")]
+      : ["--disallowedTools", "Agent,AskUserQuestion", ...(mcpTools.length > 0
+        ? ["--permission-mode", "dontAsk", "--allowedTools", ["Bash", "Read", "Write", "Edit", "Glob", "Grep", "NotebookEdit", "WebFetch", "WebSearch", "TodoWrite", "Skill", ...mcpTools].join(",")]
+        : ["--dangerously-skip-permissions"])]),
   ];
 }
 
@@ -73,12 +80,14 @@ export class ClaudeCodeTaskRuntime implements TaskHarness {
     await mkdir(runtimeDirectory, { recursive: true, mode: 0o700 });
     if (scope.role !== "worker" && scope.workflow !== "standard" && scope.evidenceRoot) await mkdir(scope.evidenceRoot, { recursive: true, mode: 0o700 });
     await this.executable();
+    const mcpServers = projectMcpServers(scope.projectMcp, scope.role);
     if (scope.role !== "worker") {
       const server = scope.role === "root"
         ? await writeRootBridgeBinding({ runtimeDirectory, identity: scope.identity, databasePath: this.databasePath, artifactRoot: this.options.artifactRoot })
         : await writeAdvisorReportBridgeBinding({ runtimeDirectory, role: scope.advisorRole });
-      await writeFile(join(runtimeDirectory, "mcp.json"), JSON.stringify({ mcpServers: { [scope.role === "root" ? "forge_root" : "forge_advisor"]: { command: server.command, args: server.args, env: server.environment } } }), { mode: 0o600 });
+      mcpServers[scope.role === "root" ? "forge_root" : "forge_advisor"] = { type: "stdio", command: server.command, args: server.args, env: server.environment };
     }
+    await writeFile(join(runtimeDirectory, "mcp.json"), JSON.stringify({ mcpServers }), { mode: 0o600 });
     return nativeSessionId ?? randomUUID();
   }
 
@@ -121,7 +130,7 @@ export class ClaudeCodeTaskRuntime implements TaskHarness {
     const resume = await this.transcript(intent.sessionID, scope) !== null;
     const guard = await this.guard(scope);
     const args = claudeArguments({ scope, sessionID: intent.sessionID, resume, print: true, runtimeDirectory });
-    const record = await dispatchHeadless({ runtimeDirectory, scope, intent, executable, args, prompt: intent.prompt, environment: { ...process.env, ...guard?.env, ...instanceEnvironment(scope.profile.providerID, scope.profile.instanceHomeDirectory ?? null) }, claim, label: "Claude Code" });
+    const record = await dispatchHeadless({ runtimeDirectory, scope, intent, executable, args, prompt: intent.prompt, environment: claudeEnvironment(scope.profile.instanceHomeDirectory, { ...process.env, ...guard?.env }), claim, label: "Claude Code" });
     return this.observe(scope, { ...intent, dispatch: "ambiguous" }, { serverGeneration: record.generation, claimedAt: new Date().toISOString() });
   }
 

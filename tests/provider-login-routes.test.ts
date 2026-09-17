@@ -19,7 +19,7 @@ test("providerLoginCommand embeds the resolved executable and falls back to the 
   vi.spyOn(executables, "resolveOpenCodeExecutable").mockRejectedValue(new Error("missing"));
 
   expect(await providerLoginCommand("claude-code")).toBe("'/opt/claude cli/claude' auth login");
-  expect(await providerLoginCommand("claude-code", "/home/work laptop")).toBe("CLAUDE_CONFIG_DIR='/home/work laptop' '/opt/claude cli/claude' auth login");
+  expect(await providerLoginCommand("claude-code", "/home/work laptop")).toContain("CLAUDE_CONFIG_DIR='/home/work laptop' ANTHROPIC_CONFIG_DIR='/home/work laptop/anthropic' '/opt/claude cli/claude' auth login --setting-sources ''");
   expect(await providerLoginCommand("devin")).toBe("'/opt/devin/devin' auth login");
   expect(await providerLoginCommand("codex")).toBe("'/opt/codex/codex' login");
   expect(await providerLoginCommand("opencode")).toBe("opencode auth login");

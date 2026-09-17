@@ -40,15 +40,16 @@ export function openCodeRoleConfig(input: {
   role: "root" | "worker" | "advisor";
   profile: OpenCodeProfile;
   bridge?: TaskBridgeServer;
-  /** The one external directory a read-only role can read: the task's evidence directory. Everything else stays denied. */
+  /** Explicit task-owned evidence/context directories; other external paths remain denied. */
   evidenceDirectory?: string;
+  contextDirectory?: string;
   /** The task worktree; listed so an alias of the working directory (macOS /var vs /private/var) is not treated as external. */
   directory?: string;
 }): Record<string, unknown> {
   const { role, profile } = input;
   const native = openCodeModel(profile.modelID);
   const model = `${native.providerID}/${native.modelID}`;
-  const allowed = input.evidenceDirectory ? [input.evidenceDirectory, ...(input.directory ? [input.directory] : [])] : [];
+  const allowed = [input.evidenceDirectory, input.contextDirectory, ...(input.evidenceDirectory && input.directory ? [input.directory] : [])].filter((path): path is string => Boolean(path));
   const readOnlyExternal = allowed.length ? { "*": "deny", ...Object.fromEntries(allowed.flatMap(path => [[path, "allow"], [`${path}/**`, "allow"]])) } : "deny";
   const permission = role === "root"
     ? { read: "allow", edit: "deny", bash: "deny", task: "deny", question: "deny", external_directory: readOnlyExternal, doom_loop: "allow" }
@@ -159,7 +160,7 @@ export async function ensureOpenCodeServer(input: {
   const log = await open(join(input.runtimeDirectory, "server.log"), "a", 0o600);
   const child = spawn(input.executable, ["serve", "--hostname", "127.0.0.1", "--port", String(port)], {
     cwd: directory,
-    env: { ...process.env, ...input.env, ...taskProcessEnvironment(input.directory), ...sessionProcessEnvironment(input.runtimeDirectory), ...executionProcessEnvironment(input.runtimeDirectory, generation), OPENCODE_SERVER_USERNAME: "opencode", OPENCODE_SERVER_PASSWORD: password, OPENCODE_CONFIG_CONTENT: JSON.stringify(input.config) },
+    env: { ...(input.env ?? process.env), ...taskProcessEnvironment(input.directory), ...sessionProcessEnvironment(input.runtimeDirectory), ...executionProcessEnvironment(input.runtimeDirectory, generation), OPENCODE_SERVER_USERNAME: "opencode", OPENCODE_SERVER_PASSWORD: password, OPENCODE_CONFIG_CONTENT: JSON.stringify(input.config) },
     detached: true,
     stdio: ["ignore", log.fd, log.fd],
   });

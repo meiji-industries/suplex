@@ -9,6 +9,11 @@ A company-scoped objective with a project, description, optional images, and
 delivery target. A task preserves its captured configuration while it runs.
 _Avoid_: Phase execution, issue projection.
 
+**Issue association**
+The external issue linked to a task, identified within its issue tracker.
+It is independent of the pull request, branch, or issue used to create the task.
+_Avoid_: Task dependency, pull request association.
+
 **Coordinator**
 The continuing read-only agent that investigates the source, writes the plan
 and acceptance criteria, independently reviews the Worker's changes and check
@@ -90,6 +95,11 @@ provider is the agent tool that runs the turn: `opencode`, `claude-code`,
 `openai/gpt-5.6-sol`; Forge splits it only when it calls OpenCode. Projects
 choose Coordinator and Worker defaults. Tasks capture the chosen settings.
 _Avoid_: Vendor as provider, separate Forge model catalog.
+
+**Project provider policy**
+The providers and login instances permitted for a project's agents. Every task
+role, replacement, and resumed session uses an agent profile within this policy.
+_Avoid_: Company provider policy, provider defaults as authorization.
 
 **Configured provider**
 An agent tool whose executable Forge resolved on the host. Its sign-in state is

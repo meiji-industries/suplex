@@ -1,5 +1,6 @@
 import { basename } from "node:path";
 import { spawn } from "node:child_process";
+import { claudeEnvironment, claudeSettingsArguments } from "../runtimes/claude-code/environment.js";
 
 import type { HealthCheck } from "../platform/health.js";
 import { providerCheckId, providerCheckLabel } from "../platform/health-contract.js";
@@ -230,7 +231,8 @@ export function createProviderReadinessCheck(kind: ProviderHarnessKind, options:
     }
     let result: ProviderProbeResult;
     try {
-      result = await runCommand(executable, probe.authArgs, { timeout: 5_000, ...(options.env ? { env: options.env } : {}) });
+      const directory = kind === "claude-code" ? options.env?.CLAUDE_CONFIG_DIR : undefined;
+      result = await runCommand(executable, [...probe.authArgs, ...claudeSettingsArguments(Boolean(directory))], { timeout: 5_000, ...(options.env ? { env: kind === "claude-code" ? claudeEnvironment(directory, options.env) : options.env } : {}) });
     } catch (error) {
       if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") {
         return { ...base, status: "unhealthy", summary: `${label} is not installed`, ...probe.installRemedy(platform), details: { state: "absent" satisfies ProviderState } };

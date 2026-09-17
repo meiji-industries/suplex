@@ -5,14 +5,41 @@ import { afterEach, expect, test } from "vitest";
 import { AuthService } from "../src/identity/auth.js";
 import { createTestConfig } from "../src/platform/config.js";
 import { ForgeDatabase } from "../src/platform/database.js";
-import { TaskService } from "../src/tasks/tasks.js";
+import { TaskService, type TaskServicePorts } from "../src/tasks/tasks.js";
+import { prepareIssueContext, taskTracker } from "../src/tasks/issue-context.js";
+import type { IssueAssociation } from "../src/tasks/issue-association.js";
+import { ArtifactStore } from "../src/platform/artifacts.js";
 import type { Project } from "../src/projects/projects.js";
 import { TaskControlStore } from "../src/coordination/root-session-store.js";
 
 const cleanups: Array<() => Promise<void>> = [];
+test("only legacy projects infer GitHub Issues from their repository", () => {
+  expect(taskTracker({ repository: "owner/repo" })).toEqual({ kind: "github", repository: "owner/repo" });
+  expect(() => taskTracker({ repository: "owner/repo", integration: { repository: { kind: "github" }, tracker: null } })).toThrow("Configure an issue tracker");
+});
+test("generated evidence is listed separately and remains readable after archive", async () => {
+  const f = await fixture();
+  const { task } = await f.tasks.createTask("alice", "company", { ...f.input, startImmediately: false });
+  const artifact = await new ArtifactStore(f.config.artifactRoot, f.database).putArtifact("company", "delivery-evidence", { taskId: task.id, filename: "verification.txt", mimeType: "text/plain", bytes: Buffer.from("Checks passed") });
+  f.tasks.repository.setArchived(task.id, true);
+  expect(f.tasks.getTask("alice", task.id)).toMatchObject({ images: [], artifacts: [{ artifactId: artifact.id, filename: "verification.txt" }] });
+  expect((await f.tasks.getTaskArtifact("alice", task.id, artifact.id)).bytes.toString()).toBe("Checks passed");
+  await expect(f.tasks.getTaskArtifact("bob", task.id, artifact.id)).rejects.toMatchObject({ statusCode: 404 });
+});
+test("Bitbucket rejects ready and merge targets on both create and backlog edits", async () => {
+  const f = await fixture();
+  f.project.integration = { repository: { kind: "bitbucket", tokenEnvironment: "BB_TOKEN" }, tracker: null };
+  const { task } = await f.tasks.createTask("alice", "company", { ...f.input, startImmediately: false });
+  expect(task.deliveryTarget).toBe("pull_request_draft");
+  for (const deliveryTarget of ["pull_request_ready", "merged"] as const) {
+    await expect(f.tasks.createTask("alice", "company", { ...f.input, idempotencyKey: `bitbucket-${deliveryTarget}`, deliveryTarget })).rejects.toThrow("Bitbucket supports draft");
+    expect(() => f.tasks.updateTaskDetails("alice", task.id, { deliveryTarget })).toThrow("Bitbucket supports draft");
+  }
+  expect(f.tasks.updateTaskDetails("alice", task.id, { deliveryTarget: "local_worktree" }).deliveryTarget).toBe("local_worktree");
+});
 afterEach(async () => { for (const cleanup of cleanups.splice(0)) await cleanup(); });
 
-async function fixture() {
+async function fixture(ports: TaskServicePorts = {}) {
   const directory = await mkdtemp(join(tmpdir(), "forge-native-intake-"));
   const config = createTestConfig(directory);
   const database = new ForgeDatabase(config.databasePath);
@@ -32,10 +59,65 @@ async function fixture() {
     getProject: () => project, getProjectInCompany: () => project,
     resolveTaskSource: async () => ({ kind: "branch", branch: "existing", headSha: "b".repeat(40) }),
     captureTaskConfiguration: async () => { captures++; duringCapture(); return { baseSha: "a".repeat(40), targetSha: "a".repeat(40) }; },
-  }, config);
+  }, config, ports);
   const input = { projectId: "project", title: "Change one thing", description: "Keep the rest.", idempotencyKey: "native-request-1", startImmediately: true };
-  return { directory, config, database, tasks, input, captures: () => captures, duringCapture: (callback: () => void) => { duringCapture = callback; } };
+  return { directory, config, database, tasks, input, project, captures: () => captures, duringCapture: (callback: () => void) => { duringCapture = callback; } };
 }
+
+test("issue association preserves authored scope and captures refreshed context only before native work", async () => {
+  let text = "Original remote scope";
+  let reads = 0;
+  const image = { filename: "issue-screen.png", mimeType: "image/png", bytes: Buffer.from("test image bytes") };
+  const issueTracker = () => ({
+    read: async (issue: IssueAssociation) => { reads++; return { issue: { ...issue, title: "Remote issue" }, text, capturedAt: new Date().toISOString() }; },
+    images: async () => ({ images: [image], notes: ["PDF attachment was not loaded."] }),
+  });
+  const f = await fixture({ issueTracker });
+  const issue: IssueAssociation = { kind: "jira", site: "https://client.atlassian.net", id: "10", key: "APP-10", title: "Local title", url: "https://client.atlassian.net/browse/APP-10" };
+  f.project.integration = { repository: { kind: "bitbucket", tokenEnvironment: "BB_TOKEN" }, tracker: { kind: "jira", site: issue.site, project: "APP", emailEnvironment: "JIRA_EMAIL", tokenEnvironment: "JIRA_TOKEN" } };
+  const { task } = await f.tasks.createTask("alice", "company", { ...f.input, issue });
+  expect(task).toMatchObject({ issue: { title: "Remote issue" }, title: f.input.title, description: f.input.description });
+  text = "Refreshed remote scope";
+  const imageRoot = join(f.directory, "custom-issue-artifacts");
+  await prepareIssueContext(f.database, task.id, issueTracker, imageRoot);
+  const stored = f.tasks.getTask("alice", task.id).images;
+  expect(stored).toHaveLength(1);
+  expect(new TaskControlStore(f.database).context(task.id).images).toEqual([{ artifactId: stored[0]?.artifactId, filename: image.filename }]);
+  const artifact = new TaskControlStore(f.database).image(task.id, stored[0]!.artifactId);
+  expect(await new ArtifactStore(imageRoot).getArtifact(artifact)).toEqual(image.bytes);
+  const context = () => f.database.authQuery(db => db.prepare("SELECT issue_context_json FROM forge_tasks WHERE id = ?").get(task.id));
+  const before = context();
+  expect(JSON.stringify(before)).toContain(text);
+  expect(JSON.stringify(before)).toContain("PDF attachment was not loaded");
+  expect(JSON.stringify(before)).not.toContain(image.bytes.toString("base64"));
+  f.database.authTransaction(db => db.prepare("INSERT INTO forge_task_sessions (id, task_id, kind, generation, is_current, native_session_id, lifecycle, created_at, updated_at) VALUES ('native-root', ?, 'root', 1, 1, 'native-id', 'live', 'now', 'now')").run(task.id));
+  await f.tasks.setTaskIssue("alice", task.id, { ...issue, id: "11", key: "APP-11", url: "https://client.atlassian.net/browse/APP-11" });
+  await prepareIssueContext(f.database, task.id, issueTracker);
+  expect(context()).toEqual(before);
+  expect(f.tasks.getTask("alice", task.id).images).toHaveLength(1);
+  expect(reads).toBe(3);
+  const cleared = await f.tasks.setTaskIssue("alice", task.id, null);
+  expect(cleared).toMatchObject({ issue: null, title: f.input.title, description: f.input.description, status: "active" });
+  expect(context()).toEqual(before);
+  await expect(f.tasks.setTaskIssue("bob", task.id, issue)).rejects.toMatchObject({ statusCode: 404 });
+});
+
+test("project provider policy selects eligible defaults and rejects every disallowed role", async () => {
+  const f = await fixture();
+  f.project.providerPolicy = { allowedProviders: ["claude-code"], allowedInstanceIds: ["dedicated"] };
+  f.database.authTransaction(db => {
+    db.prepare("INSERT INTO forge_provider_instances (id, provider, label, home_directory, created_at, updated_at) VALUES ('dedicated', 'claude-code', 'Client', ?, 'now', 'now')").run(join(f.directory, "client"));
+    for (const role of ["root", "worker"]) db.prepare("INSERT INTO forge_profiles (id, name, role, avatar_seed, provider, provider_instance_id, model, reasoning_level, service_tier, created_at, updated_at) VALUES (?, ?, ?, 'seed', 'claude-code', 'dedicated', 'sonnet', 'high', 'default', 'now', 'now')").run(`client-${role}`, role, role);
+    db.prepare("INSERT INTO forge_profiles (id, name, role, avatar_seed, provider, model, reasoning_level, service_tier, created_at, updated_at) VALUES ('global-claude', 'Global', 'root', 'seed', 'claude-code', 'sonnet', 'high', 'default', 'now', 'now')").run();
+  });
+  const { task } = await f.tasks.createTask("alice", "company", { ...f.input, startImmediately: false, workflow: "independent_review" });
+  for (const profile of [task.rootProfile, task.workerProfile, task.advisorProfiles.reviewer]) expect(profile).toMatchObject({ providerInstanceId: "dedicated", instanceHomeDirectory: join(f.directory, "client") });
+  expect(task.configuration.providerPolicy).toEqual(f.project.providerPolicy);
+  for (const selection of [{ rootProfileId: "profile_native_root" }, { rootProfileId: "global-claude" }, { workerProfileId: "profile_native_worker" }, { advisorProfileIds: { reviewer: "profile_native_root" } }]) {
+    await expect(f.tasks.createTask("alice", "company", { ...f.input, idempotencyKey: `rejected-${JSON.stringify(selection)}`.replace(/[^a-zA-Z0-9]/g, "-"), workflow: "independent_review", ...selection })).rejects.toThrow("allowed by this project");
+    expect(() => f.tasks.updateTaskDetails("alice", task.id, selection)).toThrow("allowed by this project");
+  }
+});
 
 test("creation persists active intent without a planning projection or running harness", async () => {
   const f = await fixture();

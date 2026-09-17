@@ -59,7 +59,7 @@ describe("install progress", () => {
 
 test("ready offers one Launch button", () => {
   expect(page("ready.html")).toContain("<h1>Forge is ready</h1>");
-  expect(page("ready.html")).toContain('<button class="primary" id="launch" type="button" autofocus>Launch</button>');
+  expect(page("ready.html")).toContain('<button class="primary" id="launch" type="button" autofocus>Launch Forge <span aria-hidden="true">→</span></button>');
 });
 
 test("connecting is the cold boot interstitial", () => {

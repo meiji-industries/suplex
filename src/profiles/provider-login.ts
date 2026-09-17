@@ -1,6 +1,7 @@
 import type { HerdrClient } from "../integrations/herdr/client.js";
 import { CLAUDE_EXECUTABLE, CODEX_EXECUTABLE, DEVIN_EXECUTABLE, OPENCODE_EXECUTABLE, resolveClaudeExecutable, resolveCodexExecutable, resolveDevinExecutable, resolveOpenCodeExecutable, type ExecutableSpec } from "../platform/executable-resolver.js";
 import type { HarnessKind } from "../runtimes/harness-kind.js";
+import { CLAUDE_AUTH_ENVIRONMENT_KEYS, claudeEnvironment, claudeRoutingVariable } from "../runtimes/claude-code/environment.js";
 
 export type ProviderLoginPort = Pick<HerdrClient, "getPane" | "createWorkspace" | "runPaneCommand" | "closePane" | "closeWorkspace">;
 
@@ -30,7 +31,10 @@ export async function providerLoginCommand(providerId: HarnessKind, homeDirector
   const entry = LOGIN_EXECUTABLES[providerId];
   const binary = await (options.resolveExecutable ?? entry.resolve)().then(quoted, () => entry.spec.binary);
   const command = [binary, ...entry.loginArgs].join(" ");
-  return homeDirectory && providerId === "claude-code" ? `CLAUDE_CONFIG_DIR=${quoted(homeDirectory)} ${command}` : command;
+  if (!homeDirectory || providerId !== "claude-code") return command;
+  const removed = [...new Set([...CLAUDE_AUTH_ENVIRONMENT_KEYS, ...Object.keys(process.env).filter(claudeRoutingVariable)])].map(key => `-u ${quoted(key)}`).join(" ");
+  const scoped = Object.entries(claudeEnvironment(homeDirectory, {})).map(([key, value]) => `${key}=${quoted(value ?? "")}`).join(" ");
+  return `env ${removed} ${scoped} ${command} --setting-sources ''`;
 }
 
 export interface ProviderLoginSession {

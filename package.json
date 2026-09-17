@@ -12,7 +12,8 @@
     "hermes",
     "drizzle",
     "README.md",
-    "components.json"
+    "components.json",
+    "scripts/shared-resource-command.py"
   ],
   "engines": {
     "node": "26.7.0"

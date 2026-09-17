@@ -88,7 +88,7 @@ test("projects desktop flow creates a project and opens its configuration", asyn
       await page.getByRole("heading", { name: "Projects", exact: true }).waitFor();
       const newProject = page.locator("[data-app-header]").getByRole("button", { name: "New project", exact: true });
       await newProject.click();
-      await page.getByLabel("GitHub repository URL", { exact: true }).fill("https://github.com/acme/forge.git");
+      await page.getByLabel("Repository URL", { exact: true }).fill("https://github.com/acme/forge.git");
       await page.getByRole("dialog", { name: "New project", exact: true }).getByRole("button", { name: "New project", exact: true }).click();
       await page.getByText("forge", { exact: true }).waitFor();
       const forgeProject = page.locator("article").filter({ hasText: "forge" });

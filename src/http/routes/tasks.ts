@@ -7,7 +7,7 @@ import { TaskFailure, type TaskService } from "../../tasks/tasks.js";
 import type { TaskHost } from "../../tasks/host.js";
 import type { ForgeConfig } from "../../platform/config.js";
 import { readTaskAgentStatuses } from "../../tasks/agent-status.js";
-import { TaskAgentsResponseSchema, TaskArchiveBodySchema, TaskArchiveResponseSchema } from "../contracts/tasks.js";
+import { TaskAgentsResponseSchema, TaskArchiveBodySchema, TaskArchiveResponseSchema, TaskIssueBodySchema } from "../contracts/tasks.js";
 import { readTaskChecks, readTaskDiff, readTaskDiffSummary } from "../../tasks/inspection.js";
 import { readTaskExecution } from "../../tasks/execution/execution.js";
 import { readTaskSessionHistory } from "../../tasks/history/read.js";
@@ -207,6 +207,7 @@ const tasks: FastifyPluginAsync<TaskRoutesOptions> = async (app, { tasks, host, 
   typed.patch("/api/tasks/:taskId", { schema: { ...taskResponse, body: TaskDetailsBodySchema } }, async request => tasks.updateTaskDetails(request.forgeUser.id, request.params.taskId, request.body));
   typed.put("/api/tasks/:taskId/dependencies", { schema: { ...taskResponse, body: TaskDependenciesBodySchema } }, async request => tasks.setTaskDependencies(request.forgeUser.id, request.params.taskId, request.body.dependsOn));
   typed.patch("/api/tasks/:taskId/blocked-by", { schema: { ...taskResponse, body: TaskBlockedByBodySchema } }, async request => tasks.setTaskBlockedBy(request.forgeUser.id, request.params.taskId, request.body));
+  typed.patch("/api/tasks/:taskId/issue", { schema: { ...taskResponse, body: TaskIssueBodySchema } }, async request => tasks.setTaskIssue(request.forgeUser.id, request.params.taskId, request.body.issue));
   typed.post("/api/tasks/:taskId/rename", { schema: { ...taskResponse, body: TaskRenameBodySchema } }, async request => tasks.renameTask(request.forgeUser.id, request.params.taskId, request.body));
   typed.post("/api/tasks/:taskId/start", { schema: taskResponse }, async request => {
     const task = tasks.startTask(request.forgeUser.id, request.params.taskId);

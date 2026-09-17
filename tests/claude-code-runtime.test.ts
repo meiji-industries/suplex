@@ -70,7 +70,10 @@ test("a local Claude instance supplies its config directory to dispatch and tran
   await mkdir(join(local, "projects", "worktree"), { recursive: true });
   const scope = { ...f.scope, profile: { ...f.scope.profile, instanceHomeDirectory: local } };
   await f.runtime.dispatch(scope, f.intent, async () => true);
-  await delay(100);
+  for (let attempt = 0; attempt < 50; attempt += 1) {
+    if ((await f.runtime.observe(scope, f.intent)).state === "completed") break;
+    await delay(25);
+  }
   expect(await readFile(join(f.root, "config-dir.txt"), "utf8")).toBe(local);
   await writeFile(join(local, "projects", "worktree", `${sessionID}.jsonl`), "");
   expect(await findClaudeTranscript(sessionID, local)).toBe(join(local, "projects", "worktree", `${sessionID}.jsonl`));
@@ -87,6 +90,9 @@ test("the session reader discovers a local instance transcript without a session
   expect((await reader.execution(session)).tools).toEqual([]);
   expect((await reader.status(session)).status).toBe("idle");
   expect((await reader.timeline(session)).usage).toEqual([]);
+  const dedicated = { ...session, profile: { profileId: "dedicated", provider: "claude-code" as const, model: "haiku", reasoningLevel: "low" as const, serviceTier: "default" as const, instanceHomeDirectory: join(f.root, "empty-instance") } };
+  await expect(reader.execution(dedicated)).rejects.toThrow("transcript is not available");
+  expect(await reader.history(dedicated)).toEqual([]);
 });
 
 test("a running turn is busy until stopped, then reads as an uncertain execution when tools were open", async () => {

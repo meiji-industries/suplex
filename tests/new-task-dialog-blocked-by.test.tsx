@@ -74,7 +74,7 @@ function mount(editing = false) {
   const container = document.createElement("div");
   document.body.append(container);
   const root = createRoot(container);
-  act(() => { root.render(<NewTaskDialog open companyId="company-1" onOpenChange={() => undefined} onCreated={() => undefined} {...(editing ? { editTask: { id: "task-edit" } as Task } : {})} />); });
+  act(() => { root.render(<NewTaskDialog open companyId="company-1" onOpenChange={() => undefined} onCreated={() => undefined} {...(editing ? { editTask: { id: "task-edit", configuration: {} } as Task } : {})} />); });
   return { container, root };
 }
 
@@ -100,7 +100,7 @@ afterEach(async () => { await act(async () => { document.body.replaceChildren();
 test("New task Blocked by picker filters, selects, clears, and posts its reference", async () => {
   const view = mount();
   await flush();
-  expect(view.container.querySelector('[data-role-selector="worker"]')?.nextElementSibling?.getAttribute("aria-label")).toBe("More options");
+  expect(view.container.querySelector('[aria-label="More options"]')).not.toBeNull();
   await act(async () => { button(view.container, "More options").click(); });
   expect(view.container.querySelectorAll('[role="menuitem"]')).toHaveLength(1);
   await act(async () => { button(view.container, "Blocked by...").click(); });

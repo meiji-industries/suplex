@@ -2,6 +2,7 @@ import type { DeliveryOperation, DeliveryReview, PullRequestBody, PullRequestTit
 import { inspectDeliveryDiff, reviewEquivalence } from "./review.js";
 import type { RootIdentity } from "../coordination/root-contracts.js";
 import type { GithubConditionalMergeResult, GithubPullRequest, GithubPullRequestObservation } from "../integrations/github/delivery.js";
+import { createBitbucketReleasePort } from "../integrations/bitbucket.js";
 import { createGithubReleasePort } from "../integrations/github/delivery.js";
 import { GithubReleaseFailure } from "../integrations/github/failure.js";
 import type { GithubTriggerPullRequestInspection } from "../integrations/github/trigger-inspection.js";
@@ -12,13 +13,14 @@ import { deliveryDecision, deliveryWaitFingerprint, freshReviewHint, latestRevie
 import { checkSummary, matchesDeliveryIntent, observedPullReference, pullReference } from "./pull-reference.js";
 import { DeliveryOperationFailure } from "./failure.js";
 import { createOrAdoptPublication, pushPublication, type DeliveryGithubPort, type PublicationDependencies } from "./publication.js";
+import { IssueEvidence } from "./issue-evidence.js";
 
 export { DeliveryOperationFailure } from "./failure.js";
 export type { DeliveryGithubPort } from "./publication.js";
 
 export const DELIVERY_WAIT_NEXT = "End this Coordinator turn. Forge will resume it when delivery state changes.";
 type Recheck = () => void;
-type AdoptionOptions = { publication?: boolean | undefined; explicit?: boolean | undefined; recheck?: Recheck | undefined };
+type AdoptionOptions = { publication?: boolean | undefined; explicit?: boolean | undefined; recheck?: Recheck | undefined; deferCompletion?: boolean };
 type CompletionOptions = AdoptionOptions & { isDraft?: boolean | undefined; validatedRange?: ReviewRange | undefined };
 type Decision = DeliveryDecision;
 type CommitDecision = Decision | { ok: false; code: DeliveryFailureCode; reason: string; cancelled: true };
@@ -33,7 +35,15 @@ function selectDiscoveredPull(control: TaskControl, pulls: GithubPullRequest[]):
 
 
 export class DeliveryOperations {
-  constructor(private readonly store: TaskControlStore, private readonly github: DeliveryGithubPort = createGithubReleasePort()) {}
+  private readonly evidence: IssueEvidence;
+  constructor(private readonly store: TaskControlStore, private readonly github: DeliveryGithubPort = createGithubReleasePort(), artifactRoot?: string) {
+    this.evidence = new IssueEvidence(store, artifactRoot);
+  }
+
+  private forTask(taskId: string): DeliveryGithubPort {
+    const connection = this.store.context(taskId).configuration.integration?.repository;
+    return connection?.kind === "bitbucket" ? createBitbucketReleasePort(connection) : this.github;
+  }
 
   async observe(taskId: string): Promise<PullRequestReference | null> {
     const control = this.store.get(taskId);
@@ -50,7 +60,7 @@ export class DeliveryOperations {
     const repository = control.deliveryIntent.repository;
     let observed: GithubPullRequestObservation;
     try {
-      observed = await this.github.observePullRequest({ repository, branch: control.deliveryIntent.headBranch, pullRequestNumber: control.pullRequest?.number ?? control.deliveryIntent.pullRequestNumber });
+      observed = await this.forTask(control.taskId).observePullRequest({ repository, branch: control.deliveryIntent.headBranch, pullRequestNumber: control.pullRequest?.number ?? control.deliveryIntent.pullRequestNumber });
     } catch (error) {
       if (error instanceof GithubReleaseFailure && error.code === "authentication-required") {
         // A credential or permission failure is a human blocker; the expected-wait comparison keeps overlapping failures to one question.
@@ -60,7 +70,7 @@ export class DeliveryOperations {
       throw error;
     }
     if (observed.state === "merged" && observed.number !== null) {
-      const pull = await this.github.getPullRequest({ repository, number: observed.number });
+      const pull = await this.forTask(control.taskId).getPullRequest({ repository, number: observed.number });
       await this.adoptKnownPull(this.store.get(taskId), pull);
       this.store.clearDeliveryWait(taskId, wait);
       return "finished";
@@ -82,7 +92,7 @@ export class DeliveryOperations {
     const control = this.store.get(taskId);
     const number = control.pullRequest?.number ?? control.deliveryIntent.pullRequestNumber;
     if (number === null) return null;
-    try { return await this.github.observePullRequest({ repository: control.deliveryIntent.repository, branch: control.deliveryIntent.headBranch, pullRequestNumber: number }); }
+    try { return await this.forTask(control.taskId).observePullRequest({ repository: control.deliveryIntent.repository, branch: control.deliveryIntent.headBranch, pullRequestNumber: number }); }
     catch { return null; }
   }
 
@@ -90,7 +100,7 @@ export class DeliveryOperations {
   async currentRange(taskId: string): Promise<DeliveryReview & { baseBranch: string; clean: boolean }> {
     const control = this.store.get(taskId);
     if (!control.worktree) throw new DeliveryOperationFailure("worktree_missing", "The task has no worktree");
-    const local = await this.github.inspectLocalRevision({ cwd: control.worktree.path });
+    const local = await this.forTask(control.taskId).inspectLocalRevision({ cwd: control.worktree.path });
     const diff = await this.deliveryDiff(control, local.headSha);
     return { baseBranch: diff.baseBranch, baseSha: diff.baseSha, headSha: diff.headSha, files: diff.files, commits: diff.commits, patchDigest: diff.patchDigest, clean: local.clean };
   }
@@ -101,20 +111,20 @@ export class DeliveryOperations {
     const recheck: Recheck = () => { this.store.assertCurrentRoot(root); options.recheck?.(); };
     if (operation === "inspect_delivery_diff") {
       if (!control.worktree) throw new DeliveryOperationFailure("worktree_missing", "The task has no worktree");
-      const local = await this.github.inspectLocalRevision({ cwd: control.worktree.path });
+      const local = await this.forTask(control.taskId).inspectLocalRevision({ cwd: control.worktree.path });
       return this.deliveryDiff(control, local.headSha);
     }
     if (operation === "complete_local_work") return this.completeLocal(control, expectedHead, recheck);
-    const known = operation === "push_branch" ? null : await this.observeKnownPull(control, { recheck });
+    const known = operation === "push_branch" ? null : await this.observeKnownPull(control, { recheck, deferCompletion: Boolean(review) });
     if (this.store.get(root.taskId).status === "delivered") return known;
     if (known?.state === "merged") return known;
     if (!control.worktree) throw new DeliveryOperationFailure("worktree_missing", "Forge has no observed worktree for this task");
-    const local = await this.github.inspectLocalRevision({ cwd: control.worktree.path });
+    const local = await this.forTask(control.taskId).inspectLocalRevision({ cwd: control.worktree.path });
     if (local.branch !== control.deliveryIntent.headBranch) throw new DeliveryOperationFailure("head_diverged", "The worktree branch does not match this task intent");
     this.store.setWorktree(root.taskId, { ...control.worktree, branch: local.branch, headSha: local.headSha, dirty: !local.clean });
     const refreshed = this.store.get(root.taskId);
     const repository = refreshed.deliveryIntent.repository;
-    const remote = await this.github.getRemoteRepository({ cwd: refreshed.worktree!.path });
+    const remote = await this.forTask(control.taskId).getRemoteRepository({ cwd: refreshed.worktree!.path });
     if (remote !== repository) throw new DeliveryOperationFailure("head_diverged", "The worktree remote does not match this task intent");
     const mutation = ["push_branch", "create_or_adopt_pull_request", "request_review", "merge_pull_request"].includes(operation);
     let actual: ReviewRange | undefined;
@@ -138,7 +148,7 @@ export class DeliveryOperations {
       recheck();
     }
     const pull = operation === "push_branch" ? null : await this.observePull(refreshed, repository, local.branch);
-    if (pull?.state === "merged") return this.adoptKnownPull(refreshed, await this.github.getPullRequest({ repository, number: pull.number }), { recheck });
+    if (pull?.state === "merged") return this.adoptKnownPull(refreshed, await this.forTask(control.taskId).getPullRequest({ repository, number: pull.number }), { recheck });
     if (mutation && actual && this.workflowDecision(refreshed, actual, local).ok) this.store.updateWorkflowState(root.taskId, state => ({ ...state, acceptedDelivery: actual! }));
     switch (operation) {
       case "observe_pull_request":
@@ -170,7 +180,7 @@ export class DeliveryOperations {
   /** The final guard before a mutation: after every provider await, the local source must still be the reviewed head on the task branch, clean, without a delegate, and still gated; then the root and tool ownership must still hold. */
   private async finalRecheck(control: TaskControl, actual: ReviewRange, recheck: Recheck, requireReview = true): Promise<void> {
     if (control.workflow !== "standard") {
-      const local = await this.github.inspectLocalRevision({ cwd: control.worktree!.path });
+      const local = await this.forTask(control.taskId).inspectLocalRevision({ cwd: control.worktree!.path });
       this.gateWorkflow(control, actual, local, requireReview);
     }
     recheck();
@@ -180,11 +190,11 @@ export class DeliveryOperations {
     let branch = control.deliveryIntent.baseBranch;
     const pinnedNumber = control.deliveryIntent.pullRequestNumber;
     if (pinnedNumber !== null) {
-      const pull = await this.github.getPullRequest({ repository: control.deliveryIntent.repository, number: pinnedNumber });
+      const pull = await this.forTask(control.taskId).getPullRequest({ repository: control.deliveryIntent.repository, number: pinnedNumber });
       if (!matchesDeliveryIntent(control, pull)) throw new DeliveryOperationFailure("pull_request_ambiguous", "The pinned pull request no longer matches this task intent");
       branch = pull.baseBranch;
     }
-    const sha = await this.github.getBranchHead({ repository: control.deliveryIntent.repository, branch });
+    const sha = await this.forTask(control.taskId).getBranchHead({ repository: control.deliveryIntent.repository, branch });
     return { branch, sha };
   }
 
@@ -212,8 +222,9 @@ export class DeliveryOperations {
    */
   private async commitCompletion(control: TaskControl, range: ReviewRange, pullRequestNumber: number | null, options: { requireAccepted: boolean; recheck?: Recheck | undefined; projectWorktree?: boolean | undefined }): Promise<CommitDecision> {
     if (!control.worktree) return { ok: false, code: "worktree_missing", reason: "The task has no observed worktree to confirm the reviewed source." };
+    if (pullRequestNumber !== null) await this.evidence.complete(control.taskId, pullRequestNumber, range.headSha, this.forTask(control.taskId), options.recheck);
     let local: LocalRevisionFacts;
-    try { local = await this.github.inspectLocalRevision({ cwd: control.worktree.path }); }
+    try { local = await this.forTask(control.taskId).inspectLocalRevision({ cwd: control.worktree.path }); }
     catch (error) { return { ok: false, code: "worktree_missing", reason: `The local source could not be observed: ${error instanceof Error ? error.message : String(error)}` }; }
     // The stored worktree projection reflects the final facts whether or not completion follows; only an active task holds a mutable projection.
     if (options.projectWorktree && this.store.get(control.taskId).status === "active") this.store.setWorktree(control.taskId, { ...control.worktree, branch: local.branch, headSha: local.headSha, dirty: !local.clean });
@@ -232,7 +243,7 @@ export class DeliveryOperations {
   private async completeLocal(control: TaskControl, expectedHead: string | undefined, recheck: Recheck) {
     if (control.deliveryTarget !== "local_worktree") throw new DeliveryOperationFailure("delivery_target_mismatch", "This task has a different delivery target");
     if (!control.worktree) throw new DeliveryOperationFailure("worktree_missing", "The task has no worktree");
-    const local = await this.github.inspectLocalRevision({ cwd: control.worktree.path });
+    const local = await this.forTask(control.taskId).inspectLocalRevision({ cwd: control.worktree.path });
     if (!expectedHead || local.headSha !== expectedHead || local.branch !== control.deliveryIntent.headBranch) throw new DeliveryOperationFailure("head_diverged", "Review the current worktree before completing the task");
     if (control.workflow === "standard") {
       recheck();
@@ -253,10 +264,10 @@ export class DeliveryOperations {
   private async observeKnownPull(control: TaskControl, options: AdoptionOptions = {}): Promise<PullRequestReference | null> {
     const pinnedNumber = control.deliveryIntent.pullRequestNumber;
     if (pinnedNumber !== null) {
-      const pull = await this.github.getPullRequest({ repository: control.deliveryIntent.repository, number: pinnedNumber });
+      const pull = await this.forTask(control.taskId).getPullRequest({ repository: control.deliveryIntent.repository, number: pinnedNumber });
       return this.adoptKnownPull(control, pull, options);
     }
-    const pull = selectDiscoveredPull(control, await this.github.listPullRequests({ repository: control.deliveryIntent.repository, owner: control.deliveryIntent.repository.split("/")[0]!, headBranch: control.deliveryIntent.headBranch, baseBranch: control.deliveryIntent.baseBranch }));
+    const pull = selectDiscoveredPull(control, await this.forTask(control.taskId).listPullRequests({ repository: control.deliveryIntent.repository, owner: control.deliveryIntent.repository.split("/")[0]!, headBranch: control.deliveryIntent.headBranch, baseBranch: control.deliveryIntent.baseBranch }));
     if (pull) return this.adoptKnownPull(control, pull, options);
     if (control.pullRequest) this.store.setPullRequest(control.taskId, null);
     return null;
@@ -264,20 +275,25 @@ export class DeliveryOperations {
 
   private async adoptKnownPull(control: TaskControl, pull: GithubPullRequest, options: AdoptionOptions = {}): Promise<PullRequestReference> {
     if (!matchesDeliveryIntent(control, pull)) throw new DeliveryOperationFailure("pull_request_ambiguous", "The stored pull request no longer matches this task intent");
+    if (options.deferCompletion && pull.state === "open") {
+      const reference = pullReference(pull);
+      this.store.setPullRequest(control.taskId, reference);
+      return reference;
+    }
     return this.completeIfTargetMatches(control, pullReference(pull), { ...options, isDraft: pull.isDraft });
   }
 
   private async observePull(control: TaskControl, repository: string, branch: string): Promise<PullRequestReference | null> {
     if (!control.pullRequest) return null;
-    const observed = await this.github.observePullRequest({ repository, branch, ...(control.pullRequest ? { pullRequestNumber: control.pullRequest.number } : {}) });
+    const observed = await this.forTask(control.taskId).observePullRequest({ repository, branch, ...(control.pullRequest ? { pullRequestNumber: control.pullRequest.number } : {}) });
     const pull = observedPullReference(repository, observed);
     if (pull) this.store.setPullRequest(control.taskId, pull);
     return pull;
   }
 
-  private publicationDependencies(): PublicationDependencies {
+  private publicationDependencies(control: TaskControl): PublicationDependencies {
     return {
-      github: this.github,
+      github: this.forTask(control.taskId),
       store: this.store,
       finalRecheck: (control, actual, recheck) => this.finalRecheck(control, actual, recheck),
       publicationRecheck: (control, actual, recheck) => this.finalRecheck(control, actual, recheck, false),
@@ -289,13 +305,13 @@ export class DeliveryOperations {
   }
 
   private async push(recheck: Recheck, control: TaskControl, repository: string, local: LocalRevisionFacts, actual: ReviewRange): Promise<unknown> {
-    return pushPublication(this.publicationDependencies(), recheck, control, repository, local, actual);
+    return pushPublication(this.publicationDependencies(control), recheck, control, repository, local, actual);
   }
 
   /** The remote-branch target completes after the published or adopted head is observed, through the same final boundary as every other completion. */
   private async completeRemoteBranch(control: TaskControl, actual: ReviewRange, recheck: Recheck): Promise<void> {
     if (control.workflow === "standard") { this.store.markDelivered(control.taskId); return; }
-    const local = await this.github.inspectLocalRevision({ cwd: control.worktree!.path });
+    const local = await this.forTask(control.taskId).inspectLocalRevision({ cwd: control.worktree!.path });
     const ready = this.workflowDecision(control, actual, local);
     if (!ready.ok && ready.code === "workflow_review_required") return;
     const decision = await this.commitCompletion(control, actual, null, { requireAccepted: true, recheck });
@@ -306,12 +322,12 @@ export class DeliveryOperations {
   }
 
   private async createOrAdopt(recheck: Recheck, control: TaskControl, repository: string, local: { branch: string; headSha: string }, pull: PullRequestReference | null, actual: ReviewRange, pullRequestTitle?: PullRequestTitle, pullRequestBody?: PullRequestBody): Promise<PullRequestReference> {
-    return createOrAdoptPublication(this.publicationDependencies(), recheck, control, repository, local, pull, actual, pullRequestTitle, pullRequestBody);
+    return createOrAdoptPublication(this.publicationDependencies(control), recheck, control, repository, local, pull, actual, pullRequestTitle, pullRequestBody);
   }
 
   private async checks(control: TaskControl, repository: string, branch: string): Promise<GithubPullRequestObservation> {
     if (!control.pullRequest) throw new DeliveryOperationFailure("pull_request_closed", "No matching pull request was found for this task");
-    const observed = await this.github.observePullRequest({ repository, branch, ...(control.pullRequest ? { pullRequestNumber: control.pullRequest.number } : {}) });
+    const observed = await this.forTask(control.taskId).observePullRequest({ repository, branch, ...(control.pullRequest ? { pullRequestNumber: control.pullRequest.number } : {}) });
     if (!observed.exists) throw new DeliveryOperationFailure("pull_request_closed", "GitHub did not return the pull request");
     return observed;
   }
@@ -340,8 +356,8 @@ export class DeliveryOperations {
     if (!expectedHead || expectedHead !== observed.headSha) throw new DeliveryOperationFailure("head_diverged", "The Coordinator must review the current observed pull request head before requesting merge");
     if (observed.state !== "open" || observed.number === null) throw new DeliveryOperationFailure("pull_request_closed", "The pull request is not open for review");
     await this.finalRecheck(control, actual, recheck);
-    await this.github.markReadyForReview({ repository, number: observed.number });
-    const final = await this.github.getPullRequest({ repository, number: observed.number });
+    await this.forTask(control.taskId).markReadyForReview({ repository, number: observed.number });
+    const final = await this.forTask(control.taskId).getPullRequest({ repository, number: observed.number });
     if (final.headSha !== expectedHead) throw new DeliveryOperationFailure("head_diverged", "The pull request head changed while requesting review");
     await this.adoptKnownPull(control, final, { explicit: true, recheck });
     return this.checks(this.store.get(control.taskId), repository, branch);
@@ -349,7 +365,7 @@ export class DeliveryOperations {
 
   private async merge(recheck: Recheck, control: TaskControl, repository: string, branch: string, expectedHead: string | undefined, actual: ReviewRange): Promise<unknown> {
     const observed = await this.checks(control, repository, branch);
-    if (observed.state === "merged" && observed.number !== null) return this.adoptKnownPull(control, await this.github.getPullRequest({ repository, number: observed.number }), { recheck });
+    if (observed.state === "merged" && observed.number !== null) return this.adoptKnownPull(control, await this.forTask(control.taskId).getPullRequest({ repository, number: observed.number }), { recheck });
     if (observed.headSha !== control.worktree!.headSha) throw new DeliveryOperationFailure("head_diverged", "The pull request head changed after review");
     if (!expectedHead || expectedHead !== observed.headSha) throw new DeliveryOperationFailure("head_diverged", "The pull request head changed after the Coordinator reviewed it");
     const trigger = await this.inspectTriggerPolicy(control, { expectedHead, protectedPaths: true });
@@ -368,9 +384,10 @@ export class DeliveryOperations {
     let mergeResult: GithubConditionalMergeResult | void;
     if (trigger) {
       if (observed.autoMergeEnabled) throw this.triggerBlocked(control, "Auto-merge is enabled for this trigger pull request. Review delivery manually.", "merge_not_eligible");
-      if (!this.github.mergePullRequestDirect) throw new DeliveryOperationFailure("merge_not_eligible", "GitHub cannot perform a conditional trigger merge");
-      mergeResult = await this.github.mergePullRequestDirect({ repository, number: requested, headSha: observed.headSha! });
-    } else mergeResult = await this.github.mergePullRequest({ repository, number: requested, headSha: observed.headSha! });
+      const mergeDirect = this.forTask(control.taskId).mergePullRequestDirect;
+      if (!mergeDirect) throw new DeliveryOperationFailure("merge_not_eligible", "GitHub cannot perform a conditional trigger merge");
+      mergeResult = await mergeDirect({ repository, number: requested, headSha: observed.headSha! });
+    } else mergeResult = await this.forTask(control.taskId).mergePullRequest({ repository, number: requested, headSha: observed.headSha! });
     if (mergeResult && !mergeResult.merged) {
       const disposition = "disposition" in mergeResult ? mergeResult.disposition : undefined;
       const message = "message" in mergeResult ? mergeResult.message : "GitHub has not completed the merge";
@@ -383,7 +400,7 @@ export class DeliveryOperations {
         ? { kind: "merge_requested", checkSummary: checkSummary(observed), wait, next: DELIVERY_WAIT_NEXT }
         : { kind: "waiting", problems: [message], wait, next: DELIVERY_WAIT_NEXT };
     }
-    const final = await this.github.getPullRequest({ repository, number: requested });
+    const final = await this.forTask(control.taskId).getPullRequest({ repository, number: requested });
     if (final.state !== "merged") {
       // The provider accepted the request without merging: a queue or asynchronous merge. Observe its actual outcome.
       const wait = { headSha: observed.headSha!, fingerprint: deliveryWaitFingerprint(observed), since: new Date().toISOString(), reason: "merge_queue" as const };
@@ -398,8 +415,9 @@ export class DeliveryOperations {
   private triggerBlocked(control: TaskControl, question: string, code: "head_diverged" | "merge_not_eligible"): DeliveryOperationFailure { if (control.status === "active") this.store.askHuman(control.taskId, question); return new DeliveryOperationFailure(code, question); }
   private async inspectTriggerPolicy(control: TaskControl, input: { expectedHead?: string; protectedPaths: boolean }): Promise<{ policy: { dispatchId: string; repositoryId: number; repositoryName: string; pullRequestNumber: number; headSha: string; baseSha: string; headBranch: string; baseBranch: string; protectedPaths: string[] }; pull: GithubTriggerPullRequestInspection } | null> {
     const policy = this.store.readTriggerDeliveryPolicy(control.taskId); if (!policy) return null;
-    if (!this.github.inspectPullRequest) throw new DeliveryOperationFailure("head_diverged", "GitHub trigger delivery policy could not be inspected");
-    let pull: GithubTriggerPullRequestInspection; try { pull = await this.github.inspectPullRequest({ repository: policy.repositoryName, number: policy.pullRequestNumber }); } catch { throw new DeliveryOperationFailure("head_diverged", "GitHub trigger delivery policy could not be inspected"); }
+    const inspectPullRequest = this.forTask(control.taskId).inspectPullRequest;
+    if (!inspectPullRequest) throw new DeliveryOperationFailure("head_diverged", "GitHub trigger delivery policy could not be inspected");
+    let pull: GithubTriggerPullRequestInspection; try { pull = await inspectPullRequest({ repository: policy.repositoryName, number: policy.pullRequestNumber }); } catch { throw new DeliveryOperationFailure("head_diverged", "GitHub trigger delivery policy could not be inspected"); }
     const valid = pull.number === policy.pullRequestNumber && pull.state === "open" && !pull.isDraft && !pull.isCrossRepository && pull.baseRepository.id === policy.repositoryId && pull.baseRepository.fullName.toLowerCase() === policy.repositoryName && pull.headRepository?.id === policy.repositoryId && pull.headRepository.fullName.toLowerCase() === policy.repositoryName && pull.headBranch === policy.headBranch && pull.baseBranch === policy.baseBranch;
     if (!valid) throw this.triggerBlocked(control, "The trigger pull request identity or open reviewable state changed. Review delivery manually.", "head_diverged");
     if (input.protectedPaths && pull.files.some(file => [file.filename, file.previousFilename].some(path => path && matchesGithubTriggerProtectedPaths(policy.protectedPaths, { filename: path })))) throw this.triggerBlocked(control, "The trigger pull request changes a protected path. Review delivery manually.", "merge_not_eligible");
@@ -472,7 +490,12 @@ export class DeliveryOperations {
       return pull;
     }
     if (current.workflowState.followUp && !options.explicit && !options.validatedRange) return pull;
-    if (control.workflow === "standard") { this.store.markDelivered(control.taskId); return pull; }
+    if (control.workflow === "standard") {
+      await this.evidence.complete(control.taskId, pull.number, pull.headSha, this.forTask(control.taskId), options.recheck);
+      options.recheck?.();
+      if (this.store.get(control.taskId).status !== "cancelled") this.store.markDelivered(control.taskId);
+      return pull;
+    }
     if (current.workflowState.completion) { if (current.status !== "delivered") this.store.markDelivered(control.taskId); return pull; }
     if (pull.state === "merged") {
       const proof = options.validatedRange ? this.directMergeProof(pull, options.validatedRange) : this.passiveMergeProof(current, pull);

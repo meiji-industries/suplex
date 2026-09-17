@@ -6,6 +6,12 @@ import { readTaskTimeline } from "./timeline/timeline.js";
 import { removeTaskWorktree } from "./worktree.js";
 import { stopIdleArchiveSessions } from "./archive/sessions.js";
 import { z } from "zod";
+import { isProfileAllowed, type ProjectProviderPolicy } from "../projects/provider-policy.js";
+import { IssueTracker } from "../integrations/issue-tracker.js";
+import { IssueAssociationSchema, type IssueAssociation } from "./issue-association.js";
+import { hasStartedNativeWork, taskTracker } from "./issue-context.js";
+import type { TrackerConnection } from "../projects/integration-configuration.js";
+import { supportsDeliveryTarget } from "../delivery/target-capabilities.js";
 import type { AuthService } from "../identity/auth.js";
 import { ArtifactStore, type StoredArtifact } from "../platform/artifacts.js";
 import type { ForgeConfig } from "../platform/config.js";
@@ -18,7 +24,7 @@ import { ProjectAgentTaskPolicySchema, type ProjectAgentTaskPolicy } from "../ht
 import { CreateTaskTemplateBodySchema } from "../http/contracts/task-templates.js";
 import { TaskDetailsBodySchema } from "../http/contracts/tasks.js";
 import { WorkflowRecordInputSchema } from "../http/contracts/workflows.js";
-import type { ProjectService } from "../projects/projects.js";
+import type { Project, ProjectService } from "../projects/projects.js";
 import { TaskProfileSchema, type TaskProfile } from "./control.js";
 import { MAX_TASK_DEPENDENCIES, TaskConfigurationSchema, TaskImageInputSchema, TaskInputSchema, type Task, type TaskInput } from "./contracts.js";
 import { replaceTaskDependencies, TaskDependencyFailure } from "./dependencies.js";
@@ -58,7 +64,7 @@ const hermesDuplicateKey = (taskId: string, key: string): string => `duplicate-$
 const HERMES_UPSTREAM_POOL = 200;
 type Projects = Pick<ProjectService, "getProject" | "getProjectInCompany" | "resolveTaskSource" | "captureTaskConfiguration">;
 /** Worktree removal defaults to the real host; tests drive a controlled one. */
-export type TaskServicePorts = { removeWorktree?: typeof removeTaskWorktree; herdr?: TaskPanePort };
+export type TaskServicePorts = { removeWorktree?: typeof removeTaskWorktree; herdr?: TaskPanePort; issueTracker?: (connection: TrackerConnection) => Pick<IssueTracker, "read"> };
 const DetailsSchema = TaskDetailsBodySchema.refine(input => Object.keys(input).length > 0);
 const RenameSchema = TaskInputSchema.pick({ title: true });
 const DependsOnSchema = z.array(z.string().min(1).max(256)).max(MAX_TASK_DEPENDENCIES);
@@ -67,6 +73,7 @@ const BlockedBySchema = z.object({ blockedByTaskId: z.string().min(1).max(256).n
 export class TaskService {
   private readonly removeWorktree: typeof removeTaskWorktree;
   private readonly herdr: TaskPanePort;
+  private readonly issueTracker: NonNullable<TaskServicePorts["issueTracker"]>;
   readonly repository: TaskRepository;
   private readonly artifacts: ArtifactStore;
   constructor(private readonly database: ForgeDatabase, private readonly auth: AuthService, private readonly projects: Projects, config: Pick<ForgeConfig, "artifactRoot">, ports: TaskServicePorts = {}) {
@@ -74,6 +81,7 @@ export class TaskService {
     this.repository = new TaskRepository(database, this.artifacts);
     this.removeWorktree = ports.removeWorktree ?? removeTaskWorktree;
     this.herdr = ports.herdr ?? new CliHerdrClient();
+    this.issueTracker = ports.issueTracker ?? (connection => new IssueTracker(connection));
   }
 
   getTask(userId: string, taskId: string): Task {
@@ -356,20 +364,27 @@ export class TaskService {
         });
       }
       const project = this.projects.getProjectInCompany(companyId, request.projectId);
+      if (!supportsDeliveryTarget(project.integration?.repository, request.deliveryTarget)) throw new TaskFailure("Bitbucket supports draft pull requests. Select a supported delivery target.", 422);
       const projectSnapshot = this.projectConfigurationSignature(project);
       if (!project.repository) throw new TaskFailure("Configure the project repository before creating a task", 422);
       const defaults = this.database.authQuery(db => z.object({ root: z.string(), worker: z.string() }).parse(db.prepare("SELECT root_profile_id AS root, worker_profile_id AS worker FROM forge_projects WHERE id = ? AND company_id = ?").get(project.id, companyId)));
-      let rootProfile = capturedDispatch ? (this.profile(capturedDispatch.profiles.root.profileId, "root"), capturedDispatch.profiles.root) : this.profile(request.rootProfileId ?? defaults.root, "root");
-      let workerProfile = capturedDispatch ? (this.profile(capturedDispatch.profiles.worker.profileId, "worker"), capturedDispatch.profiles.worker) : this.profile(request.workerProfileId ?? defaults.worker, "worker");
+      let rootProfile = capturedDispatch ? (this.profile(capturedDispatch.profiles.root.profileId, "root"), capturedDispatch.profiles.root) : this.projectProfile(request.rootProfileId, defaults.root, "root", project.providerPolicy);
+      let workerProfile = capturedDispatch ? (this.profile(capturedDispatch.profiles.worker.profileId, "worker"), capturedDispatch.profiles.worker) : this.projectProfile(request.workerProfileId, defaults.worker, "worker", project.providerPolicy);
       let advisorProfiles: Partial<Record<AdvisorRole, TaskProfile>> = {};
       for (const role of workflowDefinition(request.workflow).advisorRoles) advisorProfiles[role] = capturedDispatch ? (this.profile(capturedDispatch.profiles.advisors[role]!.profileId, "root"), capturedDispatch.profiles.advisors[role]!) : this.profile(request.advisorProfileIds[role] ?? rootProfile.profileId, "root");
       const images = request.images.map(image => ({ filename: image.filename, mimeType: image.mimeType, bytes: decodeTaskImage(image) }));
+      const legacyIssueSource = request.issue === undefined;
       const source = request.source ? await this.projects.resolveTaskSource(project, request.source) : null;
-      if (source?.kind === "issue") request.description = request.description ? `${request.description}\n\n${source.context}` : source.context;
+      if (request.issue) request.issue = (await this.issueTracker(taskTracker({ repository: project.repository, ...(project.integration ? { integration: project.integration } : {}) })).read(request.issue)).issue;
+      else if (request.issue === undefined && request.source?.kind === "issue") request.issue = IssueAssociationSchema.parse({ kind: "github", repository: project.repository, number: request.source.number, id: String(request.source.number), key: `#${request.source.number}`, title: request.title, url: `https://github.com/${project.repository}/issues/${request.source.number}` });
+      if (source?.kind === "issue" && legacyIssueSource) request.description = request.description ? `${request.description}\n\n${source.context}` : source.context;
       const heads = await this.projects.captureTaskConfiguration(project);
       if (capturedDispatch && (source?.kind !== "pull_request" || source.number !== capturedDispatch.pullRequestNumber || source.headSha !== capturedDispatch.policy.headSha || source.baseSha !== capturedDispatch.policy.baseSha || source.headBranch !== capturedDispatch.policy.headBranch || source.baseBranch !== capturedDispatch.policy.baseBranch || project.repository?.toLowerCase() !== capturedDispatch.repositoryName || project.baseBranch !== capturedDispatch.policy.baseBranch)) throw new TaskFailure("GitHub trigger source changed", 409);
       const taskId = newTaskId();
       const configuration = TaskConfigurationSchema.parse({
+        providerPolicy: project.providerPolicy,
+        integration: project.integration,
+        execution: project.execution,
         repository: project.repository, repositoryPath: project.repositoryPath, worktreeRoot: project.worktreeRoot,
         branch: source?.kind === "pull_request" ? source.headBranch : source?.kind === "branch" ? source.branch : taskBranchName(request.title, taskId),
         baseBranch: source?.kind === "pull_request" ? source.baseBranch : project.baseBranch,
@@ -395,6 +410,8 @@ export class TaskService {
           this.requireGithubTriggerAdmission(capturedDispatch);
           if (this.projectConfigurationSignature(this.projects.getProjectInCompany(companyId, request.projectId)) !== projectSnapshot) throw new TaskFailure("Project configuration changed", 409);
         }
+        this.requireEligibleProfiles(project.providerPolicy, [rootProfile, workerProfile, ...Object.values(advisorProfiles)]);
+        if (this.projectConfigurationSignature(this.projects.getProjectInCompany(companyId, request.projectId)) !== projectSnapshot) throw new TaskFailure("Project configuration changed", 409);
         let startImmediately = request.startImmediately;
         let startWhenBlockedByDelivered = false;
         if (request.blockedByTaskId) {
@@ -515,6 +532,8 @@ export class TaskService {
       const profileId = normalized.advisorProfileIds[role] ?? stored ?? rootProfile.profileId;
       advisorProfiles[role] = profileId === rootProfile.profileId ? rootProfile : selected(profileId, task.advisorProfiles[role], "root");
     }
+    this.requireEligibleProfiles(task.configuration.providerPolicy, [rootProfile, workerProfile, ...Object.values(advisorProfiles)]);
+    if (!supportsDeliveryTarget(task.configuration.integration?.repository, normalized.deliveryTarget ?? task.deliveryTarget)) throw new TaskFailure("Bitbucket supports draft pull requests. Select a supported delivery target.", 422);
     const updated = this.repository.updateDetails(taskId, {
       title: input.title ?? task.title, description: input.description ?? task.description, workflow: normalized.workflow,
       deliveryTarget: normalized.deliveryTarget ?? task.deliveryTarget,
@@ -542,6 +561,18 @@ export class TaskService {
     }
     if (!this.repository.setBlockedBy(taskId, blockedByTaskId)) throw new TaskFailure("Not found", 404);
     return this.getTask(userId, taskId);
+  }
+
+  async setTaskIssue(userId: string, taskId: string, raw: IssueAssociation | null): Promise<Task> {
+    const issue = IssueAssociationSchema.nullable().parse(raw);
+    const task = this.getTask(userId, taskId);
+    const resolved = issue ? (await this.issueTracker(taskTracker(task.configuration)).read(issue)).issue : null;
+    return this.database.authImmediateTransaction(db => {
+      const current = this.getTask(userId, taskId);
+      db.prepare("UPDATE forge_tasks SET issue_json = ?, updated_at = ? WHERE id = ?").run(resolved ? JSON.stringify(resolved) : null, new Date().toISOString(), taskId);
+      if (current.status === "backlog" && !hasStartedNativeWork(this.database, taskId)) db.prepare("UPDATE forge_tasks SET issue_context_json = NULL WHERE id = ?").run(taskId);
+      return this.getTask(userId, taskId);
+    });
   }
 
   unarchiveTask(userId: string, taskId: string): Task {
@@ -631,9 +662,23 @@ export class TaskService {
   }
 
   private profile(profileId: string, role: "root" | "worker"): TaskProfile {
-    const value = this.database.authQuery(db => db.prepare("SELECT p.id AS profileId, p.provider, p.model, p.reasoning_level AS reasoningLevel, p.service_tier AS serviceTier, i.home_directory AS instanceHomeDirectory FROM forge_profiles p LEFT JOIN forge_provider_instances i ON i.id = p.provider_instance_id WHERE p.id = ? AND p.role = ? AND p.archived_at IS NULL").get(profileId, role));
+    const value = this.database.authQuery(db => db.prepare("SELECT p.id AS profileId, p.provider, p.model, p.reasoning_level AS reasoningLevel, p.service_tier AS serviceTier, p.provider_instance_id AS providerInstanceId, i.home_directory AS instanceHomeDirectory FROM forge_profiles p LEFT JOIN forge_provider_instances i ON i.id = p.provider_instance_id WHERE p.id = ? AND p.role = ? AND p.archived_at IS NULL").get(profileId, role));
     if (!value) throw new TaskFailure("The selected agent profile does not exist", 422);
     return TaskProfileSchema.parse(value);
+  }
+
+  private requireEligibleProfiles(policy: ProjectProviderPolicy | null | undefined, profiles: TaskProfile[]): void {
+    if (profiles.some(profile => !isProfileAllowed(policy, profile))) throw new TaskFailure("Select agents with providers and logins allowed by this project", 422);
+  }
+
+  private projectProfile(explicit: string | undefined, defaultId: string, role: "root" | "worker", policy: ProjectProviderPolicy | null | undefined): TaskProfile {
+    if (explicit) return this.profile(explicit, role);
+    const preferred = this.profile(defaultId, role);
+    if (isProfileAllowed(policy, preferred)) return preferred;
+    const ids = this.database.authQuery(db => z.array(z.object({ id: z.string() })).parse(db.prepare("SELECT id FROM forge_profiles WHERE role = ? AND archived_at IS NULL ORDER BY created_at, id").all(role)));
+    const eligible = ids.map(({ id }) => this.profile(id, role)).find(profile => isProfileAllowed(policy, profile));
+    if (!eligible) throw new TaskFailure("Create an agent with a provider and login allowed by this project", 422);
+    return eligible;
   }
 
   private resolveHermesRequest(companyId: string, raw: HermesTaskCreateBody): { request: TaskInput; signature: string } {
@@ -655,8 +700,8 @@ export class TaskService {
       throw error;
     }
     if (raw.deliveryTarget !== undefined && raw.deliveryTarget !== policy.deliveryTarget || raw.runProjectTests !== undefined && raw.runProjectTests !== policy.runProjectTests || raw.visualEvidence !== undefined && raw.visualEvidence !== policy.visualEvidence) throw new TaskFailure(`This project permits deliveryTarget "${policy.deliveryTarget}", runProjectTests ${policy.runProjectTests}, and visualEvidence "${policy.visualEvidence}"`, 422, "delivery_policy_rejected");
-    const root = request.rootProfileId ?? project.rootProfileId;
-    const worker = request.workerProfileId ?? project.workerProfileId;
+    const root = this.projectProfile(request.rootProfileId, project.rootProfileId, "root", project.providerPolicy).profileId;
+    const worker = this.projectProfile(request.workerProfileId, project.workerProfileId, "worker", project.providerPolicy).profileId;
     // The allowlist governs what a caller may choose; server-chosen defaults (project defaults, workflow and template records) are already trusted.
     if (raw.rootProfileId !== undefined && !policy.rootProfileIds.includes(raw.rootProfileId) || raw.workerProfileId !== undefined && !policy.workerProfileIds.includes(raw.workerProfileId)) throw new TaskFailure("The selected agent profile is not permitted", 422);
     for (const role of workflowDefinition(request.workflow).advisorRoles) {
@@ -704,8 +749,8 @@ export class TaskService {
     return Object.fromEntries(workflowDefinition(request.workflow ?? "standard").advisorRoles.map(role => [role, this.profile(request.advisorProfileIds?.[role] ?? rootProfile.profileId, "root")])) as Partial<Record<AdvisorRole, TaskProfile>>;
   }
 
-  private projectConfigurationSignature(project: { repository: string | undefined; repositoryPath: string; worktreeRoot: string; baseBranch: string; setupCommand: string; verificationCommand: string }): string {
-    return JSON.stringify({ repository: project.repository, repositoryPath: project.repositoryPath, worktreeRoot: project.worktreeRoot, baseBranch: project.baseBranch, setupCommand: project.setupCommand, verificationCommand: project.verificationCommand });
+  private projectConfigurationSignature(project: Project): string {
+    return JSON.stringify({ repository: project.repository, repositoryPath: project.repositoryPath, worktreeRoot: project.worktreeRoot, baseBranch: project.baseBranch, setupCommand: project.setupCommand, verificationCommand: project.verificationCommand, providerPolicy: project.providerPolicy, integration: project.integration, execution: project.execution });
   }
 
   private requireTask(authority: Authority, taskId: string): TaskRow {

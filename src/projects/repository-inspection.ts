@@ -6,6 +6,7 @@ import { promisify } from "node:util";
 
 import { ProjectFailure, type ProjectFinding } from "./contracts.js";
 import type { LocalRepositoryAdapter } from "./projects.js";
+import { repositoryCoordinate } from "./repository-coordinate.js";
 
 const execFileAsync = promisify(execFile);
 
@@ -45,20 +46,7 @@ export async function canonicalDirectory(raw: string, rootRaw: string, field: st
   }
 }
 
-export function githubRepositoryFromRemote(remoteUrl: string): { identity: string; credentialBearing: boolean } | undefined {
-  const trimmed = remoteUrl.trim();
-  const normalizedSsh = trimmed.replace(/\.git$/, "");
-  const ssh = /^git@github\.com:([A-Za-z0-9][A-Za-z0-9_.-]{0,99})\/([A-Za-z0-9][A-Za-z0-9_.-]{0,99})$/.exec(normalizedSsh);
-  if (ssh?.[1] && ssh[2]) return { identity: `${ssh[1]}/${ssh[2]}`.toLowerCase(), credentialBearing: false };
-  try {
-    const parsed = new URL(trimmed);
-    if (parsed.hostname.toLowerCase() !== "github.com") return undefined;
-    const match = /^\/([A-Za-z0-9][A-Za-z0-9_.-]{0,99}\/[A-Za-z0-9][A-Za-z0-9_.-]{0,99})$/.exec(parsed.pathname.replace(/\.git$/, ""));
-    return match?.[1] ? { identity: match[1].toLowerCase(), credentialBearing: Boolean(parsed.username || parsed.password) } : undefined;
-  } catch { return undefined; }
-}
-
-export async function defaultLocalRepositoryAdapter(): Promise<LocalRepositoryAdapter> {
+export async function defaultLocalRepositoryAdapter(host: "github" | "bitbucket" = "github"): Promise<LocalRepositoryAdapter> {
   const run = async (args: string[], cwd: string, timeout = 8_000): Promise<string> => {
     try { return (await execFileAsync("git", args, { cwd, timeout, maxBuffer: 16 * 1024 })).stdout.trim(); }
     catch { throw new ProjectFailure("Repository validation failed", [finding("repository-unavailable", "repositoryPath", "Git could not inspect the configured repository")], 422); }
@@ -68,10 +56,10 @@ export async function defaultLocalRepositoryAdapter(): Promise<LocalRepositoryAd
     const status = await run(["status", "--porcelain", "--untracked-files=all"], input.repositoryPath);
     const remoteUrl = await run(["config", "--get", "remote.origin.url"], input.repositoryPath);
     if (/^[a-z][a-z0-9+.-]*:\/\/[^/@\s]+@/i.test(remoteUrl) || /(?:token|password|secret)=/i.test(remoteUrl)) throw new ProjectFailure("Repository validation failed", [finding("credential-url", "repository", "Credential-bearing repository URLs are not accepted")], 422);
-    const remote = githubRepositoryFromRemote(remoteUrl);
-    if (!remote || remote.credentialBearing) throw new ProjectFailure("Repository validation failed", [finding("repository-identity", "repository", "Origin must identify a canonical GitHub repository")], 422);
+    const remote = repositoryCoordinate(remoteUrl);
+    if (!remote || remote.host !== host) throw new ProjectFailure("Repository validation failed", [finding("repository-identity", "repository", "Origin must identify the configured repository host")], 422);
     await run(["fetch", "--no-tags", "origin", `refs/heads/${input.baseBranch}:refs/remotes/origin/${input.baseBranch}`], input.repositoryPath, 30_000);
     const baseSha = await run(["rev-parse", "--verify", `refs/remotes/origin/${input.baseBranch}`], input.repositoryPath);
-    return { canonicalPath, remoteRepository: remote.identity, clean: status.length === 0, baseSha };
+    return { canonicalPath, remoteRepository: remote.repository, clean: status.length === 0, baseSha };
   } };
 }

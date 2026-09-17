@@ -7,7 +7,8 @@ import { expect, test } from "vitest";
 import { AuthService } from "../src/identity/auth.js";
 import { createTestConfig } from "../src/platform/config.js";
 import { ForgeDatabase } from "../src/platform/database.js";
-import { ProjectService, inferRepositoryCommands, parseGithubRepositoryUrl, type LocalRepositoryAdapter } from "../src/projects/projects.js";
+import { ProjectService, inferRepositoryCommands, type LocalRepositoryAdapter } from "../src/projects/projects.js";
+import { repositoryCoordinate } from "../src/projects/repository-coordinate.js";
 import type { GithubAdapter } from "../src/integrations/github/client.js";
 
 interface Fixture {
@@ -79,11 +80,35 @@ test("normalizes supported GitHub repository URLs", () => {
     "https://github.com/meiji-industries/sampler.git",
     "git@github.com:meiji-industries/sampler.git",
   ]) {
-    expect(parseGithubRepositoryUrl(repositoryUrl)).toMatchObject({ repository: "meiji-industries/sampler", name: "sampler" });
+    expect(repositoryCoordinate(repositoryUrl)).toMatchObject({ host: "github", repository: "meiji-industries/sampler", name: "sampler" });
   }
-  expect(parseGithubRepositoryUrl("git@github.com:meiji-industries/sampler.git").cloneUrl).toBe("git@github.com:meiji-industries/sampler.git");
-  expect(() => parseGithubRepositoryUrl("https://token@github.com/meiji-industries/sampler.git")).toThrowError("GitHub repository URL is invalid");
-  expect(() => parseGithubRepositoryUrl("https://gitlab.com/meiji-industries/sampler.git")).toThrowError("GitHub repository URL is invalid");
+  expect(repositoryCoordinate("git@github.com:meiji-industries/sampler.git")?.cloneUrl).toBe("git@github.com:meiji-industries/sampler.git");
+  expect(repositoryCoordinate("https://token@github.com/meiji-industries/sampler.git")).toBeNull();
+  expect(repositoryCoordinate("https://gitlab.com/meiji-industries/sampler.git")).toBeNull();
+  expect(repositoryCoordinate("git@bitbucket.org:team/project.git")).toMatchObject({ host: "bitbucket", repository: "team/project", cloneUrl: "git@bitbucket.org:team/project.git" });
+});
+
+test("project provider policy persists, survives unrelated edits, and validates login identities", async () => {
+  const f = await fixture();
+  try {
+    const providerPolicy = { allowedProviders: ["codex"], allowedInstanceIds: [] };
+    const project = await f.projects.createProject(f.adminId, f.companyId, input(f, { providerPolicy }));
+    expect(project.providerPolicy).toEqual(providerPolicy);
+    expect((await f.projects.updateProject(f.adminId, project.id, input(f))).providerPolicy).toEqual(providerPolicy);
+    await expect(f.projects.updateProject(f.adminId, project.id, input(f, { providerPolicy: { allowedProviders: ["claude-code"], allowedInstanceIds: ["missing"] } }))).rejects.toMatchObject({ findings: expect.arrayContaining([expect.objectContaining({ code: "instance-ineligible" })]) });
+    expect((await f.projects.updateProject(f.adminId, project.id, input(f, { providerPolicy: null }))).providerPolicy).toBeNull();
+  } finally { await close(f); }
+});
+
+test("explicit tracker settings survive edits and do not admit unrelated legacy issue sources", async () => {
+  const f = await fixture();
+  try {
+    const integration = { repository: { kind: "github" }, tracker: { kind: "jira", site: "https://client.atlassian.net", project: "APP", emailEnvironment: "CLIENT_EMAIL", tokenEnvironment: "CLIENT_TOKEN" } };
+    const project = await f.projects.createProject(f.adminId, f.companyId, input(f, { integration }));
+    expect((await f.projects.updateProject(f.adminId, project.id, input(f))).integration).toEqual(integration);
+    await expect(f.projects.discoverTaskSources(f.adminId, project.id, "issue")).resolves.toMatchObject({ available: false, sources: [] });
+    await expect(f.projects.resolveTaskSource(project, { kind: "issue", number: 7 })).rejects.toThrow("Issue field");
+  } finally { await close(f); }
 });
 
 test.each([

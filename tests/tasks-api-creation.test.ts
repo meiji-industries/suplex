@@ -2,6 +2,19 @@ import { expect, test } from "vitest";
 import { nativeApp } from "./helpers/native-app.js";
 import { TaskSchema } from "../src/tasks/contracts.js";
 
+test("issue association can be cleared during active work without changing task intent", async () => {
+  const f = await nativeApp();
+  try {
+    const { task } = await f.tasks.createTask(f.userId, f.company.id, { projectId: f.project.id, title: "Keep this title", description: "Keep this scope", idempotencyKey: "clear-issue-api", startImmediately: true });
+    const url = `/api/tasks/${task.id}/issue`;
+    expect((await f.app.inject({ method: "PATCH", url, payload: { issue: null } })).statusCode).toBe(401);
+    const response = await f.app.inject({ method: "PATCH", url, headers: f.headers, payload: { issue: null } });
+    expect(response.statusCode, response.body).toBe(200);
+    expect(response.json()).toMatchObject({ issue: null, title: "Keep this title", description: "Keep this scope", status: "active" });
+    expect(f.tasks.repository.controls.get(task.id).objective).toBe("Keep this title\n\nKeep this scope");
+  } finally { await f.close(); }
+});
+
 test("Start immediately commits active intent and schedules Coordinator without a second command", async () => {
   const f = await nativeApp();
   try {

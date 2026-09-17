@@ -72,10 +72,10 @@ export class TaskAnalyticsCollector {
 /** Reads shared native history: the OpenCode server here never prompts or resumes a session, and Claude Code transcripts are read as files. */
 export class AnalyticsHistoryReader {
   constructor(private readonly databasePath: string, private readonly directory: string, private readonly pricing: ModelPricingReader = new ModelsDevCatalogReader()) {}
-  async read(session: Pick<TaskSession, "id" | "nativeSessionId" | "kind">, pricing?: ModelPricingCatalog): Promise<TaskUsage[]> {
+  async read(session: Pick<TaskSession, "id" | "nativeSessionId" | "kind" | "profile">, pricing?: ModelPricingCatalog): Promise<TaskUsage[]> {
     const sessionId = session.nativeSessionId;
     if (!sessionId) throw new Error("Session is not available");
-    if (sessionHarness(sessionId) === "claude-code") return claudeUsage(await readClaudeTranscript(sessionId, claudeConfigDirectory()), sessionId, session.kind, pricing);
+    if (sessionHarness(sessionId) === "claude-code") return claudeUsage(await readClaudeTranscript(sessionId, session.profile?.instanceHomeDirectory ?? claudeConfigDirectory()), sessionId, session.kind, pricing);
     if (sessionHarness(sessionId) === "devin") return (await new DevinSessionReader(this.databasePath).timeline(session, pricing)).usage;
     if (sessionHarness(sessionId) === "codex") return (await new CodexSessionReader(this.databasePath).timeline(session, pricing)).usage;
     const server = await ensureOpenCodeServer({ runtimeDirectory: this.directory, executable: await resolveOpenCodeExecutable(), directory: process.cwd(), config: {} });

@@ -2,6 +2,7 @@ import { replaceWorker, workerReplacementReady } from "./worker-replacement.js";
 import { WorkerReplacementRequestSchema, type WorkerReplacementRequest } from "./worker-replacement-contracts.js";
 import { createHash, randomUUID } from "node:crypto";
 import { z } from "zod";
+import { IssueContextSchema } from "../tasks/issue-association.js";
 import { HumanQuestionOptionsSchema, type HumanQuestionOptions } from "./human-question.js";
 import { inspectProcessOnce } from "../platform/process-manager.js";
 import { TaskAnalyticsStore } from "../tasks/analytics/store.js";
@@ -54,7 +55,7 @@ function control(row: Row): TaskControl {
 
 export class TaskControlStore {
   private readonly limitStore: TaskLimitStore;
-  constructor(private readonly database: ForgeDatabase, private readonly inspectOwner: (pid: number) => Promise<ProcessOwnerObservation> = observeProcessOwner) { this.limitStore = new TaskLimitStore(database); }
+  constructor(readonly database: ForgeDatabase, private readonly inspectOwner: (pid: number) => Promise<ProcessOwnerObservation> = observeProcessOwner) { this.limitStore = new TaskLimitStore(database); }
   readTriggerDeliveryPolicy(taskId: string): GithubTriggerDeliveryPolicy | null { return this.database.authQuery(db => triggerDeliveryPolicy(db, taskId)); }
   recordTriggerPush(input: { taskId: string; dispatchId: string; fromHeadSha: string; toHeadSha: string; review: unknown }): void { this.database.authImmediateTransaction(db => recordTriggerPush(db, input)); }
   taskSpend(taskId: string): { costUsd: number; turns: number } {
@@ -175,17 +176,18 @@ export class TaskControlStore {
   }
   context(taskId: string) {
     return this.database.authQuery(db => {
-      const row = db.prepare("SELECT configuration_json FROM forge_tasks WHERE id = ?").get(taskId) as Row | undefined;
+      const row = db.prepare("SELECT configuration_json, issue_context_json FROM forge_tasks WHERE id = ?").get(taskId) as Row | undefined;
       const configuration = row ? text(row, "configuration_json") : null;
       if (!configuration) throw new Error("Task configuration is missing");
-      const images = db.prepare("SELECT id AS artifactId, filename FROM forge_artifacts WHERE task_id = ? AND kind = 'task-image' ORDER BY created_at, id").all(taskId);
-      return { configuration: TaskConfigurationSchema.parse(JSON.parse(configuration)), images };
+      const images = db.prepare("SELECT id AS artifactId, filename FROM forge_artifacts WHERE task_id = ? AND kind IN ('task-image', 'delivery-image') ORDER BY created_at, id").all(taskId);
+      const issueContext = row ? text(row, "issue_context_json") : null;
+      return { configuration: TaskConfigurationSchema.parse(JSON.parse(configuration)), images, issueContext: issueContext ? IssueContextSchema.parse(JSON.parse(issueContext)) : null };
     });
   }
   dependencySummaries(taskId: string): TaskDependencySummary[] { return taskDependencySummaries(this.database, taskId); }
   image(taskId: string, artifactId: string) {
     return this.database.authQuery(db => {
-      const row = db.prepare("SELECT a.filename, a.mime_type AS mimeType, a.company_id AS companyId, a.storage_path AS storagePath, a.sha256 FROM forge_artifacts a JOIN forge_tasks t ON t.id = a.task_id AND t.company_id = a.company_id WHERE t.id = ? AND a.id = ? AND a.kind = 'task-image'").get(taskId, artifactId);
+      const row = db.prepare("SELECT a.filename, a.mime_type AS mimeType, a.company_id AS companyId, a.storage_path AS storagePath, a.sha256 FROM forge_artifacts a JOIN forge_tasks t ON t.id = a.task_id AND t.company_id = a.company_id WHERE t.id = ? AND a.id = ? AND a.kind IN ('task-image', 'delivery-image')").get(taskId, artifactId);
       return z.object({ filename: z.string(), mimeType: z.enum(["image/png", "image/jpeg", "image/webp", "image/gif"]), companyId: z.string(), storagePath: z.string(), sha256: z.string() }).parse(row);
     });
   }

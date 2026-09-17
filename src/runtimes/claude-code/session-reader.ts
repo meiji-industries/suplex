@@ -15,23 +15,25 @@ export class ClaudeCodeSessionReader implements NativeSessionReader {
   private directory(session: TaskSession): string { return session.profile?.instanceHomeDirectory ?? this.configDirectory; }
   private async transcript(session: TaskSession): Promise<string | null> {
     const sessionID = this.sessionID(session);
-    const cached = this.transcripts.get(sessionID);
+    const cacheKey = `${this.directory(session)}:${sessionID}`;
+    const cached = this.transcripts.get(cacheKey);
     if (cached) {
       try { await stat(cached); return cached; }
       catch (error) {
         if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) throw error;
-        this.transcripts.delete(sessionID);
+        this.transcripts.delete(cacheKey);
       }
     }
     const direct = await findClaudeTranscript(sessionID, this.directory(session));
     if (direct) {
-      this.transcripts.set(sessionID, direct);
+      this.transcripts.set(cacheKey, direct);
       return direct;
     }
+    if (session.profile?.instanceHomeDirectory) return null;
     for (const directory of await providerInstanceDirectories(this.databasePath)) {
       const transcript = await findClaudeTranscript(sessionID, directory);
       if (transcript) {
-        this.transcripts.set(sessionID, transcript);
+        this.transcripts.set(cacheKey, transcript);
         return transcript;
       }
     }

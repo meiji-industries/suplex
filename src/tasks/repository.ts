@@ -7,9 +7,11 @@ import { TaskConfigurationSchema, TaskImageSchema, TaskSchema, type DeliveryTarg
 import type { TaskProfile } from "./control.js";
 import { advisorKeysSorted, publicWorkflowState, type AdvisorRole, type WorkflowId } from "../coordination/workflows.js";
 import { taskDependencies } from "./dependencies.js";
+import { IssueAssociationSchema } from "./issue-association.js";
 
 export type TaskCreator = { kind: "user"; id: string } | { kind: "agent"; id: string };
 const RowSchema = z.object({
+  issue_json: z.string().nullable(),
   id: z.string(), company_id: z.string(), project_id: z.string(), issue_number: z.number().nullable(), issue_code: z.string().nullable(),
   title: z.string(), description: z.string(), configuration_json: z.string(), idempotency_key: z.string(), request_hash: z.string(), blocked_by_task_id: z.string().nullable(), start_when_blocked_by_delivered: z.number(),
   blocked_task_id: z.string().nullable(), blocked_task_title: z.string().nullable(), blocked_task_status: z.string().nullable(),
@@ -92,6 +94,7 @@ export class TaskRepository {
         db.prepare("INSERT INTO forge_tasks (id, company_id, project_id, title, description, configuration_json, idempotency_key, request_hash, blocked_by_task_id, start_when_blocked_by_delivered, creator_user_id, creator_agent_id, copied_from_task_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
           .run(input.taskId, input.companyId, input.request.projectId, input.request.title, input.request.description, JSON.stringify(configuration), input.request.idempotencyKey, input.requestHash, input.request.blockedByTaskId ?? null, input.startWhenBlockedByDelivered ? 1 : 0, input.creator.kind === "user" ? input.creator.id : null, input.creator.kind === "agent" ? input.creator.id : null, input.copiedFromTaskId ?? null, time, time);
         for (const image of input.images) written.push(this.artifacts.putArtifactSync(db, input.companyId, "task-image", { ...image, taskId: input.taskId }));
+        if (input.request.issue) db.prepare("UPDATE forge_tasks SET issue_json = ? WHERE id = ?").run(JSON.stringify(input.request.issue), input.taskId);
         this.controls.create({
           taskId: input.taskId, startImmediately: input.startImmediately, objective: input.request.description ? `${input.request.title}\n\n${input.request.description}` : input.request.title, deliveryTarget: input.request.deliveryTarget,
           deliveryIntent: { repository: configuration.repository, headBranch: configuration.branch, baseBranch: configuration.baseBranch, baselineSha: configuration.baselineSha, pullRequestNumber: configuration.source?.kind === "pull_request" ? configuration.source.number : null },
@@ -112,9 +115,11 @@ export class TaskRepository {
     const control = this.controls.get(row.id);
     const limitState = this.controls.taskLimitState(row.id);
     const images = this.database.authQuery(db => z.array(TaskImageSchema).parse(db.prepare("SELECT id AS artifactId, filename, mime_type AS mimeType, byte_size AS byteSize FROM forge_artifacts WHERE task_id = ? AND company_id = ? AND kind = 'task-image' ORDER BY created_at, id").all(row.id, row.company_id)));
+    const artifacts = this.database.authQuery(db => z.array(TaskImageSchema).parse(db.prepare("SELECT id AS artifactId, filename, mime_type AS mimeType, byte_size AS byteSize FROM forge_artifacts WHERE task_id = ? AND company_id = ? AND kind LIKE 'delivery-%' ORDER BY created_at, id").all(row.id, row.company_id)));
     return TaskSchema.parse({
       id: row.id, companyId: row.company_id, projectId: row.project_id,
       issueKey: row.issue_code && row.issue_number ? `${row.issue_code}-${row.issue_number}` : null,
+      issue: row.issue_json ? IssueAssociationSchema.parse(JSON.parse(row.issue_json)) : null,
       title: row.title, description: row.description, status: control.status, deliveryTarget: control.deliveryTarget,
       rootProfile: control.rootProfile, workerProfile: control.workerProfile, workflow: control.workflow, advisorProfiles: control.advisorProfiles, workflowState: publicWorkflowState(control.workflowState), dependsOn: taskDependencies(this.database, row.id), configuration: JSON.parse(row.configuration_json),
       worktree: control.worktree, pullRequest: control.pullRequest,
@@ -125,7 +130,7 @@ export class TaskRepository {
        blockedBy: row.blocked_task_id && row.blocked_task_title && row.blocked_task_status ? { id: row.blocked_task_id, title: row.blocked_task_title, status: row.blocked_task_status } : null,
        startWhenBlockedByDelivered: row.start_when_blocked_by_delivered === 1,
       limits: { ...limitState.limits, admittedTurns: limitState.admittedTurns },
-      wakeAt: control.wakeAt, images, createdAt: row.created_at, updatedAt: row.activity_updated_at, statusChangedAt: row.status_changed_at, archivedAt: row.archived_at,
+      wakeAt: control.wakeAt, images, artifacts, createdAt: row.created_at, updatedAt: row.activity_updated_at, statusChangedAt: row.status_changed_at, archivedAt: row.archived_at,
     });
   }
 

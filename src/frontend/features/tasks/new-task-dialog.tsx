@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type ReactElement } from "react";
+import { isProfileAllowed } from "../../../projects/provider-policy.js";
 import { FileText, FolderKanban, MoreHorizontal, X } from "lucide-react";
 import { TaskImageInputSchema, DeliveryTargetSchema, VisualEvidenceSchema, type Task, type TaskInput } from "../../../tasks/contracts.js";
 import { ADVISOR_LABELS, workflowDefinition, type AdvisorProfileIds, type AdvisorRole, type WorkflowId } from "../../../coordination/workflows.js";
@@ -22,6 +23,9 @@ import { BlockedByPickerDialog } from "./blocked-by-picker.js";
 import { taskDeliveryTargetOptions } from "./task-delivery-target.js";
 import { readNewTaskMemory, writeNewTaskMemory, type NewTaskMemory } from "./new-task-memory.js";
 import { TaskRoleSelector } from "./task-role-selectors.js";
+import { IssuePicker } from "./issue-picker.js";
+import type { IssueAssociation } from "../../../tasks/issue-association.js";
+import { supportsDeliveryTarget } from "../../../delivery/target-capabilities.js";
 import type { NewTaskDraft } from "./lib/duplicate-task-prefill.js";
 
 type Delivery = { deliveryTarget: NonNullable<TaskInput["deliveryTarget"]>; runProjectTests: boolean };
@@ -72,6 +76,8 @@ export function NewTaskDialog({ open, onOpenChange, companyId, onCreated, initia
   const [images, setImages] = useState<NonNullable<TaskInput["images"]>>(initialDraft?.images ?? []);
   const [blockedBy, setBlockedBy] = useState<Task["blockedBy"]>(null);
   const [blockedByPickerOpen, setBlockedByPickerOpen] = useState(false);
+  const [issue, setIssue] = useState<IssueAssociation | null | undefined>(initialDraft?.issue);
+  useEffect(() => { setIssue(initialDraft?.projectId === projectId ? initialDraft.issue : undefined); }, [projectId, initialDraft]);
   const [busy, setBusy] = useState(false);
   const [readingImages, setReadingImages] = useState(false);
   const imageRead = useRef({ generation: 0, pending: false });
@@ -182,12 +188,12 @@ export function NewTaskDialog({ open, onOpenChange, companyId, onCreated, initia
         onCreated(saved);
         return;
       }
-      const body = { projectId, title, description, startImmediately, deliveryTarget, runProjectTests, visualEvidence, images, workflow, advisorProfileIds: admittedAdvisors(workflow, advisorProfileIds), ...(rootProfileId ? { rootProfileId } : {}), ...(workerProfileId ? { workerProfileId } : {}), ...(source ? { source } : {}), ...(blockedBy ? { blockedByTaskId: blockedBy.id } : {}) };
+      const body = { projectId, title, description, startImmediately, deliveryTarget, runProjectTests, visualEvidence, images, workflow, issue, advisorProfileIds: admittedAdvisors(workflow, advisorProfileIds), ...(rootProfileId ? { rootProfileId } : {}), ...(workerProfileId ? { workerProfileId } : {}), ...(source ? { source } : {}), ...(blockedBy ? { blockedByTaskId: blockedBy.id } : {}) };
       const serialized = JSON.stringify(body);
       if (request.current?.body !== serialized) request.current = { body: serialized, key: crypto.randomUUID() };
       const task = await readJson<Task>(`/api/companies/${companyId}/tasks`, { method: "POST", body: JSON.stringify({ ...body, idempotencyKey: request.current.key }) });
       request.current = null;
-      setTitle(""); setDescription(""); setImages([]); setSource(undefined); setSourceSummary(undefined); setBlockedBy(null);
+      setTitle(""); setDescription(""); setImages([]); setSource(undefined); setSourceSummary(undefined); setBlockedBy(null); setIssue(undefined);
       onCreated(task);
     } catch (error) { setError(error instanceof Error ? error.message : "Forge could not save the task"); }
     finally { setBusy(false); }
@@ -210,6 +216,18 @@ export function NewTaskDialog({ open, onOpenChange, companyId, onCreated, initia
     finally { if (imageRead.current.generation === generation) { imageRead.current.pending = false; setReadingImages(false); } }
   };
   const project = projects.find(project => project.id === projectId);
+  const eligibleProfiles = profiles.filter(profile => isProfileAllowed(editTask ? editTask.configuration.providerPolicy : project?.providerPolicy, profile));
+  const repositoryConnection = editTask ? editTask.configuration.integration?.repository : project?.integration?.repository;
+  const deliveryOptions = taskDeliveryTargetOptions.filter(option => supportsDeliveryTarget(repositoryConnection, option.value));
+  const unsupportedTarget = !supportsDeliveryTarget(repositoryConnection, deliveryTarget);
+  useEffect(() => { if (!repair && !supportsDeliveryTarget(repositoryConnection, deliveryTarget)) setDeliveryTarget("pull_request_draft"); }, [repair, repositoryConnection, deliveryTarget]);
+  useEffect(() => {
+    if (editing || !open || !settingsLoaded || !project?.providerPolicy) return;
+    const allowed = (id: string) => profiles.some(profile => profile.id === id && isProfileAllowed(project.providerPolicy, profile));
+    if (rootProfileId && !allowed(rootProfileId)) setRootProfileId("");
+    if (workerProfileId && !allowed(workerProfileId)) setWorkerProfileId("");
+    if (Object.values(advisorProfileIds).some(id => id && !allowed(id))) setAdvisorProfileIds(current => Object.fromEntries(Object.entries(current).filter(([, id]) => id && allowed(id))));
+  }, [editing, open, settingsLoaded, project, profiles, rootProfileId, workerProfileId, advisorProfileIds]);
   const definition = workflowDefinition(workflow);
   return <Dialog open={open} onOpenChange={value => { if (!busy) onOpenChange(value); }}>
     <DialogContent className="max-h-[min(85vh,460px)] w-[min(92vw,936px)] max-w-none gap-0 overflow-y-auto rounded-xl p-0 shadow-2xl sm:max-w-[936px]" showCloseButton={false}>
@@ -220,8 +238,8 @@ export function NewTaskDialog({ open, onOpenChange, companyId, onCreated, initia
           </DropdownMenuTrigger><DropdownMenuContent align="start">{projects.map(candidate => <DropdownMenuItem key={candidate.id} onClick={() => { setProjectId(candidate.id); setSource(undefined); setSourceSummary(undefined); setBlockedBy(null); }}><EntityAvatar kind="project" id={candidate.id} name={candidate.name} size="xs" /><span className="min-w-0 flex-1 truncate">{candidate.name}</span>{candidate.id === projectId ? <span aria-label="Selected">✓</span> : null}</DropdownMenuItem>)}</DropdownMenuContent></DropdownMenu>
         </BreadcrumbItem><BreadcrumbSeparator /><BreadcrumbItem><DialogTitle className="font-normal">{editing ? "Edit task" : "New task"}</DialogTitle></BreadcrumbItem></BreadcrumbList></Breadcrumb>
         <div className="ml-auto flex flex-wrap items-center justify-end gap-1">
-          <TaskSourcePicker projectId={projectId} value={sourceSummary} disabled={busy || editing} pullRequestsOnly={repair} onClear={() => { setSource(undefined); setSourceSummary(undefined); }} onSelect={(summary, selector) => { setSource(selector); setSourceSummary(summary); const prefill = prefillForTaskSource(summary); if (!title) setTitle(prefill.title); if (!description) setDescription(prefill.description); }} />
-          <label className="flex items-center gap-1.5 text-xs"><span className="text-muted-foreground">Workflow</span><Select value={workflowId} onValueChange={value => { const record = workflows.find(candidate => candidate.id === value); if (record) selectRecord(record); }}><SelectTrigger aria-label="Workflow" size="sm" disabled={busy}><SelectValue /></SelectTrigger><SelectContent>{workflows.filter(record => !record.archivedAt || record.id === workflowId).map(record => <SelectItem key={record.id} value={record.id}>{record.name}</SelectItem>)}</SelectContent></Select></label>
+          <TaskSourcePicker projectId={projectId} value={sourceSummary} disabled={busy || editing} pullRequestsOnly={repair} onClear={() => { setSource(undefined); setSourceSummary(undefined); }} onSelect={(summary, selector) => { setSource(selector); setSourceSummary(summary); const prefill = prefillForTaskSource(summary); if (!title) setTitle(prefill.title); if (!description) setDescription(prefill.description); if (summary.kind === "issue" && project?.repository) setIssue(current => current === undefined ? { kind: "github", repository: project.repository!, number: summary.number, id: String(summary.number), key: `#${summary.number}`, title: summary.title, url: summary.url } : current); }} />
+          <label className="flex items-center gap-1.5 text-xs"><span className="text-muted-foreground">Workflow</span><Select value={workflowId} onValueChange={value => { const record = workflows.find(candidate => candidate.id === value); if (record) selectRecord(record); }}><SelectTrigger aria-label="Workflow" size="sm" disabled={busy}><SelectValue /></SelectTrigger><SelectContent>{workflows.filter(record => (!record.archivedAt || record.id === workflowId) && (repositoryConnection?.kind !== "bitbucket" || record.engine !== REPAIR)).map(record => <SelectItem key={record.id} value={record.id}>{record.name}</SelectItem>)}</SelectContent></Select></label>
           <DropdownMenu><DropdownMenuTrigger render={<Button type="button" variant="ghost" size="sm" disabled={busy || !projectId} />}><FileText className="size-3.5" />Template</DropdownMenuTrigger><DropdownMenuContent align="end">{templates.length ? templates.map(template => <DropdownMenuItem key={template.id} onClick={() => applyTemplate(template)}>{template.name}</DropdownMenuItem>) : <DropdownMenuItem render={<a href={withCompany(`/projects/${encodeURIComponent(projectId)}/templates`, companyId)} />}>Open templates</DropdownMenuItem>}</DropdownMenuContent></DropdownMenu>
         </div></div>
       </DialogHeader>
@@ -233,15 +251,16 @@ export function NewTaskDialog({ open, onOpenChange, companyId, onCreated, initia
         {error ? <div className="px-5 pb-3"><Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert></div> : null}
         <div className="mt-auto flex flex-wrap items-end gap-2 px-5 pb-4">
           {editing ? null : <InlineAttachmentPicker compact attachments={images.map((image, index) => ({ id: String(index), filename: image.filename, previewUrl: `data:${image.mimeType};base64,${image.base64}` }))} onSelect={addImages} onRemove={index => setImages(current => current.filter((_, item) => item !== index))} disabled={busy || readingImages} />}
-          <TaskRoleSelector role="root" profiles={profiles} assignment={rootProfileId} defaultProfileId={project?.rootProfileId} busy={busy} onChange={setRootProfileId} />
-           <TaskRoleSelector role="worker" profiles={profiles} assignment={workerProfileId} defaultProfileId={project?.workerProfileId} busy={busy} onChange={setWorkerProfileId} />
-           {definition.advisorRoles.map(role => <TaskRoleSelector key={role} role="root" label={ADVISOR_LABELS[role]} profiles={profiles} assignment={advisorProfileIds[role] ?? ""} defaultProfileId={rootProfileId || project?.rootProfileId} busy={busy} onChange={profileId => setAdvisorProfileIds(current => ({ ...current, [role]: profileId || undefined }))} />)}
+          <TaskRoleSelector role="root" profiles={eligibleProfiles} assignment={rootProfileId} defaultProfileId={project?.rootProfileId} busy={busy} onChange={setRootProfileId} />
+           <TaskRoleSelector role="worker" profiles={eligibleProfiles} assignment={workerProfileId} defaultProfileId={project?.workerProfileId} busy={busy} onChange={setWorkerProfileId} />
+           {!editing ? <div className="flex min-w-0 items-center gap-1"><span>Issue</span><IssuePicker projectId={projectId} issue={issue} disabled={busy} onChange={selected => { setIssue(selected); if (selected && !title.trim()) setTitle(selected.title); }} /></div> : null}
+           {definition.advisorRoles.map(role => <TaskRoleSelector key={role} role="root" label={ADVISOR_LABELS[role]} profiles={eligibleProfiles} assignment={advisorProfileIds[role] ?? ""} defaultProfileId={rootProfileId || project?.rootProfileId} busy={busy} onChange={profileId => setAdvisorProfileIds(current => ({ ...current, [role]: profileId || undefined }))} />)}
            {editing ? null : <DropdownMenu><DropdownMenuTrigger render={<Button type="button" variant="ghost" size="icon-xs" aria-label="More options" disabled={busy || !projectId} />}><MoreHorizontal /></DropdownMenuTrigger><DropdownMenuContent><DropdownMenuItem onClick={() => setBlockedByPickerOpen(true)}>Blocked by...</DropdownMenuItem></DropdownMenuContent></DropdownMenu>}
            {blockedBy ? <span className="flex items-center gap-1 text-xs" data-blocked-by-selection><span className="max-w-40 truncate">Blocked by {blockedBy.title}</span><Button type="button" variant="ghost" size="icon-xs" aria-label="Clear blocked by reference" disabled={busy} onClick={() => setBlockedBy(null)}><X /></Button></span> : null}
-          <DialogFooter className="ml-auto flex-row items-center gap-2 sm:justify-end">{repair ? <span className="text-xs text-muted-foreground" data-repair-note>{missingSource ? "Select a pull request source." : repairNote}</span> : null}<NewButton type="submit" disabled={busy || readingImages || !projectId || !title.trim() || missingSource} title={editing ? "Save task (⌘Enter)" : "New task (⌘Enter)"}>{busy ? (editing ? "Saving…" : "Creating…") : editing ? "Save task" : "New task"}</NewButton></DialogFooter>
+          <DialogFooter className="ml-auto flex-row items-center gap-2 sm:justify-end">{unsupportedTarget ? <span>Select a workflow that delivers a draft pull request.</span> : repair ? <span className="text-xs text-muted-foreground" data-repair-note>{missingSource ? "Select a pull request source." : repairNote}</span> : null}<NewButton type="submit" disabled={busy || readingImages || !projectId || !title.trim() || missingSource || unsupportedTarget} title={editing ? "Save task (⌘Enter)" : "New task (⌘Enter)"}>{busy ? (editing ? "Saving…" : "Creating…") : editing ? "Save task" : "New task"}</NewButton></DialogFooter>
         </div>
         <fieldset className="min-w-0 border-t border-border/70 bg-muted/30 px-5 py-3"><legend className="px-0 text-xs font-medium text-muted-foreground">Delivery &amp; checks</legend>
-          <RadioGroup aria-label="Delivery target" value={deliveryTarget} disabled={repair} onValueChange={value => setDeliveryTarget(DeliveryTargetSchema.parse(value))} className="mt-2.5 flex flex-wrap gap-x-4 gap-y-2">{taskDeliveryTargetOptions.map(option => <label className="flex items-center gap-1.5 text-xs" key={option.value}><RadioGroupItem value={option.value} disabled={repair} />{option.label}</label>)}</RadioGroup>
+          <RadioGroup aria-label="Delivery target" value={deliveryTarget} disabled={repair} onValueChange={value => setDeliveryTarget(DeliveryTargetSchema.parse(value))} className="mt-2.5 flex flex-wrap gap-x-4 gap-y-2">{deliveryOptions.map(option => <label className="flex items-center gap-1.5 text-xs" key={option.value}><RadioGroupItem value={option.value} disabled={repair} />{option.label}</label>)}</RadioGroup>
           <div className="mt-2.5 flex flex-wrap items-center gap-x-4 gap-y-2 border-t border-border/60 pt-2.5 text-xs">
             {editing ? null : <label className="flex cursor-pointer items-center gap-2"><Checkbox checked={startImmediately} onCheckedChange={value => setStartImmediately(value === true)} />Start immediately</label>}
             {project?.verificationCommand.trim() || repair ? <label className="flex items-center gap-2"><Checkbox checked={runProjectTests} disabled={repair} onCheckedChange={value => setRunProjectTests(value === true)} />Run project tests</label> : <span className="text-muted-foreground">No project test command configured.</span>}

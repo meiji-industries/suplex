@@ -2,9 +2,12 @@ import { chromium } from "playwright";
 import { expect, test } from "vitest";
 import { TaskSchema } from "../src/tasks/contracts.js";
 import { nativeApp } from "./helpers/native-app.js";
+import type { IssueAssociation } from "../src/tasks/issue-association.js";
 
 test.each([1280, 390])("tasks can be created, started and viewed on the board at %ipx", { timeout: 90_000 }, async width => {
-  const value = await nativeApp();
+  const issue: IssueAssociation = { kind: "github", repository: "owner/repo", number: 42, id: "1042", key: "#42", title: "Associated issue", url: "https://github.com/owner/repo/issues/42" };
+  const value = await nativeApp({ issueTracker: () => ({ read: async () => ({ issue, text: "Issue scope", capturedAt: new Date().toISOString() }) }) });
+  value.projects.searchIssues = async () => [issue];
   const browser = await chromium.launch({ headless: true });
   try {
     await value.app.listen({ host: "127.0.0.1", port: 0 });
@@ -21,11 +24,18 @@ test.each([1280, 390])("tasks can be created, started and viewed on the board at
     page.on("pageerror", error => errors.push(error.message));
     await page.goto(`${base}/tasks?company=${value.company.id}`);
     for (const immediate of [true, false]) {
-      await page.locator("[data-app-header]").getByRole("button", { name: "New task", exact: true }).click();
-      const dialog = page.getByRole("dialog");
+      await page.getByRole("heading", { name: "Tasks", exact: true }).waitFor();
+      await page.keyboard.press("c");
+      const dialog = page.getByRole("dialog", { name: "New task", exact: true });
       await dialog.getByLabel("Task title", { exact: true }).fill(`Task ${immediate}`);
       await dialog.getByLabel("Task description", { exact: true }).fill("Use the native Coordinator and Worker");
       await dialog.getByRole("checkbox", { name: "Start immediately", exact: true }).setChecked(immediate);
+      if (immediate) {
+        await dialog.getByRole("button", { name: "Select issue", exact: true }).click();
+        const picker = page.getByRole("dialog", { name: "Select issue", exact: true });
+        await picker.getByRole("textbox", { name: "Search issues", exact: true }).fill("42");
+        await picker.getByRole("button", { name: "#42: Associated issue", exact: true }).click();
+      }
       const response = page.waitForResponse(response => response.request().method() === "POST" && response.url().endsWith(`/api/companies/${value.company.id}/tasks`));
       if (immediate) await dialog.getByLabel("Task description", { exact: true }).press("Control+Enter");
       else await dialog.getByRole("button", { name: "New task", exact: true }).click();
@@ -33,6 +43,7 @@ test.each([1280, 390])("tasks can be created, started and viewed on the board at
       expect(created.status(), await created.text()).toBe(201);
       const task = TaskSchema.parse(await created.json());
       expect(task.status).toBe(immediate ? "active" : "backlog");
+      if (immediate) expect(task.issue).toEqual(issue);
       expect(value.wakes.includes(task.id)).toBe(immediate);
       await page.getByRole("heading", { name: `Task ${immediate}`, level: 2, exact: true }).waitFor();
       expect(await page.getByRole("button", { name: "Start task", exact: true }).count()).toBe(immediate ? 0 : 1);

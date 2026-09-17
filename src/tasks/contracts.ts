@@ -1,4 +1,8 @@
 import { z } from "zod";
+import { ProjectProviderPolicySchema } from "../projects/provider-policy.js";
+import { ProjectIntegrationSchema } from "../projects/integration-configuration.js";
+import { ProjectExecutionSchema } from "../projects/execution-configuration.js";
+import { IssueAssociationSchema } from "./issue-association.js";
 import { HumanQuestionOptionsSchema } from "../coordination/human-question.js";
 import { TaskControlStatusSchema, TaskProfileFieldsSchema, WorktreeReferenceSchema, PullRequestReferenceSchema } from "./control.js";
 import { MAX_TASK_IMAGES, MAX_TASK_IMAGE_BASE64_LENGTH } from "./limits/attachment-limits.js";
@@ -36,6 +40,7 @@ export const TaskInputSchema = z.object({
   runProjectTests: z.boolean().default(true),
   visualEvidence: VisualEvidenceSchema.default("off"),
   source: TaskSourceInputSchema.optional(),
+  issue: IssueAssociationSchema.nullable().optional(),
   workflow: WorkflowIdSchema.default("standard"),
   advisorProfileIds: AdvisorProfileIdsSchema.default({}),
   dependsOn: z.array(id).max(MAX_TASK_DEPENDENCIES).default([]),
@@ -45,6 +50,9 @@ export type TaskInput = z.input<typeof TaskInputSchema>;
 export type TaskRequest = z.output<typeof TaskInputSchema>;
 
 export const TaskConfigurationSchema = z.object({
+  providerPolicy: ProjectProviderPolicySchema.nullable().optional(),
+  integration: ProjectIntegrationSchema.optional(),
+  execution: ProjectExecutionSchema.optional(),
   repository: z.string().min(1),
   repositoryPath: z.string().min(1),
   worktreeRoot: z.string().min(1),
@@ -71,6 +79,7 @@ const TaskHumanQuestionSchema = z.discriminatedUnion("kind", [
 export const TaskSchema = z.object({
   id, companyId: id, projectId: id,
   issueKey: z.string().nullable(),
+  issue: IssueAssociationSchema.nullable().optional(),
   title: z.string(), description: z.string(),
   status: TaskControlStatusSchema,
   deliveryTarget: DeliveryTargetSchema,
@@ -89,6 +98,7 @@ export const TaskSchema = z.object({
   limits: TaskLimitsSchema.extend({ admittedTurns: z.number().int().nonnegative() }).strict(),
   wakeAt: z.string().nullable(),
   images: z.array(TaskImageSchema),
+  artifacts: z.array(TaskImageSchema).optional(),
   createdAt: z.string(), updatedAt: z.string(), statusChangedAt: z.string(), archivedAt: z.string().nullable(),
 }).strict();
 export type Task = z.infer<typeof TaskSchema>;

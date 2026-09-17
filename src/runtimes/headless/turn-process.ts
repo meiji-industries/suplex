@@ -9,6 +9,7 @@ import { withWorktreeMiseTrust } from "../../coordination/worker-environment.js"
 import { compareProcessIdentity, executionProcessEnvironment, inspectProcessOnce, sessionProcessEnvironment, stopExecutionProcesses, stopOwnedProcesses, stopSessionProcesses, taskProcessEnvironment, type OwnedProcess } from "../../platform/process-manager.js";
 import type { PromptDispatchAttempt } from "../../tasks/control.js";
 import type { PromptIntent, TaskScope } from "../task-harness.js";
+import { excludeEnvironmentKeys } from "../project-environment.js";
 
 export const HeadlessTurnRecordSchema = z.object({
   generation: z.string().uuid(),
@@ -103,7 +104,7 @@ export async function dispatchHeadless(input: { runtimeDirectory: string; scope:
     const command = '"$0" "$@"; code=$?; printf "%s\\n" "$code" > "$FORGE_HEADLESS_EXIT_FILE"; exit "$code"';
     child = spawn("/bin/sh", ["-c", command, input.executable, ...input.args], {
       cwd: input.scope.directory,
-      env: { ...withWorktreeMiseTrust(input.environment ?? process.env, input.scope.directory), ...taskProcessEnvironment(input.scope.directory), ...sessionProcessEnvironment(input.runtimeDirectory), ...executionProcessEnvironment(input.runtimeDirectory, generation), FORGE_HEADLESS_EXIT_FILE: files.exit },
+      env: excludeEnvironmentKeys({ ...withWorktreeMiseTrust(input.environment ?? process.env, input.scope.directory), ...input.scope.projectEnvironment, ...taskProcessEnvironment(input.scope.directory), ...sessionProcessEnvironment(input.runtimeDirectory), ...executionProcessEnvironment(input.runtimeDirectory, generation), FORGE_HEADLESS_EXIT_FILE: files.exit }, input.scope.excludedEnvironmentKeys),
       detached: true,
       stdio: [promptFile.fd, log.fd, stderr.fd],
     });

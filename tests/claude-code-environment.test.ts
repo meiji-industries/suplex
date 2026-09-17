@@ -11,7 +11,7 @@ import { CLAUDE_CODE_PROVIDER, type TaskScope } from "../src/runtimes/task-harne
 
 const directories: string[] = [];
 const sessionID = "71618050-0d31-428e-a547-d6c4a2eca88f";
-const expectedEnvironment = { sentinel: true, ghConfig: true, ghConfigFile: true, homeUnchanged: true, claudeConfig: true };
+const expectedEnvironment = { sentinel: true, ghConfig: true, ghConfigFile: true, homeUnchanged: true, claudeConfig: true, authIsolated: true };
 const noPane: TaskPanePort = {
   getPane: async () => { throw new Error("Dispatch must not use a task pane"); },
   getPaneProcessInfo: async () => { throw new Error("Dispatch must not use a task pane"); },
@@ -24,7 +24,7 @@ const noPane: TaskPanePort = {
 
 type EnvironmentObservation = typeof expectedEnvironment;
 type Fixture = { executable: string; observation: string; providerConfig: string; root: string; worktree: string };
-type CallerEnvironment = { claudeConfig: string; ghConfig: string; homeHash: string; sentinel: string };
+type CallerEnvironment = { claudeConfig: string; ghConfig: string; homeHash: string; sentinel: string; dedicated?: boolean };
 
 afterEach(async () => {
   vi.unstubAllEnvs();
@@ -56,6 +56,7 @@ try {
     ghConfigFile: typeof process.env.GH_CONFIG_DIR === "string" && fs.readFileSync(path.join(process.env.GH_CONFIG_DIR, "hosts.yml"), "utf8") === "github.com:\\n  user: fixture\\n",
     homeUnchanged: createHash("sha256").update(process.env.HOME ?? "").digest("hex") === expected.homeHash,
     claudeConfig: process.env.CLAUDE_CONFIG_DIR === expected.claudeConfig,
+    authIsolated: expected.dedicated ? !process.env.ANTHROPIC_API_KEY && !process.env.ANTHROPIC_BASE_URL && !process.env.CLAUDE_CODE_USE_VERTEX && !process.env.CLAUDE_CODE_OAUTH_TOKEN && process.env.ANTHROPIC_CONFIG_DIR === path.join(expected.claudeConfig, "anthropic") : process.env.ANTHROPIC_API_KEY === "global-fixture",
   };
 } catch { checks = failed; }
 process.stdout.write(JSON.stringify(checks));
@@ -91,6 +92,10 @@ async function configureCallerEnvironment(root: string, name: string): Promise<C
   await writeFile(join(ghConfig, "hosts.yml"), "github.com:\n  user: fixture\n");
   vi.stubEnv("FORGE_CLAUDE_ENV_SENTINEL", `${name}-sentinel`);
   vi.stubEnv("CLAUDE_CONFIG_DIR", parentConfig);
+  vi.stubEnv("ANTHROPIC_API_KEY", "global-fixture");
+  vi.stubEnv("ANTHROPIC_BASE_URL", "https://wrong.example");
+  vi.stubEnv("CLAUDE_CODE_USE_VERTEX", "1");
+  vi.stubEnv("CLAUDE_CODE_OAUTH_TOKEN", "global-fixture");
   vi.stubEnv("GH_CONFIG_DIR", ghConfig);
   const expected = { sentinel: `${name}-sentinel`, claudeConfig: parentConfig, ghConfig, homeHash: createHash("sha256").update(process.env.HOME ?? "").digest("hex") };
   await writeExpectation(root, expected);
@@ -121,7 +126,7 @@ async function waitForTerminalObservation(runtime: ClaudeCodeTaskRuntime, taskSc
   throw new Error("Fixture Claude process did not finish");
 }
 
-function scope(input: { role: "root" | "advisor"; worktree: string; providerConfig?: string | null }): TaskScope {
+function scope(input: { role: "root" | "advisor" | "worker"; worktree: string; providerConfig?: string | null }): TaskScope {
   const base = {
     id: `claude-${input.role}`,
     taskId: "task-claude",
@@ -130,12 +135,13 @@ function scope(input: { role: "root" | "advisor"; worktree: string; providerConf
     evidenceRoot: null,
     profile: { providerID: CLAUDE_CODE_PROVIDER, modelID: "haiku", reasoningEffort: "low" as const, serviceTier: "default" as const, ...(input.providerConfig === undefined ? {} : { instanceHomeDirectory: input.providerConfig }) },
   };
+  if (input.role === "worker") return { ...base, role: "worker", workerMode: "planned", purpose: "implementation" };
   return input.role === "root"
     ? { ...base, role: "root", identity: { taskId: base.taskId, sessionId: base.id, generation: 1 } }
     : { ...base, role: "advisor", advisorRole: "reviewer", label: "Reviewer" };
 }
 
-function intent(role: "root" | "advisor", prompt = "Inspect configuration") {
+function intent(role: "root" | "advisor" | "worker", prompt = "Inspect configuration") {
   return createOpenCodePromptIntent({ sessionID, directory: "/fixture", prompt, model: { providerID: CLAUDE_CODE_PROVIDER, modelID: "haiku" }, agent: `forge-${role}`, variant: "low" });
 }
 
@@ -146,12 +152,13 @@ test.each([
   ["advisor", undefined],
   ["advisor", null],
   ["advisor", "custom"],
+  ["worker", "custom"],
 ] as const)("%s dispatch inherits caller configuration and applies the %s instance setting", async (role, instance) => {
   const f = await fixture();
   configureFixtureExecutable(f);
   const expected = await configureCallerEnvironment(f.root, `${role}-${instance ?? "default"}`);
   const providerConfig = instance === "custom" ? f.providerConfig : instance;
-  if (providerConfig) await writeExpectation(f.root, { ...expected, claudeConfig: providerConfig });
+  if (providerConfig) await writeExpectation(f.root, { ...expected, claudeConfig: providerConfig, dedicated: true });
   const taskScope = scope(providerConfig === undefined ? { role, worktree: f.worktree } : { role, worktree: f.worktree, providerConfig });
   const runtime = new ClaudeCodeTaskRuntime(join(f.root, "forge.sqlite"), noPane, { executable: f.executable });
   const taskIntent = intent(role);
@@ -161,11 +168,13 @@ test.each([
   await runtime.stop(taskScope, sessionID);
 });
 
-test("a recreated runtime reads the caller environment again without a pane", async () => {
+test.each([null, "dedicated"])("a recreated runtime preserves %s auth isolation without a pane", async instance => {
   const f = await fixture();
   configureFixtureExecutable(f);
-  const rootScope = scope({ role: "root", worktree: f.worktree, providerConfig: null });
-  await configureCallerEnvironment(f.root, "first");
+  const providerConfig = instance ? f.providerConfig : null;
+  const rootScope = scope({ role: "root", worktree: f.worktree, providerConfig });
+  const first = await configureCallerEnvironment(f.root, "first");
+  if (providerConfig) await writeExpectation(f.root, { ...first, claudeConfig: providerConfig, dedicated: true });
   const firstIntent = intent("root");
   const initialRuntime = new ClaudeCodeTaskRuntime(join(f.root, "forge.sqlite"), noPane, { executable: f.executable });
   await initialRuntime.dispatch(rootScope, firstIntent, async () => true);
@@ -173,7 +182,8 @@ test("a recreated runtime reads the caller environment again without a pane", as
   expect((await waitForTerminalObservation(initialRuntime, rootScope, firstIntent)).state).toBe("completed");
   await initialRuntime.stop(rootScope, sessionID);
   await rm(f.observation);
-  await configureCallerEnvironment(f.root, "second");
+  const second = await configureCallerEnvironment(f.root, "second");
+  if (providerConfig) await writeExpectation(f.root, { ...second, claudeConfig: providerConfig, dedicated: true });
   const secondIntent = intent("root", "Inspect configuration again");
   const recreatedRuntime = new ClaudeCodeTaskRuntime(join(f.root, "forge.sqlite"), noPane, { executable: f.executable });
   await recreatedRuntime.dispatch(rootScope, secondIntent, async () => true);

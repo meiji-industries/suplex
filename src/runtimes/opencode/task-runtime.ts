@@ -1,7 +1,7 @@
 import { stopSessionProcesses, stopExecutionProcesses } from "../../platform/process-manager.js";
 import { randomUUID } from "node:crypto";
 import { readFile, rename, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import { resolveOpenCodeExecutable } from "../../platform/executable-resolver.js";
 import { ensureOpenCodeServer, OpenCodeServerReferenceSchema, openCodeAttachCommand, openCodeServerRunning, openCodeRoleConfig, openCodeServerClient, readOpenCodeServer, stopOpenCodeServer, type OpenCodeServerReference } from "./server.js";
 import { openCodeModel, reconcileOpenCodePrompt, replayOpenCodePrompt } from "./session.js";
@@ -11,6 +11,7 @@ import { attachTaskDisplay, type TaskPanePort } from "../task-display.js";
 import { taskRolePrompt } from "../../tasks/execution/role-prompt.js";
 import { createGitCommandGuard, withWorktreeMiseTrust } from "../../coordination/worker-environment.js";
 import { executionFromMessages } from "./session-reader.js";
+import { excludeEnvironmentKeys } from "../project-environment.js";
 
 export type OpenCodeTaskScope = TaskScope;
 
@@ -34,11 +35,11 @@ export class OpenCodeTaskRuntime implements TaskHarness {
       ? await writeRootBridgeBinding({ runtimeDirectory, identity: scope.identity, databasePath: this.databasePath, artifactRoot: this.options.artifactRoot })
       : scope.role === "advisor" ? await writeAdvisorReportBridgeBinding({ runtimeDirectory, role: scope.advisorRole }) : undefined;
     const guard = scope.role === "worker" ? await createGitCommandGuard(runtimeDirectory, "git-guard") : undefined;
-    const evidenceDirectory = scope.role !== "worker" && scope.workflow !== "standard" && scope.evidenceRoot ? scope.evidenceRoot : undefined;
+    const evidenceDirectory = scope.role !== "worker" && (scope.workflow !== "standard" || scope.projectContextPath) && scope.evidenceRoot ? scope.evidenceRoot : undefined;
     const reference = await ensureOpenCodeServer({
       runtimeDirectory, executable, directory: scope.directory,
-      config: openCodeRoleConfig({ role: scope.role, profile: scope.profile, ...(bridge ? { bridge } : {}), ...(evidenceDirectory ? { evidenceDirectory, directory: scope.directory } : {}) }),
-      env: withWorktreeMiseTrust(guard?.env ?? process.env, scope.directory),
+      config: openCodeRoleConfig({ role: scope.role, profile: scope.profile, ...(bridge ? { bridge } : {}), ...(evidenceDirectory ? { evidenceDirectory, directory: scope.directory } : {}), ...(scope.projectContextPath ? { contextDirectory: dirname(scope.projectContextPath) } : {}) }),
+      env: excludeEnvironmentKeys(withWorktreeMiseTrust({ ...(guard?.env ?? process.env), ...scope.projectEnvironment }, scope.directory), scope.excludedEnvironmentKeys),
     });
     const client = openCodeServerClient(reference);
     if (scope.role !== "worker") {

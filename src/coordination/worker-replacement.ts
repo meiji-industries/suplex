@@ -1,4 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
+import { TaskConfigurationSchema } from "../tasks/contracts.js";
+import { assertProfileAllowed } from "../projects/provider-policy.js";
 import type { WorkerReplacementRequest } from "./worker-replacement-contracts.js";
 import type { ForgeDatabase } from "../platform/database.js";
 import { TaskProfileSchema, type TaskSession } from "../tasks/control.js";
@@ -9,7 +11,7 @@ import { turnOutcome } from "./workflows.js";
 
 export function replaceWorker(database: ForgeDatabase, taskId: string, request: WorkerReplacementRequest): TaskSession {
   return database.authImmediateTransaction(db => {
-    const task = db.prepare("SELECT c.*, t.archived_at FROM forge_task_controls c JOIN forge_tasks t ON t.id = c.task_id WHERE c.task_id = ?").get(taskId) as Row | undefined;
+    const task = db.prepare("SELECT c.*, t.archived_at, t.configuration_json FROM forge_task_controls c JOIN forge_tasks t ON t.id = c.task_id WHERE c.task_id = ?").get(taskId) as Row | undefined;
     if (!task || task.archived_at !== null || !["active", "waiting_human"].includes(String(task.status))) throw new Error("Only active or paused tasks can replace a Worker.");
     const previous = db.prepare("SELECT * FROM forge_task_sessions WHERE task_id = ? AND id = ? AND kind = 'worker' AND advisor_role IS NULL").get(taskId, request.sessionId) as Row | undefined;
     if (!previous) throw new Error("The Worker does not belong to this task.");
@@ -20,9 +22,10 @@ export function replaceWorker(database: ForgeDatabase, taskId: string, request: 
     const assignment = assignments.at(-1);
     if (!assignment) throw new Error("The Worker has no saved assignment.");
     const previousProfile = TaskProfileSchema.parse(JSON.parse(String(previous.profile_json ?? task.worker_profile_json)));
-    const selected = request.workerProfileId ? db.prepare("SELECT id AS profileId, provider, model, reasoning_level AS reasoningLevel, service_tier AS serviceTier FROM forge_profiles WHERE id = ? AND role = 'worker' AND archived_at IS NULL").get(request.workerProfileId) : previousProfile;
+    const selected = request.workerProfileId ? db.prepare("SELECT p.id AS profileId, p.provider, p.model, p.reasoning_level AS reasoningLevel, p.service_tier AS serviceTier, p.provider_instance_id AS providerInstanceId, i.home_directory AS instanceHomeDirectory FROM forge_profiles p LEFT JOIN forge_provider_instances i ON i.id = p.provider_instance_id WHERE p.id = ? AND p.role = 'worker' AND p.archived_at IS NULL").get(request.workerProfileId) : previousProfile;
     if (!selected) throw new Error("The selected Worker profile does not exist.");
     const profile = TaskProfileSchema.parse(selected);
+    assertProfileAllowed(TaskConfigurationSchema.pick({ providerPolicy: true }).strip().parse(JSON.parse(String(task.configuration_json))).providerPolicy, profile);
     const latestResult = [...assignments].reverse().find(value => value.terminalObservation !== null);
     const result = latestResult ? turnOutcome(latestResult.terminalObservation).text ?? "" : "No completed Worker result exists.";
     const handoff = [`Reason for replacement: ${request.reason}`, request.handoff ? `Additional direction:\n${request.handoff}` : "", `Latest Worker result (verify its claims against source and command evidence):\n${result.slice(-12000)}`, "Inspect the preserved worktree, branch, and current Git status. Preserve existing commits and uncommitted work. Finish the remaining assignment and its checks. Report exact verification and the resulting commit. Use a different approach if the previous attempts did not advance the assignment."].filter(Boolean).join("\n\n");

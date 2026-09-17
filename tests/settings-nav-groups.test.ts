@@ -15,7 +15,7 @@ const hrefs = (groups: SettingsNavGroup[]): Record<string, string> =>
 test("admin sees Company, AI, and System groups in order", () => {
   const groups = buildSettingsGroups("company-1", admin);
   expect(titles(groups)).toEqual(["Company", "AI", "System"]);
-  expect(items(groups, "Company")).toEqual(["Onboarding", "Profile", "Templates", "Workspace", "Workflows", "Triggers"]);
+  expect(items(groups, "Company")).toEqual(["Profile", "Templates", "Workspace", "Workflows", "Triggers", "Onboarding"]);
   expect(items(groups, "AI")).toEqual(["Agents", "Models", "Providers"]);
   expect(items(groups, "System")).toEqual(["Users", "Companies", "Passkeys", "Invitations", "Environment", "Host health"]);
 });

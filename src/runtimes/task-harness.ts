@@ -4,6 +4,7 @@ import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { z } from "zod";
 import { HARNESS_KIND_IDS, type HarnessKind } from "./harness-kind.js";
+import type { ProjectMcp } from "./project-mcp.js";
 import { StructuredLogger } from "../platform/logging.js";
 import { resolveGhExecutable } from "../platform/executable-resolver.js";
 import type { OpenCodePromptIntent, OpenCodePromptObservation } from "./opencode/session.js";
@@ -36,6 +37,11 @@ export type TaskScope = {
   profile: TaskProfileSelection;
   workflow: WorkflowId;
   evidenceRoot: string | null;
+  projectMcp?: ProjectMcp;
+  projectContext?: string;
+  projectContextPath?: string;
+  projectEnvironment?: Record<string, string>;
+  excludedEnvironmentKeys?: string[];
 } & ({ role: "root"; identity: RootIdentity } | { role: "worker"; workerMode: "planned" | "direct"; purpose: "implementation" | "verification" } | { role: "advisor"; advisorRole: AdvisorRole; label: string });
 
 export interface TaskHarness {
@@ -76,11 +82,6 @@ export const CODEX_MODELS = [
 /** A profile provider is already a harness kind; a snapshot that escaped the migration ran on OpenCode. */
 export function profileHarness(providerID: string): HarnessKind {
   return (HARNESS_KIND_IDS as readonly string[]).includes(providerID) ? providerID as HarnessKind : "opencode";
-}
-
-/** Provider-owned configuration directories are opt-in per harness. */
-export function instanceEnvironment(providerID: string, homeDirectory: string | null): NodeJS.ProcessEnv {
-  return providerID === "claude-code" && homeDirectory ? { CLAUDE_CONFIG_DIR: homeDirectory } : {};
 }
 
 export function supportsProviderInstances(providerID: string): boolean {
@@ -204,7 +205,11 @@ export class HarnessRouter implements TaskHarness {
   ensureSession(scope: TaskScope, nativeSessionId: string | null): Promise<string> { return this.forScope(scope).ensureSession(scope, nativeSessionId); }
   attach(input: Parameters<TaskHarness["attach"]>[0]): Promise<string> { return this.forScope(input.scope).attach(input); }
   observe(scope: TaskScope, intent: PromptIntent, attempt?: PromptDispatchAttempt | null): Promise<PromptObservation> { return this.forScope(scope).observe(scope, intent, attempt); }
-  dispatch(scope: TaskScope, intent: PromptIntent, claim: (serverGeneration: string) => Promise<boolean>): Promise<PromptObservation> { return this.forScope(scope).dispatch(scope, intent, claim); }
+  async dispatch(scope: TaskScope, intent: PromptIntent, claim: (serverGeneration: string) => Promise<boolean>): Promise<PromptObservation> {
+    const prepared = scope.projectContextPath ? await readFile(scope.projectContextPath, "utf8").catch(() => "Prepared project context is unavailable. Inspect the actual worktree and configured skill sources before continuing.") : "";
+    const context = [scope.projectContext, prepared].filter(Boolean).join("\n\n");
+    return this.forScope(scope).dispatch(scope, context ? { ...intent, prompt: `${context}\n\n${intent.prompt}` } : intent, claim);
+  }
   recoverDispatch(scope: TaskScope, intent: PromptIntent, attempt: PromptDispatchAttempt): Promise<PromptObservation> { return this.forScope(scope).recoverDispatch(scope, intent, attempt); }
   resultText(scope: TaskScope, observation: PromptObservation): Promise<string> { return this.forScope(scope).resultText(scope, observation); }
   turnEvidence(scope: TaskScope, observation: PromptObservation): ReturnType<TaskHarness["turnEvidence"]> { return this.forScope(scope).turnEvidence(scope, observation); }

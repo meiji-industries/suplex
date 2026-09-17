@@ -11,7 +11,7 @@ export const TaskSessionLifecycleSchema = z.enum(["reserved", "live", "stopped",
 export const TaskTurnStatusSchema = z.enum(["pending_prompt", "prompted", "unknown", "completed", "cancelled"]);
 export const PromptDispatchAttemptSchema = z.object({ serverGeneration: z.string().uuid(), claimedAt: z.string().datetime() }).strict();
 export type PromptDispatchAttempt = z.infer<typeof PromptDispatchAttemptSchema>;
-export const TaskProfileFieldsSchema = z.object({ profileId: z.string().min(1), provider: HarnessKindSchema, model: z.string().min(1), reasoningLevel: z.enum(["low", "medium", "high", "xhigh", "max"]), serviceTier: z.enum(["default", "priority"]), instanceHomeDirectory: z.string().nullable().optional() }).strict();
+export const TaskProfileFieldsSchema = z.object({ profileId: z.string().min(1), provider: HarnessKindSchema, model: z.string().min(1), reasoningLevel: z.enum(["low", "medium", "high", "xhigh", "max"]), serviceTier: z.enum(["default", "priority"]), providerInstanceId: z.string().nullable().optional(), instanceHomeDirectory: z.string().nullable().optional() }).strict();
 
 // Stored task, session and trigger snapshots written before the
 // providers-as-harnesses migration carry the OpenCode vendor id as provider.

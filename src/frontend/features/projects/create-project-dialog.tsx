@@ -7,6 +7,8 @@ import { NewButton } from "../../components/ui/new-button.js";
 import { readJson, type CompanyStatus } from "../../lib/api.js";
 import { reconcileScopedNotFound, type ApiProject } from "../../shell/view-shared.js";
 import { useEffect, useState, type FormEvent, type ReactElement } from "react";
+import { ProjectConnections } from "./project-connections.js";
+import { ProjectIntegrationSchema, type ProjectIntegration } from "../../../projects/integration-configuration.js";
 
 export function CreateProjectDialog({
   open,
@@ -24,6 +26,8 @@ export function CreateProjectDialog({
   reloadCompanies: () => Promise<void>;
 }): ReactElement {
   const [repositoryUrl, setRepositoryUrl] = useState("");
+  const [integration, setIntegration] = useState<ProjectIntegration>({ repository: { kind: "github" }, tracker: null });
+  const [baseBranch, setBaseBranch] = useState("main");
   const [findings, setFindings] = useState<Array<{ field: string; message: string }>>([]);
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
@@ -31,6 +35,8 @@ export function CreateProjectDialog({
   useEffect(() => {
     if (open) {
       setRepositoryUrl("");
+      setIntegration({ repository: { kind: "github" }, tracker: null });
+      setBaseBranch("main");
       setFindings([]);
       setError("");
       setBusy(false);
@@ -46,7 +52,7 @@ export function CreateProjectDialog({
     try {
       await readJson<ApiProject>(`/api/companies/${companyId}/projects`, {
         method: "POST",
-        body: JSON.stringify({ repositoryUrl: repositoryUrl.trim() }),
+        body: JSON.stringify({ repositoryUrl: repositoryUrl.trim(), baseBranch, integration: ProjectIntegrationSchema.parse(integration) }),
       });
       await onCreated();
       onOpenChange(false);
@@ -68,10 +74,12 @@ export function CreateProjectDialog({
           ) : (
             <form className="grid gap-3" onSubmit={(event: FormEvent) => void submit(event)}>
               <Field>
-                <FieldLabel htmlFor="project-repository-url">GitHub repository URL</FieldLabel>
+                <FieldLabel htmlFor="project-repository-url">Repository URL</FieldLabel>
                 <Input id="project-repository-url" name="repositoryUrl" autoFocus autoComplete="off" spellCheck={false} placeholder="https://github.com/owner/repository" aria-describedby="project-repository-hint" value={repositoryUrl} onChange={(event) => setRepositoryUrl(event.target.value)} />
                 <FieldDescription id="project-repository-hint">HTTPS and SSH URLs are supported. Forge clones into <span className="font-mono">~/forge/repos</span> and creates worktrees in <span className="font-mono">~/forge/worktrees</span>.</FieldDescription>
               </Field>
+              <Field><FieldLabel htmlFor="create-base-branch">Base branch</FieldLabel><Input id="create-base-branch" value={baseBranch} onChange={event => setBaseBranch(event.target.value)} /></Field>
+              <ProjectConnections value={integration} onChange={setIntegration} />
               <DialogFooter><DialogClose render={<Button type="button" variant="outline" size="sm">Cancel</Button>} /><NewButton type="submit" disabled={busy || !companyId || !repositoryUrl.trim()}>{busy ? "Cloning…" : "New project"}</NewButton></DialogFooter>
             </form>
           )}

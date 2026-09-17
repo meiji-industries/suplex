@@ -7,6 +7,19 @@ import { RootBridge } from "../src/coordination/root-bridge.js";
 import { join } from "node:path";
 
 afterEach(cleanupRootControllerFixtures);
+
+test("replacement preserves the dedicated login and rejects a disallowed provider", async () => {
+  const f = await assigned();
+  f.database.authTransaction(db => {
+    db.prepare("INSERT INTO forge_provider_instances (id, provider, label, home_directory, created_at, updated_at) VALUES ('client', 'claude-code', 'Client', '/dedicated/client', 'now', 'now')").run();
+    db.prepare("INSERT INTO forge_profiles (id, name, role, avatar_seed, provider, provider_instance_id, model, reasoning_level, service_tier, created_at, updated_at) VALUES ('client-worker', 'Client', 'worker', 'seed', 'claude-code', 'client', 'sonnet', 'high', 'default', 'now', 'now')").run();
+    db.prepare("UPDATE forge_tasks SET configuration_json = json_set(configuration_json, '$.providerPolicy', json(?)) WHERE id = 'task'").run(JSON.stringify({ allowedProviders: ["claude-code"], allowedInstanceIds: ["client"] }));
+  });
+  expect(() => f.store.replaceWorker("task", { sessionId: f.old.id, workerProfileId: "profile_native_worker", reason: "Change model" })).toThrow("allowed by this project");
+  const replacement = f.store.replaceWorker("task", { sessionId: f.old.id, workerProfileId: "client-worker", reason: "Use client login" });
+  expect(replacement.profile).toMatchObject({ providerInstanceId: "client", instanceHomeDirectory: "/dedicated/client" });
+  expect(f.store.replaceWorker("task", { sessionId: replacement.id, reason: "Fresh session" }).profile).toEqual(replacement.profile);
+});
 const assignment = { plan: "Finish the feature", acceptanceCriteria: ["Complete behavior and tests"], instruction: "Preserve work and finish the implementation." };
 
 async function assigned() {

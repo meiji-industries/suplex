@@ -10,7 +10,7 @@ export type DeliveryGithubPort = Required<Pick<GithubReleaseAdapter,
   "getRemoteRepository" | "getBranchHead" | "inspectLocalRevision" | "pushNormal" |
   "listPullRequests" | "createDraftPullRequest" | "getPullRequest" |
   "observePullRequest" | "markReadyForReview" | "mergePullRequest"
->> & Partial<Pick<GithubReleaseAdapter, "mergePullRequestDirect">> & Partial<Pick<GithubTriggerPort, "inspectPullRequest">>;
+>> & Partial<Pick<GithubReleaseAdapter, "mergePullRequestDirect" | "updateDraftPullRequest">> & Partial<Pick<GithubTriggerPort, "inspectPullRequest">>;
 
 type Recheck = () => void;
 type Trigger = { policy: { dispatchId: string; repositoryId: number; repositoryName: string; pullRequestNumber: number; headSha: string; baseSha: string; headBranch: string; baseBranch: string; protectedPaths: string[] }; pull: GithubTriggerPullRequestInspection } | null;

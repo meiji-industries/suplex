@@ -1,4 +1,7 @@
 import { z } from "zod";
+import { ProjectIntegrationSchema } from "../../projects/integration-configuration.js";
+import { ProjectExecutionSchema } from "../../projects/execution-configuration.js";
+import { ProjectProviderPolicySchema } from "../../projects/provider-policy.js";
 import { HarnessKindSchema } from "../../runtimes/harness-kind.js";
 import { AgentProfileInputSchema, AgentProfilePatchSchema, AgentProfileSchema } from "../../profiles/agent-profile-contracts.js";
 import { ProviderSummarySchema } from "./providers.js";
@@ -24,6 +27,8 @@ export const ProjectAgentTaskPolicySchema = z.object({
 export type ProjectAgentTaskPolicy = z.infer<typeof ProjectAgentTaskPolicySchema>;
 
 export const ProjectBodySchema = z.object({
+  integration: ProjectIntegrationSchema.optional(),
+  execution: ProjectExecutionSchema.optional(),
   name: z.string().min(1),
   repositoryPath: z.string().min(1),
   worktreeRoot: z.string().min(1),
@@ -34,8 +39,9 @@ export const ProjectBodySchema = z.object({
   rootProfileId: z.string().min(1),
   workerProfileId: z.string().min(1),
   agentTaskPolicy: ProjectAgentTaskPolicySchema.optional(),
+  providerPolicy: ProjectProviderPolicySchema.nullable().optional(),
 }).strict();
-export const ProjectRepositoryBodySchema = z.object({ repositoryUrl: z.string().min(1) }).strict();
+export const ProjectRepositoryBodySchema = z.object({ repositoryUrl: z.string().min(1), integration: ProjectIntegrationSchema.optional(), baseBranch: z.string().min(1).optional() }).strict();
 export const ProjectCreateBodySchema = z.union([ProjectRepositoryBodySchema, ProjectBodySchema]);
 export const ProjectResponseSchema = ProjectBodySchema.extend({
   id: z.string(), companyId: z.string(), repository: z.string().optional(), createdAt: z.string(), updatedAt: z.string(),

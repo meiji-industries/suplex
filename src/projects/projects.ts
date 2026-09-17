@@ -1,4 +1,10 @@
+import { ProjectIntegrationSchema, type ProjectIntegration } from "./integration-configuration.js";
+import { ProjectExecutionSchema, type ProjectExecution } from "./execution-configuration.js";
+import { BitbucketClient, createBitbucketReleasePort } from "../integrations/bitbucket.js";
+import { repositoryCoordinate } from "./repository-coordinate.js";
+import { IssueTracker } from "../integrations/issue-tracker.js";
 import { randomBytes } from "node:crypto";
+import { ProjectProviderPolicySchema, type ProjectProviderPolicy } from "./provider-policy.js";
 import { access, constants, lstat, readFile, realpath, stat } from "node:fs/promises";
 import { join, relative, resolve, sep } from "node:path";
 import type { Database } from "better-sqlite3";
@@ -20,7 +26,6 @@ import {
 } from "./repository-inspection.js";
 import {
   defaultRepositoryProvisioner as createRepositoryProvisioner,
-  parseGithubRepositoryUrl as parseRepositoryUrl,
 } from "./repository-provisioning.js";
 import { ProjectFailure, type ProjectFinding } from "./contracts.js";
 import { ProjectAgentTaskPolicySchema, type ProjectAgentTaskPolicy } from "../http/contracts/projects.js";
@@ -37,6 +42,9 @@ export interface AgentModelOption {
 }
 
 export interface ProjectInput {
+  integration?: ProjectIntegration | undefined;
+  execution?: ProjectExecution | undefined;
+  providerPolicy?: ProjectProviderPolicy | null | undefined;
   name: string;
   repositoryPath: string;
   worktreeRoot: string;
@@ -50,6 +58,9 @@ export interface ProjectInput {
 }
 
 export interface Project {
+  integration?: ProjectIntegration;
+  execution?: ProjectExecution;
+  providerPolicy?: ProjectProviderPolicy | null;
   id: string;
   companyId: string;
   name: string;
@@ -81,12 +92,6 @@ export interface RepositoryProvisioner {
   ensure(input: { cloneUrl: string; repository: string; repositoryPath: string; worktreeRoot: string }): Promise<void>;
 }
 
-export interface GithubRepositoryCoordinate {
-  cloneUrl: string;
-  repository: string;
-  name: string;
-}
-
 interface ProjectServiceOptions {
   readProviders?: ReadProviders;
   github?: GithubAdapter;
@@ -98,6 +103,9 @@ interface ProjectServiceOptions {
 }
 
 interface ProjectRow {
+  integration_json: string | null;
+  execution_json: string | null;
+  provider_policy_json: string | null;
   id: string;
   company_id: string;
   name: string;
@@ -132,6 +140,8 @@ function withinRoot(candidate: string, root: string): boolean {
 
 function normalizedInput(input: ProjectInput, paths: { repositoryPath: string; worktreeRoot: string }): ProjectInput {
   const normalized: ProjectInput = {
+    ...(input.integration ? { integration: ProjectIntegrationSchema.parse(input.integration) } : {}),
+    ...(input.execution ? { execution: ProjectExecutionSchema.parse(input.execution) } : {}),
     name: input.name.trim(),
     repositoryPath: paths.repositoryPath,
     worktreeRoot: paths.worktreeRoot,
@@ -151,6 +161,8 @@ function publicProject(row: ProjectRow): Project {
     advisorProfileIds: { reviewer: [], planner_a: [], planner_b: [], rater: [] }, deliveryTarget: "pull_request_draft", runProjectTests: true, visualEvidence: "off",
   };
   return {
+    ...(row.integration_json ? { integration: ProjectIntegrationSchema.parse(JSON.parse(row.integration_json)) } : {}),
+    ...(row.execution_json ? { execution: ProjectExecutionSchema.parse(JSON.parse(row.execution_json)) } : {}),
     id: row.id,
     companyId: row.company_id,
     name: row.name,
@@ -163,6 +175,7 @@ function publicProject(row: ProjectRow): Project {
     rootProfileId: row.root_profile_id,
     workerProfileId: row.worker_profile_id,
     agentTaskPolicy: readAgentTaskPolicy(row.agent_task_policy_json, defaultAgentTaskPolicy),
+    providerPolicy: row.provider_policy_json ? ProjectProviderPolicySchema.parse(JSON.parse(row.provider_policy_json)) : null,
     createdAt: row.created_at,
     updatedAt: row.updated_at,
   };
@@ -186,7 +199,6 @@ function isUsableCommand(command: string): boolean {
 }
 
 export { inferRepositoryCommands } from "./repository-commands.js";
-export { parseGithubRepositoryUrl } from "./repository-provisioning.js";
 
 export class ProjectService {
   private readonly now: () => Date;
@@ -230,10 +242,12 @@ export class ProjectService {
     return this.mutateProject(actorUserId, companyId, input, false);
   }
 
-  async createProjectFromRepository(actorUserId: string, companyId: string, repositoryUrl: string): Promise<Project> {
+  async createProjectFromRepository(actorUserId: string, companyId: string, repositoryUrl: string, options: { integration?: ProjectIntegration | undefined; baseBranch?: string | undefined } = {}): Promise<Project> {
     const company = this.auth.requireCompanyAccess(actorUserId, companyId);
     if (company.status !== "active") throw new ProjectFailure("Company is not active", [finding("company-inactive", "companyId", "Project configuration requires an active company")], 409);
-    const coordinate = parseRepositoryUrl(repositoryUrl);
+    const coordinate = repositoryCoordinate(repositoryUrl);
+    if (!coordinate) throw new ProjectFailure("Repository URL is invalid", [], 422);
+    if (coordinate.host !== (options.integration?.repository.kind ?? "github")) throw new ProjectFailure("Select the repository host and its credentials", [], 422);
     const [owner, repositoryName] = coordinate.repository.split("/");
     if (!owner || !repositoryName) throw new ProjectFailure("GitHub repository URL is invalid", [finding("repository-url", "repositoryUrl", "Use an HTTPS or SSH URL for one GitHub repository")], 422);
     const repositoryPath = resolve(this.config.repositoryRoot, owner, repositoryName);
@@ -248,7 +262,8 @@ export class ProjectService {
       repositoryPath,
       worktreeRoot,
       repository: coordinate.repository,
-      baseBranch: "main",
+      baseBranch: options.baseBranch ?? "main",
+      ...(options.integration ? { integration: options.integration } : {}),
       setupCommand: commands.setupCommand,
       verificationCommand: commands.verificationCommand,
       rootProfileId: "profile_native_root",
@@ -265,7 +280,7 @@ export class ProjectService {
   /** Resolve the runtime values that a newly-created task owns thereafter. */
   async captureTaskConfiguration(project: Project): Promise<{ baseSha: string }> {
     try {
-      const inspection = await (this.localRepository ?? await createLocalRepositoryAdapter()).inspect({ repositoryPath: project.repositoryPath, baseBranch: project.baseBranch });
+      const inspection = await (this.localRepository ?? await createLocalRepositoryAdapter(project.integration?.repository.kind)).inspect({ repositoryPath: project.repositoryPath, baseBranch: project.baseBranch });
       if (!inspection.baseSha) throw new Error("branch unavailable");
       return { baseSha: inspection.baseSha };
     } catch {
@@ -274,11 +289,22 @@ export class ProjectService {
   }
 
   async discoverTaskSources(actorUserId: string, projectId: string, kind: TaskSourceSelector["kind"]): Promise<Awaited<ReturnType<TaskSourceService["discover"]>>> {
-    return this.taskSources.discover(this.getProject(actorUserId, projectId), kind);
+    const project = this.getProject(actorUserId, projectId);
+    if (kind === "issue" && project.integration && (project.integration.tracker?.kind !== "github" || project.integration.tracker.repository.toLowerCase() !== project.repository?.toLowerCase())) return { available: false, reason: "Select the issue with the task's Issue field.", sources: [] };
+    const sources = project.integration?.repository.kind === "bitbucket" ? new TaskSourceService(createBitbucketReleasePort(project.integration.repository)) : this.taskSources;
+    return sources.discover(project, kind);
   }
 
   async resolveTaskSource(project: Project, selector: TaskSourceSelector): Promise<Awaited<ReturnType<TaskSourceService["resolve"]>>> {
-    return this.taskSources.resolve(project, selector);
+    if (selector.kind === "issue" && project.integration && (project.integration.tracker?.kind !== "github" || project.integration.tracker.repository.toLowerCase() !== project.repository?.toLowerCase())) throw new ProjectFailure("Select the configured tracker issue with the task's Issue field.", [], 422);
+    const sources = project.integration?.repository.kind === "bitbucket" ? new TaskSourceService(createBitbucketReleasePort(project.integration.repository)) : this.taskSources;
+    return sources.resolve(project, selector);
+  }
+
+  async searchIssues(actorUserId: string, projectId: string, query: string) {
+    const project = this.getProject(actorUserId, projectId);
+    const tracker = project.integration ? project.integration.tracker : project.repository ? { kind: "github" as const, repository: project.repository } : null;
+    return tracker ? new IssueTracker(tracker).search(query) : [];
   }
 
   getProject(actorUserId: string, projectId: string): Project {
@@ -346,10 +372,11 @@ export class ProjectService {
     if (worktree.path) {
       try { await access(worktree.path, constants.W_OK); } catch { findings.push(finding("worktree-unwritable", "worktreeRoot", "Worktree root must be writable")); }
     }
-    const normalized = normalizedInput(input, { repositoryPath: repository.path ?? resolve(input.repositoryPath), worktreeRoot: worktree.path ?? resolve(input.worktreeRoot) });
+    const previous = updating && projectId ? this.getProject(actorUserId, projectId) : undefined;
+    const normalized = normalizedInput({ ...input, integration: input.integration ?? previous?.integration }, { repositoryPath: repository.path ?? resolve(input.repositoryPath), worktreeRoot: worktree.path ?? resolve(input.worktreeRoot) });
     if (this.validateProjectConfiguration && findings.length === 0) {
       try {
-        const inspection = await (this.localRepository ?? await createLocalRepositoryAdapter()).inspect({ repositoryPath: normalized.repositoryPath, baseBranch: normalized.baseBranch });
+        const inspection = await (this.localRepository ?? await createLocalRepositoryAdapter(normalized.integration?.repository.kind)).inspect({ repositoryPath: normalized.repositoryPath, baseBranch: normalized.baseBranch });
         if (inspection.canonicalPath !== normalized.repositoryPath) findings.push(finding("repository-path-mismatch", "repositoryPath", "Repository path is not canonical"));
         if (!inspection.baseSha) findings.push(finding("branch-unavailable", "baseBranch", "Configured branches must resolve to commits"));
         if (inspection.remoteRepository !== normalized.repository) findings.push(finding("repository-mismatch", "repository", "Local origin does not match configured repository identity"));
@@ -360,12 +387,16 @@ export class ProjectService {
     }
     if (this.validateProjectConfiguration && findings.length === 0) {
       try {
-        await this.github.checkAuthentication();
-        const remote = await this.github.getRepository({ cwd: normalized.repositoryPath, nameWithOwner: normalized.repository });
+        const connection = normalized.integration?.repository;
+        if (connection?.kind !== "bitbucket") await this.github.checkAuthentication();
+        const remote = connection?.kind === "bitbucket"
+          ? await new BitbucketClient(connection).repository(normalized.repository)
+          : await this.github.getRepository({ cwd: normalized.repositoryPath, nameWithOwner: normalized.repository });
+        const expectedHost = connection?.kind === "bitbucket" ? "bitbucket.org" : "github.com";
         if (remote.nameWithOwner.toLowerCase() !== normalized.repository.toLowerCase()) findings.push(finding("provider-mismatch", "repository", "GitHub repository identity does not match configuration"));
         let providerUrl: URL | undefined;
         try { providerUrl = new URL(remote.url); } catch {}
-        if (!providerUrl || providerUrl.protocol !== "https:" || providerUrl.hostname.toLowerCase() !== "github.com") findings.push(finding("provider-host", "repository", "GitHub provider returned a URL outside github.com"));
+        if (!providerUrl || providerUrl.protocol !== "https:" || providerUrl.hostname.toLowerCase() !== expectedHost) findings.push(finding("provider-host", "repository", "GitHub provider returned a URL outside github.com"));
         else if (providerUrl.username || providerUrl.password || providerUrl.search || providerUrl.hash || providerUrl.pathname.replace(/\/$/, "").replace(/\.git$/, "").slice(1).toLowerCase() !== normalized.repository) findings.push(finding("provider-path", "repository", "GitHub provider URL does not match configured repository identity"));
       } catch (reason) {
         findings.push(finding(reason instanceof GithubFailure && (reason as GithubFailure).code === "authentication" ? "github-auth-unavailable" : "github-repository-unavailable", "repository", "GitHub repository identity could not be verified"));
@@ -389,6 +420,12 @@ export class ProjectService {
         deliveryTarget: "pull_request_draft", runProjectTests: true, visualEvidence: "off",
       };
       const stored = updating ? this.rowForProject(db, id)! : undefined;
+      const providerPolicy = input.providerPolicy === undefined ? stored?.provider_policy_json ?? null : input.providerPolicy === null ? null : JSON.stringify(ProjectProviderPolicySchema.parse(input.providerPolicy));
+      if (providerPolicy) {
+        for (const instanceId of ProjectProviderPolicySchema.parse(JSON.parse(providerPolicy)).allowedInstanceIds) {
+          if (!db.prepare("SELECT 1 FROM forge_provider_instances WHERE id = ?").get(instanceId)) throw new ProjectFailure("Project configuration is invalid", [finding("instance-ineligible", "providerPolicy", "Select an existing provider login")], 422);
+        }
+      }
       const storedPolicy = stored ? readAgentTaskPolicy(stored.agent_task_policy_json, defaultPolicy) : undefined;
       // Without an explicit policy body the stored allowlists still have to admit the project's own defaults, or agent creates without profile ids would be refused.
       const policy = ProjectAgentTaskPolicySchema.parse(input.agentTaskPolicy ?? (storedPolicy ? { ...storedPolicy, rootProfileIds: withProfile(storedPolicy.rootProfileIds, normalized.rootProfileId), workerProfileIds: withProfile(storedPolicy.workerProfileIds, normalized.workerProfileId) } : defaultPolicy));
@@ -400,7 +437,9 @@ export class ProjectService {
       } else {
         db.prepare("INSERT INTO forge_projects (id, company_id, name, repository_path, worktree_root, repository_identity, base_branch, setup_command, verification_command, root_profile_id, worker_profile_id, agent_task_policy_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(id, companyId, normalized.name, normalized.repositoryPath, normalized.worktreeRoot, normalized.repository, normalized.baseBranch, normalized.setupCommand, normalized.verificationCommand, normalized.rootProfileId, normalized.workerProfileId, JSON.stringify(policy), now, now);
       }
+      db.prepare("UPDATE forge_projects SET integration_json = ?, execution_json = ? WHERE id = ?").run(input.integration === undefined ? stored?.integration_json ?? null : JSON.stringify(normalized.integration), input.execution === undefined ? stored?.execution_json ?? null : JSON.stringify(normalized.execution), id);
       this.auth.recordAuditEventInTransaction(db, actorUserId, updating ? "project_updated" : "project_created", undefined, companyId, { projectId: id });
+      db.prepare("UPDATE forge_projects SET provider_policy_json = ? WHERE id = ?").run(providerPolicy, id);
       return { id };
       });
     } catch (error) {

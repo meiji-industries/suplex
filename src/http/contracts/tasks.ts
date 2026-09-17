@@ -1,5 +1,6 @@
 import { WorkerReplacementRequestSchema, WorkerReplacementSchema } from "../../coordination/worker-replacement-contracts.js";
 import { z } from "zod";
+import { IssueAssociationSchema } from "../../tasks/issue-association.js";
 import { HarnessKindSchema } from "../../runtimes/harness-kind.js";
 import { DeliveryTargetSchema as DeliveryTarget, TaskInputSchema, TaskSchema, VisualEvidenceSchema as VisualEvidence } from "../../tasks/contracts.js";
 import { TaskSessionKindSchema, TaskTurnStatusSchema } from "../../tasks/control.js";
@@ -27,6 +28,7 @@ export const TaskDetailsBodySchema = z.object({
   advisorProfileIds: AdvisorProfileIdsSchema,
 }).partial().strict();
 export const TaskBlockedByBodySchema = z.object({ blockedByTaskId: z.string().min(1).max(256).nullable() }).strict();
+export const TaskIssueBodySchema = z.object({ issue: IssueAssociationSchema.nullable() }).strict();
 export const TaskRenameBodySchema = TaskInputSchema.pick({ title: true });
 export const TaskDependenciesBodySchema = TaskInputSchema.pick({ dependsOn: true }).required().strict();
 export const TaskArchiveBodySchema = z.object({ confirmDiscardDirty: z.boolean().optional() }).strict();

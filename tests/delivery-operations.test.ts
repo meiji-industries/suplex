@@ -3,7 +3,8 @@ import { cp, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-import { afterAll, afterEach, describe, expect, it } from "vitest";
+import { afterAll, afterEach, describe, expect, it, vi } from "vitest";
+import { IssueEvidence } from "../src/delivery/issue-evidence.js";
 
 import { createTestDatabase } from "./helpers/test-database.js";
 import { DeliveryOperations, type DeliveryGithubPort } from "../src/delivery/operations.js";
@@ -68,6 +69,22 @@ async function fixture() {
   const review = { baseSha: local.headSha, headSha: local.headSha, files: [], commits: [] };
   return { database, directory, local, root, store, review };
 }
+
+it.each([null, "b".repeat(40)])("accepts current review before publishing existing draft evidence with %s authorization", async previous => {
+  const value = await fixture();
+  const fake = github(value.local, value.review.baseSha);
+  value.database.authTransaction(db => db.prepare("UPDATE forge_task_controls SET delivery_target = 'pull_request_draft' WHERE task_id = 'task'").run());
+  if (previous) value.store.updateWorkflowState("task", state => ({ ...state, acceptedDelivery: { ...value.review, headSha: previous } }));
+  const evidence = vi.spyOn(IssueEvidence.prototype, "complete").mockImplementation(async () => {
+    expect(value.store.get("task").workflowState.acceptedDelivery?.headSha).toBe(value.local.headSha);
+  });
+  try {
+    await new DeliveryOperations(value.store, fake.port).execute({ taskId: "task", sessionId: value.root.id, generation: value.root.generation }, "create_or_adopt_pull_request", value.local.headSha, value.review);
+    expect(evidence).toHaveBeenCalledOnce();
+    expect(value.store.get("task").status).toBe("delivered");
+    expect(fake.calls).not.toContain("push");
+  } finally { evidence.mockRestore(); value.database.close(); }
+});
 
 function github(local: LocalRevision, baseSha = "base") {
   const calls: string[] = [];

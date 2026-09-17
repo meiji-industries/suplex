@@ -11,6 +11,13 @@ import { TaskControlStore } from "../coordination/root-session-store.js";
 import { createTaskHarness, nativeSessionReader } from "../runtimes/task-harness-registry.js";
 import { prepareTaskWorktree } from "./worktree.js";
 import { taskEvidenceRoot } from "../coordination/workflow-evidence.js";
+import { prepareProjectWorkspace } from "./preparation.js";
+import { hasStartedNativeWork, prepareIssueContext } from "./issue-context.js";
+import { ProjectExecutionSchema } from "../projects/execution-configuration.js";
+import { projectCredentialEnvironmentKeys } from "../runtimes/project-environment.js";
+import { MissingIntegrationCredential } from "../projects/integration-configuration.js";
+import { IssueTrackerScopeFailure } from "../integrations/issue-tracker.js";
+import { ProviderHttpFailure } from "../integrations/provider-http.js";
 
 type Controller = Pick<RootController, "prepareRoot" | "recover">;
 
@@ -19,6 +26,7 @@ export class TaskHost {
   private readonly controller: Controller;
   private readonly delivery: Pick<DeliveryOperations, "observe"> & Partial<Pick<DeliveryOperations, "observeDeliveryWait">>;
   private readonly worktree: typeof prepareTaskWorktree;
+  private readonly artifactRoot: string;
   private readonly running = new Map<string, Promise<void>>();
   private timer: NodeJS.Timeout | undefined;
   private stopping = false;
@@ -29,9 +37,10 @@ export class TaskHost {
   constructor(private readonly database: ForgeDatabase, options: { completedPullRequests?: Pick<CompletedPullRequests, "refresh">; artifactRoot?: string; controller?: Controller; delivery?: Pick<DeliveryOperations, "observe"> & Partial<Pick<DeliveryOperations, "observeDeliveryWait">>; worktree?: typeof prepareTaskWorktree } = {}) {
     this.store = new TaskControlStore(database);
     this.completedPullRequests = options.completedPullRequests ?? new CompletedPullRequests(database);
-    this.delivery = options.delivery ?? new DeliveryOperations(this.store);
-    const artifactRoot = options.artifactRoot ?? join(dirname(database.filename()), "artifacts");
-    this.controller = options.controller ?? new RootController(this.store, createTaskHarness(database.filename(), new CliHerdrClient(), { artifactRoot }), undefined, new ArtifactStore(artifactRoot), { root: taskEvidenceRoot(database.filename()) }, session => nativeSessionReader(database.filename(), session));
+    const artifactRoot = this.artifactRoot = options.artifactRoot ?? join(dirname(database.filename()), "artifacts");
+    const nativeDelivery = new DeliveryOperations(this.store, undefined, artifactRoot);
+    this.delivery = options.delivery ?? nativeDelivery;
+    this.controller = options.controller ?? new RootController(this.store, createTaskHarness(database.filename(), new CliHerdrClient(), { artifactRoot }), nativeDelivery, new ArtifactStore(artifactRoot), { root: taskEvidenceRoot(database.filename()) }, session => nativeSessionReader(database.filename(), session));
     this.worktree = options.worktree ?? prepareTaskWorktree;
   }
 
@@ -82,11 +91,25 @@ export class TaskHost {
     try { await this.delivery.observe(taskId); } catch (error) { observationError = error; }
     if (this.store.get(taskId).status === "active") {
       try {
-        this.controller.prepareRoot(taskId);
         const configuration = this.store.context(taskId).configuration;
         const worktree = await this.worktree({ taskId, repositoryPath: configuration.repositoryPath, worktreeRoot: configuration.worktreeRoot, branch: configuration.branch, startingSha: configuration.startingSha });
         if (this.store.get(taskId).status === "active") this.store.setWorktree(taskId, worktree);
+        if (!hasStartedNativeWork(this.database, taskId)) {
+          try { await prepareIssueContext(this.database, taskId, undefined, this.artifactRoot); }
+          catch (error) {
+            if (error instanceof MissingIntegrationCredential || error instanceof IssueTrackerScopeFailure || error instanceof ProviderHttpFailure && [401, 403, 404].includes(error.status)) {
+              if (this.store.get(taskId).status === "active") this.store.askHuman(taskId, `Forge cannot read the linked issue. ${error.message}. Check the issue and tracker access, then answer to retry.`);
+              return;
+            }
+            new StructuredLogger().warn("Issue context intake will be retried", { taskId }, { error: error instanceof Error ? error.message : String(error) });
+            this.store.scheduleWake(taskId, new Date(Date.now() + 15_000).toISOString());
+            return;
+          }
+          if (configuration.execution || configuration.integration || this.store.context(taskId).issueContext) await prepareProjectWorkspace({ databasePath: this.database.filename(), taskId, directory: worktree.path, execution: configuration.execution ?? ProjectExecutionSchema.parse({}), setupCommand: configuration.setupCommand, excludedEnvironmentKeys: projectCredentialEnvironmentKeys(configuration.integration, configuration.execution?.mcp) });
+        }
+        this.controller.prepareRoot(taskId);
       } catch (error) {
+        this.controller.prepareRoot(taskId);
         if (this.store.get(taskId).status === "active") this.store.askHuman(taskId, `Forge could not prepare this task. ${error instanceof Error ? error.message : "Worktree preparation failed"}. Resolve the problem, then answer to retry.`);
       }
     }

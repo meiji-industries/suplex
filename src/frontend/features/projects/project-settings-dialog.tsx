@@ -1,4 +1,11 @@
 import { Alert, AlertDescription } from "../../components/ui/alert.js";
+import { Textarea } from "../../components/ui/textarea.js";
+import { ProjectConnections } from "./project-connections.js";
+import { ProjectIntegrationSchema, type ProjectIntegration } from "../../../projects/integration-configuration.js";
+import { ProjectExecutionSchema } from "../../../projects/execution-configuration.js";
+import { Checkbox } from "../../components/ui/checkbox.js";
+import { HARNESS_KIND_IDS } from "../../../runtimes/harness-kind.js";
+import { isProfileAllowed, type ProjectProviderPolicy } from "../../../projects/provider-policy.js";
 import { Button } from "../../components/ui/button.js";
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "../../components/ui/dialog.js";
 import { Field, FieldDescription, FieldGroup, FieldLabel, FieldLegend, FieldSet } from "../../components/ui/field.js";
@@ -9,6 +16,12 @@ import { readJson, withCompany } from "../../lib/api.js";
 import type { ApiProfile, ApiProject } from "../../shell/view-shared.js";
 import { useEffect, useState, type FormEvent, type ReactElement } from "react";
 type ProjectSettingsForm = {
+  integration: ProjectIntegration;
+  instructions: string;
+  skillDirectories: string;
+  mcp: string;
+  environment: string;
+  providerPolicy: ProjectProviderPolicy | null;
   name: string;
   baseBranch: string;
   setupCommand: string;
@@ -19,6 +32,12 @@ type ProjectSettingsForm = {
 
 function settingsForm(project: ApiProject): ProjectSettingsForm {
   return {
+    integration: project.integration ?? { repository: { kind: "github" }, tracker: project.repository ? { kind: "github", repository: project.repository } : null },
+    instructions: project.execution?.instructions ?? "",
+    skillDirectories: project.execution?.skillDirectories.join("\n") ?? "",
+    mcp: JSON.stringify(project.execution?.mcp ?? [], null, 2),
+    environment: JSON.stringify(project.execution?.environment ?? {}, null, 2),
+    providerPolicy: project.providerPolicy ?? null,
     name: project.name,
     baseBranch: project.baseBranch,
     setupCommand: project.setupCommand,
@@ -65,6 +84,8 @@ export function ProjectSettingsDialog({
         method: "PATCH",
         body: JSON.stringify({
           name: form.name,
+          integration: ProjectIntegrationSchema.parse(form.integration),
+          execution: ProjectExecutionSchema.parse({ instructions: form.instructions, skillDirectories: form.skillDirectories.split("\n").map(path => path.trim()).filter(Boolean), mcp: JSON.parse(form.mcp), environment: JSON.parse(form.environment) }),
           repositoryPath: project.repositoryPath,
           worktreeRoot: project.worktreeRoot,
           repository: project.repository ?? "",
@@ -73,6 +94,7 @@ export function ProjectSettingsDialog({
           verificationCommand: form.verificationCommand,
           rootProfileId: form.rootProfileId,
           workerProfileId: form.workerProfileId,
+          providerPolicy: form.providerPolicy,
         }),
       });
       await onSaved();
@@ -97,10 +119,24 @@ export function ProjectSettingsDialog({
               <Field><FieldLabel htmlFor="project-setup-command">Setup command</FieldLabel><Input id="project-setup-command" value={form.setupCommand} onChange={(event) => setField("setupCommand", event.target.value)} /></Field>
               <Field><FieldLabel htmlFor="project-verification-command">Verification command</FieldLabel><Input id="project-verification-command" value={form.verificationCommand} onChange={(event) => setField("verificationCommand", event.target.value)} /></Field>
               <FieldSet>
+                <FieldLegend variant="label">Provider access</FieldLegend>
+                <Field orientation="horizontal"><Checkbox id="project-provider-policy" checked={form.providerPolicy !== null} onCheckedChange={checked => setField("providerPolicy", checked ? { allowedProviders: [...HARNESS_KIND_IDS], allowedInstanceIds: [] } : null)} /><FieldLabel htmlFor="project-provider-policy">Restrict providers and logins</FieldLabel></Field>
+                {form.providerPolicy ? <>
+                  {HARNESS_KIND_IDS.map(provider => <Field key={provider} orientation="horizontal"><Checkbox id={`project-provider-${provider}`} checked={form.providerPolicy!.allowedProviders.includes(provider)} onCheckedChange={checked => setField("providerPolicy", { ...form.providerPolicy!, allowedProviders: checked ? [...form.providerPolicy!.allowedProviders, provider] : form.providerPolicy!.allowedProviders.filter(value => value !== provider) })} /><FieldLabel htmlFor={`project-provider-${provider}`}>{provider}</FieldLabel></Field>)}
+                  <FieldDescription>Claude Code needs an allowed dedicated login. Add logins and agents in Settings.</FieldDescription>
+                  {[...new Set(agents.flatMap(agent => agent.providerInstanceId ? [agent.providerInstanceId] : []))].map(id => <Field key={id} orientation="horizontal"><Checkbox id={`project-login-${id}`} checked={form.providerPolicy!.allowedInstanceIds.includes(id)} onCheckedChange={checked => setField("providerPolicy", { ...form.providerPolicy!, allowedInstanceIds: checked ? [...form.providerPolicy!.allowedInstanceIds, id] : form.providerPolicy!.allowedInstanceIds.filter(value => value !== id) })} /><FieldLabel htmlFor={`project-login-${id}`}>Login for {agents.filter(agent => agent.providerInstanceId === id).map(agent => agent.name).join(", ")}</FieldLabel></Field>)}
+                </> : null}
+              </FieldSet>
+              <ProjectConnections value={form.integration} onChange={value => setField("integration", value)} />
+              <Field><FieldLabel htmlFor="project-instructions">Project instructions</FieldLabel><Textarea id="project-instructions" value={form.instructions} onChange={event => setField("instructions", event.target.value)} /></Field>
+              <Field><FieldLabel htmlFor="project-skills">Skill directories, one per line</FieldLabel><Textarea id="project-skills" value={form.skillDirectories} onChange={event => setField("skillDirectories", event.target.value)} /></Field>
+              <Field><FieldLabel htmlFor="project-environment">Environment values (JSON)</FieldLabel><Textarea id="project-environment" value={form.environment} onChange={event => setField("environment", event.target.value)} /><FieldDescription>Use non-secret values. Configure credential references in Connections.</FieldDescription></Field>
+              <Field><FieldLabel htmlFor="project-mcp">Claude MCP servers and tool grants (JSON)</FieldLabel><Textarea id="project-mcp" value={form.mcp} onChange={event => setField("mcp", event.target.value)} /><FieldDescription>Claude profiles only. Use environment variable names for credential references. Grant tools to Coordinator, Advisor, and Worker explicitly.</FieldDescription></Field>
+              <FieldSet>
                 <FieldLegend variant="label">Default agents</FieldLegend>
                 {(["rootProfileId", "workerProfileId"] as const).map((key) => {
                   const role = key === "rootProfileId" ? "root" : "worker";
-                  const options = agents.filter((agent) => agent.role === role);
+                  const options = agents.filter((agent) => agent.role === role && isProfileAllowed(form.providerPolicy, agent));
                   const selected = options.find((agent) => agent.id === form[key]);
                   return <Field key={key}><FieldLabel htmlFor={`project-${key}`}>{role === "root" ? "Coordinator" : "Worker"} default</FieldLabel><Select value={form[key] || null} onValueChange={(value) => setField(key, value ?? "")}><SelectTrigger id={`project-${key}`}><SelectValue placeholder="None">{selected ? <span className="flex items-center gap-2"><EntityAvatar kind="agent" id={selected.id} name={selected.name} seed={selected.avatarSeed} />{selected.name}</span> : "None"}</SelectValue></SelectTrigger><SelectContent>{options.map((agent) => <SelectItem key={agent.id} value={agent.id}><span className="flex items-center gap-2"><EntityAvatar kind="agent" id={agent.id} name={agent.name} seed={agent.avatarSeed} />{agent.name}</span></SelectItem>)}</SelectContent></Select></Field>;
                 })}

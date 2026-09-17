@@ -61,7 +61,7 @@ export function ProjectsView(): ReactElement {
           {currentCompany ? (
             <div className="grid gap-3">
               {!loadError && loadedCompanyId !== companyId ? <div className="flex items-center gap-2 py-8 text-xs text-muted-foreground" aria-busy="true"><Spinner /><span>Loading projects…</span></div> : null}
-              <ProjectCards projects={visibleProjects} agents={agents} onSaved={reload} />
+              <ProjectCards projects={visibleProjects} agents={agents} />
               {!loading && loadedCompanyId === companyId && visibleProjects.length === 0 ? <Empty>
                 <EmptyHeader>
                   <EmptyMedia variant="icon"><FolderGit2 aria-hidden="true" /></EmptyMedia>

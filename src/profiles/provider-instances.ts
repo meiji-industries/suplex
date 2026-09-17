@@ -36,9 +36,12 @@ export class ProviderInstanceService {
   async delete(userId: string, id: string): Promise<void> {
     this.requireAdmin(userId);
     const instance = this.get(id);
-    const inUse = this.database.authQuery(db => db.prepare("SELECT 1 FROM forge_profiles WHERE provider_instance_id = ? LIMIT 1").get(id));
-    if (inUse) throw new AuthFailure("This provider instance is used by an agent profile", 409);
-    this.database.authTransaction(db => db.prepare("DELETE FROM forge_provider_instances WHERE id = ?").run(id));
+    this.database.authTransaction(db => {
+      const profileReference = db.prepare("SELECT 1 FROM forge_profiles WHERE provider_instance_id = ? LIMIT 1").get(id);
+      const projectReference = db.prepare("SELECT 1 FROM forge_projects p, json_each(p.provider_policy_json, '$.allowedInstanceIds') allowed WHERE allowed.value = ? LIMIT 1").get(id);
+      if (profileReference || projectReference) throw new AuthFailure("This provider instance is used by an agent profile or project", 409);
+      db.prepare("DELETE FROM forge_provider_instances WHERE id = ?").run(id);
+    });
     await rm(instance.homeDirectory, { recursive: true, force: true });
   }
   private get(id: string): ProviderInstance {

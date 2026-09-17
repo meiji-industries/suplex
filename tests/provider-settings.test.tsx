@@ -132,3 +132,28 @@ test("Add Provider creates a Claude Code instance through the dialog", async () 
   await act(async () => { submit!.click(); });
   expect(api.readJson).toHaveBeenCalledWith("/api/admin/provider-instances", { method: "POST", body: JSON.stringify({ provider: "claude-code", label: "Work laptop" }) });
 });
+
+test("a provider deletion conflict closes the dialog and shows the server error", async () => {
+  mockReads();
+  api.readJson.mockImplementation(async (url: string, init?: RequestInit) => {
+    if (init?.method === "DELETE" && url === "/api/admin/provider-instances/instance_1") throw new Error("Provider instance is used by a project provider restriction.");
+    if (url === "/api/admin/providers") return providersResponse;
+    if (url === "/api/admin/provider-instances") return { instances: [instance] };
+    return {};
+  });
+  const container = document.createElement("div");
+  document.body.append(container);
+  await act(async () => { createRoot(container).render(<ProviderSettingsView />); });
+
+  const deleteButton = Array.from(container.querySelectorAll("button")).find(button => button.textContent === "Delete");
+  expect(deleteButton).not.toBeNull();
+  await act(async () => { deleteButton!.click(); });
+  expect(document.body.textContent).toContain("Change agent profiles and project provider restrictions that use it first.");
+
+  const confirm = Array.from(document.body.querySelectorAll("button")).find(button => button.textContent === "Delete instance");
+  expect(confirm).not.toBeNull();
+  await act(async () => { confirm!.click(); });
+
+  expect(document.body.textContent).not.toContain("Delete Work laptop?");
+  expect(container.querySelector('[role="alert"]')?.textContent).toBe("Provider instance is used by a project provider restriction.");
+});

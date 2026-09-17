@@ -4,7 +4,7 @@ import { ProjectExecutionSchema } from "../../projects/execution-configuration.j
 import { ProjectProviderPolicySchema } from "../../projects/provider-policy.js";
 import { HarnessKindSchema } from "../../runtimes/harness-kind.js";
 import { AgentProfileInputSchema, AgentProfilePatchSchema, AgentProfileSchema } from "../../profiles/agent-profile-contracts.js";
-import { ProviderSummarySchema } from "./providers.js";
+import { ProviderInstanceSchema, ProviderSummarySchema } from "./providers.js";
 import { DeliveryTargetSchema, VisualEvidenceSchema } from "../../tasks/contracts.js";
 
 const profileId = z.string().min(1).max(256);
@@ -41,6 +41,14 @@ export const ProjectBodySchema = z.object({
   agentTaskPolicy: ProjectAgentTaskPolicySchema.optional(),
   providerPolicy: ProjectProviderPolicySchema.nullable().optional(),
 }).strict();
+export const ProjectPatchBodySchema = ProjectBodySchema.partial().extend({
+  execution: z.object({
+    instructions: ProjectExecutionSchema.shape.instructions.removeDefault().optional(),
+    skillDirectories: ProjectExecutionSchema.shape.skillDirectories.removeDefault().optional(),
+    environment: ProjectExecutionSchema.shape.environment.removeDefault().optional(),
+    mcp: ProjectExecutionSchema.shape.mcp.removeDefault().optional(),
+  }).strict().optional(),
+}).strict().refine((value) => Object.keys(value).length > 0, "Provide at least one project field");
 export const ProjectRepositoryBodySchema = z.object({ repositoryUrl: z.string().min(1), integration: ProjectIntegrationSchema.optional(), baseBranch: z.string().min(1).optional() }).strict();
 export const ProjectCreateBodySchema = z.union([ProjectRepositoryBodySchema, ProjectBodySchema]);
 export const ProjectResponseSchema = ProjectBodySchema.extend({
@@ -48,6 +56,8 @@ export const ProjectResponseSchema = ProjectBodySchema.extend({
 }).strip();
 export const ProjectListResponseSchema = z.object({ projects: z.array(ProjectResponseSchema) });
 export const ProjectRepositoryDefaultsResponseSchema = z.object({ setupCommand: z.string(), verificationCommand: z.string() });
+export const ProjectProviderInstanceSchema = ProviderInstanceSchema.pick({ id: true, provider: true, label: true });
+export const ProjectProviderInstanceListResponseSchema = z.object({ instances: z.array(ProjectProviderInstanceSchema) });
 export const ProfileBodySchema = AgentProfileInputSchema;
 export const ProfilePatchBodySchema = AgentProfilePatchSchema;
 export const ProfileListQuerySchema = z.object({ includeArchived: z.literal("true").optional() }).strict();
@@ -64,3 +74,5 @@ export const TaskSourceListResponseSchema = z.object({ available: z.boolean(), r
 export type ProfileResponse = z.infer<typeof ProfileResponseSchema>;
 export type ModelResponse = z.infer<typeof ModelResponseSchema>;
 export type ProjectResponse = z.infer<typeof ProjectResponseSchema>;
+export type ProjectPatchBody = z.infer<typeof ProjectPatchBodySchema>;
+export type ProjectProviderInstance = z.infer<typeof ProjectProviderInstanceSchema>;

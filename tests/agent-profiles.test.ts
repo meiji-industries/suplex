@@ -60,6 +60,25 @@ test("provider instances allocate private directories and protect profile refere
   } finally { await f.close(); }
 });
 
+test("provider instances protect project policy references until the policy clears", async () => {
+  const f = await nativeApp();
+  try {
+    const instances = new ProviderInstanceService(f.database, f.auth);
+    const instance = await instances.create(f.userId, { provider: "claude-code", label: "acmelaude" });
+    const defaultProviders = f.profiles.list(f.userId).filter((profile) => profile.id === f.project.rootProfileId || profile.id === f.project.workerProfileId).map((profile) => profile.provider);
+    await f.projects.patchProject(f.userId, f.project.id, { providerPolicy: { allowedProviders: [...new Set([...defaultProviders, instance.provider])], allowedInstanceIds: [instance.id] } });
+
+    await expect(instances.delete(f.userId, instance.id)).rejects.toMatchObject({ statusCode: 409 });
+    expect(f.projects.getProject(f.userId, f.project.id).providerPolicy?.allowedInstanceIds).toContain(instance.id);
+
+    await f.projects.patchProject(f.userId, f.project.id, { providerPolicy: null });
+    await instances.delete(f.userId, instance.id);
+    expect(f.database.authQuery((db) => db.prepare("SELECT 1 FROM forge_provider_instances WHERE id = ?").get(instance.id))).toBeUndefined();
+  } finally {
+    await f.close();
+  }
+});
+
 test("provider instance migration creates the table and profile reference", async () => {
   const f = await nativeApp();
   try {

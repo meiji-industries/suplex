@@ -44,7 +44,7 @@ function replaceCompanyLocation(companyId?: string, detailRoot?: string): void {
 
 function isScopedDetailPath(pathname: string, companyId: string): string | undefined {
   if (/^\/tasks\/[^/]+$/.test(pathname)) return "/tasks";
-  if (/^\/projects\/[^/]+$/.test(pathname)) return "/projects";
+  if (/^\/projects\/[^/]+(?:\/templates)?$/.test(pathname)) return "/projects";
   if (/^\/companies\/[^/]+\/settings$/.test(pathname)) return `/companies/${encodeURIComponent(companyId)}/settings`;
   return undefined;
 }

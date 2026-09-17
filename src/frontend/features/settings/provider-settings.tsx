@@ -71,7 +71,16 @@ export function ProviderSettingsView(): ReactElement {
       setBusy(false);
     }
   };
-  const remove = async (id: string): Promise<void> => { await readJson(`/api/admin/provider-instances/${encodeURIComponent(id)}`, { method: "DELETE" }); setDeleteTarget(null); await load(); };
+  const remove = async (id: string): Promise<void> => {
+    setDeleteTarget(null);
+    setError("");
+    try {
+      await readJson(`/api/admin/provider-instances/${encodeURIComponent(id)}`, { method: "DELETE" });
+      await load();
+    } catch (reason) {
+      setError(reason instanceof Error ? reason.message : "Forge could not delete the provider.");
+    }
+  };
   const loginButton = (key: string, rowLabel: string, url: string): ReactElement => (
     <Button size="sm" variant="outline" aria-label={`Login to ${rowLabel}`} disabled={loginPending !== null} onClick={() => void startLogin(key, rowLabel, url).catch(reason => setError(reason instanceof Error ? reason.message : "Forge could not open a sign-in pane."))}>{loginPending === key ? "Opening" : "Login"}</Button>
   );
@@ -104,13 +113,13 @@ export function ProviderSettingsView(): ReactElement {
           <SettingsTableCell><ConnectionBadge connection={instance.connection} /></SettingsTableCell>
           <SettingsTableCell><div className="flex gap-1">
             {instance.connection.status !== "connected" ? loginButton(`instance:${instance.id}`, instance.label, `/api/admin/provider-instances/${encodeURIComponent(instance.id)}/login`) : null}
-            <Button size="sm" variant="outline" onClick={() => setDeleteTarget(instance)}>Delete</Button>
+            <Button size="sm" variant="outline" onClick={() => { setError(""); setDeleteTarget(instance); }}>Delete</Button>
           </div></SettingsTableCell>
         </SettingsTableRow>)}
       </SettingsTableGroup> : null}
       {view.status === "loaded" && providers.length === 0 && instances.length === 0 ? <SettingsTableEmpty columnCount={columns.length}>No providers were found.</SettingsTableEmpty> : null}
      </SettingsDataTable>
-     <AlertDialog open={deleteTarget !== null} onOpenChange={open => { if (!open) setDeleteTarget(null); }}><AlertDialogContent><AlertDialogHeader><AlertDialogTitle>Delete {deleteTarget?.label}?</AlertDialogTitle><AlertDialogDescription>This deletes the local provider configuration. Agent profiles using it must be changed first.</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel>Cancel</AlertDialogCancel><AlertDialogAction onClick={() => { if (deleteTarget) void remove(deleteTarget.id); }}>Delete instance</AlertDialogAction></AlertDialogFooter></AlertDialogContent></AlertDialog>
+     <AlertDialog open={deleteTarget !== null} onOpenChange={open => { if (!open) setDeleteTarget(null); }}><AlertDialogContent><AlertDialogHeader><AlertDialogTitle>Delete {deleteTarget?.label}?</AlertDialogTitle><AlertDialogDescription>This deletes the local provider configuration. Change agent profiles and project provider restrictions that use it first.</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel>Cancel</AlertDialogCancel><AlertDialogAction onClick={() => { if (deleteTarget) void remove(deleteTarget.id); }}>Delete instance</AlertDialogAction></AlertDialogFooter></AlertDialogContent></AlertDialog>
      <Dialog open={addOpen} onOpenChange={open => { if (busy) return; setAddOpen(open); if (!open) setLabel(""); }}>
       <DialogContent showCloseButton={!busy}>
        <DialogHeader><DialogTitle>Add Provider</DialogTitle><DialogDescription>Forge creates a local Claude Code instance with its own sign-in.</DialogDescription></DialogHeader>

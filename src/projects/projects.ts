@@ -4,10 +4,11 @@ import { BitbucketClient, createBitbucketReleasePort } from "../integrations/bit
 import { repositoryCoordinate } from "./repository-coordinate.js";
 import { IssueTracker } from "../integrations/issue-tracker.js";
 import { randomBytes } from "node:crypto";
-import { ProjectProviderPolicySchema, type ProjectProviderPolicy } from "./provider-policy.js";
+import { isProfileAllowed, ProjectProviderPolicySchema, type ProjectProviderPolicy } from "./provider-policy.js";
 import { access, constants, lstat, readFile, realpath, stat } from "node:fs/promises";
 import { join, relative, resolve, sep } from "node:path";
 import type { Database } from "better-sqlite3";
+import { z } from "zod";
 
 import type { AuthUser } from "../identity/auth.js";
 import { AuthFailure, type AuthService } from "../identity/auth.js";
@@ -17,7 +18,7 @@ import type { ForgeDatabase } from "../platform/database.js";
 import { createGithubReleasePort, type GithubReleasePort } from "../integrations/github/delivery.js";
 import { TaskSourceService, type TaskSourceSelector } from "../tasks/sources.js";
 import { readProviders as readHostProviders, type ReadProviders } from "../profiles/provider-catalog.js";
-import type { HarnessKind } from "../runtimes/harness-kind.js";
+import { HarnessKindSchema, type HarnessKind } from "../runtimes/harness-kind.js";
 import { inferRepositoryCommands } from "./repository-commands.js";
 import {
   canonicalDirectory as inspectCanonicalDirectory,
@@ -28,7 +29,7 @@ import {
   defaultRepositoryProvisioner as createRepositoryProvisioner,
 } from "./repository-provisioning.js";
 import { ProjectFailure, type ProjectFinding } from "./contracts.js";
-import { ProjectAgentTaskPolicySchema, type ProjectAgentTaskPolicy } from "../http/contracts/projects.js";
+import { ProjectAgentTaskPolicySchema, ProjectPatchBodySchema, ProjectProviderInstanceSchema, type ProjectAgentTaskPolicy, type ProjectPatchBody, type ProjectProviderInstance } from "../http/contracts/projects.js";
 
 export { ProjectFailure, type ProjectFinding } from "./contracts.js";
 
@@ -128,6 +129,7 @@ const namePattern = /^[\p{L}\p{N}](?:[\p{L}\p{N} ._'-]{0,78}[\p{L}\p{N}])?$/u;
 const repositoryPattern = /^[A-Za-z0-9](?:[A-Za-z0-9_.-]{0,99})\/[A-Za-z0-9](?:[A-Za-z0-9_.-]{0,99})$/;
 const branchPattern = /^(?![./])(?!.*(?:\.\.|\.$|\.lock$|\/\/|\s|[~^:?*\[\\]))[A-Za-z0-9._/-]+$/;
 const secretPattern = /(?:gh[pousr]_|github_pat_|token\s*=|password\s*=|secret\s*=|BEGIN [A-Z ]+ PRIVATE KEY|sk-[A-Za-z0-9])/i;
+const projectProfileSchema = z.object({ provider: HarnessKindSchema, providerInstanceId: z.string().nullable() });
 
 function identifier(prefix: string): string {
   return `${prefix}_${randomBytes(12).toString("hex")}`;
@@ -238,6 +240,11 @@ export class ProjectService {
     return inferRepositoryCommands(project.repositoryPath);
   }
 
+  listProjectProviderInstances(actorUserId: string, projectId: string): ProjectProviderInstance[] {
+    this.getProject(actorUserId, projectId);
+    return this.database.authQuery((db) => z.array(ProjectProviderInstanceSchema).parse(db.prepare("SELECT id, provider, label FROM forge_provider_instances ORDER BY provider, label COLLATE NOCASE, id").all()));
+  }
+
   createProject(actorUserId: string, companyId: string, input: ProjectInput): Promise<Project> {
     return this.mutateProject(actorUserId, companyId, input, false);
   }
@@ -275,6 +282,91 @@ export class ProjectService {
   async updateProject(actorUserId: string, projectId: string, input: ProjectInput): Promise<Project> {
     const existing = this.getProject(actorUserId, projectId);
     return this.mutateProject(actorUserId, existing.companyId, input, true, projectId);
+  }
+
+  async patchProject(actorUserId: string, projectId: string, rawInput: ProjectPatchBody): Promise<Project> {
+    const input = ProjectPatchBodySchema.parse(rawInput);
+    const existing = this.getProject(actorUserId, projectId);
+    const company = this.auth.requireCompanyAccess(actorUserId, existing.companyId);
+    if (company.status !== "active") throw new ProjectFailure("Company is not active", [finding("company-inactive", "companyId", "Project configuration requires an active company")], 409);
+
+    const mergedExecution = input.execution ? ProjectExecutionSchema.parse({ ...existing.execution, ...input.execution }) : existing.execution;
+    const candidate: Project = {
+      ...existing,
+      name: input.name ?? existing.name,
+      repositoryPath: input.repositoryPath ?? existing.repositoryPath,
+      worktreeRoot: input.worktreeRoot ?? existing.worktreeRoot,
+      repository: input.repository ?? existing.repository,
+      baseBranch: input.baseBranch ?? existing.baseBranch,
+      setupCommand: input.setupCommand ?? existing.setupCommand,
+      verificationCommand: input.verificationCommand ?? existing.verificationCommand,
+      rootProfileId: input.rootProfileId ?? existing.rootProfileId,
+      workerProfileId: input.workerProfileId ?? existing.workerProfileId,
+      ...(input.integration !== undefined ? { integration: input.integration } : {}),
+      ...(mergedExecution !== undefined ? { execution: mergedExecution } : {}),
+      ...(input.providerPolicy !== undefined ? { providerPolicy: input.providerPolicy } : {}),
+      ...(input.agentTaskPolicy !== undefined ? { agentTaskPolicy: input.agentTaskPolicy } : {}),
+    };
+    const findings: ProjectFinding[] = [];
+    if (input.name !== undefined && !namePattern.test(input.name.trim())) findings.push(finding("invalid-name", "name", "Project name is invalid"));
+    if (input.setupCommand !== undefined && !isUsableCommand(input.setupCommand)) findings.push(finding("unapproved-command", "setupCommand", "Command must be a single non-empty line without secrets"));
+    if (input.verificationCommand !== undefined && !isUsableCommand(input.verificationCommand)) findings.push(finding("unapproved-command", "verificationCommand", "Command must be a single non-empty line without secrets"));
+
+    const repositoryConnectionChanged = input.integration !== undefined && JSON.stringify(input.integration.repository) !== JSON.stringify(existing.integration?.repository ?? { kind: "github" });
+    const repositoryChanged = input.repositoryPath !== undefined && input.repositoryPath !== existing.repositoryPath
+      || input.worktreeRoot !== undefined && input.worktreeRoot !== existing.worktreeRoot
+      || input.repository !== undefined && input.repository.trim().toLowerCase() !== existing.repository
+      || input.baseBranch !== undefined && input.baseBranch.trim() !== existing.baseBranch
+      || repositoryConnectionChanged;
+    const remoteRepositoryChanged = input.repositoryPath !== undefined && input.repositoryPath !== existing.repositoryPath
+      || input.repository !== undefined && input.repository.trim().toLowerCase() !== existing.repository
+      || repositoryConnectionChanged;
+    let repositoryPath = candidate.repositoryPath;
+    let worktreeRoot = candidate.worktreeRoot;
+    if (repositoryChanged) {
+      const inspected = await this.validatePatchedRepository(candidate, "worktreeRoot" in input, remoteRepositoryChanged);
+      repositoryPath = inspected.repositoryPath;
+      worktreeRoot = inspected.worktreeRoot;
+      findings.push(...inspected.findings);
+    }
+    if (findings.length) throw new ProjectFailure("Project configuration is invalid", findings, 422);
+
+    const now = this.now().toISOString();
+    try {
+      this.database.authTransaction((db) => {
+        const currentCompany = this.auth.requireCompanyAccess(actorUserId, existing.companyId);
+        if (currentCompany.status !== "active") throw new ProjectFailure("Company is not active", [], 409);
+        const stored = this.rowForProject(db, projectId);
+        if (!stored || stored.company_id !== existing.companyId) throw new ProjectFailure("Not found", [], 404);
+
+        if (input.name !== undefined) db.prepare("UPDATE forge_projects SET name = ? WHERE id = ?").run(input.name.trim(), projectId);
+        if (input.repositoryPath !== undefined) db.prepare("UPDATE forge_projects SET repository_path = ? WHERE id = ?").run(repositoryPath, projectId);
+        if (input.worktreeRoot !== undefined) db.prepare("UPDATE forge_projects SET worktree_root = ? WHERE id = ?").run(worktreeRoot, projectId);
+        if (input.repository !== undefined) db.prepare("UPDATE forge_projects SET repository_identity = ? WHERE id = ?").run(input.repository.trim().toLowerCase(), projectId);
+        if (input.baseBranch !== undefined) db.prepare("UPDATE forge_projects SET base_branch = ? WHERE id = ?").run(input.baseBranch.trim(), projectId);
+        if (input.setupCommand !== undefined) db.prepare("UPDATE forge_projects SET setup_command = ? WHERE id = ?").run(input.setupCommand.trim(), projectId);
+        if (input.verificationCommand !== undefined) db.prepare("UPDATE forge_projects SET verification_command = ? WHERE id = ?").run(input.verificationCommand.trim(), projectId);
+        if (input.integration !== undefined) db.prepare("UPDATE forge_projects SET integration_json = ? WHERE id = ?").run(JSON.stringify(ProjectIntegrationSchema.parse(input.integration)), projectId);
+        if (input.execution) {
+          const storedExecution = stored.execution_json ? ProjectExecutionSchema.parse(JSON.parse(stored.execution_json)) : ProjectExecutionSchema.parse({});
+          const execution = ProjectExecutionSchema.parse({ ...storedExecution, ...input.execution });
+          db.prepare("UPDATE forge_projects SET execution_json = ? WHERE id = ?").run(JSON.stringify(execution), projectId);
+        }
+
+        const agentChanged = input.rootProfileId !== undefined || input.workerProfileId !== undefined || input.agentTaskPolicy !== undefined || input.providerPolicy !== undefined;
+        if (agentChanged) this.patchAgentConfiguration(db, stored, projectId, input);
+        db.prepare("UPDATE forge_projects SET updated_at = ? WHERE id = ?").run(now, projectId);
+        this.auth.recordAuditEventInTransaction(db, actorUserId, "project_updated", undefined, existing.companyId, { projectId });
+      });
+    } catch (error) {
+      if (error instanceof Error && (error.message.includes("forge_projects.") || error.message.includes("forge_projects_repository_identity_unique"))) {
+        const field = error.message.includes("repository_path") ? "repositoryPath" : error.message.includes("worktree_root") ? "worktreeRoot" : error.message.includes("repository_identity") ? "repository" : error.message.includes("company_id") && error.message.includes("name") ? "name" : undefined;
+        if (!field) throw error;
+        throw new ProjectFailure("Project configuration is invalid", [finding("already-assigned", field, "This coordinate is already assigned to another project")], 409);
+      }
+      throw error;
+    }
+    return this.getProject(actorUserId, projectId);
   }
 
   /** Resolve the runtime values that a newly-created task owns thereafter. */
@@ -451,6 +543,94 @@ export class ProjectService {
       throw error;
     }
     return this.getProject(actorUserId, row.id);
+  }
+
+  private async validatePatchedRepository(project: Project, validateWorktreeWrite: boolean, validateRemote: boolean): Promise<{ repositoryPath: string; worktreeRoot: string; findings: ProjectFinding[] }> {
+    const [repository, worktree] = await Promise.all([
+      inspectCanonicalDirectory(project.repositoryPath, this.config.repositoryRoot, "repositoryPath"),
+      inspectCanonicalDirectory(project.worktreeRoot, this.config.worktreeRoot, "worktreeRoot"),
+    ]);
+    const findings = [...repository.findings, ...worktree.findings];
+    if (repository.path && worktree.path && (withinRoot(repository.path, worktree.path) || withinRoot(worktree.path, repository.path))) findings.push(finding("worktree-separation", "worktreeRoot", "Worktree root must be separate from the repository"));
+    const repositoryIdentity = project.repository?.trim().toLowerCase() ?? "";
+    if (!repositoryPattern.test(repositoryIdentity)) findings.push(finding("repository-identity", "repository", "Repository must use owner/name identity without credentials"));
+    if (!branchPattern.test(project.baseBranch.trim())) findings.push(finding("unsafe-branch", "baseBranch", "Base branch is unsafe"));
+    if (secretPattern.test(repositoryIdentity) || secretPattern.test(project.baseBranch)) findings.push(finding("secret-shaped-value", "configuration", "Secret-shaped configuration values are not accepted"));
+    if (validateWorktreeWrite && worktree.path) {
+      try { await access(worktree.path, constants.W_OK); } catch { findings.push(finding("worktree-unwritable", "worktreeRoot", "Worktree root must be writable")); }
+    }
+    const repositoryPath = repository.path ?? resolve(project.repositoryPath);
+    const worktreeRoot = worktree.path ?? resolve(project.worktreeRoot);
+    if (this.validateProjectConfiguration && findings.length === 0) {
+      try {
+        const inspection = await (this.localRepository ?? await createLocalRepositoryAdapter(project.integration?.repository.kind)).inspect({ repositoryPath, baseBranch: project.baseBranch.trim() });
+        if (inspection.canonicalPath !== repositoryPath) findings.push(finding("repository-path-mismatch", "repositoryPath", "Repository path is not canonical"));
+        if (!inspection.baseSha) findings.push(finding("branch-unavailable", "baseBranch", "Configured branches must resolve to commits"));
+        if (inspection.remoteRepository !== repositoryIdentity) findings.push(finding("repository-mismatch", "repository", "Local origin does not match configured repository identity"));
+      } catch (reason) {
+        if (reason instanceof ProjectFailure) findings.push(...reason.findings);
+        else findings.push(finding("repository-unavailable", "repositoryPath", "Git could not inspect the configured repository"));
+      }
+    }
+    if (validateRemote && this.validateProjectConfiguration && findings.length === 0) {
+      try {
+        const connection = project.integration?.repository;
+        if (connection?.kind !== "bitbucket") await this.github.checkAuthentication();
+        const remote = connection?.kind === "bitbucket"
+          ? await new BitbucketClient(connection).repository(repositoryIdentity)
+          : await this.github.getRepository({ cwd: repositoryPath, nameWithOwner: repositoryIdentity });
+        const expectedHost = connection?.kind === "bitbucket" ? "bitbucket.org" : "github.com";
+        if (remote.nameWithOwner.toLowerCase() !== repositoryIdentity) findings.push(finding("provider-mismatch", "repository", "GitHub repository identity does not match configuration"));
+        let providerUrl: URL | undefined;
+        try { providerUrl = new URL(remote.url); } catch {}
+        if (!providerUrl || providerUrl.protocol !== "https:" || providerUrl.hostname.toLowerCase() !== expectedHost) findings.push(finding("provider-host", "repository", "GitHub provider returned a URL outside github.com"));
+        else if (providerUrl.username || providerUrl.password || providerUrl.search || providerUrl.hash || providerUrl.pathname.replace(/\/$/, "").replace(/\.git$/, "").slice(1).toLowerCase() !== repositoryIdentity) findings.push(finding("provider-path", "repository", "GitHub provider URL does not match configured repository identity"));
+      } catch (reason) {
+        findings.push(finding(reason instanceof GithubFailure && reason.code === "authentication" ? "github-auth-unavailable" : "github-repository-unavailable", "repository", "GitHub repository identity could not be verified"));
+      }
+    }
+    return { repositoryPath, worktreeRoot, findings };
+  }
+
+  private patchAgentConfiguration(db: Database, stored: ProjectRow, projectId: string, input: ProjectPatchBody): void {
+    const rootProfileId = input.rootProfileId?.trim() ?? stored.root_profile_id;
+    const workerProfileId = input.workerProfileId?.trim() ?? stored.worker_profile_id;
+    const selectedProfiles = [
+      ["root", rootProfileId],
+      ["worker", workerProfileId],
+    ] as const;
+    const resolvedProfiles = selectedProfiles.map(([role, profileId]) => {
+      const profile = projectProfileSchema.safeParse(db.prepare("SELECT provider, provider_instance_id AS providerInstanceId FROM forge_profiles WHERE id = ? AND role = ? AND archived_at IS NULL").get(profileId, role));
+      if (!profile.success) throw new ProjectFailure("Project configuration is invalid", [finding("profile-ineligible", `${role}ProfileId`, "Select an active profile with the matching role")], 422);
+      return { role, profileId, profile: profile.data };
+    });
+    const providerPolicy = input.providerPolicy !== undefined
+      ? input.providerPolicy
+      : stored.provider_policy_json ? ProjectProviderPolicySchema.parse(JSON.parse(stored.provider_policy_json)) : null;
+    if (providerPolicy) {
+      for (const instanceId of providerPolicy.allowedInstanceIds) {
+        if (!db.prepare("SELECT 1 FROM forge_provider_instances WHERE id = ?").get(instanceId)) throw new ProjectFailure("Project configuration is invalid", [finding("instance-ineligible", "providerPolicy", "Select an existing provider login")], 422);
+      }
+      for (const selected of resolvedProfiles) {
+        if (!isProfileAllowed(providerPolicy, selected.profile)) throw new ProjectFailure("Project configuration is invalid", [finding("profile-provider-ineligible", `${selected.role}ProfileId`, "Select an agent with a provider and login allowed by this project")], 422);
+      }
+    }
+
+    const defaultPolicy: ProjectAgentTaskPolicy = {
+      workflowIds: ["workflow_native_standard"], defaultWorkflowId: "workflow_native_standard", templateIds: [], rootProfileIds: [rootProfileId], workerProfileIds: [workerProfileId],
+      advisorProfileIds: { reviewer: [], planner_a: [], planner_b: [], rater: [] }, deliveryTarget: "pull_request_draft", runProjectTests: true, visualEvidence: "off",
+    };
+    const storedPolicy = readAgentTaskPolicy(stored.agent_task_policy_json, defaultPolicy);
+    const policy = ProjectAgentTaskPolicySchema.parse(input.agentTaskPolicy ?? {
+      ...storedPolicy,
+      rootProfileIds: withProfile(storedPolicy.rootProfileIds, rootProfileId),
+      workerProfileIds: withProfile(storedPolicy.workerProfileIds, workerProfileId),
+    });
+    if (input.agentTaskPolicy) this.validateAgentTaskPolicy(db, policy, projectId);
+    if (input.rootProfileId !== undefined) db.prepare("UPDATE forge_projects SET root_profile_id = ? WHERE id = ?").run(rootProfileId, projectId);
+    if (input.workerProfileId !== undefined) db.prepare("UPDATE forge_projects SET worker_profile_id = ? WHERE id = ?").run(workerProfileId, projectId);
+    if (input.agentTaskPolicy !== undefined || input.rootProfileId !== undefined || input.workerProfileId !== undefined) db.prepare("UPDATE forge_projects SET agent_task_policy_json = ? WHERE id = ?").run(JSON.stringify(policy), projectId);
+    if (input.providerPolicy !== undefined) db.prepare("UPDATE forge_projects SET provider_policy_json = ? WHERE id = ?").run(providerPolicy === null ? null : JSON.stringify(ProjectProviderPolicySchema.parse(providerPolicy)), projectId);
   }
 
   private rowForProject(db: Database, projectId: string): ProjectRow | undefined {

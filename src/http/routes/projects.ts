@@ -5,7 +5,7 @@ import { IssueAssociationSchema } from "../../tasks/issue-association.js";
 
 import type { ProjectService } from "../../projects/projects.js";
 import { CompanyIdParamsSchema, ProjectIdParamsSchema } from "../contracts/common.js";
-import { ModelListResponseSchema, ProjectBodySchema, ProjectCreateBodySchema, ProjectListResponseSchema, ProjectRepositoryDefaultsResponseSchema, ProjectResponseSchema, TaskSourceListResponseSchema, TaskSourceQuerySchema } from "../contracts/projects.js";
+import { ModelListResponseSchema, ProjectBodySchema, ProjectCreateBodySchema, ProjectListResponseSchema, ProjectPatchBodySchema, ProjectProviderInstanceListResponseSchema, ProjectRepositoryDefaultsResponseSchema, ProjectResponseSchema, TaskSourceListResponseSchema, TaskSourceQuerySchema } from "../contracts/projects.js";
 
 export interface ProjectRoutesOptions {
   projects: ProjectService;
@@ -31,7 +31,13 @@ const projects: FastifyPluginAsync<ProjectRoutesOptions> = async (app, options) 
   } }, async (request, reply) => reply.send({ issues: await projects.searchIssues(request.forgeUser.id, request.params.projectId, request.query.query) }));
   typed.get("/api/projects/:projectId/task-sources", { schema: { params: ProjectIdParamsSchema, querystring: TaskSourceQuerySchema, response: { 200: TaskSourceListResponseSchema } } }, async (request, reply) => reply.send(await projects.discoverTaskSources(request.forgeUser.id, request.params.projectId, request.query.kind)));
   typed.get("/api/projects/:projectId/repository-defaults", { schema: { params: ProjectIdParamsSchema, response: { 200: ProjectRepositoryDefaultsResponseSchema } } }, async (request, reply) => reply.send(await projects.getProjectRepositoryDefaults(request.forgeUser.id, request.params.projectId)));
-  typed.patch("/api/projects/:projectId", { schema: { params: ProjectIdParamsSchema, body: ProjectBodySchema, response: { 200: ProjectResponseSchema } } }, async (request, reply) => reply.send(await projects.updateProject(request.forgeUser.id, request.params.projectId, request.body)));
+  typed.get("/api/projects/:projectId/provider-instances", { schema: { params: ProjectIdParamsSchema, response: { 200: ProjectProviderInstanceListResponseSchema } } }, async (request, reply) => reply.send({ instances: projects.listProjectProviderInstances(request.forgeUser.id, request.params.projectId) }));
+  typed.patch("/api/projects/:projectId", { schema: { params: ProjectIdParamsSchema, body: ProjectPatchBodySchema, response: { 200: ProjectResponseSchema } } }, async (request, reply) => {
+    const full = ProjectBodySchema.safeParse(request.body);
+    return reply.send(full.success
+      ? await projects.updateProject(request.forgeUser.id, request.params.projectId, full.data)
+      : await projects.patchProject(request.forgeUser.id, request.params.projectId, request.body));
+  });
 };
 
 export default projects;

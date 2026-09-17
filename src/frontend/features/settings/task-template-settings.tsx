@@ -4,6 +4,7 @@ import type { TaskTemplateInput } from "../../../tasks/templates.js";
 import { DeliveryTargetSchema, VisualEvidenceSchema } from "../../../tasks/contracts.js";
 import { ADVISOR_LABELS, WORKFLOWS, WorkflowIdSchema, workflowDefinition, type AdvisorRole } from "../../../coordination/workflows.js";
 import { SettingsLayout } from "./settings-layout.js";
+import { ProjectDetailsLayout } from "../projects/project-details-layout.js";
 import { SettingsDataTable, SettingsTableCell, SettingsTableEmpty, SettingsTableGroup, SettingsTableRow, SettingsToolbar, type SettingsTableColumn } from "../../components/app/settings-table.js";
 import { useCompanyContext } from "../../shell/company-context.js";
 import { taskDeliveryTargetOptions } from "../tasks/task-delivery-target.js";
@@ -79,11 +80,13 @@ export function TaskTemplateSettings({ projectId: initialProjectId }: { projectI
       if (closed) return;
       setProjects(projectResult.projects);
       setProfiles(profileResult.profiles);
-      setProjectId((current) => projectResult.projects.some((project) => project.id === current) ? current : projectResult.projects[0]?.id ?? "");
+      setProjectId((current) => initialProjectId
+        ? projectResult.projects.some((project) => project.id === initialProjectId) ? initialProjectId : ""
+        : projectResult.projects.some((project) => project.id === current) ? current : projectResult.projects[0]?.id ?? "");
     }).catch((reason) => { if (!closed) setProjectError(String(reason)); })
       .finally(() => { if (!closed) setLoadingProjects(false); });
     return () => { closed = true; };
-  }, [companyId]);
+  }, [companyId, initialProjectId]);
 
   useEffect(() => {
     let closed = false;
@@ -152,14 +155,14 @@ export function TaskTemplateSettings({ projectId: initialProjectId }: { projectI
   const draft = editor.kind === "closed" ? null : editor.draft;
   const editingTemplate = editor.kind === "edit" ? templates.find((template) => template.id === editor.templateId) : undefined;
 
-  return <SettingsLayout title="Task templates" companyId={companyId} backHref={withCompany("/projects", companyId)} activeHref={withCompany("/templates", companyId)}>
+  const content = <>
     {projectError ? <div className="pt-3"><Alert variant="destructive"><AlertDescription>{projectError}</AlertDescription></Alert></div> : null}
     {projectId ? <section className="min-w-0 pt-3 lg:px-8">
       <SettingsToolbar searchLabel="Search templates" searchPlaceholder="Search templates" filterLabel="All templates" searchWidth="compact" searchValue={search} onSearchChange={setSearch} actions={<>
-        <Select value={projectId} disabled={busy} onValueChange={(value) => setProjectId(value ?? "")}>
+        {!initialProjectId ? <Select value={projectId} disabled={busy} onValueChange={(value) => setProjectId(value ?? "")}>
           <SelectTrigger aria-label="Template project"><SelectValue /></SelectTrigger>
           <SelectContent>{projects.map((project) => <SelectItem key={project.id} value={project.id}>{project.name}</SelectItem>)}</SelectContent>
-        </Select>
+        </Select> : null}
         <NewButton disabled={busy} onClick={() => { setError(""); setEditor({ kind: "create", draft: emptyDraft() }); }}>New template</NewButton>
       </>} />
       {error && editor.kind === "closed" ? <div className="mt-3"><Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert></div> : null}
@@ -223,5 +226,10 @@ export function TaskTemplateSettings({ projectId: initialProjectId }: { projectI
         </AlertDialogFooter>
       </AlertDialogContent>
     </AlertDialog>
-  </SettingsLayout>;
+  </>;
+  if (initialProjectId) {
+    const selectedProject = projects.find((project) => project.id === initialProjectId);
+    return <ProjectDetailsLayout projectId={initialProjectId} companyId={companyId} title={selectedProject?.name ?? "Project templates"} active="templates">{content}</ProjectDetailsLayout>;
+  }
+  return <SettingsLayout title="Task templates" companyId={companyId} backHref={withCompany("/projects", companyId)} activeHref={withCompany("/templates", companyId)}>{content}</SettingsLayout>;
 }

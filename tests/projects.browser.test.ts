@@ -92,11 +92,15 @@ test("projects desktop flow creates a project and opens its configuration", asyn
       await page.getByRole("dialog", { name: "New project", exact: true }).getByRole("button", { name: "New project", exact: true }).click();
       await page.getByText("forge", { exact: true }).waitFor();
       const forgeProject = page.locator("article").filter({ hasText: "forge" });
-      await forgeProject.getByRole("button", { name: "Configure" }).click();
+      await forgeProject.getByRole("link", { name: "Configure" }).click();
+      await page.reload();
       expect(await page.getByLabel("Base branch").inputValue()).toBe("main");
-      expect(await page.getByLabel("Coordinator default").innerText()).toContain("Root");
-      expect(await page.getByLabel("Worker default").innerText()).toContain("Worker");
-      await page.getByRole("button", { name: "Cancel", exact: true }).click();
+      await page.getByLabel("Project name").fill("Forge renamed");
+      await page.getByRole("button", { name: "Save changes", exact: true }).click();
+      await page.getByText("Saved", { exact: true }).waitFor();
+      await page.getByRole("link", { name: "Back to projects", exact: true }).click();
+      await page.getByRole("heading", { name: "Projects", exact: true }).waitFor();
+      await page.getByText("Forge renamed", { exact: true }).waitFor();
       await page.close();
       await context.close();
     } finally {

@@ -10,6 +10,7 @@ import { CompanySettingsView } from "../features/settings/company-settings.js";
 import { ProfileView } from "../features/profiles/profile.js";
 import { Dashboard } from "../features/tasks/dashboard.js";
 import { ProjectsView } from "../features/projects/projects.js";
+import { ProjectDetails } from "../features/projects/project-details.js";
 import { TasksView } from "../features/tasks/tasks.js";
 import { TimelineView } from "../features/timeline/timeline.js";
 import { AnalyticsView } from "../features/analytics/analytics.js";
@@ -23,7 +24,7 @@ import { OnboardingView } from "../features/onboarding/onboarding-wizard.js";
 import { ApplicationShell } from "./application-frame.js";
 
 export function activityShellKey(pathname: string): "activity" | undefined {
-  if (pathname === "/projects" || pathname === "/tasks" || pathname.startsWith("/tasks/") || pathname === "/board" || pathname.startsWith("/board/") || pathname === "/timeline" || pathname === "/analytics") return "activity";
+  if (pathname === "/projects" || pathname.startsWith("/projects/") || pathname === "/tasks" || pathname.startsWith("/tasks/") || pathname === "/board" || pathname.startsWith("/board/") || pathname === "/timeline" || pathname === "/analytics") return "activity";
   return undefined;
 }
 import { SetupView } from "../features/settings/setup.js";
@@ -46,6 +47,7 @@ function AppView(): ReactElement {
   if (pathname === "/profile") return <ProfileView />;
   if (pathname === "/projects") return <ProjectsView />;
   if (/^\/projects\/[^/]+\/templates$/.test(pathname)) return <TaskTemplateSettings key={pathname} projectId={pathname.split("/")[2]!} />;
+  if (/^\/projects\/[^/]+$/.test(pathname)) return <ProjectDetails projectId={pathname.split("/")[2]!} />;
   if (pathname === "/templates") return <TaskTemplateSettings />;
   if (pathname === "/tasks" || pathname.startsWith("/tasks/")) return <TasksView />;
   if (pathname === "/board" || pathname.startsWith("/board/")) return <TasksView mode="board" />;

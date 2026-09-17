@@ -87,11 +87,12 @@ export function SettingsSection({ title, description, children }: { title?: stri
   );
 }
 
-export function SettingRow({ label, description, children, destructive }: { label: string; description?: string; children: ReactNode; destructive?: boolean }): ReactElement {
+export function SettingRow({ label, description, children, destructive, htmlFor }: { label: string; description?: string; children: ReactNode; destructive?: boolean; htmlFor?: string }): ReactElement {
+  const labelClassName = destructive ? "text-[13px] font-medium text-destructive" : "text-[13px] font-medium";
   return (
     <div className="flex flex-col gap-2 px-4 py-3.5 sm:flex-row sm:items-center sm:justify-between sm:gap-4">
       <div className="min-w-0 flex-1">
-        <div className={destructive ? "text-[13px] font-medium text-destructive" : "text-[13px] font-medium"}>{label}</div>
+        {htmlFor ? <label className={labelClassName} htmlFor={htmlFor}>{label}</label> : <div className={labelClassName}>{label}</div>}
         {description ? <div className="mt-0.5 text-xs text-muted-foreground">{description}</div> : null}
       </div>
       <div className="shrink-0">{children}</div>

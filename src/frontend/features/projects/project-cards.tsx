@@ -1,8 +1,8 @@
 import { Button } from "../../components/ui/button.js";
 import { Card, CardAction, CardContent, CardHeader, CardTitle } from "../../components/ui/card.js";
 import { EntityAvatar } from "../../components/app/entity-avatar.js";
-import { ProjectSettingsDialog } from "./project-settings-dialog.js";
-import { useState, type ReactElement } from "react";
+import { withCompany } from "../../lib/api.js";
+import type { ReactElement } from "react";
 import type { ApiProfile, ApiProject } from "../../shell/view-shared.js";
 
 const projectRoles = ["root", "worker"] as const;
@@ -31,16 +31,15 @@ function ProjectIcon({ project }: { project: ApiProject }): ReactElement {
   );
 }
 
-export function ProjectCards({ projects, agents, onSaved }: { projects: readonly ApiProject[]; agents: readonly ApiProfile[]; onSaved: () => Promise<void> }): ReactElement {
-  const [settingsProject, setSettingsProject] = useState<ApiProject>();
+export function ProjectCards({ projects, agents }: { projects: readonly ApiProject[]; agents: readonly ApiProfile[] }): ReactElement {
   return <>
     {projects.map((project) => (
       <article key={project.id}>
         <Card size="sm">
           <CardHeader>
-            <CardTitle><span className="flex items-center gap-2"><ProjectIcon project={project} /><span className="text-[13px]">{project.name}</span></span></CardTitle>
+            <CardTitle><a className="flex items-center gap-2" href={withCompany(`/projects/${encodeURIComponent(project.id)}`, project.companyId)}><ProjectIcon project={project} /><span className="text-[13px]">{project.name}</span></a></CardTitle>
             <CardAction>
-              <Button variant="ghost" size="sm" onClick={() => setSettingsProject(project)}>Configure</Button>
+              <Button variant="ghost" size="sm" render={<a href={withCompany(`/projects/${encodeURIComponent(project.id)}`, project.companyId)} />}>Configure</Button>
             </CardAction>
           </CardHeader>
           <CardContent>
@@ -58,6 +57,5 @@ export function ProjectCards({ projects, agents, onSaved }: { projects: readonly
         </Card>
       </article>
     ))}
-    <ProjectSettingsDialog project={settingsProject} agents={agents} onOpenChange={() => setSettingsProject(undefined)} onSaved={onSaved} />
   </>;
 }

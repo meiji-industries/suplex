@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 
 import { expect, test } from "vitest";
+import { z } from "zod";
 
 import { AuthService } from "../src/identity/auth.js";
 import { createTestConfig } from "../src/platform/config.js";
@@ -208,6 +209,116 @@ test("keeps saved project changes live without mutating prior configuration valu
   }
 });
 
+test("partial project updates preserve omitted fields and validate only changed domains", async () => {
+  const value = await fixture();
+  try {
+    const original = await value.projects.createProject(value.adminId, value.companyId, input(value, {
+      execution: { instructions: "Keep this", skillDirectories: ["skills"], environment: { APP_MODE: "test" }, mcp: [] },
+    }));
+    const unavailable = new ProjectService(value.database, value.auth, createTestConfig(value.root, {
+      reachableAddress: "https://forge.tailnet.ts.net:4111",
+      repositoryRoot: join(value.root, "repositories"),
+      worktreeRoot: value.worktreeRoot,
+    }), {
+      localRepository: { async inspect() { throw new Error("repository not available"); } },
+      github: { async checkAuthentication() { throw new Error("provider not available"); }, async getRepository() { throw new Error("provider not available"); } },
+      validateProjectConfiguration: true,
+    });
+
+    await rm(value.repositoryPath, { recursive: true });
+    const renamed = await unavailable.patchProject(value.adminId, original.id, { name: "Renamed project" });
+    expect(renamed).toMatchObject({
+      name: "Renamed project",
+      repository: original.repository,
+      baseBranch: original.baseBranch,
+      setupCommand: original.setupCommand,
+      verificationCommand: original.verificationCommand,
+    });
+    expect((await unavailable.patchProject(value.adminId, original.id, { execution: { instructions: "Changed" } })).execution).toEqual({
+      instructions: "Changed",
+      skillDirectories: ["skills"],
+      environment: { APP_MODE: "test" },
+      mcp: [],
+    });
+    expect((await unavailable.patchProject(value.adminId, original.id, { execution: { environment: { NEXT_MODE: "enabled" } } })).execution).toEqual({
+      instructions: "Changed",
+      skillDirectories: ["skills"],
+      environment: { NEXT_MODE: "enabled" },
+      mcp: [],
+    });
+    await expect(unavailable.patchProject(value.adminId, original.id, { baseBranch: "feature..unsafe" })).rejects.toMatchObject({ findings: expect.arrayContaining([expect.objectContaining({ code: "unsafe-branch", field: "baseBranch" })]) });
+    await expect(unavailable.patchProject("missing-user", original.id, { name: "No access" })).rejects.toMatchObject({ statusCode: 401 });
+  } finally {
+    await close(value);
+  }
+});
+
+test("partial branch and tracker updates do not require the repository provider", async () => {
+  const value = await fixture();
+  try {
+    const project = await value.projects.createProject(value.adminId, value.companyId, input(value));
+    const providerUnavailable = new ProjectService(value.database, value.auth, createTestConfig(value.root, {
+      reachableAddress: "https://forge.tailnet.ts.net:4111",
+      repositoryRoot: join(value.root, "repositories"),
+      worktreeRoot: value.worktreeRoot,
+    }), {
+      localRepository,
+      github: { async checkAuthentication() { throw new Error("provider not available"); }, async getRepository() { throw new Error("provider not available"); } },
+      validateProjectConfiguration: true,
+    });
+
+    await expect(providerUnavailable.patchProject(value.adminId, project.id, { baseBranch: "release" })).resolves.toMatchObject({ baseBranch: "release" });
+    const integration = { repository: { kind: "github" as const }, tracker: { kind: "jira" as const, site: "https://client.atlassian.net/", project: "APP", emailEnvironment: "JIRA_EMAIL", tokenEnvironment: "JIRA_TOKEN" } };
+    await expect(providerUnavailable.patchProject(value.adminId, project.id, { integration })).resolves.toMatchObject({ integration });
+  } finally {
+    await close(value);
+  }
+});
+
+test("partial agent updates reject invalid profiles and provider policies atomically", async () => {
+  const value = await fixture();
+  try {
+    const project = await value.projects.createProject(value.adminId, value.companyId, input(value));
+    await expect(value.projects.patchProject(value.adminId, project.id, { rootProfileId: "missing-profile", providerPolicy: { allowedProviders: ["codex"], allowedInstanceIds: [] } })).rejects.toMatchObject({ findings: expect.arrayContaining([expect.objectContaining({ code: "profile-ineligible", field: "rootProfileId" })]) });
+    expect(value.projects.getProject(value.adminId, project.id)).toMatchObject({ rootProfileId: project.rootProfileId, providerPolicy: project.providerPolicy });
+
+    const rootProvider = z.object({ provider: z.string() }).parse(value.database.authQuery((db) => db.prepare("SELECT provider FROM forge_profiles WHERE id = ?").get(project.rootProfileId))).provider;
+    const disallowedProvider = rootProvider === "devin" ? "codex" : "devin";
+    await expect(value.projects.patchProject(value.adminId, project.id, { providerPolicy: { allowedProviders: [disallowedProvider], allowedInstanceIds: [] } })).rejects.toMatchObject({ findings: expect.arrayContaining([expect.objectContaining({ code: "profile-provider-ineligible" })]) });
+    expect(value.projects.getProject(value.adminId, project.id).providerPolicy).toEqual(project.providerPolicy);
+  } finally {
+    await close(value);
+  }
+});
+
+test("partial rename does not revalidate archived default profiles", async () => {
+  const value = await fixture();
+  try {
+    const project = await value.projects.createProject(value.adminId, value.companyId, input(value));
+    value.database.authQuery((db) => db.prepare("UPDATE forge_profiles SET archived_at = '2026-09-17T00:00:00.000Z' WHERE id IN (?, ?)").run(project.rootProfileId, project.workerProfileId));
+    await expect(value.projects.patchProject(value.adminId, project.id, { name: "Renamed with archived defaults" })).resolves.toMatchObject({ name: "Renamed with archived defaults" });
+  } finally {
+    await close(value);
+  }
+});
+
+test("project members can list the minimal provider instance catalog", async () => {
+  const value = await fixture();
+  try {
+    const project = await value.projects.createProject(value.adminId, value.companyId, input(value));
+    value.database.authQuery((db) => {
+      db.prepare("INSERT INTO forge_users (id, display_name, username, role, status, created_at, updated_at) VALUES ('member-catalog', 'Member', 'catalog@forge.local', 'member', 'active', '2026-09-17T00:00:00.000Z', '2026-09-17T00:00:00.000Z')").run();
+      db.prepare("INSERT INTO forge_memberships (user_id, company_id, created_at) VALUES ('member-catalog', ?, '2026-09-17T00:00:00.000Z')").run(value.companyId);
+      db.prepare("INSERT INTO forge_provider_instances (id, provider, label, home_directory, created_at, updated_at) VALUES ('instance_acmelaude', 'claude-code', 'acmelaude', '/private/acmelaude', '2026-09-17T00:00:00.000Z', '2026-09-17T00:00:00.000Z')").run();
+    });
+
+    expect(value.projects.listProjectProviderInstances("member-catalog", project.id)).toEqual([{ id: "instance_acmelaude", provider: "claude-code", label: "acmelaude" }]);
+    expect(() => value.projects.listProjectProviderInstances("member-catalog", "missing-project")).toThrowError("Not found");
+  } finally {
+    await close(value);
+  }
+});
+
 test("accepts free-form project commands and rejects secret-shaped commands", async () => {
   const value = await fixture();
   try {
@@ -262,8 +373,10 @@ test("fails closed for provider mismatch, unavailable agents, and cross-company 
     expect(value.projects.listProjects("member-1")).toEqual([]);
     await expect(value.projects.createProject("member-1", value.companyId, input(value, { name: "Cross-company create", repositoryPath: join(value.root, "repositories", "cross"), worktreeRoot: join(value.worktreeRoot, "cross") }))).rejects.toMatchObject({ publicMessage: "Not found" });
     await expect(value.projects.updateProject("member-1", project.id, input(value))).rejects.toMatchObject({ publicMessage: "Not found" });
+    await expect(value.projects.patchProject("member-1", project.id, { name: "Cross-company patch" })).rejects.toMatchObject({ publicMessage: "Not found" });
     value.auth.setCompanyStatus(value.adminId, value.companyId, "paused");
     await expect(value.projects.updateProject(value.adminId, project.id, input(value))).rejects.toMatchObject({ publicMessage: "Company is not active", findings: expect.arrayContaining([expect.objectContaining({ code: "company-inactive" })]) });
+    await expect(value.projects.patchProject(value.adminId, project.id, { name: "Paused patch" })).rejects.toMatchObject({ publicMessage: "Company is not active", findings: expect.arrayContaining([expect.objectContaining({ code: "company-inactive" })]) });
   } finally {
     await close(value);
   }

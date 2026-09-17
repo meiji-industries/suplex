@@ -5,7 +5,10 @@ import type { z } from "zod";
 import { readJson } from "../../lib/api.js";
 import { Alert, AlertDescription } from "../../components/ui/alert.js";
 import { InternalAgentsSection } from "./internal-agents-section.js";
-import { InternalAgentDialog } from "./internal-agent-editor-dialog.js";
+import {
+  InternalAgentDialog,
+  type AgentProviderOption,
+} from "./internal-agent-editor-dialog.js";
 
 export function InternalAgentsManager({ agents, onSaved }: { agents: readonly ApiProfile[]; onSaved: () => Promise<void> }): ReactElement {
   const [agentName, setAgentName] = useState("");
@@ -22,7 +25,27 @@ export function InternalAgentsManager({ agents, onSaved }: { agents: readonly Ap
   const [archiveTarget, setArchiveTarget] = useState<ApiProfile | null>(null);
   const [models, setModels] = useState<ApiModel[]>([]);
   const [error, setError] = useState("");
-  const providerOptions = [...new Map(models.map((model) => [model.provider, { id: model.provider, label: model.providerLabel, status: model.providerStatus }])).values()];
+  const providerOptions: AgentProviderOption[] = [
+    ...new Map(
+      models.map((model) => [
+        model.provider,
+        {
+          id: `provider:${model.provider}`,
+          label: model.providerLabel,
+          provider: model.provider,
+          providerInstanceId: null,
+          status: model.providerStatus,
+        },
+      ]),
+    ).values(),
+    ...providerInstances.map((instance): AgentProviderOption => ({
+      id: `instance:${instance.id}`,
+      label: instance.label,
+      provider: instance.provider,
+      providerInstanceId: instance.id,
+      status: "configured",
+    })),
+  ];
   useEffect(() => {
     const controller = new AbortController();
     const options = { signal: controller.signal };
@@ -147,7 +170,6 @@ export function InternalAgentsManager({ agents, onSaved }: { agents: readonly Ap
       agentReasoning={agentReasoning}
       agentPriority={agentPriority}
       agentInstanceId={agentInstanceId}
-      instances={providerInstances}
       models={models}
       providerOptions={providerOptions}
       onOpenChange={(open) => {

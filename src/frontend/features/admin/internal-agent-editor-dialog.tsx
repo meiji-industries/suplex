@@ -26,6 +26,15 @@ import type { ApiModel } from "../../shell/view-shared.js";
 import type { ReactElement } from "react";
 
 const SERVICE_PRIORITIES = ["default", "priority"] as const;
+
+export type AgentProviderOption = {
+  id: string;
+  label: string;
+  provider: string;
+  providerInstanceId: string | null;
+  status: ApiModel["providerStatus"];
+};
+
 const serviceTierLabel = (_provider: string, priority: string): string =>
   priority === "priority" ? "Priority" : "Default";
 
@@ -40,7 +49,6 @@ export function InternalAgentDialog({
   agentReasoning,
   agentPriority,
   agentInstanceId,
-  instances,
   models,
   providerOptions,
   onOpenChange,
@@ -64,9 +72,8 @@ export function InternalAgentDialog({
   agentReasoning: string;
   agentPriority: string;
   agentInstanceId: string | null;
-  instances: { id: string; provider: string; label: string }[];
   models: ApiModel[];
-  providerOptions: { id: string; label: string; status: ApiModel["providerStatus"] }[];
+  providerOptions: AgentProviderOption[];
   onOpenChange: (open: boolean) => void;
   onAgentNameChange: (value: string) => void;
   onAgentRoleChange: (value: "root" | "worker") => void;
@@ -81,7 +88,11 @@ export function InternalAgentDialog({
   const providerModels = models.filter(
     (model) => model.provider === agentProvider,
   );
-  const supportsInstances = agentProvider === "claude-code";
+  const selectedProviderOption = providerOptions.find(
+    (option) =>
+      option.provider === agentProvider &&
+      option.providerInstanceId === agentInstanceId,
+  );
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent>
@@ -134,16 +145,6 @@ export function InternalAgentDialog({
                 </Button>
               </span>
             </Field>
-            {supportsInstances ? <Field>
-              <FieldLabel htmlFor="agent-instance">Instance</FieldLabel>
-              <Select value={agentInstanceId ?? "global"} onValueChange={(value) => onAgentInstanceIdChange(value === "global" ? null : value ?? null)}>
-                <SelectTrigger id="agent-instance"><SelectValue /></SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="global">Global (your configuration)</SelectItem>
-                  {instances.filter(instance => instance.provider === agentProvider).map(instance => <SelectItem key={instance.id} value={instance.id}>{instance.label}</SelectItem>)}
-                </SelectContent>
-              </Select>
-            </Field> : null}
             <Field>
               <FieldLabel htmlFor="agent-name">Agent name</FieldLabel>
               <Input
@@ -173,14 +174,16 @@ export function InternalAgentDialog({
             <Field>
               <FieldLabel htmlFor="agent-provider">Provider</FieldLabel>
               <Select
-                value={agentProvider}
+                value={selectedProviderOption?.id ?? null}
                 onValueChange={(value) => {
-                  const provider = value ?? "";
-                  onAgentProviderChange(provider);
+                  const option = providerOptions.find((item) => item.id === value);
+                  if (!option) return;
+                  onAgentProviderChange(option.provider);
+                  onAgentInstanceIdChange(option.providerInstanceId);
                   if (
                     !models.some(
                       (model) =>
-                        model.provider === provider && model.id === agentModel,
+                        model.provider === option.provider && model.id === agentModel,
                     )
                   )
                     onAgentModelChange("");

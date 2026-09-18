@@ -43,9 +43,13 @@ function bodyParserMessage(code: string): string {
    return Boolean(error && typeof error === "object" && "validation" in error);
  }
 
-function hermesTaskFailureCode(error: TaskFailure): "not_found" | "idempotency_conflict" | "command_in_progress" | "revision_stale" | "illegal_command" | "request_invalid" | "delivery_policy_rejected" | "task_unavailable" {
+function hermesTaskFailureCode(error: TaskFailure): "not_found" | "idempotency_conflict" | "command_in_progress" | "revision_stale" | "illegal_command" | "request_invalid" | "delivery_policy_rejected" | "workflow_not_found" | "workflow_not_permitted" | "template_not_found" | "template_not_permitted" | "task_unavailable" {
   if (error.statusCode === 404) return "not_found";
   if (error.code === "delivery_policy_rejected") return "delivery_policy_rejected";
+  if (error.code === "workflow_not_found") return "workflow_not_found";
+  if (error.code === "workflow_not_permitted") return "workflow_not_permitted";
+  if (error.code === "template_not_found") return "template_not_found";
+  if (error.code === "template_not_permitted") return "template_not_permitted";
   if (error.publicMessage === "This idempotency key belongs to a different request") return "idempotency_conflict";
   if (error.code === "revision_stale") return "revision_stale";
   if (error.code === "command_in_progress") return "command_in_progress";
@@ -63,7 +67,7 @@ function sendDomainFailure(request: FastifyRequest, reply: FastifyReply, error: 
       : error instanceof AuthFailure
         ? { error: error.publicMessage, ...(error.code !== "auth_failure" ? { code: error.code } : {}) }
     : error instanceof TaskFailure && runtime
-      ? { error: error.publicMessage, code: hermesTaskFailureCode(error) }
+      ? { error: error.publicMessage, code: hermesTaskFailureCode(error), ...error.details }
     : error instanceof ProjectFailure && runtime
       ? { error: error.publicMessage, code: error.statusCode === 404 ? "not_found" : "task_unavailable", findings: error.findings }
     : { error: error.publicMessage, ...(error instanceof TaskFailure && error.code !== "task_failure" ? { code: error.code } : {}), ...(error instanceof ProjectFailure ? { findings: error.findings } : {}) };

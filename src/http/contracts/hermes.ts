@@ -212,6 +212,27 @@ export const HermesTaskListQuerySchema = z.object({
   filter: HermesTaskFilterSchema.optional(),
 }).strict();
 
+export const HermesProjectDiscoveryQuerySchema = z.object({
+  projectId: z.string().min(1).max(128),
+}).strict();
+
+export const HermesWorkflowDiscoverySchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  description: z.string(),
+  permittedForAgentTaskCreation: z.boolean(),
+});
+
+export const HermesWorkflowDiscoveryResponseSchema = z.object({
+  workflows: z.array(HermesWorkflowDiscoverySchema),
+});
+
+export const HermesTemplateDiscoverySchema = HermesWorkflowDiscoverySchema;
+
+export const HermesTemplateDiscoveryResponseSchema = z.object({
+  templates: z.array(HermesTemplateDiscoverySchema),
+});
+
 export const HermesTaskDeliverySchema = z.object({
   pullRequest: z.object({
     number: z.number().int().min(1),
@@ -248,7 +269,8 @@ export const HermesSafeTaskProjectionSchema = z.object({
     reason: z.enum(["checks", "mergeability", "merge_queue", "observation"]).optional(),
   }).nullable(),
   workflowStage: z.string(),
-  workflow: z.string(),
+  workflow: z.object({ id: z.string().nullable(), engine: z.string(), name: z.string().nullable() }).strict(),
+  templateId: z.string().nullable(),
   deliveryTarget: DeliveryTargetSchema,
   runProjectTests: z.boolean(),
   visualEvidence: VisualEvidenceSchema,
@@ -380,8 +402,10 @@ export const HermesTaskListResponseSchema = z.object({
 
 export const HermesRuntimeErrorSchema = z.object({
   error: z.string(),
-  code: z.enum(["credential_invalid", "not_found", "resource_not_found", "idempotency_conflict", "command_in_progress", "revision_stale", "illegal_command", "request_invalid", "delivery_policy_rejected", "task_unavailable", "payload_too_large", "unsupported_media_type", "internal_error"]),
+  code: z.enum(["credential_invalid", "not_found", "resource_not_found", "idempotency_conflict", "command_in_progress", "revision_stale", "illegal_command", "request_invalid", "delivery_policy_rejected", "workflow_not_found", "workflow_not_permitted", "template_not_found", "template_not_permitted", "task_unavailable", "payload_too_large", "unsupported_media_type", "internal_error"]),
   findings: z.array(z.object({ code: z.string(), field: z.string(), message: z.string() })).optional(),
+  permittedWorkflowIds: z.array(z.string()).optional(),
+  permittedTemplateIds: z.array(z.string()).optional(),
 });
 
 const runtimeError = <T extends z.infer<typeof HermesRuntimeErrorSchema>["code"]>(code: T) => HermesRuntimeErrorSchema.extend({ code: z.literal(code) });
@@ -396,6 +420,10 @@ const HermesRuntimeErrorResponses = {
   revisionStale: runtimeError("revision_stale"),
   illegalCommand: runtimeError("illegal_command"),
   deliveryPolicyRejected: runtimeError("delivery_policy_rejected"),
+  workflowNotFound: runtimeError("workflow_not_found").extend({ permittedWorkflowIds: z.array(z.string()) }),
+  workflowNotPermitted: runtimeError("workflow_not_permitted").extend({ permittedWorkflowIds: z.array(z.string()) }),
+  templateNotFound: runtimeError("template_not_found").extend({ permittedTemplateIds: z.array(z.string()) }),
+  templateNotPermitted: runtimeError("template_not_permitted").extend({ permittedTemplateIds: z.array(z.string()) }),
   taskUnavailable: runtimeError("task_unavailable"),
   payloadTooLarge: runtimeError("payload_too_large"),
   unsupportedMediaType: runtimeError("unsupported_media_type"),
@@ -405,7 +433,7 @@ const HermesRuntimeErrorResponses = {
 export const HermesCapabilitiesSchema = z.object({
   apiVersion: z.literal("v1"),
   capabilities: z.object({
-    read: z.object({ task: z.literal(true) }),
+    read: z.object({ task: z.literal(true), workflows: z.literal(true), templates: z.literal(true) }),
     create: z.object({ backlogTask: z.literal(true), deliveryTargets: z.array(DeliveryTargetSchema) }),
     taskControl: z.literal(true),
     // Delivery and merge follow the configured agent delivery surface, which a deployment can leave off.
@@ -430,6 +458,14 @@ export const HermesRuntimeOperations = {
   capabilities: {
     response: { 200: HermesCapabilitiesSchema, 401: HermesRuntimeErrorResponses.credentialInvalid, 500: HermesRuntimeErrorResponses.internal },
   },
+  workflows: {
+    querystring: HermesProjectDiscoveryQuerySchema,
+    response: { 200: HermesWorkflowDiscoveryResponseSchema, 401: HermesRuntimeErrorResponses.credentialInvalid, 404: HermesRuntimeErrorResponses.notFound, 500: HermesRuntimeErrorResponses.internal },
+  },
+  templates: {
+    querystring: HermesProjectDiscoveryQuerySchema,
+    response: { 200: HermesTemplateDiscoveryResponseSchema, 401: HermesRuntimeErrorResponses.credentialInvalid, 404: HermesRuntimeErrorResponses.notFound, 500: HermesRuntimeErrorResponses.internal },
+  },
   createTask: {
     body: HermesTaskCreateBodySchema,
     response: {
@@ -441,7 +477,7 @@ export const HermesRuntimeOperations = {
       409: z.union([HermesRuntimeErrorResponses.idempotencyConflict, HermesRuntimeErrorResponses.taskUnavailable]),
       413: HermesRuntimeErrorResponses.payloadTooLarge,
       415: HermesRuntimeErrorResponses.unsupportedMediaType,
-      422: z.union([HermesRuntimeErrorResponses.deliveryPolicyRejected, HermesRuntimeErrorResponses.taskUnavailable]),
+      422: z.union([HermesRuntimeErrorResponses.deliveryPolicyRejected, HermesRuntimeErrorResponses.workflowNotFound, HermesRuntimeErrorResponses.workflowNotPermitted, HermesRuntimeErrorResponses.templateNotFound, HermesRuntimeErrorResponses.templateNotPermitted, HermesRuntimeErrorResponses.taskUnavailable]),
       500: HermesRuntimeErrorResponses.internal,
     },
   },
@@ -494,6 +530,12 @@ export function hermesRuntimeOpenApi(): Record<string, unknown> {
           security: [{ HermesBearer: [] }],
           responses: openApiResponses(HermesRuntimeOperations.capabilities.response),
         },
+      },
+      "/api/hermes/workflows": {
+        get: { operationId: "listHermesWorkflows", summary: "List workflows available to a project", security: [{ HermesBearer: [] }], parameters: [{ name: "projectId", in: "query", required: true, schema: jsonSchema(HermesRuntimeOperations.workflows.querystring.shape.projectId, "input") }], responses: openApiResponses(HermesRuntimeOperations.workflows.response) },
+      },
+      "/api/hermes/templates": {
+        get: { operationId: "listHermesTemplates", summary: "List templates available to a project", security: [{ HermesBearer: [] }], parameters: [{ name: "projectId", in: "query", required: true, schema: jsonSchema(HermesRuntimeOperations.templates.querystring.shape.projectId, "input") }], responses: openApiResponses(HermesRuntimeOperations.templates.response) },
       },
       "/api/hermes/tasks": {
         post: {

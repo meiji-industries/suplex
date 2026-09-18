@@ -143,6 +143,12 @@ class ForgeClient:
     def capabilities(self) -> dict:
         return self.call("GET", "/api/hermes/capabilities")
 
+    def list_workflows(self, project_id: str) -> dict:
+        return self.call("GET", f"/api/hermes/workflows?{urllib.parse.urlencode({'projectId': project_id})}")
+
+    def list_templates(self, project_id: str) -> dict:
+        return self.call("GET", f"/api/hermes/templates?{urllib.parse.urlencode({'projectId': project_id})}")
+
     def list_tasks(self, **query) -> dict:
         search = urllib.parse.urlencode({key: value for key, value in query.items() if value is not None})
         return self.call("GET", f"/api/hermes/tasks?{search}" if search else "/api/hermes/tasks")

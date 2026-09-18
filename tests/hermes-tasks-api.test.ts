@@ -316,7 +316,7 @@ test("authenticated runtime contract uses the live task schemas and states its a
   const document = documentResponse.json() as { openapi: string; info: { version: string }; paths: Record<string, unknown>; components: Record<string, unknown> };
   expect(document.openapi).toBe("3.0.3");
   expect(document.info.version).toBe("v1");
-  expect(Object.keys(document.paths).sort()).toEqual(["/api/hermes/capabilities", "/api/hermes/openapi.json", "/api/hermes/tasks", "/api/hermes/tasks/{taskId}", "/api/hermes/tasks/{taskId}/commands"].sort());
+  expect(Object.keys(document.paths).sort()).toEqual(["/api/hermes/capabilities", "/api/hermes/openapi.json", "/api/hermes/templates", "/api/hermes/workflows", "/api/hermes/tasks", "/api/hermes/tasks/{taskId}", "/api/hermes/tasks/{taskId}/commands"].sort());
   expect(JSON.stringify(document)).not.toMatch(/pairingCode|credentialCreatedAt|credential_hash|board session/i);
   const createOperation = (document.paths["/api/hermes/tasks"] as CreateOperationDocument).post;
   expect(createOperation.requestBody.content["application/json"].schema.required).toEqual(expect.arrayContaining(["projectId", "title", "idempotencyKey"]));
@@ -327,7 +327,7 @@ test("authenticated runtime contract uses the live task schemas and states its a
   expect(capabilities.statusCode).toBe(200);
   expect(capabilities.json()).toMatchObject({
     apiVersion: "v1",
-    capabilities: { read: { task: true }, create: { backlogTask: true, deliveryTargets: ["local_worktree", "remote_branch", "pull_request_draft", "pull_request_ready", "merged"] }, taskControl: true, delivery: false, merge: false, humanDecisions: false },
+    capabilities: { read: { task: true, workflows: true, templates: true }, create: { backlogTask: true, deliveryTargets: ["local_worktree", "remote_branch", "pull_request_draft", "pull_request_ready", "merged"] }, taskControl: true, delivery: false, merge: false, humanDecisions: false },
     pagination: { supported: false, cursor: false },
   });
   expect(capabilities.json().unavailableCommands).toEqual(["answer_human_question", "deliver_task", "merge_pull_request"]);
@@ -436,6 +436,8 @@ test("all rejected credential states cannot discover or mutate runtime state", a
     for (const request of [
       app.inject({ method: "GET", url: "/api/hermes/openapi.json", headers }),
       app.inject({ method: "GET", url: "/api/hermes/capabilities", headers }),
+      app.inject({ method: "GET", url: `/api/hermes/workflows?projectId=${projectId}`, headers }),
+      app.inject({ method: "GET", url: `/api/hermes/templates?projectId=${projectId}`, headers }),
       app.inject({ method: "GET", url: "/api/hermes/tasks/task_unknown", headers }),
       app.inject({ method: "POST", url: "/api/hermes/tasks", headers, payload: { projectId, title: "Denied", idempotencyKey: `denied-${credential ?? "missing"}` } }),
     ]) expect((await request).statusCode).toBe(401);
@@ -534,7 +536,7 @@ test("POST /api/hermes/tasks creates task with native status, private no-store h
   expect(response.headers["cache-control"]).toBe("private, no-store");
 
   const body = response.json();
-  const expectedKeys = ["id", "issueKey", "projectId", "project", "title", "status", "dependsOn", "archived", "revision", "permittedCommands", "humanQuestion", "blocker", "workflowStage", "workflow", "deliveryTarget", "runProjectTests", "visualEvidence", "delivery", "createdAt", "updatedAt", "implementation", "integration", "actionRequired"].sort();
+  const expectedKeys = ["id", "issueKey", "projectId", "project", "title", "status", "dependsOn", "archived", "revision", "permittedCommands", "humanQuestion", "blocker", "workflowStage", "workflow", "templateId", "deliveryTarget", "runProjectTests", "visualEvidence", "delivery", "createdAt", "updatedAt", "implementation", "integration", "actionRequired"].sort();
   expect(Object.keys(body).sort()).toEqual(expectedKeys);
   expect(body).toMatchObject({
     dependsOn: [],
@@ -586,6 +588,38 @@ test("POST /api/hermes/tasks accepts a title without a description", async () =>
   expect(database.authQuery(db => db.prepare("SELECT objective FROM forge_task_controls WHERE task_id = ?").get(taskId))).toEqual({ objective: "Hermes title only" });
 });
 
+test("workflow and template discovery is project scoped and reports creation permission", async () => {
+  const templateId = "template_hermes_discovery";
+  database.authTransaction(db => {
+    db.prepare("INSERT INTO forge_task_templates (id, project_id, name, configuration_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)")
+      .run(templateId, projectId, "Discovery template", JSON.stringify({ name: "Discovery template", description: "A discovered template", workflow: "standard", advisorProfileIds: {} }), new Date().toISOString(), new Date().toISOString());
+    db.prepare("INSERT INTO forge_task_templates (id, project_id, name, configuration_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)")
+      .run("template_hermes_disallowed", projectId, "Blocked template", JSON.stringify({ name: "Blocked template", description: "Not permitted", workflow: "standard", advisorProfileIds: {} }), new Date().toISOString(), new Date().toISOString());
+    db.prepare("UPDATE forge_workflows SET archived_at = ? WHERE id = 'workflow_native_refine_pull_request'").run(new Date().toISOString());
+  });
+  await updateProjectPolicy({ workflowIds: ["workflow_native_standard"], defaultWorkflowId: "workflow_native_standard", templateIds: [templateId], rootProfileIds: ["profile_native_root"], workerProfileIds: ["profile_native_worker"], advisorProfileIds: { reviewer: [], planner_a: [], planner_b: [], rater: [] }, deliveryTarget: "pull_request_draft", runProjectTests: true, visualEvidence: "off" });
+
+  const headers = { Authorization: `Bearer ${agentCredential}` };
+  const [workflows, templates] = await Promise.all([
+    app.inject({ method: "GET", url: `/api/hermes/workflows?projectId=${projectId}`, headers }),
+    app.inject({ method: "GET", url: `/api/hermes/templates?projectId=${projectId}`, headers }),
+  ]);
+  expect(workflows.statusCode).toBe(200);
+  expect(workflows.json().workflows).toEqual(expect.arrayContaining([
+    { id: "workflow_native_standard", name: "Standard", description: expect.any(String), permittedForAgentTaskCreation: true },
+    { id: "workflow_native_direct_build", name: "Direct build", description: expect.any(String), permittedForAgentTaskCreation: false },
+  ]));
+  expect(workflows.json().workflows.map((workflow: { id: string }) => workflow.id)).not.toContain("workflow_native_refine_pull_request");
+  expect(templates.statusCode).toBe(200);
+  expect(templates.json()).toMatchObject({ templates: expect.arrayContaining([
+    { id: templateId, name: "Discovery template", description: "A discovered template", permittedForAgentTaskCreation: true },
+    { id: "template_hermes_disallowed", name: "Blocked template", description: "Not permitted", permittedForAgentTaskCreation: false },
+  ]) });
+
+  for (const url of ["/api/hermes/workflows", "/api/hermes/templates"]) expect((await app.inject({ method: "GET", url: `${url}?projectId=${projectId}` })).statusCode).toBe(401);
+  expect((await app.inject({ method: "GET", url: `/api/hermes/workflows?projectId=${otherProjectId}`, headers })).statusCode).toBe(404);
+});
+
 test("POST /api/hermes/tasks resolves only project-authorized workflow, template, profiles, and attachments", async () => {
   const policy: ProjectAgentTaskPolicy = {
     workflowIds: ["workflow_native_standard", "workflow_native_direct_build"], defaultWorkflowId: "workflow_native_standard", templateIds: ["template_hermes_direct"],
@@ -607,7 +641,7 @@ test("POST /api/hermes/tasks resolves only project-authorized workflow, template
     images: [{ filename: "proof.png", mimeType: "image/png", base64: "iVBORw0KGgo=" }], deliveryTarget: "pull_request_draft", runProjectTests: true, visualEvidence: "off",
   });
   expect(rich.statusCode, rich.body).toBe(201);
-  expect(rich.json()).toMatchObject({ workflow: "direct_build" });
+  expect(rich.json()).toMatchObject({ workflow: { id: "workflow_native_direct_build", engine: "direct_build", name: "Direct build" }, templateId: null, deliveryTarget: "pull_request_draft" });
   expect(database.authQuery(db => db.prepare("SELECT COUNT(*) AS count FROM forge_artifacts").get())).toEqual({ count: 1 });
 
   // An omitted delivery configuration reports back the policy the project applied.
@@ -618,10 +652,12 @@ test("POST /api/hermes/tasks resolves only project-authorized workflow, template
 
   const templated = await request({ projectId, title: "Template task", idempotencyKey: "hermes-template-001", templateId: "template_hermes_direct" });
   expect(templated.statusCode, templated.body).toBe(201);
-  expect(templated.json().workflow).toBe("direct_build");
+  expect(templated.json()).toMatchObject({ workflow: { id: null, engine: "direct_build", name: null }, templateId: "template_hermes_direct" });
+  expect((await app.inject({ method: "GET", url: `/api/hermes/tasks/${templated.json().id}`, headers: { Authorization: `Bearer ${agentCredential}` } })).json()).toMatchObject({ workflow: { id: null, engine: "direct_build", name: null }, templateId: "template_hermes_direct", deliveryTarget: "pull_request_draft" });
 
   const denied = await request({ projectId, title: "Denied workflow", idempotencyKey: "hermes-denied-001", workflowId: "workflow_native_independent_review" });
   expect(denied.statusCode).toBe(422);
+  expect(denied.json()).toMatchObject({ code: "workflow_not_permitted", permittedWorkflowIds: policy.workflowIds });
   const badImage = await request({ projectId, title: "Bad image", idempotencyKey: "hermes-bad-image-001", images: [{ filename: "bad.png", mimeType: "image/png", base64: "aGVsbG8=" }] });
   expect(badImage.statusCode).toBe(422);
   const badFields = await request({ projectId, title: "Bad fields", idempotencyKey: "hermes-bad-fields-001", repositoryPath: "/private/path" });
@@ -703,7 +739,9 @@ test("Hermes request validation rejects required fields, unapproved choices, and
   const request = (payload: object) => app.inject({ method: "POST", url: "/api/hermes/tasks", headers: { Authorization: `Bearer ${agentCredential}` }, payload });
   expect((await request({ title: "Missing project", idempotencyKey: "missing-project" })).statusCode).toBe(400);
   expect((await request({ projectId, title: "Missing key" })).statusCode).toBe(400);
-  expect((await request({ projectId, title: "Bad choice", idempotencyKey: "bad-choice-001", workflowId: "unknown" })).statusCode).toBe(422);
+  const missingWorkflow = await request({ projectId, title: "Bad choice", idempotencyKey: "bad-choice-001", workflowId: "unknown" });
+  expect(missingWorkflow).toMatchObject({ statusCode: 422 });
+  expect(missingWorkflow.json()).toMatchObject({ code: "workflow_not_found", permittedWorkflowIds: expect.any(Array) });
   expect((await request({ projectId, title: "Bad profile", idempotencyKey: "bad-profile-001", rootProfileId: "profile_native_worker" })).statusCode).toBe(422);
   for (const [key, deliveryTarget] of [["bad-delivery-001", "merged"], ["bad-delivery-002", "pull_request_ready"]] as const) {
     const rejected = await request({ projectId, title: "Bad delivery", idempotencyKey: key, deliveryTarget });
@@ -725,7 +763,12 @@ test("Hermes request validation rejects required fields, unapproved choices, and
   expect(testsDisabled.statusCode).toBe(422);
   expect(testsDisabled.json()).toMatchObject({ code: "delivery_policy_rejected" });
   database.authTransaction(db => db.prepare("INSERT INTO forge_task_templates (id, project_id, name, configuration_json, created_at, updated_at) VALUES ('template_disallowed', ?, 'Disallowed', ?, ?, ?)").run(projectId, JSON.stringify({ name: "Disallowed", description: "", workflow: "standard", advisorProfileIds: {} }), new Date().toISOString(), new Date().toISOString()));
-  for (const templateId of ["template_missing", "template_disallowed"]) expect((await request({ projectId, title: "Unavailable template", idempotencyKey: `template-${templateId}`, templateId })).statusCode).toBe(422);
+  const missingTemplate = await request({ projectId, title: "Unavailable template", idempotencyKey: "template-template_missing", templateId: "template_missing" });
+  expect(missingTemplate).toMatchObject({ statusCode: 422 });
+  expect(missingTemplate.json()).toMatchObject({ code: "template_not_found", permittedTemplateIds: expect.any(Array) });
+  const unpermittedTemplate = await request({ projectId, title: "Unavailable template", idempotencyKey: "template-template_disallowed", templateId: "template_disallowed" });
+  expect(unpermittedTemplate).toMatchObject({ statusCode: 422 });
+  expect(unpermittedTemplate.json()).toMatchObject({ code: "template_not_permitted", permittedTemplateIds: expect.any(Array) });
 });
 
 test("persisted grants remain authoritative when a principal project observation is stale", async () => {
@@ -893,7 +936,7 @@ test("project policy owns the default workflow and implicit Advisor profile", as
   await update({ workflowIds: ["workflow_native_direct_build"], defaultWorkflowId: "workflow_native_direct_build", templateIds: [], rootProfileIds: ["profile_native_root"], workerProfileIds: ["profile_native_worker"], advisorProfileIds: { reviewer: [], planner_a: [], planner_b: [], rater: [] }, deliveryTarget: "pull_request_draft", runProjectTests: true, visualEvidence: "off" });
   const direct = await app.inject({ method: "POST", url: "/api/hermes/tasks", headers: { Authorization: `Bearer ${agentCredential}` }, payload: { projectId, title: "Policy default", idempotencyKey: "hermes-policy-default-001" } });
   expect(direct.statusCode, direct.body).toBe(201);
-  expect(direct.json().workflow).toBe("direct_build");
+  expect(direct.json().workflow).toMatchObject({ id: "workflow_native_direct_build", engine: "direct_build", name: "Direct build" });
 
   await update({ workflowIds: ["workflow_native_independent_review"], defaultWorkflowId: "workflow_native_independent_review", templateIds: [], rootProfileIds: ["profile_native_root"], workerProfileIds: ["profile_native_worker"], advisorProfileIds: { reviewer: [], planner_a: [], planner_b: [], rater: [] }, deliveryTarget: "pull_request_draft", runProjectTests: true, visualEvidence: "off" });
   const denied = await app.inject({ method: "POST", url: "/api/hermes/tasks", headers: { Authorization: `Bearer ${agentCredential}` }, payload: { projectId, title: "Implicit advisor", idempotencyKey: "hermes-policy-advisor-denied" } });
@@ -902,7 +945,7 @@ test("project policy owns the default workflow and implicit Advisor profile", as
   await update({ workflowIds: ["workflow_native_independent_review"], defaultWorkflowId: "workflow_native_independent_review", templateIds: [], rootProfileIds: ["profile_native_root"], workerProfileIds: ["profile_native_worker"], advisorProfileIds: { reviewer: ["profile_native_root"], planner_a: [], planner_b: [], rater: [] }, deliveryTarget: "pull_request_draft", runProjectTests: true, visualEvidence: "off" });
   const allowed = await app.inject({ method: "POST", url: "/api/hermes/tasks", headers: { Authorization: `Bearer ${agentCredential}` }, payload: { projectId, title: "Implicit advisor allowed", idempotencyKey: "hermes-policy-advisor-allowed" } });
   expect(allowed.statusCode, allowed.body).toBe(201);
-  expect(allowed.json()).toMatchObject({ workflow: "independent_review" });
+  expect(allowed.json()).toMatchObject({ workflow: { id: "workflow_native_independent_review", engine: "independent_review", name: "Second opinion" } });
 
   database.authTransaction(db => db.prepare("UPDATE forge_projects SET agent_task_policy_json = ? WHERE id = ?").run("{invalid", projectId));
   const corrupt = await app.inject({ method: "POST", url: "/api/hermes/tasks", headers: { Authorization: `Bearer ${agentCredential}` }, payload: { projectId, title: "Corrupt policy", idempotencyKey: "hermes-policy-corrupt" } });
@@ -1015,7 +1058,7 @@ test("GET /api/hermes/tasks/:taskId returns safe projection, handles non-enumera
   });
   expect(getSuccess.statusCode).toBe(200);
   expect(getSuccess.headers["cache-control"]).toBe("private, no-store");
-  const expectedKeys = ["id", "issueKey", "projectId", "project", "title", "status", "dependsOn", "archived", "revision", "permittedCommands", "humanQuestion", "blocker", "workflowStage", "workflow", "deliveryTarget", "runProjectTests", "visualEvidence", "delivery", "createdAt", "updatedAt", "implementation", "integration", "actionRequired"].sort();
+  const expectedKeys = ["id", "issueKey", "projectId", "project", "title", "status", "dependsOn", "archived", "revision", "permittedCommands", "humanQuestion", "blocker", "workflowStage", "workflow", "templateId", "deliveryTarget", "runProjectTests", "visualEvidence", "delivery", "createdAt", "updatedAt", "implementation", "integration", "actionRequired"].sort();
   expect(Object.keys(getSuccess.json()).sort()).toEqual(expectedKeys);
   expect(getSuccess.json().title).toBe("Task For Status Check");
 
@@ -1133,7 +1176,7 @@ test("GET /api/hermes/tasks scopes the list, rejects an unknown filter, and expo
   expect(ids).not.toContain(outOfGrant.id);
   expect(ids).not.toContain(crossCompany.id);
 
-  expect(Object.keys(listed[0]!).sort()).toEqual(["id", "issueKey", "projectId", "project", "title", "status", "dependsOn", "archived", "revision", "permittedCommands", "humanQuestion", "blocker", "workflowStage", "workflow", "deliveryTarget", "runProjectTests", "visualEvidence", "delivery", "createdAt", "updatedAt", "implementation", "integration", "actionRequired"].sort());
+  expect(Object.keys(listed[0]!).sort()).toEqual(["id", "issueKey", "projectId", "project", "title", "status", "dependsOn", "archived", "revision", "permittedCommands", "humanQuestion", "blocker", "workflowStage", "workflow", "templateId", "deliveryTarget", "runProjectTests", "visualEvidence", "delivery", "createdAt", "updatedAt", "implementation", "integration", "actionRequired"].sort());
   expect(JSON.stringify(listed)).not.toMatch(/worktree|repositoryPath|session|turn|prompt|transcript|credential|objective/i);
 
   expect((await listTasks(`?projectId=${projectId}`)).json().tasks.map((task: { id: string }) => task.id)).toContain(granted);

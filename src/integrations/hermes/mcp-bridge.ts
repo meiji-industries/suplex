@@ -6,6 +6,7 @@ import {
   HermesTaskCreateBodySchema,
   HermesTaskIdParamsSchema,
   HermesTaskListQuerySchema,
+  HermesProjectDiscoveryQuerySchema,
 } from "../../http/contracts/hermes.js";
 import { startMcpStdioTransport, type McpTool } from "../../shared/mcp-stdio.js";
 
@@ -26,6 +27,8 @@ const toolSchema = (schema: z.ZodType): Record<string, unknown> => z.toJSONSchem
 export const HERMES_MCP_TOOLS: readonly McpTool[] = [
   { name: "forge_whoami", description: `Read this paired agent's identity, capabilities, and granted projects with the create-time agentTaskPolicy each one permits. ${AUTHORITY}`, inputSchema: toolSchema(NoArgumentsSchema) },
   { name: "forge_capabilities", description: `Read the runtime capability contract, autonomous commands, and unavailable commands. ${AUTHORITY}`, inputSchema: toolSchema(NoArgumentsSchema) },
+  { name: "forge_list_workflows", description: "List workflow records for one granted project and whether task creation permits each record.", inputSchema: toolSchema(HermesProjectDiscoveryQuerySchema) },
+  { name: "forge_list_templates", description: "List task templates for one granted project and whether task creation permits each template.", inputSchema: toolSchema(HermesProjectDiscoveryQuerySchema) },
   { name: "forge_list_tasks", description: "List tasks this agent created, newest update first. Filters and the opaque cursor come from the runtime contract.", inputSchema: toolSchema(HermesTaskListQuerySchema) },
   { name: "forge_get_task", description: "Read one task. Pass knownRevision to poll conditionally: an unchanged task returns { unchanged: true, revision } instead of the projection.", inputSchema: toolSchema(GetTaskSchema) },
   { name: "forge_get_task_delivery", description: `Read the delivery and blocker state of one task, including any pull request, delivery wait, and completion observation. Forge reports no persisted check observation. ${AUTHORITY}`, inputSchema: toolSchema(TaskOnlySchema) },
@@ -74,6 +77,14 @@ export class HermesMcpBridge {
         return this.request("GET", "/api/hermes/me");
       case "forge_capabilities":
         return this.request("GET", "/api/hermes/capabilities");
+      case "forge_list_workflows": {
+        const query = HermesProjectDiscoveryQuerySchema.parse(args);
+        return this.request("GET", `/api/hermes/workflows?${new URLSearchParams(query).toString()}`);
+      }
+      case "forge_list_templates": {
+        const query = HermesProjectDiscoveryQuerySchema.parse(args);
+        return this.request("GET", `/api/hermes/templates?${new URLSearchParams(query).toString()}`);
+      }
       case "forge_list_tasks": {
         const query = HermesTaskListQuerySchema.parse(args);
         const search = new URLSearchParams(Object.entries(query).map(([key, value]) => [key, String(value)]));

@@ -17,6 +17,14 @@ create request that asks for anything else is rejected.
 `GET /api/hermes/capabilities` reports the deployment-wide surface. Its
 `capabilities.create.deliveryTargets` is the full set of delivery targets the
 route accepts; each project narrows that to the single value its policy fixes.
+Its `capabilities.read.workflows` and `capabilities.read.templates` flags
+advertise project-scoped creation discovery.
+
+`GET /api/hermes/workflows?projectId=...` lists every non-archived workflow
+with `id`, `name`, `description`, and `permittedForAgentTaskCreation`. `GET
+/api/hermes/templates?projectId=...` returns the same fields for templates in
+that project. Both routes require a current project grant. The permission flag
+comes from the project's agent task policy.
 
 `GET /api/hermes/tasks` returns only the caller's tasks. It accepts these query
 parameters: `projectId`, `status`, `archived`, `attention`, `blocker`,
@@ -91,7 +99,16 @@ project policy does not permit returns `422` with
 `{ "code": "delivery_policy_rejected" }` and a message naming the permitted
 values. Read `agentTaskPolicy` from `GET /api/hermes/me` to avoid the round
 trip, or omit the fields and let the policy default apply. The created task
-reports the applied `deliveryTarget`, `runProjectTests`, and `visualEvidence`.
+reports the applied `workflow`, `templateId`, `deliveryTarget`,
+`runProjectTests`, and `visualEvidence`. `workflow` has the selected record ID
+and name when Forge selected a workflow record, plus the engine that the task
+runs. A template task has a null workflow record ID and name.
+
+An unknown or archived workflow returns `422 workflow_not_found`. A workflow
+that exists but is outside the project policy returns `422
+workflow_not_permitted`. Both error bodies include `permittedWorkflowIds`.
+Templates use `template_not_found` and `template_not_permitted`, with
+`permittedTemplateIds`.
 
 `docs/hermes-mcp-bridge.md` describes the stdio MCP bridge that exposes these
 routes as tools.

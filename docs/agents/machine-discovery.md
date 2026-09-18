@@ -26,7 +26,8 @@ Read them in this order.
 3. Read `/.well-known/forge/agent-skills.json` to choose a client.
 
 Every runtime path stays closed until you pair. `GET /api/hermes/openapi.json`,
-`GET /api/hermes/capabilities`, `GET /api/hermes/me`, and every task route answer
+`GET /api/hermes/capabilities`, `GET /api/hermes/me`, the workflow and template
+discovery routes, and every task route answer
 `401` with `credential_invalid` when the request carries no credential. The public
 artifacts state this. They do not promise access.
 
@@ -143,15 +144,18 @@ Run this sequence after every Forge upgrade, with the agent credential in hand.
    breaks any agent that sent it.
 4. Read `GET /api/hermes/me`. Confirm the agent identity and every granted
    project.
-5. Read `GET /api/hermes/tasks`. Confirm that the tasks the agent created are
+5. Read `GET /api/hermes/workflows?projectId=...` and `GET
+   /api/hermes/templates?projectId=...`. Confirm that each result reports its
+   current create permission.
+6. Read `GET /api/hermes/tasks`. Confirm that the tasks the agent created are
    still listed.
-6. Create the acknowledgment task twice with the same idempotency key. Run
+7. Create the acknowledgment task twice with the same idempotency key. Run
    `python3 smoke_test.py` from the skill directory, or send
    `POST /api/hermes/tasks` twice. The second call must return the same task
    identifier. The task must stay in `backlog`.
-7. Confirm that the runtime routes still refuse an anonymous request. Send
+8. Confirm that the runtime routes still refuse an anonymous request. Send
    `GET /api/hermes/me` with no header. It must answer `401`.
-8. Archive or cancel the acknowledgment task when you finish.
+9. Archive or cancel the acknowledgment task when you finish.
 
 Report a failure at any step as a break in the agent contract, not as an agent
 error.

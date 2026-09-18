@@ -55,7 +55,7 @@ test("tool input schemas stay derived from the served Hermes runtime contract", 
     expect(tool("forge_command_task").required).toEqual(expect.arrayContaining(["revision", "idempotencyKey"]));
     expect(tool("forge_command_task").properties.command?.enum).toEqual((command.properties.command as { enum: string[] }).enum);
 
-    expect(HERMES_MCP_TOOLS.map(entry => entry.name)).toEqual(["forge_whoami", "forge_capabilities", "forge_list_tasks", "forge_get_task", "forge_get_task_delivery", "forge_create_task", "forge_command_task"]);
+    expect(HERMES_MCP_TOOLS.map(entry => entry.name)).toEqual(["forge_whoami", "forge_capabilities", "forge_list_workflows", "forge_list_templates", "forge_list_tasks", "forge_get_task", "forge_get_task_delivery", "forge_create_task", "forge_command_task"]);
     for (const entry of HERMES_MCP_TOOLS) expect(JSON.stringify(entry.inputSchema)).not.toContain("credential");
   } finally { await fixture.close(); }
 });
@@ -76,6 +76,11 @@ test("the stdio bridge drives the paired Hermes runtime API end to end", async (
 
     const whoami = await session.call({ method: "tools/call", params: { name: "forge_whoami", arguments: {} } });
     expect(structured(whoami)).toMatchObject({ status: 200, body: { agent: { name: "Hermes Bot" }, projects: [{ id: fixture.project.id }] } });
+
+    const workflows = await session.call({ method: "tools/call", params: { name: "forge_list_workflows", arguments: { projectId: fixture.project.id } } });
+    expect(structured(workflows)).toMatchObject({ status: 200, body: { workflows: expect.arrayContaining([expect.objectContaining({ permittedForAgentTaskCreation: expect.any(Boolean) })]) } });
+    const templates = await session.call({ method: "tools/call", params: { name: "forge_list_templates", arguments: { projectId: fixture.project.id } } });
+    expect(structured(templates)).toEqual({ status: 200, body: { templates: [] } });
 
     const created = await session.call({ method: "tools/call", params: { name: "forge_create_task", arguments: { projectId: fixture.project.id, title: "Bridge task", description: "Created through the MCP bridge", idempotencyKey: "bridge-key-1" } } });
     expect(structured(created)).toMatchObject({ status: 201, body: { title: "Bridge task", status: "backlog" } });

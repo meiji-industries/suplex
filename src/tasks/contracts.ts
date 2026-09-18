@@ -64,6 +64,11 @@ export const TaskConfigurationSchema = z.object({
   verificationCommand: z.string(),
   runProjectTests: z.boolean(),
   visualEvidence: VisualEvidenceSchema,
+  hermesSelection: z.object({
+    workflowId: z.string().min(1).max(256).nullable(),
+    workflowName: z.string().min(1).max(80).nullable(),
+    templateId: z.string().min(1).max(256).nullable(),
+  }).strict().optional(),
   source: TaskSourceInputSchema.nullable(),
   capturedAt: z.string().datetime(),
 }).strict();

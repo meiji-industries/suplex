@@ -14,7 +14,8 @@ Two transports, same API:
 
 - **Prefer the Forge MCP tools** when the bridge is registered (`forge mcp`,
   or `pnpm run forge mcp` from a source checkout). Check for tools named
-  `forge_whoami`, `forge_capabilities`, `forge_list_tasks`, `forge_get_task`,
+  `forge_whoami`, `forge_capabilities`, `forge_list_workflows`,
+  `forge_list_templates`, `forge_list_tasks`, `forge_get_task`,
   `forge_get_task_delivery`, `forge_create_task`, `forge_command_task`.
 - **Otherwise use `forge_client.py`** in this directory. It is standard
   library only and speaks the same routes.
@@ -113,6 +114,13 @@ configuration that project permits. Forge's persisted grants are authoritative:
 `projectId` is always explicit in a create request. Forge rejects a project
 this agent was not granted with a non-enumerating `404`.
 
+## Workflow and template selection
+
+Call `forge_list_workflows(projectId)` and `forge_list_templates(projectId)`
+before you set `workflowId` or `templateId`. Each result has `id`, `name`,
+`description`, and `permittedForAgentTaskCreation`. A workflow is shared by
+projects. A template belongs to the project in the request.
+
 ## Before you create: list first
 
 Duplicate tasks are expensive. Before creating, list existing tasks for the
@@ -157,6 +165,13 @@ message naming the permitted values. Omit them to take the policy default — th
 created task reports the applied values back. Omit `description` to keep a template's
 description; sending it, even as `""`, overrides it. Never send local paths,
 URLs, credentials, or file references.
+
+An unknown or archived workflow returns `422 workflow_not_found`. A known
+workflow outside the project policy returns `422 workflow_not_permitted`.
+Both responses include `permittedWorkflowIds`. Templates return
+`template_not_found` or `template_not_permitted` with `permittedTemplateIds`.
+The created task reports the applied `workflow` object, `templateId`, and
+`deliveryTarget`.
 
 `PUT /api/hermes/tasks/{taskId}/dependencies` replaces `dependsOn` on an
 existing task.

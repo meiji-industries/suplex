@@ -42,10 +42,13 @@ import { CliHerdrClient } from "../integrations/herdr/client.js";
 import { ensureTaskShellPane, type TaskPanePort } from "../runtimes/task-display.js";
 
 export class TaskFailure extends Error {
-  constructor(readonly publicMessage: string, readonly statusCode = 400, readonly code = "task_failure", options?: { cause?: unknown }) {
+  constructor(readonly publicMessage: string, readonly statusCode = 400, readonly code = "task_failure", options?: { cause?: unknown; details?: { permittedWorkflowIds?: string[]; permittedTemplateIds?: string[] } }) {
     super(publicMessage);
     this.cause = options?.cause;
+    this.details = options?.details;
   }
+
+  readonly details: { permittedWorkflowIds?: string[]; permittedTemplateIds?: string[] } | undefined;
 }
 type Authority = { kind: "user"; userId: string } | { kind: "hermes"; principal: HermesPrincipal };
 export type HermesGithubPort = Pick<Required<GithubReleasePort>, "observePullRequest">;
@@ -168,7 +171,7 @@ export class TaskService {
     }
     if (existing) return { created: false, task: this.getHermesTask(principal, existing.id) };
     const resolved = this.resolveHermesRequest(principal.companyId, raw);
-    const result = await this.create(authority, principal.companyId, resolved.request, undefined, requestHash, resolved.signature, raw, copiedFromTaskId);
+    const result = await this.create(authority, principal.companyId, resolved.request, undefined, requestHash, resolved.signature, raw, copiedFromTaskId, resolved.selection);
     return { created: result.created, task: this.getHermesTask(principal, result.task.id) };
   }
 
@@ -184,6 +187,18 @@ export class TaskService {
   /** Every task the agent created inside its granted projects, newest activity first. */
   listHermesTaskRows(principal: HermesPrincipal): TaskRow[] {
     return this.repository.rows().filter(row => row.company_id === principal.companyId && row.creator_agent_id === principal.agentId && principal.projectIds.includes(row.project_id) && !row.archived_at);
+  }
+
+  listHermesWorkflows(principal: HermesPrincipal, projectId: string) {
+    this.requireScope({ kind: "hermes", principal }, principal.companyId, projectId);
+    const policy = ProjectAgentTaskPolicySchema.parse(this.projects.getProjectInCompany(principal.companyId, projectId).agentTaskPolicy);
+    return this.database.authQuery(db => (db.prepare("SELECT id, name, description FROM forge_workflows WHERE archived_at IS NULL ORDER BY name COLLATE NOCASE, id").all() as Array<{ id: string; name: string; description: string }>).map(workflow => ({ ...workflow, permittedForAgentTaskCreation: policy.workflowIds.includes(workflow.id) })));
+  }
+
+  listHermesTemplates(principal: HermesPrincipal, projectId: string) {
+    this.requireScope({ kind: "hermes", principal }, principal.companyId, projectId);
+    const policy = ProjectAgentTaskPolicySchema.parse(this.projects.getProjectInCompany(principal.companyId, projectId).agentTaskPolicy);
+    return this.database.authQuery(db => (db.prepare("SELECT id, name, configuration_json FROM forge_task_templates WHERE project_id = ? ORDER BY name COLLATE NOCASE, id").all(projectId) as Array<{ id: string; name: string; configuration_json: string }>).map(template => ({ id: template.id, name: template.name, description: CreateTaskTemplateBodySchema.parse(JSON.parse(template.configuration_json)).description, permittedForAgentTaskCreation: policy.templateIds.includes(template.id) })));
   }
 
   setTaskDependencies(userId: string, taskId: string, dependsOn: unknown): Task {
@@ -343,7 +358,7 @@ export class TaskService {
     return { tasks, nextCursor: last && hasMore ? this.createHermesCursor(principal, filter, last) : null };
   }
 
-  private async create(authority: Authority, companyId: string, raw: TaskInput, capturedDispatch?: GithubTriggerDispatch, requestHashOverride?: string, hermesPolicySignature?: string, hermesRaw?: HermesTaskCreateBody, copiedFromTaskId?: string): Promise<{ task: Task; created: boolean }> {
+  private async create(authority: Authority, companyId: string, raw: TaskInput, capturedDispatch?: GithubTriggerDispatch, requestHashOverride?: string, hermesPolicySignature?: string, hermesRaw?: HermesTaskCreateBody, copiedFromTaskId?: string, hermesSelection?: { workflowId: string | null; workflowName: string | null; templateId: string | null }): Promise<{ task: Task; created: boolean }> {
     let normalized: TaskInput;
     try { normalized = normalizeWorkflowInput(raw, { requireSource: true }); }
     catch (error) { if (error instanceof WorkflowInputFailure) throw new TaskFailure(error.message, error.statusCode); throw error; }
@@ -391,6 +406,7 @@ export class TaskService {
         baselineSha: source?.kind === "pull_request" ? source.baseSha : heads.baseSha,
         startingSha: source && source.kind !== "issue" ? source.headSha : heads.baseSha, setupCommand: project.setupCommand, verificationCommand: project.verificationCommand,
         runProjectTests: request.runProjectTests, visualEvidence: request.visualEvidence, source: request.source ?? null, capturedAt: new Date().toISOString(),
+        ...(hermesSelection ? { hermesSelection } : {}),
       });
       return this.database.authImmediateTransaction(() => {
         this.requireScope(authority, companyId, request.projectId, true);
@@ -681,12 +697,13 @@ export class TaskService {
     return eligible;
   }
 
-  private resolveHermesRequest(companyId: string, raw: HermesTaskCreateBody): { request: TaskInput; signature: string } {
+  private resolveHermesRequest(companyId: string, raw: HermesTaskCreateBody): { request: TaskInput; selection: { workflowId: string | null; workflowName: string | null; templateId: string | null }; signature: string } {
     const project = this.projects.getProjectInCompany(companyId, raw.projectId);
     const policy = ProjectAgentTaskPolicySchema.parse(project.agentTaskPolicy);
     const template = raw.templateId ? this.templateForHermes(project.id, policy, raw.templateId) : undefined;
     const workflow = template ? undefined : this.workflowForHermes(policy, raw.workflowId ?? policy.defaultWorkflowId);
-    const selected = template ?? workflow!;
+    const selected = template?.request ?? workflow!.request;
+    const selection = template ? { workflowId: null, workflowName: null, templateId: raw.templateId! } : { workflowId: workflow!.id, workflowName: workflow!.name, templateId: null };
     let request: ReturnType<typeof TaskInputSchema.parse>;
     try {
       request = TaskInputSchema.parse(normalizeWorkflowInput({
@@ -709,27 +726,27 @@ export class TaskService {
       if (!policy.advisorProfileIds[role].includes(profileId)) throw new TaskFailure("The selected Advisor profile is not permitted", 422);
     }
     const resolved = { ...request, rootProfileId: root, workerProfileId: worker };
-    return { request: resolved, signature: JSON.stringify(resolved) };
+    return { request: resolved, selection, signature: JSON.stringify({ request: resolved, selection }) };
   }
 
-  private workflowForHermes(policy: ProjectAgentTaskPolicy, workflowId: string): Partial<z.infer<typeof CreateTaskTemplateBodySchema>> {
-    if (!policy.workflowIds.includes(workflowId)) throw new TaskFailure("The selected workflow is not permitted", 422);
+  private workflowForHermes(policy: ProjectAgentTaskPolicy, workflowId: string): { id: string; name: string; request: Partial<z.infer<typeof CreateTaskTemplateBodySchema>> } {
     const row = this.database.authQuery(db => db.prepare("SELECT name, description, configuration_json, engine FROM forge_workflows WHERE id = ? AND archived_at IS NULL").get(workflowId) as { name: string; description: string; configuration_json: string; engine: string } | undefined);
-    if (!row) throw new TaskFailure("The selected workflow is not available", 422);
+    if (!row) throw new TaskFailure("The selected workflow is not available", 422, "workflow_not_found", { details: { permittedWorkflowIds: policy.workflowIds } });
+    if (!policy.workflowIds.includes(workflowId)) throw new TaskFailure("The selected workflow is not permitted", 422, "workflow_not_permitted", { details: { permittedWorkflowIds: policy.workflowIds } });
     const record = WorkflowRecordInputSchema.parse({ ...JSON.parse(row.configuration_json), name: row.name, description: row.description, engine: row.engine });
-    return {
+    return { id: workflowId, name: record.name, request: {
       workflow: record.engine,
       advisorProfileIds: record.advisorProfileIds,
       ...(record.rootProfileId ? { rootProfileId: record.rootProfileId } : {}),
       ...(record.workerProfileId ? { workerProfileId: record.workerProfileId } : {}),
-    };
+    } };
   }
 
-  private templateForHermes(projectId: string, policy: ProjectAgentTaskPolicy, templateId: string): z.infer<typeof CreateTaskTemplateBodySchema> {
-    if (!policy.templateIds.includes(templateId)) throw new TaskFailure("The selected template is not permitted", 422);
+  private templateForHermes(projectId: string, policy: ProjectAgentTaskPolicy, templateId: string): { request: z.infer<typeof CreateTaskTemplateBodySchema> } {
     const row = this.database.authQuery(db => db.prepare("SELECT configuration_json FROM forge_task_templates WHERE id = ? AND project_id = ?").get(templateId, projectId) as { configuration_json: string } | undefined);
-    if (!row) throw new TaskFailure("The selected template is not available", 422);
-    return CreateTaskTemplateBodySchema.parse(JSON.parse(row.configuration_json));
+    if (!row) throw new TaskFailure("The selected template is not available", 422, "template_not_found", { details: { permittedTemplateIds: policy.templateIds } });
+    if (!policy.templateIds.includes(templateId)) throw new TaskFailure("The selected template is not permitted", 422, "template_not_permitted", { details: { permittedTemplateIds: policy.templateIds } });
+    return { request: CreateTaskTemplateBodySchema.parse(JSON.parse(row.configuration_json)) };
   }
 
   private hermesRequestHash(input: HermesTaskCreateBody, creator: TaskCreator): string {
@@ -779,7 +796,8 @@ export class TaskService {
       : task.status === "cancelled" ? ["archive_task", "duplicate_task"] as const
       : task.status === "delivered" ? ["archive_task", "duplicate_task"] as const
       : ["duplicate_task"] as const;
-    const value = { id: task.id, issueKey: task.issueKey, projectId: task.projectId, project, title: task.title, status: task.status, dependsOn: task.dependsOn, archived: task.archivedAt !== null, permittedCommands: [...permittedCommands, ...recheck], humanQuestion, blocker, workflowStage, workflow: task.workflow, deliveryTarget: task.deliveryTarget, runProjectTests: task.configuration.runProjectTests, visualEvidence: task.configuration.visualEvidence, delivery, createdAt: task.createdAt, updatedAt: task.updatedAt };
+    const selection = task.configuration.hermesSelection;
+    const value = { id: task.id, issueKey: task.issueKey, projectId: task.projectId, project, title: task.title, status: task.status, dependsOn: task.dependsOn, archived: task.archivedAt !== null, permittedCommands: [...permittedCommands, ...recheck], humanQuestion, blocker, workflowStage, workflow: { id: selection?.workflowId ?? null, engine: task.workflow, name: selection?.workflowName ?? null }, templateId: selection?.templateId ?? null, deliveryTarget: task.deliveryTarget, runProjectTests: task.configuration.runProjectTests, visualEvidence: task.configuration.visualEvidence, delivery, createdAt: task.createdAt, updatedAt: task.updatedAt };
     return { ...value, revision: createHash("sha256").update(JSON.stringify({ value, commandRevision: row.command_revision })).digest("base64url") };
   }
 

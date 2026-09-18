@@ -24,6 +24,8 @@ const CATALOG = {
     { path: "/api/hermes/openapi.json", method: "GET", authentication: "agent credential", description: "The authoritative OpenAPI 3.0.3 contract for the runtime routes. Read it after pairing." },
     { path: "/api/hermes/capabilities", method: "GET", authentication: "agent credential", description: "The commands this deployment accepts and the commands it does not." },
     { path: "/api/hermes/me", method: "GET", authentication: "agent credential", description: "The agent identity and the projects granted to it." },
+    { path: "/api/hermes/workflows", method: "GET", authentication: "agent credential", description: "List workflow records for a granted project and whether task creation permits each one." },
+    { path: "/api/hermes/templates", method: "GET", authentication: "agent credential", description: "List task templates for a granted project and whether task creation permits each one." },
     { path: "/api/hermes/tasks", method: "GET", authentication: "agent credential", description: "List the tasks this agent created." },
     { path: "/api/hermes/tasks", method: "POST", authentication: "agent credential", description: "Create a backlog task. An idempotency key is necessary. Creation never starts the task." },
     { path: "/api/hermes/tasks/{taskId}", method: "GET", authentication: "agent credential", description: "Read one task. Send the ETag in If-None-Match to poll conditionally." },
@@ -49,7 +51,7 @@ const SKILLS = {
   skills: [
     {
       name: "forge",
-      summary: "Work with Forge tasks as a paired agent: discover capabilities, select a granted project, create backlog tasks idempotently, poll them, and send lifecycle commands.",
+      summary: "Work with Forge tasks as a paired agent: discover capabilities, projects, workflows, and templates; create backlog tasks idempotently; poll them; and send lifecycle commands.",
       source: "hermes/skills/forge",
       instructions: "hermes/skills/forge/SKILL.md",
       install: "docs/hermes-skill.md",
@@ -59,7 +61,7 @@ const SKILLS = {
           preferred: true,
           command: "forge mcp",
           server: "forge-hermes-bridge",
-          tools: ["forge_whoami", "forge_capabilities", "forge_list_tasks", "forge_get_task", "forge_get_task_delivery", "forge_create_task", "forge_command_task"],
+          tools: ["forge_whoami", "forge_capabilities", "forge_list_workflows", "forge_list_templates", "forge_list_tasks", "forge_get_task", "forge_get_task_delivery", "forge_create_task", "forge_command_task"],
           description: "A local stdio MCP server that maps the runtime routes onto typed tools. Forge serves no remote MCP endpoint.",
           documentation: "docs/hermes-mcp-bridge.md",
         },

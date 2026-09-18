@@ -69,7 +69,7 @@ test("the discovery artifacts state that pairing and a scoped credential are nec
 test("the runtime routes the artifacts name stay behind the credential", async () => {
   const fixture = await nativeApp();
   try {
-    for (const path of ["/api/hermes/openapi.json", "/api/hermes/capabilities", "/api/hermes/me", "/api/hermes/tasks"]) {
+    for (const path of ["/api/hermes/openapi.json", "/api/hermes/capabilities", "/api/hermes/me", "/api/hermes/workflows?projectId=project", "/api/hermes/templates?projectId=project", "/api/hermes/tasks"]) {
       const response = await fixture.app.inject({ method: "GET", url: path });
       expect(response.statusCode, path).toBe(401);
       expect(response.json(), path).toEqual({ error: "Authentication failed", code: "credential_invalid" });

@@ -6,6 +6,7 @@ import {
   HermesDeliveryDecisionBodySchema, HermesDeliveryDecisionResponseSchema, HermesDeliveryRefreshResponseSchema, HermesDeliveryRepairResponseSchema,
   HermesIdentityResponseSchema, HermesMergeApprovalBodySchema, HermesMergeApprovalResponseSchema, HermesMergeBodySchema, HermesMergeResponseSchema,
   HermesMergeTrainQuerySchema, HermesMergeTrainResponseSchema, HermesProvenanceResponseSchema, HermesRuntimeOperations,
+  HermesProjectDiscoveryQuerySchema, HermesTemplateDiscoveryResponseSchema, HermesWorkflowDiscoveryResponseSchema,
   HermesSafeTaskProjectionSchema, HermesTaskDependenciesBodySchema, HermesTaskIdParamsSchema,
   HermesTaskListQuerySchema, HermesTaskListResponseSchema, HermesTaskReadProjectionSchema, hermesRuntimeOpenApi,
 } from "../contracts/hermes.js";
@@ -51,7 +52,7 @@ export function registerHermesTaskRoutes(app: FastifyInstance, options: { hermes
     preValidation: async (request) => { authenticate(request.headers.authorization); },
   }, async (_request, reply) => reply.header("Cache-Control", "private, no-store").send({
     apiVersion: "v1",
-    capabilities: { read: { task: true }, create: { backlogTask: true, deliveryTargets: DeliveryTargetSchema.options }, taskControl: true, delivery: agentDelivery, merge: agentDelivery, humanDecisions: false },
+    capabilities: { read: { task: true, workflows: true, templates: true }, create: { backlogTask: true, deliveryTargets: DeliveryTargetSchema.options }, taskControl: true, delivery: agentDelivery, merge: agentDelivery, humanDecisions: false },
     autonomousCommands: [
       "create_backlog_task", "start_task", "cancel_task", "archive_task", "unarchive_task", "duplicate_task", "send_task_note", "recheck_delivery_wait",
       ...(agentDelivery ? ["observe_delivery", "request_delivery_repair", "decide_delivery_wait", "read_merge_train", "request_merge_approval", "merge_pull_request"] as const : []),
@@ -60,6 +61,24 @@ export function registerHermesTaskRoutes(app: FastifyInstance, options: { hermes
     unavailableCommands: agentDelivery ? ["answer_human_question", "deliver_task"] as const : ["answer_human_question", "deliver_task", "merge_pull_request"] as const,
     pagination: { supported: false, cursor: false },
   }));
+
+  typed.get("/api/hermes/workflows", {
+    config: { hermesRuntime: true },
+    schema: { querystring: HermesProjectDiscoveryQuerySchema, response: { 200: HermesWorkflowDiscoveryResponseSchema } },
+    preValidation: async (request) => { authenticate(request.headers.authorization); },
+  }, async (request, reply) => {
+    const workflows = options.tasks.listHermesWorkflows(authenticate(request.headers.authorization), request.query.projectId);
+    return reply.header("Cache-Control", "private, no-store").code(200).send({ workflows });
+  });
+
+  typed.get("/api/hermes/templates", {
+    config: { hermesRuntime: true },
+    schema: { querystring: HermesProjectDiscoveryQuerySchema, response: { 200: HermesTemplateDiscoveryResponseSchema } },
+    preValidation: async (request) => { authenticate(request.headers.authorization); },
+  }, async (request, reply) => {
+    const templates = options.tasks.listHermesTemplates(authenticate(request.headers.authorization), request.query.projectId);
+    return reply.header("Cache-Control", "private, no-store").code(200).send({ templates });
+  });
 
   typed.post("/api/hermes/tasks", {
     config: { hermesRuntime: true },

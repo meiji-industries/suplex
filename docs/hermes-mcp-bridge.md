@@ -45,6 +45,8 @@ separately.
 | --- | --- | --- |
 | `forge_whoami` | `GET /api/hermes/me` | Agent identity, capabilities, and granted projects with the create-time policy each one permits. |
 | `forge_capabilities` | `GET /api/hermes/capabilities` | Autonomous commands and unavailable commands. |
+| `forge_list_workflows` | `GET /api/hermes/workflows` | Non-archived workflows for one granted project and the creation permission for each one. |
+| `forge_list_templates` | `GET /api/hermes/templates` | Templates for one granted project and the creation permission for each one. |
 | `forge_list_tasks` | `GET /api/hermes/tasks` | Filters and the opaque cursor come from the runtime contract. |
 | `forge_get_task` | `GET /api/hermes/tasks/{taskId}` | Pass `knownRevision` to poll conditionally. An unchanged task returns `{ "unchanged": true, "revision": "…" }`. |
 | `forge_get_task_delivery` | `GET /api/hermes/tasks/{taskId}` | The delivery, blocker, and completion observation of the same projection. |

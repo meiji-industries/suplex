@@ -111,19 +111,44 @@ export function visualEvidenceInstruction(value: VisualEvidence): string {
  * The dependency section of the initial prompt. Only an undelivered dependency produces text, so a
  * task that nothing blocks reads exactly as it did before dependencies existed.
  */
-export function dependencyInstruction(baseBranch: string, dependencies: TaskDependency[]): string {
+export function dependencyInstruction(baseBranch: string, dependencies: readonly TaskDependency[]): string {
   const undelivered = dependencies.filter(dependency => dependency.status !== "delivered");
   if (!undelivered.length) return "";
   const list = undelivered.map(dependency => `${dependency.id} "${dependency.title}" (${dependency.status})`).join(", ");
   return [
     `This task depends on these tasks: ${list}.`,
-    "Wait for the delivery of every dependency before you integrate this task.",
-    `Forge merges their work into ${baseBranch}. Integrate that work. Do not reimplement it.`,
-    "Forge wakes this task when the dependencies deliver.",
+    "The dependencies constrain execution and delivery ordering. Forge does not admit new work for this task until every dependency is delivered.",
+    `After release, observe the actual Git and GitHub state for ${baseBranch}. Integrate prerequisite work only when the current repository state requires it.`,
+    "Forge resumes this task when every dependency is delivered.",
   ].join(" ");
 }
 
-export function initialCoordinatorPrompt(control: TaskContext, context: CapturedConfiguration, dependencies: TaskDependency[] = []): string {
+export const IDLE_ROOT_PROMPT = "Observe the current task, worktree, and GitHub state and continue toward the delivery target. Adopt out-of-band progress. If checks or another external operation are pending, report what you are waiting for. Ask a specific human question only if a necessary decision or external failure requires it.";
+const DEPENDENCY_CONTEXT_START = "[Forge prerequisite status]";
+const DEPENDENCY_CONTEXT_END = "[/Forge prerequisite status]";
+const DEPENDENCY_CONTEXT_PREFIX = `\n\n${DEPENDENCY_CONTEXT_START}\nCurrent prerequisites: `;
+const DEPENDENCY_CONTEXT_SUFFIX = ". Prerequisites constrain delivery ordering. Forge resumes native work when all are delivered. Observe actual Git and GitHub state before integration.\n" + DEPENDENCY_CONTEXT_END;
+
+function withoutCurrentDependencyStatus(prompt: string): string {
+  const start = prompt.lastIndexOf(DEPENDENCY_CONTEXT_PREFIX);
+  if (start < 0) return prompt;
+  const generated = prompt.slice(start + DEPENDENCY_CONTEXT_PREFIX.length);
+  if (!generated.endsWith(DEPENDENCY_CONTEXT_SUFFIX) || generated.length === DEPENDENCY_CONTEXT_SUFFIX.length) return prompt;
+  return prompt.slice(0, start);
+}
+
+export function isIdleRootPrompt(prompt: string): boolean {
+  return withoutCurrentDependencyStatus(prompt) === IDLE_ROOT_PROMPT;
+}
+
+export function withCurrentDependencyStatus(prompt: string, dependencies: readonly TaskDependency[]): string {
+  const base = withoutCurrentDependencyStatus(prompt);
+  if (!dependencies.length) return base;
+  const list = dependencies.map(dependency => `${dependency.id} "${dependency.title}" (${dependency.status})`).join(", ");
+  return `${base}${DEPENDENCY_CONTEXT_PREFIX}${list}${DEPENDENCY_CONTEXT_SUFFIX}`;
+}
+
+export function initialCoordinatorPrompt(control: TaskContext, context: CapturedConfiguration, dependencies: readonly TaskDependency[] = []): string {
   const identity = `Objective: ${control.objective}\nDelivery target: ${control.deliveryTarget}\nRepository: ${control.deliveryIntent.repository}\nBranch: ${control.deliveryIntent.headBranch}`;
   const blocked = dependencyInstruction(control.deliveryIntent.baseBranch, dependencies);
   const suffix = blocked ? `\n\n${blocked}` : "";

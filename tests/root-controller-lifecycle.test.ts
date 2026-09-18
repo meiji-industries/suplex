@@ -184,10 +184,55 @@ test("a legacy active task preserves history without admitting dependency pollin
   expect(value.store.taskSpend("task").turns).toBe(2);
 });
 
+test("a blocked task recovers a natively completed turn whose local row is still pending", async () => {
+  const value = await fixture();
+  const root = value.controller.prepareRoot("task");
+  const pending = value.store.pendingTurns(root.id)[0]!;
+  const profile = value.store.get("task").rootProfile;
+  value.database.authTransaction(db => insertNativeTaskRow(db, { taskId: "native-prerequisite", directory: value.directory }));
+  value.store.create({ taskId: "native-prerequisite", startImmediately: true, objective: "Prepare native input", deliveryTarget: "merged", deliveryIntent: { repository: "owner/repo", headBranch: "native-prerequisite", baseBranch: "main", baselineSha: "a", pullRequestNumber: null }, rootProfile: profile, workerProfile: profile });
+  value.database.authTransaction(db => db.prepare("INSERT INTO forge_task_dependencies (task_id, depends_on_task_id, created_at) VALUES ('task', 'native-prerequisite', ?)").run(new Date().toISOString()));
+  value.harness.observations.set(pending.id, { sessionID: `ses_${root.id.replaceAll("-", "")}`, messageID: pending.id, state: "completed", admission: "observed", retry: "forbidden", assistantMessageID: `assistant-${pending.id}`, assistantMessageIDs: [`assistant-${pending.id}`] });
+  value.harness.results.set(pending.id, "Native completion recovered");
+
+  await value.controller.recover("task");
+
+  expect(value.store.turns("task").find(turn => turn.id === pending.id)?.status).toBe("completed");
+  expect(value.store.pendingTurns(root.id)).toHaveLength(0);
+  expect(value.harness.dispatched).toHaveLength(0);
+});
+
+test("a prerequisite added at the native admission claim prevents dispatch", async () => {
+  const value = await fixture();
+  const profile = value.store.get("task").rootProfile;
+  const dispatch = value.harness.dispatch.bind(value.harness);
+  let added = false;
+  value.harness.dispatch = async (...args) => {
+    if (!added) {
+      added = true;
+      value.database.authTransaction(db => insertNativeTaskRow(db, { taskId: "claim-prerequisite", directory: value.directory }));
+      value.store.create({ taskId: "claim-prerequisite", startImmediately: true, objective: "Close the admission race", deliveryTarget: "merged", deliveryIntent: { repository: "owner/repo", headBranch: "claim-prerequisite", baseBranch: "main", baselineSha: "a", pullRequestNumber: null }, rootProfile: profile, workerProfile: profile });
+      value.database.authTransaction(db => db.prepare("INSERT INTO forge_task_dependencies (task_id, depends_on_task_id, created_at) VALUES ('task', 'claim-prerequisite', ?)").run(new Date().toISOString()));
+    }
+    return dispatch(...args);
+  };
+
+  await value.controller.recover("task");
+
+  expect(value.harness.dispatched).toHaveLength(0);
+  expect(value.store.taskSpend("task").turns).toBe(0);
+  value.store.markDelivered("claim-prerequisite");
+  await value.controller.recover("task");
+  expect(value.harness.dispatched).toHaveLength(1);
+  expect(value.store.taskSpend("task").turns).toBe(1);
+});
+
 test("a blocked active task retains an admitted Worker result until release", async () => {
   const value = await fixture();
   await value.controller.recover("task");
+  const rootTurn = value.harness.dispatched[0]!;
   await value.controller.delegateWorker(value.identity(), { plan: "Make the bounded change", acceptanceCriteria: ["The focused check passes"], instruction: "Implement the change" });
+  value.harness.finish(rootTurn.messageID);
   await value.controller.recover("task");
   const workerTurn = value.harness.dispatched.find(turn => turn.agent === "forge-worker")!;
 

@@ -100,9 +100,10 @@ export async function recoverSession(dependencies: SessionRecoveryDependencies, 
     } catch (error) {
       new StructuredLogger().warn("Task display attachment is unavailable; native work is retained", { taskId: control.taskId }, { error: error instanceof Error ? error.message : String(error) });
     }
-    for (const turn of store.pendingTurns(session.id)) {
+    for (const pending of store.pendingTurns(session.id)) {
+      let turn = pending;
       if (store.get(control.taskId).status !== "active") break;
-      const intent = createOpenCodePromptIntent({
+      let intent = createOpenCodePromptIntent({
         sessionID: nativeSessionId,
         messageID: turn.id,
         directory: taskScope.directory,
@@ -119,6 +120,12 @@ export async function recoverSession(dependencies: SessionRecoveryDependencies, 
         if (observed.retry === "allowed") replayable = store.requeueFencedPrompt({ turnId: turn.id, attempt: turn.dispatchAttempt, owner });
       }
       if (observed.retry === "allowed" && replayable) {
+        if (session.kind === "root" && store.coalesceUnadmittedIdleRootTurn(turn.id)) continue;
+        if (store.dependencyBlockers(control.taskId).length) break;
+        if (session.kind === "root") {
+          turn = store.refreshPendingRootDependencyContext(turn.id);
+          intent = createOpenCodePromptIntent({ ...intent, prompt: turn.promptText, dispatch: "not_submitted" });
+        }
         const usage = await observeTaskLimitUsage({ taskId: control.taskId, store, ...(dependencies.reader ? { reader: dependencies.reader } : {}), readPricing: dependencies.readPricing });
         if (store.pauseAtTaskLimit(control.taskId, usage)) break;
         observed = await harness.dispatch(taskScope, { ...intent, dispatch: "not_submitted" }, async serverGeneration => store.claimPrompt({ taskId: control.taskId, turnId: turn.id, serverGeneration, owner, usage }));

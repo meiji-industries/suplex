@@ -945,7 +945,7 @@ test("Hermes start records queued intent while a prerequisite is undelivered", a
   const started = await command(dependent.id, { command: "start_task", revision: dependent.revision, idempotencyKey: "hermes-start-blocked-001" });
   expect(started.statusCode, started.body).toBe(200);
   expect(started.json()).toMatchObject({ status: "backlog", dependsOn: [prerequisite.id] });
-  expect(tasks.getTask(adminId, dependent.id)).toMatchObject({ status: "backlog", startWhenBlockedByDelivered: true });
+  expect(tasks.getTask(adminId, dependent.id)).toMatchObject({ status: "backlog", queue: { startIntent: "queued" } });
   expect(tasks.repository.controls.taskSpend(dependent.id).turns).toBe(0);
 });
 

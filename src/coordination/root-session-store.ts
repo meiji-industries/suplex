@@ -15,12 +15,12 @@ import type Database from "better-sqlite3";
 import type { ForgeDatabase } from "../platform/database.js";
 import { createOpenCodeMessageID } from "../runtimes/opencode/session.js";
 import { TaskConfigurationSchema } from "../tasks/contracts.js";
-import { taskDependencySummaries, type TaskDependencySummary } from "../tasks/dependencies.js";
+import { taskDependencyBlockersInTransaction, taskDependencySummaries, taskDependencySummariesInTransaction, type TaskDependencySummary } from "../tasks/dependencies.js";
 import { admitQueuedTask, admitQueuedTasks, readyQueuedTaskIds } from "../tasks/queue.js";
 import type { PromptDispatchAttempt, PullRequestReference } from "../tasks/control.js";
 import { DeliveryIntentSchema, PullRequestReferenceSchema, TaskControlStatusSchema, TaskProfileSchema, TaskSessionLifecycleSchema, TaskTurnStatusSchema, WorktreeReferenceSchema, type DeliveryIntent, type TaskControl, type TaskProfile, type TaskSession, type TaskSessionKind, type TaskTurn, type WorktreeReference } from "../tasks/control.js";
 import { AdvisorRoleSchema, RaterResultSchema, ReviewerResultSchema, WorkflowIdSchema, WorkflowInputSchema, WorkflowStateSchema, deliveryDecision, emptyWorkflowState, sameRange, turnOutcome, type AdvisorResult, type AdvisorRole, type DeliveryFailureCode, type DeliveryWait, type RaterResult, type ReviewRange, type ReviewerResult, type WorkflowCompletion, type WorkflowId, type WorkflowInput, type WorkflowState } from "./workflows.js";
-import { STANDARD_WORKER_RESULT_WAKE, initialCoordinatorPrompt, workerAssignmentPreamble } from "./workflow-prompts.js";
+import { IDLE_ROOT_PROMPT, STANDARD_WORKER_RESULT_WAKE, initialCoordinatorPrompt, isIdleRootPrompt, withCurrentDependencyStatus, workerAssignmentPreamble } from "./workflow-prompts.js";
 import { assertPullRequestAvailable, assertTaskPullRequestsAvailable } from "../delivery/pull-request-ownership.js";
 import { recordTriggerPush, triggerDeliveryPolicy, type GithubTriggerDeliveryPolicy } from "../integrations/github/trigger-delivery-policy.js";
 import { integer, parseJson, text, type Row } from "./persistence/row-values.js";
@@ -179,13 +179,25 @@ export class TaskControlStore {
   }
   markDelivered(taskId: string): TaskControl {
     const changed = this.database.authTransaction((db) => {
+      const previous = db.prepare("SELECT status FROM forge_task_controls WHERE task_id = ?").get(taskId) as { status: string } | undefined;
       const delivered = db.prepare("UPDATE forge_task_controls SET workflow_state_json = json_set(workflow_state_json, '$.followUp', json('false')), status = 'delivered', wake_at = NULL, human_question = NULL, human_question_id = NULL, limit_pause_json = NULL, updated_at = ? WHERE task_id = ? AND status IN ('active', 'waiting_human', 'delivered')").run(now(), taskId).changes;
+      if (delivered !== 1) return delivered;
       // A queued dependent starts in the same transaction when this delivery completes its last prerequisite.
-      if (delivered === 1) admitQueuedTasks(db, readyQueuedTaskIds(db, taskId));
+      admitQueuedTasks(db, readyQueuedTaskIds(db, taskId));
+      if (previous?.status !== "delivered") {
+        const dependents = db.prepare("SELECT task_id AS id FROM forge_task_dependencies WHERE depends_on_task_id = ? ORDER BY task_id").all(taskId) as Array<{ id: string }>;
+        for (const dependent of dependents) this.reconcileDependencyReleaseInTransaction(db, dependent.id);
+      }
       return delivered;
     });
     if (changed !== 1) throw new Error("task_not_active");
     return this.observeLifecycle(taskId);
+  }
+  /** Call when a task may have lost its last blocker. A queued task is admitted; an active task receives an earlier wake. */
+  reconcileDependencyReleaseInTransaction(db: Database.Database, taskId: string): void {
+    if (taskDependencyBlockersInTransaction(db, taskId).length) return;
+    if (admitQueuedTasks(db, [taskId]).length) return;
+    db.prepare("UPDATE forge_task_controls SET wake_at = ?, updated_at = ? WHERE task_id = ? AND status = 'active'").run(now(), now(), taskId);
   }
   get(taskId: string): TaskControl {
     return this.database.authQuery((db) => { const row = db.prepare("SELECT * FROM forge_task_controls WHERE task_id = ?").get(taskId) as Row | undefined; if (!row) throw new Error(`Task control ${taskId} does not exist`); return control(row); });
@@ -201,6 +213,7 @@ export class TaskControlStore {
     });
   }
   dependencySummaries(taskId: string): TaskDependencySummary[] { return taskDependencySummaries(this.database, taskId); }
+  dependencyBlockers(taskId: string): TaskDependencySummary[] { return this.database.authQuery(db => taskDependencyBlockersInTransaction(db, taskId)); }
   image(taskId: string, artifactId: string) {
     return this.database.authQuery(db => {
       const row = db.prepare("SELECT a.filename, a.mime_type AS mimeType, a.company_id AS companyId, a.storage_path AS storagePath, a.sha256 FROM forge_artifacts a JOIN forge_tasks t ON t.id = a.task_id AND t.company_id = a.company_id WHERE t.id = ? AND a.id = ? AND a.kind IN ('task-image', 'delivery-image')").get(taskId, artifactId);
@@ -261,11 +274,34 @@ export class TaskControlStore {
   }
   wakeIdleRoot(taskId: string): void {
     const time = now();
-    const prompt = "Observe the current task, worktree, and GitHub state and continue toward the delivery target. Adopt out-of-band progress. If checks or another external operation are pending, report what you are waiting for. Ask a specific human question only if a necessary decision or external failure requires it.";
-    this.database.authTransaction((db) => db.prepare("INSERT INTO forge_task_turns (id, task_id, session_id, generation, prompt_hash, prompt_text, status, created_at, updated_at) SELECT ?, c.task_id, s.id, s.generation, ?, ?, 'pending_prompt', ?, ? FROM forge_task_controls c JOIN forge_task_sessions s ON s.id = c.root_session_id WHERE c.task_id = ? AND c.status = 'active' AND json_extract(c.workflow_state_json, '$.deliveryWait') IS NULL AND s.is_current = 1 AND s.lifecycle = 'live' AND s.native_session_id IS NOT NULL AND s.launch_owner IS NULL AND NOT EXISTS (SELECT 1 FROM forge_task_turns t WHERE t.session_id = s.id AND t.status IN ('pending_prompt', 'prompted', 'unknown')) AND NOT EXISTS (SELECT 1 FROM forge_task_sessions w JOIN forge_task_turns wt ON wt.session_id = w.id AND wt.generation = w.generation WHERE w.task_id = c.task_id AND w.kind = 'worker' AND w.is_current = 1 AND wt.status IN ('pending_prompt', 'prompted', 'unknown'))").run(createOpenCodeMessageID(), hash(prompt), prompt, time, time, taskId));
+    this.database.authTransaction((db) => {
+      if (taskDependencyBlockersInTransaction(db, taskId).length) return;
+      const prompt = withCurrentDependencyStatus(IDLE_ROOT_PROMPT, taskDependencySummariesInTransaction(db, taskId));
+      db.prepare("INSERT INTO forge_task_turns (id, task_id, session_id, generation, prompt_hash, prompt_text, status, created_at, updated_at) SELECT ?, c.task_id, s.id, s.generation, ?, ?, 'pending_prompt', ?, ? FROM forge_task_controls c JOIN forge_task_sessions s ON s.id = c.root_session_id WHERE c.task_id = ? AND c.status = 'active' AND json_extract(c.workflow_state_json, '$.deliveryWait') IS NULL AND s.is_current = 1 AND s.lifecycle = 'live' AND s.native_session_id IS NOT NULL AND s.launch_owner IS NULL AND NOT EXISTS (SELECT 1 FROM forge_task_turns t WHERE t.session_id = s.id AND t.status IN ('pending_prompt', 'prompted', 'unknown')) AND NOT EXISTS (SELECT 1 FROM forge_task_sessions w JOIN forge_task_turns wt ON wt.session_id = w.id AND wt.generation = w.generation WHERE w.task_id = c.task_id AND w.kind = 'worker' AND w.is_current = 1 AND wt.status IN ('pending_prompt', 'prompted', 'unknown'))").run(createOpenCodeMessageID(), hash(prompt), prompt, time, time, taskId);
+    });
+  }
+  coalesceUnadmittedIdleRootTurn(turnId: string): boolean {
+    return this.database.authTransaction(db => {
+      const candidate = db.prepare("SELECT t.task_id AS taskId, t.session_id AS sessionId, t.prompt_text AS promptText FROM forge_task_turns t JOIN forge_task_sessions s ON s.id = t.session_id WHERE t.id = ? AND t.status = 'pending_prompt' AND s.kind = 'root'").get(turnId) as { taskId: string; sessionId: string; promptText: string } | undefined;
+      if (!candidate || !isIdleRootPrompt(candidate.promptText)) return false;
+      const others = db.prepare("SELECT prompt_text AS promptText FROM forge_task_turns WHERE task_id = ? AND session_id = ? AND id <> ? AND status = 'pending_prompt'").all(candidate.taskId, candidate.sessionId, turnId) as Array<{ promptText: string }>;
+      if (!others.some(other => !isIdleRootPrompt(other.promptText))) return false;
+      return db.prepare("UPDATE forge_task_turns SET status = 'cancelled', updated_at = ? WHERE id = ? AND status = 'pending_prompt'").run(now(), turnId).changes === 1;
+    });
+  }
+  refreshPendingRootDependencyContext(turnId: string): TaskTurn {
+    return this.database.authTransaction(db => {
+      const row = db.prepare("SELECT t.* FROM forge_task_turns t JOIN forge_task_sessions s ON s.id = t.session_id WHERE t.id = ? AND t.status = 'pending_prompt' AND s.kind = 'root'").get(turnId) as Row | undefined;
+      if (!row) return this.turnById(turnId);
+      const current = turn(row);
+      const prompt = withCurrentDependencyStatus(current.promptText, taskDependencySummariesInTransaction(db, current.taskId));
+      if (prompt !== current.promptText) db.prepare("UPDATE forge_task_turns SET prompt_text = ?, prompt_hash = ?, updated_at = ? WHERE id = ? AND status = 'pending_prompt'").run(prompt, hash(prompt), now(), turnId);
+      const refreshed = db.prepare("SELECT * FROM forge_task_turns WHERE id = ?").get(turnId) as Row;
+      return turn(refreshed);
+    });
   }
   claimPrompt(input: { taskId: string; turnId: string; serverGeneration: string; owner: string; usage: TaskLimitUsage }): boolean {
-    return this.limitStore.claimPrompt(input);
+    return this.limitStore.claimPrompt(input, db => taskDependencyBlockersInTransaction(db, input.taskId).length === 0);
   }
   requeueFencedPrompt(input: { turnId: string; attempt: PromptDispatchAttempt; owner: string }): boolean {
     return requeueFencedPrompt(this.database, input, now);

@@ -3,12 +3,17 @@ import { cleanupRootControllerFixtures, fixture, ageDispatch } from "./helpers/r
 import { RootController } from "../src/coordination/root-controller.js";
 import { TaskControlStore, type ProcessOwnerObservation } from "../src/coordination/root-session-store.js";
 import { GithubReleaseFailure } from "../src/integrations/github/failure.js";
+import { insertNativeTaskRow } from "./helpers/native-task-row.js";
 
 afterEach(cleanupRootControllerFixtures);
 
 test("observe retains task state when GitHub is unavailable", async () => {
   const value = await fixture();
   const root = value.controller.prepareRoot("task");
+  const profile = value.store.get("task").rootProfile;
+  value.database.authTransaction(db => insertNativeTaskRow(db, { taskId: "observe-prerequisite", directory: value.directory }));
+  value.store.create({ taskId: "observe-prerequisite", startImmediately: true, objective: "Prepare observation", deliveryTarget: "merged", deliveryIntent: { repository: "owner/repo", headBranch: "observe-prerequisite", baseBranch: "main", baselineSha: "a", pullRequestNumber: null }, rootProfile: profile, workerProfile: profile });
+  value.database.authTransaction(db => db.prepare("INSERT INTO forge_task_dependencies (task_id, depends_on_task_id, created_at) VALUES ('task', 'observe-prerequisite', ?)").run(new Date().toISOString()));
   const delivery = {
     observe: async () => { throw new GithubReleaseFailure("provider-unavailable", "GitHub is offline"); },
     execute: async () => { throw new Error("not used"); },
@@ -16,7 +21,7 @@ test("observe retains task state when GitHub is unavailable", async () => {
   };
   const controller = new RootController(value.store, value.harness, delivery);
   const observed = await controller.observe({ taskId: "task", sessionId: root.id, generation: root.generation });
-  expect(observed).toMatchObject({ control: { taskId: "task" }, worker: null, worktree: expect.anything(), results: {}, github: { available: false, code: "provider-unavailable", message: "GitHub is offline" } });
+  expect(observed).toMatchObject({ control: { taskId: "task" }, dependencies: [{ id: "observe-prerequisite", title: "Task", status: "active" }], worker: null, worktree: expect.anything(), results: {}, github: { available: false, code: "provider-unavailable", message: "GitHub is offline" } });
 });
 
 test("session claims recover from PID reuse without stealing a live or uncertain owner", async () => {

@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { z } from "zod";
 import type { ForgeDatabase } from "../../platform/database.js";
+import type Database from "better-sqlite3";
 import { readEnvironmentSettings } from "../../platform/environment-settings.js";
 import { createOpenCodeMessageID } from "../../runtimes/opencode/session.js";
 import { PromptDispatchAttemptSchema } from "../control.js";
@@ -73,13 +74,14 @@ export class TaskLimitStore {
     });
   }
 
-  claimPrompt(input: { taskId: string; turnId: string; serverGeneration: string; owner: string; usage: TaskLimitUsage }): boolean {
+  claimPrompt(input: { taskId: string; turnId: string; serverGeneration: string; owner: string; usage: TaskLimitUsage }, canAdmit: (db: Database.Database) => boolean = () => true): boolean {
     const attempt = PromptDispatchAttemptSchema.parse({ serverGeneration: input.serverGeneration, claimedAt: new Date().toISOString() });
     return this.database.authImmediateTransaction(db => {
       const raw = db.prepare("SELECT status, budget_usd AS budgetUsd, max_turns AS maxTurns FROM forge_task_controls WHERE task_id = ?").get(input.taskId);
       if (!raw) return false;
       const row = PersistedLimitsSchema.parse(raw);
       if (row.status !== "active") return false;
+      if (!canAdmit(db)) return false;
       const defaults = readEnvironmentSettings(this.database);
       const allowance = { budgetUsd: defaults.defaultBudgetUsd, maxTurns: defaults.defaultMaxTurns };
       const limits = { budgetUsd: row.budgetUsd ?? allowance.budgetUsd, maxTurns: row.maxTurns ?? allowance.maxTurns };

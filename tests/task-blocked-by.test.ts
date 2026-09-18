@@ -141,11 +141,11 @@ test("an explicit start records queued intent until live prerequisites are remov
     const prerequisite = await f.tasks.createTask(f.userId, f.company.id, { projectId: f.project.id, title: "Prepare first", idempotencyKey: "explicit-start-prerequisite", startImmediately: true });
     const dependent = await f.tasks.createTask(f.userId, f.company.id, { projectId: f.project.id, title: "Start after prepare", idempotencyKey: "explicit-start-dependent", dependsOn: [prerequisite.task.id] });
 
-    expect(f.tasks.startTask(f.userId, dependent.task.id)).toMatchObject({ status: "backlog", startWhenBlockedByDelivered: true });
+    expect(f.tasks.startTask(f.userId, dependent.task.id)).toMatchObject({ status: "backlog", queue: { startIntent: "queued" } });
     expect(f.tasks.repository.controls.taskSpend(dependent.task.id).turns).toBe(0);
 
     f.tasks.setTaskDependencies(f.userId, dependent.task.id, []);
-    expect(f.tasks.getTask(f.userId, dependent.task.id)).toMatchObject({ status: "active", startWhenBlockedByDelivered: false });
+    expect(f.tasks.getTask(f.userId, dependent.task.id)).toMatchObject({ status: "active", queue: { startIntent: "manual" } });
   } finally { await f.close(); }
 });
 

@@ -7,7 +7,7 @@ import { z } from "zod";
 import { ForgeDatabase } from "../src/platform/database.js";
 import { TaskControlStore } from "../src/coordination/root-session-store.js";
 import { TaskSchema } from "../src/tasks/contracts.js";
-import { composeAdvisorAssignment, composeWorkerAssignment, IMPLEMENTATION_COMMIT_PROMPT, initialCoordinatorPrompt, VERIFICATION_WORKER_PROMPT, workerAssignmentPreamble } from "../src/coordination/workflow-prompts.js";
+import { composeAdvisorAssignment, composeWorkerAssignment, IMPLEMENTATION_COMMIT_PROMPT, initialCoordinatorPrompt, VERIFICATION_WORKER_PROMPT, withCurrentDependencyStatus, workerAssignmentPreamble } from "../src/coordination/workflow-prompts.js";
 import { normalizeWorkflowInput, parseAdvisorReport, PublicWorkflowStateSchema, reviewGate, roleLabel, WORKFLOWS, workflowDefinition, type ReviewRecord } from "../src/coordination/workflows.js";
 import { nativeApp } from "./helpers/native-app.js";
 
@@ -298,19 +298,31 @@ test("workflow state with review records encodes for task API responses", () => 
 test("the initial Coordinator prompt names undelivered dependencies and stays silent without them", () => {
   const context = { configuration: { visualEvidence: "off" as const }, images: [] };
   const control = (workflow: "standard" | "independent_review") => ({ objective: "Add the caller", deliveryTarget: "merged", deliveryIntent: { repository: "owner/repo", headBranch: "task", baseBranch: "main", pullRequestNumber: null }, workflow });
-  const dependencies = [{ id: "task_upstream", title: "Add the shared parser", status: "active" }, { id: "task_done", title: "Add the flag", status: "delivered" }];
+  const dependencies = [{ id: "task_upstream", title: "Add the shared parser", status: "active" }, { id: "task_done", title: "Add the flag", status: "delivered" }] as const;
 
   for (const workflow of ["standard", "independent_review"] as const) {
     const blocked = initialCoordinatorPrompt(control(workflow), context, dependencies);
     expect(blocked).toContain('This task depends on these tasks: task_upstream "Add the shared parser" (active).');
     expect(blocked).not.toContain("task_done");
-    expect(blocked).toContain("Wait for the delivery of every dependency before you integrate this task.");
-    expect(blocked).toContain("Forge merges their work into main. Integrate that work. Do not reimplement it.");
-    expect(blocked).toContain("Forge wakes this task when the dependencies deliver.");
+    expect(blocked).toContain("Forge does not admit new work for this task until every dependency is delivered.");
+    expect(blocked).toContain("observe the actual Git and GitHub state for main");
+    expect(blocked).not.toContain("Forge merges their work");
 
     // A task with no dependency, and a task whose dependencies are all delivered, read the same.
     const free = initialCoordinatorPrompt(control(workflow), context);
     expect(free).not.toContain("This task depends on these tasks");
     expect(initialCoordinatorPrompt(control(workflow), context, [dependencies[1]!])).toBe(free);
   }
+});
+
+test("dependency context replaces only Forge's exact trailing suffix", () => {
+  const userText = "Keep this literal text:\n\n[Forge prerequisite status]\nDo not truncate it.";
+  const active = [{ id: "task_upstream", title: "Prepare input", status: "active" }] as const;
+  const delivered = [{ ...active[0], status: "delivered" as const }];
+
+  expect(withCurrentDependencyStatus(userText, [])).toBe(userText);
+  const generated = withCurrentDependencyStatus(userText, active);
+  expect(generated).toContain(userText);
+  expect(withCurrentDependencyStatus(generated, delivered)).toContain('task_upstream "Prepare input" (delivered)');
+  expect(withCurrentDependencyStatus(generated, [])).toBe(userText);
 });

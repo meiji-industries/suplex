@@ -23,9 +23,17 @@ export function taskDependencyMap(database: ForgeDatabase, taskIds: string[]): M
 const SummarySchema = z.object({ id: z.string(), title: z.string(), status: z.string() });
 export type TaskDependencySummary = z.infer<typeof SummarySchema>;
 
+export function taskDependencySummariesInTransaction(db: Database.Database, taskId: string): TaskDependencySummary[] {
+  return z.array(SummarySchema).parse(db.prepare(`SELECT t.id AS id, t.title AS title, COALESCE(c.status, 'backlog') AS status FROM (${EDGE_SOURCE} WHERE task_id = ?) d JOIN forge_tasks t ON t.id = d.depends_on_task_id LEFT JOIN forge_task_controls c ON c.task_id = t.id ORDER BY t.id`).all(taskId));
+}
+
 /** The prerequisite tasks of one task with the title and status every reader shows: the task view, Hermes, and the Coordinator. */
 export function taskDependencySummaries(database: ForgeDatabase, taskId: string): TaskDependencySummary[] {
-  return database.authQuery(db => z.array(SummarySchema).parse(db.prepare(`SELECT t.id AS id, t.title AS title, COALESCE(c.status, 'backlog') AS status FROM (${EDGE_SOURCE} WHERE task_id = ?) d JOIN forge_tasks t ON t.id = d.depends_on_task_id LEFT JOIN forge_task_controls c ON c.task_id = t.id ORDER BY t.id`).all(taskId)));
+  return database.authQuery(db => taskDependencySummariesInTransaction(db, taskId));
+}
+
+export function taskDependencyBlockersInTransaction(db: Database.Database, taskId: string): TaskDependencySummary[] {
+  return taskDependencySummariesInTransaction(db, taskId).filter(dependency => dependency.status !== "delivered");
 }
 
 function readDependencies(db: Database.Database, taskId: string): string[] {
@@ -36,10 +44,11 @@ function readDependencies(db: Database.Database, taskId: string): string[] {
  * Replaces the dependency set of one task. The company scope and the absence of a cycle are proven
  * inside the same transaction that writes the edges, so a concurrent write cannot introduce a loop.
  */
-export function replaceTaskDependencies(database: ForgeDatabase, input: { taskId: string; companyId: string; dependsOn: string[] }): string[] {
+export function replaceTaskDependencies(database: ForgeDatabase, input: { taskId: string; companyId: string; dependsOn: string[] }, afterReplace?: (db: Database.Database, wasBlocked: boolean) => void): string[] {
   const dependsOn = [...new Set(input.dependsOn)].sort();
   if (dependsOn.includes(input.taskId)) throw new TaskDependencyFailure("A task cannot depend on itself");
   return database.authImmediateTransaction(db => {
+    const wasBlocked = taskDependencyBlockersInTransaction(db, input.taskId).length > 0;
     for (const dependency of dependsOn) {
       const row = db.prepare("SELECT company_id FROM forge_tasks WHERE id = ?").get(dependency) as { company_id: string } | undefined;
       if (!row || row.company_id !== input.companyId) throw new TaskDependencyFailure("A dependency task is not available", 404);
@@ -48,6 +57,7 @@ export function replaceTaskDependencies(database: ForgeDatabase, input: { taskId
     const stamp = new Date().toISOString();
     for (const dependency of dependsOn) db.prepare("INSERT INTO forge_task_dependencies (task_id, depends_on_task_id, created_at) VALUES (?, ?, ?)").run(input.taskId, dependency, stamp);
     assertNoCycle(db, input.taskId);
+    afterReplace?.(db, wasBlocked);
     return readDependencies(db, input.taskId);
   });
 }

@@ -198,6 +198,6 @@ test("a limit answer supersedes only the unadmitted idle prompt while dependenci
   expect(value.harness.dispatched).toHaveLength(2);
   expect(value.harness.dispatched[1]?.prompt).toContain("add_allowance");
   expect(value.harness.dispatched[1]?.prompt).toContain('limit-prerequisite "Task" (delivered)');
-  expect(value.store.pendingTurns(value.identity().sessionId)).toHaveLength(0);
+  expect(value.store.pendingTurns(value.identity().sessionId).filter(turn => turn.status === "pending_prompt")).toHaveLength(0);
   expect(value.store.taskSpend("task").turns).toBe(2);
 });

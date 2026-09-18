@@ -112,7 +112,7 @@ export class RootController implements RootBridgeAdapter {
     }));
     const workerResult = worker ? results[worker.id] ?? null : null;
     const acceptedAssignment = worker?.advisorRole === null ? this.acceptedWorkerAssignment(root.taskId, worker) : null;
-    return { control: { ...this.store.get(root.taskId), workflowState: publicWorkflowState(this.store.get(root.taskId).workflowState) }, context: this.store.context(root.taskId), root: this.store.currentSession(root.taskId, "root"), worker, acceptedAssignment, workerResult, workers, results, worktree, pullRequest, github };
+    return { control: { ...this.store.get(root.taskId), workflowState: publicWorkflowState(this.store.get(root.taskId).workflowState) }, context: this.store.context(root.taskId), dependencies: this.store.dependencySummaries(root.taskId), root: this.store.currentSession(root.taskId, "root"), worker, acceptedAssignment, workerResult, workers, results, worktree, pullRequest, github };
   }
 
   private acceptedWorkerAssignment(taskId: string, worker: TaskSession): AcceptedWorkerAssignment | null {

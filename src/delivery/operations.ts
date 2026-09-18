@@ -379,6 +379,11 @@ export class DeliveryOperations {
       if (!equivalent.ok) throw new DeliveryOperationFailure("delivery_review_required", `${equivalent.reason}${freshReviewHint(control.workflow)}`);
     }
     await this.finalRecheck(control, actual, recheck);
+    const blockers = this.store.dependencyBlockers(control.taskId);
+    if (blockers.length) {
+      const waiting = blockers.map(dependency => `${dependency.id} "${dependency.title}" (${dependency.status})`).join(", ");
+      throw new DeliveryOperationFailure("merge_not_eligible", `Waiting for these prerequisites: ${waiting}. Forge resumes when delivered.`);
+    }
     recheck();
     const requested = observed.number!;
     let mergeResult: GithubConditionalMergeResult | void;

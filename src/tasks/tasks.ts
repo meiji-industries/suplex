@@ -217,7 +217,7 @@ export class TaskService {
 
   private applyDependencies(authority: Authority, companyId: string, taskId: string, dependsOn: string[]): void {
     for (const dependency of dependsOn) this.requireTask(authority, dependency);
-    try { replaceTaskDependencies(this.database, { taskId, companyId, dependsOn }); }
+    try { replaceTaskDependencies(this.database, { taskId, companyId, dependsOn }, (db, wasBlocked) => { if (wasBlocked) this.repository.controls.reconcileDependencyReleaseInTransaction(db, taskId); }); }
     catch (error) {
       if (error instanceof TaskDependencyFailure) throw new TaskFailure(error.publicMessage, error.statusCode);
       throw error;

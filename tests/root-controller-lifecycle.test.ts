@@ -6,6 +6,7 @@ import { TaskControlStore } from "../src/coordination/root-session-store.js";
 import { ForgeDatabase } from "../src/platform/database.js";
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
+import { insertNativeTaskRow } from "./helpers/native-task-row.js";
 
 afterEach(cleanupRootControllerFixtures);
 
@@ -154,6 +155,58 @@ test("a finished Coordinator turn queues one continuation while its objective re
   expect(value.store.pendingTurns(value.identity().sessionId)[0]?.status).toBe("pending_prompt");
   await value.controller.recover("task");
   expect(value.harness.dispatched).toHaveLength(2);
+});
+
+test("a legacy active task preserves history without admitting dependency polling turns", async () => {
+  const value = await fixture();
+  await value.controller.recover("task");
+  const original = value.harness.dispatched[0]!;
+  value.harness.finish(original.messageID);
+  await value.controller.recover("task");
+
+  const profile = value.store.get("task").rootProfile;
+  value.database.authTransaction(db => insertNativeTaskRow(db, { taskId: "prerequisite", directory: value.directory }));
+  value.store.create({ taskId: "prerequisite", startImmediately: true, objective: "Prepare the dependency", deliveryTarget: "merged", deliveryIntent: { repository: "owner/repo", headBranch: "prerequisite", baseBranch: "main", baselineSha: "a", pullRequestNumber: null }, rootProfile: profile, workerProfile: profile });
+  value.database.authTransaction(db => {
+    db.prepare("INSERT INTO forge_task_dependencies (task_id, depends_on_task_id, created_at) VALUES ('task', 'prerequisite', ?)").run(new Date().toISOString());
+    db.prepare("UPDATE forge_task_sessions SET pane_id = NULL WHERE task_id = 'task'").run();
+  });
+
+  for (let tick = 0; tick < 41; tick += 1) await value.controller.recover("task");
+  expect(value.harness.dispatched).toHaveLength(1);
+  expect(value.store.taskSpend("task").turns).toBe(1);
+  expect(value.store.turns("task").filter(turn => turn.status === "pending_prompt")).toHaveLength(1);
+
+  value.store.markDelivered("prerequisite");
+  await value.controller.recover("task");
+  expect(value.harness.dispatched).toHaveLength(2);
+  expect(value.harness.dispatched[1]?.prompt).toContain('prerequisite "Task" (delivered)');
+  expect(value.store.taskSpend("task").turns).toBe(2);
+});
+
+test("a blocked active task retains an admitted Worker result until release", async () => {
+  const value = await fixture();
+  await value.controller.recover("task");
+  await value.controller.delegateWorker(value.identity(), { plan: "Make the bounded change", acceptanceCriteria: ["The focused check passes"], instruction: "Implement the change" });
+  await value.controller.recover("task");
+  const workerTurn = value.harness.dispatched.find(turn => turn.agent === "forge-worker")!;
+
+  const profile = value.store.get("task").rootProfile;
+  value.database.authTransaction(db => insertNativeTaskRow(db, { taskId: "worker-prerequisite", directory: value.directory }));
+  value.store.create({ taskId: "worker-prerequisite", startImmediately: true, objective: "Prepare Worker input", deliveryTarget: "merged", deliveryIntent: { repository: "owner/repo", headBranch: "worker-prerequisite", baseBranch: "main", baselineSha: "a", pullRequestNumber: null }, rootProfile: profile, workerProfile: profile });
+  value.database.authTransaction(db => db.prepare("INSERT INTO forge_task_dependencies (task_id, depends_on_task_id, created_at) VALUES ('task', 'worker-prerequisite', ?)").run(new Date().toISOString()));
+
+  value.harness.finish(workerTurn.messageID);
+  await value.controller.recover("task");
+  expect(value.store.turns("task").some(turn => turn.sessionId === value.store.currentSession("task", "worker")?.id && turn.status === "completed")).toBe(true);
+  expect(value.store.pendingTurns(value.identity().sessionId).some(turn => turn.promptText.includes("Worker reported"))).toBe(true);
+  expect(value.harness.dispatched.filter(turn => turn.agent === "forge-root")).toHaveLength(1);
+
+  value.store.markDelivered("worker-prerequisite");
+  await value.controller.recover("task");
+  expect(value.harness.dispatched.filter(turn => turn.agent === "forge-root")).toHaveLength(2);
+  expect(value.harness.dispatched.at(-1)?.prompt).toContain("Worker reported");
+  expect(value.harness.dispatched.at(-1)?.prompt).toContain('worker-prerequisite "Task" (delivered)');
 });
 
 test("an interrupted Worker preserves dirty files and reports interruption to Coordinator", async () => {

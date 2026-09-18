@@ -933,6 +933,22 @@ test("agent lifecycle commands use current revisions, durable receipts, note att
   expect(database.authQuery(db => (db.prepare("SELECT COUNT(*) AS count FROM forge_audit_events WHERE actor_agent_id = ? AND action IN ('task_started', 'task_note_added', 'task_duplicated', 'task_cancelled', 'task_archived', 'task_unarchived')").get(agentId) as { count: number }).count)).toBe(6);
 });
 
+test("Hermes start records queued intent while a prerequisite is undelivered", async () => {
+  const prerequisite = await createTask("Hermes prerequisite", "hermes-start-prerequisite-001");
+  const created = await app.inject({
+    method: "POST", url: "/api/hermes/tasks", headers: { Authorization: `Bearer ${agentCredential}` },
+    payload: { projectId, title: "Hermes dependent", idempotencyKey: "hermes-start-dependent-001", dependsOn: [prerequisite.id] },
+  });
+  expect(created.statusCode, created.body).toBe(201);
+  const dependent = created.json() as { id: string; revision: string };
+
+  const started = await command(dependent.id, { command: "start_task", revision: dependent.revision, idempotencyKey: "hermes-start-blocked-001" });
+  expect(started.statusCode, started.body).toBe(200);
+  expect(started.json()).toMatchObject({ status: "backlog", dependsOn: [prerequisite.id] });
+  expect(tasks.getTask(adminId, dependent.id)).toMatchObject({ status: "backlog", startWhenBlockedByDelivered: true });
+  expect(tasks.repository.controls.taskSpend(dependent.id).turns).toBe(0);
+});
+
 test("project policy owns the default workflow and implicit Advisor profile", async () => {
   const update = async (agentTaskPolicy: ProjectAgentTaskPolicy) => {
     const current = projects.getProject(adminId, projectId);

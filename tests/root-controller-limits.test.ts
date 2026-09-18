@@ -5,6 +5,7 @@ import { RootController } from "../src/coordination/root-controller.js";
 import { TaskControlStore } from "../src/coordination/root-session-store.js";
 import type { ModelPricingCatalog } from "../src/profiles/model-pricing.js";
 import { observeTaskLimitUsage } from "../src/tasks/limits/limit-observer.js";
+import { insertNativeTaskRow } from "./helpers/native-task-row.js";
 
 afterEach(cleanupRootControllerFixtures);
 
@@ -173,4 +174,30 @@ test("a turn cap counts admitted turns but excludes queued prompts", async () =>
   await unlimited.controller.recover("task");
   expect(unlimited.store.get("task").status).toBe("active");
   expect(unlimited.harness.dispatched).toHaveLength(1);
+});
+
+test("a limit answer supersedes only the unadmitted idle prompt while dependencies remain blocked", async () => {
+  const value = await fixture();
+  await value.controller.recover("task");
+  value.harness.finish(value.harness.dispatched[0]!.messageID);
+  await value.controller.recover("task");
+
+  const profile = value.store.get("task").rootProfile;
+  value.database.authTransaction(db => insertNativeTaskRow(db, { taskId: "limit-prerequisite", directory: value.directory }));
+  value.store.create({ taskId: "limit-prerequisite", startImmediately: true, objective: "Prepare the limit dependency", deliveryTarget: "merged", deliveryIntent: { repository: "owner/repo", headBranch: "limit-prerequisite", baseBranch: "main", baselineSha: "a", pullRequestNumber: null }, rootProfile: profile, workerProfile: profile });
+  value.database.authTransaction(db => db.prepare("INSERT INTO forge_task_dependencies (task_id, depends_on_task_id, created_at) VALUES ('task', 'limit-prerequisite', ?)").run(new Date().toISOString()));
+
+  expect(value.store.pauseAtTaskLimit("task", { estimatedCostUsd: 999, admittedTurns: 1 })).toBe(true);
+  value.store.answerTaskLimit("task", value.store.get("task").humanQuestionId!, { kind: "add_allowance" });
+  for (let tick = 0; tick < 3; tick += 1) await value.controller.recover("task");
+  expect(value.harness.dispatched).toHaveLength(1);
+  expect(value.store.taskSpend("task").turns).toBe(1);
+
+  value.store.markDelivered("limit-prerequisite");
+  await value.controller.recover("task");
+  expect(value.harness.dispatched).toHaveLength(2);
+  expect(value.harness.dispatched[1]?.prompt).toContain("add_allowance");
+  expect(value.harness.dispatched[1]?.prompt).toContain('limit-prerequisite "Task" (delivered)');
+  expect(value.store.pendingTurns(value.identity().sessionId)).toHaveLength(0);
+  expect(value.store.taskSpend("task").turns).toBe(2);
 });

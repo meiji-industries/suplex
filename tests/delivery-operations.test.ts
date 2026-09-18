@@ -695,4 +695,20 @@ describe("Coordinator delivery operations", () => {
     expect(fake.calls).toContain("merge");
     expect(value.store.get("task").status).toBe("delivered");
   });
+
+  it("rechecks live prerequisites immediately before the merge mutation", async () => {
+    const value = await fixture();
+    const fake = github(value.local);
+    const profile = value.store.get("task").rootProfile;
+    value.database.authTransaction(db => insertNativeTaskRow(db, { taskId: "merge-prerequisite", directory: value.directory }));
+    value.store.create({ taskId: "merge-prerequisite", startImmediately: true, objective: "Prepare merge input", deliveryTarget: "merged", deliveryIntent: { repository: "owner/repo", headBranch: "merge-prerequisite", baseBranch: "main", baselineSha: value.local.headSha, pullRequestNumber: null }, rootProfile: profile, workerProfile: profile });
+    value.database.authTransaction(db => db.prepare("INSERT INTO forge_task_dependencies (task_id, depends_on_task_id, created_at) VALUES ('task', 'merge-prerequisite', ?)").run(new Date().toISOString()));
+
+    await expect(new DeliveryOperations(value.store, fake.port).execute({ taskId: "task", sessionId: value.root.id, generation: value.root.generation }, "merge_pull_request", value.local.headSha, value.review)).rejects.toMatchObject({
+      code: "merge_not_eligible",
+      message: expect.stringContaining("Forge resumes when delivered"),
+    });
+    expect(fake.calls).not.toContain("merge");
+    expect(value.store.get("task")).toMatchObject({ status: "active", humanQuestion: null });
+  });
 });

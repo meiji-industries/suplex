@@ -135,6 +135,34 @@ test("an immediate task waits for its Blocked by task to deliver", async () => {
   } finally { await f.close(); }
 });
 
+test("an explicit start records queued intent until live prerequisites are removed", async () => {
+  const f = await nativeApp();
+  try {
+    const prerequisite = await f.tasks.createTask(f.userId, f.company.id, { projectId: f.project.id, title: "Prepare first", idempotencyKey: "explicit-start-prerequisite", startImmediately: true });
+    const dependent = await f.tasks.createTask(f.userId, f.company.id, { projectId: f.project.id, title: "Start after prepare", idempotencyKey: "explicit-start-dependent", dependsOn: [prerequisite.task.id] });
+
+    expect(f.tasks.startTask(f.userId, dependent.task.id)).toMatchObject({ status: "backlog", startWhenBlockedByDelivered: true });
+    expect(f.tasks.repository.controls.taskSpend(dependent.task.id).turns).toBe(0);
+
+    f.tasks.setTaskDependencies(f.userId, dependent.task.id, []);
+    expect(f.tasks.getTask(f.userId, dependent.task.id)).toMatchObject({ status: "active", startWhenBlockedByDelivered: false });
+  } finally { await f.close(); }
+});
+
+test.each(["cancelled", "archived"] as const)("dependency release does not wake a %s queued task", async disposition => {
+  const f = await nativeApp();
+  try {
+    const prerequisite = await f.tasks.createTask(f.userId, f.company.id, { projectId: f.project.id, title: "Prepare first", idempotencyKey: `release-${disposition}-prerequisite`, startImmediately: true });
+    const dependent = await f.tasks.createTask(f.userId, f.company.id, { projectId: f.project.id, title: "Wait safely", idempotencyKey: `release-${disposition}-dependent`, dependsOn: [prerequisite.task.id] });
+    f.tasks.startTask(f.userId, dependent.task.id);
+    if (disposition === "cancelled") f.tasks.repository.controls.cancel(dependent.task.id);
+    else f.tasks.repository.setArchived(dependent.task.id, true);
+
+    f.tasks.repository.controls.markDelivered(prerequisite.task.id);
+    expect(f.tasks.getTask(f.userId, dependent.task.id).status).toBe(disposition === "cancelled" ? "cancelled" : "backlog");
+  } finally { await f.close(); }
+});
+
 test("an immediate task with two Blocked by tasks starts only after both deliver", async () => {
   const f = await nativeApp();
   try {

@@ -71,7 +71,6 @@ export type TaskServicePorts = { removeWorktree?: typeof removeTaskWorktree; her
 const DetailsSchema = TaskDetailsBodySchema.refine(input => Object.keys(input).length > 0);
 const RenameSchema = TaskInputSchema.pick({ title: true });
 const DependsOnSchema = z.array(z.string().min(1).max(256)).max(MAX_TASK_DEPENDENCIES);
-const BlockedBySchema = z.object({ blockedByTaskId: z.string().min(1).max(256).nullable() }).strict();
 
 export class TaskService {
   private readonly removeWorktree: typeof removeTaskWorktree;
@@ -428,16 +427,10 @@ export class TaskService {
         }
         this.requireEligibleProfiles(project.providerPolicy, [rootProfile, workerProfile, ...Object.values(advisorProfiles)]);
         if (this.projectConfigurationSignature(this.projects.getProjectInCompany(companyId, request.projectId)) !== projectSnapshot) throw new TaskFailure("Project configuration changed", 409);
-        let startImmediately = request.startImmediately;
-        let startWhenBlockedByDelivered = false;
-        if (request.blockedByTaskId) {
-          const blocked = this.requireTask(authority, request.blockedByTaskId);
-          if (blocked.company_id !== companyId || blocked.project_id !== request.projectId) throw new TaskFailure("The blocked task is not available", 404);
-          if (request.startImmediately && this.repository.task(blocked).status !== "delivered") {
-            startImmediately = false;
-            startWhenBlockedByDelivered = true;
-          }
-        }
+        // A task blocked by an undelivered prerequisite waits in the backlog and starts when the last one is delivered.
+        const blocked = request.startImmediately && request.dependsOn.some(dependency => this.repository.task(this.requireTask(authority, dependency)).status !== "delivered");
+        const startImmediately = request.startImmediately && !blocked;
+        const startWhenBlockedByDelivered = blocked;
         // A copy commits with the source it was authorized against, and carries that provenance from its first row.
         const result = this.repository.create({ taskId, companyId, creator, request, requestHash, configuration, rootProfile, workerProfile, advisorProfiles, images, startImmediately, startWhenBlockedByDelivered, ...(copiedFromTaskId ? { copiedFromTaskId } : {}) });
         if (capturedDispatch) new GithubTriggerDispatchRepository(this.database).linkTask(capturedDispatch.id, result.task.id);
@@ -565,17 +558,6 @@ export class TaskService {
     const { title } = RenameSchema.parse(raw);
     this.getTask(userId, taskId);
     if (!this.repository.rename(taskId, title)) throw new TaskFailure("Open archived tasks before renaming them.", 409);
-    return this.getTask(userId, taskId);
-  }
-
-  setTaskBlockedBy(userId: string, taskId: string, raw: z.input<typeof BlockedBySchema>): Task {
-    const { blockedByTaskId } = BlockedBySchema.parse(raw);
-    const task = this.getTask(userId, taskId);
-    if (blockedByTaskId !== null) {
-      const blocked = this.requireTask({ kind: "user", userId }, blockedByTaskId);
-      if (blocked.id === task.id || blocked.company_id !== task.companyId || blocked.project_id !== task.projectId) throw new TaskFailure("The blocked task is not available", 404);
-    }
-    if (!this.repository.setBlockedBy(taskId, blockedByTaskId)) throw new TaskFailure("Not found", 404);
     return this.getTask(userId, taskId);
   }
 
@@ -797,7 +779,7 @@ export class TaskService {
       : task.status === "delivered" ? ["archive_task", "duplicate_task"] as const
       : ["duplicate_task"] as const;
     const selection = task.configuration.hermesSelection;
-    const value = { id: task.id, issueKey: task.issueKey, projectId: task.projectId, project, title: task.title, status: task.status, dependsOn: task.dependsOn, archived: task.archivedAt !== null, permittedCommands: [...permittedCommands, ...recheck], humanQuestion, blocker, workflowStage, workflow: { id: selection?.workflowId ?? null, engine: task.workflow, name: selection?.workflowName ?? null }, templateId: selection?.templateId ?? null, deliveryTarget: task.deliveryTarget, runProjectTests: task.configuration.runProjectTests, visualEvidence: task.configuration.visualEvidence, delivery, createdAt: task.createdAt, updatedAt: task.updatedAt };
+    const value = { id: task.id, issueKey: task.issueKey, projectId: task.projectId, project, title: task.title, status: task.status, dependsOn: task.dependsOn, blockedBy: task.blockedBy, archived: task.archivedAt !== null, permittedCommands: [...permittedCommands, ...recheck], humanQuestion, blocker, workflowStage, workflow: { id: selection?.workflowId ?? null, engine: task.workflow, name: selection?.workflowName ?? null }, templateId: selection?.templateId ?? null, deliveryTarget: task.deliveryTarget, runProjectTests: task.configuration.runProjectTests, visualEvidence: task.configuration.visualEvidence, delivery, createdAt: task.createdAt, updatedAt: task.updatedAt };
     return { ...value, revision: createHash("sha256").update(JSON.stringify({ value, commandRevision: row.command_revision })).digest("base64url") };
   }
 

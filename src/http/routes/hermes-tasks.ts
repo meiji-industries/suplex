@@ -7,7 +7,7 @@ import {
   HermesIdentityResponseSchema, HermesMergeApprovalBodySchema, HermesMergeApprovalResponseSchema, HermesMergeBodySchema, HermesMergeResponseSchema,
   HermesMergeTrainQuerySchema, HermesMergeTrainResponseSchema, HermesProvenanceResponseSchema, HermesRuntimeOperations,
   HermesProjectDiscoveryQuerySchema, HermesTemplateDiscoveryResponseSchema, HermesWorkflowDiscoveryResponseSchema,
-  HermesSafeTaskProjectionSchema, HermesTaskDependenciesBodySchema, HermesTaskIdParamsSchema,
+  HermesTaskIdParamsSchema,
   HermesTaskListQuerySchema, HermesTaskListResponseSchema, HermesTaskReadProjectionSchema, hermesRuntimeOpenApi,
 } from "../contracts/hermes.js";
 import type { AgentDeliveryService } from "../../delivery/agent-delivery.js";
@@ -143,11 +143,9 @@ export function registerHermesTaskRoutes(app: FastifyInstance, options: { hermes
   });
 
   typed.put("/api/hermes/tasks/:taskId/dependencies", {
-    schema: {
-      params: HermesTaskIdParamsSchema,
-      body: HermesTaskDependenciesBodySchema,
-      response: { 200: HermesSafeTaskProjectionSchema },
-    },
+    config: { hermesRuntime: true },
+    schema: { params: HermesRuntimeOperations.setTaskDependencies.params, body: HermesRuntimeOperations.setTaskDependencies.body, response: HermesRuntimeOperations.setTaskDependencies.response },
+    preValidation: async (request) => { authenticate(request.headers.authorization); },
   }, async (request, reply) => {
     const principal = authenticate(request.headers.authorization);
     const task = options.tasks.setHermesTaskDependencies(principal, request.params.taskId, request.body.dependsOn);

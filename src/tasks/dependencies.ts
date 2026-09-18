@@ -3,23 +3,11 @@ import type Database from "better-sqlite3";
 import type { ForgeDatabase } from "../platform/database.js";
 
 const EdgeSchema = z.object({ task_id: z.string(), depends_on_task_id: z.string() });
-/**
- * One dependency gate. A declared forge_task_dependencies edge and a human-set Blocked by reference
- * are the same fact for every reader, so both arrive from one query, de-duplicated and sorted.
- * A task that names itself is not a dependency of itself.
- */
-const EDGE_SOURCE = `SELECT task_id, depends_on_task_id FROM (
-  SELECT task_id, depends_on_task_id FROM forge_task_dependencies
-  UNION
-  SELECT id AS task_id, blocked_by_task_id AS depends_on_task_id FROM forge_tasks WHERE blocked_by_task_id IS NOT NULL AND blocked_by_task_id <> id
-)`;
+/** forge_task_dependencies is the only persisted prerequisite source; the UI calls each edge "Blocked by". */
+const EDGE_SOURCE = "SELECT task_id, depends_on_task_id FROM forge_task_dependencies";
 
 export class TaskDependencyFailure extends Error {
   constructor(readonly publicMessage: string, readonly statusCode = 422) { super(publicMessage); }
-}
-
-export function taskDependencies(database: ForgeDatabase, taskId: string): string[] {
-  return database.authQuery(db => readDependencies(db, taskId));
 }
 
 /** Every dependency edge for the given tasks, keyed by the dependent task. */
@@ -35,7 +23,7 @@ export function taskDependencyMap(database: ForgeDatabase, taskIds: string[]): M
 const SummarySchema = z.object({ id: z.string(), title: z.string(), status: z.string() });
 export type TaskDependencySummary = z.infer<typeof SummarySchema>;
 
-/** The dependency tasks of one task with the title and status a Coordinator needs to reason about them. */
+/** The prerequisite tasks of one task with the title and status every reader shows: the task view, Hermes, and the Coordinator. */
 export function taskDependencySummaries(database: ForgeDatabase, taskId: string): TaskDependencySummary[] {
   return database.authQuery(db => z.array(SummarySchema).parse(db.prepare(`SELECT t.id AS id, t.title AS title, COALESCE(c.status, 'backlog') AS status FROM (${EDGE_SOURCE} WHERE task_id = ?) d JOIN forge_tasks t ON t.id = d.depends_on_task_id LEFT JOIN forge_task_controls c ON c.task_id = t.id ORDER BY t.id`).all(taskId)));
 }
@@ -59,7 +47,6 @@ export function replaceTaskDependencies(database: ForgeDatabase, input: { taskId
     db.prepare("DELETE FROM forge_task_dependencies WHERE task_id = ?").run(input.taskId);
     const stamp = new Date().toISOString();
     for (const dependency of dependsOn) db.prepare("INSERT INTO forge_task_dependencies (task_id, depends_on_task_id, created_at) VALUES (?, ?, ?)").run(input.taskId, dependency, stamp);
-    // The walk crosses Blocked by edges too, so a loop through one is rejected here.
     assertNoCycle(db, input.taskId);
     return readDependencies(db, input.taskId);
   });

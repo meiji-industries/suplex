@@ -221,9 +221,9 @@ export async function mergeTrainFixture(count = 3) {
     const approval = await agentDelivery.issueApproval(principal, task.id, { pullRequestNumber: task.pull.number, headSha: task.pull.headSha, baseSha: task.pull.baseSha });
     return agentDelivery.merge(principal, task.id, { pullRequestNumber: task.pull.number, expectedHeadSha: task.pull.headSha, expectedBaseSha: task.pull.baseSha, approvalReceipt: approval.receipt });
   };
-  /** The human "Blocked by" property, which Forge reads as an explicit dependency. */
-  const blockOn = (task: TrainTask, blocker: TrainTask | null): void => {
-    if (!tasks.repository.setBlockedBy(task.id, blocker?.id ?? null)) throw new Error("Blocked by was not stored");
+  /** A human "Blocked by" edit, through the same dependency write path as the task view. */
+  const blockOn = (task: TrainTask, blockers: TrainTask[]): void => {
+    tasks.setTaskDependencies(adminId, task.id, blockers.map(blocker => blocker.id));
   };
   const dependOn = (task: TrainTask, dependencies: TrainTask[]): void => {
     tasks.setHermesTaskDependencies(principal, task.id, dependencies.map(dependency => dependency.id));

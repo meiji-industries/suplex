@@ -29,6 +29,7 @@ const CATALOG = {
     { path: "/api/hermes/tasks", method: "GET", authentication: "agent credential", description: "List the tasks this agent created." },
     { path: "/api/hermes/tasks", method: "POST", authentication: "agent credential", description: "Create a backlog task. An idempotency key is necessary. Creation never starts the task." },
     { path: "/api/hermes/tasks/{taskId}", method: "GET", authentication: "agent credential", description: "Read one task. Send the ETag in If-None-Match to poll conditionally." },
+    { path: "/api/hermes/tasks/{taskId}/dependencies", method: "PUT", authentication: "agent credential", description: "Replace the prerequisites of a task, shown as Blocked by." },
     { path: "/api/hermes/tasks/{taskId}/commands", method: "POST", authentication: "agent credential", description: "Apply one lifecycle command with the current revision and an idempotency key." },
   ],
   administration: {
@@ -51,7 +52,7 @@ const SKILLS = {
   skills: [
     {
       name: "forge",
-      summary: "Work with Forge tasks as a paired agent: discover capabilities, projects, workflows, and templates; create backlog tasks idempotently; poll them; and send lifecycle commands.",
+      summary: "Work with Forge tasks as a paired agent: discover capabilities, projects, workflows, and templates; create backlog tasks idempotently; set their prerequisites; poll them; and send lifecycle commands.",
       source: "hermes/skills/forge",
       instructions: "hermes/skills/forge/SKILL.md",
       install: "docs/hermes-skill.md",
@@ -61,7 +62,7 @@ const SKILLS = {
           preferred: true,
           command: "forge mcp",
           server: "forge-hermes-bridge",
-          tools: ["forge_whoami", "forge_capabilities", "forge_list_workflows", "forge_list_templates", "forge_list_tasks", "forge_get_task", "forge_get_task_delivery", "forge_create_task", "forge_command_task"],
+          tools: ["forge_whoami", "forge_capabilities", "forge_list_workflows", "forge_list_templates", "forge_list_tasks", "forge_get_task", "forge_get_task_delivery", "forge_create_task", "forge_set_task_dependencies", "forge_command_task"],
           description: "A local stdio MCP server that maps the runtime routes onto typed tools. Forge serves no remote MCP endpoint.",
           documentation: "docs/hermes-mcp-bridge.md",
         },

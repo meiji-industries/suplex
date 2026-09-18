@@ -99,7 +99,7 @@ export const HermesTaskCreateBodySchema = z.object({
   title: z.string().trim().min(1),
   description: z.string().trim().optional().meta({ default: "" }),
   idempotencyKey: z.string().trim().min(1).max(128),
-  dependsOn: z.array(taskId).max(MAX_DEPENDENCIES).optional(),
+  dependsOn: z.array(taskId).max(MAX_DEPENDENCIES).optional().describe("Prerequisite task ids in this company, shown as Blocked by. A self-reference, a cycle, or an unavailable task is rejected."),
   images: z.array(TaskImageInputSchema).max(MAX_TASK_IMAGES).default([]),
   source: TaskSourceInputSchema.optional(),
   workflowId: z.string().min(1).max(256).optional(),
@@ -114,7 +114,7 @@ export const HermesTaskCreateBodySchema = z.object({
 export type HermesTaskCreateBody = z.infer<typeof HermesTaskCreateBodySchema>;
 
 export const HermesTaskDependenciesBodySchema = z.object({
-  dependsOn: z.array(taskId).max(MAX_DEPENDENCIES),
+  dependsOn: z.array(taskId).max(MAX_DEPENDENCIES).describe("The complete prerequisite set. It replaces the current set; an empty array removes every prerequisite."),
 }).strict();
 
 export const HermesTaskIdParamsSchema = z.object({
@@ -259,7 +259,8 @@ export const HermesSafeTaskProjectionSchema = z.object({
   project: HermesProjectSchema,
   title: z.string(),
   status: HermesTaskStatusSchema,
-  dependsOn: z.array(z.string()),
+  dependsOn: z.array(z.string()).describe("The ids of blockedBy, in the same order."),
+  blockedBy: z.array(z.object({ id: z.string(), title: z.string(), status: HermesTaskStatusSchema }).strict()).describe("The prerequisite tasks of this task with their current title and status."),
   archived: z.boolean(),
   revision: z.string(),
   permittedCommands: z.array(HermesTaskCommandSchema),
@@ -485,6 +486,11 @@ export const HermesRuntimeOperations = {
     params: HermesTaskIdParamsSchema,
     response: { 200: HermesTaskReadProjectionSchema, 400: HermesRuntimeErrorResponses.requestInvalid, 401: HermesRuntimeErrorResponses.credentialInvalid, 404: z.union([HermesRuntimeErrorResponses.notFound, HermesRuntimeErrorResponses.resourceNotFound]), 500: HermesRuntimeErrorResponses.internal },
   },
+  setTaskDependencies: {
+    params: HermesTaskIdParamsSchema,
+    body: HermesTaskDependenciesBodySchema,
+    response: { 200: HermesSafeTaskProjectionSchema, 400: HermesRuntimeErrorResponses.requestInvalid, 401: HermesRuntimeErrorResponses.credentialInvalid, 404: z.union([HermesRuntimeErrorResponses.notFound, HermesRuntimeErrorResponses.resourceNotFound]), 422: HermesRuntimeErrorResponses.taskUnavailable, 500: HermesRuntimeErrorResponses.internal },
+  },
   commandTask: {
     params: HermesTaskIdParamsSchema,
     body: HermesTaskCommandBodySchema,
@@ -541,7 +547,7 @@ export function hermesRuntimeOpenApi(): Record<string, unknown> {
         post: {
           operationId: "createHermesBacklogTask",
           summary: "Create a backlog task without starting it",
-          description: "Creates a backlog task and never starts execution. The server defaults description to an empty string and ignores unknown fields. Idempotency is scoped to the paired agent and company. An identical replay returns 200; reuse for a different request returns 409 with idempotency_conflict. Collections are not supported, so pagination and cursors are unavailable.",
+          description: "Creates a backlog task and never starts execution. The server defaults description to an empty string and rejects unknown fields with request_invalid. dependsOn sets the prerequisites, shown as Blocked by; every one must be a task this agent created in the same company. Idempotency is scoped to the paired agent and company. An identical replay returns 200; reuse for a different request returns 409 with idempotency_conflict. Collections are not supported, so pagination and cursors are unavailable.",
           security: [{ HermesBearer: [] }],
           requestBody: { required: true, content: { "application/json": { schema: inputSchema(HermesRuntimeOperations.createTask.body) } } },
           responses: openApiResponses(HermesRuntimeOperations.createTask.response),
@@ -556,6 +562,9 @@ export function hermesRuntimeOpenApi(): Record<string, unknown> {
           parameters: [{ name: "taskId", in: "path", required: true, schema: jsonSchema(HermesRuntimeOperations.getTask.params.shape.taskId, "input") }],
           responses: openApiResponses(HermesRuntimeOperations.getTask.response),
         },
+      },
+      "/api/hermes/tasks/{taskId}/dependencies": {
+        put: { operationId: "setHermesTaskDependencies", summary: "Replace the prerequisites of a task", description: "Replaces dependsOn, shown as Blocked by, with the complete set in the body. Every prerequisite must be a task this agent created in the same company. A self-reference, a cycle, or an unavailable task is rejected and the current set stays. Unknown fields are rejected. The response and every later read report dependsOn and blockedBy from the same stored edges.", security: [{ HermesBearer: [] }], parameters: [{ name: "taskId", in: "path", required: true, schema: jsonSchema(HermesRuntimeOperations.setTaskDependencies.params.shape.taskId, "input") }], requestBody: { required: true, content: { "application/json": { schema: jsonSchema(HermesRuntimeOperations.setTaskDependencies.body, "input") } } }, responses: openApiResponses(HermesRuntimeOperations.setTaskDependencies.response) },
       },
       "/api/hermes/tasks/{taskId}/commands": {
         post: { operationId: "commandHermesTask", summary: "Apply an authorized task lifecycle command", description: "Every command requires the current task revision and an idempotency key. Human answers, delivery, releases, and merges remain unavailable.", security: [{ HermesBearer: [] }], parameters: [{ name: "taskId", in: "path", required: true, schema: jsonSchema(HermesRuntimeOperations.commandTask.params.shape.taskId, "input") }], requestBody: { required: true, content: { "application/json": { schema: inputSchema(HermesRuntimeOperations.commandTask.body) } } }, responses: openApiResponses(HermesRuntimeOperations.commandTask.response) },

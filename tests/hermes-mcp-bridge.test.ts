@@ -39,9 +39,9 @@ test("tool input schemas stay derived from the served Hermes runtime contract", 
   const fixture = await pairedBridgeFixture();
   try {
     const document = (await fixture.app.inject({ method: "GET", url: "/api/hermes/openapi.json", headers: { Authorization: `Bearer ${fixture.credential}` } })).json() as {
-      paths: Record<string, { post?: { requestBody: { content: { "application/json": { schema: { required?: string[]; properties: Record<string, unknown> } } } } } }>;
+      paths: Record<string, Partial<Record<"post" | "put", { requestBody: { content: { "application/json": { schema: { required?: string[]; properties: Record<string, unknown> } } } } }>>>;
     };
-    const requestSchema = (path: string) => document.paths[path]!.post!.requestBody.content["application/json"].schema;
+    const requestSchema = (path: string, method: "post" | "put" = "post") => document.paths[path]![method]!.requestBody.content["application/json"].schema;
     const tool = (name: string) => HERMES_MCP_TOOLS.find(candidate => candidate.name === name)!.inputSchema as { required?: string[]; properties: Record<string, { enum?: string[] }> };
 
     const create = requestSchema("/api/hermes/tasks");
@@ -55,7 +55,12 @@ test("tool input schemas stay derived from the served Hermes runtime contract", 
     expect(tool("forge_command_task").required).toEqual(expect.arrayContaining(["revision", "idempotencyKey"]));
     expect(tool("forge_command_task").properties.command?.enum).toEqual((command.properties.command as { enum: string[] }).enum);
 
-    expect(HERMES_MCP_TOOLS.map(entry => entry.name)).toEqual(["forge_whoami", "forge_capabilities", "forge_list_workflows", "forge_list_templates", "forge_list_tasks", "forge_get_task", "forge_get_task_delivery", "forge_create_task", "forge_command_task"]);
+    const dependencies = requestSchema("/api/hermes/tasks/{taskId}/dependencies", "put");
+    expect(Object.keys(tool("forge_set_task_dependencies").properties).sort()).toEqual([...Object.keys(dependencies.properties), "taskId"].sort());
+    expect([...(tool("forge_set_task_dependencies").required ?? [])].sort()).toEqual([...(dependencies.required ?? []), "taskId"].sort());
+    expect(tool("forge_create_task").properties).toHaveProperty("dependsOn");
+
+    expect(HERMES_MCP_TOOLS.map(entry => entry.name)).toEqual(["forge_whoami", "forge_capabilities", "forge_list_workflows", "forge_list_templates", "forge_list_tasks", "forge_get_task", "forge_get_task_delivery", "forge_create_task", "forge_set_task_dependencies", "forge_command_task"]);
     for (const entry of HERMES_MCP_TOOLS) expect(JSON.stringify(entry.inputSchema)).not.toContain("credential");
   } finally { await fixture.close(); }
 });
@@ -106,6 +111,22 @@ test("the stdio bridge drives the paired Hermes runtime API end to end", async (
 
     const stale = await session.call({ method: "tools/call", params: { name: "forge_command_task", arguments: { taskId: task.id, command: "cancel_task", revision: "not-the-current-revision", idempotencyKey: "bridge-command-2" } } });
     expect(structured(stale)).toMatchObject({ status: 412, body: { code: "revision_stale" } });
+
+    // Prerequisites set on create or through the dependency tool read back identically over MCP, the agent API, and the board.
+    const second = structured(await session.call({ method: "tools/call", params: { name: "forge_create_task", arguments: { projectId: fixture.project.id, title: "Bridge second", idempotencyKey: "bridge-key-2" } } })).body as { id: string };
+    const dependent = await session.call({ method: "tools/call", params: { name: "forge_create_task", arguments: { projectId: fixture.project.id, title: "Bridge dependent", idempotencyKey: "bridge-key-3", dependsOn: [task.id] } } });
+    const dependentId = (structured(dependent).body as { id: string }).id;
+    expect(structured(dependent)).toMatchObject({ status: 201, body: { dependsOn: [task.id], blockedBy: [{ id: task.id, title: "Bridge task", status: "backlog" }] } });
+    const expected = [{ id: task.id, title: "Bridge task", status: "backlog" }, { id: second.id, title: "Bridge second", status: "backlog" }].sort((left, right) => left.id.localeCompare(right.id));
+    const set = await session.call({ method: "tools/call", params: { name: "forge_set_task_dependencies", arguments: { taskId: dependentId, dependsOn: [second.id, task.id] } } });
+    expect(structured(set)).toMatchObject({ status: 200, body: { dependsOn: expected.map(entry => entry.id), blockedBy: expected } });
+    const dependentRead = await session.call({ method: "tools/call", params: { name: "forge_get_task", arguments: { taskId: dependentId } } });
+    expect(structured(dependentRead)).toMatchObject({ status: 200, body: { dependsOn: expected.map(entry => entry.id), blockedBy: expected } });
+    const http = await fixture.app.inject({ method: "GET", url: `/api/hermes/tasks/${dependentId}`, headers: { Authorization: `Bearer ${fixture.credential}` } });
+    expect(http.json()).toMatchObject({ dependsOn: expected.map(entry => entry.id), blockedBy: expected });
+    const cycle = await session.call({ method: "tools/call", params: { name: "forge_set_task_dependencies", arguments: { taskId: task.id, dependsOn: [dependentId] } } });
+    expect(cycle.result).toMatchObject({ isError: true });
+    expect(structured(cycle)).toMatchObject({ status: 422, body: { error: "The dependency creates a cycle", code: "task_unavailable" } });
   } finally { session.close(); await fixture.close(); }
 });
 

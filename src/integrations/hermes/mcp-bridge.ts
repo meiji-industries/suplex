@@ -4,6 +4,7 @@ import { z } from "zod";
 import {
   HermesTaskCommandBodySchema,
   HermesTaskCreateBodySchema,
+  HermesTaskDependenciesBodySchema,
   HermesTaskIdParamsSchema,
   HermesTaskListQuerySchema,
   HermesProjectDiscoveryQuerySchema,
@@ -19,6 +20,7 @@ const GetTaskSchema = z.object({
 }).strict();
 const TaskOnlySchema = z.object({ taskId: TaskIdSchema }).strict();
 const CommandTaskSchema = HermesTaskCommandBodySchema.extend({ taskId: TaskIdSchema });
+const SetDependenciesSchema = HermesTaskDependenciesBodySchema.extend({ taskId: TaskIdSchema });
 const NoArgumentsSchema = z.object({}).strict();
 
 const toolSchema = (schema: z.ZodType): Record<string, unknown> => z.toJSONSchema(schema, { io: "input" }) as Record<string, unknown>;
@@ -32,7 +34,8 @@ export const HERMES_MCP_TOOLS: readonly McpTool[] = [
   { name: "forge_list_tasks", description: "List tasks this agent created, newest update first. Filters and the opaque cursor come from the runtime contract.", inputSchema: toolSchema(HermesTaskListQuerySchema) },
   { name: "forge_get_task", description: "Read one task. Pass knownRevision to poll conditionally: an unchanged task returns { unchanged: true, revision } instead of the projection.", inputSchema: toolSchema(GetTaskSchema) },
   { name: "forge_get_task_delivery", description: `Read the delivery and blocker state of one task, including any pull request, delivery wait, and completion observation. Forge reports no persisted check observation. ${AUTHORITY}`, inputSchema: toolSchema(TaskOnlySchema) },
-  { name: "forge_create_task", description: `Create a backlog task. It never starts execution; use forge_command_task with start_task for that. idempotencyKey is required and scoped to this agent: an identical replay returns the same task, and reusing the key for a different request fails with idempotency_conflict. deliveryTarget, runProjectTests, and visualEvidence must match the project agentTaskPolicy from forge_whoami; anything else fails with delivery_policy_rejected. ${AUTHORITY}`, inputSchema: toolSchema(HermesTaskCreateBodySchema) },
+  { name: "forge_create_task", description: `Create a backlog task. It never starts execution; use forge_command_task with start_task for that. dependsOn sets its prerequisites, shown as Blocked by. idempotencyKey is required and scoped to this agent: an identical replay returns the same task, and reusing the key for a different request fails with idempotency_conflict. deliveryTarget, runProjectTests, and visualEvidence must match the project agentTaskPolicy from forge_whoami; anything else fails with delivery_policy_rejected. ${AUTHORITY}`, inputSchema: toolSchema(HermesTaskCreateBodySchema) },
+  { name: "forge_set_task_dependencies", description: "Replace the prerequisites (dependsOn, shown as Blocked by) of a task with the complete set given. An empty array removes every prerequisite. Each prerequisite must be a task this agent created; a self-reference, a cycle, or an unavailable task is rejected and the current set stays. forge_get_task reads the same set back as dependsOn and blockedBy.", inputSchema: toolSchema(SetDependenciesSchema) },
   { name: "forge_command_task", description: `Apply one lifecycle command to a task. revision must be the task's current revision (a stale one fails with revision_stale) and idempotencyKey is required. start_task, cancel_task, and archive_task are not reversible by this agent. note is only accepted by send_task_note. ${AUTHORITY}`, inputSchema: toolSchema(CommandTaskSchema) },
 ];
 
@@ -106,6 +109,10 @@ export class HermesMcpBridge {
       }
       case "forge_create_task":
         return this.request("POST", "/api/hermes/tasks", { body: HermesTaskCreateBodySchema.parse(args) });
+      case "forge_set_task_dependencies": {
+        const { taskId, ...rest } = SetDependenciesSchema.parse(args);
+        return this.request("PUT", `/api/hermes/tasks/${encodeURIComponent(taskId)}/dependencies`, { body: HermesTaskDependenciesBodySchema.parse(rest) });
+      }
       case "forge_command_task": {
         const { taskId, ...rest } = CommandTaskSchema.parse(args);
         return this.request("POST", `/api/hermes/tasks/${encodeURIComponent(taskId)}/commands`, { body: HermesTaskCommandBodySchema.parse(rest) });

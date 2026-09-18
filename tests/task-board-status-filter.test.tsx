@@ -13,7 +13,7 @@ vi.mock("../src/frontend/lib/api.js", () => api);
 vi.mock("../src/frontend/shell/company-context.js", () => ({ useCompanyContext: () => ({ currentCompany: { id: "company-1", status: "active" } }) }));
 vi.mock("../src/frontend/shell/application-frame.js", () => ({ ApplicationFrame: ({ children }: { children: ReactNode }) => children }));
 vi.mock("../src/frontend/shell/global-new-task-dialog.js", () => ({ requestNewTask: vi.fn() }));
-vi.mock("../src/frontend/features/analytics/lib/analytics.js", () => ({ useTaskCosts: () => new Map() }));
+vi.mock("../src/frontend/features/analytics/lib/analytics.js", async importOriginal => ({ ...(await importOriginal<Record<string, unknown>>()), useTaskCosts: () => new Map() }));
 vi.mock("../src/frontend/features/tasks/task-details.js", () => ({ TaskDetailsPage: () => null }));
 vi.mock("../src/frontend/features/tasks/task-options.js", () => ({ TaskOptions: () => null }));
 vi.mock("../src/frontend/components/ui/select.js", () => {
@@ -48,7 +48,7 @@ function task(id: string, title: string, status: Task["status"]): Task {
     id, companyId: "company-1", projectId: "project-1", issueKey: null, title, description: "", status, deliveryTarget: "pull_request_draft",
     rootProfile: profile, workerProfile: profile, workflow: "standard", advisorProfiles: {}, workflowState: { version: 1, reviews: [], acceptedDelivery: null, deliveryWait: null, completion: null },
     configuration: { repository: "meiji-industries/forge", repositoryPath: "/repo", worktreeRoot: "/worktrees", branch: id, baseBranch: "main", baselineSha: "a".repeat(40), startingSha: "a".repeat(40), setupCommand: "", verificationCommand: "", runProjectTests: true, visualEvidence: "off", source: null, capturedAt: "2026-09-08T00:00:00.000Z" },
-    worktree: null, pullRequest: null, humanQuestion: null, blockedBy: null, limits: { budgetUsd: 15, maxTurns: 40, admittedTurns: 0 }, wakeAt: null, images: [],
+    worktree: null, pullRequest: null, humanQuestion: null, blockedBy: [], limits: { budgetUsd: 15, maxTurns: 40, admittedTurns: 0 }, wakeAt: null, images: [],
     dependsOn: [], createdAt: "2026-09-08T00:00:00.000Z", updatedAt: "2026-09-08T00:00:00.000Z", statusChangedAt: "2026-09-08T00:00:00.000Z", archivedAt: null,
   };
 }
@@ -83,4 +83,18 @@ test("the board status filter narrows the visible columns and tasks", async () =
 
   await act(async () => { container.querySelector<HTMLButtonElement>('[data-select="Filter by status"][data-value="all"]')?.click(); });
   expect(columns()).toEqual(["Backlog", "Active"]);
+});
+
+test("board cards and list rows label every Blocked by task from the same prerequisite list", async () => {
+  const blocked = { ...task("task-3", "Ship the release", "backlog"), dependsOn: ["task-1", "task-2"], blockedBy: [{ id: "task-1", title: "Repair the poller", status: "active" as const }, { id: "task-2", title: "Plan the migration", status: "delivered" as const }] };
+  const tasks = [task("task-1", "Repair the poller", "active"), blocked];
+  api.readJson.mockImplementation(async (path: string) => path.includes("/projects") ? { projects: [] } : { tasks });
+  for (const mode of ["board", "list"] as const) {
+    const container = document.createElement("div");
+    document.body.append(container);
+    const root = createRoot(container);
+    await act(async () => { root.render(<TasksView mode={mode} />); });
+    expect(Array.from(container.querySelectorAll("[data-task-blocked-by]")).map(label => label.textContent)).toEqual(["Blocked by Repair the poller · Active, Plan the migration · Delivered"]);
+    await act(async () => { root.unmount(); container.remove(); });
+  }
 });

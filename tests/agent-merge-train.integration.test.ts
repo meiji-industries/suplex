@@ -237,10 +237,10 @@ test("a delivery repair is refused while an upstream task is not delivered", { t
   expect(f.store.turns(second!.id).at(-1)!.promptText).toContain("Do not rewrite it and do not reimplement it.");
 });
 
-test("a human Blocked by reference gates the train exactly like a declared dependency", { timeout: 120_000 }, async () => {
+test("a human Blocked by edit gates the train exactly like an agent-declared dependency", { timeout: 120_000 }, async () => {
   const f = await mergeTrainFixture(2);
   const [first, second] = f.train;
-  f.blockOn(second!, first!);
+  f.blockOn(second!, [first!]);
 
   // One gate: the Blocked by task reads as a dependency everywhere Forge decides.
   expect(f.tasks.getTask(f.adminId, second!.id).dependsOn).toEqual([first!.id]);
@@ -256,11 +256,11 @@ test("a human Blocked by reference gates the train exactly like a declared depen
   await expect(f.approveAndMerge(second!)).rejects.toThrow(`Task ${first!.id} is not delivered.`);
   expect(f.merges).toEqual([]);
 
-  // The same reference declared twice stays one dependency.
+  // The agent declaring the same prerequisite reads back the same single edge.
   f.dependOn(second!, [first!]);
   expect(f.tasks.getTask(f.adminId, second!.id).dependsOn).toEqual([first!.id]);
 
-  // A loop through the Blocked by edge is rejected.
+  // A loop through the human-set edge is rejected.
   expect(() => f.dependOn(first!, [second!])).toThrow("The dependency creates a cycle");
 
   // The upstream delivery opens the gate.

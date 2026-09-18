@@ -14,6 +14,13 @@ The external issue linked to a task, identified within its issue tracker.
 It is independent of the pull request, branch, or issue used to create the task.
 _Avoid_: Task dependency, pull request association.
 
+**Prerequisite**
+A task in the same company that another task waits for, shown as "Blocked by".
+A task can have several. `forge_task_dependencies` is the only store; APIs call
+the ids `dependsOn` and the resolved tasks `blockedBy`. A task created to start
+immediately waits in the backlog until every prerequisite is delivered.
+_Avoid_: Blocked by reference, single blocker.
+
 **Coordinator**
 The continuing read-only agent that investigates the source, writes the plan
 and acceptance criteria, independently reviews the Worker's changes and check

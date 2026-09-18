@@ -43,8 +43,8 @@ export const TaskInputSchema = z.object({
   issue: IssueAssociationSchema.nullable().optional(),
   workflow: WorkflowIdSchema.default("standard"),
   advisorProfileIds: AdvisorProfileIdsSchema.default({}),
+  /** Prerequisite task ids, shown as "Blocked by". With startImmediately, the task waits in the backlog until every one is delivered. */
   dependsOn: z.array(id).max(MAX_TASK_DEPENDENCIES).default([]),
-  blockedByTaskId: id.optional(),
 }).strict();
 export type TaskInput = z.input<typeof TaskInputSchema>;
 export type TaskRequest = z.output<typeof TaskInputSchema>;
@@ -93,12 +93,13 @@ export const TaskSchema = z.object({
   workflow: WorkflowIdSchema,
   advisorProfiles: z.partialRecord(AdvisorRoleSchema, TaskProfileFieldsSchema),
   workflowState: PublicWorkflowStateSchema,
+  /** The ids of blockedBy, in the same order. */
   dependsOn: z.array(id).default([]),
   configuration: TaskConfigurationSchema,
   worktree: WorktreeReferenceSchema.nullable(),
   pullRequest: PullRequestReferenceSchema.nullable(),
   humanQuestion: TaskHumanQuestionSchema.nullable(),
-  blockedBy: TaskReferenceSchema.nullable(),
+  blockedBy: z.array(TaskReferenceSchema),
   startWhenBlockedByDelivered: z.boolean().optional(),
   limits: TaskLimitsSchema.extend({ admittedTurns: z.number().int().nonnegative() }).strict(),
   wakeAt: z.string().nullable(),

@@ -51,6 +51,7 @@ separately.
 | `forge_get_task` | `GET /api/hermes/tasks/{taskId}` | Pass `knownRevision` to poll conditionally. An unchanged task returns `{ "unchanged": true, "revision": "…" }`. |
 | `forge_get_task_delivery` | `GET /api/hermes/tasks/{taskId}` | The delivery, blocker, and completion observation of the same projection. |
 | `forge_create_task` | `POST /api/hermes/tasks` | `idempotencyKey` is required. Creates a backlog task and never starts execution. |
+| `forge_set_task_dependencies` | `PUT /api/hermes/tasks/{taskId}/dependencies` | Replaces the prerequisites (`dependsOn`, shown as Blocked by) with the complete set given. `forge_get_task` reads them back as `dependsOn` and `blockedBy`. |
 | `forge_command_task` | `POST /api/hermes/tasks/{taskId}/commands` | Requires the current `revision` and an `idempotencyKey`. |
 
 Every tool input schema is generated from the zod contract in

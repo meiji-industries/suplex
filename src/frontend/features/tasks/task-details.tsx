@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactElement } from "react";
-import { ChevronRight, ClipboardCopy } from "lucide-react";
+import { ChevronRight, ClipboardCopy, X } from "lucide-react";
 import { Collapsible } from "../../components/ui/collapsible.js";
 import type { Task } from "../../../tasks/contracts.js";
 import { TaskActivityResponseSchema } from "../../../http/contracts/tasks.js";
@@ -16,7 +16,7 @@ import { Alert, AlertDescription } from "../../components/ui/alert.js";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "../../components/ui/dialog.js";
 import { Markdown } from "../../components/app/markdown.js";
 import { EntityAvatar } from "../../components/app/entity-avatar.js";
-import { TaskStatus, TaskStatusIcon, taskStatusLabels } from "./task-status.js";
+import { TaskStatus, TaskTitleLink } from "./task-status.js";
 import { TaskWork, type TaskActivity } from "./task-work.js";
 import { taskDeliveryTargetOptions } from "./task-delivery-target.js";
 import { LivePaneDock } from "./task-chat/live-pane-dock.js";
@@ -37,19 +37,21 @@ function CopyValue({ label, value, children }: { label: string; value: string; c
   </span>;
 }
 
-export function TaskBlockedByProperty({ task, save }: { task: Pick<Task, "id" | "companyId" | "projectId" | "status" | "blockedBy">; save: (blockedByTaskId: string | null) => Promise<void> }): ReactElement {
+/** The Blocked by prerequisites of a task. Each change saves the complete prerequisite set through the dependency route, so removing one keeps the others. */
+export function TaskBlockedByProperty({ task, onChange }: { task: Pick<Task, "id" | "companyId" | "projectId" | "status" | "blockedBy">; onChange: (task: Task) => void }): ReactElement {
   const [pickerOpen, setPickerOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const submit = async (blockedByTaskId: string | null) => {
+  const ids = task.blockedBy.map(prerequisite => prerequisite.id);
+  const submit = async (dependsOn: string[]) => {
     if (busy) return;
     setBusy(true); setError("");
-    try { await save(blockedByTaskId); }
-    catch (error) { setError(error instanceof Error ? error.message : "The Blocked by reference could not be saved"); }
+    try { onChange(await readJson<Task>(`/api/tasks/${task.id}/dependencies`, { method: "PUT", body: JSON.stringify({ dependsOn }) })); }
+    catch (error) { setError(error instanceof Error ? error.message : "The Blocked by tasks could not be saved"); }
     finally { setBusy(false); }
   };
   const openPicker = () => { setError(""); setPickerOpen(true); };
-  return <div className="space-y-1.5"><dt className="text-muted-foreground">Blocked by</dt><dd>{task.blockedBy ? <button type="button" className="flex w-full min-w-0 max-w-full items-center gap-1.5 text-left underline-offset-2 hover:underline disabled:opacity-50" disabled={busy} title={`${task.blockedBy.title} · ${taskStatusLabels[task.blockedBy.status]}`} onClick={openPicker}><TaskStatusIcon status={task.blockedBy.status} /><span className="truncate">{task.blockedBy.title}</span></button> : <Button type="button" size="xs" variant="ghost" disabled={busy} onClick={openPicker}>None</Button>}</dd>{error ? <dd role="alert" className="text-destructive">{error}</dd> : null}<BlockedByPickerDialog open={pickerOpen} onOpenChange={setPickerOpen} companyId={task.companyId} projectId={task.projectId} excludeTaskId={task.id} current={task.blockedBy} onSelect={selected => void submit(selected.id)} onClear={() => void submit(null)} onError={setError} /></div>;
+  return <div className="space-y-1.5"><dt className="text-muted-foreground">Blocked by</dt><dd className="flex min-w-0 flex-col items-start gap-1">{task.blockedBy.map(prerequisite => <span key={prerequisite.id} data-blocked-by-task={prerequisite.id} className="flex w-full min-w-0 items-center gap-1"><TaskTitleLink task={prerequisite} companyId={task.companyId} className="min-w-0 flex-1" /><Button type="button" size="icon-xs" variant="ghost" aria-label={`Remove ${prerequisite.title} from Blocked by`} disabled={busy} onClick={() => void submit(ids.filter(id => id !== prerequisite.id))}><X /></Button></span>)}<Button type="button" size="xs" variant="ghost" aria-label={ids.length ? "Add Blocked by task" : undefined} disabled={busy} onClick={openPicker}>{ids.length ? "Add" : "None"}</Button></dd>{error ? <dd role="alert" className="text-destructive">{error}</dd> : null}<BlockedByPickerDialog open={pickerOpen} onOpenChange={setPickerOpen} companyId={task.companyId} projectId={task.projectId} excludeTaskIds={[task.id, ...ids]} onSelect={selected => void submit([...ids, selected.id])} onError={setError} /></div>;
 }
 
 export function TaskDetailsPage({ task, project, onChange }: { task: Task; project: ApiProject | undefined; onChange: (task: Task) => void }): ReactElement {
@@ -85,7 +87,7 @@ export function TaskDetailsPage({ task, project, onChange }: { task: Task; proje
           {task.images.length ? <ul className="flex flex-wrap gap-2" aria-label="Task images">{task.images.map(item => <li key={item.artifactId}><button type="button" className="size-16 overflow-hidden rounded-md border bg-muted/30 focus-visible:outline" aria-label={`Open ${item.filename}`} onClick={() => setImage(item)}><img className="size-full object-cover" src={`/api/tasks/${task.id}/images/${item.artifactId}`} alt={item.filename} /></button></li>)}</ul> : null}
           {task.artifacts?.length ? <section aria-label="Delivery evidence"><h3>Delivery evidence</h3><ul className="space-y-1">{task.artifacts.map(item => <li key={item.artifactId}><a href={`/api/tasks/${task.id}/artifacts/${item.artifactId}`} target="_blank" rel="noreferrer">{item.filename}</a><span className="ml-2 text-xs text-muted-foreground">{item.byteSize.toLocaleString()} bytes</span></li>)}</ul></section> : null}
           {task.status !== "active" || task.pullRequest || task.humanQuestion ? <div data-task-current className="-mx-4 border-y px-4 py-3 sm:-mx-6 sm:px-6 lg:-mx-10 lg:px-10"><div className="mx-auto max-w-4xl space-y-3">
-            {task.pullRequest ? <TaskPullRequestCard task={task} /> : task.status === "active" ? null : <div className="flex flex-wrap items-center justify-between gap-2"><p className="text-xs text-muted-foreground">{task.status === "backlog" ? task.startWhenBlockedByDelivered && task.blockedBy ? `This task waits for its Blocked by reference: ${task.blockedBy.title}.` : "The task is ready to start." : task.status === "delivered" ? "The delivery target is complete." : task.status === "cancelled" ? "The task is cancelled." : "Coordinator needs your answer."}</p>{editable ? <span className="flex items-center gap-2"><Button size="sm" variant="outline" disabled={busy} onClick={() => setEdit(editTaskDraft(task))}>Edit task</Button><Button size="sm" disabled={busy} onClick={() => void act("start")}>Start task</Button></span> : null}</div>}
+            {task.pullRequest ? <TaskPullRequestCard task={task} /> : task.status === "active" ? null : <div className="flex flex-wrap items-center justify-between gap-2"><p className="text-xs text-muted-foreground">{task.status === "backlog" ? task.startWhenBlockedByDelivered && task.blockedBy.length ? `This task starts when its Blocked by tasks are delivered: ${task.blockedBy.map(prerequisite => prerequisite.title).join(", ")}.` : "The task is ready to start." : task.status === "delivered" ? "The delivery target is complete." : task.status === "cancelled" ? "The task is cancelled." : "Coordinator needs your answer."}</p>{editable ? <span className="flex items-center gap-2"><Button size="sm" variant="outline" disabled={busy} onClick={() => setEdit(editTaskDraft(task))}>Edit task</Button><Button size="sm" disabled={busy} onClick={() => void act("start")}>Start task</Button></span> : null}</div>}
             {task.humanQuestion ? <TaskQuestion key={task.humanQuestion.id} question={task.humanQuestion} busy={busy} onAnswer={answer => act("answer", { questionId: task.humanQuestion?.id, ...answer })} onLimitDecision={limitDecision => act("answer", { questionId: task.humanQuestion?.id, limitDecision })} /> : null}
           </div></div> : null}
           {task.workflow !== "standard" ? <WorkflowHistory task={task} activity={activity} /> : null}
@@ -105,7 +107,7 @@ export function TaskDetailsPage({ task, project, onChange }: { task: Task; proje
               <ProgressValue className="text-xs">{() => task.limits.maxTurns ? `${task.limits.admittedTurns} of ${task.limits.maxTurns}` : `${task.limits.admittedTurns}`}</ProgressValue>
             </Progress>
           </div>
-          <TaskBlockedByProperty task={task} save={async blockedByTaskId => onChange(await readJson<Task>(`/api/tasks/${task.id}/blocked-by`, { method: "PATCH", body: JSON.stringify({ blockedByTaskId }) }))} />
+          <TaskBlockedByProperty task={task} onChange={onChange} />
           <div className="space-y-1.5"><dt className="text-muted-foreground">Issue</dt><dd><IssuePicker projectId={task.projectId} issue={task.issue} onChange={async issue => onChange(await readJson<Task>(`/api/tasks/${task.id}/issue`, { method: "PATCH", body: JSON.stringify({ issue }) }))} /></dd></div>
           <div className="space-y-1.5"><dt className="text-muted-foreground">Project</dt><dd className="flex min-w-0 items-center gap-2">{project ? <EntityAvatar kind="project" id={project.id} name={project.name} size="xs" /> : null}<span className="truncate">{project?.name ?? task.configuration.repository}</span></dd></div>
           {([["root", "Coordinator", task.rootProfile], ["worker", "Worker", task.workerProfile], ...workflowDefinition(task.workflow).advisorRoles.map(role => [role, ADVISOR_LABELS[role], task.advisorProfiles[role as AdvisorRole] ?? task.rootProfile] as const)] as const).map(([role, label, profile]) => <div key={role} className="space-y-1.5"><dt className="text-muted-foreground">{label}</dt><dd className="flex items-center gap-2"><EntityAvatar kind="agent" id={profile.profileId} name={label} size="xs" /><span className="min-w-0"><span className="block truncate" title={`${profile.model} · ${profile.provider}`}>{profile.model}</span><span className="block text-[11px] text-muted-foreground">{profile.provider} · {profile.reasoningLevel}</span></span></dd></div>)}

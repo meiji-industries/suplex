@@ -45,7 +45,7 @@ const task = {
     mergedAt: null,
   },
   humanQuestion: null,
-  blockedBy: { id: "task-0", title: "Prepare task links", status: "backlog" },
+  blockedBy: [{ id: "task-0", title: "Prepare task links", status: "backlog" }],
   limits: { budgetUsd: 15, maxTurns: 40, admittedTurns: 0 },
   wakeAt: null,
   images: [],

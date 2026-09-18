@@ -27,7 +27,6 @@ export const TaskDetailsBodySchema = z.object({
   workflow: WorkflowIdSchema,
   advisorProfileIds: AdvisorProfileIdsSchema,
 }).partial().strict();
-export const TaskBlockedByBodySchema = z.object({ blockedByTaskId: z.string().min(1).max(256).nullable() }).strict();
 export const TaskIssueBodySchema = z.object({ issue: IssueAssociationSchema.nullable() }).strict();
 export const TaskRenameBodySchema = TaskInputSchema.pick({ title: true });
 export const TaskDependenciesBodySchema = TaskInputSchema.pick({ dependsOn: true }).required().strict();

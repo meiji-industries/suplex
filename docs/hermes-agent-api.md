@@ -110,5 +110,20 @@ workflow_not_permitted`. Both error bodies include `permittedWorkflowIds`.
 Templates use `template_not_found` and `template_not_permitted`, with
 `permittedTemplateIds`.
 
+## Task prerequisites
+
+A task's prerequisites are the tasks it waits for. The board shows them as
+**Blocked by**. `forge_task_dependencies` is their only store. Every task read
+reports them twice from the same edges: `dependsOn` has the IDs, and
+`blockedBy` has `id`, `title`, and `status` for each one.
+
+Set them at creation with `dependsOn`, or replace the whole set with
+`PUT /api/hermes/tasks/:taskId/dependencies` and `{ "dependsOn": [...] }`. The
+body is the complete set: an omitted ID is removed, and `[]` removes every
+prerequisite. Each prerequisite must be a task this agent created in the same
+company. A self-reference or a cycle returns `422 task_unavailable`, an
+unavailable task returns `404`, and the current set stays unchanged. Unknown
+fields, such as `blockedByTaskId`, return `400 request_invalid`.
+
 `docs/hermes-mcp-bridge.md` describes the stdio MCP bridge that exposes these
 routes as tools.

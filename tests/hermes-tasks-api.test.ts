@@ -316,12 +316,16 @@ test("authenticated runtime contract uses the live task schemas and states its a
   const document = documentResponse.json() as { openapi: string; info: { version: string }; paths: Record<string, unknown>; components: Record<string, unknown> };
   expect(document.openapi).toBe("3.0.3");
   expect(document.info.version).toBe("v1");
-  expect(Object.keys(document.paths).sort()).toEqual(["/api/hermes/capabilities", "/api/hermes/openapi.json", "/api/hermes/templates", "/api/hermes/workflows", "/api/hermes/tasks", "/api/hermes/tasks/{taskId}", "/api/hermes/tasks/{taskId}/commands"].sort());
+  expect(Object.keys(document.paths).sort()).toEqual(["/api/hermes/capabilities", "/api/hermes/openapi.json", "/api/hermes/templates", "/api/hermes/workflows", "/api/hermes/tasks", "/api/hermes/tasks/{taskId}", "/api/hermes/tasks/{taskId}/commands", "/api/hermes/tasks/{taskId}/dependencies"].sort());
+  const dependenciesOperation = (document.paths["/api/hermes/tasks/{taskId}/dependencies"] as { put: { requestBody: { content: { "application/json": { schema: { required: string[]; additionalProperties: boolean } } } }; responses: Record<string, { content: { "application/json": { schema: { properties: Record<string, unknown> } } } }> } }).put;
+  expect(dependenciesOperation.requestBody.content["application/json"].schema).toMatchObject({ required: ["dependsOn"], additionalProperties: false });
+  expect(Object.keys(dependenciesOperation.responses["200"]!.content["application/json"].schema.properties)).toEqual(expect.arrayContaining(["dependsOn", "blockedBy"]));
   expect(JSON.stringify(document)).not.toMatch(/pairingCode|credentialCreatedAt|credential_hash|board session/i);
   const createOperation = (document.paths["/api/hermes/tasks"] as CreateOperationDocument).post;
   expect(createOperation.requestBody.content["application/json"].schema.required).toEqual(expect.arrayContaining(["projectId", "title", "idempotencyKey"]));
   expect(createOperation.requestBody.content["application/json"].schema.properties.description.default).toBe("");
   expect(createOperation.responses["201"].content["application/json"].schema.properties.status.enum).toContain("waiting_human");
+  expect(Object.keys((createOperation.responses["201"].content["application/json"].schema as unknown as { properties: Record<string, unknown> }).properties)).toEqual(expect.arrayContaining(["dependsOn", "blockedBy"]));
 
   const capabilities = await app.inject({ method: "GET", url: "/api/hermes/capabilities", headers: { Authorization: `Bearer ${agentCredential}` } });
   expect(capabilities.statusCode).toBe(200);
@@ -536,10 +540,11 @@ test("POST /api/hermes/tasks creates task with native status, private no-store h
   expect(response.headers["cache-control"]).toBe("private, no-store");
 
   const body = response.json();
-  const expectedKeys = ["id", "issueKey", "projectId", "project", "title", "status", "dependsOn", "archived", "revision", "permittedCommands", "humanQuestion", "blocker", "workflowStage", "workflow", "templateId", "deliveryTarget", "runProjectTests", "visualEvidence", "delivery", "createdAt", "updatedAt", "implementation", "integration", "actionRequired"].sort();
+  const expectedKeys = ["id", "issueKey", "projectId", "project", "title", "status", "dependsOn", "blockedBy", "archived", "revision", "permittedCommands", "humanQuestion", "blocker", "workflowStage", "workflow", "templateId", "deliveryTarget", "runProjectTests", "visualEvidence", "delivery", "createdAt", "updatedAt", "implementation", "integration", "actionRequired"].sort();
   expect(Object.keys(body).sort()).toEqual(expectedKeys);
   expect(body).toMatchObject({
     dependsOn: [],
+    blockedBy: [],
     issueKey: "HMC-1",
     projectId,
     project: { id: projectId, name: "Hermes Project" },
@@ -1058,7 +1063,7 @@ test("GET /api/hermes/tasks/:taskId returns safe projection, handles non-enumera
   });
   expect(getSuccess.statusCode).toBe(200);
   expect(getSuccess.headers["cache-control"]).toBe("private, no-store");
-  const expectedKeys = ["id", "issueKey", "projectId", "project", "title", "status", "dependsOn", "archived", "revision", "permittedCommands", "humanQuestion", "blocker", "workflowStage", "workflow", "templateId", "deliveryTarget", "runProjectTests", "visualEvidence", "delivery", "createdAt", "updatedAt", "implementation", "integration", "actionRequired"].sort();
+  const expectedKeys = ["id", "issueKey", "projectId", "project", "title", "status", "dependsOn", "blockedBy", "archived", "revision", "permittedCommands", "humanQuestion", "blocker", "workflowStage", "workflow", "templateId", "deliveryTarget", "runProjectTests", "visualEvidence", "delivery", "createdAt", "updatedAt", "implementation", "integration", "actionRequired"].sort();
   expect(Object.keys(getSuccess.json()).sort()).toEqual(expectedKeys);
   expect(getSuccess.json().title).toBe("Task For Status Check");
 
@@ -1176,7 +1181,7 @@ test("GET /api/hermes/tasks scopes the list, rejects an unknown filter, and expo
   expect(ids).not.toContain(outOfGrant.id);
   expect(ids).not.toContain(crossCompany.id);
 
-  expect(Object.keys(listed[0]!).sort()).toEqual(["id", "issueKey", "projectId", "project", "title", "status", "dependsOn", "archived", "revision", "permittedCommands", "humanQuestion", "blocker", "workflowStage", "workflow", "templateId", "deliveryTarget", "runProjectTests", "visualEvidence", "delivery", "createdAt", "updatedAt", "implementation", "integration", "actionRequired"].sort());
+  expect(Object.keys(listed[0]!).sort()).toEqual(["id", "issueKey", "projectId", "project", "title", "status", "dependsOn", "blockedBy", "archived", "revision", "permittedCommands", "humanQuestion", "blocker", "workflowStage", "workflow", "templateId", "deliveryTarget", "runProjectTests", "visualEvidence", "delivery", "createdAt", "updatedAt", "implementation", "integration", "actionRequired"].sort());
   expect(JSON.stringify(listed)).not.toMatch(/worktree|repositoryPath|session|turn|prompt|transcript|credential|objective/i);
 
   expect((await listTasks(`?projectId=${projectId}`)).json().tasks.map((task: { id: string }) => task.id)).toContain(granted);
@@ -1641,9 +1646,9 @@ test("task dependencies are declared on create, replaced through the agent route
 
   const second = await createDependencyTask("Dependency follower", "dependency-follower-001", [firstId]);
   expect(second.statusCode, second.body).toBe(201);
-  expect(second.json().dependsOn).toEqual([firstId]);
+  expect(second.json()).toMatchObject({ dependsOn: [firstId], blockedBy: [{ id: firstId, title: "Dependency root", status: "backlog" }] });
   const secondId = second.json().id as string;
-  expect(tasks.getTask(adminId, secondId).dependsOn).toEqual([firstId]);
+  expect(tasks.getTask(adminId, secondId)).toMatchObject({ dependsOn: [firstId], blockedBy: [{ id: firstId, title: "Dependency root", status: "backlog" }] });
 
   const third = await createDependencyTask("Dependency third", "dependency-third-001");
   const thirdId = third.json().id as string;
@@ -1652,16 +1657,30 @@ test("task dependencies are declared on create, replaced through the agent route
     headers: { Authorization: `Bearer ${agentCredential}` }, payload: { dependsOn: [secondId, firstId] },
   });
   expect(replaced.statusCode, replaced.body).toBe(200);
-  expect(replaced.json().dependsOn).toEqual([firstId, secondId].sort());
+  const both = [{ id: firstId, title: "Dependency root", status: "backlog" }, { id: secondId, title: "Dependency follower", status: "backlog" }].sort((left, right) => left.id.localeCompare(right.id));
+  expect(replaced.json()).toMatchObject({ dependsOn: both.map(task => task.id), blockedBy: both });
+  // Every reader reports the same edges: the agent read, the board task, and its HTTP read.
+  const agentRead = await app.inject({ method: "GET", url: `/api/hermes/tasks/${thirdId}`, headers: { Authorization: `Bearer ${agentCredential}` } });
+  expect(agentRead.json()).toMatchObject({ dependsOn: both.map(task => task.id), blockedBy: both });
+  expect(tasks.getTask(adminId, thirdId)).toMatchObject({ dependsOn: both.map(task => task.id), blockedBy: both });
+
+  // Removing one prerequisite keeps the other.
+  const removed = await app.inject({
+    method: "PUT", url: `/api/hermes/tasks/${thirdId}/dependencies`,
+    headers: { Authorization: `Bearer ${agentCredential}` }, payload: { dependsOn: [secondId] },
+  });
+  expect(removed.json()).toMatchObject({ dependsOn: [secondId], blockedBy: [{ id: secondId, title: "Dependency follower", status: "backlog" }] });
 
   const cleared = await app.inject({
     method: "PUT", url: `/api/hermes/tasks/${thirdId}/dependencies`,
     headers: { Authorization: `Bearer ${agentCredential}` }, payload: { dependsOn: [] },
   });
-  expect(cleared.json().dependsOn).toEqual([]);
+  expect(cleared.json()).toMatchObject({ dependsOn: [], blockedBy: [] });
 
-  // The user route replaces the same edges under user authority.
+  // The user route replaces the same edges under user authority, and the agent reads that edit back.
   expect(tasks.setTaskDependencies(adminId, thirdId, [firstId]).dependsOn).toEqual([firstId]);
+  const afterHumanEdit = await app.inject({ method: "GET", url: `/api/hermes/tasks/${thirdId}`, headers: { Authorization: `Bearer ${agentCredential}` } });
+  expect(afterHumanEdit.json()).toMatchObject({ dependsOn: [firstId], blockedBy: [{ id: firstId, title: "Dependency root", status: "backlog" }] });
 });
 
 test("a cycle, a self-dependency, and a dependency outside the agent scope are rejected", async () => {
@@ -1697,6 +1716,15 @@ test("a cycle, a self-dependency, and a dependency outside the agent scope are r
 
   const unknown = await dependencies(firstId, ["task_unknown"]);
   expect(unknown.statusCode).toBe(404);
+
+  // Unsupported dependency input is rejected, never ignored.
+  const legacyUpdate = await app.inject({ method: "PUT", url: `/api/hermes/tasks/${firstId}/dependencies`, headers: { Authorization: `Bearer ${agentCredential}` }, payload: { dependsOn: [], blockedByTaskId: secondId } });
+  expect(legacyUpdate.statusCode).toBe(400);
+  expect(legacyUpdate.json().code).toBe("request_invalid");
+  const legacyCreate = await app.inject({ method: "POST", url: "/api/hermes/tasks", headers: { Authorization: `Bearer ${agentCredential}` }, payload: { projectId, title: "Legacy", idempotencyKey: "legacy-blocked-by-001", blockedByTaskId: secondId } });
+  expect(legacyCreate.statusCode).toBe(400);
+  expect(legacyCreate.json().code).toBe("request_invalid");
+  expect(tasks.getTask(adminId, firstId).dependsOn).toEqual([]);
 });
 
 test("configured agent delivery reports delivery, merge, and the agent delivery commands", async () => {

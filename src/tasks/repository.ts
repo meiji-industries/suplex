@@ -6,15 +6,14 @@ import { TaskControlStore } from "../coordination/root-session-store.js";
 import { TaskConfigurationSchema, TaskImageSchema, TaskSchema, type DeliveryTarget, type Task, type TaskConfiguration, type TaskInput, type TaskRequest, type VisualEvidence } from "./contracts.js";
 import type { TaskProfile } from "./control.js";
 import { advisorKeysSorted, publicWorkflowState, type AdvisorRole, type WorkflowId } from "../coordination/workflows.js";
-import { taskDependencies } from "./dependencies.js";
+import { taskDependencySummaries } from "./dependencies.js";
 import { IssueAssociationSchema } from "./issue-association.js";
 
 export type TaskCreator = { kind: "user"; id: string } | { kind: "agent"; id: string };
 const RowSchema = z.object({
   issue_json: z.string().nullable(),
   id: z.string(), company_id: z.string(), project_id: z.string(), issue_number: z.number().nullable(), issue_code: z.string().nullable(),
-  title: z.string(), description: z.string(), configuration_json: z.string(), idempotency_key: z.string(), request_hash: z.string(), blocked_by_task_id: z.string().nullable(), start_when_blocked_by_delivered: z.number(),
-  blocked_task_id: z.string().nullable(), blocked_task_title: z.string().nullable(), blocked_task_status: z.string().nullable(),
+  title: z.string(), description: z.string(), configuration_json: z.string(), idempotency_key: z.string(), request_hash: z.string(), start_when_blocked_by_delivered: z.number(),
   creator_user_id: z.string().nullable(), creator_agent_id: z.string().nullable(), copied_from_task_id: z.string().nullable(), command_revision: z.number(), created_at: z.string(), updated_at: z.string(), activity_updated_at: z.string(), status_changed_at: z.string(), archived_at: z.string().nullable(),
 });
 export type TaskRow = z.infer<typeof RowSchema>;
@@ -22,7 +21,7 @@ const ArtifactRowSchema = z.object({
   id: z.string(), companyId: z.string(), kind: z.string(), filename: z.string(), mimeType: z.string(), byteSize: z.number(),
   sha256: z.string(), storagePath: z.string(), createdAt: z.string(),
 });
-const select = "SELECT t.*, CASE WHEN julianday(t.updated_at) >= julianday(COALESCE(control.updated_at, t.updated_at)) THEN t.updated_at ELSE control.updated_at END AS activity_updated_at, control.status_changed_at, c.issue_code, blocked.id AS blocked_task_id, blocked.title AS blocked_task_title, blocked_control.status AS blocked_task_status FROM forge_tasks t JOIN forge_companies c ON c.id = t.company_id LEFT JOIN forge_task_controls control ON control.task_id = t.id LEFT JOIN forge_tasks blocked ON blocked.id = t.blocked_by_task_id LEFT JOIN forge_task_controls blocked_control ON blocked_control.task_id = blocked.id";
+const select = "SELECT t.*, CASE WHEN julianday(t.updated_at) >= julianday(COALESCE(control.updated_at, t.updated_at)) THEN t.updated_at ELSE control.updated_at END AS activity_updated_at, control.status_changed_at, c.issue_code FROM forge_tasks t JOIN forge_companies c ON c.id = t.company_id LEFT JOIN forge_task_controls control ON control.task_id = t.id";
 
 export class TaskConflict extends Error {}
 
@@ -91,8 +90,8 @@ export class TaskRepository {
         if (existing) return { task: this.task(existing), created: false };
         const time = new Date().toISOString();
         const configuration = TaskConfigurationSchema.parse(input.configuration);
-        db.prepare("INSERT INTO forge_tasks (id, company_id, project_id, title, description, configuration_json, idempotency_key, request_hash, blocked_by_task_id, start_when_blocked_by_delivered, creator_user_id, creator_agent_id, copied_from_task_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
-          .run(input.taskId, input.companyId, input.request.projectId, input.request.title, input.request.description, JSON.stringify(configuration), input.request.idempotencyKey, input.requestHash, input.request.blockedByTaskId ?? null, input.startWhenBlockedByDelivered ? 1 : 0, input.creator.kind === "user" ? input.creator.id : null, input.creator.kind === "agent" ? input.creator.id : null, input.copiedFromTaskId ?? null, time, time);
+        db.prepare("INSERT INTO forge_tasks (id, company_id, project_id, title, description, configuration_json, idempotency_key, request_hash, start_when_blocked_by_delivered, creator_user_id, creator_agent_id, copied_from_task_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+          .run(input.taskId, input.companyId, input.request.projectId, input.request.title, input.request.description, JSON.stringify(configuration), input.request.idempotencyKey, input.requestHash, input.startWhenBlockedByDelivered ? 1 : 0, input.creator.kind === "user" ? input.creator.id : null, input.creator.kind === "agent" ? input.creator.id : null, input.copiedFromTaskId ?? null, time, time);
         for (const image of input.images) written.push(this.artifacts.putArtifactSync(db, input.companyId, "task-image", { ...image, taskId: input.taskId }));
         if (input.request.issue) db.prepare("UPDATE forge_tasks SET issue_json = ? WHERE id = ?").run(JSON.stringify(input.request.issue), input.taskId);
         this.controls.create({
@@ -112,6 +111,7 @@ export class TaskRepository {
   }
 
   task(row: TaskRow): Task {
+    const blockedBy = taskDependencySummaries(this.database, row.id);
     const control = this.controls.get(row.id);
     const limitState = this.controls.taskLimitState(row.id);
     const images = this.database.authQuery(db => z.array(TaskImageSchema).parse(db.prepare("SELECT id AS artifactId, filename, mime_type AS mimeType, byte_size AS byteSize FROM forge_artifacts WHERE task_id = ? AND company_id = ? AND kind = 'task-image' ORDER BY created_at, id").all(row.id, row.company_id)));
@@ -121,14 +121,14 @@ export class TaskRepository {
       issueKey: row.issue_code && row.issue_number ? `${row.issue_code}-${row.issue_number}` : null,
       issue: row.issue_json ? IssueAssociationSchema.parse(JSON.parse(row.issue_json)) : null,
       title: row.title, description: row.description, status: control.status, deliveryTarget: control.deliveryTarget,
-      rootProfile: control.rootProfile, workerProfile: control.workerProfile, workflow: control.workflow, advisorProfiles: control.advisorProfiles, workflowState: publicWorkflowState(control.workflowState), dependsOn: taskDependencies(this.database, row.id), configuration: JSON.parse(row.configuration_json),
+      rootProfile: control.rootProfile, workerProfile: control.workerProfile, workflow: control.workflow, advisorProfiles: control.advisorProfiles, workflowState: publicWorkflowState(control.workflowState), dependsOn: blockedBy.map(prerequisite => prerequisite.id), configuration: JSON.parse(row.configuration_json),
       worktree: control.worktree, pullRequest: control.pullRequest,
       humanQuestion: control.humanQuestion && control.humanQuestionId ? control.limitPause
         ? { kind: "task_limit", id: control.humanQuestionId, text: control.humanQuestion, options: [], requiresCommandCleanup: false, pause: control.limitPause }
         : { kind: "question", id: control.humanQuestionId, text: control.humanQuestion, options: control.humanQuestionOptions ?? [], requiresCommandCleanup: control.recoveryTurnId !== null }
         : null,
-       blockedBy: row.blocked_task_id && row.blocked_task_title && row.blocked_task_status ? { id: row.blocked_task_id, title: row.blocked_task_title, status: row.blocked_task_status } : null,
-       startWhenBlockedByDelivered: row.start_when_blocked_by_delivered === 1,
+      blockedBy,
+      startWhenBlockedByDelivered: row.start_when_blocked_by_delivered === 1,
       limits: { ...limitState.limits, admittedTurns: limitState.admittedTurns },
       wakeAt: control.wakeAt, images, artifacts, createdAt: row.created_at, updatedAt: row.activity_updated_at, statusChangedAt: row.status_changed_at, archivedAt: row.archived_at,
     });
@@ -157,10 +157,6 @@ export class TaskRepository {
         .run(taskId, details.deliveryTarget, details.workflow, JSON.stringify(details.rootProfile), JSON.stringify(details.workerProfile), JSON.stringify(details.advisorProfiles), time, taskId);
       return true;
     });
-  }
-
-  setBlockedBy(taskId: string, blockedByTaskId: string | null): boolean {
-    return this.database.authTransaction(db => db.prepare("UPDATE forge_tasks SET blocked_by_task_id = ?, updated_at = ? WHERE id = ?").run(blockedByTaskId, new Date().toISOString(), taskId).changes === 1);
   }
 
   rename(taskId: string, title: string): boolean {

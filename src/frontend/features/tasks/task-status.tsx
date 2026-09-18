@@ -29,6 +29,11 @@ export function TaskStatus({ status, pullRequestState }: TaskStatusProps) {
   return <Badge variant={status === "waiting_human" ? "destructive" : "secondary"}><TaskStatusIcon status={status} pullRequestState={pullRequestState} />{taskStatusLabels[status]}</Badge>;
 }
 
+/** "Blocked by First · Active, Second · Backlog", or null when the task has no prerequisites. */
+export function blockedByLabel(blockedBy: ReadonlyArray<{ title: string; status: TaskControlStatus }>): string | null {
+  return blockedBy.length ? `Blocked by ${blockedBy.map(prerequisite => `${prerequisite.title} · ${taskStatusLabels[prerequisite.status]}`).join(", ")}` : null;
+}
+
 /** Status icon beside a task title, linking to the task. */
 export function TaskTitleLink({ task, companyId, className = "" }: { task: { id: string; title: string; status: TaskControlStatus; pullRequest?: PullRequestReference | null }; companyId: string; className?: string }) {
   return <a className={`flex min-w-0 items-center gap-1.5 underline-offset-2 hover:underline ${className}`} href={withCompany(`/tasks/${task.id}`, companyId)} title={`${task.title} · ${taskStatusLabels[task.status]}`}><TaskStatusIcon status={task.status} pullRequestState={task.pullRequest?.state} /><span className="truncate">{task.title}</span></a>;

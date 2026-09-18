@@ -31,13 +31,20 @@ const backlog = { id: "task-backlog", projectId: "project-1", title: "Backlog ta
 const delivered = { id: "task-delivered", projectId: "project-1", title: "Delivered task", status: "delivered", archivedAt: null };
 const otherProject = { id: "task-other-project", projectId: "project-2", title: "Other project", status: "active", archivedAt: null };
 
-const activeTask: Pick<Task, "id" | "companyId" | "projectId" | "status" | "blockedBy"> = { id: "task-self", companyId: "company-1", projectId: "project-1", status: "active", blockedBy: null };
+const activeTask: Pick<Task, "id" | "companyId" | "projectId" | "status" | "blockedBy"> = { id: "task-self", companyId: "company-1", projectId: "project-1", status: "active", blockedBy: [] };
+const first = { id: "task-first", title: "First prerequisite", status: "backlog" as const };
+const second = { id: "task-second", title: "Second prerequisite", status: "delivered" as const };
 
-function mount(task = activeTask, save = vi.fn<(blockedByTaskId: string | null) => Promise<void>>().mockResolvedValue(undefined)) {
+const saved = { id: "task-self", blockedBy: [] } as unknown as Task;
+
+/** Every save goes through the canonical dependency route with the complete prerequisite set. */
+function mount(task = activeTask) {
   const container = document.createElement("div");
   document.body.append(container);
   const root = createRoot(container);
-  return { container, root, save, render: async () => { await act(async () => { root.render(<dl><TaskBlockedByProperty task={task} save={save} /></dl>); }); } };
+  const onChange = vi.fn<(task: Task) => void>();
+  const saves = () => api.readJson.mock.calls.filter(([url]) => url === "/api/tasks/task-self/dependencies").map(([, init]) => { expect(init.method).toBe("PUT"); return JSON.parse(init.body).dependsOn as string[]; });
+  return { container, root, onChange, saves, render: async () => { await act(async () => { root.render(<dl><TaskBlockedByProperty task={task} onChange={onChange} /></dl>); }); } };
 }
 
 function button(container: HTMLElement, name: string) {
@@ -54,13 +61,14 @@ beforeEach(() => {
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
   api.readJson.mockReset();
   api.readJson.mockImplementation(async (url: string) => {
-    if (url === "/api/companies/company-1/tasks") return { tasks: [self, active, backlog, delivered, otherProject] };
+    if (url === "/api/tasks/task-self/dependencies") return saved;
+    if (url === "/api/companies/company-1/tasks") return { tasks: [self, active, backlog, delivered, otherProject, { ...first, projectId: "project-1", archivedAt: null }] };
     throw new Error(`Unexpected request: ${url}`);
   });
 });
 afterEach(async () => { await act(async () => { document.body.replaceChildren(); }); });
 
-test("None opens the picker and selecting a task saves its id", async () => {
+test("None opens the picker and selecting a task saves it as the only prerequisite", async () => {
   const view = mount();
   await view.render();
   await act(async () => { button(view.container, "None").click(); });
@@ -72,49 +80,59 @@ test("None opens the picker and selecting a task saves its id", async () => {
   expect(view.container.textContent).not.toContain("Other project");
   expect(view.container.textContent).not.toContain("This task");
   await act(async () => { button(view.container, "Active prerequisite").click(); await Promise.resolve(); });
-  expect(view.save).toHaveBeenCalledWith("task-active");
+  expect(view.saves()).toEqual([["task-active"]]);
+  expect(view.onChange).toHaveBeenCalledWith(saved);
   expect(view.container.querySelector('[aria-label="Search tasks"]')).toBeNull();
 });
 
-test("the current reference opens the picker, links to its task, and saves a replacement", async () => {
-  const view = mount({ ...activeTask, blockedBy: { id: "task-first", title: "First prerequisite", status: "backlog" } });
+test("every prerequisite links to its task with its status", async () => {
+  const view = mount({ ...activeTask, blockedBy: [first, second] });
   await view.render();
-  await act(async () => { button(view.container, "First prerequisite").click(); });
+  expect(view.container.querySelector('a[href="/tasks/task-first?company=company-1"]')?.getAttribute("title")).toBe("First prerequisite · Backlog");
+  expect(view.container.querySelector('a[href="/tasks/task-second?company=company-1"]')?.getAttribute("title")).toBe("Second prerequisite · Delivered");
+  expect(view.container.textContent).not.toContain("None");
+});
+
+test("Add saves the current prerequisites and the selected task, and hides tasks already listed", async () => {
+  const view = mount({ ...activeTask, blockedBy: [first, second] });
+  await view.render();
+  await act(async () => { button(view.container, "Add Blocked by task").click(); });
   await flush();
-  expect(view.container.querySelector('[aria-label="Search tasks"]')).not.toBeNull();
-  expect(view.container.querySelector('a[href="/tasks/task-first?company=company-1"]')?.textContent).toContain("First prerequisite");
-  expect(view.container.textContent).not.toContain("This task");
+  const picker = view.container.querySelector('[aria-label="Search tasks"]')!.parentElement!;
+  expect(picker.textContent).not.toContain("First prerequisite");
+  expect(picker.textContent).not.toContain("This task");
   await act(async () => { button(view.container, "Backlog task").click(); await Promise.resolve(); });
-  expect(view.save).toHaveBeenCalledWith("task-backlog");
+  expect(view.saves()).toEqual([["task-first", "task-second", "task-backlog"]]);
 });
 
-test("Clear in the picker clears the current Blocked by reference", async () => {
-  const view = mount({ ...activeTask, blockedBy: { id: "task-first", title: "First prerequisite", status: "backlog" } });
+test("removing one prerequisite saves the others", async () => {
+  const view = mount({ ...activeTask, blockedBy: [first, second] });
   await view.render();
-  await act(async () => { button(view.container, "First prerequisite").click(); });
-  await flush();
-  await act(async () => { button(view.container, "Clear").click(); await Promise.resolve(); });
-  expect(view.save).toHaveBeenCalledWith(null);
-  expect(view.container.querySelector('[aria-label="Search tasks"]')).toBeNull();
+  await act(async () => { button(view.container, "Remove First prerequisite from Blocked by").click(); await Promise.resolve(); });
+  expect(view.saves()).toEqual([["task-second"]]);
 });
 
-test("closing the picker leaves the current reference unchanged", async () => {
-  const view = mount({ ...activeTask, blockedBy: { id: "task-first", title: "First prerequisite", status: "backlog" } });
+test("closing the picker leaves the prerequisites unchanged", async () => {
+  const view = mount({ ...activeTask, blockedBy: [first] });
   await view.render();
-  await act(async () => { button(view.container, "First prerequisite").click(); });
+  await act(async () => { button(view.container, "Add Blocked by task").click(); });
   await flush();
   await act(async () => { button(view.container, "Close").click(); });
-  expect(view.save).not.toHaveBeenCalled();
+  expect(view.saves()).toEqual([]);
   expect(view.container.querySelector('[aria-label="Search tasks"]')).toBeNull();
   expect(view.container.textContent).toContain("First prerequisite");
 });
 
 test("a failed save shows the error message", async () => {
-  const view = mount(activeTask, vi.fn().mockRejectedValue(new Error("Reference is not available")));
+  const view = mount();
+  const listed = api.readJson.getMockImplementation()!;
+  api.readJson.mockImplementation(async (url: string, init?: RequestInit) => { if (url === "/api/tasks/task-self/dependencies") throw new Error("The dependency creates a cycle"); return listed(url, init); });
   await view.render();
   await act(async () => { button(view.container, "None").click(); });
   await flush();
   await act(async () => { button(view.container, "Active prerequisite").click(); await Promise.resolve(); });
-  expect(view.save).toHaveBeenCalledWith("task-active");
-  expect(view.container.textContent).toContain("Reference is not available");
+  await flush();
+  expect(view.saves()).toEqual([["task-active"]]);
+  expect(view.onChange).not.toHaveBeenCalled();
+  expect(view.container.textContent).toContain("The dependency creates a cycle");
 });

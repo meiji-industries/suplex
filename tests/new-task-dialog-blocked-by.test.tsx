@@ -97,7 +97,7 @@ beforeEach(() => {
 });
 afterEach(async () => { await act(async () => { document.body.replaceChildren(); }); });
 
-test("New task Blocked by picker filters, selects, clears, and posts its reference", async () => {
+test("New task Blocked by picker filters, selects several, removes one, and posts the rest as dependsOn", async () => {
   const view = mount();
   await flush();
   expect(view.container.querySelector('[aria-label="More options"]')).not.toBeNull();
@@ -118,20 +118,32 @@ test("New task Blocked by picker filters, selects, clears, and posts its referen
   expect(view.container.textContent).toContain("Active prerequisite");
   await act(async () => { button(view.container, "Active prerequisite").click(); });
   expect(view.container.textContent).toContain("Blocked by Active prerequisite");
-  expect(view.container.querySelector('[aria-label="Clear blocked by reference"]')).not.toBeNull();
 
   const title = view.container.querySelector<HTMLInputElement>('[aria-label="Task title"]')!;
-  await act(async () => { button(view.container, "Clear blocked by reference").click(); });
-  expect(view.container.querySelector('[aria-label="Clear blocked by reference"]')).toBeNull();
+  await act(async () => { button(view.container, "Remove Active prerequisite from Blocked by").click(); });
+  expect(view.container.querySelector('[data-blocked-by-selection]')).toBeNull();
   await act(async () => { setText(title, "Create without reference"); title.form?.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })); await Promise.resolve(); });
-  const posts = api.readJson.mock.calls.filter(([url, init]) => url === "/api/companies/company-1/tasks" && init?.method === "POST");
-  expect(JSON.parse(posts[0]![1].body)).not.toHaveProperty("blockedByTaskId");
+  const posts = () => api.readJson.mock.calls.filter(([url, init]) => url === "/api/companies/company-1/tasks" && init?.method === "POST").map(([, init]) => JSON.parse(init.body));
+  expect(posts()[0]).not.toHaveProperty("dependsOn");
+  expect(posts()[0]).not.toHaveProperty("blockedByTaskId");
 
+  for (const name of ["Active prerequisite", "Backlog task"]) {
+    await act(async () => { button(view.container, "More options").click(); button(view.container, "Blocked by...").click(); });
+    await flush();
+    await act(async () => { button(view.container, name).click(); });
+  }
+  expect(view.container.querySelectorAll("[data-blocked-by-selection]")).toHaveLength(2);
+  // A selected task is not offered again.
   await act(async () => { button(view.container, "More options").click(); button(view.container, "Blocked by...").click(); });
   await flush();
-  await act(async () => { button(view.container, "Backlog task").click(); setText(title, "Create dependent"); title.form?.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })); await Promise.resolve(); });
-  const postsWithReference = api.readJson.mock.calls.filter(([url, init]) => url === "/api/companies/company-1/tasks" && init?.method === "POST");
-  expect(JSON.parse(postsWithReference[1]![1].body).blockedByTaskId).toBe("task-backlog");
+  expect(view.container.querySelector('[aria-label="Search tasks"]')!.parentElement!.textContent).not.toContain("Backlog task");
+  await act(async () => { button(view.container, "Close").click(); });
+  await act(async () => { button(view.container, "Remove Active prerequisite from Blocked by").click(); });
+  await act(async () => { button(view.container, "More options").click(); button(view.container, "Blocked by...").click(); });
+  await flush();
+  await act(async () => { button(view.container, "Active prerequisite").click(); setText(title, "Create dependent"); title.form?.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })); await Promise.resolve(); });
+  expect(posts()[1].dependsOn).toEqual(["task-backlog", "task-active"]);
+  expect(posts()[1]).not.toHaveProperty("blockedByTaskId");
 });
 
 test("closing the Blocked by picker preserves the new task dialog state", async () => {

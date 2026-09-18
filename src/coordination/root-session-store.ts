@@ -158,7 +158,8 @@ export class TaskControlStore {
     const changed = this.database.authTransaction((db) => {
       const delivered = db.prepare("UPDATE forge_task_controls SET workflow_state_json = json_set(workflow_state_json, '$.followUp', json('false')), status = 'delivered', wake_at = NULL, human_question = NULL, human_question_id = NULL, limit_pause_json = NULL, updated_at = ? WHERE task_id = ? AND status IN ('active', 'waiting_human', 'delivered')").run(now(), taskId).changes;
       if (delivered !== 1) return delivered;
-      const waiting = db.prepare("SELECT t.id FROM forge_tasks t JOIN forge_task_controls c ON c.task_id = t.id WHERE t.blocked_by_task_id = ? AND t.start_when_blocked_by_delivered = 1 AND t.archived_at IS NULL AND c.status = 'backlog'").all(taskId) as Array<{ id: string }>;
+      // A waiting dependent starts when this delivery was its last undelivered prerequisite.
+      const waiting = db.prepare("SELECT t.id FROM forge_task_dependencies d JOIN forge_tasks t ON t.id = d.task_id JOIN forge_task_controls c ON c.task_id = t.id WHERE d.depends_on_task_id = ? AND t.start_when_blocked_by_delivered = 1 AND t.archived_at IS NULL AND c.status = 'backlog' AND NOT EXISTS (SELECT 1 FROM forge_task_dependencies other LEFT JOIN forge_task_controls oc ON oc.task_id = other.depends_on_task_id WHERE other.task_id = t.id AND COALESCE(oc.status, 'backlog') <> 'delivered')").all(taskId) as Array<{ id: string }>;
       for (const dependent of waiting) {
         if (this.startInTransaction(db, dependent.id) === 1) db.prepare("UPDATE forge_tasks SET start_when_blocked_by_delivered = 0, updated_at = ? WHERE id = ?").run(now(), dependent.id);
       }

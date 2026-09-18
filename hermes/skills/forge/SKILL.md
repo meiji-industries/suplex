@@ -173,13 +173,31 @@ Both responses include `permittedWorkflowIds`. Templates return
 The created task reports the applied `workflow` object, `templateId`, and
 `deliveryTarget`.
 
-`PUT /api/hermes/tasks/{taskId}/dependencies` replaces `dependsOn` on an
-existing task.
+## Prerequisites (Blocked by)
+
+`dependsOn` lists the task IDs a task waits for. Forge shows them as
+**Blocked by**. Set them at creation with `dependsOn`, or replace the whole set
+later with `PUT /api/hermes/tasks/{taskId}/dependencies` (MCP:
+`forge_set_task_dependencies`, client: `client.set_dependencies(task_id,
+[...])`). Send the complete set: an omitted ID is removed, and `[]` removes
+every prerequisite.
+
+```python
+task = client.set_dependencies(task_id, [first_id, second_id])
+```
+
+Each prerequisite must be a task this agent created in the same company.
+Forge rejects a self-reference or a cycle with `422 task_unavailable`, and an
+unavailable task with `404`; the current set stays unchanged. Unknown fields,
+such as `blockedByTaskId`, fail with `400 request_invalid`.
+
+Every read reports the same stored set: `dependsOn` has the IDs and
+`blockedBy` has `id`, `title`, and `status` for each prerequisite.
 
 ## Status polling
 
 `GET /api/hermes/tasks/{taskId}` returns the task with `status`, `revision`,
-`permittedCommands`, `blocker`, `humanQuestion`, `workflowStage`,
+`permittedCommands`, `dependsOn`, `blockedBy`, `blocker`, `humanQuestion`, `workflowStage`,
 `deliveryTarget`, `runProjectTests`, `visualEvidence`, `delivery`,
 `integration`, and `actionRequired`.
 
@@ -233,8 +251,8 @@ Failures worth handling:
   `observationReason`) means Forge could not read GitHub — the state is
   unknown, not bad. Report the reason and re-read later. `revision_stale` on a
   command is a different thing: it means your copy of the task is old.
-- **`dependsOn` / `blocked_by_dependency`** — the task waits on another task.
-  Report the blocking task; do not cancel or force anything.
+- **`blockedBy` / `blocked_by_dependency`** — the task waits on other tasks.
+  Report the blocking tasks; do not cancel or force anything.
 
 ## Reporting back
 

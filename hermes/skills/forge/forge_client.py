@@ -164,6 +164,10 @@ class ForgeClient:
         payload["idempotencyKey"] = key or idempotency_key(project_id, payload)
         return self.call("POST", "/api/hermes/tasks", payload)
 
+    def set_dependencies(self, task_id: str, depends_on: list[str]) -> dict:
+        """Replace the prerequisites (Blocked by) of a task with the complete set given."""
+        return self.call("PUT", f"/api/hermes/tasks/{urllib.parse.quote(task_id)}/dependencies", {"dependsOn": depends_on})
+
     def command_task(self, task_id: str, command: str, revision: str, note: str | None = None, key: str | None = None) -> dict:
         """Apply one lifecycle command. revision must be the task's current revision."""
         payload = {"command": command, "revision": revision}

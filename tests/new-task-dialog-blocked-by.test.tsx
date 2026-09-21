@@ -110,6 +110,7 @@ test("New task Blocked by picker filters, selects several, removes one, and post
   await act(async () => { button(view.container, "Blocked by...").click(); });
   await flush();
   expect(view.container.textContent).toContain("Active prerequisite");
+  expect(view.container.textContent).not.toContain("task-active");
   expect(view.container.textContent).toContain("Backlog task");
   expect(view.container.textContent).not.toContain("Other project");
   expect(view.container.textContent).not.toContain("Archived task");

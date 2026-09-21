@@ -4,7 +4,7 @@ import { readTaskList } from "./lib/task-list.js";
 import type { Task } from "../../../tasks/contracts.js";
 import { SidebarGroup, SidebarGroupContent, SidebarGroupLabel, SidebarMenu, SidebarMenuButton, SidebarMenuItem } from "../../components/ui/sidebar.js";
 import { useOptionalCompanyContext } from "../../shell/company-context.js";
-import { blockedByLabel, TaskStatusIcon, taskStatusLabels } from "./task-status.js";
+import { blockedByLabel, TaskStatusIcon, taskStatusLabel } from "./task-status.js";
 import { RecentTaskAgents } from "./recent-task-agents.js";
 import { RecentPullRequest } from "./recent-pull-request.js";
 import { useTaskCosts } from "../analytics/lib/analytics.js";
@@ -40,9 +40,9 @@ export function RecentTasks({ close }: { close?: () => void }): ReactElement | n
   return <SidebarGroup><SidebarGroupLabel>Activity</SidebarGroupLabel>{archiveError ? <p role="alert" className="px-2 text-xs text-destructive">{archiveError}</p> : null}<SidebarGroupContent><SidebarMenu>{tasks.map(task => {
     const cost = costs.get(task.id);
     return <SidebarMenuItem key={task.id}>
-      <SidebarMenuButton render={<a href={withCompany(`/tasks/${task.id}`, companyId)} onClick={close} aria-label={`${task.title}, ${taskStatusLabels[task.status]}${task.blockedBy.length ? `, ${blockedByLabel(task.blockedBy)}` : ""}${task.pullRequest ? `, pull request ${task.pullRequest.state}` : ""}`}>
+      <SidebarMenuButton render={<a href={withCompany(`/tasks/${task.id}`, companyId)} onClick={close} aria-label={`${task.title}, ${taskStatusLabel(task)}${task.blockedBy.length ? `, ${blockedByLabel(task.blockedBy)}` : ""}${task.pullRequest ? `, pull request ${task.pullRequest.state}` : ""}`}>
         <span className="flex min-w-0 flex-1 items-center gap-2">
-          <span data-recent-task-status={task.status} className={`inline-flex shrink-0${task.status === "active" ? " animate-spin" : ""}`}><TaskStatusIcon status={task.status} pullRequestState={task.pullRequest?.state} /></span>
+          <span data-recent-task-status={task.status} className={`inline-flex shrink-0${task.status === "active" ? " animate-spin" : ""}`}><TaskStatusIcon status={task.status} pullRequestState={task.pullRequest?.state} queued={task.queue.state === "queued"} /></span>
           <span className="min-w-0 flex-1 truncate">{task.title}{task.blockedBy.length ? <span data-recent-task-blocked-by className="text-muted-foreground"> · {blockedByLabel(task.blockedBy)}</span> : null}</span>
           {cost?.cost != null ? <CostValue value={cost.cost} subsidized={cost.subsidized} partial={cost.partial} className="shrink-0 text-[10px] tabular-nums text-muted-foreground" suffix={cost.partial ? "+" : ""} /> : null}
         </span>

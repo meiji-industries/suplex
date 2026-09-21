@@ -93,7 +93,8 @@ have no command and stay human authority.
 
 ## Creating a task
 
-`POST /api/hermes/tasks` creates a backlog task. `deliveryTarget`,
+`POST /api/hermes/tasks` creates a backlog task. Send `"queue": true` to queue
+it; see [Queued tasks](#queued-tasks). `deliveryTarget`,
 `runProjectTests`, and `visualEvidence` are optional; sending a value the
 project policy does not permit returns `422` with
 `{ "code": "delivery_policy_rejected" }` and a message naming the permitted
@@ -124,6 +125,40 @@ prerequisite. Each prerequisite must be a task this agent created in the same
 company. A self-reference or a cycle returns `422 task_unavailable`, an
 unavailable task returns `404`, and the current set stays unchanged. Unknown
 fields, such as `blockedByTaskId`, return `400 request_invalid`.
+
+## Queued tasks
+
+A backlog task is either manual or queued. A manual task never starts by
+itself. A queued task stays in `backlog`, with no sessions or turns, and Forge
+starts it when every prerequisite is complete. Every task read reports `queue`:
+
+- `startIntent`: `manual` or `queued`. This is the persisted start intent.
+- `state`: `backlog` (manual), `queued`, `running`, `needs_attention`,
+  `delivered`, or `cancelled`.
+- `waitingOn`: each incomplete prerequisite with `id`, `title`, `status`,
+  `deliveryTarget`, `reason`, and a `summary` that tells you what to do.
+
+A prerequisite is complete when it is delivered at its own delivery target.
+The `merged` target also needs the merged pull request state that Forge
+observed from GitHub. A prerequisite delivered at `pull_request_draft`,
+`pull_request_ready`, `remote_branch`, or `local_worktree` is complete without
+a merge, because that target is what its delivery promised. Wait reasons:
+
+| `reason` | Meaning |
+| --- | --- |
+| `prerequisite_not_started` | The prerequisite is in the backlog. |
+| `prerequisite_running` | The prerequisite is active. |
+| `prerequisite_needs_human` | The prerequisite waits for a human answer. |
+| `prerequisite_cancelled` | The prerequisite is cancelled. Remove it or disarm the task. |
+| `prerequisite_archived` | The prerequisite is archived and not delivered. |
+| `prerequisite_merge_unobserved` | The prerequisite is delivered at `merged`, but Forge did not observe the merge. Forge checks GitHub again. |
+
+Queue at creation with `"queue": true`, or send `start_task` to a manual
+backlog task. Both start the task now when every prerequisite is complete and
+never bypass one. `disarm_task` returns a queued task to the manual backlog.
+Forge re-evaluates a queued task when a prerequisite completes, when Forge
+observes a merged pull request, when the prerequisites change, and on every
+scheduler tick after a restart. Cancelling a queued task clears its intent.
 
 `docs/hermes-mcp-bridge.md` describes the stdio MCP bridge that exposes these
 routes as tools.

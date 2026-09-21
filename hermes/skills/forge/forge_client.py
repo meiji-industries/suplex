@@ -157,7 +157,7 @@ class ForgeClient:
         return self.call("GET", f"/api/hermes/tasks/{urllib.parse.quote(task_id)}")
 
     def create_task(self, project_id: str, title: str, description: str | None = None, key: str | None = None, **extra) -> dict:
-        """Create a backlog task. Forge never starts it; that needs start_task."""
+        """Create a backlog task. Pass queue=True to start it when every prerequisite is complete."""
         payload = {"projectId": project_id, "title": title, **extra}
         if description is not None:
             payload["description"] = description

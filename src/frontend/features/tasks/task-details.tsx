@@ -38,6 +38,17 @@ function CopyValue({ label, value, children }: { label: string; value: string; c
 }
 
 /** The Blocked by prerequisites of a task. Each change saves the complete prerequisite set through the dependency route, so removing one keeps the others. */
+/** Each incomplete Blocked by task with the exact reason the backlog task waits for it. */
+export function TaskQueueWaits({ task }: { task: Pick<Task, "companyId" | "queue"> }): ReactElement {
+  return <ul data-task-queue-waits aria-label="Waiting for" className="space-y-1 text-xs">{task.queue.waitingOn.map(wait => <li key={wait.id} data-task-queue-wait={wait.id} data-reason={wait.reason} className="flex min-w-0 flex-wrap items-center gap-x-1"><TaskTitleLink task={wait} companyId={task.companyId} /><span className="text-muted-foreground">{wait.summary.startsWith(wait.title) ? wait.summary.slice(wait.title.length).trim() : wait.summary}</span></li>)}</ul>;
+}
+
+/** Start queues a task: Forge starts it by itself when every Blocked by task is complete. */
+export function backlogText(queue: Task["queue"]): string {
+  if (queue.state === "queued") return queue.waitingOn.length ? "Queued. This task starts by itself when its Blocked by tasks are complete." : "Queued. Forge starts this task now.";
+  return queue.waitingOn.length ? "Backlog. Queue this task to start it by itself when its Blocked by tasks are complete." : "The task is ready to start.";
+}
+
 export function TaskBlockedByProperty({ task, onChange }: { task: Pick<Task, "id" | "companyId" | "projectId" | "status" | "blockedBy">; onChange: (task: Task) => void }): ReactElement {
   const [pickerOpen, setPickerOpen] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -87,7 +98,8 @@ export function TaskDetailsPage({ task, project, onChange }: { task: Task; proje
           {task.images.length ? <ul className="flex flex-wrap gap-2" aria-label="Task images">{task.images.map(item => <li key={item.artifactId}><button type="button" className="size-16 overflow-hidden rounded-md border bg-muted/30 focus-visible:outline" aria-label={`Open ${item.filename}`} onClick={() => setImage(item)}><img className="size-full object-cover" src={`/api/tasks/${task.id}/images/${item.artifactId}`} alt={item.filename} /></button></li>)}</ul> : null}
           {task.artifacts?.length ? <section aria-label="Delivery evidence"><h3>Delivery evidence</h3><ul className="space-y-1">{task.artifacts.map(item => <li key={item.artifactId}><a href={`/api/tasks/${task.id}/artifacts/${item.artifactId}`} target="_blank" rel="noreferrer">{item.filename}</a><span className="ml-2 text-xs text-muted-foreground">{item.byteSize.toLocaleString()} bytes</span></li>)}</ul></section> : null}
           {task.status !== "active" || task.pullRequest || task.humanQuestion ? <div data-task-current className="-mx-4 border-y px-4 py-3 sm:-mx-6 sm:px-6 lg:-mx-10 lg:px-10"><div className="mx-auto max-w-4xl space-y-3">
-            {task.pullRequest ? <TaskPullRequestCard task={task} /> : task.status === "active" ? null : <div className="flex flex-wrap items-center justify-between gap-2"><p className="text-xs text-muted-foreground">{task.status === "backlog" ? task.startWhenBlockedByDelivered && task.blockedBy.length ? `This task starts when its Blocked by tasks are delivered: ${task.blockedBy.map(prerequisite => prerequisite.title).join(", ")}.` : "The task is ready to start." : task.status === "delivered" ? "The delivery target is complete." : task.status === "cancelled" ? "The task is cancelled." : "Coordinator needs your answer."}</p>{editable ? <span className="flex items-center gap-2"><Button size="sm" variant="outline" disabled={busy} onClick={() => setEdit(editTaskDraft(task))}>Edit task</Button><Button size="sm" disabled={busy} onClick={() => void act("start")}>Start task</Button></span> : null}</div>}
+            {task.pullRequest ? <TaskPullRequestCard task={task} /> : task.status === "active" ? null : <div className="flex flex-wrap items-center justify-between gap-2"><p className="text-xs text-muted-foreground">{task.status === "backlog" ? backlogText(task.queue) : task.status === "delivered" ? "The delivery target is complete." : task.status === "cancelled" ? "The task is cancelled." : "Coordinator needs your answer."}</p>{editable ? <span className="flex items-center gap-2"><Button size="sm" variant="outline" disabled={busy} onClick={() => setEdit(editTaskDraft(task))}>Edit task</Button>{task.queue.state === "queued" ? <Button size="sm" variant="outline" disabled={busy} onClick={() => void act("disarm")}>Disarm</Button> : <Button size="sm" disabled={busy} onClick={() => void act("start")}>{task.queue.waitingOn.length ? "Queue task" : "Start task"}</Button>}</span> : null}</div>}
+            {task.status === "backlog" && task.queue.waitingOn.length ? <TaskQueueWaits task={task} /> : null}
             {task.humanQuestion ? <TaskQuestion key={task.humanQuestion.id} question={task.humanQuestion} busy={busy} onAnswer={answer => act("answer", { questionId: task.humanQuestion?.id, ...answer })} onLimitDecision={limitDecision => act("answer", { questionId: task.humanQuestion?.id, limitDecision })} /> : null}
           </div></div> : null}
           {task.workflow !== "standard" ? <WorkflowHistory task={task} activity={activity} /> : null}
@@ -96,7 +108,7 @@ export function TaskDetailsPage({ task, project, onChange }: { task: Task; proje
       </div>
       <aside aria-label="Task properties" className="min-w-0 border-t px-4 py-5 lg:border-l lg:border-t-0">
         <dl className="grid grid-cols-1 gap-5 text-xs">
-          <div className="space-y-1.5"><dt className="text-muted-foreground">Status</dt><dd className="flex items-center gap-2"><TaskStatus status={task.status} pullRequestState={task.pullRequest?.state} />{task.archivedAt ? <Badge variant="outline">Archived</Badge> : null}</dd></div>
+          <div className="space-y-1.5"><dt className="text-muted-foreground">Status</dt><dd className="flex items-center gap-2"><TaskStatus status={task.status} pullRequestState={task.pullRequest?.state} queued={task.queue.state === "queued"} />{task.archivedAt ? <Badge variant="outline">Archived</Badge> : null}</dd></div>
           <div className="space-y-3">
             <Progress className="gap-y-1.5" title={costTitle} aria-label="Estimated cost" value={task.limits.budgetUsd ? Math.min(100, ((cost?.cost ?? 0) / task.limits.budgetUsd) * 100) : null}>
               <ProgressLabel className="text-xs font-normal text-muted-foreground">Cost</ProgressLabel>

@@ -35,6 +35,7 @@ export const TaskInputSchema = z.object({
   images: z.array(TaskImageInputSchema).max(MAX_TASK_IMAGES).default([]),
   rootProfileId: id.optional(),
   workerProfileId: id.optional(),
+  /** Queues the task: it starts now when every prerequisite is complete, and otherwise when the last one completes. */
   startImmediately: z.boolean().default(false),
   deliveryTarget: DeliveryTargetSchema.default("pull_request_draft"),
   runProjectTests: z.boolean().default(true),
@@ -43,7 +44,7 @@ export const TaskInputSchema = z.object({
   issue: IssueAssociationSchema.nullable().optional(),
   workflow: WorkflowIdSchema.default("standard"),
   advisorProfileIds: AdvisorProfileIdsSchema.default({}),
-  /** Prerequisite task ids, shown as "Blocked by". With startImmediately, the task waits in the backlog until every one is delivered. */
+  /** Prerequisite task ids, shown as "Blocked by". With startImmediately, the task is queued: it starts when every one is complete. */
   dependsOn: z.array(id).max(MAX_TASK_DEPENDENCIES).default([]),
 }).strict();
 export type TaskInput = z.input<typeof TaskInputSchema>;
@@ -76,6 +77,16 @@ export type TaskConfiguration = z.infer<typeof TaskConfigurationSchema>;
 
 export const TaskImageSchema = z.object({ artifactId: id, filename: z.string(), mimeType: z.string(), byteSize: z.number().int().nonnegative() }).strict();
 export const TaskReferenceSchema = z.object({ id, title: z.string(), status: TaskControlStatusSchema }).strict();
+export const TaskQueueWaitReasonSchema = z.enum(["prerequisite_not_started", "prerequisite_running", "prerequisite_needs_human", "prerequisite_cancelled", "prerequisite_archived", "prerequisite_merge_unobserved"]);
+export const TaskQueueWaitSchema = z.object({ id, title: z.string(), status: TaskControlStatusSchema, deliveryTarget: DeliveryTargetSchema, reason: TaskQueueWaitReasonSchema, summary: z.string() }).strict();
+/** startIntent is persisted; state and waitingOn are derived from the task and its prerequisites on every read. */
+export const TaskQueueSchema = z.object({
+  startIntent: z.enum(["manual", "queued"]),
+  state: z.enum(["backlog", "queued", "running", "needs_attention", "delivered", "cancelled"]),
+  waitingOn: z.array(TaskQueueWaitSchema),
+}).strict();
+export type TaskQueue = z.infer<typeof TaskQueueSchema>;
+export type TaskQueueWait = z.infer<typeof TaskQueueWaitSchema>;
 const TaskQuestionBaseSchema = z.object({ id, text: z.string(), options: HumanQuestionOptionsSchema.default([]), requiresCommandCleanup: z.boolean() });
 const TaskHumanQuestionSchema = z.discriminatedUnion("kind", [
   TaskQuestionBaseSchema.extend({ kind: z.literal("question") }).strict(),
@@ -100,7 +111,7 @@ export const TaskSchema = z.object({
   pullRequest: PullRequestReferenceSchema.nullable(),
   humanQuestion: TaskHumanQuestionSchema.nullable(),
   blockedBy: z.array(TaskReferenceSchema),
-  startWhenBlockedByDelivered: z.boolean().optional(),
+  queue: TaskQueueSchema,
   limits: TaskLimitsSchema.extend({ admittedTurns: z.number().int().nonnegative() }).strict(),
   wakeAt: z.string().nullable(),
   images: z.array(TaskImageSchema),

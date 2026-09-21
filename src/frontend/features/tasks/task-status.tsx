@@ -1,5 +1,5 @@
 import { useId } from "react";
-import { CheckCircle2, CircleDashed, CircleDotDashed, CircleHelp, CircleSlash } from "lucide-react";
+import { CheckCircle2, CircleDashed, CircleDotDashed, CircleHelp, CircleSlash, Clock } from "lucide-react";
 import type { PullRequestReference, TaskControlStatus } from "../../../tasks/control.js";
 import { Badge } from "../../components/ui/badge.js";
 import { withCompany } from "../../lib/api.js";
@@ -13,10 +13,16 @@ const appearances = {
   delivered: { icon: CheckCircle2, color: "text-emerald-500" },
 } satisfies Record<TaskControlStatus, { icon: typeof CircleDashed; color: string }>;
 
-type TaskStatusProps = { status: TaskControlStatus; pullRequestState?: PullRequestReference["state"] | undefined };
+type TaskStatusProps = { status: TaskControlStatus; pullRequestState?: PullRequestReference["state"] | undefined; queued?: boolean | undefined };
 
-export function TaskStatusIcon({ status, pullRequestState }: TaskStatusProps) {
+/** A queued task is a backlog task that starts by itself when its Blocked by tasks are complete. */
+export function taskStatusLabel(task: { status: TaskControlStatus; queue?: { state: string } | undefined }): string {
+  return task.status === "backlog" && task.queue?.state === "queued" ? "Queued" : taskStatusLabels[task.status];
+}
+
+export function TaskStatusIcon({ status, pullRequestState, queued }: TaskStatusProps) {
   const maskId = useId();
+  if (status === "backlog" && queued) return <Clock aria-hidden="true" className="size-3.5 shrink-0 text-sky-500" />;
   const { icon: Icon, color } = appearances[status];
   if (status === "delivered" && pullRequestState === "merged") return <svg role="img" aria-label="Delivered, merged" viewBox="0 0 24 24" className="size-3.5 shrink-0 text-emerald-500">
     <defs><mask id={maskId}><rect width="24" height="24" fill="white" /><path d="m9 12 2 2 4-4" fill="none" stroke="black" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></mask></defs>
@@ -25,8 +31,8 @@ export function TaskStatusIcon({ status, pullRequestState }: TaskStatusProps) {
   return <Icon aria-hidden="true" className={`size-3.5 shrink-0 ${color}`} />;
 }
 
-export function TaskStatus({ status, pullRequestState }: TaskStatusProps) {
-  return <Badge variant={status === "waiting_human" ? "destructive" : "secondary"}><TaskStatusIcon status={status} pullRequestState={pullRequestState} />{taskStatusLabels[status]}</Badge>;
+export function TaskStatus({ status, pullRequestState, queued }: TaskStatusProps) {
+  return <Badge variant={status === "waiting_human" ? "destructive" : "secondary"}><TaskStatusIcon status={status} pullRequestState={pullRequestState} queued={queued} />{status === "backlog" && queued ? "Queued" : taskStatusLabels[status]}</Badge>;
 }
 
 /** "Blocked by First · Active, Second · Backlog", or null when the task has no prerequisites. */

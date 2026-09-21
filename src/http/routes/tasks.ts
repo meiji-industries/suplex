@@ -213,6 +213,7 @@ const tasks: FastifyPluginAsync<TaskRoutesOptions> = async (app, { tasks, host, 
     wake(task.id);
     return task;
   });
+  typed.post("/api/tasks/:taskId/disarm", { schema: taskResponse }, async request => tasks.disarmTask(request.forgeUser.id, request.params.taskId));
   typed.post("/api/tasks/:taskId/answer", { schema: { ...taskResponse, body: TaskAnswerBodySchema } }, async request => {
     const task = "limitDecision" in request.body
       ? tasks.answerTaskLimit(request.forgeUser.id, request.params.taskId, request.body.questionId, request.body.limitDecision)

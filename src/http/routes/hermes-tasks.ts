@@ -52,9 +52,9 @@ export function registerHermesTaskRoutes(app: FastifyInstance, options: { hermes
     preValidation: async (request) => { authenticate(request.headers.authorization); },
   }, async (_request, reply) => reply.header("Cache-Control", "private, no-store").send({
     apiVersion: "v1",
-    capabilities: { read: { task: true, workflows: true, templates: true }, create: { backlogTask: true, deliveryTargets: DeliveryTargetSchema.options }, taskControl: true, delivery: agentDelivery, merge: agentDelivery, humanDecisions: false },
+    capabilities: { read: { task: true, workflows: true, templates: true }, create: { backlogTask: true, queuedTask: true, deliveryTargets: DeliveryTargetSchema.options }, taskControl: true, delivery: agentDelivery, merge: agentDelivery, humanDecisions: false },
     autonomousCommands: [
-      "create_backlog_task", "start_task", "cancel_task", "archive_task", "unarchive_task", "duplicate_task", "send_task_note", "recheck_delivery_wait",
+      "create_backlog_task", "create_queued_task", "start_task", "disarm_task", "cancel_task", "archive_task", "unarchive_task", "duplicate_task", "send_task_note", "recheck_delivery_wait",
       ...(agentDelivery ? ["observe_delivery", "request_delivery_repair", "decide_delivery_wait", "read_merge_train", "request_merge_approval", "merge_pull_request"] as const : []),
     ],
     humanOnlyRecords: ["task_human_answer"],
@@ -90,6 +90,7 @@ export function registerHermesTaskRoutes(app: FastifyInstance, options: { hermes
   }, async (request, reply) => {
     const principal = authenticate(request.headers.authorization);
     const result = await options.tasks.createTaskForHermes(principal, request.body);
+    if (result.task.status === "active") void options.host?.recover(result.task.id).catch(error => app.log.warn({ taskId: result.task.id, err: error }, "Task recovery will be retried"));
     reply.header("Cache-Control", "private, no-store");
     return reply.code(result.created ? 201 : 200).send(await options.tasks.readHermesTask(principal, result.task.id, options.github));
   });

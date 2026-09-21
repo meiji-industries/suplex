@@ -16,6 +16,7 @@ import type { ForgeDatabase } from "../platform/database.js";
 import { createOpenCodeMessageID } from "../runtimes/opencode/session.js";
 import { TaskConfigurationSchema } from "../tasks/contracts.js";
 import { taskDependencySummaries, type TaskDependencySummary } from "../tasks/dependencies.js";
+import { admitQueuedTask, admitQueuedTasks, readyQueuedTaskIds } from "../tasks/queue.js";
 import type { PromptDispatchAttempt, PullRequestReference } from "../tasks/control.js";
 import { DeliveryIntentSchema, PullRequestReferenceSchema, TaskControlStatusSchema, TaskProfileSchema, TaskSessionLifecycleSchema, TaskTurnStatusSchema, WorktreeReferenceSchema, type DeliveryIntent, type TaskControl, type TaskProfile, type TaskSession, type TaskSessionKind, type TaskTurn, type WorktreeReference } from "../tasks/control.js";
 import { AdvisorRoleSchema, RaterResultSchema, ReviewerResultSchema, WorkflowIdSchema, WorkflowInputSchema, WorkflowStateSchema, deliveryDecision, emptyWorkflowState, sameRange, turnOutcome, type AdvisorResult, type AdvisorRole, type DeliveryFailureCode, type DeliveryWait, type RaterResult, type ReviewRange, type ReviewerResult, type WorkflowCompletion, type WorkflowId, type WorkflowInput, type WorkflowState } from "./workflows.js";
@@ -85,14 +86,36 @@ export class TaskControlStore {
     this.database.authImmediateTransaction((db) => { const intent = DeliveryIntentSchema.parse(input.deliveryIntent); if (intent.pullRequestNumber) assertPullRequestAvailable(db, { taskId: input.taskId, repository: intent.repository, number: intent.pullRequestNumber }); db.prepare("INSERT INTO forge_task_controls (task_id, objective, delivery_target, delivery_intent_json, status, wake_at, human_question, worktree_json, pull_request_json, root_session_id, worker_session_id, root_profile_json, worker_profile_json, workflow, advisor_profiles_json, workflow_state_json, status_changed_at, created_at, updated_at) VALUES (?, ?, ?, ?, ?, NULL, NULL, ?, NULL, NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?)").run(input.taskId, input.objective, input.deliveryTarget, JSON.stringify(intent), input.startImmediately ? "active" : "backlog", input.worktree ? JSON.stringify(input.worktree) : null, JSON.stringify(TaskProfileSchema.parse(input.rootProfile)), JSON.stringify(TaskProfileSchema.parse(input.workerProfile)), WorkflowIdSchema.parse(input.workflow ?? "standard"), JSON.stringify(advisorProfiles), JSON.stringify(emptyWorkflowState()), time, time, time); });
     return this.observeLifecycle(input.taskId);
   }
+  /**
+   * Start means queue: the task records its start intent and starts now only when every prerequisite is complete. It never
+   * bypasses a prerequisite. An active task only receives an earlier wake.
+   */
   start(taskId: string): TaskControl {
     const changed = this.database.authImmediateTransaction(db => {
-      const started = this.startInTransaction(db, taskId);
-      if (started === 1) db.prepare("UPDATE forge_tasks SET start_when_blocked_by_delivered = 0, updated_at = ? WHERE id = ?").run(now(), taskId);
-      return started;
+      const time = now();
+      if (db.prepare("UPDATE forge_task_controls SET wake_at = ?, updated_at = ? WHERE task_id = ? AND status = 'active'").run(time, time, taskId).changes === 1) return true;
+      if (db.prepare("UPDATE forge_tasks SET start_queued = 1, updated_at = ? WHERE id = ? AND archived_at IS NULL AND EXISTS (SELECT 1 FROM forge_task_controls WHERE task_id = forge_tasks.id AND status = 'backlog')").run(time, taskId).changes !== 1) return false;
+      admitQueuedTask(db, taskId);
+      return true;
     });
-    if (changed !== 1) throw new Error("task_not_startable");
+    if (!changed) throw new Error("task_not_startable");
     return this.observeLifecycle(taskId);
+  }
+  /** Returns a queued task to the manual backlog. It is a no-op for a manual backlog task and false once the task left the backlog. */
+  disarm(taskId: string): boolean {
+    return this.database.authImmediateTransaction(db => {
+      const status = (db.prepare("SELECT status FROM forge_task_controls WHERE task_id = ?").get(taskId) as { status: string } | undefined)?.status;
+      if (status !== "backlog") return false;
+      db.prepare("UPDATE forge_tasks SET start_queued = 0, updated_at = ? WHERE id = ? AND start_queued = 1").run(now(), taskId);
+      return true;
+    });
+  }
+  /** Re-evaluates the given queued tasks after their prerequisites changed. Without ids, it is the sweep over every queued task that runs from startup on. */
+  admitQueued(taskIds?: string[]): string[] {
+    if (!taskIds && !this.database.authQuery(db => readyQueuedTaskIds(db)).length) return [];
+    const admitted = this.database.authImmediateTransaction(db => admitQueuedTasks(db, taskIds ?? readyQueuedTaskIds(db)));
+    for (const taskId of admitted) this.observeLifecycle(taskId);
+    return admitted;
   }
   sendNote(taskId: string, note: string, label = "Human note"): TaskControl {
     this.database.authImmediateTransaction(db => {
@@ -157,20 +180,12 @@ export class TaskControlStore {
   markDelivered(taskId: string): TaskControl {
     const changed = this.database.authTransaction((db) => {
       const delivered = db.prepare("UPDATE forge_task_controls SET workflow_state_json = json_set(workflow_state_json, '$.followUp', json('false')), status = 'delivered', wake_at = NULL, human_question = NULL, human_question_id = NULL, limit_pause_json = NULL, updated_at = ? WHERE task_id = ? AND status IN ('active', 'waiting_human', 'delivered')").run(now(), taskId).changes;
-      if (delivered !== 1) return delivered;
-      // A waiting dependent starts when this delivery was its last undelivered prerequisite.
-      const waiting = db.prepare("SELECT t.id FROM forge_task_dependencies d JOIN forge_tasks t ON t.id = d.task_id JOIN forge_task_controls c ON c.task_id = t.id WHERE d.depends_on_task_id = ? AND t.start_when_blocked_by_delivered = 1 AND t.archived_at IS NULL AND c.status = 'backlog' AND NOT EXISTS (SELECT 1 FROM forge_task_dependencies other LEFT JOIN forge_task_controls oc ON oc.task_id = other.depends_on_task_id WHERE other.task_id = t.id AND COALESCE(oc.status, 'backlog') <> 'delivered')").all(taskId) as Array<{ id: string }>;
-      for (const dependent of waiting) {
-        if (this.startInTransaction(db, dependent.id) === 1) db.prepare("UPDATE forge_tasks SET start_when_blocked_by_delivered = 0, updated_at = ? WHERE id = ?").run(now(), dependent.id);
-      }
+      // A queued dependent starts in the same transaction when this delivery completes its last prerequisite.
+      if (delivered === 1) admitQueuedTasks(db, readyQueuedTaskIds(db, taskId));
       return delivered;
     });
     if (changed !== 1) throw new Error("task_not_active");
     return this.observeLifecycle(taskId);
-  }
-  private startInTransaction(db: Database.Database, taskId: string): number {
-    assertTaskPullRequestsAvailable(db, taskId);
-    return db.prepare("UPDATE forge_task_controls SET status = 'active', wake_at = ?, updated_at = ? WHERE task_id = ? AND status IN ('backlog', 'active')").run(now(), now(), taskId).changes;
   }
   get(taskId: string): TaskControl {
     return this.database.authQuery((db) => { const row = db.prepare("SELECT * FROM forge_task_controls WHERE task_id = ?").get(taskId) as Row | undefined; if (!row) throw new Error(`Task control ${taskId} does not exist`); return control(row); });
@@ -545,6 +560,8 @@ export class TaskControlStore {
     this.database.authTransaction((db) => {
       const changed = db.prepare("UPDATE forge_task_controls SET status = 'cancelled', wake_at = NULL, human_question = NULL, human_question_id = NULL, limit_pause_json = NULL, workflow_state_json = json_set(workflow_state_json, '$.deliveryWait', json('null')), updated_at = ? WHERE task_id = ? AND status <> 'delivered'").run(now(), taskId).changes;
       if (changed !== 1) throw new Error("task_not_cancellable");
+      // A late wake finds no start intent, so a cancelled queued task never starts.
+      db.prepare("UPDATE forge_tasks SET start_queued = 0 WHERE id = ?").run(taskId);
       db.prepare("UPDATE forge_task_sessions SET is_current = 0, lifecycle = 'cancelled', stop_requested_at = COALESCE(stop_requested_at, ?), updated_at = ? WHERE task_id = ? AND stopped_at IS NULL").run(now(), now(), taskId);
       db.prepare("UPDATE forge_task_turns SET status = 'cancelled', updated_at = ? WHERE task_id = ? AND status IN ('pending_prompt', 'prompted', 'unknown')").run(now(), taskId);
     });

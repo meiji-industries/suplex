@@ -1,6 +1,6 @@
 import { z } from "zod";
 import { AdvisorProfileIdsSchema } from "../../coordination/workflows.js";
-import { DeliveryTargetSchema, TaskImageInputSchema, TaskSourceInputSchema, VisualEvidenceSchema } from "../../tasks/contracts.js";
+import { DeliveryTargetSchema, TaskImageInputSchema, TaskQueueSchema, TaskSourceInputSchema, VisualEvidenceSchema } from "../../tasks/contracts.js";
 import { MAX_TASK_IMAGES } from "../../tasks/limits/attachment-limits.js";
 
 export const HermesAdminAgentSchema = z.object({
@@ -100,6 +100,7 @@ export const HermesTaskCreateBodySchema = z.object({
   description: z.string().trim().optional().meta({ default: "" }),
   idempotencyKey: z.string().trim().min(1).max(128),
   dependsOn: z.array(taskId).max(MAX_DEPENDENCIES).optional().describe("Prerequisite task ids in this company, shown as Blocked by. A self-reference, a cycle, or an unavailable task is rejected."),
+  queue: z.boolean().optional().describe("Queue the task: it starts now when every prerequisite is complete, and otherwise starts by itself when the last one completes. Without it, the task stays in the manual backlog."),
   images: z.array(TaskImageInputSchema).max(MAX_TASK_IMAGES).default([]),
   source: TaskSourceInputSchema.optional(),
   workflowId: z.string().min(1).max(256).optional(),
@@ -158,7 +159,7 @@ export const HermesActionRequiredSchema = z.object({
   suggestedCommands: z.array(z.string()),
   humanApprovalRequired: z.boolean(),
 }).strict();
-export const HermesTaskCommandSchema = z.enum(["start_task", "cancel_task", "archive_task", "unarchive_task", "duplicate_task", "send_task_note", "recheck_delivery_wait"]);
+export const HermesTaskCommandSchema = z.enum(["start_task", "disarm_task", "cancel_task", "archive_task", "unarchive_task", "duplicate_task", "send_task_note", "recheck_delivery_wait"]);
 export const HermesTaskCommandBodySchema = z.object({
   command: HermesTaskCommandSchema,
   revision: z.string().min(1).max(256),
@@ -259,6 +260,7 @@ export const HermesSafeTaskProjectionSchema = z.object({
   project: HermesProjectSchema,
   title: z.string(),
   status: HermesTaskStatusSchema,
+  queue: TaskQueueSchema.describe("startIntent is manual or queued. state separates backlog (manual), queued (waits to start by itself), running, needs_attention, delivered, and cancelled. waitingOn lists each incomplete prerequisite with its exact reason."),
   dependsOn: z.array(z.string()).describe("The ids of blockedBy, in the same order."),
   blockedBy: z.array(z.object({ id: z.string(), title: z.string(), status: HermesTaskStatusSchema }).strict()).describe("The prerequisite tasks of this task with their current title and status."),
   archived: z.boolean(),
@@ -435,14 +437,14 @@ export const HermesCapabilitiesSchema = z.object({
   apiVersion: z.literal("v1"),
   capabilities: z.object({
     read: z.object({ task: z.literal(true), workflows: z.literal(true), templates: z.literal(true) }),
-    create: z.object({ backlogTask: z.literal(true), deliveryTargets: z.array(DeliveryTargetSchema) }),
+    create: z.object({ backlogTask: z.literal(true), queuedTask: z.literal(true), deliveryTargets: z.array(DeliveryTargetSchema) }),
     taskControl: z.literal(true),
     // Delivery and merge follow the configured agent delivery surface, which a deployment can leave off.
     delivery: z.boolean(),
     merge: z.boolean(),
     humanDecisions: z.literal(false),
   }),
-  autonomousCommands: z.array(z.enum(["create_backlog_task", "start_task", "cancel_task", "archive_task", "unarchive_task", "duplicate_task", "send_task_note", "recheck_delivery_wait", "observe_delivery", "request_delivery_repair", "decide_delivery_wait", "read_merge_train", "request_merge_approval", "merge_pull_request"])),
+  autonomousCommands: z.array(z.enum(["create_backlog_task", "create_queued_task", "start_task", "disarm_task", "cancel_task", "archive_task", "unarchive_task", "duplicate_task", "send_task_note", "recheck_delivery_wait", "observe_delivery", "request_delivery_repair", "decide_delivery_wait", "read_merge_train", "request_merge_approval", "merge_pull_request"])),
   humanOnlyRecords: z.array(z.literal("task_human_answer")),
   unavailableCommands: z.array(z.enum([
     "answer_human_question",
@@ -546,8 +548,8 @@ export function hermesRuntimeOpenApi(): Record<string, unknown> {
       "/api/hermes/tasks": {
         post: {
           operationId: "createHermesBacklogTask",
-          summary: "Create a backlog task without starting it",
-          description: "Creates a backlog task and never starts execution. The server defaults description to an empty string and rejects unknown fields with request_invalid. dependsOn sets the prerequisites, shown as Blocked by; every one must be a task this agent created in the same company. Idempotency is scoped to the paired agent and company. An identical replay returns 200; reuse for a different request returns 409 with idempotency_conflict. Collections are not supported, so pagination and cursors are unavailable.",
+          summary: "Create a backlog or queued task",
+          description: "Creates a backlog task. With queue true, the task is queued: it starts now when every prerequisite is complete, and otherwise stays in the backlog with zero sessions until the last prerequisite completes. Without queue, it never starts by itself. The server defaults description to an empty string and rejects unknown fields with request_invalid. dependsOn sets the prerequisites, shown as Blocked by; every one must be a task this agent created in the same company. Idempotency is scoped to the paired agent and company. An identical replay returns 200; reuse for a different request returns 409 with idempotency_conflict. Collections are not supported, so pagination and cursors are unavailable.",
           security: [{ HermesBearer: [] }],
           requestBody: { required: true, content: { "application/json": { schema: inputSchema(HermesRuntimeOperations.createTask.body) } } },
           responses: openApiResponses(HermesRuntimeOperations.createTask.response),
@@ -557,7 +559,7 @@ export function hermesRuntimeOpenApi(): Record<string, unknown> {
         get: {
           operationId: "getHermesCreatedTask",
           summary: "Read a task created by this paired agent",
-          description: "Only the creating paired agent can read a task. Task states are backlog, active, waiting_human, cancelled, and delivered. Human questions are records only: answering them remains human authority and no agent answer command exists. The server router rejects path parameters longer than 100 characters before this authenticated operation is matched; those router-level responses are outside this contract. Collections are not supported, so pagination and cursors are unavailable.",
+          description: "Only the creating paired agent can read a task. Task states are backlog, active, waiting_human, cancelled, and delivered. queue separates a manual backlog task from a queued one and lists the exact wait reason of each incomplete prerequisite. A prerequisite is complete when it is delivered at its own delivery target; the merged target also needs the merged pull request state Forge observed from GitHub. Human questions are records only: answering them remains human authority and no agent answer command exists. The server router rejects path parameters longer than 100 characters before this authenticated operation is matched; those router-level responses are outside this contract. Collections are not supported, so pagination and cursors are unavailable.",
           security: [{ HermesBearer: [] }],
           parameters: [{ name: "taskId", in: "path", required: true, schema: jsonSchema(HermesRuntimeOperations.getTask.params.shape.taskId, "input") }],
           responses: openApiResponses(HermesRuntimeOperations.getTask.response),
@@ -567,7 +569,7 @@ export function hermesRuntimeOpenApi(): Record<string, unknown> {
         put: { operationId: "setHermesTaskDependencies", summary: "Replace the prerequisites of a task", description: "Replaces dependsOn, shown as Blocked by, with the complete set in the body. Every prerequisite must be a task this agent created in the same company. A self-reference, a cycle, or an unavailable task is rejected and the current set stays. Unknown fields are rejected. The response and every later read report dependsOn and blockedBy from the same stored edges.", security: [{ HermesBearer: [] }], parameters: [{ name: "taskId", in: "path", required: true, schema: jsonSchema(HermesRuntimeOperations.setTaskDependencies.params.shape.taskId, "input") }], requestBody: { required: true, content: { "application/json": { schema: jsonSchema(HermesRuntimeOperations.setTaskDependencies.body, "input") } } }, responses: openApiResponses(HermesRuntimeOperations.setTaskDependencies.response) },
       },
       "/api/hermes/tasks/{taskId}/commands": {
-        post: { operationId: "commandHermesTask", summary: "Apply an authorized task lifecycle command", description: "Every command requires the current task revision and an idempotency key. Human answers, delivery, releases, and merges remain unavailable.", security: [{ HermesBearer: [] }], parameters: [{ name: "taskId", in: "path", required: true, schema: jsonSchema(HermesRuntimeOperations.commandTask.params.shape.taskId, "input") }], requestBody: { required: true, content: { "application/json": { schema: inputSchema(HermesRuntimeOperations.commandTask.body) } } }, responses: openApiResponses(HermesRuntimeOperations.commandTask.response) },
+        post: { operationId: "commandHermesTask", summary: "Apply an authorized task lifecycle command", description: "Every command requires the current task revision and an idempotency key. start_task queues a manual backlog task: it starts now when every prerequisite is complete and never bypasses one. disarm_task returns a queued task to the manual backlog. Human answers, delivery, releases, and merges remain unavailable.", security: [{ HermesBearer: [] }], parameters: [{ name: "taskId", in: "path", required: true, schema: jsonSchema(HermesRuntimeOperations.commandTask.params.shape.taskId, "input") }], requestBody: { required: true, content: { "application/json": { schema: inputSchema(HermesRuntimeOperations.commandTask.body) } } }, responses: openApiResponses(HermesRuntimeOperations.commandTask.response) },
       },
     },
     components: {

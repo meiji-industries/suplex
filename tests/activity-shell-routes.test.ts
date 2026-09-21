@@ -6,7 +6,7 @@ import { act, createElement, useEffect, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-type TaskRow = { id: string; title: string; status: "backlog"; statusChangedAt: string; pullRequest: null; archivedAt: null; blockedBy: [] };
+type TaskRow = { id: string; title: string; status: "backlog"; queue: { startIntent: "manual"; state: "backlog"; waitingOn: [] }; statusChangedAt: string; pullRequest: null; archivedAt: null; blockedBy: [] };
 
 const state = vi.hoisted(() => ({
   companyId: "company-a",
@@ -35,7 +35,7 @@ vi.mock("../src/frontend/features/tasks/lib/task-list.js", () => ({ readTaskList
 vi.mock("../src/frontend/features/analytics/lib/analytics.js", () => ({ useTaskCosts: () => new Map() }));
 vi.mock("../src/frontend/features/tasks/recent-task-agents.js", () => ({ RecentTaskAgents: () => null }));
 vi.mock("../src/frontend/features/tasks/recent-pull-request.js", () => ({ RecentPullRequest: () => null }));
-vi.mock("../src/frontend/features/tasks/task-status.js", () => ({ TaskStatusIcon: () => null, taskStatusLabels: { backlog: "Backlog" } }));
+vi.mock("../src/frontend/features/tasks/task-status.js", () => ({ TaskStatusIcon: () => null, taskStatusLabels: { backlog: "Backlog" }, taskStatusLabel: () => "Backlog" }));
 vi.mock("../src/frontend/components/app/cost-value.js", () => ({ CostValue: () => null }));
 vi.mock("../src/frontend/components/app/system-health.js", async () => {
   const React = await import("react");
@@ -103,7 +103,7 @@ import { AppRouter } from "../src/frontend/shell/app-router.js";
 import { ApplicationFrame } from "../src/frontend/shell/application-frame.js";
 
 function task(id: string, title: string): TaskRow {
-  return { id, title, status: "backlog", statusChangedAt: "2026-09-09T00:00:00.000Z", pullRequest: null, archivedAt: null, blockedBy: [] };
+  return { id, title, status: "backlog", queue: { startIntent: "manual", state: "backlog", waitingOn: [] }, statusChangedAt: "2026-09-09T00:00:00.000Z", pullRequest: null, archivedAt: null, blockedBy: [] };
 }
 
 function navigate(path: string, event = "forge:navigate"): void {

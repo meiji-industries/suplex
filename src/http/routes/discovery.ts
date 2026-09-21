@@ -27,10 +27,10 @@ const CATALOG = {
     { path: "/api/hermes/workflows", method: "GET", authentication: "agent credential", description: "List workflow records for a granted project and whether task creation permits each one." },
     { path: "/api/hermes/templates", method: "GET", authentication: "agent credential", description: "List task templates for a granted project and whether task creation permits each one." },
     { path: "/api/hermes/tasks", method: "GET", authentication: "agent credential", description: "List the tasks this agent created." },
-    { path: "/api/hermes/tasks", method: "POST", authentication: "agent credential", description: "Create a backlog task. An idempotency key is necessary. Creation never starts the task." },
+    { path: "/api/hermes/tasks", method: "POST", authentication: "agent credential", description: "Create a backlog task, or a queued task with queue true. An idempotency key is necessary. A queued task starts by itself only when every prerequisite is complete." },
     { path: "/api/hermes/tasks/{taskId}", method: "GET", authentication: "agent credential", description: "Read one task. Send the ETag in If-None-Match to poll conditionally." },
     { path: "/api/hermes/tasks/{taskId}/dependencies", method: "PUT", authentication: "agent credential", description: "Replace the prerequisites of a task, shown as Blocked by." },
-    { path: "/api/hermes/tasks/{taskId}/commands", method: "POST", authentication: "agent credential", description: "Apply one lifecycle command with the current revision and an idempotency key." },
+    { path: "/api/hermes/tasks/{taskId}/commands", method: "POST", authentication: "agent credential", description: "Apply one lifecycle command with the current revision and an idempotency key. start_task queues a task and disarm_task returns it to the manual backlog." },
   ],
   administration: {
     description: "Pairing codes, credential rotation, revocation, and project grants live under /api/admin/hermes-agents. An administrator session controls them. They are not part of the agent runtime contract.",

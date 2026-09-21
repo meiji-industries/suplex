@@ -7,13 +7,14 @@ import { TaskConfigurationSchema, TaskImageSchema, TaskSchema, type DeliveryTarg
 import type { TaskProfile } from "./control.js";
 import { advisorKeysSorted, publicWorkflowState, type AdvisorRole, type WorkflowId } from "../coordination/workflows.js";
 import { taskDependencySummaries } from "./dependencies.js";
+import { taskQueue } from "./queue.js";
 import { IssueAssociationSchema } from "./issue-association.js";
 
 export type TaskCreator = { kind: "user"; id: string } | { kind: "agent"; id: string };
 const RowSchema = z.object({
   issue_json: z.string().nullable(),
   id: z.string(), company_id: z.string(), project_id: z.string(), issue_number: z.number().nullable(), issue_code: z.string().nullable(),
-  title: z.string(), description: z.string(), configuration_json: z.string(), idempotency_key: z.string(), request_hash: z.string(), start_when_blocked_by_delivered: z.number(),
+  title: z.string(), description: z.string(), configuration_json: z.string(), idempotency_key: z.string(), request_hash: z.string(), start_queued: z.number(),
   creator_user_id: z.string().nullable(), creator_agent_id: z.string().nullable(), copied_from_task_id: z.string().nullable(), command_revision: z.number(), created_at: z.string(), updated_at: z.string(), activity_updated_at: z.string(), status_changed_at: z.string(), archived_at: z.string().nullable(),
 });
 export type TaskRow = z.infer<typeof RowSchema>;
@@ -78,8 +79,8 @@ export class TaskRepository {
     taskId: string; companyId: string; creator: TaskCreator; request: TaskRequest;
     requestHash: string; configuration: TaskConfiguration; rootProfile: TaskProfile; workerProfile: TaskProfile; advisorProfiles: Partial<Record<AdvisorRole, TaskProfile>>;
     images: Array<{ filename: string; mimeType: string; bytes: Buffer }>;
-    startImmediately: boolean;
-    startWhenBlockedByDelivered: boolean;
+    /** The persisted start intent. Creation never starts the task; the caller admits it after its prerequisites are written. */
+    startQueued: boolean;
     /** Provenance written with the row itself, so a copy is identifiable without a second write. */
     copiedFromTaskId?: string;
   }): { task: Task; created: boolean } {
@@ -90,12 +91,12 @@ export class TaskRepository {
         if (existing) return { task: this.task(existing), created: false };
         const time = new Date().toISOString();
         const configuration = TaskConfigurationSchema.parse(input.configuration);
-        db.prepare("INSERT INTO forge_tasks (id, company_id, project_id, title, description, configuration_json, idempotency_key, request_hash, start_when_blocked_by_delivered, creator_user_id, creator_agent_id, copied_from_task_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
-          .run(input.taskId, input.companyId, input.request.projectId, input.request.title, input.request.description, JSON.stringify(configuration), input.request.idempotencyKey, input.requestHash, input.startWhenBlockedByDelivered ? 1 : 0, input.creator.kind === "user" ? input.creator.id : null, input.creator.kind === "agent" ? input.creator.id : null, input.copiedFromTaskId ?? null, time, time);
+        db.prepare("INSERT INTO forge_tasks (id, company_id, project_id, title, description, configuration_json, idempotency_key, request_hash, start_queued, creator_user_id, creator_agent_id, copied_from_task_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+          .run(input.taskId, input.companyId, input.request.projectId, input.request.title, input.request.description, JSON.stringify(configuration), input.request.idempotencyKey, input.requestHash, input.startQueued ? 1 : 0, input.creator.kind === "user" ? input.creator.id : null, input.creator.kind === "agent" ? input.creator.id : null, input.copiedFromTaskId ?? null, time, time);
         for (const image of input.images) written.push(this.artifacts.putArtifactSync(db, input.companyId, "task-image", { ...image, taskId: input.taskId }));
         if (input.request.issue) db.prepare("UPDATE forge_tasks SET issue_json = ? WHERE id = ?").run(JSON.stringify(input.request.issue), input.taskId);
         this.controls.create({
-          taskId: input.taskId, startImmediately: input.startImmediately, objective: input.request.description ? `${input.request.title}\n\n${input.request.description}` : input.request.title, deliveryTarget: input.request.deliveryTarget,
+          taskId: input.taskId, startImmediately: false, objective: input.request.description ? `${input.request.title}\n\n${input.request.description}` : input.request.title, deliveryTarget: input.request.deliveryTarget,
           deliveryIntent: { repository: configuration.repository, headBranch: configuration.branch, baseBranch: configuration.baseBranch, baselineSha: configuration.baselineSha, pullRequestNumber: configuration.source?.kind === "pull_request" ? configuration.source.number : null },
           rootProfile: input.rootProfile, workerProfile: input.workerProfile, workflow: input.request.workflow, advisorProfiles: input.advisorProfiles,
         });
@@ -128,7 +129,7 @@ export class TaskRepository {
         : { kind: "question", id: control.humanQuestionId, text: control.humanQuestion, options: control.humanQuestionOptions ?? [], requiresCommandCleanup: control.recoveryTurnId !== null }
         : null,
       blockedBy,
-      startWhenBlockedByDelivered: row.start_when_blocked_by_delivered === 1,
+      queue: this.database.authQuery(db => taskQueue(db, row.id, control.status)),
       limits: { ...limitState.limits, admittedTurns: limitState.admittedTurns },
       wakeAt: control.wakeAt, images, artifacts, createdAt: row.created_at, updatedAt: row.activity_updated_at, statusChangedAt: row.status_changed_at, archivedAt: row.archived_at,
     });
@@ -140,7 +141,8 @@ export class TaskRepository {
   }
 
   setArchived(taskId: string, archived: boolean): void {
-    this.database.authTransaction(db => db.prepare("UPDATE forge_tasks SET archived_at = ?, updated_at = ? WHERE id = ?").run(archived ? new Date().toISOString() : null, new Date().toISOString(), taskId));
+    // Archiving clears a queue intent, so opening the task again never starts it by itself.
+    this.database.authTransaction(db => db.prepare("UPDATE forge_tasks SET archived_at = ?, start_queued = CASE WHEN ? THEN 0 ELSE start_queued END, updated_at = ? WHERE id = ?").run(archived ? new Date().toISOString() : null, archived ? 1 : 0, new Date().toISOString(), taskId));
   }
 
   /** The caller resolves every field against the current task, so an edit writes one consistent snapshot of the editable settings. */

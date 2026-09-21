@@ -48,7 +48,7 @@ function task(id: string, title: string, status: Task["status"]): Task {
     id, companyId: "company-1", projectId: "project-1", issueKey: null, title, description: "", status, deliveryTarget: "pull_request_draft",
     rootProfile: profile, workerProfile: profile, workflow: "standard", advisorProfiles: {}, workflowState: { version: 1, reviews: [], acceptedDelivery: null, deliveryWait: null, completion: null },
     configuration: { repository: "meiji-industries/forge", repositoryPath: "/repo", worktreeRoot: "/worktrees", branch: id, baseBranch: "main", baselineSha: "a".repeat(40), startingSha: "a".repeat(40), setupCommand: "", verificationCommand: "", runProjectTests: true, visualEvidence: "off", source: null, capturedAt: "2026-09-08T00:00:00.000Z" },
-    worktree: null, pullRequest: null, humanQuestion: null, blockedBy: [], limits: { budgetUsd: 15, maxTurns: 40, admittedTurns: 0 }, wakeAt: null, images: [],
+    worktree: null, pullRequest: null, humanQuestion: null, blockedBy: [], queue: { startIntent: "manual", state: status === "active" ? "running" : status === "waiting_human" ? "needs_attention" : status, waitingOn: [] }, limits: { budgetUsd: 15, maxTurns: 40, admittedTurns: 0 }, wakeAt: null, images: [],
     dependsOn: [], createdAt: "2026-09-08T00:00:00.000Z", updatedAt: "2026-09-08T00:00:00.000Z", statusChangedAt: "2026-09-08T00:00:00.000Z", archivedAt: null,
   };
 }

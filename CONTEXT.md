@@ -17,9 +17,18 @@ _Avoid_: Task dependency, pull request association.
 **Prerequisite**
 A task in the same company that another task waits for, shown as "Blocked by".
 A task can have several. `forge_task_dependencies` is the only store; APIs call
-the ids `dependsOn` and the resolved tasks `blockedBy`. A task created to start
-immediately waits in the backlog until every prerequisite is delivered.
+the ids `dependsOn` and the resolved tasks `blockedBy`. A prerequisite is
+complete when it is delivered at its own delivery target; the merged target
+also needs the merged pull request state Forge observed from GitHub.
 _Avoid_: Blocked by reference, single blocker.
+
+**Queued task**
+A backlog task with a persisted start intent. Forge starts it by itself, once,
+when every prerequisite is complete. Start and "Start immediately" queue a
+task; they never bypass a prerequisite. Disarm returns it to the manual
+backlog, which never starts by itself. APIs report `queue` with `startIntent`,
+`state`, and `waitingOn`.
+_Avoid_: Auto-start flag, armed task.
 
 **Coordinator**
 The continuing read-only agent that investigates the source, writes the plan

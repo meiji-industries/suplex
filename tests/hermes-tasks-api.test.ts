@@ -540,7 +540,7 @@ test("POST /api/hermes/tasks creates task with native status, private no-store h
   expect(response.headers["cache-control"]).toBe("private, no-store");
 
   const body = response.json();
-  const expectedKeys = ["id", "issueKey", "projectId", "project", "title", "status", "dependsOn", "blockedBy", "archived", "revision", "permittedCommands", "humanQuestion", "blocker", "workflowStage", "workflow", "templateId", "deliveryTarget", "runProjectTests", "visualEvidence", "delivery", "createdAt", "updatedAt", "implementation", "integration", "actionRequired"].sort();
+  const expectedKeys = ["id", "issueKey", "projectId", "project", "title", "status", "queue", "dependsOn", "blockedBy", "archived", "revision", "permittedCommands", "humanQuestion", "blocker", "workflowStage", "workflow", "templateId", "deliveryTarget", "runProjectTests", "visualEvidence", "delivery", "createdAt", "updatedAt", "implementation", "integration", "actionRequired"].sort();
   expect(Object.keys(body).sort()).toEqual(expectedKeys);
   expect(body).toMatchObject({
     dependsOn: [],
@@ -1063,7 +1063,7 @@ test("GET /api/hermes/tasks/:taskId returns safe projection, handles non-enumera
   });
   expect(getSuccess.statusCode).toBe(200);
   expect(getSuccess.headers["cache-control"]).toBe("private, no-store");
-  const expectedKeys = ["id", "issueKey", "projectId", "project", "title", "status", "dependsOn", "blockedBy", "archived", "revision", "permittedCommands", "humanQuestion", "blocker", "workflowStage", "workflow", "templateId", "deliveryTarget", "runProjectTests", "visualEvidence", "delivery", "createdAt", "updatedAt", "implementation", "integration", "actionRequired"].sort();
+  const expectedKeys = ["id", "issueKey", "projectId", "project", "title", "status", "queue", "dependsOn", "blockedBy", "archived", "revision", "permittedCommands", "humanQuestion", "blocker", "workflowStage", "workflow", "templateId", "deliveryTarget", "runProjectTests", "visualEvidence", "delivery", "createdAt", "updatedAt", "implementation", "integration", "actionRequired"].sort();
   expect(Object.keys(getSuccess.json()).sort()).toEqual(expectedKeys);
   expect(getSuccess.json().title).toBe("Task For Status Check");
 
@@ -1181,7 +1181,7 @@ test("GET /api/hermes/tasks scopes the list, rejects an unknown filter, and expo
   expect(ids).not.toContain(outOfGrant.id);
   expect(ids).not.toContain(crossCompany.id);
 
-  expect(Object.keys(listed[0]!).sort()).toEqual(["id", "issueKey", "projectId", "project", "title", "status", "dependsOn", "blockedBy", "archived", "revision", "permittedCommands", "humanQuestion", "blocker", "workflowStage", "workflow", "templateId", "deliveryTarget", "runProjectTests", "visualEvidence", "delivery", "createdAt", "updatedAt", "implementation", "integration", "actionRequired"].sort());
+  expect(Object.keys(listed[0]!).sort()).toEqual(["id", "issueKey", "projectId", "project", "title", "status", "queue", "dependsOn", "blockedBy", "archived", "revision", "permittedCommands", "humanQuestion", "blocker", "workflowStage", "workflow", "templateId", "deliveryTarget", "runProjectTests", "visualEvidence", "delivery", "createdAt", "updatedAt", "implementation", "integration", "actionRequired"].sort());
   expect(JSON.stringify(listed)).not.toMatch(/worktree|repositoryPath|session|turn|prompt|transcript|credential|objective/i);
 
   expect((await listTasks(`?projectId=${projectId}`)).json().tasks.map((task: { id: string }) => task.id)).toContain(granted);

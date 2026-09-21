@@ -46,6 +46,7 @@ const task = {
   },
   humanQuestion: null,
   blockedBy: [{ id: "task-0", title: "Prepare task links", status: "backlog" }],
+  queue: { startIntent: "manual", state: "running", waitingOn: [] },
   limits: { budgetUsd: 15, maxTurns: 40, admittedTurns: 0 },
   wakeAt: null,
   images: [],

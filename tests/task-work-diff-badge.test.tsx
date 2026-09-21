@@ -15,7 +15,7 @@ const task = {
   id: "task-1", companyId: "company-1", projectId: "project-1", issueKey: null, title: "Show the diff count", description: "", status: "active", deliveryTarget: "pull_request_draft",
   rootProfile: profile, workerProfile: profile, workflow: "standard", advisorProfiles: {}, workflowState: { version: 1, reviews: [], acceptedDelivery: null, deliveryWait: null, completion: null },
   configuration: { repository: "meiji-industries/forge", repositoryPath: "/repo", worktreeRoot: "/worktrees", branch: "diff-count", baseBranch: "main", baselineSha: "a".repeat(40), startingSha: "a".repeat(40), setupCommand: "", verificationCommand: "", runProjectTests: true, visualEvidence: "off", source: null, capturedAt: "2026-09-08T00:00:00.000Z" },
-  worktree: { path: "/worktrees/diff-count", branch: "diff-count", baseSha: "a".repeat(40), headSha: "b".repeat(40), dirty: true }, pullRequest: null, humanQuestion: null, blockedBy: [], limits: { budgetUsd: 15, maxTurns: 40, admittedTurns: 0 }, wakeAt: null, images: [],
+  worktree: { path: "/worktrees/diff-count", branch: "diff-count", baseSha: "a".repeat(40), headSha: "b".repeat(40), dirty: true }, pullRequest: null, humanQuestion: null, blockedBy: [], queue: { startIntent: "manual", state: "running", waitingOn: [] }, limits: { budgetUsd: 15, maxTurns: 40, admittedTurns: 0 }, wakeAt: null, images: [],
   dependsOn: [], createdAt: "2026-09-08T00:00:00.000Z", updatedAt: "2026-09-08T00:00:00.000Z", statusChangedAt: "2026-09-08T00:00:00.000Z", archivedAt: null,
 } satisfies Task;
 

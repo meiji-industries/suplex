@@ -28,8 +28,10 @@ identity = client.whoami()
 
 ## Guardrails
 
-- A task you create stays in `backlog`. Send `start_task` only when the person
-  you work for explicitly asks to start it.
+- A task you create stays in `backlog` unless you send `"queue": true`. Queue
+  a task or send `start_task` only when the person you work for explicitly
+  asks to start it. A queued task starts by itself when its prerequisites are
+  complete; `disarm_task` returns it to the manual backlog.
 - Never approve, release, merge, cancel, archive, or make any other
   consequential commitment unless Forge reports the command as permitted **and**
   the requesting person approved that exact action. `start_task`,
@@ -138,7 +140,8 @@ task exists, report it instead of creating another.
 
 ## Creating a task
 
-`POST /api/hermes/tasks` creates a **backlog** task and never starts execution.
+`POST /api/hermes/tasks` creates a **backlog** task. It never starts by itself
+unless you send `"queue": true`; see [Queued tasks](#queued-tasks).
 
 ```python
 task = client.create_task(project_id, "Add saved searches", "Users want …")
@@ -154,7 +157,7 @@ one. Keep that property whichever transport you use:
   different payload fails with `409 idempotency_conflict`, which means your key
   is wrong, not that the task is wrong.
 
-Optional fields Forge accepts: `dependsOn`, `images`, `source`, `workflowId` or
+Optional fields Forge accepts: `queue`, `dependsOn`, `images`, `source`, `workflowId` or
 `templateId` (never both), `rootProfileId`, `workerProfileId`,
 `advisorProfileIds`, `deliveryTarget`, `runProjectTests`, `visualEvidence`.
 Send them only when the project policy allows them; omitting a workflow and a
@@ -194,10 +197,27 @@ such as `blockedByTaskId`, fail with `400 request_invalid`.
 Every read reports the same stored set: `dependsOn` has the IDs and
 `blockedBy` has `id`, `title`, and `status` for each prerequisite.
 
+## Queued tasks
+
+A queued task is a backlog task that Forge starts by itself when every
+prerequisite is complete. It has no sessions or turns until then. Queue it at
+creation with `"queue": true`, or send `start_task` to a manual backlog task.
+`start_task` starts the task now only when every prerequisite is complete; it
+never bypasses one. `disarm_task` returns a queued task to the manual backlog.
+
+Every read reports `queue`: `startIntent` (`manual` or `queued`), `state`
+(`backlog`, `queued`, `running`, `needs_attention`, `delivered`, `cancelled`),
+and `waitingOn`, one entry per incomplete prerequisite with `id`, `title`,
+`status`, `deliveryTarget`, `reason`, and `summary`. A prerequisite is complete
+when it is delivered at its own delivery target; the `merged` target also needs
+the merged pull request that Forge observed from GitHub. Act on the `summary`:
+for example, a `prerequisite_cancelled` reason means remove that prerequisite
+or disarm the task.
+
 ## Status polling
 
 `GET /api/hermes/tasks/{taskId}` returns the task with `status`, `revision`,
-`permittedCommands`, `dependsOn`, `blockedBy`, `blocker`, `humanQuestion`, `workflowStage`,
+`permittedCommands`, `queue`, `dependsOn`, `blockedBy`, `blocker`, `humanQuestion`, `workflowStage`,
 `deliveryTarget`, `runProjectTests`, `visualEvidence`, `delivery`,
 `integration`, and `actionRequired`.
 
@@ -211,7 +231,7 @@ doubles its delay up to 60 seconds. Over MCP, pass `knownRevision` to
 `POST /api/hermes/tasks/{taskId}/commands` with `command`, the task's current
 `revision`, an `idempotencyKey`, and `note` only for `send_task_note`.
 
-Commands: `start_task`, `cancel_task`, `archive_task`, `unarchive_task`,
+Commands: `start_task`, `disarm_task`, `cancel_task`, `archive_task`, `unarchive_task`,
 `duplicate_task`, `send_task_note`, `recheck_delivery_wait`. Send only what the
 task's `permittedCommands` lists.
 

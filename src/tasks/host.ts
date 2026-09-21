@@ -64,6 +64,8 @@ export class TaskHost {
         .catch(error => new StructuredLogger().warn("Completed pull request refresh will be retried", {}, { error: error instanceof Error ? error.message : String(error) }))
         .finally(() => { this.completedRefresh = undefined; });
     }
+    // The queue sweep: from startup on, every queued task whose prerequisites are complete starts, whatever event was missed.
+    this.store.admitQueued();
     const ids = this.database.authQuery(db => z.array(z.object({ task_id: z.string() })).parse(db.prepare("SELECT c.task_id FROM forge_task_controls c JOIN forge_tasks t ON t.id = c.task_id WHERE (t.archived_at IS NULL AND c.status IN ('active', 'waiting_human') AND (c.wake_at IS NULL OR c.wake_at <= ?)) OR EXISTS (SELECT 1 FROM forge_task_sessions s WHERE s.task_id = c.task_id AND s.stop_requested_at IS NOT NULL AND s.stopped_at IS NULL) ORDER BY COALESCE(c.wake_at, c.created_at)").all(new Date().toISOString())));
     for (const row of ids) {
       if (this.running.has(row.task_id)) continue;

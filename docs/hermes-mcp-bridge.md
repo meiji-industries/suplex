@@ -50,7 +50,7 @@ separately.
 | `forge_list_tasks` | `GET /api/hermes/tasks` | Filters and the opaque cursor come from the runtime contract. |
 | `forge_get_task` | `GET /api/hermes/tasks/{taskId}` | Pass `knownRevision` to poll conditionally. An unchanged task returns `{ "unchanged": true, "revision": "…" }`. |
 | `forge_get_task_delivery` | `GET /api/hermes/tasks/{taskId}` | The delivery, blocker, and completion observation of the same projection. |
-| `forge_create_task` | `POST /api/hermes/tasks` | `idempotencyKey` is required. Creates a backlog task and never starts execution. |
+| `forge_create_task` | `POST /api/hermes/tasks` | `idempotencyKey` is required. Creates a backlog task. With `queue: true` the task is queued and starts by itself when every prerequisite is complete. |
 | `forge_set_task_dependencies` | `PUT /api/hermes/tasks/{taskId}/dependencies` | Replaces the prerequisites (`dependsOn`, shown as Blocked by) with the complete set given. `forge_get_task` reads them back as `dependsOn` and `blockedBy`. |
 | `forge_command_task` | `POST /api/hermes/tasks/{taskId}/commands` | Requires the current `revision` and an `idempotencyKey`. |
 
@@ -66,8 +66,13 @@ Every tool input schema is generated from the zod contract in
 - `forge_command_task` needs the task's current `revision`. A stale revision
   fails with `revision_stale`; read the task again and retry with the current
   value. The `note` field is only accepted by `send_task_note`.
-- `start_task`, `cancel_task`, and `archive_task` are not reversible by the
-  agent. Confirm intent with the person you work for before you send them.
+- `start_task` queues the task: it starts now when every prerequisite is
+  complete and never bypasses one. `disarm_task` returns a queued task to the
+  manual backlog. `forge_get_task` and `forge_get_task_delivery` report
+  `queue` with the start intent, the state, and each wait reason.
+- `cancel_task` and `archive_task` are not reversible by the agent. Confirm
+  intent with the person you work for before you send `start_task`,
+  `cancel_task`, or `archive_task`.
 - Human answers, delivery, releases, and merges are unavailable. There is no
   tool for them, and no generic "call any endpoint" tool exists.
 

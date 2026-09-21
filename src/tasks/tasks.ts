@@ -54,7 +54,7 @@ type Authority = { kind: "user"; userId: string } | { kind: "hermes"; principal:
 export type HermesGithubPort = Pick<Required<GithubReleasePort>, "observePullRequest">;
 type HermesCommand = z.infer<typeof HermesTaskCommandBodySchema>;
 const HERMES_COMMAND_AUDITS: Record<HermesCommand["command"], string> = {
-  start_task: "task_started", cancel_task: "task_cancelled", archive_task: "task_archived", unarchive_task: "task_unarchived",
+  start_task: "task_started", disarm_task: "task_disarmed", cancel_task: "task_cancelled", archive_task: "task_archived", unarchive_task: "task_unarchived",
   send_task_note: "task_note_added", duplicate_task: "task_duplicated", recheck_delivery_wait: "delivery_wait_recheck_requested",
 };
 /** Commands running anywhere in this process. Keyed without the service instance so siblings sharing a database agree. */
@@ -222,6 +222,8 @@ export class TaskService {
       if (error instanceof TaskDependencyFailure) throw new TaskFailure(error.publicMessage, error.statusCode);
       throw error;
     }
+    // Removing the last incomplete prerequisite starts a queued task; an added incomplete one keeps it queued.
+    this.repository.controls.admitQueued([taskId]);
   }
 
   /** The read path adds observed delivery integration health to the stored projection. */
@@ -297,6 +299,7 @@ export class TaskService {
           if (archivesInProgress.has(taskId)) throw new TaskFailure("Archive cleanup is in progress", 409, "illegal_command");
           this.repository.controls.start(taskId);
           break;
+        case "disarm_task": this.repository.controls.disarm(taskId); break;
         case "cancel_task": this.repository.controls.cancel(taskId); break;
         case "unarchive_task": this.unarchive(authority, taskId); break;
         case "send_task_note": this.note(authority, taskId, input.note!, `Agent note (${principal.agentId})`); break;
@@ -330,7 +333,7 @@ export class TaskService {
     });
     return {
       agent: { id: principal.agentId, name: this.database.authQuery(db => (db.prepare("SELECT name FROM forge_agents WHERE id = ?").get(principal.agentId) as { name: string }).name), profileId: principal.profileId },
-      capabilities: { taskDiscovery: true as const, taskRead: true as const, taskCreate: true as const, taskCommands: ["start_task", "cancel_task", "archive_task", "unarchive_task", "duplicate_task", "send_task_note", "recheck_delivery_wait"] as Array<z.infer<typeof HermesTaskCommandBodySchema>["command"]> },
+      capabilities: { taskDiscovery: true as const, taskRead: true as const, taskCreate: true as const, taskCommands: ["start_task", "disarm_task", "cancel_task", "archive_task", "unarchive_task", "duplicate_task", "send_task_note", "recheck_delivery_wait"] as Array<z.infer<typeof HermesTaskCommandBodySchema>["command"]> },
       projects: withPolicy,
     };
   }
@@ -427,15 +430,13 @@ export class TaskService {
         }
         this.requireEligibleProfiles(project.providerPolicy, [rootProfile, workerProfile, ...Object.values(advisorProfiles)]);
         if (this.projectConfigurationSignature(this.projects.getProjectInCompany(companyId, request.projectId)) !== projectSnapshot) throw new TaskFailure("Project configuration changed", 409);
-        // A task blocked by an undelivered prerequisite waits in the backlog and starts when the last one is delivered.
-        const blocked = request.startImmediately && request.dependsOn.some(dependency => this.repository.task(this.requireTask(authority, dependency)).status !== "delivered");
-        const startImmediately = request.startImmediately && !blocked;
-        const startWhenBlockedByDelivered = blocked;
         // A copy commits with the source it was authorized against, and carries that provenance from its first row.
-        const result = this.repository.create({ taskId, companyId, creator, request, requestHash, configuration, rootProfile, workerProfile, advisorProfiles, images, startImmediately, startWhenBlockedByDelivered, ...(copiedFromTaskId ? { copiedFromTaskId } : {}) });
+        const result = this.repository.create({ taskId, companyId, creator, request, requestHash, configuration, rootProfile, workerProfile, advisorProfiles, images, startQueued: request.startImmediately, ...(copiedFromTaskId ? { copiedFromTaskId } : {}) });
         if (capturedDispatch) new GithubTriggerDispatchRepository(this.database).linkTask(capturedDispatch.id, result.task.id);
         if (result.created) {
           if (request.dependsOn.length) this.applyDependencies(authority, companyId, result.task.id, request.dependsOn);
+          // The prerequisites are written first, so a queued task starts now only when every one is already complete.
+          if (request.startImmediately) this.repository.controls.admitQueued([result.task.id]);
           this.audit(authority, companyId, "task_created", result.task.id);
           return { task: this.repository.task(this.repository.row(result.task.id)!), created: true };
         }
@@ -461,12 +462,21 @@ export class TaskService {
     for (const profile of Object.values(dispatch.profiles.advisors)) this.profile(profile.profileId, "root");
   }
 
+  /** Queues the task. It starts now when every prerequisite is complete; otherwise it stays queued and starts when they are. */
   startTask(userId: string, taskId: string): Task {
     const task = this.getTask(userId, taskId);
     if (archivesInProgress.has(taskId)) throw new TaskFailure("Archive cleanup is in progress", 409);
     if (task.archivedAt || !["backlog", "active"].includes(task.status)) throw new TaskFailure("This task cannot be started", 409);
     this.repository.controls.start(taskId);
     this.audit({ kind: "user", userId }, task.companyId, "task_started", taskId);
+    return this.getTask(userId, taskId);
+  }
+
+  /** Returns a queued task to the manual backlog. The same people who can start a task can disarm it. */
+  disarmTask(userId: string, taskId: string): Task {
+    const task = this.getTask(userId, taskId);
+    if (task.archivedAt || !this.repository.controls.disarm(taskId)) throw new TaskFailure("Only a task in the backlog can be disarmed", 409);
+    this.audit({ kind: "user", userId }, task.companyId, "task_disarmed", taskId);
     return this.getTask(userId, taskId);
   }
 
@@ -692,7 +702,7 @@ export class TaskService {
         projectId: raw.projectId, title: raw.title, description: raw.description === undefined ? selected.description ?? "" : raw.description, idempotencyKey: raw.idempotencyKey, images: raw.images, source: raw.source, dependsOn: raw.dependsOn,
         workflow: selected.workflow ?? "standard", rootProfileId: raw.rootProfileId ?? selected.rootProfileId, workerProfileId: raw.workerProfileId ?? selected.workerProfileId,
         advisorProfileIds: Object.keys(raw.advisorProfileIds).length ? raw.advisorProfileIds : selected.advisorProfileIds ?? {},
-        deliveryTarget: policy.deliveryTarget, runProjectTests: policy.runProjectTests, visualEvidence: policy.visualEvidence, startImmediately: false,
+        deliveryTarget: policy.deliveryTarget, runProjectTests: policy.runProjectTests, visualEvidence: policy.visualEvidence, startImmediately: raw.queue ?? false,
       }, { requireSource: true }));
     } catch (error) {
       if (error instanceof WorkflowInputFailure) throw new TaskFailure(error.message, error.statusCode);
@@ -737,7 +747,7 @@ export class TaskService {
   }
 
   private isLegacyHermesRequest(input: HermesTaskCreateBody): boolean {
-    return !input.dependsOn?.length && !input.images.length && !input.source && !input.workflowId && !input.templateId && !input.rootProfileId && !input.workerProfileId && Object.keys(input.advisorProfileIds).length === 0 && input.deliveryTarget === undefined && input.runProjectTests === undefined && input.visualEvidence === undefined;
+    return !input.queue && !input.dependsOn?.length && !input.images.length && !input.source && !input.workflowId && !input.templateId && !input.rootProfileId && !input.workerProfileId && Object.keys(input.advisorProfileIds).length === 0 && input.deliveryTarget === undefined && input.runProjectTests === undefined && input.visualEvidence === undefined;
   }
 
   private legacyHermesRequest(input: HermesTaskCreateBody): TaskInput {
@@ -768,18 +778,18 @@ export class TaskService {
     const wait = task.workflowState.deliveryWait;
     const completion = task.workflowState.completion;
     const blocker = humanQuestion ? { kind: "human_question" as const } : wait ? { kind: "delivery_wait" as const, reason: wait.reason } : null;
-    const workflowStage = task.status === "cancelled" ? "cancelled" : completion || task.status === "delivered" ? "completed" : humanQuestion ? "waiting_human" : wait ? "waiting_delivery" : task.status === "active" ? "working" : "queued";
+    const workflowStage = task.status === "cancelled" ? "cancelled" : completion || task.status === "delivered" ? "completed" : humanQuestion ? "waiting_human" : wait ? "waiting_delivery" : task.status === "active" ? "working" : task.queue.state;
     const delivery = task.pullRequest || wait || completion ? { pullRequest: task.pullRequest ? { number: task.pullRequest.number, url: task.pullRequest.url, state: task.pullRequest.state, mergedAt: task.pullRequest.mergedAt } : null, checks: null, waiting: wait ? { reason: wait.reason, since: wait.since } : null, completion: completion ? { kind: completion.kind, pullRequestNumber: completion.pullRequestNumber, observedAt: completion.observedAt } : null } : null;
     const recheck = !task.archivedAt && wait && task.status === "active" ? ["recheck_delivery_wait"] as const : [] as const;
     const permittedCommands = task.archivedAt ? ["unarchive_task"] as const
-      : task.status === "backlog" ? ["start_task", "cancel_task", "archive_task", "duplicate_task"] as const
+      : task.status === "backlog" ? [task.queue.startIntent === "queued" ? "disarm_task" : "start_task", "cancel_task", "archive_task", "duplicate_task"] as const
       : task.status === "active" ? ["cancel_task", "duplicate_task", "send_task_note"] as const
       : task.status === "waiting_human" ? ["cancel_task", "duplicate_task"] as const
       : task.status === "cancelled" ? ["archive_task", "duplicate_task"] as const
       : task.status === "delivered" ? ["archive_task", "duplicate_task"] as const
       : ["duplicate_task"] as const;
     const selection = task.configuration.hermesSelection;
-    const value = { id: task.id, issueKey: task.issueKey, projectId: task.projectId, project, title: task.title, status: task.status, dependsOn: task.dependsOn, blockedBy: task.blockedBy, archived: task.archivedAt !== null, permittedCommands: [...permittedCommands, ...recheck], humanQuestion, blocker, workflowStage, workflow: { id: selection?.workflowId ?? null, engine: task.workflow, name: selection?.workflowName ?? null }, templateId: selection?.templateId ?? null, deliveryTarget: task.deliveryTarget, runProjectTests: task.configuration.runProjectTests, visualEvidence: task.configuration.visualEvidence, delivery, createdAt: task.createdAt, updatedAt: task.updatedAt };
+    const value = { id: task.id, issueKey: task.issueKey, projectId: task.projectId, project, title: task.title, status: task.status, queue: task.queue, dependsOn: task.dependsOn, blockedBy: task.blockedBy, archived: task.archivedAt !== null, permittedCommands: [...permittedCommands, ...recheck], humanQuestion, blocker, workflowStage, workflow: { id: selection?.workflowId ?? null, engine: task.workflow, name: selection?.workflowName ?? null }, templateId: selection?.templateId ?? null, deliveryTarget: task.deliveryTarget, runProjectTests: task.configuration.runProjectTests, visualEvidence: task.configuration.visualEvidence, delivery, createdAt: task.createdAt, updatedAt: task.updatedAt };
     return { ...value, revision: createHash("sha256").update(JSON.stringify({ value, commandRevision: row.command_revision })).digest("base64url") };
   }
 

@@ -12,6 +12,7 @@ import { TaskService, type TaskServicePorts } from "../../src/tasks/tasks.js";
 import { TaskTemplateService } from "../../src/tasks/templates.js";
 import { WorkflowRecordService } from "../../src/coordination/workflow-records.js";
 import { ExternalAgentService } from "../../src/identity/external-agents.js";
+import { OAuthService } from "../../src/identity/oauth.js";
 import { GithubTriggerService } from "../../src/integrations/github/triggers.js";
 import type { GithubTriggerPort } from "../../src/integrations/github/trigger-inspection.js";
 import { providerCheckId, providerCheckLabel } from "../../src/platform/health-contract.js";
@@ -34,9 +35,9 @@ const webAuthn: WebAuthnAdapter = {
   async verifyAuthenticationResponse() { return { verified: true, newCounter: 1 }; },
 };
 
-export async function nativeApp(fixtureOptions: { githubTrigger?: GithubTriggerPort; herdr?: TaskPanePort; logSink?: (line: string) => void; issueTracker?: TaskServicePorts["issueTracker"] } = {}) {
+export async function nativeApp(fixtureOptions: { githubTrigger?: GithubTriggerPort; herdr?: TaskPanePort; logSink?: (line: string) => void; issueTracker?: TaskServicePorts["issueTracker"]; reachableAddress?: string } = {}) {
   const directory = await mkdtemp(join(tmpdir(), "forge-native-app-"));
-  const config = createTestConfig(directory, { reachableAddress: "http://127.0.0.1:4111" });
+  const config = createTestConfig(directory, { reachableAddress: fixtureOptions.reachableAddress ?? "http://127.0.0.1:4111" });
   const database = createTestDatabase(config.databasePath);
   const auth = new AuthService(database, config, { webAuthn });
   const profiles = new AgentProfileService(database, auth);
@@ -55,6 +56,7 @@ export async function nativeApp(fixtureOptions: { githubTrigger?: GithubTriggerP
   const templates = new TaskTemplateService(database, auth, tasks);
   const workflows = new WorkflowRecordService(database, auth);
   const externalAgent = new ExternalAgentService(database, auth);
+  const oauth = new OAuthService(database, auth, externalAgent, config.reachableAddress);
   const githubTrigger = fixtureOptions.githubTrigger ?? {
     async observeRepository(input) { return { id: 1, fullName: input.repository }; },
     async validateLabel() {},
@@ -63,7 +65,7 @@ export async function nativeApp(fixtureOptions: { githubTrigger?: GithubTriggerP
   } satisfies GithubTriggerPort;
   const githubTriggers = new GithubTriggerService(database, auth, projects, workflows, githubTrigger, tasks);
   const wakes: string[] = [];
-  const app = createApp({ ...(fixtureOptions.logSink ? { logger: createFastifyLogger(fixtureOptions.logSink) } : {}), config, database, auth, profiles, projects, tasks, taskTemplates: templates, workflows, githubTriggers, externalAgent, health: healthyHost, readUpdate: async () => ({ status: { kind: "current" }, canRestart: false }), host: { async recover(id) { wakes.push(id); } } });
+  const app = createApp({ ...(fixtureOptions.logSink ? { logger: createFastifyLogger(fixtureOptions.logSink) } : {}), config, database, auth, profiles, projects, tasks, taskTemplates: templates, workflows, githubTriggers, externalAgent, oauth, health: healthyHost, readUpdate: async () => ({ status: { kind: "current" }, canRestart: false }), host: { async recover(id) { wakes.push(id); } } });
   const invitation = auth.ensureBootstrapInvitation();
   if (!invitation) throw new Error("Fresh database did not create an invitation");
   const options = await app.inject({ method: "POST", url: "/api/auth/bootstrap/options", payload: { token: invitation.token } });
@@ -79,7 +81,7 @@ export async function nativeApp(fixtureOptions: { githubTrigger?: GithubTriggerP
   await mkdir(repositoryPath, { recursive: true });
   await mkdir(worktreeRoot, { recursive: true });
   const project = await projects.createProject(userId, company.id, { name: "Repository", repositoryPath, worktreeRoot, repository: "owner/repo", baseBranch: "main", setupCommand: "pnpm install", verificationCommand: "pnpm test", rootProfileId: "profile_native_root", workerProfileId: "profile_native_worker" });
-  return { directory, config, database, auth, profiles, projects, tasks, templates, workflows, githubTriggers, externalAgent, app, headers, userId, company, project, wakes,
+  return { directory, config, database, auth, profiles, projects, tasks, templates, workflows, githubTriggers, externalAgent, oauth, app, headers, userId, company, project, wakes,
     async close() { await app.close(); database.close(); await rm(directory, { recursive: true, force: true }); },
   };
 }

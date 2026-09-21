@@ -89,16 +89,16 @@ export function deriveActionRequired(task: Task, integration: AgentApiIntegratio
   }
   if (integration.integrated) return null;
   if (pull.state === "conflicting") {
-    return action({ owner: "agent", reasonCode: "conflicting_pull_request", summary: "GitHub reports merge conflicts on the pull request. Merge the base branch and resolve the conflicts.", suggestedCommands: mergeCommands(task) }, at);
+    return action({ owner: "agent", reasonCode: "conflicting_pull_request", summary: "GitHub reports merge conflicts on the pull request. The task owner must merge the base branch and resolve the conflicts.", suggestedCommands: mergeCommands(task) }, at);
   }
   if (pull.checks.failing > 0) {
-    return action({ owner: "agent", reasonCode: "failed_checks", summary: "CI reports failed checks on the pull request. Read the checks and repair the build.", suggestedCommands: [`gh pr checks ${reference}`] }, at);
+    return action({ owner: "agent", reasonCode: "failed_checks", summary: "CI reports failed checks on the pull request. The task owner must read the checks and repair the build.", suggestedCommands: [`gh pr checks ${reference}`] }, at);
   }
   if (pull.state !== "absent" && pull.state !== "closed" && (pull.mergeStateStatus === "BEHIND" || (task.pullRequest?.headSha !== undefined && pull.headSha !== null && task.pullRequest.headSha !== pull.headSha))) {
-    return action({ owner: "agent", reasonCode: "stale_delivery", summary: "The pull request is behind the base branch. Update the branch and push the result.", suggestedCommands: mergeCommands(task) }, at);
+    return action({ owner: "agent", reasonCode: "stale_delivery", summary: "The pull request is behind the base branch. The task owner must update the branch and push the result.", suggestedCommands: mergeCommands(task) }, at);
   }
   if (task.status === "delivered" && requiresPullRequest(task) && (pull.state === "absent" || pull.state === "closed")) {
-    return action({ owner: "agent", reasonCode: "pull_request_missing", summary: "Forge delivered the task without an open pull request. Create the pull request for the branch.", suggestedCommands: [`gh pr create --repo ${task.configuration.repository} --head ${task.configuration.branch} --base ${task.configuration.baseBranch}`] }, at);
+    return action({ owner: "agent", reasonCode: "pull_request_missing", summary: "Forge delivered the task without an open pull request. The task owner must create the pull request for the branch.", suggestedCommands: [`gh pr create --repo ${task.configuration.repository} --head ${task.configuration.branch} --base ${task.configuration.baseBranch}`] }, at);
   }
   if (upstream) {
     return action({ owner: "upstream", reasonCode: "blocked_by_dependency", summary: "An upstream task is not integrated. Wait for the upstream pull request to merge.", suggestedCommands: [], upstream }, at);

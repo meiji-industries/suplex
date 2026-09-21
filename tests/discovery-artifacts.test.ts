@@ -7,6 +7,9 @@ const CONTENT_TYPES: Record<string, string> = {
   "/llms.txt": "text/plain; charset=utf-8",
   "/.well-known/forge/api-catalog.json": "application/json; charset=utf-8",
   "/.well-known/forge/agent-skills.json": "application/json; charset=utf-8",
+  "/.well-known/oauth-protected-resource/mcp": "application/json; charset=utf-8",
+  "/.well-known/oauth-protected-resource": "application/json; charset=utf-8",
+  "/.well-known/oauth-authorization-server": "application/json; charset=utf-8",
 };
 
 /** A pairing code, a credential, or either one hashed must never reach a public artifact. */
@@ -50,7 +53,8 @@ test("the discovery artifacts state that pairing and a scoped credential are nec
       pairing: Array<{ path: string }>;
     };
     expect(catalog.authorization).toMatch(/paired-agent bearer credential/);
-    expect(catalog.runtime.every(entry => entry.authentication === "agent credential")).toBe(true);
+    expect(catalog.runtime.find(entry => entry.path === "/mcp")?.authentication).toBe("OAuth bearer");
+    expect(catalog.runtime.filter(entry => entry.path !== "/mcp").every(entry => entry.authentication === "agent credential")).toBe(true);
     expect(catalog.runtime.map(entry => entry.path)).toContain("/api/agent/openapi.json");
     expect(catalog.pairing.map(entry => entry.path)).toEqual(["/api/agent/pairing/exchange"]);
     // Only the public artifacts themselves are reachable without a credential.
@@ -62,7 +66,7 @@ test("the discovery artifacts state that pairing and a scoped credential are nec
     };
     expect(skills.authorization).toMatch(/paired-agent bearer credential/);
     expect(skills.skills.map(entry => entry.name)).toEqual(["forge"]);
-    expect(skills.skills[0]!.clients.map(client => client.transport)).toEqual(["mcp-stdio", "http-bearer"]);
+    expect(skills.skills[0]!.clients.map(client => client.transport)).toEqual(["streamable-http", "mcp-stdio", "http-bearer"]);
   } finally { await fixture.close(); }
 });
 

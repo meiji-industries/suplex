@@ -797,9 +797,17 @@ test("AgentApi request validation rejects required fields, unapproved choices, a
 
 test("persisted grants remain authoritative when a principal project observation is stale", async () => {
   const principal = externalAgent.authenticate(agentCredential);
-  const result = await tasks.createTaskForAgentApi({ ...principal, projectIds: [] }, { projectId, title: "Stale observation", idempotencyKey: "externalAgent-stale-observation-001", images: [], advisorProfileIds: {} });
+  const stalePrincipal = { ...principal, projectIds: [] };
+  const result = await tasks.createTaskForAgentApi(stalePrincipal, { projectId, title: "Stale observation", idempotencyKey: "externalAgent-stale-observation-001", images: [], advisorProfileIds: {} });
   expect(result.created).toBe(true);
+  expect(tasks.listAgentApiTasks(stalePrincipal, { limit: 10 }).tasks.map(task => task.id)).toContain(result.task.id);
+  expect(tasks.getAgentApiTask(stalePrincipal, result.task.id)).toMatchObject({ id: result.task.id });
+  expect(tasks.listAgentApiTaskRows(stalePrincipal).map(row => row.id)).toContain(result.task.id);
+
   externalAgent.replaceProjects(adminId, agentId, []);
+  expect(tasks.listAgentApiTasks(stalePrincipal, { limit: 10 })).toEqual({ tasks: [], nextCursor: null });
+  expect(() => tasks.getAgentApiTask(stalePrincipal, result.task.id)).toThrow("Not found");
+  expect(tasks.listAgentApiTaskRows(stalePrincipal)).toEqual([]);
   const denied = await tasks.createTaskForAgentApi({ ...principal, projectIds: [projectId] }, { projectId, title: "Revoked grant", idempotencyKey: "externalAgent-revoked-grant-001", images: [], advisorProfileIds: {} }).catch(error => error);
   expect(denied).toMatchObject({ statusCode: 404 });
 });
@@ -1075,7 +1083,7 @@ test("bearer authentication failures are identical at the HTTP boundary", async 
   }
 });
 
-test("GET /api/agent/tasks/:taskId returns safe projection, handles non-enumeration and scope revocation", async () => {
+test("GET /api/agent/tasks/:taskId reads project tasks but keeps commands creator-only", async () => {
   const created = await app.inject({
     method: "POST",
     url: "/api/agent/tasks",
@@ -1102,7 +1110,7 @@ test("GET /api/agent/tasks/:taskId returns safe projection, handles non-enumerat
   expect(Object.keys(getSuccess.json()).sort()).toEqual(expectedKeys);
   expect(getSuccess.json().title).toBe("Task For Status Check");
 
-  // Another agent granted the same project still reads nothing: a task belongs to the agent that created it.
+  // Another agent granted the same project can observe the task but cannot mutate it.
   const otherAgentIssued = externalAgent.create(adminId, { name: "AgentApi Bot Other", companyId, projectIds: [projectId] });
   const otherPaired = externalAgent.exchange({ pairingCode: otherAgentIssued.pairingCode, profileId: "profile-other" });
 
@@ -1111,7 +1119,23 @@ test("GET /api/agent/tasks/:taskId returns safe projection, handles non-enumerat
     url: `/api/agent/tasks/${taskId}`,
     headers: { Authorization: `Bearer ${otherPaired.credential}` },
   });
-  expect(getOtherAgent.statusCode).toBe(404);
+  expect(getOtherAgent.statusCode).toBe(200);
+  expect(getOtherAgent.json()).toMatchObject({ id: taskId, permittedCommands: [] });
+  expect(getOtherAgent.json().revision).not.toBe(getSuccess.json().revision);
+  const otherCommand = await app.inject({
+    method: "POST",
+    url: `/api/agent/tasks/${taskId}/commands`,
+    headers: { Authorization: `Bearer ${otherPaired.credential}` },
+    payload: { command: "start_task", revision: getOtherAgent.json().revision, idempotencyKey: "other-agent-command" },
+  });
+  expect(otherCommand.statusCode).toBe(404);
+  const otherDependencies = await app.inject({
+    method: "PUT",
+    url: `/api/agent/tasks/${taskId}/dependencies`,
+    headers: { Authorization: `Bearer ${otherPaired.credential}` },
+    payload: { dependsOn: [] },
+  });
+  expect(otherDependencies.statusCode).toBe(404);
 
   // Non-existent task returns 404
   const getNonExistent = await app.inject({
@@ -1160,6 +1184,27 @@ test("a delivered task with a conflicting pull request blocks its downstream tas
   expect((await ids("?filter=not_integrated")).sort()).toEqual([foundation, downstream].sort());
 });
 
+test("foreign delivery problems identify the task owner without repair commands", async () => {
+  const createForeignDelivery = async (title: string, key: string, pullRequestNumber: number, observation: GithubPullRequestObservation) => {
+    const created = (await tasks.createTask(adminId, companyId, { projectId, title, idempotencyKey: key })).task;
+    tasks.startTask(adminId, created.id);
+    tasks.repository.controls.setPullRequest(created.id, { repository: "meiji/externalAgent-test", number: pullRequestNumber, url: `https://github.com/meiji/externalAgent-test/pull/${pullRequestNumber}`, headSha: "d".repeat(40), state: "open", mergedAt: null });
+    tasks.repository.controls.markDelivered(created.id);
+    observations.set(tasks.getTask(adminId, created.id).configuration.branch, observation);
+    return created.id;
+  };
+  const conflict = await createForeignDelivery("Foreign conflict", "foreign-conflict-001", 141, ghPullRequest({ number: 141, state: "OPEN", headSha: "d".repeat(40), mergeable: "CONFLICTING", mergeStateStatus: "DIRTY" }));
+  const stale = await createForeignDelivery("Foreign stale delivery", "foreign-stale-001", 142, ghPullRequest({ number: 142, state: "OPEN", headSha: "d".repeat(40), mergeStateStatus: "BEHIND" }));
+
+  for (const [taskId, reasonCode] of [[conflict, "conflicting_pull_request"], [stale, "stale_delivery"]] as const) {
+    const projection = (await readTask(taskId)).json();
+    expect(projection).toMatchObject({ id: taskId, permittedCommands: [], actionRequired: { owner: "task_owner", reasonCode, suggestedCommands: [] } });
+    expect(projection.actionRequired.summary).toContain("The task owner must");
+  }
+  expect(((await listTasks("?filter=conflicting_pull_request")).json().tasks as Array<{ id: string }>).map(task => task.id)).toContain(conflict);
+  expect(((await listTasks("?filter=stale_delivery")).json().tasks as Array<{ id: string }>).map(task => task.id)).toContain(stale);
+});
+
 test("a merged pull request reports integration with no action required", async () => {
   const taskId = await deliverTask("Merged delivery", "integration-merged-001", 42, ghPullRequest({ number: 42, state: "MERGED", headSha: "d".repeat(40) }));
   const body = (await readTask(taskId)).json();
@@ -1202,8 +1247,9 @@ test("a GitHub read failure returns 200 with an unavailable observation and no i
   expect(response.json().actionRequired).toMatchObject({ owner: "forge", reasonCode: "observation_unavailable" });
 });
 
-test("GET /api/agent/tasks scopes the list, rejects an unknown filter, and exposes no build internals", async () => {
+test("GET /api/agent/tasks lists every task in granted projects and exposes no build internals", async () => {
   const granted = await createAgentApiTask("Granted project task", "list-granted-001");
+  const humanOwned = (await tasks.createTask(adminId, companyId, { projectId, title: "Human-owned visible task", idempotencyKey: "list-human-owned-001" })).task;
   const outOfGrant = (await tasks.createTask(adminId, companyId, { projectId: otherProjectId, title: "Out of grant", idempotencyKey: "list-out-of-grant-001" })).task;
   const crossCompany = (await tasks.createTask(adminId, auth.listVisibleCompanies(adminId).find(company => company.id !== companyId)!.id, { projectId: crossCompanyProjectId, title: "Cross company", idempotencyKey: "list-cross-company-001" })).task;
 
@@ -1213,8 +1259,10 @@ test("GET /api/agent/tasks scopes the list, rejects an unknown filter, and expos
   const listed = response.json().tasks as Array<Record<string, unknown>>;
   const ids = listed.map(task => task.id);
   expect(ids).toContain(granted);
+  expect(ids).toContain(humanOwned.id);
   expect(ids).not.toContain(outOfGrant.id);
   expect(ids).not.toContain(crossCompany.id);
+  expect(listed.find(task => task.id === humanOwned.id)).toMatchObject({ permittedCommands: [] });
 
   expect(Object.keys(listed[0]!).sort()).toEqual(["id", "issueKey", "projectId", "project", "title", "status", "queue", "dependsOn", "blockedBy", "archived", "revision", "permittedCommands", "humanQuestion", "blocker", "workflowStage", "workflow", "templateId", "deliveryTarget", "runProjectTests", "visualEvidence", "delivery", "createdAt", "updatedAt", "implementation", "integration", "actionRequired"].sort());
   expect(JSON.stringify(listed)).not.toMatch(/worktree|repositoryPath|session|turn|prompt|transcript|credential|objective/i);
@@ -1229,7 +1277,7 @@ test("GET /api/agent/tasks scopes the list, rejects an unknown filter, and expos
   expect((await readTask(granted)).json()).toMatchObject({ archived: true, permittedCommands: ["unarchive_task"] });
 });
 
-test("real HTTP discovery applies current grants, ownership, pagination, and conditional polling", async () => {
+test("real HTTP discovery applies current grants, creator authority, pagination, and conditional polling", async () => {
   const create = async (title: string, idempotencyKey: string) => {
     const response = await app.inject({ method: "POST", url: "/api/agent/tasks", headers: { Authorization: `Bearer ${agentCredential}` }, payload: { projectId, title, idempotencyKey } });
     expect(response.statusCode, response.body).toBe(201);
@@ -1238,7 +1286,7 @@ test("real HTTP discovery applies current grants, ownership, pagination, and con
   const first = await create("Discovery first", "discovery-001");
   const second = await create("Discovery second", "discovery-002");
   const third = await create("Discovery third", "discovery-003");
-  const humanTask = await tasks.createTask(adminId, companyId, { projectId, title: "Human-owned task", description: "Not visible to AgentApi", idempotencyKey: "human-discovery-001" });
+  const humanTask = await tasks.createTask(adminId, companyId, { projectId, title: "Human-owned task", description: "Visible without command authority", idempotencyKey: "human-discovery-001" });
 
   const otherIssued = externalAgent.create(adminId, { name: "Discovery Other", companyId, projectIds: [projectId] });
   const otherCredential = externalAgent.exchange({ pairingCode: otherIssued.pairingCode, profileId: "profile-discovery-other" }).credential;
@@ -1291,17 +1339,34 @@ test("real HTTP discovery applies current grants, ownership, pagination, and con
   address = await app.listen({ host: "127.0.0.1", port: 0 });
   const pageTwo = await request(`/api/agent/tasks?limit=2&cursor=${encodeURIComponent(pageOneBody.nextCursor!)}`);
   expect(pageTwo.status).toBe(200);
-  const pageTwoBody = await pageTwo.json() as { tasks: Array<{ id: string }> };
-  expect(pageTwoBody.tasks).toHaveLength(1);
-  expect([...pageOneBody.tasks.map(task => task.id), ...pageTwoBody.tasks.map(task => task.id)].sort()).toEqual([first.id, second.id, third.id].sort());
+  const pageTwoBody = await pageTwo.json() as { tasks: Array<{ id: string }>; nextCursor: string | null };
+  expect(pageTwoBody.tasks).toHaveLength(2);
+  expect(pageTwoBody.nextCursor).toBeTypeOf("string");
+  const pageThree = await request(`/api/agent/tasks?limit=2&cursor=${encodeURIComponent(pageTwoBody.nextCursor!)}`);
+  expect(pageThree.status).toBe(200);
+  const pageThreeBody = await pageThree.json() as { tasks: Array<{ id: string }>; nextCursor: string | null };
+  expect(pageThreeBody.tasks).toHaveLength(1);
+  expect(pageThreeBody.nextCursor).toBeNull();
+  expect([...pageOneBody.tasks, ...pageTwoBody.tasks, ...pageThreeBody.tasks].map(task => task.id).sort()).toEqual([first.id, second.id, third.id, humanTask.task.id, otherTask.json().id].sort());
   expect((await request(`/api/agent/tasks?limit=2&cursor=${encodeURIComponent(pageOneBody.nextCursor!)}`, otherCredential)).status).toBe(400);
   expect((await request(`/api/agent/tasks?limit=2&status=active&cursor=${encodeURIComponent(pageOneBody.nextCursor!)}`)).status).toBe(400);
   expect((await request("/api/agent/tasks?projectId=project_unknown")).status).toBe(404);
-  for (const taskId of [otherTask.json().id, otherProjectTask.json().id, crossCompanyTask.json().id, humanTask.task.id]) {
+  for (const taskId of [otherProjectTask.json().id, crossCompanyTask.json().id]) {
     const denied = await request(`/api/agent/tasks/${taskId}`);
     expect(denied.status).toBe(404);
     expect(await denied.json()).toEqual({ error: "Not found", code: "resource_not_found" });
   }
+  for (const taskId of [otherTask.json().id, humanTask.task.id]) {
+    const readable = await request(`/api/agent/tasks/${taskId}`);
+    expect(readable.status).toBe(200);
+    expect(await readable.json()).toMatchObject({ id: taskId, permittedCommands: [] });
+  }
+  const foreignCurrent = await request(`/api/agent/tasks/${otherTask.json().id}`);
+  const foreignEtag = foreignCurrent.headers.get("etag");
+  expect(foreignEtag).toBeTypeOf("string");
+  const foreignUnchanged = await request(`/api/agent/tasks/${otherTask.json().id}`, agentCredential, { "if-none-match": foreignEtag! });
+  expect(foreignUnchanged.status).toBe(304);
+  expect(await foreignUnchanged.text()).toBe("");
   expect((await request("/api/agent/tasks?cursor=not-a-cursor")).status).toBe(400);
   const [cursorPayload, cursorSignature] = pageOneBody.nextCursor!.split(".");
   const tamperedSignature = `${cursorSignature!.slice(0, -1)}${cursorSignature!.endsWith("A") ? "B" : "A"}`;
@@ -1313,17 +1378,18 @@ test("real HTTP discovery applies current grants, ownership, pagination, and con
   expect(await (await request("/api/agent/tasks?archived=true")).json()).toMatchObject({ tasks: [{ id: second.id }] });
   expect(await (await request("/api/agent/tasks?attention=true")).json()).toMatchObject({ tasks: [{ id: first.id }] });
   const blockerTasks = await (await request("/api/agent/tasks?blocker=true")).json() as { tasks: Array<{ id: string }>; nextCursor: string | null };
-  expect(blockerTasks.tasks.map(task => task.id)).toEqual([first.id, third.id].sort());
-  const blockedFirstPage = await (await request("/api/agent/tasks?blocker=true&limit=1")).json() as { tasks: Array<{ id: string }>; nextCursor: string | null };
-  const blockedSecondPage = await (await request(`/api/agent/tasks?blocker=true&limit=1&cursor=${encodeURIComponent(blockedFirstPage.nextCursor!)}`)).json() as { tasks: Array<{ id: string }>; nextCursor: string | null };
-  expect([...blockedFirstPage.tasks, ...blockedSecondPage.tasks].map(task => task.id).sort()).toEqual([first.id, third.id].sort());
+  const blockedIds = [first.id, third.id, otherTask.json().id, humanTask.task.id].sort();
+  expect(blockerTasks.tasks.map(task => task.id)).toEqual(blockedIds);
+  const blockedFirstPage = await (await request("/api/agent/tasks?blocker=true&limit=2")).json() as { tasks: Array<{ id: string }>; nextCursor: string | null };
+  const blockedSecondPage = await (await request(`/api/agent/tasks?blocker=true&limit=2&cursor=${encodeURIComponent(blockedFirstPage.nextCursor!)}`)).json() as { tasks: Array<{ id: string }>; nextCursor: string | null };
+  expect([...blockedFirstPage.tasks, ...blockedSecondPage.tasks].map(task => task.id).sort()).toEqual(blockedIds);
   expect(blockedSecondPage.nextCursor).toBeNull();
   const combinedBlocked = await (await request(`/api/agent/tasks?projectId=${projectId}&status=active&archived=false&attention=false&blocker=true&updatedSince=2030-01-01T00:00:00Z`)).json() as { tasks: Array<{ id: string }> };
-  expect(combinedBlocked.tasks.map(task => task.id)).toEqual([third.id]);
+  expect(combinedBlocked.tasks.map(task => task.id)).toEqual([third.id, otherTask.json().id, humanTask.task.id].sort());
   const unblockedTasks = await (await request("/api/agent/tasks?blocker=false")).json() as { tasks: Array<{ id: string }> };
   expect(unblockedTasks.tasks.map(task => task.id)).toEqual([second.id]);
   const updatedTasks = await (await request("/api/agent/tasks?updatedSince=2030-01-01T00:00:00Z")).json() as { tasks: Array<{ id: string }> };
-  expect(updatedTasks.tasks.map(task => task.id)).toEqual(expect.arrayContaining([first.id, second.id, third.id]));
+  expect(updatedTasks.tasks.map(task => task.id)).toEqual(expect.arrayContaining([first.id, second.id, third.id, otherTask.json().id, humanTask.task.id]));
 
   const current = await request(`/api/agent/tasks/${first.id}`);
   expect(current.status).toBe(200);

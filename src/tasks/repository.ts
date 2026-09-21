@@ -51,9 +51,10 @@ export class TaskRepository {
     return this.database.authQuery(db => z.array(RowSchema).parse(db.prepare(`${select} ORDER BY julianday(activity_updated_at) DESC, t.id`).all()));
   }
 
-  agentApiRows(input: { agentId: string; companyId: string; projectId?: string; status?: string; archived?: boolean; attention?: boolean; blocker?: boolean; updatedSince?: string; cursor?: { updatedAt: string; id: string }; limit: number }): TaskRow[] {
-    const conditions = ["t.company_id = ?", "t.creator_agent_id = ?", "a.status = 'paired'", "a.revoked_at IS NULL"];
-    const params: Array<string | number> = [input.companyId, input.agentId];
+  agentApiRows(input: { agentId: string; companyId: string; creatorAgentId?: string; projectId?: string; status?: string; archived?: boolean; attention?: boolean; blocker?: boolean; updatedSince?: string; cursor?: { updatedAt: string; id: string }; limit?: number }): TaskRow[] {
+    const conditions = ["t.company_id = ?", "a.status = 'paired'", "a.revoked_at IS NULL"];
+    const params: Array<string | number> = [input.companyId];
+    if (input.creatorAgentId) { conditions.push("t.creator_agent_id = ?"); params.push(input.creatorAgentId); }
     if (input.projectId) { conditions.push("t.project_id = ?"); params.push(input.projectId); }
     if (input.status) { conditions.push("control.status = ?"); params.push(input.status); }
     if (input.archived !== undefined) conditions.push(input.archived ? "t.archived_at IS NOT NULL" : "t.archived_at IS NULL");
@@ -61,8 +62,9 @@ export class TaskRepository {
     if (input.blocker !== undefined) conditions.push(input.blocker ? "((control.human_question IS NOT NULL AND control.human_question_id IS NOT NULL) OR json_extract(control.workflow_state_json, '$.deliveryWait') IS NOT NULL)" : "((control.human_question IS NULL OR control.human_question_id IS NULL) AND json_extract(control.workflow_state_json, '$.deliveryWait') IS NULL)");
     if (input.updatedSince) { conditions.push("julianday(activity_updated_at) >= julianday(?)"); params.push(input.updatedSince); }
     if (input.cursor) { conditions.push("(julianday(activity_updated_at) < julianday(?) OR (julianday(activity_updated_at) = julianday(?) AND t.id > ?))"); params.push(input.cursor.updatedAt, input.cursor.updatedAt, input.cursor.id); }
-    params.push(input.limit);
-    return this.database.authQuery(db => z.array(RowSchema).parse(db.prepare(`${select} JOIN forge_external_agents a ON a.id = ? AND a.company_id = t.company_id JOIN forge_external_agent_project_grants g ON g.agent_id = a.id AND g.company_id = t.company_id AND g.project_id = t.project_id WHERE ${conditions.join(" AND ")} ORDER BY julianday(activity_updated_at) DESC, t.id LIMIT ?`).all(input.agentId, ...params)));
+    if (input.limit !== undefined) params.push(input.limit);
+    const limit = input.limit === undefined ? "" : " LIMIT ?";
+    return this.database.authQuery(db => z.array(RowSchema).parse(db.prepare(`${select} JOIN forge_external_agents a ON a.id = ? AND a.company_id = t.company_id JOIN forge_external_agent_project_grants g ON g.agent_id = a.id AND g.company_id = t.company_id AND g.project_id = t.project_id WHERE ${conditions.join(" AND ")} ORDER BY julianday(activity_updated_at) DESC, t.id${limit}`).all(input.agentId, ...params)));
   }
 
   existing(companyId: string, key: string, requestHash: string, creator: TaskCreator): TaskRow | null {

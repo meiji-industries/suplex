@@ -38,6 +38,13 @@ const pages: FastifyPluginAsync<PageRoutesOptions> = async (app, options) => {
     return reply.redirect("/tasks");
   });
   app.get("/auth", async (request, reply) => sendHtml(request, reply, renderApplicationPage("auth", assetMode)));
+  app.get("/oauth/consent", async (request, reply) => {
+    const requestId = (request.query as { request?: unknown }).request;
+    if (typeof requestId !== "string" || !/^oauth_request_[a-f0-9]{32}$/.test(requestId)) return reply.code(400).type("text/plain; charset=utf-8").send("Invalid authorization request");
+    if (auth && !(await sessionUser(auth, request, reply, options.config))) return reply.redirect(`/auth?returnTo=${encodeURIComponent(`/oauth/consent?request=${requestId}`)}`);
+    reply.header("Cache-Control", "no-store").header("Referrer-Policy", "no-referrer");
+    return sendHtml(request, reply, renderApplicationPage("oauth-consent", assetMode));
+  });
   app.get("/admin", async (request, reply) => {
     if (!(await requirePageSession(request, reply))) return reply;
     return sendHtml(request, reply, renderApplicationPage("admin", assetMode));

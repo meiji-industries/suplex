@@ -51,7 +51,7 @@ ${frontendEntry(assetMode)}
 </html>`;
 }
 
-export function renderApplicationPage(view: "auth" | "admin" | "projects" | "project-prompts" | "project-templates" | "tasks" | "board" | "timeline" | "analytics" | "company-settings" | "profile" | "setup" | "onboarding", assetMode: FrontendAssetMode = "built"): string {
+export function renderApplicationPage(view: "auth" | "oauth-consent" | "admin" | "projects" | "project-prompts" | "project-templates" | "tasks" | "board" | "timeline" | "analytics" | "company-settings" | "profile" | "setup" | "onboarding", assetMode: FrontendAssetMode = "built"): string {
   return `<!doctype html>
 <html lang="en">
   <head>
@@ -59,7 +59,7 @@ export function renderApplicationPage(view: "auth" | "admin" | "projects" | "pro
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="theme-color" content="#ffffff">
 ${themeBootstrap()}
-    <title>Forge · ${view === "auth" ? "Sign in" : view === "admin" ? "Administration" : view === "projects" ? "Projects" : view === "project-prompts" ? "Project prompts" : view === "project-templates" ? "Project templates" : view === "tasks" ? "Tasks" : view === "board" ? "Board" : view === "timeline" ? "Timeline" : view === "profile" ? "Profile" : view === "setup" ? "Set up" : view === "onboarding" ? "Onboarding" : "Company settings"}</title>
+    <title>Forge · ${view === "auth" ? "Sign in" : view === "oauth-consent" ? "Approve connection" : view === "admin" ? "Administration" : view === "projects" ? "Projects" : view === "project-prompts" ? "Project prompts" : view === "project-templates" ? "Project templates" : view === "tasks" ? "Tasks" : view === "board" ? "Board" : view === "timeline" ? "Timeline" : view === "profile" ? "Profile" : view === "setup" ? "Set up" : view === "onboarding" ? "Onboarding" : "Company settings"}</title>
 ${frontendHead(assetMode)}  </head>
   <body>
     <div id="forge-app"></div>

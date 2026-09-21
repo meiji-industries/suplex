@@ -2,8 +2,9 @@
 
 External agent credentials use bearer authentication. Every request reads the current
 persisted credential and project grants. A revoked credential returns `401`.
-Tasks remain concealed with `404` unless the caller is their creator and has a
-current grant for the task project in the agent's company.
+Task reads cover every task in the caller's currently granted projects and
+company. Missing tasks and tasks outside those grants remain concealed with
+`404`. Mutations remain limited to tasks the caller created.
 
 The bearer credential and persisted project grants authorize every request.
 `profileId` is optional client metadata. It can be absent, shared by more than
@@ -46,7 +47,8 @@ with `id`, `name`, `description`, and `permittedForAgentTaskCreation`. `GET
 that project. Both routes require a current project grant. The permission flag
 comes from the project's agent task policy.
 
-`GET /api/agent/tasks` returns only the caller's tasks. It accepts these query
+`GET /api/agent/tasks` returns every task in the caller's currently granted
+projects. It accepts these query
 parameters: `projectId`, `status`, `archived`, `attention`, `blocker`,
 `updatedSince` (ISO-8601 timestamp), `limit` (1 through 100, default 50),
 `cursor`, and `filter`. Results are ordered by `updatedAt` descending and task
@@ -66,6 +68,7 @@ current human question or a persisted delivery wait. A task projection includes
 only safe task, project, workflow progress, question, and delivery observations.
 `permittedCommands` lists the lifecycle commands that
 `POST /api/agent/tasks/:taskId/commands` accepts for the task right now.
+It is empty when another agent or a user created the task.
 `checks` is `null`, which means Forge has no persisted check observation to
 report. `deliveryTarget`, `runProjectTests`, and `visualEvidence` report the
 configuration the project policy applied to the task.
@@ -75,9 +78,12 @@ Read responses (`GET` and `POST /api/agent/tasks`) also carry `implementation`,
 the task's pull request when the request was served, with `observation` set to
 `unavailable` and `integrated` left `false` when GitHub could not answer. Forge
 never observes deployed runtimes, so `integration.deployed.included` is always
-`null`. `actionRequired` names the owner and the reason the task is not
-integrated, or is `null` when nothing is outstanding. Command replies omit these
-three fields: a command reports stored task state and reads no provider.
+`null`. `actionRequired` describes the observed owner and reason when work is
+outstanding. It does not grant command authority. `permittedCommands` is the
+authority signal. When another actor created a task, an agent-owned repair uses
+`owner: "task_owner"` and returns an empty `suggestedCommands` array. Human,
+Forge, and upstream owners remain descriptive. Command replies omit these three
+fields because a command reports stored task state and reads no provider.
 
 `filter` selects on that observed health: `stale_delivery`,
 `conflicting_pull_request`, `failed_checks`, `pending_review`,
@@ -85,14 +91,14 @@ three fields: a command reports stored task state and reads no provider.
 drawn, so `filter` narrows the returned page rather than the scan; keep
 following `nextCursor` to see every matching task.
 
-Missing, out-of-grant, cross-company, and other-creator tasks all return `404`
-with `{ "code": "resource_not_found" }`. This intentionally conceals which
-condition applied.
+Missing, out-of-grant, and cross-company tasks all return `404` with
+`{ "code": "resource_not_found" }`. This conceals which condition applied.
 
 ## Conditional task polling
 
 `GET /api/agent/tasks/:taskId` returns an `ETag` derived from the full safe
-projection. Send that exact value in `If-None-Match` to receive `304` without a
+projection, including `permittedCommands`. Send that exact value in
+`If-None-Match` to receive `304` without a
 body when unchanged. Authorization always happens before the conditional
 response. The opaque `revision` and ETag change when any exposed task, question,
 workflow, project, or delivery field changes. To require a known revision for a
@@ -108,8 +114,10 @@ All successful Agent API responses use `Cache-Control: private, no-store`.
 body takes `command`, the task's current `revision`, an `idempotencyKey`, and
 `note` for `send_task_note` only. A stale revision returns `412` with
 `{ "code": "revision_stale" }`; a command outside `permittedCommands` returns
-`409` with `{ "code": "illegal_command" }`. Human answers, delivery, and merges
-have no command and stay human authority.
+`409` with `{ "code": "illegal_command" }`. Only the paired agent that created
+the task can send a command. A command for another task returns the same `404`
+as an unavailable task. Human answers, delivery, and merges have no command and
+stay human authority.
 
 ## Creating a task
 

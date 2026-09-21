@@ -19,6 +19,7 @@ import { ProviderInstanceService } from "./profiles/provider-instances.js";
 import { ProjectService } from "./projects/projects.js";
 import { TaskService } from "./tasks/tasks.js";
 import { ExternalAgentService } from "./identity/external-agents.js";
+import { OAuthService } from "./identity/oauth.js";
 import { AgentDeliveryService } from "./delivery/agent-delivery.js";
 import { DeliveryOperations } from "./delivery/operations.js";
 import { TaskHost } from "./tasks/host.js";
@@ -44,6 +45,7 @@ export async function createForgeServer(config: ForgeConfig = loadConfig(), opti
   const host = new TaskHost(database, { artifactRoot: config.artifactRoot });
   const auth = new AuthService(database, config);
   const externalAgent = new ExternalAgentService(database, auth);
+  const oauth = new OAuthService(database, auth, externalAgent, config.reachableAddress);
   const projects = new ProjectService(database, auth, config);
   await seedDevelopmentData(auth, config);
   const profiles = new AgentProfileService(database, auth);
@@ -60,6 +62,7 @@ export async function createForgeServer(config: ForgeConfig = loadConfig(), opti
     health: createHostHealthDependencies(config, database),
     auth,
     externalAgent,
+    oauth,
     agentDelivery,
     projects,
     profiles,

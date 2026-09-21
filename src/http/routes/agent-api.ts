@@ -9,11 +9,11 @@ import {
   AgentApiProjectDiscoveryQuerySchema, AgentApiTemplateDiscoveryResponseSchema, AgentApiWorkflowDiscoveryResponseSchema,
   AgentApiTaskIdParamsSchema,
   AgentApiTaskListQuerySchema, AgentApiTaskListResponseSchema, AgentApiTaskReadProjectionSchema, agentApiRuntimeOpenApi,
+  agentApiCapabilities,
 } from "../contracts/agent-api.js";
 import type { AgentDeliveryService } from "../../delivery/agent-delivery.js";
 import { TaskFailure, type AgentApiGithubPort, type TaskService } from "../../tasks/tasks.js";
 import type { TaskHost } from "../../tasks/host.js";
-import { DeliveryTargetSchema } from "../../tasks/contracts.js";
 
 export function authenticateAgentApiBearer(header: string | undefined, externalAgent: ExternalAgentService): ExternalAgentPrincipal {
   if (!header || !header.startsWith("Bearer ")) {
@@ -51,17 +51,7 @@ export function registerAgentApiTaskRoutes(app: FastifyInstance, options: { exte
     config: { agentApiRuntime: true },
     schema: { response: AgentApiRuntimeOperations.capabilities.response },
     preValidation: async (request) => { authenticate(request.headers.authorization); },
-  }, async (_request, reply) => reply.header("Cache-Control", "private, no-store").send({
-    apiVersion: "v1",
-    capabilities: { read: { task: true, workflows: true, templates: true }, create: { backlogTask: true, queuedTask: true, deliveryTargets: DeliveryTargetSchema.options }, taskControl: true, delivery: agentDelivery, merge: agentDelivery, humanDecisions: false },
-    autonomousCommands: [
-      "create_backlog_task", "create_queued_task", "start_task", "disarm_task", "cancel_task", "archive_task", "unarchive_task", "duplicate_task", "send_task_note", "recheck_delivery_wait",
-      ...(agentDelivery ? ["observe_delivery", "request_delivery_repair", "decide_delivery_wait", "read_merge_train", "request_merge_approval", "merge_pull_request"] as const : []),
-    ],
-    humanOnlyRecords: ["task_human_answer"],
-    unavailableCommands: agentDelivery ? ["answer_human_question", "deliver_task"] as const : ["answer_human_question", "deliver_task", "merge_pull_request"] as const,
-    pagination: { supported: false, cursor: false },
-  }));
+  }, async (_request, reply) => reply.header("Cache-Control", "private, no-store").send(agentApiCapabilities(agentDelivery)));
 
   typed.get(`${prefix}/workflows`, {
     config: { agentApiRuntime: true },

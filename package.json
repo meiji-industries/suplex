@@ -49,6 +49,7 @@
     "@fastify/cookie": "^11.1.2",
     "@fastify/type-provider-zod": "^1.0.0",
     "@fastify/websocket": "11.3.0",
+    "@modelcontextprotocol/sdk": "1.30.0",
     "@pierre/diffs": "^1.4.0",
     "@pierre/trees": "1.0.0-beta.6",
     "@shadcn/react": "^0.3.1",

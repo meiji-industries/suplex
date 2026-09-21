@@ -4,12 +4,13 @@ This document has two halves. The first half is public. Any agent can read it an
 the artifacts it describes without a credential. The second half is the operator
 handoff. It needs an administrator session in Forge.
 
-Forge serves no remote MCP endpoint. The only MCP transport is a local stdio
-bridge. See [the bridge guide](../agent-mcp.md).
+Forge serves a remote Streamable HTTP MCP endpoint at `/mcp`. OAuth 2.1 browser
+approval protects it. The local stdio bridge and the Agent API remain advanced
+pairing options. See [the MCP guide](../agent-mcp.md).
 
 ## Public discovery
 
-Forge serves three artifacts without authentication. They describe the contract.
+Forge serves six artifacts without authentication. They describe the contract.
 They never contain task data, company data, or a credential.
 
 | Path | Type | Content |
@@ -17,15 +18,17 @@ They never contain task data, company data, or a credential.
 | `/llms.txt` | `text/plain` | A plain-text overview of the deployment. |
 | `/.well-known/forge/api-catalog.json` | `application/json` | Every public, pairing, and runtime path with its authentication. |
 | `/.well-known/forge/agent-skills.json` | `application/json` | The `forge` agent skill, its clients, and the variables to set. |
+| `/.well-known/oauth-protected-resource/mcp` | `application/json` | The canonical MCP resource and its authorization server. |
+| `/.well-known/oauth-protected-resource` | `application/json` | The root compatibility form of the protected-resource metadata. |
+| `/.well-known/oauth-authorization-server` | `application/json` | OAuth endpoints, grants, scopes, and PKCE methods. |
 
 Read them in this order.
 
 1. Read `/llms.txt` to learn what the deployment is.
-2. Read `/.well-known/forge/api-catalog.json` to find the pairing path and the
-   runtime paths.
+2. Read `/.well-known/forge/api-catalog.json` to find the MCP, pairing, and runtime paths.
 3. Read `/.well-known/forge/agent-skills.json` to choose a client.
 
-Every runtime path stays closed until you pair. `GET /api/agent/openapi.json`,
+`POST /mcp` stays closed until OAuth approval. Every Agent API runtime path stays closed until you pair. `GET /api/agent/openapi.json`,
 `GET /api/agent/capabilities`, `GET /api/agent/me`, the workflow and template
 discovery routes, and every task route answer
 `401` with `credential_invalid` when the request carries no credential. The public
@@ -34,7 +37,19 @@ artifacts state this. They do not promise access.
 The artifacts are a map. `GET /api/agent/openapi.json` is the contract. Read the
 served document after you pair, and treat it as authoritative when the two differ.
 
-## Install and pair
+## Connect through OAuth
+
+1. Add the canonical `/mcp` resource to the MCP client.
+2. Start the client login flow.
+3. Sign in to Forge when Forge asks you to sign in.
+4. Check the callback, and select the company and projects.
+5. Select **Approve**.
+
+Forge creates or reuses one stable external-agent identity for the registered
+client, the administrator, and the company. Refresh and reconnect keep that
+identity. The Agents page controls its grants and revocation.
+
+## Use advanced pairing
 
 1. Install the skill in the client that will use it. Hermes users copy
    `skills/forge` into the active Hermes profile. [The skill guide](../agent-skill.md)
@@ -66,9 +81,11 @@ agent. It grants nothing else.
   current revision and an idempotency key are both necessary.
 
 Forge conceals what you cannot reach. A task in another company, a task in a
-project without a grant, a task created by another agent, and a task that does not
-exist all answer `404` with the same body. A denial never tells you which case
-applied. Treat every `404` as "not available to you" and stop.
+project without a grant, and a task that does not exist all answer `404` with the
+same body. A denial never tells you which case applied. Treat every `404` as
+"not available to you" and stop. Reads include tasks that users or other agents
+created in granted projects. Those tasks have no permitted commands. Task
+commands and dependency changes remain limited to tasks this agent created.
 
 Human answers, delivery, and merges are not available to an agent unless
 `GET /api/agent/capabilities` reports them. No tool and no command exists for a

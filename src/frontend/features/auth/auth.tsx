@@ -12,15 +12,16 @@ export function AuthView(): ReactElement {
   const [required, setRequired] = useState(false);
   const [token, setToken] = useState(params.get("invite") ?? "");
   const mode = params.get("mode") ?? "";
+  const returnTo = oauthReturnTo(params.get("returnTo"));
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
 
   useEffect(() => {
     void readJson<{ required: boolean; authenticated: boolean }>("/api/auth/status").then((status) => {
-      if (status.authenticated) window.location.assign("/tasks");
+      if (status.authenticated) window.location.assign(returnTo);
       setRequired(status.required);
     }).catch(() => setError("Unable to read sign-in state"));
-  }, []);
+  }, [returnTo]);
 
   const enroll = async (): Promise<void> => {
     setBusy(true); setError("");
@@ -29,7 +30,7 @@ export function AuthView(): ReactElement {
       const options = await readJson<{ challengeId: string; options: Parameters<typeof startRegistration>[0]["optionsJSON"] }>(`/api/auth/${registrationKind}/options`, { method: "POST", body: JSON.stringify({ token }) });
       const response = await startRegistration({ optionsJSON: options.options });
       await readJson(`/api/auth/${registrationKind}/verify`, { method: "POST", body: JSON.stringify({ token, challengeId: options.challengeId, response }) });
-      window.location.assign("/tasks");
+      window.location.assign(returnTo);
     } catch {
       setError("Passkey enrollment failed");
     } finally { setBusy(false); }
@@ -41,7 +42,7 @@ export function AuthView(): ReactElement {
       const options = await readJson<{ challengeId: string; options: Parameters<typeof startAuthentication>[0]["optionsJSON"] }>("/api/auth/options", { method: "POST", body: "{}" });
       const response = await startAuthentication({ optionsJSON: options.options });
       await readJson("/api/auth/verify", { method: "POST", body: JSON.stringify({ challengeId: options.challengeId, response }) });
-      window.location.assign("/tasks");
+      window.location.assign(returnTo);
     } catch {
       setError("Passkey sign-in failed");
     } finally { setBusy(false); }
@@ -59,4 +60,16 @@ export function AuthView(): ReactElement {
       </div>
     </ApplicationFrame>
   );
+}
+
+export function oauthReturnTo(value: string | null): string {
+  if (!value) return "/tasks";
+  try {
+    const url = new URL(value, window.location.origin);
+    const requestId = url.searchParams.get("request") ?? "";
+    if (url.origin !== window.location.origin || url.pathname !== "/oauth/consent" || !/^oauth_request_[a-f0-9]{32}$/.test(requestId)) return "/tasks";
+    return `${url.pathname}?request=${encodeURIComponent(requestId)}`;
+  } catch {
+    return "/tasks";
+  }
 }

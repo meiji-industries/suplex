@@ -1,11 +1,11 @@
 import { chromium } from "playwright";
 import { nativeApp } from "./native-app.js";
 
-export async function nativeBrowser(width = 1280, host = "127.0.0.1") {
-  const value = await nativeApp();
+export async function nativeBrowser(width = 1280, host = "127.0.0.1", reachableAddress?: string) {
+  const value = await nativeApp(reachableAddress ? { reachableAddress } : {});
   const browser = await chromium.launch({ headless: true, args: host === "127.0.0.1" ? [] : [`--host-resolver-rules=MAP ${host} 127.0.0.1`] });
   try {
-    await value.app.listen({ host: "127.0.0.1", port: 0 });
+    await value.app.listen({ host: "127.0.0.1", port: reachableAddress ? Number(new URL(reachableAddress).port) : 0 });
     const address = value.app.server.address();
     if (!address || typeof address === "string") throw new Error("No browser test address");
     // The isolated server uses an ephemeral port, which is still a direct loopback origin.

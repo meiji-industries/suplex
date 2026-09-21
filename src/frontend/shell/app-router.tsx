@@ -5,6 +5,7 @@ import { SystemHealthProvider } from "../components/app/system-health.js";
 import { UpdateProvider } from "../components/app/update-provider.js";
 import { isApplicationPath, navigate, shouldNavigate } from "./navigation-state.js";
 import { AuthView } from "../features/auth/auth.js";
+import { OAuthConsentView } from "../features/auth/oauth-consent.js";
 import { AdminView } from "../features/admin/admin.js";
 import { CompanySettingsView } from "../features/settings/company-settings.js";
 import { ProfileView } from "../features/profiles/profile.js";
@@ -80,6 +81,7 @@ export function AppRouter(): ReactElement {
     };
   }, []);
   if (window.__FORGE_VIEW__ === "auth") return <AuthView />;
+  if (window.__FORGE_VIEW__ === "oauth-consent") return <OAuthConsentView />;
   const shellKey = activityShellKey(window.location.pathname);
   const view = <AppView key={route} />;
   return <CompanyProvider><UpdateProvider><SystemHealthProvider initialSnapshot={window.__FORGE_HEALTH__}>{shellKey ? <ApplicationShell key={shellKey}>{view}</ApplicationShell> : view}</SystemHealthProvider></UpdateProvider></CompanyProvider>;

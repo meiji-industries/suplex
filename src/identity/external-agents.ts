@@ -1,5 +1,6 @@
 import { createHash, randomBytes } from "node:crypto";
 
+import type Database from "better-sqlite3";
 import { z } from "zod";
 
 import type { AuthService } from "./auth.js";
@@ -40,6 +41,7 @@ interface AgentQueryRow {
   pairing_expires_at: string | null;
   paired_at: string | null;
   credential_created_at: string | null;
+  connection_kind: "oauth" | "credential";
   last_used_at: string | null;
   revoked_at: string | null;
   created_at: string;
@@ -125,6 +127,7 @@ export class ExternalAgentService {
                (SELECT p.expires_at FROM forge_external_agent_pairing_codes p WHERE p.agent_id = e.id AND p.consumed_at IS NULL AND p.replaced_at IS NULL ORDER BY p.created_at DESC LIMIT 1) AS pairing_expires_at,
                e.paired_at,
                (SELECT c.created_at FROM forge_external_agent_credentials c WHERE c.agent_id = e.id AND c.revoked_at IS NULL ORDER BY c.created_at DESC LIMIT 1) AS credential_created_at,
+               CASE WHEN EXISTS (SELECT 1 FROM forge_oauth_grants og WHERE og.agent_id = e.id) THEN 'oauth' ELSE 'credential' END AS connection_kind,
                e.last_used_at, e.revoked_at, e.created_at, e.updated_at
         FROM forge_external_agents e
         JOIN forge_agents ag ON ag.id = e.id
@@ -265,6 +268,50 @@ export class ExternalAgentService {
     });
   }
 
+  provisionOAuthAgentInTransaction(db: Database.Database, input: { actorUserId: string; clientId: string; clientName: string; companyId: string; projectIds: string[]; cursorKey: string }): ExternalAgentPrincipal {
+    this.requireAdmin(input.actorUserId);
+    this.auth.requireCompanyAccess(input.actorUserId, input.companyId);
+    const projectIds = [...new Set(input.projectIds)].sort();
+    if (projectIds.length === 0 || projectIds.some((projectId) => !idSchema.safeParse(projectId).success)) {
+      throw new ExternalAgentFailure("Select at least one project", 400, "configuration_invalid");
+    }
+    const matching = db.prepare(`SELECT id FROM forge_projects WHERE company_id = ? AND id IN (${projectIds.map(() => "?").join(",")})`).all(input.companyId, ...projectIds) as Array<{ id: string }>;
+    if (matching.length !== projectIds.length) throw new ExternalAgentFailure("Not found", 404, "scope_not_found");
+
+    const nowIso = this.now().toISOString();
+    const agentId = identifier("agent");
+    const suffix = input.clientId.slice(-8);
+    const base = input.clientName.trim().slice(0, 60) || "OAuth client";
+    let name = `${base} (${suffix})`.slice(0, 80);
+    let collision = 1;
+    while (db.prepare("SELECT 1 FROM forge_agents WHERE name = ?").get(name)) {
+      collision += 1;
+      name = `${base.slice(0, 68)} (${suffix}-${collision})`.slice(0, 80);
+    }
+    db.prepare("INSERT INTO forge_agents (id, kind, name, avatar_seed, created_at, updated_at) VALUES (?, 'external', ?, ?, ?, ?)").run(agentId, name, randomBytes(16).toString("hex"), nowIso, nowIso);
+    db.prepare("INSERT INTO forge_external_agents (id, company_id, status, paired_at, created_at, updated_at) VALUES (?, ?, 'paired', ?, ?, ?)").run(agentId, input.companyId, nowIso, nowIso, nowIso);
+    const grant = db.prepare("INSERT INTO forge_external_agent_project_grants (agent_id, company_id, project_id, created_at) VALUES (?, ?, ?, ?)");
+    for (const projectId of projectIds) grant.run(agentId, input.companyId, projectId, nowIso);
+    this.auth.recordAuditEventInTransaction(db, input.actorUserId, "external_agent_oauth_authorized", undefined, input.companyId, { agentId, clientId: input.clientId });
+    return { agentId, companyId: input.companyId, profileId: null, projectIds, cursorKey: input.cursorKey };
+  }
+
+  oauthPrincipal(agentId: string, cursorKey: string): ExternalAgentPrincipal {
+    const nowIso = this.now().toISOString();
+    return this.database.authTransaction((db) => {
+      const row = db.prepare("SELECT id, company_id, client_profile_id FROM forge_external_agents WHERE id = ? AND status = 'paired' AND revoked_at IS NULL").get(agentId) as { id: string; company_id: string; client_profile_id: string | null } | undefined;
+      if (!row) throw authenticationFailure();
+      const projectIds = (db.prepare("SELECT project_id FROM forge_external_agent_project_grants WHERE agent_id = ? ORDER BY project_id").all(agentId) as Array<{ project_id: string }>).map(({ project_id }) => project_id);
+      db.prepare("UPDATE forge_external_agents SET last_used_at = ?, updated_at = ? WHERE id = ?").run(nowIso, nowIso, agentId);
+      return { agentId, companyId: row.company_id, profileId: row.client_profile_id, projectIds, cursorKey };
+    });
+  }
+
+  assertOAuthAgentActive(agentId: string): void {
+    const active = this.database.authQuery((db) => db.prepare("SELECT 1 FROM forge_external_agents WHERE id = ? AND status = 'paired' AND revoked_at IS NULL").get(agentId));
+    if (!active) throw authenticationFailure();
+  }
+
   revoke(actorUserId: string, agentId: string): void {
     this.requireAdmin(actorUserId);
     const nowIso = this.now().toISOString();
@@ -274,6 +321,10 @@ export class ExternalAgentService {
       db.prepare("UPDATE forge_external_agents SET status = 'revoked', revoked_at = ?, updated_at = ? WHERE id = ?").run(nowIso, nowIso, agentId);
       db.prepare("UPDATE forge_external_agent_credentials SET revoked_at = ? WHERE agent_id = ? AND revoked_at IS NULL").run(nowIso, agentId);
       db.prepare("UPDATE forge_external_agent_pairing_codes SET replaced_at = ? WHERE agent_id = ? AND consumed_at IS NULL AND replaced_at IS NULL").run(nowIso, agentId);
+      db.prepare("UPDATE forge_oauth_grants SET revoked_at = ?, updated_at = ? WHERE agent_id = ? AND revoked_at IS NULL").run(nowIso, nowIso, agentId);
+      db.prepare("UPDATE forge_oauth_token_families SET revoked_at = ? WHERE grant_id IN (SELECT id FROM forge_oauth_grants WHERE agent_id = ?) AND revoked_at IS NULL").run(nowIso, agentId);
+      db.prepare("UPDATE forge_oauth_access_tokens SET revoked_at = ? WHERE family_id IN (SELECT id FROM forge_oauth_token_families WHERE grant_id IN (SELECT id FROM forge_oauth_grants WHERE agent_id = ?)) AND revoked_at IS NULL").run(nowIso, agentId);
+      db.prepare("UPDATE forge_oauth_authorization_codes SET consumed_at = ? WHERE grant_id IN (SELECT id FROM forge_oauth_grants WHERE agent_id = ?) AND consumed_at IS NULL").run(nowIso, agentId);
       this.auth.recordAuditEventInTransaction(db, actorUserId, "external_agent_revoked", undefined, agent.company_id, { agentId });
     });
   }
@@ -285,6 +336,7 @@ export class ExternalAgentService {
                (SELECT p.expires_at FROM forge_external_agent_pairing_codes p WHERE p.agent_id = e.id AND p.consumed_at IS NULL AND p.replaced_at IS NULL ORDER BY p.created_at DESC LIMIT 1) AS pairing_expires_at,
                e.paired_at,
                (SELECT c.created_at FROM forge_external_agent_credentials c WHERE c.agent_id = e.id AND c.revoked_at IS NULL ORDER BY c.created_at DESC LIMIT 1) AS credential_created_at,
+               CASE WHEN EXISTS (SELECT 1 FROM forge_oauth_grants og WHERE og.agent_id = e.id) THEN 'oauth' ELSE 'credential' END AS connection_kind,
                e.last_used_at, e.revoked_at, e.created_at, e.updated_at
         FROM forge_external_agents e
         JOIN forge_agents ag ON ag.id = e.id
@@ -303,6 +355,7 @@ export class ExternalAgentService {
                NULL AS pairing_expires_at,
                e.paired_at,
                NULL AS credential_created_at,
+               CASE WHEN EXISTS (SELECT 1 FROM forge_oauth_grants og WHERE og.agent_id = e.id) THEN 'oauth' ELSE 'credential' END AS connection_kind,
                e.last_used_at, e.revoked_at, e.created_at, e.updated_at
         FROM forge_external_agents e
         JOIN forge_agents ag ON ag.id = e.id
@@ -351,6 +404,7 @@ export class ExternalAgentService {
       pairingExpiresAt: row.pairing_expires_at,
       pairedAt: row.paired_at,
       credentialCreatedAt: row.credential_created_at,
+      connectionKind: row.connection_kind,
       lastUsedAt: row.last_used_at,
       revokedAt: row.revoked_at,
       createdAt: row.created_at,

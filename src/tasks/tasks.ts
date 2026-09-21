@@ -175,7 +175,7 @@ export class TaskService {
   }
 
   getAgentApiTask(principal: ExternalAgentPrincipal, taskId: string) {
-    return this.agentApiProjection(this.requireTask({ kind: "agentApi", principal }, taskId));
+    return this.agentApiProjection(this.requireReadableAgentApiTask(principal, taskId), principal);
   }
 
   /** The authorized task row for a AgentApi agent command. Every agent command resolves its task through this check. */
@@ -183,9 +183,9 @@ export class TaskService {
     return this.requireTask({ kind: "agentApi", principal }, taskId);
   }
 
-  /** Every task the agent created inside its granted projects, newest activity first. */
+  /** Every task the agent created inside its current grants, for creator-only delivery management. */
   listAgentApiTaskRows(principal: ExternalAgentPrincipal): TaskRow[] {
-    return this.repository.rows().filter(row => row.company_id === principal.companyId && row.creator_agent_id === principal.agentId && principal.projectIds.includes(row.project_id) && !row.archived_at);
+    return this.repository.agentApiRows({ agentId: principal.agentId, companyId: principal.companyId, creatorAgentId: principal.agentId, archived: false });
   }
 
   listAgentApiWorkflows(principal: ExternalAgentPrincipal, projectId: string) {
@@ -241,7 +241,8 @@ export class TaskService {
 
   private async withAgentApiIntegration(principal: ExternalAgentPrincipal, projections: AgentApiSafeTaskProjection[], github: AgentApiGithubPort): Promise<AgentApiTaskReadProjection[]> {
     if (!projections.length) return [];
-    const targets = projections.map(projection => this.repository.task(this.repository.row(projection.id)!));
+    const targetRows = projections.map(projection => this.repository.row(projection.id)!);
+    const targets = targetRows.map(row => this.repository.task(row));
     const pool = this.repository.agentApiRows({ agentId: principal.agentId, companyId: principal.companyId, limit: AGENT_API_UPSTREAM_POOL }).map(row => this.repository.task(row));
     const upstreams = new Map(targets.map(task => [task.id, pool.filter(other => isUpstreamOf(other, task))] as const));
     const observed = new Map<string, Task>();
@@ -252,11 +253,14 @@ export class TaskService {
       const task = targets[index]!;
       const integration = integrations.get(task.id)!;
       const blocking = upstreams.get(task.id)!.find(other => !integrations.get(other.id)?.integrated);
+      const actionRequired = deriveActionRequired(task, integration, blocking ? { taskId: blocking.id, pullRequestNumber: blocking.pullRequest?.number ?? null } : null);
       return {
         ...projection,
         implementation: { status: projection.status },
         integration,
-        actionRequired: deriveActionRequired(task, integration, blocking ? { taskId: blocking.id, pullRequestNumber: blocking.pullRequest?.number ?? null } : null),
+        actionRequired: actionRequired?.owner === "agent" && targetRows[index]!.creator_agent_id !== principal.agentId
+          ? { ...actionRequired, owner: "task_owner" as const, suggestedCommands: [] }
+          : actionRequired,
       };
     });
   }
@@ -288,7 +292,7 @@ export class TaskService {
     agentApiCommandsInFlight.add(inFlight);
     try {
       const row = this.requireTask(authority, taskId);
-      const before = this.agentApiProjection(row);
+      const before = this.agentApiProjection(row, principal);
       if (before.revision !== input.revision) throw new TaskFailure("Task revision is stale", 412, "revision_stale");
       if (!before.permittedCommands.includes(input.command)) throw new TaskFailure("This command is not legal for the current task", 409, "illegal_command");
       // The revision claim is the optimistic lock: a concurrent command on the same revision loses here.
@@ -356,7 +360,7 @@ export class TaskService {
       ...(cursor ? { cursor } : {}),
     });
     const hasMore = rows.length > input.limit;
-    const tasks = rows.slice(0, input.limit).map(row => this.agentApiProjection(row));
+    const tasks = rows.slice(0, input.limit).map(row => this.agentApiProjection(row, principal));
     const last = tasks.at(-1);
     return { tasks, nextCursor: last && hasMore ? this.createAgentApiCursor(principal, filter, last) : null };
   }
@@ -771,7 +775,14 @@ export class TaskService {
     return row;
   }
 
-  private agentApiProjection(row: TaskRow): AgentApiSafeTaskProjection {
+  private requireReadableAgentApiTask(principal: ExternalAgentPrincipal, taskId: string): TaskRow {
+    const row = this.repository.row(taskId);
+    if (!row) throw new TaskFailure("Not found", 404, "resource_not_found");
+    this.requireScope({ kind: "agentApi", principal }, row.company_id, row.project_id);
+    return row;
+  }
+
+  private agentApiProjection(row: TaskRow, principal: ExternalAgentPrincipal): AgentApiSafeTaskProjection {
     const task = this.repository.task(row);
     const project = this.database.authQuery(db => db.prepare("SELECT id, name FROM forge_projects WHERE id = ? AND company_id = ?").get(row.project_id, row.company_id) as { id: string; name: string } | undefined);
     if (!project) throw new TaskFailure("Not found", 404);
@@ -782,15 +793,16 @@ export class TaskService {
     const workflowStage = task.status === "cancelled" ? "cancelled" : completion || task.status === "delivered" ? "completed" : humanQuestion ? "waiting_human" : wait ? "waiting_delivery" : task.status === "active" ? "working" : task.queue.state;
     const delivery = task.pullRequest || wait || completion ? { pullRequest: task.pullRequest ? { number: task.pullRequest.number, url: task.pullRequest.url, state: task.pullRequest.state, mergedAt: task.pullRequest.mergedAt } : null, checks: null, waiting: wait ? { reason: wait.reason, since: wait.since } : null, completion: completion ? { kind: completion.kind, pullRequestNumber: completion.pullRequestNumber, observedAt: completion.observedAt } : null } : null;
     const recheck = !task.archivedAt && wait && task.status === "active" ? ["recheck_delivery_wait"] as const : [] as const;
-    const permittedCommands = task.archivedAt ? ["unarchive_task"] as const
+    const lifecycleCommands = task.archivedAt ? ["unarchive_task"] as const
       : task.status === "backlog" ? [task.queue.startIntent === "queued" ? "disarm_task" : "start_task", "cancel_task", "archive_task", "duplicate_task"] as const
       : task.status === "active" ? ["cancel_task", "duplicate_task", "send_task_note"] as const
       : task.status === "waiting_human" ? ["cancel_task", "duplicate_task"] as const
       : task.status === "cancelled" ? ["archive_task", "duplicate_task"] as const
       : task.status === "delivered" ? ["archive_task", "duplicate_task"] as const
       : ["duplicate_task"] as const;
+    const permittedCommands = row.creator_agent_id === principal.agentId ? [...lifecycleCommands, ...recheck] : [];
     const selection = task.configuration.hermesSelection;
-    const value = { id: task.id, issueKey: task.issueKey, projectId: task.projectId, project, title: task.title, status: task.status, queue: task.queue, dependsOn: task.dependsOn, blockedBy: task.blockedBy, archived: task.archivedAt !== null, permittedCommands: [...permittedCommands, ...recheck], humanQuestion, blocker, workflowStage, workflow: { id: selection?.workflowId ?? null, engine: task.workflow, name: selection?.workflowName ?? null }, templateId: selection?.templateId ?? null, deliveryTarget: task.deliveryTarget, runProjectTests: task.configuration.runProjectTests, visualEvidence: task.configuration.visualEvidence, delivery, createdAt: task.createdAt, updatedAt: task.updatedAt };
+    const value = { id: task.id, issueKey: task.issueKey, projectId: task.projectId, project, title: task.title, status: task.status, queue: task.queue, dependsOn: task.dependsOn, blockedBy: task.blockedBy, archived: task.archivedAt !== null, permittedCommands, humanQuestion, blocker, workflowStage, workflow: { id: selection?.workflowId ?? null, engine: task.workflow, name: selection?.workflowName ?? null }, templateId: selection?.templateId ?? null, deliveryTarget: task.deliveryTarget, runProjectTests: task.configuration.runProjectTests, visualEvidence: task.configuration.visualEvidence, delivery, createdAt: task.createdAt, updatedAt: task.updatedAt };
     return { ...value, revision: createHash("sha256").update(JSON.stringify({ value, commandRevision: row.command_revision })).digest("base64url") };
   }
 

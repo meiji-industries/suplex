@@ -73,8 +73,9 @@ test("a paired agent completes the whole task journey without the web applicatio
     const exchangePath = catalog.pairing[0]!.path;
     const skills = JSON.parse(artifacts["/.well-known/forge/agent-skills.json"]!) as { skills: Array<{ clients: Array<{ transport: string; preferred: boolean; tools?: string[] }> }> };
     const preferred = skills.skills[0]!.clients.find(client => client.preferred)!;
-    expect(preferred.transport).toBe("mcp-stdio");
+    expect(preferred.transport).toBe("streamable-http");
     expect(preferred.tools).toEqual(FORGE_MCP_TOOLS.map(entry => entry.name));
+    expect(skills.skills[0]!.clients.some(client => client.transport === "mcp-stdio" && !client.preferred)).toBe(true);
 
     // 2. Pair once, in the way the catalog describes.
     const exchanged = await fixture.app.inject({ method: "POST", url: exchangePath, payload: { pairingCode, profileId: "machine-discovery-profile" } });
@@ -93,7 +94,7 @@ test("a paired agent completes the whole task journey without the web applicatio
     }
     expect(Object.keys(openApi.paths)).toContain("/api/agent/tasks");
 
-    // 4. Establish the preferred client path.
+    // 4. Establish the documented local stdio fallback with the paired credential.
     session = mcpSession({ baseUrl, credential });
     const initialized = await session.call({ method: "initialize", params: { protocolVersion: "2025-11-25", capabilities: {}, clientInfo: { name: "machine-discovery", version: "1" } } });
     expect(initialized).toMatchObject({ result: { serverInfo: { name: "forge-agent-bridge" } } });

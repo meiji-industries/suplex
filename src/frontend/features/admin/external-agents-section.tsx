@@ -27,7 +27,7 @@ const EXTERNAL_AGENT_AGENT_COLUMNS: SettingsTableColumn[] = [
   { key: "name", label: "Name ↓", width: 200 },
   { key: "status", label: "Status", width: 280 },
   { key: "projects", label: "Projects", width: 180 },
-  { key: "credentialCreatedAt", label: "Credential created", width: 140 },
+  { key: "credentialCreatedAt", label: "Connected with", width: 140 },
   { key: "lastUsed", label: "Last used", width: 140 },
   { key: "menu", width: 28 },
   { key: "end", width: 32 },
@@ -131,7 +131,9 @@ export function ExternalAgentsSection({
                   </span>
                 </SettingsTableCell>
                 <SettingsTableCell className="truncate text-muted-foreground text-xs">
-                  {agent.credentialCreatedAt
+                  {agent.connectionKind === "oauth"
+                    ? "OAuth"
+                    : agent.credentialCreatedAt
                     ? adminDate(agent.credentialCreatedAt)
                     : "—"}
                 </SettingsTableCell>
@@ -161,14 +163,14 @@ export function ExternalAgentsSection({
                             <Key className="mr-2 size-3.5" /> Reissue pairing
                             code
                           </DropdownMenuItem>
-                        ) : (
+                        ) : agent.connectionKind === "credential" ? (
                           <DropdownMenuItem
                             onClick={() => void onRotateAgent(agent)}
                           >
                             <RotateCw className="mr-2 size-3.5" /> Rotate
                             credential
                           </DropdownMenuItem>
-                        )}
+                        ) : null}
                         <DropdownMenuItem onClick={() => onEditProjects(agent)}>
                           <Pencil className="mr-2 size-3.5" /> Edit project
                           scope

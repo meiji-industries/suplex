@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { cp, mkdtemp, mkdir, readFile, readdir, rm, stat, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -127,6 +127,13 @@ function removeAuthenticationState(snapshotPath: string): void {
       snapshot.prepare("DELETE FROM forge_invitations").run();
       snapshot.prepare("DELETE FROM forge_external_agent_credentials").run();
       snapshot.prepare("DELETE FROM forge_external_agent_pairing_codes").run();
+      snapshot.prepare("DELETE FROM forge_oauth_access_tokens").run();
+      snapshot.prepare("DELETE FROM forge_oauth_refresh_tokens").run();
+      snapshot.prepare("DELETE FROM forge_oauth_token_families").run();
+      snapshot.prepare("DELETE FROM forge_oauth_authorization_codes").run();
+      snapshot.prepare("DELETE FROM forge_oauth_pending_authorizations").run();
+      const cursor = snapshot.prepare("UPDATE forge_oauth_grants SET cursor_key = ? WHERE id = ?");
+      for (const grant of snapshot.prepare("SELECT id FROM forge_oauth_grants").all() as Array<{ id: string }>) cursor.run(randomBytes(32).toString("base64url"), grant.id);
     })();
   } finally {
     snapshot.close();
@@ -166,7 +173,7 @@ export class BackupService {
         },
         entries,
         database: { path: "app/forge.sqlite", integrity: "ok" },
-        secretsExcluded: ["credential registrations", "passkeys", "sessions", "challenges", "invitation tokens", "external agent credentials", "provider API keys", "external agent pairing codes", "cookies", "private keys", "provider tokens", "Engine API keys", "generated environment files"],
+        secretsExcluded: ["credential registrations", "passkeys", "sessions", "challenges", "invitation tokens", "external agent credentials", "OAuth tokens and authorization codes", "OAuth pending authorizations", "OAuth cursor keys", "provider API keys", "external agent pairing codes", "cookies", "private keys", "provider tokens", "Engine API keys", "generated environment files"],
         requiredConfiguration: ["accessMode", "reachableAddress", "databasePath", "artifactRoot", "installationId"],
       };
       await writeFile(join(root, "manifest.json"), JSON.stringify(manifest, null, 2), { mode: 0o600 });

@@ -9,6 +9,8 @@ import { AuthService } from "../src/identity/auth.js";
 import { createTestConfig } from "../src/platform/config.js";
 import { ForgeDatabase } from "../src/platform/database.js";
 import { ProjectService, inferRepositoryCommands, type LocalRepositoryAdapter } from "../src/projects/projects.js";
+import { AgentProfileService } from "../src/profiles/agent-profiles.js";
+import { isProfileAllowed, type ProjectProviderPolicy } from "../src/projects/provider-policy.js";
 import { repositoryCoordinate } from "../src/projects/repository-coordinate.js";
 import type { GithubAdapter } from "../src/integrations/github/client.js";
 
@@ -286,6 +288,22 @@ test("partial agent updates reject invalid profiles and provider policies atomic
     const disallowedProvider = rootProvider === "devin" ? "codex" : "devin";
     await expect(value.projects.patchProject(value.adminId, project.id, { providerPolicy: { allowedProviders: [disallowedProvider], allowedInstanceIds: [] } })).rejects.toMatchObject({ findings: expect.arrayContaining([expect.objectContaining({ code: "profile-provider-ineligible" })]) });
     expect(value.projects.getProject(value.adminId, project.id).providerPolicy).toEqual(project.providerPolicy);
+  } finally {
+    await close(value);
+  }
+});
+
+test("a provider policy and replacement Coordinator default save together", async () => {
+  const value = await fixture();
+  try {
+    const profiles = new AgentProfileService(value.database, value.auth);
+    const oldRoot = profiles.create(value.adminId, { name: "Claude default", role: "root", provider: "claude-code", model: "claude-sonnet-4", reasoningLevel: "medium", serviceTier: "default", avatarSeed: "d".repeat(32) });
+    const project = await value.projects.createProject(value.adminId, value.companyId, input(value, { rootProfileId: oldRoot.id }));
+    const root = profiles.create(value.adminId, { name: "Codex Coordinator", role: "root", provider: "codex", model: "gpt-5.4", reasoningLevel: "medium", serviceTier: "default", avatarSeed: "e".repeat(32) });
+    const policy: ProjectProviderPolicy = { allowedProviders: ["codex"], allowedInstanceIds: [] };
+    expect(isProfileAllowed(policy, oldRoot)).toBe(false);
+
+    await expect(value.projects.patchProject(value.adminId, project.id, { rootProfileId: root.id, providerPolicy: policy })).resolves.toMatchObject({ rootProfileId: root.id, providerPolicy: policy });
   } finally {
     await close(value);
   }

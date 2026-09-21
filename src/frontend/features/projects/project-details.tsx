@@ -22,6 +22,7 @@ import { ProjectDetailsLayout } from "./project-details-layout.js";
 import { SettingRow, SettingsContent, SettingsSection } from "../settings/settings-layout.js";
 import {
   agentsDraft,
+  agentsDraftFindings,
   agentsProjectPatch,
   connectionsDraft,
   executionDraft,
@@ -55,12 +56,12 @@ function saveFailure(reason: unknown, fallback: string): SaveStatus {
     : { kind: "failed", message: reason instanceof Error ? reason.message : fallback, findings: [] };
 }
 
-function SectionActions({ status, dirty, onDiscard }: { status: SaveStatus; dirty: boolean; onDiscard: () => void }): ReactElement {
+function SectionActions({ status, dirty, invalid = false, onDiscard }: { status: SaveStatus; dirty: boolean; invalid?: boolean; onDiscard: () => void }): ReactElement {
   const saving = status.kind === "saving";
   return <div className="flex items-center justify-end gap-2 border-t pt-4">
     {status.kind === "saved" ? <span className="text-xs text-muted-foreground" role="status">Saved</span> : null}
     <Button type="button" variant="outline" size="sm" disabled={saving || !dirty} onClick={onDiscard}>Discard</Button>
-    <Button type="submit" size="sm" disabled={saving || !dirty}>{saving ? "Save in progress" : "Save changes"}</Button>
+    <Button type="submit" size="sm" disabled={saving || !dirty || invalid}>{saving ? "Save in progress" : "Save changes"}</Button>
   </div>;
 }
 
@@ -176,6 +177,11 @@ export function ProjectDetails({ projectId }: { projectId: string }): ReactEleme
   const saveAgents = async (): Promise<void> => {
     if (!agentSettings) return;
     const submitted = agentSettings.draft;
+    const findings = agentsDraftFindings(submitted, agents);
+    if (findings.length > 0) {
+      setAgentSettings((current) => current ? { ...current, status: { kind: "failed", message: "Select allowed default agents", findings } } : current);
+      return;
+    }
     const body = agentsProjectPatch(agentSettings.saved, submitted);
     const token = ++saveTokens.current.agents;
     const generation = loadToken.current;
@@ -251,6 +257,7 @@ export function ProjectDetails({ projectId }: { projectId: string }): ReactEleme
 
   const generalDirty = Object.keys(generalProjectPatch(general.saved, general.draft)).length > 0;
   const agentsDirty = Object.keys(agentsProjectPatch(agentSettings.saved, agentSettings.draft)).length > 0;
+  const agentFindings = agentsDraftFindings(agentSettings.draft, agents);
   const executionDirty = Object.keys(executionProjectPatch(execution.saved, execution.draft)).length > 0;
   const connectionsDirty = !same(connections.saved, connections.draft);
   const updateGeneral = <Key extends keyof GeneralDraft>(key: Key, value: GeneralDraft[Key]): void => setGeneral((current) => current ? { ...current, draft: { ...current.draft, [key]: value }, status: current.status.kind === "saving" ? current.status : idle } : current);
@@ -281,10 +288,11 @@ export function ProjectDetails({ projectId }: { projectId: string }): ReactEleme
         <SettingsSection title="Default agents">
           {(["rootProfileId", "workerProfileId"] as const).map((key) => {
             const role = key === "rootProfileId" ? "root" : "worker";
-            const options = agents.filter((agent) => agent.role === role && isProfileAllowed(agentSettings.draft.providerPolicy, agent));
-            const selected = options.find((agent) => agent.id === agentSettings.draft[key]);
+            const selected = agents.find((agent) => agent.role === role && agent.id === agentSettings.draft[key]);
+            const options = agents.filter((agent) => agent.role === role && (agent.id === agentSettings.draft[key] || isProfileAllowed(agentSettings.draft.providerPolicy, agent)));
+            const findings = [...fieldFindings(agentSettings.status, key), ...agentFindings.filter((finding) => finding.field === key)];
             const id = `project-${key}`;
-            return <SettingRow key={key} label={`${role === "root" ? "Coordinator" : "Worker"} default`} htmlFor={id}><div className="w-full sm:w-80"><Select disabled={agentSettings.status.kind === "saving"} value={agentSettings.draft[key] || null} onValueChange={(value) => updateAgents(key, value ?? "")}><SelectTrigger id={id}><SelectValue placeholder="None">{selected ? <span className="flex items-center gap-2"><EntityAvatar kind="agent" id={selected.id} name={selected.name} seed={selected.avatarSeed} />{selected.name}</span> : "None"}</SelectValue></SelectTrigger><SelectContent>{options.map((agent) => <SelectItem key={agent.id} value={agent.id}><span className="flex items-center gap-2"><EntityAvatar kind="agent" id={agent.id} name={agent.name} seed={agent.avatarSeed} />{agent.name}</span></SelectItem>)}</SelectContent></Select><FieldError errors={fieldFindings(agentSettings.status, key)} /></div></SettingRow>;
+            return <SettingRow key={key} label={`${role === "root" ? "Coordinator" : "Worker"} default`} htmlFor={id}><div className="w-full sm:w-80"><Select disabled={agentSettings.status.kind === "saving"} value={agentSettings.draft[key] || null} onValueChange={(value) => { if (value) updateAgents(key, value); }}><SelectTrigger id={id} aria-invalid={findings.length > 0}><SelectValue placeholder="None">{selected ? <span className="flex items-center gap-2"><EntityAvatar kind="agent" id={selected.id} name={selected.name} seed={selected.avatarSeed} />{selected.name}</span> : "None"}</SelectValue></SelectTrigger><SelectContent>{options.map((agent) => <SelectItem key={agent.id} value={agent.id} disabled={!isProfileAllowed(agentSettings.draft.providerPolicy, agent)}><span className="flex items-center gap-2"><EntityAvatar kind="agent" id={agent.id} name={agent.name} seed={agent.avatarSeed} />{agent.name}</span></SelectItem>)}</SelectContent></Select><FieldError errors={findings} /></div></SettingRow>;
           })}
           {agents.length === 0 ? <SettingRow label="Agent profiles" description="No agents are configured."><Button type="button" variant="outline" size="sm" render={<a href={withCompany("/admin/agents", project.companyId)} />}>Add an agent</Button></SettingRow> : null}
         </SettingsSection>
@@ -301,7 +309,7 @@ export function ProjectDetails({ projectId }: { projectId: string }): ReactEleme
             ? <SettingRow key={instance.id} label={instance.label} description={instance.provider} htmlFor={`project-login-${instance.id}`}><Checkbox id={`project-login-${instance.id}`} disabled={agentSettings.status.kind === "saving"} checked={agentSettings.draft.providerPolicy.allowedInstanceIds.includes(instance.id)} onCheckedChange={(checked) => { const policy = agentSettings.draft.providerPolicy; if (policy) updateAgents("providerPolicy", { ...policy, allowedInstanceIds: checked ? [...policy.allowedInstanceIds, instance.id] : policy.allowedInstanceIds.filter((value) => value !== instance.id) }); }} /></SettingRow>
             : <SettingRow key={instance.id} label={instance.label} description={`${instance.provider}. Restrictions are off.`}><span className="text-xs text-muted-foreground">Allowed</span></SettingRow>) : null}
         </SettingsSection>
-        <SectionActions status={agentSettings.status} dirty={agentsDirty} onDiscard={() => setAgentSettings(draftState(agentSettings.saved))} />
+        <SectionActions status={agentSettings.status} dirty={agentsDirty} invalid={agentFindings.length > 0} onDiscard={() => setAgentSettings(draftState(agentSettings.saved))} />
       </form> : null}
 
       {section === "execution" ? <form onSubmit={(event) => { event.preventDefault(); void saveExecution(); }}>

@@ -1,6 +1,7 @@
 import type { ProjectExecution } from "../../../projects/execution-configuration.js";
 import type { ProjectIntegration } from "../../../projects/integration-configuration.js";
-import type { ProjectProviderPolicy } from "../../../projects/provider-policy.js";
+import { isProfileAllowed, type ProjectProviderPolicy } from "../../../projects/provider-policy.js";
+import type { AgentProfile } from "../../../profiles/agent-profile-contracts.js";
 import type { ProjectPatchBody } from "../../../http/contracts/projects.js";
 import type { ApiProject } from "../../shell/view-shared.js";
 
@@ -15,6 +16,7 @@ export const PROJECT_SECTIONS = [
 
 export type GeneralDraft = Pick<ApiProject, "name" | "baseBranch">;
 export type AgentsDraft = Pick<ApiProject, "rootProfileId" | "workerProfileId"> & { providerPolicy: ProjectProviderPolicy | null };
+export type AgentsDraftFinding = { field: "rootProfileId" | "workerProfileId"; message: string };
 export type ExecutionDraft = Pick<ApiProject, "setupCommand" | "verificationCommand"> & Pick<ProjectExecution, "instructions"> & { skillDirectories: string };
 export type ConnectionsDraft = { integration: ProjectIntegration; environment: string; mcp: string };
 
@@ -56,6 +58,18 @@ export function agentsProjectPatch(saved: AgentsDraft, draft: AgentsDraft): Proj
     ...(draft.workerProfileId !== saved.workerProfileId ? { workerProfileId: draft.workerProfileId } : {}),
     ...(JSON.stringify(draft.providerPolicy) !== JSON.stringify(saved.providerPolicy) ? { providerPolicy: draft.providerPolicy } : {}),
   };
+}
+
+export function agentsDraftFindings(draft: AgentsDraft, profiles: readonly Pick<AgentProfile, "id" | "role" | "provider" | "providerInstanceId">[]): AgentsDraftFinding[] {
+  return ([
+    ["rootProfileId", "root"],
+    ["workerProfileId", "worker"],
+  ] as const).flatMap(([field, role]) => {
+    const profile = profiles.find((candidate) => candidate.id === draft[field] && candidate.role === role);
+    return !draft[field] || (profile !== undefined && !isProfileAllowed(draft.providerPolicy, profile))
+      ? [{ field, message: "Select an agent with a provider and login allowed by this project" }]
+      : [];
+  });
 }
 
 export function executionProjectPatch(saved: ExecutionDraft, draft: ExecutionDraft): ProjectPatchBody {

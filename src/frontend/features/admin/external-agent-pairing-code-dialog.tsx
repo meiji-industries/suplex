@@ -11,9 +11,9 @@ import { Input } from "../../components/ui/input.js";
 import { adminDate } from "../../shell/view-shared.js";
 import { Check, Copy } from "lucide-react";
 import type { ReactElement } from "react";
-import { hermesSetupInstructions } from "./hermes-setup-instructions.js";
+import { externalAgentSetupInstructions } from "./external-agent-setup-instructions.js";
 
-export function HermesPairingCodeDialog({
+export function ExternalAgentPairingCodeDialog({
   open,
   data,
   profileName,
@@ -41,19 +41,19 @@ export function HermesPairingCodeDialog({
           <div className="space-y-3">
             <div className="space-y-1">
               <div className="flex items-center gap-2">
-                <p className="text-sm font-medium">Paste into Hermes</p>
+                <p className="text-sm font-medium">Copy the setup instructions</p>
                 <Badge variant="secondary">Recommended</Badge>
               </div>
               <p className="text-[11px] text-muted-foreground">
-                Paste them into the Hermes profile you are pairing.
+                Give the instructions to the client that will use this identity.
               </p>
             </div>
             <Field>
-              <FieldLabel htmlFor="hermes-profile-name">
-                Hermes profile name
+              <FieldLabel htmlFor="externalAgent-profile-name">
+                Client profile ID
               </FieldLabel>
               <Input
-                id="hermes-profile-name"
+                id="externalAgent-profile-name"
                 value={profileName}
                 onChange={(event) => onProfileNameChange(event.target.value)}
               />
@@ -65,7 +65,7 @@ export function HermesPairingCodeDialog({
               onClick={() => void onCopyInstructions()}
             >
               <span className="block h-12 overflow-hidden whitespace-pre-wrap break-words">
-                {hermesSetupInstructions(data, profileName).replaceAll(
+                {externalAgentSetupInstructions(data, profileName).replaceAll(
                   "\n\n",
                   "\n",
                 )}
@@ -86,8 +86,7 @@ export function HermesPairingCodeDialog({
             <div>
               <p className="text-sm font-medium">Manual setup</p>
               <p className="text-[11px] text-muted-foreground">
-                Use this single-use code to configure the Hermes profile
-                yourself.
+                Use this single-use code to configure the client yourself.
               </p>
             </div>
             <button

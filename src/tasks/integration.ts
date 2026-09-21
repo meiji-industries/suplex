@@ -1,5 +1,5 @@
 import type { GithubPullRequestObservation } from "../integrations/github/delivery.js";
-import type { HermesActionRequired, HermesIntegration, HermesTaskFilter } from "../http/contracts/hermes.js";
+import type { AgentApiActionRequired, AgentApiIntegration, AgentApiTaskFilter } from "../http/contracts/agent-api.js";
 import type { Task } from "./contracts.js";
 
 /** What GitHub answered for one task, or why it could not answer. A null observation with a null failure means Forge did not ask. */
@@ -19,7 +19,7 @@ export function observableDelivery(task: Task): boolean {
   return Boolean(task.pullRequest) || (task.status === "delivered" && requiresPullRequest(task));
 }
 
-function pullRequestState(observation: GithubPullRequestObservation | null): HermesIntegration["pullRequest"]["state"] {
+function pullRequestState(observation: GithubPullRequestObservation | null): AgentApiIntegration["pullRequest"]["state"] {
   if (!observation || !observation.exists) return "absent";
   if (observation.state === "merged" || observation.state === "closed") return observation.state;
   if (observation.mergeable === "CONFLICTING" || observation.mergeStateStatus === "DIRTY") return "conflicting";
@@ -28,7 +28,7 @@ function pullRequestState(observation: GithubPullRequestObservation | null): Her
   return "open";
 }
 
-export function deriveTaskIntegration(task: Task, observed: PullRequestObservationResult, observedAt: string): HermesIntegration {
+export function deriveTaskIntegration(task: Task, observed: PullRequestObservationResult, observedAt: string): AgentApiIntegration {
   const observation = observed.observation;
   const state = pullRequestState(observation);
   const integrated = state === "merged" || (task.status === "delivered" && !requiresPullRequest(task) && observed.failureCode === null);
@@ -73,11 +73,11 @@ function mergeCommands(task: Task): string[] {
   return [`git fetch origin ${task.configuration.baseBranch}`, `git merge origin/${task.configuration.baseBranch}`];
 }
 
-function action(input: Omit<HermesActionRequired, "upstream" | "evidenceAt" | "humanApprovalRequired"> & { upstream?: HermesActionRequired["upstream"]; humanApprovalRequired?: boolean }, evidenceAt: string): HermesActionRequired {
+function action(input: Omit<AgentApiActionRequired, "upstream" | "evidenceAt" | "humanApprovalRequired"> & { upstream?: AgentApiActionRequired["upstream"]; humanApprovalRequired?: boolean }, evidenceAt: string): AgentApiActionRequired {
   return { upstream: null, humanApprovalRequired: false, ...input, evidenceAt };
 }
 
-export function deriveActionRequired(task: Task, integration: HermesIntegration, upstream: HermesActionRequired["upstream"]): HermesActionRequired | null {
+export function deriveActionRequired(task: Task, integration: AgentApiIntegration, upstream: AgentApiActionRequired["upstream"]): AgentApiActionRequired | null {
   const at = integration.observedAt;
   const pull = integration.pullRequest;
   const reference = pull.number === null ? task.configuration.branch : `${pull.number} --repo ${task.configuration.repository}`;
@@ -113,7 +113,7 @@ export function deriveActionRequired(task: Task, integration: HermesIntegration,
   return action({ owner: "human", reasonCode: "waiting_human", summary: "The pull request is approved and not merged. Merge the pull request.", suggestedCommands: [`gh pr view ${reference}`], humanApprovalRequired: true }, at);
 }
 
-export function matchesHermesFilter(projection: { integration: HermesIntegration; actionRequired: HermesActionRequired | null }, filter: HermesTaskFilter): boolean {
+export function matchesAgentApiFilter(projection: { integration: AgentApiIntegration; actionRequired: AgentApiActionRequired | null }, filter: AgentApiTaskFilter): boolean {
   if (filter === "not_integrated") return !projection.integration.integrated;
   return projection.actionRequired?.reasonCode === filter;
 }

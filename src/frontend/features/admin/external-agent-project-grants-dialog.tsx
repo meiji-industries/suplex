@@ -10,10 +10,10 @@ import {
   DialogTitle,
 } from "../../components/ui/dialog.js";
 import { Field, FieldGroup, FieldLabel } from "../../components/ui/field.js";
-import type { ApiHermesAgent, ApiProject } from "../../shell/view-shared.js";
+import type { ApiExternalAgent, ApiProject } from "../../shell/view-shared.js";
 import type { Dispatch, ReactElement, SetStateAction } from "react";
 
-export function HermesProjectGrantsDialog({
+export function ExternalAgentProjectGrantsDialog({
   open,
   agent,
   projectIds,
@@ -23,7 +23,7 @@ export function HermesProjectGrantsDialog({
   onSave,
 }: {
   open: boolean;
-  agent: ApiHermesAgent | null;
+  agent: ApiExternalAgent | null;
   projectIds: string[];
   projects: ApiProject[];
   onOpenChange: (open: boolean) => void;

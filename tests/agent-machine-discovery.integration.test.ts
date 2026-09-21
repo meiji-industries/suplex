@@ -6,7 +6,7 @@ import { PassThrough } from "node:stream";
 import { expect, test } from "vitest";
 
 import { DISCOVERY_ARTIFACT_PATHS } from "../src/http/routes/discovery.js";
-import { HERMES_MCP_TOOLS, HermesMcpBridge, startHermesMcpTransport } from "../src/integrations/hermes/mcp-bridge.js";
+import { FORGE_MCP_TOOLS, ForgeMcpBridge, startForgeMcpTransport } from "../src/integrations/forge/mcp-bridge.js";
 import { nativeApp } from "./helpers/native-app.js";
 
 type JsonRecord = Record<string, unknown>;
@@ -22,7 +22,7 @@ function mcpSession(settings: { baseUrl: string; credential: string }) {
   const stdout = new PassThrough();
   const responses: unknown[] = [];
   stdout.on("data", (chunk: Buffer) => { for (const line of chunk.toString().split("\n").filter(Boolean)) responses.push(JSON.parse(line)); });
-  const reader = startHermesMcpTransport({ bridge: new HermesMcpBridge(settings), stdin, stdout });
+  const reader = startForgeMcpTransport({ bridge: new ForgeMcpBridge(settings), stdin, stdout });
   let id = 0;
   return {
     async call(request: JsonRecord): Promise<JsonRecord> {
@@ -56,7 +56,7 @@ test("a paired agent completes the whole task journey without the web applicatio
     // A real task the agent must never see, so the denial is proven to conceal rather than to be empty.
     const ungrantedTaskId = (await fixture.tasks.createTask(fixture.userId, fixture.company.id, { projectId: ungrantedProject.id, title: "Out of grant", description: "Not for this agent", idempotencyKey: "out-of-grant-1", startImmediately: false })).task.id;
 
-    const issued = fixture.hermes.create(fixture.userId, { name: "Machine Discovery Bot", companyId: company.id, projectIds: [forgeProject.id] });
+    const issued = fixture.externalAgent.create(fixture.userId, { name: "Machine Discovery Bot", companyId: company.id, projectIds: [forgeProject.id] });
     const pairingCode = issued.pairingCode;
 
     const baseUrl = await fixture.app.listen({ port: 0, host: "127.0.0.1" });
@@ -74,7 +74,7 @@ test("a paired agent completes the whole task journey without the web applicatio
     const skills = JSON.parse(artifacts["/.well-known/forge/agent-skills.json"]!) as { skills: Array<{ clients: Array<{ transport: string; preferred: boolean; tools?: string[] }> }> };
     const preferred = skills.skills[0]!.clients.find(client => client.preferred)!;
     expect(preferred.transport).toBe("mcp-stdio");
-    expect(preferred.tools).toEqual(HERMES_MCP_TOOLS.map(entry => entry.name));
+    expect(preferred.tools).toEqual(FORGE_MCP_TOOLS.map(entry => entry.name));
 
     // 2. Pair once, in the way the catalog describes.
     const exchanged = await fixture.app.inject({ method: "POST", url: exchangePath, payload: { pairingCode, profileId: "machine-discovery-profile" } });
@@ -83,7 +83,7 @@ test("a paired agent completes the whole task journey without the web applicatio
     expect(credential).toMatch(/^fha_/);
 
     // 3. Read the authoritative contract with the new credential.
-    const openApiResponse = await fixture.app.inject({ method: "GET", url: "/api/hermes/openapi.json", headers: { Authorization: `Bearer ${credential}` } });
+    const openApiResponse = await fixture.app.inject({ method: "GET", url: "/api/agent/openapi.json", headers: { Authorization: `Bearer ${credential}` } });
     expect(openApiResponse.statusCode).toBe(200);
     const openApi = openApiResponse.json() as { paths: Record<string, JsonRecord> };
     record("openapi", openApi);
@@ -91,12 +91,12 @@ test("a paired agent completes the whole task journey without the web applicatio
       if (!entry.path.includes("{")) continue;
       expect(Object.keys(openApi.paths), `${entry.path} is missing from the served contract`).toContain(entry.path);
     }
-    expect(Object.keys(openApi.paths)).toContain("/api/hermes/tasks");
+    expect(Object.keys(openApi.paths)).toContain("/api/agent/tasks");
 
     // 4. Establish the preferred client path.
     session = mcpSession({ baseUrl, credential });
     const initialized = await session.call({ method: "initialize", params: { protocolVersion: "2025-11-25", capabilities: {}, clientInfo: { name: "machine-discovery", version: "1" } } });
-    expect(initialized).toMatchObject({ result: { serverInfo: { name: "forge-hermes-bridge" } } });
+    expect(initialized).toMatchObject({ result: { serverInfo: { name: "forge-agent-bridge" } } });
     record("initialize", initialized);
 
     // 5. Learn the allowed project from the credential's own identity, never from a list of everything.
@@ -162,7 +162,7 @@ test("a paired agent completes the whole task journey without the web applicatio
     const capabilities = await session.call(tool("forge_capabilities", {}));
     record("capabilities", capabilities);
     expect((structured(capabilities).body as { unavailableCommands: string[] }).unavailableCommands).toContain("merge_pull_request");
-    expect(HERMES_MCP_TOOLS.map(entry => entry.name)).not.toContain("forge_merge_task");
+    expect(FORGE_MCP_TOOLS.map(entry => entry.name)).not.toContain("forge_merge_task");
 
     // 10. Nothing ran. The task is still waiting for a person to start it.
     const final = await session.call(tool("forge_get_task", { taskId: task.id }));

@@ -200,15 +200,15 @@ test("HTTP, the paired-agent API, OpenAPI, and the UI report the same queue stat
   const f = await nativeApp();
   try {
     const credential = (name: string) => {
-      const issued = f.hermes.create(f.userId, { name, companyId: f.company.id, projectIds: [f.project.id] });
-      return { Authorization: `Bearer ${f.hermes.exchange({ pairingCode: issued.pairingCode, profileId: `profile-${name}` }).credential}` };
+      const issued = f.externalAgent.create(f.userId, { name, companyId: f.company.id, projectIds: [f.project.id] });
+      return { Authorization: `Bearer ${f.externalAgent.exchange({ pairingCode: issued.pairingCode, profileId: `profile-${name}` }).credential}` };
     };
     const agent = credential("queue-bot");
     const other = credential("other-bot");
-    const hermes = (method: "GET" | "POST", url: string, payload?: object, headers = agent) => f.app.inject({ method, url, headers, ...(payload ? { payload } : {}) });
+    const agentApi = (method: "GET" | "POST", url: string, payload?: object, headers = agent) => f.app.inject({ method, url, headers, ...(payload ? { payload } : {}) });
 
-    const prerequisite = (await hermes("POST", "/api/hermes/tasks", { projectId: f.project.id, title: "Agent prerequisite", idempotencyKey: "agent-prerequisite" })).json();
-    const createdResponse = await hermes("POST", "/api/hermes/tasks", { projectId: f.project.id, title: "Agent queued", idempotencyKey: "agent-queued", queue: true, dependsOn: [prerequisite.id] });
+    const prerequisite = (await agentApi("POST", "/api/agent/tasks", { projectId: f.project.id, title: "Agent prerequisite", idempotencyKey: "agent-prerequisite" })).json();
+    const createdResponse = await agentApi("POST", "/api/agent/tasks", { projectId: f.project.id, title: "Agent queued", idempotencyKey: "agent-queued", queue: true, dependsOn: [prerequisite.id] });
     expect(createdResponse.statusCode, createdResponse.body).toBe(201);
     const created = createdResponse.json();
     const expectedQueue = { startIntent: "queued", state: "queued", waitingOn: [{ id: prerequisite.id, title: "Agent prerequisite", status: "backlog", deliveryTarget: "pull_request_draft", reason: "prerequisite_not_started", summary: expect.stringContaining("Start it") }] };
@@ -230,23 +230,23 @@ test("HTTP, the paired-agent API, OpenAPI, and the UI report the same queue stat
     expect(waits).toContain("Agent prerequisite");
 
     // Another paired agent cannot read or disarm the task; the creator can disarm and queue it again.
-    expect((await hermes("POST", `/api/hermes/tasks/${created.id}/commands`, { command: "disarm_task", revision: created.revision, idempotencyKey: "other-disarm" }, other)).statusCode).toBe(404);
-    const disarmed = await hermes("POST", `/api/hermes/tasks/${created.id}/commands`, { command: "disarm_task", revision: created.revision, idempotencyKey: "agent-disarm" });
+    expect((await agentApi("POST", `/api/agent/tasks/${created.id}/commands`, { command: "disarm_task", revision: created.revision, idempotencyKey: "other-disarm" }, other)).statusCode).toBe(404);
+    const disarmed = await agentApi("POST", `/api/agent/tasks/${created.id}/commands`, { command: "disarm_task", revision: created.revision, idempotencyKey: "agent-disarm" });
     expect(disarmed.statusCode, disarmed.body).toBe(200);
     expect(disarmed.json()).toMatchObject({ status: "backlog", workflowStage: "backlog", queue: { startIntent: "manual", state: "backlog" }, permittedCommands: expect.arrayContaining(["start_task"]) });
     expect(read(f, created.id).queue).toEqual(disarmed.json().queue);
-    const requeued = await hermes("POST", `/api/hermes/tasks/${created.id}/commands`, { command: "start_task", revision: disarmed.json().revision, idempotencyKey: "agent-requeue" });
+    const requeued = await agentApi("POST", `/api/agent/tasks/${created.id}/commands`, { command: "start_task", revision: disarmed.json().revision, idempotencyKey: "agent-requeue" });
     expect(requeued.json()).toMatchObject({ status: "backlog", queue: { state: "queued" } });
-    expect((await hermes("GET", `/api/hermes/tasks/${created.id}`)).json().queue).toEqual(read(f, created.id).queue);
+    expect((await agentApi("GET", `/api/agent/tasks/${created.id}`)).json().queue).toEqual(read(f, created.id).queue);
 
-    const document = (await hermes("GET", "/api/hermes/openapi.json")).json();
-    const commandEnum = document.paths["/api/hermes/tasks/{taskId}/commands"].post.requestBody.content["application/json"].schema.properties.command.enum;
+    const document = (await agentApi("GET", "/api/agent/openapi.json")).json();
+    const commandEnum = document.paths["/api/agent/tasks/{taskId}/commands"].post.requestBody.content["application/json"].schema.properties.command.enum;
     expect(commandEnum).toEqual(expect.arrayContaining(["start_task", "disarm_task"]));
-    expect(document.paths["/api/hermes/tasks"].post.requestBody.content["application/json"].schema.properties).toHaveProperty("queue");
-    const readSchema = document.paths["/api/hermes/tasks/{taskId}"].get.responses["200"].content["application/json"].schema;
+    expect(document.paths["/api/agent/tasks"].post.requestBody.content["application/json"].schema.properties).toHaveProperty("queue");
+    const readSchema = document.paths["/api/agent/tasks/{taskId}"].get.responses["200"].content["application/json"].schema;
     expect(readSchema.properties.queue.properties.state.enum).toEqual(["backlog", "queued", "running", "needs_attention", "delivered", "cancelled"]);
     expect(readSchema.properties.queue.properties.waitingOn.items.properties.reason.enum).toContain("prerequisite_merge_unobserved");
-    const capabilities = (await hermes("GET", "/api/hermes/capabilities")).json();
+    const capabilities = (await agentApi("GET", "/api/agent/capabilities")).json();
     expect(capabilities).toMatchObject({ capabilities: { create: { queuedTask: true } }, autonomousCommands: expect.arrayContaining(["create_queued_task", "disarm_task"]) });
   } finally { await f.close(); }
 });

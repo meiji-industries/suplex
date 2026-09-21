@@ -6,15 +6,15 @@ import {
   DialogHeader,
   DialogTitle,
 } from "../../components/ui/dialog.js";
-import type { ApiHermesAgent } from "../../shell/view-shared.js";
+import type { ApiExternalAgent } from "../../shell/view-shared.js";
 import type { ReactElement } from "react";
 
-export function HermesAvatarDialog({
+export function ExternalAgentAvatarDialog({
   target,
   onTargetChange,
 }: {
-  target: ApiHermesAgent | null;
-  onTargetChange: (target: ApiHermesAgent | null) => void;
+  target: ApiExternalAgent | null;
+  onTargetChange: (target: ApiExternalAgent | null) => void;
 }): ReactElement {
   return (
     <Dialog

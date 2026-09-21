@@ -6,7 +6,7 @@ import { AgentDeliveryService } from "../../src/delivery/agent-delivery.js";
 import { AuthService } from "../../src/identity/auth.js";
 import { DeliveryOperations, type DeliveryGithubPort } from "../../src/delivery/operations.js";
 import { ForgeDatabase } from "../../src/platform/database.js";
-import { HermesAgentService } from "../../src/identity/hermes-agents.js";
+import { ExternalAgentService } from "../../src/identity/external-agents.js";
 import { ProjectService, type LocalRepositoryAdapter } from "../../src/projects/projects.js";
 import { TaskService } from "../../src/tasks/tasks.js";
 import { createTestConfig } from "../../src/platform/config.js";
@@ -95,16 +95,16 @@ export async function mergeTrainFixture(count = 3) {
     setupCommand: "pnpm install", verificationCommand: "pnpm test", rootProfileId: "profile_native_root", workerProfileId: "profile_native_worker",
   });
   const tasks = new TaskService(database, auth, projects, config);
-  const hermes = new HermesAgentService(database, auth);
-  const issued = hermes.create(adminId, { name: "Train Agent", companyId: company.id, projectIds: [project.id] });
-  const credential = hermes.exchange({ pairingCode: issued.pairingCode, profileId: "profile-train" }).credential;
-  const principal = hermes.authenticate(credential);
+  const externalAgent = new ExternalAgentService(database, auth);
+  const issued = externalAgent.create(adminId, { name: "Train Agent", companyId: company.id, projectIds: [project.id] });
+  const credential = externalAgent.exchange({ pairingCode: issued.pairingCode, profileId: "profile-train" }).credential;
+  const principal = externalAgent.authenticate(credential);
   const store = tasks.repository.controls;
 
   const pulls = new Map<number, TrainPull>();
   const train: TrainTask[] = [];
   for (let index = 0; index < count; index++) {
-    const created = await tasks.createTaskForHermes(principal, { projectId: project.id, title: `Train task ${index + 1}`, idempotencyKey: `train-task-${index + 1}`, images: [], advisorProfileIds: {} });
+    const created = await tasks.createTaskForAgentApi(principal, { projectId: project.id, title: `Train task ${index + 1}`, idempotencyKey: `train-task-${index + 1}`, images: [], advisorProfileIds: {} });
     const taskId = created.task.id;
     // The agent-managed train delivers merged pull requests, so an open pull request never completes the task.
     database.authTransaction(db => db.prepare("UPDATE forge_task_controls SET delivery_target = 'merged' WHERE task_id = ?").run(taskId));
@@ -226,10 +226,10 @@ export async function mergeTrainFixture(count = 3) {
     tasks.setTaskDependencies(adminId, task.id, blockers.map(blocker => blocker.id));
   };
   const dependOn = (task: TrainTask, dependencies: TrainTask[]): void => {
-    tasks.setHermesTaskDependencies(principal, task.id, dependencies.map(dependency => dependency.id));
+    tasks.setAgentApiTaskDependencies(principal, task.id, dependencies.map(dependency => dependency.id));
   };
   const auditCount = (action: string): number => database.authQuery(db => (db.prepare("SELECT COUNT(*) AS count FROM forge_audit_events WHERE action = ?").get(action) as { count: number }).count);
   const provenance = (taskId: string) => agentDelivery.provenance(principal, taskId);
 
-  return { directory, bare, repo, worktrees, database, config, auth, adminId, company, project, projects, tasks, hermes, principal, credential, store, delivery, agentDelivery, port, pulls, train, merges, acceptHead, repairBranch, pushUnacceptedCommit, approveAndMerge, dependOn, blockOn, auditCount, provenance };
+  return { directory, bare, repo, worktrees, database, config, auth, adminId, company, project, projects, tasks, externalAgent, principal, credential, store, delivery, agentDelivery, port, pulls, train, merges, acceptHead, repairBranch, pushUnacceptedCommit, approveAndMerge, dependOn, blockOn, auditCount, provenance };
 }

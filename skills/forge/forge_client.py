@@ -1,4 +1,4 @@
-"""Forge paired-agent client for Hermes. Python standard library only.
+"""Forge external-agent client. Python standard library only.
 
 Reads FORGE_BASE_URL and FORGE_AGENT_CREDENTIAL from the environment at call
 time. The credential is never logged, printed, or written to a file: every
@@ -18,7 +18,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-USER_AGENT = "forge-hermes-skill/1"
+USER_AGENT = "forge-agent-skill/1"
 RETRY_STATUSES = frozenset({429, 500, 502, 503, 504})
 
 
@@ -62,7 +62,7 @@ def _host(base_url: str) -> str:
 
 
 class ForgeClient:
-    """Thin typed-route client over the Hermes runtime API.
+    """Thin typed-route client over the Forge Agent API.
 
     Prefer the Forge MCP tools when the bridge is configured; this client is
     the documented HTTP fallback and speaks only routes that exist in Forge.
@@ -73,9 +73,9 @@ class ForgeClient:
         self.base_url = (base_url or env.get("FORGE_BASE_URL", "")).strip().rstrip("/")
         self.credential = (credential or env.get("FORGE_AGENT_CREDENTIAL", "")).strip()
         if not self.base_url:
-            raise ForgeConfigError("Set FORGE_BASE_URL in $HERMES_HOME/.env before using the Forge skill.")
+            raise ForgeConfigError("Set FORGE_BASE_URL in the client process environment.")
         if not self.credential:
-            raise ForgeConfigError("Set FORGE_AGENT_CREDENTIAL in $HERMES_HOME/.env before using the Forge skill.")
+            raise ForgeConfigError("Set FORGE_AGENT_CREDENTIAL in the client process environment.")
 
     @property
     def host(self) -> str:
@@ -135,26 +135,26 @@ class ForgeClient:
             )
         raise ForgeError(message, status, code, safe.get("findings"))
 
-    # Routes that exist in src/http/routes/hermes-tasks.ts.
+    # Routes that exist in src/http/routes/agent-api.ts.
 
     def whoami(self) -> dict:
-        return self.call("GET", "/api/hermes/me")
+        return self.call("GET", "/api/agent/me")
 
     def capabilities(self) -> dict:
-        return self.call("GET", "/api/hermes/capabilities")
+        return self.call("GET", "/api/agent/capabilities")
 
     def list_workflows(self, project_id: str) -> dict:
-        return self.call("GET", f"/api/hermes/workflows?{urllib.parse.urlencode({'projectId': project_id})}")
+        return self.call("GET", f"/api/agent/workflows?{urllib.parse.urlencode({'projectId': project_id})}")
 
     def list_templates(self, project_id: str) -> dict:
-        return self.call("GET", f"/api/hermes/templates?{urllib.parse.urlencode({'projectId': project_id})}")
+        return self.call("GET", f"/api/agent/templates?{urllib.parse.urlencode({'projectId': project_id})}")
 
     def list_tasks(self, **query) -> dict:
         search = urllib.parse.urlencode({key: value for key, value in query.items() if value is not None})
-        return self.call("GET", f"/api/hermes/tasks?{search}" if search else "/api/hermes/tasks")
+        return self.call("GET", f"/api/agent/tasks?{search}" if search else "/api/agent/tasks")
 
     def get_task(self, task_id: str) -> dict:
-        return self.call("GET", f"/api/hermes/tasks/{urllib.parse.quote(task_id)}")
+        return self.call("GET", f"/api/agent/tasks/{urllib.parse.quote(task_id)}")
 
     def create_task(self, project_id: str, title: str, description: str | None = None, key: str | None = None, **extra) -> dict:
         """Create a backlog task. Pass queue=True to start it when every prerequisite is complete."""
@@ -162,11 +162,11 @@ class ForgeClient:
         if description is not None:
             payload["description"] = description
         payload["idempotencyKey"] = key or idempotency_key(project_id, payload)
-        return self.call("POST", "/api/hermes/tasks", payload)
+        return self.call("POST", "/api/agent/tasks", payload)
 
     def set_dependencies(self, task_id: str, depends_on: list[str]) -> dict:
         """Replace the prerequisites (Blocked by) of a task with the complete set given."""
-        return self.call("PUT", f"/api/hermes/tasks/{urllib.parse.quote(task_id)}/dependencies", {"dependsOn": depends_on})
+        return self.call("PUT", f"/api/agent/tasks/{urllib.parse.quote(task_id)}/dependencies", {"dependsOn": depends_on})
 
     def command_task(self, task_id: str, command: str, revision: str, note: str | None = None, key: str | None = None) -> dict:
         """Apply one lifecycle command. revision must be the task's current revision."""
@@ -174,7 +174,7 @@ class ForgeClient:
         if note is not None:
             payload["note"] = note
         payload["idempotencyKey"] = key or idempotency_key(task_id, payload)
-        return self.call("POST", f"/api/hermes/tasks/{urllib.parse.quote(task_id)}/commands", payload)
+        return self.call("POST", f"/api/agent/tasks/{urllib.parse.quote(task_id)}/commands", payload)
 
     def poll_task(self, task_id: str, until=None, attempts: int = 8, delay: float = 2.0) -> dict:
         """Read a task repeatedly with exponential backoff until `until` holds."""

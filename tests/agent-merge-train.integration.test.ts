@@ -32,8 +32,8 @@ test("a three-pull-request serial train merges in dependency order and records p
     expect(records.map(record => record.kind)).toEqual(["merge"]);
     expect(records[0]).toMatchObject({ pull_request_number: task.pull.number, task_id: task.id });
   }
-  expect(f.auditCount("hermes_pull_request_merged")).toBe(3);
-  expect(f.auditCount("hermes_merge_approval_issued")).toBe(3);
+  expect(f.auditCount("agent_api_pull_request_merged")).toBe(3);
+  expect(f.auditCount("agent_api_merge_approval_issued")).toBe(3);
 });
 
 test("an out-of-order merge is refused while the upstream task is not delivered", { timeout: 120_000 }, async () => {
@@ -69,7 +69,7 @@ test("base drift and a conflict resume the Coordinator repair path and append pr
   expect(turns.length).toBe(before + 1);
   expect(turns.at(-1)!.sessionId).toBe(rootSession.id);
   expect(turns.at(-1)!.promptText).toContain("delivery repair");
-  expect(f.auditCount("hermes_delivery_repair_requested")).toBe(1);
+  expect(f.auditCount("agent_api_delivery_repair_requested")).toBe(1);
 
   const opened = f.provenance(second!.id);
   expect(opened.map(record => record.kind)).toEqual(["reconciliation"]);
@@ -162,8 +162,8 @@ test("wait and resume follow the dependency graph and name the blocking task", {
   expect(f.agentDelivery.decide(f.principal, second!.id, "resume")).toMatchObject({ decision: "resume", blockingTaskIds: [] });
   expect(f.store.turns(second!.id).length).toBe(before + 1);
   expect(() => f.agentDelivery.decide(f.principal, second!.id, "wait_for_dependency")).toThrow("Every dependency of this task is delivered.");
-  expect(f.auditCount("hermes_delivery_resumed")).toBe(1);
-  expect(f.auditCount("hermes_delivery_wait_accepted")).toBe(1);
+  expect(f.auditCount("agent_api_delivery_resumed")).toBe(1);
+  expect(f.auditCount("agent_api_delivery_wait_accepted")).toBe(1);
 });
 
 test("a refresh observes GitHub and records an audit event without changing the task", { timeout: 120_000 }, async () => {
@@ -172,7 +172,7 @@ test("a refresh observes GitHub and records an audit event without changing the 
   const result = await f.agentDelivery.refresh(f.principal, only!.id);
   expect(result.observation).toMatchObject({ exists: true, number: only!.pull.number, headSha: only!.pull.headSha, mergeStateStatus: "CLEAN" });
   expect(result.pullRequest).toMatchObject({ number: only!.pull.number, state: "open" });
-  expect(f.auditCount("hermes_delivery_observed")).toBe(1);
+  expect(f.auditCount("agent_api_delivery_observed")).toBe(1);
   expect(f.store.get(only!.id).status).toBe("active");
   // No repair attempt is open, so the refresh appends nothing.
   expect(f.provenance(only!.id)).toEqual([]);
@@ -188,8 +188,8 @@ test("a healthy pull request cannot request delivery repair", { timeout: 120_000
 test("another agent cannot observe, repair, or merge a task it did not create", { timeout: 120_000 }, async () => {
   const f = await mergeTrainFixture(1);
   const [only] = f.train;
-  const other = f.hermes.create(f.adminId, { name: "Other Agent", companyId: f.company.id, projectIds: [f.project.id] });
-  const outsider = f.hermes.authenticate(f.hermes.exchange({ pairingCode: other.pairingCode, profileId: "profile-other" }).credential);
+  const other = f.externalAgent.create(f.adminId, { name: "Other Agent", companyId: f.company.id, projectIds: [f.project.id] });
+  const outsider = f.externalAgent.authenticate(f.externalAgent.exchange({ pairingCode: other.pairingCode, profileId: "profile-other" }).credential);
   await expect(f.agentDelivery.refresh(outsider, only!.id)).rejects.toThrow(TaskFailure);
   await expect(f.agentDelivery.requestReconciliation(outsider, only!.id)).rejects.toThrow(TaskFailure);
   await expect(f.agentDelivery.issueApproval(outsider, only!.id, { pullRequestNumber: only!.pull.number, headSha: only!.pull.headSha, baseSha: only!.pull.baseSha })).rejects.toThrow(TaskFailure);
@@ -228,7 +228,7 @@ test("a delivery repair is refused while an upstream task is not delivered", { t
   await expect(f.agentDelivery.requestReconciliation(f.principal, second!.id))
     .rejects.toThrow(`Task ${first!.id} is not delivered. Wait for its delivery instead of a delivery repair.`);
   expect(f.provenance(second!.id)).toEqual([]);
-  expect(f.auditCount("hermes_delivery_repair_requested")).toBe(0);
+  expect(f.auditCount("agent_api_delivery_repair_requested")).toBe(0);
 
   // The upstream delivery makes the repair available, and its prompt keeps the merged work intact.
   await f.approveAndMerge(first!);

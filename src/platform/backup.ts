@@ -126,7 +126,7 @@ function removeAuthenticationState(snapshotPath: string): void {
       snapshot.prepare("DELETE FROM forge_credentials").run();
       snapshot.prepare("DELETE FROM forge_invitations").run();
       snapshot.prepare("DELETE FROM forge_external_agent_credentials").run();
-      snapshot.prepare("DELETE FROM forge_hermes_pairing_codes").run();
+      snapshot.prepare("DELETE FROM forge_external_agent_pairing_codes").run();
     })();
   } finally {
     snapshot.close();

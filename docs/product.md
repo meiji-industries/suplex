@@ -64,7 +64,7 @@ Each agent tool owns its own model authentication. Forge's provider page reports
 configuration and sign-in, not a successful inference request. GitHub operations
 use the host's existing GitHub CLI authentication.
 
-Hermes agents can create tasks within explicitly granted project scopes.
+External agents can create tasks within explicitly granted project scopes.
 Passkey users manage companies, projects, and work through the web application.
 
 ## Recovery and boundaries

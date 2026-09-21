@@ -1,14 +1,14 @@
 import { isApiError } from "../lib/api.js";
 import type { CredentialResponse, InvitationSummaryResponse } from "../../http/contracts/common.js";
 import type { ModelResponse, ProfileResponse, ProjectResponse } from "../../http/contracts/projects.js";
-import type { HermesAdminAgent } from "../../http/contracts/hermes.js";
+import type { AgentApiAdminAgent } from "../../http/contracts/agent-api.js";
 import type { TaskListTask, TaskResponse } from "../../http/contracts/tasks.js";
 import type { TaskTemplateResponse } from "../../http/contracts/task-templates.js";
 import type { WorkflowRecord } from "../../http/contracts/workflows.js";
 
 export type ApiProfile = ProfileResponse;
 export type ApiWorkflow = WorkflowRecord;
-export type ApiHermesAgent = HermesAdminAgent;
+export type ApiExternalAgent = AgentApiAdminAgent;
 export type ApiModel = ModelResponse;
 export type ApiInvitation = InvitationSummaryResponse;
 export type ApiCredential = CredentialResponse;

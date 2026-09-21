@@ -8,7 +8,7 @@ import { useCallback, useEffect, useState, type ReactElement } from "react";
 import type {
   ApiProfile,
   ApiCredential,
-  ApiHermesAgent,
+  ApiExternalAgent,
   ApiInvitation,
   ApiModel,
   ApiProject,
@@ -19,12 +19,13 @@ import { InvitationsSection } from "./invitations-section.js";
 import { ModelsSection } from "./models-section.js";
 import { PasskeysSection } from "./passkeys-section.js";
 import { InternalAgentsManager } from "./internal-agents-manager.js";
-import { HermesAgentsSection } from "./hermes-agents-section.js";
-import { HermesAvatarDialog } from "./hermes-avatar-dialog.js";
-import { HermesNewAgentDialog } from "./hermes-new-agent-dialog.js";
-import { HermesPairingCodeDialog } from "./hermes-pairing-code-dialog.js";
-import { HermesProjectGrantsDialog } from "./hermes-project-grants-dialog.js";
-import { createHermesActions } from "./hermes-actions.js";
+import { ExternalAgentsSection } from "./external-agents-section.js";
+import { ExternalAgentConnectionGuide } from "./external-agent-connection-guide.js";
+import { ExternalAgentAvatarDialog } from "./external-agent-avatar-dialog.js";
+import { ExternalAgentNewAgentDialog } from "./external-agent-new-dialog.js";
+import { ExternalAgentPairingCodeDialog } from "./external-agent-pairing-code-dialog.js";
+import { ExternalAgentProjectGrantsDialog } from "./external-agent-project-grants-dialog.js";
+import { createExternalAgentActions } from "./external-agent-actions.js";
 
 export function AdminView(): ReactElement {
   const { user, companies, currentCompany, loading } = useCompanyContext();
@@ -32,7 +33,7 @@ export function AdminView(): ReactElement {
   const [invitations, setInvitations] = useState<ApiInvitation[]>([]);
   const [credentials, setCredentials] = useState<ApiCredential[]>([]);
   const [agents, setAgents] = useState<ApiProfile[]>([]);
-  const [hermesAgents, setHermesAgents] = useState<ApiHermesAgent[]>([]);
+  const [externalAgents, setExternalAgents] = useState<ApiExternalAgent[]>([]);
   const [companyProjects, setCompanyProjects] = useState<ApiProject[]>([]);
   const [models, setModels] = useState<ApiModel[]>([]);
   const [displayName, setDisplayName] = useState("");
@@ -44,28 +45,28 @@ export function AdminView(): ReactElement {
   const [error, setError] = useState("");
   const [initialReloading, setInitialReloading] = useState(true);
 
-  // Hermes agent administration state
-  const [newHermesOpen, setNewHermesOpen] = useState(false);
-  const [hermesName, setHermesName] = useState("");
-  const [hermesError, setHermesError] = useState("");
-  const [hermesProjectIds, setHermesProjectIds] = useState<string[]>([]);
-  const [hermesAvatarSeed, setHermesAvatarSeed] = useState("");
-  const [hermesAvatarTarget, setHermesAvatarTarget] =
-    useState<ApiHermesAgent | null>(null);
+  // External agent administration state
+  const [newExternalAgentOpen, setNewExternalAgentOpen] = useState(false);
+  const [externalAgentName, setExternalAgentName] = useState("");
+  const [externalAgentError, setExternalAgentError] = useState("");
+  const [externalAgentProjectIds, setExternalAgentProjectIds] = useState<string[]>([]);
+  const [externalAgentAvatarSeed, setExternalAgentAvatarSeed] = useState("");
+  const [externalAgentAvatarTarget, setExternalAgentAvatarTarget] =
+    useState<ApiExternalAgent | null>(null);
   const [pairingCodeModalOpen, setPairingCodeModalOpen] = useState(false);
   const [pairingCodeData, setPairingCodeData] = useState<{
     code: string;
     expiresAt: string;
     agentName: string;
   } | null>(null);
-  const [hermesProfileName, setHermesProfileName] = useState("default");
+  const [externalAgentProfileName, setExternalAgentProfileName] = useState("default");
   const [pairingCodeCopied, setPairingCodeCopied] = useState(false);
   const [pairingInstructionsCopied, setPairingInstructionsCopied] =
     useState(false);
   const [editProjectsModalOpen, setEditProjectsModalOpen] = useState(false);
-  const [editingHermesAgent, setEditingHermesAgent] =
-    useState<ApiHermesAgent | null>(null);
-  const [editingHermesProjectIds, setEditingHermesProjectIds] = useState<
+  const [editingExternalAgent, setEditingExternalAgent] =
+    useState<ApiExternalAgent | null>(null);
+  const [editingExternalAgentProjectIds, setEditingExternalAgentProjectIds] = useState<
     string[]
   >([]);
 
@@ -90,7 +91,7 @@ export function AdminView(): ReactElement {
           invitationList,
           credentialList,
           agentList,
-          hermesList,
+          externalAgentList,
           projectList,
           modelList,
         ] = await Promise.all([
@@ -116,8 +117,8 @@ export function AdminView(): ReactElement {
               )
             : { profiles: [] },
           isAgents
-            ? readJson<{ agents: ApiHermesAgent[] }>(
-                `/api/admin/hermes-agents${currentCompany ? `?companyId=${encodeURIComponent(currentCompany.id)}` : ""}`,
+            ? readJson<{ agents: ApiExternalAgent[] }>(
+                `/api/admin/external-agents${currentCompany ? `?companyId=${encodeURIComponent(currentCompany.id)}` : ""}`,
                 options,
               ).catch(() => ({ agents: [] }))
             : { agents: [] },
@@ -145,15 +146,15 @@ export function AdminView(): ReactElement {
         setInvitations(invitationList.invitations);
         setCredentials(credentialList.credentials);
         setAgents(agentList.profiles);
-        setHermesAgents(hermesList.agents);
+        setExternalAgents(externalAgentList.agents);
         setCompanyProjects(projectList.projects);
         const projectIds = new Set(
           projectList.projects.map((project) => project.id),
         );
-        setHermesProjectIds((selected) =>
+        setExternalAgentProjectIds((selected) =>
           selected.filter((projectId) => projectIds.has(projectId)),
         );
-        setEditingHermesProjectIds((selected) =>
+        setEditingExternalAgentProjectIds((selected) =>
           selected.filter((projectId) => projectIds.has(projectId)),
         );
         setModels(modelList.models);
@@ -217,39 +218,39 @@ export function AdminView(): ReactElement {
     }
   };
   const {
-    openNewHermesAgent,
-    createHermesAgent,
-    reissueHermesPairing,
-    rotateHermesAgent,
-    revokeHermesAgent,
-    openEditHermesProjects,
-    saveHermesProjects,
+    openNewExternalAgent,
+    createExternalAgent,
+    reissueExternalAgentPairing,
+    rotateExternalAgent,
+    revokeExternalAgent,
+    openEditExternalAgentProjects,
+    saveExternalAgentProjects,
     copyPairingCode,
-    copyHermesSetupInstructions,
-  } = createHermesActions({
+    copyExternalAgentSetupInstructions,
+  } = createExternalAgentActions({
     currentCompany,
-    hermesName,
-    hermesProjectIds,
-    hermesAvatarSeed,
-    editingHermesAgent,
-    editingHermesProjectIds,
+    externalAgentName,
+    externalAgentProjectIds,
+    externalAgentAvatarSeed,
+    editingExternalAgent,
+    editingExternalAgentProjectIds,
     pairingCodeData,
-    hermesProfileName,
+    externalAgentProfileName,
     pendingAction,
     reload,
-    setNewHermesOpen,
-    setHermesName,
-    setHermesError,
-    setHermesProjectIds,
-    setHermesAvatarSeed,
+    setNewExternalAgentOpen,
+    setExternalAgentName,
+    setExternalAgentError,
+    setExternalAgentProjectIds,
+    setExternalAgentAvatarSeed,
     setPairingCodeData,
-    setHermesProfileName,
+    setExternalAgentProfileName,
     setPairingCodeCopied,
     setPairingInstructionsCopied,
     setPairingCodeModalOpen,
     setPendingAction,
-    setEditingHermesAgent,
-    setEditingHermesProjectIds,
+    setEditingExternalAgent,
+    setEditingExternalAgentProjectIds,
     setEditProjectsModalOpen,
     setError,
   });
@@ -395,60 +396,61 @@ export function AdminView(): ReactElement {
         {isAgents ? (
           <div className="space-y-12">
             <InternalAgentsManager agents={agents} onSaved={reload} />
-            <HermesAgentsSection
-              agents={hermesAgents}
+            <ExternalAgentsSection
+              agents={externalAgents}
               projects={companyProjects}
               pendingAction={pendingAction}
-              onOpenNewAgent={openNewHermesAgent}
-              onReissuePairing={reissueHermesPairing}
-              onRotateAgent={rotateHermesAgent}
-              onEditProjects={openEditHermesProjects}
-              onEditAvatar={setHermesAvatarTarget}
-              onRevokeAgent={revokeHermesAgent}
+              onOpenNewAgent={openNewExternalAgent}
+              onReissuePairing={reissueExternalAgentPairing}
+              onRotateAgent={rotateExternalAgent}
+              onEditProjects={openEditExternalAgentProjects}
+              onEditAvatar={setExternalAgentAvatarTarget}
+              onRevokeAgent={revokeExternalAgent}
               onClearPendingAction={() => setPendingAction("")}
             />
-            <HermesAvatarDialog
-              target={hermesAvatarTarget}
-              onTargetChange={setHermesAvatarTarget}
+            <ExternalAgentConnectionGuide />
+            <ExternalAgentAvatarDialog
+              target={externalAgentAvatarTarget}
+              onTargetChange={setExternalAgentAvatarTarget}
             />
-            <HermesNewAgentDialog
-              open={newHermesOpen}
-              name={hermesName}
-              error={hermesError}
-              projectIds={hermesProjectIds}
+            <ExternalAgentNewAgentDialog
+              open={newExternalAgentOpen}
+              name={externalAgentName}
+              error={externalAgentError}
+              projectIds={externalAgentProjectIds}
               projects={companyProjects}
-              avatarSeed={hermesAvatarSeed}
-              onOpenChange={setNewHermesOpen}
+              avatarSeed={externalAgentAvatarSeed}
+              onOpenChange={setNewExternalAgentOpen}
               onNameChange={(value) => {
-                setHermesName(value);
-                setHermesError("");
+                setExternalAgentName(value);
+                setExternalAgentError("");
               }}
-              onProjectIdsChange={setHermesProjectIds}
-              onAvatarSeedChange={setHermesAvatarSeed}
-              onCreate={createHermesAgent}
+              onProjectIdsChange={setExternalAgentProjectIds}
+              onAvatarSeedChange={setExternalAgentAvatarSeed}
+              onCreate={createExternalAgent}
             />
-            <HermesPairingCodeDialog
+            <ExternalAgentPairingCodeDialog
               open={pairingCodeModalOpen}
               data={pairingCodeData}
-              profileName={hermesProfileName}
+              profileName={externalAgentProfileName}
               codeCopied={pairingCodeCopied}
               instructionsCopied={pairingInstructionsCopied}
               onOpenChange={setPairingCodeModalOpen}
               onProfileNameChange={(value) => {
-                setHermesProfileName(value);
+                setExternalAgentProfileName(value);
                 setPairingInstructionsCopied(false);
               }}
               onCopyCode={copyPairingCode}
-              onCopyInstructions={copyHermesSetupInstructions}
+              onCopyInstructions={copyExternalAgentSetupInstructions}
             />
-            <HermesProjectGrantsDialog
+            <ExternalAgentProjectGrantsDialog
               open={editProjectsModalOpen}
-              agent={editingHermesAgent}
-              projectIds={editingHermesProjectIds}
+              agent={editingExternalAgent}
+              projectIds={editingExternalAgentProjectIds}
               projects={companyProjects}
               onOpenChange={setEditProjectsModalOpen}
-              onProjectIdsChange={setEditingHermesProjectIds}
-              onSave={saveHermesProjects}
+              onProjectIdsChange={setEditingExternalAgentProjectIds}
+              onSave={saveExternalAgentProjects}
             />
           </div>
         ) : null}

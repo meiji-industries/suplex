@@ -16,10 +16,10 @@ import type { AuthService } from "../identity/auth.js";
 import { ArtifactStore, type StoredArtifact } from "../platform/artifacts.js";
 import type { ForgeConfig } from "../platform/config.js";
 import type { ForgeDatabase } from "../platform/database.js";
-import type { HermesPrincipal } from "../identity/hermes-agents.js";
-import { HermesSafeTaskProjectionSchema, HermesTaskCommandBodySchema, HermesTaskCreateBodySchema, type HermesSafeTaskProjection, type HermesTaskCreateBody, type HermesTaskFilter, type HermesTaskReadProjection } from "../http/contracts/hermes.js";
+import type { ExternalAgentPrincipal } from "../identity/external-agents.js";
+import { AgentApiSafeTaskProjectionSchema, AgentApiTaskCommandBodySchema, AgentApiTaskCreateBodySchema, type AgentApiSafeTaskProjection, type AgentApiTaskCreateBody, type AgentApiTaskFilter, type AgentApiTaskReadProjection } from "../http/contracts/agent-api.js";
 import { createGithubReleasePort, GithubReleaseFailure, type GithubReleasePort } from "../integrations/github/delivery.js";
-import { deriveActionRequired, deriveTaskIntegration, isUpstreamOf, matchesHermesFilter, observableDelivery, type PullRequestObservationResult } from "./integration.js";
+import { deriveActionRequired, deriveTaskIntegration, isUpstreamOf, matchesAgentApiFilter, observableDelivery, type PullRequestObservationResult } from "./integration.js";
 import { ProjectAgentTaskPolicySchema, type ProjectAgentTaskPolicy } from "../http/contracts/projects.js";
 import { CreateTaskTemplateBodySchema } from "../http/contracts/task-templates.js";
 import { TaskDetailsBodySchema } from "../http/contracts/tasks.js";
@@ -50,21 +50,21 @@ export class TaskFailure extends Error {
 
   readonly details: { permittedWorkflowIds?: string[]; permittedTemplateIds?: string[] } | undefined;
 }
-type Authority = { kind: "user"; userId: string } | { kind: "hermes"; principal: HermesPrincipal };
-export type HermesGithubPort = Pick<Required<GithubReleasePort>, "observePullRequest">;
-type HermesCommand = z.infer<typeof HermesTaskCommandBodySchema>;
-const HERMES_COMMAND_AUDITS: Record<HermesCommand["command"], string> = {
+type Authority = { kind: "user"; userId: string } | { kind: "agentApi"; principal: ExternalAgentPrincipal };
+export type AgentApiGithubPort = Pick<Required<GithubReleasePort>, "observePullRequest">;
+type AgentApiCommand = z.infer<typeof AgentApiTaskCommandBodySchema>;
+const AGENT_API_COMMAND_AUDITS: Record<AgentApiCommand["command"], string> = {
   start_task: "task_started", disarm_task: "task_disarmed", cancel_task: "task_cancelled", archive_task: "task_archived", unarchive_task: "task_unarchived",
   send_task_note: "task_note_added", duplicate_task: "task_duplicated", recheck_delivery_wait: "delivery_wait_recheck_requested",
 };
 /** Commands running anywhere in this process. Keyed without the service instance so siblings sharing a database agree. */
-const hermesCommandsInFlight = new Set<string>();
+const agentApiCommandsInFlight = new Set<string>();
 /** Tasks whose worktree is being removed anywhere in this process. Start and unarchive refuse while a task is listed. */
 const archivesInProgress = new Set<string>();
-const hermesCommandKey = (agentId: string, taskId: string, key: string): string => JSON.stringify([agentId, taskId, key]);
-const hermesDuplicateKey = (taskId: string, key: string): string => `duplicate-${createHash("sha256").update(`${taskId}:${key}`).digest("hex")}`;
+const agentApiCommandKey = (agentId: string, taskId: string, key: string): string => JSON.stringify([agentId, taskId, key]);
+const agentApiDuplicateKey = (taskId: string, key: string): string => `duplicate-${createHash("sha256").update(`${taskId}:${key}`).digest("hex")}`;
 /** ponytail: one page of the agent's own tasks feeds upstream dependency lookup; page it if an agent ever owns more. */
-const HERMES_UPSTREAM_POOL = 200;
+const AGENT_API_UPSTREAM_POOL = 200;
 type Projects = Pick<ProjectService, "getProject" | "getProjectInCompany" | "resolveTaskSource" | "captureTaskConfiguration">;
 /** Worktree removal defaults to the real host; tests drive a controlled one. */
 export type TaskServicePorts = { removeWorktree?: typeof removeTaskWorktree; herdr?: TaskPanePort; issueTracker?: (connection: TrackerConnection) => Pick<IssueTracker, "read"> };
@@ -147,55 +147,55 @@ export class TaskService {
     });
   }
 
-  async createTaskForHermes(principal: HermesPrincipal, input: HermesTaskCreateBody, copiedFromTaskId?: string) {
+  async createTaskForAgentApi(principal: ExternalAgentPrincipal, input: AgentApiTaskCreateBody, copiedFromTaskId?: string) {
     const untrusted: Record<string, unknown> = { ...input };
     delete untrusted.companyId;
     delete untrusted.agentId;
     delete untrusted.startImmediately;
-    let raw: HermesTaskCreateBody;
-    try { raw = HermesTaskCreateBodySchema.strict().parse(untrusted); }
+    let raw: AgentApiTaskCreateBody;
+    try { raw = AgentApiTaskCreateBodySchema.strict().parse(untrusted); }
     catch { throw new TaskFailure("Invalid request", 400, "request_invalid"); }
-    const authority: Authority = { kind: "hermes", principal };
+    const authority: Authority = { kind: "agentApi", principal };
     const creator: TaskCreator = { kind: "agent", id: principal.agentId };
-    const requestHash = this.hermesRequestHash(raw, creator);
+    const requestHash = this.agentApiRequestHash(raw, creator);
     this.requireScope(authority, principal.companyId, raw.projectId, true);
     let existing: TaskRow | null;
     try { existing = this.repository.existing(principal.companyId, raw.idempotencyKey, requestHash, creator); }
     catch (error) {
       if (!(error instanceof TaskConflict)) throw error;
-      if (!this.isLegacyHermesRequest(input)) throw new TaskFailure(error.message, 409);
-      const legacy = taskRequestHash(this.legacyHermesRequest(raw), creator);
+      if (!this.isLegacyAgentApiRequest(input)) throw new TaskFailure(error.message, 409);
+      const legacy = taskRequestHash(this.legacyAgentApiRequest(raw), creator);
       try { existing = this.repository.existing(principal.companyId, raw.idempotencyKey, legacy, creator); }
       catch (legacyError) { if (legacyError instanceof TaskConflict) throw new TaskFailure(legacyError.message, 409); throw legacyError; }
     }
-    if (existing) return { created: false, task: this.getHermesTask(principal, existing.id) };
-    const resolved = this.resolveHermesRequest(principal.companyId, raw);
+    if (existing) return { created: false, task: this.getAgentApiTask(principal, existing.id) };
+    const resolved = this.resolveAgentApiRequest(principal.companyId, raw);
     const result = await this.create(authority, principal.companyId, resolved.request, undefined, requestHash, resolved.signature, raw, copiedFromTaskId, resolved.selection);
-    return { created: result.created, task: this.getHermesTask(principal, result.task.id) };
+    return { created: result.created, task: this.getAgentApiTask(principal, result.task.id) };
   }
 
-  getHermesTask(principal: HermesPrincipal, taskId: string) {
-    return this.hermesProjection(this.requireTask({ kind: "hermes", principal }, taskId));
+  getAgentApiTask(principal: ExternalAgentPrincipal, taskId: string) {
+    return this.agentApiProjection(this.requireTask({ kind: "agentApi", principal }, taskId));
   }
 
-  /** The authorized task row for a Hermes agent command. Every agent command resolves its task through this check. */
-  hermesTaskRow(principal: HermesPrincipal, taskId: string): TaskRow {
-    return this.requireTask({ kind: "hermes", principal }, taskId);
+  /** The authorized task row for a AgentApi agent command. Every agent command resolves its task through this check. */
+  agentApiTaskRow(principal: ExternalAgentPrincipal, taskId: string): TaskRow {
+    return this.requireTask({ kind: "agentApi", principal }, taskId);
   }
 
   /** Every task the agent created inside its granted projects, newest activity first. */
-  listHermesTaskRows(principal: HermesPrincipal): TaskRow[] {
+  listAgentApiTaskRows(principal: ExternalAgentPrincipal): TaskRow[] {
     return this.repository.rows().filter(row => row.company_id === principal.companyId && row.creator_agent_id === principal.agentId && principal.projectIds.includes(row.project_id) && !row.archived_at);
   }
 
-  listHermesWorkflows(principal: HermesPrincipal, projectId: string) {
-    this.requireScope({ kind: "hermes", principal }, principal.companyId, projectId);
+  listAgentApiWorkflows(principal: ExternalAgentPrincipal, projectId: string) {
+    this.requireScope({ kind: "agentApi", principal }, principal.companyId, projectId);
     const policy = ProjectAgentTaskPolicySchema.parse(this.projects.getProjectInCompany(principal.companyId, projectId).agentTaskPolicy);
     return this.database.authQuery(db => (db.prepare("SELECT id, name, description FROM forge_workflows WHERE archived_at IS NULL ORDER BY name COLLATE NOCASE, id").all() as Array<{ id: string; name: string; description: string }>).map(workflow => ({ ...workflow, permittedForAgentTaskCreation: policy.workflowIds.includes(workflow.id) })));
   }
 
-  listHermesTemplates(principal: HermesPrincipal, projectId: string) {
-    this.requireScope({ kind: "hermes", principal }, principal.companyId, projectId);
+  listAgentApiTemplates(principal: ExternalAgentPrincipal, projectId: string) {
+    this.requireScope({ kind: "agentApi", principal }, principal.companyId, projectId);
     const policy = ProjectAgentTaskPolicySchema.parse(this.projects.getProjectInCompany(principal.companyId, projectId).agentTaskPolicy);
     return this.database.authQuery(db => (db.prepare("SELECT id, name, configuration_json FROM forge_task_templates WHERE project_id = ? ORDER BY name COLLATE NOCASE, id").all(projectId) as Array<{ id: string; name: string; configuration_json: string }>).map(template => ({ id: template.id, name: template.name, description: CreateTaskTemplateBodySchema.parse(JSON.parse(template.configuration_json)).description, permittedForAgentTaskCreation: policy.templateIds.includes(template.id) })));
   }
@@ -207,12 +207,12 @@ export class TaskService {
     return this.getTask(userId, taskId);
   }
 
-  setHermesTaskDependencies(principal: HermesPrincipal, taskId: string, dependsOn: unknown) {
-    const authority: Authority = { kind: "hermes", principal };
+  setAgentApiTaskDependencies(principal: ExternalAgentPrincipal, taskId: string, dependsOn: unknown) {
+    const authority: Authority = { kind: "agentApi", principal };
     const row = this.requireTask(authority, taskId);
     this.applyDependencies(authority, row.company_id, taskId, DependsOnSchema.parse(dependsOn));
     this.audit(authority, row.company_id, "task_dependencies_updated", taskId);
-    return this.getHermesTask(principal, taskId);
+    return this.getAgentApiTask(principal, taskId);
   }
 
   private applyDependencies(authority: Authority, companyId: string, taskId: string, dependsOn: string[]): void {
@@ -227,22 +227,22 @@ export class TaskService {
   }
 
   /** The read path adds observed delivery integration health to the stored projection. */
-  async readHermesTask(principal: HermesPrincipal, taskId: string, github: HermesGithubPort = createGithubReleasePort()): Promise<HermesTaskReadProjection> {
-    const [projection] = await this.withHermesIntegration(principal, [this.getHermesTask(principal, taskId)], github);
+  async readAgentApiTask(principal: ExternalAgentPrincipal, taskId: string, github: AgentApiGithubPort = createGithubReleasePort()): Promise<AgentApiTaskReadProjection> {
+    const [projection] = await this.withAgentApiIntegration(principal, [this.getAgentApiTask(principal, taskId)], github);
     return projection!;
   }
 
-  async readHermesTasks(principal: HermesPrincipal, input: Parameters<TaskService["listHermesTasks"]>[1] & { filter?: HermesTaskFilter }, github: HermesGithubPort = createGithubReleasePort()): Promise<{ tasks: HermesTaskReadProjection[]; nextCursor: string | null }> {
-    const page = this.listHermesTasks(principal, input);
-    const tasks = await this.withHermesIntegration(principal, page.tasks, github);
+  async readAgentApiTasks(principal: ExternalAgentPrincipal, input: Parameters<TaskService["listAgentApiTasks"]>[1] & { filter?: AgentApiTaskFilter }, github: AgentApiGithubPort = createGithubReleasePort()): Promise<{ tasks: AgentApiTaskReadProjection[]; nextCursor: string | null }> {
+    const page = this.listAgentApiTasks(principal, input);
+    const tasks = await this.withAgentApiIntegration(principal, page.tasks, github);
     // Integration health comes from GitHub, not the query, so the filter narrows a page already drawn. The cursor still walks every task.
-    return { tasks: input.filter ? tasks.filter(projection => matchesHermesFilter(projection, input.filter!)) : tasks, nextCursor: page.nextCursor };
+    return { tasks: input.filter ? tasks.filter(projection => matchesAgentApiFilter(projection, input.filter!)) : tasks, nextCursor: page.nextCursor };
   }
 
-  private async withHermesIntegration(principal: HermesPrincipal, projections: HermesSafeTaskProjection[], github: HermesGithubPort): Promise<HermesTaskReadProjection[]> {
+  private async withAgentApiIntegration(principal: ExternalAgentPrincipal, projections: AgentApiSafeTaskProjection[], github: AgentApiGithubPort): Promise<AgentApiTaskReadProjection[]> {
     if (!projections.length) return [];
     const targets = projections.map(projection => this.repository.task(this.repository.row(projection.id)!));
-    const pool = this.repository.hermesRows({ agentId: principal.agentId, companyId: principal.companyId, limit: HERMES_UPSTREAM_POOL }).map(row => this.repository.task(row));
+    const pool = this.repository.agentApiRows({ agentId: principal.agentId, companyId: principal.companyId, limit: AGENT_API_UPSTREAM_POOL }).map(row => this.repository.task(row));
     const upstreams = new Map(targets.map(task => [task.id, pool.filter(other => isUpstreamOf(other, task))] as const));
     const observed = new Map<string, Task>();
     for (const task of [...targets, ...[...upstreams.values()].flat()]) observed.set(task.id, task);
@@ -261,7 +261,7 @@ export class TaskService {
     });
   }
 
-  private async observeTaskPullRequest(task: Task, github: HermesGithubPort): Promise<PullRequestObservationResult> {
+  private async observeTaskPullRequest(task: Task, github: AgentApiGithubPort): Promise<PullRequestObservationResult> {
     if (!observableDelivery(task)) return { observation: null, failureCode: null };
     try {
       return { observation: await github.observePullRequest({ repository: task.configuration.repository, branch: task.configuration.branch, pullRequestNumber: task.pullRequest?.number ?? null }), failureCode: null };
@@ -270,24 +270,25 @@ export class TaskService {
     }
   }
 
-  async commandHermesTask(principal: HermesPrincipal, taskId: string, raw: unknown): Promise<HermesSafeTaskProjection> {
-    let input: HermesCommand;
-    try { input = HermesTaskCommandBodySchema.parse(raw); }
+  async commandAgentApiTask(principal: ExternalAgentPrincipal, taskId: string, raw: unknown): Promise<AgentApiSafeTaskProjection> {
+    let input: AgentApiCommand;
+    try { input = AgentApiTaskCommandBodySchema.parse(raw); }
     catch { throw new TaskFailure("Invalid request", 400, "request_invalid"); }
     const requestHash = createHash("sha256").update(JSON.stringify(input)).digest("hex");
-    const authority: Authority = { kind: "hermes", principal };
+    const authority: Authority = { kind: "agentApi", principal };
     this.requireTask(authority, taskId);
+    // This historical table name preserves existing idempotency receipts across the public rename.
     const stored = this.database.authQuery(db => db.prepare("SELECT request_hash, result_json FROM forge_hermes_task_command_receipts WHERE agent_id = ? AND task_id = ? AND idempotency_key = ?").get(principal.agentId, taskId, input.idempotencyKey) as { request_hash: string; result_json: string } | undefined);
     if (stored) {
       if (stored.request_hash !== requestHash) throw new TaskFailure("This idempotency key belongs to a different request", 409, "idempotency_conflict");
-      return HermesSafeTaskProjectionSchema.parse(JSON.parse(stored.result_json));
+      return AgentApiSafeTaskProjectionSchema.parse(JSON.parse(stored.result_json));
     }
-    const inFlight = hermesCommandKey(principal.agentId, taskId, input.idempotencyKey);
-    if (hermesCommandsInFlight.has(inFlight)) throw new TaskFailure("This command is still being processed", 409, "command_in_progress");
-    hermesCommandsInFlight.add(inFlight);
+    const inFlight = agentApiCommandKey(principal.agentId, taskId, input.idempotencyKey);
+    if (agentApiCommandsInFlight.has(inFlight)) throw new TaskFailure("This command is still being processed", 409, "command_in_progress");
+    agentApiCommandsInFlight.add(inFlight);
     try {
       const row = this.requireTask(authority, taskId);
-      const before = this.hermesProjection(row);
+      const before = this.agentApiProjection(row);
       if (before.revision !== input.revision) throw new TaskFailure("Task revision is stale", 412, "revision_stale");
       if (!before.permittedCommands.includes(input.command)) throw new TaskFailure("This command is not legal for the current task", 409, "illegal_command");
       // The revision claim is the optimistic lock: a concurrent command on the same revision loses here.
@@ -308,16 +309,16 @@ export class TaskService {
         case "archive_task":
           if ("dirtyFileCount" in await this.archive(authority, taskId, false)) throw new TaskFailure("Discard dirty worktree changes before archiving", 409, "illegal_command");
           break;
-        case "duplicate_task": resultTaskId = await this.duplicateTaskForHermes(principal, taskId, input.idempotencyKey); break;
+        case "duplicate_task": resultTaskId = await this.duplicateTaskForAgentApi(principal, taskId, input.idempotencyKey); break;
       }
-      const result = this.getHermesTask(principal, resultTaskId);
+      const result = this.getAgentApiTask(principal, resultTaskId);
       this.database.authTransaction(db => db.prepare("INSERT INTO forge_hermes_task_command_receipts (agent_id, task_id, idempotency_key, request_hash, result_json, created_at) VALUES (?, ?, ?, ?, ?, ?)").run(principal.agentId, taskId, input.idempotencyKey, requestHash, JSON.stringify(result), new Date().toISOString()));
-      this.audit(authority, principal.companyId, HERMES_COMMAND_AUDITS[input.command], taskId);
+      this.audit(authority, principal.companyId, AGENT_API_COMMAND_AUDITS[input.command], taskId);
       return result;
-    } finally { hermesCommandsInFlight.delete(inFlight); }
+    } finally { agentApiCommandsInFlight.delete(inFlight); }
   }
 
-  hermesIdentity(principal: HermesPrincipal) {
+  agentApiIdentity(principal: ExternalAgentPrincipal) {
     const projects = this.database.authQuery((db) => db.prepare(`
       SELECT p.id, p.name
       FROM forge_external_agent_project_grants g
@@ -333,16 +334,16 @@ export class TaskService {
     });
     return {
       agent: { id: principal.agentId, name: this.database.authQuery(db => (db.prepare("SELECT name FROM forge_agents WHERE id = ?").get(principal.agentId) as { name: string }).name), profileId: principal.profileId },
-      capabilities: { taskDiscovery: true as const, taskRead: true as const, taskCreate: true as const, taskCommands: ["start_task", "disarm_task", "cancel_task", "archive_task", "unarchive_task", "duplicate_task", "send_task_note", "recheck_delivery_wait"] as Array<z.infer<typeof HermesTaskCommandBodySchema>["command"]> },
+      capabilities: { taskDiscovery: true as const, taskRead: true as const, taskCreate: true as const, taskCommands: ["start_task", "disarm_task", "cancel_task", "archive_task", "unarchive_task", "duplicate_task", "send_task_note", "recheck_delivery_wait"] as Array<z.infer<typeof AgentApiTaskCommandBodySchema>["command"]> },
       projects: withPolicy,
     };
   }
 
-  listHermesTasks(principal: HermesPrincipal, input: { projectId?: string; status?: string; archived?: boolean; attention?: boolean; blocker?: boolean; updatedSince?: string; cursor?: string; limit: number }) {
-    if (input.projectId) this.requireScope({ kind: "hermes", principal }, principal.companyId, input.projectId);
+  listAgentApiTasks(principal: ExternalAgentPrincipal, input: { projectId?: string; status?: string; archived?: boolean; attention?: boolean; blocker?: boolean; updatedSince?: string; cursor?: string; limit: number }) {
+    if (input.projectId) this.requireScope({ kind: "agentApi", principal }, principal.companyId, input.projectId);
     const filter = { projectId: input.projectId ?? null, status: input.status ?? null, archived: input.archived ?? null, attention: input.attention ?? null, blocker: input.blocker ?? null, updatedSince: input.updatedSince ?? null };
-    const cursor = input.cursor ? this.parseHermesCursor(input.cursor, principal, filter) : null;
-    const rows = this.repository.hermesRows({
+    const cursor = input.cursor ? this.parseAgentApiCursor(input.cursor, principal, filter) : null;
+    const rows = this.repository.agentApiRows({
       agentId: principal.agentId,
       companyId: principal.companyId,
       limit: input.limit + 1,
@@ -355,12 +356,12 @@ export class TaskService {
       ...(cursor ? { cursor } : {}),
     });
     const hasMore = rows.length > input.limit;
-    const tasks = rows.slice(0, input.limit).map(row => this.hermesProjection(row));
+    const tasks = rows.slice(0, input.limit).map(row => this.agentApiProjection(row));
     const last = tasks.at(-1);
-    return { tasks, nextCursor: last && hasMore ? this.createHermesCursor(principal, filter, last) : null };
+    return { tasks, nextCursor: last && hasMore ? this.createAgentApiCursor(principal, filter, last) : null };
   }
 
-  private async create(authority: Authority, companyId: string, raw: TaskInput, capturedDispatch?: GithubTriggerDispatch, requestHashOverride?: string, hermesPolicySignature?: string, hermesRaw?: HermesTaskCreateBody, copiedFromTaskId?: string, hermesSelection?: { workflowId: string | null; workflowName: string | null; templateId: string | null }): Promise<{ task: Task; created: boolean }> {
+  private async create(authority: Authority, companyId: string, raw: TaskInput, capturedDispatch?: GithubTriggerDispatch, requestHashOverride?: string, agentApiPolicySignature?: string, agentApiRaw?: AgentApiTaskCreateBody, copiedFromTaskId?: string, hermesSelection?: { workflowId: string | null; workflowName: string | null; templateId: string | null }): Promise<{ task: Task; created: boolean }> {
     let normalized: TaskInput;
     try { normalized = normalizeWorkflowInput(raw, { requireSource: true }); }
     catch (error) { if (error instanceof WorkflowInputFailure) throw new TaskFailure(error.message, error.statusCode); throw error; }
@@ -412,17 +413,17 @@ export class TaskService {
       });
       return this.database.authImmediateTransaction(() => {
         this.requireScope(authority, companyId, request.projectId, true);
-        // A concurrent identical Hermes request is already admitted; only its current scope remains relevant.
-        if (authority.kind === "hermes") {
+        // A concurrent identical AgentApi request is already admitted; only its current scope remains relevant.
+        if (authority.kind === "agentApi") {
           const existing = this.repository.existing(companyId, request.idempotencyKey, requestHash, creator);
           if (existing) return { task: this.repository.task(existing), created: false };
         }
-        if (authority.kind === "hermes" && hermesPolicySignature && hermesRaw) {
-          const current = this.resolveHermesRequest(companyId, hermesRaw);
-          if (current.signature !== hermesPolicySignature || this.projectConfigurationSignature(this.projects.getProjectInCompany(companyId, request.projectId)) !== projectSnapshot) throw new TaskFailure("Project task configuration changed", 409);
+        if (authority.kind === "agentApi" && agentApiPolicySignature && agentApiRaw) {
+          const current = this.resolveAgentApiRequest(companyId, agentApiRaw);
+          if (current.signature !== agentApiPolicySignature || this.projectConfigurationSignature(this.projects.getProjectInCompany(companyId, request.projectId)) !== projectSnapshot) throw new TaskFailure("Project task configuration changed", 409);
           rootProfile = this.profile(current.request.rootProfileId!, "root");
           workerProfile = this.profile(current.request.workerProfileId!, "worker");
-          advisorProfiles = this.hermesAdvisorProfiles(current.request, rootProfile);
+          advisorProfiles = this.agentApiAdvisorProfiles(current.request, rootProfile);
         }
         if (capturedDispatch) {
           this.requireGithubTriggerAdmission(capturedDispatch);
@@ -518,10 +519,10 @@ export class TaskService {
     return this.getTask(userId, taskId);
   }
 
-  /** Wakes the Coordinator with a note from either authority. Hermes replays are already deduped by their receipt. */
+  /** Wakes the Coordinator with a note from either authority. AgentApi replays are already deduped by their receipt. */
   private note(authority: Authority, taskId: string, note: string, label: string): void {
     const task = this.repository.task(this.requireTask(authority, taskId));
-    if (task.archivedAt || !["active", "delivered"].includes(task.status)) throw new TaskFailure("Start the task or answer its current decision before you send a message.", 409, authority.kind === "hermes" ? "illegal_command" : "task_failure");
+    if (task.archivedAt || !["active", "delivered"].includes(task.status)) throw new TaskFailure("Start the task or answer its current decision before you send a message.", 409, authority.kind === "agentApi" ? "illegal_command" : "task_failure");
     const prompt = z.string().trim().min(1).max(20_000).parse(note);
     this.repository.controls.sendNote(taskId, prompt, label);
   }
@@ -689,11 +690,11 @@ export class TaskService {
     return eligible;
   }
 
-  private resolveHermesRequest(companyId: string, raw: HermesTaskCreateBody): { request: TaskInput; selection: { workflowId: string | null; workflowName: string | null; templateId: string | null }; signature: string } {
+  private resolveAgentApiRequest(companyId: string, raw: AgentApiTaskCreateBody): { request: TaskInput; selection: { workflowId: string | null; workflowName: string | null; templateId: string | null }; signature: string } {
     const project = this.projects.getProjectInCompany(companyId, raw.projectId);
     const policy = ProjectAgentTaskPolicySchema.parse(project.agentTaskPolicy);
-    const template = raw.templateId ? this.templateForHermes(project.id, policy, raw.templateId) : undefined;
-    const workflow = template ? undefined : this.workflowForHermes(policy, raw.workflowId ?? policy.defaultWorkflowId);
+    const template = raw.templateId ? this.templateForAgentApi(project.id, policy, raw.templateId) : undefined;
+    const workflow = template ? undefined : this.workflowForAgentApi(policy, raw.workflowId ?? policy.defaultWorkflowId);
     const selected = template?.request ?? workflow!.request;
     const selection = template ? { workflowId: null, workflowName: null, templateId: raw.templateId! } : { workflowId: workflow!.id, workflowName: workflow!.name, templateId: null };
     let request: ReturnType<typeof TaskInputSchema.parse>;
@@ -721,7 +722,7 @@ export class TaskService {
     return { request: resolved, selection, signature: JSON.stringify({ request: resolved, selection }) };
   }
 
-  private workflowForHermes(policy: ProjectAgentTaskPolicy, workflowId: string): { id: string; name: string; request: Partial<z.infer<typeof CreateTaskTemplateBodySchema>> } {
+  private workflowForAgentApi(policy: ProjectAgentTaskPolicy, workflowId: string): { id: string; name: string; request: Partial<z.infer<typeof CreateTaskTemplateBodySchema>> } {
     const row = this.database.authQuery(db => db.prepare("SELECT name, description, configuration_json, engine FROM forge_workflows WHERE id = ? AND archived_at IS NULL").get(workflowId) as { name: string; description: string; configuration_json: string; engine: string } | undefined);
     if (!row) throw new TaskFailure("The selected workflow is not available", 422, "workflow_not_found", { details: { permittedWorkflowIds: policy.workflowIds } });
     if (!policy.workflowIds.includes(workflowId)) throw new TaskFailure("The selected workflow is not permitted", 422, "workflow_not_permitted", { details: { permittedWorkflowIds: policy.workflowIds } });
@@ -734,27 +735,27 @@ export class TaskService {
     } };
   }
 
-  private templateForHermes(projectId: string, policy: ProjectAgentTaskPolicy, templateId: string): { request: z.infer<typeof CreateTaskTemplateBodySchema> } {
+  private templateForAgentApi(projectId: string, policy: ProjectAgentTaskPolicy, templateId: string): { request: z.infer<typeof CreateTaskTemplateBodySchema> } {
     const row = this.database.authQuery(db => db.prepare("SELECT configuration_json FROM forge_task_templates WHERE id = ? AND project_id = ?").get(templateId, projectId) as { configuration_json: string } | undefined);
     if (!row) throw new TaskFailure("The selected template is not available", 422, "template_not_found", { details: { permittedTemplateIds: policy.templateIds } });
     if (!policy.templateIds.includes(templateId)) throw new TaskFailure("The selected template is not permitted", 422, "template_not_permitted", { details: { permittedTemplateIds: policy.templateIds } });
     return { request: CreateTaskTemplateBodySchema.parse(JSON.parse(row.configuration_json)) };
   }
 
-  private hermesRequestHash(input: HermesTaskCreateBody, creator: TaskCreator): string {
+  private agentApiRequestHash(input: AgentApiTaskCreateBody, creator: TaskCreator): string {
     const sort = (value: unknown): unknown => Array.isArray(value) ? value.map(sort) : value && typeof value === "object" ? Object.fromEntries(Object.entries(value).sort(([left], [right]) => left.localeCompare(right)).map(([key, entry]) => [key, sort(entry)])) : value;
     return createHash("sha256").update(JSON.stringify(sort({ input, creator }))).digest("hex");
   }
 
-  private isLegacyHermesRequest(input: HermesTaskCreateBody): boolean {
+  private isLegacyAgentApiRequest(input: AgentApiTaskCreateBody): boolean {
     return !input.queue && !input.dependsOn?.length && !input.images.length && !input.source && !input.workflowId && !input.templateId && !input.rootProfileId && !input.workerProfileId && Object.keys(input.advisorProfileIds).length === 0 && input.deliveryTarget === undefined && input.runProjectTests === undefined && input.visualEvidence === undefined;
   }
 
-  private legacyHermesRequest(input: HermesTaskCreateBody): TaskInput {
+  private legacyAgentApiRequest(input: AgentApiTaskCreateBody): TaskInput {
     return TaskInputSchema.parse(normalizeWorkflowInput({ projectId: input.projectId, title: input.title, description: input.description ?? "", idempotencyKey: input.idempotencyKey }, { requireSource: true }));
   }
 
-  private hermesAdvisorProfiles(request: TaskInput, rootProfile: TaskProfile): Partial<Record<AdvisorRole, TaskProfile>> {
+  private agentApiAdvisorProfiles(request: TaskInput, rootProfile: TaskProfile): Partial<Record<AdvisorRole, TaskProfile>> {
     return Object.fromEntries(workflowDefinition(request.workflow ?? "standard").advisorRoles.map(role => [role, this.profile(request.advisorProfileIds?.[role] ?? rootProfile.profileId, "root")])) as Partial<Record<AdvisorRole, TaskProfile>>;
   }
 
@@ -764,13 +765,13 @@ export class TaskService {
 
   private requireTask(authority: Authority, taskId: string): TaskRow {
     const row = this.repository.row(taskId);
-    if (!row) throw new TaskFailure("Not found", 404, authority.kind === "hermes" ? "resource_not_found" : "task_failure");
+    if (!row) throw new TaskFailure("Not found", 404, authority.kind === "agentApi" ? "resource_not_found" : "task_failure");
     this.requireScope(authority, row.company_id, row.project_id);
-    if (authority.kind === "hermes" && row.creator_agent_id !== authority.principal.agentId) throw new TaskFailure("Not found", 404, "resource_not_found");
+    if (authority.kind === "agentApi" && row.creator_agent_id !== authority.principal.agentId) throw new TaskFailure("Not found", 404, "resource_not_found");
     return row;
   }
 
-  private hermesProjection(row: TaskRow): HermesSafeTaskProjection {
+  private agentApiProjection(row: TaskRow): AgentApiSafeTaskProjection {
     const task = this.repository.task(row);
     const project = this.database.authQuery(db => db.prepare("SELECT id, name FROM forge_projects WHERE id = ? AND company_id = ?").get(row.project_id, row.company_id) as { id: string; name: string } | undefined);
     if (!project) throw new TaskFailure("Not found", 404);
@@ -793,14 +794,14 @@ export class TaskService {
     return { ...value, revision: createHash("sha256").update(JSON.stringify({ value, commandRevision: row.command_revision })).digest("base64url") };
   }
 
-  private createHermesCursor(principal: HermesPrincipal, filter: object, task: HermesSafeTaskProjection): string {
+  private createAgentApiCursor(principal: ExternalAgentPrincipal, filter: object, task: AgentApiSafeTaskProjection): string {
     const payload = Buffer.from(JSON.stringify({ agentId: principal.agentId, filter, updatedAt: task.updatedAt, id: task.id })).toString("base64url");
     return `${payload}.${createHmac("sha256", principal.cursorKey).update(payload).digest("base64url")}`;
   }
 
   /** The copy carries the source configuration this project still permits, with provenance written by its creation. */
-  private async duplicateTaskForHermes(principal: HermesPrincipal, taskId: string, key: string): Promise<string> {
-    const row = this.requireTask({ kind: "hermes", principal }, taskId);
+  private async duplicateTaskForAgentApi(principal: ExternalAgentPrincipal, taskId: string, key: string): Promise<string> {
+    const row = this.requireTask({ kind: "agentApi", principal }, taskId);
     const source = this.repository.task(row);
     const policy = ProjectAgentTaskPolicySchema.parse(this.projects.getProjectInCompany(principal.companyId, source.projectId).agentTaskPolicy);
     const images = await Promise.all(source.images.map(async image => {
@@ -808,9 +809,9 @@ export class TaskService {
       if (!artifact) throw new TaskFailure("A source task image is no longer available", 409, "illegal_command");
       return TaskImageInputSchema.parse({ filename: artifact.filename, mimeType: artifact.mimeType, base64: (await this.artifacts.getArtifact(artifact)).toString("base64") });
     }));
-    const created = await this.createTaskForHermes(principal, {
-      projectId: source.projectId, title: duplicateTitle(source.title, new Set()), description: source.description, idempotencyKey: hermesDuplicateKey(taskId, key),
-      workflowId: this.hermesWorkflowIdForEngine(policy, source.workflow), templateId: undefined,
+    const created = await this.createTaskForAgentApi(principal, {
+      projectId: source.projectId, title: duplicateTitle(source.title, new Set()), description: source.description, idempotencyKey: agentApiDuplicateKey(taskId, key),
+      workflowId: this.agentApiWorkflowIdForEngine(policy, source.workflow), templateId: undefined,
       rootProfileId: policy.rootProfileIds.includes(source.rootProfile.profileId) ? source.rootProfile.profileId : undefined,
       workerProfileId: policy.workerProfileIds.includes(source.workerProfile.profileId) ? source.workerProfile.profileId : undefined,
       advisorProfileIds: Object.fromEntries(Object.entries(source.advisorProfiles).filter(([role, profile]) => policy.advisorProfileIds[role as AdvisorRole]?.includes(profile.profileId)).map(([role, profile]) => [role, profile.profileId])), images,
@@ -820,12 +821,12 @@ export class TaskService {
   }
 
   /** Keeps the copy on the source workflow engine when the project still permits a record that runs it. */
-  private hermesWorkflowIdForEngine(policy: ProjectAgentTaskPolicy, engine: string): string {
+  private agentApiWorkflowIdForEngine(policy: ProjectAgentTaskPolicy, engine: string): string {
     const engines = this.database.authQuery(db => new Map(policy.workflowIds.map(id => [id, (db.prepare("SELECT engine FROM forge_workflows WHERE id = ? AND archived_at IS NULL").get(id) as { engine: string } | undefined)?.engine])));
     return policy.workflowIds.find(id => engines.get(id) === engine) ?? policy.defaultWorkflowId;
   }
 
-  private parseHermesCursor(value: string, principal: HermesPrincipal, filter: object): { updatedAt: string; id: string } {
+  private parseAgentApiCursor(value: string, principal: ExternalAgentPrincipal, filter: object): { updatedAt: string; id: string } {
     try {
       const [payload, signature, extra] = value.split(".");
       if (!payload || !signature || extra) throw new TaskFailure("Invalid cursor", 400, "cursor_invalid");

@@ -1,4 +1,4 @@
-"""Verify the Forge pairing of this Hermes profile end to end.
+"""Verify an external agent's Forge pairing end to end.
 
 Reports only that the variables are set and the base URL host, performs one
 non-destructive read, then creates the connectivity acknowledgment task twice
@@ -14,7 +14,7 @@ import sys
 
 from forge_client import ForgeClient, ForgeError
 
-TITLE = "Hermes connectivity confirmed"
+TITLE = "External agent connectivity confirmed"
 DESCRIPTION = "Connection acknowledged. Do not plan or execute this task."
 
 

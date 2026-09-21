@@ -65,6 +65,7 @@ export const TaskConfigurationSchema = z.object({
   verificationCommand: z.string(),
   runProjectTests: z.boolean(),
   visualEvidence: VisualEvidenceSchema,
+  // Persisted compatibility key. Renaming it would make existing task configurations unreadable.
   hermesSelection: z.object({
     workflowId: z.string().min(1).max(256).nullable(),
     workflowName: z.string().min(1).max(80).nullable(),

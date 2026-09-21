@@ -218,6 +218,43 @@ describe("timestamp migrations", () => {
     }
   });
 
+  test("generalizes external-agent identity without losing pairing, credential, or grant data", () => {
+    const folder = resolve(process.cwd(), "drizzle");
+    const database = new Database(":memory:");
+    try {
+      database.exec(`
+        CREATE TABLE forge_agents (id TEXT PRIMARY KEY, name TEXT NOT NULL, avatar_seed TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+        CREATE TABLE forge_external_agents (id TEXT PRIMARY KEY, company_id TEXT NOT NULL, hermes_profile_id TEXT, status TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL);
+        CREATE UNIQUE INDEX forge_external_agents_active_profile_unique ON forge_external_agents (hermes_profile_id) WHERE hermes_profile_id IS NOT NULL AND status != 'revoked';
+        CREATE TABLE forge_hermes_pairing_codes (id TEXT PRIMARY KEY, agent_id TEXT NOT NULL, code_hash TEXT NOT NULL, purpose TEXT NOT NULL, expires_at TEXT NOT NULL, consumed_at TEXT, replaced_at TEXT, created_at TEXT NOT NULL);
+        CREATE UNIQUE INDEX forge_hermes_pairing_codes_active_agent_unique ON forge_hermes_pairing_codes (agent_id) WHERE consumed_at IS NULL AND replaced_at IS NULL;
+        CREATE TABLE forge_external_agent_project_grants (agent_id TEXT NOT NULL, company_id TEXT NOT NULL, project_id TEXT NOT NULL, created_at TEXT NOT NULL, PRIMARY KEY (agent_id, project_id));
+        CREATE TABLE forge_external_agent_credentials (id TEXT PRIMARY KEY, agent_id TEXT NOT NULL, credential_hash TEXT NOT NULL, created_at TEXT NOT NULL, last_used_at TEXT, revoked_at TEXT);
+        INSERT INTO forge_agents VALUES ('agent-1', 'Existing agent', 'seed', 'then', 'then');
+        INSERT INTO forge_external_agents VALUES ('agent-1', 'company-1', 'default', 'paired', 'then', 'then');
+        INSERT INTO forge_hermes_pairing_codes VALUES ('pair-1', 'agent-1', 'pair-hash', 'rotation', 'later', 'then', NULL, 'then');
+        INSERT INTO forge_external_agent_project_grants VALUES ('agent-1', 'company-1', 'project-1', 'then');
+        INSERT INTO forge_external_agent_credentials VALUES ('credential-1', 'agent-1', 'credential-hash', 'then', 'then', NULL);
+      `);
+
+      const migration = readMigrations(folder).find((candidate) => candidate.tag.includes("generic_external_agent_identity"))!;
+      for (const statement of readFileSync(`${folder}/${migration.tag}.sql`, "utf8").split("--> statement-breakpoint")) {
+        if (statement.trim()) database.exec(statement);
+      }
+
+      expect(database.prepare("SELECT id, kind FROM forge_agents").get()).toEqual({ id: "agent-1", kind: "external" });
+      expect(database.prepare("SELECT id, client_profile_id, status FROM forge_external_agents").get()).toEqual({ id: "agent-1", client_profile_id: "default", status: "paired" });
+      expect(database.prepare("SELECT id, agent_id, code_hash, consumed_at FROM forge_external_agent_pairing_codes").get()).toEqual({ id: "pair-1", agent_id: "agent-1", code_hash: "pair-hash", consumed_at: "then" });
+      expect(database.prepare("SELECT agent_id, company_id, project_id FROM forge_external_agent_project_grants").get()).toEqual({ agent_id: "agent-1", company_id: "company-1", project_id: "project-1" });
+      expect(database.prepare("SELECT id, agent_id, credential_hash, last_used_at FROM forge_external_agent_credentials").get()).toEqual({ id: "credential-1", agent_id: "agent-1", credential_hash: "credential-hash", last_used_at: "then" });
+      database.prepare("INSERT INTO forge_agents (id, name, avatar_seed, created_at, updated_at) VALUES ('agent-2', 'Second agent', 'seed-2', 'then', 'then')").run();
+      database.prepare("INSERT INTO forge_external_agents (id, company_id, client_profile_id, status, created_at, updated_at) VALUES ('agent-2', 'company-1', 'default', 'paired', 'then', 'then')").run();
+      database.prepare("UPDATE forge_external_agents SET client_profile_id = NULL WHERE id = 'agent-1'").run();
+    } finally {
+      database.close();
+    }
+  });
+
   test("preserves role-session fields during the OpenRouter provider migration", () => {
     const folder = resolve(process.cwd(), "drizzle");
     const database = new Database(":memory:");

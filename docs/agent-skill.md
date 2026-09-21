@@ -1,0 +1,60 @@
+# Forge external-agent skill
+
+`skills/forge/` is the provider-neutral skill template for an external agent
+that works with Forge tasks. It contains:
+
+| File | Purpose |
+| --- | --- |
+| `SKILL.md` | Agent-facing guardrails, pairing, capability discovery, project selection, duplicate avoidance, idempotent creation, polling, and lifecycle commands. |
+| `forge_client.py` | A standard-library client over the canonical `/api/agent/*` routes, plus a server-free self-check. |
+| `smoke_test.py` | A live pairing and idempotency check. |
+
+The template holds no Forge rules of its own. It calls the same routes as the
+MCP bridge described in [the MCP guide](agent-mcp.md). The skill tells the
+agent to prefer the MCP tools when the bridge is registered.
+
+## Install
+
+Copy `skills/forge/` into the skill directory for your agent host. The client
+needs Python 3.10 or later and no packages. Set these values in the client
+process environment:
+
+- `FORGE_BASE_URL`, the Forge origin, for example `http://127.0.0.1:4111`.
+- `FORGE_AGENT_CREDENTIAL`, the credential returned by
+  `POST /api/agent/pairing/exchange`.
+
+The Python client and MCP bridge read the process environment at call time.
+They do not load a `.env` file. Do not pass a credential on a command line,
+write it into the skill, or commit it.
+
+For Hermes, copy the directory into the active profile:
+
+```bash
+cp -R skills/forge "$HERMES_HOME/skills/forge"
+```
+
+Hermes can supply the two variables through its existing profile-specific
+environment configuration. This is a Hermes host instruction, not behavior
+implemented by the skill or bridge.
+
+## Verify
+
+Run both checks from the installed skill directory:
+
+```bash
+python3 forge_client.py --self-check
+python3 smoke_test.py
+```
+
+The self-check verifies redaction, stable idempotency keys, and safe missing
+configuration errors without contacting a server. The smoke test reads the
+agent identity, creates one backlog acknowledgment task twice with the same
+idempotency key, and verifies that Forge returns the same task ID. It never
+starts the task.
+
+## Contract maintenance
+
+Every route the template references exists in `src/http/routes/agent-api.ts`
+or `src/http/routes/agent-pairing.ts`. Request shapes come from
+`src/http/contracts/agent-api.ts`. Keep `SKILL.md` aligned with those contracts.
+Do not approximate capabilities that the served contract omits.

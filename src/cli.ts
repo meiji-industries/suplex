@@ -16,7 +16,7 @@ import { formatDoctor, runDoctor } from "./platform/diagnostics/doctor.js";
 import { formatTaskDiagnostic, inspectTask, writeTaskBundle } from "./platform/diagnostics/task.js";
 import { runLogViewer } from "./platform/log-viewer.js";
 import { runCommand } from "./platform/command-runner.js";
-import { HermesMcpBridge, readHermesBridgeSettings, startHermesMcpTransport } from "./integrations/hermes/mcp-bridge.js";
+import { ForgeMcpBridge, readForgeMcpBridgeSettings, startForgeMcpTransport } from "./integrations/forge/mcp-bridge.js";
 
 const command = process.argv[2] === "--" ? (process.argv[3] ?? "help") : (process.argv[2] ?? "help");
 const commandArgs = process.argv.slice(process.argv[2] === "--" ? 4 : 3);
@@ -74,9 +74,9 @@ async function main(): Promise<void> {
     return;
   }
   if (command === "mcp") {
-    // Hermes drives the runtime API over stdio; the bridge never starts a Forge server and never takes the credential on the command line.
-    const settings = readHermesBridgeSettings(process.env);
-    startHermesMcpTransport({ bridge: new HermesMcpBridge(settings), stdin: process.stdin, stdout: process.stdout });
+    // The MCP bridge drives the Agent API over stdio; it never starts a Forge server or takes the credential on the command line.
+    const settings = readForgeMcpBridgeSettings(process.env);
+    startForgeMcpTransport({ bridge: new ForgeMcpBridge(settings), stdin: process.stdin, stdout: process.stdout });
     return;
   }
   if (command === "help") {

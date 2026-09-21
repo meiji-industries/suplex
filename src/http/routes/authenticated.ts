@@ -9,7 +9,7 @@ import { AvatarService } from "../../identity/avatars.js";
 import type { ProjectService } from "../../projects/projects.js";
 import type { TaskService } from "../../tasks/tasks.js";
 import type { TaskHost } from "../../tasks/host.js";
-import type { HermesAgentService } from "../../identity/hermes-agents.js";
+import type { ExternalAgentService } from "../../identity/external-agents.js";
 import type { ReadProviders } from "../../profiles/provider-catalog.js";
 import type { ProviderLoginPort } from "../../profiles/provider-login.js";
 import type { UpdateResponse, UpdateRestartResponse } from "../contracts/update.js";
@@ -25,7 +25,7 @@ import taskPane from "./task-pane.js";
 import taskWorktree from "./task-worktree.js";
 import update from "./update.js";
 
-import hermesAdministration from "./hermes-administration.js";
+import externalAgentAdministration from "./external-agent-administration.js";
 
 export interface AuthenticatedRoutesOptions {
   auth: AuthService;
@@ -37,7 +37,7 @@ export interface AuthenticatedRoutesOptions {
   tasks?: TaskService;
   host?: Pick<TaskHost, "recover">;
   database?: ForgeDatabase;
-  hermes?: HermesAgentService;
+  externalAgent?: ExternalAgentService;
   readProviders?: ReadProviders;
   providerLoginHerdr?: ProviderLoginPort;
   readUpdate?: (check: boolean, user: AuthUser) => Promise<UpdateResponse>;
@@ -59,7 +59,7 @@ const authenticated: FastifyPluginAsync<AuthenticatedRoutesOptions> = async (app
   await app.register(authMe, { prefix: "/api/auth", auth: options.auth });
   await app.register(companies, { auth: options.auth });
   await app.register(administration, { auth: options.auth, ...(options.profiles ? { profiles: options.profiles } : {}), ...(options.providerInstances ? { providerInstances: options.providerInstances } : {}), ...(options.readProviderInstanceReadiness ? { readProviderInstanceReadiness: options.readProviderInstanceReadiness } : {}), ...(options.readProviders ? { readProviders: options.readProviders } : {}), ...(options.config ? { config: options.config } : {}), ...(options.projects ? { projects: options.projects } : {}), ...(options.database ? { database: options.database } : {}) });
-  if (options.hermes) await app.register(hermesAdministration, { hermes: options.hermes });
+  if (options.externalAgent) await app.register(externalAgentAdministration, { externalAgent: options.externalAgent });
   await app.register(providerLogin, { auth: options.auth, ...(options.providerInstances ? { providerInstances: options.providerInstances } : {}), ...(options.config ? { config: options.config } : {}), ...(options.providerLoginHerdr ? { herdr: options.providerLoginHerdr } : {}) });
   if (options.database) await app.register(avatars, { avatars: new AvatarService(options.database, options.auth), ...(options.projects ? { projects: options.projects } : {}) });
   if (options.projects) await app.register(projects, { projects: options.projects });

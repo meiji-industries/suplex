@@ -17,13 +17,13 @@ import {
 import { NewButton } from "../../components/ui/new-button.js";
 import {
   adminDate,
-  type ApiHermesAgent,
+  type ApiExternalAgent,
   type ApiProject,
 } from "../../shell/view-shared.js";
 import { Ellipsis, Key, Pencil, RotateCw, ShieldAlert } from "lucide-react";
 import type { ReactElement } from "react";
 
-const HERMES_AGENT_COLUMNS: SettingsTableColumn[] = [
+const EXTERNAL_AGENT_AGENT_COLUMNS: SettingsTableColumn[] = [
   { key: "name", label: "Name ↓", width: 200 },
   { key: "status", label: "Status", width: 280 },
   { key: "projects", label: "Projects", width: 180 },
@@ -33,7 +33,7 @@ const HERMES_AGENT_COLUMNS: SettingsTableColumn[] = [
   { key: "end", width: 32 },
 ];
 
-export function HermesAgentsSection({
+export function ExternalAgentsSection({
   agents,
   projects,
   pendingAction,
@@ -45,37 +45,37 @@ export function HermesAgentsSection({
   onRevokeAgent,
   onClearPendingAction,
 }: {
-  agents: ApiHermesAgent[];
+  agents: ApiExternalAgent[];
   projects: ApiProject[];
   pendingAction: string;
   onOpenNewAgent: () => void;
-  onReissuePairing: (agent: ApiHermesAgent) => Promise<void>;
-  onRotateAgent: (agent: ApiHermesAgent) => Promise<void>;
-  onEditProjects: (agent: ApiHermesAgent) => void;
-  onEditAvatar: (agent: ApiHermesAgent) => void;
-  onRevokeAgent: (agent: ApiHermesAgent) => Promise<void>;
+  onReissuePairing: (agent: ApiExternalAgent) => Promise<void>;
+  onRotateAgent: (agent: ApiExternalAgent) => Promise<void>;
+  onEditProjects: (agent: ApiExternalAgent) => void;
+  onEditAvatar: (agent: ApiExternalAgent) => void;
+  onRevokeAgent: (agent: ApiExternalAgent) => Promise<void>;
   onClearPendingAction: () => void;
 }): ReactElement {
   return (
     <section>
       <div className="flex justify-end">
-        <NewButton onClick={onOpenNewAgent}>New Hermes agent</NewButton>
+        <NewButton onClick={onOpenNewAgent}>New external agent</NewButton>
       </div>
       <SettingsDataTable
-        label="Hermes Agents"
-        columns={HERMES_AGENT_COLUMNS}
+        label="External agents"
+        columns={EXTERNAL_AGENT_AGENT_COLUMNS}
         className="mt-4"
       >
         <SettingsTableGroup
-          label="Hermes agents"
+          label="External agents"
           count={agents.length}
-          columnCount={HERMES_AGENT_COLUMNS.length}
+          columnCount={EXTERNAL_AGENT_AGENT_COLUMNS.length}
         >
           {agents.map((agent) => {
-            const action = `hermes:revoke:${agent.id}`;
+            const action = `externalAgent:revoke:${agent.id}`;
             return (
               <SettingsTableRow
-                aria-label={`Hermes agent ${agent.name}`}
+                aria-label={`External agent ${agent.name}`}
                 key={agent.id}
               >
                 <SettingsTableCell>
@@ -200,8 +200,8 @@ export function HermesAgentsSection({
           })}
         </SettingsTableGroup>
         {agents.length === 0 ? (
-          <SettingsTableEmpty columnCount={HERMES_AGENT_COLUMNS.length}>
-            No Hermes agents configured.
+          <SettingsTableEmpty columnCount={EXTERNAL_AGENT_AGENT_COLUMNS.length}>
+            No external agents configured.
           </SettingsTableEmpty>
         ) : null}
       </SettingsDataTable>

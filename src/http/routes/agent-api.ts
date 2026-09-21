@@ -1,54 +1,55 @@
 import type { FastifyInstance } from "fastify";
 import type { ZodTypeProvider } from "@fastify/type-provider-zod";
 
-import { HermesAgentFailure, type HermesAgentService, type HermesPrincipal } from "../../identity/hermes-agents.js";
+import { ExternalAgentFailure, type ExternalAgentService, type ExternalAgentPrincipal } from "../../identity/external-agents.js";
 import {
-  HermesDeliveryDecisionBodySchema, HermesDeliveryDecisionResponseSchema, HermesDeliveryRefreshResponseSchema, HermesDeliveryRepairResponseSchema,
-  HermesIdentityResponseSchema, HermesMergeApprovalBodySchema, HermesMergeApprovalResponseSchema, HermesMergeBodySchema, HermesMergeResponseSchema,
-  HermesMergeTrainQuerySchema, HermesMergeTrainResponseSchema, HermesProvenanceResponseSchema, HermesRuntimeOperations,
-  HermesProjectDiscoveryQuerySchema, HermesTemplateDiscoveryResponseSchema, HermesWorkflowDiscoveryResponseSchema,
-  HermesTaskIdParamsSchema,
-  HermesTaskListQuerySchema, HermesTaskListResponseSchema, HermesTaskReadProjectionSchema, hermesRuntimeOpenApi,
-} from "../contracts/hermes.js";
+  AgentApiDeliveryDecisionBodySchema, AgentApiDeliveryDecisionResponseSchema, AgentApiDeliveryRefreshResponseSchema, AgentApiDeliveryRepairResponseSchema,
+  AgentApiIdentityResponseSchema, AgentApiMergeApprovalBodySchema, AgentApiMergeApprovalResponseSchema, AgentApiMergeBodySchema, AgentApiMergeResponseSchema,
+  AgentApiMergeTrainQuerySchema, AgentApiMergeTrainResponseSchema, AgentApiProvenanceResponseSchema, AgentApiRuntimeOperations,
+  AgentApiProjectDiscoveryQuerySchema, AgentApiTemplateDiscoveryResponseSchema, AgentApiWorkflowDiscoveryResponseSchema,
+  AgentApiTaskIdParamsSchema,
+  AgentApiTaskListQuerySchema, AgentApiTaskListResponseSchema, AgentApiTaskReadProjectionSchema, agentApiRuntimeOpenApi,
+} from "../contracts/agent-api.js";
 import type { AgentDeliveryService } from "../../delivery/agent-delivery.js";
-import { TaskFailure, type HermesGithubPort, type TaskService } from "../../tasks/tasks.js";
+import { TaskFailure, type AgentApiGithubPort, type TaskService } from "../../tasks/tasks.js";
 import type { TaskHost } from "../../tasks/host.js";
 import { DeliveryTargetSchema } from "../../tasks/contracts.js";
 
-export function authenticateHermesBearer(header: string | undefined, hermes: HermesAgentService): HermesPrincipal {
+export function authenticateAgentApiBearer(header: string | undefined, externalAgent: ExternalAgentService): ExternalAgentPrincipal {
   if (!header || !header.startsWith("Bearer ")) {
-    throw new HermesAgentFailure("Authentication failed", 401, "credential_invalid");
+    throw new ExternalAgentFailure("Authentication failed", 401, "credential_invalid");
   }
   const token = header.slice("Bearer ".length).trim();
   if (!token) {
-    throw new HermesAgentFailure("Authentication failed", 401, "credential_invalid");
+    throw new ExternalAgentFailure("Authentication failed", 401, "credential_invalid");
   }
-  return hermes.authenticate(token);
+  return externalAgent.authenticate(token);
 }
 
-export function registerHermesTaskRoutes(app: FastifyInstance, options: { hermes: HermesAgentService; tasks: TaskService; host?: Pick<TaskHost, "recover">; github?: HermesGithubPort; agentDelivery?: AgentDeliveryService }): void {
+export function registerAgentApiTaskRoutes(app: FastifyInstance, options: { externalAgent: ExternalAgentService; tasks: TaskService; host?: Pick<TaskHost, "recover">; github?: AgentApiGithubPort; agentDelivery?: AgentDeliveryService }): void {
   const typed = app.withTypeProvider<ZodTypeProvider>();
-  const authenticate = (header: string | undefined): HermesPrincipal => authenticateHermesBearer(header, options.hermes);
+  const authenticate = (header: string | undefined): ExternalAgentPrincipal => authenticateAgentApiBearer(header, options.externalAgent);
   const noStore = { "Cache-Control": "private, no-store" };
+  const registerRoutes = (prefix: "/api/agent" | "/api/hermes"): void => {
 
-  typed.get("/api/hermes/me", {
-    schema: { response: { 200: HermesIdentityResponseSchema } },
+  typed.get(`${prefix}/me`, {
+    schema: { response: { 200: AgentApiIdentityResponseSchema } },
   }, async (request, reply) => {
     const principal = authenticate(request.headers.authorization);
-    return reply.header("Cache-Control", "private, no-store").code(200).send(options.tasks.hermesIdentity(principal));
+    return reply.header("Cache-Control", "private, no-store").code(200).send(options.tasks.agentApiIdentity(principal));
   });
 
-  typed.get("/api/hermes/openapi.json", {
-    config: { hermesRuntime: true },
-    schema: { response: HermesRuntimeOperations.openApi.response },
+  typed.get(`${prefix}/openapi.json`, {
+    config: { agentApiRuntime: true },
+    schema: { response: AgentApiRuntimeOperations.openApi.response },
     preValidation: async (request) => { authenticate(request.headers.authorization); },
-  }, async (_request, reply) => reply.header("Cache-Control", "private, no-store").send(hermesRuntimeOpenApi()));
+  }, async (_request, reply) => reply.header("Cache-Control", "private, no-store").send(agentApiRuntimeOpenApi()));
 
   // The reported surface is the registered surface: an agent reads what this deployment actually accepts.
   const agentDelivery = Boolean(options.agentDelivery);
-  typed.get("/api/hermes/capabilities", {
-    config: { hermesRuntime: true },
-    schema: { response: HermesRuntimeOperations.capabilities.response },
+  typed.get(`${prefix}/capabilities`, {
+    config: { agentApiRuntime: true },
+    schema: { response: AgentApiRuntimeOperations.capabilities.response },
     preValidation: async (request) => { authenticate(request.headers.authorization); },
   }, async (_request, reply) => reply.header("Cache-Control", "private, no-store").send({
     apiVersion: "v1",
@@ -62,47 +63,47 @@ export function registerHermesTaskRoutes(app: FastifyInstance, options: { hermes
     pagination: { supported: false, cursor: false },
   }));
 
-  typed.get("/api/hermes/workflows", {
-    config: { hermesRuntime: true },
-    schema: { querystring: HermesProjectDiscoveryQuerySchema, response: { 200: HermesWorkflowDiscoveryResponseSchema } },
+  typed.get(`${prefix}/workflows`, {
+    config: { agentApiRuntime: true },
+    schema: { querystring: AgentApiProjectDiscoveryQuerySchema, response: { 200: AgentApiWorkflowDiscoveryResponseSchema } },
     preValidation: async (request) => { authenticate(request.headers.authorization); },
   }, async (request, reply) => {
-    const workflows = options.tasks.listHermesWorkflows(authenticate(request.headers.authorization), request.query.projectId);
+    const workflows = options.tasks.listAgentApiWorkflows(authenticate(request.headers.authorization), request.query.projectId);
     return reply.header("Cache-Control", "private, no-store").code(200).send({ workflows });
   });
 
-  typed.get("/api/hermes/templates", {
-    config: { hermesRuntime: true },
-    schema: { querystring: HermesProjectDiscoveryQuerySchema, response: { 200: HermesTemplateDiscoveryResponseSchema } },
+  typed.get(`${prefix}/templates`, {
+    config: { agentApiRuntime: true },
+    schema: { querystring: AgentApiProjectDiscoveryQuerySchema, response: { 200: AgentApiTemplateDiscoveryResponseSchema } },
     preValidation: async (request) => { authenticate(request.headers.authorization); },
   }, async (request, reply) => {
-    const templates = options.tasks.listHermesTemplates(authenticate(request.headers.authorization), request.query.projectId);
+    const templates = options.tasks.listAgentApiTemplates(authenticate(request.headers.authorization), request.query.projectId);
     return reply.header("Cache-Control", "private, no-store").code(200).send({ templates });
   });
 
-  typed.post("/api/hermes/tasks", {
-    config: { hermesRuntime: true },
+  typed.post(`${prefix}/tasks`, {
+    config: { agentApiRuntime: true },
     schema: {
-      body: HermesRuntimeOperations.createTask.body,
-      response: HermesRuntimeOperations.createTask.response,
+      body: AgentApiRuntimeOperations.createTask.body,
+      response: AgentApiRuntimeOperations.createTask.response,
     },
     preValidation: async (request) => { authenticate(request.headers.authorization); },
   }, async (request, reply) => {
     const principal = authenticate(request.headers.authorization);
-    const result = await options.tasks.createTaskForHermes(principal, request.body);
+    const result = await options.tasks.createTaskForAgentApi(principal, request.body);
     if (result.task.status === "active") void options.host?.recover(result.task.id).catch(error => app.log.warn({ taskId: result.task.id, err: error }, "Task recovery will be retried"));
     reply.header("Cache-Control", "private, no-store");
-    return reply.code(result.created ? 201 : 200).send(await options.tasks.readHermesTask(principal, result.task.id, options.github));
+    return reply.code(result.created ? 201 : 200).send(await options.tasks.readAgentApiTask(principal, result.task.id, options.github));
   });
 
-  typed.get("/api/hermes/tasks/:taskId", {
+  typed.get(`${prefix}/tasks/:taskId`, {
     schema: {
-      params: HermesRuntimeOperations.getTask.params,
-      response: { ...HermesRuntimeOperations.getTask.response, 304: HermesTaskReadProjectionSchema.nullable() },
+      params: AgentApiRuntimeOperations.getTask.params,
+      response: { ...AgentApiRuntimeOperations.getTask.response, 304: AgentApiTaskReadProjectionSchema.nullable() },
     },
   }, async (request, reply) => {
     const principal = authenticate(request.headers.authorization);
-    const task = await options.tasks.readHermesTask(principal, request.params.taskId, options.github);
+    const task = await options.tasks.readAgentApiTask(principal, request.params.taskId, options.github);
     const etag = `\"${task.revision}\"`;
     reply.header("Cache-Control", "private, no-store");
     reply.header("ETag", etag);
@@ -111,25 +112,25 @@ export function registerHermesTaskRoutes(app: FastifyInstance, options: { hermes
     return reply.code(200).send(task);
   });
 
-  typed.post("/api/hermes/tasks/:taskId/commands", {
-    config: { hermesRuntime: true },
-    schema: { params: HermesRuntimeOperations.commandTask.params, body: HermesRuntimeOperations.commandTask.body, response: HermesRuntimeOperations.commandTask.response },
+  typed.post(`${prefix}/tasks/:taskId/commands`, {
+    config: { agentApiRuntime: true },
+    schema: { params: AgentApiRuntimeOperations.commandTask.params, body: AgentApiRuntimeOperations.commandTask.body, response: AgentApiRuntimeOperations.commandTask.response },
     preValidation: async (request) => { authenticate(request.headers.authorization); },
   }, async (request, reply) => {
-    const task = await options.tasks.commandHermesTask(authenticate(request.headers.authorization), request.params.taskId, request.body);
+    const task = await options.tasks.commandAgentApiTask(authenticate(request.headers.authorization), request.params.taskId, request.body);
     if (["start_task", "cancel_task", "send_task_note", "recheck_delivery_wait"].includes(request.body.command)) void options.host?.recover(task.id).catch(error => app.log.warn({ taskId: task.id, err: error }, "Task recovery will be retried"));
     return reply.header("Cache-Control", "private, no-store").code(200).send(task);
   });
 
-  typed.get("/api/hermes/tasks", {
+  typed.get(`${prefix}/tasks`, {
     schema: {
-      querystring: HermesTaskListQuerySchema,
-      response: { 200: HermesTaskListResponseSchema },
+      querystring: AgentApiTaskListQuerySchema,
+      response: { 200: AgentApiTaskListResponseSchema },
     },
   }, async (request, reply) => {
     const principal = authenticate(request.headers.authorization);
     const query = request.query;
-    const result = await options.tasks.readHermesTasks(principal, {
+    const result = await options.tasks.readAgentApiTasks(principal, {
       limit: query.limit,
       ...(query.projectId === undefined ? {} : { projectId: query.projectId }),
       ...(query.status === undefined ? {} : { status: query.status }),
@@ -143,13 +144,13 @@ export function registerHermesTaskRoutes(app: FastifyInstance, options: { hermes
     return reply.header("Cache-Control", "private, no-store").code(200).send(result);
   });
 
-  typed.put("/api/hermes/tasks/:taskId/dependencies", {
-    config: { hermesRuntime: true },
-    schema: { params: HermesRuntimeOperations.setTaskDependencies.params, body: HermesRuntimeOperations.setTaskDependencies.body, response: HermesRuntimeOperations.setTaskDependencies.response },
+  typed.put(`${prefix}/tasks/:taskId/dependencies`, {
+    config: { agentApiRuntime: true },
+    schema: { params: AgentApiRuntimeOperations.setTaskDependencies.params, body: AgentApiRuntimeOperations.setTaskDependencies.body, response: AgentApiRuntimeOperations.setTaskDependencies.response },
     preValidation: async (request) => { authenticate(request.headers.authorization); },
   }, async (request, reply) => {
     const principal = authenticate(request.headers.authorization);
-    const task = options.tasks.setHermesTaskDependencies(principal, request.params.taskId, request.body.dependsOn);
+    const task = options.tasks.setAgentApiTaskDependencies(principal, request.params.taskId, request.body.dependsOn);
     reply.headers(noStore);
     return reply.code(200).send(task);
   });
@@ -157,8 +158,8 @@ export function registerHermesTaskRoutes(app: FastifyInstance, options: { hermes
   const delivery = options.agentDelivery;
   if (!delivery) return;
 
-  typed.get("/api/hermes/merge-train", {
-    schema: { querystring: HermesMergeTrainQuerySchema, response: { 200: HermesMergeTrainResponseSchema } },
+  typed.get(`${prefix}/merge-train`, {
+    schema: { querystring: AgentApiMergeTrainQuerySchema, response: { 200: AgentApiMergeTrainResponseSchema } },
   }, async (request, reply) => {
     const principal = authenticate(request.headers.authorization);
     const result = await delivery.mergeTrain(principal, request.query.projectId);
@@ -166,8 +167,8 @@ export function registerHermesTaskRoutes(app: FastifyInstance, options: { hermes
     return reply.code(200).send(result);
   });
 
-  typed.post("/api/hermes/tasks/:taskId/delivery/refresh", {
-    schema: { params: HermesTaskIdParamsSchema, response: { 200: HermesDeliveryRefreshResponseSchema } },
+  typed.post(`${prefix}/tasks/:taskId/delivery/refresh`, {
+    schema: { params: AgentApiTaskIdParamsSchema, response: { 200: AgentApiDeliveryRefreshResponseSchema } },
   }, async (request, reply) => {
     const principal = authenticate(request.headers.authorization);
     const result = await delivery.refresh(principal, request.params.taskId);
@@ -175,8 +176,8 @@ export function registerHermesTaskRoutes(app: FastifyInstance, options: { hermes
     return reply.code(200).send(result);
   });
 
-  typed.post("/api/hermes/tasks/:taskId/delivery/repair", {
-    schema: { params: HermesTaskIdParamsSchema, response: { 202: HermesDeliveryRepairResponseSchema } },
+  typed.post(`${prefix}/tasks/:taskId/delivery/repair`, {
+    schema: { params: AgentApiTaskIdParamsSchema, response: { 202: AgentApiDeliveryRepairResponseSchema } },
   }, async (request, reply) => {
     const principal = authenticate(request.headers.authorization);
     const result = await delivery.requestReconciliation(principal, request.params.taskId);
@@ -184,8 +185,8 @@ export function registerHermesTaskRoutes(app: FastifyInstance, options: { hermes
     return reply.code(202).send(result);
   });
 
-  typed.post("/api/hermes/tasks/:taskId/delivery/decision", {
-    schema: { params: HermesTaskIdParamsSchema, body: HermesDeliveryDecisionBodySchema, response: { 200: HermesDeliveryDecisionResponseSchema } },
+  typed.post(`${prefix}/tasks/:taskId/delivery/decision`, {
+    schema: { params: AgentApiTaskIdParamsSchema, body: AgentApiDeliveryDecisionBodySchema, response: { 200: AgentApiDeliveryDecisionResponseSchema } },
   }, async (request, reply) => {
     const principal = authenticate(request.headers.authorization);
     const result = delivery.decide(principal, request.params.taskId, request.body.decision);
@@ -193,8 +194,8 @@ export function registerHermesTaskRoutes(app: FastifyInstance, options: { hermes
     return reply.code(200).send(result);
   });
 
-  typed.post("/api/hermes/tasks/:taskId/delivery/approvals", {
-    schema: { params: HermesTaskIdParamsSchema, body: HermesMergeApprovalBodySchema, response: { 201: HermesMergeApprovalResponseSchema } },
+  typed.post(`${prefix}/tasks/:taskId/delivery/approvals`, {
+    schema: { params: AgentApiTaskIdParamsSchema, body: AgentApiMergeApprovalBodySchema, response: { 201: AgentApiMergeApprovalResponseSchema } },
   }, async (request, reply) => {
     const principal = authenticate(request.headers.authorization);
     const result = await delivery.issueApproval(principal, request.params.taskId, request.body);
@@ -202,8 +203,8 @@ export function registerHermesTaskRoutes(app: FastifyInstance, options: { hermes
     return reply.code(201).send(result);
   });
 
-  typed.post("/api/hermes/tasks/:taskId/delivery/merge", {
-    schema: { params: HermesTaskIdParamsSchema, body: HermesMergeBodySchema, response: { 200: HermesMergeResponseSchema } },
+  typed.post(`${prefix}/tasks/:taskId/delivery/merge`, {
+    schema: { params: AgentApiTaskIdParamsSchema, body: AgentApiMergeBodySchema, response: { 200: AgentApiMergeResponseSchema } },
   }, async (request, reply) => {
     const principal = authenticate(request.headers.authorization);
     const result = await delivery.merge(principal, request.params.taskId, request.body);
@@ -211,8 +212,8 @@ export function registerHermesTaskRoutes(app: FastifyInstance, options: { hermes
     return reply.code(200).send(result);
   });
 
-  typed.get("/api/hermes/tasks/:taskId/delivery/provenance", {
-    schema: { params: HermesTaskIdParamsSchema, response: { 200: HermesProvenanceResponseSchema } },
+  typed.get(`${prefix}/tasks/:taskId/delivery/provenance`, {
+    schema: { params: AgentApiTaskIdParamsSchema, response: { 200: AgentApiProvenanceResponseSchema } },
   }, async (request, reply) => {
     const principal = authenticate(request.headers.authorization);
     const records = delivery.provenance(principal, request.params.taskId).map(record => ({
@@ -225,4 +226,8 @@ export function registerHermesTaskRoutes(app: FastifyInstance, options: { hermes
     reply.headers(noStore);
     return reply.code(200).send({ records });
   });
+  };
+
+  registerRoutes("/api/agent");
+  registerRoutes("/api/hermes");
 }

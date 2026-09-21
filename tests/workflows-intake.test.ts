@@ -137,9 +137,9 @@ test("repair tasks require an open same-repository pull request and the fixed ta
     const { task } = await service.createTask(f.userId, f.company.id, { ...base, workflow: "refine_pull_request", idempotencyKey: "repair-ok", source: { kind: "pull_request", number: 7 } });
     expect(task).toMatchObject({ workflow: "refine_pull_request", deliveryTarget: "merged", configuration: { runProjectTests: true, branch: "feature", baseBranch: "main", startingSha: sha("b"), baselineSha: sha("a") }, advisorProfiles: { rater: { profileId: "profile_native_root" } } });
     expect(service.repository.controls.get(task.id).deliveryIntent.pullRequestNumber).toBe(7);
-    const issued = f.hermes.create(f.userId, { name: "Hermes Bot", companyId: f.company.id, projectIds: [f.project.id] });
-    const credential = f.hermes.exchange({ pairingCode: issued.pairingCode, profileId: "profile-bot" }).credential;
-    const hermes = await f.app.inject({ method: "POST", url: "/api/hermes/tasks", headers: { Authorization: `Bearer ${credential}` }, payload: { projectId: f.project.id, title: "Hermes", description: "Restricted", idempotencyKey: "hermes-repair", workflowId: "workflow_native_refine_pull_request" } });
+    const issued = f.externalAgent.create(f.userId, { name: "Hermes Bot", companyId: f.company.id, projectIds: [f.project.id] });
+    const credential = f.externalAgent.exchange({ pairingCode: issued.pairingCode, profileId: "profile-bot" }).credential;
+    const hermes = await f.app.inject({ method: "POST", url: "/api/agent/tasks", headers: { Authorization: `Bearer ${credential}` }, payload: { projectId: f.project.id, title: "Hermes", description: "Restricted", idempotencyKey: "hermes-repair", workflowId: "workflow_native_refine_pull_request" } });
     expect(hermes.statusCode, hermes.body).toBe(422);
     expect(f.tasks.listTasks(f.userId)).toHaveLength(1);
   } finally { await f.close(); }

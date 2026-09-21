@@ -51,7 +51,7 @@ export class TaskRepository {
     return this.database.authQuery(db => z.array(RowSchema).parse(db.prepare(`${select} ORDER BY julianday(activity_updated_at) DESC, t.id`).all()));
   }
 
-  hermesRows(input: { agentId: string; companyId: string; projectId?: string; status?: string; archived?: boolean; attention?: boolean; blocker?: boolean; updatedSince?: string; cursor?: { updatedAt: string; id: string }; limit: number }): TaskRow[] {
+  agentApiRows(input: { agentId: string; companyId: string; projectId?: string; status?: string; archived?: boolean; attention?: boolean; blocker?: boolean; updatedSince?: string; cursor?: { updatedAt: string; id: string }; limit: number }): TaskRow[] {
     const conditions = ["t.company_id = ?", "t.creator_agent_id = ?", "a.status = 'paired'", "a.revoked_at IS NULL"];
     const params: Array<string | number> = [input.companyId, input.agentId];
     if (input.projectId) { conditions.push("t.project_id = ?"); params.push(input.projectId); }

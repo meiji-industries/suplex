@@ -22,7 +22,7 @@ import { NewButton } from "../../components/ui/new-button.js";
 import type { ApiProject } from "../../shell/view-shared.js";
 import type { Dispatch, ReactElement, SetStateAction } from "react";
 
-export function HermesNewAgentDialog({
+export function ExternalAgentNewAgentDialog({
   open,
   name,
   error,
@@ -51,7 +51,7 @@ export function HermesNewAgentDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent>
         <DialogHeader>
-          <DialogTitle>New Hermes agent</DialogTitle>
+          <DialogTitle>New external agent</DialogTitle>
           <DialogDescription>
             Add an external agent that can add and track tasks.
           </DialogDescription>
@@ -69,7 +69,7 @@ export function HermesNewAgentDialog({
                 <EntityAvatar
                   kind="agent"
                   id=""
-                  name={name || "Hermes"}
+                  name={name || "ExternalAgent"}
                   seed={avatarSeed}
                   size="lg"
                 />
@@ -86,12 +86,12 @@ export function HermesNewAgentDialog({
               </span>
             </Field>
             <Field data-invalid={Boolean(error)}>
-              <FieldLabel htmlFor="hermes-name">Agent name</FieldLabel>
+              <FieldLabel htmlFor="externalAgent-name">Agent name</FieldLabel>
               <Input
-                id="hermes-name"
+                id="externalAgent-name"
                 autoFocus
                 aria-invalid={Boolean(error)}
-                placeholder="e.g. SRE Hermes Bot"
+                placeholder="e.g. SRE ExternalAgent Bot"
                 value={name}
                 onChange={(event) => onNameChange(event.target.value)}
               />
@@ -148,7 +148,7 @@ export function HermesNewAgentDialog({
                 type="submit"
                 disabled={!name.trim() || projectIds.length === 0}
               >
-                New Hermes agent
+                New external agent
               </NewButton>
             </DialogFooter>
           </FieldGroup>

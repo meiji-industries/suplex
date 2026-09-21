@@ -27,7 +27,7 @@ export function taskDependencySummariesInTransaction(db: Database.Database, task
   return z.array(SummarySchema).parse(db.prepare(`SELECT t.id AS id, t.title AS title, COALESCE(c.status, 'backlog') AS status FROM (${EDGE_SOURCE} WHERE task_id = ?) d JOIN forge_tasks t ON t.id = d.depends_on_task_id LEFT JOIN forge_task_controls c ON c.task_id = t.id ORDER BY t.id`).all(taskId));
 }
 
-/** The prerequisite tasks of one task with the title and status every reader shows: the task view, Hermes, and the Coordinator. */
+/** The prerequisite tasks of one task with the title and status every reader shows: the task view, AgentApi, and the Coordinator. */
 export function taskDependencySummaries(database: ForgeDatabase, taskId: string): TaskDependencySummary[] {
   return database.authQuery(db => taskDependencySummariesInTransaction(db, taskId));
 }

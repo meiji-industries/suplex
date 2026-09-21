@@ -8,7 +8,7 @@ import type { AuthService, AuthUser } from "./identity/auth.js";
 import type { ForgeDatabase } from "./platform/database.js";
 import type { ForgeConfig } from "./platform/config.js";
 import type { TaskHost } from "./tasks/host.js";
-import type { HermesAgentService } from "./identity/hermes-agents.js";
+import type { ExternalAgentService } from "./identity/external-agents.js";
 import type { AgentDeliveryService } from "./delivery/agent-delivery.js";
 import type { ReadProviders } from "./profiles/provider-catalog.js";
 import type { ProviderLoginPort } from "./profiles/provider-login.js";
@@ -31,16 +31,16 @@ import {
 } from "./identity/auth-identifiers.js";
 import { installHttpErrorHandlers } from "./http/errors.js";
 import { isLoopbackHost } from "./http/session.js";
-import { isHermesRuntimeRequest } from "./http/hermes-runtime.js";
+import { isAgentApiRuntimeRequest } from "./http/agent-api-runtime.js";
 import authRoutes from "./http/routes/auth.js";
 import authenticated from "./http/routes/authenticated.js";
 import assets from "./http/routes/assets.js";
 import health, { cachedHealthReader } from "./http/routes/health.js";
 import pages from "./http/routes/pages.js";
 import discovery from "./http/routes/discovery.js";
-import hermesPairing from "./http/routes/hermes-pairing.js";
-import { registerHermesTaskRoutes } from "./http/routes/hermes-tasks.js";
-import type { HermesGithubPort } from "./tasks/tasks.js";
+import agentPairing from "./http/routes/agent-pairing.js";
+import { registerAgentApiTaskRoutes } from "./http/routes/agent-api.js";
+import type { AgentApiGithubPort } from "./tasks/tasks.js";
 import taskTemplates from "./http/routes/task-templates.js";
 import workflowRoutes from "./http/routes/workflows.js";
 import githubTriggerRoutes from "./http/routes/github-triggers.js";
@@ -63,9 +63,9 @@ export interface AppDependencies {
   host?: Pick<TaskHost, "recover">;
   database?: ForgeDatabase;
   logger?: Logger | false;
-  hermes?: HermesAgentService;
+  externalAgent?: ExternalAgentService;
   agentDelivery?: AgentDeliveryService;
-  hermesGithub?: HermesGithubPort;
+  agentApiGithub?: AgentApiGithubPort;
   readProviders?: ReadProviders;
   providerLoginHerdr?: ProviderLoginPort;
   readUpdate?: (check: boolean, user: AuthUser) => Promise<UpdateResponse>;
@@ -105,8 +105,8 @@ export function createAppServer(dependencies: AppDependencies): FastifyInstance 
   const configuredOrigin = new URL(dependencies.config.reachableAddress).origin;
   const loopbackOrigins = new Set([`http://localhost:${dependencies.config.port}`, `http://127.0.0.1:${dependencies.config.port}`, `http://[::1]:${dependencies.config.port}`]);
   app.addHook("preHandler", async (request: FastifyRequest, reply: FastifyReply) => {
-    // Hermes runtime routes authenticate a bearer credential independently of board sessions and CSRF.
-    if (isHermesRuntimeRequest(request)) return;
+    // Agent API routes authenticate a bearer credential independently of board sessions and CSRF.
+    if (isAgentApiRuntimeRequest(request)) return;
     if (["GET", "HEAD", "OPTIONS"].includes(request.method)) return;
     const hasSession = [SESSION_COOKIE_NAME, LEGACY_SESSION_COOKIE_NAME].some((name) => typeof request.cookies[name] === "string" && request.cookies[name] !== "");
     if (!hasSession) return;
@@ -146,9 +146,9 @@ export function registerAppRoutes(app: FastifyInstance, dependencies: AppDepende
   void app.register(health, { readHealth, ...(auth ? { auth } : {}), config: dependencies.config, ...(dependencies.profiles ? { profiles: dependencies.profiles } : {}), ...(projectService ? { projects: projectService } : {}), ...(dependencies.healthNow ? { now: dependencies.healthNow } : {}) });
   if (auth) {
     void app.register(authRoutes, { auth, config: dependencies.config, prefix: "/api/auth" });
-    if (dependencies.hermes) void app.register(hermesPairing, { hermes: dependencies.hermes });
-    if (dependencies.hermes && taskService) registerHermesTaskRoutes(app, { hermes: dependencies.hermes, tasks: taskService, ...(dependencies.host ? { host: dependencies.host } : {}), ...(dependencies.hermesGithub ? { github: dependencies.hermesGithub } : {}), ...(dependencies.agentDelivery ? { agentDelivery: dependencies.agentDelivery } : {}) });
-    void app.register(authenticated, { auth, ...(dependencies.profiles ? { profiles: dependencies.profiles } : {}), ...(dependencies.providerInstances ? { providerInstances: dependencies.providerInstances } : {}), ...(dependencies.readProviderInstanceReadiness ? { readProviderInstanceReadiness: dependencies.readProviderInstanceReadiness } : {}), config: dependencies.config, ...(dependencies.readProviders ? { readProviders: dependencies.readProviders } : {}), ...(dependencies.providerLoginHerdr ? { providerLoginHerdr: dependencies.providerLoginHerdr } : {}), ...(dependencies.readUpdate ? { readUpdate: dependencies.readUpdate } : {}), ...(dependencies.requestUpdateRestart ? { requestUpdateRestart: dependencies.requestUpdateRestart } : {}), ...(dependencies.instanceId ? { instanceId: dependencies.instanceId } : {}), ...(projectService ? { projects: projectService } : {}), ...(taskService ? { tasks: taskService } : {}), ...(dependencies.host ? { host: dependencies.host } : {}), ...(database ? { database } : {}), ...(dependencies.hermes ? { hermes: dependencies.hermes } : {}) });
+    if (dependencies.externalAgent) void app.register(agentPairing, { externalAgent: dependencies.externalAgent });
+    if (dependencies.externalAgent && taskService) registerAgentApiTaskRoutes(app, { externalAgent: dependencies.externalAgent, tasks: taskService, ...(dependencies.host ? { host: dependencies.host } : {}), ...(dependencies.agentApiGithub ? { github: dependencies.agentApiGithub } : {}), ...(dependencies.agentDelivery ? { agentDelivery: dependencies.agentDelivery } : {}) });
+    void app.register(authenticated, { auth, ...(dependencies.profiles ? { profiles: dependencies.profiles } : {}), ...(dependencies.providerInstances ? { providerInstances: dependencies.providerInstances } : {}), ...(dependencies.readProviderInstanceReadiness ? { readProviderInstanceReadiness: dependencies.readProviderInstanceReadiness } : {}), config: dependencies.config, ...(dependencies.readProviders ? { readProviders: dependencies.readProviders } : {}), ...(dependencies.providerLoginHerdr ? { providerLoginHerdr: dependencies.providerLoginHerdr } : {}), ...(dependencies.readUpdate ? { readUpdate: dependencies.readUpdate } : {}), ...(dependencies.requestUpdateRestart ? { requestUpdateRestart: dependencies.requestUpdateRestart } : {}), ...(dependencies.instanceId ? { instanceId: dependencies.instanceId } : {}), ...(projectService ? { projects: projectService } : {}), ...(taskService ? { tasks: taskService } : {}), ...(dependencies.host ? { host: dependencies.host } : {}), ...(database ? { database } : {}), ...(dependencies.externalAgent ? { externalAgent: dependencies.externalAgent } : {}) });
     if (templateService) void app.register(taskTemplates, { auth, config: dependencies.config, templates: templateService });
     if (dependencies.workflows) void app.register(workflowRoutes, { auth, config: dependencies.config, workflows: dependencies.workflows });
     if (dependencies.githubTriggers) void app.register(githubTriggerRoutes, { auth, config: dependencies.config, triggers: dependencies.githubTriggers });

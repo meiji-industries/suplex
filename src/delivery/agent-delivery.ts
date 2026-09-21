@@ -2,7 +2,7 @@ import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { z } from "zod";
 import type { AuthService } from "../identity/auth.js";
 import type { ForgeDatabase } from "../platform/database.js";
-import type { HermesPrincipal } from "../identity/hermes-agents.js";
+import type { ExternalAgentPrincipal } from "../identity/external-agents.js";
 import type { GithubPullRequestObservation } from "../integrations/github/delivery.js";
 import type { TaskControlStore } from "../coordination/root-session-store.js";
 import { TaskFailure, type TaskService } from "../tasks/tasks.js";
@@ -36,7 +36,7 @@ type Delivery = Pick<DeliveryOperations, "observe" | "checksObservation" | "exec
 
 export interface AgentDeliveryDependencies {
   database: ForgeDatabase;
-  tasks: Pick<TaskService, "hermesTaskRow" | "listHermesTaskRows" | "repository">;
+  tasks: Pick<TaskService, "agentApiTaskRow" | "listAgentApiTaskRows" | "repository">;
   store: Pick<TaskControlStore, "get" | "currentSession" | "wakeRoot">;
   delivery: Delivery;
   auth: Pick<AuthService, "recordAgentAuditEventInTransaction">;
@@ -86,8 +86,8 @@ export class AgentDeliveryService {
   constructor(private readonly dependencies: AgentDeliveryDependencies) {}
 
   /** Re-observes the pull request and its checks, and appends the observation to any open repair attempt. */
-  async refresh(principal: HermesPrincipal, taskId: string) {
-    const row = this.dependencies.tasks.hermesTaskRow(principal, taskId);
+  async refresh(principal: ExternalAgentPrincipal, taskId: string) {
+    const row = this.dependencies.tasks.agentApiTaskRow(principal, taskId);
     const pullRequest = await this.dependencies.delivery.observe(taskId);
     const observation = await this.dependencies.delivery.checksObservation(taskId);
     const attempt = this.openAttempt(taskId);
@@ -98,13 +98,13 @@ export class AgentDeliveryService {
         baseSha: observation.baseSha, checks: observation.checks,
       });
     }
-    this.audit(principal, row, "hermes_delivery_observed", { pullRequestNumber: String(observation?.number ?? ""), headSha: observation?.headSha ?? "", baseSha: observation?.baseSha ?? "" });
+    this.audit(principal, row, "agent_api_delivery_observed", { pullRequestNumber: String(observation?.number ?? ""), headSha: observation?.headSha ?? "", baseSha: observation?.baseSha ?? "" });
     return { taskId, pullRequest, observation };
   }
 
   /** Wakes the task's Coordinator with a delivery repair instruction and opens an append-only provenance attempt. */
-  async requestReconciliation(principal: HermesPrincipal, taskId: string) {
-    const row = this.dependencies.tasks.hermesTaskRow(principal, taskId);
+  async requestReconciliation(principal: ExternalAgentPrincipal, taskId: string) {
+    const row = this.dependencies.tasks.agentApiTaskRow(principal, taskId);
     const control = this.dependencies.store.get(taskId);
     if (control.status !== "active") throw new AgentDeliveryFailure("Start the task before you request delivery repair.");
     // A repair before the upstream delivery tempts the Coordinator to rewrite the foundation. Wait instead.
@@ -125,7 +125,7 @@ export class AgentDeliveryService {
       pullRequestNumber: observation.number, originalHeadSha: observation.headSha, headSha: observation.headSha,
       baseSha: observation.baseSha, checks: observation.checks,
     });
-    this.audit(principal, row, "hermes_delivery_repair_requested", { attemptId, pullRequestNumber: String(observation.number), headSha: observation.headSha ?? "", baseSha: observation.baseSha ?? "" });
+    this.audit(principal, row, "agent_api_delivery_repair_requested", { attemptId, pullRequestNumber: String(observation.number), headSha: observation.headSha ?? "", baseSha: observation.baseSha ?? "" });
     return { taskId, attemptId, observation };
   }
 
@@ -133,8 +133,8 @@ export class AgentDeliveryService {
    * Accepts a wait only while the dependency graph shows an undelivered upstream task, and a resume only
    * when every dependency is delivered. The refusal names the blocking task.
    */
-  decide(principal: HermesPrincipal, taskId: string, decision: "wait_for_dependency" | "resume") {
-    const row = this.dependencies.tasks.hermesTaskRow(principal, taskId);
+  decide(principal: ExternalAgentPrincipal, taskId: string, decision: "wait_for_dependency" | "resume") {
+    const row = this.dependencies.tasks.agentApiTaskRow(principal, taskId);
     const blocking = this.blockingDependencies(taskId);
     if (decision === "wait_for_dependency" && !blocking.length) throw new AgentDeliveryFailure("Every dependency of this task is delivered. Resume the task.");
     if (decision === "resume" && blocking.length) throw new AgentDeliveryFailure(`Task ${blocking[0]} is not delivered. Wait for its delivery.`);
@@ -145,13 +145,13 @@ export class AgentDeliveryService {
       if (!root) throw new AgentDeliveryFailure("Coordinator is not ready. Retry the request.");
       this.dependencies.store.wakeRoot({ taskId, rootSessionId: root.id, generation: root.generation, prompt: resumePrompt(control.deliveryIntent.baseBranch) });
     }
-    this.audit(principal, row, decision === "resume" ? "hermes_delivery_resumed" : "hermes_delivery_wait_accepted", { blockingTaskId: blocking[0] ?? "" });
+    this.audit(principal, row, decision === "resume" ? "agent_api_delivery_resumed" : "agent_api_delivery_wait_accepted", { blockingTaskId: blocking[0] ?? "" });
     return { taskId, decision, blockingTaskIds: blocking };
   }
 
   /** The agent's eligible pull requests in dependency-first order, each with its live GitHub facts. */
-  async mergeTrain(principal: HermesPrincipal, projectId?: string): Promise<{ entries: MergeTrainEntry[] }> {
-    const rows = this.dependencies.tasks.listHermesTaskRows(principal).filter(row => !projectId || row.project_id === projectId);
+  async mergeTrain(principal: ExternalAgentPrincipal, projectId?: string): Promise<{ entries: MergeTrainEntry[] }> {
+    const rows = this.dependencies.tasks.listAgentApiTaskRows(principal).filter(row => !projectId || row.project_id === projectId);
     const dependencies = taskDependencyMap(this.dependencies.database, rows.map(row => row.id));
     const ordered = topologicalTaskOrder(rows.map(row => ({ id: row.id, dependsOn: dependencies.get(row.id) ?? [], row })));
     const entries: MergeTrainEntry[] = [];
@@ -166,20 +166,20 @@ export class AgentDeliveryService {
         blocker: mergeBlocker({ observation, blockingDependency, acceptedHeadSha: this.acceptedHead(entry.id) }),
       });
     }
-    this.audit(principal, null, "hermes_merge_train_observed", { projectId: projectId ?? "", entries: String(entries.length) });
+    this.audit(principal, null, "agent_api_merge_train_observed", { projectId: projectId ?? "", entries: String(entries.length) });
     return { entries };
   }
 
   /** Issues a single-use receipt bound to the observed pull request, head, and base of one eligible task. */
-  async issueApproval(principal: HermesPrincipal, taskId: string, input: { pullRequestNumber: number; headSha: string; baseSha: string }) {
-    const row = this.dependencies.tasks.hermesTaskRow(principal, taskId);
+  async issueApproval(principal: ExternalAgentPrincipal, taskId: string, input: { pullRequestNumber: number; headSha: string; baseSha: string }) {
+    const row = this.dependencies.tasks.agentApiTaskRow(principal, taskId);
     const observation = await this.requireEligible(taskId, input);
     const receipt = `fma_${randomBytes(32).toString("base64url")}`;
     const createdAt = new Date();
     this.dependencies.database.authTransaction(db => {
       db.prepare("INSERT INTO forge_merge_approvals (id, task_id, agent_id, pull_request_number, head_sha, base_sha, receipt_hash, created_at, expires_at, consumed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)")
         .run(`mar_${randomUUID().replaceAll("-", "")}`, taskId, principal.agentId, input.pullRequestNumber, observation.headSha, observation.baseSha, receiptHash(receipt), createdAt.toISOString(), new Date(createdAt.getTime() + APPROVAL_TTL_MS).toISOString());
-      this.dependencies.auth.recordAgentAuditEventInTransaction(db, principal.agentId, "hermes_merge_approval_issued", undefined, row.company_id, { taskId, pullRequestNumber: String(input.pullRequestNumber), headSha: observation.headSha ?? "", baseSha: observation.baseSha ?? "" });
+      this.dependencies.auth.recordAgentAuditEventInTransaction(db, principal.agentId, "agent_api_merge_approval_issued", undefined, row.company_id, { taskId, pullRequestNumber: String(input.pullRequestNumber), headSha: observation.headSha ?? "", baseSha: observation.baseSha ?? "" });
     });
     return { taskId, receipt, expiresAt: new Date(createdAt.getTime() + APPROVAL_TTL_MS).toISOString(), pullRequestNumber: input.pullRequestNumber, headSha: observation.headSha, baseSha: observation.baseSha };
   }
@@ -188,8 +188,8 @@ export class AgentDeliveryService {
    * Merges one pull request of the train. Forge re-observes GitHub, refuses every ineligible or stale
    * revision, consumes the receipt exactly once, and then runs the existing delivery merge operation.
    */
-  async merge(principal: HermesPrincipal, taskId: string, input: { pullRequestNumber: number; expectedHeadSha: string; expectedBaseSha: string; approvalReceipt: string }) {
-    const row = this.dependencies.tasks.hermesTaskRow(principal, taskId);
+  async merge(principal: ExternalAgentPrincipal, taskId: string, input: { pullRequestNumber: number; expectedHeadSha: string; expectedBaseSha: string; approvalReceipt: string }) {
+    const row = this.dependencies.tasks.agentApiTaskRow(principal, taskId);
     if (!RECEIPT_PATTERN.test(input.approvalReceipt)) throw new AgentDeliveryFailure("The approval receipt is not valid.", 403);
     if (this.dependencies.store.get(taskId).status !== "active") throw new AgentDeliveryFailure("The task is not active.");
     const observation = await this.requireEligible(taskId, { pullRequestNumber: input.pullRequestNumber, headSha: input.expectedHeadSha, baseSha: input.expectedBaseSha });
@@ -208,13 +208,13 @@ export class AgentDeliveryService {
       pullRequestNumber: input.pullRequestNumber, originalHeadSha: input.expectedHeadSha, headSha: merged?.headSha ?? input.expectedHeadSha,
       baseSha: merged?.baseSha ?? input.expectedBaseSha, checks: merged?.checks ?? null, merge: result,
     });
-    this.audit(principal, row, "hermes_pull_request_merged", { pullRequestNumber: String(input.pullRequestNumber), headSha: input.expectedHeadSha, baseSha: input.expectedBaseSha });
+    this.audit(principal, row, "agent_api_pull_request_merged", { pullRequestNumber: String(input.pullRequestNumber), headSha: input.expectedHeadSha, baseSha: input.expectedBaseSha });
     return { taskId, pullRequestNumber: input.pullRequestNumber, result };
   }
 
   /** The append-only provenance trail of one task. */
-  provenance(principal: HermesPrincipal, taskId: string): DeliveryProvenanceRecord[] {
-    this.dependencies.tasks.hermesTaskRow(principal, taskId);
+  provenance(principal: ExternalAgentPrincipal, taskId: string): DeliveryProvenanceRecord[] {
+    this.dependencies.tasks.agentApiTaskRow(principal, taskId);
     return this.dependencies.database.authQuery(db => z.array(ProvenanceRowSchema).parse(db.prepare("SELECT * FROM forge_delivery_provenance WHERE task_id = ? ORDER BY recorded_at, id").all(taskId)));
   }
 
@@ -228,7 +228,7 @@ export class AgentDeliveryService {
     return observation;
   }
 
-  private consumeApproval(principal: HermesPrincipal, taskId: string, input: { pullRequestNumber: number; expectedHeadSha: string; expectedBaseSha: string; approvalReceipt: string }): void {
+  private consumeApproval(principal: ExternalAgentPrincipal, taskId: string, input: { pullRequestNumber: number; expectedHeadSha: string; expectedBaseSha: string; approvalReceipt: string }): void {
     const hash = receiptHash(input.approvalReceipt);
     const consumed = this.dependencies.database.authImmediateTransaction(db => db.prepare("UPDATE forge_merge_approvals SET consumed_at = ? WHERE receipt_hash = ? AND task_id = ? AND agent_id = ? AND pull_request_number = ? AND head_sha = ? AND base_sha = ? AND consumed_at IS NULL AND expires_at > ?")
       .run(new Date().toISOString(), hash, taskId, principal.agentId, input.pullRequestNumber, input.expectedHeadSha, input.expectedBaseSha, new Date().toISOString()).changes);
@@ -255,7 +255,7 @@ export class AgentDeliveryService {
       .run(input.id ?? `dpv_${randomUUID().replaceAll("-", "")}`, input.taskId, input.attemptId, input.agentId, input.kind, input.pullRequestNumber, input.originalHeadSha, input.headSha, input.baseSha, input.checks === null || input.checks === undefined ? null : JSON.stringify(input.checks), input.merge === undefined ? null : JSON.stringify(input.merge ?? null), new Date().toISOString()));
   }
 
-  private audit(principal: HermesPrincipal, row: TaskRow | null, action: string, metadata: Record<string, string>): void {
+  private audit(principal: ExternalAgentPrincipal, row: TaskRow | null, action: string, metadata: Record<string, string>): void {
     this.dependencies.database.authTransaction(db => this.dependencies.auth.recordAgentAuditEventInTransaction(db, principal.agentId, action, undefined, row?.company_id ?? principal.companyId, { ...(row ? { taskId: row.id } : {}), ...metadata }));
   }
 }

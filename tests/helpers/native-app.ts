@@ -11,7 +11,7 @@ import { ProjectService } from "../../src/projects/projects.js";
 import { TaskService, type TaskServicePorts } from "../../src/tasks/tasks.js";
 import { TaskTemplateService } from "../../src/tasks/templates.js";
 import { WorkflowRecordService } from "../../src/coordination/workflow-records.js";
-import { HermesAgentService } from "../../src/identity/hermes-agents.js";
+import { ExternalAgentService } from "../../src/identity/external-agents.js";
 import { GithubTriggerService } from "../../src/integrations/github/triggers.js";
 import type { GithubTriggerPort } from "../../src/integrations/github/trigger-inspection.js";
 import { providerCheckId, providerCheckLabel } from "../../src/platform/health-contract.js";
@@ -54,7 +54,7 @@ export async function nativeApp(fixtureOptions: { githubTrigger?: GithubTriggerP
   const tasks = new TaskService(database, auth, projects, config, { ...(fixtureOptions.herdr ? { herdr: fixtureOptions.herdr } : {}), ...(fixtureOptions.issueTracker ? { issueTracker: fixtureOptions.issueTracker } : {}) });
   const templates = new TaskTemplateService(database, auth, tasks);
   const workflows = new WorkflowRecordService(database, auth);
-  const hermes = new HermesAgentService(database, auth);
+  const externalAgent = new ExternalAgentService(database, auth);
   const githubTrigger = fixtureOptions.githubTrigger ?? {
     async observeRepository(input) { return { id: 1, fullName: input.repository }; },
     async validateLabel() {},
@@ -63,7 +63,7 @@ export async function nativeApp(fixtureOptions: { githubTrigger?: GithubTriggerP
   } satisfies GithubTriggerPort;
   const githubTriggers = new GithubTriggerService(database, auth, projects, workflows, githubTrigger, tasks);
   const wakes: string[] = [];
-  const app = createApp({ ...(fixtureOptions.logSink ? { logger: createFastifyLogger(fixtureOptions.logSink) } : {}), config, database, auth, profiles, projects, tasks, taskTemplates: templates, workflows, githubTriggers, hermes, health: healthyHost, readUpdate: async () => ({ status: { kind: "current" }, canRestart: false }), host: { async recover(id) { wakes.push(id); } } });
+  const app = createApp({ ...(fixtureOptions.logSink ? { logger: createFastifyLogger(fixtureOptions.logSink) } : {}), config, database, auth, profiles, projects, tasks, taskTemplates: templates, workflows, githubTriggers, externalAgent, health: healthyHost, readUpdate: async () => ({ status: { kind: "current" }, canRestart: false }), host: { async recover(id) { wakes.push(id); } } });
   const invitation = auth.ensureBootstrapInvitation();
   if (!invitation) throw new Error("Fresh database did not create an invitation");
   const options = await app.inject({ method: "POST", url: "/api/auth/bootstrap/options", payload: { token: invitation.token } });
@@ -79,7 +79,7 @@ export async function nativeApp(fixtureOptions: { githubTrigger?: GithubTriggerP
   await mkdir(repositoryPath, { recursive: true });
   await mkdir(worktreeRoot, { recursive: true });
   const project = await projects.createProject(userId, company.id, { name: "Repository", repositoryPath, worktreeRoot, repository: "owner/repo", baseBranch: "main", setupCommand: "pnpm install", verificationCommand: "pnpm test", rootProfileId: "profile_native_root", workerProfileId: "profile_native_worker" });
-  return { directory, config, database, auth, profiles, projects, tasks, templates, workflows, githubTriggers, hermes, app, headers, userId, company, project, wakes,
+  return { directory, config, database, auth, profiles, projects, tasks, templates, workflows, githubTriggers, externalAgent, app, headers, userId, company, project, wakes,
     async close() { await app.close(); database.close(); await rm(directory, { recursive: true, force: true }); },
   };
 }

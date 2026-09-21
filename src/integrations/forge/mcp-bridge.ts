@@ -2,6 +2,9 @@ import type { Interface } from "node:readline";
 import { z } from "zod";
 
 import {
+  AGENT_API_MCP_AUTHORITY,
+  AGENT_API_PREREQUISITE_SCOPE,
+  AGENT_API_WHOAMI_DESCRIPTION,
   AgentApiTaskCommandBodySchema,
   AgentApiTaskCreateBodySchema,
   AgentApiTaskDependenciesBodySchema,
@@ -11,8 +14,6 @@ import {
 } from "../../http/contracts/agent-api.js";
 import { startMcpStdioTransport, type McpTool } from "../../shared/mcp-stdio.js";
 import { presentForgeMcpResult } from "./mcp-runtime.js";
-
-const AUTHORITY = "Human answers, delivery, releases, and merges stay human authority and are unavailable here.";
 
 const TaskIdSchema = AgentApiTaskIdParamsSchema.shape.taskId;
 const GetTaskSchema = z.object({
@@ -28,16 +29,16 @@ const toolSchema = (schema: z.ZodType): Record<string, unknown> => z.toJSONSchem
 
 /** Every tool maps onto one existing ForgeMcp runtime route; the server stays the sole authority on task rules. */
 export const FORGE_MCP_TOOLS: readonly McpTool[] = [
-  { name: "forge_whoami", description: `Read this paired agent's identity, capabilities, and granted projects with the create-time agentTaskPolicy each one permits. ${AUTHORITY}`, inputSchema: toolSchema(NoArgumentsSchema) },
-  { name: "forge_capabilities", description: `Read the runtime capability contract, autonomous commands, and unavailable commands. ${AUTHORITY}`, inputSchema: toolSchema(NoArgumentsSchema) },
+  { name: "forge_whoami", description: `Read this paired agent's identity, capabilities, and granted projects with the create-time agentTaskPolicy each one permits. ${AGENT_API_WHOAMI_DESCRIPTION} ${AGENT_API_MCP_AUTHORITY}`, inputSchema: toolSchema(NoArgumentsSchema) },
+  { name: "forge_capabilities", description: `Read the runtime capability contract, autonomous commands, and unavailable commands. ${AGENT_API_WHOAMI_DESCRIPTION} ${AGENT_API_MCP_AUTHORITY}`, inputSchema: toolSchema(NoArgumentsSchema) },
   { name: "forge_list_workflows", description: "List workflow records for one granted project and whether task creation permits each record.", inputSchema: toolSchema(AgentApiProjectDiscoveryQuerySchema) },
   { name: "forge_list_templates", description: "List task templates for one granted project and whether task creation permits each template.", inputSchema: toolSchema(AgentApiProjectDiscoveryQuerySchema) },
   { name: "forge_list_tasks", description: "List tasks in this agent's currently granted projects, newest update first. Tasks created by another actor have no permitted commands. Filters and the opaque cursor come from the runtime contract.", inputSchema: toolSchema(AgentApiTaskListQuerySchema) },
   { name: "forge_get_task", description: "Read one task in a currently granted project. Tasks created by another actor have no permitted commands. Pass knownRevision to poll conditionally: an unchanged task returns { unchanged: true, revision } instead of the projection.", inputSchema: toolSchema(GetTaskSchema) },
-  { name: "forge_get_task_delivery", description: `Read the delivery and blocker state of one task, including its queue state and wait reasons, any pull request, delivery wait, and completion observation. Forge reports no persisted check observation. ${AUTHORITY}`, inputSchema: toolSchema(TaskOnlySchema) },
-  { name: "forge_create_task", description: `Create a backlog task. Without queue it never starts by itself; use forge_command_task with start_task to queue it later. With queue true it is queued: it starts now when every prerequisite is complete, and otherwise starts by itself when the last one completes. dependsOn sets its prerequisites, shown as Blocked by. idempotencyKey is required and scoped to this agent: an identical replay returns the same task, and reusing the key for a different request fails with idempotency_conflict. deliveryTarget, runProjectTests, and visualEvidence must match the project agentTaskPolicy from forge_whoami; anything else fails with delivery_policy_rejected. ${AUTHORITY}`, inputSchema: toolSchema(AgentApiTaskCreateBodySchema) },
-  { name: "forge_set_task_dependencies", description: "Replace the prerequisites (dependsOn, shown as Blocked by) of a task with the complete set given. An empty array removes every prerequisite. Each prerequisite must be a task this agent created; a self-reference, a cycle, or an unavailable task is rejected and the current set stays. forge_get_task reads the same set back as dependsOn and blockedBy.", inputSchema: toolSchema(SetDependenciesSchema) },
-  { name: "forge_command_task", description: `Apply one lifecycle command to a task this agent created. Reading another task in a granted project does not grant command authority. revision must be the task's current revision (a stale one fails with revision_stale) and idempotencyKey is required. start_task queues the task: it starts now when every prerequisite is complete and never bypasses one. disarm_task returns a queued task to the manual backlog. cancel_task and archive_task are not reversible by this agent. note is only accepted by send_task_note. ${AUTHORITY}`, inputSchema: toolSchema(CommandTaskSchema) },
+  { name: "forge_get_task_delivery", description: `Read the delivery and blocker state of one task, including its queue state and wait reasons, any pull request, delivery wait, and completion observation. Forge reports no persisted check observation. ${AGENT_API_MCP_AUTHORITY}`, inputSchema: toolSchema(TaskOnlySchema) },
+  { name: "forge_create_task", description: `Create a backlog task. Without queue it never starts by itself; use forge_command_task with start_task to queue it later. With queue true it is queued: it starts now when every prerequisite is complete, and otherwise starts by itself when the last one completes. dependsOn sets its prerequisites, shown as Blocked by. ${AGENT_API_PREREQUISITE_SCOPE} idempotencyKey is required and scoped to this agent: an identical replay returns the same task, and reusing the key for a different request fails with idempotency_conflict. deliveryTarget, runProjectTests, and visualEvidence must match the project agentTaskPolicy from forge_whoami; anything else fails with delivery_policy_rejected. ${AGENT_API_MCP_AUTHORITY}`, inputSchema: toolSchema(AgentApiTaskCreateBodySchema) },
+  { name: "forge_set_task_dependencies", description: `Replace the prerequisites (dependsOn, shown as Blocked by) of a task with the complete set given. An empty array removes every prerequisite. ${AGENT_API_PREREQUISITE_SCOPE} A self-reference, a cycle, or an unavailable task is rejected and the current set stays. forge_get_task reads the same set back as dependsOn and blockedBy.`, inputSchema: toolSchema(SetDependenciesSchema) },
+  { name: "forge_command_task", description: `Apply one lifecycle command to a task this agent created. Reading another task in a granted project does not grant command authority. revision must be the task's current revision (a stale one fails with revision_stale) and idempotencyKey is required. start_task queues the task: it starts now when every prerequisite is complete and never bypasses one. disarm_task returns a queued task to the manual backlog. cancel_task and archive_task are not reversible by this agent. note is only accepted by send_task_note. ${AGENT_API_MCP_AUTHORITY}`, inputSchema: toolSchema(CommandTaskSchema) },
 ];
 
 export class ForgeMcpBridgeFailure extends Error {

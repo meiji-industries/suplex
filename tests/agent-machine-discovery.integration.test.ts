@@ -159,7 +159,7 @@ test("a paired agent completes the whole task journey without the web applicatio
     expect(structured(unknownTask)).toEqual(structured(await session.call(tool("forge_get_task", { taskId: ungrantedTaskId }))));
     expect(structured(unknownTask)).toMatchObject({ status: 404, body: { code: "resource_not_found" } });
 
-    // Merging and answering a human stay outside the agent surface: no tool exists and the deployment says so.
+    // MCP keeps merge and human-answer commands outside its tool surface. The runtime capability contract reports whether its HTTP delivery routes are enabled.
     const capabilities = await session.call(tool("forge_capabilities", {}));
     record("capabilities", capabilities);
     expect((structured(capabilities).body as { unavailableCommands: string[] }).unavailableCommands).toContain("merge_pull_request");

@@ -1,5 +1,6 @@
 import type { FastifyPluginAsync } from "fastify";
 import type { OAuthService } from "../../identity/oauth.js";
+import { AGENT_API_MCP_AUTHORITY, AGENT_API_RUNTIME_AUTHORITY } from "../contracts/agent-api.js";
 
 /**
  * Public machine-discovery artifacts. They describe how to reach the paired-agent
@@ -42,7 +43,8 @@ const CATALOG = {
   },
   notes: [
     "Forge conceals tasks that the caller cannot read. Denied and missing tasks both answer 404 with resource_not_found.",
-    "Human answers, delivery, and merges stay human authority unless the deployment reports them in /api/agent/capabilities.",
+    AGENT_API_RUNTIME_AUTHORITY,
+    AGENT_API_MCP_AUTHORITY,
   ],
   documentation: {
     discovery: "docs/agents/machine-discovery.md",

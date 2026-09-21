@@ -78,7 +78,7 @@ test("the stdio bridge drives the paired ForgeMcp runtime API end to end", async
     const commandTool = (listed.result as { tools: Array<{ name: string; description: string }> }).tools.find(entry => entry.name === "forge_command_task")!;
     expect(commandTool.description).toContain("not reversible");
     expect(commandTool.description).toContain("revision_stale");
-    expect(commandTool.description).toContain("Human answers, delivery, releases, and merges stay human authority");
+    expect(commandTool.description).toContain("MCP exposes task lifecycle commands only");
 
     const whoami = await session.call({ method: "tools/call", params: { name: "forge_whoami", arguments: {} } });
     expect(structured(whoami)).toMatchObject({ status: 200, body: { agent: { name: "ForgeMcp Bot" }, projects: [{ id: fixture.project.id }] } });

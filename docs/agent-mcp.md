@@ -40,7 +40,7 @@ Forge re-reads the agent, administrator authority, company access, and project g
 
 Task reads cover every task in the approved projects. A task created by another actor has an empty `permittedCommands` array. Lifecycle commands and dependency changes remain limited to tasks that the connected agent created.
 
-Human answers and delivery completion are not available through MCP. The HTTP API can expose delivery operations separately.
+MCP exposes lifecycle task commands only. It does not expose runtime delivery or merge commands. Human answers remain unavailable to paired agents. Forge can perform a task's configured delivery, including a merge after review, without an agent command.
 
 ## Use the advanced stdio setup
 

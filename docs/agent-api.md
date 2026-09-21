@@ -116,8 +116,13 @@ body takes `command`, the task's current `revision`, an `idempotencyKey`, and
 `{ "code": "revision_stale" }`; a command outside `permittedCommands` returns
 `409` with `{ "code": "illegal_command" }`. Only the paired agent that created
 the task can send a command. A command for another task returns the same `404`
-as an unavailable task. Human answers, delivery, and merges have no command and
-stay human authority.
+as an unavailable task. `taskCommands` from `GET /api/agent/me` lists exactly
+these lifecycle commands. `autonomousCommands` from
+`GET /api/agent/capabilities` also includes task creation and, when enabled,
+the runtime delivery commands. Human answers remain unavailable. The runtime API
+exposes delivery and merge commands only when capabilities reports them. Forge
+can perform a task's configured delivery, including a merge after review,
+without an agent command.
 
 ## Creating a task
 
@@ -183,8 +188,8 @@ reports them twice from the same edges: `dependsOn` has the IDs, and
 Set them at creation with `dependsOn`, or replace the whole set with
 `PUT /api/agent/tasks/:taskId/dependencies` and `{ "dependsOn": [...] }`. The
 body is the complete set: an omitted ID is removed, and `[]` removes every
-prerequisite. Each prerequisite must be a task this agent created in the same
-company. A self-reference or a cycle returns `422 task_unavailable`, an
+prerequisite. Each prerequisite must be a task this agent created. A
+self-reference or a cycle returns `422 task_unavailable`, an
 unavailable task returns `404`, and the current set stays unchanged. Unknown
 fields, such as `blockedByTaskId`, return `400 request_invalid`.
 
@@ -195,6 +200,7 @@ The MCP bridge intentionally exposes a smaller surface than the HTTP API. It
 covers identity, capability and creation discovery, task reads and creation,
 dependencies, and lifecycle commands. Delivery refresh, repair, decisions,
 approvals, merge-train operations, merge, provenance, and administration stay
-HTTP-only. Human answers and delivery completion remain unavailable to an
-external agent. Forge does not provide a generic MCP tool for arbitrary HTTP
-requests.
+HTTP-only. MCP exposes lifecycle task commands only. It does not expose runtime
+delivery or merge commands. Forge can perform a task's configured delivery,
+including a merge after review, without an agent command. Forge does not provide
+a generic MCP tool for arbitrary HTTP requests.

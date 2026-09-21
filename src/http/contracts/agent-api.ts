@@ -95,12 +95,24 @@ const sha = z.string().regex(/^[a-f0-9]{40,64}$/);
 /** bound: dependency fan-out per task */
 const MAX_DEPENDENCIES = 50;
 
+export const AGENT_API_PREREQUISITE_SCOPE = "Each prerequisite must be a task this agent created.";
+export const AGENT_API_TASK_COMMANDS = ["start_task", "disarm_task", "cancel_task", "archive_task", "unarchive_task", "duplicate_task", "send_task_note", "recheck_delivery_wait"] as const;
+export type AgentApiTaskCommand = typeof AGENT_API_TASK_COMMANDS[number];
+const AGENT_API_DELIVERY_COMMANDS = ["observe_delivery", "request_delivery_repair", "decide_delivery_wait", "read_merge_train", "request_merge_approval", "merge_pull_request"] as const;
+const AGENT_API_AUTONOMOUS_COMMANDS = ["create_backlog_task", "create_queued_task", ...AGENT_API_TASK_COMMANDS, ...AGENT_API_DELIVERY_COMMANDS] as const;
+const AGENT_API_UNAVAILABLE_COMMANDS = ["answer_human_question", "deliver_task", "merge_pull_request"] as const;
+
+export const AGENT_API_RUNTIME_AUTHORITY = "Human answers remain unavailable to paired agents. The runtime API exposes delivery and merge commands only when capabilities reports them. Forge can perform delivery for a task's configured target, including a merge after review, without an agent command.";
+export const AGENT_API_MCP_AUTHORITY = "MCP exposes task lifecycle commands only. It does not expose runtime delivery or merge commands. Human answers remain unavailable to paired agents. Forge can perform delivery for a task's configured target, including a merge after review, without an agent command.";
+export const AGENT_API_WHOAMI_DESCRIPTION = "taskCommands lists exactly the lifecycle commands accepted by forge_command_task. autonomousCommands also includes task creation and, when enabled, runtime delivery commands.";
+export const AGENT_API_CAPABILITIES_DESCRIPTION = "autonomousCommands lists every command available through the runtime API. unavailableCommands lists commands this deployment does not accept. taskCommands from forge_whoami is the lifecycle subset exposed by forge_command_task.";
+
 export const AgentApiTaskCreateBodySchema = z.object({
   projectId: z.string().min(1).max(128),
   title: z.string().trim().min(1),
   description: z.string().trim().optional().meta({ default: "" }),
   idempotencyKey: z.string().trim().min(1).max(128),
-  dependsOn: z.array(taskId).max(MAX_DEPENDENCIES).optional().describe("Prerequisite task ids in this company, shown as Blocked by. A self-reference, a cycle, or an unavailable task is rejected."),
+  dependsOn: z.array(taskId).max(MAX_DEPENDENCIES).optional().describe(`${AGENT_API_PREREQUISITE_SCOPE} Shown as Blocked by. A self-reference, a cycle, or an unavailable task is rejected.`),
   queue: z.boolean().optional().describe("Queue the task: it starts now when every prerequisite is complete, and otherwise starts by itself when the last one completes. Without it, the task stays in the manual backlog."),
   images: z.array(TaskImageInputSchema).max(MAX_TASK_IMAGES).default([]),
   source: TaskSourceInputSchema.optional(),
@@ -116,7 +128,7 @@ export const AgentApiTaskCreateBodySchema = z.object({
 export type AgentApiTaskCreateBody = z.infer<typeof AgentApiTaskCreateBodySchema>;
 
 export const AgentApiTaskDependenciesBodySchema = z.object({
-  dependsOn: z.array(taskId).max(MAX_DEPENDENCIES).describe("The complete prerequisite set. It replaces the current set; an empty array removes every prerequisite."),
+  dependsOn: z.array(taskId).max(MAX_DEPENDENCIES).describe(`${AGENT_API_PREREQUISITE_SCOPE} The complete set replaces the current set; an empty array removes every prerequisite.`),
 }).strict();
 
 export const AgentApiTaskIdParamsSchema = z.object({
@@ -160,7 +172,7 @@ export const AgentApiActionRequiredSchema = z.object({
   suggestedCommands: z.array(z.string()),
   humanApprovalRequired: z.boolean(),
 }).strict();
-export const AgentApiTaskCommandSchema = z.enum(["start_task", "disarm_task", "cancel_task", "archive_task", "unarchive_task", "duplicate_task", "send_task_note", "recheck_delivery_wait"]);
+export const AgentApiTaskCommandSchema = z.enum(AGENT_API_TASK_COMMANDS);
 export const AgentApiTaskCommandBodySchema = z.object({
   command: AgentApiTaskCommandSchema,
   revision: z.string().min(1).max(256),
@@ -195,7 +207,7 @@ export const AgentApiIdentityResponseSchema = z.object({
     taskDiscovery: z.literal(true),
     taskRead: z.literal(true),
     taskCreate: z.literal(true),
-    taskCommands: z.array(AgentApiTaskCommandSchema),
+    taskCommands: z.array(AgentApiTaskCommandSchema).describe(AGENT_API_WHOAMI_DESCRIPTION),
   }),
   projects: z.array(AgentApiIdentityProjectSchema),
 });
@@ -445,14 +457,10 @@ export const AgentApiCapabilitiesSchema = z.object({
     merge: z.boolean(),
     humanDecisions: z.literal(false),
   }),
-  autonomousCommands: z.array(z.enum(["create_backlog_task", "create_queued_task", "start_task", "disarm_task", "cancel_task", "archive_task", "unarchive_task", "duplicate_task", "send_task_note", "recheck_delivery_wait", "observe_delivery", "request_delivery_repair", "decide_delivery_wait", "read_merge_train", "request_merge_approval", "merge_pull_request"])),
+  autonomousCommands: z.array(z.enum(AGENT_API_AUTONOMOUS_COMMANDS)).describe(AGENT_API_CAPABILITIES_DESCRIPTION),
   humanOnlyRecords: z.array(z.literal("task_human_answer")),
-  unavailableCommands: z.array(z.enum([
-    "answer_human_question",
-    "deliver_task",
-    "merge_pull_request",
-  ])),
-  pagination: z.object({ supported: z.literal(false), cursor: z.literal(false) }),
+  unavailableCommands: z.array(z.enum(AGENT_API_UNAVAILABLE_COMMANDS)),
+  pagination: z.object({ supported: z.literal(true), cursor: z.literal(true) }),
 });
 
 export function agentApiCapabilities(agentDelivery: boolean): z.infer<typeof AgentApiCapabilitiesSchema> {
@@ -460,12 +468,12 @@ export function agentApiCapabilities(agentDelivery: boolean): z.infer<typeof Age
     apiVersion: "v1",
     capabilities: { read: { task: true, workflows: true, templates: true }, create: { backlogTask: true, queuedTask: true, deliveryTargets: DeliveryTargetSchema.options }, taskControl: true, delivery: agentDelivery, merge: agentDelivery, humanDecisions: false },
     autonomousCommands: [
-      "create_backlog_task", "create_queued_task", "start_task", "disarm_task", "cancel_task", "archive_task", "unarchive_task", "duplicate_task", "send_task_note", "recheck_delivery_wait",
-      ...(agentDelivery ? ["observe_delivery", "request_delivery_repair", "decide_delivery_wait", "read_merge_train", "request_merge_approval", "merge_pull_request"] as const : []),
+      "create_backlog_task", "create_queued_task", ...AGENT_API_TASK_COMMANDS,
+      ...(agentDelivery ? AGENT_API_DELIVERY_COMMANDS : []),
     ],
     humanOnlyRecords: ["task_human_answer"],
-    unavailableCommands: agentDelivery ? ["answer_human_question", "deliver_task"] : ["answer_human_question", "deliver_task", "merge_pull_request"],
-    pagination: { supported: false, cursor: false },
+    unavailableCommands: agentDelivery ? AGENT_API_UNAVAILABLE_COMMANDS.filter(command => command !== "merge_pull_request") : [...AGENT_API_UNAVAILABLE_COMMANDS],
+    pagination: { supported: true, cursor: true },
   };
 }
 
@@ -564,7 +572,7 @@ export function agentApiRuntimeOpenApi(): Record<string, unknown> {
         post: {
           operationId: "createAgentApiBacklogTask",
           summary: "Create a backlog or queued task",
-          description: "Creates a backlog task. With queue true, the task is queued: it starts now when every prerequisite is complete, and otherwise stays in the backlog with zero sessions until the last prerequisite completes. Without queue, it never starts by itself. The server defaults description to an empty string and rejects unknown fields with request_invalid. dependsOn sets the prerequisites, shown as Blocked by; every one must be a task this agent created in the same company. Idempotency is scoped to the paired agent and company. An identical replay returns 200; reuse for a different request returns 409 with idempotency_conflict. Collections are not supported, so pagination and cursors are unavailable.",
+          description: `Creates a backlog task. With queue true, the task is queued: it starts now when every prerequisite is complete, and otherwise stays in the backlog with zero sessions until the last prerequisite completes. Without queue, it never starts by itself. The server defaults description to an empty string and rejects unknown fields with request_invalid. dependsOn sets the prerequisites, shown as Blocked by. ${AGENT_API_PREREQUISITE_SCOPE} Idempotency is scoped to the paired agent and company. An identical replay returns 200; reuse for a different request returns 409 with idempotency_conflict. GET /api/agent/tasks supports opaque cursors and returns nextCursor.`,
           security: [{ AgentApiBearer: [] }],
           requestBody: { required: true, content: { "application/json": { schema: inputSchema(AgentApiRuntimeOperations.createTask.body) } } },
           responses: openApiResponses(AgentApiRuntimeOperations.createTask.response),
@@ -574,17 +582,17 @@ export function agentApiRuntimeOpenApi(): Record<string, unknown> {
         get: {
           operationId: "getAgentApiCreatedTask",
           summary: "Read a task in a granted project",
-          description: "A paired agent can read every task in its currently granted company projects. A task created by another actor reports permittedCommands as an empty array. Task states are backlog, active, waiting_human, cancelled, and delivered. queue separates a manual backlog task from a queued one and lists the exact wait reason of each incomplete prerequisite. A prerequisite is complete when it is delivered at its own delivery target; the merged target also needs the merged pull request state Forge observed from GitHub. Human questions are records only: answering them remains human authority and no agent answer command exists. The server router rejects path parameters longer than 100 characters before this authenticated operation is matched; those router-level responses are outside this contract. Collections are not supported, so pagination and cursors are unavailable.",
+          description: "A paired agent can read every task in its currently granted company projects. A task created by another actor reports permittedCommands as an empty array. Task states are backlog, active, waiting_human, cancelled, and delivered. queue separates a manual backlog task from a queued one and lists the exact wait reason of each incomplete prerequisite. A prerequisite is complete when it is delivered at its own delivery target; the merged target also needs the merged pull request state Forge observed from GitHub. Human questions are records only: answering them remains human authority and no agent answer command exists. The server router rejects path parameters longer than 100 characters before this authenticated operation is matched; those router-level responses are outside this contract.",
           security: [{ AgentApiBearer: [] }],
           parameters: [{ name: "taskId", in: "path", required: true, schema: jsonSchema(AgentApiRuntimeOperations.getTask.params.shape.taskId, "input") }],
           responses: openApiResponses(AgentApiRuntimeOperations.getTask.response),
         },
       },
       "/api/agent/tasks/{taskId}/dependencies": {
-        put: { operationId: "setAgentApiTaskDependencies", summary: "Replace the prerequisites of a task", description: "Replaces dependsOn, shown as Blocked by, with the complete set in the body. Every prerequisite must be a task this agent created in the same company. A self-reference, a cycle, or an unavailable task is rejected and the current set stays. Unknown fields are rejected. The response and every later read report dependsOn and blockedBy from the same stored edges.", security: [{ AgentApiBearer: [] }], parameters: [{ name: "taskId", in: "path", required: true, schema: jsonSchema(AgentApiRuntimeOperations.setTaskDependencies.params.shape.taskId, "input") }], requestBody: { required: true, content: { "application/json": { schema: jsonSchema(AgentApiRuntimeOperations.setTaskDependencies.body, "input") } } }, responses: openApiResponses(AgentApiRuntimeOperations.setTaskDependencies.response) },
+        put: { operationId: "setAgentApiTaskDependencies", summary: "Replace the prerequisites of a task", description: `Replaces dependsOn, shown as Blocked by, with the complete set in the body. ${AGENT_API_PREREQUISITE_SCOPE} A self-reference, a cycle, or an unavailable task is rejected and the current set stays. Unknown fields are rejected. The response and every later read report dependsOn and blockedBy from the same stored edges.`, security: [{ AgentApiBearer: [] }], parameters: [{ name: "taskId", in: "path", required: true, schema: jsonSchema(AgentApiRuntimeOperations.setTaskDependencies.params.shape.taskId, "input") }], requestBody: { required: true, content: { "application/json": { schema: jsonSchema(AgentApiRuntimeOperations.setTaskDependencies.body, "input") } } }, responses: openApiResponses(AgentApiRuntimeOperations.setTaskDependencies.response) },
       },
       "/api/agent/tasks/{taskId}/commands": {
-        post: { operationId: "commandAgentApiTask", summary: "Apply an authorized task lifecycle command", description: "Only the paired agent that created the task can send a command. Every command requires the current task revision and an idempotency key. start_task queues a manual backlog task: it starts now when every prerequisite is complete and never bypasses one. disarm_task returns a queued task to the manual backlog. Human answers, delivery, releases, and merges remain unavailable.", security: [{ AgentApiBearer: [] }], parameters: [{ name: "taskId", in: "path", required: true, schema: jsonSchema(AgentApiRuntimeOperations.commandTask.params.shape.taskId, "input") }], requestBody: { required: true, content: { "application/json": { schema: inputSchema(AgentApiRuntimeOperations.commandTask.body) } } }, responses: openApiResponses(AgentApiRuntimeOperations.commandTask.response) },
+        post: { operationId: "commandAgentApiTask", summary: "Apply an authorized task lifecycle command", description: `Only the paired agent that created the task can send a command. Every command requires the current task revision and an idempotency key. start_task queues a manual backlog task: it starts now when every prerequisite is complete and never bypasses one. disarm_task returns a queued task to the manual backlog. ${AGENT_API_WHOAMI_DESCRIPTION} ${AGENT_API_RUNTIME_AUTHORITY}`, security: [{ AgentApiBearer: [] }], parameters: [{ name: "taskId", in: "path", required: true, schema: jsonSchema(AgentApiRuntimeOperations.commandTask.params.shape.taskId, "input") }], requestBody: { required: true, content: { "application/json": { schema: inputSchema(AgentApiRuntimeOperations.commandTask.body) } } }, responses: openApiResponses(AgentApiRuntimeOperations.commandTask.response) },
       },
     },
     components: {

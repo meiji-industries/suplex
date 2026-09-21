@@ -29,6 +29,8 @@ import { normalizeWorkflowInput } from "../src/coordination/workflows.js";
 import { MAX_TASK_IMAGES, MAX_TASK_IMAGE_BASE64_LENGTH, MAX_TASK_IMAGE_BYTES } from "../src/tasks/limits/attachment-limits.js";
 import { decodeTaskImage } from "../src/tasks/images.js";
 import { runCommand } from "../src/platform/command-runner.js";
+import { AGENT_API_MCP_AUTHORITY, AGENT_API_RUNTIME_AUTHORITY, AGENT_API_TASK_COMMANDS, AgentApiTaskCommandBodySchema, agentApiCapabilities } from "../src/http/contracts/agent-api.js";
+import { FORGE_MCP_TOOLS } from "../src/integrations/forge/mcp-bridge.js";
 
 let inspectionGate: Promise<void> | undefined;
 let inspectionStarted: (() => void) | undefined;
@@ -332,7 +334,7 @@ test("authenticated runtime contract uses the live task schemas and states its a
   expect(capabilities.json()).toMatchObject({
     apiVersion: "v1",
     capabilities: { read: { task: true, workflows: true, templates: true }, create: { backlogTask: true, deliveryTargets: ["local_worktree", "remote_branch", "pull_request_draft", "pull_request_ready", "merged"] }, taskControl: true, delivery: false, merge: false, humanDecisions: false },
-    pagination: { supported: false, cursor: false },
+    pagination: { supported: true, cursor: true },
   });
   expect(capabilities.json().unavailableCommands).toEqual(["answer_human_question", "deliver_task", "merge_pull_request"]);
   expect(capabilities.json().autonomousCommands).not.toContain("read_merge_train");
@@ -1858,4 +1860,30 @@ test("configured agent delivery reports delivery, merge, and the agent delivery 
   } finally {
     await configured.close();
   }
+});
+
+test("agent command advertisements agree across whoami, capabilities, schemas, and MCP for both delivery configurations", async () => {
+  const mcpCommandSchema = FORGE_MCP_TOOLS.find(tool => tool.name === "forge_command_task")!.inputSchema;
+  const commandSchema = AgentApiTaskCommandBodySchema.shape.command.options;
+
+  expect(commandSchema).toEqual([...AGENT_API_TASK_COMMANDS]);
+  expect(mcpCommandSchema).toMatchObject({ properties: { command: { enum: [...AGENT_API_TASK_COMMANDS] } } });
+  const whoami = await app.inject({ method: "GET", url: "/api/agent/me", headers: { Authorization: `Bearer ${agentCredential}` } });
+  expect(whoami.json()).toMatchObject({ capabilities: { taskCommands: [...AGENT_API_TASK_COMMANDS] } });
+  expect(FORGE_MCP_TOOLS.find(tool => tool.name === "forge_whoami")!.description).toContain(AGENT_API_MCP_AUTHORITY);
+  expect(FORGE_MCP_TOOLS.find(tool => tool.name === "forge_capabilities")!.description).toContain(AGENT_API_MCP_AUTHORITY);
+
+  for (const agentDelivery of [false, true]) {
+    const capabilities = agentApiCapabilities(agentDelivery);
+    const advertised = new Set([...AGENT_API_TASK_COMMANDS, ...capabilities.autonomousCommands]);
+    const unavailable = new Set<string>(capabilities.unavailableCommands);
+    expect([...advertised].filter(command => unavailable.has(command))).toEqual([]);
+    expect(capabilities.autonomousCommands).toEqual(expect.arrayContaining([...AGENT_API_TASK_COMMANDS]));
+    expect(capabilities.pagination).toEqual({ supported: true, cursor: true });
+    expect(capabilities.capabilities.merge).toBe(agentDelivery);
+    expect(capabilities.unavailableCommands.includes("merge_pull_request")).toBe(!agentDelivery);
+  }
+
+  expect(AGENT_API_RUNTIME_AUTHORITY).toContain("only when capabilities reports them");
+  expect(AGENT_API_MCP_AUTHORITY).toContain("does not expose runtime delivery or merge commands");
 });

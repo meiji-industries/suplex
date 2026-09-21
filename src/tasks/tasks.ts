@@ -17,7 +17,7 @@ import { ArtifactStore, type StoredArtifact } from "../platform/artifacts.js";
 import type { ForgeConfig } from "../platform/config.js";
 import type { ForgeDatabase } from "../platform/database.js";
 import type { ExternalAgentPrincipal } from "../identity/external-agents.js";
-import { AgentApiSafeTaskProjectionSchema, AgentApiTaskCommandBodySchema, AgentApiTaskCreateBodySchema, type AgentApiSafeTaskProjection, type AgentApiTaskCreateBody, type AgentApiTaskFilter, type AgentApiTaskReadProjection } from "../http/contracts/agent-api.js";
+import { AGENT_API_TASK_COMMANDS, AgentApiSafeTaskProjectionSchema, AgentApiTaskCommandBodySchema, AgentApiTaskCreateBodySchema, type AgentApiSafeTaskProjection, type AgentApiTaskCreateBody, type AgentApiTaskFilter, type AgentApiTaskReadProjection } from "../http/contracts/agent-api.js";
 import { createGithubReleasePort, GithubReleaseFailure, type GithubReleasePort } from "../integrations/github/delivery.js";
 import { deriveActionRequired, deriveTaskIntegration, isUpstreamOf, matchesAgentApiFilter, observableDelivery, type PullRequestObservationResult } from "./integration.js";
 import { ProjectAgentTaskPolicySchema, type ProjectAgentTaskPolicy } from "../http/contracts/projects.js";
@@ -338,7 +338,7 @@ export class TaskService {
     });
     return {
       agent: { id: principal.agentId, name: this.database.authQuery(db => (db.prepare("SELECT name FROM forge_agents WHERE id = ?").get(principal.agentId) as { name: string }).name), profileId: principal.profileId },
-      capabilities: { taskDiscovery: true as const, taskRead: true as const, taskCreate: true as const, taskCommands: ["start_task", "disarm_task", "cancel_task", "archive_task", "unarchive_task", "duplicate_task", "send_task_note", "recheck_delivery_wait"] as Array<z.infer<typeof AgentApiTaskCommandBodySchema>["command"]> },
+      capabilities: { taskDiscovery: true as const, taskRead: true as const, taskCreate: true as const, taskCommands: [...AGENT_API_TASK_COMMANDS] },
       projects: withPolicy,
     };
   }

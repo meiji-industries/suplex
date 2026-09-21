@@ -104,9 +104,9 @@ you need the exact request shapes.
 - Editing a task's title or description after creation, deleting a task, and
   reading session transcripts or artifacts: no route exists. Do not attempt a
   workaround.
-- `capabilities.pagination` reports `supported: false`. `GET /api/agent/tasks`
-  does accept `cursor` and returns `nextCursor`; follow the cursor if a listing
-  is truncated, and do not rely on the capability flag for this.
+- `capabilities.pagination` reports `supported: true` and `cursor: true`.
+  `GET /api/agent/tasks` accepts `cursor` and returns `nextCursor`; follow the
+  cursor if a listing is truncated.
 
 ## Project selection
 
@@ -195,7 +195,7 @@ every prerequisite.
 task = client.set_dependencies(task_id, [first_id, second_id])
 ```
 
-Each prerequisite must be a task this agent created in the same company.
+Each prerequisite must be a task this agent created.
 Forge rejects a self-reference or a cycle with `422 task_unavailable`, and an
 unavailable task with `404`; the current set stays unchanged. Unknown fields,
 such as `blockedByTaskId`, fail with `400 request_invalid`.

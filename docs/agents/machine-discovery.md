@@ -87,9 +87,10 @@ same body. A denial never tells you which case applied. Treat every `404` as
 created in granted projects. Those tasks have no permitted commands. Task
 commands and dependency changes remain limited to tasks this agent created.
 
-Human answers, delivery, and merges are not available to an agent unless
-`GET /api/agent/capabilities` reports them. No tool and no command exists for a
-capability the deployment withholds.
+Human answers are not available to paired agents. The runtime API exposes
+delivery and merge commands only when `GET /api/agent/capabilities` reports
+them. MCP exposes lifecycle task commands only. Forge can perform a task's
+configured delivery, including a merge after review, without an agent command.
 
 [The runtime API guide](../agent-api.md) describes pagination, filters,
 revisions, and error codes in full.

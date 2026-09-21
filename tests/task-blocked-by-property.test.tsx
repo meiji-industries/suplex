@@ -25,15 +25,16 @@ vi.mock("../src/frontend/components/ui/dialog.js", async () => {
 
 import { TaskBlockedByProperty } from "../src/frontend/features/tasks/task-details.js";
 
-const self = { id: "task-self", projectId: "project-1", title: "This task", status: "active", archivedAt: null };
-const active = { id: "task-active", projectId: "project-1", title: "Active prerequisite", status: "active", archivedAt: null };
-const backlog = { id: "task-backlog", projectId: "project-1", title: "Backlog task", status: "backlog", archivedAt: null };
-const delivered = { id: "task-delivered", projectId: "project-1", title: "Delivered task", status: "delivered", archivedAt: null };
-const otherProject = { id: "task-other-project", projectId: "project-2", title: "Other project", status: "active", archivedAt: null };
+const self = { id: "task-self", projectId: "project-1", title: "This task", status: "active", archivedAt: null, queue: { state: "running" } };
+const active = { id: "task-active", projectId: "project-1", title: "Active prerequisite", status: "active", archivedAt: null, queue: { state: "running" } };
+const backlog = { id: "task-backlog", projectId: "project-1", title: "Backlog task", status: "backlog", archivedAt: null, queue: { state: "backlog" } };
+const queued = { id: "task-queued", projectId: "project-1", title: "Queued task", status: "backlog", archivedAt: null, queue: { state: "queued" } };
+const delivered = { id: "task-delivered", projectId: "project-1", title: "Delivered task", status: "delivered", archivedAt: null, queue: { state: "delivered" } };
+const otherProject = { id: "task-other-project", projectId: "project-2", title: "Other project", status: "active", archivedAt: null, queue: { state: "running" } };
 
 const activeTask: Pick<Task, "id" | "companyId" | "projectId" | "status" | "blockedBy"> = { id: "task-self", companyId: "company-1", projectId: "project-1", status: "active", blockedBy: [] };
-const first = { id: "task-first", title: "First prerequisite", status: "backlog" as const };
-const second = { id: "task-second", title: "Second prerequisite", status: "delivered" as const };
+const first = { id: "task-first", title: "First prerequisite", status: "backlog" as const, queued: false };
+const second = { id: "task-second", title: "Second prerequisite", status: "delivered" as const, queued: false };
 
 const saved = { id: "task-self", blockedBy: [] } as unknown as Task;
 
@@ -62,7 +63,7 @@ beforeEach(() => {
   api.readJson.mockReset();
   api.readJson.mockImplementation(async (url: string) => {
     if (url === "/api/tasks/task-self/dependencies") return saved;
-    if (url === "/api/companies/company-1/tasks") return { tasks: [self, active, backlog, delivered, otherProject, { ...first, projectId: "project-1", archivedAt: null }] };
+    if (url === "/api/companies/company-1/tasks") return { tasks: [self, active, backlog, queued, delivered, otherProject, { ...first, projectId: "project-1", archivedAt: null, queue: { state: "backlog" } }] };
     throw new Error(`Unexpected request: ${url}`);
   });
 });
@@ -86,11 +87,24 @@ test("None opens the picker and selecting a task saves it as the only prerequisi
 });
 
 test("every prerequisite links to its task with its status", async () => {
-  const view = mount({ ...activeTask, blockedBy: [first, second] });
+  const queuedPrerequisite = { id: "task-queued", title: "Queued prerequisite", status: "backlog" as const, queued: true };
+  const view = mount({ ...activeTask, blockedBy: [first, queuedPrerequisite, second] });
   await view.render();
   expect(view.container.querySelector('a[href="/tasks/task-first?company=company-1"]')?.getAttribute("title")).toBe("First prerequisite · Backlog");
+  expect(view.container.querySelector('a[href="/tasks/task-queued?company=company-1"]')?.getAttribute("title")).toBe("Queued prerequisite · Queued");
   expect(view.container.querySelector('a[href="/tasks/task-second?company=company-1"]')?.getAttribute("title")).toBe("Second prerequisite · Delivered");
   expect(view.container.textContent).not.toContain("None");
+});
+
+test("the picker renders queued and manual backlog tasks with distinct icons", async () => {
+  const view = mount();
+  await view.render();
+  await act(async () => { button(view.container, "None").click(); });
+  await flush();
+  const queuedButton = button(view.container, "Queued task");
+  const backlogButton = button(view.container, "Backlog task");
+  expect(queuedButton.innerHTML).toContain("text-sky-500");
+  expect(backlogButton.innerHTML).toContain("text-muted-foreground");
 });
 
 test("Add saves the current prerequisites and the selected task, and hides tasks already listed", async () => {

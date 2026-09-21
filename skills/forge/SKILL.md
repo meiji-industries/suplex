@@ -214,9 +214,11 @@ never bypasses one. `disarm_task` returns a queued task to the manual backlog.
 Every read reports `queue`: `startIntent` (`manual` or `queued`), `state`
 (`backlog`, `queued`, `running`, `needs_attention`, `delivered`, `cancelled`),
 and `waitingOn`, one entry per incomplete prerequisite with `id`, `title`,
-`status`, `deliveryTarget`, `reason`, and `summary`. A prerequisite is complete
-when it is delivered at its own delivery target; the `merged` target also needs
-the merged pull request that Forge observed from GitHub. Act on the `summary`:
+`status`, `queued`, `deliveryTarget`, `reason`, and `summary`. `queued` is true
+when the prerequisite is a queued backlog task that starts by itself. A
+prerequisite is complete when it is delivered at its own delivery target; the
+`merged` target also needs the merged pull request that Forge observed from
+GitHub. Act on the `summary`:
 for example, a `prerequisite_cancelled` reason means remove that prerequisite
 or disarm the task.
 

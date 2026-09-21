@@ -55,12 +55,12 @@ const project = { id: "project-1", name: "Project One", rootProfileId: "root", w
 const profile = { id: "root", role: "root", provider: "opencode", model: "root", reasoningLevel: "medium", serviceTier: "default" };
 const worker = { ...profile, id: "worker", role: "worker", model: "worker" };
 const workflow = { id: "workflow_native_standard", name: "Standard", engine: "standard", rootProfileId: "root", workerProfileId: "worker", advisorProfileIds: {}, deliveryTarget: "pull_request_draft", runProjectTests: true, visualEvidence: "off", archivedAt: null };
-const active = { id: "task-active", projectId: project.id, title: "Active prerequisite", status: "active", archivedAt: null };
-const otherProject = { id: "task-other-project", projectId: "project-2", title: "Other project", status: "active", archivedAt: null };
-const backlog = { id: "task-backlog", projectId: project.id, title: "Backlog task", status: "backlog", archivedAt: null };
-const archived = { id: "task-archived", projectId: project.id, title: "Archived task", status: "active", archivedAt: "2026-01-01T00:00:00.000Z" };
-const delivered = { id: "task-delivered", projectId: project.id, title: "Delivered task", status: "delivered", archivedAt: null };
-const cancelled = { id: "task-cancelled", projectId: project.id, title: "Cancelled task", status: "cancelled", archivedAt: null };
+const active = { id: "task-active", projectId: project.id, title: "Active prerequisite", status: "active", archivedAt: null, queue: { state: "running" } };
+const otherProject = { id: "task-other-project", projectId: "project-2", title: "Other project", status: "active", archivedAt: null, queue: { state: "running" } };
+const backlog = { id: "task-backlog", projectId: project.id, title: "Backlog task", status: "backlog", archivedAt: null, queue: { state: "backlog" } };
+const archived = { id: "task-archived", projectId: project.id, title: "Archived task", status: "active", archivedAt: "2026-01-01T00:00:00.000Z", queue: { state: "running" } };
+const delivered = { id: "task-delivered", projectId: project.id, title: "Delivered task", status: "delivered", archivedAt: null, queue: { state: "delivered" } };
+const cancelled = { id: "task-cancelled", projectId: project.id, title: "Cancelled task", status: "cancelled", archivedAt: null, queue: { state: "cancelled" } };
 
 function setText(field: HTMLInputElement | HTMLTextAreaElement, value: string) {
   const prototype = field instanceof HTMLTextAreaElement ? HTMLTextAreaElement.prototype : HTMLInputElement.prototype;

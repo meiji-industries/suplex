@@ -16,8 +16,8 @@ const appearances = {
 type TaskStatusProps = { status: TaskControlStatus; pullRequestState?: PullRequestReference["state"] | undefined; queued?: boolean | undefined };
 
 /** A queued task is a backlog task that starts by itself when its Blocked by tasks are complete. */
-export function taskStatusLabel(task: { status: TaskControlStatus; queue?: { state: string } | undefined }): string {
-  return task.status === "backlog" && task.queue?.state === "queued" ? "Queued" : taskStatusLabels[task.status];
+export function taskStatusLabel(task: { status: TaskControlStatus; queued?: boolean | undefined; queue?: { state: string } | undefined }): string {
+  return task.status === "backlog" && (task.queued || task.queue?.state === "queued") ? "Queued" : taskStatusLabels[task.status];
 }
 
 export function TaskStatusIcon({ status, pullRequestState, queued }: TaskStatusProps) {
@@ -36,11 +36,11 @@ export function TaskStatus({ status, pullRequestState, queued }: TaskStatusProps
 }
 
 /** "Blocked by First · Active, Second · Backlog", or null when the task has no prerequisites. */
-export function blockedByLabel(blockedBy: ReadonlyArray<{ title: string; status: TaskControlStatus }>): string | null {
-  return blockedBy.length ? `Blocked by ${blockedBy.map(prerequisite => `${prerequisite.title} · ${taskStatusLabels[prerequisite.status]}`).join(", ")}` : null;
+export function blockedByLabel(blockedBy: ReadonlyArray<{ title: string; status: TaskControlStatus; queued: boolean }>): string | null {
+  return blockedBy.length ? `Blocked by ${blockedBy.map(prerequisite => `${prerequisite.title} · ${taskStatusLabel(prerequisite)}`).join(", ")}` : null;
 }
 
 /** Status icon beside a task title, linking to the task. */
-export function TaskTitleLink({ task, companyId, className = "" }: { task: { id: string; title: string; status: TaskControlStatus; pullRequest?: PullRequestReference | null }; companyId: string; className?: string }) {
-  return <a className={`flex min-w-0 items-center gap-1.5 underline-offset-2 hover:underline ${className}`} href={withCompany(`/tasks/${task.id}`, companyId)} title={`${task.title} · ${taskStatusLabels[task.status]}`}><TaskStatusIcon status={task.status} pullRequestState={task.pullRequest?.state} /><span className="truncate">{task.title}</span></a>;
+export function TaskTitleLink({ task, companyId, className = "" }: { task: { id: string; title: string; status: TaskControlStatus; queued: boolean; pullRequest?: PullRequestReference | null }; companyId: string; className?: string }) {
+  return <a className={`flex min-w-0 items-center gap-1.5 underline-offset-2 hover:underline ${className}`} href={withCompany(`/tasks/${task.id}`, companyId)} title={`${task.title} · ${taskStatusLabel(task)}`}><TaskStatusIcon status={task.status} pullRequestState={task.pullRequest?.state} queued={task.queued} /><span className="truncate">{task.title}</span></a>;
 }

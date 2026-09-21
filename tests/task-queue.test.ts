@@ -33,7 +33,8 @@ test("a merged-target chain starts one task at a time, exactly once, and only af
     const c = await create(f, "Chain C", { startImmediately: true, deliveryTarget: "merged", dependsOn: [b.id] });
     expect(a).toMatchObject({ status: "active", queue: { state: "running" } });
     expect(b).toMatchObject({ status: "backlog", queue: { startIntent: "queued", state: "queued", waitingOn: [{ id: a.id, title: "Chain A", status: "active", deliveryTarget: "merged", reason: "prerequisite_running" }] } });
-    expect(c).toMatchObject({ status: "backlog", queue: { startIntent: "queued", state: "queued", waitingOn: [{ id: b.id, reason: "prerequisite_not_started" }] } });
+    expect(c).toMatchObject({ status: "backlog", queue: { startIntent: "queued", state: "queued", waitingOn: [{ id: b.id, queued: true, reason: "prerequisite_not_started" }] } });
+    expect(renderToStaticMarkup(createElement(TaskQueueWaits, { task: c }))).toContain(`title="Chain B · Queued"`);
 
     // The agent finished and opened the pull request, but GitHub has not merged it.
     f.tasks.repository.controls.setPullRequest(a.id, pull(101, "open"));

@@ -6,7 +6,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle } from "../../componen
 import { Input } from "../../components/ui/input.js";
 import { TaskStatusIcon } from "./task-status.js";
 
-export type BlockedByTaskSummary = Pick<Task, "id" | "title" | "status">;
+export type BlockedByTaskSummary = Task["blockedBy"][number];
 
 /** Searchable picker that adds one Blocked by task: the project's active and backlog tasks, minus the excluded ones (the task itself and its current prerequisites). */
 export function BlockedByPickerDialog({ open, onOpenChange, companyId, projectId, excludeTaskIds, onSelect, onError }: { open: boolean; onOpenChange: (open: boolean) => void; companyId: string; projectId: string; excludeTaskIds: string[]; onSelect: (task: BlockedByTaskSummary) => void; onError?: ((message: string) => void) | undefined }): ReactElement {
@@ -29,7 +29,7 @@ export function BlockedByPickerDialog({ open, onOpenChange, companyId, projectId
     <DialogContent className="max-h-[min(80vh,480px)] grid-cols-[minmax(0,1fr)] overflow-y-auto overflow-x-hidden [&>*]:min-w-0">
       <DialogHeader><DialogTitle>Blocked by...</DialogTitle></DialogHeader>
       <Input aria-label="Search tasks" autoFocus placeholder="Search by title or ID" value={query} onChange={event => setQuery(event.target.value)} />
-      <div className="flex min-w-0 flex-col gap-1">{loading ? <span className="text-xs text-muted-foreground">Loading tasks...</span> : matchingTasks.length ? matchingTasks.map(task => <Button key={task.id} type="button" variant="ghost" className="w-full min-w-0 justify-start gap-2 overflow-hidden" onClick={() => { onSelect({ id: task.id, title: task.title, status: task.status }); onOpenChange(false); }}><TaskStatusIcon status={task.status} pullRequestState={task.pullRequest?.state} /><span className="min-w-0 flex-1 truncate text-left">{task.title}</span></Button>) : <span className="text-xs text-muted-foreground">No matching active or backlog tasks.</span>}</div>
+      <div className="flex min-w-0 flex-col gap-1">{loading ? <span className="text-xs text-muted-foreground">Loading tasks...</span> : matchingTasks.length ? matchingTasks.map(task => <Button key={task.id} type="button" variant="ghost" className="w-full min-w-0 justify-start gap-2 overflow-hidden" onClick={() => { onSelect({ id: task.id, title: task.title, status: task.status, queued: task.queue.state === "queued" }); onOpenChange(false); }}><TaskStatusIcon status={task.status} pullRequestState={task.pullRequest?.state} queued={task.queue.state === "queued"} /><span className="min-w-0 flex-1 truncate text-left">{task.title}</span></Button>) : <span className="text-xs text-muted-foreground">No matching active or backlog tasks.</span>}</div>
     </DialogContent>
   </Dialog>;
 }

@@ -244,7 +244,7 @@ test("a human Blocked by edit gates the train exactly like an agent-declared dep
 
   // One gate: the Blocked by task reads as a dependency everywhere Forge decides.
   expect(f.tasks.getTask(f.adminId, second!.id).dependsOn).toEqual([first!.id]);
-  expect(f.store.dependencySummaries(second!.id)).toEqual([{ id: first!.id, title: "Train task 1", status: "active" }]);
+  expect(f.store.dependencySummaries(second!.id)).toEqual([{ id: first!.id, title: "Train task 1", status: "active", queued: false }]);
   const train = await f.agentDelivery.mergeTrain(f.principal);
   expect(train.entries.map(entry => entry.taskId)).toEqual([first!.id, second!.id]);
   expect(train.entries[1]).toMatchObject({ dependsOn: [first!.id], blocker: `Task ${first!.id} is not delivered.` });

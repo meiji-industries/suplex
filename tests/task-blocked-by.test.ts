@@ -30,22 +30,22 @@ test("Blocked by edits save the complete prerequisite set through the dependency
 
     const both = await f.app.inject({ method: "PUT", url, headers: f.headers, payload: { dependsOn: [second.task.id, first.task.id] } });
     expect(both.statusCode, both.body).toBe(200);
-    const expected = byId([{ id: first.task.id, title: "Prepare the schema", status: "backlog" as const }, { id: second.task.id, title: "Prepare the API", status: "backlog" as const }]);
+    const expected = byId([{ id: first.task.id, title: "Prepare the schema", status: "backlog" as const, queued: false }, { id: second.task.id, title: "Prepare the API", status: "backlog" as const, queued: false }]);
     expect(readers(f, dependent.task.id)).toEqual({ blockedBy: expected, dependsOn: expected.map(task => task.id), coordinator: expected, evaluation: expected.map(task => task.id) });
     expect((await f.app.inject({ method: "PATCH", url: `/api/tasks/${dependent.task.id}`, headers: f.headers, payload: { description: "Keep the prerequisites" } })).statusCode).toBe(200);
     expect(f.tasks.getTask(f.userId, dependent.task.id).dependsOn).toEqual(expected.map(task => task.id));
 
     f.tasks.renameTask(f.userId, second.task.id, { title: "Prepare the updated API" });
     f.tasks.startTask(f.userId, second.task.id);
-    expect(f.tasks.getTask(f.userId, dependent.task.id).blockedBy).toContainEqual({ id: second.task.id, title: "Prepare the updated API", status: "active" });
+    expect(f.tasks.getTask(f.userId, dependent.task.id).blockedBy).toContainEqual({ id: second.task.id, title: "Prepare the updated API", status: "active", queued: false });
 
     // Removing one prerequisite keeps the other.
     const removed = await f.app.inject({ method: "PUT", url, headers: f.headers, payload: { dependsOn: [second.task.id] } });
-    expect(TaskSchema.parse(removed.json()).blockedBy).toEqual([{ id: second.task.id, title: "Prepare the updated API", status: "active" }]);
+    expect(TaskSchema.parse(removed.json()).blockedBy).toEqual([{ id: second.task.id, title: "Prepare the updated API", status: "active", queued: false }]);
     expect(readers(f, dependent.task.id).evaluation).toEqual([second.task.id]);
 
     f.tasks.repository.setArchived(second.task.id, true);
-    expect(f.tasks.getTask(f.userId, dependent.task.id).blockedBy).toEqual([{ id: second.task.id, title: "Prepare the updated API", status: "active" }]);
+    expect(f.tasks.getTask(f.userId, dependent.task.id).blockedBy).toEqual([{ id: second.task.id, title: "Prepare the updated API", status: "active", queued: false }]);
     // Start queues; an archived prerequisite that was never delivered keeps the task queued.
     expect(f.tasks.startTask(f.userId, dependent.task.id)).toMatchObject({ status: "backlog", queue: { startIntent: "queued", state: "queued", waitingOn: [{ id: second.task.id, reason: "prerequisite_archived" }] } });
 
@@ -53,6 +53,20 @@ test("Blocked by edits save the complete prerequisite set through the dependency
     expect(cleared.statusCode, cleared.body).toBe(200);
     expect(readers(f, dependent.task.id)).toEqual({ blockedBy: [], dependsOn: [], coordinator: [], evaluation: [] });
     expect(TaskSchema.parse(cleared.json())).toMatchObject({ status: "active", queue: { startIntent: "manual", state: "running", waitingOn: [] } });
+  } finally { await f.close(); }
+});
+
+test("Blocked by derives queued state from the prerequisite start intent", async () => {
+  const f = await nativeApp();
+  try {
+    const manual = await f.tasks.createTask(f.userId, f.company.id, { projectId: f.project.id, title: "Manual backlog prerequisite", idempotencyKey: "manual-backlog-prerequisite" });
+    const queued = await f.tasks.createTask(f.userId, f.company.id, { projectId: f.project.id, title: "Queued prerequisite", idempotencyKey: "queued-prerequisite", startImmediately: true, dependsOn: [manual.task.id] });
+    const dependent = await f.tasks.createTask(f.userId, f.company.id, { projectId: f.project.id, title: "Blocked task", idempotencyKey: "blocked-task", dependsOn: [manual.task.id, queued.task.id] });
+
+    expect(TaskSchema.parse(f.tasks.getTask(f.userId, dependent.task.id)).blockedBy).toEqual(byId([
+      { id: manual.task.id, title: "Manual backlog prerequisite", status: "backlog", queued: false },
+      { id: queued.task.id, title: "Queued prerequisite", status: "backlog", queued: true },
+    ]));
   } finally { await f.close(); }
 });
 
@@ -105,7 +119,7 @@ test("creation validates and persists several Blocked by tasks", async () => {
     const payload = { projectId: f.project.id, title: "Dependent", idempotencyKey: "creation-dependent", dependsOn: [first.task.id, second.task.id] };
     const response = await f.app.inject({ method: "POST", url, headers: f.headers, payload });
     expect(response.statusCode, response.body).toBe(201);
-    expect(TaskSchema.parse(response.json()).blockedBy).toEqual(byId([{ id: first.task.id, title: "First", status: "backlog" }, { id: second.task.id, title: "Second", status: "backlog" }]));
+    expect(TaskSchema.parse(response.json()).blockedBy).toEqual(byId([{ id: first.task.id, title: "First", status: "backlog", queued: false }, { id: second.task.id, title: "Second", status: "backlog", queued: false }]));
 
     const rejected = await f.app.inject({ method: "POST", url, headers: f.headers, payload: { ...payload, idempotencyKey: "creation-invalid", dependsOn: [first.task.id, "task_missing"] } });
     expect(rejected.statusCode, rejected.body).toBe(404);

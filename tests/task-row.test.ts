@@ -45,7 +45,7 @@ const task = {
     mergedAt: null,
   },
   humanQuestion: null,
-  blockedBy: [{ id: "task-0", title: "Prepare task links", status: "backlog" }],
+  blockedBy: [{ id: "task-0", title: "Prepare task links", status: "backlog", queued: true }],
   queue: { startIntent: "manual", state: "running", waitingOn: [] },
   limits: { budgetUsd: 15, maxTurns: 40, admittedTurns: 0 },
   wakeAt: null,
@@ -73,7 +73,7 @@ test("task rows render sibling task and pull request links", () => {
 
   expect(anchorDepth).toBe(0);
   expect(html).toContain("data-task-row");
-  expect(html).toContain("Blocked by Prepare task links · Backlog");
+  expect(html).toContain("Blocked by Prepare task links · Queued");
   expect(links.flatMap(match => match[1] ?? [])).toEqual([
     "/tasks/task-1?company=company-1",
     "https://github.com/meiji-industries/forge/pull/164",

@@ -11,7 +11,7 @@ import { TaskControlStatusSchema, type TaskControlStatus } from "./control.js";
  * dependency edges, and each prerequisite's own control row on every call; nothing mirrors it.
  */
 
-const PrerequisiteSchema = z.object({ id: z.string(), title: z.string(), status: TaskControlStatusSchema, deliveryTarget: DeliveryTargetSchema, archived: z.number(), pullRequestState: z.string().nullable() });
+const PrerequisiteSchema = z.object({ id: z.string(), title: z.string(), status: TaskControlStatusSchema, queued: z.number().transform(Boolean), deliveryTarget: DeliveryTargetSchema, archived: z.number(), pullRequestState: z.string().nullable() });
 type Prerequisite = z.infer<typeof PrerequisiteSchema>;
 
 /**
@@ -39,10 +39,10 @@ function waitSummary(prerequisite: Prerequisite, reason: TaskQueueWait["reason"]
 
 /** Every prerequisite that is not complete, with the exact reason, ordered by task id like Blocked by. */
 export function prerequisiteWaits(db: Database.Database, taskId: string): TaskQueueWait[] {
-  const rows = z.array(PrerequisiteSchema).parse(db.prepare("SELECT t.id, t.title, c.status, c.delivery_target AS deliveryTarget, t.archived_at IS NOT NULL AS archived, json_extract(c.pull_request_json, '$.state') AS pullRequestState FROM forge_task_dependencies d JOIN forge_tasks t ON t.id = d.depends_on_task_id JOIN forge_task_controls c ON c.task_id = t.id WHERE d.task_id = ? ORDER BY t.id").all(taskId));
+  const rows = z.array(PrerequisiteSchema).parse(db.prepare("SELECT t.id, t.title, c.status, c.status = 'backlog' AND t.start_queued = 1 AS queued, c.delivery_target AS deliveryTarget, t.archived_at IS NOT NULL AS archived, json_extract(c.pull_request_json, '$.state') AS pullRequestState FROM forge_task_dependencies d JOIN forge_tasks t ON t.id = d.depends_on_task_id JOIN forge_task_controls c ON c.task_id = t.id WHERE d.task_id = ? ORDER BY t.id").all(taskId));
   return rows.flatMap(prerequisite => {
     const reason = waitReason(prerequisite);
-    return reason ? [{ id: prerequisite.id, title: prerequisite.title, status: prerequisite.status, deliveryTarget: prerequisite.deliveryTarget, reason, summary: waitSummary(prerequisite, reason) }] : [];
+    return reason ? [{ id: prerequisite.id, title: prerequisite.title, status: prerequisite.status, queued: prerequisite.queued, deliveryTarget: prerequisite.deliveryTarget, reason, summary: waitSummary(prerequisite, reason) }] : [];
   });
 }
 

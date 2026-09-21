@@ -148,7 +148,9 @@ starts it when every prerequisite is complete. Every task read reports `queue`:
 - `state`: `backlog` (manual), `queued`, `running`, `needs_attention`,
   `delivered`, or `cancelled`.
 - `waitingOn`: each incomplete prerequisite with `id`, `title`, `status`,
-  `deliveryTarget`, `reason`, and a `summary` that tells you what to do.
+  `queued`, `deliveryTarget`, `reason`, and a `summary` that tells you what to do.
+  `queued` is true when the prerequisite is a queued backlog task that starts by
+  itself.
 
 A prerequisite is complete when it is delivered at its own delivery target.
 The `merged` target also needs the merged pull request state that Forge

@@ -77,9 +77,10 @@ export const TaskConfigurationSchema = z.object({
 export type TaskConfiguration = z.infer<typeof TaskConfigurationSchema>;
 
 export const TaskImageSchema = z.object({ artifactId: id, filename: z.string(), mimeType: z.string(), byteSize: z.number().int().nonnegative() }).strict();
-export const TaskReferenceSchema = z.object({ id, title: z.string(), status: TaskControlStatusSchema }).strict();
+/** queued is derived from the prerequisite's backlog status and start intent on every read. */
+export const TaskReferenceSchema = z.object({ id, title: z.string(), status: TaskControlStatusSchema, queued: z.boolean() }).strict();
 export const TaskQueueWaitReasonSchema = z.enum(["prerequisite_not_started", "prerequisite_running", "prerequisite_needs_human", "prerequisite_cancelled", "prerequisite_archived", "prerequisite_merge_unobserved"]);
-export const TaskQueueWaitSchema = z.object({ id, title: z.string(), status: TaskControlStatusSchema, deliveryTarget: DeliveryTargetSchema, reason: TaskQueueWaitReasonSchema, summary: z.string() }).strict();
+export const TaskQueueWaitSchema = z.object({ id, title: z.string(), status: TaskControlStatusSchema, queued: z.boolean(), deliveryTarget: DeliveryTargetSchema, reason: TaskQueueWaitReasonSchema, summary: z.string() }).strict();
 /** startIntent is persisted; state and waitingOn are derived from the task and its prerequisites on every read. */
 export const TaskQueueSchema = z.object({
   startIntent: z.enum(["manual", "queued"]),

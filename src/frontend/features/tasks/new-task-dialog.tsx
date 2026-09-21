@@ -18,13 +18,11 @@ import { EntityAvatar } from "../../components/app/entity-avatar.js";
 import { Breadcrumb, BreadcrumbItem, BreadcrumbList, BreadcrumbSeparator } from "../../components/ui/breadcrumb.js";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "../../components/ui/dropdown-menu.js";
 import { RadioGroup, RadioGroupItem } from "../../components/ui/radio-group.js";
-import { TaskSourcePicker, prefillForTaskSource, type TaskSourceSelector, type TaskSourceSummary } from "./task-source-picker.js";
+import { TaskSourcePicker, issueTaskSource, prefillForTaskSource, type TaskSourceSelector, type TaskSourceSummary } from "./task-source-picker.js";
 import { BlockedByPickerDialog } from "./blocked-by-picker.js";
 import { taskDeliveryTargetOptions } from "./task-delivery-target.js";
 import { readNewTaskMemory, writeNewTaskMemory, type NewTaskMemory } from "./new-task-memory.js";
 import { TaskRoleSelector } from "./task-role-selectors.js";
-import { IssuePicker } from "./issue-picker.js";
-import type { IssueAssociation } from "../../../tasks/issue-association.js";
 import { supportsDeliveryTarget } from "../../../delivery/target-capabilities.js";
 import type { NewTaskDraft } from "./lib/duplicate-task-prefill.js";
 
@@ -72,12 +70,10 @@ export function NewTaskDialog({ open, onOpenChange, companyId, onCreated, initia
   // The non-repair target/tests this draft had before switching to repair, restored when switching away.
   const previousDelivery = useRef<Delivery | null>(null);
   const [source, setSource] = useState<TaskSourceSelector | undefined>(initialDraft?.source);
-  const [sourceSummary, setSourceSummary] = useState<TaskSourceSummary | undefined>(initialDraft?.sourceSummary);
+  const [sourceSummary, setSourceSummary] = useState<TaskSourceSummary | undefined>(initialDraft?.sourceSummary ?? (initialDraft?.issue ? issueTaskSource(initialDraft.issue) : undefined));
   const [images, setImages] = useState<NonNullable<TaskInput["images"]>>(initialDraft?.images ?? []);
   const [blockedBy, setBlockedBy] = useState<Task["blockedBy"]>([]);
   const [blockedByPickerOpen, setBlockedByPickerOpen] = useState(false);
-  const [issue, setIssue] = useState<IssueAssociation | null | undefined>(initialDraft?.issue);
-  useEffect(() => { setIssue(initialDraft?.projectId === projectId ? initialDraft.issue : undefined); }, [projectId, initialDraft]);
   const [busy, setBusy] = useState(false);
   const [readingImages, setReadingImages] = useState(false);
   const imageRead = useRef({ generation: 0, pending: false });
@@ -188,12 +184,12 @@ export function NewTaskDialog({ open, onOpenChange, companyId, onCreated, initia
         onCreated(saved);
         return;
       }
-      const body = { projectId, title, description, startImmediately, deliveryTarget, runProjectTests, visualEvidence, images, workflow, issue, advisorProfileIds: admittedAdvisors(workflow, advisorProfileIds), ...(rootProfileId ? { rootProfileId } : {}), ...(workerProfileId ? { workerProfileId } : {}), ...(source ? { source } : {}), ...(blockedBy.length ? { dependsOn: blockedBy.map(prerequisite => prerequisite.id) } : {}) };
+      const body = { projectId, title, description, startImmediately, deliveryTarget, runProjectTests, visualEvidence, images, workflow, advisorProfileIds: admittedAdvisors(workflow, advisorProfileIds), ...(rootProfileId ? { rootProfileId } : {}), ...(workerProfileId ? { workerProfileId } : {}), ...(sourceSummary?.kind === "issue" ? { issue: sourceSummary.issue } : {}), ...(source ? { source } : {}), ...(blockedBy.length ? { dependsOn: blockedBy.map(prerequisite => prerequisite.id) } : {}) };
       const serialized = JSON.stringify(body);
       if (request.current?.body !== serialized) request.current = { body: serialized, key: crypto.randomUUID() };
       const task = await readJson<Task>(`/api/companies/${companyId}/tasks`, { method: "POST", body: JSON.stringify({ ...body, idempotencyKey: request.current.key }) });
       request.current = null;
-      setTitle(""); setDescription(""); setImages([]); setSource(undefined); setSourceSummary(undefined); setBlockedBy([]); setIssue(undefined);
+      setTitle(""); setDescription(""); setImages([]); setSource(undefined); setSourceSummary(undefined); setBlockedBy([]);
       onCreated(task);
     } catch (error) { setError(error instanceof Error ? error.message : "Forge could not save the task"); }
     finally { setBusy(false); }
@@ -238,7 +234,7 @@ export function NewTaskDialog({ open, onOpenChange, companyId, onCreated, initia
           </DropdownMenuTrigger><DropdownMenuContent align="start">{projects.map(candidate => <DropdownMenuItem key={candidate.id} onClick={() => { setProjectId(candidate.id); setSource(undefined); setSourceSummary(undefined); setBlockedBy([]); }}><EntityAvatar kind="project" id={candidate.id} name={candidate.name} size="xs" /><span className="min-w-0 flex-1 truncate">{candidate.name}</span>{candidate.id === projectId ? <span aria-label="Selected">✓</span> : null}</DropdownMenuItem>)}</DropdownMenuContent></DropdownMenu>
         </BreadcrumbItem><BreadcrumbSeparator /><BreadcrumbItem><DialogTitle className="font-normal">{editing ? "Edit task" : "New task"}</DialogTitle></BreadcrumbItem></BreadcrumbList></Breadcrumb>
         <div className="ml-auto flex flex-wrap items-center justify-end gap-1">
-          <TaskSourcePicker projectId={projectId} value={sourceSummary} disabled={busy || editing} pullRequestsOnly={repair} onClear={() => { setSource(undefined); setSourceSummary(undefined); }} onSelect={(summary, selector) => { setSource(selector); setSourceSummary(summary); const prefill = prefillForTaskSource(summary); if (!title) setTitle(prefill.title); if (!description) setDescription(prefill.description); if (summary.kind === "issue" && project?.repository) setIssue(current => current === undefined ? { kind: "github", repository: project.repository!, number: summary.number, id: String(summary.number), key: `#${summary.number}`, title: summary.title, url: summary.url } : current); }} />
+          <TaskSourcePicker projectId={projectId} value={sourceSummary} disabled={busy || editing} pullRequestsOnly={repair} onClear={() => { setSource(undefined); setSourceSummary(undefined); }} onSelect={(summary, selector) => { setSource(selector); setSourceSummary(summary); const prefill = prefillForTaskSource(summary); if (!title) setTitle(prefill.title); if (!description) setDescription(prefill.description); }} />
           <label className="flex items-center gap-1.5 text-xs"><span className="text-muted-foreground">Workflow</span><Select value={workflowId} onValueChange={value => { const record = workflows.find(candidate => candidate.id === value); if (record) selectRecord(record); }}><SelectTrigger aria-label="Workflow" size="sm" disabled={busy}><SelectValue /></SelectTrigger><SelectContent>{workflows.filter(record => (!record.archivedAt || record.id === workflowId) && (repositoryConnection?.kind !== "bitbucket" || record.engine !== REPAIR)).map(record => <SelectItem key={record.id} value={record.id}>{record.name}</SelectItem>)}</SelectContent></Select></label>
           <DropdownMenu><DropdownMenuTrigger render={<Button type="button" variant="ghost" size="sm" disabled={busy || !projectId} />}><FileText className="size-3.5" />Template</DropdownMenuTrigger><DropdownMenuContent align="end">{templates.length ? templates.map(template => <DropdownMenuItem key={template.id} onClick={() => applyTemplate(template)}>{template.name}</DropdownMenuItem>) : <DropdownMenuItem render={<a href={withCompany(`/projects/${encodeURIComponent(projectId)}/templates`, companyId)} />}>Open templates</DropdownMenuItem>}</DropdownMenuContent></DropdownMenu>
         </div></div>
@@ -253,7 +249,6 @@ export function NewTaskDialog({ open, onOpenChange, companyId, onCreated, initia
           {editing ? null : <InlineAttachmentPicker compact attachments={images.map((image, index) => ({ id: String(index), filename: image.filename, previewUrl: `data:${image.mimeType};base64,${image.base64}` }))} onSelect={addImages} onRemove={index => setImages(current => current.filter((_, item) => item !== index))} disabled={busy || readingImages} />}
           <TaskRoleSelector role="root" profiles={eligibleProfiles} assignment={rootProfileId} defaultProfileId={project?.rootProfileId} busy={busy} onChange={setRootProfileId} />
            <TaskRoleSelector role="worker" profiles={eligibleProfiles} assignment={workerProfileId} defaultProfileId={project?.workerProfileId} busy={busy} onChange={setWorkerProfileId} />
-           {!editing ? <div className="flex min-w-0 items-center gap-1"><span>Issue</span><IssuePicker projectId={projectId} issue={issue} disabled={busy} onChange={selected => { setIssue(selected); if (selected && !title.trim()) setTitle(selected.title); }} /></div> : null}
            {definition.advisorRoles.map(role => <TaskRoleSelector key={role} role="root" label={ADVISOR_LABELS[role]} profiles={eligibleProfiles} assignment={advisorProfileIds[role] ?? ""} defaultProfileId={rootProfileId || project?.rootProfileId} busy={busy} onChange={profileId => setAdvisorProfileIds(current => ({ ...current, [role]: profileId || undefined }))} />)}
            {editing ? null : <DropdownMenu><DropdownMenuTrigger render={<Button type="button" variant="ghost" size="icon-xs" aria-label="More options" disabled={busy || !projectId} />}><MoreHorizontal /></DropdownMenuTrigger><DropdownMenuContent><DropdownMenuItem onClick={() => setBlockedByPickerOpen(true)}>Blocked by...</DropdownMenuItem></DropdownMenuContent></DropdownMenu>}
            {blockedBy.map(prerequisite => <span key={prerequisite.id} className="flex items-center gap-1 text-xs" data-blocked-by-selection><span className="max-w-40 truncate">Blocked by {prerequisite.title}</span><Button type="button" variant="ghost" size="icon-xs" aria-label={`Remove ${prerequisite.title} from Blocked by`} disabled={busy} onClick={() => setBlockedBy(current => current.filter(selected => selected.id !== prerequisite.id))}><X /></Button></span>)}

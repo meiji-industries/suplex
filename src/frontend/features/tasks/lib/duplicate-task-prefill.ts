@@ -1,6 +1,6 @@
 import { duplicateTitle } from "../../../../tasks/duplicate-title.js";
 import { TaskImageInputSchema, type Task, type TaskInput } from "../../../../tasks/contracts.js";
-import type { TaskSourceSummary } from "../task-source-picker.js";
+import { issueTaskSource, type TaskSourceSummary } from "../task-source-picker.js";
 import { readJson } from "../../../lib/api.js";
 
 /** workflowId names a workflow record whose engine and defaults the dialog applies; workflow alone names an engine. */
@@ -21,15 +21,15 @@ export async function duplicateTaskDraft(task: Task): Promise<NewTaskDraft> {
     return TaskImageInputSchema.parse({ filename: image.filename, mimeType: image.mimeType, base64 });
   }));
   const source = task.configuration.source;
-  let sourceSummary: TaskSourceSummary | undefined;
-  if (source) {
+  let sourceSummary = task.issue ? issueTaskSource(task.issue) : undefined;
+  if (source && source.kind !== "issue") {
     const result = await readJson<{ sources: TaskSourceSummary[] }>(`/api/projects/${task.projectId}/task-sources?kind=${source.kind}`);
     sourceSummary = result.sources.find(item => source.kind === "branch" ? item.kind === "branch" && item.branch === source.branch : item.kind === source.kind && item.number === source.number);
     if (!sourceSummary) throw new Error("The original task source is not available. Select a source in a new task.");
   }
   return {
     ...taskDraftFields(task), title: duplicateTitle(task.title, new Set(tasks.filter(candidate => candidate.projectId === task.projectId).map(candidate => candidate.title))),
-    startImmediately: false, images, ...(source && sourceSummary ? { source, sourceSummary } : {}),
+    startImmediately: false, images, ...(sourceSummary ? { ...(source && source.kind !== "issue" ? { source } : {}), sourceSummary } : {}),
   };
 }
 

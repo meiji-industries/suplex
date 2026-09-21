@@ -382,13 +382,13 @@ export class ProjectService {
 
   async discoverTaskSources(actorUserId: string, projectId: string, kind: TaskSourceSelector["kind"]): Promise<Awaited<ReturnType<TaskSourceService["discover"]>>> {
     const project = this.getProject(actorUserId, projectId);
-    if (kind === "issue" && project.integration && (project.integration.tracker?.kind !== "github" || project.integration.tracker.repository.toLowerCase() !== project.repository?.toLowerCase())) return { available: false, reason: "Select the issue with the task's Issue field.", sources: [] };
+    if (kind === "issue" && project.integration && (project.integration.tracker?.kind !== "github" || project.integration.tracker.repository.toLowerCase() !== project.repository?.toLowerCase())) return { available: false, reason: "The source issue does not match the configured tracker.", sources: [] };
     const sources = project.integration?.repository.kind === "bitbucket" ? new TaskSourceService(createBitbucketReleasePort(project.integration.repository)) : this.taskSources;
     return sources.discover(project, kind);
   }
 
   async resolveTaskSource(project: Project, selector: TaskSourceSelector): Promise<Awaited<ReturnType<TaskSourceService["resolve"]>>> {
-    if (selector.kind === "issue" && project.integration && (project.integration.tracker?.kind !== "github" || project.integration.tracker.repository.toLowerCase() !== project.repository?.toLowerCase())) throw new ProjectFailure("Select the configured tracker issue with the task's Issue field.", [], 422);
+    if (selector.kind === "issue" && project.integration && (project.integration.tracker?.kind !== "github" || project.integration.tracker.repository.toLowerCase() !== project.repository?.toLowerCase())) throw new ProjectFailure("The source issue does not match the configured tracker.", [], 422);
     const sources = project.integration?.repository.kind === "bitbucket" ? new TaskSourceService(createBitbucketReleasePort(project.integration.repository)) : this.taskSources;
     return sources.resolve(project, selector);
   }

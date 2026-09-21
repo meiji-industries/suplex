@@ -108,7 +108,7 @@ test("explicit tracker settings survive edits and do not admit unrelated legacy 
     const project = await f.projects.createProject(f.adminId, f.companyId, input(f, { integration }));
     expect((await f.projects.updateProject(f.adminId, project.id, input(f))).integration).toEqual(integration);
     await expect(f.projects.discoverTaskSources(f.adminId, project.id, "issue")).resolves.toMatchObject({ available: false, sources: [] });
-    await expect(f.projects.resolveTaskSource(project, { kind: "issue", number: 7 })).rejects.toThrow("Issue field");
+    await expect(f.projects.resolveTaskSource(project, { kind: "issue", number: 7 })).rejects.toThrow("The source issue does not match the configured tracker.");
   } finally { await close(f); }
 });
 

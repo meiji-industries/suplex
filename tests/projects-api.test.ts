@@ -37,6 +37,20 @@ test("project task sources accept issue discovery through the HTTP route", async
   } finally { await f.close(); }
 });
 
+test("project issues use the configured tracker through the HTTP route", async () => {
+  const f = await nativeApp();
+  try {
+    const issue = { kind: "jira" as const, site: "https://client.atlassian.net", id: "42", key: "APP-42", title: "Fix the picker", url: "https://client.atlassian.net/browse/APP-42" };
+    const search = vi.spyOn(f.projects, "searchIssues").mockResolvedValue([issue]);
+
+    const response = await f.app.inject({ method: "GET", url: `/api/projects/${f.project.id}/issues?query=picker`, headers: f.headers });
+
+    expect(response.statusCode, response.body).toBe(200);
+    expect(response.json()).toEqual({ issues: [issue] });
+    expect(search).toHaveBeenCalledWith(f.userId, f.project.id, "picker");
+  } finally { await f.close(); }
+});
+
 test("project provider instances include configured logins without profile references", async () => {
   const f = await nativeApp();
   try {

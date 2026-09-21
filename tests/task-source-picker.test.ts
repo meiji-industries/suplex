@@ -29,8 +29,8 @@ test("selection produces only the stable selector payload", () => {
 
 test("source menu rows use Base UI's activation event", () => {
   const source = readFileSync(new URL("../src/frontend/features/tasks/task-source-picker.tsx", import.meta.url), "utf8");
-  expect(source).toContain("onClick={() => onSelect(row, selectorForTaskSource(row))}");
-  expect(source).not.toContain("onSelect={() => onSelect(row, selectorForTaskSource(row))}");
+  expect(source).toContain("onClick={() => row.kind === \"issue\" ? onSelect(row) : onSelect(row, selectorForTaskSource(row))}");
+  expect(source).not.toContain("onSelect={() => row.kind === \"issue\"");
 });
 
 test("source prefill remains editable and only generated values are replaced", () => {
@@ -41,9 +41,8 @@ test("source prefill remains editable and only generated values are replaced", (
   expect(preserveEditedPrefill({ title: first.title, description: "My description" }, first, next)).toEqual({ title: next.title, description: "My description" });
 });
 
-test("issues prefill the title and URL and use stable selectors", () => {
-  const issue: TaskSourceSummary = { kind: "issue", number: 42, title: "Fix search", url: "https://github.com/acme/forge/issues/42", body: "Details", author: "octo" };
-  expect(selectorForTaskSource(issue)).toEqual({ kind: "issue", number: 42 });
-  expect(prefillForTaskSource(issue)).toEqual({ title: "Fix search", description: "Work on GitHub issue #42: https://github.com/acme/forge/issues/42" });
+test("issues prefill the title and URL with their resolved association", () => {
+  const issue: TaskSourceSummary = { kind: "issue", issue: { kind: "github", repository: "acme/forge", number: 42, id: "42", key: "#42", title: "Fix search", url: "https://github.com/acme/forge/issues/42" } };
+  expect(prefillForTaskSource(issue)).toEqual({ title: "Fix search", description: "Work on #42: https://github.com/acme/forge/issues/42" });
   expect(filterTaskSources([pull, branch, issue], "42")).toEqual([issue]);
 });

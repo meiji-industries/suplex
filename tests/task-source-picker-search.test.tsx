@@ -17,6 +17,12 @@ async function flush() {
   await act(async () => { await new Promise(resolve => setTimeout(resolve, 20)); });
 }
 
+function deferred<T>() {
+  let resolve: (value: T) => void = () => undefined;
+  const promise = new Promise<T>(next => { resolve = next; });
+  return { promise, resolve };
+}
+
 beforeEach(() => {
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
   api.readJson.mockResolvedValue({ available: true, sources: [
@@ -71,5 +77,111 @@ test("task source search accepts keyboard input without menu typeahead taking fo
   expect(document.activeElement).toBe(firstRow);
   await act(async () => { firstRow.click(); });
   expect(onSelect).toHaveBeenCalledWith(expect.objectContaining({ kind: "pull_request", number: 42 }), { kind: "pull_request", number: 42 });
+  root.unmount();
+});
+
+test("issue selection reads the configured Jira tracker and returns its association", async () => {
+  api.readJson.mockImplementation(async (url: string) => {
+    if (url.includes("/issues?query=")) return { issues: [{ kind: "jira", site: "https://client.atlassian.net", id: "42", key: "APP-42", title: "Fix the picker", url: "https://client.atlassian.net/browse/APP-42" }] };
+    return { available: true, sources: [] };
+  });
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  const onSelect = vi.fn();
+  act(() => { root.render(<TaskSourcePicker projectId="project-1" onSelect={onSelect} onClear={() => undefined} />); });
+
+  await act(async () => { container.querySelector<HTMLButtonElement>('[aria-label="New from source"]')!.click(); });
+  await flush();
+  await act(async () => { Array.from(document.querySelectorAll<HTMLButtonElement>("button")).find(button => button.textContent === "Issues")!.click(); });
+  await flush();
+
+  expect(api.readJson).toHaveBeenLastCalledWith("/api/projects/project-1/issues?query=");
+  expect(document.body.textContent).toContain("APP-42 Fix the picker");
+  await act(async () => { Array.from(document.querySelectorAll<HTMLElement>('[role="menuitem"]')).find(row => row.textContent?.includes("APP-42"))!.click(); });
+  expect(onSelect).toHaveBeenCalledWith({ kind: "issue", issue: { kind: "jira", site: "https://client.atlassian.net", id: "42", key: "APP-42", title: "Fix the picker", url: "https://client.atlassian.net/browse/APP-42" } });
+  root.unmount();
+});
+
+test("newer issue searches replace slower earlier results", async () => {
+  const requests: Array<{ query: string; response: ReturnType<typeof deferred<{ issues: Array<{ kind: "jira"; site: string; id: string; key: string; title: string; url: string }> }>> }> = [];
+  api.readJson.mockImplementation((url: string) => {
+    if (!url.includes("/issues?query=")) return Promise.resolve({ available: true, sources: [] });
+    const response = deferred<{ issues: Array<{ kind: "jira"; site: string; id: string; key: string; title: string; url: string }> }>();
+    requests.push({ query: new URL(url, "https://forge.test").searchParams.get("query") ?? "", response });
+    return response.promise;
+  });
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  act(() => { root.render(<TaskSourcePicker projectId="project-1" onSelect={() => undefined} onClear={() => undefined} />); });
+
+  await act(async () => { container.querySelector<HTMLButtonElement>('[aria-label="New from source"]')!.click(); });
+  await flush();
+  await act(async () => { Array.from(document.querySelectorAll<HTMLButtonElement>("button")).find(button => button.textContent === "Issues")!.click(); });
+  await flush();
+  const search = document.querySelector<HTMLInputElement>('[aria-label="Search task sources"]')!;
+  await act(async () => { setText(search, "first"); });
+  await act(async () => { setText(search, "second"); });
+
+  const issue = (key: string, title: string) => ({ kind: "jira" as const, site: "https://client.atlassian.net", id: key, key: `APP-${key}`, title, url: `https://client.atlassian.net/browse/APP-${key}` });
+  await act(async () => { requests.find(request => request.query === "second")!.response.resolve({ issues: [issue("2", "Second result")] }); });
+  await act(async () => { requests.find(request => request.query === "first")!.response.resolve({ issues: [issue("1", "First result")] }); requests.find(request => request.query === "")!.response.resolve({ issues: [issue("0", "Initial result")] }); });
+
+  expect(document.body.textContent).toContain("APP-2 Second result");
+  expect(document.body.textContent).not.toContain("First result");
+  expect(document.body.textContent).not.toContain("Initial result");
+  root.unmount();
+});
+
+test("tab and project changes invalidate pending issue searches", async () => {
+  const requests: Array<ReturnType<typeof deferred<{ issues: Array<{ kind: "jira"; site: string; id: string; key: string; title: string; url: string }> }>>> = [];
+  api.readJson.mockImplementation((url: string) => {
+    if (!url.includes("/issues?query=")) return Promise.resolve({ available: true, sources: [{ kind: "pull_request", number: 7, title: "Current pull request", body: "", author: "octo", headBranch: "feature", baseBranch: "main", isDraft: false }] });
+    const response = deferred<{ issues: Array<{ kind: "jira"; site: string; id: string; key: string; title: string; url: string }> }>();
+    requests.push(response);
+    return response.promise;
+  });
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  const render = (projectId: string) => <TaskSourcePicker projectId={projectId} onSelect={() => undefined} onClear={() => undefined} />;
+  act(() => { root.render(render("project-1")); });
+
+  await act(async () => { container.querySelector<HTMLButtonElement>('[aria-label="New from source"]')!.click(); });
+  await flush();
+  await act(async () => { Array.from(document.querySelectorAll<HTMLButtonElement>("button")).find(button => button.textContent === "Issues")!.click(); });
+  await flush();
+  await act(async () => { Array.from(document.querySelectorAll<HTMLButtonElement>("button")).find(button => button.textContent === "Pull requests")!.click(); });
+  await flush();
+  await act(async () => { requests[0]!.resolve({ issues: [{ kind: "jira", site: "https://client.atlassian.net", id: "1", key: "APP-1", title: "Stale tab result", url: "https://client.atlassian.net/browse/APP-1" }] }); });
+  expect(document.body.textContent).toContain("#7 Current pull request");
+  expect(document.body.textContent).not.toContain("Stale tab result");
+
+  await act(async () => { Array.from(document.querySelectorAll<HTMLButtonElement>("button")).find(button => button.textContent === "Issues")!.click(); });
+  await flush();
+  await act(async () => { root.render(render("project-2")); });
+  await act(async () => { requests[1]!.resolve({ issues: [{ kind: "jira", site: "https://client.atlassian.net", id: "2", key: "APP-2", title: "Stale project result", url: "https://client.atlassian.net/browse/APP-2" }] }); });
+  expect(document.body.textContent).not.toContain("Stale project result");
+  root.unmount();
+});
+
+test("issue results keep tracker matches that do not contain the query", async () => {
+  api.readJson.mockImplementation(async (url: string) => url.includes("/issues?query=")
+    ? { issues: [{ kind: "jira", site: "https://client.atlassian.net", id: "42", key: "APP-42", title: "Fix the picker", url: "https://client.atlassian.net/browse/APP-42" }] }
+    : { available: true, sources: [] });
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  act(() => { root.render(<TaskSourcePicker projectId="project-1" onSelect={() => undefined} onClear={() => undefined} />); });
+
+  await act(async () => { container.querySelector<HTMLButtonElement>('[aria-label="New from source"]')!.click(); });
+  await flush();
+  await act(async () => { Array.from(document.querySelectorAll<HTMLButtonElement>("button")).find(button => button.textContent === "Issues")!.click(); });
+  await flush();
+  await act(async () => { setText(document.querySelector<HTMLInputElement>('[aria-label="Search task sources"]')!, "words from the Jira description"); });
+  await flush();
+
+  expect(document.body.textContent).toContain("APP-42 Fix the picker");
   root.unmount();
 });

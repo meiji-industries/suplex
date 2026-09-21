@@ -42,7 +42,11 @@ vi.mock("../src/frontend/components/ui/alert.js", () => ({ Alert: ({ children }:
 vi.mock("../src/frontend/components/app/entity-avatar.js", () => ({ EntityAvatar: () => null }));
 vi.mock("../src/frontend/components/ui/breadcrumb.js", () => ({ Breadcrumb: ({ children }: { children: React.ReactNode }) => <>{children}</>, BreadcrumbItem: ({ children }: { children: React.ReactNode }) => <>{children}</>, BreadcrumbList: ({ children }: { children: React.ReactNode }) => <>{children}</>, BreadcrumbSeparator: () => null }));
 vi.mock("../src/frontend/components/ui/radio-group.js", () => ({ RadioGroup: ({ children }: { children: React.ReactNode }) => <>{children}</>, RadioGroupItem: () => <input type="radio" /> }));
-vi.mock("../src/frontend/features/tasks/task-source-picker.js", () => ({ TaskSourcePicker: () => null, prefillForTaskSource: () => ({ title: "", description: "" }) }));
+vi.mock("../src/frontend/features/tasks/task-source-picker.js", () => ({
+  TaskSourcePicker: ({ onSelect }: { onSelect: (source: unknown) => void }) => <button type="button" onClick={() => onSelect({ kind: "issue", issue: { kind: "jira", site: "https://client.atlassian.net", id: "42", key: "APP-42", title: "Fix the picker", url: "https://client.atlassian.net/browse/APP-42" } })}>Select Jira issue</button>,
+  issueTaskSource: (issue: unknown) => ({ kind: "issue", issue }),
+  prefillForTaskSource: (source: { kind: string; issue?: { title: string; key: string; url: string } }) => source.kind === "issue" ? { title: source.issue!.title, description: `Work on ${source.issue!.key}: ${source.issue!.url}` } : { title: "", description: "" },
+}));
 vi.mock("../src/frontend/features/tasks/task-role-selectors.js", () => ({ TaskRoleSelector: ({ role, label }: { role: string; label?: string }) => <span data-role-selector={role}>{label ?? role}</span> }));
 
 import { NewTaskDialog } from "../src/frontend/features/tasks/new-task-dialog.js";
@@ -144,6 +148,22 @@ test("New task Blocked by picker filters, selects several, removes one, and post
   await act(async () => { button(view.container, "Active prerequisite").click(); setText(title, "Create dependent"); title.form?.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })); await Promise.resolve(); });
   expect(posts()[1].dependsOn).toEqual(["task-backlog", "task-active"]);
   expect(posts()[1]).not.toHaveProperty("blockedByTaskId");
+});
+
+test("New from stores the selected Jira issue on the create request", async () => {
+  const view = mount();
+  await flush();
+  expect(view.container.textContent).not.toContain("IssueNone");
+  await act(async () => { button(view.container, "Select Jira issue").click(); });
+  const title = view.container.querySelector<HTMLInputElement>('[aria-label="Task title"]')!;
+  expect(title.value).toBe("Fix the picker");
+  await act(async () => { title.form?.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })); await Promise.resolve(); });
+  const post = api.readJson.mock.calls.filter(([url, init]) => url === "/api/companies/company-1/tasks" && init?.method === "POST").at(-1);
+  expect(post).toBeDefined();
+  expect(JSON.parse(post![1].body)).toMatchObject({
+    title: "Fix the picker",
+    issue: { kind: "jira", site: "https://client.atlassian.net", id: "42", key: "APP-42", title: "Fix the picker", url: "https://client.atlassian.net/browse/APP-42" },
+  });
 });
 
 test("closing the Blocked by picker preserves the new task dialog state", async () => {

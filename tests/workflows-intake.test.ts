@@ -7,7 +7,7 @@ import { z } from "zod";
 import { ForgeDatabase } from "../src/platform/database.js";
 import { TaskControlStore } from "../src/coordination/root-session-store.js";
 import { TaskSchema } from "../src/tasks/contracts.js";
-import { composeAdvisorAssignment, composeWorkerAssignment, IMPLEMENTATION_COMMIT_PROMPT, initialCoordinatorPrompt, VERIFICATION_WORKER_PROMPT, withCurrentDependencyStatus, workerAssignmentPreamble } from "../src/coordination/workflow-prompts.js";
+import { advisorResultWake, composeAdvisorAssignment, composeWorkerAssignment, IMPLEMENTATION_COMMIT_PROMPT, initialCoordinatorPrompt, VERIFICATION_WORKER_PROMPT, withCurrentDependencyStatus, workerAssignmentPreamble, workerResultWake } from "../src/coordination/workflow-prompts.js";
 import { normalizeWorkflowInput, parseAdvisorReport, PublicWorkflowStateSchema, reviewGate, roleLabel, WORKFLOWS, workflowDefinition, type ReviewRecord } from "../src/coordination/workflows.js";
 import { nativeApp } from "./helpers/native-app.js";
 
@@ -242,6 +242,28 @@ test("Coordinator and implementation prompts share one Worker ownership boundary
     expect(worker).toContain("Continue until the complete assignment and its necessary checks are done");
     expect(worker).not.toMatch(/Coordinator owns planning, design decisions|Return missing design decisions|Do not take over task planning/);
   }
+});
+
+test("pull request repair leaves quality findings to Rater", () => {
+  const control = { objective: "Repair the pull request", deliveryTarget: "merged", deliveryIntent: { repository: "owner/repo", headBranch: "task", baseBranch: "main", pullRequestNumber: 7 }, workflow: "refine_pull_request" as const };
+  const context = { configuration: { visualEvidence: "off" as const }, images: [] };
+  const coordinator = initialCoordinatorPrompt(control, context);
+  const workerWake = workerResultWake("refine_pull_request", "receipt", { turnId: "turn", state: "completed", text: "Repaired the issue" }, "implementation");
+  const raterWake = advisorResultWake("rater", "receipt", { valid: true, summary: "9 out of 10" }, "Current pull request observation.");
+
+  for (const prompt of [coordinator, workerWake, raterWake]) {
+    expect(prompt).toContain("Rater owns quality assessment");
+    expect(prompt).toContain("Do not delegate source repairs from your own code-quality opinion");
+    expect(prompt).toContain("Source repairs require a Rater report and its advisorTurnId");
+    expect(prompt).toContain("If you suspect Rater missed a serious defect, request a fresh Rater assessment");
+  }
+
+  expect(coordinator).toContain("Confirm that scope matches the objective, no unrelated or unpublished work is present, check evidence is real, and teammate and base integration is correct");
+  expect(coordinator).toContain("After a passing rating, Worker implementation is limited to teammate pushes, base conflicts, or CI failures");
+  expect(coordinator).toContain("A workflow that assigns quality assessment to an Advisor also controls how suspected defects become repair work");
+  expect(workerWake).toContain("After a passing rating, delegate Worker only for teammate pushes, base conflicts, or CI failures");
+  expect(raterWake).toContain("After a passing rating, delegate Worker only for teammate pushes, base conflicts, or CI failures");
+  expect(coordinator).not.toContain("Worker implementation is allowed even after a passing rating");
 });
 
 test("prompt assignments explain the Screenshots setting", () => {

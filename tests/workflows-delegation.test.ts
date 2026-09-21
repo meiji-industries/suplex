@@ -520,7 +520,7 @@ test("Rater results keep their launch range, invalid or stale reports record nul
   await f.controller.recover("task");
   f.harness.evidence.set(f.harness.dispatched.at(-1)!.messageID, { tools: [{ id: "m:1", name: "bash", status: "completed", input: { command: "pnpm test" }, output: "2 passed", error: null }], limit: null });
   await f.finishDelegate("Added the guard and ran pnpm test.");
-  expect(f.store.pendingTurns(f.identity().sessionId).at(-1)!.promptText).toContain("request a new Rater assessment");
+  expect(f.store.pendingTurns(f.identity().sessionId).at(-1)!.promptText).toContain("request a fresh Rater assessment");
   // The next Rater turn sees prior findings and repair evidence. The old score remains conversation context, not current proof.
   await f.controller.delegateAdvisor(f.identity(), { role: "rater" });
   const second = f.store.currentSession("task", "worker")!;

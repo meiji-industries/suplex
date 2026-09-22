@@ -1,7 +1,6 @@
 import { useEffect, useState } from "react";
 import type { z } from "zod";
-import { TaskAgentsResponseSchema, type TaskAgentStatusSchema } from "../../../http/contracts/tasks.js";
-import { readJson } from "../../lib/api.js";
+import type { TaskAgentsResponseSchema, TaskAgentStatusSchema } from "../../../http/contracts/tasks.js";
 import { readTaskAgentExpiry } from "./task-agent-expiry.js";
 import { roleLabel } from "../../../coordination/workflows.js";
 
@@ -16,24 +15,13 @@ export function isTaskAgentExpired(agent: TaskAgent, now: number, expiryMs: numb
   return Number.isFinite(changedAt) && now - changedAt >= expiryMs;
 }
 
-export function RecentTaskAgents({ taskId }: { taskId: string }) {
-  const [agents, setAgents] = useState<z.infer<typeof TaskAgentsResponseSchema>["agents"]>([]);
+export function RecentTaskAgents({ agents }: { agents: TaskAgent[] }) {
   const [expiryMs] = useState(readTaskAgentExpiry);
   const [now, setNow] = useState(() => Date.now());
   useEffect(() => {
-    let closed = false;
-    let reading = false;
-    const load = async () => {
-      if (closed || reading) return;
-      reading = true;
-      try { const value = TaskAgentsResponseSchema.parse(await readJson(`/api/tasks/${taskId}/agents`)); if (!closed) { setAgents(value.agents); setNow(Date.now()); } }
-      catch { if (!closed) setAgents(current => current.map(agent => ({ ...agent, status: "unknown" }))); }
-      finally { reading = false; }
-    };
-    void load();
-    const timer = setInterval(() => { setNow(Date.now()); void load(); }, 3000);
-    return () => { closed = true; clearInterval(timer); };
-  }, [taskId]);
+    const timer = setInterval(() => setNow(Date.now()), 3000);
+    return () => clearInterval(timer);
+  }, []);
   const visibleAgents = agents.filter(agent => !isTaskAgentExpired(agent, now, expiryMs));
   if (!visibleAgents.length) return null;
   return <ul className="ml-6 min-w-0" aria-label="Task agents">{visibleAgents.map(agent => {

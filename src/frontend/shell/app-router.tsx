@@ -23,6 +23,8 @@ import { TriggerSettingsView } from "../features/settings/trigger-settings.js";
 import { OnboardingSettingsView } from "../features/settings/onboarding-settings.js";
 import { OnboardingView } from "../features/onboarding/onboarding-wizard.js";
 import { ApplicationShell } from "./application-frame.js";
+import { ServerStateProvider } from "./server-state.js";
+import { TaskDataProvider } from "../features/tasks/task-data.js";
 
 export function activityShellKey(pathname: string): "activity" | undefined {
   if (pathname === "/tasks" || pathname.startsWith("/tasks/") || pathname === "/board" || pathname.startsWith("/board/") || pathname === "/timeline" || pathname === "/analytics") return "activity";
@@ -84,7 +86,7 @@ export function AppRouter(): ReactElement {
   if (window.__FORGE_VIEW__ === "oauth-consent") return <OAuthConsentView />;
   const shellKey = activityShellKey(window.location.pathname);
   const view = <AppView key={route} />;
-  return <CompanyProvider><UpdateProvider><SystemHealthProvider initialSnapshot={window.__FORGE_HEALTH__}>{shellKey ? <ApplicationShell key={shellKey}>{view}</ApplicationShell> : view}</SystemHealthProvider></UpdateProvider></CompanyProvider>;
+  return <CompanyProvider><ServerStateProvider><TaskDataProvider><UpdateProvider><SystemHealthProvider initialSnapshot={window.__FORGE_HEALTH__}>{shellKey ? <ApplicationShell key={shellKey}>{view}</ApplicationShell> : view}</SystemHealthProvider></UpdateProvider></TaskDataProvider></ServerStateProvider></CompanyProvider>;
 }
 
 export { isApplicationPath };

@@ -5,6 +5,7 @@ import { TaskImageInputSchema, DeliveryTargetSchema, VisualEvidenceSchema, type 
 import { ADVISOR_LABELS, workflowDefinition, type AdvisorProfileIds, type AdvisorRole, type WorkflowId } from "../../../coordination/workflows.js";
 import type { ApiProfile, ApiProject, ApiTaskTemplate, ApiWorkflow } from "../../shell/view-shared.js";
 import { readJson, withCompany } from "../../lib/api.js";
+import { useTaskCache } from "./task-data.js";
 import { Button } from "../../components/ui/button.js";
 import { NewButton } from "../../components/ui/new-button.js";
 import { Checkbox } from "../../components/ui/checkbox.js";
@@ -44,6 +45,7 @@ function findRecord(records: ApiWorkflow[], id: string | undefined, engine: Work
 
 /** With editTask the dialog edits that task instead of creating one: it saves with PATCH and leaves the task's project, source and images alone. */
 export function NewTaskDialog({ open, onOpenChange, companyId, onCreated, initialDraft, editTask }: { open: boolean; onOpenChange: (open: boolean) => void; companyId: string; onCreated: (task: Task) => void; initialDraft?: Partial<NewTaskDraft> | undefined; editTask?: Task | undefined }): ReactElement {
+  const cacheTask = useTaskCache();
   const editing = editTask !== undefined;
   // An edit is about one task, never a preference: it neither reads nor writes the new task memory.
   const memory = (): NewTaskMemory => editing ? {} : readNewTaskMemory();
@@ -190,6 +192,7 @@ export function NewTaskDialog({ open, onOpenChange, companyId, onCreated, initia
       const task = await readJson<Task>(`/api/companies/${companyId}/tasks`, { method: "POST", body: JSON.stringify({ ...body, idempotencyKey: request.current.key }) });
       request.current = null;
       setTitle(""); setDescription(""); setImages([]); setSource(undefined); setSourceSummary(undefined); setBlockedBy([]);
+      cacheTask(task);
       onCreated(task);
     } catch (error) { setError(error instanceof Error ? error.message : "Forge could not save the task"); }
     finally { setBusy(false); }

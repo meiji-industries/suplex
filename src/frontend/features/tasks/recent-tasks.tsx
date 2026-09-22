@@ -1,6 +1,7 @@
-import { useEffect, useState, type ReactElement } from "react";
+import { useState, type ReactElement } from "react";
 import { withCompany } from "../../lib/api.js";
-import { readTaskList } from "./lib/task-list.js";
+import { showRecentTasks } from "./lib/task-list.js";
+import { useTaskAgents, useTaskCache, useTaskData } from "./task-data.js";
 import type { Task } from "../../../tasks/contracts.js";
 import { SidebarGroup, SidebarGroupContent, SidebarGroupLabel, SidebarMenu, SidebarMenuButton, SidebarMenuItem } from "../../components/ui/sidebar.js";
 import { useOptionalCompanyContext } from "../../shell/company-context.js";
@@ -14,29 +15,20 @@ export function recentTasks<T extends Pick<Task, "status" | "statusChangedAt">>(
   return tasks.filter(task => task.status !== "cancelled").sort((left, right) => right.statusChangedAt.localeCompare(left.statusChangedAt)).slice(0, 10);
 }
 
-export function currentRecentTasks<T>(state: { companyId: string; tasks: T[] } | undefined, companyId: string | undefined): T[] {
-  return state && state.companyId === companyId ? state.tasks : [];
-}
-
-export function showRecentTasks(path: string): boolean {
-  return !/^\/(?:admin(?:\/|$)|profile(?:\/|$)|companies\/[^/]+\/settings(?:\/|$))/.test(path);
-}
-
 export function RecentTasks({ close }: { close?: () => void }): ReactElement | null {
   const companyId = useOptionalCompanyContext()?.currentCompany?.id;
   const costs = useTaskCosts(companyId);
-  const [taskState, setTaskState] = useState<{ companyId: string; tasks: Task[] }>();
+  return companyId && showRecentTasks(window.location.pathname) ? <RecentTasksContent costs={costs} {...(close ? { close } : {})} /> : null;
+}
+
+function RecentTasksContent({ close, costs }: { close?: () => void; costs: ReturnType<typeof useTaskCosts> }): ReactElement | null {
+  const companyId = useOptionalCompanyContext()?.currentCompany?.id;
+  const list = useTaskData();
+  const tasks = recentTasks(list.data ?? []);
+  const agents = useTaskAgents(tasks.map(task => task.id));
+  const cacheTask = useTaskCache();
   const [archiveError, setArchiveError] = useState("");
-  useEffect(() => {
-    if (!companyId) return;
-    let cancelled = false;
-    const load = async () => { try { const rows = await readTaskList(companyId); if (!cancelled) setTaskState({ companyId, tasks: recentTasks(rows) }); } catch { if (!cancelled) setTaskState({ companyId, tasks: [] }); } };
-    void load();
-    const timer = setInterval(() => void load(), 3_000);
-    return () => { cancelled = true; clearInterval(timer); };
-  }, [companyId]);
-  const tasks = currentRecentTasks(taskState, companyId);
-  if (!tasks.length || !showRecentTasks(window.location.pathname)) return null;
+  if (!tasks.length) return null;
   return <SidebarGroup><SidebarGroupLabel>Activity</SidebarGroupLabel>{archiveError ? <p role="alert" className="px-2 text-xs text-destructive">{archiveError}</p> : null}<SidebarGroupContent><SidebarMenu>{tasks.map(task => {
     const cost = costs.get(task.id);
     return <SidebarMenuItem key={task.id}>
@@ -47,8 +39,8 @@ export function RecentTasks({ close }: { close?: () => void }): ReactElement | n
           {cost?.cost != null ? <CostValue value={cost.cost} subsidized={cost.subsidized} partial={cost.partial} className="shrink-0 text-[10px] tabular-nums text-muted-foreground" suffix={cost.partial ? "+" : ""} /> : null}
         </span>
       </a>} isActive={window.location.pathname === `/tasks/${task.id}`} tooltip={`${task.title}${task.blockedBy.length ? ` · ${blockedByLabel(task.blockedBy)}` : ""}`} />
-      {task.pullRequest ? <RecentPullRequest taskId={task.id} number={task.pullRequest.number} state={task.pullRequest.state} headSha={task.pullRequest.headSha} status={task.status} archivedAt={task.archivedAt} onArchived={() => setTaskState(current => current && current.companyId === companyId ? { ...current, tasks: current.tasks.filter(candidate => candidate.id !== task.id) } : current)} onError={setArchiveError} /> : null}
-      <RecentTaskAgents taskId={task.id} />
+      {task.pullRequest ? <RecentPullRequest taskId={task.id} number={task.pullRequest.number} state={task.pullRequest.state} headSha={task.pullRequest.headSha} status={task.status} archivedAt={task.archivedAt} onArchived={cacheTask} onError={setArchiveError} /> : null}
+      <RecentTaskAgents agents={(agents.data?.find(row => row.taskId === task.id)?.agents ?? []).map(agent => agents.isError ? { ...agent, status: "unknown" } : agent)} />
     </SidebarMenuItem>;
   })}</SidebarMenu></SidebarGroupContent></SidebarGroup>;
 }

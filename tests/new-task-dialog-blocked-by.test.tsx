@@ -6,6 +6,7 @@ import type { Task } from "../src/tasks/contracts.js";
 
 const api = vi.hoisted(() => ({ readJson: vi.fn(), withCompany: (path: string) => path }));
 vi.mock("../src/frontend/lib/api.js", () => api);
+vi.mock("../src/frontend/features/tasks/task-data.js", () => ({ useTaskCache: () => vi.fn() }));
 
 vi.mock("../src/frontend/components/ui/dialog.js", async () => {
   const React = await import("react");

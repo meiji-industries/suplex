@@ -5,6 +5,8 @@
 import { act, createElement, useEffect, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { notifyManager } from "@tanstack/react-query";
+import type * as taskListModule from "../src/frontend/features/tasks/lib/task-list.js";
 
 type TaskRow = { id: string; title: string; status: "backlog"; queue: { waitingOn: [] }; statusChangedAt: string; pullRequest: null; archivedAt: null; blockedBy: [] };
 
@@ -31,7 +33,7 @@ vi.mock("../src/frontend/components/ui/sidebar.js", async () => {
     SidebarTrigger: () => React.createElement("button"),
   };
 });
-vi.mock("../src/frontend/features/tasks/lib/task-list.js", () => ({ readTaskList: state.readTaskList }));
+vi.mock("../src/frontend/features/tasks/lib/task-list.js", async importOriginal => ({ ...await importOriginal<typeof taskListModule>(), readTaskList: state.readTaskList }));
 vi.mock("../src/frontend/features/analytics/lib/analytics.js", () => ({ useTaskCosts: () => new Map() }));
 vi.mock("../src/frontend/features/tasks/recent-task-agents.js", () => ({ RecentTaskAgents: () => null }));
 vi.mock("../src/frontend/features/tasks/recent-pull-request.js", () => ({ RecentPullRequest: () => null }));
@@ -52,6 +54,7 @@ vi.mock("../src/frontend/shell/company-context.js", async () => {
   const React = await import("react");
   return {
     CompanyProvider: ({ children }: { children: ReactNode }) => React.createElement(React.Fragment, null, children),
+    useCompanyContext: () => ({ user: { id: "user-a" }, currentCompany: { id: state.companyId, status: "active" } }),
     useOptionalCompanyContext: () => ({ currentCompany: { id: state.companyId, status: "active" } }),
   };
 });
@@ -117,6 +120,9 @@ describe("Activity shell lifecycle", () => {
   let mounted: boolean;
 
   beforeEach(async () => {
+    Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
+    notifyManager.setScheduler(queueMicrotask);
+    vi.stubGlobal("fetch", async () => new Response(JSON.stringify({ tasks: [] })));
     vi.useFakeTimers();
     state.companyId = "company-a";
     state.sidebarMounts = 0;
@@ -135,6 +141,8 @@ describe("Activity shell lifecycle", () => {
     if (mounted) await act(async () => root.unmount());
     container.remove();
     vi.useRealTimers();
+    vi.unstubAllGlobals();
+    notifyManager.setScheduler(callback => setTimeout(callback, 0));
   });
 
   it("retains Activity through list, detail, cross-view, and history navigation while replacing the main view", async () => {

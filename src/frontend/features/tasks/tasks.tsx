@@ -21,6 +21,7 @@ import { CostValue } from "../../components/app/cost-value.js";
 import { Tabs, TabsList, TabsTrigger } from "../../components/ui/tabs.js";
 import { useTaskCosts } from "../analytics/lib/analytics.js";
 import { relativeTime, type ApiProject } from "../../shell/view-shared.js";
+import { useTaskCache, useTaskData } from "./task-data.js";
 
 type BoardView = "compact" | "full";
 
@@ -28,11 +29,16 @@ export function TasksView({ mode = "list" }: { mode?: "list" | "board" }): React
   const { currentCompany } = useCompanyContext();
   const companyId = currentCompany?.id;
   const selectedId = /^\/(?:tasks|board)\/([^/]+)$/.exec(window.location.pathname)?.[1];
-  const [tasks, setTasks] = useState<Task[]>([]);
+  const taskList = useTaskData();
+  const cacheTask = useTaskCache();
+  const [archivedTasks, setArchivedTasks] = useState<Task[]>([]);
   const [selected, setSelected] = useState<Task | null>(null);
   const [error, setError] = useState("");
-  const [loaded, setLoaded] = useState(false);
+  const [detailsLoaded, setLoaded] = useState(false);
   const [archived, setArchived] = useState(false);
+  const tasks = archived ? archivedTasks : taskList.data ?? [];
+  const loaded = detailsLoaded && Boolean(selectedId || archived || !companyId || !taskList.isPending);
+  const readError = error || (!archived && taskList.error?.message) || "";
   const [query, setQuery] = useState("");
   const [status, setStatus] = useState("all");
   const [projects, setProjects] = useState<ApiProject[]>([]);
@@ -46,20 +52,20 @@ export function TasksView({ mode = "list" }: { mode?: "list" | "board" }): React
   const reload = useCallback(async () => {
     if (!companyId) { setLoaded(true); return; }
     const [result, task, projectResult] = await Promise.all([
-      readJson<{ tasks: Task[] }>(`/api/companies/${encodeURIComponent(companyId)}/tasks?archived=${archived}`),
+      archived ? readJson<{ tasks: Task[] }>(`/api/companies/${encodeURIComponent(companyId)}/tasks?archived=true`) : Promise.resolve(null),
       selectedId ? readJson<Task>(`/api/tasks/${encodeURIComponent(selectedId)}`) : Promise.resolve(null),
       readJson<{ projects: ApiProject[] }>(`/api/companies/${encodeURIComponent(companyId)}/projects`),
     ]);
     if (currentScope.current !== scope) return;
     if (task && task.companyId !== companyId) throw new Error("This task is not in the selected company");
-    setTasks(result.tasks);
+    if (result) setArchivedTasks(result.tasks);
     setSelected(task);
     setProjects(projectResult.projects);
     setLoaded(true);
     setError("");
   }, [companyId, selectedId, archived, scope]);
   useEffect(() => {
-    setSelected(null); setTasks([]); setLoaded(false);
+    setSelected(null); setArchivedTasks([]); setLoaded(false);
     let closed = false;
     let reading = false;
     const poll = async () => {
@@ -70,15 +76,17 @@ export function TasksView({ mode = "list" }: { mode?: "list" | "board" }): React
       finally { reading = false; }
     };
     void poll();
-    const timer = setInterval(() => void poll(), 3000);
+    const timer = setInterval(() => { if (document.visibilityState !== "hidden") void poll(); }, 3000);
     return () => { closed = true; clearInterval(timer); };
   }, [reload]);
+  const updateTask = (task: Task) => { setSelected(task); cacheTask(task); };
+  const refresh = async () => { await Promise.all([reload(), ...(!archived && companyId ? [taskList.refetch({ throwOnError: true })] : [])]); };
   const visible = tasks.filter(task => (status === "all" || task.status === status || status === "active" && task.status === "waiting_human") && (boardStatus === "all" || task.status === boardStatus) && (projectId === "all" || task.projectId === projectId) && `${task.issueKey ?? ""} ${task.title}`.toLowerCase().includes(query.trim().toLowerCase()));
   const hasFilters = Boolean(query.trim() || status !== "all" || projectId !== "all" || boardStatus !== "all" || archived);
   const groups = ["backlog", "queued", "active", "waiting_human", "delivered", "cancelled"] as const;
-  return <ApplicationFrame title={selected ? `${selected.issueKey ? `${selected.issueKey} · ` : ""}${selected.title}` : mode === "board" ? "Board" : "Tasks"} viewportBound={Boolean(selectedId)} headerActions={selected ? <TaskOptions key={selected.id} task={selected} onChange={setSelected} onError={setError} /> : null} headerRight={<><Button variant="ghost" size="icon-sm" aria-label="Check tasks" onClick={() => void reload().catch(error => setError(String(error)))}><RefreshCw /></Button></>}>
-    {error ? <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert> : null}
-    {selectedId ? selected ? <TaskDetailsPage key={selected.id} task={selected} project={projects.find(project => project.id === selected.projectId)} onChange={setSelected} /> : loaded ? <p className="p-4">Task not found</p> : <p className="flex items-center gap-2 p-4 text-xs text-muted-foreground" aria-busy="true"><Spinner /><span>Loading task…</span></p> : <div data-task-list className="min-w-0">
+  return <ApplicationFrame title={selected ? `${selected.issueKey ? `${selected.issueKey} · ` : ""}${selected.title}` : mode === "board" ? "Board" : "Tasks"} viewportBound={Boolean(selectedId)} headerActions={selected ? <TaskOptions key={selected.id} task={selected} onChange={updateTask} onError={setError} /> : null} headerRight={<><Button variant="ghost" size="icon-sm" aria-label="Check tasks" onClick={() => void refresh().catch(error => setError(String(error)))}><RefreshCw /></Button></>}>
+    {readError ? <Alert variant="destructive"><AlertDescription>{readError}</AlertDescription></Alert> : null}
+    {selectedId ? selected ? <TaskDetailsPage key={selected.id} task={selected} project={projects.find(project => project.id === selected.projectId)} onChange={updateTask} /> : loaded ? <p className="p-4">Task not found</p> : <p className="flex items-center gap-2 p-4 text-xs text-muted-foreground" aria-busy="true"><Spinner /><span>Loading task…</span></p> : <div data-task-list className="min-w-0">
       <div className="flex min-h-11 flex-wrap items-center justify-between gap-2 border-b px-3 py-1 sm:px-4">
         <div className="flex max-w-full flex-wrap items-center gap-2"><div className="max-w-full overflow-x-auto"><Tabs value={archived ? "archived" : status} onValueChange={value => { setArchived(value === "archived"); setStatus(value === "archived" ? "all" : String(value)); }}><TabsList>
           <TabsTrigger value="active">Active</TabsTrigger><TabsTrigger value="backlog">Backlog</TabsTrigger><TabsTrigger value="queued">Queued</TabsTrigger><TabsTrigger value="all">All tasks</TabsTrigger><TabsTrigger value="archived">Archived</TabsTrigger>

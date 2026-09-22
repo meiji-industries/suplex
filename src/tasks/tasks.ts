@@ -774,7 +774,7 @@ export class TaskService {
         const profile = this.sessionProfile(task, session);
         return { id: session.id, kind: session.kind, advisorRole: session.advisorRole, label: roleLabel(session), profileId: profile.profileId, harness: profile.provider, generation: session.generation, nativeSessionId: session.nativeSessionId, paneId: session.paneId, current: session.current, replacement: session.replacement };
       }),
-      turns: this.repository.controls.turns(taskId).map(turn => ({ id: turn.id, sessionId: turn.sessionId, prompt: turn.promptText, status: turn.status, result: turn.terminalObservation })),
+      turns: this.repository.controls.turns(taskId).map(turn => ({ id: turn.id, sessionId: turn.sessionId, prompt: turn.promptText, status: turn.status, promptedAt: turn.promptedAt, completedAt: turn.completedAt, result: turn.terminalObservation })),
       shellPaneId: this.database.authQuery(db => (db.prepare("SELECT shell_pane_id AS id FROM forge_task_controls WHERE task_id = ?").get(taskId) as { id: string | null } | undefined)?.id ?? null),
     };
   }

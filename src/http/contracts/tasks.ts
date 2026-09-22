@@ -46,7 +46,7 @@ export const TaskContinueDeliveryBodySchema = z.object({ deliveryTarget: z.enum(
 export const TaskHarnessKindSchema = HarnessKindSchema;
 export const TaskActivityResponseSchema = z.object({
   sessions: z.array(z.object({ id: z.string(), kind: TaskSessionKindSchema, advisorRole: AdvisorRoleSchema.nullable(), label: z.string(), profileId: z.string(), harness: TaskHarnessKindSchema.optional(), generation: z.number(), nativeSessionId: z.string().nullable(), paneId: z.string().nullable(), current: z.boolean(), replacement: WorkerReplacementSchema.nullable().optional() })),
-  turns: z.array(z.object({ id: z.string(), sessionId: z.string(), prompt: z.string(), status: TaskTurnStatusSchema, result: z.string().nullable() })),
+  turns: z.array(z.object({ id: z.string(), sessionId: z.string(), prompt: z.string(), status: TaskTurnStatusSchema, promptedAt: z.string().datetime().nullable(), completedAt: z.string().datetime().nullable(), result: z.string().nullable() })),
   shellPaneId: z.string().nullable(),
 });
 export const TaskSessionHistoryParamsSchema = z.object({ taskId: z.string().min(1), sessionId: z.string().min(1) });

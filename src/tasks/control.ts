@@ -103,6 +103,8 @@ export interface TaskTurn {
   promptHash: string;
   promptText: string;
   status: TaskTurnStatus;
+  promptedAt: string | null;
+  completedAt: string | null;
   resultReceiptId: string | null;
   terminalObservation: string | null;
   nativeTurnId: string | null;

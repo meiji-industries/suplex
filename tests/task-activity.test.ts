@@ -45,3 +45,29 @@ test("task activity reports the captured harness for every provider without depe
     }
   } finally { await value.close(); }
 });
+
+test("task activity reports prompted and completed timestamps for each turn", async () => {
+  const value = await nativeApp();
+  try {
+    const { task } = await value.tasks.createTask(value.userId, value.company.id, {
+      projectId: value.project.id,
+      title: "Activity timestamps",
+      description: "Read persisted turn timestamps",
+      idempotencyKey: "task-activity-timestamps",
+      startImmediately: true,
+    });
+    const session = value.tasks.repository.controls.claimRoot({ taskId: task.id });
+    const promptedAt = "2026-09-21T10:00:00.000Z";
+    const completedAt = "2026-09-21T10:05:23.000Z";
+    value.database.authTransaction(db => {
+      db.prepare("INSERT INTO forge_task_turns (id, task_id, session_id, generation, prompt_hash, prompt_text, status, prompted_at, completed_at, created_at, updated_at) VALUES ('completed-turn', ?, ?, ?, 'hash', 'Completed prompt', 'completed', ?, ?, ?, ?), ('pending-turn', ?, ?, ?, 'hash', 'Pending prompt', 'pending_prompt', NULL, NULL, ?, ?)").run(task.id, session.id, session.generation, promptedAt, completedAt, promptedAt, completedAt, task.id, session.id, session.generation, promptedAt, promptedAt);
+    });
+
+    const response = await value.app.inject({ url: `/api/tasks/${task.id}/activity`, headers: value.headers });
+    expect(response.statusCode, response.body).toBe(200);
+    expect(response.json().turns).toEqual([
+      expect.objectContaining({ id: "completed-turn", promptedAt, completedAt }),
+      expect.objectContaining({ id: "pending-turn", promptedAt: null, completedAt: null }),
+    ]);
+  } finally { await value.close(); }
+});

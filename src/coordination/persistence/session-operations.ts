@@ -13,7 +13,7 @@ export const session = (row: Row): TaskSession => {
 export const turn = (row: Row): TaskTurn => {
   const id = text(row, "id"); const taskId = text(row, "task_id"); const sessionId = text(row, "session_id"); const promptHash = text(row, "prompt_hash"); const promptText = text(row, "prompt_text");
   if (!id || !taskId || !sessionId || !promptHash || promptText === null) throw new Error("Invalid persisted task turn");
-  return { id, taskId, sessionId, generation: integer(row, "generation"), assignmentHash: text(row, "assignment_hash"), promptHash, promptText, status: TaskTurnStatusSchema.parse(text(row, "status")), resultReceiptId: text(row, "result_receipt_id"), terminalObservation: text(row, "terminal_observation"), nativeTurnId: text(row, "native_turn_id"), dispatchAttempt: parseJson(text(row, "dispatch_attempt_json"), PromptDispatchAttemptSchema), workflowInput: parseJson(text(row, "workflow_input_json"), WorkflowInputSchema) };
+  return { id, taskId, sessionId, generation: integer(row, "generation"), assignmentHash: text(row, "assignment_hash"), promptHash, promptText, status: TaskTurnStatusSchema.parse(text(row, "status")), promptedAt: text(row, "prompted_at"), completedAt: text(row, "completed_at"), resultReceiptId: text(row, "result_receipt_id"), terminalObservation: text(row, "terminal_observation"), nativeTurnId: text(row, "native_turn_id"), dispatchAttempt: parseJson(text(row, "dispatch_attempt_json"), PromptDispatchAttemptSchema), workflowInput: parseJson(text(row, "workflow_input_json"), WorkflowInputSchema) };
 };
 
 export const currentSession = (database: ForgeDatabase, taskId: string, kind: TaskSessionKind): TaskSession | null => database.authQuery(db => {

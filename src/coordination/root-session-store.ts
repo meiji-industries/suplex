@@ -1,4 +1,6 @@
 import { replaceWorker, workerReplacementReady } from "./worker-replacement.js";
+import { selectDelegate } from "./task-agent-selection.js";
+import { TaskAgentSelectionRequestSchema, type TaskAgentSelectionRequest } from "./task-agent-selection-contracts.js";
 import { replaceCoordinator } from "./coordinator-replacement.js";
 import { CoordinatorReplacementRequestSchema, type CoordinatorReplacementRequest } from "./coordinator-replacement-contracts.js";
 import { WorkerReplacementRequestSchema, type WorkerReplacementRequest } from "./worker-replacement-contracts.js";
@@ -10,6 +12,7 @@ import { inspectProcessOnce } from "../platform/process-manager.js";
 import { TaskAnalyticsStore } from "../tasks/analytics/store.js";
 import { StructuredLogger } from "../platform/logging.js";
 import { TaskLimitStore } from "../tasks/limits/limit-store.js";
+import { assertProfileAllowed } from "../projects/provider-policy.js";
 import { TaskLimitPauseSchema, type TaskLimitDecision, type TaskLimitPause, type TaskLimits, type TaskLimitUsage } from "../tasks/limits/limits.js";
 import type { TaskUsage } from "../tasks/usage.js";
 
@@ -21,7 +24,7 @@ import { taskDependencyBlockersInTransaction, taskDependencySummaries, taskDepen
 import { admitQueuedTask, admitQueuedTasks, readyQueuedTaskIds } from "../tasks/queue.js";
 import type { PromptDispatchAttempt, PullRequestReference } from "../tasks/control.js";
 import { DeliveryIntentSchema, PullRequestReferenceSchema, TaskControlStatusSchema, TaskProfileSchema, TaskSessionLifecycleSchema, TaskTurnStatusSchema, WorktreeReferenceSchema, type DeliveryIntent, type TaskControl, type TaskProfile, type TaskSession, type TaskSessionKind, type TaskTurn, type WorktreeReference } from "../tasks/control.js";
-import { AdvisorRoleSchema, RaterResultSchema, ReviewerResultSchema, WorkflowIdSchema, WorkflowInputSchema, WorkflowStateSchema, deliveryDecision, emptyWorkflowState, sameRange, turnOutcome, type AdvisorResult, type AdvisorRole, type DeliveryFailureCode, type DeliveryWait, type RaterResult, type ReviewRange, type ReviewerResult, type WorkflowCompletion, type WorkflowId, type WorkflowInput, type WorkflowState } from "./workflows.js";
+import { AdvisorRoleSchema, AgentSelectionIntentSchema, RaterResultSchema, ReviewerResultSchema, WorkflowIdSchema, WorkflowInputSchema, WorkflowStateSchema, deliveryDecision, emptyWorkflowState, sameRange, turnOutcome, type AdvisorResult, type AdvisorRole, type DeliveryFailureCode, type DeliveryWait, type RaterResult, type ReviewRange, type ReviewerResult, type WorkflowCompletion, type WorkflowId, type WorkflowInput, type WorkflowState } from "./workflows.js";
 import { IDLE_ROOT_PROMPT, STANDARD_WORKER_RESULT_WAKE, initialCoordinatorPrompt, isIdleRootPrompt, withCurrentDependencyStatus, workerAssignmentPreamble } from "./workflow-prompts.js";
 import { assertPullRequestAvailable, assertTaskPullRequestsAvailable } from "../delivery/pull-request-ownership.js";
 import { recordTriggerPush, triggerDeliveryPolicy, type GithubTriggerDeliveryPolicy } from "../integrations/github/trigger-delivery-policy.js";
@@ -358,7 +361,7 @@ export class TaskControlStore {
     const assignmentHash = hash(advisor ? advisor.prompt : worker?.instruction ?? "");
     if (workflowInput) WorkflowInputSchema.parse(workflowInput);
     return this.database.authTransaction((db) => {
-      const task = db.prepare("SELECT status, workflow FROM forge_task_controls WHERE task_id = ?").get(input.taskId) as Row | undefined;
+      const task = db.prepare("SELECT status, workflow, root_profile_json, worker_profile_json, advisor_profiles_json FROM forge_task_controls WHERE task_id = ?").get(input.taskId) as Row | undefined;
       const root = db.prepare("SELECT * FROM forge_task_sessions WHERE id = ? AND task_id = ? AND kind = 'root' AND is_current = 1 AND generation = ?").get(input.rootSessionId, input.taskId, input.rootGeneration) as Row | undefined;
       if (!task || TaskControlStatusSchema.parse(text(task, "status")) !== "active" || !root || TaskSessionLifecycleSchema.parse(text(root, "lifecycle")) === "cancelled") throw new Error("root_identity_mismatch");
       if (db.prepare("SELECT 1 FROM forge_task_sessions s JOIN forge_task_turns t ON t.session_id = s.id AND t.generation = s.generation WHERE s.task_id = ? AND s.kind = 'worker' AND s.is_current = 1 AND t.status IN ('pending_prompt', 'prompted', 'unknown')").get(input.taskId)) throw new Error("worker_already_assigned");
@@ -372,18 +375,20 @@ export class TaskControlStore {
       const latest = db.prepare("SELECT COALESCE(MAX(generation), 0) AS generation FROM forge_task_sessions WHERE task_id = ? AND kind = 'worker'").get(input.taskId) as Row;
       const generation = integer(latest, "generation") + 1;
       const role = advisor?.role ?? null;
-      const compatible = db.prepare("SELECT * FROM forge_task_sessions WHERE task_id = ? AND kind = 'worker' AND advisor_role IS ? AND lifecycle <> 'cancelled' ORDER BY generation DESC, created_at DESC, id DESC LIMIT 1").get(input.taskId, role) as Row | undefined;
+      const advisorProfiles = z.partialRecord(AdvisorRoleSchema, TaskProfileSchema).parse(JSON.parse(text(task, "advisor_profiles_json") ?? "{}"));
+      const profile = role ? advisorProfiles[role] ?? TaskProfileSchema.parse(JSON.parse(text(task, "root_profile_json")!)) : TaskProfileSchema.parse(JSON.parse(text(task, "worker_profile_json")!));
+      const compatible = db.prepare("SELECT * FROM forge_task_sessions WHERE task_id = ? AND kind = 'worker' AND advisor_role IS ? AND lifecycle <> 'cancelled' AND (profile_json IS NULL OR json(profile_json) = json(?)) ORDER BY generation DESC, created_at DESC, id DESC LIMIT 1").get(input.taskId, role, JSON.stringify(profile)) as Row | undefined;
       if (compatible && text(compatible, "stop_requested_at") !== null && text(compatible, "stopped_at") === null) throw new Error("worker_already_assigned");
       const reuse = Boolean(compatible);
       const id = reuse ? text(compatible!, "id") : randomUUID();
       if (!id) throw new Error("Invalid persisted task session");
       if (reuse) {
         if (current && text(current, "id") !== id) db.prepare("UPDATE forge_task_sessions SET is_current = 0, updated_at = ? WHERE id = ? AND is_current = 1").run(time, text(current, "id"));
-        const changed = db.prepare("UPDATE forge_task_sessions SET generation = ?, is_current = 1, lifecycle = CASE WHEN lifecycle = 'stopped' THEN 'reserved' ELSE lifecycle END, assignment_hash = ?, launch_owner = NULL, launch_owner_pid = NULL, launch_owner_start_time = NULL, launch_claimed_at = NULL, stop_requested_at = NULL, stopped_at = NULL, updated_at = ? WHERE id = ? AND lifecycle IN ('reserved', 'live', 'stopped') AND (launch_owner IS NULL OR stopped_at IS NOT NULL) AND (stop_requested_at IS NULL OR stopped_at IS NOT NULL) AND NOT EXISTS (SELECT 1 FROM forge_task_turns t WHERE t.session_id = forge_task_sessions.id AND t.generation = forge_task_sessions.generation AND t.status IN ('pending_prompt', 'prompted', 'unknown'))").run(generation, assignmentHash, time, id).changes;
+        const changed = db.prepare("UPDATE forge_task_sessions SET generation = ?, is_current = 1, lifecycle = CASE WHEN lifecycle = 'stopped' THEN 'reserved' ELSE lifecycle END, assignment_hash = ?, profile_json = COALESCE(profile_json, ?), launch_owner = NULL, launch_owner_pid = NULL, launch_owner_start_time = NULL, launch_claimed_at = NULL, stop_requested_at = NULL, stopped_at = NULL, updated_at = ? WHERE id = ? AND lifecycle IN ('reserved', 'live', 'stopped') AND (launch_owner IS NULL OR stopped_at IS NOT NULL) AND (stop_requested_at IS NULL OR stopped_at IS NOT NULL) AND NOT EXISTS (SELECT 1 FROM forge_task_turns t WHERE t.session_id = forge_task_sessions.id AND t.generation = forge_task_sessions.generation AND t.status IN ('pending_prompt', 'prompted', 'unknown'))").run(generation, assignmentHash, JSON.stringify(profile), time, id).changes;
         if (changed !== 1) throw new Error("worker_already_assigned");
       } else {
         if (current) db.prepare("UPDATE forge_task_sessions SET is_current = 0, updated_at = ? WHERE id = ? AND generation = ? AND is_current = 1").run(time, text(current, "id"), integer(current, "generation"));
-        db.prepare("INSERT INTO forge_task_sessions (id, task_id, kind, generation, is_current, pane_id, native_session_id, lifecycle, assignment_hash, advisor_role, delegate_slot, workflow_input_json, created_at, updated_at) VALUES (?, ?, 'worker', ?, 1, NULL, NULL, 'reserved', ?, ?, ?, ?, ?, ?)").run(id, input.taskId, generation, assignmentHash, advisor?.role ?? null, delegateSlot, workflowInput ? JSON.stringify(workflowInput) : null, time, time);
+        db.prepare("INSERT INTO forge_task_sessions (id, task_id, kind, generation, is_current, pane_id, native_session_id, lifecycle, assignment_hash, advisor_role, delegate_slot, workflow_input_json, profile_json, created_at, updated_at) VALUES (?, ?, 'worker', ?, 1, NULL, NULL, 'reserved', ?, ?, ?, ?, ?, ?, ?)").run(id, input.taskId, generation, assignmentHash, advisor?.role ?? null, delegateSlot, workflowInput ? JSON.stringify(workflowInput) : null, JSON.stringify(profile), time, time);
       }
       db.prepare("UPDATE forge_task_controls SET worker_session_id = ?, updated_at = ? WHERE task_id = ? AND status = 'active'").run(id, time, input.taskId);
       db.prepare("INSERT INTO forge_task_turns (id, task_id, session_id, generation, assignment_hash, prompt_hash, prompt_text, status, result_receipt_id, terminal_observation, workflow_input_json, created_at, prompted_at, completed_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending_prompt', NULL, NULL, ?, ?, NULL, NULL, ?)").run(createOpenCodeMessageID(), input.taskId, id, generation, assignmentHash, hash(promptText), promptText, workflowInput ? JSON.stringify(workflowInput) : null, time, time);
@@ -394,7 +399,7 @@ export class TaskControlStore {
     const time = now();
     for (const planner of input.planners) WorkflowInputSchema.parse(planner.input);
     return this.database.authTransaction(db => {
-      const task = db.prepare("SELECT status, workflow FROM forge_task_controls WHERE task_id = ?").get(input.taskId) as Row | undefined;
+      const task = db.prepare("SELECT status, workflow, root_profile_json, advisor_profiles_json FROM forge_task_controls WHERE task_id = ?").get(input.taskId) as Row | undefined;
       const root = db.prepare("SELECT * FROM forge_task_sessions WHERE id = ? AND task_id = ? AND kind = 'root' AND is_current = 1 AND generation = ?").get(input.rootSessionId, input.taskId, input.rootGeneration) as Row | undefined;
       if (!task || TaskControlStatusSchema.parse(text(task, "status")) !== "active" || !root || TaskSessionLifecycleSchema.parse(text(root, "lifecycle")) === "cancelled") throw new Error("root_identity_mismatch");
       if (WorkflowIdSchema.parse(text(task, "workflow") ?? "standard") !== "competing_plans") throw new Error("planner_pair_requires_combined_workflow");
@@ -403,9 +408,11 @@ export class TaskControlStore {
       if (db.prepare("SELECT 1 FROM forge_task_sessions s WHERE s.task_id = ? AND s.kind = 'worker' AND s.is_current = 1 AND (s.launch_owner IS NOT NULL AND s.stopped_at IS NULL OR s.stop_requested_at IS NOT NULL AND s.stopped_at IS NULL OR EXISTS (SELECT 1 FROM forge_task_turns t WHERE t.session_id = s.id AND t.generation = s.generation AND t.status IN ('pending_prompt', 'prompted', 'unknown')))").get(input.taskId)) throw new Error("worker_already_assigned");
       db.prepare("UPDATE forge_task_sessions SET is_current = 0, updated_at = ? WHERE task_id = ? AND kind = 'worker' AND is_current = 1 AND delegate_slot IN ('planner_a', 'planner_b')").run(time, input.taskId);
       const latest = db.prepare("SELECT COALESCE(MAX(generation), 0) AS generation FROM forge_task_sessions WHERE task_id = ? AND kind = 'worker'").get(input.taskId) as Row;
+      const advisorProfiles = z.partialRecord(AdvisorRoleSchema, TaskProfileSchema).parse(JSON.parse(text(task, "advisor_profiles_json") ?? "{}"));
       const sessions = input.planners.map((planner, index) => {
         const id = randomUUID(); const generation = integer(latest, "generation") + index + 1;
-        db.prepare("INSERT INTO forge_task_sessions (id, task_id, kind, generation, is_current, pane_id, native_session_id, lifecycle, assignment_hash, advisor_role, delegate_slot, workflow_input_json, created_at, updated_at) VALUES (?, ?, 'worker', ?, 1, NULL, NULL, 'reserved', ?, ?, ?, ?, ?, ?)").run(id, input.taskId, generation, hash(planner.prompt), planner.role, planner.role, JSON.stringify(planner.input), time, time);
+        const profile = advisorProfiles[planner.role] ?? TaskProfileSchema.parse(JSON.parse(text(task, "root_profile_json")!));
+        db.prepare("INSERT INTO forge_task_sessions (id, task_id, kind, generation, is_current, pane_id, native_session_id, lifecycle, assignment_hash, advisor_role, delegate_slot, workflow_input_json, profile_json, created_at, updated_at) VALUES (?, ?, 'worker', ?, 1, NULL, NULL, 'reserved', ?, ?, ?, ?, ?, ?, ?)").run(id, input.taskId, generation, hash(planner.prompt), planner.role, planner.role, JSON.stringify(planner.input), JSON.stringify(profile), time, time);
         db.prepare("INSERT INTO forge_task_turns (id, task_id, session_id, generation, assignment_hash, prompt_hash, prompt_text, status, result_receipt_id, terminal_observation, created_at, prompted_at, completed_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, 'pending_prompt', NULL, NULL, ?, NULL, NULL, ?)").run(createOpenCodeMessageID(), input.taskId, id, generation, hash(planner.prompt), hash(planner.prompt), planner.prompt, time, time);
         return session(db.prepare("SELECT * FROM forge_task_sessions WHERE id = ?").get(id) as Row);
       }) as [TaskSession, TaskSession];
@@ -628,6 +635,43 @@ export class TaskControlStore {
     });
   }
   replaceWorker(taskId: string, request: WorkerReplacementRequest): TaskSession { return replaceWorker(this.database, taskId, WorkerReplacementRequestSchema.parse(request)); }
+  selectTaskAgent(taskId: string, raw: TaskAgentSelectionRequest): TaskSession | null {
+    const request = TaskAgentSelectionRequestSchema.parse(raw);
+    if (request.role !== "root") {
+      return selectDelegate(this.database, taskId, request, initialCoordinatorPrompt(this.get(taskId), this.context(taskId), this.dependencySummaries(taskId)));
+    }
+    if (!request.expectedSessionId) {
+      const initialPrompt = initialCoordinatorPrompt(this.get(taskId), this.context(taskId), this.dependencySummaries(taskId));
+      return this.database.authImmediateTransaction(db => {
+        const row = db.prepare("SELECT c.*, t.archived_at, t.configuration_json FROM forge_task_controls c JOIN forge_tasks t ON t.id = c.task_id WHERE c.task_id = ?").get(taskId) as Row | undefined;
+        if (!row || row.archived_at !== null || !["active", "waiting_human"].includes(String(row.status))) throw new Error("The Coordinator changed. Read the current Coordinator before selecting another.");
+        const state = WorkflowStateSchema.parse(JSON.parse(String(row.workflow_state_json)));
+        const intent = AgentSelectionIntentSchema.parse({ role: "root", expectedProfileId: request.expectedProfileId, expectedSessionId: null, profileId: request.profileId, direction: request.direction, resume: request.resume, questionId: request.resume ? request.questionId : null });
+        if (state.agentSelections?.root && JSON.stringify(state.agentSelections.root) === JSON.stringify(intent) && row.root_session_id === state.initialRootSelectionSessionId) return session(db.prepare("SELECT * FROM forge_task_sessions WHERE id = ? AND is_current = 1").get(row.root_session_id) as Row);
+        if (row.root_session_id !== null || TaskProfileSchema.parse(JSON.parse(String(row.root_profile_json))).profileId !== request.expectedProfileId) throw new Error("The Coordinator changed. Read the current Coordinator before selecting another.");
+        if (request.resume && (row.status !== "waiting_human" || row.human_question_id !== request.questionId || row.limit_pause_json !== null || row.recovery_turn_id !== null)) throw new Error("Answer the current task decision before resuming.");
+        const selected = db.prepare("SELECT p.id AS profileId, p.provider, p.model, p.reasoning_level AS reasoningLevel, p.service_tier AS serviceTier, p.provider_instance_id AS providerInstanceId, i.home_directory AS instanceHomeDirectory FROM forge_profiles p LEFT JOIN forge_provider_instances i ON i.id = p.provider_instance_id WHERE p.id = ? AND p.role = 'root' AND p.archived_at IS NULL").get(request.profileId);
+        if (!selected) throw new Error("The selected Coordinator profile does not exist.");
+        const profile = TaskProfileSchema.parse(selected);
+        assertProfileAllowed(TaskConfigurationSchema.pick({ providerPolicy: true }).strip().parse(JSON.parse(String(row.configuration_json))).providerPolicy, profile);
+        const time = now(); const id = randomUUID();
+        const generation = Number((db.prepare("SELECT COALESCE(MAX(generation), 0) AS generation FROM forge_task_sessions WHERE task_id = ? AND kind = 'root'").get(taskId) as Row).generation) + 1;
+        db.prepare("INSERT INTO forge_task_sessions (id, task_id, kind, generation, is_current, lifecycle, profile_json, created_at, updated_at) VALUES (?, ?, 'root', ?, 1, 'reserved', ?, ?, ?)").run(id, taskId, generation, JSON.stringify(profile), time, time);
+        db.prepare("UPDATE forge_task_controls SET root_session_id = ?, root_profile_json = ?, workflow_state_json = ?, status = CASE WHEN ? THEN 'active' ELSE status END, status_changed_at = CASE WHEN ? THEN ? ELSE status_changed_at END, human_question = CASE WHEN ? THEN NULL ELSE human_question END, human_question_id = CASE WHEN ? THEN NULL ELSE human_question_id END, human_question_options_json = CASE WHEN ? THEN '[]' ELSE human_question_options_json END, wake_at = CASE WHEN ? OR status = 'active' THEN ? ELSE wake_at END, updated_at = ? WHERE task_id = ?").run(id, JSON.stringify(profile), JSON.stringify({ ...state, agentSelections: { ...state.agentSelections, root: intent }, initialRootSelectionSessionId: id }), request.resume ? 1 : 0, request.resume ? 1 : 0, time, request.resume ? 1 : 0, request.resume ? 1 : 0, request.resume ? 1 : 0, request.resume ? 1 : 0, time, time, taskId);
+        const prompt = `${initialPrompt}${request.direction ? `\n\nAdditional direction from the user:\n${request.direction}` : ""}`;
+        db.prepare("INSERT INTO forge_task_turns (id, task_id, session_id, generation, prompt_hash, prompt_text, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, 'pending_prompt', ?, ?)").run(createOpenCodeMessageID(), taskId, id, generation, hash(prompt), prompt, time, time);
+        if (request.direction || row.human_question) {
+          const note = `Human note:\n${[request.direction ? `Additional direction from the user:\n${request.direction}` : "", row.human_question ? `Question ${row.human_question_id} remains unanswered: ${row.human_question}\nOptions: ${row.human_question_options_json ?? '[]'}` : ""].filter(Boolean).join("\n\n")}`;
+          db.prepare("INSERT INTO forge_task_turns (id, task_id, session_id, generation, prompt_hash, prompt_text, status, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, 'pending_prompt', ?, ?)").run(createOpenCodeMessageID(), taskId, id, generation, hash(note), note, time, time);
+        }
+        return session(db.prepare("SELECT * FROM forge_task_sessions WHERE id = ?").get(id) as Row);
+      });
+    }
+    if (this.get(taskId).rootSessionId === request.expectedSessionId && this.get(taskId).rootProfile.profileId !== request.expectedProfileId) throw new Error("The Coordinator changed. Read the current Coordinator before selecting another.");
+    return this.replaceCoordinator(taskId, request.resume
+      ? { sessionId: request.expectedSessionId, rootProfileId: request.profileId, handoff: request.direction, resume: true, questionId: request.questionId }
+      : { sessionId: request.expectedSessionId, rootProfileId: request.profileId, handoff: request.direction, resume: false });
+  }
   replaceCoordinator(taskId: string, request: CoordinatorReplacementRequest): TaskSession {
     const prompt = initialCoordinatorPrompt(this.get(taskId), this.context(taskId), this.dependencySummaries(taskId));
     return replaceCoordinator(this.database, taskId, CoordinatorReplacementRequestSchema.parse(request), prompt);

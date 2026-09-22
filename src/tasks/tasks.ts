@@ -1,5 +1,6 @@
 import type { WorkerReplacementRequest } from "../coordination/worker-replacement-contracts.js";
 import type { CoordinatorReplacementRequest } from "../coordination/coordinator-replacement-contracts.js";
+import type { TaskAgentSelectionRequest } from "../coordination/task-agent-selection-contracts.js";
 import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 import { TaskAnalyticsStore } from "./analytics/store.js";
 import { taskAnalytics } from "./analytics/analytics.js";
@@ -639,6 +640,13 @@ export class TaskService {
     this.getTask(userId, taskId);
     try { this.repository.controls.replaceCoordinator(taskId, request); }
     catch (error) { throw new TaskFailure(error instanceof Error ? error.message : "Forge could not select the Coordinator.", 409); }
+    return this.getTask(userId, taskId);
+  }
+
+  selectTaskAgent(userId: string, taskId: string, request: TaskAgentSelectionRequest): Task {
+    this.getTask(userId, taskId);
+    try { this.repository.controls.selectTaskAgent(taskId, request); }
+    catch (error) { throw new TaskFailure(error instanceof Error ? error.message : "Forge could not select the agent.", 409); }
     return this.getTask(userId, taskId);
   }
 

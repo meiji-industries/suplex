@@ -69,6 +69,11 @@ export function replaceCoordinator(database: ForgeDatabase, taskId: string, requ
     const policy = TaskConfigurationSchema.pick({ providerPolicy: true }).strip().parse(JSON.parse(String(task.configuration_json))).providerPolicy;
     assertProfileAllowed(policy, profile);
     const oldProfile = TaskProfileSchema.parse(JSON.parse(String(previous.profile_json ?? task.root_profile_json)));
+    const advisorProfiles = z.record(z.string(), TaskProfileSchema).parse(JSON.parse(String(task.advisor_profiles_json ?? "{}")));
+    for (const advisor of db.prepare("SELECT id, advisor_role FROM forge_task_sessions WHERE task_id = ? AND kind = 'worker' AND advisor_role IS NOT NULL AND profile_json IS NULL").all(taskId) as Row[]) {
+      const profile = advisorProfiles[String(advisor.advisor_role)] ?? oldProfile;
+      db.prepare("UPDATE forge_task_sessions SET profile_json = ? WHERE id = ? AND profile_json IS NULL").run(JSON.stringify(profile), advisor.id);
+    }
     const rootTurns = db.prepare("SELECT t.*, s.generation AS session_generation FROM forge_task_turns t JOIN forge_task_sessions s ON s.id = t.session_id WHERE t.task_id = ? AND s.kind = 'root' ORDER BY t.rowid").all(taskId) as Row[];
     const priorIntents = (db.prepare("SELECT replacement_reason, generation FROM forge_task_sessions WHERE task_id = ? AND kind = 'root' AND replaces_session_id IS NOT NULL ORDER BY generation").all(taskId) as Row[]).flatMap(row => {
       let parsed: unknown;

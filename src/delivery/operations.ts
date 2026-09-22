@@ -9,7 +9,7 @@ import type { GithubTriggerPullRequestInspection } from "../integrations/github/
 import { matchesGithubTriggerProtectedPaths } from "../integrations/github/trigger-paths.js";
 import type { PullRequestReference, TaskControl } from "../tasks/control.js";
 import type { TaskControlStore } from "../coordination/root-session-store.js";
-import { deliveryDecision, deliveryWaitFingerprint, freshReviewHint, latestReview, reviewRole, sameRange, rangeDifferences, type DeliveryDecision, type DeliveryFailureCode, type LocalSourceFacts, type ReviewRange, type WorkflowCompletion } from "../coordination/workflows.js";
+import { deliveryDecision, deliveryWaitFingerprint, freshReviewHint, latestReview, reviewRole, sameDeliveryWaitFingerprint, sameRange, rangeDifferences, type DeliveryDecision, type DeliveryFailureCode, type LocalSourceFacts, type ReviewRange, type WorkflowCompletion } from "../coordination/workflows.js";
 import { checkSummary, matchesDeliveryIntent, observedPullReference, pullReference } from "./pull-reference.js";
 import { DeliveryOperationFailure } from "./failure.js";
 import { createOrAdoptPublication, pushPublication, type DeliveryGithubPort, type PublicationDependencies } from "./publication.js";
@@ -81,8 +81,7 @@ export class DeliveryOperations {
       const prompt = `GitHub evidence is available again (the head of ${base.branch}). Retry the delivery operation with your current review; no source change is needed.`;
       return this.store.resumeDeliveryWait(taskId, wait, prompt) ? "changed" : "none";
     }
-    const fingerprint = deliveryWaitFingerprint(observed);
-    if (observed.exists && fingerprint === wait.fingerprint) return "unchanged";
+    if (observed.exists && sameDeliveryWaitFingerprint(wait.fingerprint, observed)) return "unchanged";
     const prompt = `Delivery state changed while Forge waited (${wait.reason}). Current observation: ${JSON.stringify({ exists: observed.exists, state: observed.state, headSha: observed.headSha, isDraft: observed.isDraft, mergeable: observed.mergeable, mergeStateStatus: observed.mergeStateStatus, reviewDecision: observed.reviewDecision, checks: observed.checks })}. If checks failed, obtain their evidence and continue the workflow; if the pull request is eligible, request merge_pull_request with your current review; otherwise observe_checks again.`;
     return this.store.resumeDeliveryWait(taskId, wait, prompt) ? "changed" : "none";
   }

@@ -258,6 +258,21 @@ export function deliveryDecision(control: ControlLike & { deliveryIntent: { head
   return ready.ok ? { ok: true } : { ok: false, code: "workflow_review_required", reason: ready.reason };
 }
 
-export function deliveryWaitFingerprint(observation: { number: number | null; headSha: string | null; baseSha: string | null; isDraft: boolean | null; reviewDecision: string | null; mergeable: string | null; mergeStateStatus: string | null; state: string | null; checks: { runs: Array<{ name: string; status: string; conclusion?: string | undefined }> } }): string {
-  return JSON.stringify({ number: observation.number, head: observation.headSha, draft: observation.isDraft, review: observation.reviewDecision, mergeable: observation.mergeable, mergeState: observation.mergeStateStatus, state: observation.state, checks: [...observation.checks.runs].map(run => `${run.name}:${run.status}:${run.conclusion ?? ""}`).sort() });
+type DeliveryWaitObservation = { number: number | null; headSha: string | null; baseSha: string | null; isDraft: boolean | null; reviewDecision: string | null; mergeable: string | null; mergeStateStatus: string | null; state: string | null; checks: { pending: number; failing: number; runs: Array<{ name: string; status: string; conclusion?: string | undefined }> } };
+
+export function deliveryWaitFingerprint(observation: DeliveryWaitObservation): string {
+  const failures = observation.checks.runs.filter(run => run.status === "failing").map(run => `${run.name}:${run.status}:${run.conclusion ?? ""}`).sort();
+  const checks = [observation.checks.pending > 0 ? "pending" : "settled", ...(observation.checks.failing > 0 ? [`failed:${observation.checks.failing}`, ...failures] : [])];
+  return JSON.stringify({ number: observation.number, head: observation.headSha, draft: observation.isDraft, review: observation.reviewDecision, mergeable: observation.mergeable, mergeState: observation.mergeStateStatus, state: observation.state, checks });
+}
+
+export function sameDeliveryWaitFingerprint(stored: string, observation: DeliveryWaitObservation): boolean {
+  const current = deliveryWaitFingerprint(observation);
+  if (stored === current) return true;
+  if (observation.checks.pending === 0 || observation.checks.failing > 0) return false;
+  try {
+    const legacy = z.object({ number: z.number().nullable(), head: z.string().nullable(), draft: z.boolean().nullable(), review: z.string().nullable(), mergeable: z.string().nullable(), mergeState: z.string().nullable(), state: z.string().nullable(), checks: z.array(z.string()) }).strict().safeParse(JSON.parse(stored));
+    if (!legacy.success || !legacy.data.checks.some(check => check.endsWith(":pending:")) || legacy.data.checks.some(check => check.includes(":failing:"))) return false;
+    return JSON.stringify({ ...legacy.data, checks: ["pending"] }) === current;
+  } catch { return false; }
 }

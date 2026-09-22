@@ -51,6 +51,64 @@ test("pending checks persist across restart and suppress idle Coordinator turns 
   }
 });
 
+test("passing CI jobs do not wake Coordinator while another job is pending", { timeout: 60_000 }, async () => {
+  const f = await fixture("refine_pull_request");
+  const checks = (passed: number) => ({
+    total: 4, pending: 4 - passed, failing: 0, successful: passed,
+    runs: Array.from({ length: 4 }, (_, index) => ({ name: `job-${index}`, status: index < passed ? "successful" as const : "pending" as const, url: null })),
+  });
+  f.github.checks = checks(0);
+  f.github.mergeStateStatus = "UNKNOWN";
+  await f.request("observe_checks");
+  f.endRootTurn();
+  await f.controller.recover("task");
+  const turnsBefore = f.rootTurns().length;
+  const dispatchesBefore = f.harness.dispatched.length;
+
+  const reopened = new ForgeDatabase(join(f.directory, "forge.sqlite"), { migrate: false });
+  const store = new TaskControlStore(reopened, f.alive);
+  const delivery = new DeliveryOperations(store, f.port);
+  const controller = new RootController(store, f.harness, delivery, undefined, { root: join(f.directory, "evidence") }, f.reader);
+  const host = new TaskHost(reopened, { controller, delivery });
+  try {
+    for (const [passed, paneId] of [[1, null], [2, "recreated-pane"], [3, null]] as const) {
+      f.github.checks = checks(passed);
+      reopened.authTransaction(db => db.prepare("UPDATE forge_task_sessions SET pane_id = ? WHERE id = ?").run(paneId, f.identity().sessionId));
+      store.wakeIdleRoot("task");
+      await host.recover("task");
+      await host.recover("task");
+      expect(f.rootTurns()).toHaveLength(turnsBefore);
+      expect(f.harness.dispatched).toHaveLength(dispatchesBefore);
+      expect(store.get("task").workflowState.deliveryWait?.reason).toBe("checks");
+    }
+    f.github.checks = checks(4);
+    expect(await delivery.observeDeliveryWait("task")).toBe("changed");
+    expect(f.rootTurns()).toHaveLength(turnsBefore + 1);
+  } finally {
+    await host.stop();
+    reopened.close();
+  }
+});
+
+test("a persisted per-job fingerprint continues waiting through passing checks", { timeout: 60_000 }, async () => {
+  const f = await fixture("refine_pull_request");
+  f.github.mergeStateStatus = "UNKNOWN";
+  f.github.checks = { total: 2, pending: 2, failing: 0, successful: 0, runs: [
+    { name: "unit", status: "pending", url: null }, { name: "integration", status: "pending", url: null },
+  ] };
+  await f.request("observe_checks");
+  const wait = f.store.get("task").workflowState.deliveryWait!;
+  const legacy = JSON.stringify({ number: 7, head: f.featureSha, draft: true, review: null, mergeable: "MERGEABLE", mergeState: "UNKNOWN", state: "open", checks: ["integration:pending:", "unit:pending:"] });
+  f.store.updateWorkflowState("task", state => ({ ...state, deliveryWait: { ...wait, fingerprint: legacy } }));
+  f.github.checks = { total: 2, pending: 1, failing: 0, successful: 1, runs: [
+    { name: "unit", status: "successful", url: null }, { name: "integration", status: "pending", url: null },
+  ] };
+  const turnsBefore = f.rootTurns().length;
+  expect(await f.delivery.observeDeliveryWait("task")).toBe("unchanged");
+  expect(f.rootTurns()).toHaveLength(turnsBefore);
+  expect(f.store.get("task").workflowState.deliveryWait?.fingerprint).toBe(legacy);
+});
+
 test.each([
   { label: "all checks pass", checks: successful, remoteHead: null },
   { label: "a check fails", checks: failing, remoteHead: null },

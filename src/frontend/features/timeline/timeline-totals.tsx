@@ -37,11 +37,16 @@ function SummaryTable({
         </div>
       ) : (
         <table className="w-full table-fixed text-left text-xs">
+          <colgroup>
+            <col />
+            <col className="w-16" />
+            <col className="w-20" />
+          </colgroup>
           <thead className="sr-only">
             <tr>
               <th>Item</th>
-              <th className="w-20">Invocations</th>
-              <th className="w-24">Time</th>
+              <th>Invocations</th>
+              <th>Time</th>
             </tr>
           </thead>
           <tbody>
@@ -75,10 +80,10 @@ function SummaryTable({
                     {total.secondary}
                   </span>
                 </td>
-                <td className="w-20 px-2 py-2 text-right text-muted-foreground">
+                <td className="whitespace-nowrap px-2 py-2 text-right text-muted-foreground">
                   {total.invocationCount}×
                 </td>
-                <td className="w-24 px-3 py-2 text-right font-medium tabular-nums sm:px-4">
+                <td className="whitespace-nowrap px-3 py-2 text-right font-medium tabular-nums sm:px-4">
                   {formatDuration(total.durationMs)}
                 </td>
               </tr>

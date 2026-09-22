@@ -108,6 +108,28 @@ test("the first collector pass refreshes a delivered Codex session despite a rec
   } finally { await value.close(); }
 });
 
+test("the first collector pass refreshes historical Devin intervals despite a recent cached observation", async () => {
+  const value = await nativeApp();
+  try {
+    const { task } = await value.tasks.createTask(value.userId, value.company.id, { projectId: value.project.id, title: "Devin refresh", description: "Refresh duration after restart", startImmediately: true, idempotencyKey: "devin-refresh" });
+    const controls = value.tasks.repository.controls;
+    const root = controls.claimRoot({ taskId: task.id });
+    controls.bindHarnessSession({ sessionId: root.id, generation: root.generation, nativeSessionId: "devin-old" });
+    controls.markDelivered(task.id);
+    const store = new TaskAnalyticsStore(value.database);
+    const cached = TaskUsageSchema.parse({ ...taskUsage([message()], "root")[0], sessionId: "devin-old", startedAt: 200 });
+    store.record(task.id, root.id, [cached]);
+    let reads = 0;
+    const collector = new TaskAnalyticsCollector(value.tasks.repository, store, async () => { reads += 1; return [{ ...cached, startedAt: 100 }]; }, error => { throw error; });
+    await collector.collect();
+    expect(reads).toBe(1);
+    expect(store.read(task.id).usage).toMatchObject([{ startedAt: 100 }]);
+    await collector.collect();
+    expect(reads).toBe(1);
+    await collector.stop();
+  } finally { await value.close(); }
+});
+
 test("collector captures final timings promptly after delivery instead of applying the historical refresh delay", async () => {
   const value = await nativeApp();
   try {

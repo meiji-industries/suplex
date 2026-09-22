@@ -57,7 +57,7 @@ export class TaskAnalyticsCollector {
           const previous = observations.find(value => value.sessionId === session.id);
           const lastAttempt = previous?.errorAt ?? previous?.observedAt;
           const changedSinceObservation = previous?.observedAt && task.updatedAt > previous.observedAt;
-          const refreshMs = startup && sessionHarness(session.nativeSessionId) === "codex" ? 0 : previous?.errorAt ? 300_000 : !changedSinceObservation && (task.archivedAt || !["active", "waiting_human"].includes(task.status)) ? 900_000 : 0;
+          const refreshMs = startup && ["codex", "devin"].includes(sessionHarness(session.nativeSessionId)) ? 0 : previous?.errorAt ? 300_000 : !changedSinceObservation && (task.archivedAt || !["active", "waiting_human"].includes(task.status)) ? 900_000 : 0;
           if (lastAttempt && Date.now() - Date.parse(lastAttempt) < refreshMs) continue;
           try {
             const readStartedAt = new Date().toISOString();

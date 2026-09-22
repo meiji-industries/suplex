@@ -1,6 +1,6 @@
 // eslint-disable-next-line no-restricted-imports -- the regression owns and stops a long-running display process group.
 import { spawn, type ChildProcess } from "node:child_process";
-import { mkdir, mkdtemp, readFile, readdir, rm, unlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, readdir, rm, stat, unlink, utimes, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -35,13 +35,13 @@ afterEach(async () => {
   for (const key of ["FORGE_ROOT_BINDING", "FORGE_ROOT_TOKEN", "FORGE_ADVISOR_BINDING", "FORGE_ADVISOR_TOKEN", "FORGE_ADVISOR_RESULT", "FORGE_GH_COMMAND", "FORGE_TEST_LOCK_ROOT", "FORGE_TEST_INVOCATIONS"]) delete process.env[key];
 });
 
-async function fixture(behaviour: "complete" | "hang" | "crash" | "startup_failure") {
+async function fixture(behaviour: "complete" | "hang" | "silent_hang" | "crash" | "startup_failure") {
   const root = await mkdtemp(join(tmpdir(), "forge-devin-runtime-"));
   directories.push(root);
   const worktree = join(root, "worktree");
   await mkdir(worktree);
   const executable = join(root, "devin");
-  const script = { complete: ["echo 'Reviewed the change.'"], hang: ["echo 'Working'", "sleep 30"], crash: ["echo 'Working'", "exit 1"], startup_failure: ["echo 'Error: Not logged in' >&2", "exit 1"] }[behaviour];
+  const script = { complete: ["echo 'Reviewed the change.'"], hang: ["echo 'Working'", "sleep 30"], silent_hang: ["sleep 30"], crash: ["echo 'Working'", "exit 1"], startup_failure: ["echo 'Error: Not logged in' >&2", "exit 1"] }[behaviour];
   await writeFile(executable, `#!/bin/sh
 if [ "$1" = list ]; then echo '[{"id":"assigned-session"}]'; exit 0; fi
 printf '%s\n' '--TURN--' "$@" >> "$FORGE_TEST_ARGS"
@@ -115,6 +115,72 @@ test("non-zero turns are errors and startup failures retain stderr", async () =>
   const observed = await eventually(failed);
   expect(observed).toMatchObject({ state: "error", reason: "native_startup_failed" });
   expect(await failed.runtime.resultText(failed.scope, observed)).toContain("Not logged in");
+});
+
+test("Devin timeline keeps completed execution time when the output log changes", async () => {
+  const f = await fixture("complete");
+  await f.runtime.dispatch(f.scope, f.intent, async () => true);
+  expect(await eventually(f)).toMatchObject({ state: "completed" });
+  const session = { id: f.scope.id, nativeSessionId: f.sessionID, kind: "worker" as const };
+  const reader = new DevinSessionReader(join(f.root, "forge.sqlite"));
+  const files = { prompt: join(f.runtimeDirectory, `turn-${f.intent.messageID}.prompt`), log: join(f.runtimeDirectory, `turn-${f.intent.messageID}.jsonl`), exit: join(f.runtimeDirectory, `turn-${f.intent.messageID}.exit`) };
+  const first = (await reader.timeline(session)).usage[0];
+  expect(first).toBeDefined();
+  expect(first?.startedAt).toBeLessThanOrEqual(Math.trunc((await stat(files.prompt)).mtimeMs));
+  expect(first?.completedAt).toBe(Math.trunc((await stat(files.exit)).mtimeMs));
+  await utimes(files.log, new Date(), new Date(Date.now() + 60_000));
+  expect((await reader.timeline(session)).usage[0]).toMatchObject({ startedAt: first?.startedAt, completedAt: first?.completedAt, failed: false });
+  await unlink(files.prompt);
+  const dispatch = (await readdir(f.runtimeDirectory)).find(name => /^dispatch-.*\.json$/.test(name));
+  if (!dispatch) throw new Error("Missing dispatch record");
+  const dispatchStat = await stat(join(f.runtimeDirectory, dispatch));
+  expect((await reader.timeline(session)).usage[0]?.startedAt).toBe(Math.trunc(dispatchStat.birthtimeMs > 0 ? dispatchStat.birthtimeMs : dispatchStat.mtimeMs));
+});
+
+test("Devin timeline identifies the running silent dispatch without turn.json or output ordering", async () => {
+  const f = await fixture("silent_hang");
+  const completedId = "zzzz-completed";
+  await mkdir(f.runtimeDirectory, { recursive: true });
+  await writeFile(join(f.runtimeDirectory, `turn-${completedId}.prompt`), "Earlier request");
+  await writeFile(join(f.runtimeDirectory, `turn-${completedId}.jsonl`), "Earlier answer");
+  await writeFile(join(f.runtimeDirectory, `turn-${completedId}.exit`), "0\n");
+  await f.runtime.dispatch(f.scope, f.intent, async () => true);
+  try {
+    const session = { id: f.scope.id, nativeSessionId: f.sessionID, kind: "worker" as const };
+    const reader = new DevinSessionReader(join(f.root, "forge.sqlite"));
+    await writeFile(join(f.runtimeDirectory, `turn-${f.intent.messageID}.exit`), "0\n");
+    const first = await reader.timeline(session);
+    expect(first.liveMessageId).toBe(f.intent.messageID);
+    expect(first.usage).toEqual(expect.arrayContaining([
+      expect.objectContaining({ messageId: completedId, completedAt: expect.any(Number), failed: false }),
+      expect.objectContaining({ messageId: f.intent.messageID, completedAt: null, failed: false }),
+    ]));
+    const startedAt = first.usage.find(turn => turn.messageId === f.intent.messageID)?.startedAt;
+    await writeFile(join(f.runtimeDirectory, `turn-${f.intent.messageID}.jsonl`), "New output");
+    await unlink(join(f.runtimeDirectory, "turn.json"));
+    const afterMissing = await reader.timeline(session);
+    expect(afterMissing.liveMessageId).toBe(f.intent.messageID);
+    expect(afterMissing.usage.find(turn => turn.messageId === f.intent.messageID)?.startedAt).toBe(startedAt);
+    const dispatch = (await readdir(f.runtimeDirectory)).find(name => /^dispatch-.*\.json$/.test(name));
+    if (!dispatch) throw new Error("Missing dispatch record");
+    await writeFile(join(f.runtimeDirectory, "turn.json"), await readFile(join(f.runtimeDirectory, dispatch)));
+    expect((await reader.timeline(session)).liveMessageId).toBe(f.intent.messageID);
+  } finally {
+    const dispatch = (await readdir(f.runtimeDirectory)).find(name => /^dispatch-.*\.json$/.test(name));
+    if (dispatch) await writeFile(join(f.runtimeDirectory, "turn.json"), await readFile(join(f.runtimeDirectory, dispatch)));
+    await f.runtime.stop(f.scope, f.sessionID);
+  }
+});
+
+test("Devin timeline records failures and leaves a turn without exit evidence incomplete", async () => {
+  const f = await fixture("crash");
+  await f.runtime.dispatch(f.scope, f.intent, async () => true);
+  expect(await eventually(f)).toMatchObject({ state: "error" });
+  const session = { id: f.scope.id, nativeSessionId: f.sessionID, kind: "worker" as const };
+  const reader = new DevinSessionReader(join(f.root, "forge.sqlite"));
+  expect((await reader.timeline(session)).usage).toEqual([expect.objectContaining({ failed: true, completedAt: expect.any(Number) })]);
+  await unlink(join(f.runtimeDirectory, `turn-${f.intent.messageID}.exit`));
+  expect((await reader.timeline(session)).usage).toEqual([expect.objectContaining({ failed: false, completedAt: null })]);
 });
 
 async function waitForText(read: () => string, text: string): Promise<void> {

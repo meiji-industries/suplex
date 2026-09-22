@@ -240,7 +240,7 @@ export class TaskService {
     if (Array.isArray(dependencies)) {
       const authority: Authority = { kind: "agentApi", principal };
       const row = this.requireTask(authority, taskId);
-      for (const dependency of dependencies) this.requireTask(authority, dependency);
+      for (const dependency of dependencies) this.requireReadableAgentApiTask(principal, dependency);
       try { replaceTaskDependencies(this.database, { taskId, companyId: row.company_id, dependsOn: dependencies }, (db, wasBlocked) => { if (wasBlocked) this.repository.controls.reconcileDependencyReleaseInTransaction(db, taskId); }); }
       catch (error) { if (error instanceof TaskDependencyFailure) throw new TaskFailure(error.publicMessage, error.statusCode); throw error; }
       this.audit(authority, row.company_id, "task_dependencies_updated", taskId);
@@ -272,11 +272,10 @@ export class TaskService {
         this.requireTask(authority, dependency);
         continue;
       }
-      const row = this.repository.row(dependency);
-      if (!row) throw new TaskFailure("The dependency is not available.", 422, "dependency_not_found", { details: { field: "dependsOn", value: dependency, reason: "The dependency is not available." } });
-      try { this.requireScope(authority, row.company_id, row.project_id); }
+      const unavailable = () => new TaskFailure("The dependency is not available.", 422, "dependency_not_found", { details: { field: "dependsOn", value: dependency, reason: "The dependency is not available." } });
+      if (!this.repository.row(dependency)) throw unavailable();
+      try { this.requireReadableAgentApiTask(authority.principal, dependency); }
       catch { throw new TaskFailure("The dependency is not available.", 422, "dependency_not_found", { details: { field: "dependsOn", value: dependency, reason: "The dependency is not available." } }); }
-      if (row.creator_agent_id !== authority.principal.agentId) throw new TaskFailure("The dependency is not permitted.", 422, "dependency_not_permitted", { details: { field: "dependsOn", value: dependency, reason: "The dependency is not permitted." } });
     }
     const task = this.repository.row(taskId);
     if (!task) throw new TaskFailure("Not found", 404);
@@ -477,11 +476,9 @@ export class TaskService {
       const projectSnapshot = this.projectConfigurationSignature(project);
       if (!project.repository) throw new TaskFailure("Configure the project repository before creating a task", 422);
       if (authority.kind === "agentApi") for (const dependency of request.dependsOn) {
-        const row = this.repository.row(dependency);
-        if (!row) throw new TaskFailure("The dependency is not available.", 422, "dependency_not_found", { details: { field: "dependsOn", value: dependency, reason: "The dependency is not available." } });
-        try { this.requireScope(authority, row.company_id, row.project_id); }
+        if (!this.repository.row(dependency)) throw new TaskFailure("The dependency is not available.", 422, "dependency_not_found", { details: { field: "dependsOn", value: dependency, reason: "The dependency is not available." } });
+        try { this.requireReadableAgentApiTask(authority.principal, dependency); }
         catch { throw new TaskFailure("The dependency is not available.", 422, "dependency_not_found", { details: { field: "dependsOn", value: dependency, reason: "The dependency is not available." } }); }
-        if (row.creator_agent_id !== authority.principal.agentId) throw new TaskFailure("The dependency is not permitted.", 422, "dependency_not_permitted", { details: { field: "dependsOn", value: dependency, reason: "The dependency is not permitted." } });
       }
       const pullRequestDependencies = await this.observePullRequestDependencies(project.repository, request.blockedByPullRequests, authority.kind === "agentApi");
       const defaults = this.database.authQuery(db => z.object({ root: z.string(), worker: z.string() }).parse(db.prepare("SELECT root_profile_id AS root, worker_profile_id AS worker FROM forge_projects WHERE id = ? AND company_id = ?").get(project.id, companyId)));
@@ -548,7 +545,10 @@ export class TaskService {
         const result = this.repository.create({ taskId, companyId, creator, request, requestHash, configuration, rootProfile, workerProfile, advisorProfiles, images: dryRun ? [] : images, startQueued: request.startImmediately, ...(copiedFromTaskId ? { copiedFromTaskId } : {}) });
         if (capturedDispatch) new GithubTriggerDispatchRepository(this.database).linkTask(capturedDispatch.id, result.task.id);
         if (result.created) {
-          for (const dependency of request.dependsOn) this.requireTask(authority, dependency);
+          for (const dependency of request.dependsOn) {
+            if (authority.kind === "agentApi") this.requireReadableAgentApiTask(authority.principal, dependency);
+            else this.requireTask(authority, dependency);
+          }
           const stamp = new Date().toISOString();
           for (const dependency of [...new Set(request.dependsOn)].sort()) db.prepare("INSERT INTO forge_task_dependencies (task_id, depends_on_task_id, created_at) VALUES (?, ?, ?)").run(result.task.id, dependency, stamp);
           if (pullRequestDependencies.length) replacePullRequestDependenciesInTransaction(db, result.task.id, pullRequestDependencies);

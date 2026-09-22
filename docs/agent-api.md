@@ -184,8 +184,8 @@ observes a merged pull request, when the prerequisites change, and on every
 scheduler tick after a restart. Cancelling a queued task clears its intent.
 
 Rejected create inputs include `field`, `value`, and `reason`. Project IDs use
-`project_not_found`. Dependencies use `dependency_not_found` or
-`dependency_not_permitted`. Profile IDs use `root_profile_not_found`,
+`project_not_found`. Dependencies use `dependency_not_found`. Profile IDs use
+`root_profile_not_found`,
 `root_profile_not_permitted`, `worker_profile_not_found`,
 `worker_profile_not_permitted`, `advisor_profile_not_found`, or
 `advisor_profile_not_permitted`. Source issues, pull requests, and branches
@@ -208,15 +208,14 @@ reports them twice from the same edges: `dependsOn` has the IDs, and
 Set them at creation with `dependsOn`, or replace the whole set with
 `PUT /api/agent/tasks/:taskId/dependencies` and `{ "dependsOn": [...] }`. The
 body is the complete set: an omitted ID is removed, and `[]` removes every
-prerequisite. Each prerequisite must be a task this agent created in the same
-company. A self-reference or a cycle returns `422 task_unavailable`. An
-unavailable prerequisite returns `422 dependency_not_found`. A readable task
-created by another agent returns `422 dependency_not_permitted`. Both include
+prerequisite. A prerequisite can be any task the agent can read in a granted
+project. The task waits for the prerequisite. Reading a prerequisite gives no
+commands on it. A self-reference or a cycle returns `422 task_unavailable`.
+An unavailable prerequisite returns `422 dependency_not_found`. Both include
 `field`, `value`, and `reason`, and the current set stays unchanged. Send
 `"dryRun": true` to validate a replacement and receive the projected
 dependencies and queue state without writing edges, queue state, or audits.
-Unknown
-fields, such as `blockedByTaskId`, return `400 request_invalid`.
+Unknown fields, such as `blockedByTaskId`, return `400 request_invalid`.
 
 `docs/agent-mcp.md` describes the stdio MCP bridge that exposes these
 routes as tools.

@@ -9,7 +9,7 @@ import { AGENT_API_MCP_AUTHORITY, AGENT_API_RUNTIME_AUTHORITY } from "../contrac
  */
 
 const AUTHORIZATION = "The remote MCP endpoint uses OAuth 2.1 browser approval. The Agent API uses a paired-agent bearer credential. Both methods bind one external-agent identity to one company and its granted projects.";
-const TASK_INPUT_FAILURE_CODES = "Task input errors include project_not_found, dependency_not_found, dependency_not_permitted, root_profile_not_found, root_profile_not_permitted, worker_profile_not_found, worker_profile_not_permitted, advisor_profile_not_found, advisor_profile_not_permitted, source_issue_rejected, source_pull_request_rejected, source_branch_rejected, workflow_not_found, workflow_not_permitted, template_not_found, and template_not_permitted. They include field, value, and reason.";
+const TASK_INPUT_FAILURE_CODES = "Task input errors include project_not_found, dependency_not_found, root_profile_not_found, root_profile_not_permitted, worker_profile_not_found, worker_profile_not_permitted, advisor_profile_not_found, advisor_profile_not_permitted, source_issue_rejected, source_pull_request_rejected, source_branch_rejected, workflow_not_found, workflow_not_permitted, template_not_found, and template_not_permitted. They include field, value, and reason.";
 
 const CATALOG = {
   service: "Forge",

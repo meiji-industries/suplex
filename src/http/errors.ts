@@ -43,12 +43,11 @@ function bodyParserMessage(code: string): string {
    return Boolean(error && typeof error === "object" && "validation" in error);
  }
 
-function agentApiTaskFailureCode(error: TaskFailure): "not_found" | "idempotency_conflict" | "command_in_progress" | "revision_stale" | "illegal_command" | "request_invalid" | "delivery_policy_rejected" | "project_not_found" | "dependency_not_found" | "dependency_not_permitted" | "root_profile_not_found" | "root_profile_not_permitted" | "worker_profile_not_found" | "worker_profile_not_permitted" | "advisor_profile_not_found" | "advisor_profile_not_permitted" | "source_issue_rejected" | "source_pull_request_rejected" | "source_branch_rejected" | "workflow_not_found" | "workflow_not_permitted" | "template_not_found" | "template_not_permitted" | "task_unavailable" {
+function agentApiTaskFailureCode(error: TaskFailure): "not_found" | "idempotency_conflict" | "command_in_progress" | "revision_stale" | "illegal_command" | "request_invalid" | "delivery_policy_rejected" | "project_not_found" | "dependency_not_found" | "root_profile_not_found" | "root_profile_not_permitted" | "worker_profile_not_found" | "worker_profile_not_permitted" | "advisor_profile_not_found" | "advisor_profile_not_permitted" | "source_issue_rejected" | "source_pull_request_rejected" | "source_branch_rejected" | "workflow_not_found" | "workflow_not_permitted" | "template_not_found" | "template_not_permitted" | "task_unavailable" {
   if (error.statusCode === 404) return "not_found";
   if (error.code === "delivery_policy_rejected") return "delivery_policy_rejected";
   if (error.code === "project_not_found") return "project_not_found";
   if (error.code === "dependency_not_found") return "dependency_not_found";
-  if (error.code === "dependency_not_permitted") return "dependency_not_permitted";
   if (error.code === "root_profile_not_found") return "root_profile_not_found";
   if (error.code === "root_profile_not_permitted") return "root_profile_not_permitted";
   if (error.code === "worker_profile_not_found") return "worker_profile_not_found";

@@ -1918,6 +1918,44 @@ const createDependencyTask = async (title: string, idempotencyKey: string, depen
   return response;
 };
 
+test("an agent can wait for a readable human task without gaining command authority", async () => {
+  const humanPrerequisite = (await tasks.createTask(adminId, companyId, {
+    projectId,
+    title: "Human prerequisite",
+    idempotencyKey: "human-prerequisite-001",
+  })).task;
+
+  const created = await app.inject({
+    method: "POST", url: "/api/agent/tasks", headers: { Authorization: `Bearer ${agentCredential}` },
+    payload: { projectId, title: "Created with human prerequisite", idempotencyKey: "human-prerequisite-create-001", dependsOn: [humanPrerequisite.id], queue: true },
+  });
+  expect(created.statusCode, created.body).toBe(201);
+  expect(created.json()).toMatchObject({ dependsOn: [humanPrerequisite.id], status: "backlog", queue: { startIntent: "queued", state: "queued" } });
+  expect(tasks.repository.controls.taskSpend(created.json().id as string).turns).toBe(0);
+
+  const later = await createDependencyTask("Set human prerequisite later", "human-prerequisite-put-001");
+  const setLater = await app.inject({
+    method: "PUT", url: `/api/agent/tasks/${later.json().id}/dependencies`, headers: { Authorization: `Bearer ${agentCredential}` },
+    payload: { dependsOn: [humanPrerequisite.id] },
+  });
+  expect(setLater.statusCode, setLater.body).toBe(200);
+  const queuedLater = await command(later.json().id as string, { command: "start_task", revision: setLater.json().revision, idempotencyKey: "human-prerequisite-start-001" });
+  expect(queuedLater.statusCode, queuedLater.body).toBe(200);
+  expect(queuedLater.json()).toMatchObject({ dependsOn: [humanPrerequisite.id], status: "backlog", queue: { startIntent: "queued", state: "queued" } });
+
+  const humanRead = await readTask(humanPrerequisite.id);
+  expect(humanRead.statusCode, humanRead.body).toBe(200);
+  expect(humanRead.json()).toMatchObject({ id: humanPrerequisite.id, permittedCommands: [] });
+  const humanCommand = await command(humanPrerequisite.id, { command: "start_task", revision: humanRead.json().revision, idempotencyKey: "human-prerequisite-command-001" });
+  expect(humanCommand.statusCode).toBe(404);
+  expect(humanCommand.json().code).toBe("not_found");
+
+  tasks.startTask(adminId, humanPrerequisite.id);
+  tasks.repository.controls.markDelivered(humanPrerequisite.id);
+  expect(tasks.getTask(adminId, created.json().id as string)).toMatchObject({ status: "active", queue: { state: "running" } });
+  expect(tasks.getTask(adminId, later.json().id as string)).toMatchObject({ status: "active", queue: { state: "running" } });
+});
+
 test("task dependencies are declared on create, replaced through the agent route, and visible on the projection", async () => {
   const first = await createDependencyTask("Dependency root", "dependency-root-001");
   expect(first.statusCode, first.body).toBe(201);
@@ -1985,7 +2023,7 @@ test("task dependencies are declared on create, replaced through the agent route
   expect(afterHumanEdit.json()).toMatchObject({ dependsOn: [firstId], blockedBy: [{ id: firstId, title: "Dependency root", status: "backlog" }] });
 });
 
-test("a cycle, a self-dependency, and a dependency outside the agent scope are rejected", async () => {
+test("a cycle, a self-dependency, and dependencies outside the agent scope are rejected", async () => {
   const first = await createDependencyTask("Cycle a", "cycle-a-001");
   const second = await createDependencyTask("Cycle b", "cycle-b-001");
   const firstId = first.json().id as string;
@@ -2005,7 +2043,14 @@ test("a cycle, a self-dependency, and a dependency outside the agent scope are r
   expect(self.statusCode).toBe(422);
   expect(self.json().error).toBe("A task cannot depend on itself");
 
-  // Another agent's task is not enumerable, so it cannot become a dependency.
+  const ungrantedPrerequisite = (await tasks.createTask(adminId, companyId, { projectId: otherProjectId, title: "Ungranted prerequisite", idempotencyKey: "ungranted-prerequisite-001" })).task;
+  const crossCompanyPrerequisite = (await tasks.createTask(adminId, crossCompanyId, { projectId: crossCompanyProjectId, title: "Cross-company prerequisite", idempotencyKey: "cross-company-prerequisite-001" })).task;
+  for (const prerequisite of [ungrantedPrerequisite, crossCompanyPrerequisite]) {
+    const outOfScope = await dependencies(firstId, [prerequisite.id]);
+    expect(outOfScope.statusCode).toBe(422);
+    expect(outOfScope.json()).toMatchObject({ code: "dependency_not_found", field: "dependsOn", value: prerequisite.id, reason: "The dependency is not available." });
+  }
+
   const otherIssued = externalAgent.create(adminId, { name: "Scope Bot", companyId, projectIds: [projectId] });
   const otherCredential = externalAgent.exchange({ pairingCode: otherIssued.pairingCode, profileId: "profile-scope" }).credential;
   const foreign = await app.inject({
@@ -2013,8 +2058,9 @@ test("a cycle, a self-dependency, and a dependency outside the agent scope are r
     payload: { projectId, title: "Foreign task", idempotencyKey: "foreign-task-001" },
   });
   const outOfScope = await dependencies(firstId, [foreign.json().id as string]);
-  expect(outOfScope.statusCode).toBe(422);
-  expect(outOfScope.json()).toMatchObject({ code: "dependency_not_permitted", field: "dependsOn", value: foreign.json().id, reason: "The dependency is not permitted." });
+  expect(outOfScope.statusCode, outOfScope.body).toBe(200);
+  expect(outOfScope.json()).toMatchObject({ dependsOn: [foreign.json().id] });
+  expect((await dependencies(firstId, [])).statusCode).toBe(200);
   expect(tasks.getTask(adminId, firstId).dependsOn).toEqual([]);
 
   const unknown = await dependencies(firstId, ["task_unknown"]);
@@ -2030,11 +2076,9 @@ test("a cycle, a self-dependency, and a dependency outside the agent scope are r
     expect(rejected.json()).toMatchObject({ code: "dependency_not_found", field: "dependsOn", value: dependency, reason: "The dependency is not available." });
     expect(runtimeCounts().forge_tasks).toBe(before);
   }
-  const foreignBefore = runtimeCounts().forge_tasks;
   const foreignCreate = await createDependencyTask("Foreign dependency", "create-dependency-foreign-001", [foreign.json().id as string]);
-  expect(foreignCreate.statusCode).toBe(422);
-  expect(foreignCreate.json()).toMatchObject({ code: "dependency_not_permitted", field: "dependsOn", value: foreign.json().id, reason: "The dependency is not permitted." });
-  expect(runtimeCounts().forge_tasks).toBe(foreignBefore);
+  expect(foreignCreate.statusCode, foreignCreate.body).toBe(201);
+  expect(foreignCreate.json()).toMatchObject({ dependsOn: [foreign.json().id] });
 
   const ungrantedUpdate = await dependencies(firstId, [ungranted.id]);
   expect(ungrantedUpdate.statusCode).toBe(422);

@@ -95,7 +95,7 @@ const sha = z.string().regex(/^[a-f0-9]{40,64}$/);
 /** bound: dependency fan-out per task */
 const MAX_DEPENDENCIES = 50;
 
-export const AGENT_API_PREREQUISITE_SCOPE = "Each prerequisite must be a task this agent created.";
+export const AGENT_API_PREREQUISITE_SCOPE = "A prerequisite can be any task the agent can read in a granted project. The task waits for the prerequisite. Reading a prerequisite gives no commands on it. A self-reference, a cycle, or a task outside a granted project is rejected.";
 export const AGENT_API_TASK_COMMANDS = ["start_task", "disarm_task", "cancel_task", "archive_task", "unarchive_task", "duplicate_task", "send_task_note", "recheck_delivery_wait"] as const;
 export type AgentApiTaskCommand = typeof AGENT_API_TASK_COMMANDS[number];
 const AGENT_API_DELIVERY_COMMANDS = ["observe_delivery", "request_delivery_repair", "decide_delivery_wait", "read_merge_train", "request_merge_approval", "merge_pull_request"] as const;
@@ -472,7 +472,7 @@ export const AgentApiTaskListResponseSchema = z.object({
 
 export const AgentApiRuntimeErrorSchema = z.object({
   error: z.string(),
-  code: z.enum(["credential_invalid", "not_found", "resource_not_found", "idempotency_conflict", "command_in_progress", "revision_stale", "illegal_command", "request_invalid", "delivery_policy_rejected", "project_not_found", "dependency_not_found", "dependency_not_permitted", "root_profile_not_found", "root_profile_not_permitted", "worker_profile_not_found", "worker_profile_not_permitted", "advisor_profile_not_found", "advisor_profile_not_permitted", "source_issue_rejected", "source_pull_request_rejected", "source_branch_rejected", "workflow_not_found", "workflow_not_permitted", "template_not_found", "template_not_permitted", "task_unavailable", "payload_too_large", "unsupported_media_type", "internal_error"]),
+  code: z.enum(["credential_invalid", "not_found", "resource_not_found", "idempotency_conflict", "command_in_progress", "revision_stale", "illegal_command", "request_invalid", "delivery_policy_rejected", "project_not_found", "dependency_not_found", "root_profile_not_found", "root_profile_not_permitted", "worker_profile_not_found", "worker_profile_not_permitted", "advisor_profile_not_found", "advisor_profile_not_permitted", "source_issue_rejected", "source_pull_request_rejected", "source_branch_rejected", "workflow_not_found", "workflow_not_permitted", "template_not_found", "template_not_permitted", "task_unavailable", "payload_too_large", "unsupported_media_type", "internal_error"]),
   field: z.string().optional(),
   value: z.string().optional(),
   reason: z.string().optional(),
@@ -495,7 +495,6 @@ const AgentApiRuntimeErrorResponses = {
   deliveryPolicyRejected: runtimeError("delivery_policy_rejected"),
   projectNotFound: runtimeError("project_not_found").extend({ field: z.literal("projectId"), value: z.string(), reason: z.string() }),
   dependencyNotFound: runtimeError("dependency_not_found").extend({ field: z.string(), value: z.string(), reason: z.string() }),
-  dependencyNotPermitted: runtimeError("dependency_not_permitted").extend({ field: z.literal("dependsOn"), value: z.string(), reason: z.string() }),
   rootProfileNotFound: runtimeError("root_profile_not_found").extend({ field: z.literal("rootProfileId"), value: z.string(), reason: z.string() }),
   rootProfileNotPermitted: runtimeError("root_profile_not_permitted").extend({ field: z.literal("rootProfileId"), value: z.string(), reason: z.string() }),
   workerProfileNotFound: runtimeError("worker_profile_not_found").extend({ field: z.literal("workerProfileId"), value: z.string(), reason: z.string() }),
@@ -572,7 +571,7 @@ export const AgentApiRuntimeOperations = {
       409: z.union([AgentApiRuntimeErrorResponses.idempotencyConflict, AgentApiRuntimeErrorResponses.taskUnavailable]),
       413: AgentApiRuntimeErrorResponses.payloadTooLarge,
       415: AgentApiRuntimeErrorResponses.unsupportedMediaType,
-      422: z.union([AgentApiRuntimeErrorResponses.deliveryPolicyRejected, AgentApiRuntimeErrorResponses.projectNotFound, AgentApiRuntimeErrorResponses.dependencyNotFound, AgentApiRuntimeErrorResponses.dependencyNotPermitted, AgentApiRuntimeErrorResponses.rootProfileNotFound, AgentApiRuntimeErrorResponses.rootProfileNotPermitted, AgentApiRuntimeErrorResponses.workerProfileNotFound, AgentApiRuntimeErrorResponses.workerProfileNotPermitted, AgentApiRuntimeErrorResponses.advisorProfileNotFound, AgentApiRuntimeErrorResponses.advisorProfileNotPermitted, AgentApiRuntimeErrorResponses.sourceIssueRejected, AgentApiRuntimeErrorResponses.sourcePullRequestRejected, AgentApiRuntimeErrorResponses.sourceBranchRejected, AgentApiRuntimeErrorResponses.workflowNotFound, AgentApiRuntimeErrorResponses.workflowNotPermitted, AgentApiRuntimeErrorResponses.templateNotFound, AgentApiRuntimeErrorResponses.templateNotPermitted, AgentApiRuntimeErrorResponses.taskUnavailable]),
+      422: z.union([AgentApiRuntimeErrorResponses.deliveryPolicyRejected, AgentApiRuntimeErrorResponses.projectNotFound, AgentApiRuntimeErrorResponses.dependencyNotFound, AgentApiRuntimeErrorResponses.rootProfileNotFound, AgentApiRuntimeErrorResponses.rootProfileNotPermitted, AgentApiRuntimeErrorResponses.workerProfileNotFound, AgentApiRuntimeErrorResponses.workerProfileNotPermitted, AgentApiRuntimeErrorResponses.advisorProfileNotFound, AgentApiRuntimeErrorResponses.advisorProfileNotPermitted, AgentApiRuntimeErrorResponses.sourceIssueRejected, AgentApiRuntimeErrorResponses.sourcePullRequestRejected, AgentApiRuntimeErrorResponses.sourceBranchRejected, AgentApiRuntimeErrorResponses.workflowNotFound, AgentApiRuntimeErrorResponses.workflowNotPermitted, AgentApiRuntimeErrorResponses.templateNotFound, AgentApiRuntimeErrorResponses.templateNotPermitted, AgentApiRuntimeErrorResponses.taskUnavailable]),
       500: AgentApiRuntimeErrorResponses.internal,
     },
   },
@@ -583,7 +582,7 @@ export const AgentApiRuntimeOperations = {
   setTaskDependencies: {
     params: AgentApiTaskIdParamsSchema,
     body: AgentApiTaskDependenciesBodySchema,
-    response: { 200: z.union([AgentApiSafeTaskProjectionSchema, AgentApiTaskDependenciesDryRunResponseSchema]), 400: AgentApiRuntimeErrorResponses.requestInvalid, 401: AgentApiRuntimeErrorResponses.credentialInvalid, 404: z.union([AgentApiRuntimeErrorResponses.notFound, AgentApiRuntimeErrorResponses.resourceNotFound]), 422: z.union([AgentApiRuntimeErrorResponses.dependencyNotFound, AgentApiRuntimeErrorResponses.dependencyNotPermitted, AgentApiRuntimeErrorResponses.taskUnavailable]), 500: AgentApiRuntimeErrorResponses.internal },
+    response: { 200: z.union([AgentApiSafeTaskProjectionSchema, AgentApiTaskDependenciesDryRunResponseSchema]), 400: AgentApiRuntimeErrorResponses.requestInvalid, 401: AgentApiRuntimeErrorResponses.credentialInvalid, 404: z.union([AgentApiRuntimeErrorResponses.notFound, AgentApiRuntimeErrorResponses.resourceNotFound]), 422: z.union([AgentApiRuntimeErrorResponses.dependencyNotFound, AgentApiRuntimeErrorResponses.taskUnavailable]), 500: AgentApiRuntimeErrorResponses.internal },
   },
   commandTask: {
     params: AgentApiTaskIdParamsSchema,

@@ -35,7 +35,6 @@ const CodexUsageSchema = z.object({
 const ThreadStartedSchema = z.object({ type: z.literal("thread.started"), thread_id: z.string().min(1) }).passthrough();
 const TurnStartedSchema = z.object({ type: z.literal("turn.started") }).passthrough();
 const TurnCompletedSchema = z.object({ type: z.literal("turn.completed"), usage: CodexUsageSchema.optional() }).passthrough();
-const ZERO_USAGE = { input_tokens: 0, cached_input_tokens: 0, cache_write_input_tokens: 0, output_tokens: 0, reasoning_output_tokens: 0 };
 const TurnFailedSchema = z.object({ type: z.literal("turn.failed"), error: z.object({ message: z.string() }).passthrough() }).passthrough();
 const CodexErrorSchema = z.object({ type: z.literal("error"), message: z.string() }).passthrough();
 const ItemEventSchema = z.object({ type: z.enum(["item.started", "item.updated", "item.completed"]), item: CodexItemSchema }).passthrough();
@@ -124,15 +123,34 @@ export interface CodexTurn {
   updatedAt: number;
 }
 
-/** One usage record per completed turn. Codex reports no cost, so listed prices estimate it. */
+type CodexUsage = z.infer<typeof CodexUsageSchema>;
+const USAGE_FIELDS = ["input_tokens", "cached_input_tokens", "cache_write_input_tokens", "output_tokens", "reasoning_output_tokens"] as const;
+
+/** One usage record per completed turn with reported usage. Codex reports no cost, so listed prices estimate it. */
 export function codexUsage(turns: readonly CodexTurn[], sessionId: string, role: TaskUsage["role"], pricing?: ModelPricingCatalog): TaskUsage[] {
-  return turns.flatMap(turn => {
+  const previousByThread = new Map<string, CodexUsage>();
+  const nativeOrder = turns.every(turn => turn.id.startsWith("msg_"));
+  const ordered = [...turns].sort((a, b) =>
+    nativeOrder
+      ? a.id.localeCompare(b.id)
+      : a.updatedAt - b.updatedAt || a.id.localeCompare(b.id));
+  return ordered.flatMap(turn => {
     const listed = pricing?.get(modelPricingKey("openai", turn.model));
-    let completed = false;
-    let reported: z.infer<typeof CodexUsageSchema> | undefined;
-    for (const event of turn.events) if (event.type === "turn.completed") { completed = true; reported = event.usage ?? reported; }
-    if (!completed) return [];
-    const native = reported ?? ZERO_USAGE;
+    let reported: CodexUsage | undefined;
+    for (const event of turn.events) if (event.type === "turn.completed" && event.usage) reported = event.usage;
+    if (!reported) return [];
+    const threadId = codexThreadId(turn.events);
+    const previous = threadId ? previousByThread.get(threadId) : undefined;
+    const reset = previous && USAGE_FIELDS.some(field => reported[field] < previous[field]);
+    const baseline = previous && !reset ? previous : undefined;
+    const native = {
+      input_tokens: reported.input_tokens - (baseline?.input_tokens ?? 0),
+      cached_input_tokens: reported.cached_input_tokens - (baseline?.cached_input_tokens ?? 0),
+      cache_write_input_tokens: reported.cache_write_input_tokens - (baseline?.cache_write_input_tokens ?? 0),
+      output_tokens: reported.output_tokens - (baseline?.output_tokens ?? 0),
+      reasoning_output_tokens: reported.reasoning_output_tokens - (baseline?.reasoning_output_tokens ?? 0),
+    };
+    if (threadId) previousByThread.set(threadId, reported);
     const tokens = emptyTokens();
     // `input_tokens` is inclusive of both cache figures and `output_tokens` of
     // reasoning, so each total is split into slices that partition it.

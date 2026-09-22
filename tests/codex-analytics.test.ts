@@ -28,7 +28,8 @@ test("analytics reads Codex usage and estimates its cost from the turn log", asy
   // The latest dispatch used a different model; turn-1 keeps the one it ran with.
   await dispatch("0f1e2d3c-4b5a-4968-8778-695a4b3c2d1e", "turn-1", "gpt-5.6-sol");
   await dispatch("1f1e2d3c-4b5a-4968-8778-695a4b3c2d1e", "turn-2", "gpt-6-astra");
-  const pricing = new Map([[modelPricingKey("openai", "gpt-5.6-sol"), { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 6.25 }]]);
+  const prices = { input: 5, output: 30, cacheRead: 0.5, cacheWrite: 6.25 };
+  const pricing = new Map([[modelPricingKey("openai", "gpt-5.6-sol"), prices], [modelPricingKey("openai", "gpt-6-astra"), prices]]);
   const reader = new AnalyticsHistoryReader(databasePath, join(root, "runtime", "analytics"));
 
   const usage = await reader.read(session, pricing);
@@ -39,6 +40,23 @@ test("analytics reads Codex usage and estimates its cost from the turn log", asy
     tokens: { input: 300, output: 30, reasoning: 20, cache: { read: 600, write: 100 } },
   }]);
   expect(usage[0]!.cost).toBeCloseTo(0.003925, 10);
+
+  const secondPath = join(directory, "turn-turn-2.jsonl");
+  const secondTurn = (input: number, cached: number, written: number, output: number, reasoning: number) => [
+    JSON.stringify({ type: "thread.started", thread_id: "11111111-2222-4333-8444-555555555555" }),
+    JSON.stringify({ type: "turn.completed", usage: { input_tokens: input, cached_input_tokens: cached, cache_write_input_tokens: written, output_tokens: output, reasoning_output_tokens: reasoning } }),
+  ].join("\n") + "\n";
+  await writeFile(secondPath, secondTurn(2_000, 1_200, 200, 100, 40));
+  const resumed = await reader.read(session, pricing);
+  expect(resumed.map(entry => [entry.model, entry.tokens.input, entry.cost])).toEqual([
+    ["gpt-5.6-sol", 300, usage[0]!.cost],
+    ["gpt-6-astra", 300, usage[0]!.cost],
+  ]);
+
+  await writeFile(secondPath, secondTurn(3_000, 1_800, 300, 150, 60));
+  const refreshed = await reader.read(session, pricing);
+  expect(refreshed).toHaveLength(2);
+  expect(refreshed[1]!.cost).toBeCloseTo(2 * usage[0]!.cost, 10);
 });
 
 test("Codex usage is unpriced when the catalog has no entry for its model", async () => {

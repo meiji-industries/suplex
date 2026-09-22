@@ -59,6 +59,58 @@ test("each turn is priced with the model it was dispatched with", () => {
   expect(usage.map(entry => entry.model)).toEqual(["gpt-5.5", "gpt-6-astra"]);
 });
 
+test("usage counts cumulative native thread totals once across shuffled turns", () => {
+  const turn = (id: string, thread: string, input: number, updatedAt: number, completed = true, usage = true) => ({
+    id, model: "gpt-5.6-sol", updatedAt,
+    events: parseCodexEvents([
+      JSON.stringify({ type: "thread.started", thread_id: thread }),
+      completed ? JSON.stringify({ type: "turn.completed", ...(usage ? { usage: { input_tokens: input, output_tokens: input / 10 } } : {}) }) : "",
+    ].filter(Boolean).join("\n")),
+  });
+  const turns = [
+    turn("a-later", "thread-a", 300, 30),
+    turn("b-first", "thread-b", 50, 15),
+    turn("a-first", "thread-a", 100, 10),
+    turn("a-incomplete", "thread-a", 0, 35, false),
+    turn("a-no-usage", "thread-a", 0, 40, true, false),
+    turn("a-last", "thread-a", 350, 50),
+  ];
+
+  const usage = codexUsage(turns, "session", "worker");
+
+  expect(usage.map(entry => [entry.turnId, entry.tokens.input, entry.tokens.output])).toEqual([
+    ["a-first", 100, 10], ["b-first", 50, 5], ["a-later", 200, 20],
+    ["a-last", 50, 5],
+  ]);
+});
+
+test("a reset native counter starts a new usage sequence", () => {
+  const events = (input: number) => parseCodexEvents([
+    JSON.stringify({ type: "thread.started", thread_id: "thread-a" }),
+    JSON.stringify({ type: "turn.completed", usage: { input_tokens: input, output_tokens: input / 10 } }),
+  ].join("\n"));
+  const usage = codexUsage([
+    { id: "first", model: "gpt-5.6-sol", events: events(100), updatedAt: 10 },
+    { id: "reset", model: "gpt-5.6-sol", events: events(20), updatedAt: 20 },
+  ], "session", "worker");
+  expect(usage.map(entry => entry.tokens.input)).toEqual([100, 20]);
+});
+
+test("native message order wins over changed file timestamps and raw counters are subtracted first", () => {
+  const events = (input: number, cached: number, output: number, reasoning: number) => parseCodexEvents([
+    JSON.stringify({ type: "thread.started", thread_id: "thread-a" }),
+    JSON.stringify({ type: "turn.completed", usage: { input_tokens: input, cached_input_tokens: cached, output_tokens: output, reasoning_output_tokens: reasoning } }),
+  ].join("\n"));
+  const usage = codexUsage([
+    { id: "msg_0002", model: "gpt-5.6-sol", events: events(300, 250, 60, 20), updatedAt: 10 },
+    { id: "msg_0001", model: "gpt-5.6-sol", events: events(100, 80, 20, 5), updatedAt: 20 },
+  ], "session", "worker");
+  expect(usage.map(entry => [entry.turnId, entry.tokens])).toMatchObject([
+    ["msg_0001", { input: 20, output: 15, reasoning: 5, cache: { read: 80 } }],
+    ["msg_0002", { input: 30, output: 25, reasoning: 15, cache: { read: 170 } }],
+  ]);
+});
+
 test("an error item is rendered rather than dropped", () => {
   expect(renderCodexEvent(parseCodexEvents(JSON.stringify({ type: "item.completed", item: { id: "item_0", type: "error", message: "context window exceeded" } }))[0]!)).toBe("error: context window exceeded\n");
 });

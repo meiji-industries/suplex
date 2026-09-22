@@ -22,8 +22,9 @@ export class CodexSessionReader implements NativeSessionReader {
       .map(name => readHeadlessTurnRecord(join(directory, name)).catch(() => null)));
     return new Map(records.flatMap(record => {
       if (!record) return [];
-      const position = record.processIdentity.argv.indexOf("-m");
-      return [[record.turnId, position >= 0 ? record.processIdentity.argv[position + 1] ?? "unknown" : "unknown"] as const];
+      const dispatchArguments = record.dispatchArguments ?? record.processIdentity.argv;
+      const position = dispatchArguments.indexOf("-m");
+      return [[record.turnId, position >= 0 ? dispatchArguments[position + 1] ?? "unknown" : "unknown"] as const];
     }));
   }
 

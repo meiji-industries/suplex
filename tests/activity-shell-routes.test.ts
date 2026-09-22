@@ -147,14 +147,13 @@ describe("Activity shell lifecycle", () => {
 
     await act(async () => navigate("/tasks/task-a?company=company-a"));
     await act(async () => navigate("/tasks/task-b?company=company-a"));
-    await act(async () => navigate("/projects?company=company-a"));
     await act(async () => navigate("/timeline?company=company-a"));
     await act(async () => navigate("/tasks/task-a?company=company-a", "popstate"));
 
     expect(container.textContent).toContain("First task");
     expect(container.querySelector("main")?.textContent).toBe("/tasks/task-a");
     expect(state.sidebarMounts).toBe(1);
-    expect(state.viewMounts).toEqual(["tasks:/tasks", "tasks:/tasks/task-a", "tasks:/tasks/task-b", "projects:/projects", "timeline:/timeline", "tasks:/tasks/task-a"]);
+    expect(state.viewMounts).toEqual(["tasks:/tasks", "tasks:/tasks/task-a", "tasks:/tasks/task-b", "timeline:/timeline", "tasks:/tasks/task-a"]);
   });
 
   it("uses the settings sidebar outside the Activity shell", async () => {

@@ -25,7 +25,7 @@ import { OnboardingView } from "../features/onboarding/onboarding-wizard.js";
 import { ApplicationShell } from "./application-frame.js";
 
 export function activityShellKey(pathname: string): "activity" | undefined {
-  if (pathname === "/projects" || pathname.startsWith("/projects/") || pathname === "/tasks" || pathname.startsWith("/tasks/") || pathname === "/board" || pathname.startsWith("/board/") || pathname === "/timeline" || pathname === "/analytics") return "activity";
+  if (pathname === "/tasks" || pathname.startsWith("/tasks/") || pathname === "/board" || pathname.startsWith("/board/") || pathname === "/timeline" || pathname === "/analytics") return "activity";
   return undefined;
 }
 import { SetupView } from "../features/settings/setup.js";

@@ -1,4 +1,4 @@
-import { ChartNoAxesGantt, CirclePlus, Columns3, ClipboardList, EllipsisVertical, FolderGit2, LogOut, Search, Settings, Shield, UserRound, type LucideIcon } from "lucide-react";
+import { ChartNoAxesGantt, CirclePlus, Columns3, ClipboardList, EllipsisVertical, LogOut, Search, Settings, Shield, UserRound, type LucideIcon } from "lucide-react";
 import { useEffect, useMemo, useState, type ReactElement } from "react";
 import { BarChart3 } from "lucide-react";
 
@@ -33,7 +33,6 @@ function MainNavigation({ close }: { close?: () => void }): ReactElement {
       { href: withCompany("/board", companyId), label: "Board", icon: Columns3 },
       { href: withCompany("/timeline", companyId), label: "Timeline", icon: ChartNoAxesGantt },
       { href: withCompany("/analytics", companyId), label: "Analytics", icon: BarChart3 },
-      { href: withCompany("/projects", companyId), label: "Projects", icon: FolderGit2 },
     ];
   }, [companyId]);
   return (
@@ -57,7 +56,7 @@ function NavigationSearch({ close }: { close?: () => void }): ReactElement {
   const items: NavItem[] = [
     { href: withCompany("/timeline", companyId), label: "Timeline", icon: ChartNoAxesGantt },
     { href: withCompany("/analytics", companyId), label: "Analytics", icon: BarChart3 },
-    { href: withCompany("/projects", companyId), label: "Projects", icon: FolderGit2 }, { href: withCompany("/tasks", companyId), label: "Tasks", icon: ClipboardList }, { href: withCompany("/board", companyId), label: "Board", icon: Columns3 }, { href: withCompany("/health", companyId), label: "Host health", icon: Shield },
+    { href: withCompany("/tasks", companyId), label: "Tasks", icon: ClipboardList }, { href: withCompany("/board", companyId), label: "Board", icon: Columns3 }, { href: withCompany("/health", companyId), label: "Host health", icon: Shield },
   ];
   const visible = items.filter((item) => item.label.toLowerCase().includes(query.trim().toLowerCase()));
   useEffect(() => {

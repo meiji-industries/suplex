@@ -25,6 +25,7 @@ export const HeadlessTurnRecordSchema = z.object({
     startTime: z.string().min(1),
     ownerUid: z.number().int().nonnegative(),
   }).strict(),
+  dispatchArguments: z.array(z.string()).optional(),
 }).strict();
 export type HeadlessTurnRecord = z.infer<typeof HeadlessTurnRecordSchema>;
 
@@ -124,7 +125,7 @@ export async function dispatchHeadless(input: { runtimeDirectory: string; scope:
   const processIdentity = inspection && inspection.ownerUid !== undefined && inspection.processGroup !== undefined
     ? { command: inspection.command, executable: inspection.executable, argv: inspection.argv, processGroup: inspection.processGroup, startTime: inspection.startTime, ownerUid: inspection.ownerUid }
     : { command: input.executable, executable: input.executable, argv: [input.executable, ...input.args], processGroup: pid, startTime: "exited-before-inspection", ownerUid: process.getuid?.() ?? 0 };
-  const record: HeadlessTurnRecord = { generation, turnId: input.intent.messageID, sessionID: input.intent.sessionID, pid, processIdentity };
+  const record: HeadlessTurnRecord = { generation, turnId: input.intent.messageID, sessionID: input.intent.sessionID, pid, processIdentity, dispatchArguments: [input.executable, ...input.args] };
   const pending = join(input.runtimeDirectory, `dispatch-${generation}.json.pending`);
   await writeFile(pending, JSON.stringify(record), { mode: 0o600 });
   await rename(pending, join(input.runtimeDirectory, `dispatch-${generation}.json`));

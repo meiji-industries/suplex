@@ -202,7 +202,7 @@ export class CodexTaskRuntime implements TaskHarness {
     if (!threadId) {
       // Only an unresumable thread is dropped. An auth or network failure keeps
       // it, because starting over would silently abandon the conversation.
-      if (record.processIdentity.argv.includes("resume") && CODEX_UNRESUMABLE.test(await readHeadlessText(files.stderr) ?? "")) await forgetCodexThread(runtimeDirectory);
+      if ((record.dispatchArguments ?? record.processIdentity.argv).includes("resume") && CODEX_UNRESUMABLE.test(await readHeadlessText(files.stderr) ?? "")) await forgetCodexThread(runtimeDirectory);
       return { ...common, state: "error", reason: "native_startup_failed" };
     }
     return { ...common, state: "interrupted", reason: "dispatch_process_stopped", interruptedExecution: { stoppedServerGeneration: record.generation } };

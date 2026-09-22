@@ -3,12 +3,12 @@ import { Alert, AlertDescription } from "../../components/ui/alert.js";
 import { Empty, EmptyContent, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "../../components/ui/empty.js";
 import { Spinner } from "../../components/ui/spinner.js";
 import { NewButton } from "../../components/ui/new-button.js";
-import { ApplicationFrame } from "../../shell/application-frame.js";
 import { useCompanyContext } from "../../shell/company-context.js";
-import { readJson } from "../../lib/api.js";
+import { readJson, withCompany } from "../../lib/api.js";
 import { useCallback, useEffect, useRef, useState, type ReactElement } from "react";
 import { reconcileScopedNotFound, type ApiProfile, type ApiProject } from "../../shell/view-shared.js";
 import { CreateProjectDialog } from "./create-project-dialog.js";
+import { SettingsLayout } from "../settings/settings-layout.js";
 
 import { ProjectCards } from "./project-cards.js";
 
@@ -54,9 +54,10 @@ export function ProjectsView(): ReactElement {
 
 
   return (
-    <ApplicationFrame title="Projects" headerRight={currentCompany?.status === "active" ? <NewButton onClick={() => setCreateOpen(true)} disabled={!companyId}>New project</NewButton> : undefined}>
+    <SettingsLayout title="Projects" companyId={companyId} backHref={withCompany("/tasks", companyId)} activeHref={withCompany("/projects", companyId)}>
       <div className="bg-background text-foreground">
-        <section className="p-4">
+        <section className="py-4">
+          {currentCompany?.status === "active" ? <div className="mb-3 flex justify-end"><NewButton onClick={() => setCreateOpen(true)} disabled={!companyId}>New project</NewButton></div> : null}
           {currentCompany && currentCompany.status !== "active" ? <p className="mb-3 text-xs text-muted-foreground">{currentCompany.status === "paused" ? "Company paused. New projects are unavailable." : "Company archived. New projects are unavailable."}</p> : null}
           {currentCompany ? (
             <div className="grid gap-3">
@@ -76,6 +77,6 @@ export function ProjectsView(): ReactElement {
         </section>
         <CreateProjectDialog open={createOpen} onOpenChange={setCreateOpen} companyId={companyId} companyStatus={currentCompany?.status} onCreated={reload} reloadCompanies={reloadCompanies} />
       </div>
-    </ApplicationFrame>
+    </SettingsLayout>
   );
 }

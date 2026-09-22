@@ -2,8 +2,8 @@ import { ArrowLeft } from "lucide-react";
 import type { ReactElement, ReactNode } from "react";
 
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../../components/ui/tabs.js";
-import { ApplicationFrame } from "../../shell/application-frame.js";
 import { withCompany } from "../../lib/api.js";
+import { SettingsLayout } from "../settings/settings-layout.js";
 import { isProjectSection, PROJECT_SECTIONS, type ProjectSection } from "./project-details-model.js";
 
 type ProjectNavigation = ProjectSection | "templates";
@@ -17,8 +17,8 @@ export function ProjectDetailsLayout({ projectId, companyId, title, active, onSe
   children: ReactNode;
 }): ReactElement {
   const projectHref = withCompany(`/projects/${encodeURIComponent(projectId)}`, companyId);
-  return <ApplicationFrame title={title}>
-    <div className="min-w-0 px-4 pb-8 lg:px-6">
+  return <SettingsLayout title={title} companyId={companyId} backHref={withCompany("/tasks", companyId)} activeHref={withCompany("/projects", companyId)}>
+    <div className="min-w-0">
       <div className="py-3">
         <a className="inline-flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground" href={withCompany("/projects", companyId)}><ArrowLeft className="size-3.5" />Back to projects</a>
       </div>
@@ -34,5 +34,5 @@ export function ProjectDetailsLayout({ projectId, companyId, title, active, onSe
         <TabsContent value={active}>{children}</TabsContent>
       </Tabs>
     </div>
-  </ApplicationFrame>;
+  </SettingsLayout>;
 }

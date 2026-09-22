@@ -1,4 +1,5 @@
 import type { WorkerReplacementRequest } from "../coordination/worker-replacement-contracts.js";
+import type { CoordinatorReplacementRequest } from "../coordination/coordinator-replacement-contracts.js";
 import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 import { TaskAnalyticsStore } from "./analytics/store.js";
 import { taskAnalytics } from "./analytics/analytics.js";
@@ -631,6 +632,13 @@ export class TaskService {
     this.getTask(userId, taskId);
     try { this.repository.controls.replaceWorker(taskId, request); }
     catch (error) { throw new TaskFailure(error instanceof Error ? error.message : "Forge could not replace the Worker.", 409); }
+    return this.getTask(userId, taskId);
+  }
+
+  replaceCoordinator(userId: string, taskId: string, request: CoordinatorReplacementRequest): Task {
+    this.getTask(userId, taskId);
+    try { this.repository.controls.replaceCoordinator(taskId, request); }
+    catch (error) { throw new TaskFailure(error instanceof Error ? error.message : "Forge could not select the Coordinator.", 409); }
     return this.getTask(userId, taskId);
   }
 

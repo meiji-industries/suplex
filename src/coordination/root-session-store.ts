@@ -1,4 +1,6 @@
 import { replaceWorker, workerReplacementReady } from "./worker-replacement.js";
+import { replaceCoordinator } from "./coordinator-replacement.js";
+import { CoordinatorReplacementRequestSchema, type CoordinatorReplacementRequest } from "./coordinator-replacement-contracts.js";
 import { WorkerReplacementRequestSchema, type WorkerReplacementRequest } from "./worker-replacement-contracts.js";
 import { createHash, randomUUID } from "node:crypto";
 import { z } from "zod";
@@ -331,13 +333,15 @@ export class TaskControlStore {
   requeueFencedPrompt(input: { turnId: string; attempt: PromptDispatchAttempt; owner: string }): boolean {
     return requeueFencedPrompt(this.database, input, now);
   }
-  completeRootTurn(turnId: string, observation: string, continuation?: string): void {
-    this.database.authTransaction(db => {
+  completeRootTurn(turnId: string, observation: string, continuation?: string): boolean {
+    return this.database.authTransaction(db => {
       const completed = db.prepare("UPDATE forge_task_turns SET status = 'completed', terminal_observation = ?, completed_at = ?, updated_at = ? WHERE id = ? AND status IN ('pending_prompt', 'unknown', 'prompted') RETURNING *").get(observation, now(), now(), turnId) as Row | undefined;
-      if (!completed || !continuation) return;
+      if (!completed) return false;
+      if (!continuation) return true;
       const previous = turn(completed);
-      if (this.get(previous.taskId).status !== "active") return;
+      if (this.get(previous.taskId).status !== "active") return true;
       this.wakeRoot({ taskId: previous.taskId, rootSessionId: previous.sessionId, generation: previous.generation, prompt: continuation });
+      return true;
     });
   }
   claimRoot(input: { taskId: string }): TaskSession {
@@ -603,18 +607,31 @@ export class TaskControlStore {
   }
   scheduleWake(taskId: string, wakeAt: string | null): void { this.database.authTransaction((db) => db.prepare("UPDATE forge_task_controls SET wake_at = ?, updated_at = ? WHERE task_id = ?").run(wakeAt, now(), taskId)); }
   askHuman(taskId: string, question: string, options: HumanQuestionOptions = []): void {
+    if (!this.setHumanQuestion(taskId, question, options)) throw new Error("task_not_active");
+  }
+  askHumanForRoot(root: { taskId: string; sessionId: string; generation: number }, question: string, options: HumanQuestionOptions = []): boolean {
+    return this.setHumanQuestion(root.taskId, question, options, root);
+  }
+  private setHumanQuestion(taskId: string, question: string, options: HumanQuestionOptions, root?: { sessionId: string; generation: number }): boolean {
     if (!question.trim()) throw new Error("question_is_empty");
-    const changed = this.database.authTransaction((db) => db.prepare("UPDATE forge_task_controls SET status = 'waiting_human', human_question = ?, human_question_options_json = ?, human_question_id = ?, limit_pause_json = NULL, wake_at = NULL, workflow_state_json = json_set(workflow_state_json, '$.deliveryWait', json('null')), updated_at = ? WHERE task_id = ? AND status = 'active'").run(question.trim(), JSON.stringify(HumanQuestionOptionsSchema.parse(options)), randomUUID(), now(), taskId).changes);
-    if (changed !== 1) throw new Error("task_not_active");
-    this.observeLifecycle(taskId);
+    const owner = root ? " AND root_session_id = ? AND EXISTS (SELECT 1 FROM forge_task_sessions s WHERE s.id = ? AND s.task_id = forge_task_controls.task_id AND s.kind = 'root' AND s.generation = ? AND s.is_current = 1 AND s.lifecycle <> 'cancelled')" : "";
+    const changed = this.database.authTransaction((db) => db.prepare(`UPDATE forge_task_controls SET status = 'waiting_human', human_question = ?, human_question_options_json = ?, human_question_id = ?, limit_pause_json = NULL, wake_at = NULL, workflow_state_json = json_set(workflow_state_json, '$.deliveryWait', json('null')), updated_at = ? WHERE task_id = ? AND status = 'active'${owner}`).run(question.trim(), JSON.stringify(HumanQuestionOptionsSchema.parse(options)), randomUUID(), now(), taskId, ...(root ? [root.sessionId, root.sessionId, root.generation] : [])).changes);
+    if (changed === 1) this.observeLifecycle(taskId);
+    return changed === 1;
   }
   requireExecutionCleanup(turn: TaskTurn): void {
     this.database.authTransaction(db => {
+      const current = db.prepare("SELECT 1 FROM forge_task_sessions s JOIN forge_task_controls c ON c.task_id = s.task_id WHERE s.id = ? AND s.generation = ? AND s.is_current = 1 AND s.lifecycle <> 'cancelled' AND c.status = 'active' AND (s.kind = 'worker' OR c.root_session_id = s.id)").get(turn.sessionId, turn.generation);
+      if (!current) return;
       this.askHuman(turn.taskId, "The agent stopped during a tool call. A command can still be active in the worktree. Stop those commands before you continue. Describe what you checked, then confirm that all commands from this session have stopped.");
       db.prepare("UPDATE forge_task_controls SET recovery_turn_id = ? WHERE task_id = ?").run(turn.id, turn.taskId);
     });
   }
   replaceWorker(taskId: string, request: WorkerReplacementRequest): TaskSession { return replaceWorker(this.database, taskId, WorkerReplacementRequestSchema.parse(request)); }
+  replaceCoordinator(taskId: string, request: CoordinatorReplacementRequest): TaskSession {
+    const prompt = initialCoordinatorPrompt(this.get(taskId), this.context(taskId), this.dependencySummaries(taskId));
+    return replaceCoordinator(this.database, taskId, CoordinatorReplacementRequestSchema.parse(request), prompt);
+  }
   workerReplacementReady(sessionId: string): boolean { return workerReplacementReady(this.database, sessionId); }
 
   cancel(taskId: string): void {

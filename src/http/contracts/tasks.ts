@@ -1,4 +1,5 @@
 import { WorkerReplacementRequestSchema, WorkerReplacementSchema } from "../../coordination/worker-replacement-contracts.js";
+import { CoordinatorReplacementRequestSchema } from "../../coordination/coordinator-replacement-contracts.js";
 import { z } from "zod";
 import { IssueAssociationSchema } from "../../tasks/issue-association.js";
 import { HarnessKindSchema } from "../../runtimes/harness-kind.js";
@@ -41,6 +42,7 @@ export const TaskAnswerBodySchema = z.union([
   z.object({ questionId: z.string().min(1), limitDecision: TaskLimitDecisionSchema }).strict(),
 ]);
 export const TaskWorkerReplacementBodySchema = WorkerReplacementRequestSchema;
+export const TaskCoordinatorReplacementBodySchema = CoordinatorReplacementRequestSchema;
 export const TaskNoteBodySchema = z.object({ note: z.string().trim().min(1).max(20_000) }).strict(); // bound: task note transport limit
 export const TaskContinueDeliveryBodySchema = z.object({ deliveryTarget: z.enum(["pull_request_ready", "merged"]) }).strict();
 export const TaskHarnessKindSchema = HarnessKindSchema;

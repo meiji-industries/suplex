@@ -287,8 +287,7 @@ export class RootController implements RootBridgeAdapter {
   }
 
   async askHuman(root: RootIdentity, question: string, options: HumanQuestionOptions): Promise<unknown> {
-    this.store.assertCurrentRoot(root);
-    this.store.askHuman(root.taskId, question, options);
+    if (!this.store.askHumanForRoot(root, question, options)) throw new Error("stale_root");
     return this.store.get(root.taskId);
   }
 

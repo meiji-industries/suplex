@@ -9,6 +9,7 @@ import { Button } from "../../components/ui/button.js";
 import { BlockedByPickerDialog } from "./blocked-by-picker.js";
 import { IssuePicker } from "./issue-picker.js";
 import { TaskQuestion } from "./task-question.js";
+import { TaskCoordinator } from "./task-coordinator.js";
 import { NewTaskDialog } from "./new-task-dialog.js";
 import { editTaskDraft, type NewTaskDraft } from "./lib/duplicate-task-prefill.js";
 import { Badge } from "../../components/ui/badge.js";
@@ -124,7 +125,8 @@ export function TaskDetailsPage({ task, project, onChange }: { task: Task; proje
           <TaskBlockedByProperty task={task} onChange={onChange} />
           <div className="space-y-1.5"><dt className="text-muted-foreground">Issue</dt><dd><IssuePicker projectId={task.projectId} issue={task.issue} onChange={async issue => onChange(await readJson<Task>(`/api/tasks/${task.id}/issue`, { method: "PATCH", body: JSON.stringify({ issue }) }))} /></dd></div>
           <div className="space-y-1.5"><dt className="text-muted-foreground">Project</dt><dd className="flex min-w-0 items-center gap-2">{project ? <EntityAvatar kind="project" id={project.id} name={project.name} size="xs" /> : null}<span className="truncate">{project?.name ?? task.configuration.repository}</span></dd></div>
-          {([["root", "Coordinator", task.rootProfile], ["worker", "Worker", task.workerProfile], ...workflowDefinition(task.workflow).advisorRoles.map(role => [role, ADVISOR_LABELS[role], task.advisorProfiles[role as AdvisorRole] ?? task.rootProfile] as const)] as const).map(([role, label, profile]) => <div key={role} className="space-y-1.5"><dt className="text-muted-foreground">{label}</dt><dd className="flex items-center gap-2"><EntityAvatar kind="agent" id={profile.profileId} name={label} size="xs" /><span className="min-w-0"><span className="block truncate" title={`${profile.model} · ${profile.provider}`}>{profile.model}</span><span className="block text-[11px] text-muted-foreground">{profile.provider} · {profile.reasoningLevel}</span></span></dd></div>)}
+          <TaskCoordinator task={task} activity={activity} onChange={onChange} onActivityChange={setActivity} />
+          {([["worker", "Worker", task.workerProfile], ...workflowDefinition(task.workflow).advisorRoles.map(role => [role, ADVISOR_LABELS[role], task.advisorProfiles[role as AdvisorRole] ?? task.rootProfile] as const)] as const).map(([role, label, profile]) => <div key={role} className="space-y-1.5"><dt className="text-muted-foreground">{label}</dt><dd className="flex items-center gap-2"><EntityAvatar kind="agent" id={profile.profileId} name={label} size="xs" /><span className="min-w-0"><span className="block truncate" title={`${profile.model} · ${profile.provider}`}>{profile.model}</span><span className="block text-[11px] text-muted-foreground">{profile.provider} · {profile.reasoningLevel}</span></span></dd></div>)}
           <div className="space-y-1.5"><dt className="text-muted-foreground">Branch</dt><dd><CopyValue label="branch" value={task.configuration.branch}><code className="truncate" title={task.configuration.branch}>{task.configuration.branch}</code></CopyValue></dd></div>
           {task.worktree ? <div className="space-y-1.5"><dt className="text-muted-foreground">Worktree</dt><dd><CopyValue label="worktree path" value={task.worktree.path}><span className="truncate font-mono text-[11px]" title={task.worktree.path}>{task.worktree.path.split("/").pop()}</span></CopyValue></dd></div> : null}
           <Collapsible.Root className="space-y-3">

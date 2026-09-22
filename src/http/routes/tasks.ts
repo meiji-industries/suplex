@@ -23,7 +23,7 @@ import { TaskExecutionResponseSchema } from "../../tasks/execution/contracts.js"
 import { TaskChecksResponseSchema, TaskDiffResponseSchema, TaskDiffSummaryResponseSchema } from "../contracts/tasks.js";
 import { CompanyIdParamsSchema, TaskArtifactParamsSchema, TaskIdParamsSchema } from "../contracts/common.js";
 import { normalizeWorkflowInput, WorkflowInputFailure } from "../../coordination/workflows.js";
-import { MAX_TASK_REQUEST_BYTES, SessionHistoryPageSchema, TaskActivityResponseSchema, TaskAnswerBodySchema, TaskBodySchema, TaskContinueDeliveryBodySchema, TaskDependenciesBodySchema, TaskDetailsBodySchema, TaskListResponseSchema, TaskNoteBodySchema, TaskSessionHistoryParamsSchema, TaskSessionHistoryQuerySchema, TaskWorkerReplacementBodySchema, TaskRenameBodySchema, TaskResponseSchema } from "../contracts/tasks.js";
+import { MAX_TASK_REQUEST_BYTES, SessionHistoryPageSchema, TaskActivityResponseSchema, TaskAnswerBodySchema, TaskBodySchema, TaskContinueDeliveryBodySchema, TaskCoordinatorReplacementBodySchema, TaskDependenciesBodySchema, TaskDetailsBodySchema, TaskListResponseSchema, TaskNoteBodySchema, TaskSessionHistoryParamsSchema, TaskSessionHistoryQuerySchema, TaskWorkerReplacementBodySchema, TaskRenameBodySchema, TaskResponseSchema } from "../contracts/tasks.js";
 
 export interface TaskRoutesOptions {
   tasks: TaskService;
@@ -223,6 +223,11 @@ const tasks: FastifyPluginAsync<TaskRoutesOptions> = async (app, { tasks, host, 
   });
   typed.post("/api/tasks/:taskId/replace-worker", { schema: { ...taskResponse, body: TaskWorkerReplacementBodySchema } }, async request => {
     const task = tasks.replaceWorker(request.forgeUser.id, request.params.taskId, request.body);
+    wake(task.id);
+    return task;
+  });
+  typed.post("/api/tasks/:taskId/replace-coordinator", { schema: { ...taskResponse, body: TaskCoordinatorReplacementBodySchema } }, async request => {
+    const task = tasks.replaceCoordinator(request.forgeUser.id, request.params.taskId, request.body);
     wake(task.id);
     return task;
   });

@@ -63,7 +63,7 @@ export function TaskWork({ task, activity, onChange, onSelectWorker }: { task: T
     <TaskActivityTimeline taskId={task.id} />
     <div className="max-w-full border-b"><TabsList variant="line"><TabsTrigger value="chat">Chat</TabsTrigger><TabsTrigger value="activity">Activity <span className="text-xs text-muted-foreground">{activity.turns.length}</span></TabsTrigger><TabsTrigger value="diffs">Diffs{diffSummary?.available ? <span className="text-xs text-muted-foreground"> ({diffSummary.files})</span> : null}</TabsTrigger><TabsTrigger value="checks">Checks</TabsTrigger><TabsTrigger value="other">Other</TabsTrigger></TabsList></div>
     <TabsContent value="chat"><div className="grid min-w-0 gap-5 pt-3" aria-label="Conversation">
-      <WorkflowPlan key={task.id} task={task} />
+      <WorkflowPlan key={`workflow-plan-${task.id}`} task={task} />
       <RootPlan execution={execution} />
       {activity.turns.filter(turn => resultText(turn.result) || humanMessage(turn.prompt)).map(turn => {
         const session = activity.sessions.find(session => session.id === turn.sessionId);
@@ -71,7 +71,7 @@ export function TaskWork({ task, activity, onChange, onSelectWorker }: { task: T
         return <div key={turn.id} className="grid min-w-0 gap-5">{humanMessage(turn.prompt) ? <article className="space-y-2 border-l-2 pl-3"><header className="flex items-center gap-2 text-xs"><span className="font-medium">You</span><span className="text-muted-foreground">{answerLabels[turn.status]}</span></header><Markdown source={humanMessage(turn.prompt)} /></article> : null}{resultText(turn.result) ? <article className="flex min-w-0 gap-3"><EntityAvatar kind="agent" id={session?.profileId ?? task.rootProfile.profileId} name={role} size="sm" /><div className="min-w-0 flex-1 space-y-2"><header className="flex items-center gap-2 text-xs"><span className="font-medium">{role}</span><span className="text-muted-foreground">{turnLabel(turn)}</span></header><Markdown source={resultText(turn.result)} /></div></article> : null}</div>;
       })}
       {!activity.turns.some(turn => resultText(turn.result) || humanMessage(turn.prompt)) ? <p className="text-xs text-muted-foreground">{task.status === "backlog" ? "Start the task to work with Coordinator." : "Agent replies appear here."}</p> : null}
-      <TaskNoteInput key={task.id} task={task} onChange={onChange} />
+      <TaskNoteInput key={`task-note-input-${task.id}`} task={task} onChange={onChange} />
     </div></TabsContent>
     <TabsContent value="activity"><section aria-label="Task activity" className="grid min-w-0 gap-0 pt-3">{activity.turns.map(turn => <div key={turn.id} className="flex gap-3 border-b py-3 text-xs"><CircleDashed className="size-4 shrink-0 text-muted-foreground" /><span className="font-medium">{activity.sessions.find(session => session.id === turn.sessionId)?.label ?? "Coordinator"}</span><span className="text-muted-foreground">{turnLabel(turn)}</span></div>)}{!activity.turns.length && !execution?.sessions.some(session => session.tools.length) ? <p className="text-xs text-muted-foreground">No activity yet.</p> : null}<TaskTools execution={execution} error={executionError} /></section></TabsContent>
     <TabsContent value="diffs">{tab === "diffs" ? <TaskDiff task={task} /> : null}</TabsContent>

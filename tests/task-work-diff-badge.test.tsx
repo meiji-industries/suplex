@@ -38,7 +38,7 @@ function mount() {
   const container = document.createElement("div");
   document.body.append(container);
   const root = createRoot(container);
-  return { container, root, render: async () => { await act(async () => { root.render(<TaskWork task={task} activity={activity} onChange={() => {}} onSelectWorker={() => {}} />); await Promise.resolve(); }); } };
+  return { container, root, render: async (nextTask: Task = task) => { await act(async () => { root.render(<TaskWork task={nextTask} activity={activity} onChange={() => {}} onSelectWorker={() => {}} />); await Promise.resolve(); }); } };
 }
 
 function diffsTab(container: HTMLElement) {
@@ -73,4 +73,27 @@ test("a failed summary read leaves the Diffs label without a count", async () =>
   const view = mount();
   await view.render();
   expect(diffsTab(view.container).textContent).toBe("Diffs");
+});
+
+test("the conversation has unique child keys and resets its draft on task change", async () => {
+  serve({ available: true, files: 2 });
+  const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+  const view = mount();
+  try {
+    await view.render();
+    const field = view.container.querySelector<HTMLTextAreaElement>('textarea[aria-label="Message Coordinator"]');
+    if (!field) throw new Error("Message Coordinator textarea was not rendered");
+    await act(async () => {
+      Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, "value")?.set?.call(field, "Keep this draft");
+      field.dispatchEvent(new Event("input", { bubbles: true }));
+    });
+    await view.render();
+    expect(field.value).toBe("Keep this draft");
+    await view.render({ ...task, id: "task-2" });
+    expect(view.container.querySelector<HTMLTextAreaElement>('textarea[aria-label="Message Coordinator"]')?.value).toBe("");
+    expect(errors.mock.calls.filter(([message]) => typeof message === "string" && message.includes("Encountered two children with the same key"))).toEqual([]);
+  } finally {
+    await act(async () => { view.root.unmount(); });
+    errors.mockRestore();
+  }
 });

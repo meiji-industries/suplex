@@ -43,10 +43,11 @@ test("keeps unexpected probe failures at error level", async () => {
   expect(records()).toEqual([expect.objectContaining({ level: 50, error: "permission-denied" })]);
 });
 
-test("logs completed commands at info", async () => {
+test("keeps successful commands out of info output without hiding failures", async () => {
   await runCommand({ taskId: null, stepId: null, command: "sh", args: ["-c", "exit 0"] });
+  await runCommand({ taskId: null, stepId: null, command: "sh", args: ["-c", "echo boom >&2; exit 3"] });
 
-  expect(records()).toEqual([expect.objectContaining({ level: 30, message: expect.stringMatching(/^Command completed:/) })]);
+  expect(records()).toEqual([expect.objectContaining({ level: 50, message: expect.stringMatching(/^Command failed:/), exitCode: 3, error: "boom" })]);
 });
 
 test("retains spawn failures and child signals", async () => {

@@ -26,7 +26,7 @@ export function TaskPullRequestCard({ task, onChange }: { task: Task; onChange: 
   const [pending, setPending] = useState(false);
   const [error, setError] = useState("");
   const [now, setNow] = useState(() => Date.now());
-  const { checks } = useTaskChecks(pullRequest ? task.id : null, pullRequest ? `${pullRequest.number}:${pullRequest.headSha}:${pullRequest.state}` : null);
+  const { checks } = useTaskChecks(pullRequest ? task.id : null, pullRequest ? `${pullRequest.number}:${pullRequest.state}:${pullRequest.headSha}` : null);
   const merged = checks?.available ? checks.pullRequestState === "merged" : task.deliveryTarget === "merged" && task.status === "delivered";
   const observed = checks?.available ? checks.pullRequestState : null;
   const state = merged ? "Merged" : observed === "closed" ? "Closed" : observed === "draft" || !observed && task.deliveryTarget === "pull_request_draft" ? "Draft" : "Open";

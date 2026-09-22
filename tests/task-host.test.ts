@@ -164,6 +164,59 @@ test("a GitHub observation outage does not block native Coordinator startup", as
   } finally { await host.stop(); }
 });
 
+test("delivery waits use the wait observer without a preliminary delivery read", async () => {
+  const f = await fixture();
+  f.store.updateWorkflowState("task", state => ({ ...state, deliveryWait: { headSha: "head", fingerprint: "fingerprint", since: new Date().toISOString(), reason: "checks" } }));
+  const observe = vi.fn(async () => null);
+  const observeDeliveryWait = vi.fn(async () => "unchanged" as const);
+  const host = new TaskHost(f.database, { controller: f.controller, delivery: { observe, observeDeliveryWait } });
+  try {
+    await host.recover("task");
+    expect(observe).not.toHaveBeenCalled();
+    expect(observeDeliveryWait).toHaveBeenCalledExactlyOnceWith("task");
+    expect(f.store.get("task").status).toBe("active");
+  } finally { await host.stop(); }
+});
+
+test("a delivery wait adopts an external merge before worktree preparation", async () => {
+  const f = await fixture();
+  f.store.updateWorkflowState("task", state => ({ ...state, deliveryWait: { headSha: "head", fingerprint: "fingerprint", since: new Date().toISOString(), reason: "checks" } }));
+  const observe = vi.fn(async () => null);
+  const worktree = vi.fn(async () => { throw new Error("Must not materialize"); });
+  const host = new TaskHost(f.database, { controller: f.controller, delivery: { observe, observeDeliveryWait: async () => { f.store.markDelivered("task"); return "finished"; } }, worktree });
+  try {
+    await host.recover("task");
+    expect(f.store.get("task")).toMatchObject({ status: "delivered", humanQuestion: null });
+    expect(observe).not.toHaveBeenCalled();
+    expect(worktree).not.toHaveBeenCalled();
+  } finally { await host.stop(); }
+});
+
+test("delivery waits retain normal observation when the optional wait observer is missing", async () => {
+  const f = await fixture();
+  f.store.updateWorkflowState("task", state => ({ ...state, deliveryWait: { headSha: "head", fingerprint: "fingerprint", since: new Date().toISOString(), reason: "checks" } }));
+  const observe = vi.fn(async () => null);
+  const host = new TaskHost(f.database, { controller: f.controller, delivery: { observe } });
+  try {
+    await host.recover("task");
+    expect(observe).toHaveBeenCalledExactlyOnceWith("task");
+  } finally { await host.stop(); }
+});
+
+test("nonwait and human-wait recovery still observe delivery", async () => {
+  const f = await fixture();
+  const observe = vi.fn(async () => null);
+  const observeDeliveryWait = vi.fn(async () => "unchanged" as const);
+  const host = new TaskHost(f.database, { controller: f.controller, delivery: { observe, observeDeliveryWait } });
+  try {
+    await host.recover("task");
+    f.store.askHuman("task", "Answer this question");
+    await host.recover("task");
+    expect(observe).toHaveBeenCalledTimes(2);
+    expect(observeDeliveryWait).not.toHaveBeenCalled();
+  } finally { await host.stop(); }
+});
+
 test("a lost prompt acknowledgement keeps automatic native recovery active", async () => {
   const f = await fixture();
   f.harness.loseAcknowledgement = true;

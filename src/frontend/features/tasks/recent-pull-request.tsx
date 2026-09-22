@@ -25,8 +25,8 @@ export function canQuickArchive(color: PullRequestColor, status: Task["status"],
 
 const colors = { purple: "text-purple-500", red: "text-red-500", yellow: "text-yellow-500", green: "text-green-500", grey: "text-muted-foreground" };
 
-export function RecentPullRequest({ taskId, state, headSha, status, archivedAt, onArchived, onError }: { taskId: string; state: string; headSha: string; status: Task["status"]; archivedAt: Task["archivedAt"]; onArchived: (task: Task) => void; onError: (error: string) => void }) {
-  const { checks } = useTaskChecks(state === "merged" ? null : taskId, `${state}:${headSha}`);
+export function RecentPullRequest({ taskId, number, state, headSha, status, archivedAt, onArchived, onError }: { taskId: string; number: number; state: string; headSha: string; status: Task["status"]; archivedAt: Task["archivedAt"]; onArchived: (task: Task) => void; onError: (error: string) => void }) {
+  const { checks } = useTaskChecks(state === "merged" ? null : taskId, `${number}:${state}:${headSha}`);
   const [archiveOpen, setArchiveOpen] = useState(false);
   const color = pullRequestColor(state, checks);
   const label = color === "red" ? "CI failed" : color === "yellow" ? "CI in progress" : color === "purple" ? "Merged" : color === "green" ? "Ready or CI passed" : "No passing CI result";

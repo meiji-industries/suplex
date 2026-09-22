@@ -1,6 +1,6 @@
 import { basename } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import type { CliHerdrClient, HerdrClient, Pane, PaneProcessInfo } from "../integrations/herdr/client.js";
+import type { CliHerdrClient, HerdrClient, HerdrPaneMetadataReport, Pane, PaneProcessInfo } from "../integrations/herdr/client.js";
 import { splitBalancedPaneRow } from "../tasks/execution/pane-layout.js";
 import { taskSessionRole, taskSessionTitle, type TaskScope } from "./task-harness.js";
 
@@ -24,11 +24,20 @@ export function taskShellPaneBinding(taskId: string): string {
   return `${taskId}:shell`;
 }
 
-async function publishShellPane(herdr: TaskPanePort, paneId: string, taskId: string): Promise<void> {
-  await Promise.allSettled([
-    Promise.resolve().then(() => herdr.renamePane(paneId, taskShellPaneTitle)),
-    Promise.resolve().then(() => herdr.reportPaneMetadata({ paneId, source: "forge", title: taskShellPaneTitle, tokens: { forge_binding_id: taskShellPaneBinding(taskId), forge_task_id: taskId, forge_task: taskId, forge_role: "shell" } })),
-  ]);
+type ForgePaneMetadata = HerdrPaneMetadataReport & { title: string; tokens: Readonly<Record<string, string>> };
+
+async function publishPaneDisplay(herdr: TaskPanePort, pane: Pane, metadata: ForgePaneMetadata, fresh = false): Promise<void> {
+  const { title, tokens } = metadata;
+  const writes: Promise<void>[] = [];
+  if (fresh || pane.label !== title) writes.push(Promise.resolve().then(() => herdr.renamePane(pane.paneId, title)));
+  if (fresh || pane.title !== title || Object.entries(tokens).some(([key, value]) => pane.tokens?.[key] !== value)) {
+    writes.push(Promise.resolve().then(() => herdr.reportPaneMetadata(metadata)));
+  }
+  await Promise.allSettled(writes);
+}
+
+async function publishShellPane(herdr: TaskPanePort, pane: Pane, taskId: string, fresh = false): Promise<void> {
+  await publishPaneDisplay(herdr, pane, { paneId: pane.paneId, source: "forge", title: taskShellPaneTitle, tokens: { forge_binding_id: taskShellPaneBinding(taskId), forge_task_id: taskId, forge_task: taskId, forge_role: "shell" } }, fresh);
 }
 
 /**
@@ -47,9 +56,9 @@ export async function ensureTaskShellPane(herdr: TaskPanePort, input: {
   excludePaneIds?: readonly (string | null | undefined)[];
   create?: boolean;
 }): Promise<Pane | null> {
-  const adopt = async (pane: Pane): Promise<Pane> => {
+  const adopt = async (pane: Pane, fresh = false): Promise<Pane> => {
     input.persist?.(pane.paneId);
-    await publishShellPane(herdr, pane.paneId, input.taskId);
+    await publishShellPane(herdr, pane, input.taskId, fresh);
     return pane;
   };
   const persisted = input.paneId ? await herdr.getPane(input.paneId) : null;
@@ -71,9 +80,9 @@ export async function ensureTaskShellPane(herdr: TaskPanePort, input: {
     if (info && isInteractiveShell(info)) return adopt(pane);
   }
   const anchor = allPanes[0];
-  if (anchor) return adopt(await splitBalancedPaneRow(herdr, { paneId: anchor.paneId, cwd: anchor.cwd ?? input.cwd }));
+  if (anchor) return adopt(await splitBalancedPaneRow(herdr, { paneId: anchor.paneId, cwd: anchor.cwd ?? input.cwd }), true);
   if (input.create === false) return null;
-  return adopt((await herdr.createWorkspace({ label: `forge-${input.taskId}`, cwd: input.cwd, focus: false })).rootPane);
+  return adopt((await herdr.createWorkspace({ label: `forge-${input.taskId}`, cwd: input.cwd, focus: false })).rootPane, true);
 }
 
 export async function attachTaskDisplay(herdr: TaskPanePort, input: {
@@ -90,12 +99,11 @@ export async function attachTaskDisplay(herdr: TaskPanePort, input: {
 }): Promise<string> {
   const { scope } = input;
   const title = taskSessionTitle(scope);
-  const metadata = (paneId: string) => ({ paneId, source: "forge", title, tokens: { forge_binding_id: scope.id, forge_task_id: scope.taskId, forge_native_session_id: input.nativeSessionId, forge_server_generation: input.generation, forge_task: scope.taskId, forge_role: taskSessionRole(scope), forge_model: scope.profile.modelID, forge_provider: scope.profile.providerID } });
-  const publishMetadata = async (paneId: string): Promise<void> => { await Promise.allSettled([Promise.resolve().then(() => herdr.renamePane(paneId, title)), Promise.resolve().then(() => herdr.reportPaneMetadata(metadata(paneId)))]); };
+  const metadata = (paneId: string): ForgePaneMetadata => ({ paneId, source: "forge", title, tokens: { forge_binding_id: scope.id, forge_task_id: scope.taskId, forge_native_session_id: input.nativeSessionId, forge_server_generation: input.generation, forge_task: scope.taskId, forge_role: taskSessionRole(scope), forge_model: scope.profile.modelID, forge_provider: scope.profile.providerID } });
   let pane = input.paneId ? await herdr.getPane(input.paneId) : null;
   if (pane) {
     const info = await herdr.getPaneProcessInfo(pane.paneId);
-    if (info.foreground_processes.some(process => process.argv !== undefined && input.isAttached(process.argv))) { input.persistPane(pane.paneId); await publishMetadata(pane.paneId); return pane.paneId; }
+    if (info.foreground_processes.some(process => process.argv !== undefined && input.isAttached(process.argv))) { input.persistPane(pane.paneId); await publishPaneDisplay(herdr, pane, metadata(pane.paneId)); return pane.paneId; }
     const owned = pane.tokens?.forge_binding_id === scope.id || !pane.tokens?.forge_binding_id && pane.cwd === scope.directory;
     if (owned && info.foreground_processes.length === 0) throw new Error("The task display process could not be inspected");
     if (!owned || !isInteractiveShell(info)) pane = null;
@@ -110,7 +118,7 @@ export async function attachTaskDisplay(herdr: TaskPanePort, input: {
     }
   }
   input.persistPane(pane.paneId);
-  await publishMetadata(pane.paneId);
+  await publishPaneDisplay(herdr, pane, metadata(pane.paneId), true);
   const deadline = Date.now() + 2_000;
   for (;;) {
     const info = await herdr.getPaneProcessInfo(pane.paneId);

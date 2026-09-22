@@ -53,29 +53,96 @@ export function checkRunLabel(run: CheckRun, now = Date.now()): string {
   return `${status === "passed" ? "Passed" : "Failed"}${duration}`;
 }
 
-/** Polls the task checks endpoint while taskId is set; pass null to disable (for example, a merged pull request). */
-export function useTaskChecks(taskId: string | null, refreshKey?: unknown): { checks: TaskChecks | null; error: string } {
-  const [checks, setChecks] = useState<TaskChecks | null>(null);
-  const [error, setError] = useState("");
-  useEffect(() => {
-    setChecks(null);
-    setError("");
-    if (taskId === null) return;
-    let closed = false;
-    let reading = false;
-    const load = async () => {
-      if (reading) return;
-      reading = true;
-      try {
-        const result = TaskChecksResponseSchema.parse(await readJson(`/api/tasks/${taskId}/checks`));
-        if (!closed) { setChecks(result); setError(""); }
-      } catch (cause) {
-        if (!closed) setError(cause instanceof Error ? cause.message : "Checks are not available");
-      } finally { reading = false; }
+type ChecksObservation = { checks: TaskChecks | null; error: string };
+const emptyObservation: ChecksObservation = { checks: null, error: "" };
+
+class ChecksPoll {
+  private readonly subscribers = new Set<(value: ChecksObservation, key: unknown) => void>();
+  private observation = emptyObservation;
+  private timer: ReturnType<typeof setTimeout> | undefined;
+  private reading = false;
+  private invalidated = false;
+  private disposed = false;
+  private refreshKey: unknown;
+  private revision = 0;
+
+  constructor(private readonly taskId: string, refreshKey: unknown) {
+    this.refreshKey = refreshKey;
+    document.addEventListener("visibilitychange", this.onVisibilityChange);
+  }
+
+  subscribe(listener: (value: ChecksObservation, key: unknown) => void): () => void {
+    this.subscribers.add(listener);
+    listener(this.observation, this.refreshKey);
+    if (this.subscribers.size === 1) this.load();
+    return () => {
+      this.subscribers.delete(listener);
+      if (this.subscribers.size !== 0) return;
+      this.disposed = true;
+      clearTimeout(this.timer);
+      document.removeEventListener("visibilitychange", this.onVisibilityChange);
+      polls.delete(this.taskId);
     };
-    void load();
-    const timer = setInterval(() => void load(), 15_000);
-    return () => { closed = true; clearInterval(timer); };
+  }
+
+  refresh(key: unknown): void {
+    if (Object.is(key, this.refreshKey)) return;
+    this.refreshKey = key;
+    this.revision += 1;
+    this.publish(emptyObservation);
+    this.load();
+  }
+
+  private readonly onVisibilityChange = () => {
+    if (document.visibilityState === "visible") this.load();
+    else clearTimeout(this.timer);
+  };
+
+  private load(): void {
+    if (this.disposed || document.visibilityState === "hidden") return;
+    if (this.reading) { this.invalidated = true; return; }
+    clearTimeout(this.timer);
+    this.reading = true;
+    this.invalidated = false;
+    const revision = this.revision;
+    void (async () => {
+      try {
+        const checks = TaskChecksResponseSchema.parse(await readJson(`/api/tasks/${this.taskId}/checks`));
+        if (!this.disposed && revision === this.revision) this.publish({ checks, error: "" });
+      } catch (cause) {
+        if (!this.disposed && revision === this.revision) this.publish({ checks: this.observation.checks, error: cause instanceof Error ? cause.message : "Checks are not available" });
+      } finally {
+        this.reading = false;
+        if (this.disposed || document.visibilityState === "hidden") return;
+        if (this.invalidated) {
+          this.invalidated = false;
+          this.load();
+        } else {
+          const pending = this.observation.error !== "" || this.observation.checks?.runs.some(run => checkRunStatus(run) === "pending");
+          this.timer = setTimeout(() => this.load(), pending ? 15_000 : 60_000);
+        }
+      }
+    })();
+  }
+
+  private publish(observation: ChecksObservation): void {
+    this.observation = observation;
+    for (const subscriber of this.subscribers) subscriber(observation, this.refreshKey);
+  }
+}
+
+const polls = new Map<string, ChecksPoll>();
+
+export function useTaskChecks(taskId: string | null, refreshKey?: unknown): { checks: TaskChecks | null; error: string } {
+  const [state, setState] = useState<{ taskId: string | null; refreshKey: unknown; observation: ChecksObservation }>({ taskId: null, refreshKey: undefined, observation: emptyObservation });
+  useEffect(() => {
+    if (taskId === null) return;
+    const poll = polls.get(taskId) ?? new ChecksPoll(taskId, refreshKey);
+    polls.set(taskId, poll);
+    return poll.subscribe((observation, key) => setState({ taskId, refreshKey: key, observation }));
+  }, [taskId]);
+  useEffect(() => {
+    if (taskId !== null) polls.get(taskId)?.refresh(refreshKey);
   }, [taskId, refreshKey]);
-  return { checks, error };
+  return state.taskId === taskId && Object.is(state.refreshKey, refreshKey) ? state.observation : emptyObservation;
 }

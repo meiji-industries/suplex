@@ -117,7 +117,13 @@ export class TaskHost {
       return;
     }
     let observationError: unknown;
-    try { await this.delivery.observe(taskId); } catch (error) { observationError = error; }
+    const controlBeforeObservation = this.store.get(taskId);
+    if (controlBeforeObservation.status === "active" && controlBeforeObservation.workflowState.deliveryWait && this.delivery.observeDeliveryWait) {
+      try { await this.delivery.observeDeliveryWait(taskId); }
+      catch (error) { new StructuredLogger().warn("Delivery wait observation will be retried", { taskId }, { error: error instanceof Error ? error.message : String(error) }); }
+    } else {
+      try { await this.delivery.observe(taskId); } catch (error) { observationError = error; }
+    }
     if (this.store.get(taskId).status === "active") {
       try {
         const configuration = this.store.context(taskId).configuration;
@@ -141,11 +147,6 @@ export class TaskHost {
         this.controller.prepareRoot(taskId);
         if (this.store.get(taskId).status === "active") this.store.askHuman(taskId, `Forge could not prepare this task. ${error instanceof Error ? error.message : "Worktree preparation failed"}. Resolve the problem, then answer to retry.`);
       }
-    }
-    // A delivery wait re-observes GitHub at its own interval; unchanged state schedules only the next observation.
-    if (this.store.get(taskId).status === "active" && this.store.get(taskId).workflowState.deliveryWait && this.delivery.observeDeliveryWait) {
-      try { await this.delivery.observeDeliveryWait(taskId); }
-      catch (error) { new StructuredLogger().warn("Delivery wait observation will be retried", { taskId }, { error: error instanceof Error ? error.message : String(error) }); }
     }
     try { await this.controller.recover(taskId); }
     catch (error) {

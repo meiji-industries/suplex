@@ -327,7 +327,7 @@ export async function runCommand(input: RunCommandInput): Promise<CommandRunResu
     });
     throw new CommandCleanupError(result);
   }
-  if (result.exitCode === 0 && !result.timedOut) logger.info(`Command completed: ${result.command}`, context);
+  if (result.exitCode === 0 && !result.timedOut) logger.debug(`Command completed: ${result.command}`, context);
   else {
     const stderrTail = tail(result.stderr).trim().split("\n").slice(-3).join("\n");
     const terminal = result.exitCode ?? result.spawnError?.code ?? result.signal ?? "unknown";

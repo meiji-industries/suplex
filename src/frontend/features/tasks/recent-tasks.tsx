@@ -47,7 +47,7 @@ export function RecentTasks({ close }: { close?: () => void }): ReactElement | n
           {cost?.cost != null ? <CostValue value={cost.cost} subsidized={cost.subsidized} partial={cost.partial} className="shrink-0 text-[10px] tabular-nums text-muted-foreground" suffix={cost.partial ? "+" : ""} /> : null}
         </span>
       </a>} isActive={window.location.pathname === `/tasks/${task.id}`} tooltip={`${task.title}${task.blockedBy.length ? ` · ${blockedByLabel(task.blockedBy)}` : ""}`} />
-      {task.pullRequest ? <RecentPullRequest taskId={task.id} state={task.pullRequest.state} headSha={task.pullRequest.headSha} status={task.status} archivedAt={task.archivedAt} onArchived={() => setTaskState(current => current && current.companyId === companyId ? { ...current, tasks: current.tasks.filter(candidate => candidate.id !== task.id) } : current)} onError={setArchiveError} /> : null}
+      {task.pullRequest ? <RecentPullRequest taskId={task.id} number={task.pullRequest.number} state={task.pullRequest.state} headSha={task.pullRequest.headSha} status={task.status} archivedAt={task.archivedAt} onArchived={() => setTaskState(current => current && current.companyId === companyId ? { ...current, tasks: current.tasks.filter(candidate => candidate.id !== task.id) } : current)} onError={setArchiveError} /> : null}
       <RecentTaskAgents taskId={task.id} />
     </SidebarMenuItem>;
   })}</SidebarMenu></SidebarGroupContent></SidebarGroup>;

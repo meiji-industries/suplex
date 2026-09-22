@@ -166,6 +166,6 @@ function TaskDiff({ task }: { task: Task }) {
 }
 
 function TaskChecks({ task }: { task: Task }) {
-  const { checks, error } = useTaskChecks(task.id, task.updatedAt);
+  const { checks, error } = useTaskChecks(task.id, task.pullRequest ? `${task.pullRequest.number}:${task.pullRequest.state}:${task.pullRequest.headSha}` : null);
   return <section aria-label="GitHub checks" className="space-y-3 pt-3">{error ? <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert> : !checks ? <p className="flex items-center gap-2 text-xs text-muted-foreground" aria-busy="true"><Spinner /><span>Loading checks…</span></p> : !checks.runs.length ? <p className="text-xs text-muted-foreground">{checks.available ? "GitHub has no checks for this pull request." : "No pull request checks are available."}</p> : <TaskCheckResults runs={checks.runs} />}</section>;
 }

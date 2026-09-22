@@ -51,12 +51,18 @@ export class TaskRepository {
     return this.database.authQuery(db => z.array(RowSchema).parse(db.prepare(`${select} ORDER BY julianday(activity_updated_at) DESC, t.id`).all()));
   }
 
-  agentApiRows(input: { agentId: string; companyId: string; creatorAgentId?: string; projectId?: string; status?: string; archived?: boolean; attention?: boolean; blocker?: boolean; updatedSince?: string; cursor?: { updatedAt: string; id: string }; limit?: number }): TaskRow[] {
+  agentApiRows(input: { agentId: string; companyId: string; creatorAgentId?: string; projectId?: string; status?: string; pullRequestNumber?: number; sourceBranch?: string; titleContains?: string; archived?: boolean; attention?: boolean; blocker?: boolean; updatedSince?: string; cursor?: { updatedAt: string; id: string }; limit?: number }): TaskRow[] {
     const conditions = ["t.company_id = ?", "a.status = 'paired'", "a.revoked_at IS NULL"];
     const params: Array<string | number> = [input.companyId];
     if (input.creatorAgentId) { conditions.push("t.creator_agent_id = ?"); params.push(input.creatorAgentId); }
     if (input.projectId) { conditions.push("t.project_id = ?"); params.push(input.projectId); }
     if (input.status) { conditions.push("control.status = ?"); params.push(input.status); }
+    if (input.pullRequestNumber !== undefined) {
+      conditions.push("((json_extract(t.configuration_json, '$.source.kind') = 'pull_request' AND json_extract(t.configuration_json, '$.source.number') = ?) OR json_extract(control.pull_request_json, '$.number') = ?)");
+      params.push(input.pullRequestNumber, input.pullRequestNumber);
+    }
+    if (input.sourceBranch !== undefined) { conditions.push("json_extract(t.configuration_json, '$.source.branch') = ?"); params.push(input.sourceBranch); }
+    if (input.titleContains !== undefined) { conditions.push("lower(t.title) LIKE ?"); params.push(`%${input.titleContains.toLowerCase()}%`); }
     if (input.archived !== undefined) conditions.push(input.archived ? "t.archived_at IS NOT NULL" : "t.archived_at IS NULL");
     if (input.attention !== undefined) conditions.push(input.attention ? "control.human_question IS NOT NULL AND control.human_question_id IS NOT NULL" : "(control.human_question IS NULL OR control.human_question_id IS NULL)");
     if (input.blocker !== undefined) conditions.push(input.blocker ? "((control.human_question IS NOT NULL AND control.human_question_id IS NOT NULL) OR json_extract(control.workflow_state_json, '$.deliveryWait') IS NOT NULL)" : "((control.human_question IS NULL OR control.human_question_id IS NULL) AND json_extract(control.workflow_state_json, '$.deliveryWait') IS NULL)");

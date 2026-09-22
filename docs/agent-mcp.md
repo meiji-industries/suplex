@@ -29,7 +29,7 @@ Both the HTTP and stdio transports expose the same tools:
 | `forge_capabilities` | Read autonomous and unavailable commands. |
 | `forge_list_workflows` | List workflows for a granted project. |
 | `forge_list_templates` | List templates for a granted project. |
-| `forge_list_tasks` | List tasks in currently granted projects. |
+| `forge_list_tasks` | List tasks in currently granted projects. It defaults to the compact `summary` view. Use `view: "full"` for the complete projection. It accepts `pullRequestNumber`, `sourceBranch`, and case-insensitive `titleContains` filters. |
 | `forge_get_task` | Read a task in a granted project or report that a known revision is unchanged. |
 | `forge_get_task_delivery` | Read the delivery and blocker projection. |
 | `forge_create_task` | Create a backlog or queued task with an idempotency key. |

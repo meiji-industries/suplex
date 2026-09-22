@@ -124,12 +124,16 @@ export function registerAgentApiTaskRoutes(app: FastifyInstance, options: { exte
       limit: query.limit,
       ...(query.projectId === undefined ? {} : { projectId: query.projectId }),
       ...(query.status === undefined ? {} : { status: query.status }),
+      ...(query.pullRequestNumber === undefined ? {} : { pullRequestNumber: query.pullRequestNumber }),
+      ...(query.sourceBranch === undefined ? {} : { sourceBranch: query.sourceBranch }),
+      ...(query.titleContains === undefined ? {} : { titleContains: query.titleContains }),
       ...(query.updatedSince === undefined ? {} : { updatedSince: query.updatedSince }),
       ...(query.cursor === undefined ? {} : { cursor: query.cursor }),
       ...(query.archived === undefined ? {} : { archived: query.archived === "true" }),
       ...(query.attention === undefined ? {} : { attention: query.attention === "true" }),
       ...(query.blocker === undefined ? {} : { blocker: query.blocker === "true" }),
       ...(query.filter === undefined ? {} : { filter: query.filter }),
+      view: query.view ?? "full",
     }, options.github);
     return reply.header("Cache-Control", "private, no-store").code(200).send(result);
   });

@@ -32,7 +32,7 @@ const CATALOG = {
     { path: "/api/agent/me", method: "GET", authentication: "agent credential", description: "The agent identity and the projects granted to it." },
     { path: "/api/agent/workflows", method: "GET", authentication: "agent credential", description: "List workflow records for a granted project and whether task creation permits each one." },
     { path: "/api/agent/templates", method: "GET", authentication: "agent credential", description: "List task templates for a granted project and whether task creation permits each one." },
-    { path: "/api/agent/tasks", method: "GET", authentication: "agent credential", description: "List tasks in the agent's currently granted projects." },
+    { path: "/api/agent/tasks", method: "GET", authentication: "agent credential", description: "List tasks in the agent's currently granted projects. Filter by pull request number, source branch, or title substring. HTTP defaults to the full view; MCP forge_list_tasks defaults to summary and accepts view=full." },
     { path: "/api/agent/tasks", method: "POST", authentication: "agent credential", description: "Create a backlog task, or a queued task with queue true. An idempotency key is necessary. A queued task starts by itself only when every prerequisite is complete." },
     { path: "/api/agent/tasks/{taskId}", method: "GET", authentication: "agent credential", description: "Read one task. Send the ETag in If-None-Match to poll conditionally." },
     { path: "/api/agent/tasks/{taskId}/dependencies", method: "PUT", authentication: "agent credential", description: "Replace the prerequisites of a task, shown as Blocked by." },

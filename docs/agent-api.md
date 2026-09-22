@@ -49,11 +49,16 @@ comes from the project's agent task policy.
 
 `GET /api/agent/tasks` returns every task in the caller's currently granted
 projects. It accepts these query
-parameters: `projectId`, `status`, `archived`, `attention`, `blocker`,
-`updatedSince` (ISO-8601 timestamp), `limit` (1 through 100, default 50),
-`cursor`, and `filter`. Results are ordered by `updatedAt` descending and task
-ID ascending. `updatedSince` is inclusive. The response has `tasks` and
-`nextCursor`.
+parameters: `projectId`, `status`, `pullRequestNumber`, `sourceBranch`,
+`titleContains`, `archived`, `attention`, `blocker`, `updatedSince`
+(ISO-8601 timestamp), `limit` (1 through 100, default 50), `cursor`, `filter`,
+and `view`. `pullRequestNumber` matches a pull request source or a stored
+delivery pull request. `sourceBranch` matches a branch source. `titleContains`
+is a case-insensitive substring. Results are ordered by `updatedAt` descending
+and task ID ascending. `updatedSince` is inclusive. HTTP defaults to `full`.
+`summary` returns only the task id, title, status, archive flag, queue state,
+workflow name, source, delivery pull request number, dependencies, and update
+time. The response has `tasks` and `nextCursor`.
 
 The cursor binds the authenticated agent and all filters. It is opaque:
 malformed, modified, cross-agent, and filter-mismatched cursors return `400`

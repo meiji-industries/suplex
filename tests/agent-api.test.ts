@@ -561,7 +561,7 @@ test("POST /api/agent/tasks creates task with native status, private no-store he
   expect(response.headers["cache-control"]).toBe("private, no-store");
 
   const body = response.json();
-  const expectedKeys = ["id", "issueKey", "projectId", "project", "title", "status", "queue", "dependsOn", "blockedBy", "archived", "revision", "permittedCommands", "humanQuestion", "blocker", "workflowStage", "workflow", "templateId", "deliveryTarget", "runProjectTests", "visualEvidence", "delivery", "createdAt", "updatedAt", "implementation", "integration", "actionRequired"].sort();
+  const expectedKeys = ["id", "issueKey", "projectId", "project", "title", "source", "status", "queue", "dependsOn", "blockedBy", "archived", "revision", "permittedCommands", "humanQuestion", "blocker", "workflowStage", "workflow", "templateId", "deliveryTarget", "runProjectTests", "visualEvidence", "delivery", "createdAt", "updatedAt", "implementation", "integration", "actionRequired"].sort();
   expect(Object.keys(body).sort()).toEqual(expectedKeys);
   expect(body).toMatchObject({
     dependsOn: [],
@@ -1108,7 +1108,7 @@ test("GET /api/agent/tasks/:taskId reads project tasks but keeps commands creato
   });
   expect(getSuccess.statusCode).toBe(200);
   expect(getSuccess.headers["cache-control"]).toBe("private, no-store");
-  const expectedKeys = ["id", "issueKey", "projectId", "project", "title", "status", "queue", "dependsOn", "blockedBy", "archived", "revision", "permittedCommands", "humanQuestion", "blocker", "workflowStage", "workflow", "templateId", "deliveryTarget", "runProjectTests", "visualEvidence", "delivery", "createdAt", "updatedAt", "implementation", "integration", "actionRequired"].sort();
+  const expectedKeys = ["id", "issueKey", "projectId", "project", "title", "source", "status", "queue", "dependsOn", "blockedBy", "archived", "revision", "permittedCommands", "humanQuestion", "blocker", "workflowStage", "workflow", "templateId", "deliveryTarget", "runProjectTests", "visualEvidence", "delivery", "createdAt", "updatedAt", "implementation", "integration", "actionRequired"].sort();
   expect(Object.keys(getSuccess.json()).sort()).toEqual(expectedKeys);
   expect(getSuccess.json().title).toBe("Task For Status Check");
 
@@ -1266,7 +1266,7 @@ test("GET /api/agent/tasks lists every task in granted projects and exposes no b
   expect(ids).not.toContain(crossCompany.id);
   expect(listed.find(task => task.id === humanOwned.id)).toMatchObject({ permittedCommands: [] });
 
-  expect(Object.keys(listed[0]!).sort()).toEqual(["id", "issueKey", "projectId", "project", "title", "status", "queue", "dependsOn", "blockedBy", "archived", "revision", "permittedCommands", "humanQuestion", "blocker", "workflowStage", "workflow", "templateId", "deliveryTarget", "runProjectTests", "visualEvidence", "delivery", "createdAt", "updatedAt", "implementation", "integration", "actionRequired"].sort());
+  expect(Object.keys(listed[0]!).sort()).toEqual(["id", "issueKey", "projectId", "project", "title", "source", "status", "queue", "dependsOn", "blockedBy", "archived", "revision", "permittedCommands", "humanQuestion", "blocker", "workflowStage", "workflow", "templateId", "deliveryTarget", "runProjectTests", "visualEvidence", "delivery", "createdAt", "updatedAt", "implementation", "integration", "actionRequired"].sort());
   expect(JSON.stringify(listed)).not.toMatch(/worktree|repositoryPath|session|turn|prompt|transcript|credential|objective/i);
 
   expect((await listTasks(`?projectId=${projectId}`)).json().tasks.map((task: { id: string }) => task.id)).toContain(granted);
@@ -1277,6 +1277,72 @@ test("GET /api/agent/tasks lists every task in granted projects and exposes no b
   await tasks.archiveTask(adminId, granted);
   expect(((await listTasks()).json().tasks as Array<{ id: string; archived: boolean }>).find(task => task.id === granted)).toMatchObject({ archived: true });
   expect((await readTask(granted)).json()).toMatchObject({ archived: true, permittedCommands: ["unarchive_task"] });
+});
+
+test("GET /api/agent/tasks filters stored sources and delivery pull requests before pagination", async () => {
+  const create = async (title: string, idempotencyKey: string, source: { kind: "pull_request"; number: number } | { kind: "branch"; branch: string }) => {
+    const taskId = await createAgentApiTask(title, idempotencyKey);
+    const configuration = { ...tasks.getTask(adminId, taskId).configuration, source };
+    database.authTransaction(db => db.prepare("UPDATE forge_tasks SET configuration_json = ? WHERE id = ?").run(JSON.stringify(configuration), taskId));
+    return taskId;
+  };
+  const pullRequest = await create("Pull request backlog", "list-source-pr-001", { kind: "pull_request", number: 17 });
+  const pullRequestTwo = await create("Pull request backlog two", "list-source-pr-002", { kind: "pull_request", number: 17 });
+  const pullRequestThree = await create("Pull request backlog three", "list-source-pr-003", { kind: "pull_request", number: 17 });
+  const archivedPullRequest = await create("Archived pull request backlog", "list-source-pr-004", { kind: "pull_request", number: 17 });
+  const branchOne = await create("Needle alpha", "list-source-branch-001", { kind: "branch", branch: "feature/needle" });
+  const branchTwo = await create("Needle beta", "list-source-branch-002", { kind: "branch", branch: "feature/needle" });
+  const branchThree = await create("Needle gamma", "list-source-branch-003", { kind: "branch", branch: "feature/needle" });
+  const delivery = await create("Delivery pull request", "list-delivery-pr-001", { kind: "branch", branch: "feature/delivery" });
+  tasks.repository.controls.start(delivery);
+  database.authTransaction(db => db.prepare("UPDATE forge_task_controls SET pull_request_json = ? WHERE task_id = ?").run(JSON.stringify({ repository: "meiji/externalAgent-test", number: 17, url: "https://github.com/meiji/externalAgent-test/pull/17", headSha: "a".repeat(40), state: "open", mergedAt: null }), delivery));
+  await tasks.archiveTask(adminId, archivedPullRequest);
+
+  const sourceTask = (await listTasks(`?pullRequestNumber=17`)).json().tasks as Array<Record<string, unknown>>;
+  expect(sourceTask.map(task => task.id).sort()).toEqual([pullRequest, pullRequestTwo, pullRequestThree, archivedPullRequest, delivery].sort());
+  expect(sourceTask.find(task => task.id === pullRequest)).toMatchObject({ source: { kind: "pull_request", number: 17 }, status: "backlog" });
+
+  const activeDeliveryExcluded = (await listTasks("?pullRequestNumber=17&status=backlog")).json().tasks as Array<{ id: string }>;
+  expect(activeDeliveryExcluded.map(task => task.id).sort()).toEqual([pullRequest, pullRequestTwo, pullRequestThree, archivedPullRequest].sort());
+  const archivedSourceExcluded = (await listTasks("?pullRequestNumber=17&status=backlog&archived=false")).json().tasks as Array<{ id: string }>;
+  expect(archivedSourceExcluded.map(task => task.id).sort()).toEqual([pullRequest, pullRequestTwo, pullRequestThree].sort());
+
+  const pullRequestPages: string[] = [];
+  let pullRequestCursor: string | null = null;
+  for (let page = 0; page < 4; page++) {
+    const result = (await listTasks(`?pullRequestNumber=17&status=backlog&archived=false&limit=1${pullRequestCursor ? `&cursor=${encodeURIComponent(pullRequestCursor)}` : ""}`)).json() as { tasks: Array<{ id: string }>; nextCursor: string | null };
+    pullRequestPages.push(...result.tasks.map(task => task.id));
+    pullRequestCursor = result.nextCursor;
+    if (pullRequestCursor === null) break;
+  }
+  expect(pullRequestCursor).toBeNull();
+  expect(pullRequestPages.sort()).toEqual([pullRequest, pullRequestTwo, pullRequestThree].sort());
+
+  const ids: string[] = [];
+  let cursor: string | null = null;
+  do {
+    const page = (await listTasks(`?sourceBranch=feature%2Fneedle&titleContains=NEEDLE&limit=1${cursor ? `&cursor=${encodeURIComponent(cursor)}` : ""}`)).json() as { tasks: Array<{ id: string }>; nextCursor: string | null };
+    ids.push(...page.tasks.map(task => task.id));
+    cursor = page.nextCursor;
+  } while (cursor);
+  expect(ids.sort()).toEqual([branchOne, branchTwo, branchThree].sort());
+});
+
+test("GET /api/agent/tasks summary keeps a compact, stored task projection", async () => {
+  const task = await createAgentApiTask("Summary task", "list-summary-001");
+  const response = await listTasks("?view=summary");
+  expect(response.statusCode).toBe(200);
+  const summary = (response.json().tasks as Array<Record<string, unknown>>).find(item => item.id === task)!;
+  expect(Object.keys(summary).sort()).toEqual(["id", "title", "status", "archived", "queue", "workflow", "dependsOn", "updatedAt"].sort());
+  expect(summary).toMatchObject({ id: task, queue: "backlog" });
+});
+
+test("a 100-task summary response stays below 20 KB", async () => {
+  for (let index = 0; index < 100; index++) await createAgentApiTask(`Compact task ${index}`, `compact-task-${String(index).padStart(3, "0")}`);
+  const response = await listTasks("?view=summary&limit=100");
+  expect(response.statusCode).toBe(200);
+  expect(response.json().tasks).toHaveLength(100);
+  expect(Buffer.byteLength(response.body)).toBeLessThan(20 * 1024);
 });
 
 test("real HTTP discovery applies current grants, creator authority, pagination, and conditional polling", async () => {

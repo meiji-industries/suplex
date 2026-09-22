@@ -105,6 +105,10 @@ test("the stdio bridge drives the paired ForgeMcp runtime API end to end", async
 
     const list = await session.call({ method: "tools/call", params: { name: "forge_list_tasks", arguments: { projectId: fixture.project.id, limit: 10 } } });
     expect(structured(list)).toMatchObject({ status: 200, body: { tasks: [{ id: task.id }], nextCursor: null } });
+    const listedTask = (structured(list).body as { tasks: Array<Record<string, unknown>> }).tasks.find(candidate => candidate.id === task.id)!;
+    expect(Object.keys(listedTask).sort()).toEqual(["id", "title", "status", "archived", "queue", "workflow", "dependsOn", "updatedAt"].sort());
+    const fullList = await session.call({ method: "tools/call", params: { name: "forge_list_tasks", arguments: { projectId: fixture.project.id, limit: 10, view: "full" } } });
+    expect((structured(fullList).body as { tasks: Array<Record<string, unknown>> }).tasks.find(candidate => candidate.id === task.id)).toHaveProperty("integration");
 
     const illegal = await session.call({ method: "tools/call", params: { name: "forge_command_task", arguments: { taskId: task.id, command: "unarchive_task", revision: task.revision, idempotencyKey: "bridge-command-1" } } });
     expect(illegal.result).toMatchObject({ isError: true });

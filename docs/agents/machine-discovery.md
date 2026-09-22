@@ -73,6 +73,9 @@ agent. It grants nothing else.
   identifier, and do not read a project list from anywhere else.
 - Read `GET /api/agent/capabilities` to learn what this deployment accepts. The
   reported surface is the registered surface.
+- List tasks with `forge_list_tasks`. It defaults to a compact summary. Filter
+  by pull request number, source branch, or case-insensitive title substring,
+  and set `view` to `full` when the complete projection is needed.
 - Create a task with `POST /api/agent/tasks`. An idempotency key is necessary. A
   replay of the same request returns the same task. Creation never starts the task.
 - Poll a task with `GET /api/agent/tasks/{taskId}`. Send the `ETag` in

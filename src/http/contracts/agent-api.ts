@@ -214,9 +214,18 @@ export const AgentApiIdentityResponseSchema = z.object({
 
 export const AgentApiTaskFilterSchema = z.enum(["stale_delivery", "conflicting_pull_request", "failed_checks", "pending_review", "blocked_by_dependency", "not_integrated"]);
 
+const AgentApiTaskSourceSchema = z.discriminatedUnion("kind", [
+  z.object({ kind: z.literal("issue"), number: z.number().int().min(1) }).strict(),
+  z.object({ kind: z.literal("branch"), branch: z.string().min(1) }).strict(),
+  z.object({ kind: z.literal("pull_request"), number: z.number().int().min(1) }).strict(),
+]);
+
 export const AgentApiTaskListQuerySchema = z.object({
   projectId: z.string().min(1).max(128).optional(),
   status: z.enum(["backlog", "active", "waiting_human", "cancelled", "delivered"]).optional(),
+  pullRequestNumber: z.coerce.number().int().positive().optional(),
+  sourceBranch: z.string().min(1).optional(),
+  titleContains: z.string().min(1).optional(),
   archived: z.enum(["true", "false"]).optional(),
   attention: z.enum(["true", "false"]).optional(),
   blocker: z.enum(["true", "false"]).optional(),
@@ -224,6 +233,7 @@ export const AgentApiTaskListQuerySchema = z.object({
   cursor: z.string().min(1).max(2048).optional(),
   limit: z.coerce.number().int().min(1).max(100).default(50),
   filter: AgentApiTaskFilterSchema.optional(),
+  view: z.enum(["summary", "full"]).optional(),
 }).strict();
 
 export const AgentApiProjectDiscoveryQuerySchema = z.object({
@@ -272,6 +282,7 @@ export const AgentApiSafeTaskProjectionSchema = z.object({
   projectId: z.string(),
   project: AgentApiProjectSchema,
   title: z.string(),
+  source: z.union([AgentApiTaskSourceSchema, z.null()]),
   status: AgentApiTaskStatusSchema,
   queue: TaskQueueSchema.describe("startIntent is manual or queued. state separates backlog (manual), queued (waits to start by itself), running, needs_attention, delivered, and cancelled. waitingOn lists each incomplete prerequisite with its exact reason."),
   dependsOn: z.array(z.string()).describe("The ids of blockedBy, in the same order."),
@@ -306,6 +317,20 @@ export type AgentApiIntegration = z.infer<typeof AgentApiIntegrationSchema>;
 export type AgentApiActionRequired = z.infer<typeof AgentApiActionRequiredSchema>;
 export type AgentApiTaskFilter = z.infer<typeof AgentApiTaskFilterSchema>;
 export type AgentApiSafeTaskProjection = z.infer<typeof AgentApiSafeTaskProjectionSchema>;
+
+export const AgentApiTaskSummaryProjectionSchema = z.object({
+  id: z.string(),
+  title: z.string(),
+  status: AgentApiTaskStatusSchema,
+  archived: z.boolean(),
+  queue: TaskQueueSchema.shape.state,
+  workflow: z.string().optional(),
+  source: AgentApiTaskSourceSchema.optional(),
+  pullRequestNumber: z.number().int().min(1).optional(),
+  dependsOn: z.array(z.string()),
+  updatedAt: z.string(),
+}).strict();
+export type AgentApiTaskSummaryProjection = z.infer<typeof AgentApiTaskSummaryProjectionSchema>;
 
 const AgentApiChecksSchema = z.object({
   total: z.number().int().nonnegative(), pending: z.number().int().nonnegative(),
@@ -412,7 +437,7 @@ export const AgentApiProvenanceResponseSchema = z.object({
 export type AgentApiTaskReadProjection = z.infer<typeof AgentApiTaskReadProjectionSchema>;
 
 export const AgentApiTaskListResponseSchema = z.object({
-  tasks: z.array(AgentApiTaskReadProjectionSchema),
+  tasks: z.array(z.union([AgentApiTaskReadProjectionSchema, AgentApiTaskSummaryProjectionSchema])),
   nextCursor: z.string().nullable(),
 });
 

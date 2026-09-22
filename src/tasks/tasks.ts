@@ -17,7 +17,7 @@ import { ArtifactStore, type StoredArtifact } from "../platform/artifacts.js";
 import type { ForgeConfig } from "../platform/config.js";
 import type { ForgeDatabase } from "../platform/database.js";
 import type { ExternalAgentPrincipal } from "../identity/external-agents.js";
-import { AGENT_API_TASK_COMMANDS, AgentApiSafeTaskProjectionSchema, AgentApiTaskCommandBodySchema, AgentApiTaskCreateBodySchema, type AgentApiSafeTaskProjection, type AgentApiTaskCreateBody, type AgentApiTaskFilter, type AgentApiTaskReadProjection } from "../http/contracts/agent-api.js";
+import { AGENT_API_TASK_COMMANDS, AgentApiSafeTaskProjectionSchema, AgentApiTaskCommandBodySchema, AgentApiTaskCreateBodySchema, type AgentApiSafeTaskProjection, type AgentApiTaskCreateBody, type AgentApiTaskFilter, type AgentApiTaskReadProjection, type AgentApiTaskSummaryProjection } from "../http/contracts/agent-api.js";
 import { createGithubReleasePort, GithubReleaseFailure, type GithubReleasePort } from "../integrations/github/delivery.js";
 import { deriveActionRequired, deriveTaskIntegration, isUpstreamOf, matchesAgentApiFilter, observableDelivery, type PullRequestObservationResult } from "./integration.js";
 import { ProjectAgentTaskPolicySchema, type ProjectAgentTaskPolicy } from "../http/contracts/projects.js";
@@ -232,11 +232,14 @@ export class TaskService {
     return projection!;
   }
 
-  async readAgentApiTasks(principal: ExternalAgentPrincipal, input: Parameters<TaskService["listAgentApiTasks"]>[1] & { filter?: AgentApiTaskFilter }, github: AgentApiGithubPort = createGithubReleasePort()): Promise<{ tasks: AgentApiTaskReadProjection[]; nextCursor: string | null }> {
+  async readAgentApiTasks(principal: ExternalAgentPrincipal, input: Parameters<TaskService["listAgentApiTasks"]>[1] & { filter?: AgentApiTaskFilter; view?: "summary" | "full" }, github: AgentApiGithubPort = createGithubReleasePort()): Promise<{ tasks: Array<AgentApiTaskReadProjection | AgentApiTaskSummaryProjection>; nextCursor: string | null }> {
     const page = this.listAgentApiTasks(principal, input);
+    const filter = input.filter;
+    if (input.view === "summary" && !filter) return { tasks: page.tasks.map(task => this.agentApiTaskSummary(task)), nextCursor: page.nextCursor };
     const tasks = await this.withAgentApiIntegration(principal, page.tasks, github);
     // Integration health comes from GitHub, not the query, so the filter narrows a page already drawn. The cursor still walks every task.
-    return { tasks: input.filter ? tasks.filter(projection => matchesAgentApiFilter(projection, input.filter!)) : tasks, nextCursor: page.nextCursor };
+    const filtered = filter === undefined ? tasks : tasks.filter(projection => matchesAgentApiFilter(projection, filter));
+    return { tasks: input.view === "summary" ? filtered.map(task => this.agentApiTaskSummary(task)) : filtered, nextCursor: page.nextCursor };
   }
 
   private async withAgentApiIntegration(principal: ExternalAgentPrincipal, projections: AgentApiSafeTaskProjection[], github: AgentApiGithubPort): Promise<AgentApiTaskReadProjection[]> {
@@ -343,9 +346,9 @@ export class TaskService {
     };
   }
 
-  listAgentApiTasks(principal: ExternalAgentPrincipal, input: { projectId?: string; status?: string; archived?: boolean; attention?: boolean; blocker?: boolean; updatedSince?: string; cursor?: string; limit: number }) {
+  listAgentApiTasks(principal: ExternalAgentPrincipal, input: { projectId?: string; status?: string; pullRequestNumber?: number; sourceBranch?: string; titleContains?: string; archived?: boolean; attention?: boolean; blocker?: boolean; updatedSince?: string; cursor?: string; limit: number }) {
     if (input.projectId) this.requireScope({ kind: "agentApi", principal }, principal.companyId, input.projectId);
-    const filter = { projectId: input.projectId ?? null, status: input.status ?? null, archived: input.archived ?? null, attention: input.attention ?? null, blocker: input.blocker ?? null, updatedSince: input.updatedSince ?? null };
+    const filter = { projectId: input.projectId ?? null, status: input.status ?? null, pullRequestNumber: input.pullRequestNumber ?? null, sourceBranch: input.sourceBranch ?? null, titleContains: input.titleContains ?? null, archived: input.archived ?? null, attention: input.attention ?? null, blocker: input.blocker ?? null, updatedSince: input.updatedSince ?? null };
     const cursor = input.cursor ? this.parseAgentApiCursor(input.cursor, principal, filter) : null;
     const rows = this.repository.agentApiRows({
       agentId: principal.agentId,
@@ -353,6 +356,9 @@ export class TaskService {
       limit: input.limit + 1,
       ...(input.projectId === undefined ? {} : { projectId: input.projectId }),
       ...(input.status === undefined ? {} : { status: input.status }),
+      ...(input.pullRequestNumber === undefined ? {} : { pullRequestNumber: input.pullRequestNumber }),
+      ...(input.sourceBranch === undefined ? {} : { sourceBranch: input.sourceBranch }),
+      ...(input.titleContains === undefined ? {} : { titleContains: input.titleContains }),
       ...(input.archived === undefined ? {} : { archived: input.archived }),
       ...(input.attention === undefined ? {} : { attention: input.attention }),
       ...(input.blocker === undefined ? {} : { blocker: input.blocker }),
@@ -812,8 +818,17 @@ export class TaskService {
       : ["duplicate_task"] as const;
     const permittedCommands = row.creator_agent_id === principal.agentId ? [...lifecycleCommands, ...recheck] : [];
     const selection = task.configuration.hermesSelection;
-    const value = { id: task.id, issueKey: task.issueKey, projectId: task.projectId, project, title: task.title, status: task.status, queue: task.queue, dependsOn: task.dependsOn, blockedBy: task.blockedBy.map(({ id, title, status }) => ({ id, title, status })), archived: task.archivedAt !== null, permittedCommands, humanQuestion, blocker, workflowStage, workflow: { id: selection?.workflowId ?? null, engine: task.workflow, name: selection?.workflowName ?? null }, templateId: selection?.templateId ?? null, deliveryTarget: task.deliveryTarget, runProjectTests: task.configuration.runProjectTests, visualEvidence: task.configuration.visualEvidence, delivery, createdAt: task.createdAt, updatedAt: task.updatedAt };
+    const value = { id: task.id, issueKey: task.issueKey, projectId: task.projectId, project, title: task.title, source: task.configuration.source, status: task.status, queue: task.queue, dependsOn: task.dependsOn, blockedBy: task.blockedBy.map(({ id, title, status }) => ({ id, title, status })), archived: task.archivedAt !== null, permittedCommands, humanQuestion, blocker, workflowStage, workflow: { id: selection?.workflowId ?? null, engine: task.workflow, name: selection?.workflowName ?? null }, templateId: selection?.templateId ?? null, deliveryTarget: task.deliveryTarget, runProjectTests: task.configuration.runProjectTests, visualEvidence: task.configuration.visualEvidence, delivery, createdAt: task.createdAt, updatedAt: task.updatedAt };
     return { ...value, revision: createHash("sha256").update(JSON.stringify({ value, commandRevision: row.command_revision })).digest("base64url") };
+  }
+
+  private agentApiTaskSummary(task: AgentApiSafeTaskProjection): AgentApiTaskSummaryProjection {
+    return {
+      id: task.id, title: task.title, status: task.status, archived: task.archived, queue: task.queue.state, dependsOn: task.dependsOn, updatedAt: task.updatedAt,
+      ...(task.workflow.name === null ? {} : { workflow: task.workflow.name }),
+      ...(task.source === null ? {} : { source: task.source }),
+      ...(task.delivery?.pullRequest === null || task.delivery === null ? {} : { pullRequestNumber: task.delivery.pullRequest.number }),
+    };
   }
 
   private createAgentApiCursor(principal: ExternalAgentPrincipal, filter: object, task: AgentApiSafeTaskProjection): string {

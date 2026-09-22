@@ -23,6 +23,7 @@ export function InternalAgentsManager({ agents, onSaved }: { agents: readonly Ap
   const [agentOpen, setAgentOpen] = useState(false);
   const [editingAgentId, setEditingAgentId] = useState<string | null>(null);
   const [archiveTarget, setArchiveTarget] = useState<ApiProfile | null>(null);
+  const [deleteTarget, setDeleteTarget] = useState<ApiProfile | null>(null);
   const [models, setModels] = useState<ApiModel[]>([]);
   const [error, setError] = useState("");
   const providerOptions: AgentProviderOption[] = [
@@ -143,6 +144,19 @@ export function InternalAgentsManager({ agents, onSaved }: { agents: readonly Ap
       );
     }
   };
+  const deleteAgent = async (agent: ApiProfile): Promise<void> => {
+    try {
+      await readJson(`/api/admin/profiles/${encodeURIComponent(agent.id)}`, {
+        method: "DELETE",
+      });
+      setError("");
+      await onSaved();
+    } catch (reason) {
+      setError(
+        reason instanceof Error ? reason.message : "Unable to delete agent",
+      );
+    }
+  };
 
   const sortedAgents = [...agents].sort(
     (left, right) =>
@@ -158,6 +172,9 @@ export function InternalAgentsManager({ agents, onSaved }: { agents: readonly Ap
       onOpenEditAgent={openEditAgent}
       onPatchAgent={patchAgent}
       onDuplicateAgent={duplicateAgent}
+      deleteTarget={deleteTarget}
+      onDeleteTargetChange={setDeleteTarget}
+      onDeleteAgent={deleteAgent}
     />
     <InternalAgentDialog
       open={agentOpen}

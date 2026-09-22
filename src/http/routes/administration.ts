@@ -101,6 +101,7 @@ const administration: FastifyPluginAsync<AdministrationRoutesOptions> = async (a
     typed.post("/api/admin/profiles", { schema: { body: ProfileBodySchema, response: { 201: ProfileResponseSchema } } }, async (request, reply) => reply.code(201).send(profiles.create(request.forgeUser.id, request.body)));
     typed.patch("/api/admin/profiles/:agentId", { schema: { params: z.object({ agentId: z.string() }), body: ProfilePatchBodySchema, response: { 200: ProfileResponseSchema } } }, async (request, reply) => reply.send(profiles.update(request.forgeUser.id, request.params.agentId, request.body)));
     typed.post("/api/admin/profiles/:agentId/duplicate", { schema: { params: z.object({ agentId: z.string() }), response: { 201: ProfileResponseSchema } } }, async (request, reply) => reply.code(201).send(profiles.duplicate(request.forgeUser.id, request.params.agentId)));
+    typed.delete("/api/admin/profiles/:agentId", { schema: { params: z.object({ agentId: z.string() }), response: { 204: z.null() } } }, async (request, reply) => { profiles.delete(request.forgeUser.id, request.params.agentId); return reply.code(204).send(null); });
   }
   if (projects) {
     typed.get("/api/admin/models", { schema: { response: { 200: ModelListResponseSchema } } }, async (request, reply) => reply.send({ models: await projects.listModels(request.forgeUser.id) }));

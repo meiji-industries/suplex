@@ -29,7 +29,7 @@ import {
 } from "../../components/ui/dropdown-menu.js";
 import { Input } from "../../components/ui/input.js";
 import { NewButton } from "../../components/ui/new-button.js";
-import { Archive, ArchiveRestore, Copy, Ellipsis, Pencil, Zap } from "lucide-react";
+import { Archive, ArchiveRestore, Copy, Ellipsis, Pencil, Trash2, Zap } from "lucide-react";
 import {
   useEffect,
   useRef,
@@ -130,6 +130,9 @@ export function InternalAgentsSection({
   onOpenEditAgent,
   onPatchAgent,
   onDuplicateAgent,
+  deleteTarget,
+  onDeleteTargetChange,
+  onDeleteAgent,
 }: {
   agents: readonly ApiProfile[];
   sortedAgents: ApiProfile[];
@@ -143,6 +146,9 @@ export function InternalAgentsSection({
     fallback: string,
   ) => Promise<void>;
   onDuplicateAgent: (agent: ApiProfile) => Promise<void>;
+  deleteTarget: ApiProfile | null;
+  onDeleteTargetChange: Dispatch<SetStateAction<ApiProfile | null>>;
+  onDeleteAgent: (agent: ApiProfile) => Promise<void>;
 }): ReactElement {
   return (
     <section>
@@ -274,6 +280,13 @@ export function InternalAgentsSection({
                         Archive
                       </DropdownMenuItem>
                     )}
+                    <DropdownMenuItem
+                      variant="destructive"
+                      onClick={() => onDeleteTargetChange(agent)}
+                    >
+                      <Trash2 />
+                      Delete
+                    </DropdownMenuItem>
                   </DropdownMenuContent>
                 </DropdownMenu>
               </SettingsTableCell>
@@ -328,6 +341,35 @@ export function InternalAgentsSection({
               }}
             >
               Archive
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+      <AlertDialog
+        open={deleteTarget !== null}
+        onOpenChange={(open) => {
+          if (!open) onDeleteTargetChange(null);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete {deleteTarget?.name}?</AlertDialogTitle>
+            <AlertDialogDescription>
+              Forge permanently deletes this agent. Tasks that use this agent
+              continue. You cannot undo this action.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              variant="destructive"
+              onClick={() => {
+                const target = deleteTarget;
+                onDeleteTargetChange(null);
+                if (target) void onDeleteAgent(target);
+              }}
+            >
+              Delete
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

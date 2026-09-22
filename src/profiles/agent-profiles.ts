@@ -2,6 +2,7 @@ import { randomBytes, randomUUID } from "node:crypto";
 import { z } from "zod";
 import { AuthFailure, type AuthService } from "../identity/auth.js";
 import type { ForgeDatabase } from "../platform/database.js";
+import { ProjectAgentTaskPolicySchema } from "../http/contracts/projects.js";
 import { AgentProfileInputSchema, AgentProfilePatchSchema, AgentProfileSchema, type AgentProfile } from "./agent-profile-contracts.js";
 
 const selection = "SELECT id, name, role, avatar_seed AS avatarSeed, provider, model, reasoning_level AS reasoningLevel, service_tier AS serviceTier, provider_instance_id AS providerInstanceId, archived_at AS archivedAt, created_at AS createdAt, updated_at AS updatedAt FROM forge_profiles";
@@ -56,6 +57,40 @@ export class AgentProfileService {
     let name = `${base} (copy)`;
     for (let copy = 2; names.has(name); copy++) name = `${base} (copy ${copy})`;
     return this.create(userId, AgentProfileInputSchema.strip().parse({ ...source, name, avatarSeed: randomBytes(16).toString("hex") }));
+  }
+
+  /** Tasks keep profile snapshots, so they continue after the agent is gone. */
+  delete(userId: string, id: string): void {
+    this.requireAdmin(userId);
+    this.database.authTransaction(db => {
+      this.get(id);
+      // A default selection would break task creation, trigger dispatch, and later edits, so the admin replaces it first.
+      const configured = (table: string) => `SELECT 1 FROM ${table} WHERE json_extract(configuration_json, '$.rootProfileId') = @id OR json_extract(configuration_json, '$.workerProfileId') = @id OR EXISTS (SELECT 1 FROM json_each(configuration_json, '$.advisorProfileIds') WHERE value = @id) LIMIT 1`;
+      const references = ([
+        ["projects", "SELECT 1 FROM forge_projects WHERE root_profile_id = @id OR worker_profile_id = @id LIMIT 1"],
+        ["workflows", configured("forge_workflows")],
+        ["task templates", configured("forge_task_templates")],
+      ] as const).filter(([, sql]) => db.prepare(sql).get({ id })).map(([kind]) => kind);
+      if (references.length) throw new AuthFailure(`Select another agent for the ${new Intl.ListFormat("en").format(references)} that use this agent before you delete it`, 409);
+      // Allowlists only permit choices, so removing the agent keeps each project policy valid.
+      const without = (ids: string[]) => ids.filter(value => value !== id);
+      const projects = db.prepare("SELECT id, root_profile_id, worker_profile_id, agent_task_policy_json FROM forge_projects WHERE agent_task_policy_json <> '{}'").all() as Array<{ id: string; root_profile_id: string; worker_profile_id: string; agent_task_policy_json: string }>;
+      for (const project of projects) {
+        const parsed = ProjectAgentTaskPolicySchema.safeParse(JSON.parse(project.agent_task_policy_json));
+        if (!parsed.success) continue;
+        const policy = parsed.data;
+        const pruned = {
+          ...policy,
+          rootProfileIds: without(policy.rootProfileIds).length ? without(policy.rootProfileIds) : [project.root_profile_id],
+          workerProfileIds: without(policy.workerProfileIds).length ? without(policy.workerProfileIds) : [project.worker_profile_id],
+          advisorProfileIds: Object.fromEntries(Object.entries(policy.advisorProfileIds).map(([role, ids]) => [role, without(ids)])),
+        };
+        if (JSON.stringify(pruned) !== JSON.stringify(policy)) db.prepare("UPDATE forge_projects SET agent_task_policy_json = ? WHERE id = ?").run(JSON.stringify(pruned), project.id);
+      }
+      db.prepare("DELETE FROM forge_avatars WHERE owner_id = ?").run(id);
+      db.prepare("DELETE FROM forge_profiles WHERE id = ?").run(id);
+      this.auth.recordAuditEvent(userId, "agent_profile_deleted", undefined, undefined, { profileId: id });
+    });
   }
 
   private get(id: string): AgentProfile {

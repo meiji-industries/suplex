@@ -205,7 +205,7 @@ const tasks: FastifyPluginAsync<TaskRoutesOptions> = async (app, { tasks, host, 
   });
   typed.get("/api/tasks/:taskId", { schema: taskResponse }, async (request, reply) => reply.header("Cache-Control", "private, no-store").send(tasks.getTask(request.forgeUser.id, request.params.taskId)));
   typed.patch("/api/tasks/:taskId", { schema: { ...taskResponse, body: TaskDetailsBodySchema } }, async request => tasks.updateTaskDetails(request.forgeUser.id, request.params.taskId, request.body));
-  typed.put("/api/tasks/:taskId/dependencies", { schema: { ...taskResponse, body: TaskDependenciesBodySchema } }, async request => tasks.setTaskDependencies(request.forgeUser.id, request.params.taskId, request.body.dependsOn));
+  typed.put("/api/tasks/:taskId/dependencies", { schema: { ...taskResponse, body: TaskDependenciesBodySchema } }, async request => tasks.setTaskDependencies(request.forgeUser.id, request.params.taskId, request.body));
   typed.patch("/api/tasks/:taskId/issue", { schema: { ...taskResponse, body: TaskIssueBodySchema } }, async request => tasks.setTaskIssue(request.forgeUser.id, request.params.taskId, request.body.issue));
   typed.post("/api/tasks/:taskId/rename", { schema: { ...taskResponse, body: TaskRenameBodySchema } }, async request => tasks.renameTask(request.forgeUser.id, request.params.taskId, request.body));
   typed.post("/api/tasks/:taskId/start", { schema: taskResponse }, async request => {

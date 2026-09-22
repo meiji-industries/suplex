@@ -27,6 +27,8 @@ export const TaskImageInputSchema = z.object({
   mimeType: z.enum(["image/png", "image/jpeg", "image/webp", "image/gif"]),
   base64: z.string().min(1).max(MAX_TASK_IMAGE_BASE64_LENGTH),
 }).strict();
+export const PullRequestDependencyInputSchema = z.object({ number: z.number().int().positive() }).strict();
+export const PullRequestDependencySchema = PullRequestDependencyInputSchema.extend({ state: z.enum(["open", "closed", "merged"]), title: z.string(), url: z.string().url(), observedAt: z.string().datetime() }).strict();
 export const TaskInputSchema = z.object({
   projectId: id,
   title: z.string().trim().min(1),
@@ -46,6 +48,8 @@ export const TaskInputSchema = z.object({
   advisorProfileIds: AdvisorProfileIdsSchema.default({}),
   /** Prerequisite task ids, shown as "Blocked by". With startImmediately, the task is queued: it starts when every one is complete. */
   dependsOn: z.array(id).max(MAX_TASK_DEPENDENCIES).default([]),
+  /** Pull requests in this project's repository. A queued task starts only after every one merges. */
+  blockedByPullRequests: z.array(PullRequestDependencyInputSchema).max(MAX_TASK_DEPENDENCIES).default([]),
 }).strict();
 export type TaskInput = z.input<typeof TaskInputSchema>;
 export type TaskRequest = z.output<typeof TaskInputSchema>;
@@ -79,8 +83,9 @@ export type TaskConfiguration = z.infer<typeof TaskConfigurationSchema>;
 export const TaskImageSchema = z.object({ artifactId: id, filename: z.string(), mimeType: z.string(), byteSize: z.number().int().nonnegative() }).strict();
 /** queued is derived from the prerequisite's backlog status and start intent on every read. */
 export const TaskReferenceSchema = z.object({ id, title: z.string(), status: TaskControlStatusSchema, queued: z.boolean() }).strict();
-export const TaskQueueWaitReasonSchema = z.enum(["prerequisite_not_started", "prerequisite_running", "prerequisite_needs_human", "prerequisite_cancelled", "prerequisite_archived", "prerequisite_merge_unobserved"]);
-export const TaskQueueWaitSchema = z.object({ id, title: z.string(), status: TaskControlStatusSchema, queued: z.boolean(), deliveryTarget: DeliveryTargetSchema, reason: TaskQueueWaitReasonSchema, summary: z.string() }).strict();
+export const TaskBlockedBySchema = TaskReferenceSchema.extend({ kind: z.enum(["task", "pull_request"]).optional(), number: z.number().int().min(1).optional(), state: z.enum(["open", "closed", "merged"]).optional(), url: z.string().url().optional(), observedAt: z.string().datetime().optional() }).strict();
+export const TaskQueueWaitReasonSchema = z.enum(["prerequisite_not_started", "prerequisite_running", "prerequisite_needs_human", "prerequisite_cancelled", "prerequisite_archived", "prerequisite_merge_unobserved", "prerequisite_pull_request_open", "prerequisite_pull_request_closed"]);
+export const TaskQueueWaitSchema = z.object({ kind: z.enum(["task", "pull_request"]).optional(), id, title: z.string(), status: TaskControlStatusSchema, queued: z.boolean(), deliveryTarget: DeliveryTargetSchema, number: z.number().int().min(1).optional(), state: z.enum(["open", "closed", "merged"]).optional(), url: z.string().url().optional(), reason: TaskQueueWaitReasonSchema, summary: z.string() }).strict();
 /** startIntent is persisted; state and waitingOn are derived from the task and its prerequisites on every read. */
 export const TaskQueueSchema = z.object({
   startIntent: z.enum(["manual", "queued"]),
@@ -112,7 +117,7 @@ export const TaskSchema = z.object({
   worktree: WorktreeReferenceSchema.nullable(),
   pullRequest: PullRequestReferenceSchema.nullable(),
   humanQuestion: TaskHumanQuestionSchema.nullable(),
-  blockedBy: z.array(TaskReferenceSchema),
+  blockedBy: z.array(TaskBlockedBySchema),
   queue: TaskQueueSchema,
   limits: TaskLimitsSchema.extend({ admittedTurns: z.number().int().nonnegative() }).strict(),
   wakeAt: z.string().nullable(),

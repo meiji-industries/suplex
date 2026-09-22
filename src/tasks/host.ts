@@ -18,6 +18,8 @@ import { projectCredentialEnvironmentKeys } from "../runtimes/project-environmen
 import { MissingIntegrationCredential } from "../projects/integration-configuration.js";
 import { IssueTrackerScopeFailure } from "../integrations/issue-tracker.js";
 import { ProviderHttpFailure } from "../integrations/provider-http.js";
+import { createGithubReleasePort, type GithubReleasePort } from "../integrations/github/delivery.js";
+import { updatePullRequestDependencyInTransaction, type PullRequestDependency } from "./pull-request-dependencies.js";
 
 type Controller = Pick<RootController, "prepareRoot" | "recover">;
 
@@ -33,8 +35,11 @@ export class TaskHost {
   private readonly completedPullRequests: Pick<CompletedPullRequests, "refresh">;
   private completedRefresh: Promise<void> | undefined;
   private nextCompletedRefresh = 0;
+  private readonly pullRequestObserver: Pick<Required<GithubReleasePort>, "observePullRequest">;
+  private prerequisiteRefresh: Promise<void> | undefined;
+  private nextPrerequisiteRefresh = 0;
 
-  constructor(private readonly database: ForgeDatabase, options: { completedPullRequests?: Pick<CompletedPullRequests, "refresh">; artifactRoot?: string; controller?: Controller; delivery?: Pick<DeliveryOperations, "observe"> & Partial<Pick<DeliveryOperations, "observeDeliveryWait">>; worktree?: typeof prepareTaskWorktree } = {}) {
+  constructor(private readonly database: ForgeDatabase, options: { completedPullRequests?: Pick<CompletedPullRequests, "refresh">; artifactRoot?: string; controller?: Controller; delivery?: Pick<DeliveryOperations, "observe"> & Partial<Pick<DeliveryOperations, "observeDeliveryWait">>; worktree?: typeof prepareTaskWorktree; pullRequestObserver?: Pick<Required<GithubReleasePort>, "observePullRequest"> } = {}) {
     this.store = new TaskControlStore(database);
     this.completedPullRequests = options.completedPullRequests ?? new CompletedPullRequests(database);
     const artifactRoot = this.artifactRoot = options.artifactRoot ?? join(dirname(database.filename()), "artifacts");
@@ -42,6 +47,7 @@ export class TaskHost {
     this.delivery = options.delivery ?? nativeDelivery;
     this.controller = options.controller ?? new RootController(this.store, createTaskHarness(database.filename(), new CliHerdrClient(), { artifactRoot }), nativeDelivery, new ArtifactStore(artifactRoot), { root: taskEvidenceRoot(database.filename()) }, session => nativeSessionReader(database.filename(), session));
     this.worktree = options.worktree ?? prepareTaskWorktree;
+    this.pullRequestObserver = options.pullRequestObserver ?? createGithubReleasePort();
   }
 
   start(): void {
@@ -64,13 +70,34 @@ export class TaskHost {
         .catch(error => new StructuredLogger().warn("Completed pull request refresh will be retried", {}, { error: error instanceof Error ? error.message : String(error) }))
         .finally(() => { this.completedRefresh = undefined; });
     }
-    // The queue sweep: from startup on, every queued task whose prerequisites are complete starts, whatever event was missed.
+    // The queue sweep runs every tick. GitHub refresh is slower and single-flight, but a completed refresh gets its own admission pass.
     this.store.admitQueued();
+    if (!this.prerequisiteRefresh && Date.now() >= this.nextPrerequisiteRefresh) {
+      this.nextPrerequisiteRefresh = Date.now() + 60_000;
+      this.prerequisiteRefresh = this.refreshPullRequestPrerequisites()
+        .catch(error => new StructuredLogger().warn("Pull request prerequisite refresh will be retried", {}, { error: error instanceof Error ? error.message : String(error) }))
+        .then(() => { this.store.admitQueued(); })
+        .finally(() => { this.prerequisiteRefresh = undefined; });
+    }
     const ids = this.database.authQuery(db => z.array(z.object({ task_id: z.string() })).parse(db.prepare("SELECT c.task_id FROM forge_task_controls c JOIN forge_tasks t ON t.id = c.task_id WHERE (t.archived_at IS NULL AND c.status IN ('active', 'waiting_human') AND (c.wake_at IS NULL OR c.wake_at <= ?)) OR EXISTS (SELECT 1 FROM forge_task_sessions s WHERE s.task_id = c.task_id AND s.stop_requested_at IS NOT NULL AND s.stopped_at IS NULL) ORDER BY COALESCE(c.wake_at, c.created_at)").all(new Date().toISOString())));
     for (const row of ids) {
       if (this.running.has(row.task_id)) continue;
       if (this.running.size >= 4) break;
       void this.recover(row.task_id).catch(error => new StructuredLogger().warn("Task recovery will be retried", { taskId: row.task_id }, { error: error instanceof Error ? error.message : String(error) }));
+    }
+  }
+
+  private async refreshPullRequestPrerequisites(): Promise<void> {
+    const rows = this.database.authQuery(db => db.prepare("SELECT d.task_id AS taskId, d.pull_request_number AS number, d.state, d.title, d.url, d.observed_at AS observedAt, json_extract(t.configuration_json, '$.repository') AS repository FROM forge_task_pull_request_dependencies d JOIN forge_tasks t ON t.id = d.task_id JOIN forge_task_controls c ON c.task_id = t.id WHERE t.start_queued = 1 AND t.archived_at IS NULL AND c.status = 'backlog' ORDER BY d.task_id, d.pull_request_number").all() as Array<PullRequestDependency & { taskId: string; repository: string }>);
+    for (const row of rows) {
+      try {
+        const observed = await this.pullRequestObserver.observePullRequest({ repository: row.repository, branch: "", pullRequestNumber: row.number });
+        if (!observed.exists || !observed.state || !observed.url) continue;
+        const state = observed.state; const url = observed.url;
+        this.database.authImmediateTransaction(db => updatePullRequestDependencyInTransaction(db, row.taskId, { number: row.number, state, title: observed.title ?? row.title, url, observedAt: new Date().toISOString() }));
+      } catch (error) {
+        new StructuredLogger().warn("Pull request prerequisite observation will be retried", { taskId: row.taskId }, { error: error instanceof Error ? error.message : String(error) });
+      }
     }
   }
 

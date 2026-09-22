@@ -16,7 +16,7 @@ export const GithubTriggerDispatchPolicySchema = z.object({ headSha: sha, baseSh
 const Row = z.object({ id: z.string(), rule_id: z.string(), company_id: z.string(), project_id: z.string(), repository_id: z.number(), repository_name: z.string(), pull_request_number: z.number(), authority_user_id: z.string(), request_json: z.string(), policy_json: z.string(), preset_json: z.string(), profiles_json: z.string(), idempotency_key: z.string(), task_id: z.string().nullable(), created_at: z.string(), updated_at: z.string() });
 
 export type GithubTriggerDispatch = { id: string; ruleId: string; companyId: string; projectId: string; repositoryId: number; repositoryName: string; pullRequestNumber: number; authorityUserId: string; request: TaskRequest; policy: z.infer<typeof GithubTriggerDispatchPolicySchema>; preset: WorkflowRecord; profiles: { root: TaskProfile; worker: TaskProfile; advisors: Record<string, TaskProfile> }; idempotencyKey: string; taskId: string | null; createdAt: string; updatedAt: string };
-export type GithubTriggerDispatchPrepare = Omit<GithubTriggerDispatch, "id" | "idempotencyKey" | "taskId" | "createdAt" | "updatedAt" | "request"> & { request: Omit<TaskRequest, "idempotencyKey" | "startImmediately" | "dependsOn"> };
+export type GithubTriggerDispatchPrepare = Omit<GithubTriggerDispatch, "id" | "idempotencyKey" | "taskId" | "createdAt" | "updatedAt" | "request"> & { request: Omit<TaskRequest, "idempotencyKey" | "startImmediately" | "dependsOn" | "blockedByPullRequests"> };
 
 function dispatch(raw: unknown): GithubTriggerDispatch {
   const row = Row.parse(raw);

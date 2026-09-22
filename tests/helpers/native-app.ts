@@ -35,7 +35,7 @@ const webAuthn: WebAuthnAdapter = {
   async verifyAuthenticationResponse() { return { verified: true, newCounter: 1 }; },
 };
 
-export async function nativeApp(fixtureOptions: { githubTrigger?: GithubTriggerPort; herdr?: TaskPanePort; logSink?: (line: string) => void; issueTracker?: TaskServicePorts["issueTracker"]; reachableAddress?: string } = {}) {
+export async function nativeApp(fixtureOptions: { githubTrigger?: GithubTriggerPort; herdr?: TaskPanePort; logSink?: (line: string) => void; issueTracker?: TaskServicePorts["issueTracker"]; pullRequestObserver?: TaskServicePorts["pullRequestObserver"]; reachableAddress?: string } = {}) {
   const directory = await mkdtemp(join(tmpdir(), "forge-native-app-"));
   const config = createTestConfig(directory, { reachableAddress: fixtureOptions.reachableAddress ?? "http://127.0.0.1:4111" });
   const database = createTestDatabase(config.databasePath);
@@ -52,7 +52,7 @@ export async function nativeApp(fixtureOptions: { githubTrigger?: GithubTriggerP
       { id: "claude-code" as const, label: "Claude Code", status: "configured" as const, modelCount: 1, models: [{ id: "claude-sonnet-5", label: "Claude Sonnet 5" }], connection: { status: "connected" as const, summary: "Signed in" } },
     ] }),
   });
-  const tasks = new TaskService(database, auth, projects, config, { ...(fixtureOptions.herdr ? { herdr: fixtureOptions.herdr } : {}), ...(fixtureOptions.issueTracker ? { issueTracker: fixtureOptions.issueTracker } : {}) });
+  const tasks = new TaskService(database, auth, projects, config, { ...(fixtureOptions.herdr ? { herdr: fixtureOptions.herdr } : {}), ...(fixtureOptions.issueTracker ? { issueTracker: fixtureOptions.issueTracker } : {}), ...(fixtureOptions.pullRequestObserver ? { pullRequestObserver: fixtureOptions.pullRequestObserver } : {}) });
   const templates = new TaskTemplateService(database, auth, tasks);
   const workflows = new WorkflowRecordService(database, auth);
   const externalAgent = new ExternalAgentService(database, auth);

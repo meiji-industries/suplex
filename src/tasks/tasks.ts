@@ -28,6 +28,7 @@ import { ProjectFailure, type Project, type ProjectService } from "../projects/p
 import { TaskProfileSchema, type TaskProfile } from "./control.js";
 import { MAX_TASK_DEPENDENCIES, TaskConfigurationSchema, TaskImageInputSchema, TaskInputSchema, type Task, type TaskInput } from "./contracts.js";
 import { replaceTaskDependencies, TaskDependencyFailure } from "./dependencies.js";
+import { replacePullRequestDependenciesInTransaction, type PullRequestDependency } from "./pull-request-dependencies.js";
 import { duplicateTitle } from "./duplicate-title.js";
 import { decodeTaskImage } from "./images.js";
 import { taskBranchName } from "./branch.js";
@@ -72,15 +73,17 @@ const agentApiDuplicateKey = (taskId: string, key: string): string => `duplicate
 const AGENT_API_UPSTREAM_POOL = 200;
 type Projects = Pick<ProjectService, "getProject" | "getProjectInCompany" | "resolveTaskSource" | "captureTaskConfiguration">;
 /** Worktree removal defaults to the real host; tests drive a controlled one. */
-export type TaskServicePorts = { removeWorktree?: typeof removeTaskWorktree; herdr?: TaskPanePort; issueTracker?: (connection: TrackerConnection) => Pick<IssueTracker, "read"> };
+export type TaskServicePorts = { removeWorktree?: typeof removeTaskWorktree; herdr?: TaskPanePort; issueTracker?: (connection: TrackerConnection) => Pick<IssueTracker, "read">; pullRequestObserver?: Pick<Required<GithubReleasePort>, "observePullRequest"> };
 const DetailsSchema = TaskDetailsBodySchema.refine(input => Object.keys(input).length > 0);
 const RenameSchema = TaskInputSchema.pick({ title: true });
-const DependsOnSchema = z.array(z.string().min(1).max(256)).max(MAX_TASK_DEPENDENCIES);
+const DependenciesSchema = z.object({ dependsOn: z.array(z.string().min(1).max(256)).max(MAX_TASK_DEPENDENCIES), blockedByPullRequests: z.array(z.object({ number: z.number().int().positive() }).strict()).max(MAX_TASK_DEPENDENCIES) }).strict();
+const DependsOnSchema = DependenciesSchema.shape.dependsOn;
 
 export class TaskService {
   private readonly removeWorktree: typeof removeTaskWorktree;
   private readonly herdr: TaskPanePort;
   private readonly issueTracker: NonNullable<TaskServicePorts["issueTracker"]>;
+  private readonly pullRequestObserver: Pick<Required<GithubReleasePort>, "observePullRequest">;
   readonly repository: TaskRepository;
   private readonly artifacts: ArtifactStore;
   constructor(private readonly database: ForgeDatabase, private readonly auth: AuthService, private readonly projects: Projects, config: Pick<ForgeConfig, "artifactRoot">, ports: TaskServicePorts = {}) {
@@ -89,6 +92,7 @@ export class TaskService {
     this.removeWorktree = ports.removeWorktree ?? removeTaskWorktree;
     this.herdr = ports.herdr ?? new CliHerdrClient();
     this.issueTracker = ports.issueTracker ?? (connection => new IssueTracker(connection));
+    this.pullRequestObserver = ports.pullRequestObserver ?? createGithubReleasePort();
   }
 
   getTask(userId: string, taskId: string): Task {
@@ -210,34 +214,60 @@ export class TaskService {
     return this.database.authQuery(db => (db.prepare("SELECT id, name, configuration_json FROM forge_task_templates WHERE project_id = ? ORDER BY name COLLATE NOCASE, id").all(projectId) as Array<{ id: string; name: string; configuration_json: string }>).map(template => ({ id: template.id, name: template.name, description: CreateTaskTemplateBodySchema.parse(JSON.parse(template.configuration_json)).description, permittedForAgentTaskCreation: policy.templateIds.includes(template.id) })));
   }
 
-  setTaskDependencies(userId: string, taskId: string, dependsOn: unknown): Task {
+  setTaskDependencies(userId: string, taskId: string, dependencies: string[]): Task;
+  setTaskDependencies(userId: string, taskId: string, dependencies: unknown): Promise<Task>;
+  setTaskDependencies(userId: string, taskId: string, dependencies: unknown): Task | Promise<Task> {
+    if (Array.isArray(dependencies)) {
+      const task = this.getTask(userId, taskId);
+      try { replaceTaskDependencies(this.database, { taskId, companyId: task.companyId, dependsOn: dependencies }, (db, wasBlocked) => { if (wasBlocked) this.repository.controls.reconcileDependencyReleaseInTransaction(db, taskId); }); }
+      catch (error) { if (error instanceof TaskDependencyFailure) throw new TaskFailure(error.publicMessage, error.statusCode); throw error; }
+      this.repository.controls.admitQueued([taskId]);
+      return this.getTask(userId, taskId);
+    }
+    return this.setTaskDependenciesAsync(userId, taskId, dependencies);
+  }
+
+  private async setTaskDependenciesAsync(userId: string, taskId: string, dependencies: unknown): Promise<Task> {
     const task = this.getTask(userId, taskId);
-    this.applyDependencies({ kind: "user", userId }, task.companyId, taskId, DependsOnSchema.parse(dependsOn));
+    await this.applyDependencies({ kind: "user", userId }, task.companyId, taskId, DependenciesSchema.parse(dependencies));
     this.audit({ kind: "user", userId }, task.companyId, "task_dependencies_updated", taskId);
     return this.getTask(userId, taskId);
   }
 
-  setAgentApiTaskDependencies(principal: ExternalAgentPrincipal, taskId: string, dependsOn: unknown) {
+  setAgentApiTaskDependencies(principal: ExternalAgentPrincipal, taskId: string, dependencies: string[]): AgentApiSafeTaskProjection;
+  setAgentApiTaskDependencies(principal: ExternalAgentPrincipal, taskId: string, dependencies: unknown): Promise<AgentApiSafeTaskProjection>;
+  setAgentApiTaskDependencies(principal: ExternalAgentPrincipal, taskId: string, dependencies: unknown): AgentApiSafeTaskProjection | Promise<AgentApiSafeTaskProjection> {
+    if (Array.isArray(dependencies)) {
+      const authority: Authority = { kind: "agentApi", principal };
+      const row = this.requireTask(authority, taskId);
+      for (const dependency of dependencies) this.requireTask(authority, dependency);
+      try { replaceTaskDependencies(this.database, { taskId, companyId: row.company_id, dependsOn: dependencies }, (db, wasBlocked) => { if (wasBlocked) this.repository.controls.reconcileDependencyReleaseInTransaction(db, taskId); }); }
+      catch (error) { if (error instanceof TaskDependencyFailure) throw new TaskFailure(error.publicMessage, error.statusCode); throw error; }
+      this.audit(authority, row.company_id, "task_dependencies_updated", taskId);
+      return this.getAgentApiTask(principal, taskId);
+    }
+    return this.setAgentApiTaskDependenciesAsync(principal, taskId, dependencies);
+  }
+
+  private async setAgentApiTaskDependenciesAsync(principal: ExternalAgentPrincipal, taskId: string, dependencies: unknown): Promise<AgentApiSafeTaskProjection> {
     const authority: Authority = { kind: "agentApi", principal };
     const row = this.requireTask(authority, taskId);
-    this.applyDependencies(authority, row.company_id, taskId, DependsOnSchema.parse(dependsOn));
+    await this.applyDependencies(authority, row.company_id, taskId, DependenciesSchema.parse(dependencies));
     this.audit(authority, row.company_id, "task_dependencies_updated", taskId);
     return this.getAgentApiTask(principal, taskId);
   }
 
   previewAgentApiTaskDependencies(principal: ExternalAgentPrincipal, taskId: string, dependsOn: unknown): z.infer<typeof AgentApiTaskDependenciesDryRunResponseSchema> {
-    const authority: Authority = { kind: "agentApi", principal };
-    const row = this.requireTask(authority, taskId);
     const requested = DependsOnSchema.parse(dependsOn);
     return this.dryRunTransaction(() => {
-      this.applyDependencies(authority, row.company_id, taskId, requested);
+      this.setAgentApiTaskDependencies(principal, taskId, requested);
       const task = this.getAgentApiTask(principal, taskId);
       return { dryRun: true, dependsOn: task.dependsOn, ...this.wouldStart(task.queue) };
     });
   }
 
-  private applyDependencies(authority: Authority, companyId: string, taskId: string, dependsOn: string[]): void {
-    for (const dependency of dependsOn) {
+  private async applyDependencies(authority: Authority, companyId: string, taskId: string, dependencies: z.infer<typeof DependenciesSchema>): Promise<void> {
+    for (const dependency of dependencies.dependsOn) {
       if (authority.kind === "user") {
         this.requireTask(authority, dependency);
         continue;
@@ -248,13 +278,33 @@ export class TaskService {
       catch { throw new TaskFailure("The dependency is not available.", 422, "dependency_not_found", { details: { field: "dependsOn", value: dependency, reason: "The dependency is not available." } }); }
       if (row.creator_agent_id !== authority.principal.agentId) throw new TaskFailure("The dependency is not permitted.", 422, "dependency_not_permitted", { details: { field: "dependsOn", value: dependency, reason: "The dependency is not permitted." } });
     }
-    try { replaceTaskDependencies(this.database, { taskId, companyId, dependsOn }, (db, wasBlocked) => { if (wasBlocked) this.repository.controls.reconcileDependencyReleaseInTransaction(db, taskId); }); }
+    const task = this.repository.row(taskId);
+    if (!task) throw new TaskFailure("Not found", 404);
+    const configuration = TaskConfigurationSchema.parse(JSON.parse(task.configuration_json));
+    const pullRequests = await this.observePullRequestDependencies(configuration.repository, dependencies.blockedByPullRequests, authority.kind === "agentApi");
+    try { replaceTaskDependencies(this.database, { taskId, companyId, dependsOn: dependencies.dependsOn }); }
     catch (error) {
       if (error instanceof TaskDependencyFailure) throw new TaskFailure(error.publicMessage, error.statusCode);
       throw error;
     }
-    // Removing the last incomplete prerequisite starts a queued task; an added incomplete one keeps it queued.
-    this.repository.controls.admitQueued([taskId]);
+    // Replace every prerequisite before a queued task is considered for admission.
+    this.database.authImmediateTransaction(db => {
+      replacePullRequestDependenciesInTransaction(db, taskId, pullRequests);
+      this.repository.controls.reconcileDependencyReleaseInTransaction(db, taskId);
+    });
+  }
+
+  private async observePullRequestDependencies(repository: string, inputs: Array<{ number: number }>, agentApi = false): Promise<PullRequestDependency[]> {
+    const observed: PullRequestDependency[] = [];
+    for (const input of [...new Map(inputs.map(value => [value.number, value])).values()]) {
+      let value;
+      const unavailable = () => new TaskFailure("The pull request is not available.", 422, "dependency_not_found", { details: { field: "blockedByPullRequests", value: String(input.number), reason: "The pull request is not available." } });
+      try { value = await this.pullRequestObserver.observePullRequest({ repository, branch: "", pullRequestNumber: input.number }); }
+      catch { throw agentApi ? unavailable() : new TaskFailure(`Forge cannot observe pull request #${input.number}. Try again when GitHub is available.`, 422); }
+      if (!value.exists || value.number !== input.number || !value.state || !value.url) throw agentApi ? unavailable() : new TaskFailure(`Pull request #${input.number} was not found`, 422);
+      observed.push({ number: input.number, state: value.state, title: value.title ?? `Pull request #${input.number}`, url: value.url, observedAt: new Date().toISOString() });
+    }
+    return observed;
   }
 
   /** The read path adds observed delivery integration health to the stored projection. */
@@ -426,6 +476,14 @@ export class TaskService {
       if (!supportsDeliveryTarget(project.integration?.repository, request.deliveryTarget)) throw new TaskFailure("Bitbucket supports draft pull requests. Select a supported delivery target.", 422);
       const projectSnapshot = this.projectConfigurationSignature(project);
       if (!project.repository) throw new TaskFailure("Configure the project repository before creating a task", 422);
+      if (authority.kind === "agentApi") for (const dependency of request.dependsOn) {
+        const row = this.repository.row(dependency);
+        if (!row) throw new TaskFailure("The dependency is not available.", 422, "dependency_not_found", { details: { field: "dependsOn", value: dependency, reason: "The dependency is not available." } });
+        try { this.requireScope(authority, row.company_id, row.project_id); }
+        catch { throw new TaskFailure("The dependency is not available.", 422, "dependency_not_found", { details: { field: "dependsOn", value: dependency, reason: "The dependency is not available." } }); }
+        if (row.creator_agent_id !== authority.principal.agentId) throw new TaskFailure("The dependency is not permitted.", 422, "dependency_not_permitted", { details: { field: "dependsOn", value: dependency, reason: "The dependency is not permitted." } });
+      }
+      const pullRequestDependencies = await this.observePullRequestDependencies(project.repository, request.blockedByPullRequests, authority.kind === "agentApi");
       const defaults = this.database.authQuery(db => z.object({ root: z.string(), worker: z.string() }).parse(db.prepare("SELECT root_profile_id AS root, worker_profile_id AS worker FROM forge_projects WHERE id = ? AND company_id = ?").get(project.id, companyId)));
       let rootProfile = capturedDispatch ? (this.profile(capturedDispatch.profiles.root.profileId, "root"), capturedDispatch.profiles.root) : this.projectProfile(request.rootProfileId, defaults.root, "root", project.providerPolicy);
       let workerProfile = capturedDispatch ? (this.profile(capturedDispatch.profiles.worker.profileId, "worker"), capturedDispatch.profiles.worker) : this.projectProfile(request.workerProfileId, defaults.worker, "worker", project.providerPolicy);
@@ -462,7 +520,7 @@ export class TaskService {
         runProjectTests: request.runProjectTests, visualEvidence: request.visualEvidence, source: request.source ?? null, capturedAt: new Date().toISOString(),
         ...(hermesSelection ? { hermesSelection } : {}),
       });
-      return this.database.authImmediateTransaction(() => {
+      return this.database.authImmediateTransaction(db => {
         this.requireScope(authority, companyId, request.projectId, true);
         // A concurrent identical AgentApi request is already admitted; only its current scope remains relevant.
         if (authority.kind === "agentApi") {
@@ -490,7 +548,10 @@ export class TaskService {
         const result = this.repository.create({ taskId, companyId, creator, request, requestHash, configuration, rootProfile, workerProfile, advisorProfiles, images: dryRun ? [] : images, startQueued: request.startImmediately, ...(copiedFromTaskId ? { copiedFromTaskId } : {}) });
         if (capturedDispatch) new GithubTriggerDispatchRepository(this.database).linkTask(capturedDispatch.id, result.task.id);
         if (result.created) {
-          if (request.dependsOn.length) this.applyDependencies(authority, companyId, result.task.id, request.dependsOn);
+          for (const dependency of request.dependsOn) this.requireTask(authority, dependency);
+          const stamp = new Date().toISOString();
+          for (const dependency of [...new Set(request.dependsOn)].sort()) db.prepare("INSERT INTO forge_task_dependencies (task_id, depends_on_task_id, created_at) VALUES (?, ?, ?)").run(result.task.id, dependency, stamp);
+          if (pullRequestDependencies.length) replacePullRequestDependenciesInTransaction(db, result.task.id, pullRequestDependencies);
           // The prerequisites are written first, so a queued task starts now only when every one is already complete.
           if (request.startImmediately) this.repository.controls.admitQueued([result.task.id]);
           this.audit(authority, companyId, "task_created", result.task.id);
@@ -769,7 +830,7 @@ export class TaskService {
     let request: ReturnType<typeof TaskInputSchema.parse>;
     try {
       request = TaskInputSchema.parse(normalizeWorkflowInput({
-        projectId: raw.projectId, title: raw.title, description: raw.description === undefined ? selected.description ?? "" : raw.description, idempotencyKey: raw.idempotencyKey, images: raw.images, source: raw.source, dependsOn: raw.dependsOn,
+        projectId: raw.projectId, title: raw.title, description: raw.description === undefined ? selected.description ?? "" : raw.description, idempotencyKey: raw.idempotencyKey, images: raw.images, source: raw.source, dependsOn: raw.dependsOn, blockedByPullRequests: raw.blockedByPullRequests,
         workflow: selected.workflow ?? "standard", rootProfileId: raw.rootProfileId ?? selected.rootProfileId, workerProfileId: raw.workerProfileId ?? selected.workerProfileId,
         advisorProfileIds: Object.keys(raw.advisorProfileIds).length ? raw.advisorProfileIds : selected.advisorProfileIds ?? {},
         deliveryTarget: policy.deliveryTarget, runProjectTests: policy.runProjectTests, visualEvidence: policy.visualEvidence, startImmediately: raw.queue ?? false,
@@ -951,7 +1012,7 @@ export class TaskService {
       : ["duplicate_task"] as const;
     const permittedCommands = row.creator_agent_id === principal.agentId ? [...lifecycleCommands, ...recheck] : [];
     const selection = task.configuration.hermesSelection;
-    const value = { id: task.id, issueKey: task.issueKey, projectId: task.projectId, project, title: task.title, source: task.configuration.source, status: task.status, queue: task.queue, dependsOn: task.dependsOn, blockedBy: task.blockedBy.map(({ id, title, status }) => ({ id, title, status })), archived: task.archivedAt !== null, permittedCommands, humanQuestion, blocker, workflowStage, workflow: { id: selection?.workflowId ?? null, engine: task.workflow, name: selection?.workflowName ?? null }, templateId: selection?.templateId ?? null, deliveryTarget: task.deliveryTarget, runProjectTests: task.configuration.runProjectTests, visualEvidence: task.configuration.visualEvidence, delivery, createdAt: task.createdAt, updatedAt: task.updatedAt };
+    const value = { id: task.id, issueKey: task.issueKey, projectId: task.projectId, project, title: task.title, source: task.configuration.source, status: task.status, queue: task.queue, dependsOn: task.dependsOn, blockedBy: task.blockedBy.map(({ queued: _queued, ...blocker }) => blocker), archived: task.archivedAt !== null, permittedCommands, humanQuestion, blocker, workflowStage, workflow: { id: selection?.workflowId ?? null, engine: task.workflow, name: selection?.workflowName ?? null }, templateId: selection?.templateId ?? null, deliveryTarget: task.deliveryTarget, runProjectTests: task.configuration.runProjectTests, visualEvidence: task.configuration.visualEvidence, delivery, createdAt: task.createdAt, updatedAt: task.updatedAt };
     return { ...value, revision: createHash("sha256").update(JSON.stringify({ value, commandRevision: row.command_revision })).digest("base64url") };
   }
 

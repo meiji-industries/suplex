@@ -36,8 +36,16 @@ export function TaskStatus({ status, pullRequestState, queued }: TaskStatusProps
 }
 
 /** "Blocked by First · Active, Second · Backlog", or null when the task has no prerequisites. */
-export function blockedByLabel(blockedBy: ReadonlyArray<{ title: string; status: TaskControlStatus; queued: boolean }>): string | null {
-  return blockedBy.length ? `Blocked by ${blockedBy.map(prerequisite => `${prerequisite.title} · ${taskStatusLabel(prerequisite)}`).join(", ")}` : null;
+type PullRequestBlockerState = "open" | "closed" | "merged";
+type BlockedByLabelInput = { title: string; status: TaskControlStatus; queued: boolean; kind?: "task" | "pull_request" | undefined; number?: number | undefined; state?: PullRequestBlockerState | undefined };
+const pullRequestBlockerStateLabels = { open: "Open", closed: "Closed", merged: "Merged" } satisfies Record<PullRequestBlockerState, string>;
+
+function isPullRequestBlocker(value: BlockedByLabelInput): value is BlockedByLabelInput & { kind: "pull_request"; number: number; state: PullRequestBlockerState } {
+  return value.kind === "pull_request" && typeof value.number === "number" && value.state !== undefined;
+}
+
+export function blockedByLabel(blockedBy: ReadonlyArray<BlockedByLabelInput>): string | null {
+  return blockedBy.length ? `Blocked by ${blockedBy.map(prerequisite => isPullRequestBlocker(prerequisite) ? `#${prerequisite.number} ${prerequisite.title} · ${pullRequestBlockerStateLabels[prerequisite.state]}` : `${prerequisite.title} · ${taskStatusLabel(prerequisite)}`).join(", ")}` : null;
 }
 
 /** Status icon beside a task title, linking to the task. */

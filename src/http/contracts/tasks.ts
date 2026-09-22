@@ -29,7 +29,7 @@ export const TaskDetailsBodySchema = z.object({
 }).partial().strict();
 export const TaskIssueBodySchema = z.object({ issue: IssueAssociationSchema.nullable() }).strict();
 export const TaskRenameBodySchema = TaskInputSchema.pick({ title: true });
-export const TaskDependenciesBodySchema = TaskInputSchema.pick({ dependsOn: true }).required().strict();
+export const TaskDependenciesBodySchema = z.object({ dependsOn: TaskInputSchema.shape.dependsOn, blockedByPullRequests: TaskInputSchema.shape.blockedByPullRequests }).strict();
 export const TaskArchiveBodySchema = z.object({ confirmDiscardDirty: z.boolean().optional() }).strict();
 export const TaskArchiveResponseSchema = z.union([TaskResponseSchema, z.object({
   status: z.literal("confirmation_required"),

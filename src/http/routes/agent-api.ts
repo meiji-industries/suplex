@@ -150,7 +150,7 @@ export function registerAgentApiTaskRoutes(app: FastifyInstance, options: { exte
     const principal = authenticate(request.headers.authorization);
     const task = request.body.dryRun
       ? options.tasks.previewAgentApiTaskDependencies(principal, request.params.taskId, request.body.dependsOn)
-      : options.tasks.setAgentApiTaskDependencies(principal, request.params.taskId, request.body.dependsOn);
+      : await options.tasks.setAgentApiTaskDependencies(principal, request.params.taskId, request.body);
     reply.headers(noStore);
     return reply.code(200).send(task);
   });

@@ -7,6 +7,7 @@ import { TaskConfigurationSchema, TaskImageSchema, TaskSchema, type DeliveryTarg
 import type { TaskProfile } from "./control.js";
 import { advisorKeysSorted, publicWorkflowState, type AdvisorRole, type WorkflowId } from "../coordination/workflows.js";
 import { taskDependencySummaries } from "./dependencies.js";
+import { pullRequestDependencies } from "./pull-request-dependencies.js";
 import { taskQueue } from "./queue.js";
 import { IssueAssociationSchema } from "./issue-association.js";
 
@@ -28,10 +29,11 @@ export class TaskConflict extends Error {}
 
 export function taskRequestHash(input: TaskInput, creator: TaskCreator): string {
   // A Standard request with no Advisor selections and no dependencies hashes exactly like a pre-workflow request.
-  const { workflow, advisorProfileIds, dependsOn, ...legacy } = input;
+  const { workflow, advisorProfileIds, dependsOn, blockedByPullRequests, ...legacy } = input;
   const advisors = advisorKeysSorted(advisorProfileIds ?? {});
   const dependencies = [...new Set(dependsOn ?? [])].sort();
-  const base = dependencies.length ? { ...legacy, dependsOn: dependencies } : legacy;
+  const pullRequestDependencies = [...new Set((blockedByPullRequests ?? []).map(dependency => dependency.number))].sort((left, right) => left - right);
+  const base = dependencies.length || pullRequestDependencies.length ? { ...legacy, ...(dependencies.length ? { dependsOn: dependencies } : {}), ...(pullRequestDependencies.length ? { blockedByPullRequests: pullRequestDependencies.map(number => ({ number })) } : {}) } : legacy;
   const hashed = (workflow ?? "standard") === "standard" && Object.keys(advisors).length === 0 ? base : { ...base, workflow, advisorProfileIds: advisors };
   return createHash("sha256").update(JSON.stringify({ input: hashed, creator })).digest("hex");
 }
@@ -120,7 +122,8 @@ export class TaskRepository {
   }
 
   task(row: TaskRow): Task {
-    const blockedBy = taskDependencySummaries(this.database, row.id);
+    const taskDependencies = taskDependencySummaries(this.database, row.id);
+    const blockedBy = [...taskDependencies, ...pullRequestDependencies(this.database, row.id).map(dependency => ({ kind: "pull_request" as const, id: `pull_request:${dependency.number}`, status: "backlog" as const, queued: false, ...dependency }))];
     const control = this.controls.get(row.id);
     const limitState = this.controls.taskLimitState(row.id);
     const images = this.database.authQuery(db => z.array(TaskImageSchema).parse(db.prepare("SELECT id AS artifactId, filename, mime_type AS mimeType, byte_size AS byteSize FROM forge_artifacts WHERE task_id = ? AND company_id = ? AND kind = 'task-image' ORDER BY created_at, id").all(row.id, row.company_id)));
@@ -130,7 +133,7 @@ export class TaskRepository {
       issueKey: row.issue_code && row.issue_number ? `${row.issue_code}-${row.issue_number}` : null,
       issue: row.issue_json ? IssueAssociationSchema.parse(JSON.parse(row.issue_json)) : null,
       title: row.title, description: row.description, status: control.status, deliveryTarget: control.deliveryTarget,
-      rootProfile: control.rootProfile, workerProfile: control.workerProfile, workflow: control.workflow, advisorProfiles: control.advisorProfiles, workflowState: publicWorkflowState(control.workflowState), dependsOn: blockedBy.map(prerequisite => prerequisite.id), configuration: JSON.parse(row.configuration_json),
+      rootProfile: control.rootProfile, workerProfile: control.workerProfile, workflow: control.workflow, advisorProfiles: control.advisorProfiles, workflowState: publicWorkflowState(control.workflowState), dependsOn: taskDependencies.map(prerequisite => prerequisite.id), configuration: JSON.parse(row.configuration_json),
       worktree: control.worktree, pullRequest: control.pullRequest,
       humanQuestion: control.humanQuestion && control.humanQuestionId ? control.limitPause
         ? { kind: "task_limit", id: control.humanQuestionId, text: control.humanQuestion, options: [], requiresCommandCleanup: false, pause: control.limitPause }

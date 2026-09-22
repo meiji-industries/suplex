@@ -62,6 +62,7 @@ export interface GithubPullRequestObservation {
   deletions?: number | null;
   autoMergeEnabled: boolean | null;
   reviewDecision: string | null;
+  title?: string | null;
 }
 
 export type GithubConditionalMergeResult =
@@ -588,7 +589,7 @@ export function createGithubReleasePort(options: GithubReleasePortOptions = {}):
       }
       if (number === null) return { exists: false, number: null, url: null, state: null, isDraft: null, headSha: null, baseSha: null, mergeable: null, mergeStateStatus: null, checks: { total: 0, pending: 0, failing: 0, successful: 0, runs: [] }, author: null, changedFiles: null, additions: null, deletions: null, autoMergeEnabled: null, reviewDecision: null };
       try {
-        const raw = parseJson((await runGh(["pr", "view", String(number), "--repo", input.repository, "--json", "number,url,state,isDraft,headRefOid,baseRefOid,mergeable,mergeStateStatus,autoMergeRequest,reviewDecision,author,changedFiles,additions,deletions,statusCheckRollup"])).stdout);
+        const raw = parseJson((await runGh(["pr", "view", String(number), "--repo", input.repository, "--json", "number,url,state,isDraft,headRefOid,baseRefOid,mergeable,mergeStateStatus,autoMergeRequest,reviewDecision,author,changedFiles,additions,deletions,statusCheckRollup,title"])).stdout);
         return mapGithubPullRequestObservation(raw);
       } catch (error) {
         if (error instanceof GithubCommandFailure && /not found/i.test(`${error.result.stdout}\n${error.result.stderr}`)) return { exists: false, number: null, url: null, state: null, isDraft: null, headSha: null, baseSha: null, mergeable: null, mergeStateStatus: null, checks: { total: 0, pending: 0, failing: 0, successful: 0, runs: [] }, author: null, changedFiles: null, additions: null, deletions: null, autoMergeEnabled: null, reviewDecision: null };

@@ -4,6 +4,7 @@ import { assertTaskPullRequestsAvailable } from "../delivery/pull-request-owners
 import { AuthFailure } from "../identity/auth.js";
 import { DeliveryTargetSchema, type TaskQueue, type TaskQueueWait } from "./contracts.js";
 import { TaskControlStatusSchema, type TaskControlStatus } from "./control.js";
+import { pullRequestDependenciesInTransaction } from "./pull-request-dependencies.js";
 
 /**
  * A queued task is a backlog task with a persisted start intent (forge_tasks.start_queued). It stays in the backlog, so no
@@ -34,16 +35,25 @@ function waitSummary(prerequisite: Prerequisite, reason: TaskQueueWait["reason"]
     case "prerequisite_cancelled": return `${prerequisite.title} is cancelled. Remove it from Blocked by, or disarm this task.`;
     case "prerequisite_archived": return `${prerequisite.title} is archived and not delivered. Remove it from Blocked by, or open and deliver it.`;
     case "prerequisite_merge_unobserved": return `${prerequisite.title} is delivered, but Forge did not observe its merged pull request. Forge checks GitHub again.`;
+    case "prerequisite_pull_request_open":
+    case "prerequisite_pull_request_closed": throw new Error("Pull request prerequisite has no task summary");
+    default: throw new Error("Invalid task prerequisite wait reason");
   }
 }
 
 /** Every prerequisite that is not complete, with the exact reason, ordered by task id like Blocked by. */
 export function prerequisiteWaits(db: Database.Database, taskId: string): TaskQueueWait[] {
   const rows = z.array(PrerequisiteSchema).parse(db.prepare("SELECT t.id, t.title, c.status, c.status = 'backlog' AND t.start_queued = 1 AS queued, c.delivery_target AS deliveryTarget, t.archived_at IS NOT NULL AS archived, json_extract(c.pull_request_json, '$.state') AS pullRequestState FROM forge_task_dependencies d JOIN forge_tasks t ON t.id = d.depends_on_task_id JOIN forge_task_controls c ON c.task_id = t.id WHERE d.task_id = ? ORDER BY t.id").all(taskId));
-  return rows.flatMap(prerequisite => {
-    const reason = waitReason(prerequisite);
-    return reason ? [{ id: prerequisite.id, title: prerequisite.title, status: prerequisite.status, queued: prerequisite.queued, deliveryTarget: prerequisite.deliveryTarget, reason, summary: waitSummary(prerequisite, reason) }] : [];
+  const pullRequests = pullRequestDependenciesInTransaction(db, taskId).flatMap(prerequisite => {
+    if (prerequisite.state === "merged") return [];
+    const reason: "prerequisite_pull_request_closed" | "prerequisite_pull_request_open" = prerequisite.state === "closed" ? "prerequisite_pull_request_closed" : "prerequisite_pull_request_open";
+    const summary = prerequisite.state === "closed" ? `Pull request #${prerequisite.number} is closed without merging. Reopen and merge it, or remove it from Blocked by.` : `Pull request #${prerequisite.number} is open. This task starts when it merges.`;
+    return [{ kind: "pull_request" as const, id: `pull_request:${prerequisite.number}`, status: "backlog" as const, queued: false, deliveryTarget: "pull_request_draft" as const, number: prerequisite.number, title: prerequisite.title, url: prerequisite.url, state: prerequisite.state, reason, summary }];
   });
+  return [...rows.flatMap(prerequisite => {
+    const reason = waitReason(prerequisite);
+    return reason ? [{ kind: "task" as const, id: prerequisite.id, title: prerequisite.title, status: prerequisite.status, queued: prerequisite.queued, deliveryTarget: prerequisite.deliveryTarget, reason, summary: waitSummary(prerequisite, reason) }] : [];
+  }), ...pullRequests];
 }
 
 export function taskQueue(db: Database.Database, taskId: string, status: TaskControlStatus): TaskQueue {

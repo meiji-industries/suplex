@@ -40,7 +40,7 @@ function CopyValue({ label, value, children }: { label: string; value: string; c
 /** The Blocked by prerequisites of a task. Each change saves the complete prerequisite set through the dependency route, so removing one keeps the others. */
 /** Each incomplete Blocked by task with the exact reason the backlog task waits for it. */
 export function TaskQueueWaits({ task }: { task: Pick<Task, "companyId" | "queue"> }): ReactElement {
-  return <ul data-task-queue-waits aria-label="Waiting for" className="space-y-1 text-xs">{task.queue.waitingOn.map(wait => <li key={wait.id} data-task-queue-wait={wait.id} data-reason={wait.reason} className="flex min-w-0 flex-wrap items-center gap-x-1"><TaskTitleLink task={wait} companyId={task.companyId} /><span className="text-muted-foreground">{wait.summary.startsWith(wait.title) ? wait.summary.slice(wait.title.length).trim() : wait.summary}</span></li>)}</ul>;
+  return <ul data-task-queue-waits aria-label="Waiting for" className="space-y-1 text-xs">{task.queue.waitingOn.map(wait => <li key={wait.id} data-task-queue-wait={wait.id} data-reason={wait.reason} className="flex min-w-0 flex-wrap items-center gap-x-1">{wait.kind === "pull_request" && wait.url ? <a href={wait.url}>#{wait.number}</a> : <TaskTitleLink task={wait} companyId={task.companyId} />}<span className="text-muted-foreground">{wait.summary.startsWith(wait.title) ? wait.summary.slice(wait.title.length).trim() : wait.summary}</span></li>)}</ul>;
 }
 
 /** Start queues a task: Forge starts it by itself when every Blocked by task is complete. */
@@ -53,16 +53,18 @@ export function TaskBlockedByProperty({ task, onChange }: { task: Pick<Task, "id
   const [pickerOpen, setPickerOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
-  const ids = task.blockedBy.map(prerequisite => prerequisite.id);
-  const submit = async (dependsOn: string[]) => {
+  const taskBlockers = task.blockedBy.filter(prerequisite => prerequisite.kind !== "pull_request");
+  const pullRequests = task.blockedBy.filter(prerequisite => prerequisite.kind === "pull_request" && prerequisite.number !== undefined);
+  const ids = taskBlockers.map(prerequisite => prerequisite.id);
+  const submit = async (dependsOn: string[], pullRequestNumbers = pullRequests.map(prerequisite => prerequisite.number!)) => {
     if (busy) return;
     setBusy(true); setError("");
-    try { onChange(await readJson<Task>(`/api/tasks/${task.id}/dependencies`, { method: "PUT", body: JSON.stringify({ dependsOn }) })); }
+    try { onChange(await readJson<Task>(`/api/tasks/${task.id}/dependencies`, { method: "PUT", body: JSON.stringify({ dependsOn, blockedByPullRequests: pullRequestNumbers.map(number => ({ number })) }) })); }
     catch (error) { setError(error instanceof Error ? error.message : "The Blocked by tasks could not be saved"); }
     finally { setBusy(false); }
   };
   const openPicker = () => { setError(""); setPickerOpen(true); };
-  return <div className="space-y-1.5"><dt className="text-muted-foreground">Blocked by</dt><dd className="flex min-w-0 flex-col items-start gap-1">{task.blockedBy.map(prerequisite => <span key={prerequisite.id} data-blocked-by-task={prerequisite.id} className="flex w-full min-w-0 items-center gap-1"><TaskTitleLink task={prerequisite} companyId={task.companyId} className="min-w-0 flex-1" /><Button type="button" size="icon-xs" variant="ghost" aria-label={`Remove ${prerequisite.title} from Blocked by`} disabled={busy} onClick={() => void submit(ids.filter(id => id !== prerequisite.id))}><X /></Button></span>)}<Button type="button" size="xs" variant="ghost" aria-label={ids.length ? "Add Blocked by task" : undefined} disabled={busy} onClick={openPicker}>{ids.length ? "Add" : "None"}</Button></dd>{error ? <dd role="alert" className="text-destructive">{error}</dd> : null}<BlockedByPickerDialog open={pickerOpen} onOpenChange={setPickerOpen} companyId={task.companyId} projectId={task.projectId} excludeTaskIds={[task.id, ...ids]} onSelect={selected => void submit([...ids, selected.id])} onError={setError} /></div>;
+  return <div className="space-y-1.5"><dt className="text-muted-foreground">Blocked by</dt><dd className="flex min-w-0 flex-col items-start gap-1">{taskBlockers.map(prerequisite => <span key={prerequisite.id} data-blocked-by-task={prerequisite.id} className="flex w-full min-w-0 items-center gap-1"><TaskTitleLink task={prerequisite} companyId={task.companyId} className="min-w-0 flex-1" /><Button type="button" size="icon-xs" variant="ghost" aria-label={`Remove ${prerequisite.title} from Blocked by`} disabled={busy} onClick={() => void submit(ids.filter(id => id !== prerequisite.id))}><X /></Button></span>)}{pullRequests.map(prerequisite => <span key={prerequisite.id} data-blocked-by-pull-request={prerequisite.number} className="flex w-full min-w-0 items-center gap-1"><a className="min-w-0 flex-1" href={prerequisite.url}>#{prerequisite.number} {prerequisite.title} ({prerequisite.state})</a><Button type="button" size="icon-xs" variant="ghost" aria-label={`Remove pull request #${prerequisite.number} from Blocked by`} disabled={busy} onClick={() => void submit(ids, pullRequests.filter(other => other.number !== prerequisite.number).map(other => other.number!))}><X /></Button></span>)}<Button type="button" size="xs" variant="ghost" aria-label={ids.length ? "Add Blocked by task" : undefined} disabled={busy} onClick={openPicker}>{ids.length ? "Add" : "None"}</Button></dd>{error ? <dd role="alert" className="text-destructive">{error}</dd> : null}<BlockedByPickerDialog open={pickerOpen} onOpenChange={setPickerOpen} companyId={task.companyId} projectId={task.projectId} excludeTaskIds={[task.id, ...ids]} onSelect={selected => void submit([...ids, selected.id])} onError={setError} /></div>;
 }
 
 export function TaskDetailsPage({ task, project, onChange }: { task: Task; project: ApiProject | undefined; onChange: (task: Task) => void }): ReactElement {

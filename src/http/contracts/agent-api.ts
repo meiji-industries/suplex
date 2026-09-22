@@ -113,6 +113,7 @@ export const AgentApiTaskCreateBodySchema = z.object({
   description: z.string().trim().optional().meta({ default: "" }),
   idempotencyKey: z.string().trim().min(1).max(128),
   dependsOn: z.array(taskId).max(MAX_DEPENDENCIES).optional().describe(`${AGENT_API_PREREQUISITE_SCOPE} Shown as Blocked by. A self-reference, a cycle, or an unavailable task is rejected.`),
+  blockedByPullRequests: z.array(z.object({ number: z.number().int().min(1) }).strict()).max(MAX_DEPENDENCIES).optional().describe("Pull requests in the project repository. Forge observes each one before saving it. An open pull request blocks until it merges. A closed pull request blocks until it is reopened and merged or removed."),
   queue: z.boolean().optional().describe("Queue the task: it starts now when every prerequisite is complete, and otherwise starts by itself when the last one completes. Without it, the task stays in the manual backlog."),
   images: z.array(TaskImageInputSchema).max(MAX_TASK_IMAGES).default([]),
   source: TaskSourceInputSchema.optional(),
@@ -130,6 +131,7 @@ export type AgentApiTaskCreateBody = z.infer<typeof AgentApiTaskCreateBodySchema
 
 export const AgentApiTaskDependenciesBodySchema = z.object({
   dependsOn: z.array(taskId).max(MAX_DEPENDENCIES).describe(`${AGENT_API_PREREQUISITE_SCOPE} The complete set replaces the current set; an empty array removes every prerequisite.`),
+  blockedByPullRequests: z.array(z.object({ number: z.number().int().min(1) }).strict()).max(MAX_DEPENDENCIES).default([]).describe("The complete pull request prerequisite set. It replaces the current pull request prerequisites."),
   dryRun: z.literal(true).optional().describe("Validate the replacement and return its projected start state without changing dependencies or queue state."),
 }).strict();
 
@@ -287,8 +289,8 @@ export const AgentApiSafeTaskProjectionSchema = z.object({
   source: z.union([AgentApiTaskSourceSchema, z.null()]),
   status: AgentApiTaskStatusSchema,
   queue: TaskQueueSchema.describe("startIntent is manual or queued. state separates backlog (manual), queued (waits to start by itself), running, needs_attention, delivered, and cancelled. waitingOn lists each incomplete prerequisite with its exact reason."),
-  dependsOn: z.array(z.string()).describe("The ids of blockedBy, in the same order."),
-  blockedBy: z.array(z.object({ id: z.string(), title: z.string(), status: AgentApiTaskStatusSchema }).strict()).describe("The prerequisite tasks of this task with their current title and status."),
+  dependsOn: z.array(z.string()).describe("The task ids of blockedBy, in the same order."),
+  blockedBy: z.array(z.object({ id: z.string(), title: z.string(), status: AgentApiTaskStatusSchema, kind: z.enum(["task", "pull_request"]).optional(), number: z.number().int().min(1).optional(), url: z.string().url().optional(), state: z.enum(["open", "closed", "merged"]).optional(), observedAt: z.string().datetime().optional() }).strict()).describe("Task and pull request prerequisites with their observed state."),
   archived: z.boolean(),
   revision: z.string(),
   permittedCommands: z.array(AgentApiTaskCommandSchema),
@@ -492,7 +494,7 @@ const AgentApiRuntimeErrorResponses = {
   illegalCommand: runtimeError("illegal_command"),
   deliveryPolicyRejected: runtimeError("delivery_policy_rejected"),
   projectNotFound: runtimeError("project_not_found").extend({ field: z.literal("projectId"), value: z.string(), reason: z.string() }),
-  dependencyNotFound: runtimeError("dependency_not_found").extend({ field: z.literal("dependsOn"), value: z.string(), reason: z.string() }),
+  dependencyNotFound: runtimeError("dependency_not_found").extend({ field: z.string(), value: z.string(), reason: z.string() }),
   dependencyNotPermitted: runtimeError("dependency_not_permitted").extend({ field: z.literal("dependsOn"), value: z.string(), reason: z.string() }),
   rootProfileNotFound: runtimeError("root_profile_not_found").extend({ field: z.literal("rootProfileId"), value: z.string(), reason: z.string() }),
   rootProfileNotPermitted: runtimeError("root_profile_not_permitted").extend({ field: z.literal("rootProfileId"), value: z.string(), reason: z.string() }),

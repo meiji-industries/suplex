@@ -15,11 +15,15 @@ It is independent of the pull request, branch, or issue used to create the task.
 _Avoid_: Task dependency, pull request association.
 
 **Prerequisite**
-A task in the same company that another task waits for, shown as "Blocked by".
-A task can have several. `forge_task_dependencies` is the only store; APIs call
-the ids `dependsOn` and the resolved tasks `blockedBy`. A prerequisite is
-complete when it is delivered at its own delivery target; the merged target
-also needs the merged pull request state Forge observed from GitHub.
+A task in the same company or a pull request in the task project repository that
+another task waits for, shown as "Blocked by". Task edges use
+`forge_task_dependencies`; pull request edges use
+`forge_task_pull_request_dependencies` and retain the latest GitHub observation.
+APIs call task ids `dependsOn`, pull request inputs `blockedByPullRequests`, and
+the resolved mixed list `blockedBy`. A pull request prerequisite is complete only
+when GitHub reports it merged. A closed pull request stays blocked until it is
+reopened and merged or removed. Missing or stale observations are refreshed from
+GitHub during queued-task sweeps, never repaired by a user.
 _Avoid_: Blocked by reference, single blocker.
 
 **Queued task**

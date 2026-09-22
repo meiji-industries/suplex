@@ -84,6 +84,7 @@ let agentCredential: string;
 let agentId: string;
 let recoveryWakes: number;
 let observations: Map<string, GithubPullRequestObservation | Error>;
+let pullRequestPrerequisites: Map<number, GithubPullRequestObservation | Error>;
 
 const ABSENT: GithubPullRequestObservation = { exists: false, number: null, url: null, state: null, isDraft: null, headSha: null, baseSha: null, mergeable: null, mergeStateStatus: null, checks: { total: 0, pending: 0, failing: 0, successful: 0, runs: [] }, autoMergeEnabled: null, reviewDecision: null };
 
@@ -267,7 +268,16 @@ beforeEach(async () => {
 
   recoveryWakes = 0;
   observations = new Map();
-  tasks = new TaskService(database, auth, projects, config);
+  pullRequestPrerequisites = new Map();
+  tasks = new TaskService(database, auth, projects, config, {
+    pullRequestObserver: {
+      async observePullRequest(input) {
+        const answer = pullRequestPrerequisites.get(input.pullRequestNumber!) ?? ABSENT;
+        if (answer instanceof Error) throw answer;
+        return answer;
+      },
+    },
+  });
   externalAgent = new ExternalAgentService(database, auth);
 
   // Create and pair AgentApi agent with access only to projectId
@@ -1900,10 +1910,10 @@ test("identical concurrent requests for one key produce one effect and replay th
   expect(auditCount("task_cancelled", task.id)).toBe(1);
 });
 
-const createDependencyTask = async (title: string, idempotencyKey: string, dependsOn?: string[]) => {
+const createDependencyTask = async (title: string, idempotencyKey: string, dependsOn?: string[], blockedByPullRequests?: Array<{ number: number }>, queue = false) => {
   const response = await app.inject({
     method: "POST", url: "/api/agent/tasks", headers: { Authorization: `Bearer ${agentCredential}` },
-    payload: { projectId, title, idempotencyKey, ...(dependsOn ? { dependsOn } : {}) },
+    payload: { projectId, title, idempotencyKey, ...(dependsOn ? { dependsOn } : {}), ...(blockedByPullRequests ? { blockedByPullRequests } : {}), ...((blockedByPullRequests || queue) ? { queue: true } : {}) },
   });
   return response;
 };
@@ -1919,7 +1929,19 @@ test("task dependencies are declared on create, replaced through the agent route
   const secondId = second.json().id as string;
   expect(tasks.getTask(adminId, secondId)).toMatchObject({ dependsOn: [firstId], blockedBy: [{ id: firstId, title: "Dependency root", status: "backlog" }] });
 
-  const third = await createDependencyTask("Dependency third", "dependency-third-001");
+  pullRequestPrerequisites.set(71, ghPullRequest({ number: 71, state: "OPEN", headSha: "7".repeat(40) }));
+  const pullRequest = await createDependencyTask("Pull request prerequisite", "dependency-pull-request-001", undefined, [{ number: 71 }]);
+  expect(pullRequest.statusCode, pullRequest.body).toBe(201);
+  expect(pullRequest.json()).toMatchObject({
+    blockedBy: [{ kind: "pull_request", number: 71, state: "open" }],
+    queue: { waitingOn: [{ kind: "pull_request", number: 71, state: "open", reason: "prerequisite_pull_request_open" }] },
+  });
+
+  const unavailablePullRequest = await createDependencyTask("Unavailable pull request prerequisite", "dependency-pull-request-unavailable-001", undefined, [{ number: 999 }]);
+  expect(unavailablePullRequest.statusCode).toBe(422);
+  expect(unavailablePullRequest.json()).toMatchObject({ code: "dependency_not_found", field: "blockedByPullRequests", value: "999", reason: "The pull request is not available." });
+
+  const third = await createDependencyTask("Dependency third", "dependency-third-001", [firstId], undefined, true);
   const thirdId = third.json().id as string;
   const replaced = await app.inject({
     method: "PUT", url: `/api/agent/tasks/${thirdId}/dependencies`,
@@ -1939,6 +1961,17 @@ test("task dependencies are declared on create, replaced through the agent route
     headers: { Authorization: `Bearer ${agentCredential}` }, payload: { dependsOn: [secondId] },
   });
   expect(removed.json()).toMatchObject({ dependsOn: [secondId], blockedBy: [{ id: secondId, title: "Dependency follower", status: "backlog" }] });
+
+  pullRequestPrerequisites.set(72, ghPullRequest({ number: 72, state: "CLOSED", headSha: "8".repeat(40) }));
+  const pullRequestDependencies = await app.inject({
+    method: "PUT", url: `/api/agent/tasks/${thirdId}/dependencies`,
+    headers: { Authorization: `Bearer ${agentCredential}` }, payload: { dependsOn: [], blockedByPullRequests: [{ number: 72 }] },
+  });
+  expect(pullRequestDependencies.statusCode, pullRequestDependencies.body).toBe(200);
+  expect(pullRequestDependencies.json()).toMatchObject({
+    blockedBy: [{ kind: "pull_request", number: 72, state: "closed" }],
+    queue: { waitingOn: [{ kind: "pull_request", number: 72, state: "closed", reason: "prerequisite_pull_request_closed" }] },
+  });
 
   const cleared = await app.inject({
     method: "PUT", url: `/api/agent/tasks/${thirdId}/dependencies`,

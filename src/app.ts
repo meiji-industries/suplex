@@ -1,7 +1,7 @@
 import cookie from "@fastify/cookie";
 import websocket from "@fastify/websocket";
 import { serializerCompiler, validatorCompiler } from "@fastify/type-provider-zod";
-import Fastify, { type FastifyInstance, type FastifyReply, type FastifyRequest } from "fastify";
+import Fastify, { LogController, type FastifyInstance, type FastifyReply, type FastifyRequest } from "fastify";
 import type { Logger } from "pino";
 
 import type { AuthService, AuthUser } from "./identity/auth.js";
@@ -86,8 +86,8 @@ export interface AppDependencies {
 
 export function createAppServer(dependencies: AppDependencies): FastifyInstance {
   const app = (dependencies.logger === undefined || dependencies.logger === false
-    ? Fastify({ logger: false, disableRequestLogging: true, ...(dependencies.https ? { https: dependencies.https } : {}) })
-    : Fastify({ loggerInstance: dependencies.logger, disableRequestLogging: true, ...(dependencies.https ? { https: dependencies.https } : {}) })) as unknown as FastifyInstance;
+    ? Fastify({ logger: false, logController: new LogController({ disableRequestLogging: true }), ...(dependencies.https ? { https: dependencies.https } : {}) })
+    : Fastify({ loggerInstance: dependencies.logger, logController: new LogController({ disableRequestLogging: true }), ...(dependencies.https ? { https: dependencies.https } : {}) })) as unknown as FastifyInstance;
   app.setValidatorCompiler(validatorCompiler);
   app.setSerializerCompiler(serializerCompiler);
   void app.register(cookie);

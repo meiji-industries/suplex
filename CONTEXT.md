@@ -117,8 +117,10 @@ choose Coordinator and Worker defaults. Tasks capture the chosen settings.
 _Avoid_: Vendor as provider, separate Forge model catalog.
 
 **Project provider policy**
-The providers and login instances permitted for a project's agents. Every task
-role, replacement, and resumed session uses an agent profile within this policy.
+The credentials permitted for a project's agents. Each row is one credential: a
+provider row is its system login, a login instance row is a dedicated login. An
+agent uses exactly one credential and is eligible only when that row is allowed.
+Every task role, replacement, and resumed session uses an eligible agent profile.
 _Avoid_: Company provider policy, provider defaults as authorization.
 
 **Configured provider**

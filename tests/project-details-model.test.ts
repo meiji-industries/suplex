@@ -20,11 +20,16 @@ test("General saves send only edited project fields", () => {
   expect(generalProjectPatch(saved, saved)).toEqual({});
 });
 
-test("Agents block a Claude Code default login when a new policy excludes it", () => {
+test("Agents allow a system login when its provider row is checked", () => {
   const providerPolicy: ProjectProviderPolicy = { allowedProviders: ["claude-code", "codex"], allowedInstanceIds: [] };
-  const draft = { ...unrestricted, providerPolicy };
 
-  expect(agentsDraftFindings(draft, profiles)).toEqual([{ field: "rootProfileId", message: "Select an agent with a provider and login allowed by this project" }]);
+  expect(agentsDraftFindings({ ...unrestricted, providerPolicy }, profiles)).toEqual([]);
+});
+
+test("Agents block a system login when its provider row is unchecked", () => {
+  const providerPolicy: ProjectProviderPolicy = { allowedProviders: ["codex"], allowedInstanceIds: [] };
+
+  expect(agentsDraftFindings({ ...unrestricted, providerPolicy }, profiles)).toEqual([{ field: "rootProfileId", message: "Select an agent with a provider and login allowed by this project" }]);
 });
 
 test("Agents block an empty default profile ID", () => {

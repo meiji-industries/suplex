@@ -108,6 +108,33 @@ test("future selection leaves completed work intact and changed profile excludes
   expect(next.profile?.profileId).toBe("new-worker");
 });
 
+test.each([["reviewer", "independent_review"], ["rater", "refine_pull_request"]] as const)("a completed %s keeps its result when its future profile changes", async (role, id) => {
+  const f = await fixture();
+  workflow(f, id);
+  profile(f, "new-advisor", "root");
+  const old = launchAdvisor(f, role);
+  const result = role === "reviewer"
+    ? { role, approved: true, blockingFindings: [], verification: "passed" as const, verificationSummary: "Checks passed", summary: "Approved" }
+    : { role, rating: 9, blockingFindings: [], verification: "passed" as const, verificationSummary: "Checks passed", summary: "Ready" };
+  f.store.recordWorkerResultAndWake({ taskId: "task", sessionId: old.id, generation: old.generation, receiptId: "valid", observation: JSON.stringify({ state: "completed", text: "Valid", advisor: { role, result, invalidReason: null } }), review: { result, invalidReason: null } });
+  const before = f.store.get("task").workflowState.reviews;
+  expect(select(f, role, "new-advisor", old.id)).toMatchObject({ id: old.id, current: true });
+  expect(f.store.turns("task").filter(turn => turn.sessionId === old.id)).toHaveLength(1);
+  expect(f.store.get("task").workflowState.reviews).toEqual(before);
+  expect(f.store.sessions("task").find(session => session.id === old.id)?.profile?.profileId).toBe("profile");
+});
+
+test("a terminal error remains resumable even though its turn is marked completed", async () => {
+  const f = await fixture();
+  profile(f, "new-worker", "worker");
+  const root = f.controller.prepareRoot("task");
+  const old = f.store.launchWorker({ taskId: "task", rootSessionId: root.id, rootGeneration: root.generation, instruction: "Finish the task" });
+  f.store.recordWorkerResultAndWake({ taskId: "task", sessionId: old.id, generation: old.generation, receiptId: "error", observation: JSON.stringify({ state: "error", text: "Provider failed" }) });
+  const next = select(f, "worker", "new-worker", old.id)!;
+  expect(next.id).not.toBe(old.id);
+  expect(f.store.pendingTurns(next.id)[0]?.promptText).toContain("Finish the task");
+});
+
 test("unchanged legacy Worker profile still reuses its session", async () => {
   const f = await fixture();
   const root = f.controller.prepareRoot("task");

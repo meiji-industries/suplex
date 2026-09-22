@@ -60,6 +60,11 @@ export const TaskDiffResponseSchema = z.object({ available: z.boolean(), patch: 
 export const TaskDiffSummaryResponseSchema = z.object({ available: z.boolean(), files: z.number().int().nonnegative() });
 export const TaskAgentStatusSchema = z.enum(["queued", "working", "retrying", "idle", "waiting_human", "stopped", "unknown"]);
 export const TaskAgentsResponseSchema = z.object({ agents: z.array(z.object({ id: z.string(), role: TaskSessionKindSchema, advisorRole: AdvisorRoleSchema.nullable().optional(), label: z.string().optional(), paneId: z.string().nullable(), status: TaskAgentStatusSchema, statusChangedAt: z.string().datetime().nullable() })) });
+export const TaskAgentsBatchQuerySchema = z.object({
+  taskId: z.union([z.string().min(1).max(256), z.array(z.string().min(1).max(256)).max(10)]).optional()
+    .transform(value => [...new Set(typeof value === "string" ? [value] : value ?? [])].sort()),
+});
+export const TaskAgentsBatchResponseSchema = z.object({ tasks: z.array(z.object({ taskId: z.string(), agents: TaskAgentsResponseSchema.shape.agents })) });
 export const TaskChecksResponseSchema = z.object({
   available: z.boolean(),
   pullRequestState: z.enum(["draft", "ready", "closed", "merged"]).nullable().optional(),

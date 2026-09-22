@@ -44,6 +44,7 @@ import type { TaskLimitDecision } from "./limits/limits.js";
 import { CliHerdrClient } from "../integrations/herdr/client.js";
 import { ensureTaskShellPane, type TaskPanePort } from "../runtimes/task-display.js";
 import { TaskSourceFailure } from "./sources.js";
+import { readTaskAgentStatuses } from "./agent-status.js";
 
 export class TaskFailure extends Error {
   constructor(readonly publicMessage: string, readonly statusCode = 400, readonly code = "task_failure", options?: { cause?: unknown; details?: { field?: string; value?: string; reason?: string; permittedWorkflowIds?: string[]; permittedTemplateIds?: string[] } }) {
@@ -119,6 +120,22 @@ export class TaskService {
     const companies = new Set(this.auth.listVisibleCompanies(userId).map(company => company.id));
     if (companyId && !companies.has(companyId)) throw new TaskFailure("Not found", 404);
     return this.repository.rows().filter(row => companies.has(row.company_id) && (!companyId || row.company_id === companyId) && Boolean(row.archived_at) === archived).map(row => this.repository.task(row));
+  }
+
+  async taskAgents(userId: string, companyId: string, taskIds: string[]) {
+    const visibleTasks = () => {
+      this.auth.requireCompanyAccess(userId, companyId);
+      return taskIds.flatMap(id => {
+        const row = this.repository.row(id);
+        return row && row.company_id === companyId && !row.archived_at ? [this.getTask(userId, id)] : [];
+      });
+    };
+    const results = await Promise.all(visibleTasks().map(async task => ({
+      taskId: task.id,
+      ...await readTaskAgentStatuses(this.database.filename(), task, this.repository.controls.sessions(task.id)),
+    })));
+    const visible = new Set(visibleTasks().map(task => task.id));
+    return { tasks: results.filter(task => visible.has(task.taskId)) };
   }
 
   async createTask(userId: string, companyId: string, input: TaskInput): Promise<{ task: Task; created: boolean }> {

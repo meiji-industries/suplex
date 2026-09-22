@@ -7,7 +7,7 @@ import { TaskFailure, type TaskService } from "../../tasks/tasks.js";
 import type { TaskHost } from "../../tasks/host.js";
 import type { ForgeConfig } from "../../platform/config.js";
 import { readTaskAgentStatuses } from "../../tasks/agent-status.js";
-import { TaskAgentsResponseSchema, TaskArchiveBodySchema, TaskArchiveResponseSchema, TaskIssueBodySchema } from "../contracts/tasks.js";
+import { TaskAgentsBatchQuerySchema, TaskAgentsBatchResponseSchema, TaskAgentsResponseSchema, TaskArchiveBodySchema, TaskArchiveResponseSchema, TaskIssueBodySchema } from "../contracts/tasks.js";
 import { readTaskChecks, readTaskDiff, readTaskDiffSummary } from "../../tasks/inspection.js";
 import { readTaskExecution } from "../../tasks/execution/execution.js";
 import { readTaskSessionHistory } from "../../tasks/history/read.js";
@@ -197,6 +197,10 @@ const tasks: FastifyPluginAsync<TaskRoutesOptions> = async (app, { tasks, host, 
     if (!config) return reply.code(503).send({ error: "Agent status is not available" });
     const result = await readTaskAgentStatuses(config.databasePath, task, tasks.repository.controls.sessions(task.id));
     tasks.getTask(request.forgeUser.id, task.id);
+    return reply.header("Cache-Control", "private, no-store").send(result);
+  });
+  typed.get("/api/companies/:companyId/task-agents", { schema: { params: CompanyIdParamsSchema, querystring: TaskAgentsBatchQuerySchema, response: { 200: TaskAgentsBatchResponseSchema } } }, async (request, reply) => {
+    const result = await tasks.taskAgents(request.forgeUser.id, request.params.companyId, request.query.taskId);
     return reply.header("Cache-Control", "private, no-store").send(result);
   });
   const wake = (taskId: string, action = "task mutation"): void => {

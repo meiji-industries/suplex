@@ -51,12 +51,14 @@ export class ForgeMcpRuntime {
       }
       case "forge_create_task": {
         const result = await tasks.createTaskForAgentApi(principal, AgentApiTaskCreateBodySchema.parse(args));
+        if (result.dryRun) return { status: 200, body: result.preview };
         if (result.task.status === "active") this.recover(result.task.id);
         return { status: result.created ? 201 : 200, body: await tasks.readAgentApiTask(principal, result.task.id, this.input.github) };
       }
       case "forge_set_task_dependencies": {
         const { taskId, ...body } = SetDependenciesSchema.parse(args);
-        return { status: 200, body: tasks.setAgentApiTaskDependencies(principal, taskId, AgentApiTaskDependenciesBodySchema.parse(body).dependsOn) };
+        const parsed = AgentApiTaskDependenciesBodySchema.parse(body);
+        return { status: 200, body: parsed.dryRun ? tasks.previewAgentApiTaskDependencies(principal, taskId, parsed.dependsOn) : tasks.setAgentApiTaskDependencies(principal, taskId, parsed.dependsOn) };
       }
       case "forge_command_task": {
         const { taskId, ...body } = CommandTaskSchema.parse(args);

@@ -81,8 +81,12 @@ export function registerAgentApiTaskRoutes(app: FastifyInstance, options: { exte
   }, async (request, reply) => {
     const principal = authenticate(request.headers.authorization);
     const result = await options.tasks.createTaskForAgentApi(principal, request.body);
-    if (result.task.status === "active") void options.host?.recover(result.task.id).catch(error => app.log.warn({ taskId: result.task.id, err: error }, "Task recovery will be retried"));
+    if (!result.dryRun && result.task.status === "active") void options.host?.recover(result.task.id).catch(error => app.log.warn({ taskId: result.task.id, err: error }, "Task recovery will be retried"));
     reply.header("Cache-Control", "private, no-store");
+    if (result.dryRun) {
+      if (!result.preview) throw new Error("Dry-run preview was not returned");
+      return reply.code(200).send(result.preview);
+    }
     return reply.code(result.created ? 201 : 200).send(await options.tasks.readAgentApiTask(principal, result.task.id, options.github));
   });
 
@@ -144,7 +148,9 @@ export function registerAgentApiTaskRoutes(app: FastifyInstance, options: { exte
     preValidation: async (request) => { authenticate(request.headers.authorization); },
   }, async (request, reply) => {
     const principal = authenticate(request.headers.authorization);
-    const task = options.tasks.setAgentApiTaskDependencies(principal, request.params.taskId, request.body.dependsOn);
+    const task = request.body.dryRun
+      ? options.tasks.previewAgentApiTaskDependencies(principal, request.params.taskId, request.body.dependsOn)
+      : options.tasks.setAgentApiTaskDependencies(principal, request.params.taskId, request.body.dependsOn);
     reply.headers(noStore);
     return reply.code(200).send(task);
   });

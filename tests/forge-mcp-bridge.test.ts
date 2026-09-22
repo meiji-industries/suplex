@@ -88,6 +88,10 @@ test("the stdio bridge drives the paired ForgeMcp runtime API end to end", async
     const templates = await session.call({ method: "tools/call", params: { name: "forge_list_templates", arguments: { projectId: fixture.project.id } } });
     expect(structured(templates)).toEqual({ status: 200, body: { templates: [] } });
 
+    const dryRun = await session.call({ method: "tools/call", params: { name: "forge_create_task", arguments: { projectId: fixture.project.id, title: "Bridge dry run", idempotencyKey: "bridge-dry-key-1", dryRun: true } } });
+    expect(structured(dryRun)).toMatchObject({ status: 200, body: { dryRun: true, title: "Bridge dry run", wouldStart: "backlog" } });
+    expect((structured(dryRun).body as { id?: string }).id).toBeUndefined();
+
     const created = await session.call({ method: "tools/call", params: { name: "forge_create_task", arguments: { projectId: fixture.project.id, title: "Bridge task", description: "Created through the MCP bridge", idempotencyKey: "bridge-key-1" } } });
     expect(structured(created)).toMatchObject({ status: 201, body: { title: "Bridge task", status: "backlog" } });
     const task = (structured(created).body as { id: string; revision: string });

@@ -17,7 +17,7 @@ import { ArtifactStore, type StoredArtifact } from "../platform/artifacts.js";
 import type { ForgeConfig } from "../platform/config.js";
 import type { ForgeDatabase } from "../platform/database.js";
 import type { ExternalAgentPrincipal } from "../identity/external-agents.js";
-import { AGENT_API_TASK_COMMANDS, AgentApiSafeTaskProjectionSchema, AgentApiTaskCommandBodySchema, AgentApiTaskCreateBodySchema, type AgentApiSafeTaskProjection, type AgentApiTaskCreateBody, type AgentApiTaskFilter, type AgentApiTaskReadProjection, type AgentApiTaskSummaryProjection } from "../http/contracts/agent-api.js";
+import { AGENT_API_TASK_COMMANDS, AgentApiSafeTaskProjectionSchema, AgentApiTaskCommandBodySchema, AgentApiTaskCreateBodySchema, AgentApiTaskCreateDryRunResponseSchema, type AgentApiSafeTaskProjection, type AgentApiTaskCreateBody, type AgentApiTaskDependenciesDryRunResponseSchema, type AgentApiTaskFilter, type AgentApiTaskReadProjection, type AgentApiTaskSummaryProjection } from "../http/contracts/agent-api.js";
 import { createGithubReleasePort, GithubReleaseFailure, type GithubReleasePort } from "../integrations/github/delivery.js";
 import { deriveActionRequired, deriveTaskIntegration, isUpstreamOf, matchesAgentApiFilter, observableDelivery, type PullRequestObservationResult } from "./integration.js";
 import { ProjectAgentTaskPolicySchema, type ProjectAgentTaskPolicy } from "../http/contracts/projects.js";
@@ -51,6 +51,10 @@ export class TaskFailure extends Error {
   readonly details: { permittedWorkflowIds?: string[]; permittedTemplateIds?: string[] } | undefined;
 }
 type Authority = { kind: "user"; userId: string } | { kind: "agentApi"; principal: ExternalAgentPrincipal };
+type TaskCreationResult = { task: Task; created: boolean };
+class DryRunRollback extends Error {
+  constructor(readonly result: TaskCreationResult) { super("Dry-run rollback"); }
+}
 export type AgentApiGithubPort = Pick<Required<GithubReleasePort>, "observePullRequest">;
 type AgentApiCommand = z.infer<typeof AgentApiTaskCommandBodySchema>;
 const AGENT_API_COMMAND_AUDITS: Record<AgentApiCommand["command"], string> = {
@@ -168,9 +172,14 @@ export class TaskService {
       try { existing = this.repository.existing(principal.companyId, raw.idempotencyKey, legacy, creator); }
       catch (legacyError) { if (legacyError instanceof TaskConflict) throw new TaskFailure(legacyError.message, 409); throw legacyError; }
     }
-    if (existing) return { created: false, task: this.getAgentApiTask(principal, existing.id) };
+    if (existing) return {
+      created: false,
+      task: this.getAgentApiTask(principal, existing.id),
+      ...(raw.dryRun ? { dryRun: true as const, preview: { dryRun: true as const, status: 200 as const, existingTaskId: existing.id } } : {}),
+    };
     const resolved = this.resolveAgentApiRequest(principal.companyId, raw);
-    const result = await this.create(authority, principal.companyId, resolved.request, undefined, requestHash, resolved.signature, raw, copiedFromTaskId, resolved.selection);
+    const result = await this.create(authority, principal.companyId, resolved.request, undefined, requestHash, resolved.signature, raw, copiedFromTaskId, resolved.selection, raw.dryRun === true);
+    if (raw.dryRun) return { created: false, task: this.agentApiDryRunTaskProjection(principal, result.task), dryRun: true as const, preview: this.agentApiDryRunPreview(principal, result.task) };
     return { created: result.created, task: this.getAgentApiTask(principal, result.task.id) };
   }
 
@@ -213,6 +222,17 @@ export class TaskService {
     this.applyDependencies(authority, row.company_id, taskId, DependsOnSchema.parse(dependsOn));
     this.audit(authority, row.company_id, "task_dependencies_updated", taskId);
     return this.getAgentApiTask(principal, taskId);
+  }
+
+  previewAgentApiTaskDependencies(principal: ExternalAgentPrincipal, taskId: string, dependsOn: unknown): z.infer<typeof AgentApiTaskDependenciesDryRunResponseSchema> {
+    const authority: Authority = { kind: "agentApi", principal };
+    const row = this.requireTask(authority, taskId);
+    const requested = DependsOnSchema.parse(dependsOn);
+    return this.dryRunTransaction(() => {
+      this.applyDependencies(authority, row.company_id, taskId, requested);
+      const task = this.getAgentApiTask(principal, taskId);
+      return { dryRun: true, dependsOn: task.dependsOn, ...this.wouldStart(task.queue) };
+    });
   }
 
   private applyDependencies(authority: Authority, companyId: string, taskId: string, dependsOn: string[]): void {
@@ -371,7 +391,7 @@ export class TaskService {
     return { tasks, nextCursor: last && hasMore ? this.createAgentApiCursor(principal, filter, last) : null };
   }
 
-  private async create(authority: Authority, companyId: string, raw: TaskInput, capturedDispatch?: GithubTriggerDispatch, requestHashOverride?: string, agentApiPolicySignature?: string, agentApiRaw?: AgentApiTaskCreateBody, copiedFromTaskId?: string, hermesSelection?: { workflowId: string | null; workflowName: string | null; templateId: string | null }): Promise<{ task: Task; created: boolean }> {
+  private async create(authority: Authority, companyId: string, raw: TaskInput, capturedDispatch?: GithubTriggerDispatch, requestHashOverride?: string, agentApiPolicySignature?: string, agentApiRaw?: AgentApiTaskCreateBody, copiedFromTaskId?: string, hermesSelection?: { workflowId: string | null; workflowName: string | null; templateId: string | null }, dryRun = false): Promise<TaskCreationResult> {
     let normalized: TaskInput;
     try { normalized = normalizeWorkflowInput(raw, { requireSource: true }); }
     catch (error) { if (error instanceof WorkflowInputFailure) throw new TaskFailure(error.message, error.statusCode); throw error; }
@@ -426,7 +446,11 @@ export class TaskService {
         // A concurrent identical AgentApi request is already admitted; only its current scope remains relevant.
         if (authority.kind === "agentApi") {
           const existing = this.repository.existing(companyId, request.idempotencyKey, requestHash, creator);
-          if (existing) return { task: this.repository.task(existing), created: false };
+          if (existing) {
+            const result = { task: this.repository.task(existing), created: false };
+            if (dryRun) throw new DryRunRollback(result);
+            return result;
+          }
         }
         if (authority.kind === "agentApi" && agentApiPolicySignature && agentApiRaw) {
           const current = this.resolveAgentApiRequest(companyId, agentApiRaw);
@@ -442,18 +466,22 @@ export class TaskService {
         this.requireEligibleProfiles(project.providerPolicy, [rootProfile, workerProfile, ...Object.values(advisorProfiles)]);
         if (this.projectConfigurationSignature(this.projects.getProjectInCompany(companyId, request.projectId)) !== projectSnapshot) throw new TaskFailure("Project configuration changed", 409);
         // A copy commits with the source it was authorized against, and carries that provenance from its first row.
-        const result = this.repository.create({ taskId, companyId, creator, request, requestHash, configuration, rootProfile, workerProfile, advisorProfiles, images, startQueued: request.startImmediately, ...(copiedFromTaskId ? { copiedFromTaskId } : {}) });
+        const result = this.repository.create({ taskId, companyId, creator, request, requestHash, configuration, rootProfile, workerProfile, advisorProfiles, images: dryRun ? [] : images, startQueued: request.startImmediately, ...(copiedFromTaskId ? { copiedFromTaskId } : {}) });
         if (capturedDispatch) new GithubTriggerDispatchRepository(this.database).linkTask(capturedDispatch.id, result.task.id);
         if (result.created) {
           if (request.dependsOn.length) this.applyDependencies(authority, companyId, result.task.id, request.dependsOn);
           // The prerequisites are written first, so a queued task starts now only when every one is already complete.
           if (request.startImmediately) this.repository.controls.admitQueued([result.task.id]);
           this.audit(authority, companyId, "task_created", result.task.id);
-          return { task: this.repository.task(this.repository.row(result.task.id)!), created: true };
+          const created = { task: this.repository.task(this.repository.row(result.task.id)!), created: true };
+          if (dryRun) throw new DryRunRollback(created);
+          return created;
         }
+        if (dryRun) throw new DryRunRollback(result);
         return result;
       });
     } catch (error) {
+      if (error instanceof DryRunRollback) return error.result;
       if (error instanceof TaskConflict) throw new TaskFailure(error.message, 409);
       throw error;
     }
@@ -762,9 +790,79 @@ export class TaskService {
     return { request: CreateTaskTemplateBodySchema.parse(JSON.parse(row.configuration_json)) };
   }
 
+  private agentApiDryRunPreview(principal: ExternalAgentPrincipal, task: Task): z.infer<typeof AgentApiTaskCreateDryRunResponseSchema> {
+    const project = this.projects.getProjectInCompany(principal.companyId, task.projectId);
+    const selection = task.configuration.hermesSelection;
+    return AgentApiTaskCreateDryRunResponseSchema.parse({
+      dryRun: true,
+      projectId: task.projectId,
+      project: { id: project.id, name: project.name },
+      title: task.title,
+      workflow: { id: selection?.workflowId ?? null, engine: task.workflow, name: selection?.workflowName ?? null },
+      templateId: selection?.templateId ?? null,
+      deliveryTarget: task.deliveryTarget,
+      branch: task.configuration.branch,
+      dependsOn: task.dependsOn,
+      ...this.wouldStart(task.queue),
+    });
+  }
+
+  private agentApiDryRunTaskProjection(principal: ExternalAgentPrincipal, task: Task): AgentApiSafeTaskProjection {
+    const project = this.projects.getProjectInCompany(principal.companyId, task.projectId);
+    const selection = task.configuration.hermesSelection;
+    return AgentApiSafeTaskProjectionSchema.parse({
+      id: task.id,
+      issueKey: task.issueKey,
+      projectId: task.projectId,
+      project: { id: project.id, name: project.name },
+      title: task.title,
+      source: task.configuration.source,
+      status: task.status,
+      queue: task.queue,
+      dependsOn: task.dependsOn,
+      blockedBy: task.blockedBy.map(({ id, title, status }) => ({ id, title, status })),
+      archived: false,
+      revision: "dry-run",
+      permittedCommands: [],
+      humanQuestion: null,
+      blocker: null,
+      workflowStage: task.queue.state,
+      workflow: { id: selection?.workflowId ?? null, engine: task.workflow, name: selection?.workflowName ?? null },
+      templateId: selection?.templateId ?? null,
+      deliveryTarget: task.deliveryTarget,
+      runProjectTests: task.configuration.runProjectTests,
+      visualEvidence: task.configuration.visualEvidence,
+      delivery: null,
+      createdAt: task.createdAt,
+      updatedAt: task.updatedAt,
+    });
+  }
+
+  private wouldStart(queue: Task["queue"]): { wouldStart: "now" | "waiting" | "backlog"; blockingPrerequisiteIds: string[] } {
+    if (queue.startIntent === "manual") return { wouldStart: "backlog", blockingPrerequisiteIds: [] };
+    if (queue.state === "running") return { wouldStart: "now", blockingPrerequisiteIds: [] };
+    return { wouldStart: "waiting", blockingPrerequisiteIds: queue.waitingOn.map(prerequisite => prerequisite.id) };
+  }
+
+  private dryRunTransaction<T>(operation: () => T): T {
+    const rollback = {};
+    let result!: T;
+    try {
+      this.database.authImmediateTransaction(() => {
+        result = operation();
+        throw rollback;
+      });
+    } catch (error) {
+      if (error !== rollback) throw error;
+    }
+    return result;
+  }
+
   private agentApiRequestHash(input: AgentApiTaskCreateBody, creator: TaskCreator): string {
     const sort = (value: unknown): unknown => Array.isArray(value) ? value.map(sort) : value && typeof value === "object" ? Object.fromEntries(Object.entries(value).sort(([left], [right]) => left.localeCompare(right)).map(([key, entry]) => [key, sort(entry)])) : value;
-    return createHash("sha256").update(JSON.stringify(sort({ input, creator }))).digest("hex");
+    const request = { ...input };
+    delete request.dryRun;
+    return createHash("sha256").update(JSON.stringify(sort({ input: request, creator }))).digest("hex");
   }
 
   private isLegacyAgentApiRequest(input: AgentApiTaskCreateBody): boolean {

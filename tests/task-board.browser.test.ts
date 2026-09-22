@@ -31,10 +31,11 @@ test.each([1280, 390])("tasks can be created, started and viewed on the board at
       await dialog.getByLabel("Task description", { exact: true }).fill("Use the native Coordinator and Worker");
       await dialog.getByRole("checkbox", { name: "Start immediately", exact: true }).setChecked(immediate);
       if (immediate) {
-        await dialog.getByRole("button", { name: "Select issue", exact: true }).click();
-        const picker = page.getByRole("dialog", { name: "Select issue", exact: true });
-        await picker.getByRole("textbox", { name: "Search issues", exact: true }).fill("42");
-        await picker.getByRole("button", { name: "#42: Associated issue", exact: true }).click();
+        await dialog.getByRole("button", { name: "New from source", exact: true }).click();
+        const picker = page.getByRole("menu");
+        await picker.getByRole("tab", { name: "Issues", exact: true }).click();
+        await picker.getByRole("textbox", { name: "Search task sources", exact: true }).fill("42");
+        await picker.getByRole("menuitem", { name: "#42 Associated issue", exact: false }).click();
       }
       const response = page.waitForResponse(response => response.request().method() === "POST" && response.url().endsWith(`/api/companies/${value.company.id}/tasks`));
       if (immediate) await dialog.getByLabel("Task description", { exact: true }).press("Control+Enter");

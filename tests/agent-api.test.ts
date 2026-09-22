@@ -319,13 +319,15 @@ test("authenticated runtime contract uses the live task schemas and states its a
   expect(document.openapi).toBe("3.0.3");
   expect(document.info.version).toBe("v1");
   expect(Object.keys(document.paths).sort()).toEqual(["/api/agent/capabilities", "/api/agent/openapi.json", "/api/agent/templates", "/api/agent/workflows", "/api/agent/tasks", "/api/agent/tasks/{taskId}", "/api/agent/tasks/{taskId}/commands", "/api/agent/tasks/{taskId}/dependencies"].sort());
-  const dependenciesOperation = (document.paths["/api/agent/tasks/{taskId}/dependencies"] as { put: { requestBody: { content: { "application/json": { schema: { required: string[]; additionalProperties: boolean } } } }; responses: Record<string, { content: { "application/json": { schema: { properties: Record<string, unknown> } } } }> } }).put;
+  const dependenciesOperation = (document.paths["/api/agent/tasks/{taskId}/dependencies"] as { put: { requestBody: { content: { "application/json": { schema: { required: string[]; additionalProperties: boolean; properties: Record<string, unknown> } } } }; responses: Record<string, { content: { "application/json": { schema: unknown } } }> } }).put;
   expect(dependenciesOperation.requestBody.content["application/json"].schema).toMatchObject({ required: ["dependsOn"], additionalProperties: false });
-  expect(Object.keys(dependenciesOperation.responses["200"]!.content["application/json"].schema.properties)).toEqual(expect.arrayContaining(["dependsOn", "blockedBy"]));
+  expect(dependenciesOperation.requestBody.content["application/json"].schema.properties).toHaveProperty("dryRun");
+  expect(JSON.stringify(dependenciesOperation.responses["200"]!.content["application/json"].schema)).toContain("dryRun");
   expect(JSON.stringify(document)).not.toMatch(/pairingCode|credentialCreatedAt|credential_hash|board session/i);
   const createOperation = (document.paths["/api/agent/tasks"] as CreateOperationDocument).post;
   expect(createOperation.requestBody.content["application/json"].schema.required).toEqual(expect.arrayContaining(["projectId", "title", "idempotencyKey"]));
   expect(createOperation.requestBody.content["application/json"].schema.properties.description.default).toBe("");
+  expect(createOperation.requestBody.content["application/json"].schema.properties).toHaveProperty("dryRun");
   expect(createOperation.responses["201"].content["application/json"].schema.properties.status.enum).toContain("waiting_human");
   expect(Object.keys((createOperation.responses["201"].content["application/json"].schema as unknown as { properties: Record<string, unknown> }).properties)).toEqual(expect.arrayContaining(["dependsOn", "blockedBy"]));
 
@@ -688,6 +690,59 @@ test("POST /api/agent/tasks resolves only project-authorized workflow, template,
   expect(badImage.statusCode).toBe(422);
   const badFields = await request({ projectId, title: "Bad fields", idempotencyKey: "externalAgent-bad-fields-001", repositoryPath: "/private/path" });
   expect(badFields.statusCode).toBe(400);
+});
+
+test("AgentApi dry runs validate creation and dependency changes without persisting state", async () => {
+  const policy: ProjectAgentTaskPolicy = {
+    workflowIds: ["workflow_native_standard"], defaultWorkflowId: "workflow_native_standard", templateIds: [],
+    rootProfileIds: ["profile_native_root"], workerProfileIds: ["profile_native_worker"],
+    advisorProfileIds: { reviewer: [], planner_a: [], planner_b: [], rater: [] },
+    deliveryTarget: "merged", runProjectTests: true, visualEvidence: "off",
+  };
+  await updateProjectPolicy(policy);
+  const headers = { Authorization: `Bearer ${agentCredential}` };
+  const request = (payload: object) => app.inject({ method: "POST", url: "/api/agent/tasks", headers, payload });
+  const prerequisite = (await request({ projectId, title: "Dry-run prerequisite", idempotencyKey: "dry-prerequisite-001" })).json().id as string;
+  const counts = () => Object.fromEntries(["forge_tasks", "forge_task_controls", "forge_artifacts", "forge_task_dependencies", "forge_audit_events"].map(table => [table, database.authQuery(db => (db.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get() as { count: number }).count)]));
+  const before = counts();
+  const body = { projectId, title: "Dry-run task", idempotencyKey: "dry-create-001", queue: true, dependsOn: [prerequisite], images: [{ filename: "proof.png", mimeType: "image/png", base64: "iVBORw0KGgo=" }], dryRun: true };
+  const preview = await request(body);
+  expect(preview.statusCode, preview.body).toBe(200);
+  expect(preview.json()).toMatchObject({ dryRun: true, projectId, title: "Dry-run task", deliveryTarget: "merged", dependsOn: [prerequisite], wouldStart: "waiting", blockingPrerequisiteIds: [prerequisite] });
+  expect(preview.json().id).toBeUndefined();
+  expect(counts()).toEqual(before);
+  expect(recoveryWakes).toBe(0);
+
+  const created = await request({ ...body, dryRun: undefined });
+  expect(created.statusCode, created.body).toBe(201);
+  expect(created.json()).toMatchObject({ dependsOn: [prerequisite], deliveryTarget: "merged" });
+  const existing = await request(body);
+  expect(existing.statusCode, existing.body).toBe(200);
+  expect(existing.json()).toEqual({ dryRun: true, status: 200, existingTaskId: created.json().id });
+  const conflict = await request({ ...body, title: "Conflicting dry run" });
+  expect(conflict.statusCode).toBe(409);
+  expect(conflict.json().code).toBe("idempotency_conflict");
+
+  for (const payload of [
+    { projectId: "missing", title: "Missing grant", idempotencyKey: "dry-error-grant" },
+    { projectId, title: "Denied workflow", idempotencyKey: "dry-error-workflow", workflowId: "workflow_native_direct_build" },
+    { projectId, title: "Bad source", idempotencyKey: "dry-error-source", source: { kind: "branch", branch: "" } },
+  ]) {
+    const real = await request(payload);
+    const dry = await request({ ...payload, dryRun: true });
+    expect([dry.statusCode, dry.json().code, dry.json().error]).toEqual([real.statusCode, real.json().code, real.json().error]);
+  }
+
+  const dependent = (await request({ projectId, title: "Dependency target", idempotencyKey: "dry-dependency-target-001" })).json().id as string;
+  const dependencyPreview = await app.inject({ method: "PUT", url: `/api/agent/tasks/${dependent}/dependencies`, headers, payload: { dependsOn: [prerequisite], dryRun: true } });
+  expect(dependencyPreview.statusCode, dependencyPreview.body).toBe(200);
+  expect(dependencyPreview.json()).toMatchObject({ dryRun: true, dependsOn: [prerequisite], wouldStart: "backlog", blockingPrerequisiteIds: [] });
+  expect((await readTask(dependent)).json().dependsOn).toEqual([]);
+  const persisted = await app.inject({ method: "PUT", url: `/api/agent/tasks/${dependent}/dependencies`, headers, payload: { dependsOn: [prerequisite] } });
+  expect(persisted.statusCode).toBe(200);
+  const cycle = await app.inject({ method: "PUT", url: `/api/agent/tasks/${prerequisite}/dependencies`, headers, payload: { dependsOn: [dependent], dryRun: true } });
+  expect(cycle.statusCode).toBe(422);
+  expect((await readTask(prerequisite)).json().dependsOn).toEqual([]);
 });
 
 test("server-chosen default profiles outlive a policy that still lists the old ones", async () => {

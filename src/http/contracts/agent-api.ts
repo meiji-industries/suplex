@@ -124,11 +124,13 @@ export const AgentApiTaskCreateBodySchema = z.object({
   deliveryTarget: DeliveryTargetSchema.optional(),
   runProjectTests: z.boolean().optional(),
   visualEvidence: VisualEvidenceSchema.optional(),
+  dryRun: z.literal(true).optional().describe("Validate the request and return its projected result without creating a task or writing any state."),
 }).passthrough().refine(input => !(input.workflowId && input.templateId), { message: "Select either a workflow or a template" });
 export type AgentApiTaskCreateBody = z.infer<typeof AgentApiTaskCreateBodySchema>;
 
 export const AgentApiTaskDependenciesBodySchema = z.object({
   dependsOn: z.array(taskId).max(MAX_DEPENDENCIES).describe(`${AGENT_API_PREREQUISITE_SCOPE} The complete set replaces the current set; an empty array removes every prerequisite.`),
+  dryRun: z.literal(true).optional().describe("Validate the replacement and return its projected start state without changing dependencies or queue state."),
 }).strict();
 
 export const AgentApiTaskIdParamsSchema = z.object({
@@ -312,6 +314,31 @@ export const AgentApiTaskReadProjectionSchema = AgentApiSafeTaskProjectionSchema
   integration: AgentApiIntegrationSchema,
   actionRequired: AgentApiActionRequiredSchema.nullable(),
 });
+
+const AgentApiDryRunStartSchema = z.object({
+  wouldStart: z.enum(["now", "waiting", "backlog"]),
+  blockingPrerequisiteIds: z.array(z.string()),
+}).strict();
+
+export const AgentApiTaskCreateDryRunResponseSchema = z.union([
+  z.object({
+    dryRun: z.literal(true),
+    projectId: z.string(),
+    project: AgentApiProjectSchema,
+    title: z.string(),
+    workflow: z.object({ id: z.string().nullable(), engine: z.string(), name: z.string().nullable() }).strict(),
+    templateId: z.string().nullable(),
+    deliveryTarget: DeliveryTargetSchema,
+    branch: z.string(),
+    dependsOn: z.array(z.string()),
+  }).extend(AgentApiDryRunStartSchema.shape).strict(),
+  z.object({ dryRun: z.literal(true), status: z.literal(200), existingTaskId: z.string() }).strict(),
+]);
+
+export const AgentApiTaskDependenciesDryRunResponseSchema = z.object({
+  dryRun: z.literal(true),
+  dependsOn: z.array(z.string()),
+}).extend(AgentApiDryRunStartSchema.shape).strict();
 
 export type AgentApiIntegration = z.infer<typeof AgentApiIntegrationSchema>;
 export type AgentApiActionRequired = z.infer<typeof AgentApiActionRequiredSchema>;
@@ -520,7 +547,7 @@ export const AgentApiRuntimeOperations = {
   createTask: {
     body: AgentApiTaskCreateBodySchema,
     response: {
-      200: AgentApiTaskReadProjectionSchema,
+      200: z.union([AgentApiTaskReadProjectionSchema, AgentApiTaskCreateDryRunResponseSchema]),
       201: AgentApiTaskReadProjectionSchema,
       400: AgentApiRuntimeErrorResponses.requestInvalid,
       401: AgentApiRuntimeErrorResponses.credentialInvalid,
@@ -539,7 +566,7 @@ export const AgentApiRuntimeOperations = {
   setTaskDependencies: {
     params: AgentApiTaskIdParamsSchema,
     body: AgentApiTaskDependenciesBodySchema,
-    response: { 200: AgentApiSafeTaskProjectionSchema, 400: AgentApiRuntimeErrorResponses.requestInvalid, 401: AgentApiRuntimeErrorResponses.credentialInvalid, 404: z.union([AgentApiRuntimeErrorResponses.notFound, AgentApiRuntimeErrorResponses.resourceNotFound]), 422: AgentApiRuntimeErrorResponses.taskUnavailable, 500: AgentApiRuntimeErrorResponses.internal },
+    response: { 200: z.union([AgentApiSafeTaskProjectionSchema, AgentApiTaskDependenciesDryRunResponseSchema]), 400: AgentApiRuntimeErrorResponses.requestInvalid, 401: AgentApiRuntimeErrorResponses.credentialInvalid, 404: z.union([AgentApiRuntimeErrorResponses.notFound, AgentApiRuntimeErrorResponses.resourceNotFound]), 422: AgentApiRuntimeErrorResponses.taskUnavailable, 500: AgentApiRuntimeErrorResponses.internal },
   },
   commandTask: {
     params: AgentApiTaskIdParamsSchema,
@@ -597,7 +624,7 @@ export function agentApiRuntimeOpenApi(): Record<string, unknown> {
         post: {
           operationId: "createAgentApiBacklogTask",
           summary: "Create a backlog or queued task",
-          description: `Creates a backlog task. With queue true, the task is queued: it starts now when every prerequisite is complete, and otherwise stays in the backlog with zero sessions until the last prerequisite completes. Without queue, it never starts by itself. The server defaults description to an empty string and rejects unknown fields with request_invalid. dependsOn sets the prerequisites, shown as Blocked by. ${AGENT_API_PREREQUISITE_SCOPE} Idempotency is scoped to the paired agent and company. An identical replay returns 200; reuse for a different request returns 409 with idempotency_conflict. GET /api/agent/tasks supports opaque cursors and returns nextCursor.`,
+          description: `Creates a backlog task. With queue true, the task is queued: it starts now when every prerequisite is complete, and otherwise stays in the backlog with zero sessions until the last prerequisite completes. Without queue, it never starts by itself. dryRun true validates the same request and returns its projection without writing a task, dependency, receipt, artifact, queue state, or audit event. The server defaults description to an empty string and rejects unknown fields with request_invalid. dependsOn sets the prerequisites, shown as Blocked by. ${AGENT_API_PREREQUISITE_SCOPE} Idempotency is scoped to the paired agent and company. An identical replay returns 200; reuse for a different request returns 409 with idempotency_conflict. GET /api/agent/tasks supports opaque cursors and returns nextCursor.`,
           security: [{ AgentApiBearer: [] }],
           requestBody: { required: true, content: { "application/json": { schema: inputSchema(AgentApiRuntimeOperations.createTask.body) } } },
           responses: openApiResponses(AgentApiRuntimeOperations.createTask.response),
@@ -614,7 +641,7 @@ export function agentApiRuntimeOpenApi(): Record<string, unknown> {
         },
       },
       "/api/agent/tasks/{taskId}/dependencies": {
-        put: { operationId: "setAgentApiTaskDependencies", summary: "Replace the prerequisites of a task", description: `Replaces dependsOn, shown as Blocked by, with the complete set in the body. ${AGENT_API_PREREQUISITE_SCOPE} A self-reference, a cycle, or an unavailable task is rejected and the current set stays. Unknown fields are rejected. The response and every later read report dependsOn and blockedBy from the same stored edges.`, security: [{ AgentApiBearer: [] }], parameters: [{ name: "taskId", in: "path", required: true, schema: jsonSchema(AgentApiRuntimeOperations.setTaskDependencies.params.shape.taskId, "input") }], requestBody: { required: true, content: { "application/json": { schema: jsonSchema(AgentApiRuntimeOperations.setTaskDependencies.body, "input") } } }, responses: openApiResponses(AgentApiRuntimeOperations.setTaskDependencies.response) },
+        put: { operationId: "setAgentApiTaskDependencies", summary: "Replace the prerequisites of a task", description: `Replaces dependsOn, shown as Blocked by, with the complete set in the body. ${AGENT_API_PREREQUISITE_SCOPE} dryRun true validates the replacement and reports the projected prerequisites and start state without changing dependencies, queue state, or audits. A self-reference, a cycle, or an unavailable task is rejected and the current set stays. Unknown fields are rejected. The response and every later read report dependsOn and blockedBy from the same stored edges.`, security: [{ AgentApiBearer: [] }], parameters: [{ name: "taskId", in: "path", required: true, schema: jsonSchema(AgentApiRuntimeOperations.setTaskDependencies.params.shape.taskId, "input") }], requestBody: { required: true, content: { "application/json": { schema: jsonSchema(AgentApiRuntimeOperations.setTaskDependencies.body, "input") } } }, responses: openApiResponses(AgentApiRuntimeOperations.setTaskDependencies.response) },
       },
       "/api/agent/tasks/{taskId}/commands": {
         post: { operationId: "commandAgentApiTask", summary: "Apply an authorized task lifecycle command", description: `Only the paired agent that created the task can send a command. Every command requires the current task revision and an idempotency key. start_task queues a manual backlog task: it starts now when every prerequisite is complete and never bypasses one. disarm_task returns a queued task to the manual backlog. ${AGENT_API_WHOAMI_DESCRIPTION} ${AGENT_API_RUNTIME_AUTHORITY}`, security: [{ AgentApiBearer: [] }], parameters: [{ name: "taskId", in: "path", required: true, schema: jsonSchema(AgentApiRuntimeOperations.commandTask.params.shape.taskId, "input") }], requestBody: { required: true, content: { "application/json": { schema: inputSchema(AgentApiRuntimeOperations.commandTask.body) } } }, responses: openApiResponses(AgentApiRuntimeOperations.commandTask.response) },

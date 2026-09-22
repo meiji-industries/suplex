@@ -52,16 +52,15 @@ export class TaskLimitStore {
   }
 
   reconcilePause(taskId: string, questionId: string, usage: TaskLimitUsage): boolean {
-    if (usage.estimatedCostUsd === null) return false;
     return this.database.authImmediateTransaction(db => {
-      const raw = db.prepare("SELECT status, budget_usd AS budgetUsd, max_turns AS maxTurns, human_question AS humanQuestion, limit_pause_json AS pause FROM forge_task_controls WHERE task_id = ? AND human_question_id = ?").get(taskId, questionId);
+      const raw = db.prepare("SELECT status, budget_usd AS budgetUsd, max_turns AS maxTurns, limit_pause_json AS pause FROM forge_task_controls WHERE task_id = ? AND human_question_id = ?").get(taskId, questionId);
       if (!raw) return false;
-      const row = PersistedLimitsSchema.extend({ humanQuestion: z.string().nullable(), pause: z.string().nullable() }).parse(raw);
+      const row = PersistedLimitsSchema.extend({ pause: z.string().nullable() }).parse(raw);
       if (row.status !== "waiting_human" || !row.pause) return false;
-      const oldPause = TaskLimitPauseSchema.parse(JSON.parse(row.pause));
-      if (row.humanQuestion !== taskLimitQuestion(oldPause)) return false;
+      TaskLimitPauseSchema.parse(JSON.parse(row.pause));
       const defaults = readEnvironmentSettings(this.database);
       const limits = { budgetUsd: row.budgetUsd ?? defaults.defaultBudgetUsd, maxTurns: row.maxTurns ?? defaults.defaultMaxTurns };
+      if (limits.budgetUsd > 0 && usage.estimatedCostUsd === null) return false;
       const admittedTurns = z.object({ turns: z.number().int().nonnegative() }).parse(db.prepare("SELECT COUNT(*) AS turns FROM forge_task_turns WHERE task_id = ? AND prompted_at IS NOT NULL").get(taskId)).turns;
       const evaluation = evaluateTaskLimits({ limits, usage: { ...usage, admittedTurns }, allowance: { budgetUsd: defaults.defaultBudgetUsd, maxTurns: defaults.defaultMaxTurns } });
       const time = new Date().toISOString();

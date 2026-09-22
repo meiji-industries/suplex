@@ -79,7 +79,7 @@ test("genuine budget and turn pauses keep their question identity", async () => 
   expect(turns.store.get("task")).toMatchObject({ status: "waiting_human", humanQuestionId: turnQuestion, limitPause: { reason: "turns" } });
 });
 
-test("a changed question, missing usage, and unpriced usage cannot clear a budget pause", async () => {
+test("missing and unpriced usage cannot clear a budget pause", async () => {
   const value = await fixture();
   await value.controller.recover("task");
   const root = value.store.currentSession("task", "root")!;
@@ -87,7 +87,6 @@ test("a changed question, missing usage, and unpriced usage cannot clear a budge
   value.nativeUsage.set(root.id, [usage(root.nativeSessionId!, 20)]);
   await value.controller.recover("task");
   await value.controller.recover("task");
-  const questionId = value.store.get("task").humanQuestionId;
 
   value.nativeUsage.set(root.id, []);
   await value.controller.recover("task");
@@ -96,10 +95,76 @@ test("a changed question, missing usage, and unpriced usage cannot clear a budge
   await value.controller.recover("task");
   expect(value.store.get("task").status).toBe("waiting_human");
 
-  value.nativeUsage.set(root.id, [usage(root.nativeSessionId!, 5)]);
-  value.database.authTransaction(db => db.prepare("UPDATE forge_task_controls SET human_question = 'A different question' WHERE task_id = 'task'").run());
+});
+
+test.each(["Old budget wording", ""])("a budget pause resumes with display question %s", async question => {
+  const value = await fixture();
   await value.controller.recover("task");
-  expect(value.store.get("task")).toMatchObject({ status: "waiting_human", humanQuestionId: questionId, humanQuestion: "A different question" });
+  const root = value.store.currentSession("task", "root")!;
+  value.harness.finish(value.harness.dispatched[0]!.messageID);
+  value.nativeUsage.set(root.id, [usage(root.nativeSessionId!, 20)]);
+  await value.controller.recover("task");
+  await value.controller.recover("task");
+  const questionId = value.store.get("task").humanQuestionId;
+  value.database.authTransaction(db => db.prepare("UPDATE forge_task_controls SET human_question = ? WHERE task_id = 'task'").run(question));
+  value.nativeUsage.set(root.id, [usage(root.nativeSessionId!, 5)]);
+  await value.controller.recover("task");
+  expect(value.store.get("task")).toMatchObject({ status: "active", humanQuestionId: null, limitPause: null });
+  expect(questionId).toBeTruthy();
+});
+
+test("a real unrelated question clears stale limit intent and remains pending", async () => {
+  const value = await fixture();
+  value.controller.prepareRoot("task");
+  expect(value.store.pauseAtTaskLimit("task", { estimatedCostUsd: 20, admittedTurns: 0 })).toBe(true);
+  const paused = value.store.get("task");
+  value.store.answerTaskLimit("task", paused.humanQuestionId!, { kind: "add_allowance" });
+  value.database.authTransaction(db => db.prepare("UPDATE forge_task_controls SET limit_pause_json = ? WHERE task_id = 'task'").run(JSON.stringify(paused.limitPause)));
+  value.store.askHuman("task", "Check repository access.");
+  expect(value.store.get("task")).toMatchObject({ status: "waiting_human", humanQuestion: "Check repository access.", limitPause: null });
+  await value.controller.recover("task");
+  expect(value.store.get("task")).toMatchObject({ status: "waiting_human", humanQuestion: "Check repository access.", limitPause: null });
+});
+
+test("disabling the current budget releases an obsolete budget pause without an allowance", async () => {
+  const value = await fixture();
+  await value.controller.recover("task");
+  const root = value.store.currentSession("task", "root")!;
+  value.harness.finish(value.harness.dispatched[0]!.messageID);
+  value.nativeUsage.set(root.id, [usage(root.nativeSessionId!, 20)]);
+  await value.controller.recover("task");
+  await value.controller.recover("task");
+  expect(value.store.get("task").status).toBe("waiting_human");
+
+  updateEnvironmentSettings(value.database, { minFreeDiskGb: 5, defaultBudgetUsd: 0, defaultMaxTurns: 40 });
+  value.nativeUsage.set(root.id, []);
+  await value.controller.recover("task");
+  expect(value.store.get("task")).toMatchObject({ status: "active", limitPause: null, humanQuestionId: null });
+  expect(value.store.taskLimits("task")).toEqual({ budgetUsd: 0, maxTurns: 40 });
+});
+
+test.each(["live", "incomplete"])("a %s native turn cannot clear a budget pause using older priced usage", async kind => {
+  const value = await fixture();
+  await value.controller.recover("task");
+  const root = value.store.currentSession("task", "root")!;
+  value.harness.finish(value.harness.dispatched[0]!.messageID);
+  value.nativeUsage.set(root.id, [usage(root.nativeSessionId!, 20)]);
+  await value.controller.recover("task");
+  await value.controller.recover("task");
+  value.nativeUsage.set(root.id, [usage(root.nativeSessionId!, 5)]);
+  let pending = true;
+  const reader = (session: Parameters<typeof value.reader>[0]) => ({ ...value.reader(session), timeline: async () => {
+    const observed = await value.reader(session).timeline();
+    return pending ? { ...observed, liveMessageId: kind === "live" ? "current-turn" : null, usage: kind === "incomplete" ? [...observed.usage, { ...usage(root.nativeSessionId!, 0), messageId: "current-turn", completedAt: null }] : observed.usage } : observed;
+  } });
+  const controller = new RootController(new TaskControlStore(value.database), value.harness, undefined, undefined, undefined, reader, async () => undefined);
+  await controller.recover("task");
+  expect(value.store.get("task").status).toBe("waiting_human");
+  pending = false;
+  await controller.recover("task");
+  await controller.recover("task");
+  expect(value.store.get("task").status).toBe("active");
+  expect(value.harness.dispatched).toHaveLength(2);
 });
 
 test("a changed question ID and explicit cancellation remain authoritative during recovery", async () => {

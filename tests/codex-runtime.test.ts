@@ -298,6 +298,7 @@ test("a hanging Codex turn is busy until stopped", async () => {
   await f.runtime.dispatch(f.scope, f.intent, async () => true);
   expect(await f.runtime.observe(f.scope, { ...f.intent, dispatch: "ambiguous" })).toMatchObject({ state: "running", reason: "dispatch_process_running" });
   expect(await codexSessionBusy(f.runtimeDirectory)).toBe(true);
+  expect(await new CodexSessionReader(f.databasePath).timeline({ id: f.scope.id, nativeSessionId: f.sessionID, kind: "worker" })).toEqual({ usage: [], liveMessageId: f.intent.messageID });
   await f.runtime.stop(f.scope, f.sessionID);
   expect(await codexSessionBusy(f.runtimeDirectory)).toBe(false);
 });

@@ -13,6 +13,7 @@ export class TaskAnalyticsStore {
     this.database.authTransaction(() => this.database.authQuery(db => {
       const row = db.prepare("SELECT native_session_id AS nativeSessionId FROM forge_task_sessions WHERE id = ? AND task_id = ?").get(sessionId, taskId);
       const nativeSessionId = usage[0]?.sessionId ?? z.object({ nativeSessionId: z.string().nullable() }).safeParse(row).data?.nativeSessionId;
+      if (!usage.length && nativeSessionId && db.prepare("SELECT 1 FROM forge_task_usage WHERE task_id = ? AND session_id = ? LIMIT 1").get(taskId, nativeSessionId)) throw new Error("Native usage has no completed observations");
       if (nativeSessionId) db.prepare("DELETE FROM forge_task_usage WHERE task_id = ? AND session_id = ?").run(taskId, nativeSessionId);
       const statement = db.prepare(`INSERT INTO forge_task_usage (task_id, session_id, message_id, snapshot, observed_at)
         VALUES (?, ?, ?, ?, ?) ON CONFLICT(session_id, message_id) DO UPDATE SET snapshot = excluded.snapshot, observed_at = excluded.observed_at`);

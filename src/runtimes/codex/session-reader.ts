@@ -2,7 +2,7 @@ import { readdir, readFile, stat } from "node:fs/promises";
 import { join } from "node:path";
 import type { ModelPricingCatalog } from "../../profiles/model-pricing.js";
 import type { TaskSession } from "../../tasks/control.js";
-import { readHeadlessTurnRecord } from "../headless/turn-process.js";
+import { headlessTurnRunning, readHeadlessTurnRecord } from "../headless/turn-process.js";
 import { taskSessionRuntimeDirectory, type NativeSessionReader } from "../task-harness.js";
 import { codexSessionBusy } from "./task-runtime.js";
 import { codexHistory, codexTools, codexUsage, parseCodexEvents, type CodexTurn } from "./transcript.js";
@@ -80,10 +80,11 @@ export class CodexSessionReader implements NativeSessionReader {
     const turns = await this.turns(session);
     if (!turns.length) throw new Error("Codex turn logs are missing");
     const usage = codexUsage(turns, session.nativeSessionId, session.kind, pricing);
-    if (!usage.length) throw new Error("Codex usage is not yet available");
-    const live = await codexSessionBusy(directory) ? usage.at(-1) : undefined;
+    const current = await readHeadlessTurnRecord(join(directory, "turn.json"));
+    const liveMessageId = current?.sessionID === session.nativeSessionId && await headlessTurnRunning(current) ? current.turnId : null;
+    const live = usage.find(entry => entry.messageId === liveMessageId);
     if (live) live.completedAt = null;
-    return { usage, liveMessageId: live?.messageId ?? null };
+    return { usage, liveMessageId };
   }
 
   async archive(session: TaskSession) {

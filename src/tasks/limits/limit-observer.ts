@@ -26,7 +26,7 @@ export async function observeTaskLimitUsage(input: {
     const reader = input.reader(session);
     if (!reader.timeline) throw new Error("Native task usage is not available. Forge will retry the observation.");
     const observed = await reader.timeline(session);
-    if (!observed.usage.length) complete = false;
+    if (!observed.usage.length || observed.liveMessageId || observed.usage.some(entry => entry.completedAt === null)) complete = false;
     for (const entry of observed.usage) unique.set(`${entry.sessionId}:${entry.messageId}`, entry);
   }
   let usage = [...unique.values()];

@@ -23,7 +23,6 @@ import type { AdvisorReportOutcome } from "./advisor-report.js";
 import { ProjectExecutionSchema } from "../projects/execution-configuration.js";
 import { projectCredentialEnvironmentKeys } from "../runtimes/project-environment.js";
 import { observeTaskLimitUsage } from "../tasks/limits/limit-observer.js";
-import { taskLimitQuestion } from "../tasks/limits/limits.js";
 
 export type TaskDelivery = Pick<DeliveryOperations, "observe" | "execute" | "currentRange"> & Partial<Pick<DeliveryOperations, "checksObservation">>;
 type AcceptedWorkerAssignment = { kind: "workflow_input"; input: WorkerWorkflowInput } | { kind: "saved_prompt"; prompt: string };
@@ -309,7 +308,7 @@ export class RootController implements RootBridgeAdapter {
     this.store.retireDeliveredSessions(taskId);
     await stopRetiredSessions(this.recoveryDependencies(), taskId);
     const paused = this.store.get(taskId);
-    if (paused.status === "waiting_human" && paused.limitPause && paused.humanQuestionId && paused.humanQuestion === taskLimitQuestion(paused.limitPause)) {
+    if (paused.status === "waiting_human" && paused.limitPause && paused.humanQuestionId) {
       try {
         const usage = await observeTaskLimitUsage({ taskId, store: this.store, ...(this.reader ? { reader: this.reader } : {}), readPricing: this.readPricing, requireCompletePricing: true });
         this.store.reconcileTaskLimitPause(taskId, paused.humanQuestionId, usage);

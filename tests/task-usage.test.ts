@@ -82,6 +82,8 @@ test("a successful session observation replaces its old rows without deleting an
     expect(store.read(task.id).usage.map(entry => [entry.sessionId, entry.messageId, entry.cost]).sort()).toEqual([
       ["ses_root", "msg_new", 3], ["ses_worker", "msg_worker", 7],
     ]);
+    expect(() => store.record(task.id, root.id, [])).toThrow("Native usage has no completed observations");
+    expect(store.read(task.id).usage.map(entry => entry.messageId).sort()).toEqual(["msg_new", "msg_worker"]);
   } finally { await value.close(); }
 });
 

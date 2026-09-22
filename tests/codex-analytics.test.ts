@@ -81,13 +81,16 @@ test("a missing Codex turn directory is not an authoritative zero-usage observat
   await expect(new AnalyticsHistoryReader(databasePath, join(root, "runtime", "analytics")).read(session)).rejects.toThrow("Codex turn logs are missing");
 });
 
-test("an incomplete Codex log cannot erase a prior usage observation", async () => {
+test("an admitted running Codex turn has no billable usage yet", async () => {
   const root = await mkdtemp(join(tmpdir(), "forge-codex-analytics-"));
   directories.push(root);
   const databasePath = join(root, "forge.sqlite");
   const session = { id: "forge-session", nativeSessionId: "codex-incomplete", kind: "worker" as const };
   const directory = taskSessionRuntimeDirectory(databasePath, session.id);
   await mkdir(directory, { recursive: true });
-  await writeFile(join(directory, "turn-msg_0001.jsonl"), `${JSON.stringify({ type: "thread.started", thread_id: "native-thread" })}\n`);
-  await expect(new AnalyticsHistoryReader(databasePath, join(root, "runtime", "analytics")).read(session)).rejects.toThrow("Codex usage is not yet available");
+  await writeFile(join(directory, "turn-msg_0001.jsonl"), [
+    JSON.stringify({ type: "thread.started", thread_id: "native-thread" }),
+    JSON.stringify({ type: "turn.started" }),
+  ].join("\n") + "\n");
+  expect(await new AnalyticsHistoryReader(databasePath, join(root, "runtime", "analytics")).read(session)).toEqual([]);
 });

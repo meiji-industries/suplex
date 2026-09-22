@@ -149,8 +149,8 @@ export function codexUsage(turns: readonly CodexTurn[], sessionId: string, role:
       return [];
     }
     const previous = threadId ? previousByThread.get(threadId) : undefined;
-    const regressed = previous && USAGE_FIELDS.some(field => reported[field] < previous[field]);
-    const ambiguous = Boolean(regressed || threadId && [...gapModels.get(threadId) ?? []].some(model => model !== turn.model));
+    if (previous && USAGE_FIELDS.some(field => reported[field] < previous[field])) throw new Error(`Codex cumulative usage decreased within native thread ${threadId}`);
+    const ambiguous = Boolean(threadId && [...gapModels.get(threadId) ?? []].some(model => model !== turn.model));
     const native = {
       input_tokens: reported.input_tokens - (previous?.input_tokens ?? 0),
       cached_input_tokens: reported.cached_input_tokens - (previous?.cached_input_tokens ?? 0),
@@ -159,18 +159,15 @@ export function codexUsage(turns: readonly CodexTurn[], sessionId: string, role:
       reasoning_output_tokens: reported.reasoning_output_tokens - (previous?.reasoning_output_tokens ?? 0),
     };
     if (threadId) {
-      if (regressed) rememberGap(threadId, turn.model);
-      else { previousByThread.set(threadId, reported); gapModels.delete(threadId); }
+      previousByThread.set(threadId, reported);
+      gapModels.delete(threadId);
     }
     const tokens = emptyTokens();
-    if (!regressed) {
-      // The inclusive native totals are split into non-overlapping token slices.
-      tokens.input = Math.max(0, native.input_tokens - native.cached_input_tokens - native.cache_write_input_tokens);
-      tokens.output = Math.max(0, native.output_tokens - native.reasoning_output_tokens);
-      tokens.reasoning = native.reasoning_output_tokens;
-      tokens.cache.read = native.cached_input_tokens;
-      tokens.cache.write = native.cache_write_input_tokens;
-    }
+    tokens.input = Math.max(0, native.input_tokens - native.cached_input_tokens - native.cache_write_input_tokens);
+    tokens.output = Math.max(0, native.output_tokens - native.reasoning_output_tokens);
+    tokens.reasoning = native.reasoning_output_tokens;
+    tokens.cache.read = native.cached_input_tokens;
+    tokens.cache.write = native.cache_write_input_tokens;
     const estimate = !ambiguous && listed ? estimateUsageCost(tokens, listed) : 0;
     return [TaskUsageSchema.parse({
       sessionId, messageId: turn.id, turnId: turn.id, role, provider: "openai", model: ambiguous ? "unknown" : turn.model, startedAt: turn.updatedAt, completedAt: turn.updatedAt,

@@ -11,19 +11,22 @@ export async function observeTaskLimitUsage(input: {
   store: Pick<TaskControlStore, "taskSpend" | "taskLimits" | "sessionsWithNativeWork" | "replaceNativeUsage">;
   reader?: (session: TaskSession) => Pick<NativeSessionReader, "turnEvidence"> & Partial<Pick<NativeSessionReader, "timeline">>;
   readPricing: () => Promise<ModelPricingCatalog | undefined>;
+  requireCompletePricing?: boolean;
 }): Promise<TaskLimitUsage> {
   const admittedTurns = input.store.taskSpend(input.taskId).turns;
   const limits = input.store.taskLimits(input.taskId);
   if (limits.maxTurns > 0 && admittedTurns >= limits.maxTurns) return { estimatedCostUsd: null, admittedTurns };
   if (limits.budgetUsd === 0) return { estimatedCostUsd: null, admittedTurns };
   const sessions = input.store.sessionsWithNativeWork(input.taskId);
-  if (!sessions.length) return { estimatedCostUsd: 0, admittedTurns };
+  if (!sessions.length) return { estimatedCostUsd: input.requireCompletePricing ? null : 0, admittedTurns };
   if (!input.reader) throw new Error("Native task usage is not available. Forge will retry the observation.");
   const unique = new Map<string, Awaited<ReturnType<NativeSessionReader["timeline"]>>["usage"][number]>();
+  let complete = true;
   for (const session of sessions) {
     const reader = input.reader(session);
     if (!reader.timeline) throw new Error("Native task usage is not available. Forge will retry the observation.");
     const observed = await reader.timeline(session);
+    if (!observed.usage.length) complete = false;
     for (const entry of observed.usage) unique.set(`${entry.sessionId}:${entry.messageId}`, entry);
   }
   let usage = [...unique.values()];
@@ -36,6 +39,7 @@ export async function observeTaskLimitUsage(input: {
     }
     if (pricing) usage = estimateUnpricedUsage(usage, pricing);
   }
+  if (input.requireCompletePricing && (!complete || usage.some(entry => entry.model === "unknown" || usageIsUnpriced(entry)))) return { estimatedCostUsd: null, admittedTurns };
   input.store.replaceNativeUsage(input.taskId, usage);
   return { estimatedCostUsd: usageMetrics(usage).cost, admittedTurns };
 }

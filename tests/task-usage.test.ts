@@ -66,6 +66,46 @@ test("old usage snapshots default to non-subsidized", () => {
   expect(TaskUsageSchema.parse(oldSnapshot).subsidized).toBe(false);
 });
 
+test("a successful session observation replaces its old rows without deleting another session", async () => {
+  const value = await nativeApp();
+  try {
+    const { task } = await value.tasks.createTask(value.userId, value.company.id, { projectId: value.project.id, title: "Usage replacement", description: "Refresh estimates", startImmediately: true, idempotencyKey: "usage-replacement" });
+    const controls = value.tasks.repository.controls;
+    const root = controls.claimRoot({ taskId: task.id });
+    controls.bindHarnessSession({ sessionId: root.id, generation: root.generation, nativeSessionId: "ses_root" });
+    const worker = controls.launchWorker({ taskId: task.id, rootSessionId: root.id, rootGeneration: root.generation, instruction: "Work" });
+    controls.bindHarnessSession({ sessionId: worker.id, generation: worker.generation, nativeSessionId: "ses_worker" });
+    const store = new TaskAnalyticsStore(value.database);
+    store.record(task.id, root.id, taskUsage([message(true, [], 10, "openai", "model", "ses_root", "msg_old")], "root"));
+    store.record(task.id, worker.id, taskUsage([message(true, [], 7, "openai", "model", "ses_worker", "msg_worker")], "worker"));
+    store.record(task.id, root.id, taskUsage([message(true, [], 3, "openai", "model", "ses_root", "msg_new")], "root"));
+    expect(store.read(task.id).usage.map(entry => [entry.sessionId, entry.messageId, entry.cost]).sort()).toEqual([
+      ["ses_root", "msg_new", 3], ["ses_worker", "msg_worker", 7],
+    ]);
+  } finally { await value.close(); }
+});
+
+test("the first collector pass refreshes a delivered Codex session despite a recent cached observation", async () => {
+  const value = await nativeApp();
+  try {
+    const { task } = await value.tasks.createTask(value.userId, value.company.id, { projectId: value.project.id, title: "Codex refresh", description: "Refresh after restart", startImmediately: true, idempotencyKey: "codex-refresh" });
+    const controls = value.tasks.repository.controls;
+    const root = controls.claimRoot({ taskId: task.id });
+    controls.bindHarnessSession({ sessionId: root.id, generation: root.generation, nativeSessionId: "codex-old" });
+    controls.markDelivered(task.id);
+    const store = new TaskAnalyticsStore(value.database);
+    store.record(task.id, root.id, [TaskUsageSchema.parse({ ...taskUsage([message(true, [], 10, "openai", "model", "ses_codex")], "root")[0], sessionId: "codex-old" })]);
+    let reads = 0;
+    const collector = new TaskAnalyticsCollector(value.tasks.repository, store, async () => { reads += 1; return [TaskUsageSchema.parse({ ...taskUsage([message(true, [], 3, "openai", "model", "ses_codex")], "root")[0], sessionId: "codex-old" })]; }, error => { throw error; });
+    await collector.collect();
+    expect(reads).toBe(1);
+    expect(store.read(task.id).usage).toMatchObject([{ cost: 3 }]);
+    await collector.collect();
+    expect(reads).toBe(1);
+    await collector.stop();
+  } finally { await value.close(); }
+});
+
 test("collector captures final timings promptly after delivery instead of applying the historical refresh delay", async () => {
   const value = await nativeApp();
   try {

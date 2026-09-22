@@ -22,6 +22,8 @@ import { reconcileCompletedAdvisorReport, recoverSession, stopRetiredSessions, t
 import type { AdvisorReportOutcome } from "./advisor-report.js";
 import { ProjectExecutionSchema } from "../projects/execution-configuration.js";
 import { projectCredentialEnvironmentKeys } from "../runtimes/project-environment.js";
+import { observeTaskLimitUsage } from "../tasks/limits/limit-observer.js";
+import { taskLimitQuestion } from "../tasks/limits/limits.js";
 
 export type TaskDelivery = Pick<DeliveryOperations, "observe" | "execute" | "currentRange"> & Partial<Pick<DeliveryOperations, "checksObservation">>;
 type AcceptedWorkerAssignment = { kind: "workflow_input"; input: WorkerWorkflowInput } | { kind: "saved_prompt"; prompt: string };
@@ -306,6 +308,15 @@ export class RootController implements RootBridgeAdapter {
   async recover(taskId: string): Promise<void> {
     this.store.retireDeliveredSessions(taskId);
     await stopRetiredSessions(this.recoveryDependencies(), taskId);
+    const paused = this.store.get(taskId);
+    if (paused.status === "waiting_human" && paused.limitPause && paused.humanQuestionId && paused.humanQuestion === taskLimitQuestion(paused.limitPause)) {
+      try {
+        const usage = await observeTaskLimitUsage({ taskId, store: this.store, ...(this.reader ? { reader: this.reader } : {}), readPricing: this.readPricing, requireCompletePricing: true });
+        this.store.reconcileTaskLimitPause(taskId, paused.humanQuestionId, usage);
+      } finally {
+        if (this.store.get(taskId).status === "waiting_human") this.store.scheduleWake(taskId, new Date(Date.now() + 15_000).toISOString());
+      }
+    }
     if (this.store.get(taskId).status !== "active") return;
     const root = this.prepareRoot(taskId);
     await recoverSession(this.recoveryDependencies(), root);

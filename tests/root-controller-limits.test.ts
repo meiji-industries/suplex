@@ -32,6 +32,98 @@ test("a spend budget uses native usage and increases only after an explicit deci
   await value.controller.recover("task");
   expect(value.harness.dispatched).toHaveLength(2);
 });
+
+test("corrected native spend clears only the false budget pause and resumes one pending prompt", async () => {
+  const value = await fixture();
+  await value.controller.recover("task");
+  const root = value.store.currentSession("task", "root")!;
+  value.harness.finish(value.harness.dispatched[0]!.messageID);
+  value.nativeUsage.set(root.id, [usage(root.nativeSessionId!, 20)]);
+  await value.controller.recover("task");
+  await value.controller.recover("task");
+  const paused = value.store.get("task");
+  const pending = value.store.pendingTurns(root.id).map(turn => turn.id);
+  expect(paused.status).toBe("waiting_human");
+  expect(pending).toHaveLength(1);
+
+  value.nativeUsage.set(root.id, [usage(root.nativeSessionId!, 5)]);
+  await value.controller.recover("task");
+  await value.controller.recover("task");
+
+  expect(value.store.get("task")).toMatchObject({ status: "active", humanQuestion: null, humanQuestionId: null, limitPause: null });
+  expect(value.store.taskLimits("task")).toEqual({ budgetUsd: 15, maxTurns: 40 });
+  expect(value.store.taskSpend("task").costUsd).toBe(5);
+  expect(value.harness.dispatched.map(intent => intent.messageID)).toEqual([value.harness.dispatched[0]!.messageID, pending[0]]);
+});
+
+test("genuine budget and turn pauses keep their question identity", async () => {
+  const budget = await fixture();
+  await budget.controller.recover("task");
+  const root = budget.store.currentSession("task", "root")!;
+  budget.harness.finish(budget.harness.dispatched[0]!.messageID);
+  budget.nativeUsage.set(root.id, [usage(root.nativeSessionId!, 20)]);
+  await budget.controller.recover("task");
+  await budget.controller.recover("task");
+  const budgetQuestion = budget.store.get("task").humanQuestionId;
+  await budget.controller.recover("task");
+  expect(budget.store.get("task")).toMatchObject({ status: "waiting_human", humanQuestionId: budgetQuestion });
+
+  const turns = await fixture();
+  updateEnvironmentSettings(turns.database, { minFreeDiskGb: 5, defaultBudgetUsd: 15, defaultMaxTurns: 1 });
+  await turns.controller.recover("task");
+  turns.harness.finish(turns.harness.dispatched[0]!.messageID);
+  await turns.controller.recover("task");
+  await turns.controller.recover("task");
+  const turnQuestion = turns.store.get("task").humanQuestionId;
+  await turns.controller.recover("task");
+  expect(turns.store.get("task")).toMatchObject({ status: "waiting_human", humanQuestionId: turnQuestion, limitPause: { reason: "turns" } });
+});
+
+test("a changed question, missing usage, and unpriced usage cannot clear a budget pause", async () => {
+  const value = await fixture();
+  await value.controller.recover("task");
+  const root = value.store.currentSession("task", "root")!;
+  value.harness.finish(value.harness.dispatched[0]!.messageID);
+  value.nativeUsage.set(root.id, [usage(root.nativeSessionId!, 20)]);
+  await value.controller.recover("task");
+  await value.controller.recover("task");
+  const questionId = value.store.get("task").humanQuestionId;
+
+  value.nativeUsage.set(root.id, []);
+  await value.controller.recover("task");
+  expect(value.store.get("task").status).toBe("waiting_human");
+  value.nativeUsage.set(root.id, [{ ...usage(root.nativeSessionId!, 0), tokens: { input: 100, output: 0, reasoning: 0, cache: { read: 0, write: 0 } } }]);
+  await value.controller.recover("task");
+  expect(value.store.get("task").status).toBe("waiting_human");
+
+  value.nativeUsage.set(root.id, [usage(root.nativeSessionId!, 5)]);
+  value.database.authTransaction(db => db.prepare("UPDATE forge_task_controls SET human_question = 'A different question' WHERE task_id = 'task'").run());
+  await value.controller.recover("task");
+  expect(value.store.get("task")).toMatchObject({ status: "waiting_human", humanQuestionId: questionId, humanQuestion: "A different question" });
+});
+
+test("a changed question ID and explicit cancellation remain authoritative during recovery", async () => {
+  const value = await fixture();
+  await value.controller.recover("task");
+  const root = value.store.currentSession("task", "root")!;
+  value.harness.finish(value.harness.dispatched[0]!.messageID);
+  value.nativeUsage.set(root.id, [usage(root.nativeSessionId!, 20)]);
+  await value.controller.recover("task");
+  await value.controller.recover("task");
+  value.nativeUsage.set(root.id, [usage(root.nativeSessionId!, 5)]);
+  const reader = (session: Parameters<typeof value.reader>[0]) => ({ ...value.reader(session), timeline: async () => {
+    const observed = await value.reader(session).timeline();
+    value.database.authTransaction(db => db.prepare("UPDATE forge_task_controls SET human_question_id = 'replacement-question' WHERE task_id = 'task'").run());
+    return observed;
+  } });
+  const controller = new RootController(new TaskControlStore(value.database), value.harness, undefined, undefined, undefined, reader, async () => undefined);
+  await controller.recover("task");
+  expect(value.store.get("task")).toMatchObject({ status: "waiting_human", humanQuestionId: "replacement-question" });
+
+  value.store.cancel("task");
+  await value.controller.recover("task");
+  expect(value.store.get("task").status).toBe("cancelled");
+});
 test("native usage failure retries without asking the user or dispatching", async () => {
   const value = await fixture();
   await value.controller.recover("task");

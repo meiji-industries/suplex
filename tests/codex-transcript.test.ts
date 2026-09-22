@@ -89,11 +89,10 @@ test("a decreasing native counter does not recount the thread", () => {
     JSON.stringify({ type: "thread.started", thread_id: "thread-a" }),
     JSON.stringify({ type: "turn.completed", usage: { input_tokens: input, output_tokens: input / 10 } }),
   ].join("\n"));
-  const usage = codexUsage([
+  expect(() => codexUsage([
     { id: "first", model: "gpt-5.6-sol", events: events(100), updatedAt: 10 },
     { id: "reset", model: "gpt-5.6-sol", events: events(20), updatedAt: 20 },
-  ], "session", "worker");
-  expect(usage.map(entry => [entry.tokens.input, entry.cost, entry.model])).toEqual([[100, 0, "gpt-5.6-sol"], [0, 0, "unknown"]]);
+  ], "session", "worker")).toThrow("Codex cumulative usage decreased within native thread thread-a");
 });
 
 test("a decrease in one raw field does not price increases in the other fields", () => {
@@ -101,11 +100,10 @@ test("a decrease in one raw field does not price increases in the other fields",
     JSON.stringify({ type: "thread.started", thread_id: "thread-a" }),
     JSON.stringify({ type: "turn.completed", usage: { input_tokens: input, cached_input_tokens: cached, output_tokens: 20 } }),
   ].join("\n"));
-  const usage = codexUsage([
+  expect(() => codexUsage([
     { id: "first", model: "gpt-5.6-sol", events: events(100, 80), updatedAt: 10 },
     { id: "ambiguous", model: "gpt-5.6-sol", events: events(200, 0), updatedAt: 20 },
-  ], "session", "worker");
-  expect(usage[1]).toMatchObject({ model: "unknown", cost: 0, tokens: { input: 0, output: 0, cache: { read: 0 } } });
+  ], "session", "worker")).toThrow("Codex cumulative usage decreased within native thread thread-a");
 });
 
 test("a model change across a missing snapshot leaves only that interval unpriced", () => {

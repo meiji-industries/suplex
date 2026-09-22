@@ -51,6 +51,29 @@ export class TaskLimitStore {
     });
   }
 
+  reconcilePause(taskId: string, questionId: string, usage: TaskLimitUsage): boolean {
+    if (usage.estimatedCostUsd === null) return false;
+    return this.database.authImmediateTransaction(db => {
+      const raw = db.prepare("SELECT status, budget_usd AS budgetUsd, max_turns AS maxTurns, human_question AS humanQuestion, limit_pause_json AS pause FROM forge_task_controls WHERE task_id = ? AND human_question_id = ?").get(taskId, questionId);
+      if (!raw) return false;
+      const row = PersistedLimitsSchema.extend({ humanQuestion: z.string().nullable(), pause: z.string().nullable() }).parse(raw);
+      if (row.status !== "waiting_human" || !row.pause) return false;
+      const oldPause = TaskLimitPauseSchema.parse(JSON.parse(row.pause));
+      if (row.humanQuestion !== taskLimitQuestion(oldPause)) return false;
+      const defaults = readEnvironmentSettings(this.database);
+      const limits = { budgetUsd: row.budgetUsd ?? defaults.defaultBudgetUsd, maxTurns: row.maxTurns ?? defaults.defaultMaxTurns };
+      const admittedTurns = z.object({ turns: z.number().int().nonnegative() }).parse(db.prepare("SELECT COUNT(*) AS turns FROM forge_task_turns WHERE task_id = ? AND prompted_at IS NOT NULL").get(taskId)).turns;
+      const evaluation = evaluateTaskLimits({ limits, usage: { ...usage, admittedTurns }, allowance: { budgetUsd: defaults.defaultBudgetUsd, maxTurns: defaults.defaultMaxTurns } });
+      const time = new Date().toISOString();
+      if (evaluation.kind === "within_limits") {
+        return db.prepare("UPDATE forge_task_controls SET status = 'active', limit_pause_json = NULL, human_question = NULL, human_question_id = NULL, human_question_options_json = '[]', wake_at = ?, updated_at = ? WHERE task_id = ? AND status = 'waiting_human' AND human_question_id = ?").run(time, time, taskId, questionId).changes === 1;
+      }
+      const pause = evaluation.pause;
+      if (JSON.stringify(pause) !== row.pause) db.prepare("UPDATE forge_task_controls SET limit_pause_json = ?, human_question = ?, updated_at = ? WHERE task_id = ? AND status = 'waiting_human' AND human_question_id = ?").run(JSON.stringify(pause), taskLimitQuestion(pause), time, taskId, questionId);
+      return false;
+    });
+  }
+
   answer(taskId: string, questionId: string, rawDecision: TaskLimitDecision): void {
     const decision = TaskLimitDecisionSchema.parse(rawDecision);
     this.database.authImmediateTransaction(db => {

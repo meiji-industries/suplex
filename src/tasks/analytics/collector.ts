@@ -16,6 +16,7 @@ export class TaskAnalyticsCollector {
   private timer: ReturnType<typeof setTimeout> | undefined;
   private pending: Promise<void> | undefined;
   private stopped = false;
+  private firstCollection = true;
   constructor(private readonly repository: TaskRepository, private readonly store: TaskAnalyticsStore,
     private readonly readUsage: (session: TaskSession, pricing: ModelPricingCatalog | undefined) => Promise<TaskUsage[]>,
     private readonly reportError: (error: unknown) => void,
@@ -34,6 +35,8 @@ export class TaskAnalyticsCollector {
   async stop(): Promise<void> { this.stopped = true; clearTimeout(this.timer); await this.pending; }
 
   async collect(): Promise<void> {
+    const startup = this.firstCollection;
+    this.firstCollection = false;
     let pricing: ModelPricingCatalog | undefined;
     let pricingAttempted = false;
     const optionalPricing = async (): Promise<ModelPricingCatalog | undefined> => {
@@ -54,7 +57,7 @@ export class TaskAnalyticsCollector {
           const previous = observations.find(value => value.sessionId === session.id);
           const lastAttempt = previous?.errorAt ?? previous?.observedAt;
           const changedSinceObservation = previous?.observedAt && task.updatedAt > previous.observedAt;
-          const refreshMs = previous?.errorAt ? 300_000 : !changedSinceObservation && (task.archivedAt || !["active", "waiting_human"].includes(task.status)) ? 900_000 : 0;
+          const refreshMs = startup && sessionHarness(session.nativeSessionId) === "codex" ? 0 : previous?.errorAt ? 300_000 : !changedSinceObservation && (task.archivedAt || !["active", "waiting_human"].includes(task.status)) ? 900_000 : 0;
           if (lastAttempt && Date.now() - Date.parse(lastAttempt) < refreshMs) continue;
           try {
             const readStartedAt = new Date().toISOString();

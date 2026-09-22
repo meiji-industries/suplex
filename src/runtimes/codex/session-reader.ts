@@ -77,7 +77,10 @@ export class CodexSessionReader implements NativeSessionReader {
   async timeline(session: Pick<TaskSession, "id" | "nativeSessionId" | "kind">, pricing?: ModelPricingCatalog) {
     if (!session.nativeSessionId) throw new Error("Session is not available");
     const directory = this.directory(session);
-    const usage = codexUsage(await this.turns(session), session.nativeSessionId, session.kind, pricing);
+    const turns = await this.turns(session);
+    if (!turns.length) throw new Error("Codex turn logs are missing");
+    const usage = codexUsage(turns, session.nativeSessionId, session.kind, pricing);
+    if (!usage.length) throw new Error("Codex usage is not yet available");
     const live = await codexSessionBusy(directory) ? usage.at(-1) : undefined;
     if (live) live.completedAt = null;
     return { usage, liveMessageId: live?.messageId ?? null };

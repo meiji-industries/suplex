@@ -80,6 +80,7 @@ export class TaskControlStore {
     this.limitStore.replaceUsage(taskId, usage);
   }
   pauseAtTaskLimit(taskId: string, usage: TaskLimitUsage): boolean { return this.limitStore.pauseIfReached(taskId, usage); }
+  reconcileTaskLimitPause(taskId: string, questionId: string, usage: TaskLimitUsage): boolean { return this.limitStore.reconcilePause(taskId, questionId, usage); }
   create(input: { taskId: string; startImmediately: boolean; objective: string; deliveryTarget: string; deliveryIntent: DeliveryIntent; rootProfile: TaskProfile; workerProfile: TaskProfile; worktree?: WorktreeReference; workflow?: WorkflowId; advisorProfiles?: Partial<Record<AdvisorRole, TaskProfile>> }): TaskControl {
     const time = now();
     const advisorProfiles = Object.fromEntries(Object.entries(input.advisorProfiles ?? {}).map(([role, profile]) => [AdvisorRoleSchema.parse(role), TaskProfileSchema.parse(profile)]));

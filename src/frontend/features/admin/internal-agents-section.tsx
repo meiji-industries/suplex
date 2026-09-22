@@ -1,4 +1,5 @@
 import { EntityAvatar } from "../../components/app/entity-avatar.js";
+import { providerIcons } from "../../components/app/provider-icons.js";
 import {
   SettingsDataTable,
   SettingsTableCell,
@@ -28,7 +29,7 @@ import {
 } from "../../components/ui/dropdown-menu.js";
 import { Input } from "../../components/ui/input.js";
 import { NewButton } from "../../components/ui/new-button.js";
-import { Archive, ArchiveRestore, Copy, Ellipsis, Pencil } from "lucide-react";
+import { Archive, ArchiveRestore, Copy, Ellipsis, Pencil, Zap } from "lucide-react";
 import {
   useEffect,
   useRef,
@@ -39,15 +40,12 @@ import {
 } from "react";
 import type { ApiProfile } from "../../shell/view-shared.js";
 
-const serviceTierLabel = (_provider: string, priority: string): string =>
-  priority === "priority" ? "Priority" : "Default";
-
 const AGENT_COLUMNS: SettingsTableColumn[] = [
   { key: "name", label: "Name ↓", width: 240 },
   { key: "role", label: "Role", width: 140 },
+  { key: "provider", label: "Provider", width: 120 },
   { key: "model", label: "Model", width: 200 },
   { key: "reasoning", label: "Reasoning", width: 90 },
-  { key: "speed", label: "Speed", width: 102 },
   { key: "status", label: "Status", width: 100 },
   { key: "menu", width: 28 },
   { key: "end", width: 32 },
@@ -201,14 +199,26 @@ export function InternalAgentsSection({
               <SettingsTableCell>
                 {agent.role === "root" ? "Coordinator" : "Worker"}
               </SettingsTableCell>
-              <SettingsTableCell className="truncate">
-                {agent.model}
+              <SettingsTableCell className="truncate text-muted-foreground">
+                {providerIcons[agent.provider].label}
+              </SettingsTableCell>
+              <SettingsTableCell>
+                <span className="flex min-w-0 items-center gap-1.5">
+                  <span className="truncate">{agent.model}</span>
+                  {agent.serviceTier === "priority" ? (
+                    <span className="inline-flex" title="Priority service tier">
+                      <Zap
+                        role="img"
+                        aria-label="Priority service tier"
+                        fill="currentColor"
+                        className="size-3.5 shrink-0 text-muted-foreground"
+                      />
+                    </span>
+                  ) : null}
+                </span>
               </SettingsTableCell>
               <SettingsTableCell className="truncate text-muted-foreground">
                 {agent.reasoningLevel}
-              </SettingsTableCell>
-              <SettingsTableCell className="truncate text-muted-foreground">
-                {serviceTierLabel(agent.provider, agent.serviceTier)}
               </SettingsTableCell>
               <SettingsTableCell>
                 <span className="flex items-center gap-1.5 text-muted-foreground">

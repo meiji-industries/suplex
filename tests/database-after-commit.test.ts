@@ -2,11 +2,11 @@ import { mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, test } from "vitest";
-import { ForgeDatabase } from "../src/platform/database.js";
+import { SuplexDatabase } from "../src/platform/database.js";
 
 test("nested callbacks run only after the outer transaction commits in order", () => {
-  const directory = mkdtempSync(join(tmpdir(), "forge-commit-"));
-  const database = new ForgeDatabase(join(directory, "forge.sqlite"));
+  const directory = mkdtempSync(join(tmpdir(), "suplex-commit-"));
+  const database = new SuplexDatabase(join(directory, "suplex.sqlite"));
   const observed: string[] = [];
   try {
     database.authImmediateTransaction(db => {
@@ -25,8 +25,8 @@ test("nested callbacks run only after the outer transaction commits in order", (
 });
 
 test("rolled-back callbacks cannot acquire a later same-status update", () => {
-  const directory = mkdtempSync(join(tmpdir(), "forge-commit-"));
-  const database = new ForgeDatabase(join(directory, "forge.sqlite"));
+  const directory = mkdtempSync(join(tmpdir(), "suplex-commit-"));
+  const database = new SuplexDatabase(join(directory, "suplex.sqlite"));
   const observed: string[] = [];
   try {
     database.authTransaction(db => db.exec("CREATE TABLE telemetry_check (status TEXT)"));

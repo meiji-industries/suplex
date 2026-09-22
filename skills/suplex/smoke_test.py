@@ -1,8 +1,8 @@
-"""Verify an external agent's Forge pairing end to end.
+"""Verify an external agent's Suplex pairing end to end.
 
 Reports only that the variables are set and the base URL host, performs one
 non-destructive read, then creates the connectivity acknowledgment task twice
-with the same idempotency key and asserts Forge returns the same task. The
+with the same idempotency key and asserts Suplex returns the same task. The
 task stays in `backlog`; this script never starts, cancels, or archives it.
 
 Usage: python3 smoke_test.py
@@ -12,7 +12,7 @@ from __future__ import annotations
 
 import sys
 
-from forge_client import ForgeClient, ForgeError
+from suplex_client import SuplexClient, SuplexError
 
 TITLE = "External agent connectivity confirmed"
 DESCRIPTION = "Connection acknowledged. Do not plan or execute this task."
@@ -20,14 +20,14 @@ DESCRIPTION = "Connection acknowledged. Do not plan or execute this task."
 
 def main() -> int:
     try:
-        client = ForgeClient()
-    except ForgeError as error:
+        client = SuplexClient()
+    except SuplexError as error:
         print(f"error: {error}", file=sys.stderr)
         return 2
 
-    print("FORGE_BASE_URL is set")
-    print("FORGE_AGENT_CREDENTIAL is set")
-    print(f"Forge host: {client.host}")
+    print("SUPLEX_BASE_URL is set")
+    print("SUPLEX_AGENT_CREDENTIAL is set")
+    print(f"Suplex host: {client.host}")
 
     identity = client.whoami()
     agent = identity["agent"]
@@ -39,7 +39,7 @@ def main() -> int:
         return 1
 
     project_id = projects[0]["id"]
-    key = f"forge-connectivity-{agent['id']}"
+    key = f"suplex-connectivity-{agent['id']}"
     first = client.create_task(project_id, TITLE, DESCRIPTION, key=key)
     second = client.create_task(project_id, TITLE, DESCRIPTION, key=key)
     if first["id"] != second["id"]:
@@ -47,13 +47,13 @@ def main() -> int:
         return 1
 
     print(f"Acknowledgment task: {first.get('issueKey') or first['id']} ({first['id']}) status {second['status']}")
-    print("Idempotent replay returned the same task. Forge pairing verified.")
+    print("Idempotent replay returned the same task. Suplex pairing verified.")
     return 0
 
 
 if __name__ == "__main__":
     try:
         raise SystemExit(main())
-    except ForgeError as error:
+    except SuplexError as error:
         print(f"error: {error}", file=sys.stderr)
         raise SystemExit(1) from None

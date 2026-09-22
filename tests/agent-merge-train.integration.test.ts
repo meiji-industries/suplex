@@ -96,7 +96,7 @@ test("provenance rows are append-only", { timeout: 120_000 }, async () => {
   const [only] = f.train;
   await f.approveAndMerge(only!);
   const record = f.provenance(only!.id)[0]!;
-  expect(() => f.database.authTransaction(db => db.prepare("UPDATE forge_delivery_provenance SET head_sha = 'x' WHERE id = ?").run(record.id))).toThrow(/append-only/);
+  expect(() => f.database.authTransaction(db => db.prepare("UPDATE suplex_delivery_provenance SET head_sha = 'x' WHERE id = ?").run(record.id))).toThrow(/append-only/);
 });
 
 test("a failed check refuses the merge and is eligible for repair", { timeout: 120_000 }, async () => {
@@ -128,11 +128,11 @@ test("a stale head, a stale base, a wrong pull request number, and a spent recei
   expect(f.merges).toEqual([]);
 
   // A refused merge never spends the receipt.
-  expect(f.database.authQuery(db => db.prepare("SELECT consumed_at FROM forge_merge_approvals").get())).toEqual({ consumed_at: null });
+  expect(f.database.authQuery(db => db.prepare("SELECT consumed_at FROM suplex_merge_approvals").get())).toEqual({ consumed_at: null });
 
   // The receipt merges exactly once, and the replay merges nothing.
   await f.agentDelivery.merge(f.principal, only!.id, { pullRequestNumber: only!.pull.number, expectedHeadSha: only!.pull.headSha, expectedBaseSha: only!.pull.baseSha, approvalReceipt: approval.receipt });
-  expect(f.database.authQuery(db => db.prepare("SELECT consumed_at FROM forge_merge_approvals").get() as { consumed_at: string | null }).consumed_at).not.toBeNull();
+  expect(f.database.authQuery(db => db.prepare("SELECT consumed_at FROM suplex_merge_approvals").get() as { consumed_at: string | null }).consumed_at).not.toBeNull();
   await expect(f.agentDelivery.merge(f.principal, only!.id, { pullRequestNumber: only!.pull.number, expectedHeadSha: only!.pull.headSha, expectedBaseSha: only!.pull.baseSha, approvalReceipt: approval.receipt })).rejects.toThrow(TaskFailure);
   expect(f.merges).toEqual([only!.pull.number]);
 });
@@ -196,7 +196,7 @@ test("another agent cannot observe, repair, or merge a task it did not create", 
   expect((await f.agentDelivery.mergeTrain(outsider)).entries).toEqual([]);
 });
 
-test("a head that Forge never accepted is listed as blocked and refused by the approval and the merge", { timeout: 120_000 }, async () => {
+test("a head that Suplex never accepted is listed as blocked and refused by the approval and the merge", { timeout: 120_000 }, async () => {
   const f = await mergeTrainFixture(1);
   const [only] = f.train;
   const unaccepted = await f.pushUnacceptedCommit(only!);
@@ -207,7 +207,7 @@ test("a head that Forge never accepted is listed as blocked and refused by the a
   expect(train.entries[0]).toMatchObject({ headSha: unaccepted, blocker: HEAD_NOT_ACCEPTED });
   const request = { pullRequestNumber: only!.pull.number, headSha: unaccepted, baseSha: only!.pull.baseSha };
   await expect(f.agentDelivery.issueApproval(f.principal, only!.id, request)).rejects.toThrow(HEAD_NOT_ACCEPTED);
-  expect(f.database.authQuery(db => db.prepare("SELECT COUNT(*) AS count FROM forge_merge_approvals").get())).toEqual({ count: 0 });
+  expect(f.database.authQuery(db => db.prepare("SELECT COUNT(*) AS count FROM suplex_merge_approvals").get())).toEqual({ count: 0 });
   await expect(f.agentDelivery.merge(f.principal, only!.id, { pullRequestNumber: only!.pull.number, expectedHeadSha: unaccepted, expectedBaseSha: only!.pull.baseSha, approvalReceipt: `fma_${"a".repeat(43)}` }))
     .rejects.toThrow(HEAD_NOT_ACCEPTED);
   expect(f.merges).toEqual([]);
@@ -242,7 +242,7 @@ test("a human Blocked by edit gates the train exactly like an agent-declared dep
   const [first, second] = f.train;
   f.blockOn(second!, [first!]);
 
-  // One gate: the Blocked by task reads as a dependency everywhere Forge decides.
+  // One gate: the Blocked by task reads as a dependency everywhere Suplex decides.
   expect(f.tasks.getTask(f.adminId, second!.id).dependsOn).toEqual([first!.id]);
   expect(f.store.dependencySummaries(second!.id)).toEqual([{ id: first!.id, title: "Train task 1", status: "active" }]);
   const train = await f.agentDelivery.mergeTrain(f.principal);

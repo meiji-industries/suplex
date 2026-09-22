@@ -4,7 +4,7 @@ import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
-import { ForgeDatabase } from "../src/platform/database.js";
+import { SuplexDatabase } from "../src/platform/database.js";
 import { RootController } from "../src/coordination/root-controller.js";
 import { TaskControlStore } from "../src/coordination/root-session-store.js";
 import { OpenCodeTaskRuntime } from "../src/runtimes/opencode/task-runtime.js";
@@ -12,24 +12,24 @@ import { readOpenCodeServer, openCodeServerClient, openCodeProcessAlive } from "
 
 const executable = process.argv[2];
 assert.ok(executable, "Usage: tsx scripts/probe-opencode-root.ts <absolute-opencode-executable>");
-const directory = await mkdtemp(join(tmpdir(), "forge-native-root-proof-"));
-const database = new ForgeDatabase(join(directory, "forge.sqlite"));
+const directory = await mkdtemp(join(tmpdir(), "suplex-native-root-proof-"));
+const database = new SuplexDatabase(join(directory, "suplex.sqlite"));
 const token = randomUUID();
 await writeFile(join(directory, "README.md"), `Read proof ${token}\n`);
 const stamp = new Date().toISOString();
 database.authTransaction((db) => {
-  db.prepare("INSERT INTO forge_companies (id, name, status, created_at) VALUES ('company', 'Company', 'active', ?)").run(stamp);
-  db.prepare("INSERT INTO forge_projects (id, company_id, name, repository_path, worktree_root, repository_identity, base_branch, setup_command, verification_command, created_at, updated_at) VALUES ('project', 'company', 'Project', ?, ?, 'meiji-industries/forge', 'main', '', '', ?, ?)").run(directory, directory, stamp, stamp);
-  db.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES ('brief', 'company', 'task-brief', 'brief', 'text/plain', 1, ?, 'brief', ?)").run("a".repeat(64), stamp);
-  db.prepare("INSERT INTO forge_users (id, display_name, username, role, status, created_at, updated_at) VALUES ('probe-user', 'Probe', 'probe', 'admin', 'active', ?, ?)").run(stamp, stamp);
-  const configuration = { repository: "meiji-industries/forge", repositoryPath: directory, worktreeRoot: directory, branch: `probe-${token}`, baseBranch: "main", baselineSha: "a".repeat(40), startingSha: "a".repeat(40), setupCommand: "", verificationCommand: "", runProjectTests: false, visualEvidence: "off", source: null, capturedAt: stamp };
-  db.prepare("INSERT INTO forge_tasks (id, company_id, project_id, title, description, configuration_json, idempotency_key, request_hash, creator_user_id, created_at, updated_at) VALUES ('task', 'company', 'project', 'Task', 'Capability proof', ?, 'root-proof', ?, 'probe-user', ?, ?)").run(JSON.stringify(configuration), "b".repeat(64), stamp, stamp);
+  db.prepare("INSERT INTO suplex_companies (id, name, status, created_at) VALUES ('company', 'Company', 'active', ?)").run(stamp);
+  db.prepare("INSERT INTO suplex_projects (id, company_id, name, repository_path, worktree_root, repository_identity, base_branch, setup_command, verification_command, created_at, updated_at) VALUES ('project', 'company', 'Project', ?, ?, 'meiji-industries/suplex', 'main', '', '', ?, ?)").run(directory, directory, stamp, stamp);
+  db.prepare("INSERT INTO suplex_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES ('brief', 'company', 'task-brief', 'brief', 'text/plain', 1, ?, 'brief', ?)").run("a".repeat(64), stamp);
+  db.prepare("INSERT INTO suplex_users (id, display_name, username, role, status, created_at, updated_at) VALUES ('probe-user', 'Probe', 'probe', 'admin', 'active', ?, ?)").run(stamp, stamp);
+  const configuration = { repository: "meiji-industries/suplex", repositoryPath: directory, worktreeRoot: directory, branch: `probe-${token}`, baseBranch: "main", baselineSha: "a".repeat(40), startingSha: "a".repeat(40), setupCommand: "", verificationCommand: "", runProjectTests: false, visualEvidence: "off", source: null, capturedAt: stamp };
+  db.prepare("INSERT INTO suplex_tasks (id, company_id, project_id, title, description, configuration_json, idempotency_key, request_hash, creator_user_id, created_at, updated_at) VALUES ('task', 'company', 'project', 'Task', 'Capability proof', ?, 'root-proof', ?, 'probe-user', ?, ?)").run(JSON.stringify(configuration), "b".repeat(64), stamp, stamp);
 });
 const store = new TaskControlStore(database);
 const profile = { profileId: "proof", provider: "opencode", model: "openai/gpt-5.6-luna", reasoningLevel: "max", serviceTier: "priority" } as const;
 store.create({ startImmediately: true,
-  taskId: "task", objective: "This is a capability probe only. Read README.md using the native read tool. Then call forge_root with kind ask_human and question equal to the exact line you read. Do not delegate Workers or request delivery operations. No GitHub action is needed.",
-  deliveryTarget: "merged", deliveryIntent: { repository: "meiji-industries/forge", headBranch: `probe-${token}`, baseBranch: "main", baselineSha: "a", pullRequestNumber: null },
+  taskId: "task", objective: "This is a capability probe only. Read README.md using the native read tool. Then call suplex_root with kind ask_human and question equal to the exact line you read. Do not delegate Workers or request delivery operations. No GitHub action is needed.",
+  deliveryTarget: "merged", deliveryIntent: { repository: "meiji-industries/suplex", headBranch: `probe-${token}`, baseBranch: "main", baselineSha: "a", pullRequestNumber: null },
   rootProfile: profile, workerProfile: profile, worktree: { path: directory, branch: `probe-${token}`, baseSha: "a", headSha: "a", dirty: false },
 });
 const unavailable = async (): Promise<never> => { throw new Error("No display in this native bridge probe"); };
@@ -50,7 +50,7 @@ try {
     if (control.status === "waiting_human") {
       assert.equal(control.humanQuestion, `Read proof ${token}`);
       assert.ok(tools.some((part) => part.tool === "read"));
-      assert.ok(tools.some((part) => part.tool === "forge_root_forge_root"));
+      assert.ok(tools.some((part) => part.tool === "suplex_root_suplex_root"));
       process.stdout.write(`${JSON.stringify({ directory, nativeSessionId: root.nativeSessionId, question: control.humanQuestion, tools: tools.map((part) => part.tool), nativeMessages: messages.map((message) => ({ id: message.info.id, role: message.info.role })) }, null, 2)}\n`);
       break;
     }

@@ -5,7 +5,7 @@ import { expect, test, vi } from "vitest";
 
 import { createApp } from "../src/app.js";
 import { createTestConfig } from "../src/platform/config.js";
-import { ForgeDatabase } from "../src/platform/database.js";
+import { SuplexDatabase } from "../src/platform/database.js";
 import { checkArtifactRoot, checkDatabase, checkDiskSpace } from "../src/platform/host-health.js";
 import { inspectHostHealth, providerCheckId, type HealthCheck } from "../src/platform/health.js";
 import { updateEnvironmentSettings } from "../src/platform/environment-settings.js";
@@ -22,7 +22,7 @@ const check = (id: HealthCheck["id"], status: "healthy" | "unhealthy"): HealthCh
 });
 
 test("host readiness reports owned-service health separately from provider authentication", async () => {
-  const snapshot = await inspectHostHealth(createTestConfig("/tmp/forge-health-test"), {
+  const snapshot = await inspectHostHealth(createTestConfig("/tmp/suplex-health-test"), {
     database: async () => check("database", "healthy"),
     artifactRoot: async () => check("artifact-root", "healthy"),
     git: async () => check("git", "unhealthy"),
@@ -55,7 +55,7 @@ test("host readiness reports owned-service health separately from provider authe
 
 test("health snapshot remedies survive inspection and HTTP response serialization", async () => {
   const app = createApp({
-    config: createTestConfig("/tmp/forge-health-remedy-test"),
+    config: createTestConfig("/tmp/suplex-health-remedy-test"),
     health: {
       database: async () => check("database", "healthy"),
       artifactRoot: async () => check("artifact-root", "healthy"),
@@ -71,7 +71,7 @@ test("health snapshot remedies survive inspection and HTTP response serializatio
 });
 
 test("host readiness is false when an owned service is unavailable", async () => {
-  const snapshot = await inspectHostHealth(createTestConfig("/tmp/forge-health-test"), {
+  const snapshot = await inspectHostHealth(createTestConfig("/tmp/suplex-health-test"), {
     database: async () => check("database", "unhealthy"),
     artifactRoot: async () => check("artifact-root", "healthy"),
     ghAuth: async () => check("gh-auth", "healthy"),
@@ -81,8 +81,8 @@ test("host readiness is false when an owned service is unavailable", async () =>
 });
 
 test("disk space warns below its current configured minimum without affecting readiness", async () => {
-  const config = createTestConfig("/tmp/forge-disk-space-test");
-  const database = new ForgeDatabase(":memory:");
+  const config = createTestConfig("/tmp/suplex-disk-space-test");
+  const database = new SuplexDatabase(":memory:");
   updateEnvironmentSettings(database, { minFreeDiskGb: 5, defaultBudgetUsd: 15, defaultMaxTurns: 40 });
   const diskSpace = checkDiskSpace(config, database, async (root) => ({ bavail: root === config.worktreeRoot ? 6 : 4, bsize: 1024 ** 3 }));
   try {
@@ -99,8 +99,8 @@ test("disk space warns below its current configured minimum without affecting re
 });
 
 test("disk space is healthy at or above the minimum, disabled at zero, and re-reads changed settings", async () => {
-  const config = createTestConfig("/tmp/forge-disk-space-settings-test");
-  const database = new ForgeDatabase(":memory:");
+  const config = createTestConfig("/tmp/suplex-disk-space-settings-test");
+  const database = new SuplexDatabase(":memory:");
   let freeGb = 5;
   const diskSpace = checkDiskSpace(config, database, async () => ({ bavail: freeGb, bsize: 1024 ** 3 }));
   try {
@@ -116,8 +116,8 @@ test("disk space is healthy at or above the minimum, disabled at zero, and re-re
 });
 
 test("disk space warns when its filesystem cannot be read", async () => {
-  const config = createTestConfig("/tmp/forge-disk-space-failure-test");
-  const database = new ForgeDatabase(":memory:");
+  const config = createTestConfig("/tmp/suplex-disk-space-failure-test");
+  const database = new SuplexDatabase(":memory:");
   const diskSpace = checkDiskSpace(config, database, async () => { throw new Error("statfs failed"); });
   try {
     expect(await diskSpace()).toMatchObject({ id: "disk-space", status: "warning", summary: "Free disk space could not be read" });
@@ -128,7 +128,7 @@ test("the API health probe is cached for ten seconds", async () => {
   let now = 0;
   let reads = 0;
   const app = createApp({
-    config: createTestConfig("/tmp/forge-health-route-cache-test"),
+    config: createTestConfig("/tmp/suplex-health-route-cache-test"),
     health: {
       database: async () => check("database", "healthy"),
       artifactRoot: async () => check("artifact-root", "healthy"),
@@ -160,7 +160,7 @@ test("the API health probe is cached for ten seconds", async () => {
 });
 
 test("cached health shares concurrent probes, including forced refreshes", async () => {
-  const snapshot = await inspectHostHealth(createTestConfig("/tmp/forge-health-concurrent-test"), healthyHost);
+  const snapshot = await inspectHostHealth(createTestConfig("/tmp/suplex-health-concurrent-test"), healthyHost);
   let finish = (_snapshot: typeof snapshot): void => { throw new Error("Probe did not start"); };
   const read = vi.fn(() => new Promise<typeof snapshot>((resolve) => { finish = resolve; }));
   const cached = cachedHealthReader(read);
@@ -175,7 +175,7 @@ test("cached health shares concurrent probes, including forced refreshes", async
 });
 
 test("failed health refreshes clear the pending probe and do not extend the old cache", async () => {
-  const snapshot = await inspectHostHealth(createTestConfig("/tmp/forge-health-failed-cache-test"), healthyHost);
+  const snapshot = await inspectHostHealth(createTestConfig("/tmp/suplex-health-failed-cache-test"), healthyHost);
   let now = 0;
   const read = vi.fn<() => Promise<typeof snapshot>>()
     .mockResolvedValueOnce(snapshot)
@@ -192,9 +192,9 @@ test("failed health refreshes clear the pending probe and do not extend the old 
 });
 
 test("health snapshot does not expose host paths or credentials", async () => {
-  const root = await mkdtemp(join(tmpdir(), "forge-health-redaction-test-"));
+  const root = await mkdtemp(join(tmpdir(), "suplex-health-redaction-test-"));
   const config = createTestConfig(root);
-  const database = new ForgeDatabase(config.databasePath);
+  const database = new SuplexDatabase(config.databasePath);
   try {
     const snapshot = await inspectHostHealth(config, {
       database: async () => checkDatabase(database),

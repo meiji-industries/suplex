@@ -3,20 +3,20 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Forge is ready</title>
+<title>Suplex is ready</title>
 <link rel="stylesheet" href="pages.css">
 </head>
 <body class="ready">
 <main>
   <svg class="ready-mark" viewBox="0 0 64 64" fill="none" aria-hidden="true"><path d="M36 6 14 36h16l-2 22 22-30H34l2-22Z" stroke="currentColor" stroke-width="3" stroke-linejoin="round" /></svg>
-  <h1>Forge is ready</h1>
+  <h1>Suplex is ready</h1>
   <p>Your next idea starts here.</p>
-  <div class="actions"><button class="primary" id="launch" type="button" autofocus>Launch Forge <span aria-hidden="true">→</span></button></div>
+  <div class="actions"><button class="primary" id="launch" type="button" autofocus>Launch Suplex <span aria-hidden="true">→</span></button></div>
 </main>
 <script>
   document.getElementById("launch").addEventListener("click", () => {
     document.getElementById("launch").disabled = true;
-    window.forgeDesktop.launch();
+    window.suplexDesktop.launch();
   });
 </script>
 </body>

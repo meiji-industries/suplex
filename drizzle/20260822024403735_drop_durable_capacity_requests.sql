@@ -1,1 +1,1 @@
-DROP TABLE IF EXISTS forge_capacity_requests;
+DROP TABLE IF EXISTS suplex_capacity_requests;

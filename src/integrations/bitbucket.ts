@@ -67,7 +67,7 @@ export class BitbucketClient {
     return result;
   }
   async upload(repository: string, filename: string, bytes: Uint8Array, mimeType: string, beforeWrite: () => Promise<void> = async () => {}): Promise<string> {
-    if (!/^forge-[A-Za-z0-9._-]+$/.test(filename)) throw new Error("The evidence filename is invalid");
+    if (!/^suplex-[A-Za-z0-9._-]+$/.test(filename)) throw new Error("The evidence filename is invalid");
     const present = async () => {
       let next: string | undefined = `${coordinate(repository)}/downloads?pagelen=100`;
       const seen = new Set<string>();

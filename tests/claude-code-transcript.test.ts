@@ -64,7 +64,7 @@ test("usage records one entry per API response, keyed by the prompt that started
 });
 
 test("transcripts are located by session id across Claude projects", async () => {
-  const configDirectory = await mkdtemp(join(tmpdir(), "forge-claude-config-"));
+  const configDirectory = await mkdtemp(join(tmpdir(), "suplex-claude-config-"));
   try {
     expect(await findClaudeTranscript("missing", configDirectory)).toBeNull();
     await mkdir(join(configDirectory, "projects", "-repo-a"), { recursive: true });

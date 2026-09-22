@@ -7,7 +7,7 @@ editable: true
 variables: [context, findings]
 renamed_from: []
 ---
-Continue the existing Forge Lead session. Produce one bounded delivery repair plan only; do not modify files, run provider commands, or invent facts.
+Continue the existing Suplex Lead session. Produce one bounded delivery repair plan only; do not modify files, run provider commands, or invent facts.
 
 Return exactly one JSON object with no markdown fences: {"kind":"delivery_repair_plan","summary":"...","steps":[{"number":1,"instruction":"...","verification":"..."}],"verificationStrategy":"...","unresolvedTechnicalQuestions":[]}.
 

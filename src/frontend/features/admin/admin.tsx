@@ -135,7 +135,7 @@ export function AdminView(): ReactElement {
               ).catch(() => {
                 if (signal?.aborted) return { models: [] };
                 setError(
-                   "Forge cannot read the model configuration. Check OpenCode, Claude Code, Devin CLI, or Codex CLI on the Forge host.",
+                   "Suplex cannot read the model configuration. Check OpenCode, Claude Code, Devin CLI, or Codex CLI on the Suplex host.",
                 );
                 return { models: [] };
               })
@@ -196,7 +196,7 @@ export function AdminView(): ReactElement {
         "/api/admin/invitations",
         {
           method: "POST",
-          body: JSON.stringify({ displayName: displayName || "Forge user" }),
+          body: JSON.stringify({ displayName: displayName || "Suplex user" }),
         },
       );
       setInviteToken(result.token);

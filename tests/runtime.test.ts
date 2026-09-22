@@ -5,7 +5,7 @@ import { expect, test } from "vitest";
 
 import { createTestConfig } from "../src/platform/config.js";
 import type { OwnedProcess, ProcessController, ProcessInspection } from "../src/platform/process-manager.js";
-import { forgeProcessArguments, healthProbeAddress, readinessProbePath, reconcileExistingRegistry, supervisorEntryPath, type RuntimeReconciliationController } from "../src/platform/runtime.js";
+import { suplexProcessArguments, healthProbeAddress, readinessProbePath, reconcileExistingRegistry, supervisorEntryPath, type RuntimeReconciliationController } from "../src/platform/runtime.js";
 
 function ownedProcess(name: "worker" | "server", pid: number): OwnedProcess {
   return {
@@ -53,11 +53,11 @@ test("the supervisor entry follows the running module rather than the working di
 });
 
 test("the stable runtime launches the dependency-free supervisor directly", () => {
-  expect(forgeProcessArguments("src/platform/updates/supervisor.ts")).toEqual(["src/platform/updates/supervisor.ts"]);
+  expect(suplexProcessArguments("src/platform/updates/supervisor.ts")).toEqual(["src/platform/updates/supervisor.ts"]);
 });
 
 test("probes the local backend when Tailscale Serve owns HTTPS", () => {
-  const config = createTestConfig("/tmp/forge-runtime-test", {
+  const config = createTestConfig("/tmp/suplex-runtime-test", {
     tailscaleExposure: "serve",
     bindAddress: "127.0.0.1",
     reachableAddress: "https://pro2.tail1234.ts.net:4111",
@@ -67,14 +67,14 @@ test("probes the local backend when Tailscale Serve owns HTTPS", () => {
 });
 
 test("probes the configured address for direct Tailscale HTTP", () => {
-  const config = createTestConfig("/tmp/forge-runtime-test", {
+  const config = createTestConfig("/tmp/suplex-runtime-test", {
     reachableAddress: "http://100.87.170.105:4111",
   });
 
   expect(healthProbeAddress(config)).toBe("http://100.87.170.105:4111");
 });
 
-test("a registry is current when the single Forge server is live", async () => {
+test("a registry is current when the single Suplex server is live", async () => {
   const server = ownedProcess("server", 4102);
   const livePids = new Set([server.pid]);
   const signalled: number[] = [];
@@ -89,7 +89,7 @@ test("a registry is current when the single Forge server is live", async () => {
     },
   });
 
-  await expect(reconcileExistingRegistry({ version: 1, processes: [server] }, createTestConfig("/tmp/forge-runtime-test"), controller)).resolves.toBe(true);
+  await expect(reconcileExistingRegistry({ version: 1, processes: [server] }, createTestConfig("/tmp/suplex-runtime-test"), controller)).resolves.toBe(true);
   expect(signalled).toEqual([]);
 });
 
@@ -107,7 +107,7 @@ test("reconciliation ignores a reused PID when the recorded identity is complete
 
   await expect(reconcileExistingRegistry(
     { version: 1, processes: [worker] },
-    createTestConfig("/tmp/forge-runtime-test", { tailscaleExposure: "direct" }),
+    createTestConfig("/tmp/suplex-runtime-test", { tailscaleExposure: "direct" }),
     controller,
   )).resolves.toBe(false);
 });
@@ -121,7 +121,7 @@ test("reconciliation blocks replacement startup when a matching recorded process
     async signal() {},
   });
 
-  await expect(reconcileExistingRegistry({ version: 1, processes: [worker] }, createTestConfig("/tmp/forge-runtime-test"), controller))
+  await expect(reconcileExistingRegistry({ version: 1, processes: [worker] }, createTestConfig("/tmp/suplex-runtime-test"), controller))
     .rejects.toThrow(/could not prove.*stopped/i);
 });
 
@@ -140,7 +140,7 @@ test("reconciliation refuses a live legacy process record without exact ownershi
     },
   });
 
-  await expect(reconcileExistingRegistry({ version: 1, processes: [legacyWorker] }, createTestConfig("/tmp/forge-runtime-test"), controller))
+  await expect(reconcileExistingRegistry({ version: 1, processes: [legacyWorker] }, createTestConfig("/tmp/suplex-runtime-test"), controller))
     .rejects.toThrow(/ownership is ambiguous/i);
 });
 
@@ -159,7 +159,7 @@ test("reconciliation blocks replacement startup when Tailscale Serve remains con
       disableCalls += 1;
     },
   });
-  const config = createTestConfig("/tmp/forge-runtime-test", { tailscaleExposure: "serve", bindAddress: "127.0.0.1", reachableAddress: "https://pro2.tail1234.ts.net:4111" });
+  const config = createTestConfig("/tmp/suplex-runtime-test", { tailscaleExposure: "serve", bindAddress: "127.0.0.1", reachableAddress: "https://pro2.tail1234.ts.net:4111" });
 
   await expect(reconcileExistingRegistry({
     version: 1,

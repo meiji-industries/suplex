@@ -1,3 +1,3 @@
-DROP TABLE `forge_projection_integrity_findings`;
+DROP TABLE `suplex_projection_integrity_findings`;
 --> statement-breakpoint
-DROP TABLE `forge_projection_invalidations`;
+DROP TABLE `suplex_projection_invalidations`;

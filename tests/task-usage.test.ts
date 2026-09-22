@@ -12,7 +12,7 @@ const tokens = { input: 10, output: 20, reasoning: 30, cache: { read: 40, write:
 function message(completed = true, parts: unknown[] = [], cost = 3, providerID = "openai", modelID = "model", sessionID = "ses", messageID = "msg") {
   return OpenCodeMessageEnvelopeSchema.parse({ info: {
     id: messageID, sessionID, role: "assistant", time: { created: 100, ...(completed ? { completed: 200 } : {}) },
-    parentID: "msg_user", modelID, providerID, mode: "primary", agent: "forge-root",
+    parentID: "msg_user", modelID, providerID, mode: "primary", agent: "suplex-root",
     path: { cwd: "/repo", root: "/repo" }, cost, tokens,
   }, parts });
 }
@@ -183,7 +183,7 @@ test("collector keeps missing OpenCode history stale without repeating warnings 
     expect(warnings).toEqual([]);
 
     const retryableAt = new Date(Date.now() - 300_001).toISOString();
-    value.database.authQuery(db => db.prepare("UPDATE forge_task_analytics_sessions SET error_at = ? WHERE session_id = ?").run(retryableAt, root.id));
+    value.database.authQuery(db => db.prepare("UPDATE suplex_task_analytics_sessions SET error_at = ? WHERE session_id = ?").run(retryableAt, root.id));
     await collector.collect();
     expect(reads).toBe(2);
     expect(warnings).toEqual([]);
@@ -192,7 +192,7 @@ test("collector keeps missing OpenCode history stale without repeating warnings 
       sessions: [{ observedAt, errorAt: expect.any(String) }],
     });
 
-    value.database.authQuery(db => db.prepare("UPDATE forge_task_analytics_sessions SET error_at = ? WHERE session_id = ?").run(retryableAt, root.id));
+    value.database.authQuery(db => db.prepare("UPDATE suplex_task_analytics_sessions SET error_at = ? WHERE session_id = ?").run(retryableAt, root.id));
     available = true;
     await collector.collect();
     expect(reads).toBe(3);
@@ -271,7 +271,7 @@ test("collector failure and broken analytics storage cannot prevent task deliver
     expect(errors).toHaveLength(1);
     expect(store.read(task.id).sessions[0]?.errorAt).not.toBeNull();
     expect(controls.get(task.id).status).toBe("active");
-    value.database.authQuery(db => db.exec("DROP TABLE forge_task_analytics_events"));
+    value.database.authQuery(db => db.exec("DROP TABLE suplex_task_analytics_events"));
     expect(controls.markDelivered(task.id).status).toBe("delivered");
     await collector.stop();
   } finally { await value.close(); }
@@ -319,15 +319,15 @@ test("durable usage replaces partial observations and survives archive", async (
   try {
     const { task } = await value.tasks.createTask(value.userId, value.company.id, { projectId: value.project.id, title: "Usage", description: "Usage", startImmediately: false, idempotencyKey: "usage-test" });
     const store = new TaskAnalyticsStore(value.database);
-    store.record(task.id, "forge_session", taskUsage([message(false)], "root"));
-    store.record(task.id, "forge_session", taskUsage([message()], "root"));
-    store.record(task.id, "forge_session", taskUsage([message()], "root"));
+    store.record(task.id, "suplex_session", taskUsage([message(false)], "root"));
+    store.record(task.id, "suplex_session", taskUsage([message()], "root"));
+    store.record(task.id, "suplex_session", taskUsage([message()], "root"));
     store.observe(task, "2026-09-01T00:00:00.000Z");
     store.observe(task, "2026-09-02T00:00:00.000Z");
     expect(store.read(task.id).usage).toHaveLength(1);
     expect(store.read(task.id).usage[0]).toMatchObject({ cost: 3, completedAt: 200 });
     expect(store.read(task.id).events).toHaveLength(1);
-    store.failed(task.id, "forge_session");
+    store.failed(task.id, "suplex_session");
     expect(store.read(task.id).usage).toHaveLength(1);
     await value.tasks.archiveTask(value.userId, task.id);
     expect(new TaskAnalyticsStore(value.database).read(task.id).usage).toHaveLength(1);

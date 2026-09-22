@@ -1,15 +1,15 @@
 import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { z } from "zod";
-import type { ForgeConfig } from "../config.js";
-import type { ForgeDatabase } from "../database.js";
+import type { SuplexConfig } from "../config.js";
+import type { SuplexDatabase } from "../database.js";
 import { TaskControlStore } from "../../coordination/root-session-store.js";
 import { nativeSessionReader } from "../../runtimes/task-harness-registry.js";
 
-export async function inspectTask(config: ForgeConfig, database: ForgeDatabase, taskId: string, includeAllHistory = false) {
+export async function inspectTask(config: SuplexConfig, database: SuplexDatabase, taskId: string, includeAllHistory = false) {
   const store = new TaskControlStore(database);
   const control = store.get(taskId);
-  const metadata = database.authQuery(db => z.object({ title: z.string() }).parse(db.prepare("SELECT title FROM forge_tasks WHERE id = ?").get(taskId)));
+  const metadata = database.authQuery(db => z.object({ title: z.string() }).parse(db.prepare("SELECT title FROM suplex_tasks WHERE id = ?").get(taskId)));
   const sessions = await Promise.all(store.sessions(taskId).map(async session => {
     try {
       if (!session.nativeSessionId) return { session, native: null };
@@ -37,7 +37,7 @@ export function formatTaskDiagnostic(value: TaskDiagnostic): string {
   ].join("\n");
 }
 
-export async function writeTaskBundle(config: ForgeConfig, database: ForgeDatabase, taskId: string): Promise<string> {
+export async function writeTaskBundle(config: SuplexConfig, database: SuplexDatabase, taskId: string): Promise<string> {
   const diagnostic = await inspectTask(config, database, taskId, true);
   const directory = join(config.dataRoot, "bundles");
   await mkdir(directory, { recursive: true, mode: 0o700 });

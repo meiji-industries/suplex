@@ -1,7 +1,7 @@
 import { rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, expect, test } from "vitest";
-import { ForgeDatabase } from "../src/platform/database.js";
+import { SuplexDatabase } from "../src/platform/database.js";
 import { DELIVERY_WAIT_NEXT, DeliveryOperations, type DeliveryGithubPort } from "../src/delivery/operations.js";
 import { createGithubReleasePort, GithubReleaseFailure, type GithubCommandRunner } from "../src/integrations/github/delivery.js";
 import { RootController } from "../src/coordination/root-controller.js";
@@ -331,7 +331,7 @@ test("D5: a reopened store with stale observations merges and completes without 
   const oldBase = f.github.baseSha;
   await advanceMain(f, "reopened-advance");
   f.github.baseSha = oldBase;
-  const reopened = new ForgeDatabase(join(f.directory, "forge.sqlite"), { migrate: false });
+  const reopened = new SuplexDatabase(join(f.directory, "suplex.sqlite"), { migrate: false });
   try {
     const store = new TaskControlStore(reopened, f.alive);
     const controller = new RootController(store, f.harness, new DeliveryOperations(store, f.port), undefined, { root: join(f.directory, "evidence") }, f.reader);
@@ -419,7 +419,7 @@ test("D4: two observers of one persisted wait produce one continuation, and canc
   await f.drainRoot();
   const original = f.store.get("task").workflowState.deliveryWait!;
   const barrier = () => { let release!: () => void; const gate = new Promise<void>(resolve => { release = resolve; }); let arrived = 0; let opened!: () => void; const both = new Promise<void>(resolve => { opened = resolve; }); return { gate, release, arrive: () => { arrived += 1; if (arrived === 2) opened(); }, both }; };
-  const race = async (database: ForgeDatabase, mutate: (() => void) | null) => {
+  const race = async (database: SuplexDatabase, mutate: (() => void) | null) => {
     const b = barrier();
     const gatedPort = (): DeliveryGithubPort => ({ ...f.port, observePullRequest: async input => { b.arrive(); await b.gate; return f.port.observePullRequest(input); } });
     const one = new DeliveryOperations(new TaskControlStore(database, f.alive), gatedPort());
@@ -441,7 +441,7 @@ test("D4: two observers of one persisted wait produce one continuation, and canc
   f.github.checks = pending; f.github.mergeStateStatus = "UNKNOWN";
   await f.request("merge_pull_request");
   await f.drainRoot();
-  const reopened = new ForgeDatabase(join(f.directory, "forge.sqlite"), { migrate: false });
+  const reopened = new SuplexDatabase(join(f.directory, "suplex.sqlite"), { migrate: false });
   try {
     f.github.checks = successful; f.github.mergeStateStatus = "CLEAN";
     turnsBefore = f.rootTurns().length;
@@ -476,7 +476,7 @@ test("D4: two observers of one persisted wait produce one continuation, and canc
 
 // Final delivery guards (docs/plans/workflows-final-delivery-guards.md): every completion and publication revalidates after its last await.
 type Port = Fixture["port"];
-/** Runs `during` once, inside the awaited remote observation of `branch`, after the provider answered and before Forge uses the answer. */
+/** Runs `during` once, inside the awaited remote observation of `branch`, after the provider answered and before Suplex uses the answer. */
 function duringBranchHead(f: Fixture, branch: string, during: () => Promise<void> | void): { fired: () => boolean; restore: () => void } {
   const original = f.port.getBranchHead;
   let fired = false;
@@ -587,7 +587,7 @@ test("F1d/F1e/F1f: local completion revalidates the source after its base observ
 test("F1g: a delegate reserved or a review replaced from a second connection after the final local inspection is seen by the completion transaction", { timeout: 90_000 }, async () => {
   const f = await fixture("independent_review");
   await approveAndAccept(f);
-  const second = new ForgeDatabase(join(f.directory, "forge.sqlite"), { migrate: false });
+  const second = new SuplexDatabase(join(f.directory, "suplex.sqlite"), { migrate: false });
   try {
     const store = new TaskControlStore(second, f.alive);
     const root = f.identity();
@@ -600,7 +600,7 @@ test("F1g: a delegate reserved or a review replaced from a second connection aft
 
   const g = await fixture("independent_review");
   await approveAndAccept(g);
-  const other = new ForgeDatabase(join(g.directory, "forge.sqlite"), { migrate: false });
+  const other = new SuplexDatabase(join(g.directory, "suplex.sqlite"), { migrate: false });
   try {
     const store = new TaskControlStore(other, g.alive);
     const controller = new RootController(store, g.harness, new DeliveryOperations(store, g.port), undefined, { root: join(g.directory, "evidence") }, g.reader);

@@ -7,7 +7,7 @@ import { expect, test } from "vitest";
 import { AuthService, type WebAuthnAdapter } from "../src/identity/auth.js";
 import { createApp } from "../src/app.js";
 import { createTestConfig } from "../src/platform/config.js";
-import { ForgeDatabase } from "../src/platform/database.js";
+import { SuplexDatabase } from "../src/platform/database.js";
 import { SESSION_COOKIE_NAME } from "../src/identity/auth-identifiers.js";
 
 function fakeWebAuthn(): WebAuthnAdapter {
@@ -16,7 +16,7 @@ function fakeWebAuthn(): WebAuthnAdapter {
     async generateRegistrationOptions(input) {
       sequence += 1;
       return {
-        rp: { name: "Forge", id: input.rpId },
+        rp: { name: "Suplex", id: input.rpId },
         user: { id: input.userId, name: input.userName, displayName: input.displayName },
         challenge: Buffer.from(`registration-${sequence}`).toString("base64url"),
         pubKeyCredParams: [{ type: "public-key", alg: -7 }],
@@ -64,7 +64,7 @@ interface RoutePolicy {
   memberFailureStatus?: number;
 }
 
-const reachableAddress = "https://forge.tailnet.ts.net:4111";
+const reachableAddress = "https://suplex.tailnet.ts.net:4111";
 
 const policies: RoutePolicy[] = [
   { method: "GET", path: "/", kind: "read", allowed: ["anonymous", "admin", "member"], scope: "none", successStatus: 302, authenticatedSuccessStatus: 302 },
@@ -110,11 +110,11 @@ function expandBody(body: Record<string, unknown> | undefined, companyId: string
 }
 
 async function makeFixture(overrides: Parameters<typeof createTestConfig>[1] = {}) {
-  const root = await mkdtemp(join(tmpdir(), "forge-auth-routes-test-"));
-  const database = new ForgeDatabase(join(root, "forge.sqlite"));
+  const root = await mkdtemp(join(tmpdir(), "suplex-auth-routes-test-"));
+  const database = new SuplexDatabase(join(root, "suplex.sqlite"));
   const config = createTestConfig(root, { reachableAddress, ...overrides });
   const auth = new AuthService(database, config, { webAuthn: fakeWebAuthn() });
-  const app = createApp({ config, auth, health, getHealth: async () => ({ generatedAt: new Date().toISOString(), reachableAddress: config.reachableAddress, ready: true, checks: [] }), readUpdate: async () => ({ status: { kind: "available" }, canRestart: true }), requestUpdateRestart: async () => ({ accepted: true, status: { kind: "applying", step: "fetch", message: "Forge checks the update." } }) });
+  const app = createApp({ config, auth, health, getHealth: async () => ({ generatedAt: new Date().toISOString(), reachableAddress: config.reachableAddress, ready: true, checks: [] }), readUpdate: async () => ({ status: { kind: "available" }, canRestart: true }), requestUpdateRestart: async () => ({ accepted: true, status: { kind: "applying", step: "fetch", message: "Suplex checks the update." } }) });
   return { root, database, config, auth, app };
 }
 
@@ -255,11 +255,11 @@ test("the tailnet is the login boundary: loopback or a tailnet identity signs in
 });
 
 test("direct Tailscale mode trusts requests addressed to the Tailscale host", async () => {
-  const fixture = await makeFixture({ tailscaleExposure: "direct", bindAddress: "100.64.0.1", reachableAddress: "https://forge.tailnet.ts.net:4111" });
+  const fixture = await makeFixture({ tailscaleExposure: "direct", bindAddress: "100.64.0.1", reachableAddress: "https://suplex.tailnet.ts.net:4111" });
   try {
-    const addressed = await fixture.app.inject({ method: "GET", url: "/api/auth/me", headers: { host: "forge.tailnet.ts.net:4111" } });
+    const addressed = await fixture.app.inject({ method: "GET", url: "/api/auth/me", headers: { host: "suplex.tailnet.ts.net:4111" } });
     expect(addressed.statusCode).toBe(200);
-    const elsewhere = await fixture.app.inject({ method: "GET", url: "/api/auth/me", headers: { host: "forge.example.com:4111" } });
+    const elsewhere = await fixture.app.inject({ method: "GET", url: "/api/auth/me", headers: { host: "suplex.example.com:4111" } });
     expect(elsewhere.statusCode).toBe(401);
   } finally {
     await closeFixture(fixture);

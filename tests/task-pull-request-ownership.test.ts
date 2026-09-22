@@ -8,7 +8,7 @@ test("starts a branch-source backlog task without claiming a pull request", asyn
   const f = await nativeApp();
   try {
     const { task } = await f.tasks.createTask(f.userId, f.company.id, { projectId: f.project.id, title: "Branch", description: "Branch", startImmediately: false, idempotencyKey: "branch-source-owner" });
-    f.database.authQuery(db => db.prepare("UPDATE forge_tasks SET configuration_json = json_set(configuration_json, '$.source', json(?)) WHERE id = ?").run(JSON.stringify({ kind: "branch", branch: "feature" }), task.id));
+    f.database.authQuery(db => db.prepare("UPDATE suplex_tasks SET configuration_json = json_set(configuration_json, '$.source', json(?)) WHERE id = ?").run(JSON.stringify({ kind: "branch", branch: "feature" }), task.id));
     expect(f.tasks.startTask(f.userId, task.id)).toMatchObject({ status: "active" });
   } finally { await f.close(); }
 });
@@ -18,9 +18,9 @@ test("recognizes ownership across persisted repository aliases with one immutabl
   try {
     const workflow = f.workflows.create(f.userId, { name: "Alias", description: "", engine: "standard", deliveryTarget: "pull_request_draft" });
     const rule = await f.githubTriggers.create(f.userId, f.company.id, { projectId: f.project.id, name: "Old", label: "ready", workflowId: workflow.id, deliveryTarget: "pull_request_draft", protectedPaths: [] });
-    f.database.authQuery(db => { db.prepare("UPDATE forge_github_trigger_rules SET repository_name = 'old/repo' WHERE id = ?").run(rule.id); db.prepare("INSERT INTO forge_github_trigger_rules (id, company_id, project_id, name, label, workflow_id, delivery_target, protected_paths_json, repository_id, repository_name, authority_user_id, enabled, archived_at, revision, last_successful_check_at, next_retry_at, latest_error, failure_count, recent_activity_json, created_at, updated_at) SELECT 'github_trigger_alias', company_id, project_id, 'New', label, workflow_id, delivery_target, protected_paths_json, repository_id, 'new/repo', authority_user_id, 0, NULL, 1, NULL, NULL, NULL, 0, '[]', created_at, updated_at FROM forge_github_trigger_rules WHERE id = ?").run(rule.id); });
+    f.database.authQuery(db => { db.prepare("UPDATE suplex_github_trigger_rules SET repository_name = 'old/repo' WHERE id = ?").run(rule.id); db.prepare("INSERT INTO suplex_github_trigger_rules (id, company_id, project_id, name, label, workflow_id, delivery_target, protected_paths_json, repository_id, repository_name, authority_user_id, enabled, archived_at, revision, last_successful_check_at, next_retry_at, latest_error, failure_count, recent_activity_json, created_at, updated_at) SELECT 'github_trigger_alias', company_id, project_id, 'New', label, workflow_id, delivery_target, protected_paths_json, repository_id, 'new/repo', authority_user_id, 0, NULL, 1, NULL, NULL, NULL, 0, '[]', created_at, updated_at FROM suplex_github_trigger_rules WHERE id = ?").run(rule.id); });
     const { task } = await f.tasks.createTask(f.userId, f.company.id, { projectId: f.project.id, title: "Owner", description: "Owner", startImmediately: false, idempotencyKey: "alias-owner" });
-    f.database.authQuery(db => { db.prepare("UPDATE forge_tasks SET configuration_json = json_set(configuration_json, '$.repository', 'old/repo', '$.source', json(?)) WHERE id = ?").run(JSON.stringify({ kind: "pull_request", number: 7 }), task.id); db.prepare("UPDATE forge_task_controls SET status = 'active', delivery_intent_json = ? WHERE task_id = ?").run(JSON.stringify({ repository: "old/repo", headBranch: "feature", baseBranch: "main", baselineSha: "a".repeat(40), pullRequestNumber: 7 }), task.id); });
+    f.database.authQuery(db => { db.prepare("UPDATE suplex_tasks SET configuration_json = json_set(configuration_json, '$.repository', 'old/repo', '$.source', json(?)) WHERE id = ?").run(JSON.stringify({ kind: "pull_request", number: 7 }), task.id); db.prepare("UPDATE suplex_task_controls SET status = 'active', delivery_intent_json = ? WHERE task_id = ?").run(JSON.stringify({ repository: "old/repo", headBranch: "feature", baseBranch: "main", baselineSha: "a".repeat(40), pullRequestNumber: 7 }), task.id); });
     expect(f.database.authQuery(db => hasPullRequestOwner(db, { repository: "new/repo", number: 7 }))).toBe(true);
     expect(f.database.authQuery(db => hasPullRequestOwner(db, { repository: "other/repo", number: 7 }))).toBe(false);
     expect(f.database.authQuery(db => hasPullRequestOwner(db, { taskId: task.id, repository: "new/repo", number: 7 }))).toBe(false);
@@ -43,7 +43,7 @@ test("serializes concurrent manual pull request admissions", async () => {
     const settled = await Promise.allSettled(pending);
     expect(settled.filter(result => result.status === "fulfilled")).toHaveLength(1);
     expect(settled.filter(result => result.status === "rejected")).toMatchObject([{ reason: { statusCode: 409 } }]);
-    expect(f.database.authQuery(db => db.prepare("SELECT count(*) AS count FROM forge_tasks").get() as { count: number }).count).toBe(1);
-    expect(f.database.authQuery(db => db.prepare("SELECT count(*) AS count FROM forge_task_controls").get() as { count: number }).count).toBe(1);
+    expect(f.database.authQuery(db => db.prepare("SELECT count(*) AS count FROM suplex_tasks").get() as { count: number }).count).toBe(1);
+    expect(f.database.authQuery(db => db.prepare("SELECT count(*) AS count FROM suplex_task_controls").get() as { count: number }).count).toBe(1);
   } finally { await f.close(); }
 });

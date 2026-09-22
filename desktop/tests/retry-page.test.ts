@@ -3,16 +3,16 @@ import { expect, test, vi } from "vitest";
 
 vi.mock("electron", () => ({}));
 
-import { retryPage } from "../src/forge-desktop";
+import { retryPage } from "../src/suplex-desktop";
 
-const origin = "https://forge.tail1234.ts.net";
+const origin = "https://suplex.tail1234.ts.net";
 const html = (address = origin): string => decodeURIComponent(retryPage(address).slice("data:text/html,".length));
 
 function pageScript(clipboard?: { writeText: (text: string) => Promise<void> }, copyResult = true) {
   const source = html().match(/<script>([\s\S]*?)<\/script>/)?.[1];
   if (!source) throw new Error("Retry page script is missing");
   let click: (() => Promise<void>) | undefined;
-  const command = { textContent: "pnpm run forge start" };
+  const command = { textContent: "pnpm run suplex start" };
   const feedback = { textContent: "" };
   const copy = { textContent: "Copy", addEventListener: (_event: string, listener: () => Promise<void>) => { click = listener; } };
   const elements = new Map<string, unknown>([["command", command], ["copy", copy], ["copy-status", feedback], ["retry", { href: origin }]]);
@@ -36,19 +36,19 @@ function pageScript(clipboard?: { writeText: (text: string) => Promise<void> }, 
 
 test("retry page has the connection diagram, host command, internal retry, and external install guide", () => {
   expect(html()).toContain('<html lang="en">');
-  expect(html()).toContain('aria-label="This Forge window cannot reach the Forge host"');
+  expect(html()).toContain('aria-label="This Suplex window cannot reach the Suplex host"');
   expect(html()).toContain(`<small>${origin}</small>`);
   expect(html()).toContain(`id="retry" href="${origin}"`);
-  expect(html()).toContain('href="https://github.com/meiji-industries/forge#set-up-an-installation"');
-  expect(html()).toContain("pnpm run forge start");
-  expect(html()).toContain("Forge retries every 5 seconds.");
+  expect(html()).toContain('href="https://github.com/meiji-industries/suplex#set-up-an-installation"');
+  expect(html()).toContain("pnpm run suplex start");
+  expect(html()).toContain("Suplex retries every 5 seconds.");
   expect(html()).toContain("-webkit-app-region: no-drag");
   expect(html()).not.toMatch(/(?:href|src)="file:/);
 });
 
 test("addresses cannot inject HTML, attributes, or an inline script", () => {
-  const address = 'https://forge.example/"\'><img src=x onerror=alert(1)>&</script><script>alert(2)</script>';
-  const escaped = "https://forge.example/&quot;&#39;&gt;&lt;img src=x onerror=alert(1)&gt;&amp;&lt;/script&gt;&lt;script&gt;alert(2)&lt;/script&gt;";
+  const address = 'https://suplex.example/"\'><img src=x onerror=alert(1)>&</script><script>alert(2)</script>';
+  const escaped = "https://suplex.example/&quot;&#39;&gt;&lt;img src=x onerror=alert(1)&gt;&amp;&lt;/script&gt;&lt;script&gt;alert(2)&lt;/script&gt;";
   expect(html(address)).toContain(`<small>${escaped}</small>`);
   expect(html(address)).toContain(`id="retry" href="${escaped}"`);
   expect(html(address).match(/<script>/g)).toHaveLength(1);
@@ -71,7 +71,7 @@ test("Copy reports success only after the clipboard write and resets after 1.5 s
   const writeText = vi.fn(() => write);
   const page = pageScript({ writeText });
   const pending = page.click();
-  expect(writeText).toHaveBeenCalledWith("pnpm run forge start");
+  expect(writeText).toHaveBeenCalledWith("pnpm run suplex start");
   expect(page.copy.textContent).toBe("Copy");
   expect(page.feedback.textContent).toBe("");
   if (!finishWrite) throw new Error("Clipboard write is missing");

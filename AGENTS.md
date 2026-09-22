@@ -1,10 +1,10 @@
-# Forge agent guidance
+# Suplex agent guidance
 
 ## No mirror gates
 
 Never make a user action depend on a local copy of external state agreeing
 with its source. Observe the authoritative system when deciding whether to
-act. Forge owns task intent and authorization; native runtimes own execution
+act. Suplex owns task intent and authorization; native runtimes own execution
 evidence; Git and GitHub own repository and delivery facts. Pane IDs, display
 tokens, cached statuses, and progress receipts are observations, not authority.
 
@@ -48,7 +48,7 @@ For the local Herdr workflow and helper scripts, read `HERDR.md`.
 
 ## Product UI
 
-Forge is a dense productivity application. Its interaction and information
+Suplex is a dense productivity application. Its interaction and information
 design should take cues from Linear and Paperclip, not from marketing sites.
 
 Before implementing or modifying UI, read:
@@ -105,7 +105,7 @@ cancelling, and archiving tasks.
 
 ## Dev workflow
 
-`mise run dev` runs the Forge API and task host as one foreground
+`mise run dev` runs the Suplex API and task host as one foreground
 command; Vite is embedded in Fastify. Frontend changes use Vite HMR and React
 Fast Refresh. Backend changes do NOT hot-reload under `mise run dev` — Ctrl-C
 and rerun it (this keeps native OpenCode sessions intact while `src/` is being
@@ -151,7 +151,7 @@ Public discovery artifacts, the paired-agent runtime, and the operator handoff:
 
 ### Issue tracker
 
-GitHub Issues on `meiji-industries/forge` via the `gh` CLI. See `docs/agents/issue-tracker.md`.
+GitHub Issues on `meiji-industries/suplex` via the `gh` CLI. See `docs/agents/issue-tracker.md`.
 
 ### Triage labels
 

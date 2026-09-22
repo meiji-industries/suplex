@@ -8,7 +8,7 @@ import { expect, test } from "vitest";
 
 import { AuthService, productionWebAuthnAdapter, type WebAuthnAdapter } from "../src/identity/auth.js";
 import { createTestConfig } from "../src/platform/config.js";
-import { ForgeDatabase } from "../src/platform/database.js";
+import { SuplexDatabase } from "../src/platform/database.js";
 import { createTestDatabase } from "./helpers/test-database.js";
 
 function fakeWebAuthn(): WebAuthnAdapter {
@@ -17,7 +17,7 @@ function fakeWebAuthn(): WebAuthnAdapter {
     async generateRegistrationOptions(input) {
       challengeNumber += 1;
       return {
-        rp: { name: "Forge", id: input.rpId },
+        rp: { name: "Suplex", id: input.rpId },
         user: { id: input.userId, name: input.userName, displayName: input.displayName },
         challenge: Buffer.from(`registration-${challengeNumber}`).toString("base64url"),
         pubKeyCredParams: [{ type: "public-key", alg: -7 }],
@@ -41,11 +41,11 @@ function fakeWebAuthn(): WebAuthnAdapter {
   };
 }
 
-async function fixture(): Promise<{ root: string; filename: string; database: ForgeDatabase; auth: AuthService }> {
-  const root = await mkdtemp(join(tmpdir(), "forge-auth-test-"));
-  const filename = join(root, "forge.sqlite");
+async function fixture(): Promise<{ root: string; filename: string; database: SuplexDatabase; auth: AuthService }> {
+  const root = await mkdtemp(join(tmpdir(), "suplex-auth-test-"));
+  const filename = join(root, "suplex.sqlite");
   const database = createTestDatabase(filename);
-  const auth = new AuthService(database, createTestConfig(root, { reachableAddress: "https://forge.tailnet.ts.net:4111" }), { webAuthn: fakeWebAuthn() });
+  const auth = new AuthService(database, createTestConfig(root, { reachableAddress: "https://suplex.tailnet.ts.net:4111" }), { webAuthn: fakeWebAuthn() });
   return { root, filename, database, auth };
 }
 
@@ -68,8 +68,8 @@ test("bootstrap invitations are hashed, replaceable, single-use, and expire with
   const value = await fixture();
   let now = new Date("2026-08-11T00:00:00.000Z");
   value.database.close();
-  const database = new ForgeDatabase(value.filename);
-  const auth = new AuthService(database, createTestConfig(value.root, { reachableAddress: "https://forge.tailnet.ts.net:4111" }), { webAuthn: fakeWebAuthn(), now: () => now });
+  const database = new SuplexDatabase(value.filename);
+  const auth = new AuthService(database, createTestConfig(value.root, { reachableAddress: "https://suplex.tailnet.ts.net:4111" }), { webAuthn: fakeWebAuthn(), now: () => now });
   try {
     const first = auth.ensureBootstrapInvitation();
     expect(first).toBeDefined();
@@ -78,7 +78,7 @@ test("bootstrap invitations are hashed, replaceable, single-use, and expire with
     await expect(auth.beginBootstrapRegistration(first!.token)).rejects.toMatchObject({ publicMessage: "Invitation is invalid or expired" });
 
     const raw = new Database(value.filename);
-    const invitations = raw.prepare("SELECT token_hash, consumed_at, replaced_at FROM forge_invitations ORDER BY created_at").all() as Array<{ token_hash: string; consumed_at: string | null; replaced_at: string | null }>;
+    const invitations = raw.prepare("SELECT token_hash, consumed_at, replaced_at FROM suplex_invitations ORDER BY created_at").all() as Array<{ token_hash: string; consumed_at: string | null; replaced_at: string | null }>;
     expect(invitations).toHaveLength(2);
     expect(JSON.stringify(invitations)).not.toContain(second!.token);
     expect(invitations[0]?.replaced_at).toBeTruthy();
@@ -88,7 +88,7 @@ test("bootstrap invitations are hashed, replaceable, single-use, and expire with
     expect(enrollment.user.role).toBe("admin");
     await expect(enrollBootstrap(auth, second!.token, "replayed")).rejects.toMatchObject({ publicMessage: "Invitation is invalid or expired" });
 
-    const malformed = "forge_bootstrap_not-a-token";
+    const malformed = "suplex_bootstrap_not-a-token";
     await expect(auth.beginBootstrapRegistration(malformed)).rejects.toMatchObject({ publicMessage: "Invitation is invalid or expired" });
 
     now = new Date("2026-08-11T00:00:00.000Z");
@@ -114,7 +114,7 @@ test("passkey authentication creates a hashed session and sign-out revokes it", 
     expect(signedIn.user.id).toBe(enrollment.user.id);
     expect(await value.auth.getUserBySession(signedIn.sessionToken)).toMatchObject({ id: enrollment.user.id, role: "admin" });
     const raw = new Database(value.filename);
-    const sessions = raw.prepare("SELECT token_hash FROM forge_sessions").all() as Array<{ token_hash: string }>;
+    const sessions = raw.prepare("SELECT token_hash FROM suplex_sessions").all() as Array<{ token_hash: string }>;
     expect(JSON.stringify(sessions)).not.toContain(signedIn.sessionToken);
     raw.close();
     value.auth.signOut(signedIn.sessionToken);
@@ -126,7 +126,7 @@ test("passkey authentication creates a hashed session and sign-out revokes it", 
 
 test("the production WebAuthn adapter rejects an incomplete ceremony instead of accepting it", async () => {
   const value = await fixture();
-  const productionAuth = new AuthService(value.database, createTestConfig(value.root, { reachableAddress: "https://forge.tailnet.ts.net:4111" }), { webAuthn: productionWebAuthnAdapter });
+  const productionAuth = new AuthService(value.database, createTestConfig(value.root, { reachableAddress: "https://suplex.tailnet.ts.net:4111" }), { webAuthn: productionWebAuthnAdapter });
   try {
     const invitation = productionAuth.ensureBootstrapInvitation()!;
     const options = await productionAuth.beginBootstrapRegistration(invitation.token);
@@ -140,7 +140,7 @@ test("the production WebAuthn adapter rejects an incomplete ceremony instead of 
 test("non-local HTTP exposure cannot start passkey authentication", async () => {
   const value = await fixture();
   try {
-    expect(() => new AuthService(value.database, createTestConfig(value.root, { reachableAddress: "http://forge.tailnet.ts.net:4111" }))).toThrow("requires an HTTPS reachable address");
+    expect(() => new AuthService(value.database, createTestConfig(value.root, { reachableAddress: "http://suplex.tailnet.ts.net:4111" }))).toThrow("requires an HTTPS reachable address");
   } finally {
     await closeFixture(value);
   }
@@ -202,15 +202,15 @@ test("legacy sessions roll over in place without creating a second active sessio
     const admin = await enrollBootstrap(value.auth, invitation.token);
     const legacyToken = "legacy-session-secret";
     const now = new Date().toISOString();
-    const sessionsBeforeLegacyInsert = value.database.authQuery((db) => db.prepare("SELECT COUNT(*) AS count FROM forge_sessions WHERE user_id = ?").get(admin.user.id));
-    value.database.authQuery((db) => db.prepare("INSERT INTO forge_sessions (id, token_hash, user_id, expires_at, created_at, revoked_at, token_version) VALUES (?, ?, ?, ?, ?, NULL, 0)").run("legacy-session", createHash("sha256").update(legacyToken).digest("hex"), admin.user.id, new Date(Date.now() + 86_400_000).toISOString(), now));
+    const sessionsBeforeLegacyInsert = value.database.authQuery((db) => db.prepare("SELECT COUNT(*) AS count FROM suplex_sessions WHERE user_id = ?").get(admin.user.id));
+    value.database.authQuery((db) => db.prepare("INSERT INTO suplex_sessions (id, token_hash, user_id, expires_at, created_at, revoked_at, token_version) VALUES (?, ?, ?, ?, ?, NULL, 0)").run("legacy-session", createHash("sha256").update(legacyToken).digest("hex"), admin.user.id, new Date(Date.now() + 86_400_000).toISOString(), now));
 
     const replacement = value.auth.rolloverLegacySession(legacyToken);
     expect(replacement).toMatch(/^session_v1_/);
     expect(await value.auth.getUserBySession(legacyToken)).toMatchObject({ id: admin.user.id });
     expect(await value.auth.getUserBySession(replacement!)).toMatchObject({ id: admin.user.id });
-    expect(value.database.authQuery((db) => db.prepare("SELECT COUNT(*) AS count FROM forge_sessions WHERE user_id = ?").get(admin.user.id))).toEqual({ count: (sessionsBeforeLegacyInsert as { count: number }).count + 1 });
-    expect(value.database.authQuery((db) => db.prepare("SELECT token_version FROM forge_sessions WHERE id = 'legacy-session'").get())).toEqual({ token_version: 1 });
+    expect(value.database.authQuery((db) => db.prepare("SELECT COUNT(*) AS count FROM suplex_sessions WHERE user_id = ?").get(admin.user.id))).toEqual({ count: (sessionsBeforeLegacyInsert as { count: number }).count + 1 });
+    expect(value.database.authQuery((db) => db.prepare("SELECT token_version FROM suplex_sessions WHERE id = 'legacy-session'").get())).toEqual({ token_version: 1 });
   } finally {
     await closeFixture(value);
   }
@@ -219,10 +219,10 @@ test("legacy sessions roll over in place without creating a second active sessio
 test("legacy product-named usernames are normalized before they cross the auth boundary", async () => {
   const value = await fixture();
   try {
-    value.database.authQuery((db) => db.prepare("INSERT INTO forge_users (id, display_name, username, role, status, created_at, updated_at, identity_version) VALUES ('legacy-user', 'Legacy user', 'legacy@forge.local', 'member', 'active', ?, ?, 0)").run(new Date().toISOString(), new Date().toISOString()));
-    const reopened = new AuthService(value.database, createTestConfig(value.root, { reachableAddress: "https://forge.tailnet.ts.net:4111" }), { webAuthn: fakeWebAuthn() });
+    value.database.authQuery((db) => db.prepare("INSERT INTO suplex_users (id, display_name, username, role, status, created_at, updated_at, identity_version) VALUES ('legacy-user', 'Legacy user', 'legacy@suplex.local', 'member', 'active', ?, ?, 0)").run(new Date().toISOString(), new Date().toISOString()));
+    const reopened = new AuthService(value.database, createTestConfig(value.root, { reachableAddress: "https://suplex.tailnet.ts.net:4111" }), { webAuthn: fakeWebAuthn() });
     expect(reopened.getUserForAuthority("legacy-user")?.username).toBe("user_v1_legacy-user");
-    expect(value.database.authQuery((db) => db.prepare("SELECT identity_version FROM forge_users WHERE id = 'legacy-user'").get())).toEqual({ identity_version: 1 });
+    expect(value.database.authQuery((db) => db.prepare("SELECT identity_version FROM suplex_users WHERE id = 'legacy-user'").get())).toEqual({ identity_version: 1 });
   } finally {
     await closeFixture(value);
   }

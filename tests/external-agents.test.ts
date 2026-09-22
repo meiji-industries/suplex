@@ -8,12 +8,12 @@ import { afterEach, beforeEach, expect, test } from "vitest";
 
 import { AuthService } from "../src/identity/auth.js";
 import { createTestConfig } from "../src/platform/config.js";
-import { ForgeDatabase } from "../src/platform/database.js";
+import { SuplexDatabase } from "../src/platform/database.js";
 import { ExternalAgentFailure, ExternalAgentService } from "../src/identity/external-agents.js";
 import { jsonRequired } from "../src/shared/json.js";
 
 let root: string;
-let database: ForgeDatabase;
+let database: SuplexDatabase;
 let auth: AuthService;
 let service: ExternalAgentService;
 let adminId: string;
@@ -21,24 +21,24 @@ let memberId: string;
 let companyId: string;
 
 beforeEach(async () => {
-  root = await mkdtemp(join(tmpdir(), "forge-externalAgent-agent-test-"));
+  root = await mkdtemp(join(tmpdir(), "suplex-externalAgent-agent-test-"));
   const config = createTestConfig(root, { developmentAutoLogin: true });
-  database = new ForgeDatabase(config.databasePath);
+  database = new SuplexDatabase(config.databasePath);
   auth = new AuthService(database, config);
   adminId = auth.ensureDevelopmentUser().id;
 
   const now = new Date().toISOString();
   memberId = "member_test_1";
   database.authTransaction((db) => {
-    db.prepare("INSERT INTO forge_users (id, display_name, username, role, status, created_at, updated_at, identity_version) VALUES (?, 'Member', 'member', 'member', 'active', ?, ?, 1)").run(memberId, now, now);
+    db.prepare("INSERT INTO suplex_users (id, display_name, username, role, status, created_at, updated_at, identity_version) VALUES (?, 'Member', 'member', 'member', 'active', ?, ?, 1)").run(memberId, now, now);
   });
 
   companyId = auth.createCompany(adminId, "ExternalAgent Company").id;
   database.authTransaction((db) => {
-    db.prepare("INSERT INTO forge_projects (id, company_id, name, repository_path, worktree_root, repository_identity, base_branch, setup_command, verification_command, created_at, updated_at) VALUES ('project_allowed', ?, 'Allowed', ?, ?, 'meiji/allowed', 'main', '', '', ?, ?)").run(companyId, join(root, "repo"), join(root, "worktrees"), now, now);
-    db.prepare("INSERT INTO forge_projects (id, company_id, name, repository_path, worktree_root, repository_identity, base_branch, setup_command, verification_command, created_at, updated_at) VALUES ('project_second', ?, 'Second', ?, ?, 'meiji/second', 'main', '', '', ?, ?)").run(companyId, join(root, "repo2"), join(root, "worktrees2"), now, now);
+    db.prepare("INSERT INTO suplex_projects (id, company_id, name, repository_path, worktree_root, repository_identity, base_branch, setup_command, verification_command, created_at, updated_at) VALUES ('project_allowed', ?, 'Allowed', ?, ?, 'meiji/allowed', 'main', '', '', ?, ?)").run(companyId, join(root, "repo"), join(root, "worktrees"), now, now);
+    db.prepare("INSERT INTO suplex_projects (id, company_id, name, repository_path, worktree_root, repository_identity, base_branch, setup_command, verification_command, created_at, updated_at) VALUES ('project_second', ?, 'Second', ?, ?, 'meiji/second', 'main', '', '', ?, ?)").run(companyId, join(root, "repo2"), join(root, "worktrees2"), now, now);
     const otherCompanyId = auth.createCompany(adminId, "Other Company").id;
-    db.prepare("INSERT INTO forge_projects (id, company_id, name, repository_path, worktree_root, repository_identity, base_branch, setup_command, verification_command, created_at, updated_at) VALUES ('project_other', ?, 'Other', ?, ?, 'meiji/other', 'main', '', '', ?, ?)").run(otherCompanyId, join(root, "other-repo"), join(root, "other-worktrees"), now, now);
+    db.prepare("INSERT INTO suplex_projects (id, company_id, name, repository_path, worktree_root, repository_identity, base_branch, setup_command, verification_command, created_at, updated_at) VALUES ('project_other', ?, 'Other', ?, ?, 'meiji/other', 'main', '', '', ?, ?)").run(otherCompanyId, join(root, "other-repo"), join(root, "other-worktrees"), now, now);
   });
   service = new ExternalAgentService(database, auth);
 });
@@ -48,11 +48,11 @@ afterEach(async () => {
   await rm(root, { recursive: true, force: true });
 });
 
-test("canonical forge_agents identity and one-to-one extension are created atomically", () => {
+test("canonical suplex_agents identity and one-to-one extension are created atomically", () => {
   const issued = service.create(adminId, { name: "ExternalAgent Unified", companyId, projectIds: ["project_allowed"] });
 
-  // Base agent in forge_agents
-  const baseAgent = database.authQuery((db) => db.prepare("SELECT * FROM forge_agents WHERE id = ?").get(issued.agent.id) as {
+  // Base agent in suplex_agents
+  const baseAgent = database.authQuery((db) => db.prepare("SELECT * FROM suplex_agents WHERE id = ?").get(issued.agent.id) as {
     id: string; name: string; avatar_seed: string;
   });
   expect(baseAgent).toMatchObject({
@@ -60,8 +60,8 @@ test("canonical forge_agents identity and one-to-one extension are created atomi
     name: "ExternalAgent Unified",
   });
 
-  // Extension row in forge_external_agents
-  const extAgent = database.authQuery((db) => db.prepare("SELECT * FROM forge_external_agents WHERE id = ?").get(issued.agent.id) as {
+  // Extension row in suplex_external_agents
+  const extAgent = database.authQuery((db) => db.prepare("SELECT * FROM suplex_external_agents WHERE id = ?").get(issued.agent.id) as {
     id: string; company_id: string; status: string;
   });
   expect(extAgent).toMatchObject({
@@ -86,10 +86,10 @@ test("pairs once, persists only hashes, authenticates, and audits with explicit 
   expect(() => service.exchange({ pairingCode: issued.pairingCode, profileId: "dev" })).toThrowError(ExternalAgentFailure);
 
   const dump = database.authQuery((db) => JSON.stringify({
-    agents: db.prepare("SELECT * FROM forge_external_agents").all(),
-    pairing: db.prepare("SELECT * FROM forge_external_agent_pairing_codes").all(),
-    credentials: db.prepare("SELECT * FROM forge_external_agent_credentials").all(),
-    audit: db.prepare("SELECT action, metadata_json FROM forge_audit_events WHERE action LIKE 'external_agent_%'").all(),
+    agents: db.prepare("SELECT * FROM suplex_external_agents").all(),
+    pairing: db.prepare("SELECT * FROM suplex_external_agent_pairing_codes").all(),
+    credentials: db.prepare("SELECT * FROM suplex_external_agent_credentials").all(),
+    audit: db.prepare("SELECT action, metadata_json FROM suplex_audit_events WHERE action LIKE 'external_agent_%'").all(),
   }));
   expect(dump).not.toContain(issued.pairingCode);
   expect(dump).not.toContain(paired.credential);
@@ -97,14 +97,14 @@ test("pairs once, persists only hashes, authenticates, and audits with explicit 
   expect(dump).not.toContain("fha_");
 
   // Verify ExternalAgent pairing audit event has actor_agent_id set and actor_user_id null
-  const pairAuditEvent = database.authQuery((db) => db.prepare("SELECT * FROM forge_audit_events WHERE action = 'external_agent_paired'").get() as {
+  const pairAuditEvent = database.authQuery((db) => db.prepare("SELECT * FROM suplex_audit_events WHERE action = 'external_agent_paired'").get() as {
     actor_user_id: string | null; actor_agent_id: string | null; action: string;
   });
   expect(pairAuditEvent.actor_agent_id).toBe(issued.agent.id);
   expect(pairAuditEvent.actor_user_id).toBeNull();
 
   // Verify admin creation audit event has actor_user_id set and actor_agent_id null
-  const createAuditEvent = database.authQuery((db) => db.prepare("SELECT * FROM forge_audit_events WHERE action = 'external_agent_created'").get() as {
+  const createAuditEvent = database.authQuery((db) => db.prepare("SELECT * FROM suplex_audit_events WHERE action = 'external_agent_created'").get() as {
     actor_user_id: string | null; actor_agent_id: string | null; action: string;
   });
   expect(createAuditEvent.actor_user_id).toBe(adminId);
@@ -182,7 +182,7 @@ test("concurrent exchanges consume one pairing code exactly once", async () => {
   const issued = service.create(adminId, { name: "ExternalAgent Concurrent", companyId, projectIds: ["project_allowed"] });
   database.close();
   const contenders = [0, 1].map(() => {
-    const contender = spawn(process.execPath, ["--import", "tsx", "tests/fixtures/external-agent-exchange-contender.ts", join(root, "forge.sqlite"), issued.pairingCode, "profile-concurrent"], { cwd: process.cwd(), stdio: ["pipe", "pipe", "pipe"] });
+    const contender = spawn(process.execPath, ["--import", "tsx", "tests/fixtures/external-agent-exchange-contender.ts", join(root, "suplex.sqlite"), issued.pairingCode, "profile-concurrent"], { cwd: process.cwd(), stdio: ["pipe", "pipe", "pipe"] });
     let stdout = "";
     let stderr = "";
     let ready!: () => void;
@@ -208,22 +208,22 @@ test("concurrent exchanges consume one pairing code exactly once", async () => {
   await Promise.all(contenders.map(({ ready }) => ready));
   contenders.forEach(({ contender }) => contender.stdin.end("go\n"));
   const outcomes = await Promise.all(contenders.map(({ result }) => result));
-  database = new ForgeDatabase(join(root, "forge.sqlite"));
+  database = new SuplexDatabase(join(root, "suplex.sqlite"));
   expect(outcomes.filter(({ outcome }) => outcome === "success")).toHaveLength(1);
   expect(outcomes.filter(({ outcome }) => outcome === "failure")).toEqual([{ outcome: "failure", statusCode: 401, code: "pairing_invalid", message: "Pairing failed" }]);
-  expect(database.authQuery((db) => db.prepare("SELECT COUNT(*) AS count FROM forge_external_agent_credentials WHERE agent_id = ? AND revoked_at IS NULL").get(issued.agent.id) as { count: number }).count).toBe(1);
-  expect(database.authQuery((db) => db.prepare("SELECT COUNT(*) AS count FROM forge_external_agent_pairing_codes WHERE agent_id = ? AND consumed_at IS NOT NULL").get(issued.agent.id) as { count: number }).count).toBe(1);
-  expect(database.authQuery((db) => db.prepare("SELECT COUNT(*) AS count FROM forge_audit_events WHERE action = 'external_agent_paired' AND actor_agent_id = ?").get(issued.agent.id) as { count: number }).count).toBe(1);
+  expect(database.authQuery((db) => db.prepare("SELECT COUNT(*) AS count FROM suplex_external_agent_credentials WHERE agent_id = ? AND revoked_at IS NULL").get(issued.agent.id) as { count: number }).count).toBe(1);
+  expect(database.authQuery((db) => db.prepare("SELECT COUNT(*) AS count FROM suplex_external_agent_pairing_codes WHERE agent_id = ? AND consumed_at IS NOT NULL").get(issued.agent.id) as { count: number }).count).toBe(1);
+  expect(database.authQuery((db) => db.prepare("SELECT COUNT(*) AS count FROM suplex_audit_events WHERE action = 'external_agent_paired' AND actor_agent_id = ?").get(issued.agent.id) as { count: number }).count).toBe(1);
 });
 
 test("rejects cross-company grants without leaving records", () => {
   expect(() => service.create(adminId, { name: "Cross tenant", companyId, projectIds: ["project_other"] })).toThrowError(/not found/i);
-  expect(database.authQuery((db) => db.prepare("SELECT COUNT(*) AS count FROM forge_external_agents").get() as { count: number }).count).toBe(0);
+  expect(database.authQuery((db) => db.prepare("SELECT COUNT(*) AS count FROM suplex_external_agents").get() as { count: number }).count).toBe(0);
 });
 
 test("database constraints reject a cross-company grant", () => {
   const issued = service.create(adminId, { name: "Constraint", companyId, projectIds: ["project_allowed"] });
-  expect(() => database.authTransaction((db) => db.prepare("INSERT INTO forge_external_agent_project_grants (agent_id, company_id, project_id, created_at) VALUES (?, ?, 'project_other', ?)").run(issued.agent.id, companyId, new Date().toISOString()))).toThrowError(/foreign key/i);
+  expect(() => database.authTransaction((db) => db.prepare("INSERT INTO suplex_external_agent_project_grants (agent_id, company_id, project_id, created_at) VALUES (?, ?, 'project_other', ?)").run(issued.agent.id, companyId, new Date().toISOString()))).toThrowError(/foreign key/i);
 });
 
 test("rotation atomically replaces the active credential, records agent audit, and revocation is immediate", () => {
@@ -238,7 +238,7 @@ test("rotation atomically replaces the active credential, records agent audit, a
   expect(service.authenticate(replacement.credential).agentId).toBe(first.agent.id);
 
   // Rotation audit event has actor_agent_id set
-  const rotateAuditEvent = database.authQuery((db) => db.prepare("SELECT * FROM forge_audit_events WHERE action = 'external_agent_rotated'").get() as {
+  const rotateAuditEvent = database.authQuery((db) => db.prepare("SELECT * FROM suplex_audit_events WHERE action = 'external_agent_rotated'").get() as {
     actor_user_id: string | null; actor_agent_id: string | null;
   });
   expect(rotateAuditEvent.actor_agent_id).toBe(first.agent.id);

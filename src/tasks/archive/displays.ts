@@ -26,7 +26,7 @@ async function firstExistingDirectory(candidates: readonly (string | undefined)[
 export async function prepareArchiveDisplays(sessions: ArchiveSession[], herdr: Displays = new CliHerdrClient(), kill: (pid: number, signal: NodeJS.Signals) => void = process.kill): Promise<() => Promise<void>> {
   const owned = new Map<string, ArchiveSession>();
   const workspaces = new Set<string>();
-  const matches = (pane: Pane, session: ArchiveSession) => pane.tokens?.forge_task_id === session.taskId && pane.tokens.forge_binding_id === session.id;
+  const matches = (pane: Pane, session: ArchiveSession) => pane.tokens?.suplex_task_id === session.taskId && pane.tokens.suplex_binding_id === session.id;
   const inspectOwned = async (pane: Pane, session: ArchiveSession): Promise<boolean> => {
     if (!matches(pane, session)) return false;
     const info = await herdr.getPaneProcessInfo(pane.paneId);
@@ -74,7 +74,7 @@ export async function prepareArchiveDisplays(sessions: ArchiveSession[], herdr: 
     }
     if (sessions.some(session => session.paneId)) {
       for (const workspace of await herdr.listWorkspaces()) {
-        if (sessions.some(session => workspace.label === `forge-${session.taskId}`)) workspaces.add(workspace.workspaceId);
+        if (sessions.some(session => workspace.label === `suplex-${session.taskId}`)) workspaces.add(workspace.workspaceId);
       }
     }
   } catch (error) {
@@ -108,7 +108,7 @@ export async function prepareArchiveDisplays(sessions: ArchiveSession[], herdr: 
         const session = owned.get(pane.paneId);
         return session !== undefined && inspected.has(pane.paneId) && matches(pane, session);
       });
-      if (taskId && workspace.label === `forge-${taskId}` && mayCloseWorkspace) {
+      if (taskId && workspace.label === `suplex-${taskId}` && mayCloseWorkspace) {
         try {
           await herdr.closeWorkspace(workspaceId);
           if (await herdr.getWorkspace(workspaceId)) throw new Error("Herdr did not close the task workspace.");

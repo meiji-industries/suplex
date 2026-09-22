@@ -1,7 +1,7 @@
 import { createHash, randomBytes, randomUUID } from "node:crypto";
 import { z } from "zod";
 import type { AuthService } from "../identity/auth.js";
-import type { ForgeDatabase } from "../platform/database.js";
+import type { SuplexDatabase } from "../platform/database.js";
 import type { ExternalAgentPrincipal } from "../identity/external-agents.js";
 import type { GithubPullRequestObservation } from "../integrations/github/delivery.js";
 import type { TaskControlStore } from "../coordination/root-session-store.js";
@@ -35,7 +35,7 @@ export type MergeTrainEntry = {
 type Delivery = Pick<DeliveryOperations, "observe" | "checksObservation" | "execute">;
 
 export interface AgentDeliveryDependencies {
-  database: ForgeDatabase;
+  database: SuplexDatabase;
   tasks: Pick<TaskService, "agentApiTaskRow" | "listAgentApiTaskRows" | "repository">;
   store: Pick<TaskControlStore, "get" | "currentSession" | "wakeRoot">;
   delivery: Delivery;
@@ -49,9 +49,9 @@ const ProvenanceRowSchema = z.object({
 });
 export type DeliveryProvenanceRecord = z.infer<typeof ProvenanceRowSchema>;
 
-export const HEAD_NOT_ACCEPTED = "Forge has not accepted this pull request head. The Coordinator must review and publish it first.";
+export const HEAD_NOT_ACCEPTED = "Suplex has not accepted this pull request head. The Coordinator must review and publish it first.";
 
-/** The single reason this pull request cannot merge now, in the order Forge checks them. */
+/** The single reason this pull request cannot merge now, in the order Suplex checks them. */
 export function mergeBlocker(input: { observation: GithubPullRequestObservation | null; blockingDependency: string | null; acceptedHeadSha: string | null }): string | null {
   if (input.blockingDependency) return `Task ${input.blockingDependency} is not delivered.`;
   const observed = input.observation;
@@ -59,7 +59,7 @@ export function mergeBlocker(input: { observation: GithubPullRequestObservation 
   if (observed.state === "merged") return "GitHub merged the pull request.";
   if (observed.state !== "open") return "The pull request is not open.";
   if (observed.isDraft) return "The pull request is a draft.";
-  // Forge's own acceptance, not a self-review, authorizes the head an agent can merge.
+  // Suplex's own acceptance, not a self-review, authorizes the head an agent can merge.
   if (input.acceptedHeadSha === null || input.acceptedHeadSha !== observed.headSha) return HEAD_NOT_ACCEPTED;
   if (observed.checks.failing > 0) return "A necessary check failed.";
   if (observed.checks.pending > 0) return "GitHub still runs the checks.";
@@ -78,7 +78,7 @@ export function needsReconciliation(observed: GithubPullRequestObservation | nul
 function receiptHash(receipt: string): string { return createHash("sha256").update(receipt).digest("hex"); }
 
 /**
- * The Forge-owned command surface for a paired agent that manages delivery repairs and a merge train.
+ * The Suplex-owned command surface for a paired agent that manages delivery repairs and a merge train.
  * Every command resolves its task through TaskService, observes GitHub before it decides, and records
  * an audit event. There is no shell and no GitHub passthrough.
  */
@@ -177,7 +177,7 @@ export class AgentDeliveryService {
     const receipt = `fma_${randomBytes(32).toString("base64url")}`;
     const createdAt = new Date();
     this.dependencies.database.authTransaction(db => {
-      db.prepare("INSERT INTO forge_merge_approvals (id, task_id, agent_id, pull_request_number, head_sha, base_sha, receipt_hash, created_at, expires_at, consumed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)")
+      db.prepare("INSERT INTO suplex_merge_approvals (id, task_id, agent_id, pull_request_number, head_sha, base_sha, receipt_hash, created_at, expires_at, consumed_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, NULL)")
         .run(`mar_${randomUUID().replaceAll("-", "")}`, taskId, principal.agentId, input.pullRequestNumber, observation.headSha, observation.baseSha, receiptHash(receipt), createdAt.toISOString(), new Date(createdAt.getTime() + APPROVAL_TTL_MS).toISOString());
       this.dependencies.auth.recordAgentAuditEventInTransaction(db, principal.agentId, "agent_api_merge_approval_issued", undefined, row.company_id, { taskId, pullRequestNumber: String(input.pullRequestNumber), headSha: observation.headSha ?? "", baseSha: observation.baseSha ?? "" });
     });
@@ -185,7 +185,7 @@ export class AgentDeliveryService {
   }
 
   /**
-   * Merges one pull request of the train. Forge re-observes GitHub, refuses every ineligible or stale
+   * Merges one pull request of the train. Suplex re-observes GitHub, refuses every ineligible or stale
    * revision, consumes the receipt exactly once, and then runs the existing delivery merge operation.
    */
   async merge(principal: ExternalAgentPrincipal, taskId: string, input: { pullRequestNumber: number; expectedHeadSha: string; expectedBaseSha: string; approvalReceipt: string }) {
@@ -196,7 +196,7 @@ export class AgentDeliveryService {
     this.consumeApproval(principal, taskId, input);
     const root = this.dependencies.store.currentSession(taskId, "root");
     if (!root) throw new AgentDeliveryFailure("Coordinator is not ready. Retry the request.");
-    // The accepted range is the Coordinator's own review. Forge never rebuilds it for the agent.
+    // The accepted range is the Coordinator's own review. Suplex never rebuilds it for the agent.
     const accepted = this.dependencies.store.get(taskId).workflowState.acceptedDelivery;
     if (!accepted || accepted.headSha !== observation.headSha) throw new AgentDeliveryFailure(HEAD_NOT_ACCEPTED);
     const result = await this.dependencies.delivery.execute(
@@ -215,7 +215,7 @@ export class AgentDeliveryService {
   /** The append-only provenance trail of one task. */
   provenance(principal: ExternalAgentPrincipal, taskId: string): DeliveryProvenanceRecord[] {
     this.dependencies.tasks.agentApiTaskRow(principal, taskId);
-    return this.dependencies.database.authQuery(db => z.array(ProvenanceRowSchema).parse(db.prepare("SELECT * FROM forge_delivery_provenance WHERE task_id = ? ORDER BY recorded_at, id").all(taskId)));
+    return this.dependencies.database.authQuery(db => z.array(ProvenanceRowSchema).parse(db.prepare("SELECT * FROM suplex_delivery_provenance WHERE task_id = ? ORDER BY recorded_at, id").all(taskId)));
   }
 
   private async requireEligible(taskId: string, input: { pullRequestNumber: number; headSha: string; baseSha: string }): Promise<GithubPullRequestObservation> {
@@ -230,12 +230,12 @@ export class AgentDeliveryService {
 
   private consumeApproval(principal: ExternalAgentPrincipal, taskId: string, input: { pullRequestNumber: number; expectedHeadSha: string; expectedBaseSha: string; approvalReceipt: string }): void {
     const hash = receiptHash(input.approvalReceipt);
-    const consumed = this.dependencies.database.authImmediateTransaction(db => db.prepare("UPDATE forge_merge_approvals SET consumed_at = ? WHERE receipt_hash = ? AND task_id = ? AND agent_id = ? AND pull_request_number = ? AND head_sha = ? AND base_sha = ? AND consumed_at IS NULL AND expires_at > ?")
+    const consumed = this.dependencies.database.authImmediateTransaction(db => db.prepare("UPDATE suplex_merge_approvals SET consumed_at = ? WHERE receipt_hash = ? AND task_id = ? AND agent_id = ? AND pull_request_number = ? AND head_sha = ? AND base_sha = ? AND consumed_at IS NULL AND expires_at > ?")
       .run(new Date().toISOString(), hash, taskId, principal.agentId, input.pullRequestNumber, input.expectedHeadSha, input.expectedBaseSha, new Date().toISOString()).changes);
     if (consumed !== 1) throw new AgentDeliveryFailure("The approval receipt is not valid.", 403);
   }
 
-  /** The head Forge accepted for delivery, which is the Coordinator's reviewed head. */
+  /** The head Suplex accepted for delivery, which is the Coordinator's reviewed head. */
   private acceptedHead(taskId: string): string | null {
     return this.dependencies.store.get(taskId).workflowState.acceptedDelivery?.headSha ?? null;
   }
@@ -246,12 +246,12 @@ export class AgentDeliveryService {
   }
 
   private openAttempt(taskId: string): DeliveryProvenanceRecord | null {
-    const row = this.dependencies.database.authQuery(db => db.prepare("SELECT * FROM forge_delivery_provenance WHERE task_id = ? AND kind = 'reconciliation' ORDER BY recorded_at DESC, id DESC LIMIT 1").get(taskId));
+    const row = this.dependencies.database.authQuery(db => db.prepare("SELECT * FROM suplex_delivery_provenance WHERE task_id = ? AND kind = 'reconciliation' ORDER BY recorded_at DESC, id DESC LIMIT 1").get(taskId));
     return row ? ProvenanceRowSchema.parse(row) : null;
   }
 
   private insertProvenance(input: { id?: string; taskId: string; attemptId: string | null; agentId: string; kind: "reconciliation" | "observation" | "merge"; pullRequestNumber: number | null; originalHeadSha: string | null; headSha: string | null; baseSha: string | null; checks: unknown; merge?: unknown }): void {
-    this.dependencies.database.authTransaction(db => db.prepare("INSERT INTO forge_delivery_provenance (id, task_id, attempt_id, agent_id, kind, pull_request_number, original_head_sha, head_sha, base_sha, checks_json, merge_json, recorded_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+    this.dependencies.database.authTransaction(db => db.prepare("INSERT INTO suplex_delivery_provenance (id, task_id, attempt_id, agent_id, kind, pull_request_number, original_head_sha, head_sha, base_sha, checks_json, merge_json, recorded_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
       .run(input.id ?? `dpv_${randomUUID().replaceAll("-", "")}`, input.taskId, input.attemptId, input.agentId, input.kind, input.pullRequestNumber, input.originalHeadSha, input.headSha, input.baseSha, input.checks === null || input.checks === undefined ? null : JSON.stringify(input.checks), input.merge === undefined ? null : JSON.stringify(input.merge ?? null), new Date().toISOString()));
   }
 
@@ -262,7 +262,7 @@ export class AgentDeliveryService {
 
 function reconciliationPrompt(baseBranch: string, observed: GithubPullRequestObservation): string {
   return [
-    "Forge received a delivery repair request for this task.",
+    "Suplex received a delivery repair request for this task.",
     `GitHub reports pull request #${observed.number} at head ${observed.headSha ?? "unknown"} with mergeable ${observed.mergeable ?? "unknown"}, merge state ${observed.mergeStateStatus ?? "unknown"}, and ${observed.checks.failing} failing checks.`,
     `Observe GitHub and Git yourself. Integrate the current ${baseBranch} head, resolve every conflict, and repair every failing check.`,
     `The upstream work is already merged into ${baseBranch}. Integrate it. Do not rewrite it and do not reimplement it.`,
@@ -273,7 +273,7 @@ function reconciliationPrompt(baseBranch: string, observed: GithubPullRequestObs
 function resumePrompt(baseBranch: string): string {
   return [
     "Every dependency of this task is delivered.",
-    `Forge merged their work into ${baseBranch}. Integrate that work. Do not rewrite it and do not reimplement it.`,
+    `Suplex merged their work into ${baseBranch}. Integrate that work. Do not rewrite it and do not reimplement it.`,
     "Observe the current task, worktree, and GitHub state, then continue toward the delivery target.",
   ].join("\n");
 }

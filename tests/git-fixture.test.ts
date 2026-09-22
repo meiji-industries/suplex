@@ -21,14 +21,14 @@ async function localConfig(directory: string, bare: boolean, key: string): Promi
 }
 
 test("Git fixtures write normal repository configuration for native Git commits", async () => {
-  const root = await mkdtemp(join(tmpdir(), "forge-git-fixture-"));
+  const root = await mkdtemp(join(tmpdir(), "suplex-git-fixture-"));
   const repository = join(root, "repository");
   try {
     await mkdir(repository);
     await initializeGitFixture(repository, "main");
 
-    expect(await localConfig(repository, false, "user.name")).toBe("Forge");
-    expect(await localConfig(repository, false, "user.email")).toBe("forge@example.invalid");
+    expect(await localConfig(repository, false, "user.name")).toBe("Suplex");
+    expect(await localConfig(repository, false, "user.email")).toBe("suplex@example.invalid");
     expect(await localConfig(repository, false, "commit.gpgsign")).toBe("false");
 
     const emptyCommit = await commitGitFixture(repository, "empty", []);
@@ -43,14 +43,14 @@ test("Git fixtures write normal repository configuration for native Git commits"
 });
 
 test("Git fixtures write bare repository configuration without a nested Git directory", async () => {
-  const root = await mkdtemp(join(tmpdir(), "forge-bare-git-fixture-"));
+  const root = await mkdtemp(join(tmpdir(), "suplex-bare-git-fixture-"));
   const repository = join(root, "repository.git");
   try {
     await mkdir(repository);
     await initializeGitFixture(repository, "main", true);
 
-    expect(await localConfig(repository, true, "user.name")).toBe("Forge");
-    expect(await localConfig(repository, true, "user.email")).toBe("forge@example.invalid");
+    expect(await localConfig(repository, true, "user.name")).toBe("Suplex");
+    expect(await localConfig(repository, true, "user.email")).toBe("suplex@example.invalid");
     expect(await localConfig(repository, true, "commit.gpgsign")).toBe("false");
     expect(await localConfig(repository, true, "core.bare")).toBe("true");
     expect(existsSync(join(repository, ".git"))).toBe(false);

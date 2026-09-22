@@ -7,11 +7,11 @@ import taskRoutes from "../src/http/routes/tasks.js";
 
 function testApp() {
   const app = Fastify();
-  app.decorateRequest("forgeUser", undefined as never);
+  app.decorateRequest("suplexUser", undefined as never);
   app.setValidatorCompiler(validatorCompiler);
   app.setSerializerCompiler(() => (data) => JSON.stringify(data));
   installHttpErrorHandlers(app);
-  app.addHook("preHandler", async (request) => { request.forgeUser = { id: "user" } as never; });
+  app.addHook("preHandler", async (request) => { request.suplexUser = { id: "user" } as never; });
   return app;
 }
 

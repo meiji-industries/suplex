@@ -21,7 +21,7 @@ test("bridge logging redirects loggers created before and after bridge initializ
 
 function createLoggingApp(lines: string[]) {
   return createAppServer({
-    config: createTestConfig("/tmp/forge-logging-test"),
+    config: createTestConfig("/tmp/suplex-logging-test"),
     health: {} as HostHealthDependencies,
     logger: createFastifyLogger((line) => lines.push(line)),
   });
@@ -64,9 +64,9 @@ test("a mutation emits one info access line", async () => {
   expect(records(lines)).toEqual([expect.objectContaining({ level: 30, msg: "request", req: expect.objectContaining({ method: "POST", url: "/mutate" }), res: { statusCode: 200 } })]);
 });
 
-test("FORGE_LOG_REQUESTS shows otherwise-debug request records", () => {
-  const original = process.env.FORGE_LOG_REQUESTS;
-  process.env.FORGE_LOG_REQUESTS = "1";
+test("SUPLEX_LOG_REQUESTS shows otherwise-debug request records", () => {
+  const original = process.env.SUPLEX_LOG_REQUESTS;
+  process.env.SUPLEX_LOG_REQUESTS = "1";
   try {
     expect(formatDevLogLine({
       level: 20,
@@ -78,8 +78,8 @@ test("FORGE_LOG_REQUESTS shows otherwise-debug request records", () => {
       responseTime: 4.4,
     }, { color: false, component: "api" })).toBe("12:34:56  INFO  api        GET /api/tasks/123 200 4ms  reqId=req-fa");
   } finally {
-    if (original === undefined) delete process.env.FORGE_LOG_REQUESTS;
-    else process.env.FORGE_LOG_REQUESTS = original;
+    if (original === undefined) delete process.env.SUPLEX_LOG_REQUESTS;
+    else process.env.SUPLEX_LOG_REQUESTS = original;
   }
 });
 

@@ -43,11 +43,11 @@ export function ProviderContextBar({ projectId, project, profiles, activeProfile
 }): ReactElement {
   return <div className="flex flex-wrap items-center gap-3 border-b px-4 py-3 lg:px-6">
     <span className="text-xs font-medium">Provider context</span>
-    {projectId !== undefined && project === undefined ? <span className="text-xs text-muted-foreground">Forge reads the project.</span> : null}
+    {projectId !== undefined && project === undefined ? <span className="text-xs text-muted-foreground">Suplex reads the project.</span> : null}
     {projectId !== undefined && project ? <span className="text-xs text-muted-foreground">Project {project.name}</span> : null}
-    {projectId === undefined || project === null ? profiles === undefined ? <span className="text-xs text-muted-foreground">Forge reads the profiles.</span> : profiles.length === 0 ? (
+    {projectId === undefined || project === null ? profiles === undefined ? <span className="text-xs text-muted-foreground">Suplex reads the profiles.</span> : profiles.length === 0 ? (
       <>
-        <span className="text-xs text-muted-foreground">No profiles. Forge checks Git and Herdr.</span>
+        <span className="text-xs text-muted-foreground">No profiles. Suplex checks Git and Herdr.</span>
         <Button size="xs" variant="outline" nativeButton={false} render={<a href="/admin/profiles" />}>Open profile settings</Button>
       </>
     ) : (
@@ -96,9 +96,9 @@ export function SetupView(): ReactElement {
   const copyState = copyFeedback?.id === selectedCheck?.id && copyFeedback?.remedy === selectedCheck?.remedy ? copyFeedback?.status : "idle";
   const hostAddress = snapshot?.reachableAddress ?? window.location.origin;
   const status = refreshing || freshness === "checking"
-    ? "Forge checks the host."
+    ? "Suplex checks the host."
     : freshness === "stale"
-      ? "Forge could not check the host. Select Check again."
+      ? "Suplex could not check the host. Select Check again."
       : needsAttention.length === 0
         ? "All checks are healthy."
         : `${needsAttention.length} ${needsAttention.length === 1 ? "check needs" : "checks need"} attention.`;
@@ -116,10 +116,10 @@ export function SetupView(): ReactElement {
     }
   }
 
-  return <ApplicationFrame title="Set up Forge" headerRight={<Badge variant="outline">Host setup</Badge>}>
+  return <ApplicationFrame title="Set up Suplex" headerRight={<Badge variant="outline">Host setup</Badge>}>
     <div className="flex flex-wrap items-center gap-3 border-b px-4 py-4 lg:px-6">
       <div className="flex size-9 shrink-0 items-center justify-center rounded-md border bg-muted/40"><Server className="size-4" /></div>
-      <div className="min-w-0 flex-1"><p className="break-all text-[13px] font-medium">{hostAddress}</p><p className="text-xs text-muted-foreground">Forge host · {connectionRoute(hostAddress)}</p></div>
+      <div className="min-w-0 flex-1"><p className="break-all text-[13px] font-medium">{hostAddress}</p><p className="text-xs text-muted-foreground">Suplex host · {connectionRoute(hostAddress)}</p></div>
       <span className="w-full text-xs text-muted-foreground sm:w-auto" data-health-freshness={freshness}>{healthFreshnessLabel(freshness, lastSuccessfulCheckAt)}</span>
     </div>
     <ProviderContextBar projectId={projectId} project={project} profiles={profiles} activeProfileId={activeProfileId} onSelectProfile={(id) => setSelectedProfileId(id || undefined)} />
@@ -133,13 +133,13 @@ export function SetupView(): ReactElement {
         {selectedCheck ? <>
           <div className="mb-4 flex items-center gap-3"><div className="flex size-10 shrink-0 items-center justify-center rounded-md border bg-muted/40"><HealthCheckIcon check={selectedCheck} /></div><div><CheckStatusIndicator check={selectedCheck} /><h2 className="mt-1.5 text-base font-medium">{repairTitle(selectedCheck)}</h2></div></div>
           <p className="mb-1 text-[13px] font-medium">{healthCheckPurpose(selectedCheck.id)}</p><p className="text-xs text-muted-foreground">{selectedCheck.summary}</p>
-          {selectedCheck.remedy && selectedCheck.remedyKind === "link" ? <div className="my-5 space-y-3"><Alert><CheckCircle2 /><AlertTitle>Repair {selectedCheck.label}</AlertTitle><AlertDescription>Open the instructions. Follow them on the Forge host. Then check again.</AlertDescription></Alert><div className="flex flex-wrap items-center gap-2"><Button size="sm" variant="outline" nativeButton={false} render={<a href={selectedCheck.remedy} target="_blank" rel="noreferrer" />}>Open the instructions</Button><Button size="sm" onClick={() => void refresh(context)} disabled={refreshing}><RefreshCw />Check again</Button></div></div> : selectedCheck.remedy ? <div className="mt-6"><Timeline value={1}>
+          {selectedCheck.remedy && selectedCheck.remedyKind === "link" ? <div className="my-5 space-y-3"><Alert><CheckCircle2 /><AlertTitle>Repair {selectedCheck.label}</AlertTitle><AlertDescription>Open the instructions. Follow them on the Suplex host. Then check again.</AlertDescription></Alert><div className="flex flex-wrap items-center gap-2"><Button size="sm" variant="outline" nativeButton={false} render={<a href={selectedCheck.remedy} target="_blank" rel="noreferrer" />}>Open the instructions</Button><Button size="sm" onClick={() => void refresh(context)} disabled={refreshing}><RefreshCw />Check again</Button></div></div> : selectedCheck.remedy ? <div className="mt-6"><Timeline value={1}>
             <TimelineItem step={1}><TimelineSeparator /><TimelineIndicator /><TimelineHeader><TimelineTitle>1. Open the Terminal on the host</TimelineTitle></TimelineHeader><TimelineContent><p className="break-all text-xs">Use the host at {hostAddress}.</p></TimelineContent></TimelineItem>
-            <TimelineItem step={2}><TimelineSeparator /><TimelineIndicator /><TimelineHeader><TimelineTitle>2. Run this command</TimelineTitle></TimelineHeader><TimelineContent><div className="mt-2 space-y-2 rounded-md border bg-muted/20 p-3"><p className="flex items-center gap-1.5 text-xs text-muted-foreground"><Terminal className="size-3.5" />Run on the Forge host</p><div className="flex flex-wrap items-center gap-2"><code className="min-w-0 flex-1 break-all text-xs text-foreground">{selectedCheck.remedy}</code><Button size="xs" variant="outline" aria-label="Copy the command" onClick={async () => { const remedy = selectedCheck.remedy ?? ""; try { await navigator.clipboard.writeText(remedy); setCopyFeedback({ id: selectedCheck.id, remedy, status: "copied" }); } catch { setCopyFeedback({ id: selectedCheck.id, remedy, status: "failed" }); } }}>{copyState === "copied" ? <Check /> : <Copy />}{copyState === "copied" ? "Copied" : "Copy"}</Button></div>{copyState === "failed" ? <p role="status" className="text-xs text-destructive">Forge cannot copy the command. Select the command and copy it manually.</p> : null}</div></TimelineContent></TimelineItem>
-            <TimelineItem step={3}><TimelineIndicator /><TimelineHeader><TimelineTitle>3. Check the host again</TimelineTitle></TimelineHeader><TimelineContent><p className="text-xs">Return to Forge after the command finishes.</p><div className="mt-3"><Button size="sm" onClick={() => void refresh(context)} disabled={refreshing}>{refreshing ? <Spinner /> : <RefreshCw />}{refreshing ? "Check in progress" : "Check again"}</Button></div></TimelineContent></TimelineItem>
-          </Timeline></div> : <div className="my-5"><Alert><CheckCircle2 /><AlertTitle>{selectedCheck.status === "healthy" ? "No action is necessary" : "Check the host again"}</AlertTitle><AlertDescription>{selectedCheck.status === "healthy" ? "Select a tool that needs attention." : "Forge did not receive repair instructions for this check."}</AlertDescription></Alert></div>}
+            <TimelineItem step={2}><TimelineSeparator /><TimelineIndicator /><TimelineHeader><TimelineTitle>2. Run this command</TimelineTitle></TimelineHeader><TimelineContent><div className="mt-2 space-y-2 rounded-md border bg-muted/20 p-3"><p className="flex items-center gap-1.5 text-xs text-muted-foreground"><Terminal className="size-3.5" />Run on the Suplex host</p><div className="flex flex-wrap items-center gap-2"><code className="min-w-0 flex-1 break-all text-xs text-foreground">{selectedCheck.remedy}</code><Button size="xs" variant="outline" aria-label="Copy the command" onClick={async () => { const remedy = selectedCheck.remedy ?? ""; try { await navigator.clipboard.writeText(remedy); setCopyFeedback({ id: selectedCheck.id, remedy, status: "copied" }); } catch { setCopyFeedback({ id: selectedCheck.id, remedy, status: "failed" }); } }}>{copyState === "copied" ? <Check /> : <Copy />}{copyState === "copied" ? "Copied" : "Copy"}</Button></div>{copyState === "failed" ? <p role="status" className="text-xs text-destructive">Suplex cannot copy the command. Select the command and copy it manually.</p> : null}</div></TimelineContent></TimelineItem>
+            <TimelineItem step={3}><TimelineIndicator /><TimelineHeader><TimelineTitle>3. Check the host again</TimelineTitle></TimelineHeader><TimelineContent><p className="text-xs">Return to Suplex after the command finishes.</p><div className="mt-3"><Button size="sm" onClick={() => void refresh(context)} disabled={refreshing}>{refreshing ? <Spinner /> : <RefreshCw />}{refreshing ? "Check in progress" : "Check again"}</Button></div></TimelineContent></TimelineItem>
+          </Timeline></div> : <div className="my-5"><Alert><CheckCircle2 /><AlertTitle>{selectedCheck.status === "healthy" ? "No action is necessary" : "Check the host again"}</AlertTitle><AlertDescription>{selectedCheck.status === "healthy" ? "Select a tool that needs attention." : "Suplex did not receive repair instructions for this check."}</AlertDescription></Alert></div>}
           <div className="mt-3"><HealthTechnicalDetails key={selectedCheck.id} check={selectedCheck} /></div>
-        </> : <p className="text-sm text-muted-foreground">{freshness === "checking" ? "Forge checks the host." : "No host tools are available. Check again."}</p>}
+        </> : <p className="text-sm text-muted-foreground">{freshness === "checking" ? "Suplex checks the host." : "No host tools are available. Check again."}</p>}
       </section>
     </div>
     <SetupFooter status={status} refreshing={refreshing} onCheckAgain={() => void refresh(context)} />

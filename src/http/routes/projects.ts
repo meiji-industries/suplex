@@ -14,29 +14,29 @@ export interface ProjectRoutesOptions {
 const projects: FastifyPluginAsync<ProjectRoutesOptions> = async (app, options) => {
   const typed = app.withTypeProvider<ZodTypeProvider>();
   const { projects } = options;
-  typed.get("/api/models", { schema: { response: { 200: ModelListResponseSchema } } }, async (request, reply) => reply.send({ models: await projects.listModels(request.forgeUser.id) }));
-  typed.get("/api/projects", { schema: { response: { 200: ProjectListResponseSchema } } }, async (request, reply) => reply.send({ projects: projects.listProjects(request.forgeUser.id) }));
-  typed.get("/api/companies/:companyId/projects", { schema: { params: CompanyIdParamsSchema, response: { 200: ProjectListResponseSchema } } }, async (request, reply) => reply.send({ projects: projects.listProjects(request.forgeUser.id, request.params.companyId) }));
+  typed.get("/api/models", { schema: { response: { 200: ModelListResponseSchema } } }, async (request, reply) => reply.send({ models: await projects.listModels(request.suplexUser.id) }));
+  typed.get("/api/projects", { schema: { response: { 200: ProjectListResponseSchema } } }, async (request, reply) => reply.send({ projects: projects.listProjects(request.suplexUser.id) }));
+  typed.get("/api/companies/:companyId/projects", { schema: { params: CompanyIdParamsSchema, response: { 200: ProjectListResponseSchema } } }, async (request, reply) => reply.send({ projects: projects.listProjects(request.suplexUser.id, request.params.companyId) }));
   typed.post("/api/companies/:companyId/projects", { schema: { params: CompanyIdParamsSchema, body: ProjectCreateBodySchema, response: { 201: ProjectResponseSchema } } }, async (request, reply) => {
     const project = "repositoryUrl" in request.body
-      ? await projects.createProjectFromRepository(request.forgeUser.id, request.params.companyId, request.body.repositoryUrl, request.body)
-      : await projects.createProject(request.forgeUser.id, request.params.companyId, request.body);
+      ? await projects.createProjectFromRepository(request.suplexUser.id, request.params.companyId, request.body.repositoryUrl, request.body)
+      : await projects.createProject(request.suplexUser.id, request.params.companyId, request.body);
     return reply.code(201).send(project);
   });
-  typed.get("/api/projects/:projectId", { schema: { params: ProjectIdParamsSchema, response: { 200: ProjectResponseSchema } } }, async (request, reply) => reply.send(projects.getProject(request.forgeUser.id, request.params.projectId)));
+  typed.get("/api/projects/:projectId", { schema: { params: ProjectIdParamsSchema, response: { 200: ProjectResponseSchema } } }, async (request, reply) => reply.send(projects.getProject(request.suplexUser.id, request.params.projectId)));
   typed.get("/api/projects/:projectId/issues", { schema: {
     params: ProjectIdParamsSchema,
     querystring: z.object({ query: z.string().max(200).default("") }), // bound: provider autocomplete query, not authored task text
     response: { 200: z.object({ issues: z.array(IssueAssociationSchema) }) },
-  } }, async (request, reply) => reply.send({ issues: await projects.searchIssues(request.forgeUser.id, request.params.projectId, request.query.query) }));
-  typed.get("/api/projects/:projectId/task-sources", { schema: { params: ProjectIdParamsSchema, querystring: TaskSourceQuerySchema, response: { 200: TaskSourceListResponseSchema } } }, async (request, reply) => reply.send(await projects.discoverTaskSources(request.forgeUser.id, request.params.projectId, request.query.kind)));
-  typed.get("/api/projects/:projectId/repository-defaults", { schema: { params: ProjectIdParamsSchema, response: { 200: ProjectRepositoryDefaultsResponseSchema } } }, async (request, reply) => reply.send(await projects.getProjectRepositoryDefaults(request.forgeUser.id, request.params.projectId)));
-  typed.get("/api/projects/:projectId/provider-instances", { schema: { params: ProjectIdParamsSchema, response: { 200: ProjectProviderInstanceListResponseSchema } } }, async (request, reply) => reply.send({ instances: projects.listProjectProviderInstances(request.forgeUser.id, request.params.projectId) }));
+  } }, async (request, reply) => reply.send({ issues: await projects.searchIssues(request.suplexUser.id, request.params.projectId, request.query.query) }));
+  typed.get("/api/projects/:projectId/task-sources", { schema: { params: ProjectIdParamsSchema, querystring: TaskSourceQuerySchema, response: { 200: TaskSourceListResponseSchema } } }, async (request, reply) => reply.send(await projects.discoverTaskSources(request.suplexUser.id, request.params.projectId, request.query.kind)));
+  typed.get("/api/projects/:projectId/repository-defaults", { schema: { params: ProjectIdParamsSchema, response: { 200: ProjectRepositoryDefaultsResponseSchema } } }, async (request, reply) => reply.send(await projects.getProjectRepositoryDefaults(request.suplexUser.id, request.params.projectId)));
+  typed.get("/api/projects/:projectId/provider-instances", { schema: { params: ProjectIdParamsSchema, response: { 200: ProjectProviderInstanceListResponseSchema } } }, async (request, reply) => reply.send({ instances: projects.listProjectProviderInstances(request.suplexUser.id, request.params.projectId) }));
   typed.patch("/api/projects/:projectId", { schema: { params: ProjectIdParamsSchema, body: ProjectPatchBodySchema, response: { 200: ProjectResponseSchema } } }, async (request, reply) => {
     const full = ProjectBodySchema.safeParse(request.body);
     return reply.send(full.success
-      ? await projects.updateProject(request.forgeUser.id, request.params.projectId, full.data)
-      : await projects.patchProject(request.forgeUser.id, request.params.projectId, request.body));
+      ? await projects.updateProject(request.suplexUser.id, request.params.projectId, full.data)
+      : await projects.patchProject(request.suplexUser.id, request.params.projectId, request.body));
   });
 };
 

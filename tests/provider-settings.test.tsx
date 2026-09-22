@@ -49,7 +49,7 @@ test("one table lists system providers and company instances with sign-in status
   expect(text).toContain("Company");
   expect(text).toContain("Connected");
   expect(text).toContain("Not Connected");
-  expect(text).not.toContain("OpenCode, Claude Code, and Devin CLI on the Forge host");
+  expect(text).not.toContain("OpenCode, Claude Code, and Devin CLI on the Suplex host");
   expect(text).not.toContain("New instance");
   expect(text).not.toContain("Local instances");
   expect(text).not.toContain("CLAUDE_CONFIG_DIR");

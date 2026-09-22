@@ -26,7 +26,7 @@ test("OAuth consent grants one selected project and returns the client state and
       redirect_uri: `${origin}/oauth-test-callback`,
       response_type: "code",
       state,
-      scope: "forge:mcp",
+      scope: "suplex:mcp",
       resource: `${origin}/mcp`,
       code_challenge: createHash("sha256").update(verifier).digest("base64url"),
       code_challenge_method: "S256",
@@ -45,7 +45,7 @@ test("OAuth consent grants one selected project and returns the client state and
     expect(callback.searchParams.get("state")).toBe(state);
     expect(callback.searchParams.get("iss")).toBe(origin);
     expect(callback.searchParams.get("code")).toMatch(/^foc_/);
-    expect(value.database.authQuery(db => (db.prepare("SELECT COUNT(*) AS count FROM forge_external_agent_project_grants WHERE project_id = ?").get(value.project.id) as { count: number }).count)).toBe(1);
+    expect(value.database.authQuery(db => (db.prepare("SELECT COUNT(*) AS count FROM suplex_external_agent_project_grants WHERE project_id = ?").get(value.project.id) as { count: number }).count)).toBe(1);
     expect(value.errors).toEqual([]);
   } finally {
     await value.close();

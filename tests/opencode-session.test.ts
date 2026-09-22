@@ -13,9 +13,9 @@ import {
 
 const intent = createOpenCodePromptIntent({
   sessionID: "ses_task",
-  directory: "/tmp/forge-opencode-task",
+  directory: "/tmp/suplex-opencode-task",
   model: { providerID: "openai", modelID: "gpt-5.6-luna" },
-  agent: "forge-root",
+  agent: "suplex-root",
   variant: "max",
   prompt: "Inspect the task and report the result.",
   messageID: "msg_task",
@@ -24,7 +24,7 @@ const intent = createOpenCodePromptIntent({
 const session = {
   id: "ses_task",
   projectID: "project",
-  directory: "/tmp/forge-opencode-task",
+  directory: "/tmp/suplex-opencode-task",
   title: "Task",
   version: "1.18.29",
   time: { created: 1, updated: 2 },
@@ -34,7 +34,7 @@ const user = {
   sessionID: "ses_task",
   role: "user" as const,
   time: { created: 3 },
-  agent: "forge-root",
+  agent: "suplex-root",
   model: { providerID: "openai", modelID: "gpt-5.6-luna" },
 };
 
@@ -59,9 +59,9 @@ function assistant(input: {
        modelID: "gpt-5.6-luna",
        providerID: "openai",
        mode: "build",
-       agent: input.agent ?? "forge-root",
+       agent: input.agent ?? "suplex-root",
        ...(input.summary === undefined ? {} : { summary: input.summary }),
-      path: { cwd: "/tmp/forge-opencode-task", root: "/tmp/forge-opencode-task" },
+      path: { cwd: "/tmp/suplex-opencode-task", root: "/tmp/suplex-opencode-task" },
       cost: 0,
       tokens: { input: 1, output: 1, reasoning: 0, cache: { read: 0, write: 0 } },
       ...(input.finish === undefined ? {} : { finish: input.finish }),

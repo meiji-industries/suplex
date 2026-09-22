@@ -1,6 +1,6 @@
-# Forge
+# Suplex
 
-Forge coordinates software delivery in owner-controlled repositories.
+Suplex coordinates software delivery in owner-controlled repositories.
 
 ## Language
 
@@ -17,8 +17,8 @@ _Avoid_: Task dependency, pull request association.
 **Prerequisite**
 A task in the same company or a pull request in the task project repository that
 another task waits for, shown as "Blocked by". Task edges use
-`forge_task_dependencies`; pull request edges use
-`forge_task_pull_request_dependencies` and retain the latest GitHub observation.
+`suplex_task_dependencies`; pull request edges use
+`suplex_task_pull_request_dependencies` and retain the latest GitHub observation.
 APIs call task ids `dependsOn`, pull request inputs `blockedByPullRequests`, and
 the resolved mixed list `blockedBy`. A pull request prerequisite is complete only
 when GitHub reports it merged. A closed pull request stays blocked until it is
@@ -27,7 +27,7 @@ GitHub during queued-task sweeps, never repaired by a user.
 _Avoid_: Blocked by reference, single blocker.
 
 **Queued task**
-A task with Queued status. Forge starts it by itself, once, when every
+A task with Queued status. Suplex starts it by itself, once, when every
 prerequisite is complete. Start and "Start immediately" queue a task; they
 never bypass a prerequisite. "Send to backlog" returns a queued task to
 Backlog, which never starts by itself. APIs report lifecycle status in
@@ -74,14 +74,14 @@ _Avoid_: Score oracle, automatic approval.
 
 **Native session**
 The OpenCode or Claude Code conversation that owns admitted messages, tool
-calls, and results. Forge selects the harness from the agent profile provider.
+calls, and results. Suplex selects the harness from the agent profile provider.
 _Avoid_: Herdr session, completion receipt file.
 
-Forge keeps one native session per task role: Coordinator, Worker, Reviewer,
+Suplex keeps one native session per task role: Coordinator, Worker, Reviewer,
 Plan A, Plan B, and Rater. Each assignment is an immutable turn in that role's
 conversation. Only one Worker or Advisor turn runs at a time, but switching
 roles does not end the inactive conversation. Missing display attachment data
-does not prevent Forge from resuming native work.
+does not prevent Suplex from resuming native work.
 
 **Turn**
 One prompt and its correlated native response within a session. A turn can
@@ -104,7 +104,7 @@ request, ready pull request, or merged pull request.
 _Avoid_: Universal merge requirement, release phase.
 
 **Delivery operation**
-A Forge-owned Git or GitHub action requested by Coordinator. The operation observes
+A Suplex-owned Git or GitHub action requested by Coordinator. The operation observes
 current external state before deciding whether a mutation is necessary.
 _Avoid_: Integrator turn, mirrored release.
 
@@ -112,9 +112,9 @@ _Avoid_: Integrator turn, mirrored release.
 A named provider, model, reasoning level, and service tier selection. The
 provider is the agent tool that runs the turn: `opencode`, `claude-code`,
 `devin`, or `codex`. An OpenCode model names its vendor, as in
-`openai/gpt-5.6-sol`; Forge splits it only when it calls OpenCode. Projects
+`openai/gpt-5.6-sol`; Suplex splits it only when it calls OpenCode. Projects
 choose Coordinator and Worker defaults. Tasks capture the chosen settings.
-_Avoid_: Vendor as provider, separate Forge model catalog.
+_Avoid_: Vendor as provider, separate Suplex model catalog.
 
 **Project provider policy**
 The credentials permitted for a project's agents. Each row is one credential: a
@@ -124,7 +124,7 @@ Every task role, replacement, and resumed session uses an eligible agent profile
 _Avoid_: Company provider policy, provider defaults as authorization.
 
 **Configured provider**
-An agent tool whose executable Forge resolved on the host. Its sign-in state is
+An agent tool whose executable Suplex resolved on the host. Its sign-in state is
 reported separately. Neither proves that a model request succeeds.
 _Avoid_: Verified inference, inherited Codex authentication.
 
@@ -139,14 +139,14 @@ left their execution uncertain. It permits continuation without replaying the
 admitted prompt.
 _Avoid_: Agent completion claim, automatic server-death inference.
 
-**Forge user**
+**Suplex user**
 A passkey-authenticated person with explicit company membership. An instance
 administrator also controls host setup and recovery.
 _Avoid_: Anonymous operator, provider identity.
 
 **Hermes agent**
 A machine identity limited to its company, granted projects, and tasks it
-created. It uses a revocable credential rather than a Forge user session.
+created. It uses a revocable credential rather than a Suplex user session.
 _Avoid_: Coordinator, Worker, unscoped API key.
 
 **Owner-controlled pilot**

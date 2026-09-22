@@ -17,15 +17,15 @@ const issue = { kind: "jira", site: "https://test.atlassian.net", id: "42", key:
 const evidence = DeliveryEvidenceSchema.parse({ headSha, summary: "Fix the button", before: [{ command: "test", output: "failed\n```" }], after: [{ command: "test", output: "passed" }], howToVerify: ["Click the button"] });
 
 async function fixture() {
-  const directory = await mkdtemp(join(tmpdir(), "forge-issue-evidence-"));
-  const database = createTestDatabase(join(directory, "forge.sqlite"));
+  const directory = await mkdtemp(join(tmpdir(), "suplex-issue-evidence-"));
+  const database = createTestDatabase(join(directory, "suplex.sqlite"));
   cleanup.push(async () => { database.close(); await rm(directory, { recursive: true, force: true }); });
   const stamp = new Date().toISOString();
   database.authTransaction(db => {
-    db.prepare("INSERT INTO forge_companies (id, name, status, created_at) VALUES ('company', 'Company', 'active', ?)").run(stamp);
-    db.prepare("INSERT INTO forge_projects (id, company_id, name, repository_path, worktree_root, repository_identity, base_branch, setup_command, verification_command, created_at, updated_at) VALUES ('project', 'company', 'Project', ?, ?, 'owner/repo', 'main', '', '', ?, ?)").run(directory, directory, stamp, stamp);
+    db.prepare("INSERT INTO suplex_companies (id, name, status, created_at) VALUES ('company', 'Company', 'active', ?)").run(stamp);
+    db.prepare("INSERT INTO suplex_projects (id, company_id, name, repository_path, worktree_root, repository_identity, base_branch, setup_command, verification_command, created_at, updated_at) VALUES ('project', 'company', 'Project', ?, ?, 'owner/repo', 'main', '', '', ?, ?)").run(directory, directory, stamp, stamp);
     insertNativeTaskRow(db, { directory });
-    db.prepare("UPDATE forge_tasks SET issue_json = ?, configuration_json = json_set(configuration_json, '$.integration', json(?)) WHERE id = 'task'").run(JSON.stringify(issue), JSON.stringify({ repository: { kind: "github" }, tracker: { kind: "jira", site: issue.site, project: "APP", emailEnvironment: "TEST_EMAIL", tokenEnvironment: "TEST_TOKEN" } }));
+    db.prepare("UPDATE suplex_tasks SET issue_json = ?, configuration_json = json_set(configuration_json, '$.integration', json(?)) WHERE id = 'task'").run(JSON.stringify(issue), JSON.stringify({ repository: { kind: "github" }, tracker: { kind: "jira", site: issue.site, project: "APP", emailEnvironment: "TEST_EMAIL", tokenEnvironment: "TEST_TOKEN" } }));
   });
   const store = new TaskControlStore(database);
   const profile = { profileId: "profile", provider: "codex" as const, model: "gpt-5.6-sol", reasoningLevel: "medium" as const, serviceTier: "default" as const };
@@ -52,13 +52,13 @@ test("retains raw evidence and retries the captured issue after a lost response,
     return "comment-7";
   });
   await expect(value.service.complete("task", 7, headSha, value.port)).rejects.toThrow("lost response");
-  value.database.authTransaction(db => db.prepare("UPDATE forge_tasks SET issue_json = ? WHERE id = 'task'").run(JSON.stringify({ ...issue, id: "99", key: "APP-99" })));
+  value.database.authTransaction(db => db.prepare("UPDATE suplex_tasks SET issue_json = ? WHERE id = 'task'").run(JSON.stringify({ ...issue, id: "99", key: "APP-99" })));
   await rm(value.generated, { recursive: true });
   await value.service.complete("task", 7, headSha, value.port);
   expect(remote.size).toBe(1);
   expect(publish.mock.calls.every(call => call[0].id === "42")).toBe(true);
   expect(value.update).toHaveBeenCalledTimes(1);
-  expect(value.database.authQuery(db => db.prepare("SELECT COUNT(*) AS n FROM forge_artifacts WHERE task_id = 'task'").get())).toEqual({ n: 1 });
+  expect(value.database.authQuery(db => db.prepare("SELECT COUNT(*) AS n FROM suplex_artifacts WHERE task_id = 'task'").get())).toEqual({ n: 1 });
   await value.service.complete("task", 7, headSha, value.port);
   expect(publish).toHaveBeenCalledTimes(3);
   expect(publish.mock.calls[2]?.[4]).toBe("comment-7");

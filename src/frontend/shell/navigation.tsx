@@ -45,7 +45,7 @@ function CreateActions({ close }: { close?: () => void }): ReactElement {
   const context = useOptionalCompanyContext();
   const company = context?.currentCompany;
   return (
-    <div className="flex gap-2 p-2"><SidebarMenuButton className="min-w-8 flex-1 bg-primary text-primary-foreground duration-200 ease-linear hover:bg-primary/90 hover:text-primary-foreground active:bg-primary/90 active:text-primary-foreground" disabled={company?.status !== "active"} onClick={() => { close?.(); requestNewTask(); }}><CirclePlus />New task</SidebarMenuButton><button type="button" className={buttonVariants({ variant: "outline", size: "icon-sm" })} onClick={() => window.dispatchEvent(new Event("forge:command-menu"))} aria-label="Search Forge" title="Search Forge (⌘K)"><Search /></button></div>
+    <div className="flex gap-2 p-2"><SidebarMenuButton className="min-w-8 flex-1 bg-primary text-primary-foreground duration-200 ease-linear hover:bg-primary/90 hover:text-primary-foreground active:bg-primary/90 active:text-primary-foreground" disabled={company?.status !== "active"} onClick={() => { close?.(); requestNewTask(); }}><CirclePlus />New task</SidebarMenuButton><button type="button" className={buttonVariants({ variant: "outline", size: "icon-sm" })} onClick={() => window.dispatchEvent(new Event("suplex:command-menu"))} aria-label="Search Suplex" title="Search Suplex (⌘K)"><Search /></button></div>
   );
 }
 
@@ -62,10 +62,10 @@ function NavigationSearch({ close }: { close?: () => void }): ReactElement {
   const visible = items.filter((item) => item.label.toLowerCase().includes(query.trim().toLowerCase()));
   useEffect(() => {
     const openMenu = (): void => { setQuery(""); setOpen(true); };
-    window.addEventListener("forge:command-menu", openMenu);
-    return () => window.removeEventListener("forge:command-menu", openMenu);
+    window.addEventListener("suplex:command-menu", openMenu);
+    return () => window.removeEventListener("suplex:command-menu", openMenu);
   }, []);
-  return <><Dialog open={open} onOpenChange={setOpen}><DialogContent><DialogHeader><DialogTitle>Command menu</DialogTitle></DialogHeader><Input autoFocus aria-label="Search Forge" placeholder="Search the views" value={query} onChange={(event) => setQuery(event.target.value)} /><div className="space-y-1"><button type="button" className={buttonVariants({ variant: "ghost", className: "w-full justify-start" })} onClick={() => { setOpen(false); close?.(); requestNewTask(); }}><CirclePlus />New task <kbd className="ml-auto text-[11px] text-muted-foreground">C</kbd></button>{visible.map(({ href, label, icon: Icon }) => <a className={buttonVariants({ variant: "ghost", className: "w-full justify-start" })} href={href} onClick={() => { setOpen(false); close?.(); }} key={href}><Icon />{label}</a>)}</div><p className="text-[11px] text-muted-foreground">⌘K or / search. G then T or B navigates. C starts a new task.</p></DialogContent></Dialog></>;
+  return <><Dialog open={open} onOpenChange={setOpen}><DialogContent><DialogHeader><DialogTitle>Command menu</DialogTitle></DialogHeader><Input autoFocus aria-label="Search Suplex" placeholder="Search the views" value={query} onChange={(event) => setQuery(event.target.value)} /><div className="space-y-1"><button type="button" className={buttonVariants({ variant: "ghost", className: "w-full justify-start" })} onClick={() => { setOpen(false); close?.(); requestNewTask(); }}><CirclePlus />New task <kbd className="ml-auto text-[11px] text-muted-foreground">C</kbd></button>{visible.map(({ href, label, icon: Icon }) => <a className={buttonVariants({ variant: "ghost", className: "w-full justify-start" })} href={href} onClick={() => { setOpen(false); close?.(); }} key={href}><Icon />{label}</a>)}</div><p className="text-[11px] text-muted-foreground">⌘K or / search. G then T or B navigates. C starts a new task.</p></DialogContent></Dialog></>;
 }
 
 function SecondaryNavigation(): ReactElement {
@@ -97,7 +97,7 @@ export function AppSidebar(): ReactElement {
       if (target?.matches("input, textarea, select, button, [contenteditable=true]")) return;
       const key = event.key.toLowerCase();
       if ((event.metaKey || event.ctrlKey) && !event.altKey && key === "k" || !event.metaKey && !event.ctrlKey && key === "/") {
-        event.preventDefault(); window.dispatchEvent(new Event("forge:command-menu")); return;
+        event.preventDefault(); window.dispatchEvent(new Event("suplex:command-menu")); return;
       }
       if (!event.metaKey && !event.ctrlKey && !event.altKey && key === "c" && context?.currentCompany?.status === "active") {
         event.preventDefault(); requestNewTask(); return;

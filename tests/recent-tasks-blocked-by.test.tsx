@@ -1,6 +1,6 @@
 /**
  * @vitest-environment happy-dom
- * @vitest-environment-options { "url": "https://forge.test/tasks?company=company-1" }
+ * @vitest-environment-options { "url": "https://suplex.test/tasks?company=company-1" }
  */
 import { act, type ReactNode } from "react";
 import { createRoot } from "react-dom/client";

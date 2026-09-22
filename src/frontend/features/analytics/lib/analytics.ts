@@ -8,7 +8,7 @@ export function money(value: number | null): string {
   return new Intl.NumberFormat("en-US", { style: "currency", currency: "USD", maximumFractionDigits: 2 }).format(value);
 }
 export function costExplanation(subsidized: boolean, partial: boolean): string {
-  if (subsidized) return `OpenCode reported zero cost. Forge estimates this value with the public models.dev list price. Forge estimates are not bills.${partial ? " Usage is partial." : ""}`;
+  if (subsidized) return `OpenCode reported zero cost. Suplex estimates this value with the public models.dev list price. Suplex estimates are not bills.${partial ? " Usage is partial." : ""}`;
   return `Estimated cost (USD)${partial ? ", partial usage" : ""}. OpenCode estimates are not bills.`;
 }
 export function duration(value: number | null): string {

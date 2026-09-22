@@ -9,10 +9,10 @@ import { createOpenCodePromptIntent } from "../src/runtimes/opencode/session.js"
 import { OpenCodeServerReferenceSchema, type OpenCodeServerReference } from "../src/runtimes/opencode/server.js";
 
 test.each(["absent", "admitted", "tool_running", "tool_error", "busy", "bad_history", "bad_status"])("dispatch fencing retains the replacement server and reads native history when %s", async evidence => {
-  const directory = await mkdtemp(join(tmpdir(), "forge-dispatch-fence-"));
+  const directory = await mkdtemp(join(tmpdir(), "suplex-dispatch-fence-"));
   const sessionID = "ses_fence";
   const scope: OpenCodeTaskScope = { id: "session-proof", taskId: "task-proof", directory, role: "worker", workerMode: "planned", purpose: "implementation", workflow: "standard", evidenceRoot: null, profile: { providerID: "opencode", modelID: "openai/test", reasoningEffort: "medium", serviceTier: "default" } };
-  const intent = createOpenCodePromptIntent({ sessionID, directory, prompt: "Do one operation", model: { providerID: "openai", modelID: "test" }, agent: "forge-worker", variant: "medium", dispatch: "ambiguous" });
+  const intent = createOpenCodePromptIntent({ sessionID, directory, prompt: "Do one operation", model: { providerID: "openai", modelID: "test" }, agent: "suplex-worker", variant: "medium", dispatch: "ambiguous" });
   let posts = 0;
   const server = createServer((request, response) => {
     if (request.method !== "GET") posts++;
@@ -22,7 +22,7 @@ test.each(["absent", "admitted", "tool_running", "tool_error", "busy", "bad_hist
     else if (path === `/session/${sessionID}/message`) {
       result = evidence === "bad_history" ? [{}] : ["admitted", "tool_running", "tool_error"].includes(evidence) ? [
         { info: { id: intent.messageID, sessionID, role: "user", time: { created: 1 }, model: intent.model, agent: intent.agent }, parts: [{ type: "text", text: intent.prompt }] },
-        ...(evidence.startsWith("tool_") ? [{ info: { id: "msg_assistant", sessionID, role: "assistant", parentID: intent.messageID, time: { created: 2 }, modelID: "test", providerID: "openai", mode: "forge-worker", agent: "forge-worker", path: { cwd: directory, root: directory }, cost: 0, tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }, ...(evidence === "tool_error" ? { error: { name: "MessageAbortedError" } } : {}) }, parts: [{ type: "tool", callID: "call_probe", tool: "bash", state: { status: evidence === "tool_error" ? "error" : "running" } }] }] : []),
+        ...(evidence.startsWith("tool_") ? [{ info: { id: "msg_assistant", sessionID, role: "assistant", parentID: intent.messageID, time: { created: 2 }, modelID: "test", providerID: "openai", mode: "suplex-worker", agent: "suplex-worker", path: { cwd: directory, root: directory }, cost: 0, tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }, ...(evidence === "tool_error" ? { error: { name: "MessageAbortedError" } } : {}) }, parts: [{ type: "tool", callID: "call_probe", tool: "bash", state: { status: evidence === "tool_error" ? "error" : "running" } }] }] : []),
       ] : [];
     }
     else if (path === "/session/status") result = evidence === "bad_status" ? { [sessionID]: { type: "unrecognized" } } : evidence === "busy" ? { [sessionID]: { type: "busy" } } : {};
@@ -47,7 +47,7 @@ test.each(["absent", "admitted", "tool_running", "tool_error", "busy", "bad_hist
         return sessionID;
       }
     }
-    const runtime = new Runtime(join(directory, "forge.sqlite"), new CliHerdrClient());
+    const runtime = new Runtime(join(directory, "suplex.sqlite"), new CliHerdrClient());
     for (let retry = 0; retry < 2; retry++) {
       const result = await runtime.recoverDispatch(scope, intent, { serverGeneration: old.generation, claimedAt: "2020-01-01T00:00:00.000Z" });
       expect(result.retry).toBe(evidence === "absent" ? "allowed" : "forbidden");

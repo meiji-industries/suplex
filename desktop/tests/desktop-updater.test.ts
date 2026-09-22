@@ -41,7 +41,7 @@ test("manual check offers download and explicit restart", async () => {
   await vi.waitFor(() => expect(updater.downloadUpdate).toHaveBeenCalledOnce());
   updater.emit("update-downloaded", { version: "1.2.3" });
   await vi.waitFor(() => expect(updater.quitAndInstall).toHaveBeenCalledWith(false, true));
-  expect(showMessageBox).toHaveBeenCalledWith(expect.objectContaining({ detail: "Restart the desktop app to apply the update. A Forge host started by this app restarts too; an independent host is not changed." }));
+  expect(showMessageBox).toHaveBeenCalledWith(expect.objectContaining({ detail: "Restart the desktop app to apply the update. A Suplex host started by this app restarts too; an independent host is not changed." }));
 });
 
 test("an emitted and rejected error produces one accurate dialog", async () => {
@@ -49,12 +49,12 @@ test("an emitted and rejected error produces one accurate dialog", async () => {
   updater.checkForUpdates.mockImplementationOnce(async () => { const error = new Error("offline"); updater.emit("error", error); throw error; });
   await subject.check(true);
   expect(showMessageBox).toHaveBeenCalledTimes(1);
-  expect(showMessageBox).toHaveBeenCalledWith(expect.objectContaining({ message: "Forge could not check the desktop app update.", detail: "offline" }));
+  expect(showMessageBox).toHaveBeenCalledWith(expect.objectContaining({ message: "Suplex could not check the desktop app update.", detail: "offline" }));
 
   showMessageBox.mockReset().mockResolvedValue({ response: 0 });
   updater.emit("update-available", { version: "1.2.4" });
   updater.downloadUpdate.mockImplementationOnce(async () => { const error = new Error("disk full"); updater.emit("error", error); throw error; });
-  await vi.waitFor(() => expect(showMessageBox).toHaveBeenCalledWith(expect.objectContaining({ message: "Forge could not download the desktop app update.", detail: "disk full" })));
+  await vi.waitFor(() => expect(showMessageBox).toHaveBeenCalledWith(expect.objectContaining({ message: "Suplex could not download the desktop app update.", detail: "disk full" })));
   expect(showMessageBox).toHaveBeenCalledTimes(2);
 });
 
@@ -62,5 +62,5 @@ test("an install-time error is reported once", async () => {
   new DesktopUpdater({ updater, dialog: { showMessageBox }, configured: true });
   updater.emit("error", new Error("signature rejected"));
   await vi.waitFor(() => expect(showMessageBox).toHaveBeenCalledOnce());
-  expect(showMessageBox).toHaveBeenCalledWith(expect.objectContaining({ message: "Forge could not install the desktop app update.", detail: "signature rejected" }));
+  expect(showMessageBox).toHaveBeenCalledWith(expect.objectContaining({ message: "Suplex could not install the desktop app update.", detail: "signature rejected" }));
 });

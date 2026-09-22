@@ -38,7 +38,7 @@ export type DesktopApi = {
 
 declare const location: { readonly protocol: string }; // the preload runs in the renderer; this package compiles without the DOM lib
 
-const send = async (message: DesktopMessage): Promise<unknown> => ipcRenderer.invoke("forge:desktop", message);
+const send = async (message: DesktopMessage): Promise<unknown> => ipcRenderer.invoke("suplex:desktop", message);
 
 const api: DesktopApi = {
   snapshot: async () => (await send({ action: "snapshot" })) as DesktopSnapshot,
@@ -50,8 +50,8 @@ const api: DesktopApi = {
   openLogs: async () => { await send({ action: "open-logs" }); },
   copyOutput: async () => { await send({ action: "copy-output" }); },
   testConnection: async (url) => (await send({ action: "test-connection", url })) as { ok: boolean; reason: string | null },
-  on: (listener) => { ipcRenderer.on("forge:event", (_event, payload: InstallEvent) => { listener(payload); }); },
+  on: (listener) => { ipcRenderer.on("suplex:event", (_event, payload: InstallEvent) => { listener(payload); }); },
 };
 
-// Only the app's own onboarding pages get the bridge; a loaded Forge origin must never see it.
-if (location.protocol === "file:") contextBridge.exposeInMainWorld("forgeDesktop", api);
+// Only the app's own onboarding pages get the bridge; a loaded Suplex origin must never see it.
+if (location.protocol === "file:") contextBridge.exposeInMainWorld("suplexDesktop", api);

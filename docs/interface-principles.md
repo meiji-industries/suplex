@@ -1,6 +1,6 @@
-# Forge interface principles
+# Suplex interface principles
 
-Forge is an application, not a webpage. The interface should feel like a
+Suplex is an application, not a webpage. The interface should feel like a
 desktop productivity tool: persistent navigation, compact toolbars, dense
 lists, fast context, and minimal visual ceremony. Use Linear and Paperclip as
 references for information architecture and interaction patterns, not as

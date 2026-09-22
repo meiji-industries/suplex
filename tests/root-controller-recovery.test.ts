@@ -14,7 +14,7 @@ test("observe retains task state when GitHub is unavailable", async () => {
   value.database.authTransaction(db => insertNativeTaskRow(db, { taskId: "observe-prerequisite", directory: value.directory }));
   value.store.create({ taskId: "observe-prerequisite", startImmediately: true, objective: "Prepare observation", deliveryTarget: "merged", deliveryIntent: { repository: "owner/repo", headBranch: "observe-prerequisite", baseBranch: "main", baselineSha: "a", pullRequestNumber: null }, rootProfile: profile, workerProfile: profile });
   value.store.admitQueued(["observe-prerequisite"]);
-  value.database.authTransaction(db => db.prepare("INSERT INTO forge_task_dependencies (task_id, depends_on_task_id, created_at) VALUES ('task', 'observe-prerequisite', ?)").run(new Date().toISOString()));
+  value.database.authTransaction(db => db.prepare("INSERT INTO suplex_task_dependencies (task_id, depends_on_task_id, created_at) VALUES ('task', 'observe-prerequisite', ?)").run(new Date().toISOString()));
   const delivery = {
     observe: async () => { throw new GithubReleaseFailure("provider-unavailable", "GitHub is offline"); },
     execute: async () => { throw new Error("not used"); },
@@ -118,7 +118,7 @@ test("Coordinator resumes the same native session without reposting its prompt",
   await new RootController(new TaskControlStore(value.database), value.harness, undefined, undefined, undefined, value.reader, async () => undefined).recover("task");
   expect(value.store.currentSession("task", "root")?.nativeSessionId).toBe(root?.nativeSessionId);
   expect(value.harness.dispatched).toHaveLength(1);
-  expect(value.harness.dispatched[0]).toMatchObject({ agent: "forge-root", variant: "max", model: { providerID: "openai", modelID: "gpt-5.6-luna" } });
+  expect(value.harness.dispatched[0]).toMatchObject({ agent: "suplex-root", variant: "max", model: { providerID: "openai", modelID: "gpt-5.6-luna" } });
   expect(value.harness.dispatched[0]?.messageID).toMatch(/^msg_/);
 });
 
@@ -130,7 +130,7 @@ test.each([
 ] as const)("recovery preserves the $provider model and dispatches its queued prompt once", async ({ provider, model, expected }) => {
   const value = await fixture();
   const profile = { profileId: "profile", provider, model, reasoningLevel: "max", serviceTier: "priority" };
-  value.database.authTransaction(db => db.prepare("UPDATE forge_task_controls SET root_profile_json = ?, worker_profile_json = ? WHERE task_id = ?").run(JSON.stringify(profile), JSON.stringify(profile), "task"));
+  value.database.authTransaction(db => db.prepare("UPDATE suplex_task_controls SET root_profile_json = ?, worker_profile_json = ? WHERE task_id = ?").run(JSON.stringify(profile), JSON.stringify(profile), "task"));
   const root = value.controller.prepareRoot("task");
   const turn = value.store.pendingTurns(root.id)[0]!;
 
@@ -147,7 +147,7 @@ test("a queued human note recovers without pane metadata or duplicate native dis
   const note = value.store.wakeRoot({ taskId: "task", rootSessionId: root.id, generation: root.generation, prompt: "Human note:\nCheck the current result." });
   await value.controller.recover("task");
   expect(value.harness.dispatched).toMatchObject([{ messageID: note.id, prompt: note.promptText }]);
-  value.database.authTransaction(db => db.prepare("UPDATE forge_task_sessions SET pane_id = NULL WHERE id = ?").run(root.id));
+  value.database.authTransaction(db => db.prepare("UPDATE suplex_task_sessions SET pane_id = NULL WHERE id = ?").run(root.id));
   await new RootController(new TaskControlStore(value.database), value.harness, undefined, undefined, undefined, value.reader, async () => undefined).recover("task");
   expect(value.harness.dispatched).toHaveLength(1);
 });
@@ -158,7 +158,7 @@ test("a queued human note dispatches while Coordinator and Worker are busy after
   await value.controller.recover("task");
   value.store.launchWorker({ taskId: "task", rootSessionId: root.id, rootGeneration: root.generation, instruction: "Continue the assigned work." });
   const note = value.store.wakeRoot({ taskId: "task", rootSessionId: root.id, generation: root.generation, prompt: "Human note:\nKeep the current work moving." });
-  value.database.authTransaction(db => db.prepare("UPDATE forge_task_sessions SET pane_id = NULL WHERE id = ?").run(root.id));
+  value.database.authTransaction(db => db.prepare("UPDATE suplex_task_sessions SET pane_id = NULL WHERE id = ?").run(root.id));
   expect(value.store.pendingTurns(root.id).map(turn => turn.id)).toContain(note.id);
   value.store.completeRootTurn(value.harness.dispatched[0]!.messageID, "root receipt", "Coordinator is busy");
   await new RootController(new TaskControlStore(value.database), value.harness, undefined, undefined, undefined, value.reader, async () => undefined).recover("task");
@@ -219,7 +219,7 @@ test.each(["missing", "recreated"])("a delivered Coordinator resumes its native 
   value.store.completeRootTurn(original.messageID, JSON.stringify({ state: "completed", text: "Delivered" }));
   value.store.markDelivered("task");
   await value.controller.recover("task");
-  value.database.authTransaction(db => db.prepare("UPDATE forge_task_sessions SET pane_id = ? WHERE id = ?").run(metadata === "missing" ? null : "recreated-pane", root.id));
+  value.database.authTransaction(db => db.prepare("UPDATE suplex_task_sessions SET pane_id = ? WHERE id = ?").run(metadata === "missing" ? null : "recreated-pane", root.id));
   value.store.sendNote("task", "Fix the failing checks.");
   const resumed = new TaskControlStore(value.database);
   const controller = new RootController(resumed, value.harness, undefined, undefined, undefined, value.reader, async () => undefined);

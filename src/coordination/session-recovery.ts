@@ -127,7 +127,7 @@ export async function recoverSession(dependencies: SessionRecoveryDependencies, 
         directory: taskScope.directory,
         prompt: turn.promptText,
         model: taskScope.profile.providerID === "opencode" ? openCodeModel(taskScope.profile.modelID) : { providerID: taskScope.profile.providerID, modelID: taskScope.profile.modelID },
-        agent: `forge-${taskScope.role}`,
+        agent: `suplex-${taskScope.role}`,
         variant: taskScope.profile.reasoningEffort,
         dispatch: turn.status === "pending_prompt" ? "not_submitted" : "ambiguous",
       });

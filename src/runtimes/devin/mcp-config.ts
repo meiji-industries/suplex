@@ -61,8 +61,8 @@ export async function ensureDevinMcpConfig(directory: string): Promise<string> {
     ...current,
     mcpServers: {
       ...current.mcpServers,
-      forge_root: { command: root.command, args: root.args, env: root.environment },
-      forge_advisor: { command: advisor.command, args: advisor.args, env: advisor.environment },
+      suplex_root: { command: root.command, args: root.args, env: root.environment },
+      suplex_advisor: { command: advisor.command, args: advisor.args, env: advisor.environment },
     },
   };
   const serialized = `${JSON.stringify(next, null, 2)}\n`;

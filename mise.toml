@@ -10,9 +10,9 @@ experimental = true
 
 [env]
 NODE_ENV = "development"
-FORGE_TAILSCALE_ADDRESS = "{{ exec(command='sh scripts/resolve-magicdns.sh') | trim }}"
-FORGE_TAILSCALE_EXPOSURE = "serve"
-FORGE_BIND_ADDRESS = "127.0.0.1"
+SUPLEX_TAILSCALE_ADDRESS = "{{ exec(command='sh scripts/resolve-magicdns.sh') | trim }}"
+SUPLEX_TAILSCALE_EXPOSURE = "serve"
+SUPLEX_BIND_ADDRESS = "127.0.0.1"
 _.path = "./node_modules/.bin"
 
 [tasks.setup]
@@ -21,22 +21,22 @@ alias = "worktree"
 run = "mise install && pnpm exec playwright install chromium"
 
 [tasks.dev]
-description = "Run the Forge supervisor, API, worker host, and Vite HMR"
-env = { FORGE_PRETTY_LOGS = "1", FORGE_FRONTEND_DEV_SERVER = "1", FORGE_DEVELOPMENT_AUTO_LOGIN = "1" }
+description = "Run the Suplex supervisor, API, worker host, and Vite HMR"
+env = { SUPLEX_PRETTY_LOGS = "1", SUPLEX_FRONTEND_DEV_SERVER = "1", SUPLEX_DEVELOPMENT_AUTO_LOGIN = "1" }
 run = '''
 export PATH="$(dirname "$(mise which node)"):$PATH"
 [ -r "${NODE_EXTRA_CA_CERTS:-}" ] || unset NODE_EXTRA_CA_CERTS
-export FORGE_PORT=${CONDUCTOR_PORT:-4111}
+export SUPLEX_PORT=${CONDUCTOR_PORT:-4111}
 exec node src/platform/updates/supervisor.ts
 '''
 
 [tasks."dev:watch"]
-description = "Run the Forge supervisor with backend reloads"
-env = { FORGE_PRETTY_LOGS = "1", FORGE_FRONTEND_DEV_SERVER = "1", FORGE_DEVELOPMENT_AUTO_LOGIN = "1" }
+description = "Run the Suplex supervisor with backend reloads"
+env = { SUPLEX_PRETTY_LOGS = "1", SUPLEX_FRONTEND_DEV_SERVER = "1", SUPLEX_DEVELOPMENT_AUTO_LOGIN = "1" }
 run = '''
 export PATH="$(dirname "$(mise which node)"):$PATH"
 [ -r "${NODE_EXTRA_CA_CERTS:-}" ] || unset NODE_EXTRA_CA_CERTS
-export FORGE_PORT=${CONDUCTOR_PORT:-4111}
+export SUPLEX_PORT=${CONDUCTOR_PORT:-4111}
 exec node src/platform/updates/supervisor.ts --watch
 '''
 
@@ -87,19 +87,19 @@ run = "pnpm run desktop:typecheck"
 [tasks."desktop:test"]
 run = "pnpm run desktop:test"
 [tasks."desktop:dist"]
-description = "Bundle the server runtime, then package the arm64 Forge.app, DMG, and ZIP under desktop/release (Developer ID signed if the cert is in the keychain, not notarized)"
+description = "Bundle the server runtime, then package the arm64 Suplex.app, DMG, and ZIP under desktop/release (Developer ID signed if the cert is in the keychain, not notarized)"
 run = "pnpm run desktop:dist"
 [tasks."desktop:dist:signed"]
-description = "Bundle the server runtime, then package, sign, notarize, and staple the arm64 DMG for distribution; Apple credentials come from the 1Password Forge vault (.env.production)"
+description = "Bundle the server runtime, then package, sign, notarize, and staple the arm64 DMG for distribution; Apple credentials come from the 1Password Suplex vault (.env.production)"
 run = '''
 source scripts/onepassword.sh
 onepassword_setup_service_account
 pnpm run desktop:dist:signed
-shasum -a 256 desktop/release/Forge-*-arm64.dmg
+shasum -a 256 desktop/release/Suplex-*-arm64.dmg
 '''
 [tasks."_1password:setup"]
 hide = true
-description = "Fetch or verify the Forge 1Password service account"
+description = "Fetch or verify the Suplex 1Password service account"
 run = '''
 source scripts/onepassword.sh
 onepassword_setup_service_account
@@ -167,9 +167,9 @@ run = "RELEASE_BUMP=minor mise run _release:run"
 description = "Bump, sign, notarize, commit, tag, push, and publish the next patch desktop release"
 run = "RELEASE_BUMP=patch mise run _release:run"
 [tasks."desktop:open"]
-description = "Open the installed Forge.app at this checkout's dev stack (http://localhost:<port>)"
+description = "Open the installed Suplex.app at this checkout's dev stack (http://localhost:<port>)"
 run = '''
 export PATH="$(dirname "$(mise which node)"):$PATH"
-export FORGE_PORT=${CONDUCTOR_PORT:-4111}
+export SUPLEX_PORT=${CONDUCTOR_PORT:-4111}
 exec tsx src/cli.ts desktop
 '''

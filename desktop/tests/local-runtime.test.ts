@@ -24,7 +24,7 @@ const healthy = vi.fn(async () => false);
 const subject = (ports: Partial<LocalRuntimePorts> = {}, port = 4111): ReturnType<typeof createLocalRuntime> =>
   createLocalRuntime({
     runtimeRoot: FIXTURE,
-    userData: mkdtempSync(join(tmpdir(), "forge-desktop-local-")),
+    userData: mkdtempSync(join(tmpdir(), "suplex-desktop-local-")),
     port,
     base: { HOME: "/Users/ada", USER: "ada", TMPDIR: "/tmp/x" },
     ports: { spawn, kill, wait, healthy, freePort: async (preferred) => preferred, ...ports },
@@ -47,7 +47,7 @@ test("a server already answering on the port is adopted, never spawned and never
 
 test("the supervisor is spawned detached with C2's entry point, cwd, and environment", async () => {
   healthy.mockResolvedValueOnce(false).mockResolvedValue(true);
-  const userData = mkdtempSync(join(tmpdir(), "forge-desktop-local-"));
+  const userData = mkdtempSync(join(tmpdir(), "suplex-desktop-local-"));
   const runtime = createLocalRuntime({ runtimeRoot: FIXTURE, userData, port: 4111, base: { HOME: "/Users/ada" }, ports: { spawn, kill, wait, healthy, freePort: async (preferred) => preferred } });
   expect(await runtime.start()).toEqual({ port: 4111, adopted: false });
   expect(spawn).toHaveBeenCalledWith(
@@ -55,7 +55,7 @@ test("the supervisor is spawned detached with C2's entry point, cwd, and environ
     [join(FIXTURE, "app", "dist", "src", "platform", "updates", "supervisor.js")],
     expect.objectContaining({ cwd: join(FIXTURE, "app"), detached: true, stdio: ["ignore", "pipe", "pipe"] }),
   );
-  expect(spawn.mock.lastCall?.[2].env).toMatchObject({ FORGE_PACKAGED: "1", FORGE_ACCESS_MODE: "local", FORGE_BIND_ADDRESS: "127.0.0.1", FORGE_PORT: "4111", FORGE_DATA_ROOT: join(userData, "data") });
+  expect(spawn.mock.lastCall?.[2].env).toMatchObject({ SUPLEX_PACKAGED: "1", SUPLEX_ACCESS_MODE: "local", SUPLEX_BIND_ADDRESS: "127.0.0.1", SUPLEX_PORT: "4111", SUPLEX_DATA_ROOT: join(userData, "data") });
   expect(wait).toHaveBeenCalledWith(500);
   child.stdout.write("listening\n");
   child.stderr.write("a warning\n");
@@ -66,7 +66,7 @@ test("the supervisor is spawned detached with C2's entry point, cwd, and environ
 test("a busy port that does not answer health moves the server to a free one", async () => {
   const runtime = subject({ freePort: async () => 4222, healthy: vi.fn(async (origin: string) => origin === "http://127.0.0.1:4222") });
   expect(await runtime.start()).toEqual({ port: 4222, adopted: false });
-  expect(spawn.mock.lastCall?.[2].env.FORGE_PORT).toBe("4222");
+  expect(spawn.mock.lastCall?.[2].env.SUPLEX_PORT).toBe("4222");
 });
 
 test("the preferred port is kept when it is free and given up when it is taken", async () => {

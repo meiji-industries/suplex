@@ -35,7 +35,7 @@ export function defaultRepositoryProvisioner(): RepositoryProvisioner {
           throw new ProjectFailure("Repository provisioning failed", [finding("repository-conflict", "repositoryUrl", "The default repository path already exists and does not match this GitHub repository")], 409);
         }
       } else {
-        const temporaryPath = await mkdtemp(join(dirname(input.repositoryPath), ".forge-clone-"));
+        const temporaryPath = await mkdtemp(join(dirname(input.repositoryPath), ".suplex-clone-"));
         try {
           await git(["clone", "--origin", "origin", "--", input.cloneUrl, temporaryPath]);
           await rename(temporaryPath, input.repositoryPath);

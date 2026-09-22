@@ -1,6 +1,6 @@
 PRAGMA foreign_keys=OFF;
 --> statement-breakpoint
-CREATE TABLE forge_herdr_turns_awaiting_human (
+CREATE TABLE suplex_herdr_turns_awaiting_human (
   turn_id TEXT PRIMARY KEY NOT NULL,
   task_id TEXT NOT NULL,
   role_session_id TEXT NOT NULL,
@@ -29,14 +29,14 @@ CREATE TABLE forge_herdr_turns_awaiting_human (
   updated_at TEXT NOT NULL,
   finished_at TEXT,
   UNIQUE (ledger, execution_id, prompt_kind, correction_index),
-  FOREIGN KEY (task_id) REFERENCES forge_tasks(id) ON DELETE CASCADE,
-  FOREIGN KEY (role_session_id) REFERENCES forge_herdr_role_sessions(id) ON DELETE CASCADE,
-  FOREIGN KEY (result_artifact_id) REFERENCES forge_artifacts(id),
-  FOREIGN KEY (rollout_artifact_id) REFERENCES forge_artifacts(id),
-  FOREIGN KEY (correction_of_turn_id) REFERENCES forge_herdr_turns_awaiting_human(turn_id)
+  FOREIGN KEY (task_id) REFERENCES suplex_tasks(id) ON DELETE CASCADE,
+  FOREIGN KEY (role_session_id) REFERENCES suplex_herdr_role_sessions(id) ON DELETE CASCADE,
+  FOREIGN KEY (result_artifact_id) REFERENCES suplex_artifacts(id),
+  FOREIGN KEY (rollout_artifact_id) REFERENCES suplex_artifacts(id),
+  FOREIGN KEY (correction_of_turn_id) REFERENCES suplex_herdr_turns_awaiting_human(turn_id)
 );
 --> statement-breakpoint
-INSERT INTO forge_herdr_turns_awaiting_human (
+INSERT INTO suplex_herdr_turns_awaiting_human (
   turn_id, task_id, role_session_id, execution_role, ledger, execution_id,
   prompt_kind, prompt_sha256, result_relative_path, rollout_path,
   rollout_start_offset, rollout_cursor_offset, codex_turn_id, prompt_sent_at,
@@ -51,13 +51,13 @@ SELECT
   task_complete_seen_at, result_sha256, result_artifact_id, rollout_artifact_id,
   correction_of_turn_id, correction_index, interrupted_generation,
   interrupted_prompt_sent_at, status, created_at, updated_at, finished_at
-FROM forge_herdr_turns;
+FROM suplex_herdr_turns;
 --> statement-breakpoint
-DROP TABLE forge_herdr_turns;
+DROP TABLE suplex_herdr_turns;
 --> statement-breakpoint
-ALTER TABLE forge_herdr_turns_awaiting_human RENAME TO forge_herdr_turns;
+ALTER TABLE suplex_herdr_turns_awaiting_human RENAME TO suplex_herdr_turns;
 --> statement-breakpoint
-CREATE INDEX forge_herdr_turn_active_idx
-  ON forge_herdr_turns (task_id, role_session_id, status, updated_at);
+CREATE INDEX suplex_herdr_turn_active_idx
+  ON suplex_herdr_turns (task_id, role_session_id, status, updated_at);
 --> statement-breakpoint
 PRAGMA foreign_keys=ON;

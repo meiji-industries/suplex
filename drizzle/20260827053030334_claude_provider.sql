@@ -1,4 +1,4 @@
-CREATE TABLE `forge_herdr_role_sessions_new` (
+CREATE TABLE `suplex_herdr_role_sessions_new` (
   `id` text PRIMARY KEY NOT NULL,
   `task_id` text NOT NULL,
   `session_role` text NOT NULL CHECK (`session_role` IN ('lead', 'developer', 'reviewer')),
@@ -19,24 +19,24 @@ CREATE TABLE `forge_herdr_role_sessions_new` (
   `created_at` text NOT NULL,
   `updated_at` text NOT NULL,
   `last_seen_at` text,
-  FOREIGN KEY (`task_id`) REFERENCES `forge_tasks`(`id`) ON DELETE cascade,
+  FOREIGN KEY (`task_id`) REFERENCES `suplex_tasks`(`id`) ON DELETE cascade,
   UNIQUE (`task_id`, `session_role`, `generation`)
 );
 --> statement-breakpoint
-INSERT INTO `forge_herdr_role_sessions_new` SELECT * FROM `forge_herdr_role_sessions`;
+INSERT INTO `suplex_herdr_role_sessions_new` SELECT * FROM `suplex_herdr_role_sessions`;
 --> statement-breakpoint
-DROP TABLE `forge_herdr_role_sessions`;
+DROP TABLE `suplex_herdr_role_sessions`;
 --> statement-breakpoint
-ALTER TABLE `forge_herdr_role_sessions_new` RENAME TO `forge_herdr_role_sessions`;
+ALTER TABLE `suplex_herdr_role_sessions_new` RENAME TO `suplex_herdr_role_sessions`;
 --> statement-breakpoint
-CREATE UNIQUE INDEX `forge_herdr_current_persistent_role_unique`
-  ON `forge_herdr_role_sessions` (`task_id`, `session_role`)
+CREATE UNIQUE INDEX `suplex_herdr_current_persistent_role_unique`
+  ON `suplex_herdr_role_sessions` (`task_id`, `session_role`)
   WHERE `is_current` = 1 AND `session_role` IN ('lead', 'developer');
 --> statement-breakpoint
-CREATE INDEX `forge_herdr_role_session_status_idx`
-  ON `forge_herdr_role_sessions` (`status`, `updated_at`);
+CREATE INDEX `suplex_herdr_role_session_status_idx`
+  ON `suplex_herdr_role_sessions` (`status`, `updated_at`);
 --> statement-breakpoint
-CREATE TABLE IF NOT EXISTS `forge_models` (
+CREATE TABLE IF NOT EXISTS `suplex_models` (
   `model_id` text PRIMARY KEY NOT NULL,
   `display_name` text NOT NULL,
   `description` text NOT NULL,
@@ -46,24 +46,24 @@ CREATE TABLE IF NOT EXISTS `forge_models` (
   `updated_at` text NOT NULL
 );
 --> statement-breakpoint
-ALTER TABLE `forge_models` ADD COLUMN `provider` text NOT NULL DEFAULT 'codex';
+ALTER TABLE `suplex_models` ADD COLUMN `provider` text NOT NULL DEFAULT 'codex';
 --> statement-breakpoint
-INSERT INTO `forge_models` (`model_id`, `display_name`, `description`, `status`, `sort_order`, `created_at`, `updated_at`, `provider`)
+INSERT INTO `suplex_models` (`model_id`, `display_name`, `description`, `status`, `sort_order`, `created_at`, `updated_at`, `provider`)
 SELECT 'claude-fable-5', 'Claude Fable 5', 'Claude Code model', 'active', 10, '2026-08-27T00:00:00.000Z', '2026-08-27T00:00:00.000Z', 'claude'
-WHERE NOT EXISTS (SELECT 1 FROM `forge_models` WHERE `model_id` = 'claude-fable-5');
+WHERE NOT EXISTS (SELECT 1 FROM `suplex_models` WHERE `model_id` = 'claude-fable-5');
 --> statement-breakpoint
-INSERT INTO `forge_models` (`model_id`, `display_name`, `description`, `status`, `sort_order`, `created_at`, `updated_at`, `provider`)
+INSERT INTO `suplex_models` (`model_id`, `display_name`, `description`, `status`, `sort_order`, `created_at`, `updated_at`, `provider`)
 SELECT 'claude-opus-5', 'Claude Opus 5', 'Claude Code model', 'active', 20, '2026-08-27T00:00:00.000Z', '2026-08-27T00:00:00.000Z', 'claude'
-WHERE NOT EXISTS (SELECT 1 FROM `forge_models` WHERE `model_id` = 'claude-opus-5');
+WHERE NOT EXISTS (SELECT 1 FROM `suplex_models` WHERE `model_id` = 'claude-opus-5');
 --> statement-breakpoint
-INSERT INTO `forge_models` (`model_id`, `display_name`, `description`, `status`, `sort_order`, `created_at`, `updated_at`, `provider`)
+INSERT INTO `suplex_models` (`model_id`, `display_name`, `description`, `status`, `sort_order`, `created_at`, `updated_at`, `provider`)
 SELECT 'claude-sonnet-5', 'Claude Sonnet 5', 'Claude Code model', 'active', 30, '2026-08-27T00:00:00.000Z', '2026-08-27T00:00:00.000Z', 'claude'
-WHERE NOT EXISTS (SELECT 1 FROM `forge_models` WHERE `model_id` = 'claude-sonnet-5');
+WHERE NOT EXISTS (SELECT 1 FROM `suplex_models` WHERE `model_id` = 'claude-sonnet-5');
 --> statement-breakpoint
-INSERT INTO `forge_models` (`model_id`, `display_name`, `description`, `status`, `sort_order`, `created_at`, `updated_at`, `provider`)
+INSERT INTO `suplex_models` (`model_id`, `display_name`, `description`, `status`, `sort_order`, `created_at`, `updated_at`, `provider`)
 SELECT 'claude-haiku-4-5-20251001', 'Claude Haiku 4.5', 'Claude Code model', 'active', 40, '2026-08-27T00:00:00.000Z', '2026-08-27T00:00:00.000Z', 'claude'
-WHERE NOT EXISTS (SELECT 1 FROM `forge_models` WHERE `model_id` = 'claude-haiku-4-5-20251001');
+WHERE NOT EXISTS (SELECT 1 FROM `suplex_models` WHERE `model_id` = 'claude-haiku-4-5-20251001');
 --> statement-breakpoint
-INSERT INTO `forge_profiles` (`id`, `name`, `provider`, `model`, `reasoning_level`, `service_priority`, `capacity`, `created_at`, `updated_at`)
+INSERT INTO `suplex_profiles` (`id`, `name`, `provider`, `model`, `reasoning_level`, `service_priority`, `capacity`, `created_at`, `updated_at`)
 SELECT 'profile_default_claude_fable', 'Fable', 'claude', 'claude-fable-5', 'high', 'standard', 2, '2026-08-27T00:00:00.000Z', '2026-08-27T00:00:00.000Z'
-WHERE NOT EXISTS (SELECT 1 FROM `forge_profiles` WHERE `id` = 'profile_default_claude_fable');
+WHERE NOT EXISTS (SELECT 1 FROM `suplex_profiles` WHERE `id` = 'profile_default_claude_fable');

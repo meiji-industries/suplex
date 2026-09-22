@@ -7,7 +7,7 @@ import { z } from "zod";
 
 import { AuthService } from "../src/identity/auth.js";
 import { createTestConfig } from "../src/platform/config.js";
-import { ForgeDatabase } from "../src/platform/database.js";
+import { SuplexDatabase } from "../src/platform/database.js";
 import { ProjectService, inferRepositoryCommands, type LocalRepositoryAdapter } from "../src/projects/projects.js";
 import { AgentProfileService } from "../src/profiles/agent-profiles.js";
 import { isProfileAllowed, type ProjectProviderPolicy } from "../src/projects/provider-policy.js";
@@ -16,7 +16,7 @@ import type { GithubAdapter } from "../src/integrations/github/client.js";
 
 interface Fixture {
   root: string;
-  database: ForgeDatabase;
+  database: SuplexDatabase;
   auth: AuthService;
   projects: ProjectService;
   adminId: string;
@@ -27,7 +27,7 @@ interface Fixture {
 
 const localRepository: LocalRepositoryAdapter = {
   async inspect(input) {
-    const identity = input.repositoryPath.includes("unavailable") ? "acme/unavailable" : input.repositoryPath.includes("cross") ? "acme/cross" : "acme/forge";
+    const identity = input.repositoryPath.includes("unavailable") ? "acme/unavailable" : input.repositoryPath.includes("cross") ? "acme/cross" : "acme/suplex";
     return { canonicalPath: input.repositoryPath, remoteRepository: identity, clean: true, baseSha: "a".repeat(40), targetSha: "b".repeat(40) };
   },
 };
@@ -38,15 +38,15 @@ const github: GithubAdapter = {
 };
 
 async function fixture(): Promise<Fixture> {
-  const root = await mkdtemp(join(tmpdir(), "forge-project-test-"));
+  const root = await mkdtemp(join(tmpdir(), "suplex-project-test-"));
   const repositoryRoot = join(root, "repositories");
   const worktreeRoot = join(root, "worktrees");
   const repositoryPath = join(repositoryRoot, "repo");
   await mkdir(repositoryPath, { recursive: true });
   await mkdir(worktreeRoot, { recursive: true });
-  const database = new ForgeDatabase(join(root, "forge.sqlite"));
-  database.authQuery((db) => db.prepare("INSERT INTO forge_users (id, display_name, username, role, status, created_at, updated_at) VALUES ('admin-1', 'Admin', 'admin@forge.local', 'admin', 'active', '2026-08-11T00:00:00.000Z', '2026-08-11T00:00:00.000Z')").run());
-  const config = createTestConfig(root, { reachableAddress: "https://forge.tailnet.ts.net:4111", repositoryRoot, worktreeRoot });
+  const database = new SuplexDatabase(join(root, "suplex.sqlite"));
+  database.authQuery((db) => db.prepare("INSERT INTO suplex_users (id, display_name, username, role, status, created_at, updated_at) VALUES ('admin-1', 'Admin', 'admin@suplex.local', 'admin', 'active', '2026-08-11T00:00:00.000Z', '2026-08-11T00:00:00.000Z')").run());
+  const config = createTestConfig(root, { reachableAddress: "https://suplex.tailnet.ts.net:4111", repositoryRoot, worktreeRoot });
   const auth = new AuthService(database, config);
   const projects = new ProjectService(database, auth, config, { localRepository, github, validateProjectConfiguration: true, readProviders: async () => ({
     directory: root, observedAt: new Date().toISOString(), providers: [
@@ -65,10 +65,10 @@ async function close(value: Fixture): Promise<void> {
 
 function input(value: Fixture, overrides: Record<string, unknown> = {}) {
   return {
-    name: "Forge project",
+    name: "Suplex project",
     repositoryPath: value.repositoryPath,
     worktreeRoot: value.worktreeRoot,
-    repository: "acme/forge",
+    repository: "acme/suplex",
     baseBranch: "main",
     setupCommand: "pnpm install",
     verificationCommand: "pnpm test",
@@ -120,7 +120,7 @@ test.each([
   ["yarn", "yarn.lock", "yarn check"],
   ["bun", "bun.lock", "bun check"],
 ] as const)("prefers the complete package check with the %s runner", async (packageManager, lockfile, verificationCommand) => {
-  const repository = await mkdtemp(join(tmpdir(), `forge-infer-${packageManager}-`));
+  const repository = await mkdtemp(join(tmpdir(), `suplex-infer-${packageManager}-`));
   try {
     await writeFile(join(repository, "package.json"), JSON.stringify({ scripts: { check: "lint && test", test: "test" } }));
     await writeFile(join(repository, lockfile), "");
@@ -131,7 +131,7 @@ test.each([
 });
 
 test("prefers complete checks in mise and Makefile repositories", async () => {
-  const root = await mkdtemp(join(tmpdir(), "forge-infer-checks-"));
+  const root = await mkdtemp(join(tmpdir(), "suplex-infer-checks-"));
   try {
     const miseRepository = join(root, "mise");
     const makeRepository = join(root, "make");
@@ -146,7 +146,7 @@ test("prefers complete checks in mise and Makefile repositories", async () => {
   }
 });
 
-test("reads provider-qualified models from OpenCode without a Forge catalog gate", async () => {
+test("reads provider-qualified models from OpenCode without a Suplex catalog gate", async () => {
   const value = await fixture();
   try {
     expect(await value.projects.listModels(value.adminId)).toEqual([
@@ -159,11 +159,11 @@ test("reads provider-qualified models from OpenCode without a Forge catalog gate
   }
 });
 
-test("clones a GitHub repository under the configured Forge roots", async () => {
+test("clones a GitHub repository under the configured Suplex roots", async () => {
   const value = await fixture();
   const provisioned: Array<{ cloneUrl: string; repository: string; repositoryPath: string; worktreeRoot: string }> = [];
   const projects = new ProjectService(value.database, value.auth, createTestConfig(value.root, {
-    reachableAddress: "https://forge.tailnet.ts.net:4111",
+    reachableAddress: "https://suplex.tailnet.ts.net:4111",
     repositoryRoot: join(value.root, "repositories"),
     worktreeRoot: value.worktreeRoot,
   }), {
@@ -202,7 +202,7 @@ test("keeps saved project changes live without mutating prior configuration valu
     expect(value.projects.getProject(value.adminId, original.id).baseBranch).toBe("release");
     expect(original.baseBranch).toBe("main");
     expect(unchanged.baseBranch).toBe("main");
-    const history = value.database.authQuery((db) => db.prepare("SELECT action, metadata_json FROM forge_audit_events WHERE company_id = ? AND action IN ('project_created', 'project_updated')").all(value.companyId) as Array<{ action: string; metadata_json: string }>);
+    const history = value.database.authQuery((db) => db.prepare("SELECT action, metadata_json FROM suplex_audit_events WHERE company_id = ? AND action IN ('project_created', 'project_updated')").all(value.companyId) as Array<{ action: string; metadata_json: string }>);
     expect(history.filter((event) => event.action === "project_created")).toHaveLength(1);
     expect(history.filter((event) => event.action === "project_updated")).toHaveLength(2);
     expect(history.every((event) => event.metadata_json.includes(original.id))).toBe(true);
@@ -218,7 +218,7 @@ test("partial project updates preserve omitted fields and validate only changed 
       execution: { instructions: "Keep this", skillDirectories: ["skills"], environment: { APP_MODE: "test" }, mcp: [] },
     }));
     const unavailable = new ProjectService(value.database, value.auth, createTestConfig(value.root, {
-      reachableAddress: "https://forge.tailnet.ts.net:4111",
+      reachableAddress: "https://suplex.tailnet.ts.net:4111",
       repositoryRoot: join(value.root, "repositories"),
       worktreeRoot: value.worktreeRoot,
     }), {
@@ -260,7 +260,7 @@ test("partial branch and tracker updates do not require the repository provider"
   try {
     const project = await value.projects.createProject(value.adminId, value.companyId, input(value));
     const providerUnavailable = new ProjectService(value.database, value.auth, createTestConfig(value.root, {
-      reachableAddress: "https://forge.tailnet.ts.net:4111",
+      reachableAddress: "https://suplex.tailnet.ts.net:4111",
       repositoryRoot: join(value.root, "repositories"),
       worktreeRoot: value.worktreeRoot,
     }), {
@@ -284,7 +284,7 @@ test("partial agent updates reject invalid profiles and provider policies atomic
     await expect(value.projects.patchProject(value.adminId, project.id, { rootProfileId: "missing-profile", providerPolicy: { allowedProviders: ["codex"], allowedInstanceIds: [] } })).rejects.toMatchObject({ findings: expect.arrayContaining([expect.objectContaining({ code: "profile-ineligible", field: "rootProfileId" })]) });
     expect(value.projects.getProject(value.adminId, project.id)).toMatchObject({ rootProfileId: project.rootProfileId, providerPolicy: project.providerPolicy });
 
-    const rootProvider = z.object({ provider: z.string() }).parse(value.database.authQuery((db) => db.prepare("SELECT provider FROM forge_profiles WHERE id = ?").get(project.rootProfileId))).provider;
+    const rootProvider = z.object({ provider: z.string() }).parse(value.database.authQuery((db) => db.prepare("SELECT provider FROM suplex_profiles WHERE id = ?").get(project.rootProfileId))).provider;
     const disallowedProvider = rootProvider === "devin" ? "codex" : "devin";
     await expect(value.projects.patchProject(value.adminId, project.id, { providerPolicy: { allowedProviders: [disallowedProvider], allowedInstanceIds: [] } })).rejects.toMatchObject({ findings: expect.arrayContaining([expect.objectContaining({ code: "profile-provider-ineligible" })]) });
     expect(value.projects.getProject(value.adminId, project.id).providerPolicy).toEqual(project.providerPolicy);
@@ -313,7 +313,7 @@ test("partial rename does not revalidate archived default profiles", async () =>
   const value = await fixture();
   try {
     const project = await value.projects.createProject(value.adminId, value.companyId, input(value));
-    value.database.authQuery((db) => db.prepare("UPDATE forge_profiles SET archived_at = '2026-09-17T00:00:00.000Z' WHERE id IN (?, ?)").run(project.rootProfileId, project.workerProfileId));
+    value.database.authQuery((db) => db.prepare("UPDATE suplex_profiles SET archived_at = '2026-09-17T00:00:00.000Z' WHERE id IN (?, ?)").run(project.rootProfileId, project.workerProfileId));
     await expect(value.projects.patchProject(value.adminId, project.id, { name: "Renamed with archived defaults" })).resolves.toMatchObject({ name: "Renamed with archived defaults" });
   } finally {
     await close(value);
@@ -325,9 +325,9 @@ test("project members can list the minimal provider instance catalog", async () 
   try {
     const project = await value.projects.createProject(value.adminId, value.companyId, input(value));
     value.database.authQuery((db) => {
-      db.prepare("INSERT INTO forge_users (id, display_name, username, role, status, created_at, updated_at) VALUES ('member-catalog', 'Member', 'catalog@forge.local', 'member', 'active', '2026-09-17T00:00:00.000Z', '2026-09-17T00:00:00.000Z')").run();
-      db.prepare("INSERT INTO forge_memberships (user_id, company_id, created_at) VALUES ('member-catalog', ?, '2026-09-17T00:00:00.000Z')").run(value.companyId);
-      db.prepare("INSERT INTO forge_provider_instances (id, provider, label, home_directory, created_at, updated_at) VALUES ('instance_acmelaude', 'claude-code', 'acmelaude', '/private/acmelaude', '2026-09-17T00:00:00.000Z', '2026-09-17T00:00:00.000Z')").run();
+      db.prepare("INSERT INTO suplex_users (id, display_name, username, role, status, created_at, updated_at) VALUES ('member-catalog', 'Member', 'catalog@suplex.local', 'member', 'active', '2026-09-17T00:00:00.000Z', '2026-09-17T00:00:00.000Z')").run();
+      db.prepare("INSERT INTO suplex_memberships (user_id, company_id, created_at) VALUES ('member-catalog', ?, '2026-09-17T00:00:00.000Z')").run(value.companyId);
+      db.prepare("INSERT INTO suplex_provider_instances (id, provider, label, home_directory, created_at, updated_at) VALUES ('instance_acmelaude', 'claude-code', 'acmelaude', '/private/acmelaude', '2026-09-17T00:00:00.000Z', '2026-09-17T00:00:00.000Z')").run();
     });
 
     expect(value.projects.listProjectProviderInstances("member-catalog", project.id)).toEqual([{ id: "instance_acmelaude", provider: "claude-code", label: "acmelaude" }]);
@@ -370,7 +370,7 @@ test("fails closed for provider mismatch, unavailable agents, and cross-company 
   const value = await fixture();
   try {
     const project = await value.projects.createProject(value.adminId, value.companyId, input(value));
-    const mismatched = new ProjectService(value.database, value.auth, createTestConfig(value.root, { reachableAddress: "https://forge.tailnet.ts.net:4111", repositoryRoot: join(value.root, "repositories"), worktreeRoot: value.worktreeRoot }), {
+    const mismatched = new ProjectService(value.database, value.auth, createTestConfig(value.root, { reachableAddress: "https://suplex.tailnet.ts.net:4111", repositoryRoot: join(value.root, "repositories"), worktreeRoot: value.worktreeRoot }), {
       localRepository: { async inspect(input) { return { canonicalPath: input.repositoryPath, remoteRepository: "other/repo", clean: true, baseSha: "a".repeat(40), targetSha: "b".repeat(40) }; } },
       github,
       validateProjectConfiguration: true,
@@ -383,9 +383,9 @@ test("fails closed for provider mismatch, unavailable agents, and cross-company 
     await expect(value.projects.createProject(value.adminId, value.companyId, input(value, { name: "Unavailable", repositoryPath: unavailableRepository, worktreeRoot: unavailableWorktree, repository: "acme/unavailable", rootProfileId: "missing-profile", workerProfileId: "missing-profile" }))).rejects.toMatchObject({ findings: expect.arrayContaining([expect.objectContaining({ code: "profile-ineligible" })]) });
 
     value.database.authQuery((db) => {
-      db.prepare("INSERT INTO forge_users (id, display_name, username, role, status, created_at, updated_at) VALUES ('member-1', 'Member', 'member@forge.local', 'member', 'active', '2026-08-11T00:00:00.000Z', '2026-08-11T00:00:00.000Z')").run();
-      db.prepare("INSERT INTO forge_companies (id, name, status, created_at) VALUES ('company-b', 'Other', 'active', '2026-08-11T00:00:00.000Z')").run();
-      db.prepare("INSERT INTO forge_memberships (user_id, company_id, created_at) VALUES ('member-1', 'company-b', '2026-08-11T00:00:00.000Z')").run();
+      db.prepare("INSERT INTO suplex_users (id, display_name, username, role, status, created_at, updated_at) VALUES ('member-1', 'Member', 'member@suplex.local', 'member', 'active', '2026-08-11T00:00:00.000Z', '2026-08-11T00:00:00.000Z')").run();
+      db.prepare("INSERT INTO suplex_companies (id, name, status, created_at) VALUES ('company-b', 'Other', 'active', '2026-08-11T00:00:00.000Z')").run();
+      db.prepare("INSERT INTO suplex_memberships (user_id, company_id, created_at) VALUES ('member-1', 'company-b', '2026-08-11T00:00:00.000Z')").run();
     });
     expect(() => value.projects.getProject("member-1", project.id)).toThrowError("Not found");
     expect(value.projects.listProjects("member-1")).toEqual([]);
@@ -405,13 +405,13 @@ test("rejects GitHub provider URL with wrong hostname or path", async () => {
   const value = await fixture();
   try {
     const project = await value.projects.createProject(value.adminId, value.companyId, input(value));
-    const wrongHost = new ProjectService(value.database, value.auth, createTestConfig(value.root, { reachableAddress: "https://forge.tailnet.ts.net:4111", repositoryRoot: join(value.root, "repositories"), worktreeRoot: value.worktreeRoot }), {
+    const wrongHost = new ProjectService(value.database, value.auth, createTestConfig(value.root, { reachableAddress: "https://suplex.tailnet.ts.net:4111", repositoryRoot: join(value.root, "repositories"), worktreeRoot: value.worktreeRoot }), {
       localRepository,
-      github: { async checkAuthentication() {}, async getRepository(input) { return { nameWithOwner: input.nameWithOwner, url: "https://notgithub.com/acme/forge" }; } },
+      github: { async checkAuthentication() {}, async getRepository(input) { return { nameWithOwner: input.nameWithOwner, url: "https://notgithub.com/acme/suplex" }; } },
       validateProjectConfiguration: true,
     });
     await expect(wrongHost.updateProject(value.adminId, project.id, input(value))).rejects.toMatchObject({ findings: expect.arrayContaining([expect.objectContaining({ code: "provider-host" })]) });
-    const wrongPath = new ProjectService(value.database, value.auth, createTestConfig(value.root, { reachableAddress: "https://forge.tailnet.ts.net:4111", repositoryRoot: join(value.root, "repositories"), worktreeRoot: value.worktreeRoot }), {
+    const wrongPath = new ProjectService(value.database, value.auth, createTestConfig(value.root, { reachableAddress: "https://suplex.tailnet.ts.net:4111", repositoryRoot: join(value.root, "repositories"), worktreeRoot: value.worktreeRoot }), {
       localRepository,
       github: { async checkAuthentication() {}, async getRepository(input) { return { nameWithOwner: input.nameWithOwner, url: "https://github.com/other/repo" }; } },
       validateProjectConfiguration: true,

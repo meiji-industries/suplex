@@ -1,7 +1,7 @@
 import { expect, test } from "vitest";
 
 import { GithubTriggerDispatchRepository } from "../src/integrations/github/trigger-dispatches.js";
-import { ForgeDatabase } from "../src/platform/database.js";
+import { SuplexDatabase } from "../src/platform/database.js";
 import type { GithubTriggerPort } from "../src/integrations/github/trigger-inspection.js";
 import { taskRequestHash } from "../src/tasks/repository.js";
 import { nativeApp } from "./helpers/native-app.js";
@@ -20,8 +20,8 @@ async function linkedFixture() {
   const dispatch = repository.prepare({ ruleId: rule.id, companyId: f.company.id, projectId: f.project.id, repositoryId: 9, repositoryName: "owner/repo", pullRequestNumber: 7, authorityUserId: f.userId, request: { projectId: f.project.id, title: "Dispatch", description: "Dispatch", images: [], rootProfileId: profiles.root.profileId, workerProfileId: profiles.worker.profileId, deliveryTarget: "pull_request_draft", runProjectTests: true, visualEvidence: "off", source: { kind: "pull_request", number: 7 }, workflow: "standard", advisorProfileIds: {} }, policy: { headSha: "a".repeat(40), baseSha: "b".repeat(40), headBranch: "feature", baseBranch: "main", protectedPaths: [], repositoryId: 9, repositoryName: "owner/repo", deliveryTarget: "pull_request_draft" }, preset: workflow, profiles });
   const { task } = await f.tasks.createTask(f.userId, f.company.id, { projectId: f.project.id, title: "Dispatch", description: "Dispatch", startImmediately: false, idempotencyKey: dispatch.idempotencyKey });
   const configuration = { repository: "owner/repo", repositoryPath: f.project.repositoryPath, worktreeRoot: f.project.worktreeRoot, branch: "feature", baseBranch: "main", baselineSha: "b".repeat(40), startingSha: "a".repeat(40), setupCommand: f.project.setupCommand, verificationCommand: f.project.verificationCommand, runProjectTests: true, visualEvidence: "off", source: { kind: "pull_request", number: 7 }, capturedAt: new Date().toISOString() };
-  f.database.authQuery(db => db.prepare("UPDATE forge_tasks SET configuration_json = ?, request_hash = ? WHERE id = ?").run(JSON.stringify(configuration), taskRequestHash(dispatch.request, { kind: "user", id: f.userId }), task.id));
-  f.database.authQuery(db => db.prepare("UPDATE forge_task_controls SET status = 'backlog', delivery_target = ?, workflow = ?, root_profile_json = ?, worker_profile_json = ?, advisor_profiles_json = ? WHERE task_id = ?").run(dispatch.policy.deliveryTarget, dispatch.request.workflow, JSON.stringify(profiles.root), JSON.stringify(profiles.worker), JSON.stringify(profiles.advisors), task.id));
+  f.database.authQuery(db => db.prepare("UPDATE suplex_tasks SET configuration_json = ?, request_hash = ? WHERE id = ?").run(JSON.stringify(configuration), taskRequestHash(dispatch.request, { kind: "user", id: f.userId }), task.id));
+  f.database.authQuery(db => db.prepare("UPDATE suplex_task_controls SET status = 'backlog', delivery_target = ?, workflow = ?, root_profile_json = ?, worker_profile_json = ?, advisor_profiles_json = ? WHERE task_id = ?").run(dispatch.policy.deliveryTarget, dispatch.request.workflow, JSON.stringify(profiles.root), JSON.stringify(profiles.worker), JSON.stringify(profiles.advisors), task.id));
   return { f, repository, dispatch, task };
 }
 
@@ -68,9 +68,9 @@ test("links a matching backlog task once and preserves the terminal association"
   const { f, repository, dispatch, task } = await linkedFixture();
   try {
     expect(repository.linkTask(dispatch.id, task.id)).toMatchObject({ taskId: task.id });
-    expect(f.database.authQuery(db => db.prepare("SELECT status FROM forge_task_controls WHERE task_id = ?").get(task.id) as { status: string }).status).toBe("backlog");
+    expect(f.database.authQuery(db => db.prepare("SELECT status FROM suplex_task_controls WHERE task_id = ?").get(task.id) as { status: string }).status).toBe("backlog");
     expect(repository.linkTask(dispatch.id, task.id)).toMatchObject({ taskId: task.id });
-    f.database.authQuery(db => db.prepare("UPDATE forge_task_controls SET status = 'delivered' WHERE task_id = ?").run(task.id));
+    f.database.authQuery(db => db.prepare("UPDATE suplex_task_controls SET status = 'delivered' WHERE task_id = ?").run(task.id));
     expect(repository.linkTask(dispatch.id, task.id)).toMatchObject({ taskId: task.id });
     await expect(f.tasks.createTask(f.userId, f.company.id, { projectId: f.project.id, title: "Other", description: "Other", startImmediately: false, idempotencyKey: "other-link-task" }).then(({ task: other }) => repository.linkTask(dispatch.id, other.id))).rejects.toThrow("another task");
   } finally { await f.close(); }
@@ -80,16 +80,16 @@ test.each(["starting_sha", "baseline_sha", "delivery_target", "root_profile_json
   const { f, repository, dispatch, task } = await linkedFixture();
   try {
     f.database.authQuery(db => {
-      if (field === "starting_sha") db.prepare("UPDATE forge_tasks SET configuration_json = json_set(configuration_json, '$.startingSha', ?) WHERE id = ?").run("c".repeat(40), task.id);
-      else if (field === "baseline_sha") db.prepare("UPDATE forge_tasks SET configuration_json = json_set(configuration_json, '$.baselineSha', ?) WHERE id = ?").run("c".repeat(40), task.id);
-      else if (field === "delivery_target") db.prepare("UPDATE forge_task_controls SET delivery_target = 'local_worktree' WHERE task_id = ?").run(task.id);
-      else if (field === "root_profile_json") db.prepare("UPDATE forge_task_controls SET root_profile_json = json_set(root_profile_json, '$.model', 'other') WHERE task_id = ?").run(task.id);
-      else if (field === "request_hash") db.prepare("UPDATE forge_tasks SET request_hash = 'wrong' WHERE id = ?").run(task.id);
+      if (field === "starting_sha") db.prepare("UPDATE suplex_tasks SET configuration_json = json_set(configuration_json, '$.startingSha', ?) WHERE id = ?").run("c".repeat(40), task.id);
+      else if (field === "baseline_sha") db.prepare("UPDATE suplex_tasks SET configuration_json = json_set(configuration_json, '$.baselineSha', ?) WHERE id = ?").run("c".repeat(40), task.id);
+      else if (field === "delivery_target") db.prepare("UPDATE suplex_task_controls SET delivery_target = 'local_worktree' WHERE task_id = ?").run(task.id);
+      else if (field === "root_profile_json") db.prepare("UPDATE suplex_task_controls SET root_profile_json = json_set(root_profile_json, '$.model', 'other') WHERE task_id = ?").run(task.id);
+      else if (field === "request_hash") db.prepare("UPDATE suplex_tasks SET request_hash = 'wrong' WHERE id = ?").run(task.id);
       else if (field === "creator_user_id") {
-        db.prepare("INSERT INTO forge_users (id, display_name, username, role, status, created_at, updated_at) SELECT 'user_link_mismatch', display_name, username || '-link-mismatch', role, status, created_at, updated_at FROM forge_users WHERE id = ?").run(f.userId);
-        db.prepare("UPDATE forge_tasks SET creator_user_id = 'user_link_mismatch', creator_agent_id = NULL WHERE id = ?").run(task.id);
+        db.prepare("INSERT INTO suplex_users (id, display_name, username, role, status, created_at, updated_at) SELECT 'user_link_mismatch', display_name, username || '-link-mismatch', role, status, created_at, updated_at FROM suplex_users WHERE id = ?").run(f.userId);
+        db.prepare("UPDATE suplex_tasks SET creator_user_id = 'user_link_mismatch', creator_agent_id = NULL WHERE id = ?").run(task.id);
       }
-      else db.prepare("UPDATE forge_task_controls SET status = 'active' WHERE task_id = ?").run(task.id);
+      else db.prepare("UPDATE suplex_task_controls SET status = 'active' WHERE task_id = ?").run(task.id);
     });
     expect(() => repository.linkTask(dispatch.id, task.id)).toThrow();
     expect(repository.get(dispatch.id)?.taskId).toBeNull();
@@ -100,7 +100,7 @@ test("reopens a linked dispatch with its exact immutable capture", async () => {
   const { f, repository, dispatch, task } = await linkedFixture();
   try {
     repository.linkTask(dispatch.id, task.id);
-    const reopened = new ForgeDatabase(f.config.databasePath, { migrate: false });
+    const reopened = new SuplexDatabase(f.config.databasePath, { migrate: false });
     try { expect(new GithubTriggerDispatchRepository(reopened).get(dispatch.id)).toMatchObject({ request: dispatch.request, policy: dispatch.policy, idempotencyKey: dispatch.idempotencyKey, taskId: task.id }); }
     finally { reopened.close(); }
   } finally { await f.close(); }
@@ -130,7 +130,7 @@ test("keeps the original repair capture when retry input and preset change", asy
     const edited = f.workflows.update(f.userId, input.preset.id, { description: "Edited", visualEvidence: "capture" });
     const retry = repository.prepare({ ...input, request: { ...input.request, title: "Changed" }, preset: edited });
     expect(retry).toEqual(first);
-    expect(f.database.authQuery(db => db.prepare("SELECT request_json FROM forge_github_trigger_dispatches WHERE id = ?").get(first.id) as { request_json: string }).request_json).toBe(JSON.stringify(first.request));
+    expect(f.database.authQuery(db => db.prepare("SELECT request_json FROM suplex_github_trigger_dispatches WHERE id = ?").get(first.id) as { request_json: string }).request_json).toBe(JSON.stringify(first.request));
     expect(() => repository.prepare({ ...input, authorityUserId: "other" })).toThrow();
     expect(() => repository.prepare({ ...input, companyId: "other" })).toThrow();
   } finally { await f.close(); }

@@ -1,7 +1,7 @@
 import { readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { afterEach, expect, test } from "vitest";
-import { ForgeDatabase } from "../src/platform/database.js";
+import { SuplexDatabase } from "../src/platform/database.js";
 import { DELIVERY_WAIT_NEXT, DeliveryOperations } from "../src/delivery/operations.js";
 import { inspectDeliveryDiff } from "../src/delivery/review.js";
 import { RootBridge } from "../src/coordination/root-bridge.js";
@@ -24,14 +24,14 @@ test("pending checks persist across restart and suppress idle Coordinator turns 
   const turnsBefore = f.rootTurns().length;
   const dispatchesBefore = f.harness.dispatched.length;
 
-  const reopened = new ForgeDatabase(join(f.directory, "forge.sqlite"), { migrate: false });
+  const reopened = new SuplexDatabase(join(f.directory, "suplex.sqlite"), { migrate: false });
   const store = new TaskControlStore(reopened, f.alive);
   const delivery = new DeliveryOperations(store, f.port);
   const controller = new RootController(store, f.harness, delivery, undefined, { root: join(f.directory, "evidence") }, f.reader);
   const host = new TaskHost(reopened, { controller, delivery });
   try {
     for (const paneId of [null, "recreated-pane"] as const) {
-      reopened.authTransaction(db => db.prepare("UPDATE forge_task_sessions SET pane_id = ? WHERE id = ?").run(paneId, f.identity().sessionId));
+      reopened.authTransaction(db => db.prepare("UPDATE suplex_task_sessions SET pane_id = ? WHERE id = ?").run(paneId, f.identity().sessionId));
       store.wakeIdleRoot("task");
       await host.recover("task");
       await host.recover("task");
@@ -65,7 +65,7 @@ test("passing CI jobs do not wake Coordinator while another job is pending", { t
   const turnsBefore = f.rootTurns().length;
   const dispatchesBefore = f.harness.dispatched.length;
 
-  const reopened = new ForgeDatabase(join(f.directory, "forge.sqlite"), { migrate: false });
+  const reopened = new SuplexDatabase(join(f.directory, "suplex.sqlite"), { migrate: false });
   const store = new TaskControlStore(reopened, f.alive);
   const delivery = new DeliveryOperations(store, f.port);
   const controller = new RootController(store, f.harness, delivery, undefined, { root: join(f.directory, "evidence") }, f.reader);
@@ -73,7 +73,7 @@ test("passing CI jobs do not wake Coordinator while another job is pending", { t
   try {
     for (const [passed, paneId] of [[1, null], [2, "recreated-pane"], [3, null]] as const) {
       f.github.checks = checks(passed);
-      reopened.authTransaction(db => db.prepare("UPDATE forge_task_sessions SET pane_id = ? WHERE id = ?").run(paneId, f.identity().sessionId));
+      reopened.authTransaction(db => db.prepare("UPDATE suplex_task_sessions SET pane_id = ? WHERE id = ?").run(paneId, f.identity().sessionId));
       store.wakeIdleRoot("task");
       await host.recover("task");
       await host.recover("task");
@@ -233,7 +233,7 @@ test("an existing pull request rated 7 is repaired until 9, pushed, waits for CI
     expect(f.store.get("task").workflowState.deliveryWait).not.toBeNull();
     expect(Date.parse(f.store.get("task").wakeAt!) - Date.now()).toBeGreaterThan(20_000);
     // The wait survives a restart with new instances and unchanged polls still add nothing.
-    const restarted = new TaskHost(new ForgeDatabase(join(f.directory, "forge.sqlite"), { migrate: false }), { controller: new RootController(new TaskControlStore(f.database, f.alive), f.harness, new DeliveryOperations(new TaskControlStore(f.database, f.alive), f.port), undefined, { root: join(f.directory, "evidence") }, f.reader), delivery: new DeliveryOperations(new TaskControlStore(f.database, f.alive), f.port) });
+    const restarted = new TaskHost(new SuplexDatabase(join(f.directory, "suplex.sqlite"), { migrate: false }), { controller: new RootController(new TaskControlStore(f.database, f.alive), f.harness, new DeliveryOperations(new TaskControlStore(f.database, f.alive), f.port), undefined, { root: join(f.directory, "evidence") }, f.reader), delivery: new DeliveryOperations(new TaskControlStore(f.database, f.alive), f.port) });
     try { await restarted.recover("task"); } finally { await restarted.stop(); }
     expect(f.rootTurns()).toHaveLength(turnsBefore);
     // CI fails with real evidence from the fixture: one continuation, then Rater sees the failure.
@@ -441,7 +441,7 @@ test("root tool calls are serialized per task through the tool owner and a dead 
   observation = { kind: "running", startTime: "test-process" };
   storeA.releaseToolOwner("task", "wrong-token");
   expect(f.store.get("task").workflowState.toolOwner?.token).toBe(first);
-  f.database.authTransaction(db => db.prepare("UPDATE forge_task_controls SET workflow_state_json = json_set(workflow_state_json, '$.toolOwner.processStartTime', 'dead-process') WHERE task_id = 'task'").run());
+  f.database.authTransaction(db => db.prepare("UPDATE suplex_task_controls SET workflow_state_json = json_set(workflow_state_json, '$.toolOwner.processStartTime', 'dead-process') WHERE task_id = 'task'").run());
   const replaced = await storeB.claimToolOwner("task");
   expect(replaced).toBeTruthy();
   expect(replaced).not.toBe(first);

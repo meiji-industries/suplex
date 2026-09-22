@@ -3,16 +3,16 @@ import type { HealthSnapshot } from "./health.js";
 export type FrontendAssetMode = "built" | "development";
 
 function frontendHead(mode: FrontendAssetMode): string {
-  return mode === "built" ? '    <link rel="stylesheet" href="/assets/forge-ui.css">\n' : "";
+  return mode === "built" ? '    <link rel="stylesheet" href="/assets/suplex-ui.css">\n' : "";
 }
 
 function frontendEntry(mode: FrontendAssetMode): string {
-  const source = mode === "development" ? "/src/frontend/main.tsx" : "/assets/forge-ui.js";
+  const source = mode === "development" ? "/src/frontend/main.tsx" : "/assets/suplex-ui.js";
   return `    <script type="module" src="${source}"></script>`;
 }
 
 function themeBootstrap(): string {
-  return `    <script>(() => { let saved = null; try { saved = localStorage.getItem("forge.theme"); } catch {} const dark = saved === "dark" || saved !== "light" && matchMedia("(prefers-color-scheme: dark)").matches; const root = document.documentElement; root.classList.toggle("dark", dark); root.style.colorScheme = dark ? "dark" : "light"; document.querySelector('meta[name="theme-color"]').content = dark ? "#0a0a0a" : "#ffffff"; })();</script>`;
+  return `    <script>(() => { let saved = null; try { saved = localStorage.getItem("suplex.theme"); } catch {} const dark = saved === "dark" || saved !== "light" && matchMedia("(prefers-color-scheme: dark)").matches; const root = document.documentElement; root.classList.toggle("dark", dark); root.style.colorScheme = dark ? "dark" : "light"; document.querySelector('meta[name="theme-color"]').content = dark ? "#0a0a0a" : "#ffffff"; })();</script>`;
 }
 
 function escapeHtml(value: string): string {
@@ -32,20 +32,20 @@ export function renderHealthPage(snapshot: HealthSnapshot, assetMode: FrontendAs
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="theme-color" content="#ffffff">
 ${themeBootstrap()}
-    <title>Forge · Host health</title>
+    <title>Suplex · Host health</title>
 ${frontendHead(assetMode)}  </head>
   <body>
-    <div id="forge-app">
-      <main aria-label="Forge host health">
-        <p>Forge · Host health</p>
+    <div id="suplex-app">
+      <main aria-label="Suplex host health">
+        <p>Suplex · Host health</p>
         <h1>Host health</h1>
         <p>Reachable at ${escapeHtml(snapshot.reachableAddress)}</p>
         <p>${snapshot.ready ? "Everything is operational" : "Attention needed"}</p>
         <section aria-label="Health checks">${snapshot.checks.map(renderFallbackCheck).join("")}</section>
       </main>
     </div>
-    <noscript>Forge host health requires JavaScript for live refresh. The server-rendered checks above remain available.</noscript>
-    <script>window.__FORGE_HEALTH__ = ${serialized};</script>
+    <noscript>Suplex host health requires JavaScript for live refresh. The server-rendered checks above remain available.</noscript>
+    <script>window.__SUPLEX_HEALTH__ = ${serialized};</script>
 ${frontendEntry(assetMode)}
   </body>
 </html>`;
@@ -59,12 +59,12 @@ export function renderApplicationPage(view: "auth" | "oauth-consent" | "admin" |
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="theme-color" content="#ffffff">
 ${themeBootstrap()}
-    <title>Forge · ${view === "auth" ? "Sign in" : view === "oauth-consent" ? "Approve connection" : view === "admin" ? "Administration" : view === "projects" ? "Projects" : view === "project-prompts" ? "Project prompts" : view === "project-templates" ? "Project templates" : view === "tasks" ? "Tasks" : view === "board" ? "Board" : view === "timeline" ? "Timeline" : view === "profile" ? "Profile" : view === "setup" ? "Set up" : view === "onboarding" ? "Onboarding" : "Company settings"}</title>
+    <title>Suplex · ${view === "auth" ? "Sign in" : view === "oauth-consent" ? "Approve connection" : view === "admin" ? "Administration" : view === "projects" ? "Projects" : view === "project-prompts" ? "Project prompts" : view === "project-templates" ? "Project templates" : view === "tasks" ? "Tasks" : view === "board" ? "Board" : view === "timeline" ? "Timeline" : view === "profile" ? "Profile" : view === "setup" ? "Set up" : view === "onboarding" ? "Onboarding" : "Company settings"}</title>
 ${frontendHead(assetMode)}  </head>
   <body>
-    <div id="forge-app"></div>
-    <noscript>Forge requires JavaScript for passkey authentication.</noscript>
-    <script>window.__FORGE_VIEW__ = ${JSON.stringify(view)};</script>
+    <div id="suplex-app"></div>
+    <noscript>Suplex requires JavaScript for passkey authentication.</noscript>
+    <script>window.__SUPLEX_VIEW__ = ${JSON.stringify(view)};</script>
 ${frontendEntry(assetMode)}
   </body>
 </html>`;

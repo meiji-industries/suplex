@@ -1,4 +1,4 @@
-const storageKey = "forge-tab-id";
+const storageKey = "suplex-tab-id";
 let tabId: string | undefined;
 let documentId: string | undefined;
 let lastReportAttempt = 0;
@@ -35,7 +35,7 @@ export function reportClientLifecycle(state: "startup" | "resumed" | "api_activi
       method: "POST",
       credentials: "same-origin",
       keepalive: state === "pagehide",
-      headers: { "Content-Type": "application/json", "X-CSRF-V1": token, "X-Forge-Tab-Id": clientId },
+      headers: { "Content-Type": "application/json", "X-CSRF-V1": token, "X-Suplex-Tab-Id": clientId },
       body: JSON.stringify({ state, tabId: clientId, documentId, clientTime: new Date().toISOString(), visible: document.visibilityState === "visible", online: navigator.onLine }),
     }).catch(() => undefined);
   } catch { /* Telemetry cannot block the page. */ }

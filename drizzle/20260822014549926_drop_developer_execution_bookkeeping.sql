@@ -1,7 +1,7 @@
-DROP TABLE `forge_developer_result_conflicts`;
+DROP TABLE `suplex_developer_result_conflicts`;
 --> statement-breakpoint
-DROP TABLE `forge_developer_result_claims`;
+DROP TABLE `suplex_developer_result_claims`;
 --> statement-breakpoint
-DROP TABLE `forge_developer_execution_truth`;
+DROP TABLE `suplex_developer_execution_truth`;
 --> statement-breakpoint
-DROP TABLE `forge_developer_execution_leases`;
+DROP TABLE `suplex_developer_execution_leases`;

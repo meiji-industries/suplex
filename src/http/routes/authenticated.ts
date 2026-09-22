@@ -1,8 +1,8 @@
 import type { FastifyPluginAsync } from "fastify";
 
 import type { AuthService, AuthUser } from "../../identity/auth.js";
-import type { ForgeConfig } from "../../platform/config.js";
-import type { ForgeDatabase } from "../../platform/database.js";
+import type { SuplexConfig } from "../../platform/config.js";
+import type { SuplexDatabase } from "../../platform/database.js";
 import type { AgentProfileService } from "../../profiles/agent-profiles.js";
 import type { ProviderInstanceService } from "../../profiles/provider-instances.js";
 import { AvatarService } from "../../identity/avatars.js";
@@ -31,14 +31,14 @@ import { systemEvent, type EventSink } from "../../platform/system-events.js";
 
 export interface AuthenticatedRoutesOptions {
   auth: AuthService;
-  config?: ForgeConfig;
+  config?: SuplexConfig;
   projects?: ProjectService;
   profiles?: AgentProfileService;
   providerInstances?: ProviderInstanceService;
   readProviderInstanceReadiness?: (homeDirectory: string) => Promise<{ status: "healthy" | "warning" | "unhealthy"; summary: string }>;
   tasks?: TaskService;
   host?: Pick<TaskHost, "recover">;
-  database?: ForgeDatabase;
+  database?: SuplexDatabase;
   externalAgent?: ExternalAgentService;
   readProviders?: ReadProviders;
   providerLoginHerdr?: ProviderLoginPort;
@@ -49,14 +49,14 @@ export interface AuthenticatedRoutesOptions {
 }
 
 const authenticated: FastifyPluginAsync<AuthenticatedRoutesOptions> = async (app, options) => {
-  app.decorateRequest("forgeUser", undefined as unknown as AuthUser);
+  app.decorateRequest("suplexUser", undefined as unknown as AuthUser);
   app.addHook("preHandler", async (request, reply) => {
     const user = await sessionUser(options.auth, request, reply, options.config);
     if (!user) {
       reply.code(401).send({ error: "Authentication required" });
       return;
     }
-    request.forgeUser = user;
+    request.suplexUser = user;
   });
 
   await app.register(authMe, { prefix: "/api/auth", auth: options.auth });

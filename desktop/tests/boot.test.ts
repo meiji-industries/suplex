@@ -17,17 +17,17 @@ import {
 } from "../src/boot";
 
 const FIXTURE = join(__dirname, "fixtures", "runtime");
-const userData = (): string => mkdtempSync(join(tmpdir(), "forge-desktop-boot-"));
+const userData = (): string => mkdtempSync(join(tmpdir(), "suplex-desktop-boot-"));
 const record = { completedAt: "2026-09-16T00:00:00.000Z", runtimeStamp: "0.0.0-fixture", port: DEFAULT_PORT };
 const failure = (from: "installing" | "starting", stage: string | null): BootFailure =>
   ({ from, title: "Install Herdr terminals", reason: "curl exited 22", remedy: "Check the network connection and retry.", stage, log: ["herdr: checking"] });
 
 describe("resolve", () => {
   test("a matching install record starts the local server, ahead of any remembered remote", () => {
-    expect(resolveBoot({ record, stamp: "0.0.0-fixture", remote: "https://forge.tail1234.ts.net/" })).toEqual({ name: "starting" });
+    expect(resolveBoot({ record, stamp: "0.0.0-fixture", remote: "https://suplex.tail1234.ts.net/" })).toEqual({ name: "starting" });
   });
   test("a runtime that no longer matches the record falls back to the remote, then to the choice screen", () => {
-    expect(resolveBoot({ record, stamp: "1.0.0", remote: "https://forge.tail1234.ts.net/" })).toEqual({ name: "connecting-remote", url: "https://forge.tail1234.ts.net/" });
+    expect(resolveBoot({ record, stamp: "1.0.0", remote: "https://suplex.tail1234.ts.net/" })).toEqual({ name: "connecting-remote", url: "https://suplex.tail1234.ts.net/" });
     expect(resolveBoot({ record, stamp: null, remote: null })).toEqual({ name: "bootstrap-needed" });
     expect(resolveBoot({ record: null, stamp: "0.0.0-fixture", remote: null })).toEqual({ name: "bootstrap-needed" });
   });
@@ -51,7 +51,7 @@ describe("transitions", () => {
     const remote = next({ name: "choosing" }, { name: "choose", mode: "remote" });
     expect(remote).toEqual({ name: "connecting-remote", url: null });
     expect(next(remote, { name: "back" })).toEqual({ name: "choosing" });
-    expect(next(remote, { name: "connected", url: "https://forge.tail1234.ts.net/" })).toEqual({ name: "connected", url: "https://forge.tail1234.ts.net/" });
+    expect(next(remote, { name: "connected", url: "https://suplex.tail1234.ts.net/" })).toEqual({ name: "connected", url: "https://suplex.tail1234.ts.net/" });
   });
   test("failure is latched until a retry, which reruns from the failed stage", () => {
     const failed = next({ name: "installing", from: null }, { name: "failed", failure: failure("installing", "herdr") });
@@ -71,8 +71,8 @@ describe("transitions", () => {
 
 describe("runtime location", () => {
   test("the environment override wins over the bundle's resources", () => {
-    expect(runtimeRoot({ FORGE_DESKTOP_RUNTIME_ROOT: FIXTURE }, "/Applications/Forge.app/Contents/Resources")).toBe(FIXTURE);
-    expect(runtimeRoot({}, "/Applications/Forge.app/Contents/Resources")).toBe("/Applications/Forge.app/Contents/Resources/runtime");
+    expect(runtimeRoot({ SUPLEX_DESKTOP_RUNTIME_ROOT: FIXTURE }, "/Applications/Suplex.app/Contents/Resources")).toBe(FIXTURE);
+    expect(runtimeRoot({}, "/Applications/Suplex.app/Contents/Resources")).toBe("/Applications/Suplex.app/Contents/Resources/runtime");
   });
   test("the entry points are C2's", () => {
     expect(runtimePaths("/r")).toEqual({ node: "/r/node/bin/node", app: "/r/app", cli: "/r/app/dist/src/cli.js", supervisor: "/r/app/dist/src/platform/updates/supervisor.js" });
@@ -97,15 +97,15 @@ describe("install record", () => {
 });
 
 test("the runtime environment is C2's, with the PATH exactly as written", () => {
-  expect(runtimeEnvironment({ userData: "/data/Forge", port: 4222, base: { HOME: "/Users/ada", USER: "ada", TMPDIR: "/tmp/x" } })).toEqual({
-    FORGE_PACKAGED: "1",
-    FORGE_ACCESS_MODE: "local",
-    FORGE_BIND_ADDRESS: "127.0.0.1",
-    FORGE_PORT: "4222",
-    FORGE_DATA_ROOT: "/data/Forge/data",
-    FORGE_ENV_FILE: "/data/Forge/forge.env",
-    FORGE_REPOSITORY_ROOT: "/Users/ada/forge/repos",
-    FORGE_WORKTREE_ROOT: "/Users/ada/forge/worktrees",
+  expect(runtimeEnvironment({ userData: "/data/Suplex", port: 4222, base: { HOME: "/Users/ada", USER: "ada", TMPDIR: "/tmp/x" } })).toEqual({
+    SUPLEX_PACKAGED: "1",
+    SUPLEX_ACCESS_MODE: "local",
+    SUPLEX_BIND_ADDRESS: "127.0.0.1",
+    SUPLEX_PORT: "4222",
+    SUPLEX_DATA_ROOT: "/data/Suplex/data",
+    SUPLEX_ENV_FILE: "/data/Suplex/suplex.env",
+    SUPLEX_REPOSITORY_ROOT: "/Users/ada/suplex/repos",
+    SUPLEX_WORKTREE_ROOT: "/Users/ada/suplex/worktrees",
     HOME: "/Users/ada",
     USER: "ada",
     TMPDIR: "/tmp/x",

@@ -7,7 +7,7 @@ editable: true
 variables: [title, brief, revision, profiles, repository_evidence, revision_request, pull_request_guidance, test_control, visual_evidence_control]
 renamed_from: []
 ---
-You are Forge's Lead planner. Work read-only in the provided repository. Do not modify files, reveal credentials, or invent provider facts.
+You are Suplex's Lead planner. Work read-only in the provided repository. Do not modify files, reveal credentials, or invent provider facts.
 
 {{test_control}}
 

@@ -9,7 +9,7 @@ const directories: string[] = [];
 afterEach(async () => { await Promise.all(directories.splice(0).map(path => rm(path, { recursive: true, force: true }))); });
 
 async function fixture() {
-  const root = await mkdtemp(join(tmpdir(), "forge-claude-live-history-"));
+  const root = await mkdtemp(join(tmpdir(), "suplex-claude-live-history-"));
   directories.push(root);
   const runtime = join(root, "runtime");
   await mkdir(runtime);

@@ -42,13 +42,13 @@ test("rolls back task admission when dispatch linkage fails", async () => {
   const value = await fixture();
   const spy = vi.spyOn(GithubTriggerDispatchRepository.prototype, "linkTask").mockImplementationOnce(() => { throw new Error("link failed"); });
   try {
-    const counter = value.f.database.authQuery(db => db.prepare("SELECT next_issue_number FROM forge_companies WHERE id = ?").get(value.f.company.id) as { next_issue_number: number }).next_issue_number;
-    const audits = value.f.database.authQuery(db => db.prepare("SELECT count(*) AS count FROM forge_audit_events WHERE action = 'task_created'").get() as { count: number }).count;
+    const counter = value.f.database.authQuery(db => db.prepare("SELECT next_issue_number FROM suplex_companies WHERE id = ?").get(value.f.company.id) as { next_issue_number: number }).next_issue_number;
+    const audits = value.f.database.authQuery(db => db.prepare("SELECT count(*) AS count FROM suplex_audit_events WHERE action = 'task_created'").get() as { count: number }).count;
     await expect(value.tasks.createTaskFromGithubTrigger(value.dispatch.id)).rejects.toThrow("link failed");
-    expect(value.f.database.authQuery(db => db.prepare("SELECT count(*) AS count FROM forge_tasks").get() as { count: number }).count).toBe(0);
-    expect(value.f.database.authQuery(db => db.prepare("SELECT count(*) AS count FROM forge_task_controls").get() as { count: number }).count).toBe(0);
-    expect(value.f.database.authQuery(db => db.prepare("SELECT next_issue_number FROM forge_companies WHERE id = ?").get(value.f.company.id) as { next_issue_number: number }).next_issue_number).toBe(counter);
-    expect(value.f.database.authQuery(db => db.prepare("SELECT count(*) AS count FROM forge_audit_events WHERE action = 'task_created'").get() as { count: number }).count).toBe(audits);
+    expect(value.f.database.authQuery(db => db.prepare("SELECT count(*) AS count FROM suplex_tasks").get() as { count: number }).count).toBe(0);
+    expect(value.f.database.authQuery(db => db.prepare("SELECT count(*) AS count FROM suplex_task_controls").get() as { count: number }).count).toBe(0);
+    expect(value.f.database.authQuery(db => db.prepare("SELECT next_issue_number FROM suplex_companies WHERE id = ?").get(value.f.company.id) as { next_issue_number: number }).next_issue_number).toBe(counter);
+    expect(value.f.database.authQuery(db => db.prepare("SELECT count(*) AS count FROM suplex_audit_events WHERE action = 'task_created'").get() as { count: number }).count).toBe(audits);
     expect(new GithubTriggerDispatchRepository(value.f.database).get(value.dispatch.id)?.taskId).toBeNull();
     spy.mockRestore();
     await expect(value.tasks.createTaskFromGithubTrigger(value.dispatch.id)).resolves.toMatchObject({ created: true, task: { status: "backlog" } });
@@ -61,7 +61,7 @@ test.each(["headSha", "baseSha"])("rejects %s drift before creating a task", asy
   try {
     value.setSource({ [field]: "c".repeat(40) });
     await expect(value.tasks.createTaskFromGithubTrigger(value.dispatch.id)).rejects.toMatchObject({ statusCode: 409 });
-    expect(value.f.database.authQuery(db => db.prepare("SELECT count(*) AS count FROM forge_tasks").get() as { count: number }).count).toBe(0);
+    expect(value.f.database.authQuery(db => db.prepare("SELECT count(*) AS count FROM suplex_tasks").get() as { count: number }).count).toBe(0);
     expect(new GithubTriggerDispatchRepository(value.f.database).get(value.dispatch.id)?.taskId).toBeNull();
   } finally { await value.f.close(); }
 });
@@ -75,10 +75,10 @@ test.each(["rule", "project"])("rejects %s changes during source resolution", as
     if (change === "rule") {
       const current = value.f.githubTriggers.repository.get(value.f.company.id, value.rule.id)!;
       await value.f.githubTriggers.update(value.f.userId, value.f.company.id, value.rule.id, { enabled: false, expectedRevision: current.revision });
-    } else value.f.database.authQuery(db => db.prepare("UPDATE forge_projects SET base_branch = 'release' WHERE id = ?").run(value.f.project.id));
+    } else value.f.database.authQuery(db => db.prepare("UPDATE suplex_projects SET base_branch = 'release' WHERE id = ?").run(value.f.project.id));
     barrier.release();
     await expect(admission).rejects.toMatchObject({ statusCode: 409 });
-    expect(value.f.database.authQuery(db => db.prepare("SELECT count(*) AS count FROM forge_tasks").get() as { count: number }).count).toBe(0);
+    expect(value.f.database.authQuery(db => db.prepare("SELECT count(*) AS count FROM suplex_tasks").get() as { count: number }).count).toBe(0);
     expect(new GithubTriggerDispatchRepository(value.f.database).get(value.dispatch.id)?.taskId).toBeNull();
   } finally { await value.f.close(); }
 });

@@ -78,7 +78,7 @@ export function UpdateProvider({ children }: { children: ReactNode }): ReactElem
       setUpdate((current) => current ? { ...current, status: accepted.status } : current);
     } catch {
       if (activeUserId.current !== userId || restartAttempt.current !== attempt) return;
-      setUpdate((current) => current ? { ...current, status: { kind: "applying", step: "start", message: "Forge reconnects to the host." } } : current);
+      setUpdate((current) => current ? { ...current, status: { kind: "applying", step: "start", message: "Suplex reconnects to the host." } } : current);
     } finally {
       if (activeUserId.current === userId) setRequesting(false);
     }

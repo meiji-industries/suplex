@@ -1,7 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { z } from "zod";
 import type { ArtifactStore, StoredArtifact } from "../platform/artifacts.js";
-import type { ForgeDatabase } from "../platform/database.js";
+import type { SuplexDatabase } from "../platform/database.js";
 import { TaskControlStore } from "../coordination/root-session-store.js";
 import { TaskConfigurationSchema, TaskImageSchema, TaskSchema, type DeliveryTarget, type Task, type TaskConfiguration, type TaskInput, type TaskRequest, type VisualEvidence } from "./contracts.js";
 import type { TaskProfile } from "./control.js";
@@ -23,7 +23,7 @@ const ArtifactRowSchema = z.object({
   id: z.string(), companyId: z.string(), kind: z.string(), filename: z.string(), mimeType: z.string(), byteSize: z.number(),
   sha256: z.string(), storagePath: z.string(), createdAt: z.string(),
 });
-const select = "SELECT t.*, CASE WHEN julianday(t.updated_at) >= julianday(COALESCE(control.updated_at, t.updated_at)) THEN t.updated_at ELSE control.updated_at END AS activity_updated_at, control.status_changed_at, c.issue_code FROM forge_tasks t JOIN forge_companies c ON c.id = t.company_id LEFT JOIN forge_task_controls control ON control.task_id = t.id";
+const select = "SELECT t.*, CASE WHEN julianday(t.updated_at) >= julianday(COALESCE(control.updated_at, t.updated_at)) THEN t.updated_at ELSE control.updated_at END AS activity_updated_at, control.status_changed_at, c.issue_code FROM suplex_tasks t JOIN suplex_companies c ON c.id = t.company_id LEFT JOIN suplex_task_controls control ON control.task_id = t.id";
 
 export class TaskConflict extends Error {}
 
@@ -40,7 +40,7 @@ export function taskRequestHash(input: TaskInput, creator: TaskCreator): string 
 
 export class TaskRepository {
   readonly controls: TaskControlStore;
-  constructor(private readonly database: ForgeDatabase, private readonly artifacts: ArtifactStore) {
+  constructor(private readonly database: SuplexDatabase, private readonly artifacts: ArtifactStore) {
     this.controls = new TaskControlStore(database);
   }
 
@@ -72,7 +72,7 @@ export class TaskRepository {
     if (input.cursor) { conditions.push("(julianday(activity_updated_at) < julianday(?) OR (julianday(activity_updated_at) = julianday(?) AND t.id > ?))"); params.push(input.cursor.updatedAt, input.cursor.updatedAt, input.cursor.id); }
     if (input.limit !== undefined) params.push(input.limit);
     const limit = input.limit === undefined ? "" : " LIMIT ?";
-    return this.database.authQuery(db => z.array(RowSchema).parse(db.prepare(`${select} JOIN forge_external_agents a ON a.id = ? AND a.company_id = t.company_id JOIN forge_external_agent_project_grants g ON g.agent_id = a.id AND g.company_id = t.company_id AND g.project_id = t.project_id WHERE ${conditions.join(" AND ")} ORDER BY julianday(activity_updated_at) DESC, t.id${limit}`).all(input.agentId, ...params)));
+    return this.database.authQuery(db => z.array(RowSchema).parse(db.prepare(`${select} JOIN suplex_external_agents a ON a.id = ? AND a.company_id = t.company_id JOIN suplex_external_agent_project_grants g ON g.agent_id = a.id AND g.company_id = t.company_id AND g.project_id = t.project_id WHERE ${conditions.join(" AND ")} ORDER BY julianday(activity_updated_at) DESC, t.id${limit}`).all(input.agentId, ...params)));
   }
 
   existing(companyId: string, key: string, requestHash: string, creator: TaskCreator): TaskRow | null {
@@ -101,10 +101,10 @@ export class TaskRepository {
         if (existing) return { task: this.task(existing), created: false };
         const time = new Date().toISOString();
         const configuration = TaskConfigurationSchema.parse(input.configuration);
-        db.prepare("INSERT INTO forge_tasks (id, company_id, project_id, title, description, configuration_json, idempotency_key, request_hash, creator_user_id, creator_agent_id, copied_from_task_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+        db.prepare("INSERT INTO suplex_tasks (id, company_id, project_id, title, description, configuration_json, idempotency_key, request_hash, creator_user_id, creator_agent_id, copied_from_task_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
           .run(input.taskId, input.companyId, input.request.projectId, input.request.title, input.request.description, JSON.stringify(configuration), input.request.idempotencyKey, input.requestHash, input.creator.kind === "user" ? input.creator.id : null, input.creator.kind === "agent" ? input.creator.id : null, input.copiedFromTaskId ?? null, time, time);
         for (const image of input.images) written.push(this.artifacts.putArtifactSync(db, input.companyId, "task-image", { ...image, taskId: input.taskId }));
-        if (input.request.issue) db.prepare("UPDATE forge_tasks SET issue_json = ? WHERE id = ?").run(JSON.stringify(input.request.issue), input.taskId);
+        if (input.request.issue) db.prepare("UPDATE suplex_tasks SET issue_json = ? WHERE id = ?").run(JSON.stringify(input.request.issue), input.taskId);
         this.controls.create({
           taskId: input.taskId, startImmediately: input.startQueued, objective: input.request.description ? `${input.request.title}\n\n${input.request.description}` : input.request.title, deliveryTarget: input.request.deliveryTarget,
           deliveryIntent: { repository: configuration.repository, headBranch: configuration.branch, baseBranch: configuration.baseBranch, baselineSha: configuration.baselineSha, pullRequestNumber: configuration.source?.kind === "pull_request" ? configuration.source.number : null },
@@ -126,8 +126,8 @@ export class TaskRepository {
     const blockedBy = [...taskDependencies, ...pullRequestDependencies(this.database, row.id).map(dependency => ({ kind: "pull_request" as const, id: `pull_request:${dependency.number}`, status: "backlog" as const, ...dependency }))];
     const control = this.controls.get(row.id);
     const limitState = this.controls.taskLimitState(row.id);
-    const images = this.database.authQuery(db => z.array(TaskImageSchema).parse(db.prepare("SELECT id AS artifactId, filename, mime_type AS mimeType, byte_size AS byteSize FROM forge_artifacts WHERE task_id = ? AND company_id = ? AND kind = 'task-image' ORDER BY created_at, id").all(row.id, row.company_id)));
-    const artifacts = this.database.authQuery(db => z.array(TaskImageSchema).parse(db.prepare("SELECT id AS artifactId, filename, mime_type AS mimeType, byte_size AS byteSize FROM forge_artifacts WHERE task_id = ? AND company_id = ? AND kind LIKE 'delivery-%' ORDER BY created_at, id").all(row.id, row.company_id)));
+    const images = this.database.authQuery(db => z.array(TaskImageSchema).parse(db.prepare("SELECT id AS artifactId, filename, mime_type AS mimeType, byte_size AS byteSize FROM suplex_artifacts WHERE task_id = ? AND company_id = ? AND kind = 'task-image' ORDER BY created_at, id").all(row.id, row.company_id)));
+    const artifacts = this.database.authQuery(db => z.array(TaskImageSchema).parse(db.prepare("SELECT id AS artifactId, filename, mime_type AS mimeType, byte_size AS byteSize FROM suplex_artifacts WHERE task_id = ? AND company_id = ? AND kind LIKE 'delivery-%' ORDER BY created_at, id").all(row.id, row.company_id)));
     return TaskSchema.parse({
       id: row.id, companyId: row.company_id, projectId: row.project_id,
       issueKey: row.issue_code && row.issue_number ? `${row.issue_code}-${row.issue_number}` : null,
@@ -147,7 +147,7 @@ export class TaskRepository {
   }
 
   artifact(row: TaskRow, artifactId: string): StoredArtifact | null {
-    const artifact = this.database.authQuery(db => db.prepare("SELECT id, company_id AS companyId, kind, filename, mime_type AS mimeType, byte_size AS byteSize, sha256, storage_path AS storagePath, created_at AS createdAt FROM forge_artifacts WHERE id = ? AND task_id = ? AND company_id = ?").get(artifactId, row.id, row.company_id));
+    const artifact = this.database.authQuery(db => db.prepare("SELECT id, company_id AS companyId, kind, filename, mime_type AS mimeType, byte_size AS byteSize, sha256, storage_path AS storagePath, created_at AS createdAt FROM suplex_artifacts WHERE id = ? AND task_id = ? AND company_id = ?").get(artifactId, row.id, row.company_id));
     return artifact ? ArtifactRowSchema.parse(artifact) : null;
   }
 
@@ -155,7 +155,7 @@ export class TaskRepository {
     this.database.authTransaction(db => {
       const time = new Date().toISOString();
       if (archived) this.controls.disarm(taskId);
-      db.prepare("UPDATE forge_tasks SET archived_at = ?, updated_at = ? WHERE id = ?").run(archived ? time : null, time, taskId);
+      db.prepare("UPDATE suplex_tasks SET archived_at = ?, updated_at = ? WHERE id = ?").run(archived ? time : null, time, taskId);
     });
   }
 
@@ -166,10 +166,10 @@ export class TaskRepository {
   }): boolean {
     return this.database.authTransaction(db => {
       const time = new Date().toISOString();
-      const updated = db.prepare("UPDATE forge_tasks SET title = ?, description = ?, configuration_json = json_set(configuration_json, '$.runProjectTests', json(?), '$.visualEvidence', ?), updated_at = ? WHERE id = ? AND archived_at IS NULL AND EXISTS (SELECT 1 FROM forge_task_controls WHERE task_id = forge_tasks.id AND status IN ('backlog', 'queued'))")
+      const updated = db.prepare("UPDATE suplex_tasks SET title = ?, description = ?, configuration_json = json_set(configuration_json, '$.runProjectTests', json(?), '$.visualEvidence', ?), updated_at = ? WHERE id = ? AND archived_at IS NULL AND EXISTS (SELECT 1 FROM suplex_task_controls WHERE task_id = suplex_tasks.id AND status IN ('backlog', 'queued'))")
         .run(details.title, details.description, details.runProjectTests ? "true" : "false", details.visualEvidence, time, taskId);
       if (updated.changes !== 1) return false;
-      db.prepare("UPDATE forge_task_controls SET objective = (SELECT CASE WHEN description = '' THEN title ELSE title || char(10) || char(10) || description END FROM forge_tasks WHERE id = ?), delivery_target = ?, workflow = ?, root_profile_json = ?, worker_profile_json = ?, advisor_profiles_json = ?, updated_at = ? WHERE task_id = ?")
+      db.prepare("UPDATE suplex_task_controls SET objective = (SELECT CASE WHEN description = '' THEN title ELSE title || char(10) || char(10) || description END FROM suplex_tasks WHERE id = ?), delivery_target = ?, workflow = ?, root_profile_json = ?, worker_profile_json = ?, advisor_profiles_json = ?, updated_at = ? WHERE task_id = ?")
         .run(taskId, details.deliveryTarget, details.workflow, JSON.stringify(details.rootProfile), JSON.stringify(details.workerProfile), JSON.stringify(details.advisorProfiles), time, taskId);
       return true;
     });
@@ -178,10 +178,10 @@ export class TaskRepository {
   rename(taskId: string, title: string): boolean {
     return this.database.authTransaction(db => {
       const time = new Date().toISOString();
-      const updated = db.prepare("UPDATE forge_tasks SET title = ?, updated_at = ? WHERE id = ? AND archived_at IS NULL")
+      const updated = db.prepare("UPDATE suplex_tasks SET title = ?, updated_at = ? WHERE id = ? AND archived_at IS NULL")
         .run(title, time, taskId);
       if (updated.changes !== 1) return false;
-      db.prepare("UPDATE forge_task_controls SET objective = (SELECT CASE WHEN description = '' THEN title ELSE title || char(10) || char(10) || description END FROM forge_tasks WHERE id = ?), updated_at = ? WHERE task_id = ? AND status IN ('backlog', 'queued')").run(taskId, time, taskId);
+      db.prepare("UPDATE suplex_task_controls SET objective = (SELECT CASE WHEN description = '' THEN title ELSE title || char(10) || char(10) || description END FROM suplex_tasks WHERE id = ?), updated_at = ? WHERE task_id = ? AND status IN ('backlog', 'queued')").run(taskId, time, taskId);
       return true;
     });
   }

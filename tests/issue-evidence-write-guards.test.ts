@@ -12,14 +12,14 @@ test.each(["publish", "upload"])("Jira %s checks cancellation after remote disco
   credentials();
   const request = vi.fn<typeof fetch>(async url => {
     const path = String(url);
-    if (path.endsWith("/myself")) return Response.json({ accountId: "forge" });
+    if (path.endsWith("/myself")) return Response.json({ accountId: "suplex" });
     if (path.includes("/comment")) return Response.json({ comments: [], total: 0, startAt: 0 });
     return Response.json({ id: "42", key: "APP-43", fields: { summary: "Fix", attachment: [] } });
   });
   const tracker = new IssueTracker(connection, request);
   const beforeWrite = vi.fn(async () => { throw new Error("cancelled"); });
   const bytes = Buffer.from("image");
-  const filename = `forge-task-${createHash("sha256").update(bytes).digest("hex")}.png`;
+  const filename = `suplex-task-${createHash("sha256").update(bytes).digest("hex")}.png`;
   await expect(action === "publish" ? tracker.publish(issue, "task", "Evidence", beforeWrite) : tracker.upload(issue, filename, bytes, "image/png", beforeWrite)).rejects.toThrow("cancelled");
   expect(beforeWrite).toHaveBeenCalledOnce();
   expect(request.mock.calls.every(([, init]) => !init?.method || init.method === "GET")).toBe(true);
@@ -29,7 +29,7 @@ test("Jira refuses publication after the issue moves outside the configured proj
   credentials();
   const request = vi.fn<typeof fetch>(async url => {
     const path = String(url);
-    if (path.endsWith("/myself")) return Response.json({ accountId: "forge" });
+    if (path.endsWith("/myself")) return Response.json({ accountId: "suplex" });
     if (path.includes("/comment")) return Response.json({ comments: [], total: 0, startAt: 0 });
     return Response.json({ id: "42", key: "OTHER-42", fields: { summary: "Fix" } });
   });
@@ -41,6 +41,6 @@ test("Bitbucket checks cancellation after download discovery", async () => {
   credentials();
   const request = vi.fn<typeof fetch>(async () => Response.json({ values: [] }));
   const client = new BitbucketClient({ kind: "bitbucket", tokenEnvironment: "TEST_TOKEN" }, request);
-  await expect(client.upload("owner/repo", "forge-task.png", Buffer.from("image"), "image/png", async () => { throw new Error("cancelled"); })).rejects.toThrow("cancelled");
+  await expect(client.upload("owner/repo", "suplex-task.png", Buffer.from("image"), "image/png", async () => { throw new Error("cancelled"); })).rejects.toThrow("cancelled");
   expect(request).toHaveBeenCalledOnce();
 });

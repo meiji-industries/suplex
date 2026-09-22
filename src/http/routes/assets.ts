@@ -15,18 +15,18 @@ async function readFrontendAsset(filename: string): Promise<Buffer> {
 }
 
 const assets: FastifyPluginAsync = async (app) => {
-  app.get("/forge-ui.js", async (_request, reply) => {
+  app.get("/suplex-ui.js", async (_request, reply) => {
     try {
-      return reply.type("text/javascript; charset=utf-8").send(await readFrontendAsset("forge-ui.js"));
+      return reply.type("text/javascript; charset=utf-8").send(await readFrontendAsset("suplex-ui.js"));
     } catch {
-      return reply.code(404).type("text/plain; charset=utf-8").send("Forge UI asset is not built");
+      return reply.code(404).type("text/plain; charset=utf-8").send("Suplex UI asset is not built");
     }
   });
-  app.get("/forge-ui.css", async (_request, reply) => {
+  app.get("/suplex-ui.css", async (_request, reply) => {
     try {
-      return reply.type("text/css; charset=utf-8").send(await readFrontendAsset("forge-ui.css"));
+      return reply.type("text/css; charset=utf-8").send(await readFrontendAsset("suplex-ui.css"));
     } catch {
-      return reply.code(404).type("text/plain; charset=utf-8").send("Forge UI asset is not built");
+      return reply.code(404).type("text/plain; charset=utf-8").send("Suplex UI asset is not built");
     }
   });
   app.get<{ Params: { filename: string } }>("/:filename", async (request, reply) => {
@@ -36,7 +36,7 @@ const assets: FastifyPluginAsync = async (app) => {
       const type = filename.endsWith(".js") ? "text/javascript; charset=utf-8" : filename.endsWith(".woff2") ? "font/woff2" : "application/octet-stream";
       return reply.type(type).send(await readFrontendAsset(filename));
     } catch {
-      return reply.code(404).type("text/plain; charset=utf-8").send("Forge UI asset is not built");
+      return reply.code(404).type("text/plain; charset=utf-8").send("Suplex UI asset is not built");
     }
   });
 };

@@ -18,56 +18,56 @@ const TaskOnlySchema = z.object({ taskId: TaskIdSchema }).strict();
 const CommandTaskSchema = AgentApiTaskCommandBodySchema.extend({ taskId: TaskIdSchema });
 const SetDependenciesSchema = AgentApiTaskDependenciesBodySchema.extend({ taskId: TaskIdSchema });
 
-export class ForgeMcpRuntime {
+export class SuplexMcpRuntime {
   constructor(private readonly input: { principal: ExternalAgentPrincipal; tasks: TaskService; agentDelivery: boolean; host?: Pick<TaskHost, "recover">; github?: AgentApiGithubPort; logRecoveryFailure?: (taskId: string, error: unknown) => void }) {}
 
   async call(name: string, args: Record<string, unknown>): Promise<{ status: number; body: unknown }> {
     const { principal, tasks } = this.input;
     switch (name) {
-      case "forge_whoami": return { status: 200, body: tasks.agentApiIdentity(principal) };
-      case "forge_capabilities": return { status: 200, body: agentApiCapabilities(this.input.agentDelivery) };
-      case "forge_list_workflows": {
+      case "suplex_whoami": return { status: 200, body: tasks.agentApiIdentity(principal) };
+      case "suplex_capabilities": return { status: 200, body: agentApiCapabilities(this.input.agentDelivery) };
+      case "suplex_list_workflows": {
         const query = AgentApiProjectDiscoveryQuerySchema.parse(args);
         return { status: 200, body: { workflows: tasks.listAgentApiWorkflows(principal, query.projectId) } };
       }
-      case "forge_list_templates": {
+      case "suplex_list_templates": {
         const query = AgentApiProjectDiscoveryQuerySchema.parse(args);
         return { status: 200, body: { templates: tasks.listAgentApiTemplates(principal, query.projectId) } };
       }
-      case "forge_list_tasks": {
+      case "suplex_list_tasks": {
         const query = AgentApiTaskListQuerySchema.parse(args);
         return { status: 200, body: await tasks.readAgentApiTasks(principal, { limit: query.limit, ...(query.projectId === undefined ? {} : { projectId: query.projectId }), ...(query.status === undefined ? {} : { status: query.status }), ...(query.pullRequestNumber === undefined ? {} : { pullRequestNumber: query.pullRequestNumber }), ...(query.sourceBranch === undefined ? {} : { sourceBranch: query.sourceBranch }), ...(query.titleContains === undefined ? {} : { titleContains: query.titleContains }), ...(query.updatedSince === undefined ? {} : { updatedSince: query.updatedSince }), ...(query.cursor === undefined ? {} : { cursor: query.cursor }), ...(query.archived === undefined ? {} : { archived: query.archived === "true" }), ...(query.attention === undefined ? {} : { attention: query.attention === "true" }), ...(query.blocker === undefined ? {} : { blocker: query.blocker === "true" }), ...(query.filter === undefined ? {} : { filter: query.filter }), view: query.view ?? "summary" }, this.input.github) };
       }
-      case "forge_get_task": {
+      case "suplex_get_task": {
         const input = GetTaskSchema.parse(args);
         const task = await tasks.readAgentApiTask(principal, input.taskId, this.input.github);
         if (input.knownRevision === task.revision) return { status: 304, body: { unchanged: true, revision: task.revision } };
         return { status: 200, body: task };
       }
-      case "forge_get_task_delivery": {
+      case "suplex_get_task_delivery": {
         const input = TaskOnlySchema.parse(args);
         const task = await tasks.readAgentApiTask(principal, input.taskId, this.input.github);
         return { status: 200, body: { taskId: task.id, taskStatus: task.status, revision: task.revision, queue: task.queue ?? null, blocker: task.blocker ?? null, delivery: task.delivery ?? null } };
       }
-      case "forge_create_task": {
+      case "suplex_create_task": {
         const result = await tasks.createTaskForAgentApi(principal, AgentApiTaskCreateBodySchema.parse(args));
         if (result.dryRun) return { status: 200, body: result.preview };
         if (result.task.status === "active") this.recover(result.task.id);
         return { status: result.created ? 201 : 200, body: await tasks.readAgentApiTask(principal, result.task.id, this.input.github) };
       }
-      case "forge_set_task_dependencies": {
+      case "suplex_set_task_dependencies": {
         const { taskId, ...body } = SetDependenciesSchema.parse(args);
         const parsed = AgentApiTaskDependenciesBodySchema.parse(body);
         return { status: 200, body: parsed.dryRun ? tasks.previewAgentApiTaskDependencies(principal, taskId, parsed.dependsOn) : tasks.setAgentApiTaskDependencies(principal, taskId, parsed.dependsOn) };
       }
-      case "forge_command_task": {
+      case "suplex_command_task": {
         const { taskId, ...body } = CommandTaskSchema.parse(args);
         const parsed = AgentApiTaskCommandBodySchema.parse(body);
         const task = await tasks.commandAgentApiTask(principal, taskId, parsed);
         if (["start_task", "cancel_task", "send_task_note", "recheck_delivery_wait"].includes(parsed.command)) this.recover(task.id);
         return { status: 200, body: task };
       }
-      default: throw new Error(`Forge MCP tool is unsupported: ${name}`);
+      default: throw new Error(`Suplex MCP tool is unsupported: ${name}`);
     }
   }
 
@@ -76,6 +76,6 @@ export class ForgeMcpRuntime {
   }
 }
 
-export function presentForgeMcpResult(result: { status: number; body: unknown }): unknown {
+export function presentSuplexMcpResult(result: { status: number; body: unknown }): unknown {
   return result.status === 304 ? result.body : result;
 }

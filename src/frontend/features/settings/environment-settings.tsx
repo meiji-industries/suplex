@@ -57,7 +57,7 @@ export function EnvironmentSettingsView(): ReactElement {
 
   return <SettingsLayout title="Environment" companyId={companyId} backHref={withCompany("/", companyId)} activeHref={withCompany("/admin/environment", companyId)}>
     <SettingsContent>
-      <SettingsSection title="Worktrees" description="Host-wide limits applied before Forge creates or changes a worktree.">
+      <SettingsSection title="Worktrees" description="Host-wide limits applied before Suplex creates or changes a worktree.">
         <SettingRow label="Minimum free disk space" description="Block worktree operations when available space falls below this threshold.">
           <form className="flex items-center gap-2" onSubmit={(event) => void save(event)}>
             <div className="w-28"><Input aria-label="Minimum free disk space in GB" type="number" min="0" max="1024" step="0.1" inputMode="decimal" value={minFreeDiskGb} onChange={(event) => { setMinFreeDiskGb(event.target.value); setMessage(""); }} /></div>
@@ -66,7 +66,7 @@ export function EnvironmentSettingsView(): ReactElement {
           </form>
         </SettingRow>
       </SettingsSection>
-      <SettingsSection title="Task limits" description="These defaults apply to tasks without task-specific limits. Forge checks each limit before it dispatches a new prompt.">
+      <SettingsSection title="Task limits" description="These defaults apply to tasks without task-specific limits. Suplex checks each limit before it dispatches a new prompt.">
         <form className="space-y-2" onSubmit={(event) => void save(event)}>
           <SettingRow label="Default task budget" description="Pause a task when its estimated spend reaches this amount.">
             <div className="flex items-center gap-2">
@@ -81,7 +81,7 @@ export function EnvironmentSettingsView(): ReactElement {
             </div>
           </SettingRow>
           <Button size="sm" type="submit" disabled={!changed || saving}>{saving ? "Saving…" : "Save"}</Button>
-          <p className="text-xs text-muted-foreground">Set a limit to 0 to disable it. A native turn already in progress can finish before Forge pauses.</p>
+          <p className="text-xs text-muted-foreground">Set a limit to 0 to disable it. A native turn already in progress can finish before Suplex pauses.</p>
         </form>
       </SettingsSection>
       {!validDisk ? <p className="text-xs text-destructive" role="alert">Enter a value from 0 to 1024 GB.</p> : null}

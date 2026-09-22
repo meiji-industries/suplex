@@ -1,4 +1,4 @@
-CREATE TABLE `forge_herdr_project_workspaces` (
+CREATE TABLE `suplex_herdr_project_workspaces` (
   `project_id` text PRIMARY KEY NOT NULL,
   `workspace_label` text NOT NULL,
   `workspace_id` text UNIQUE,
@@ -8,10 +8,10 @@ CREATE TABLE `forge_herdr_project_workspaces` (
   `failure_code` text,
   `created_at` text NOT NULL,
   `updated_at` text NOT NULL,
-  FOREIGN KEY (`project_id`) REFERENCES `forge_projects`(`id`) ON DELETE cascade
+  FOREIGN KEY (`project_id`) REFERENCES `suplex_projects`(`id`) ON DELETE cascade
 );
 --> statement-breakpoint
-CREATE TABLE `forge_herdr_task_tabs` (
+CREATE TABLE `suplex_herdr_task_tabs` (
   `task_id` text PRIMARY KEY NOT NULL,
   `project_id` text NOT NULL,
   `workspace_id` text,
@@ -26,12 +26,12 @@ CREATE TABLE `forge_herdr_task_tabs` (
   `updated_at` text NOT NULL,
   `closed_at` text,
   `failure_code` text,
-  FOREIGN KEY (`task_id`) REFERENCES `forge_tasks`(`id`) ON DELETE cascade,
-  FOREIGN KEY (`project_id`) REFERENCES `forge_projects`(`id`) ON DELETE cascade,
-  FOREIGN KEY (`final_snapshot_artifact_id`) REFERENCES `forge_artifacts`(`id`)
+  FOREIGN KEY (`task_id`) REFERENCES `suplex_tasks`(`id`) ON DELETE cascade,
+  FOREIGN KEY (`project_id`) REFERENCES `suplex_projects`(`id`) ON DELETE cascade,
+  FOREIGN KEY (`final_snapshot_artifact_id`) REFERENCES `suplex_artifacts`(`id`)
 );
 --> statement-breakpoint
-CREATE TABLE `forge_herdr_role_sessions` (
+CREATE TABLE `suplex_herdr_role_sessions` (
   `id` text PRIMARY KEY NOT NULL,
   `task_id` text NOT NULL,
   `session_role` text NOT NULL CHECK (`session_role` IN ('lead', 'developer', 'reviewer')),
@@ -52,18 +52,18 @@ CREATE TABLE `forge_herdr_role_sessions` (
   `created_at` text NOT NULL,
   `updated_at` text NOT NULL,
   `last_seen_at` text,
-  FOREIGN KEY (`task_id`) REFERENCES `forge_tasks`(`id`) ON DELETE cascade,
+  FOREIGN KEY (`task_id`) REFERENCES `suplex_tasks`(`id`) ON DELETE cascade,
   UNIQUE (`task_id`, `session_role`, `generation`)
 );
 --> statement-breakpoint
-CREATE UNIQUE INDEX `forge_herdr_current_persistent_role_unique`
-  ON `forge_herdr_role_sessions` (`task_id`, `session_role`)
+CREATE UNIQUE INDEX `suplex_herdr_current_persistent_role_unique`
+  ON `suplex_herdr_role_sessions` (`task_id`, `session_role`)
   WHERE `is_current` = 1 AND `session_role` IN ('lead', 'developer');
 --> statement-breakpoint
-CREATE INDEX `forge_herdr_role_session_status_idx`
-  ON `forge_herdr_role_sessions` (`status`, `updated_at`);
+CREATE INDEX `suplex_herdr_role_session_status_idx`
+  ON `suplex_herdr_role_sessions` (`status`, `updated_at`);
 --> statement-breakpoint
-CREATE TABLE `forge_herdr_turns` (
+CREATE TABLE `suplex_herdr_turns` (
   `turn_id` text PRIMARY KEY NOT NULL,
   `task_id` text NOT NULL,
   `role_session_id` text NOT NULL,
@@ -91,17 +91,17 @@ CREATE TABLE `forge_herdr_turns` (
   `updated_at` text NOT NULL,
   `finished_at` text,
   UNIQUE (`ledger`, `execution_id`, `prompt_kind`, `correction_index`),
-  FOREIGN KEY (`task_id`) REFERENCES `forge_tasks`(`id`) ON DELETE cascade,
-  FOREIGN KEY (`role_session_id`) REFERENCES `forge_herdr_role_sessions`(`id`) ON DELETE cascade,
-  FOREIGN KEY (`result_artifact_id`) REFERENCES `forge_artifacts`(`id`),
-  FOREIGN KEY (`rollout_artifact_id`) REFERENCES `forge_artifacts`(`id`),
-  FOREIGN KEY (`correction_of_turn_id`) REFERENCES `forge_herdr_turns`(`turn_id`)
+  FOREIGN KEY (`task_id`) REFERENCES `suplex_tasks`(`id`) ON DELETE cascade,
+  FOREIGN KEY (`role_session_id`) REFERENCES `suplex_herdr_role_sessions`(`id`) ON DELETE cascade,
+  FOREIGN KEY (`result_artifact_id`) REFERENCES `suplex_artifacts`(`id`),
+  FOREIGN KEY (`rollout_artifact_id`) REFERENCES `suplex_artifacts`(`id`),
+  FOREIGN KEY (`correction_of_turn_id`) REFERENCES `suplex_herdr_turns`(`turn_id`)
 );
 --> statement-breakpoint
-CREATE INDEX `forge_herdr_turn_active_idx`
-  ON `forge_herdr_turns` (`task_id`, `role_session_id`, `status`, `updated_at`);
+CREATE INDEX `suplex_herdr_turn_active_idx`
+  ON `suplex_herdr_turns` (`task_id`, `role_session_id`, `status`, `updated_at`);
 --> statement-breakpoint
-CREATE TABLE `forge_issue_timeline_herdr` (
+CREATE TABLE `suplex_issue_timeline_herdr` (
   `stream_id` integer PRIMARY KEY AUTOINCREMENT,
   `id` text NOT NULL UNIQUE,
   `task_id` text NOT NULL,
@@ -117,44 +117,44 @@ CREATE TABLE `forge_issue_timeline_herdr` (
   `execution_id` text,
   `execution_role` text,
   `session_id` text,
-  `forge_turn_id` text,
+  `suplex_turn_id` text,
   `source_offset` integer,
-  FOREIGN KEY (`task_id`) REFERENCES `forge_tasks`(`id`) ON DELETE cascade,
-  FOREIGN KEY (`company_id`) REFERENCES `forge_companies`(`id`) ON DELETE cascade,
+  FOREIGN KEY (`task_id`) REFERENCES `suplex_tasks`(`id`) ON DELETE cascade,
+  FOREIGN KEY (`company_id`) REFERENCES `suplex_companies`(`id`) ON DELETE cascade,
   CHECK (
-    (`source` = 'workflow' AND `execution_id` IS NULL AND `execution_role` IS NULL AND `session_id` IS NULL AND `forge_turn_id` IS NULL AND `source_offset` IS NULL)
+    (`source` = 'workflow' AND `execution_id` IS NULL AND `execution_role` IS NULL AND `session_id` IS NULL AND `suplex_turn_id` IS NULL AND `source_offset` IS NULL)
     OR
-    (`source` = 'agent' AND `execution_id` IS NOT NULL AND `execution_role` IN ('planner', 'reviewer', 'builder', 'integrator') AND `session_id` IS NOT NULL AND `forge_turn_id` IS NOT NULL AND `source_offset` >= 0)
+    (`source` = 'agent' AND `execution_id` IS NOT NULL AND `execution_role` IN ('planner', 'reviewer', 'builder', 'integrator') AND `session_id` IS NOT NULL AND `suplex_turn_id` IS NOT NULL AND `source_offset` >= 0)
   )
 );
 --> statement-breakpoint
-INSERT INTO `forge_issue_timeline_herdr`
+INSERT INTO `suplex_issue_timeline_herdr`
   (`id`, `task_id`, `company_id`, `workflow_id`, `run_id`, `revision`, `source`, `event_type`, `metadata_json`, `created_at`, `event_hash`)
 SELECT `id`, `task_id`, `company_id`, `workflow_id`, `run_id`, `revision`, 'workflow', `event_type`, `metadata_json`, `created_at`, `event_hash`
-FROM `forge_issue_timeline`
+FROM `suplex_issue_timeline`
 ORDER BY `created_at`, `workflow_id`, `revision`, `id`;
 --> statement-breakpoint
-DROP TABLE `forge_issue_timeline`;
+DROP TABLE `suplex_issue_timeline`;
 --> statement-breakpoint
-ALTER TABLE `forge_issue_timeline_herdr` RENAME TO `forge_issue_timeline`;
+ALTER TABLE `suplex_issue_timeline_herdr` RENAME TO `suplex_issue_timeline`;
 --> statement-breakpoint
-CREATE UNIQUE INDEX `forge_issue_timeline_workflow_revision_unique`
-  ON `forge_issue_timeline` (`workflow_id`, `revision`) WHERE `source` = 'workflow';
+CREATE UNIQUE INDEX `suplex_issue_timeline_workflow_revision_unique`
+  ON `suplex_issue_timeline` (`workflow_id`, `revision`) WHERE `source` = 'workflow';
 --> statement-breakpoint
-CREATE UNIQUE INDEX `forge_issue_timeline_rollout_offset_unique`
-  ON `forge_issue_timeline` (`session_id`, `source_offset`) WHERE `source` = 'agent';
+CREATE UNIQUE INDEX `suplex_issue_timeline_rollout_offset_unique`
+  ON `suplex_issue_timeline` (`session_id`, `source_offset`) WHERE `source` = 'agent';
 --> statement-breakpoint
-CREATE INDEX `forge_issue_timeline_task_stream_idx`
-  ON `forge_issue_timeline` (`task_id`, `stream_id`);
+CREATE INDEX `suplex_issue_timeline_task_stream_idx`
+  ON `suplex_issue_timeline` (`task_id`, `stream_id`);
 --> statement-breakpoint
-CREATE INDEX `forge_issue_timeline_workflow_revision_idx`
-  ON `forge_issue_timeline` (`workflow_id`, `revision`) WHERE `source` = 'workflow';
+CREATE INDEX `suplex_issue_timeline_workflow_revision_idx`
+  ON `suplex_issue_timeline` (`workflow_id`, `revision`) WHERE `source` = 'workflow';
 --> statement-breakpoint
-ALTER TABLE `forge_planner_notes` ADD COLUMN `forward_status` text NOT NULL DEFAULT 'forwarded'
+ALTER TABLE `suplex_planner_notes` ADD COLUMN `forward_status` text NOT NULL DEFAULT 'forwarded'
   CHECK (`forward_status` IN ('pending', 'dispatching', 'forwarded', 'blocked', 'failed'));
 --> statement-breakpoint
-ALTER TABLE `forge_planner_notes` ADD COLUMN `forwarded_at` text;
+ALTER TABLE `suplex_planner_notes` ADD COLUMN `forwarded_at` text;
 --> statement-breakpoint
-ALTER TABLE `forge_planner_notes` ADD COLUMN `forward_attempt` integer NOT NULL DEFAULT 0;
+ALTER TABLE `suplex_planner_notes` ADD COLUMN `forward_attempt` integer NOT NULL DEFAULT 0;
 --> statement-breakpoint
-ALTER TABLE `forge_planner_notes` ADD COLUMN `forward_error_code` text;
+ALTER TABLE `suplex_planner_notes` ADD COLUMN `forward_error_code` text;

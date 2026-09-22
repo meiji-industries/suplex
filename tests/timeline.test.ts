@@ -22,7 +22,7 @@ test("agent time is split by local day and summed per ticket", () => {
       activity: [invocation("planner-b", "root", at(11, 0, 15), at(11, 0, 45), "planner-agent", "Planner agent", "a".repeat(32)), invocation("builder-b", "worker", at(11, 1, 45), null, "builder-agent", "Builder agent", "b".repeat(32))],
     },
   ];
-  const summary = summarizeAgentTime(tasks, [{ id: "project-a", name: "Forge" }], { start: new Date(2026, 7, 10).getTime(), end: new Date(2026, 7, 12).getTime() }, new Date(2026, 7, 11, 2).getTime());
+  const summary = summarizeAgentTime(tasks, [{ id: "project-a", name: "Suplex" }], { start: new Date(2026, 7, 10).getTime(), end: new Date(2026, 7, 12).getTime() }, new Date(2026, 7, 11, 2).getTime());
 
   expect(summary.durationMs).toBe(165 * 60_000);
   expect(summary.ticketTotals.map(({ key, durationMs }) => ({ key, durationMs }))).toEqual([
@@ -39,14 +39,14 @@ test("agent time is split by local day and summed per ticket", () => {
 
 test("agent time is grouped by project without changing flat totals", () => {
   const tasks: TimelineTask[] = [
-    { id: "ticket-a", projectId: "project-a", issueKey: "FORGE-1", title: "Forge ticket", activity: [invocation("builder-a", "worker", at(10, 9), at(10, 11), "builder-agent", "Builder agent", "a".repeat(32))] },
+    { id: "ticket-a", projectId: "project-a", issueKey: "SUPLEX-1", title: "Suplex ticket", activity: [invocation("builder-a", "worker", at(10, 9), at(10, 11), "builder-agent", "Builder agent", "a".repeat(32))] },
     { id: "ticket-b", projectId: "project-b", issueKey: "HERDR-1", title: "Herdr ticket", activity: [invocation("planner-b", "root", at(10, 10), at(10, 11), "planner-agent", "Planner agent", "b".repeat(32))] },
     { id: "ticket-c", projectId: "project-unknown", issueKey: null, title: "Unknown ticket", activity: [invocation("builder-c", "worker", at(10, 10, 30), at(10, 11), "builder-agent", "Builder agent", "a".repeat(32))] },
   ];
-  const summary = summarizeAgentTime(tasks, [{ id: "project-a", name: "Forge" }, { id: "project-b", name: "Herdr" }], { start: new Date(2026, 7, 10).getTime(), end: new Date(2026, 7, 11).getTime() }, new Date(2026, 7, 11).getTime());
+  const summary = summarizeAgentTime(tasks, [{ id: "project-a", name: "Suplex" }, { id: "project-b", name: "Herdr" }], { start: new Date(2026, 7, 10).getTime(), end: new Date(2026, 7, 11).getTime() }, new Date(2026, 7, 11).getTime());
 
   expect(summary.projectGroups.map(({ projectName, durationMs }) => ({ projectName, durationMs }))).toEqual([
-    { projectName: "Forge", durationMs: 120 * 60_000 },
+    { projectName: "Suplex", durationMs: 120 * 60_000 },
     { projectName: "Herdr", durationMs: 60 * 60_000 },
     { projectName: "Unknown project", durationMs: 30 * 60_000 },
   ]);

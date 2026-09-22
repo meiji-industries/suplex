@@ -5,7 +5,7 @@ import { CLAUDE_AUTH_ENVIRONMENT_KEYS, claudeEnvironment, claudeRoutingVariable 
 
 export type ProviderLoginPort = Pick<HerdrClient, "getPane" | "createWorkspace" | "runPaneCommand" | "closePane" | "closeWorkspace">;
 
-export const PROVIDER_LOGIN_WORKSPACE_LABEL = "forge-provider-login";
+export const PROVIDER_LOGIN_WORKSPACE_LABEL = "suplex-provider-login";
 
 const quoted = (value: string): string => `'${value.replaceAll("'", `'\\''`)}'`;
 
@@ -22,7 +22,7 @@ export interface ProviderLoginCommandOptions {
 
 /**
  * Interactive sign-in command for a provider; a local instance scopes Claude
- * Code to its home directory. The executable resolves through Forge's
+ * Code to its home directory. The executable resolves through Suplex's
  * executable resolver so the pane does not depend on the pane shell PATH;
  * when resolution fails the command falls back to the bare binary name so the
  * interactive pane stays usable.
@@ -49,7 +49,7 @@ export interface ProviderLoginSession {
  * is the authority for which panes the terminal route can attach to; a session
  * whose pane disappeared from Herdr is forgotten and recreated on demand. Only
  * one sign-in session runs at a time: starting a new login closes the previous
- * session so Herdr is not left running orphaned forge-provider-login workspaces.
+ * session so Herdr is not left running orphaned suplex-provider-login workspaces.
  */
 export class ProviderLoginService {
   private readonly sessions = new Map<string, ProviderLoginSession>();

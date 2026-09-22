@@ -11,12 +11,12 @@ const server: servers.OpenCodeServerReference = { pid: process.pid, baseUrl: "ht
 afterEach(() => vi.restoreAllMocks());
 
 test("an incomplete operation identity does not block archive", async () => {
-  await expect(stopIdleArchiveSessions("/unused/forge.db", "task", [{ ...session, launchOwnerPid: process.pid }])).resolves.toBeTypeOf("function");
+  await expect(stopIdleArchiveSessions("/unused/suplex.db", "task", [{ ...session, launchOwnerPid: process.pid }])).resolves.toBeTypeOf("function");
 });
 
 test("a missing server record does not block archive", async () => {
   vi.spyOn(servers, "readOpenCodeServer").mockResolvedValue(null);
-  await expect(stopIdleArchiveSessions("/unused/forge.db", "task", [session])).resolves.toBeTypeOf("function");
+  await expect(stopIdleArchiveSessions("/unused/suplex.db", "task", [session])).resolves.toBeTypeOf("function");
 });
 
 test("a reused pid is not treated as a live server", async () => {
@@ -24,7 +24,7 @@ test("a reused pid is not treated as a live server", async () => {
   vi.spyOn(servers, "openCodeServerRunning").mockResolvedValue(false);
   const status = vi.spyOn(OpenCodeClient.prototype, "getStatus").mockRejectedValue(new Error("unreachable"));
   vi.spyOn(servers, "stopOpenCodeServer").mockResolvedValue();
-  await stopIdleArchiveSessions("/unused/forge.db", "task", [session]);
+  await stopIdleArchiveSessions("/unused/suplex.db", "task", [session]);
   expect(status).not.toHaveBeenCalled();
 });
 
@@ -33,7 +33,7 @@ test("native busy status prevents cleanup despite a stopped database observation
   vi.spyOn(servers, "openCodeServerRunning").mockResolvedValue(true);
   vi.spyOn(OpenCodeClient.prototype, "getStatus").mockResolvedValue({ native: { type: "busy" } });
   const stop = vi.spyOn(servers, "stopOpenCodeServer").mockResolvedValue();
-  await expect(stopIdleArchiveSessions("/unused/forge.db", "task", [session])).rejects.toThrow("agent is still active");
+  await expect(stopIdleArchiveSessions("/unused/suplex.db", "task", [session])).rejects.toThrow("agent is still active");
   expect(stop).not.toHaveBeenCalled();
 });
 
@@ -42,12 +42,12 @@ test("an idle native server can be stopped", async () => {
   vi.spyOn(servers, "openCodeServerRunning").mockResolvedValue(true);
   vi.spyOn(OpenCodeClient.prototype, "getStatus").mockResolvedValue({ native: { type: "idle" } });
   const stop = vi.spyOn(servers, "stopOpenCodeServer").mockResolvedValue();
-  await stopIdleArchiveSessions("/unused/forge.db", "task", [session]);
+  await stopIdleArchiveSessions("/unused/suplex.db", "task", [session]);
   expect(stop).toHaveBeenCalledWith(server);
 });
 
 test("a confirmed live task operation still prevents concurrent archive cleanup", async () => {
   const owner = await inspectProcessOnce(process.pid);
   expect(owner).toBeDefined();
-  await expect(stopIdleArchiveSessions("/unused/forge.db", "task", [{ ...session, launchOwnerPid: process.pid, launchOwnerStartTime: owner!.startTime }])).rejects.toThrow("operation is still active");
+  await expect(stopIdleArchiveSessions("/unused/suplex.db", "task", [{ ...session, launchOwnerPid: process.pid, launchOwnerStartTime: owner!.startTime }])).rejects.toThrow("operation is still active");
 });

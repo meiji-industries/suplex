@@ -5,19 +5,19 @@ import { OpenCodeClient, type OpenCodeFailure } from "../src/runtimes/opencode/c
 const session = {
   id: "ses_test",
   projectID: "project",
-  directory: "/tmp/forge-opencode",
+  directory: "/tmp/suplex-opencode",
   title: "Native session",
   version: "1.18.29",
   time: { created: 1, updated: 2 },
   model: { id: "gpt-5.6-luna", providerID: "openai", variant: "max" },
-  agent: "forge-root",
+  agent: "suplex-root",
 };
 const user = {
   id: "msg_user",
   sessionID: "ses_test",
   role: "user" as const,
   time: { created: 3 },
-  agent: "forge-root",
+  agent: "suplex-root",
   model: { providerID: "openai", modelID: "gpt-5.6-luna" },
 };
 const assistant = {
@@ -29,8 +29,8 @@ const assistant = {
   modelID: "gpt-5.6-luna",
   providerID: "openai",
   mode: "build",
-  agent: "forge-root",
-  path: { cwd: "/tmp/forge-opencode", root: "/tmp/forge-opencode" },
+  agent: "suplex-root",
+  path: { cwd: "/tmp/suplex-opencode", root: "/tmp/suplex-opencode" },
   cost: 0,
   tokens: { input: 1, output: 1, reasoning: 0, cache: { read: 0, write: 0 } },
   variant: "max",
@@ -72,10 +72,10 @@ test("MCP discovery uses a bodyless GET scoped to the session directory", async 
     const request = new Request(input, init);
     expect(request.method).toBe("GET");
     expect(request.body).toBeNull();
-    expect(new URL(request.url).searchParams.get("directory")).toBe("/tmp/forge-opencode");
-    return jsonResponse({ forge_root: { status: "connected" } });
+    expect(new URL(request.url).searchParams.get("directory")).toBe("/tmp/suplex-opencode");
+    return jsonResponse({ suplex_root: { status: "connected" } });
   } });
-  await expect(client.mcpStatus("/tmp/forge-opencode")).resolves.toEqual({ forge_root: { status: "connected" } });
+  await expect(client.mcpStatus("/tmp/suplex-opencode")).resolves.toEqual({ suplex_root: { status: "connected" } });
 });
 
 test("client uses the installed v1 routes and validates native envelopes", async () => {
@@ -93,33 +93,33 @@ test("client uses the installed v1 routes and validates native envelopes", async
         ...(request.body ? { body: await request.json() } : {}),
       });
       if (request.url.endsWith("/global/health")) return jsonResponse({ healthy: true, version: "1.18.29" });
-      if (request.url.endsWith("/config?directory=%2Ftmp%2Fforge-opencode")) return jsonResponse({ model: "openai/gpt-5.6-luna" });
-      if (request.url.endsWith("/session?directory=%2Ftmp%2Fforge-opencode")) return jsonResponse(session);
-      if (request.url.endsWith("/session/ses_test?directory=%2Ftmp%2Fforge-opencode")) return jsonResponse(session);
-      if (request.url.endsWith("/session/ses_test/message?directory=%2Ftmp%2Fforge-opencode")) return jsonResponse([{ info: user, parts: [{ type: "text", text: "Inspect the task." }] }, { info: assistant, parts: [{ type: "text", text: "done" }] }]);
-      if (request.url.endsWith("/session/status?directory=%2Ftmp%2Fforge-opencode")) return jsonResponse({ ses_test: { type: "idle" } });
-      if (request.url.endsWith("/session/ses_test/prompt_async?directory=%2Ftmp%2Fforge-opencode")) return new Response(null, { status: 204 });
+      if (request.url.endsWith("/config?directory=%2Ftmp%2Fsuplex-opencode")) return jsonResponse({ model: "openai/gpt-5.6-luna" });
+      if (request.url.endsWith("/session?directory=%2Ftmp%2Fsuplex-opencode")) return jsonResponse(session);
+      if (request.url.endsWith("/session/ses_test?directory=%2Ftmp%2Fsuplex-opencode")) return jsonResponse(session);
+      if (request.url.endsWith("/session/ses_test/message?directory=%2Ftmp%2Fsuplex-opencode")) return jsonResponse([{ info: user, parts: [{ type: "text", text: "Inspect the task." }] }, { info: assistant, parts: [{ type: "text", text: "done" }] }]);
+      if (request.url.endsWith("/session/status?directory=%2Ftmp%2Fsuplex-opencode")) return jsonResponse({ ses_test: { type: "idle" } });
+      if (request.url.endsWith("/session/ses_test/prompt_async?directory=%2Ftmp%2Fsuplex-opencode")) return new Response(null, { status: 204 });
       throw new Error(`unexpected route ${request.url}`);
     },
   });
 
   await expect(client.health()).resolves.toEqual({ healthy: true, version: "1.18.29" });
-  await expect(client.getConfig("/tmp/forge-opencode")).resolves.toEqual({ model: "openai/gpt-5.6-luna" });
+  await expect(client.getConfig("/tmp/suplex-opencode")).resolves.toEqual({ model: "openai/gpt-5.6-luna" });
   await expect(client.createSession({
     title: "Native session",
-    directory: "/tmp/forge-opencode",
+    directory: "/tmp/suplex-opencode",
     model: { id: "gpt-5.6-luna", providerID: "openai", variant: "max" },
-    agent: "forge-root",
+    agent: "suplex-root",
   })).resolves.toMatchObject({ id: "ses_test" });
-  await expect(client.getSession("ses_test", "/tmp/forge-opencode")).resolves.toMatchObject({ id: "ses_test" });
-  await expect(client.getMessages("ses_test", { directory: "/tmp/forge-opencode" })).resolves.toHaveLength(2);
-  await expect(client.getStatus("/tmp/forge-opencode")).resolves.toEqual({ ses_test: { type: "idle" } });
+  await expect(client.getSession("ses_test", "/tmp/suplex-opencode")).resolves.toMatchObject({ id: "ses_test" });
+  await expect(client.getMessages("ses_test", { directory: "/tmp/suplex-opencode" })).resolves.toHaveLength(2);
+  await expect(client.getStatus("/tmp/suplex-opencode")).resolves.toEqual({ ses_test: { type: "idle" } });
   await expect(client.promptAsync({
     sessionID: "ses_test",
     messageID: "msg_retry",
-    directory: "/tmp/forge-opencode",
+    directory: "/tmp/suplex-opencode",
     model: { providerID: "openai", modelID: "gpt-5.6-luna" },
-    agent: "forge-root",
+    agent: "suplex-root",
     variant: "max",
     text: "Inspect the task.",
   })).resolves.toBeUndefined();
@@ -136,13 +136,13 @@ test("client uses the installed v1 routes and validates native envelopes", async
   expect(calls.every(({ redirect }) => redirect === "error")).toBe(true);
   expect(calls[2]?.body).toEqual({
     title: "Native session",
-    agent: "forge-root",
+    agent: "suplex-root",
     model: { id: "gpt-5.6-luna", providerID: "openai", variant: "max" },
   });
   expect(calls[6]?.body).toEqual({
     messageID: "msg_retry",
     model: { providerID: "openai", modelID: "gpt-5.6-luna" },
-    agent: "forge-root",
+    agent: "suplex-root",
     variant: "max",
     parts: [{ type: "text", text: "Inspect the task." }],
   });
@@ -180,7 +180,7 @@ test("client fails closed for invalid addresses, malformed native data, and non-
     sessionID: "ses_test",
     messageID: "msg_retry",
     model: { providerID: "openai", modelID: "gpt-5.6-luna" },
-    agent: "forge-root",
+    agent: "suplex-root",
     variant: "max",
     text: "Inspect the task.",
   })).rejects.toMatchObject({ code: "unexpected_status", status: 200 });

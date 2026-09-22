@@ -43,17 +43,17 @@ test.each(scopes)("refreshes lost metadata on a matching $role display", async (
   expect(f.herdr.renamePane).toHaveBeenCalledWith("pane", `task-123 ${role}`);
   expect(f.reportPaneMetadata).toHaveBeenCalledWith({
     paneId: "pane",
-    source: "forge",
+    source: "suplex",
     title: `task-123 ${role}`,
     tokens: {
-      forge_binding_id: scope.id,
-      forge_task_id: "task-123",
-      forge_native_session_id: "native-session",
-      forge_server_generation: "generation",
-      forge_task: "task-123",
-      forge_role: role,
-      forge_model: "openai/gpt-5.6-sol",
-      forge_provider: "opencode",
+      suplex_binding_id: scope.id,
+      suplex_task_id: "task-123",
+      suplex_native_session_id: "native-session",
+      suplex_server_generation: "generation",
+      suplex_task: "task-123",
+      suplex_role: role,
+      suplex_model: "openai/gpt-5.6-sol",
+      suplex_provider: "opencode",
     },
   });
   expect(f.herdr.runPaneCommand).not.toHaveBeenCalled();
@@ -66,14 +66,14 @@ function desiredDisplayPane(): Pane {
     label: "task-123 Worker",
     title: "task-123 Worker",
     tokens: {
-      forge_binding_id: "worker-session",
-      forge_task_id: "task-123",
-      forge_native_session_id: "native-session",
-      forge_server_generation: "generation",
-      forge_task: "task-123",
-      forge_role: "Worker",
-      forge_model: "openai/gpt-5.6-sol",
-      forge_provider: "opencode",
+      suplex_binding_id: "worker-session",
+      suplex_task_id: "task-123",
+      suplex_native_session_id: "native-session",
+      suplex_server_generation: "generation",
+      suplex_task: "task-123",
+      suplex_role: "Worker",
+      suplex_model: "openai/gpt-5.6-sol",
+      suplex_provider: "opencode",
       foreign_token: "kept",
     },
   };
@@ -107,8 +107,8 @@ test("an unchanged native attachment needs no display writes on repeated recover
 
 test.each([
   { name: "missing metadata after restart", change: (pane: Pane) => { delete pane.title; delete pane.tokens; }, rename: 0 },
-  { name: "stale native session token", change: (pane: Pane) => { pane.tokens = { ...pane.tokens, forge_native_session_id: "old" }; }, rename: 0 },
-  { name: "stale generation token", change: (pane: Pane) => { pane.tokens = { ...pane.tokens, forge_server_generation: "old" }; }, rename: 0 },
+  { name: "stale native session token", change: (pane: Pane) => { pane.tokens = { ...pane.tokens, suplex_native_session_id: "old" }; }, rename: 0 },
+  { name: "stale generation token", change: (pane: Pane) => { pane.tokens = { ...pane.tokens, suplex_server_generation: "old" }; }, rename: 0 },
   { name: "stale metadata title", change: (pane: Pane) => { pane.title = "old title"; }, rename: 0 },
   { name: "stale pane label", change: (pane: Pane) => { pane.label = "old label"; }, rename: 1 },
 ])("repairs $name without replaying native work", async ({ change, rename }) => {
@@ -212,7 +212,7 @@ test("metadata does not make a different native attachment reusable", async () =
 
 test("an unchanged Shell display needs no writes, but lost metadata is restored", async () => {
   const f = matchingDisplay(workerScope);
-  const pane: Pane = { paneId: "pane-shell", cwd: "/repo", label: "Shell", title: "Shell", tokens: { forge_binding_id: "task-123:shell", forge_task_id: "task-123", forge_task: "task-123", forge_role: "shell", foreign_token: "kept" } };
+  const pane: Pane = { paneId: "pane-shell", cwd: "/repo", label: "Shell", title: "Shell", tokens: { suplex_binding_id: "task-123:shell", suplex_task_id: "task-123", suplex_task: "task-123", suplex_role: "shell", foreign_token: "kept" } };
   f.herdr.getPane = async () => pane;
   const input = { taskId: "task-123", cwd: "/repo", paneId: "pane-shell" };
 
@@ -239,10 +239,10 @@ test("a fresh attachment establishes the Shell pane before the session pane", as
     isAttached: () => false,
     command: "native attach",
   })).resolves.toBe("pane-split");
-  expect(f.herdr.createWorkspace).toHaveBeenCalledWith({ label: "forge-task-123", cwd: "/repo", focus: false });
+  expect(f.herdr.createWorkspace).toHaveBeenCalledWith({ label: "suplex-task-123", cwd: "/repo", focus: false });
   expect(persistShellPane).toHaveBeenCalledWith("pane-new");
   expect(f.herdr.renamePane).toHaveBeenCalledWith("pane-new", "Shell");
-  expect(f.reportPaneMetadata).toHaveBeenCalledWith(expect.objectContaining({ paneId: "pane-new", title: "Shell", tokens: expect.objectContaining({ forge_role: "shell", forge_task_id: "task-123", forge_binding_id: "task-123:shell" }) }));
+  expect(f.reportPaneMetadata).toHaveBeenCalledWith(expect.objectContaining({ paneId: "pane-new", title: "Shell", tokens: expect.objectContaining({ suplex_role: "shell", suplex_task_id: "task-123", suplex_binding_id: "task-123:shell" }) }));
   expect(f.herdr.splitPane).toHaveBeenCalledWith(expect.objectContaining({ paneId: "pane-new", direction: "down" }));
   expect(f.herdr.runPaneCommand).not.toHaveBeenCalledWith("pane-new", expect.anything());
 });
@@ -250,8 +250,8 @@ test("a fresh attachment establishes the Shell pane before the session pane", as
 test("a stale shell binding is rediscovered from the task workspace", async () => {
   const scope = workerScope;
   const f = matchingDisplay(scope);
-  const shellPane = { paneId: "pane-shell", workspaceId: "workspace", cwd: "/repo", tokens: { forge_task_id: "task-123", forge_role: "shell", forge_binding_id: "task-123:shell" } };
-  f.herdr.listWorkspaces = async () => [{ workspaceId: "workspace", label: "forge-task-123" }];
+  const shellPane = { paneId: "pane-shell", workspaceId: "workspace", cwd: "/repo", tokens: { suplex_task_id: "task-123", suplex_role: "shell", suplex_binding_id: "task-123:shell" } };
+  f.herdr.listWorkspaces = async () => [{ workspaceId: "workspace", label: "suplex-task-123" }];
   f.herdr.listPanes = async () => [shellPane];
   const persistShellPane = vi.fn();
   await expect(attachTaskDisplay(f.herdr, {

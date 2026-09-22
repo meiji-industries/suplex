@@ -70,7 +70,7 @@ export function TaskAgent({ task, role, onChange, onActivityChange, openRequest,
       onChange(updated);
       await readJson(`/api/tasks/${task.id}/activity`).then(value => onActivityChange(TaskActivityResponseSchema.parse(value)), () => undefined);
       setOpen(false);
-    } catch (cause) { setError(cause instanceof Error ? cause.message : `Forge could not save the ${label}.`); }
+    } catch (cause) { setError(cause instanceof Error ? cause.message : `Suplex could not save the ${label}.`); }
     finally { setBusy(false); }
   };
   return <div className="space-y-1.5"><dt className="text-muted-foreground">{label}</dt><dd>
@@ -78,10 +78,10 @@ export function TaskAgent({ task, role, onChange, onActivityChange, openRequest,
       : <span className="flex items-center gap-2"><EntityAvatar kind="agent" id={profile.profileId} name={label} size="xs" /><span className="min-w-0"><span className="block truncate">{profile.model}</span><span className="block text-[11px] text-muted-foreground">{profile.provider} · {profile.reasoningLevel}</span></span></span>}
   </dd><Dialog open={open} onOpenChange={value => { if (!busy) setOpen(value); }}><DialogContent><DialogHeader><DialogTitle>Select {label}</DialogTitle></DialogHeader>
     <form className="grid gap-3" onSubmit={event => { event.preventDefault(); void save(); }}>
-      <p className="text-xs text-muted-foreground">Forge uses this agent for remaining work. Forge keeps completed work, history, and limits.</p>
+      <p className="text-xs text-muted-foreground">Suplex uses this agent for remaining work. Suplex keeps completed work, history, and limits.</p>
       <TaskRoleSelector role={role === "worker" ? "worker" : "root"} {...(role === "root" || role === "worker" ? {} : { label })} profiles={allowed} assignment={profileId} defaultProfileId={intent ? roleProfile(intent.task, role).profileId : undefined} showDefaultChoice={false} busy={busy} onChange={setProfileId} />
       <div className="grid gap-1"><Label htmlFor={`agent-direction-${role}-${task.id}`}>Additional direction (optional)</Label><Textarea id={`agent-direction-${role}-${task.id}`} value={direction} onChange={event => setDirection(event.target.value)} disabled={busy} /></div>
-      {question ? <div className="grid gap-2 text-xs"><p>{question.text}</p>{canResume ? <><p className="text-muted-foreground">Forge sends the unanswered question to Coordinator.</p><label className="flex items-center gap-2"><Checkbox checked={resume} disabled={busy} onCheckedChange={checked => setResume(checked === true)} />Resume the task</label></> : <p className="text-muted-foreground">The current decision stays pending. Answer it to resume the task.</p>}</div> : null}
+      {question ? <div className="grid gap-2 text-xs"><p>{question.text}</p>{canResume ? <><p className="text-muted-foreground">Suplex sends the unanswered question to Coordinator.</p><label className="flex items-center gap-2"><Checkbox checked={resume} disabled={busy} onCheckedChange={checked => setResume(checked === true)} />Resume the task</label></> : <p className="text-muted-foreground">The current decision stays pending. Answer it to resume the task.</p>}</div> : null}
       {error ? <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert> : null}
       <DialogFooter><Button type="button" variant="ghost" disabled={busy} onClick={() => setOpen(false)}>Cancel</Button><Button type="submit" disabled={busy || !intent || noChange || !allowed.some(item => item.id === selected)}>{resume ? "Save and resume" : `Save ${label}`}</Button></DialogFooter>
     </form>

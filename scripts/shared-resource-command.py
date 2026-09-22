@@ -17,7 +17,7 @@ def group_alive(group):
 
 
 def supervise(resource, command):
-    directory = os.path.join(tempfile.gettempdir(), "forge-resource-locks-" + str(os.getuid()))
+    directory = os.path.join(tempfile.gettempdir(), "suplex-resource-locks-" + str(os.getuid()))
     os.makedirs(directory, mode=0o700, exist_ok=True)
     key = os.path.realpath(resource) if os.path.isabs(resource) else resource
     path = os.path.join(directory, hashlib.sha256(key.encode()).hexdigest() + ".lock")

@@ -43,7 +43,7 @@ export interface GithubPullRequest {
   isCrossRepository?: boolean;
 }
 
-/** The provider truth used by Forge when reconciling an externally changed PR. */
+/** The provider truth used by Suplex when reconciling an externally changed PR. */
 export interface GithubPullRequestObservation {
   exists: boolean;
   number: number | null;
@@ -363,7 +363,7 @@ const defaultRunner: GithubCommandRunner = async ({ command, args, cwd, timeout,
 };
 
 export function createGithubReleasePort(options: GithubReleasePortOptions = {}): Required<GithubReleaseAdapter> & GithubTriggerPort {
-  const ghCommand = options.ghCommand ?? process.env.FORGE_GH_COMMAND ?? "gh";
+  const ghCommand = options.ghCommand ?? process.env.SUPLEX_GH_COMMAND ?? "gh";
   const gitCommand = options.gitCommand ?? "git";
   const retryPausesMs = options.retryPausesMs ?? [2_000, 6_000];
   const runner = options.runner ?? (options.taskId && options.stepId

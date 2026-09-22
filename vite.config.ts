@@ -15,9 +15,9 @@ export default defineConfig({
     rollupOptions: {
       input: "src/frontend/main.tsx",
       output: {
-        entryFileNames: "forge-ui.js",
+        entryFileNames: "suplex-ui.js",
         chunkFileNames: "[name]-[hash].js",
-        assetFileNames: "forge-ui.[ext]",
+        assetFileNames: "suplex-ui.[ext]",
       },
     },
   },

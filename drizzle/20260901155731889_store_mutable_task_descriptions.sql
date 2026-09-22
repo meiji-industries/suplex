@@ -1,1 +1,1 @@
-ALTER TABLE `forge_tasks` ADD COLUMN `description` text;
+ALTER TABLE `suplex_tasks` ADD COLUMN `description` text;

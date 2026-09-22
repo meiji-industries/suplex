@@ -1,6 +1,6 @@
 import { afterEach, expect, test } from "vitest";
 import { cleanupRootControllerFixtures, fixture } from "./helpers/root-controller-fixture.js";
-import { ForgeDatabase } from "../src/platform/database.js";
+import { SuplexDatabase } from "../src/platform/database.js";
 import { TaskControlStore } from "../src/coordination/root-session-store.js";
 import { RootController } from "../src/coordination/root-controller.js";
 import { RootBridge } from "../src/coordination/root-bridge.js";
@@ -11,9 +11,9 @@ afterEach(cleanupRootControllerFixtures);
 test("replacement preserves the dedicated login and rejects a disallowed provider", async () => {
   const f = await assigned();
   f.database.authTransaction(db => {
-    db.prepare("INSERT INTO forge_provider_instances (id, provider, label, home_directory, created_at, updated_at) VALUES ('client', 'claude-code', 'Client', '/dedicated/client', 'now', 'now')").run();
-    db.prepare("INSERT INTO forge_profiles (id, name, role, avatar_seed, provider, provider_instance_id, model, reasoning_level, service_tier, created_at, updated_at) VALUES ('client-worker', 'Client', 'worker', 'seed', 'claude-code', 'client', 'sonnet', 'high', 'default', 'now', 'now')").run();
-    db.prepare("UPDATE forge_tasks SET configuration_json = json_set(configuration_json, '$.providerPolicy', json(?)) WHERE id = 'task'").run(JSON.stringify({ allowedProviders: ["claude-code"], allowedInstanceIds: ["client"] }));
+    db.prepare("INSERT INTO suplex_provider_instances (id, provider, label, home_directory, created_at, updated_at) VALUES ('client', 'claude-code', 'Client', '/dedicated/client', 'now', 'now')").run();
+    db.prepare("INSERT INTO suplex_profiles (id, name, role, avatar_seed, provider, provider_instance_id, model, reasoning_level, service_tier, created_at, updated_at) VALUES ('client-worker', 'Client', 'worker', 'seed', 'claude-code', 'client', 'sonnet', 'high', 'default', 'now', 'now')").run();
+    db.prepare("UPDATE suplex_tasks SET configuration_json = json_set(configuration_json, '$.providerPolicy', json(?)) WHERE id = 'task'").run(JSON.stringify({ allowedProviders: ["claude-code"], allowedInstanceIds: ["client"] }));
   });
   expect(() => f.store.replaceWorker("task", { sessionId: f.old.id, workerProfileId: "profile_native_worker", reason: "Change model" })).toThrow("allowed by this project");
   const replacement = f.store.replaceWorker("task", { sessionId: f.old.id, workerProfileId: "client-worker", reason: "Use client login" });
@@ -62,7 +62,7 @@ test("the new Worker waits for authoritative shutdown, then survives a database 
   expect(f.harness.dispatched).toHaveLength(before);
   expect(f.store.workerReplacementReady(replacement.id)).toBe(false);
   f.harness.stop = originalStop;
-  const database = new ForgeDatabase(join(f.directory, "forge.sqlite"));
+  const database = new SuplexDatabase(join(f.directory, "suplex.sqlite"));
   try {
     const store = new TaskControlStore(database);
     await new RootController(store, f.harness, undefined, undefined, undefined, f.reader, async () => undefined).recover("task");
@@ -82,7 +82,7 @@ test("Coordinator replacement rejects another task's session and cannot change t
 
 test("a profile change preserves the outgoing profile and repeated replacement handoffs stay concise", async () => {
   const f = await assigned();
-  f.database.authTransaction(db => db.prepare("INSERT INTO forge_profiles (id, name, role, avatar_seed, provider, model, reasoning_level, service_tier, created_at, updated_at) VALUES ('replacement', 'Replacement', 'worker', 'replacement', 'claude-code', 'claude-model', 'high', 'default', ?, ?)").run(new Date().toISOString(), new Date().toISOString()));
+  f.database.authTransaction(db => db.prepare("INSERT INTO suplex_profiles (id, name, role, avatar_seed, provider, model, reasoning_level, service_tier, created_at, updated_at) VALUES ('replacement', 'Replacement', 'worker', 'replacement', 'claude-code', 'claude-model', 'high', 'default', ?, ?)").run(new Date().toISOString(), new Date().toISOString()));
   const originalProfile = f.store.get("task").workerProfile;
   const worker = f.store.replaceWorker("task", { sessionId: f.old.id, workerProfileId: "replacement", reason: "Use another model" });
   expect(worker.profile).toMatchObject({ provider: "claude-code", model: "claude-model" });
@@ -96,7 +96,7 @@ test("a profile change preserves the outgoing profile and repeated replacement h
 
 test("a Coordinator-initiated replacement keeps the previous Worker profile", async () => {
   const f = await assigned();
-  f.database.authTransaction(db => db.prepare("INSERT INTO forge_profiles (id, name, role, avatar_seed, provider, model, reasoning_level, service_tier, created_at, updated_at) VALUES ('switched', 'Switched', 'worker', 'switched', 'claude-code', 'claude-model', 'high', 'default', ?, ?)").run(new Date().toISOString(), new Date().toISOString()));
+  f.database.authTransaction(db => db.prepare("INSERT INTO suplex_profiles (id, name, role, avatar_seed, provider, model, reasoning_level, service_tier, created_at, updated_at) VALUES ('switched', 'Switched', 'worker', 'switched', 'claude-code', 'claude-model', 'high', 'default', ?, ?)").run(new Date().toISOString(), new Date().toISOString()));
   const switched = f.store.replaceWorker("task", { sessionId: f.old.id, workerProfileId: "switched", reason: "Human chose another agent" });
   expect(switched.profile).toMatchObject({ profileId: "switched", provider: "claude-code" });
   const configured = f.store.get("task").workerProfile;
@@ -110,7 +110,7 @@ test("a Coordinator-initiated replacement keeps the previous Worker profile", as
 
 test("replacement of a previously stopped Worker requests a new native inspection", async () => {
   const f = await assigned();
-  f.database.authTransaction(db => db.prepare("UPDATE forge_task_sessions SET stopped_at = ?, lifecycle = 'stopped' WHERE id = ?").run(new Date().toISOString(), f.old.id));
+  f.database.authTransaction(db => db.prepare("UPDATE suplex_task_sessions SET stopped_at = ?, lifecycle = 'stopped' WHERE id = ?").run(new Date().toISOString(), f.old.id));
   const next = f.store.replaceWorker("task", { sessionId: f.old.id, reason: "Fresh native session" });
   expect(f.store.workerReplacementReady(next.id)).toBe(false);
   expect((await f.store.pendingStops("task")).map(session => session.id)).toContain(f.old.id);

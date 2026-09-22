@@ -99,7 +99,7 @@ function mcpServerTable(bridge: TaskBridgeServer): string {
 }
 
 export function codexBridgeServerName(role: TaskScope["role"]): string {
-  return role === "root" ? "forge_root" : "forge_advisor";
+  return role === "root" ? "suplex_root" : "suplex_advisor";
 }
 
 // `codex exec resume` accepts no `-s`, `-C`, or `--add-dir`, so every policy
@@ -169,7 +169,7 @@ export class CodexTaskRuntime implements TaskHarness {
     const events = parseCodexEvents(log ?? "");
     const threadId = codexThreadId(events);
     if (threadId && !await readCodexThreadId(runtimeDirectory) && !(await deadCodexThreadIds(runtimeDirectory)).has(threadId)) await persistCodexThreadId(runtimeDirectory, threadId);
-    const agent = `forge-${scope.role}`;
+    const agent = `suplex-${scope.role}`;
     const common: PromptObservation = {
       ...base, state: "running", admission: "observed", retry: "forbidden",
       native: { messageID: intent.messageID, parentID: intent.messageID, providerID: "codex", modelID: scope.profile.modelID, mode: agent, agent, cwd: scope.directory, root: scope.directory },
@@ -216,7 +216,7 @@ export class CodexTaskRuntime implements TaskHarness {
     const bridge = await this.bridge(scope);
     const guard = await this.guard(scope);
     const resumeThreadId = await recoverCodexThreadId(runtimeDirectory);
-    const additions = scope.role === "advisor" ? { FORGE_ADVISOR_RESULT: advisorBridgeResultPath(runtimeDirectory, intent.messageID) } : {};
+    const additions = scope.role === "advisor" ? { SUPLEX_ADVISOR_RESULT: advisorBridgeResultPath(runtimeDirectory, intent.messageID) } : {};
     const environment = taskBridgeEnvironment(bridge, { ...process.env, ...guard.env }, additions);
     const record = await dispatchHeadless({ runtimeDirectory, scope, intent, executable, args: codexArguments({ scope, resumeThreadId, bridge }), prompt: rolePrompt(scope, intent), environment, claim, label: "Codex" });
     return this.observe(scope, { ...intent, dispatch: "ambiguous" }, { serverGeneration: record.generation, claimedAt: new Date().toISOString() });

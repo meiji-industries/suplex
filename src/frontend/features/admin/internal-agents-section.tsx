@@ -320,7 +320,7 @@ export function InternalAgentsSection({
           <AlertDialogHeader>
             <AlertDialogTitle>Archive {archiveTarget?.name}?</AlertDialogTitle>
             <AlertDialogDescription>
-              Forge removes archived agents from the task and project lists.
+              Suplex removes archived agents from the task and project lists.
               Tasks that use this agent continue. You can unarchive the agent
               later.
             </AlertDialogDescription>
@@ -355,7 +355,7 @@ export function InternalAgentsSection({
           <AlertDialogHeader>
             <AlertDialogTitle>Delete {deleteTarget?.name}?</AlertDialogTitle>
             <AlertDialogDescription>
-              Forge permanently deletes this agent. Tasks that use this agent
+              Suplex permanently deletes this agent. Tasks that use this agent
               continue. You cannot undo this action.
             </AlertDialogDescription>
           </AlertDialogHeader>

@@ -9,11 +9,11 @@ import * as executables from "../src/platform/executable-resolver.js";
 import { CSRF_COOKIE_NAME, SESSION_COOKIE_NAME } from "../src/identity/auth-identifiers.js";
 import { createApp } from "../src/app.js";
 import { createTestConfig } from "../src/platform/config.js";
-import { ForgeDatabase } from "../src/platform/database.js";
+import { SuplexDatabase } from "../src/platform/database.js";
 import { ProviderInstanceService } from "../src/profiles/provider-instances.js";
 import { healthyHost } from "./helpers/native-app.js";
 
-const webAuthn: WebAuthnAdapter = { async generateRegistrationOptions(input) { return { rp: { name: "Forge", id: input.rpId }, user: { id: input.userId, name: input.userName, displayName: input.displayName }, challenge: "provider-api", pubKeyCredParams: [{ type: "public-key" as const, alg: -7 }], attestation: "none" as const }; }, async verifyRegistrationResponse(input) { return { verified: true, credential: { id: input.response.id, publicKey: Uint8Array.from([1]), counter: 0 } }; }, async generateAuthenticationOptions() { return { challenge: "provider-api", rpId: "localhost", allowCredentials: [], userVerification: "required" as const }; }, async verifyAuthenticationResponse() { return { verified: true, newCounter: 1 }; } };
+const webAuthn: WebAuthnAdapter = { async generateRegistrationOptions(input) { return { rp: { name: "Suplex", id: input.rpId }, user: { id: input.userId, name: input.userName, displayName: input.displayName }, challenge: "provider-api", pubKeyCredParams: [{ type: "public-key" as const, alg: -7 }], attestation: "none" as const }; }, async verifyRegistrationResponse(input) { return { verified: true, credential: { id: input.response.id, publicKey: Uint8Array.from([1]), counter: 0 } }; }, async generateAuthenticationOptions() { return { challenge: "provider-api", rpId: "localhost", allowCredentials: [], userVerification: "required" as const }; }, async verifyAuthenticationResponse() { return { verified: true, newCounter: 1 }; } };
 
 afterEach(() => vi.restoreAllMocks());
 
@@ -22,9 +22,9 @@ function cookie(headers: OutgoingHttpHeaders, name: string): string {
   return (all.find((value) => value.split("=", 1)[0] === name) ?? "").split(";", 1)[0]!.split("=", 2)[1] ?? "";
 }
 
-test("provider API uses native configuration, not CLI health or Forge credentials", async () => {
-  const root = await mkdtemp(join(tmpdir(), "forge-providers-api-"));
-  const database = new ForgeDatabase(join(root, "forge.sqlite"));
+test("provider API uses native configuration, not CLI health or Suplex credentials", async () => {
+  const root = await mkdtemp(join(tmpdir(), "suplex-providers-api-"));
+  const database = new SuplexDatabase(join(root, "suplex.sqlite"));
   const config = createTestConfig(root, { reachableAddress: "http://127.0.0.1:4111" });
   const auth = new AuthService(database, config, { webAuthn });
   const providerInstances = new ProviderInstanceService(database, auth);
@@ -72,8 +72,8 @@ test("provider login endpoints create, reuse, and close Herdr sign-in panes", as
   vi.spyOn(executables, "resolveClaudeExecutable").mockResolvedValue("/opt/claude/bin/claude");
   vi.spyOn(executables, "resolveDevinExecutable").mockResolvedValue("/opt/devin/devin");
   vi.spyOn(executables, "resolveOpenCodeExecutable").mockRejectedValue(new Error("missing"));
-  const root = await mkdtemp(join(tmpdir(), "forge-provider-login-api-"));
-  const database = new ForgeDatabase(join(root, "forge.sqlite"));
+  const root = await mkdtemp(join(tmpdir(), "suplex-provider-login-api-"));
+  const database = new SuplexDatabase(join(root, "suplex.sqlite"));
   const config = createTestConfig(root, { reachableAddress: "http://127.0.0.1:4111" });
   const auth = new AuthService(database, config, { webAuthn });
   const providerInstances = new ProviderInstanceService(database, auth);
@@ -84,7 +84,7 @@ test("provider login endpoints create, reuse, and close Herdr sign-in panes", as
     createWorkspace: vi.fn(async () => {
       const pane = { paneId: `pane-login-${++paneSeq}` };
       panes.set(pane.paneId, pane);
-      return { workspace: { workspaceId: `ws-login-${paneSeq}`, label: "forge-provider-login" }, tab: { tabId: `tab-${paneSeq}`, label: "sign-in" }, rootPane: pane };
+      return { workspace: { workspaceId: `ws-login-${paneSeq}`, label: "suplex-provider-login" }, tab: { tabId: `tab-${paneSeq}`, label: "sign-in" }, rootPane: pane };
     }),
     runPaneCommand: vi.fn(async () => {}),
     closePane: vi.fn(async () => {}),
@@ -103,7 +103,7 @@ test("provider login endpoints create, reuse, and close Herdr sign-in panes", as
 
     const claude = await app.inject({ method: "POST", url: "/api/admin/providers/claude-code/login", headers });
     expect(claude.statusCode, claude.body).toBe(200);
-    expect(herdr.createWorkspace).toHaveBeenCalledWith(expect.objectContaining({ label: "forge-provider-login", focus: false }));
+    expect(herdr.createWorkspace).toHaveBeenCalledWith(expect.objectContaining({ label: "suplex-provider-login", focus: false }));
     expect(herdr.runPaneCommand).toHaveBeenLastCalledWith("pane-login-1", "'/opt/claude/bin/claude' auth login");
 
     const reused = await app.inject({ method: "POST", url: "/api/admin/providers/claude-code/login", headers });
@@ -133,10 +133,10 @@ test("provider login endpoints create, reuse, and close Herdr sign-in panes", as
     const listed = await app.inject({ method: "GET", url: "/api/admin/provider-instances", headers });
     expect(listed.json()).toMatchObject({ instances: [{ id: instance.id, connection: { status: "not-connected" } }] });
 
-    database.authTransaction(db => db.prepare("UPDATE forge_users SET role = 'member' WHERE id = ?").run(userId));
+    database.authTransaction(db => db.prepare("UPDATE suplex_users SET role = 'member' WHERE id = ?").run(userId));
     expect((await app.inject({ method: "POST", url: "/api/admin/providers/devin/login", headers })).statusCode).toBe(403);
     expect((await app.inject({ method: "DELETE", url: "/api/admin/provider-login/pane-login-1", headers })).statusCode).toBe(403);
-    database.authTransaction(db => db.prepare("UPDATE forge_users SET role = 'admin' WHERE id = ?").run(userId));
+    database.authTransaction(db => db.prepare("UPDATE suplex_users SET role = 'admin' WHERE id = ?").run(userId));
 
     expect((await app.inject({ method: "DELETE", url: "/api/admin/provider-login/pane-login-4", headers })).statusCode).toBe(204);
     expect(herdr.closeWorkspace).toHaveBeenCalledWith("ws-login-4");

@@ -42,7 +42,7 @@ test("source prefill remains editable and only generated values are replaced", (
 });
 
 test("issues prefill the title and URL with their resolved association", () => {
-  const issue: TaskSourceSummary = { kind: "issue", issue: { kind: "github", repository: "acme/forge", number: 42, id: "42", key: "#42", title: "Fix search", url: "https://github.com/acme/forge/issues/42" } };
-  expect(prefillForTaskSource(issue)).toEqual({ title: "Fix search", description: "Work on #42: https://github.com/acme/forge/issues/42" });
+  const issue: TaskSourceSummary = { kind: "issue", issue: { kind: "github", repository: "acme/suplex", number: 42, id: "42", key: "#42", title: "Fix search", url: "https://github.com/acme/suplex/issues/42" } };
+  expect(prefillForTaskSource(issue)).toEqual({ title: "Fix search", description: "Work on #42: https://github.com/acme/suplex/issues/42" });
   expect(filterTaskSources([pull, branch, issue], "42")).toEqual([issue]);
 });

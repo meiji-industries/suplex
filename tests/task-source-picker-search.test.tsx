@@ -108,7 +108,7 @@ test("newer issue searches replace slower earlier results", async () => {
   api.readJson.mockImplementation((url: string) => {
     if (!url.includes("/issues?query=")) return Promise.resolve({ available: true, sources: [] });
     const response = deferred<{ issues: Array<{ kind: "jira"; site: string; id: string; key: string; title: string; url: string }> }>();
-    requests.push({ query: new URL(url, "https://forge.test").searchParams.get("query") ?? "", response });
+    requests.push({ query: new URL(url, "https://suplex.test").searchParams.get("query") ?? "", response });
     return response.promise;
   });
   const container = document.createElement("div");

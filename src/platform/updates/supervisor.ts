@@ -11,7 +11,7 @@ type ChildRequest = { kind: "update:read"; requestId: string; check: boolean } |
 type ChildMessage = ChildRequest | { kind: "ready"; instanceId: string; currentRevision?: string };
 type CommandResult = { code: number; stdout: string; stderr: string };
 
-const FORGE_REPOSITORY = "meiji-industries/forge";
+const SUPLEX_REPOSITORY = "meiji-industries/suplex";
 const PACKAGED_UPDATE_MESSAGE = "Updates come with the desktop app.";
 const MAIN_BRANCH = "main";
 const READY_TIMEOUT_MS = 30_000;
@@ -63,10 +63,10 @@ function repositoryPath(pathname: string): string | undefined {
   return /^[A-Za-z0-9_.-]+\/[A-Za-z0-9_.-]+$/.test(normalized) ? normalized.toLowerCase() : undefined;
 }
 
-export function canonicalForgeRepository(rawUrl: string): boolean {
+export function canonicalSuplexRepository(rawUrl: string): boolean {
   const trimmed = rawUrl.trim();
   const scp = /^git@github\.com:([^\s]+)$/i.exec(trimmed);
-  if (scp?.[1]) return repositoryPath(scp[1]) === FORGE_REPOSITORY;
+  if (scp?.[1]) return repositoryPath(scp[1]) === SUPLEX_REPOSITORY;
   try {
     const url = new URL(trimmed);
     const https = url.protocol === "https:";
@@ -74,17 +74,17 @@ export function canonicalForgeRepository(rawUrl: string): boolean {
     if ((!https && !ssh) || url.hostname.toLowerCase() !== "github.com" || url.search || url.hash) return false;
     if (https && (url.username || url.password)) return false;
     if (ssh && (url.username !== "git" || url.password || (url.port && url.port !== "22"))) return false;
-    return repositoryPath(url.pathname) === FORGE_REPOSITORY;
+    return repositoryPath(url.pathname) === SUPLEX_REPOSITORY;
   } catch {
     return false;
   }
 }
 
 function packagedStatus(action: "check" | "apply"): UpdateStatus {
-  return { kind: "failed", action, message: PACKAGED_UPDATE_MESSAGE, error: "This Forge ships inside Forge.app; install the new app to update it." };
+  return { kind: "failed", action, message: PACKAGED_UPDATE_MESSAGE, error: "This Suplex ships inside Suplex.app; install the new app to update it." };
 }
 
-export class ForgeSupervisor {
+export class SuplexSupervisor {
   private readonly root: string;
   private readonly watchMode: boolean;
   private readonly packaged: boolean;
@@ -104,7 +104,7 @@ export class ForgeSupervisor {
   private watchTimer: NodeJS.Timeout | undefined;
   private watchFlight: Promise<void> | undefined;
 
-  constructor(root: string, watchMode: boolean, packaged = process.env.FORGE_PACKAGED === "1") {
+  constructor(root: string, watchMode: boolean, packaged = process.env.SUPLEX_PACKAGED === "1") {
     this.root = root;
     this.watchMode = watchMode;
     this.packaged = packaged;
@@ -160,7 +160,7 @@ export class ForgeSupervisor {
         escalation = setTimeout(() => child.kill("SIGKILL"), 5_000);
       }, READY_TIMEOUT_MS);
       const onExit = (code: number | null, signal: NodeJS.Signals | null): void => {
-        fail(timedOut ? new Error("Forge API did not report readiness.") : new Error(`Forge API stopped before readiness (${signal ?? code ?? "unknown"}).`));
+        fail(timedOut ? new Error("Suplex API did not report readiness.") : new Error(`Suplex API stopped before readiness (${signal ?? code ?? "unknown"}).`));
       };
       child.once("exit", onExit);
       child.once("error", (error) => fail(error));
@@ -178,7 +178,7 @@ export class ForgeSupervisor {
           resolveReady();
           return;
         }
-        void this.handleRequest(child, typed).catch((error: unknown) => process.stderr.write(`Forge update IPC failed: ${text(error)}\n`));
+        void this.handleRequest(child, typed).catch((error: unknown) => process.stderr.write(`Suplex update IPC failed: ${text(error)}\n`));
       });
     });
   }
@@ -191,7 +191,7 @@ export class ForgeSupervisor {
     }
     const alreadyRunning = this.applyFlight !== undefined;
     if (!alreadyRunning) {
-      this.status = { kind: "applying", step: "fetch", message: "Forge checks the update." };
+      this.status = { kind: "applying", step: "fetch", message: "Suplex checks the update." };
       setTimeout(() => { if (!this.applyFlight && !this.stopping) this.applyFlight = this.apply().finally(() => { this.applyFlight = undefined; }); }, 100);
     }
     await this.send(child, { kind: "update:apply-result", requestId: request.requestId, value: { accepted: true, status: this.status } });
@@ -217,7 +217,7 @@ export class ForgeSupervisor {
       if (head !== remote) await this.requireFastForward(head, remoteRef);
       this.status = priorApplyFailure ?? (running === remote ? { kind: "current" } : { kind: "available" });
     } catch (error) {
-      this.status = priorApplyFailure ?? { kind: "failed", action: "check", message: "Forge could not check for an update.", error: text(error) };
+      this.status = priorApplyFailure ?? { kind: "failed", action: "check", message: "Suplex could not check for an update.", error: text(error) };
     }
   }
 
@@ -229,29 +229,29 @@ export class ForgeSupervisor {
     try {
       if (this.watchFlight) await this.watchFlight;
       if (this.checkFlight) await this.checkFlight;
-      this.setApplying("fetch", "Forge checks the update.");
+      this.setApplying("fetch", "Suplex checks the update.");
       const remoteRef = await this.fetchRemoteMain();
       const head = await this.readHead();
       const remote = requiredRevision((await this.git(["rev-parse", "--verify", `${remoteRef}^{commit}`])).stdout);
       await this.requireFastForward(head, remoteRef);
       this.availableRevision = head === remote ? this.availableRevision : remote;
 
-      this.setApplying("stop", "Forge stops the host.");
+      this.setApplying("stop", "Suplex stops the host.");
       await this.stopChild();
       childStopped = true;
 
       if (head !== remote) {
-        this.setApplying("merge", "Forge applies the update.");
+        this.setApplying("merge", "Suplex applies the update.");
         await this.git(["merge", "--ff-only", remoteRef]);
       }
-      this.setApplying("install", "Forge installs dependencies.");
+      this.setApplying("install", "Suplex installs dependencies.");
       await this.command("pnpm", ["install", "--frozen-lockfile"], 5 * 60_000);
-      if (process.env.FORGE_FRONTEND_DEV_SERVER !== "1") {
-        this.setApplying("build", "Forge builds production assets.");
+      if (process.env.SUPLEX_FRONTEND_DEV_SERVER !== "1") {
+        this.setApplying("build", "Suplex builds production assets.");
         await this.command("pnpm", ["run", "build"], 5 * 60_000);
       }
 
-      this.setApplying("start", "Forge starts the host.");
+      this.setApplying("start", "Suplex starts the host.");
       await this.startChild();
       this.availableRevision = undefined;
       this.status = { kind: "current" };
@@ -264,8 +264,8 @@ export class ForgeSupervisor {
       this.status = {
         kind: "failed",
         action: "apply",
-        message: "Forge could not apply the update.",
-        error: restartError ? `${original}\nForge could not restart the current checkout: ${restartError}` : original,
+        message: "Suplex could not apply the update.",
+        error: restartError ? `${original}\nSuplex could not restart the current checkout: ${restartError}` : original,
       };
     } finally {
       this.updating = false;
@@ -279,28 +279,28 @@ export class ForgeSupervisor {
 
   private async resolveRemote(): Promise<string> {
     const branch = (await this.git(["symbolic-ref", "--short", "HEAD"])).stdout.trim();
-    if (branch !== MAIN_BRANCH) throw new Error(`Forge updates require the ${MAIN_BRANCH} branch. The current branch is ${branch || "detached"}.`);
+    if (branch !== MAIN_BRANCH) throw new Error(`Suplex updates require the ${MAIN_BRANCH} branch. The current branch is ${branch || "detached"}.`);
     const upstream = await this.git(["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"], true);
     if (upstream.code === 0) {
       const value = upstream.stdout.trim();
       const slash = value.indexOf("/");
       const remote = slash > 0 ? value.slice(0, slash) : "";
       const remoteBranch = slash > 0 ? value.slice(slash + 1) : "";
-      if (!remote || remoteBranch !== MAIN_BRANCH) throw new Error(`Forge main must track a ${MAIN_BRANCH} branch.`);
-      await this.requireForgeRemote(remote);
+      if (!remote || remoteBranch !== MAIN_BRANCH) throw new Error(`Suplex main must track a ${MAIN_BRANCH} branch.`);
+      await this.requireSuplexRemote(remote);
       return remote;
     }
     const names = (await this.git(["remote"])).stdout.split(/\r?\n/).map((value) => value.trim()).filter(Boolean);
     const matches: string[] = [];
-    for (const name of names) if (canonicalForgeRepository((await this.git(["remote", "get-url", name])).stdout)) matches.push(name);
+    for (const name of names) if (canonicalSuplexRepository((await this.git(["remote", "get-url", name])).stdout)) matches.push(name);
     if (matches.includes("origin")) return "origin";
     if (matches.length === 1) return matches[0]!;
-    if (matches.length === 0) throw new Error("git found no remote for meiji-industries/forge.");
-    throw new Error("git found multiple Forge remotes and no authoritative upstream.");
+    if (matches.length === 0) throw new Error("git found no remote for meiji-industries/suplex.");
+    throw new Error("git found multiple Suplex remotes and no authoritative upstream.");
   }
 
-  private async requireForgeRemote(remote: string): Promise<void> {
-    if (!canonicalForgeRepository((await this.git(["remote", "get-url", remote])).stdout)) throw new Error("git upstream does not match meiji-industries/forge.");
+  private async requireSuplexRemote(remote: string): Promise<void> {
+    if (!canonicalSuplexRepository((await this.git(["remote", "get-url", remote])).stdout)) throw new Error("git upstream does not match meiji-industries/suplex.");
   }
 
   private async fetchRemoteMain(): Promise<string> {
@@ -312,7 +312,7 @@ export class ForgeSupervisor {
 
   private async requireFastForward(head: string, remoteRef: string): Promise<void> {
     const result = await this.git(["merge-base", "--is-ancestor", head, remoteRef], true);
-    if (result.code !== 0) throw new Error("The Forge checkout has diverged from remote main. Resolve the branch before updating.");
+    if (result.code !== 0) throw new Error("The Suplex checkout has diverged from remote main. Resolve the branch before updating.");
   }
 
   private async readHead(): Promise<string> {
@@ -324,7 +324,7 @@ export class ForgeSupervisor {
   }
 
   private command(command: string, args: string[], timeoutMs: number, allowFailure = false): Promise<CommandResult> {
-    if (this.stopping) return Promise.reject(new Error("Forge update stopped."));
+    if (this.stopping) return Promise.reject(new Error("Suplex update stopped."));
     const done = new Promise<CommandResult>((resolveCommand, reject) => {
       const child = spawn(command, args, { cwd: this.root, env: process.env, detached: process.platform !== "win32", stdio: ["ignore", "pipe", "pipe"] });
       this.activeCommand = child;
@@ -411,7 +411,7 @@ export class ForgeSupervisor {
 
   private async restartForWatch(): Promise<void> {
     if (this.updating || this.stopping) return;
-    try { await this.stopChild(); await this.startChild(); } catch (error) { process.stderr.write(`Forge watch restart failed: ${text(error)}\n`); }
+    try { await this.stopChild(); await this.startChild(); } catch (error) { process.stderr.write(`Suplex watch restart failed: ${text(error)}\n`); }
   }
 
   private pauseWatcher(): void {
@@ -423,7 +423,7 @@ export class ForgeSupervisor {
 
   private send(child: ChildProcess, message: object): Promise<void> {
     return new Promise((resolveSent, reject) => {
-      if (!child.connected) { reject(new Error("Forge API IPC disconnected.")); return; }
+      if (!child.connected) { reject(new Error("Suplex API IPC disconnected.")); return; }
       try { child.send(message, (error) => error ? reject(error) : resolveSent()); } catch (error) { reject(error); }
     });
   }
@@ -442,10 +442,10 @@ export class ForgeSupervisor {
 }
 
 async function main(): Promise<void> {
-  const supervisor = new ForgeSupervisor(process.cwd(), process.argv.includes("--watch"));
+  const supervisor = new SuplexSupervisor(process.cwd(), process.argv.includes("--watch"));
   await supervisor.run();
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])) {
-  main().catch((error: unknown) => { process.stderr.write(`Forge supervisor stopped: ${text(error)}\n`); process.exitCode = 1; });
+  main().catch((error: unknown) => { process.stderr.write(`Suplex supervisor stopped: ${text(error)}\n`); process.exitCode = 1; });
 }

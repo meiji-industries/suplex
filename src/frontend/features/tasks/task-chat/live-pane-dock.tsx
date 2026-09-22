@@ -10,7 +10,7 @@ import { roleLabel } from "../../../../coordination/workflows.js";
 import { SessionHistory } from "./session-history.js";
 import { sessionHistoryLabels } from "./session-history-state.js";
 
-const storageKey = "forge.live-pane-height";
+const storageKey = "suplex.live-pane-height";
 const clampHeight = (height: number) => Math.min(720, Math.max(160, height));
 const shellTabId = "shell";
 type AgentOutputView = "live" | "mirror";

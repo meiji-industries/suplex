@@ -203,7 +203,7 @@ export function InternalAgentDialog({
             </Field>
             <Field>
               <FieldLabel htmlFor="agent-model">Model</FieldLabel>
-              {/* Free text: the provider CLI accepts models that Forge does not list yet. */}
+              {/* Free text: the provider CLI accepts models that Suplex does not list yet. */}
               <Input
                 id="agent-model"
                 list="agent-model-options"

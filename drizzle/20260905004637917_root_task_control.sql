@@ -1,4 +1,4 @@
-CREATE TABLE forge_task_controls (
+CREATE TABLE suplex_task_controls (
   task_id text PRIMARY KEY NOT NULL,
   objective text NOT NULL,
   delivery_target text NOT NULL,
@@ -11,10 +11,10 @@ CREATE TABLE forge_task_controls (
   worker_session_id text,
   created_at text NOT NULL,
   updated_at text NOT NULL,
-  FOREIGN KEY (task_id) REFERENCES forge_tasks(id) ON DELETE CASCADE
+  FOREIGN KEY (task_id) REFERENCES suplex_tasks(id) ON DELETE CASCADE
 );
 --> statement-breakpoint
-CREATE TABLE forge_task_sessions (
+CREATE TABLE suplex_task_sessions (
   id text PRIMARY KEY NOT NULL,
   task_id text NOT NULL,
   kind text NOT NULL CHECK (kind IN ('root', 'worker')),
@@ -29,17 +29,17 @@ CREATE TABLE forge_task_sessions (
   result_receipt_id text,
   created_at text NOT NULL,
   updated_at text NOT NULL,
-  FOREIGN KEY (task_id) REFERENCES forge_tasks(id) ON DELETE CASCADE,
+  FOREIGN KEY (task_id) REFERENCES suplex_tasks(id) ON DELETE CASCADE,
   UNIQUE (task_id, kind, generation)
 );
 --> statement-breakpoint
-CREATE UNIQUE INDEX forge_task_current_root_unique
-  ON forge_task_sessions (task_id, kind) WHERE is_current = 1 AND kind = 'root';
+CREATE UNIQUE INDEX suplex_task_current_root_unique
+  ON suplex_task_sessions (task_id, kind) WHERE is_current = 1 AND kind = 'root';
 --> statement-breakpoint
-CREATE UNIQUE INDEX forge_task_current_worker_unique
-  ON forge_task_sessions (task_id, kind) WHERE is_current = 1 AND kind = 'worker';
+CREATE UNIQUE INDEX suplex_task_current_worker_unique
+  ON suplex_task_sessions (task_id, kind) WHERE is_current = 1 AND kind = 'worker';
 --> statement-breakpoint
-CREATE TABLE forge_task_turns (
+CREATE TABLE suplex_task_turns (
   id text PRIMARY KEY NOT NULL,
   task_id text NOT NULL,
   session_id text NOT NULL,
@@ -54,9 +54,9 @@ CREATE TABLE forge_task_turns (
   prompted_at text,
   completed_at text,
   updated_at text NOT NULL,
-  FOREIGN KEY (task_id) REFERENCES forge_tasks(id) ON DELETE CASCADE,
-  FOREIGN KEY (session_id) REFERENCES forge_task_sessions(id) ON DELETE CASCADE
+  FOREIGN KEY (task_id) REFERENCES suplex_tasks(id) ON DELETE CASCADE,
+  FOREIGN KEY (session_id) REFERENCES suplex_task_sessions(id) ON DELETE CASCADE
 );
 --> statement-breakpoint
-CREATE INDEX forge_task_turn_recovery_idx
-  ON forge_task_turns (task_id, session_id, status, updated_at);
+CREATE INDEX suplex_task_turn_recovery_idx
+  ON suplex_task_turns (task_id, session_id, status, updated_at);

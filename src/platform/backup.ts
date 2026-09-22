@@ -7,12 +7,12 @@ import { promisify } from "node:util";
 
 import Database from "better-sqlite3";
 
-import type { ForgeConfig } from "./config.js";
+import type { SuplexConfig } from "./config.js";
 import type { HealthCheck } from "./health.js";
 
 const execFileAsync = promisify(execFile);
 const backupVersion = 1;
-const backupRoot = "forge-backup";
+const backupRoot = "suplex-backup";
 
 export const BACKUP_HEALTH_MAX_AGE_MS = 24 * 60 * 60 * 1_000;
 
@@ -51,7 +51,7 @@ export interface BackupCreateInput {
 
 export class BackupFailure extends Error {
   constructor(readonly code: "exists" | "invalid" | "unsafe" | "verification") {
-    super(`Forge backup ${code}`);
+    super(`Suplex backup ${code}`);
     this.name = "BackupFailure";
   }
 }
@@ -95,7 +95,7 @@ function safeManifestPath(path: string): boolean {
   return Boolean(path) && safeArchiveName(`${backupRoot}/${path}`);
 }
 
-function configuration(config: ForgeConfig): Record<string, string | number | boolean> {
+function configuration(config: SuplexConfig): Record<string, string | number | boolean> {
   return {
     accessMode: config.accessMode,
     tailscaleExposure: config.tailscaleExposure,
@@ -112,7 +112,7 @@ function configuration(config: ForgeConfig): Record<string, string | number | bo
   };
 }
 
-async function recordVerification(config: ForgeConfig, verification: BackupVerification): Promise<void> {
+async function recordVerification(config: SuplexConfig, verification: BackupVerification): Promise<void> {
   await mkdir(config.dataRoot, { recursive: true });
   await writeFile(join(config.dataRoot, "backup-status.json"), JSON.stringify({ verifiedAt: verification.verifiedAt, valid: verification.valid, archivePath: verification.archivePath, errors: verification.errors, durationMs: verification.durationMs }, null, 2), { mode: 0o600 });
 }
@@ -121,19 +121,19 @@ function removeAuthenticationState(snapshotPath: string): void {
   const snapshot = new Database(snapshotPath);
   try {
     snapshot.transaction(() => {
-      snapshot.prepare("DELETE FROM forge_challenges").run();
-      snapshot.prepare("DELETE FROM forge_sessions").run();
-      snapshot.prepare("DELETE FROM forge_credentials").run();
-      snapshot.prepare("DELETE FROM forge_invitations").run();
-      snapshot.prepare("DELETE FROM forge_external_agent_credentials").run();
-      snapshot.prepare("DELETE FROM forge_external_agent_pairing_codes").run();
-      snapshot.prepare("DELETE FROM forge_oauth_access_tokens").run();
-      snapshot.prepare("DELETE FROM forge_oauth_refresh_tokens").run();
-      snapshot.prepare("DELETE FROM forge_oauth_token_families").run();
-      snapshot.prepare("DELETE FROM forge_oauth_authorization_codes").run();
-      snapshot.prepare("DELETE FROM forge_oauth_pending_authorizations").run();
-      const cursor = snapshot.prepare("UPDATE forge_oauth_grants SET cursor_key = ? WHERE id = ?");
-      for (const grant of snapshot.prepare("SELECT id FROM forge_oauth_grants").all() as Array<{ id: string }>) cursor.run(randomBytes(32).toString("base64url"), grant.id);
+      snapshot.prepare("DELETE FROM suplex_challenges").run();
+      snapshot.prepare("DELETE FROM suplex_sessions").run();
+      snapshot.prepare("DELETE FROM suplex_credentials").run();
+      snapshot.prepare("DELETE FROM suplex_invitations").run();
+      snapshot.prepare("DELETE FROM suplex_external_agent_credentials").run();
+      snapshot.prepare("DELETE FROM suplex_external_agent_pairing_codes").run();
+      snapshot.prepare("DELETE FROM suplex_oauth_access_tokens").run();
+      snapshot.prepare("DELETE FROM suplex_oauth_refresh_tokens").run();
+      snapshot.prepare("DELETE FROM suplex_oauth_token_families").run();
+      snapshot.prepare("DELETE FROM suplex_oauth_authorization_codes").run();
+      snapshot.prepare("DELETE FROM suplex_oauth_pending_authorizations").run();
+      const cursor = snapshot.prepare("UPDATE suplex_oauth_grants SET cursor_key = ? WHERE id = ?");
+      for (const grant of snapshot.prepare("SELECT id FROM suplex_oauth_grants").all() as Array<{ id: string }>) cursor.run(randomBytes(32).toString("base64url"), grant.id);
     })();
   } finally {
     snapshot.close();
@@ -141,7 +141,7 @@ function removeAuthenticationState(snapshotPath: string): void {
 }
 
 export class BackupService {
-  constructor(private readonly config: ForgeConfig) {}
+  constructor(private readonly config: SuplexConfig) {}
 
   async create(input: BackupCreateInput): Promise<{ archivePath: string; manifest: BackupManifest; archiveBytes: number; durationMs: number }> {
     const started = Date.now();
@@ -150,12 +150,12 @@ export class BackupService {
     if (!(await exists(this.config.databasePath)) || !(await exists(this.config.artifactRoot))) throw new BackupFailure("invalid");
     await mkdir(dirname(destination), { recursive: true });
 
-    const staging = await mkdtemp(join(tmpdir(), "forge-backup-create-"));
+    const staging = await mkdtemp(join(tmpdir(), "suplex-backup-create-"));
     const root = join(staging, backupRoot);
     try {
       await mkdir(join(root, "app"), { recursive: true });
       await mkdir(join(root, "config"), { recursive: true });
-      const snapshotPath = join(root, "app", "forge.sqlite");
+      const snapshotPath = join(root, "app", "suplex.sqlite");
       const database = new Database(this.config.databasePath, { readonly: true });
       try { await database.backup(snapshotPath); } finally { database.close(); }
       removeAuthenticationState(snapshotPath);
@@ -172,7 +172,7 @@ export class BackupService {
           configuration: component(entries, "config/"),
         },
         entries,
-        database: { path: "app/forge.sqlite", integrity: "ok" },
+        database: { path: "app/suplex.sqlite", integrity: "ok" },
         secretsExcluded: ["credential registrations", "passkeys", "sessions", "challenges", "invitation tokens", "external agent credentials", "OAuth tokens and authorization codes", "OAuth pending authorizations", "OAuth cursor keys", "provider API keys", "external agent pairing codes", "cookies", "private keys", "provider tokens", "Engine API keys", "generated environment files"],
         requiredConfiguration: ["accessMode", "reachableAddress", "databasePath", "artifactRoot", "installationId"],
       };
@@ -189,7 +189,7 @@ export class BackupService {
     const archive = resolve(archivePath);
     const errors: string[] = [];
     let manifest: BackupManifest | undefined;
-    const staging = await mkdtemp(join(tmpdir(), "forge-backup-verify-"));
+    const staging = await mkdtemp(join(tmpdir(), "suplex-backup-verify-"));
     try {
       if (!(await exists(archive))) throw new BackupFailure("invalid");
       const listing = (await execFileAsync("tar", ["-tzf", archive], { timeout: 30_000, maxBuffer: 512 * 1024 })).stdout.split(/\r?\n/).filter(Boolean);
@@ -227,14 +227,14 @@ export class BackupService {
       const configValue = JSON.parse(await readFile(configPath, "utf8")) as { version?: number; config?: Record<string, unknown>; requiresReauthentication?: boolean };
       if (configValue.version !== backupVersion || !configValue.requiresReauthentication) errors.push("required configuration is missing");
       for (const required of manifest.requiredConfiguration ?? []) if (configValue.config?.[required] === undefined) errors.push(`missing configuration: ${required}`);
-      const databaseRelativePath = manifest.database?.path ?? "app/forge.sqlite";
+      const databaseRelativePath = manifest.database?.path ?? "app/suplex.sqlite";
       if (!safeManifestPath(databaseRelativePath)) throw new BackupFailure("unsafe");
       const databasePath = join(root, databaseRelativePath);
       const database = new Database(databasePath, { readonly: true });
       try {
         const integrity = database.pragma("integrity_check", { simple: true });
         if (integrity !== "ok") errors.push("database integrity check failed");
-        const artifacts = database.prepare("SELECT storage_path, byte_size, sha256 FROM forge_artifacts").all() as Array<{ storage_path: string; byte_size: number; sha256: string }>;
+        const artifacts = database.prepare("SELECT storage_path, byte_size, sha256 FROM suplex_artifacts").all() as Array<{ storage_path: string; byte_size: number; sha256: string }>;
         for (const artifact of artifacts) {
           const relativeArtifactPath = `app/artifacts/${artifact.storage_path}`;
           if (!safeManifestPath(relativeArtifactPath)) {
@@ -276,7 +276,7 @@ function component(entries: BackupManifestEntry[], prefix: string): { path: stri
   return { path: prefix.replace(/\/$/, ""), count: selected.length, bytes: selected.reduce((total, entry) => total + entry.bytes, 0) };
 }
 
-export async function checkBackupHealth(config: ForgeConfig, now: () => number = Date.now): Promise<HealthCheck> {
+export async function checkBackupHealth(config: SuplexConfig, now: () => number = Date.now): Promise<HealthCheck> {
   try {
     const value = JSON.parse(await readFile(join(config.dataRoot, "backup-status.json"), "utf8")) as { valid?: boolean; verifiedAt?: string; errors?: string[] };
     const verifiedAt = typeof value.verifiedAt === "string" ? value.verifiedAt : "";
@@ -292,6 +292,6 @@ export async function checkBackupHealth(config: ForgeConfig, now: () => number =
       details: { verifiedAt: verifiedAt || "never", ageMs, errors: value.errors?.join(", ") ?? "" },
     };
   } catch {
-    return { id: "backup", label: "Backup verification", status: "warning", summary: "No backup has been made yet", remedy: "Run pnpm run forge backup <archive> and verify it", details: { verifiedAt: "never", ageMs: -1, errors: "missing-status" } };
+    return { id: "backup", label: "Backup verification", status: "warning", summary: "No backup has been made yet", remedy: "Run pnpm run suplex backup <archive> and verify it", details: { verifiedAt: "never", ageMs: -1, errors: "missing-status" } };
   }
 }

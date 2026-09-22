@@ -32,8 +32,8 @@ export const WORKFLOWS: readonly WorkflowDefinition[] = [
     steps: ["Coordinator writes the plan and acceptance criteria.", "Worker builds the plan and runs the checks.", "Coordinator reviews the changes and the check evidence.", "Reviewer inspects the complete change independently.", "Worker repairs every blocking finding, then Reviewer makes a new assessment of the current change.", "Coordinator requests the selected delivery target after Reviewer approves."] },
   { id: "competing_plans", name: "Combined planning", description: "Two agents write separate plans. Coordinator combines them and assigns the build to Worker.", advisorRoles: ["planner_a", "planner_b"], agents: "Coordinator, Worker, Plan A, Plan B", delivery: "Selected target",
     steps: ["Plan A writes an implementation plan from the objective.", "Plan B writes a separate plan from the same objective.", "Coordinator combines both plans into one plan with acceptance criteria.", "Worker builds the combined plan and runs the checks.", "Coordinator reviews the changes and requests the selected delivery target."] },
-  { id: "refine_pull_request", name: "Pull request repair", description: "Rater reviews an existing pull request. Worker applies repairs until it scores at least 9/10. Forge then pushes and merges it.", advisorRoles: ["rater"], agents: "Coordinator, Worker, Rater", delivery: "Merged pull request",
-    steps: ["Rater rates the existing pull request from 1 to 10 and writes a repair plan.", "Worker applies the repair plan and runs the checks.", "Rater makes a new assessment of the current result. Forge repeats until the rating is at least 9/10.", "Forge pushes the branch and observes the checks.", "If CI fails, Rater reviews the failure and Worker repairs it.", "Forge merges the same pull request after GitHub reports it ready."] },
+  { id: "refine_pull_request", name: "Pull request repair", description: "Rater reviews an existing pull request. Worker applies repairs until it scores at least 9/10. Suplex then pushes and merges it.", advisorRoles: ["rater"], agents: "Coordinator, Worker, Rater", delivery: "Merged pull request",
+    steps: ["Rater rates the existing pull request from 1 to 10 and writes a repair plan.", "Worker applies the repair plan and runs the checks.", "Rater makes a new assessment of the current result. Suplex repeats until the rating is at least 9/10.", "Suplex pushes the branch and observes the checks.", "If CI fails, Rater reviews the failure and Worker repairs it.", "Suplex merges the same pull request after GitHub reports it ready."] },
 ];
 
 export function workflowDefinition(workflow: WorkflowId): WorkflowDefinition {
@@ -144,7 +144,7 @@ export function advisorKeysSorted(ids: AdvisorProfileIds): Record<string, string
   return Object.fromEntries(Object.entries(ids).flatMap(([key, value]) => value === undefined ? [] : [[key, value] as [string, string]]).sort(([left], [right]) => left.localeCompare(right)));
 }
 
-/** The advisor outcome that Forge stored inside an Advisor turn's terminal observation. */
+/** The advisor outcome that Suplex stored inside an Advisor turn's terminal observation. */
 export const AdvisorOutcomeSchema = z.object({ role: AdvisorRoleSchema, result: AdvisorResultSchema.nullable(), invalidReason: z.string().nullable() });
 export type AdvisorOutcome = z.infer<typeof AdvisorOutcomeSchema>;
 export function turnOutcome(observation: string | null): { state: string | null; advisor: AdvisorOutcome | null; text: string | null } {

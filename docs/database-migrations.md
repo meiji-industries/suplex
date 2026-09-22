@@ -1,6 +1,6 @@
 # Database migrations
 
-Forge migrations are immutable SQL files in `drizzle/`. Their names begin with
+Suplex migrations are immutable SQL files in `drizzle/`. Their names begin with
 a unique UTC timestamp, which determines their logical order without requiring
 a shared journal or sequential number:
 

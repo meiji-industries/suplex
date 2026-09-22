@@ -23,7 +23,7 @@ const externalAgentAdministration: FastifyPluginAsync<{ externalAgent: ExternalA
       response: { 200: AgentApiAgentListResponseSchema },
     },
   }, async (request) => {
-    const agents = options.externalAgent.list(request.forgeUser.id, request.query.companyId);
+    const agents = options.externalAgent.list(request.suplexUser.id, request.query.companyId);
     return { agents };
   });
 
@@ -33,7 +33,7 @@ const externalAgentAdministration: FastifyPluginAsync<{ externalAgent: ExternalA
       response: { 201: AgentApiAdminCreateResponseSchema },
     },
   }, async (request, reply) => {
-    const result = options.externalAgent.create(request.forgeUser.id, request.body);
+    const result = options.externalAgent.create(request.suplexUser.id, request.body);
     return reply.header("Cache-Control", "private, no-store").code(201).send(result);
   });
 
@@ -44,7 +44,7 @@ const externalAgentAdministration: FastifyPluginAsync<{ externalAgent: ExternalA
       response: { 200: AgentApiAdminProjectsResponseSchema },
     },
   }, async (request) => {
-    const agent = options.externalAgent.replaceProjects(request.forgeUser.id, request.params.agentId, request.body.projectIds);
+    const agent = options.externalAgent.replaceProjects(request.suplexUser.id, request.params.agentId, request.body.projectIds);
     return { agent };
   });
 
@@ -54,7 +54,7 @@ const externalAgentAdministration: FastifyPluginAsync<{ externalAgent: ExternalA
       response: { 200: AgentApiAdminPairingCodeResponseSchema },
     },
   }, async (request, reply) => {
-    return reply.header("Cache-Control", "private, no-store").send(options.externalAgent.issueInitialPairing(request.forgeUser.id, request.params.agentId));
+    return reply.header("Cache-Control", "private, no-store").send(options.externalAgent.issueInitialPairing(request.suplexUser.id, request.params.agentId));
   });
 
   typed.post(`${prefix}/:agentId/rotate`, {
@@ -63,7 +63,7 @@ const externalAgentAdministration: FastifyPluginAsync<{ externalAgent: ExternalA
       response: { 200: AgentApiAdminPairingCodeResponseSchema },
     },
   }, async (request, reply) => {
-    return reply.header("Cache-Control", "private, no-store").send(options.externalAgent.rotate(request.forgeUser.id, request.params.agentId));
+    return reply.header("Cache-Control", "private, no-store").send(options.externalAgent.rotate(request.suplexUser.id, request.params.agentId));
   });
 
   typed.post(`${prefix}/:agentId/revoke`, {
@@ -72,7 +72,7 @@ const externalAgentAdministration: FastifyPluginAsync<{ externalAgent: ExternalA
       response: { 204: { type: "null" } },
     },
   }, async (request, reply) => {
-    options.externalAgent.revoke(request.forgeUser.id, request.params.agentId);
+    options.externalAgent.revoke(request.suplexUser.id, request.params.agentId);
     return reply.code(204).send();
   });
   };

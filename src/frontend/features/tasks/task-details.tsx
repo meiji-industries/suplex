@@ -44,9 +44,9 @@ export function TaskQueueWaits({ task }: { task: Pick<Task, "companyId" | "queue
   return <ul data-task-queue-waits aria-label="Waiting for" className="space-y-1 text-xs">{task.queue.waitingOn.map(wait => <li key={wait.id} data-task-queue-wait={wait.id} data-reason={wait.reason} className="flex min-w-0 flex-wrap items-center gap-x-1">{wait.kind === "pull_request" && wait.url ? <a href={wait.url}>#{wait.number}</a> : <TaskTitleLink task={wait} companyId={task.companyId} />}<span className="text-muted-foreground">{wait.summary.startsWith(wait.title) ? wait.summary.slice(wait.title.length).trim() : wait.summary}</span></li>)}</ul>;
 }
 
-/** Start queues a task: Forge starts it by itself when every Blocked by task is complete. */
+/** Start queues a task: Suplex starts it by itself when every Blocked by task is complete. */
 export function backlogText(task: Pick<Task, "status" | "queue">): string {
-  if (task.status === "queued") return task.queue.waitingOn.length ? "Queued. Forge starts this task when its prerequisites are complete." : "Queued. Forge can start this task.";
+  if (task.status === "queued") return task.queue.waitingOn.length ? "Queued. Suplex starts this task when its prerequisites are complete." : "Queued. Suplex can start this task.";
   return task.queue.waitingOn.length ? "Backlog. Start this task to queue it after its prerequisites." : "The task is ready to start.";
 }
 

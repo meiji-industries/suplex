@@ -9,7 +9,7 @@ import { formatDoctor, runDoctor } from "../src/platform/diagnostics/doctor.js";
 import * as hostHealth from "../src/platform/host-health.js";
 import { providerCheckId, type HealthCheck } from "../src/platform/health.js";
 import { inspectTask, formatTaskDiagnostic } from "../src/platform/diagnostics/task.js";
-import { ForgeDatabase } from "../src/platform/database.js";
+import { SuplexDatabase } from "../src/platform/database.js";
 import { nativeApp } from "./helpers/native-app.js";
 import { createTestConfig } from "../src/platform/config.js";
 
@@ -33,7 +33,7 @@ describe("operator diagnostics formatting", () => {
 });
 
 test("doctor fails necessary checks, warns for optional checks, and prints their remedies", async () => {
-  const database = new ForgeDatabase(":memory:");
+  const database = new SuplexDatabase(":memory:");
   const check = (id: HealthCheck["id"], status: HealthCheck["status"], remedy?: string) => async (): Promise<HealthCheck> => ({ id, label: id, status, summary: "Host check", details: {}, ...(remedy ? { remedy } : {}) });
   const dependencies = vi.spyOn(hostHealth, "createHostHealthDependencies").mockReturnValue({
     database: check("database", "warning"),
@@ -48,7 +48,7 @@ test("doctor fails necessary checks, warns for optional checks, and prints their
     provider: async (kind) => ({ id: providerCheckId(kind), label: kind, status: "unhealthy", summary: "Not signed in", remedy: "sign in", details: {}, provider: kind }),
   });
   try {
-    const checks = await runDoctor(createTestConfig("/tmp/forge-doctor-health-test"), database);
+    const checks = await runDoctor(createTestConfig("/tmp/suplex-doctor-health-test"), database);
     expect(checks.filter(({ status }) => status === "FAIL").map(({ name }) => name)).toEqual(["database", "git", "herdr-readiness"]);
     expect(checks.filter(({ status }) => status === "WARN").map(({ name }) => name)).toEqual(["disk-space", "gh-auth", "pnpm", "tailscale", "backup", "opencode", "claude-code", "codex"]);
     expect(formatDoctor(checks)).toContain("FAIL herdr-readiness: Host check (herdr)\n");
@@ -60,14 +60,14 @@ test("doctor fails necessary checks, warns for optional checks, and prints their
 });
 
 test("read-only diagnostics open never creates or migrates the database", async () => {
-  const root = await mkdtemp(join(tmpdir(), "forge-diagnostics-readonly-"));
-  const filename = join(root, "forge.sqlite");
+  const root = await mkdtemp(join(tmpdir(), "suplex-diagnostics-readonly-"));
+  const filename = join(root, "suplex.sqlite");
   try {
     const seed = new Database(filename);
     seed.exec("CREATE TABLE existing_data (id INTEGER PRIMARY KEY)");
     seed.close();
 
-    const database = new ForgeDatabase(filename, { readOnly: true });
+    const database = new SuplexDatabase(filename, { readOnly: true });
     expect(database.openMode()).toBe("read-only");
     expect(database.schemaStatus().state).toBe("behind");
     database.close();
@@ -81,14 +81,14 @@ test("read-only diagnostics open never creates or migrates the database", async 
 });
 
 test("doctor reports a database behind this build without migrating it", async () => {
-  const root = await mkdtemp(join(tmpdir(), "forge-diagnostics-fix-"));
-  const filename = join(root, "forge.sqlite");
+  const root = await mkdtemp(join(tmpdir(), "suplex-diagnostics-fix-"));
+  const filename = join(root, "suplex.sqlite");
   try {
-    const migrating = new ForgeDatabase(filename);
+    const migrating = new SuplexDatabase(filename);
     migrating.authQuery((db) => db.prepare("DELETE FROM __drizzle_migrations WHERE created_at = (SELECT max(created_at) FROM __drizzle_migrations)").run());
     migrating.close();
 
-    const diagnostic = new ForgeDatabase(filename, { migrate: false });
+    const diagnostic = new SuplexDatabase(filename, { migrate: false });
     const { runDoctor } = await import("../src/platform/diagnostics/doctor.js");
     expect(await runDoctor(createTestConfig(root), diagnostic)).toEqual([expect.objectContaining({ status: "FAIL", name: "database schema" })]);
     expect(diagnostic.schemaStatus().state).toBe("behind");

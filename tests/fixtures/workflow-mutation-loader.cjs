@@ -4,7 +4,7 @@ module.exports = function workflowMutationLoader(source) {
   const needle = "if (distinctPlanningStates || !patched(planningProjectionIntegrityPatch)) await projectIssueState(next);";
   if (source.split(needle).length !== 2) throw new Error("Workflow mutation target must occur exactly once");
   if (mode === "compatible") {
-    return source.replace(needle, `if (patched("forge-replay-compatible-mutation-v1")) await sleep("1 millisecond");\n    ${needle}`);
+    return source.replace(needle, `if (patched("suplex-replay-compatible-mutation-v1")) await sleep("1 millisecond");\n    ${needle}`);
   }
   return source.replace(needle, `await sleep("1 millisecond");\n    ${needle}`);
 };

@@ -6,25 +6,25 @@ import { expect, test } from "vitest";
 
 import { AuthService } from "../src/identity/auth.js";
 import { createTestConfig } from "../src/platform/config.js";
-import { ForgeDatabase } from "../src/platform/database.js";
+import { SuplexDatabase } from "../src/platform/database.js";
 import { insertNativeTaskRow } from "./helpers/native-task-row.js";
 
 const now = "2026-08-12T00:00:00.000Z";
 
-function insertIssue(database: ForgeDatabase, companyId: string, suffix: string): void {
+function insertIssue(database: SuplexDatabase, companyId: string, suffix: string): void {
   database.authTransaction((db) => {
-    db.prepare("INSERT INTO forge_projects (id, company_id, name, repository_path, worktree_root, base_branch, setup_command, verification_command, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 'main', 'true', 'true', ?, ?)").run(`project-${suffix}`, companyId, `Project ${suffix}`, `/repo/${suffix}`, `/worktrees/${suffix}`, now, now);
+    db.prepare("INSERT INTO suplex_projects (id, company_id, name, repository_path, worktree_root, base_branch, setup_command, verification_command, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 'main', 'true', 'true', ?, ?)").run(`project-${suffix}`, companyId, `Project ${suffix}`, `/repo/${suffix}`, `/worktrees/${suffix}`, now, now);
     insertNativeTaskRow(db, { taskId: `task-${suffix}`, companyId, projectId: `project-${suffix}` });
   });
 }
 
 test("company issue codes normalize, lock after allocation, and audit real changes", async () => {
-  const root = await mkdtemp(join(tmpdir(), "forge-company-issue-code-"));
-  const database = new ForgeDatabase(join(root, "forge.sqlite"));
+  const root = await mkdtemp(join(tmpdir(), "suplex-company-issue-code-"));
+  const database = new SuplexDatabase(join(root, "suplex.sqlite"));
   try {
     database.authQuery((db) => {
-      db.prepare("INSERT INTO forge_users (id, display_name, username, role, status, created_at, updated_at) VALUES ('admin', 'Admin', 'admin', 'admin', 'active', ?, ?)").run(now, now);
-      db.prepare("INSERT INTO forge_users (id, display_name, username, role, status, created_at, updated_at) VALUES ('member', 'Member', 'member', 'member', 'active', ?, ?)").run(now, now);
+      db.prepare("INSERT INTO suplex_users (id, display_name, username, role, status, created_at, updated_at) VALUES ('admin', 'Admin', 'admin', 'admin', 'active', ?, ?)").run(now, now);
+      db.prepare("INSERT INTO suplex_users (id, display_name, username, role, status, created_at, updated_at) VALUES ('member', 'Member', 'member', 'member', 'active', ?, ?)").run(now, now);
     });
     const auth = new AuthService(database, createTestConfig(root));
     const editable = auth.createCompany("admin", "Editable");

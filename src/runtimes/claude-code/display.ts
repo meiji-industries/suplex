@@ -398,7 +398,7 @@ async function scan(runtimeDirectory: string, cursors: Map<string, FileCursor>, 
         cursor,
         text,
         value => { if (renderJsonValue(state, output, value)) wrote = true; },
-        () => { writeLine(output, "Forge omitted a Claude record larger than 8 MiB."); wrote = true; },
+        () => { writeLine(output, "Suplex omitted a Claude record larger than 8 MiB."); wrote = true; },
       );
     }
   }

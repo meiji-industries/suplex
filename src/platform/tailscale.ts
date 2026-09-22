@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process";
 import { promisify } from "node:util";
 
-import type { ForgeConfig } from "./config.js";
+import type { SuplexConfig } from "./config.js";
 import { TailscaleServeStatusSchema, TailscaleStatusSchema } from "./schemas.js";
 import { jsonRequired } from "../shared/json.js";
 
@@ -22,7 +22,7 @@ export function parseTailscaleHostname(raw: string): string {
   return hostname;
 }
 
-export async function configureTailscaleServe(config: ForgeConfig, command = "tailscale"): Promise<void> {
+export async function configureTailscaleServe(config: SuplexConfig, command = "tailscale"): Promise<void> {
   await execFileAsync(command, [
     "serve",
     "--bg",
@@ -31,7 +31,7 @@ export async function configureTailscaleServe(config: ForgeConfig, command = "ta
   ], { timeout: 10_000, maxBuffer: 16 * 1024 });
 }
 
-export async function verifyTailscaleServe(config: ForgeConfig, command = "tailscale"): Promise<void> {
+export async function verifyTailscaleServe(config: SuplexConfig, command = "tailscale"): Promise<void> {
   if (!await isTailscaleServeConfigured(config, command)) {
     const route = `${new URL(config.reachableAddress).hostname}:${config.port}`;
     const expectedProxy = `http://${config.bindAddress}:${config.port}`;
@@ -39,7 +39,7 @@ export async function verifyTailscaleServe(config: ForgeConfig, command = "tails
   }
 }
 
-export async function isTailscaleServeConfigured(config: ForgeConfig, command = "tailscale"): Promise<boolean> {
+export async function isTailscaleServeConfigured(config: SuplexConfig, command = "tailscale"): Promise<boolean> {
   const result = await execFileAsync(command, ["serve", "status", "--json"], { timeout: 10_000, maxBuffer: 64 * 1024 });
   let status: ReturnType<typeof TailscaleServeStatusSchema.parse>;
   try {

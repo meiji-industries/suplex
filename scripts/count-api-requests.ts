@@ -3,7 +3,7 @@ import { createInterface } from "node:readline";
 import { setTimeout as delay } from "node:timers/promises";
 import { parseArgs } from "node:util";
 
-const { values } = parseArgs({ options: { seconds: { type: "string", default: "60" }, log: { type: "string", default: ".forge/logs/api.log" } } });
+const { values } = parseArgs({ options: { seconds: { type: "string", default: "60" }, log: { type: "string", default: ".suplex/logs/api.log" } } });
 const seconds = Number(values.seconds);
 if (!Number.isFinite(seconds) || seconds <= 0 || seconds * 1000 > 2_147_483_647) throw new Error("--seconds must be a positive duration supported by Node timers");
 

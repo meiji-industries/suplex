@@ -3,9 +3,9 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { beforeAll, describe, expect, test } from "vitest";
 
-const APP = join(__dirname, "..", "release", "mac-arm64", "Forge.app");
-const BINARY = join(APP, "Contents", "MacOS", "Forge");
-const SMOKE_URL = process.env.FORGE_DESKTOP_SMOKE_URL;
+const APP = join(__dirname, "..", "release", "mac-arm64", "Suplex.app");
+const BINARY = join(APP, "Contents", "MacOS", "Suplex");
+const SMOKE_URL = process.env.SUPLEX_DESKTOP_SMOKE_URL;
 
 /** Lists the paths inside an asar archive by reading its JSON header (no dependency). */
 function asarPaths(archive: string): string[] {
@@ -23,22 +23,22 @@ function asarPaths(archive: string): string[] {
   return paths.sort();
 }
 
-describe("packaged Forge.app", () => {
+describe("packaged Suplex.app", () => {
   beforeAll(() => {
     if (!existsSync(APP)) throw new Error(`Packaged application not found at ${APP}. Run pnpm desktop:dist before pnpm test:packaged.`);
   });
   test("bundles only the desktop app", () => {
     const paths = asarPaths(join(APP, "Contents", "Resources", "app.asar"));
-    expect(paths).toEqual(expect.arrayContaining(["dist/src/boot.js", "dist/src/connect.html", "dist/src/desktop-updater.js", "dist/src/forge-desktop.js", "dist/src/forge-target.js", "dist/src/installer.js", "dist/src/local-runtime.js", "dist/src/main.js", "dist/src/pages/choice.html", "dist/src/pages/failed.html", "dist/src/pages/install.html", "dist/src/pages/pages.css", "dist/src/pages/ready.html", "dist/src/preload.js", "dist/src/target-store.js", "node_modules/electron-updater/package.json", "package.json"]));
+    expect(paths).toEqual(expect.arrayContaining(["dist/src/boot.js", "dist/src/connect.html", "dist/src/desktop-updater.js", "dist/src/suplex-desktop.js", "dist/src/suplex-target.js", "dist/src/installer.js", "dist/src/local-runtime.js", "dist/src/main.js", "dist/src/pages/choice.html", "dist/src/pages/failed.html", "dist/src/pages/install.html", "dist/src/pages/pages.css", "dist/src/pages/ready.html", "dist/src/preload.js", "dist/src/target-store.js", "node_modules/electron-updater/package.json", "package.json"]));
     expect(paths.some((path) => path.startsWith("dist/src/") && /server|database|coordination|runtimes/.test(path))).toBe(false);
     expect(paths.some((path) => path.includes("better-sqlite3"))).toBe(false);
   });
-  test("contains no Forge backend, database, or better-sqlite3 binary", () => {
-    const result = spawnSync("grep", ["-rl", "-e", "better_sqlite3", "-e", "better-sqlite3", "-e", "forge.sqlite", join(APP, "Contents")], { encoding: "utf8" });
+  test("contains no Suplex backend, database, or better-sqlite3 binary", () => {
+    const result = spawnSync("grep", ["-rl", "-e", "better_sqlite3", "-e", "better-sqlite3", "-e", "suplex.sqlite", join(APP, "Contents")], { encoding: "utf8" });
     expect(result.stdout.trim()).toBe("");
   });
   test.skipIf(SMOKE_URL === undefined)("loads from the exact configured origin", () => {
-    const stdout = execFileSync(BINARY, ["--url", SMOKE_URL ?? ""], { env: { ...process.env, FORGE_DESKTOP_PROBE: "1" }, encoding: "utf8", timeout: 60_000 });
+    const stdout = execFileSync(BINARY, ["--url", SMOKE_URL ?? ""], { env: { ...process.env, SUPLEX_DESKTOP_PROBE: "1" }, encoding: "utf8", timeout: 60_000 });
     const line = stdout.split("\n").find((entry) => entry.startsWith("{"));
     const probe = JSON.parse(line ?? "{}") as { url: string; origin: string; navigatorCredentials: boolean };
     const expected = new URL(SMOKE_URL ?? "");
@@ -47,7 +47,7 @@ describe("packaged Forge.app", () => {
     expect(probe.navigatorCredentials).toBe(true);
   });
   test.skipIf(SMOKE_URL === undefined)("fails visibly on an invalid explicit target", () => {
-    const result = spawnSync(BINARY, ["--url", "http://forge.example.com"], { env: { ...process.env, FORGE_DESKTOP_PROBE: "1" }, encoding: "utf8", timeout: 60_000 });
+    const result = spawnSync(BINARY, ["--url", "http://suplex.example.com"], { env: { ...process.env, SUPLEX_DESKTOP_PROBE: "1" }, encoding: "utf8", timeout: 60_000 });
     expect(result.status).toBe(1);
     expect(result.stderr).toMatch(/--url is not valid/);
   });

@@ -1,12 +1,12 @@
-export type ForgeUrl = string & { readonly __brand: "ForgeUrl" };
+export type SuplexUrl = string & { readonly __brand: "SuplexUrl" };
 
-export interface ForgeTarget {
-  readonly url: ForgeUrl;
+export interface SuplexTarget {
+  readonly url: SuplexUrl;
   readonly origin: string;
 }
 
 export type NavigationDecision =
-  | { readonly kind: "internal"; readonly url: ForgeUrl }
+  | { readonly kind: "internal"; readonly url: SuplexUrl }
   | { readonly kind: "external"; readonly url: string }
   | { readonly kind: "blocked"; readonly reason: string };
 
@@ -15,12 +15,12 @@ export type TargetSource = "argument" | "environment" | "persisted";
 const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "[::1]"]);
 
 /**
- * Validates one external string as a Forge target. Throws with a short reason.
- * https anywhere, or http on the loopback host where Forge signs in the local operator.
+ * Validates one external string as a Suplex target. Throws with a short reason.
+ * https anywhere, or http on the loopback host where Suplex signs in the local operator.
  * The path and query are kept as the first page to load (an invitation link);
  * the origin is what every later same-origin check compares against.
  */
-export function parseForgeTarget(value: string): ForgeTarget {
+export function parseSuplexTarget(value: string): SuplexTarget {
   let url: URL;
   try {
     url = new URL(value.trim());
@@ -34,7 +34,7 @@ export function parseForgeTarget(value: string): ForgeTarget {
   } else if (url.protocol !== "https:") {
     throw new Error("Only https URLs are accepted.");
   }
-  return { url: url.href as ForgeUrl, origin: url.origin };
+  return { url: url.href as SuplexUrl, origin: url.origin };
 }
 
 /**
@@ -53,26 +53,26 @@ function argumentValue(argv: readonly string[]): string | undefined {
 }
 
 /** Argument, then environment, then persisted. An explicit invalid value throws; it never falls through. */
-export function resolveForgeTarget(input: {
+export function resolveSuplexTarget(input: {
   readonly argv: readonly string[];
   readonly environment: Readonly<Record<string, string | undefined>>;
   readonly persisted: string | null;
-}): { readonly source: TargetSource; readonly target: ForgeTarget } | null {
+}): { readonly source: TargetSource; readonly target: SuplexTarget } | null {
   const explicit: ReadonlyArray<[TargetSource, string | undefined]> = [
     ["argument", argumentValue(input.argv)],
-    ["environment", input.environment.FORGE_DESKTOP_URL],
+    ["environment", input.environment.SUPLEX_DESKTOP_URL],
   ];
   for (const [source, value] of explicit) {
     if (value === undefined) continue;
     try {
-      return { source, target: parseForgeTarget(value) };
+      return { source, target: parseSuplexTarget(value) };
     } catch (error) {
-      throw new Error(`${source === "argument" ? "--url" : "FORGE_DESKTOP_URL"} is not valid: ${(error as Error).message}`);
+      throw new Error(`${source === "argument" ? "--url" : "SUPLEX_DESKTOP_URL"} is not valid: ${(error as Error).message}`);
     }
   }
   if (input.persisted === null) return null;
   try {
-    return { source: "persisted", target: parseForgeTarget(input.persisted) };
+    return { source: "persisted", target: parseSuplexTarget(input.persisted) };
   } catch {
     return null;
   }
@@ -86,7 +86,7 @@ export function classifyNavigation(url: string, origin: string | null): Navigati
   } catch {
     return { kind: "blocked", reason: "not a URL" };
   }
-  if (origin !== null && parsed.origin === origin) return { kind: "internal", url: parsed.href as ForgeUrl };
+  if (origin !== null && parsed.origin === origin) return { kind: "internal", url: parsed.href as SuplexUrl };
   if (parsed.protocol === "http:" || parsed.protocol === "https:") return { kind: "external", url: parsed.href };
   return { kind: "blocked", reason: `${parsed.protocol} is not allowed` };
 }

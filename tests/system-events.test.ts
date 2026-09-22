@@ -6,11 +6,11 @@ import { createSystemEventWriter, runWithSystemEvents, systemEvent, systemLogDir
 
 const directories: string[] = [];
 afterEach(() => { for (const directory of directories.splice(0)) rmSync(directory, { recursive: true, force: true }); });
-const directory = (): string => { const path = mkdtempSync(join(tmpdir(), "forge-system-events-")); directories.push(path); return path; };
+const directory = (): string => { const path = mkdtempSync(join(tmpdir(), "suplex-system-events-")); directories.push(path); return path; };
 const heartbeat = () => ({ type: "server" as const, state: "heartbeat" as const });
 
 test("production and fixture log directories are isolated", () => {
-  expect(systemLogDirectory("/repo/.forge/data")).toBe("/repo/.forge/logs");
+  expect(systemLogDirectory("/repo/.suplex/data")).toBe("/repo/.suplex/logs");
   expect(systemLogDirectory("/tmp/fixture")).toBe("/tmp/fixture/logs");
 });
 

@@ -13,9 +13,9 @@ const profiles: ApiProfile[] = [
 const unrestricted: AgentsDraft = { rootProfileId: "root-claude-default", workerProfileId: "worker-codex", providerPolicy: null };
 
 test("General saves send only edited project fields", () => {
-  const saved = { name: "Forge", baseBranch: "main" };
+  const saved = { name: "Suplex", baseBranch: "main" };
 
-  expect(generalProjectPatch(saved, { ...saved, name: "Forge renamed" })).toEqual({ name: "Forge renamed" });
+  expect(generalProjectPatch(saved, { ...saved, name: "Suplex renamed" })).toEqual({ name: "Suplex renamed" });
   expect(generalProjectPatch(saved, { ...saved, baseBranch: "release" })).toEqual({ baseBranch: "release" });
   expect(generalProjectPatch(saved, saved)).toEqual({});
 });

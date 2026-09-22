@@ -16,12 +16,12 @@ async function testGuard(guard: Pick<GitCommandGuard, "directory" | "env">, phas
 }
 
 async function testGuardContext(): Promise<GitCommandGuard> {
-  const inheritedDirectory = process.env.FORGE_GIT_GUARD_DIR?.trim();
+  const inheritedDirectory = process.env.SUPLEX_GIT_GUARD_DIR?.trim();
   if (inheritedDirectory) {
     return { directory: inheritedDirectory, env: process.env, async cleanup() {} };
   }
 
-  const root = await mkdtemp(join(tmpdir(), "forge-guarded-tests-"));
+  const root = await mkdtemp(join(tmpdir(), "suplex-guarded-tests-"));
   try {
     const guard = await createGitCommandGuard(root);
     return {
@@ -39,10 +39,10 @@ async function testGuardContext(): Promise<GitCommandGuard> {
 
 function testEnvironment(guard: Pick<GitCommandGuard, "directory" | "env">): NodeJS.ProcessEnv {
   const env = { ...guard.env };
-  const realGit = env.FORGE_GIT_REAL_BIN;
-  if (realGit) env.FORGE_GIT_BIN = realGit;
-  else delete env.FORGE_GIT_BIN;
-  delete env.FORGE_GIT_GUARD_DIR;
+  const realGit = env.SUPLEX_GIT_REAL_BIN;
+  if (realGit) env.SUPLEX_GIT_BIN = realGit;
+  else delete env.SUPLEX_GIT_BIN;
+  delete env.SUPLEX_GIT_GUARD_DIR;
   env.PATH = (env.PATH ?? "").split(delimiter).filter((entry) => entry && resolve(entry) !== resolve(guard.directory)).join(delimiter);
   return env;
 }

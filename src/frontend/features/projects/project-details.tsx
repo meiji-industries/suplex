@@ -271,7 +271,7 @@ export function ProjectDetails({ projectId }: { projectId: string }): ReactEleme
       {section === "general" ? <form onSubmit={(event) => { event.preventDefault(); void saveGeneral(); }}>
         {sectionError(general.status) ? <Alert variant="destructive"><AlertDescription>{sectionError(general.status)}</AlertDescription></Alert> : null}
         <SettingsSection title="Profile">
-          <SettingRow label="Project name" description="Name shown in Forge." htmlFor="project-name"><div className="w-full sm:w-80"><Input id="project-name" autoFocus disabled={general.status.kind === "saving"} aria-invalid={fieldFindings(general.status, "name").length > 0} value={general.draft.name} onChange={(event) => updateGeneral("name", event.target.value)} /><FieldError errors={fieldFindings(general.status, "name")} /></div></SettingRow>
+          <SettingRow label="Project name" description="Name shown in Suplex." htmlFor="project-name"><div className="w-full sm:w-80"><Input id="project-name" autoFocus disabled={general.status.kind === "saving"} aria-invalid={fieldFindings(general.status, "name").length > 0} value={general.draft.name} onChange={(event) => updateGeneral("name", event.target.value)} /><FieldError errors={fieldFindings(general.status, "name")} /></div></SettingRow>
           <SettingRow label="Avatar" description="Shown with this project."><AvatarEditor kind="project" id={project.id} name={general.draft.name || project.name} /></SettingRow>
         </SettingsSection>
         <SettingsSection title="Repository">
@@ -303,7 +303,7 @@ export function ProjectDetails({ projectId }: { projectId: string }): ReactEleme
             {HARNESS_KIND_IDS.map((provider) => <SettingRow key={provider} label={provider} description="System login" htmlFor={`project-provider-${provider}`}><Checkbox id={`project-provider-${provider}`} disabled={agentSettings.status.kind === "saving"} checked={agentSettings.draft.providerPolicy?.allowedProviders.includes(provider)} onCheckedChange={(checked) => { const policy = agentSettings.draft.providerPolicy; if (policy) updateAgents("providerPolicy", { ...policy, allowedProviders: checked ? [...policy.allowedProviders, provider] : policy.allowedProviders.filter((value) => value !== provider) }); }} /></SettingRow>)}
             <div className="px-4 pb-3"><FieldError errors={fieldFindings(agentSettings.status, "providerPolicy")} /></div>
           </> : null}
-          {providerInstancesLoading ? <SettingRow label="Named provider logins" description="Forge checks configured logins."><Spinner /></SettingRow> : null}
+          {providerInstancesLoading ? <SettingRow label="Named provider logins" description="Suplex checks configured logins."><Spinner /></SettingRow> : null}
           {providerInstanceError ? <SettingRow label="Named provider logins" description={providerInstanceError}><Button type="button" variant="outline" size="sm" onClick={() => void loadProviderInstances(loadToken.current)}>Retry</Button></SettingRow> : null}
           {!providerInstancesLoading && !providerInstanceError && providerInstances.length === 0 ? <SettingRow label="Named provider logins" description="No named provider logins are configured."><span className="text-xs text-muted-foreground">None</span></SettingRow> : null}
           {!providerInstancesLoading && !providerInstanceError ? providerInstances.map((instance) => agentSettings.draft.providerPolicy

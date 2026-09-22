@@ -1,2 +1,2 @@
 -- Write migration SQL here.
-ALTER TABLE forge_tasks ADD COLUMN archived_at TEXT;
+ALTER TABLE suplex_tasks ADD COLUMN archived_at TEXT;

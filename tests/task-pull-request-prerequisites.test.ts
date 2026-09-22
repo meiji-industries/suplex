@@ -62,7 +62,7 @@ test("set dependencies observes merged, rejects missing, and create reports obse
   await expect(f.tasks.setTaskDependencies(f.userId, task.id, { dependsOn: [], blockedByPullRequests: [{ number: 99 }] })).rejects.toThrow("Pull request #99 was not found");
   expect(f.tasks.getTask(f.userId, task.id).blockedBy).toMatchObject([{ number: 44 }]);
   const unavailable = await nativeApp({ pullRequestObserver: { async observePullRequest() { throw new Error("offline"); } } }); fixtures.push(unavailable);
-  await expect(unavailable.tasks.createTask(unavailable.userId, unavailable.company.id, { projectId: unavailable.project.id, title: "Unavailable", idempotencyKey: "pull-prerequisite-offline", blockedByPullRequests: [{ number: 45 }] })).rejects.toThrow("Forge cannot observe pull request #45");
+  await expect(unavailable.tasks.createTask(unavailable.userId, unavailable.company.id, { projectId: unavailable.project.id, title: "Unavailable", idempotencyKey: "pull-prerequisite-offline", blockedByPullRequests: [{ number: 45 }] })).rejects.toThrow("Suplex cannot observe pull request #45");
 });
 
 test("the host observes each queued pull request once per minute and never overlaps a refresh", async () => {

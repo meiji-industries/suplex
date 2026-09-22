@@ -5,9 +5,9 @@ import { companySettingsPath, readJson, withCompany, type ApiCompany, type ApiUs
 import type { AvatarRecord, AvatarUpdateBody } from "../../http/contracts/avatars.js";
 import { navigate } from "./navigation-state.js";
 
-const activeCompanyStorageKey = "forge.activeCompanyId";
-const companiesStorageKey = "forge.companies";
-const userStorageKey = "forge.user";
+const activeCompanyStorageKey = "suplex.activeCompanyId";
+const companiesStorageKey = "suplex.companies";
+const userStorageKey = "suplex.user";
 
 export type CompanyContextValue = {
   user?: ApiUser;
@@ -137,7 +137,7 @@ export function CompanyProvider({ children }: { children: ReactNode }): ReactEle
     }
     flushSync(() => setCurrentCompany(selected));
     replaceCompanyLocation(selected.id, detailRoot);
-    window.dispatchEvent(new Event("forge:company-change"));
+    window.dispatchEvent(new Event("suplex:company-change"));
   }, [companies, currentCompany?.id]);
 
   const createCompany = useCallback(async (name: string): Promise<ApiCompany> => {

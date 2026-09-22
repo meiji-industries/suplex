@@ -27,7 +27,7 @@ export function useSignOut() {
     finally {
       try { client?.clear(); }
       finally {
-        window.localStorage.removeItem("forge.activeCompanyId");
+        window.localStorage.removeItem("suplex.activeCompanyId");
         window.location.assign("/auth");
       }
     }

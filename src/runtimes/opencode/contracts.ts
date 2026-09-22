@@ -15,7 +15,7 @@ export type OpenCodeHealth = z.infer<typeof OpenCodeHealthSchema>;
 export const OpenCodeMcpStatusSchema = z.record(z.string(), z.object({ status: z.string(), error: z.string().optional() }).passthrough());
 export type OpenCodeMcpStatus = z.infer<typeof OpenCodeMcpStatusSchema>;
 
-// Strip provider keys and options at the HTTP boundary. Neither belongs in Forge.
+// Strip provider keys and options at the HTTP boundary. Neither belongs in Suplex.
 export const OpenCodeProvidersSchema = z.object({
   all: z.array(z.object({ id: z.string(), name: z.string(), models: z.record(z.string(), z.object({ id: z.string(), name: z.string() })) })),
   connected: z.array(z.string()),

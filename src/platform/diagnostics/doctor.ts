@@ -1,5 +1,5 @@
-import type { ForgeConfig } from "../config.js";
-import type { ForgeDatabase } from "../database.js";
+import type { SuplexConfig } from "../config.js";
+import type { SuplexDatabase } from "../database.js";
 import { createHostHealthDependencies } from "../host-health.js";
 import type { HealthCheck } from "../health.js";
 import { isOwnedHealthCheck, isRequiredHealthCheck } from "../health-contract.js";
@@ -9,7 +9,7 @@ import { z } from "zod";
 
 export type DoctorCheck = { status: "PASS" | "WARN" | "FAIL"; name: string; detail: string };
 
-export async function runDoctor(config: ForgeConfig, database: ForgeDatabase): Promise<DoctorCheck[]> {
+export async function runDoctor(config: SuplexConfig, database: SuplexDatabase): Promise<DoctorCheck[]> {
   const schema = database.schemaStatus();
   const checks: DoctorCheck[] = [{
     status: schema.state === "current" ? "PASS" : "FAIL",
@@ -31,7 +31,7 @@ export async function runDoctor(config: ForgeConfig, database: ForgeDatabase): P
     });
   }
   const store = new TaskControlStore(database);
-  const taskIds = database.authQuery(db => z.array(z.object({ id: z.string() })).parse(db.prepare("SELECT id FROM forge_tasks WHERE archived_at IS NULL").all()));
+  const taskIds = database.authQuery(db => z.array(z.object({ id: z.string() })).parse(db.prepare("SELECT id FROM suplex_tasks WHERE archived_at IS NULL").all()));
   for (const { id } of taskIds) {
     try {
       const task = store.get(id);

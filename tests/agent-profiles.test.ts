@@ -12,7 +12,7 @@ test("fresh installs have one Coordinator and one Worker with Codex CLI settings
       { id: "profile_native_worker", role: "worker", provider: "codex", model: "gpt-5.6-luna", reasoningLevel: "max", serviceTier: "priority" },
     ]);
     expect(f.database.authQuery(db => db.prepare("PRAGMA foreign_key_check").all())).toEqual([]);
-    expect(f.database.authQuery(db => db.prepare("SELECT name FROM sqlite_master WHERE name IN ('forge_models', 'forge_issue_projections', 'forge_engine_commands', 'worker_registrations')").all())).toEqual([]);
+    expect(f.database.authQuery(db => db.prepare("SELECT name FROM sqlite_master WHERE name IN ('suplex_models', 'suplex_issue_projections', 'suplex_engine_commands', 'worker_registrations')").all())).toEqual([]);
   } finally { await f.close(); }
 });
 
@@ -56,7 +56,7 @@ test("provider instances allocate private directories and protect profile refere
     await expect(instances.delete(f.userId, instance.id)).rejects.toMatchObject({ statusCode: 409 });
     f.profiles.update(f.userId, "profile_native_root", { providerInstanceId: null });
     await instances.delete(f.userId, instance.id);
-    expect(f.database.authQuery(db => db.prepare("SELECT 1 FROM forge_provider_instances WHERE id = ?").get(instance.id))).toBeUndefined();
+    expect(f.database.authQuery(db => db.prepare("SELECT 1 FROM suplex_provider_instances WHERE id = ?").get(instance.id))).toBeUndefined();
   } finally { await f.close(); }
 });
 
@@ -73,7 +73,7 @@ test("provider instances protect project policy references until the policy clea
 
     await f.projects.patchProject(f.userId, f.project.id, { providerPolicy: null });
     await instances.delete(f.userId, instance.id);
-    expect(f.database.authQuery((db) => db.prepare("SELECT 1 FROM forge_provider_instances WHERE id = ?").get(instance.id))).toBeUndefined();
+    expect(f.database.authQuery((db) => db.prepare("SELECT 1 FROM suplex_provider_instances WHERE id = ?").get(instance.id))).toBeUndefined();
   } finally {
     await f.close();
   }
@@ -82,8 +82,8 @@ test("provider instances protect project policy references until the policy clea
 test("provider instance migration creates the table and profile reference", async () => {
   const f = await nativeApp();
   try {
-    expect(f.database.authQuery(db => db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'forge_provider_instances'").get())).toBeTruthy();
-    expect(f.database.authQuery(db => db.prepare("PRAGMA table_info('forge_profiles')").all())).toEqual(expect.arrayContaining([expect.objectContaining({ name: "provider_instance_id" })]));
+    expect(f.database.authQuery(db => db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'suplex_provider_instances'").get())).toBeTruthy();
+    expect(f.database.authQuery(db => db.prepare("PRAGMA table_info('suplex_profiles')").all())).toEqual(expect.arrayContaining([expect.objectContaining({ name: "provider_instance_id" })]));
   } finally { await f.close(); }
 });
 
@@ -112,20 +112,20 @@ test("admins delete an agent with its avatar and audit event", async () => {
   const f = await nativeApp();
   try {
     const spare = agent(f, "Spare", "worker");
-    f.database.authTransaction(db => db.prepare("INSERT INTO forge_avatars (owner_id, shape, updated_at) VALUES (?, 'circle', ?)").run(spare.id, new Date().toISOString()));
+    f.database.authTransaction(db => db.prepare("INSERT INTO suplex_avatars (owner_id, shape, updated_at) VALUES (?, 'circle', ?)").run(spare.id, new Date().toISOString()));
     const url = `/api/admin/profiles/${spare.id}`;
     const deleted = await f.app.inject({ method: "DELETE", url, headers: f.headers });
     expect(deleted.statusCode, deleted.body).toBe(204);
     const listed = (await f.app.inject({ method: "GET", url: "/api/profiles?includeArchived=true", headers: f.headers })).json().profiles as Array<{ id: string }>;
     expect(listed.map(profile => profile.id)).not.toContain(spare.id);
-    expect(f.database.authQuery(db => db.prepare("SELECT 1 FROM forge_avatars WHERE owner_id = ?").get(spare.id))).toBeUndefined();
+    expect(f.database.authQuery(db => db.prepare("SELECT 1 FROM suplex_avatars WHERE owner_id = ?").get(spare.id))).toBeUndefined();
     expect(f.auth.listAuditEvents(f.userId)).toEqual(expect.arrayContaining([expect.objectContaining({ action: "agent_profile_deleted", metadata: { profileId: spare.id } })]));
     expect((await f.app.inject({ method: "DELETE", url, headers: f.headers })).statusCode).toBe(404);
     const archived = agent(f, "Archived", "worker");
     f.profiles.update(f.userId, archived.id, { archived: true });
-    f.database.authTransaction(db => db.prepare("UPDATE forge_users SET role = 'member' WHERE id = ?").run(f.userId));
+    f.database.authTransaction(db => db.prepare("UPDATE suplex_users SET role = 'member' WHERE id = ?").run(f.userId));
     expect((await f.app.inject({ method: "DELETE", url: `/api/admin/profiles/${archived.id}`, headers: f.headers })).statusCode).toBe(403);
-    f.database.authTransaction(db => db.prepare("UPDATE forge_users SET role = 'admin' WHERE id = ?").run(f.userId));
+    f.database.authTransaction(db => db.prepare("UPDATE suplex_users SET role = 'admin' WHERE id = ?").run(f.userId));
     expect((await f.app.inject({ method: "DELETE", url: `/api/admin/profiles/${archived.id}`, headers: f.headers })).statusCode).toBe(204);
     expect(f.database.authQuery(db => db.prepare("PRAGMA foreign_key_check").all())).toEqual([]);
   } finally { await f.close(); }
@@ -163,14 +163,14 @@ test("agent delete prunes project allowlists and keeps tasks that used the agent
     const policy = f.projects.getProject(f.userId, f.project.id).agentTaskPolicy!;
     await f.projects.patchProject(f.userId, f.project.id, { agentTaskPolicy: { ...policy, rootProfileIds: [...policy.rootProfileIds, root.id], workerProfileIds: [...policy.workerProfileIds, worker.id], advisorProfileIds: { ...policy.advisorProfileIds, reviewer: [root.id] } } });
     const { task } = await f.tasks.createTask(f.userId, f.company.id, { projectId: f.project.id, title: "Uses agents", description: "Keep", idempotencyKey: "deleted-agent-task", rootProfileId: root.id, workerProfileId: worker.id, startImmediately: false });
-    const before = f.database.authQuery(db => db.prepare("SELECT * FROM forge_tasks WHERE id = ?").get(task.id));
+    const before = f.database.authQuery(db => db.prepare("SELECT * FROM suplex_tasks WHERE id = ?").get(task.id));
 
     for (const id of [root.id, worker.id]) expect((await f.app.inject({ method: "DELETE", url: `/api/admin/profiles/${id}`, headers: f.headers })).statusCode).toBe(204);
 
     const pruned = f.projects.getProject(f.userId, f.project.id).agentTaskPolicy!;
     expect(pruned).toMatchObject({ rootProfileIds: policy.rootProfileIds, workerProfileIds: policy.workerProfileIds, advisorProfileIds: { reviewer: [] } });
     await f.projects.patchProject(f.userId, f.project.id, { agentTaskPolicy: pruned });
-    expect(f.database.authQuery(db => db.prepare("SELECT * FROM forge_tasks WHERE id = ?").get(task.id))).toEqual(before);
+    expect(f.database.authQuery(db => db.prepare("SELECT * FROM suplex_tasks WHERE id = ?").get(task.id))).toEqual(before);
     const read = await f.app.inject({ method: "GET", url: `/api/tasks/${task.id}`, headers: f.headers });
     expect(read.statusCode, read.body).toBe(200);
     expect(read.json()).toMatchObject({ rootProfile: { profileId: root.id }, workerProfile: { profileId: worker.id } });

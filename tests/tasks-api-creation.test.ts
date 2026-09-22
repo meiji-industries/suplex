@@ -85,7 +85,7 @@ test("task limit answers require an explicit decision and expose the approved li
     const { task } = await f.tasks.createTask(f.userId, f.company.id, { projectId: f.project.id, title: "Limited task", description: "Stop at the boundary", idempotencyKey: "limited-task-1", startImmediately: true });
     f.tasks.repository.controls.claimRoot({ taskId: task.id });
     const pause = { kind: "task_limit", reason: "budget", limits: { budgetUsd: 15, maxTurns: 40 }, usage: { estimatedCostUsd: 16, admittedTurns: 2 }, proposedLimits: { budgetUsd: 31, maxTurns: 40 } };
-    f.database.authTransaction(db => db.prepare("UPDATE forge_task_controls SET status = 'waiting_human', human_question = 'Task limit reached', human_question_id = 'limit-question', limit_pause_json = ? WHERE task_id = ?").run(JSON.stringify(pause), task.id));
+    f.database.authTransaction(db => db.prepare("UPDATE suplex_task_controls SET status = 'waiting_human', human_question = 'Task limit reached', human_question_id = 'limit-question', limit_pause_json = ? WHERE task_id = ?").run(JSON.stringify(pause), task.id));
     const url = `/api/tasks/${task.id}/answer`;
     expect((await f.app.inject({ method: "POST", url, headers: f.headers, payload: { questionId: "limit-question", answer: "Continue" } })).statusCode).toBe(409);
     const response = await f.app.inject({ method: "POST", url, headers: f.headers, payload: { questionId: "limit-question", limitDecision: { kind: "add_allowance" } } });
@@ -94,7 +94,7 @@ test("task limit answers require an explicit decision and expose the approved li
 
     const cancelled = await f.tasks.createTask(f.userId, f.company.id, { projectId: f.project.id, title: "Stopped task", description: "Stop at the limit", idempotencyKey: "limited-task-2", startImmediately: true });
     f.tasks.repository.controls.claimRoot({ taskId: cancelled.task.id });
-    f.database.authTransaction(db => db.prepare("UPDATE forge_task_controls SET status = 'waiting_human', human_question = 'Task limit reached', human_question_id = 'cancel-question', limit_pause_json = ? WHERE task_id = ?").run(JSON.stringify(pause), cancelled.task.id));
+    f.database.authTransaction(db => db.prepare("UPDATE suplex_task_controls SET status = 'waiting_human', human_question = 'Task limit reached', human_question_id = 'cancel-question', limit_pause_json = ? WHERE task_id = ?").run(JSON.stringify(pause), cancelled.task.id));
     const cancelResponse = await f.app.inject({ method: "POST", url: `/api/tasks/${cancelled.task.id}/answer`, headers: f.headers, payload: { questionId: "cancel-question", limitDecision: { kind: "cancel_task" } } });
     expect(cancelResponse.statusCode, cancelResponse.body).toBe(200);
     expect(TaskSchema.parse(cancelResponse.json())).toMatchObject({ status: "cancelled", humanQuestion: null });
@@ -179,7 +179,7 @@ test("task APIs reject old phase commands and cross-company reads", async () => 
     expect((await f.app.inject({ method: "POST", url: `/api/tasks/${task.id}/approve-plan`, headers: f.headers, payload: { expectedRevision: 1 } })).statusCode).toBe(404);
     expect((await f.app.inject({ method: "GET", url: `/api/tasks/${task.id}` })).statusCode).toBe(401);
     const stamp = new Date().toISOString();
-    f.database.authTransaction(db => db.prepare("INSERT INTO forge_users (id, display_name, username, role, status, created_at, updated_at) VALUES ('outsider', 'Outsider', 'outsider', 'member', 'active', ?, ?)").run(stamp, stamp));
+    f.database.authTransaction(db => db.prepare("INSERT INTO suplex_users (id, display_name, username, role, status, created_at, updated_at) VALUES ('outsider', 'Outsider', 'outsider', 'member', 'active', ?, ?)").run(stamp, stamp));
     expect(() => f.tasks.getTask("outsider", task.id)).toThrow("Not found");
     expect(f.tasks.listTasks("outsider")).toEqual([]);
   } finally { await f.close(); }

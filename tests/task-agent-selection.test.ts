@@ -6,11 +6,11 @@ afterEach(cleanupRootControllerFixtures);
 
 function profile(f: Awaited<ReturnType<typeof fixture>>, id: string, role: "root" | "worker", provider = "codex") {
   const time = new Date().toISOString();
-  f.database.authTransaction(db => db.prepare("INSERT INTO forge_profiles (id, name, role, avatar_seed, provider, model, reasoning_level, service_tier, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 'gpt-5.6-sol', 'medium', 'default', ?, ?)").run(id, id, role, id, provider, time, time));
+  f.database.authTransaction(db => db.prepare("INSERT INTO suplex_profiles (id, name, role, avatar_seed, provider, model, reasoning_level, service_tier, created_at, updated_at) VALUES (?, ?, ?, ?, ?, 'gpt-5.6-sol', 'medium', 'default', ?, ?)").run(id, id, role, id, provider, time, time));
 }
 
 function workflow(f: Awaited<ReturnType<typeof fixture>>, id: WorkflowId) {
-  f.database.authTransaction(db => db.prepare("UPDATE forge_task_controls SET workflow = ? WHERE task_id = 'task'").run(id));
+  f.database.authTransaction(db => db.prepare("UPDATE suplex_task_controls SET workflow = ? WHERE task_id = 'task'").run(id));
 }
 
 function select(f: Awaited<ReturnType<typeof fixture>>, role: "root" | "worker" | AdvisorRole, profileId: string, expectedSessionId: string | null, direction = "Check the remaining work.", resume = false, questionId?: string) {
@@ -33,7 +33,7 @@ test("active Worker selection preserves assignment and fences retired results ac
   profile(f, "new-worker", "worker");
   const root = f.controller.prepareRoot("task");
   const old = f.store.launchWorker({ taskId: "task", rootSessionId: root.id, rootGeneration: root.generation, instruction: "Build the change" });
-  f.database.authTransaction(db => db.prepare("UPDATE forge_task_sessions SET pane_id = 'recreated' WHERE id = ?").run(old.id));
+  f.database.authTransaction(db => db.prepare("UPDATE suplex_task_sessions SET pane_id = 'recreated' WHERE id = ?").run(old.id));
   const request = { role: "worker", expectedProfileId: "profile", expectedSessionId: old.id, profileId: "new-worker", direction: "Keep the prior checks.", resume: false } as const;
   const next = f.store.selectTaskAgent("task", request)!;
   expect(next).toMatchObject({ advisorRole: null, delegateSlot: "delegate", profile: { provider: "codex" }, replacement: { sessionId: old.id } });
@@ -140,7 +140,7 @@ test("unchanged legacy Worker profile still reuses its session", async () => {
   const root = f.controller.prepareRoot("task");
   const old = f.store.launchWorker({ taskId: "task", rootSessionId: root.id, rootGeneration: root.generation, instruction: "First" });
   f.store.recordWorkerResultAndWake({ taskId: "task", sessionId: old.id, generation: old.generation, receiptId: "done", observation: JSON.stringify({ state: "completed", text: "Done" }) });
-  f.database.authTransaction(db => db.prepare("UPDATE forge_task_sessions SET profile_json = NULL WHERE id = ?").run(old.id));
+  f.database.authTransaction(db => db.prepare("UPDATE suplex_task_sessions SET profile_json = NULL WHERE id = ?").run(old.id));
   const next = f.store.launchWorker({ taskId: "task", rootSessionId: root.id, rootGeneration: root.generation, instruction: "Second" });
   expect(next.id).toBe(old.id);
   expect(next.generation).toBe(old.generation + 1);
@@ -192,7 +192,7 @@ test("task limit and command cleanup decisions cannot resume through role select
   f.store.pauseAtTaskLimit("task", { estimatedCostUsd: 999, admittedTurns: 1 });
   const questionId = f.store.get("task").humanQuestionId!;
   expect(() => select(f, "worker", "new-worker", null, "Continue", true, questionId)).toThrow("decision");
-  f.database.authTransaction(db => db.prepare("UPDATE forge_task_controls SET limit_pause_json = NULL, recovery_turn_id = ? WHERE task_id = 'task'").run(f.store.pendingTurns(root.id)[0]!.id));
+  f.database.authTransaction(db => db.prepare("UPDATE suplex_task_controls SET limit_pause_json = NULL, recovery_turn_id = ? WHERE task_id = 'task'").run(f.store.pendingTurns(root.id)[0]!.id));
   expect(() => select(f, "worker", "new-worker", null, "Continue", true, questionId)).toThrow("decision");
   expect(f.store.get("task").rootSessionId).toBe(root.id);
 });

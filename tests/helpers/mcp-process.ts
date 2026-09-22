@@ -6,11 +6,11 @@ import { runCommand } from "../../src/platform/command-runner.js";
 type Server = { command: string; args: string[]; environment: Record<string, string> };
 
 export async function runMcpProcess(server: Server, environment: NodeJS.ProcessEnv, requests: unknown[]): Promise<{ responses: unknown[]; stderr: string; exitCode: number | null }> {
-  const directory = await mkdtemp(join(tmpdir(), "forge-mcp-process-"));
+  const directory = await mkdtemp(join(tmpdir(), "suplex-mcp-process-"));
   const inputPath = join(directory, "requests.jsonl");
   await writeFile(inputPath, `${requests.map(request => JSON.stringify(request)).join("\n")}\n`, { mode: 0o600 });
   try {
-    const result = await runCommand({ taskId: null, stepId: null, command: "/bin/sh", args: ["-c", "input=$1; shift; exec \"$@\" < \"$input\"", "forge-mcp-process", inputPath, server.command, ...server.args], env: environment, expectNonZero: true });
+    const result = await runCommand({ taskId: null, stepId: null, command: "/bin/sh", args: ["-c", "input=$1; shift; exec \"$@\" < \"$input\"", "suplex-mcp-process", inputPath, server.command, ...server.args], env: environment, expectNonZero: true });
     const responses = result.stdout.split("\n").filter(Boolean).map(line => JSON.parse(line));
     return { responses, stderr: result.stderr, exitCode: result.exitCode };
   } finally {

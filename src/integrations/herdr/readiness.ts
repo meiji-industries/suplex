@@ -151,10 +151,10 @@ export async function checkHerdrReadiness(options: HerdrReadinessOptions = {}): 
 
   if (!apiReachable) {
     if (version.kind === "ambiguous" && status.kind !== "ok") {
-      return check("warning", "Forge could not check Herdr", { ...details, failure: "probe-ambiguous" });
+      return check("warning", "Suplex could not check Herdr", { ...details, failure: "probe-ambiguous" });
     }
     // The CLI answered but the socket API did not: the server is not running.
-    return check("unhealthy", "Forge cannot reach Herdr", { ...details, failure: "api-unreachable" }, { remedy: "herdr" });
+    return check("unhealthy", "Suplex cannot reach Herdr", { ...details, failure: "api-unreachable" }, { remedy: "herdr" });
   }
 
   if (diagnostic.privateProtocolCompatibility === "incompatible") {
@@ -167,7 +167,7 @@ export async function checkHerdrReadiness(options: HerdrReadinessOptions = {}): 
   }
 
   if (clientVersion === "unknown") {
-    return check("warning", "Forge could not check Herdr", { ...details, failure: "probe-ambiguous" });
+    return check("warning", "Suplex could not check Herdr", { ...details, failure: "probe-ambiguous" });
   }
 
   return check("healthy", "Herdr API and terminal views are available", details);

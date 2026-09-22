@@ -10,16 +10,16 @@ Durations are GitHub job `completedAt - startedAt`, including setup and cleanup 
 
 | Configuration | Job duration | Unit/integration step | Browser step | Run |
 | --- | ---: | ---: | ---: | --- |
-| Original workflow, 4 vCPUs | 167s | 24.36s reported by Vitest | 74.85s reported by Vitest | [Baseline](https://github.com/meiji-industries/forge/actions/runs/34166261817) |
-| Sticky disk, cold, 4 vCPUs / default workers | 159s | 23s | 75s | [4 vCPUs](https://github.com/meiji-industries/forge/actions/runs/34166264525) |
-| Sticky disk, cold, 8 vCPUs / default workers | 112s | 12s | 40s | [8 vCPUs](https://github.com/meiji-industries/forge/actions/runs/34166265554) |
-| Sticky disk, cold, 16 vCPUs / default workers | 96s | 7s | 36s | [16 vCPUs](https://github.com/meiji-industries/forge/actions/runs/34166266691) |
-| Actions cache, cold, 8 vCPUs / default workers | 110s | 12s | 41s | [Cold Actions cache](https://github.com/meiji-industries/forge/actions/runs/34166267728) |
-| Sticky disk, warm, 8 vCPUs / default workers | 104s | 12s | 42s | [Warm sticky disk](https://github.com/meiji-industries/forge/actions/runs/34166401366) |
-| Actions cache, warm, 8 vCPUs / default workers | 104s | 12s | 41s | [Warm Actions cache](https://github.com/meiji-industries/forge/actions/runs/34166402715) |
-| Actions cache, warm, concurrent lint/build, 8 vCPUs / 8 workers | 94s | 10s | 39s | [8-worker candidate](https://github.com/meiji-industries/forge/actions/runs/34166423976) |
-| Actions cache, warm, concurrent lint/build, 4 vCPUs / 6 workers | 112s | 17s | 48s | [Lower-compute candidate](https://github.com/meiji-industries/forge/actions/runs/34166425964) |
-| Final workflow, version-keyed cache cold, 8 vCPUs / 8 workers | 102s | 11s | 39s | [Final cold cache](https://github.com/meiji-industries/forge/actions/runs/34166527638) |
+| Original workflow, 4 vCPUs | 167s | 24.36s reported by Vitest | 74.85s reported by Vitest | [Baseline](https://github.com/meiji-industries/suplex/actions/runs/34166261817) |
+| Sticky disk, cold, 4 vCPUs / default workers | 159s | 23s | 75s | [4 vCPUs](https://github.com/meiji-industries/suplex/actions/runs/34166264525) |
+| Sticky disk, cold, 8 vCPUs / default workers | 112s | 12s | 40s | [8 vCPUs](https://github.com/meiji-industries/suplex/actions/runs/34166265554) |
+| Sticky disk, cold, 16 vCPUs / default workers | 96s | 7s | 36s | [16 vCPUs](https://github.com/meiji-industries/suplex/actions/runs/34166266691) |
+| Actions cache, cold, 8 vCPUs / default workers | 110s | 12s | 41s | [Cold Actions cache](https://github.com/meiji-industries/suplex/actions/runs/34166267728) |
+| Sticky disk, warm, 8 vCPUs / default workers | 104s | 12s | 42s | [Warm sticky disk](https://github.com/meiji-industries/suplex/actions/runs/34166401366) |
+| Actions cache, warm, 8 vCPUs / default workers | 104s | 12s | 41s | [Warm Actions cache](https://github.com/meiji-industries/suplex/actions/runs/34166402715) |
+| Actions cache, warm, concurrent lint/build, 8 vCPUs / 8 workers | 94s | 10s | 39s | [8-worker candidate](https://github.com/meiji-industries/suplex/actions/runs/34166423976) |
+| Actions cache, warm, concurrent lint/build, 4 vCPUs / 6 workers | 112s | 17s | 48s | [Lower-compute candidate](https://github.com/meiji-industries/suplex/actions/runs/34166425964) |
+| Final workflow, version-keyed cache cold, 8 vCPUs / 8 workers | 102s | 11s | 39s | [Final cold cache](https://github.com/meiji-industries/suplex/actions/runs/34166527638) |
 
 The 94-second candidate is 44% faster than the 167-second baseline and uses 752 versus 668 vCPU-seconds, about 13% more compute. The 4-vCPU/six-worker candidate takes 112 seconds and uses 448 vCPU-seconds, about 33% less compute. These are measured tradeoffs, not billing estimates.
 
@@ -31,10 +31,10 @@ PR #149 merged while these comparisons were running. The final branch includes t
 
 | Configuration | Job duration | Run |
 | --- | ---: | --- |
-| Updated main, original workflow, 4 vCPUs | 189s | [Updated baseline](https://github.com/meiji-industries/forge/actions/runs/34166333307) |
-| Final workflow, warm, 8 vCPUs / 8 workers | 119s | [Updated suite, warm run 1](https://github.com/meiji-industries/forge/actions/runs/34166664199) |
-| Final workflow, warm, 8 vCPUs / 8 workers | 118s | [Updated suite, warm run 2](https://github.com/meiji-industries/forge/actions/runs/34166817539) |
-| Final workflow, warm, 4 vCPUs / 6 workers | 142s | [Updated suite, lower compute](https://github.com/meiji-industries/forge/actions/runs/34166818536) |
+| Updated main, original workflow, 4 vCPUs | 189s | [Updated baseline](https://github.com/meiji-industries/suplex/actions/runs/34166333307) |
+| Final workflow, warm, 8 vCPUs / 8 workers | 119s | [Updated suite, warm run 1](https://github.com/meiji-industries/suplex/actions/runs/34166664199) |
+| Final workflow, warm, 8 vCPUs / 8 workers | 118s | [Updated suite, warm run 2](https://github.com/meiji-industries/suplex/actions/runs/34166817539) |
+| Final workflow, warm, 4 vCPUs / 6 workers | 142s | [Updated suite, lower compute](https://github.com/meiji-industries/suplex/actions/runs/34166818536) |
 
 The two final 8-vCPU runs average 118.5 seconds, 37% below the updated 189-second baseline. Their average compute proxy is 948 vCPU-seconds versus 756, about 25% higher. Both restored the version-keyed browser cache in one second, downloaded no browser binaries, and passed all 652 tests with the same existing skip. The final workflow prioritizes feedback time. The smaller-runner alternative takes 142 seconds and uses 568 vCPU-seconds, about 25% less compute than the original baseline.
 

@@ -11,14 +11,14 @@ const directories: string[] = [];
 afterEach(async () => { await Promise.all(directories.splice(0).map(path => rm(path, { recursive: true, force: true }))); });
 
 test("preparation preserves worktree files, copies skills outside Git, and reruns idempotent setup without receipt gates", async () => {
-  const root = await mkdtemp(join(tmpdir(), "forge-preparation-"));
+  const root = await mkdtemp(join(tmpdir(), "suplex-preparation-"));
   directories.push(root);
   const worktree = join(root, "worktree");
   const skills = join(root, "skills");
   await Promise.all([mkdir(worktree), mkdir(skills)]);
   await writeFile(join(worktree, "CLAUDE.md"), "user-owned");
   await writeFile(join(skills, "SKILL.md"), "Use this skill");
-  const input = { databasePath: join(root, "forge.sqlite"), taskId: "task", directory: worktree, execution: ProjectExecutionSchema.parse({ instructions: "Keep draft delivery", skillDirectories: [skills], environment: { PREPARATION_SENTINEL: "ok" } }), setupCommand: 'test "$PREPARATION_SENTINEL" = ok && (test -f prepared || printf ready > prepared)' };
+  const input = { databasePath: join(root, "suplex.sqlite"), taskId: "task", directory: worktree, execution: ProjectExecutionSchema.parse({ instructions: "Keep draft delivery", skillDirectories: [skills], environment: { PREPARATION_SENTINEL: "ok" } }), setupCommand: 'test "$PREPARATION_SENTINEL" = ok && (test -f prepared || printf ready > prepared)' };
   await prepareProjectWorkspace(input);
   const contextPath = join(taskPreparationDirectory(input.databasePath, input.taskId), "context.md");
   expect(await readFile(contextPath, "utf8")).toContain("Configured setup exited 0");
@@ -36,7 +36,7 @@ test("preparation preserves worktree files, copies skills outside Git, and rerun
 });
 
 test("setup only inherits non-secret tooling environment", () => {
-  expect(setupEnvironment({ PROJECT_MODE: "test" }, { HOME: "/home", PATH: "/bin", GH_TOKEN: "secret", ANTHROPIC_BASE_URL: "wrong", AWS_PROFILE: "private", FORGE_ROOT_TOKEN: "secret", PASSWORD: "secret" })).toEqual({ HOME: "/home", PATH: "/bin", PROJECT_MODE: "test" });
+  expect(setupEnvironment({ PROJECT_MODE: "test" }, { HOME: "/home", PATH: "/bin", GH_TOKEN: "secret", ANTHROPIC_BASE_URL: "wrong", AWS_PROFILE: "private", SUPLEX_ROOT_TOKEN: "secret", PASSWORD: "secret" })).toEqual({ HOME: "/home", PATH: "/bin", PROJECT_MODE: "test" });
 });
 
 test("opaque integration credential references are excluded from project subprocesses", () => {

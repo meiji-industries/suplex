@@ -13,7 +13,7 @@ export function UpdateSettings(): ReactElement {
   const statusLabel = !status ? "Status not available"
     : status.kind === "idle" ? "Not checked"
       : status.kind === "checking" ? "Check in progress"
-        : status.kind === "current" ? "Forge is current"
+        : status.kind === "current" ? "Suplex is current"
           : status.kind === "available" ? "Update available"
             : status.kind === "applying" ? status.message
               : status.message;
@@ -26,7 +26,7 @@ export function UpdateSettings(): ReactElement {
         : undefined;
 
   return (
-    <SettingsSection title="Forge host update">
+    <SettingsSection title="Suplex host update">
       <SettingRow label="Status" {...(description ? { description } : {})}>
         <div className="flex items-center gap-2">
           <span className="text-xs text-muted-foreground">{statusLabel}</span>
@@ -34,8 +34,8 @@ export function UpdateSettings(): ReactElement {
         </div>
       </SettingRow>
       {canApply ? (
-        <SettingRow label={retry ? "Retry the update" : "Restart Forge"} description={retry ? "Forge retries the host update." : "Forge applies the update and restarts the host."}>
-          <Button type="button" size="sm" onClick={() => void restart()} disabled={requesting || busy}>{retry ? "Retry" : "Restart Forge"}</Button>
+        <SettingRow label={retry ? "Retry the update" : "Restart Suplex"} description={retry ? "Suplex retries the host update." : "Suplex applies the update and restarts the host."}>
+          <Button type="button" size="sm" onClick={() => void restart()} disabled={requesting || busy}>{retry ? "Retry" : "Restart Suplex"}</Button>
         </SettingRow>
       ) : null}
     </SettingsSection>

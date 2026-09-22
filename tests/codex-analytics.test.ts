@@ -10,10 +10,10 @@ const directories: string[] = [];
 afterEach(async () => { await Promise.all(directories.splice(0).map(path => rm(path, { recursive: true, force: true }))); });
 
 test("analytics reads Codex usage and estimates its cost from the turn log", async () => {
-  const root = await mkdtemp(join(tmpdir(), "forge-codex-analytics-"));
+  const root = await mkdtemp(join(tmpdir(), "suplex-codex-analytics-"));
   directories.push(root);
-  const databasePath = join(root, "forge.sqlite");
-  const session = { id: "forge-session", nativeSessionId: "codex-11111111-2222-4333-8444-555555555555", kind: "worker" as const };
+  const databasePath = join(root, "suplex.sqlite");
+  const session = { id: "suplex-session", nativeSessionId: "codex-11111111-2222-4333-8444-555555555555", kind: "worker" as const };
   const directory = taskSessionRuntimeDirectory(databasePath, session.id);
   await mkdir(directory, { recursive: true });
   await writeFile(join(directory, "turn-turn-1.jsonl"), [
@@ -60,10 +60,10 @@ test("analytics reads Codex usage and estimates its cost from the turn log", asy
 });
 
 test("Codex usage is unpriced when the catalog has no entry for its model", async () => {
-  const root = await mkdtemp(join(tmpdir(), "forge-codex-analytics-"));
+  const root = await mkdtemp(join(tmpdir(), "suplex-codex-analytics-"));
   directories.push(root);
-  const databasePath = join(root, "forge.sqlite");
-  const session = { id: "forge-session", nativeSessionId: "codex-unpriced", kind: "root" as const };
+  const databasePath = join(root, "suplex.sqlite");
+  const session = { id: "suplex-session", nativeSessionId: "codex-unpriced", kind: "root" as const };
   const directory = taskSessionRuntimeDirectory(databasePath, session.id);
   await mkdir(directory, { recursive: true });
   await writeFile(join(directory, "turn-turn-1.jsonl"), `${JSON.stringify({ type: "turn.completed", usage: { input_tokens: 10, output_tokens: 2 } })}\n`);
@@ -74,18 +74,18 @@ test("Codex usage is unpriced when the catalog has no entry for its model", asyn
 });
 
 test("a missing Codex turn directory is not an authoritative zero-usage observation", async () => {
-  const root = await mkdtemp(join(tmpdir(), "forge-codex-analytics-"));
+  const root = await mkdtemp(join(tmpdir(), "suplex-codex-analytics-"));
   directories.push(root);
-  const databasePath = join(root, "forge.sqlite");
-  const session = { id: "forge-session", nativeSessionId: "codex-missing", kind: "worker" as const };
+  const databasePath = join(root, "suplex.sqlite");
+  const session = { id: "suplex-session", nativeSessionId: "codex-missing", kind: "worker" as const };
   await expect(new AnalyticsHistoryReader(databasePath, join(root, "runtime", "analytics")).read(session)).rejects.toThrow("Codex turn logs are missing");
 });
 
 test("an admitted running Codex turn has no billable usage yet", async () => {
-  const root = await mkdtemp(join(tmpdir(), "forge-codex-analytics-"));
+  const root = await mkdtemp(join(tmpdir(), "suplex-codex-analytics-"));
   directories.push(root);
-  const databasePath = join(root, "forge.sqlite");
-  const session = { id: "forge-session", nativeSessionId: "codex-incomplete", kind: "worker" as const };
+  const databasePath = join(root, "suplex.sqlite");
+  const session = { id: "suplex-session", nativeSessionId: "codex-incomplete", kind: "worker" as const };
   const directory = taskSessionRuntimeDirectory(databasePath, session.id);
   await mkdir(directory, { recursive: true });
   await writeFile(join(directory, "turn-msg_0001.jsonl"), [

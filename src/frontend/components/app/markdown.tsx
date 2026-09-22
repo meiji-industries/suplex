@@ -6,7 +6,7 @@ export type MarkdownImageSource = Record<string, string>;
 
 export function Markdown({ source, imageSources }: { source: string; imageSources?: MarkdownImageSource }) {
   return (
-    <div className="prose-forge">
+    <div className="prose-suplex">
       <ReactMarkdown
         remarkPlugins={[remarkGfm, remarkBreaks]}
         components={{

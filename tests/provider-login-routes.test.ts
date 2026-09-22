@@ -37,15 +37,15 @@ test("provider login terminal is admin-only, validates the pane, and bridges con
       createWorkspace: async () => {
         const pane = { paneId: `pane-login-${++paneSeq}` };
         panes.set(pane.paneId, pane);
-        return { workspace: { workspaceId: `ws-login-${paneSeq}`, label: "forge-provider-login" }, tab: { tabId: `tab-${paneSeq}`, label: "sign-in" }, rootPane: pane };
+        return { workspace: { workspaceId: `ws-login-${paneSeq}`, label: "suplex-provider-login" }, tab: { tabId: `tab-${paneSeq}`, label: "sign-in" }, rootPane: pane };
       },
       runPaneCommand: vi.fn(async () => {}),
       closePane: vi.fn(async () => {}),
       closeWorkspace: vi.fn(async () => {}),
     };
-    const user: AuthUser = { id: "admin-1", displayName: "Admin", username: "admin@forge.local", avatarSeed: "admin", role: "admin", status: "active", companyIds: [] };
+    const user: AuthUser = { id: "admin-1", displayName: "Admin", username: "admin@suplex.local", avatarSeed: "admin", role: "admin", status: "active", companyIds: [] };
     await app.register(websocket);
-    app.decorateRequest("forgeUser", { getter: () => user });
+    app.decorateRequest("suplexUser", { getter: () => user });
     app.setValidatorCompiler(validatorCompiler);
     app.setSerializerCompiler(serializerCompiler);
     const bridge = { input: vi.fn(), resize: vi.fn(), scroll: vi.fn(), release: vi.fn() };

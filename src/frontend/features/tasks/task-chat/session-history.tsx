@@ -144,13 +144,13 @@ export function SessionHistory({ taskId, sessionId }: { taskId: string; sessionI
         try {
           raw = typeof messageEvent.data === "string" ? JSON.parse(messageEvent.data) : undefined;
         } catch {
-          setConnection({ kind: "stale", message: "Forge received an invalid live output event." });
+          setConnection({ kind: "stale", message: "Suplex received an invalid live output event." });
           nextSocket.close();
           return;
         }
         const parsed = SessionHistoryLiveEventSchema.safeParse(raw);
         if (!parsed.success) {
-          setConnection({ kind: "stale", message: "Forge received an invalid live output event." });
+          setConnection({ kind: "stale", message: "Suplex received an invalid live output event." });
           nextSocket.close();
           return;
         }
@@ -158,7 +158,7 @@ export function SessionHistory({ taskId, sessionId }: { taskId: string; sessionI
       };
       nextSocket.onclose = () => {
         if (!isCurrent(nextSocket)) return;
-        setConnection({ kind: "stale", message: "Live output is out of date. Forge will retry." });
+        setConnection({ kind: "stale", message: "Live output is out of date. Suplex will retry." });
         retryTimer = window.setTimeout(connect, reconnectDelay(retryAttempt++));
       };
     };
@@ -259,7 +259,7 @@ export function SessionHistory({ taskId, sessionId }: { taskId: string; sessionI
     }}>
       {olderCursor ? <div className="mb-3 flex justify-center"><Button size="xs" variant="outline" disabled={reading} onClick={() => void readEarlier()}>Open earlier messages</Button></div> : null}
       {!messages.length && connection.kind === "live" ? <p className="text-xs text-muted-foreground">No messages yet.</p> : null}
-      {!messages.length && connection.kind === "connecting" ? <p className="text-xs text-muted-foreground" aria-busy="true">Forge connects to live output.</p> : null}
+      {!messages.length && connection.kind === "connecting" ? <p className="text-xs text-muted-foreground" aria-busy="true">Suplex connects to live output.</p> : null}
       <div className="grid gap-4">{messages.map(message => <article key={message.id} data-native-message-id={message.id} className="min-w-0">
         {message.role === "user" ? <header className="mb-2 text-xs font-medium">Instruction</header> : null}
         <div className="grid min-w-0 gap-2">{message.content.map(part => part.type === "text"

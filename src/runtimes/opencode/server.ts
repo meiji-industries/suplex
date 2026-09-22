@@ -54,19 +54,19 @@ export function openCodeRoleConfig(input: {
   const permission = role === "root"
     ? { read: "allow", edit: "deny", bash: "deny", task: "deny", question: "deny", external_directory: readOnlyExternal, doom_loop: "allow" }
     : role === "advisor"
-      ? { read: "allow", edit: "deny", bash: "deny", task: "deny", question: "deny", external_directory: readOnlyExternal, doom_loop: "allow", "forge_root_*": "deny" }
-      : { read: "allow", edit: "allow", bash: "allow", external_directory: "allow", doom_loop: "allow", task: "deny", question: "deny", "forge_root_*": "deny" };
+      ? { read: "allow", edit: "deny", bash: "deny", task: "deny", question: "deny", external_directory: readOnlyExternal, doom_loop: "allow", "suplex_root_*": "deny" }
+      : { read: "allow", edit: "allow", bash: "allow", external_directory: "allow", doom_loop: "allow", task: "deny", question: "deny", "suplex_root_*": "deny" };
   return {
     model,
-    default_agent: `forge-${role}`,
+    default_agent: `suplex-${role}`,
     agent: {
-      [`forge-${role}`]: {
+      [`suplex-${role}`]: {
         mode: "primary", model, variant: profile.reasoningEffort, permission,
         tools: role === "root"
           ? { bash: false, edit: false, write: false, apply_patch: false, task: false, question: false }
           : role === "advisor"
-            ? { bash: false, edit: false, write: false, apply_patch: false, task: false, question: false, "forge_root_*": false, "forge_advisor_*": true }
-            : { task: false, question: false, "forge_root_*": false },
+            ? { bash: false, edit: false, write: false, apply_patch: false, task: false, question: false, "suplex_root_*": false, "suplex_advisor_*": true }
+            : { task: false, question: false, "suplex_root_*": false },
         reasoningEffort: profile.reasoningEffort,
         serviceTier: profile.serviceTier,
       },
@@ -76,7 +76,7 @@ export function openCodeRoleConfig(input: {
         [native.modelID]: { options: { reasoningEffort: profile.reasoningEffort, serviceTier: profile.serviceTier } },
       } },
     },
-    ...(input.bridge && role !== "worker" ? { mcp: { [role === "root" ? "forge_root" : "forge_advisor"]: { type: "local", command: [input.bridge.command, ...input.bridge.args], environment: input.bridge.environment, enabled: true } } } : {}),
+    ...(input.bridge && role !== "worker" ? { mcp: { [role === "root" ? "suplex_root" : "suplex_advisor"]: { type: "local", command: [input.bridge.command, ...input.bridge.args], environment: input.bridge.environment, enabled: true } } } : {}),
   };
 }
 

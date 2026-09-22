@@ -2,7 +2,7 @@ import { expect, test } from "vitest";
 
 import { isApplicationPath } from "../src/frontend/shell/navigation-state.js";
 
-test("only Forge views are eligible for client-side navigation", () => {
+test("only Suplex views are eligible for client-side navigation", () => {
   expect(isApplicationPath("/tasks/task-1")).toBe(true);
   expect(isApplicationPath("/admin/workflows")).toBe(true);
   expect(isApplicationPath("/admin/triggers")).toBe(true);

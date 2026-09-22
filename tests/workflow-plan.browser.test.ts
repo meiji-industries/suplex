@@ -15,7 +15,7 @@ test.each([1440, 900, 390])("workflow plans are prospective, connected, and inde
     await page.setViewportSize({ width, height: width < 768 ? 844 : 900 });
     for (const workflow of workflows) {
       const { task } = await value.tasks.createTask(value.userId, value.company.id, { projectId: value.project.id, title: `${workflow} workflow map`, description: "Map fixture", idempotencyKey: `workflow-map-${workflow}-${width}`, startImmediately: false, workflow: workflow === "refine_pull_request" ? "independent_review" : workflow });
-      if (workflow === "refine_pull_request") value.database.authTransaction(db => db.prepare("UPDATE forge_task_controls SET workflow = 'refine_pull_request', delivery_target = 'merged' WHERE task_id = ?").run(task.id));
+      if (workflow === "refine_pull_request") value.database.authTransaction(db => db.prepare("UPDATE suplex_task_controls SET workflow = 'refine_pull_request', delivery_target = 'merged' WHERE task_id = ?").run(task.id));
       await page.goto(`${value.base}/tasks/${task.id}?company=${value.company.id}`);
       await page.getByRole("heading", { name: `${workflow} workflow map`, level: 2, exact: true }).waitFor();
       const plan = page.locator(`[data-workflow-plan="${workflow}"]`);

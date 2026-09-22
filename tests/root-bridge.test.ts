@@ -8,7 +8,7 @@ import { expect, test, vi } from "vitest";
 
 import { RootBridge, RootBridgeFailure, startRootBridgeTransport, type RootBridgeAdapter } from "../src/coordination/root-bridge.js";
 import type { RootIdentity } from "../src/coordination/root-contracts.js";
-import { ForgeDatabase } from "../src/platform/database.js";
+import { SuplexDatabase } from "../src/platform/database.js";
 import { RootController } from "../src/coordination/root-controller.js";
 import { FakeTaskHarness } from "./helpers/fake-task-harness.js";
 import { TaskControlStore } from "../src/coordination/root-session-store.js";
@@ -20,19 +20,19 @@ import { writeRootBridgeBinding } from "../src/runtimes/task-harness.js";
 import { initializeAndList, runMcpProcess } from "./helpers/mcp-process.js";
 
 test("the Coordinator bridge process authenticates before MCP initialization", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "forge-root-bridge-auth-"));
-  const database = new ForgeDatabase(join(directory, "forge.sqlite"));
+  const directory = await mkdtemp(join(tmpdir(), "suplex-root-bridge-auth-"));
+  const database = new SuplexDatabase(join(directory, "suplex.sqlite"));
   database.close();
   try {
-    const server = await writeRootBridgeBinding({ runtimeDirectory: join(directory, "runtime"), identity: { taskId: "task", sessionId: "root", generation: 1 }, databasePath: join(directory, "forge.sqlite"), artifactRoot: join(directory, "artifacts") });
-    const cleanEnvironment = Object.fromEntries(Object.entries(process.env).filter(([key, value]) => key !== "FORGE_ROOT_TOKEN" && value !== undefined));
+    const server = await writeRootBridgeBinding({ runtimeDirectory: join(directory, "runtime"), identity: { taskId: "task", sessionId: "root", generation: 1 }, databasePath: join(directory, "suplex.sqlite"), artifactRoot: join(directory, "artifacts") });
+    const cleanEnvironment = Object.fromEntries(Object.entries(process.env).filter(([key, value]) => key !== "SUPLEX_ROOT_TOKEN" && value !== undefined));
     for (const token of [undefined, "00000000-0000-4000-8000-000000000000"]) {
-      const attempt = await runMcpProcess(server, { ...cleanEnvironment, FORGE_ROOT_BINDING: server.environment.FORGE_ROOT_BINDING!, ...(token ? { FORGE_ROOT_TOKEN: token } : {}) }, initializeAndList);
+      const attempt = await runMcpProcess(server, { ...cleanEnvironment, SUPLEX_ROOT_BINDING: server.environment.SUPLEX_ROOT_BINDING!, ...(token ? { SUPLEX_ROOT_TOKEN: token } : {}) }, initializeAndList);
       expect(attempt.responses).toEqual([]);
       expect(attempt.stderr).toContain("authentication failed");
     }
     const accepted = await runMcpProcess(server, { ...cleanEnvironment, ...server.environment }, initializeAndList);
-    expect(accepted.responses).toMatchObject([{ result: { serverInfo: { name: "forge-root-bridge" } } }, { result: { tools: [{ name: "forge_root" }] } }]);
+    expect(accepted.responses).toMatchObject([{ result: { serverInfo: { name: "suplex-root-bridge" } } }, { result: { tools: [{ name: "suplex_root" }] } }]);
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
@@ -56,7 +56,7 @@ test("Coordinator image reads enforce task ownership and content integrity and r
     try {
       const call = mcpClient(input, replies);
       await call({ method: "initialize", params: { protocolVersion: "2024-11-05", capabilities: {}, clientInfo: { name: "proof", version: "1" } } });
-      const response = await call({ method: "tools/call", params: { name: "forge_root", arguments: { kind: "read_image", artifactId: id } } });
+      const response = await call({ method: "tools/call", params: { name: "suplex_root", arguments: { kind: "read_image", artifactId: id } } });
       expect(response.result).toEqual({ content: [{ type: "text", text: image.filename }, { type: "image", data: image.base64, mimeType: image.mimeType }] });
     } finally { transport.close(); input.destroy(); }
     const artifact = value.tasks.repository.controls.image(task.id, id);
@@ -72,7 +72,7 @@ const run = (command: string, args: string[]) => runCommand({ taskId: null, step
 const root: RootIdentity = { taskId: "task_1", sessionId: "session_1", generation: 3 };
 
 test("delegation requires the Coordinator's plan and acceptance criteria before dispatch", async () => {
-  const adapter = new ForgeAdapterFake();
+  const adapter = new SuplexAdapterFake();
   const bridge = new RootBridge(root, adapter);
   for (const request of [
     { kind: "delegate_worker", instruction: "Plan and implement the task" },
@@ -82,7 +82,7 @@ test("delegation requires the Coordinator's plan and acceptance criteria before 
   expect(adapter.calls).toEqual([]);
 });
 
-class ForgeAdapterFake implements RootBridgeAdapter {
+class SuplexAdapterFake implements RootBridgeAdapter {
   readonly calls: string[] = [];
   pullRequestBody: string | undefined;
   current = true;
@@ -147,7 +147,7 @@ function mcpClient(transport: { write(chunk: string): boolean }, responses: unkn
 }
 
 test("Coordinator bridge rejects stale persisted bindings before every operation", async () => {
-  const adapter = new ForgeAdapterFake();
+  const adapter = new SuplexAdapterFake();
   const bridge = new RootBridge(root, adapter);
   await expect(bridge.call({ kind: "observe" })).resolves.toEqual({ taskId: "task_1", observed: true });
   adapter.current = false;
@@ -164,69 +164,69 @@ test("MCP discovery and typed Coordinator calls use the scoped bridge transport"
   const stdout = new PassThrough();
   const responses: unknown[] = [];
   stdout.on("data", (chunk: Buffer) => responses.push(JSON.parse(chunk.toString())));
-  const adapter = new ForgeAdapterFake();
+  const adapter = new SuplexAdapterFake();
   const bridge = new RootBridge(root, adapter);
   const reader = startRootBridgeTransport({ bridge, stdin, stdout });
   const call = mcpClient(stdin, responses);
 
   const initialized = await call({ method: "initialize", params: { protocolVersion: "2025-11-25", capabilities: {}, clientInfo: { name: "probe", version: "1" } } });
-  expect(initialized).toMatchObject({ result: { capabilities: { tools: {} }, serverInfo: { name: "forge-root-bridge" } } });
+  expect(initialized).toMatchObject({ result: { capabilities: { tools: {} }, serverInfo: { name: "suplex-root-bridge" } } });
   stdin.write(`${JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" })}\n`);
   await new Promise<void>((resolve) => setTimeout(resolve, 0));
   const listed = await call({ method: "tools/list", params: {} });
   expect(listed).toMatchObject({ result: { tools: [{ inputSchema: { type: "object" } }] } });
-  expect(listed).toMatchObject({ result: { tools: [expect.objectContaining({ name: "forge_root" })] } });
+  expect(listed).toMatchObject({ result: { tools: [expect.objectContaining({ name: "suplex_root" })] } });
   const inputSchema = (listed as { result: { tools: Array<{ inputSchema: Record<string, unknown> }> } }).result.tools[0]!.inputSchema;
   expect(["oneOf", "anyOf", "allOf"].filter(key => key in inputSchema)).toEqual([]);
   expect(inputSchema.properties).not.toHaveProperty("workerProfileId");
   expect(inputSchema).toMatchObject({ required: ["kind"], properties: { kind: { enum: ["observe", "replace_worker", "read_image", "read_worker_evidence", "delegate_worker", "delegate_advisor", "delegate_planners", "request_delivery", "ask_human"], description: expect.stringContaining("delegate_worker: required acceptanceCriteria, instruction") }, turnId: expect.anything(), toolId: expect.anything(), field: { description: expect.stringContaining("Defaults to output") }, position: { description: expect.stringContaining("Defaults to tail") }, cursor: expect.anything(), maxCharacters: expect.anything(), plan: expect.anything(), role: expect.anything(), operation: expect.anything(), question: expect.anything() } });
   expect((inputSchema.properties as Record<string, { description?: string }>).kind?.description).toContain("plan is also required when mode is planned or omitted");
-  const observed = await call({ method: "tools/call", params: { name: "forge_root", arguments: { kind: "observe", _meta: { progressToken: "mcp-client" } }, _meta: { progressToken: "request" } } });
+  const observed = await call({ method: "tools/call", params: { name: "suplex_root", arguments: { kind: "observe", _meta: { progressToken: "mcp-client" } }, _meta: { progressToken: "request" } } });
   expect(observed).toMatchObject({ result: { structuredContent: { taskId: "task_1", observed: true } } });
   await expect(bridge.call({ kind: "read_worker_evidence", turnId: "turn_1", maxCharacters: 4096 })).resolves.toMatchObject({ turnId: "turn_1", kind: "index", nextCursor: null });
   expect(adapter.calls).toContain("evidence:task_1:turn_1:index:default:default:start:4096");
-  const delegated = await call({ method: "tools/call", params: { name: "forge_root", arguments: { kind: "delegate_worker", plan: "Inspect the scoped diff for the requested implementation", acceptanceCriteria: ["The diff contains only requested changes"], instruction: "Inspect the current diff." } } });
+  const delegated = await call({ method: "tools/call", params: { name: "suplex_root", arguments: { kind: "delegate_worker", plan: "Inspect the scoped diff for the requested implementation", acceptanceCriteria: ["The diff contains only requested changes"], instruction: "Inspect the current diff." } } });
   expect(delegated).toMatchObject({ result: { structuredContent: { assignmentId: "worker_1" } } });
   expect(adapter.calls).toContain("delegate:session_1:Inspect the current diff.");
   await expect(bridge.call({ kind: "delegate_planners" })).resolves.toEqual({ plannerPairId: "pair_1" });
   expect(adapter.calls).toContain("planners:session_1");
   const pullRequestBody = "## Summary\n\n- Add the reviewed delivery flow.\n\n## Why\n\nIt records the reviewed result.\n\n## Validation\n\n- pnpm test (passed)\n\n## Review notes\n\nReview the delivery body.";
-  await call({ method: "tools/call", params: { name: "forge_root", arguments: { kind: "request_delivery", operation: "create_or_adopt_pull_request", pullRequestTitle: "  Create reviewed delivery flow  ", pullRequestBody } } });
+  await call({ method: "tools/call", params: { name: "suplex_root", arguments: { kind: "request_delivery", operation: "create_or_adopt_pull_request", pullRequestTitle: "  Create reviewed delivery flow  ", pullRequestBody } } });
   expect(adapter.calls).toContain("delivery:create_or_adopt_pull_request:Create reviewed delivery flow");
   expect(adapter.pullRequestBody).toBe(pullRequestBody);
   reader.close();
 });
 
 test("Coordinator bridge rejects invalid evidence query combinations", async () => {
-  const bridge = new RootBridge(root, new ForgeAdapterFake());
+  const bridge = new RootBridge(root, new SuplexAdapterFake());
   await expect(bridge.call({ kind: "read_worker_evidence", turnId: "turn_1", field: "input" })).rejects.toMatchObject({ code: "invalid_request" });
   await expect(bridge.call({ kind: "read_worker_evidence", turnId: "turn_1", toolId: "tool_1", cursor: "field:10" })).rejects.toMatchObject({ code: "invalid_request" });
   await expect(bridge.call({ kind: "read_worker_evidence", turnId: "turn_1", toolId: "tool_1", position: "head", cursor: "index:1" })).rejects.toMatchObject({ code: "invalid_request" });
 });
 
 test("Coordinator bridge rejects invalid pull request titles", async () => {
-  const bridge = new RootBridge(root, new ForgeAdapterFake());
+  const bridge = new RootBridge(root, new SuplexAdapterFake());
   for (const pullRequestTitle of [" ", "\nCreate a pull request", "Create\na pull request", `Create${String.fromCharCode(1)} a pull request`, "a".repeat(121)]) {
     await expect(bridge.call({ kind: "request_delivery", operation: "create_or_adopt_pull_request", pullRequestTitle })).rejects.toMatchObject({ code: "invalid_request" });
   }
 });
 
 test("Coordinator bridge rejects malformed pull request descriptions", async () => {
-  const bridge = new RootBridge(root, new ForgeAdapterFake());
+  const bridge = new RootBridge(root, new SuplexAdapterFake());
   await expect(bridge.call({ kind: "request_delivery", operation: "create_or_adopt_pull_request", pullRequestBody: "## Summary\n\n- Change\n\n## Validation\n\n- pnpm test (passed)\n\n## Review notes\n\nReview it." })).rejects.toMatchObject({ code: "invalid_request" });
 });
 
 test("stdio bridge invokes the production controller against a durable task control", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "forge-root-bridge-"));
+  const directory = await mkdtemp(join(tmpdir(), "suplex-root-bridge-"));
   const repository = join(directory, "repo");
-  const database = new ForgeDatabase(join(directory, "forge.sqlite"));
+  const database = new SuplexDatabase(join(directory, "suplex.sqlite"));
   const stamp = new Date().toISOString();
   await run("git", ["init", repository]);
   try {
     database.authTransaction((db) => {
-      db.prepare("INSERT INTO forge_companies (id, name, status, created_at) VALUES ('company', 'Company', 'active', ?)").run(stamp);
-      db.prepare("INSERT INTO forge_projects (id, company_id, name, repository_path, worktree_root, repository_identity, base_branch, setup_command, verification_command, created_at, updated_at) VALUES ('project', 'company', 'Project', ?, ?, 'owner/repo', 'main', '', '', ?, ?)").run(repository, directory, stamp, stamp);
-      db.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES ('brief', 'company', 'task-brief', 'brief', 'text/plain', 1, ?, 'brief', ?)").run("a".repeat(64), stamp);
+      db.prepare("INSERT INTO suplex_companies (id, name, status, created_at) VALUES ('company', 'Company', 'active', ?)").run(stamp);
+      db.prepare("INSERT INTO suplex_projects (id, company_id, name, repository_path, worktree_root, repository_identity, base_branch, setup_command, verification_command, created_at, updated_at) VALUES ('project', 'company', 'Project', ?, ?, 'owner/repo', 'main', '', '', ?, ?)").run(repository, directory, stamp, stamp);
+      db.prepare("INSERT INTO suplex_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES ('brief', 'company', 'task-brief', 'brief', 'text/plain', 1, ?, 'brief', ?)").run("a".repeat(64), stamp);
       insertNativeTaskRow(db);
     });
     const store = new TaskControlStore(database);
@@ -258,7 +258,7 @@ test("stdio bridge invokes the production controller against a durable task cont
     const reader = startRootBridgeTransport({ bridge: new RootBridge({ taskId: "task", sessionId: session.id, generation: session.generation }, controller), stdin, stdout });
     const call = mcpClient(stdin, responses);
     await call({ method: "initialize", params: { protocolVersion: "2025-11-25", capabilities: {}, clientInfo: { name: "probe", version: "1" } } });
-    const delegated = await call({ method: "tools/call", params: { name: "forge_root", arguments: { kind: "delegate_worker", plan: "Inspect the scoped diff for the requested implementation", acceptanceCriteria: ["The diff contains only requested changes"], instruction: "Inspect the worktree." } } });
+    const delegated = await call({ method: "tools/call", params: { name: "suplex_root", arguments: { kind: "delegate_worker", plan: "Inspect the scoped diff for the requested implementation", acceptanceCriteria: ["The diff contains only requested changes"], instruction: "Inspect the worktree." } } });
     expect(delegated).toMatchObject({ result: { structuredContent: { worker: { kind: "worker", lifecycle: "reserved", nativeSessionId: null } } } });
     expect(store.currentSession("task", "worker")).toMatchObject({ lifecycle: "reserved", nativeSessionId: null });
     reader.close();
@@ -266,14 +266,14 @@ test("stdio bridge invokes the production controller against a durable task cont
 });
 
 test("exposes Worker replacement through the Coordinator tool", async () => {
-  const adapter = new ForgeAdapterFake();
+  const adapter = new SuplexAdapterFake();
   const bridge = new RootBridge(root, adapter);
   await expect(bridge.call({ kind: "replace_worker", sessionId: "worker_1", reason: "Repeated partial returns", handoff: "Finish the behavior" })).resolves.toEqual({ replaced: true });
   expect(adapter.calls).toContain("replace:task_1:worker_1");
 });
 
 test("Coordinator bridge rejects a Worker profile selection for replace_worker", async () => {
-  const adapter = new ForgeAdapterFake();
+  const adapter = new SuplexAdapterFake();
   const bridge = new RootBridge(root, adapter);
   await expect(bridge.call({ kind: "replace_worker", sessionId: "worker_1", reason: "Repeated partial returns", workerProfileId: "alternate" })).rejects.toMatchObject({ code: "invalid_request" });
   expect(adapter.calls).toEqual([]);

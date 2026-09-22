@@ -30,7 +30,7 @@ import type { NewTaskDraft } from "./lib/duplicate-task-prefill.js";
 type Delivery = { deliveryTarget: NonNullable<TaskInput["deliveryTarget"]>; runProjectTests: boolean };
 type RecordFallback = { rootProfileId?: string | undefined; workerProfileId?: string | undefined; advisorProfileIds?: AdvisorProfileIds | undefined; deliveryTarget?: Delivery["deliveryTarget"] | undefined; runProjectTests?: boolean | undefined; visualEvidence?: NonNullable<TaskInput["visualEvidence"]> | undefined };
 const REPAIR: WorkflowId = "refine_pull_request";
-const repairNote = "Forge repairs this pull request, then pushes and merges it after the checks pass.";
+const repairNote = "Suplex repairs this pull request, then pushes and merges it after the checks pass.";
 
 /** Keeps only the Advisor selections the selected workflow admits, so hidden or old choices never reach the request. */
 function admittedAdvisors(workflow: WorkflowId, ids: AdvisorProfileIds): AdvisorProfileIds {
@@ -194,7 +194,7 @@ export function NewTaskDialog({ open, onOpenChange, companyId, onCreated, initia
       setTitle(""); setDescription(""); setImages([]); setSource(undefined); setSourceSummary(undefined); setBlockedBy([]);
       cacheTask(task);
       onCreated(task);
-    } catch (error) { setError(error instanceof Error ? error.message : "Forge could not save the task"); }
+    } catch (error) { setError(error instanceof Error ? error.message : "Suplex could not save the task"); }
     finally { setBusy(false); }
   };
   const addImages = async (files: File[]) => {

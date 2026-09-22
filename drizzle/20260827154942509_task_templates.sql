@@ -1,4 +1,4 @@
-CREATE TABLE `forge_task_templates` (
+CREATE TABLE `suplex_task_templates` (
   `id` text PRIMARY KEY NOT NULL,
   `company_id` text NOT NULL,
   `project_id` text NOT NULL,
@@ -14,4 +14,4 @@ CREATE TABLE `forge_task_templates` (
   UNIQUE (`project_id`, `name`)
 );
 --> statement-breakpoint
-CREATE INDEX `forge_task_templates_project_id_idx` ON `forge_task_templates` (`project_id`);
+CREATE INDEX `suplex_task_templates_project_id_idx` ON `suplex_task_templates` (`project_id`);

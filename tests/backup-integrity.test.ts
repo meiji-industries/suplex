@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { expect, test } from "vitest";
 import { BackupService, checkBackupHealth } from "../src/platform/backup.js";
 import { createTestConfig } from "../src/platform/config.js";
-import { ForgeDatabase } from "../src/platform/database.js";
+import { SuplexDatabase } from "../src/platform/database.js";
 import { runCommand } from "../src/platform/command-runner.js";
 import { z } from "zod";
 
@@ -22,24 +22,24 @@ async function exec(command: string, args: string[], options?: { cwd?: string })
 }
 
 async function fixture() {
-  const root = await mkdtemp(join(tmpdir(), "forge-backup-integrity-"));
+  const root = await mkdtemp(join(tmpdir(), "suplex-backup-integrity-"));
   const config = createTestConfig(root, { artifactRoot: join(root, "artifacts"), dataRoot: join(root, "data") });
   await mkdir(config.artifactRoot, { recursive: true });
-  const database = new ForgeDatabase(config.databasePath);
+  const database = new SuplexDatabase(config.databasePath);
   const now = new Date().toISOString();
   database.authTransaction(db => {
-    db.prepare("INSERT INTO forge_companies (id, name, status, created_at) VALUES ('company-a', 'Company A', 'active', ?)").run(now);
-    db.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES ('brief-a', 'company-a', 'task-brief', 'brief.md', 'text/plain', 4, ?, 'company-a/brief-a', ?)").run("d".repeat(64), now);
+    db.prepare("INSERT INTO suplex_companies (id, name, status, created_at) VALUES ('company-a', 'Company A', 'active', ?)").run(now);
+    db.prepare("INSERT INTO suplex_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES ('brief-a', 'company-a', 'task-brief', 'brief.md', 'text/plain', 4, ?, 'company-a/brief-a', ?)").run("d".repeat(64), now);
   });
   return { root, config, database };
 }
 
 async function rewriteArchive(source: string, destination: string, mutate: (root: string) => Promise<void>): Promise<void> {
-  const staging = await mkdtemp(join(tmpdir(), "forge-backup-mutate-"));
+  const staging = await mkdtemp(join(tmpdir(), "suplex-backup-mutate-"));
   try {
     await exec("tar", ["-xzf", source, "-C", staging]);
-    await mutate(join(staging, "forge-backup"));
-    await exec("tar", ["-czf", destination, "-C", staging, "forge-backup"]);
+    await mutate(join(staging, "suplex-backup"));
+    await exec("tar", ["-czf", destination, "-C", staging, "suplex-backup"]);
   } finally {
     await rm(staging, { recursive: true, force: true });
   }
@@ -52,7 +52,7 @@ test("backup archive verifies hashes and restores only into a separate clean loc
   try {
     await mkdir(join(value.config.artifactRoot, "company-a"), { recursive: true });
     await writeFile(join(value.config.artifactRoot, "company-a", "brief-a"), "body");
-    value.database.authQuery((db) => db.prepare("UPDATE forge_artifacts SET byte_size = 4, sha256 = ? WHERE id = 'brief-a'").run(createHash("sha256").update("body").digest("hex")));
+    value.database.authQuery((db) => db.prepare("UPDATE suplex_artifacts SET byte_size = 4, sha256 = ? WHERE id = 'brief-a'").run(createHash("sha256").update("body").digest("hex")));
     const service = new BackupService(value.config);
     const created = await service.create({ destination: archive });
     expect(created.manifest.secretsExcluded).toContain("provider tokens");
@@ -62,7 +62,7 @@ test("backup archive verifies hashes and restores only into a separate clean loc
     expect((await checkBackupHealth(value.config)).status).toBe("healthy");
     const restoredResult = await service.restore(archive, restored);
     expect(restoredResult.restoreDurationMs).toBeGreaterThanOrEqual(0);
-    expect(await readFile(join(restored, "forge-backup", "config", "config.json"), "utf8")).toContain("requiresReauthentication");
+    expect(await readFile(join(restored, "suplex-backup", "config", "config.json"), "utf8")).toContain("requiresReauthentication");
     await expect(service.restore(archive, restored)).rejects.toMatchObject({ code: "exists" });
     await writeFile(join(value.root, "truncated.tar.gz"), "not-an-archive");
     expect((await service.verify(join(value.root, "truncated.tar.gz"))).valid).toBe(false);

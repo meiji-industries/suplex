@@ -2,10 +2,10 @@ import { appendFileSync, existsSync, rmSync } from "node:fs";
 import { createServer } from "node:http";
 import { randomUUID } from "node:crypto";
 
-const port = Number(process.env.FORGE_SUPERVISOR_TEST_PORT);
-const startLog = process.env.FORGE_SUPERVISOR_TEST_START_LOG;
-const failReady = process.env.FORGE_SUPERVISOR_TEST_FAIL_READY;
-const lateReady = process.env.FORGE_SUPERVISOR_TEST_LATE_READY;
+const port = Number(process.env.SUPLEX_SUPERVISOR_TEST_PORT);
+const startLog = process.env.SUPLEX_SUPERVISOR_TEST_START_LOG;
+const failReady = process.env.SUPLEX_SUPERVISOR_TEST_FAIL_READY;
+const lateReady = process.env.SUPLEX_SUPERVISOR_TEST_LATE_READY;
 if (!port || !startLog || !failReady || !lateReady) throw new Error("Supervisor test environment is incomplete");
 appendFileSync(startLog, `${process.pid}\n`);
 if (existsSync(failReady)) {

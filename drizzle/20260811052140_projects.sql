@@ -1,6 +1,6 @@
-ALTER TABLE `forge_companies` ADD COLUMN `status` text NOT NULL DEFAULT 'active';
+ALTER TABLE `suplex_companies` ADD COLUMN `status` text NOT NULL DEFAULT 'active';
 --> statement-breakpoint
-CREATE TABLE IF NOT EXISTS `forge_profiles` (
+CREATE TABLE IF NOT EXISTS `suplex_profiles` (
 	`id` text PRIMARY KEY NOT NULL,
 	`name` text NOT NULL,
 	`provider` text NOT NULL,
@@ -10,10 +10,10 @@ CREATE TABLE IF NOT EXISTS `forge_profiles` (
 	`capacity` integer NOT NULL,
 	`created_at` text NOT NULL,
 	`updated_at` text NOT NULL,
-	CONSTRAINT `forge_profiles_name_unique` UNIQUE(`name`)
+	CONSTRAINT `suplex_profiles_name_unique` UNIQUE(`name`)
 );
 --> statement-breakpoint
-CREATE TABLE IF NOT EXISTS `forge_projects` (
+CREATE TABLE IF NOT EXISTS `suplex_projects` (
 	`id` text PRIMARY KEY NOT NULL,
 	`company_id` text NOT NULL,
 	`name` text NOT NULL,
@@ -31,13 +31,13 @@ CREATE TABLE IF NOT EXISTS `forge_projects` (
 	`active_revision_id` text,
 	`created_at` text NOT NULL,
 	`updated_at` text NOT NULL,
-	FOREIGN KEY (`company_id`) REFERENCES `forge_companies`(`id`) ON UPDATE no action ON DELETE cascade,
-	CONSTRAINT `forge_projects_company_name_unique` UNIQUE(`company_id`, `name`),
-	CONSTRAINT `forge_projects_repository_path_unique` UNIQUE(`repository_path`),
-	CONSTRAINT `forge_projects_worktree_root_unique` UNIQUE(`worktree_root`)
+	FOREIGN KEY (`company_id`) REFERENCES `suplex_companies`(`id`) ON UPDATE no action ON DELETE cascade,
+	CONSTRAINT `suplex_projects_company_name_unique` UNIQUE(`company_id`, `name`),
+	CONSTRAINT `suplex_projects_repository_path_unique` UNIQUE(`repository_path`),
+	CONSTRAINT `suplex_projects_worktree_root_unique` UNIQUE(`worktree_root`)
 );
 --> statement-breakpoint
-CREATE TABLE IF NOT EXISTS `forge_project_revisions` (
+CREATE TABLE IF NOT EXISTS `suplex_project_revisions` (
 	`id` text PRIMARY KEY NOT NULL,
 	`project_id` text NOT NULL,
 	`revision` integer NOT NULL,
@@ -45,12 +45,12 @@ CREATE TABLE IF NOT EXISTS `forge_project_revisions` (
 	`normalized_json` text NOT NULL,
 	`actor_user_id` text NOT NULL,
 	`created_at` text NOT NULL,
-	FOREIGN KEY (`project_id`) REFERENCES `forge_projects`(`id`) ON UPDATE no action ON DELETE cascade,
-	FOREIGN KEY (`actor_user_id`) REFERENCES `forge_users`(`id`) ON UPDATE no action ON DELETE no action,
-	CONSTRAINT `forge_project_revisions_project_revision_unique` UNIQUE(`project_id`, `revision`),
-	CONSTRAINT `forge_project_revisions_project_identity_unique` UNIQUE(`project_id`, `identity`)
+	FOREIGN KEY (`project_id`) REFERENCES `suplex_projects`(`id`) ON UPDATE no action ON DELETE cascade,
+	FOREIGN KEY (`actor_user_id`) REFERENCES `suplex_users`(`id`) ON UPDATE no action ON DELETE no action,
+	CONSTRAINT `suplex_project_revisions_project_revision_unique` UNIQUE(`project_id`, `revision`),
+	CONSTRAINT `suplex_project_revisions_project_identity_unique` UNIQUE(`project_id`, `identity`)
 );
 --> statement-breakpoint
-CREATE INDEX IF NOT EXISTS `forge_projects_company_idx` ON `forge_projects` (`company_id`);
+CREATE INDEX IF NOT EXISTS `suplex_projects_company_idx` ON `suplex_projects` (`company_id`);
 --> statement-breakpoint
-CREATE INDEX IF NOT EXISTS `forge_project_revisions_project_idx` ON `forge_project_revisions` (`project_id`, `revision`);
+CREATE INDEX IF NOT EXISTS `suplex_project_revisions_project_idx` ON `suplex_project_revisions` (`project_id`, `revision`);

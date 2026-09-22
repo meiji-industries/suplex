@@ -1,4 +1,4 @@
-UPDATE forge_issue_projections
+UPDATE suplex_issue_projections
 SET step = phase
 WHERE step IS NULL
   AND phase IN (
@@ -15,7 +15,7 @@ WHERE step IS NULL
 
 --> statement-breakpoint
 
-UPDATE forge_issue_projections
+UPDATE suplex_issue_projections
 SET phase = CASE step
   WHEN 'backlog' THEN 'backlog'
   WHEN 'planning' THEN 'planning'

@@ -1,13 +1,13 @@
-const feed = process.env.FORGE_DESKTOP_UPDATE_URL;
-if (feed && (!URL.canParse(feed) || new URL(feed).protocol !== "https:")) throw new Error("FORGE_DESKTOP_UPDATE_URL must be a valid HTTPS URL");
+const feed = process.env.SUPLEX_DESKTOP_UPDATE_URL;
+if (feed && (!URL.canParse(feed) || new URL(feed).protocol !== "https:")) throw new Error("SUPLEX_DESKTOP_UPDATE_URL must be a valid HTTPS URL");
 
 // Notarize only when Apple credentials are present (pnpm dist:signed loads them from 1Password).
 // Without them electron-builder still signs with the Developer ID it finds in the login keychain, or ad-hoc if none.
 const notarize = Boolean(process.env.APPLE_ID && process.env.APPLE_APP_SPECIFIC_PASSWORD && process.env.APPLE_TEAM_ID);
 
 module.exports = {
-  appId: "dev.forge.desktop",
-  productName: "Forge",
+  appId: "dev.suplex.desktop",
+  productName: "Suplex",
   directories: { output: "release" },
   files: ["dist/src/**"],
   extraResources: [{ from: "runtime", to: "runtime" }],

@@ -5,7 +5,7 @@ import type { NativeHistoryMessage } from "../../tasks/history/contracts.js";
 import { emptyTokens, TaskUsageSchema, type TaskUsage } from "../../tasks/usage.js";
 import { parseJsonLines } from "../claude-code/transcript.js";
 
-// `codex exec --json` prints one thread event per line. Forge reads those turn
+// `codex exec --json` prints one thread event per line. Suplex reads those turn
 // logs; it never edits them.
 
 const count = z.number().nonnegative().default(0);

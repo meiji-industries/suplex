@@ -67,7 +67,7 @@ export function useOnboardingData(company: ApiCompany | undefined): OnboardingDa
       setProfiles(profileResponse.profiles);
       setProjects(projectResponse.projects);
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "Forge could not check the providers. Select Check again.");
+      setError(reason instanceof Error ? reason.message : "Suplex could not check the providers. Select Check again.");
     } finally {
       setLoading(false);
     }

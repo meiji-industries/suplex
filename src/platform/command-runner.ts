@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { once } from "node:events";
 import { setTimeout as delay } from "node:timers/promises";
 
-import type { ForgeDatabase } from "./database.js";
+import type { SuplexDatabase } from "./database.js";
 import { StructuredLogger, redact } from "./logging.js";
 import { defaultProcessController, inspectProcessOnce, signalOwnedProcess, type OwnedProcess, type ProcessController } from "./process-manager.js";
 import { systemEvent } from "./system-events.js";
@@ -68,7 +68,7 @@ export function runCommandSync(input: Pick<RunCommandInput, "command" | "args" |
 
 /** File-backed stdout also supports CLIs that exit before flushing a large pipe. */
 export async function readCommandOutput(command: string, args: readonly string[]): Promise<string> {
-  const directory = await mkdtemp(join(tmpdir(), "forge-command-"));
+  const directory = await mkdtemp(join(tmpdir(), "suplex-command-"));
   const output = join(directory, "stdout");
   const file = await open(output, "w", 0o600);
   try {
@@ -82,10 +82,10 @@ export async function readCommandOutput(command: string, args: readonly string[]
   }
 }
 
-let database: ForgeDatabase | undefined;
+let database: SuplexDatabase | undefined;
 
 /** Connects worker command observations to the task activity projection. */
-export function configureCommandActivityStore(value: ForgeDatabase): void {
+export function configureCommandActivityStore(value: SuplexDatabase): void {
   database = value;
 }
 
@@ -165,7 +165,7 @@ async function waitForOwnedGroupToStop(owned: OwnedProcess | undefined, timeout:
 
 function record(input: RunCommandInput, result: CommandRunResult): void {
   if (!database || !input.taskId || !input.stepId) return;
-  database.authQuery((db) => db.prepare(`INSERT INTO forge_task_command_activity
+  database.authQuery((db) => db.prepare(`INSERT INTO suplex_task_command_activity
     (id, task_id, step_id, command, cwd, exit_code, duration_ms, stdout, stderr, entries_json, started_at, finished_at)
     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(
     randomUUID(), input.taskId, input.stepId, result.command, result.cwd ?? null, result.exitCode, result.durationMs,

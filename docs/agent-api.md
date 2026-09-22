@@ -14,7 +14,7 @@ identity projection returns it as `null` when it is absent.
 ## Compatibility paths
 
 The canonical paths are `/api/agent/*` and `/api/admin/external-agents/*`.
-Forge keeps `/api/hermes/*` and `/api/admin/hermes-agents/*` as narrow path
+Suplex keeps `/api/hermes/*` and `/api/admin/hermes-agents/*` as narrow path
 aliases that use the same handlers and authorization. Existing credentials,
 grants, tasks, and idempotency receipts continue to work. The aliases return
 the canonical external-agent response shape; they do not preserve old
@@ -22,7 +22,7 @@ provider-specific field names or identity kinds.
 
 Two private storage names remain provider-specific for data compatibility:
 task configuration stores its existing `hermesSelection` key, and command
-idempotency receipts remain in `forge_hermes_task_command_receipts`. They are
+idempotency receipts remain in `suplex_hermes_task_command_receipts`. They are
 not public API names. Keeping them avoids rewriting saved task configuration
 and receipts or losing replay protection during this rename.
 
@@ -74,20 +74,20 @@ only safe task, project, workflow progress, question, and delivery observations.
 `permittedCommands` lists the lifecycle commands that
 `POST /api/agent/tasks/:taskId/commands` accepts for the task right now.
 It is empty when another agent or a user created the task.
-`checks` is `null`, which means Forge has no persisted check observation to
+`checks` is `null`, which means Suplex has no persisted check observation to
 report. `deliveryTarget`, `runProjectTests`, and `visualEvidence` report the
 configuration the project policy applied to the task.
 
 Read responses (`GET` and `POST /api/agent/tasks`) also carry `implementation`,
 `integration`, and `actionRequired`. `integration` is what GitHub reported about
 the task's pull request when the request was served, with `observation` set to
-`unavailable` and `integrated` left `false` when GitHub could not answer. Forge
+`unavailable` and `integrated` left `false` when GitHub could not answer. Suplex
 never observes deployed runtimes, so `integration.deployed.included` is always
 `null`. `actionRequired` describes the observed owner and reason when work is
 outstanding. It does not grant command authority. `permittedCommands` is the
 authority signal. When another actor created a task, an agent-owned repair uses
 `owner: "task_owner"` and returns an empty `suggestedCommands` array. Human,
-Forge, and upstream owners remain descriptive. Command replies omit these three
+Suplex, and upstream owners remain descriptive. Command replies omit these three
 fields because a command reports stored task state and reads no provider.
 
 `filter` selects on that observed health: `stale_delivery`,
@@ -125,7 +125,7 @@ as an unavailable task. `taskCommands` from `GET /api/agent/me` lists exactly
 these lifecycle commands. `autonomousCommands` from
 `GET /api/agent/capabilities` also includes task creation and, when enabled,
 the runtime delivery commands. Human answers remain unavailable. The runtime API
-exposes delivery and merge commands only when capabilities reports them. Forge
+exposes delivery and merge commands only when capabilities reports them. Suplex
 can perform a task's configured delivery, including a merge after review,
 without an agent command.
 
@@ -140,7 +140,7 @@ values. Read `agentTaskPolicy` from `GET /api/agent/me` to avoid the round
 trip, or omit the fields and let the policy default apply. The created task
 reports the applied `workflow`, `templateId`, `deliveryTarget`,
 `runProjectTests`, and `visualEvidence`. `workflow` has the selected record ID
-and name when Forge selected a workflow record, plus the engine that the task
+and name when Suplex selected a workflow record, plus the engine that the task
 runs. A template task has a null workflow record ID and name.
 
 Send `"dryRun": true` to validate a create request and receive its projected
@@ -150,12 +150,12 @@ or image.
 ## Queued tasks
 
 A task has `backlog` status until someone starts it. A queued task has no
-sessions or turns. Forge starts it when every prerequisite is complete. Every
+sessions or turns. Suplex starts it when every prerequisite is complete. Every
 task read reports `status` and `queue.waitingOn`. Each incomplete prerequisite
 has an `id`, `title`, `status`, `deliveryTarget`, `reason`, and `summary`.
 
 A prerequisite is complete when it is delivered at its own delivery target.
-The `merged` target also needs the merged pull request state that Forge
+The `merged` target also needs the merged pull request state that Suplex
 observed from GitHub. A prerequisite delivered at `pull_request_draft`,
 `pull_request_ready`, `remote_branch`, or `local_worktree` is complete without
 a merge, because that target is what its delivery promised. Wait reasons:
@@ -167,12 +167,12 @@ a merge, because that target is what its delivery promised. Wait reasons:
 | `prerequisite_needs_human` | The prerequisite waits for a human answer. |
 | `prerequisite_cancelled` | The prerequisite is cancelled. Remove it or disarm the task. |
 | `prerequisite_archived` | The prerequisite is archived and not delivered. |
-| `prerequisite_merge_unobserved` | The prerequisite is delivered at `merged`, but Forge did not observe the merge. Forge checks GitHub again. |
+| `prerequisite_merge_unobserved` | The prerequisite is delivered at `merged`, but Suplex did not observe the merge. Suplex checks GitHub again. |
 
 Queue at creation with `"queue": true`, or send `start_task` to a manual
 backlog task. Both start the task now when every prerequisite is complete and
 never bypass one. `disarm_task` returns a queued task to the manual backlog.
-Forge re-evaluates a queued task when a prerequisite completes, when Forge
+Suplex re-evaluates a queued task when a prerequisite completes, when Suplex
 observes a merged pull request, when the prerequisites change, and on every
 scheduler tick after a restart. Cancelling a queued task prevents admission.
 
@@ -194,7 +194,7 @@ Templates use `template_not_found` and `template_not_permitted`, with
 ## Task prerequisites
 
 A task's prerequisites are the tasks it waits for. The board shows them as
-**Blocked by**. `forge_task_dependencies` is their only store. Every task read
+**Blocked by**. `suplex_task_dependencies` is their only store. Every task read
 reports them twice from the same edges: `dependsOn` has the IDs, and
 `blockedBy` has `id`, `title`, and `status` for each one.
 
@@ -218,6 +218,6 @@ covers identity, capability and creation discovery, task reads and creation,
 dependencies, and lifecycle commands. Delivery refresh, repair, decisions,
 approvals, merge-train operations, merge, provenance, and administration stay
 HTTP-only. MCP exposes lifecycle task commands only. It does not expose runtime
-delivery or merge commands. Forge can perform a task's configured delivery,
-including a merge after review, without an agent command. Forge does not provide
+delivery or merge commands. Suplex can perform a task's configured delivery,
+including a merge after review, without an agent command. Suplex does not provide
 a generic MCP tool for arbitrary HTTP requests.

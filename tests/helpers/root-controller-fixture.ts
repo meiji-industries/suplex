@@ -2,7 +2,7 @@ import { insertNativeTaskRow } from "./native-task-row.js";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import type { ForgeDatabase } from "../../src/platform/database.js";
+import type { SuplexDatabase } from "../../src/platform/database.js";
 import { RootController } from "../../src/coordination/root-controller.js";
 import { TaskControlStore } from "../../src/coordination/root-session-store.js";
 import { TaskUsageSchema } from "../../src/tasks/usage.js";
@@ -20,19 +20,19 @@ export function usage(sessionId: string, cost: number) {
   return TaskUsageSchema.parse({ sessionId, messageId: `usage-${cost}`, turnId: `turn-${cost}`, role: "root", provider: "openai", model: "gpt-5.6-luna", startedAt: 1, completedAt: 2, failed: false, summary: false, steps: 1, cost, subsidized: false, tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } }, source: "message" });
 }
 
-export function ageDispatch(database: ForgeDatabase, turnId: string): void {
-  database.authTransaction(db => db.prepare("UPDATE forge_task_turns SET dispatch_attempt_json = json_set(dispatch_attempt_json, '$.claimedAt', '2020-01-01T00:00:00.000Z') WHERE id = ?").run(turnId));
+export function ageDispatch(database: SuplexDatabase, turnId: string): void {
+  database.authTransaction(db => db.prepare("UPDATE suplex_task_turns SET dispatch_attempt_json = json_set(dispatch_attempt_json, '$.claimedAt', '2020-01-01T00:00:00.000Z') WHERE id = ?").run(turnId));
 }
 
 export async function fixture(startImmediately = true) {
-  const directory = await mkdtemp(join(tmpdir(), "forge-native-controller-"));
-  const database = createTestDatabase(join(directory, "forge.sqlite"));
+  const directory = await mkdtemp(join(tmpdir(), "suplex-native-controller-"));
+  const database = createTestDatabase(join(directory, "suplex.sqlite"));
   cleanups.push(async () => { database.close(); await rm(directory, { recursive: true, force: true }); });
   const stamp = new Date().toISOString();
   database.authTransaction((db) => {
-    db.prepare("INSERT INTO forge_companies (id, name, status, created_at) VALUES ('company', 'Company', 'active', ?)").run(stamp);
-    db.prepare("INSERT INTO forge_projects (id, company_id, name, repository_path, worktree_root, repository_identity, base_branch, setup_command, verification_command, created_at, updated_at) VALUES ('project', 'company', 'Project', ?, ?, 'owner/repo', 'main', '', '', ?, ?)").run(directory, directory, stamp, stamp);
-    db.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES ('brief', 'company', 'task-brief', 'brief', 'text/plain', 1, ?, 'brief', ?)").run("a".repeat(64), stamp);
+    db.prepare("INSERT INTO suplex_companies (id, name, status, created_at) VALUES ('company', 'Company', 'active', ?)").run(stamp);
+    db.prepare("INSERT INTO suplex_projects (id, company_id, name, repository_path, worktree_root, repository_identity, base_branch, setup_command, verification_command, created_at, updated_at) VALUES ('project', 'company', 'Project', ?, ?, 'owner/repo', 'main', '', '', ?, ?)").run(directory, directory, stamp, stamp);
+    db.prepare("INSERT INTO suplex_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES ('brief', 'company', 'task-brief', 'brief', 'text/plain', 1, ?, 'brief', ?)").run("a".repeat(64), stamp);
       insertNativeTaskRow(db);
   });
   const profile = { profileId: "profile", provider: "opencode", model: "openai/gpt-5.6-luna", reasoningLevel: "max", serviceTier: "priority" } as const;

@@ -1,1 +1,1 @@
-ALTER TABLE forge_issue_projections ADD COLUMN projection_status_message TEXT;
+ALTER TABLE suplex_issue_projections ADD COLUMN projection_status_message TEXT;

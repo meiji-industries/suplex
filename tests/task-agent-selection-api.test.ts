@@ -6,7 +6,7 @@ test("authenticated role selection saves a future Worker without a native sessio
   try {
     const { task } = await f.tasks.createTask(f.userId, f.company.id, { projectId: f.project.id, title: "Select a Worker", startImmediately: true, idempotencyKey: "select-agent-api" });
     const time = new Date().toISOString();
-    f.tasks.repository.controls.database.authTransaction(db => db.prepare("INSERT INTO forge_profiles (id, name, role, avatar_seed, provider, model, reasoning_level, service_tier, created_at, updated_at) VALUES ('selected-worker', 'Selected', 'worker', 'selected', 'codex', 'gpt-5.6-sol', 'medium', 'default', ?, ?)").run(time, time));
+    f.tasks.repository.controls.database.authTransaction(db => db.prepare("INSERT INTO suplex_profiles (id, name, role, avatar_seed, provider, model, reasoning_level, service_tier, created_at, updated_at) VALUES ('selected-worker', 'Selected', 'worker', 'selected', 'codex', 'gpt-5.6-sol', 'medium', 'default', ?, ?)").run(time, time));
     const url = `/api/tasks/${task.id}/select-agent`;
     const direction = `Inspect existing work. ${"x".repeat(20_000)}`;
     const payload = { role: "worker", expectedProfileId: task.workerProfile.profileId, expectedSessionId: null, profileId: "selected-worker", direction, resume: false };

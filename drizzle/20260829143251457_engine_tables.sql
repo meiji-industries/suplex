@@ -1,4 +1,4 @@
-CREATE TABLE forge_engine_activities (
+CREATE TABLE suplex_engine_activities (
   id TEXT PRIMARY KEY NOT NULL,
   workflow_id TEXT NOT NULL,
   activity TEXT NOT NULL,
@@ -6,9 +6,9 @@ CREATE TABLE forge_engine_activities (
   heartbeat_at TEXT NOT NULL
 );
 
-CREATE INDEX forge_engine_activities_workflow_idx ON forge_engine_activities(workflow_id);
+CREATE INDEX suplex_engine_activities_workflow_idx ON suplex_engine_activities(workflow_id);
 
-CREATE TABLE forge_engine_commands (
+CREATE TABLE suplex_engine_commands (
   command_id TEXT PRIMARY KEY NOT NULL,
   workflow_id TEXT NOT NULL,
   command TEXT NOT NULL,
@@ -16,4 +16,4 @@ CREATE TABLE forge_engine_commands (
   created_at TEXT NOT NULL
 );
 
-CREATE INDEX forge_engine_commands_workflow_idx ON forge_engine_commands(workflow_id);
+CREATE INDEX suplex_engine_commands_workflow_idx ON suplex_engine_commands(workflow_id);

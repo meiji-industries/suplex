@@ -23,7 +23,7 @@ async function writeExecutable(path: string, content: string): Promise<void> {
 export async function createGitCommandGuard(runtimeRoot: string, name = "worker-guard"): Promise<GitCommandGuard> {
   const directory = join(resolve(runtimeRoot), name);
   await mkdir(directory, { recursive: true, mode: 0o700 });
-  const configuredGitBin = process.env.FORGE_GIT_BIN?.trim();
+  const configuredGitBin = process.env.SUPLEX_GIT_BIN?.trim();
   const resolvedGitBin = configuredGitBin ? undefined : await runCommand({ taskId: null, stepId: null, command: "which", args: ["git"] });
   const gitBin = configuredGitBin || (resolvedGitBin?.exitCode === 0 ? resolvedGitBin.stdout.trim() : "");
   if (!gitBin) throw new Error("Git is not available for the guarded Worker");
@@ -39,24 +39,24 @@ check_command() {
     esac
   done
   case "$command" in
-    push|clean|reset|checkout|switch|worktree|update-ref|filter-repo|gc|prune) echo "Forge Worker policy blocked git $command" >&2; return 125 ;;
+    push|clean|reset|checkout|switch|worktree|update-ref|filter-repo|gc|prune) echo "Suplex Worker policy blocked git $command" >&2; return 125 ;;
   esac
   for arg in "$@"; do
     [ "$arg" != -- ] || break
     case "$command:$arg" in
-      commit:--amend|branch:-D|branch:-d|branch:--delete|branch:--force|branch:-f) echo "Forge Worker policy blocked destructive git option $arg" >&2; return 125 ;;
+      commit:--amend|branch:-D|branch:-d|branch:--delete|branch:--force|branch:-f) echo "Suplex Worker policy blocked destructive git option $arg" >&2; return 125 ;;
     esac
   done
 }
 check_command "$@" || exit 125
-exec "$FORGE_GIT_REAL_BIN" "$@"
+exec "$SUPLEX_GIT_REAL_BIN" "$@"
 `;
   const ghGuard = `#!/bin/sh
 case "$1 $2" in
   "run view"|"run list"|"pr view"|"pr list"|"pr diff"|"pr checks"|"repo view"|"issue view"|"issue list")
-    if [ -n "$FORGE_GH_REAL_BIN" ]; then exec "$FORGE_GH_REAL_BIN" "$@"; fi ;;
+    if [ -n "$SUPLEX_GH_REAL_BIN" ]; then exec "$SUPLEX_GH_REAL_BIN" "$@"; fi ;;
 esac
-echo "Forge Worker policy blocks provider-side GitHub mutation" >&2
+echo "Suplex Worker policy blocks provider-side GitHub mutation" >&2
 exit 125
   `;
   await Promise.all([
@@ -66,7 +66,7 @@ exit 125
   return {
     directory,
     gitRealBin: gitBin,
-    env: { ...process.env, PATH: `${directory}${process.platform === "win32" ? ";" : ":"}${process.env.PATH ?? ""}`, FORGE_GIT_REAL_BIN: gitBin, FORGE_GH_REAL_BIN: ghBin, FORGE_GIT_GUARD_DIR: directory },
+    env: { ...process.env, PATH: `${directory}${process.platform === "win32" ? ";" : ":"}${process.env.PATH ?? ""}`, SUPLEX_GIT_REAL_BIN: gitBin, SUPLEX_GH_REAL_BIN: ghBin, SUPLEX_GIT_GUARD_DIR: directory },
     async cleanup() { await rm(directory, { recursive: true, force: true }); },
   };
 }

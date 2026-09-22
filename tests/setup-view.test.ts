@@ -36,7 +36,7 @@ test("with no profiles, setup offers profile settings and claims no provider rea
   const html = renderToStaticMarkup(createElement(ProviderContextBar, {
     projectId: undefined, project: undefined, profiles: [], activeProfileId: undefined, onSelectProfile: () => {},
   }));
-  expect(html).toContain("No profiles. Forge checks Git and Herdr.");
+  expect(html).toContain("No profiles. Suplex checks Git and Herdr.");
   expect(html).toContain('href="/admin/profiles"');
   expect(html).toContain("Open profile settings");
   expect(html).not.toMatch(/OpenCode|Claude Code/);
@@ -46,7 +46,7 @@ test("a project context names the project instead of offering a profile picker",
   const loading = renderToStaticMarkup(createElement(ProviderContextBar, {
     projectId: "project-1", project: undefined, profiles: [profile("p1")], activeProfileId: "p1", onSelectProfile: () => {},
   }));
-  expect(loading).toContain("Forge reads the project.");
+  expect(loading).toContain("Suplex reads the project.");
   const loaded = renderToStaticMarkup(createElement(ProviderContextBar, {
     projectId: "project-1", project, profiles: [profile("p1")], activeProfileId: "p1", onSelectProfile: () => {},
   }));
@@ -55,7 +55,7 @@ test("a project context names the project instead of offering a profile picker",
 });
 
 test("Continue is always enabled and links to the task list", () => {
-  for (const [status, refreshing] of [["All checks are healthy.", false], ["Forge could not check the host. Select Check again.", false], ["2 checks need attention.", false], ["Forge checks the host.", true]] as const) {
+  for (const [status, refreshing] of [["All checks are healthy.", false], ["Suplex could not check the host. Select Check again.", false], ["2 checks need attention.", false], ["Suplex checks the host.", true]] as const) {
     const html = renderToStaticMarkup(createElement(SetupFooter, { status, refreshing, onCheckAgain: () => {} }));
     expect(html).toContain('href="/tasks"');
     expect(html).toContain("Continue");

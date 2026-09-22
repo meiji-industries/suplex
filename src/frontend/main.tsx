@@ -6,4 +6,4 @@ import { installClientLifecycle } from "./shell/client-lifecycle.js";
 import "./styles.css";
 
 installClientLifecycle();
-createRoot(document.getElementById("forge-app")!).render(<ThemeProvider><AppRouter /></ThemeProvider>);
+createRoot(document.getElementById("suplex-app")!).render(<ThemeProvider><AppRouter /></ThemeProvider>);

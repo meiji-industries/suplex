@@ -5,7 +5,7 @@ import { withCurrentDependencyStatus } from "../src/coordination/workflow-prompt
 afterEach(cleanupRootControllerFixtures);
 
 function addProfile(database: Awaited<ReturnType<typeof fixture>>["database"], id: string, provider = "codex") {
-  database.authTransaction(db => db.prepare("INSERT INTO forge_profiles (id, name, role, avatar_seed, provider, model, reasoning_level, service_tier, created_at, updated_at) VALUES (?, ?, 'root', ?, ?, ?, 'medium', 'default', ?, ?)").run(id, id, id, provider, provider === "codex" ? "gpt-5.6-sol" : "opus", new Date().toISOString(), new Date().toISOString()));
+  database.authTransaction(db => db.prepare("INSERT INTO suplex_profiles (id, name, role, avatar_seed, provider, model, reasoning_level, service_tier, created_at, updated_at) VALUES (?, ?, 'root', ?, ?, ?, 'medium', 'default', ?, ?)").run(id, id, id, provider, provider === "codex" ? "gpt-5.6-sol" : "opus", new Date().toISOString(), new Date().toISOString()));
 }
 
 test("replacement fences the old Coordinator, retries the stop, and starts one fresh turn", async () => {
@@ -14,7 +14,7 @@ test("replacement fences the old Coordinator, retries the stop, and starts one f
   await f.controller.recover("task");
   const old = f.store.currentSession("task", "root")!;
   const oldProfile = f.store.get("task").rootProfile;
-  f.database.authTransaction(db => db.prepare("UPDATE forge_task_sessions SET pane_id = 'recreated-pane-token' WHERE id = ?").run(old.id));
+  f.database.authTransaction(db => db.prepare("UPDATE suplex_task_sessions SET pane_id = 'recreated-pane-token' WHERE id = ?").run(old.id));
   const request = { sessionId: old.id, rootProfileId: "new-root", handoff: "Check the failed provider.", resume: false } as const;
   const next = f.store.replaceCoordinator("task", request);
   expect(next).toMatchObject({ current: true, generation: old.generation + 1, profile: { provider: "codex" }, replacement: { sessionId: old.id } });
@@ -85,7 +85,7 @@ test("accepted answers, notes, and earlier additional direction survive multiple
   f.store.answerHuman("task", questionId, "Use the maintenance branch");
   const answer = f.store.pendingTurns(old.id).find(turn => turn.promptText.includes("maintenance branch"))!;
   const admitted = withCurrentDependencyStatus(answer.promptText, [{ id: "prerequisite", title: "Prepare release", status: "active" }]);
-  f.database.authTransaction(db => db.prepare("UPDATE forge_task_turns SET prompt_text = ?, status = 'prompted', prompted_at = ? WHERE id = ?").run(admitted, new Date().toISOString(), answer.id));
+  f.database.authTransaction(db => db.prepare("UPDATE suplex_task_turns SET prompt_text = ?, status = 'prompted', prompted_at = ? WHERE id = ?").run(admitted, new Date().toISOString(), answer.id));
   f.store.sendNote("task", "Keep the release notes intact.");
   const first = f.store.replaceCoordinator("task", { sessionId: old.id, rootProfileId: "first-root", handoff: "Use the release checklist.", resume: false });
   const second = f.store.replaceCoordinator("task", { sessionId: first.id, rootProfileId: "second-root", resume: false });
@@ -94,7 +94,7 @@ test("accepted answers, notes, and earlier additional direction survive multiple
   expect(prompt).toContain("Keep the release notes intact.");
   expect(prompt).toContain("Use the release checklist.");
   expect(prompt.match(/Earlier additional directions from the user/g)).toHaveLength(1);
-  expect(prompt).not.toContain("[Forge prerequisite status]");
+  expect(prompt).not.toContain("[Suplex prerequisite status]");
 });
 
 test("an existing Worker result wakes the replacement Coordinator", async () => {
@@ -133,7 +133,7 @@ test("a later accepted answer removes a carried question from the next handoff",
   addProfile(f.database, "first-root");
   addProfile(f.database, "second-root");
   const old = f.controller.prepareRoot("task");
-  const question = "Which release branch should Forge use?";
+  const question = "Which release branch should Suplex use?";
   f.store.askHuman("task", question, []);
   const firstId = f.store.get("task").humanQuestionId!;
   const first = f.store.replaceCoordinator("task", { sessionId: old.id, rootProfileId: "first-root", resume: true, questionId: firstId });
@@ -152,9 +152,9 @@ test("a task limit decision stays pending and a disallowed provider is rejected"
   f.store.pauseAtTaskLimit("task", { estimatedCostUsd: 999, admittedTurns: 1 });
   const questionId = f.store.get("task").humanQuestionId!;
   expect(() => f.store.replaceCoordinator("task", { sessionId: old.id, rootProfileId: "new-root", resume: true, questionId })).toThrow("Answer the current task decision");
-  f.database.authTransaction(db => db.prepare("UPDATE forge_tasks SET configuration_json = json_set(configuration_json, '$.providerPolicy', json(?)) WHERE id = 'task'").run(JSON.stringify({ allowedProviders: ["opencode"], allowedInstanceIds: [] })));
+  f.database.authTransaction(db => db.prepare("UPDATE suplex_tasks SET configuration_json = json_set(configuration_json, '$.providerPolicy', json(?)) WHERE id = 'task'").run(JSON.stringify({ allowedProviders: ["opencode"], allowedInstanceIds: [] })));
   expect(() => f.store.replaceCoordinator("task", { sessionId: old.id, rootProfileId: "new-root", resume: false })).toThrow("allowed by this project");
-  f.database.authTransaction(db => db.prepare("UPDATE forge_tasks SET configuration_json = json_remove(configuration_json, '$.providerPolicy') WHERE id = 'task'").run());
+  f.database.authTransaction(db => db.prepare("UPDATE suplex_tasks SET configuration_json = json_remove(configuration_json, '$.providerPolicy') WHERE id = 'task'").run());
   f.store.replaceCoordinator("task", { sessionId: old.id, rootProfileId: "new-root", resume: false });
   expect(f.store.get("task")).toMatchObject({ status: "waiting_human", humanQuestionId: questionId });
 });
@@ -163,16 +163,16 @@ test.each(["cancelled", "delivered"] as const)("a %s task cannot select a Coordi
   const f = await fixture();
   addProfile(f.database, "new-root");
   const root = f.controller.prepareRoot("task");
-  f.database.authTransaction(db => db.prepare("UPDATE forge_task_controls SET status = ? WHERE task_id = 'task'").run(status));
+  f.database.authTransaction(db => db.prepare("UPDATE suplex_task_controls SET status = ? WHERE task_id = 'task'").run(status));
   expect(() => f.store.replaceCoordinator("task", { sessionId: root.id, rootProfileId: "new-root", resume: false })).toThrow("Only active or paused");
 });
 
 test("an archived task and a Worker profile cannot be selected", async () => {
   const f = await fixture();
   const root = f.controller.prepareRoot("task");
-  f.database.authTransaction(db => db.prepare("INSERT INTO forge_profiles (id, name, role, avatar_seed, provider, model, reasoning_level, service_tier, created_at, updated_at) VALUES ('wrong-role', 'Wrong role', 'worker', 'seed', 'codex', 'gpt-5.6-sol', 'medium', 'default', ?, ?)").run(new Date().toISOString(), new Date().toISOString()));
+  f.database.authTransaction(db => db.prepare("INSERT INTO suplex_profiles (id, name, role, avatar_seed, provider, model, reasoning_level, service_tier, created_at, updated_at) VALUES ('wrong-role', 'Wrong role', 'worker', 'seed', 'codex', 'gpt-5.6-sol', 'medium', 'default', ?, ?)").run(new Date().toISOString(), new Date().toISOString()));
   expect(() => f.store.replaceCoordinator("task", { sessionId: root.id, rootProfileId: "wrong-role", resume: false })).toThrow("profile does not exist");
   addProfile(f.database, "new-root");
-  f.database.authTransaction(db => db.prepare("UPDATE forge_tasks SET archived_at = ? WHERE id = 'task'").run(new Date().toISOString()));
+  f.database.authTransaction(db => db.prepare("UPDATE suplex_tasks SET archived_at = ? WHERE id = 'task'").run(new Date().toISOString()));
   expect(() => f.store.replaceCoordinator("task", { sessionId: root.id, rootProfileId: "new-root", resume: false })).toThrow("Only active or paused");
 });

@@ -1,4 +1,4 @@
-UPDATE forge_tasks
+UPDATE suplex_tasks
 SET issue_json = json_object(
   'kind', 'github',
   'repository', json_extract(configuration_json, '$.repository'),

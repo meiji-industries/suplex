@@ -12,7 +12,7 @@ function herdrHealth(apiReachable: boolean): HealthCheck {
     id: "herdr-readiness",
     label: "Herdr",
     status: apiReachable ? "healthy" : "unhealthy",
-    summary: apiReachable ? "Herdr API and terminal views are available" : "Forge cannot reach Herdr",
+    summary: apiReachable ? "Herdr API and terminal views are available" : "Suplex cannot reach Herdr",
     remedy: "herdr",
     details: { apiReachable },
   };
@@ -56,7 +56,7 @@ test("the manifest names every stage the desktop app runs", async () => {
       { name: "prerequisites", title: "Check this Mac" },
       { name: "developer-tools", title: "Install Apple developer tools (git)" },
       { name: "herdr", title: "Install Herdr terminals" },
-      { name: "data", title: "Prepare Forge data" },
+      { name: "data", title: "Prepare Suplex data" },
       { name: "complete", title: "Finish" },
     ],
   });
@@ -173,17 +173,17 @@ test("herdr starts the server headlessly and waits for the socket API", async ()
 });
 
 test("data writes the local environment file, migrates, and skips the second run", async () => {
-  const root = await mkdtemp(join(tmpdir(), "forge-install-data-"));
+  const root = await mkdtemp(join(tmpdir(), "suplex-install-data-"));
   try {
     const env = {
-      FORGE_ACCESS_MODE: "local",
-      FORGE_DATA_ROOT: join(root, "data"),
-      FORGE_ENV_FILE: join(root, "forge.env"),
-      FORGE_PORT: "4222",
+      SUPLEX_ACCESS_MODE: "local",
+      SUPLEX_DATA_ROOT: join(root, "data"),
+      SUPLEX_ENV_FILE: join(root, "suplex.env"),
+      SUPLEX_PORT: "4222",
     };
     const first = await stage("data").run(context({ env }));
     expect(first).toMatchObject({ ok: true, skipped: false, reason: expect.stringContaining("schema current") });
-    expect(await readFile(env.FORGE_ENV_FILE, "utf8")).toMatch(/^\s*FORGE_ACCESS_MODE=local\nFORGE_BIND_ADDRESS=127\.0\.0\.1\nFORGE_PORT=4222\n$/);
+    expect(await readFile(env.SUPLEX_ENV_FILE, "utf8")).toMatch(/^\s*SUPLEX_ACCESS_MODE=local\nSUPLEX_BIND_ADDRESS=127\.0\.0\.1\nSUPLEX_PORT=4222\n$/);
     expect(await stage("data").run(context({ env }))).toMatchObject({ ok: true, skipped: true });
   } finally {
     await rm(root, { recursive: true, force: true });
@@ -191,20 +191,20 @@ test("data writes the local environment file, migrates, and skips the second run
 });
 
 test("complete fails with the doctor check that failed", async () => {
-  const root = await mkdtemp(join(tmpdir(), "forge-install-complete-"));
+  const root = await mkdtemp(join(tmpdir(), "suplex-install-complete-"));
   try {
-    const env = { FORGE_ACCESS_MODE: "local", FORGE_DATA_ROOT: join(root, "data"), FORGE_ENV_FILE: join(root, "forge.env") };
+    const env = { SUPLEX_ACCESS_MODE: "local", SUPLEX_DATA_ROOT: join(root, "data"), SUPLEX_ENV_FILE: join(root, "suplex.env") };
     expect(await stage("complete").run(context({ env }))).toEqual({ ok: true, reason: "1 checks passed" });
     const failing = await capture(["--stage", "complete", "--json"], context({
       env,
-      doctor: async () => [{ status: "FAIL", name: "Herdr", detail: "Forge cannot reach Herdr (herdr)" }],
+      doctor: async () => [{ status: "FAIL", name: "Herdr", detail: "Suplex cannot reach Herdr (herdr)" }],
     }));
     expect(failing.code).toBe(1);
     expect(failing.stdout.trim().split("\n").at(-1)).toBe(JSON.stringify({
       ok: false,
       stage: "complete",
       skipped: false,
-      reason: "Herdr: Forge cannot reach Herdr (herdr)",
+      reason: "Herdr: Suplex cannot reach Herdr (herdr)",
       remedy: "Fix the failing check and run the install again.",
     }));
   } finally {

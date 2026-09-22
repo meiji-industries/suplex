@@ -91,7 +91,7 @@ try {
     assert.equal(await copy.innerText(), "Copied");
     await page.evaluate(() => { navigator.clipboard.writeText = async () => { throw new Error("Clipboard permission denied"); }; });
     await copy.click();
-    await panel.getByRole("status").getByText("Forge cannot copy the command. Select the command and copy it manually.", { exact: true }).waitFor();
+    await panel.getByRole("status").getByText("Suplex cannot copy the command. Select the command and copy it manually.", { exact: true }).waitFor();
     assert.equal(await copy.innerText(), "Copy", "A failed copy must not claim success");
     for (const [ready, command] of [[3, "curl -fsSL https://herdr.dev/install.sh | sh"], [3, "herdr"], [4, null]]) {
       await panel.getByRole("button", { name: "Check again", exact: true }).click();
@@ -124,7 +124,7 @@ try {
     await activePanel.getByText("Git", { exact: true }).waitFor();
     const refresh = page.getByRole("button", { name: "Refresh", exact: true });
     await refresh.click();
-    await page.getByRole("status").getByText("Forge checks the sample host.", { exact: true }).waitFor();
+    await page.getByRole("status").getByText("Suplex checks the sample host.", { exact: true }).waitFor();
     assert.ok(await refresh.isDisabled(), "Refresh must disable duplicate checks");
     await page.getByRole("status").getByText("Sample checks refreshed just now", { exact: true }).waitFor();
     assert.ok(await refresh.isEnabled());

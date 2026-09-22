@@ -3,18 +3,18 @@ import { createTypeScriptImportResolver } from "eslint-import-resolver-typescrip
 import { importX } from "eslint-plugin-import-x";
 
 const droppedTables = [
-  "forge_developer_execution_leases",
-  "forge_developer_execution_truth",
-  "forge_plan_authorizations",
-  "forge_issue_governance",
-  "forge_projection_integrity_findings",
-  "forge_projection_invalidations",
-  "forge_project_revisions",
-  "forge_issue_outputs",
+  "suplex_developer_execution_leases",
+  "suplex_developer_execution_truth",
+  "suplex_plan_authorizations",
+  "suplex_issue_governance",
+  "suplex_projection_integrity_findings",
+  "suplex_projection_invalidations",
+  "suplex_project_revisions",
+  "suplex_issue_outputs",
 ].join("|");
 
 export default tseslint.config({
-  ignores: ["dist/**", "node_modules/**", ".forge/**", ".scratch/**", "coverage/**", "bb/**", "orca/**", "meiji-industries/**", "references/**", "desktop/**"],
+  ignores: ["dist/**", "node_modules/**", ".suplex/**", ".scratch/**", "coverage/**", "bb/**", "orca/**", "meiji-industries/**", "references/**", "desktop/**"],
 }, {
   files: ["src/**/*.{ts,tsx}", "tests/**/*.{ts,tsx}"],
   plugins: {

@@ -3,7 +3,7 @@ import { cleanupRootControllerFixtures, fixture } from "./helpers/root-controlle
 import * as processes from "../src/tasks/archive/processes.js";
 import { RootController } from "../src/coordination/root-controller.js";
 import { TaskControlStore } from "../src/coordination/root-session-store.js";
-import { ForgeDatabase } from "../src/platform/database.js";
+import { SuplexDatabase } from "../src/platform/database.js";
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { insertNativeTaskRow } from "./helpers/native-task-row.js";
@@ -17,7 +17,7 @@ test("backlog waits for a durable start and resumes after reopening the database
   expect(value.harness.dispatched).toHaveLength(0);
   value.store.start("task");
   value.database.close();
-  const reopened = new ForgeDatabase(join(value.directory, "forge.sqlite"));
+  const reopened = new SuplexDatabase(join(value.directory, "suplex.sqlite"));
   try {
     const store = new TaskControlStore(reopened);
     expect(store.start("task").status).toBe("active");
@@ -47,11 +47,11 @@ test("answers wake the same Coordinator atomically and stale answers cannot revi
   expect(value.store.get("task").status).toBe("cancelled");
 });
 
-test("start immediately survives closing Forge before the first native dispatch", async () => {
+test("start immediately survives closing Suplex before the first native dispatch", async () => {
   const value = await fixture(true);
   expect(value.harness.dispatched).toHaveLength(0);
   value.database.close();
-  const reopened = new ForgeDatabase(join(value.directory, "forge.sqlite"));
+  const reopened = new SuplexDatabase(join(value.directory, "suplex.sqlite"));
   try {
     await new RootController(new TaskControlStore(reopened), value.harness).recover("task");
     expect(value.harness.dispatched).toHaveLength(1);
@@ -129,10 +129,10 @@ test("an idle retained Worker does not gate Coordinator progress", async () => {
   await value.controller.delegateWorker(value.identity(), { plan: "Update the scoped file using the existing implementation", acceptanceCriteria: ["The requested behavior passes its focused checks"], instruction: "Make the change" });
   await value.controller.recover("task");
   const worker = value.store.currentSession("task", "worker")!;
-  value.harness.finish(value.harness.dispatched.find(intent => intent.agent === "forge-worker")!.messageID);
+  value.harness.finish(value.harness.dispatched.find(intent => intent.agent === "suplex-worker")!.messageID);
   await value.controller.recover("task");
   await value.controller.recover("task");
-  expect(value.harness.dispatched.filter(turn => turn.agent === "forge-root")).toHaveLength(2);
+  expect(value.harness.dispatched.filter(turn => turn.agent === "suplex-root")).toHaveLength(2);
   expect(await value.store.pendingStops("task")).toEqual([]);
   expect(value.harness.stopped).not.toContain(worker.nativeSessionId);
 });
@@ -169,8 +169,8 @@ test("a legacy active task preserves history without admitting dependency pollin
   value.store.create({ taskId: "prerequisite", startImmediately: true, objective: "Prepare the dependency", deliveryTarget: "merged", deliveryIntent: { repository: "owner/repo", headBranch: "prerequisite", baseBranch: "main", baselineSha: "a", pullRequestNumber: null }, rootProfile: profile, workerProfile: profile });
   value.store.admitQueued(["prerequisite"]);
   value.database.authTransaction(db => {
-    db.prepare("INSERT INTO forge_task_dependencies (task_id, depends_on_task_id, created_at) VALUES ('task', 'prerequisite', ?)").run(new Date().toISOString());
-    db.prepare("UPDATE forge_task_sessions SET pane_id = NULL WHERE task_id = 'task'").run();
+    db.prepare("INSERT INTO suplex_task_dependencies (task_id, depends_on_task_id, created_at) VALUES ('task', 'prerequisite', ?)").run(new Date().toISOString());
+    db.prepare("UPDATE suplex_task_sessions SET pane_id = NULL WHERE task_id = 'task'").run();
   });
 
   for (let tick = 0; tick < 41; tick += 1) await value.controller.recover("task");
@@ -193,7 +193,7 @@ test("a blocked task recovers a natively completed turn whose local row is still
   value.database.authTransaction(db => insertNativeTaskRow(db, { taskId: "native-prerequisite", directory: value.directory }));
   value.store.create({ taskId: "native-prerequisite", startImmediately: true, objective: "Prepare native input", deliveryTarget: "merged", deliveryIntent: { repository: "owner/repo", headBranch: "native-prerequisite", baseBranch: "main", baselineSha: "a", pullRequestNumber: null }, rootProfile: profile, workerProfile: profile });
   value.store.admitQueued(["native-prerequisite"]);
-  value.database.authTransaction(db => db.prepare("INSERT INTO forge_task_dependencies (task_id, depends_on_task_id, created_at) VALUES ('task', 'native-prerequisite', ?)").run(new Date().toISOString()));
+  value.database.authTransaction(db => db.prepare("INSERT INTO suplex_task_dependencies (task_id, depends_on_task_id, created_at) VALUES ('task', 'native-prerequisite', ?)").run(new Date().toISOString()));
   value.harness.observations.set(pending.id, { sessionID: `ses_${root.id.replaceAll("-", "")}`, messageID: pending.id, state: "completed", admission: "observed", retry: "forbidden", assistantMessageID: `assistant-${pending.id}`, assistantMessageIDs: [`assistant-${pending.id}`] });
   value.harness.results.set(pending.id, "Native completion recovered");
 
@@ -215,7 +215,7 @@ test("a prerequisite added at the native admission claim prevents dispatch", asy
       value.database.authTransaction(db => insertNativeTaskRow(db, { taskId: "claim-prerequisite", directory: value.directory }));
       value.store.create({ taskId: "claim-prerequisite", startImmediately: true, objective: "Close the admission race", deliveryTarget: "merged", deliveryIntent: { repository: "owner/repo", headBranch: "claim-prerequisite", baseBranch: "main", baselineSha: "a", pullRequestNumber: null }, rootProfile: profile, workerProfile: profile });
       value.store.admitQueued(["claim-prerequisite"]);
-      value.database.authTransaction(db => db.prepare("INSERT INTO forge_task_dependencies (task_id, depends_on_task_id, created_at) VALUES ('task', 'claim-prerequisite', ?)").run(new Date().toISOString()));
+      value.database.authTransaction(db => db.prepare("INSERT INTO suplex_task_dependencies (task_id, depends_on_task_id, created_at) VALUES ('task', 'claim-prerequisite', ?)").run(new Date().toISOString()));
     }
     return dispatch(...args);
   };
@@ -237,23 +237,23 @@ test("a blocked active task retains an admitted Worker result until release", as
   await value.controller.delegateWorker(value.identity(), { plan: "Make the bounded change", acceptanceCriteria: ["The focused check passes"], instruction: "Implement the change" });
   value.harness.finish(rootTurn.messageID);
   await value.controller.recover("task");
-  const workerTurn = value.harness.dispatched.find(turn => turn.agent === "forge-worker")!;
+  const workerTurn = value.harness.dispatched.find(turn => turn.agent === "suplex-worker")!;
 
   const profile = value.store.get("task").rootProfile;
   value.database.authTransaction(db => insertNativeTaskRow(db, { taskId: "worker-prerequisite", directory: value.directory }));
   value.store.create({ taskId: "worker-prerequisite", startImmediately: true, objective: "Prepare Worker input", deliveryTarget: "merged", deliveryIntent: { repository: "owner/repo", headBranch: "worker-prerequisite", baseBranch: "main", baselineSha: "a", pullRequestNumber: null }, rootProfile: profile, workerProfile: profile });
   value.store.admitQueued(["worker-prerequisite"]);
-  value.database.authTransaction(db => db.prepare("INSERT INTO forge_task_dependencies (task_id, depends_on_task_id, created_at) VALUES ('task', 'worker-prerequisite', ?)").run(new Date().toISOString()));
+  value.database.authTransaction(db => db.prepare("INSERT INTO suplex_task_dependencies (task_id, depends_on_task_id, created_at) VALUES ('task', 'worker-prerequisite', ?)").run(new Date().toISOString()));
 
   value.harness.finish(workerTurn.messageID);
   await value.controller.recover("task");
   expect(value.store.turns("task").some(turn => turn.sessionId === value.store.currentSession("task", "worker")?.id && turn.status === "completed")).toBe(true);
   expect(value.store.pendingTurns(value.identity().sessionId).some(turn => turn.promptText.includes("Worker reported"))).toBe(true);
-  expect(value.harness.dispatched.filter(turn => turn.agent === "forge-root")).toHaveLength(1);
+  expect(value.harness.dispatched.filter(turn => turn.agent === "suplex-root")).toHaveLength(1);
 
   value.store.markDelivered("worker-prerequisite");
   await value.controller.recover("task");
-  expect(value.harness.dispatched.filter(turn => turn.agent === "forge-root")).toHaveLength(2);
+  expect(value.harness.dispatched.filter(turn => turn.agent === "suplex-root")).toHaveLength(2);
   expect(value.harness.dispatched.at(-1)?.prompt).toContain("Worker reported");
   expect(value.harness.dispatched.at(-1)?.prompt).toContain('worker-prerequisite "Task" (delivered)');
 });
@@ -318,7 +318,7 @@ test.each(["delivered", "cancelled"] as const)("a retained idle Worker is stoppe
   await value.controller.delegateWorker(value.identity(), { plan: "Make the scoped change", acceptanceCriteria: ["The change is verified"], instruction: "Implement the change" });
   await value.controller.recover("task");
   const worker = value.store.currentSession("task", "worker")!;
-  value.harness.finish(value.harness.dispatched.find(intent => intent.agent === "forge-worker")!.messageID);
+  value.harness.finish(value.harness.dispatched.find(intent => intent.agent === "suplex-worker")!.messageID);
   await value.controller.recover("task");
   expect(value.harness.stopped).toEqual([]);
 
@@ -349,7 +349,7 @@ test("cancellation does not wait on an incomplete launch-owner record", async ()
   const value = await fixture(true);
   await value.controller.recover("task");
   const root = value.store.currentSession("task", "root")!;
-  value.database.authTransaction(db => db.prepare("UPDATE forge_task_sessions SET launch_owner_pid = ?, launch_owner_start_time = NULL WHERE id = ?").run(process.pid, root.id));
+  value.database.authTransaction(db => db.prepare("UPDATE suplex_task_sessions SET launch_owner_pid = ?, launch_owner_start_time = NULL WHERE id = ?").run(process.pid, root.id));
   await value.controller.cancel("task");
   expect(value.harness.stopped).toContain(root.nativeSessionId);
   expect(await value.store.pendingStops("task")).toHaveLength(0);

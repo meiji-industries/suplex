@@ -1,4 +1,4 @@
-CREATE TABLE IF NOT EXISTS `forge_developer_executions` (
+CREATE TABLE IF NOT EXISTS `suplex_developer_executions` (
 	`id` text PRIMARY KEY NOT NULL,
 	`task_id` text NOT NULL,
 	`company_id` text NOT NULL,
@@ -23,13 +23,13 @@ CREATE TABLE IF NOT EXISTS `forge_developer_executions` (
 	`evidence_artifact_id` text,
 	`failure_code` text,
 	`failure_summary` text,
-	FOREIGN KEY (`task_id`) REFERENCES `forge_tasks`(`id`) ON UPDATE no action ON DELETE cascade,
-	FOREIGN KEY (`company_id`) REFERENCES `forge_companies`(`id`) ON UPDATE no action ON DELETE cascade,
-	FOREIGN KEY (`delivery_artifact_id`) REFERENCES `forge_artifacts`(`id`) ON UPDATE no action ON DELETE no action,
-	FOREIGN KEY (`evidence_artifact_id`) REFERENCES `forge_artifacts`(`id`) ON UPDATE no action ON DELETE no action,
-	CONSTRAINT `forge_developer_executions_attempt_unique` UNIQUE(`workflow_id`, `plan_revision`, `attempt`)
+	FOREIGN KEY (`task_id`) REFERENCES `suplex_tasks`(`id`) ON UPDATE no action ON DELETE cascade,
+	FOREIGN KEY (`company_id`) REFERENCES `suplex_companies`(`id`) ON UPDATE no action ON DELETE cascade,
+	FOREIGN KEY (`delivery_artifact_id`) REFERENCES `suplex_artifacts`(`id`) ON UPDATE no action ON DELETE no action,
+	FOREIGN KEY (`evidence_artifact_id`) REFERENCES `suplex_artifacts`(`id`) ON UPDATE no action ON DELETE no action,
+	CONSTRAINT `suplex_developer_executions_attempt_unique` UNIQUE(`workflow_id`, `plan_revision`, `attempt`)
 );
 --> statement-breakpoint
-CREATE UNIQUE INDEX IF NOT EXISTS `forge_developer_active_lease_idx` ON `forge_developer_executions` (`task_id`) WHERE `status` IN ('starting', 'running');
+CREATE UNIQUE INDEX IF NOT EXISTS `suplex_developer_active_lease_idx` ON `suplex_developer_executions` (`task_id`) WHERE `status` IN ('starting', 'running');
 --> statement-breakpoint
-CREATE INDEX IF NOT EXISTS `forge_developer_executions_task_idx` ON `forge_developer_executions` (`task_id`, `plan_revision`, `attempt`);
+CREATE INDEX IF NOT EXISTS `suplex_developer_executions_task_idx` ON `suplex_developer_executions` (`task_id`, `plan_revision`, `attempt`);

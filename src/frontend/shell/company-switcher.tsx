@@ -15,7 +15,7 @@ import { navigate } from "./navigation-state.js";
 import { useOptionalCompanyContext } from "./company-context.js";
 import { EntityAvatar } from "../components/app/entity-avatar.js";
 
-function ForgeMark(): ReactElement {
+function SuplexMark(): ReactElement {
   return <span className="flex size-5 shrink-0 items-center justify-center rounded-[5px] bg-foreground text-[10px] font-bold text-background">F</span>;
 }
 
@@ -65,7 +65,7 @@ function CreateCompanyDialog({ open, onOpenChange }: { open: boolean; onOpenChan
 export function CompanySwitcher(): ReactElement {
   const context = useOptionalCompanyContext();
   const [createOpen, setCreateOpen] = useState(false);
-  if (!context) return <div className="flex h-8 items-center gap-2 px-2"><ForgeMark /><span className="text-[13px] font-semibold tracking-[-0.02em]">Forge</span></div>;
+  if (!context) return <div className="flex h-8 items-center gap-2 px-2"><SuplexMark /><span className="text-[13px] font-semibold tracking-[-0.02em]">Suplex</span></div>;
   const { currentCompany, companies, loading, error, user } = context;
   const label = loading ? "Loading companies" : currentCompany?.name ?? "No company";
   return (

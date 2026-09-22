@@ -9,7 +9,7 @@ import type { ProviderObservation } from "../../http/contracts/providers.js";
 // Disposing it cannot interrupt a task's server or refresh its credentials.
 export async function readOpenCodeProviders(input: { directory: string; executable?: string }): Promise<ProviderObservation> {
   const executable = await resolveOpenCodeExecutable(input);
-  const runtimeDirectory = await mkdtemp(join(tmpdir(), "forge-provider-observation-"));
+  const runtimeDirectory = await mkdtemp(join(tmpdir(), "suplex-provider-observation-"));
   try {
     const reference = await ensureOpenCodeServer({ runtimeDirectory, executable, directory: input.directory, config: {} });
     const native = await openCodeServerClient(reference).providers(reference.directory);

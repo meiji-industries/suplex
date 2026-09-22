@@ -8,7 +8,7 @@ import { createApp } from "../src/app.js";
 import { SESSION_COOKIE_NAME } from "../src/identity/auth-identifiers.js";
 import { AuthService, type WebAuthnAdapter } from "../src/identity/auth.js";
 import { createTestConfig } from "../src/platform/config.js";
-import { ForgeDatabase } from "../src/platform/database.js";
+import { SuplexDatabase } from "../src/platform/database.js";
 import { ExternalAgentService } from "../src/identity/external-agents.js";
 
 const health = {
@@ -22,7 +22,7 @@ function fakeWebAuthn(): WebAuthnAdapter {
   return {
     async generateRegistrationOptions(input) {
       return {
-        rp: { name: "Forge", id: input.rpId },
+        rp: { name: "Suplex", id: input.rpId },
         user: { id: input.userId, name: input.userName, displayName: input.displayName },
         challenge: "externalAgent-api-auth",
         pubKeyCredParams: [{ type: "public-key", alg: -7 }],
@@ -47,7 +47,7 @@ function fakeWebAuthn(): WebAuthnAdapter {
 }
 
 let root: string;
-let database: ForgeDatabase;
+let database: SuplexDatabase;
 let auth: AuthService;
 let externalAgent: ExternalAgentService;
 let app: ReturnType<typeof createApp>;
@@ -58,9 +58,9 @@ let memberCookie: string;
 let origin: string;
 
 beforeEach(async () => {
-  root = await mkdtemp(join(tmpdir(), "forge-externalAgent-api-test-"));
+  root = await mkdtemp(join(tmpdir(), "suplex-externalAgent-api-test-"));
   const config = createTestConfig(root, { developmentAutoLogin: true });
-  database = new ForgeDatabase(config.databasePath);
+  database = new SuplexDatabase(config.databasePath);
   auth = new AuthService(database, config, { webAuthn: fakeWebAuthn() });
   const admin = auth.developmentSignIn();
   adminId = admin.user.id;
@@ -73,8 +73,8 @@ beforeEach(async () => {
   companyId = auth.createCompany(adminId, "ExternalAgent API Company").id;
   const now = new Date().toISOString();
   database.authTransaction((db) => {
-    db.prepare("INSERT INTO forge_projects (id, company_id, name, repository_path, worktree_root, repository_identity, base_branch, setup_command, verification_command, created_at, updated_at) VALUES ('project_api', ?, 'API Project', ?, ?, 'meiji/api', 'main', '', '', ?, ?)").run(companyId, join(root, "repo"), join(root, "worktrees"), now, now);
-    db.prepare("INSERT INTO forge_projects (id, company_id, name, repository_path, worktree_root, repository_identity, base_branch, setup_command, verification_command, created_at, updated_at) VALUES ('project_api_2', ?, 'API Project 2', ?, ?, 'meiji/api-2', 'main', '', '', ?, ?)").run(companyId, join(root, "repo2"), join(root, "worktrees2"), now, now);
+    db.prepare("INSERT INTO suplex_projects (id, company_id, name, repository_path, worktree_root, repository_identity, base_branch, setup_command, verification_command, created_at, updated_at) VALUES ('project_api', ?, 'API Project', ?, ?, 'meiji/api', 'main', '', '', ?, ?)").run(companyId, join(root, "repo"), join(root, "worktrees"), now, now);
+    db.prepare("INSERT INTO suplex_projects (id, company_id, name, repository_path, worktree_root, repository_identity, base_branch, setup_command, verification_command, created_at, updated_at) VALUES ('project_api_2', ?, 'API Project 2', ?, ?, 'meiji/api-2', 'main', '', '', ?, ?)").run(companyId, join(root, "repo2"), join(root, "worktrees2"), now, now);
   });
 
   const memberInvitation = auth.inviteUser(adminId, { displayName: "Member User" });

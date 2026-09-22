@@ -32,7 +32,7 @@ afterEach(async () => {
     }
   })));
   await Promise.all(directories.splice(0).map(path => rm(path, { recursive: true, force: true })));
-  for (const key of ["FORGE_ROOT_BINDING", "FORGE_ROOT_TOKEN", "FORGE_ADVISOR_BINDING", "FORGE_ADVISOR_TOKEN", "FORGE_ADVISOR_RESULT", "FORGE_GH_COMMAND", "FORGE_TEST_ARGS", "FORGE_TEST_PROMPT", "FORGE_TEST_BRIDGE_ENV", "FORGE_TEST_COUNT", "FORGE_TEST_ORPHAN"]) delete process.env[key];
+  for (const key of ["SUPLEX_ROOT_BINDING", "SUPLEX_ROOT_TOKEN", "SUPLEX_ADVISOR_BINDING", "SUPLEX_ADVISOR_TOKEN", "SUPLEX_ADVISOR_RESULT", "SUPLEX_GH_COMMAND", "SUPLEX_TEST_ARGS", "SUPLEX_TEST_PROMPT", "SUPLEX_TEST_BRIDGE_ENV", "SUPLEX_TEST_COUNT", "SUPLEX_TEST_ORPHAN"]) delete process.env[key];
 });
 
 const event = (value: unknown): string => `printf '%s\\n' '${JSON.stringify(value)}'`;
@@ -43,7 +43,7 @@ const COMPLETE = [
   event({ type: "turn.started" }),
   event({ type: "item.started", item: { id: "item_0", type: "command_execution", command: "pnpm test", status: "in_progress" } }),
   event({ type: "item.completed", item: { id: "item_0", type: "command_execution", command: "pnpm test", aggregated_output: "2 passed", exit_code: 0, status: "completed" } }),
-  `if [ -n "$FORGE_ADVISOR_RESULT" ]; then ${event({ type: "item.completed", item: { id: "item_1", type: "mcp_tool_call", server: "forge_advisor", tool: "submit_report", arguments: {}, result: { structuredContent: RATER_SUBMISSION }, status: "completed" } })}; fi`,
+  `if [ -n "$SUPLEX_ADVISOR_RESULT" ]; then ${event({ type: "item.completed", item: { id: "item_1", type: "mcp_tool_call", server: "suplex_advisor", tool: "submit_report", arguments: {}, result: { structuredContent: RATER_SUBMISSION }, status: "completed" } })}; fi`,
   event({ type: "item.completed", item: { id: "item_2", type: "agent_message", text: "Reviewed the change." } }),
   event({ type: "turn.completed", usage: { input_tokens: 1_000, cached_input_tokens: 600, cache_write_input_tokens: 100, output_tokens: 50, reasoning_output_tokens: 20 } }),
 ];
@@ -59,10 +59,10 @@ const BEHAVIOURS = {
   unsettled: [event({ type: "thread.started", thread_id: THREAD_ID }), event({ type: "item.started", item: { id: "item_0", type: "command_execution", command: "pnpm test", aggregated_output: "37%", exit_code: null, status: "in_progress" } }), "exit 0"],
   unsettled_final: [event({ type: "thread.started", thread_id: THREAD_ID }), event({ type: "item.started", item: { id: "item_0", type: "command_execution", command: "pnpm test", aggregated_output: "37%", exit_code: null, status: "in_progress" } }), event({ type: "item.completed", item: { id: "item_1", type: "agent_message", text: "Done." } }), event({ type: "turn.completed", usage: { input_tokens: 100, output_tokens: 10 } }), "exit 0"],
   unsettled_final_slow: [event({ type: "thread.started", thread_id: THREAD_ID }), event({ type: "item.started", item: { id: "item_0", type: "command_execution", command: "pnpm test", exit_code: null, status: "in_progress" } }), event({ type: "turn.completed", usage: { input_tokens: 100, output_tokens: 10 } }), "sleep 30"],
-  unsettled_orphan: [event({ type: "thread.started", thread_id: THREAD_ID }), event({ type: "item.started", item: { id: "item_0", type: "command_execution", command: "sleep 30", exit_code: null, status: "in_progress" } }), "sleep 30 & echo $! > \"$FORGE_TEST_ORPHAN\"", "sleep 1", "exit 0"],
+  unsettled_orphan: [event({ type: "thread.started", thread_id: THREAD_ID }), event({ type: "item.started", item: { id: "item_0", type: "command_execution", command: "sleep 30", exit_code: null, status: "in_progress" } }), "sleep 30 & echo $! > \"$SUPLEX_TEST_ORPHAN\"", "sleep 1", "exit 0"],
   resume_failure: [
     `if [ "$2" = "resume" ]; then printf 'error: no rollout found for thread id %s\\n' "$3" >&2; exit 1; fi`,
-    `count=$(cat "$FORGE_TEST_COUNT" 2>/dev/null || echo 0); count=$((count + 1)); printf '%s' "$count" > "$FORGE_TEST_COUNT"`,
+    `count=$(cat "$SUPLEX_TEST_COUNT" 2>/dev/null || echo 0); count=$((count + 1)); printf '%s' "$count" > "$SUPLEX_TEST_COUNT"`,
     `if [ "$count" = "1" ]; then thread='${THREAD_ID}'; else thread='${SECOND_THREAD_ID}'; fi`,
     `printf '{"type":"thread.started","thread_id":"%s"}\\n' "$thread"`,
     ...COMPLETE.slice(1),
@@ -70,28 +70,28 @@ const BEHAVIOURS = {
 };
 
 async function fixture(behaviour: keyof typeof BEHAVIOURS) {
-  const root = await mkdtemp(join(tmpdir(), "forge-codex-runtime-"));
+  const root = await mkdtemp(join(tmpdir(), "suplex-codex-runtime-"));
   directories.push(root);
   const worktree = join(root, "worktree");
   await mkdir(worktree);
   const executable = join(root, "codex");
   await writeFile(executable, `#!/bin/sh
-printf '%s\\n' '--TURN--' "$@" >> "$FORGE_TEST_ARGS"
-printf '%s\\n' '--PROMPT--' >> "$FORGE_TEST_PROMPT"
-cat >> "$FORGE_TEST_PROMPT"
-printf '%s|%s|%s|%s|%s\\n' "$FORGE_ROOT_BINDING" "$FORGE_ROOT_TOKEN" "$FORGE_ADVISOR_BINDING" "$FORGE_ADVISOR_TOKEN" "$FORGE_ADVISOR_RESULT" >> "$FORGE_TEST_BRIDGE_ENV"
+printf '%s\\n' '--TURN--' "$@" >> "$SUPLEX_TEST_ARGS"
+printf '%s\\n' '--PROMPT--' >> "$SUPLEX_TEST_PROMPT"
+cat >> "$SUPLEX_TEST_PROMPT"
+printf '%s|%s|%s|%s|%s\\n' "$SUPLEX_ROOT_BINDING" "$SUPLEX_ROOT_TOKEN" "$SUPLEX_ADVISOR_BINDING" "$SUPLEX_ADVISOR_TOKEN" "$SUPLEX_ADVISOR_RESULT" >> "$SUPLEX_TEST_BRIDGE_ENV"
 ${BEHAVIOURS[behaviour].join("\n")}
 `, { mode: 0o700 });
-  process.env.FORGE_TEST_ARGS = join(root, "args.txt");
-  process.env.FORGE_TEST_PROMPT = join(root, "prompt.txt");
-  process.env.FORGE_TEST_BRIDGE_ENV = join(root, "bridge-env.txt");
-  process.env.FORGE_TEST_COUNT = join(root, "count.txt");
-  const databasePath = join(root, "forge.sqlite");
+  process.env.SUPLEX_TEST_ARGS = join(root, "args.txt");
+  process.env.SUPLEX_TEST_PROMPT = join(root, "prompt.txt");
+  process.env.SUPLEX_TEST_BRIDGE_ENV = join(root, "bridge-env.txt");
+  process.env.SUPLEX_TEST_COUNT = join(root, "count.txt");
+  const databasePath = join(root, "suplex.sqlite");
   const profile = { providerID: "codex", modelID: "gpt-5.6-sol", reasoningEffort: "low", serviceTier: "default" } as const;
   const scope: TaskScope = { id: "session-codex", taskId: "task-codex", directory: worktree, role: "worker", workerMode: "planned", purpose: "implementation", workflow: "standard", evidenceRoot: null, profile };
   const sessionID = `codex-${THREAD_ID}`;
   const runtime = new CodexTaskRuntime(databasePath, {} as never, { executable });
-  const intent = createOpenCodePromptIntent({ sessionID, directory: worktree, prompt: "Implement the change", model: { providerID: "codex", modelID: "gpt-5.6-sol" }, agent: "forge-worker", variant: "low" });
+  const intent = createOpenCodePromptIntent({ sessionID, directory: worktree, prompt: "Implement the change", model: { providerID: "codex", modelID: "gpt-5.6-sol" }, agent: "suplex-worker", variant: "low" });
   return { root, databasePath, executable, scope, runtime, intent, sessionID, runtimeDirectory: taskSessionRuntimeDirectory(databasePath, scope.id) };
 }
 
@@ -118,14 +118,14 @@ test("Codex routing is unambiguous against the other harness identities", () => 
 test("every policy rides on a config override and the bridge names its variables without values", () => {
   const profile = { providerID: "codex", modelID: "gpt-5.6-sol", reasoningEffort: "low", serviceTier: "default" } as const;
   const rootScope: TaskScope = { id: "s", taskId: "t", directory: "/w", role: "root", identity: { taskId: "t", sessionId: "s", generation: 1 }, workflow: "standard", evidenceRoot: null, profile };
-  const bridge = { command: "/usr/bin/node", args: ["/tmp/cli.mjs", "/tmp/root-bridge.ts"], environment: { FORGE_ROOT_BINDING: "/tmp/root.binding.json", FORGE_ROOT_TOKEN: "t-1", FORGE_GH_COMMAND: "/opt/gh" } };
+  const bridge = { command: "/usr/bin/node", args: ["/tmp/cli.mjs", "/tmp/root-bridge.ts"], environment: { SUPLEX_ROOT_BINDING: "/tmp/root.binding.json", SUPLEX_ROOT_TOKEN: "t-1", SUPLEX_GH_COMMAND: "/opt/gh" } };
 
   expect(codexArguments({ scope: rootScope, resumeThreadId: null, bridge })).toEqual([
     "exec", "--json", "--skip-git-repo-check", "-m", "gpt-5.6-sol",
     "-c", 'model_reasoning_effort="low"',
     "-c", 'approval_policy="never"',
     "-c", 'sandbox_mode="read-only"',
-    "-c", 'mcp_servers.forge_root={command="/usr/bin/node",args=["/tmp/cli.mjs","/tmp/root-bridge.ts"],env_vars=["FORGE_ROOT_BINDING","FORGE_ROOT_TOKEN","FORGE_GH_COMMAND"],default_tools_approval_mode="approve"}',
+    "-c", 'mcp_servers.suplex_root={command="/usr/bin/node",args=["/tmp/cli.mjs","/tmp/root-bridge.ts"],env_vars=["SUPLEX_ROOT_BINDING","SUPLEX_ROOT_TOKEN","SUPLEX_GH_COMMAND"],default_tools_approval_mode="approve"}',
     "-",
   ]);
   expect(codexArguments({ scope: rootScope, resumeThreadId: null, bridge }).join(" ")).not.toContain("t-1");
@@ -136,7 +136,7 @@ test("every policy rides on a config override and the bridge names its variables
 
   const hostile = { command: "/usr/bin/node", args: [], environment: { 'a"b\\c\nd\te': "unused" } };
   const quoted = codexArguments({ scope: rootScope, resumeThreadId: null, bridge: hostile }).find(argument => argument.startsWith("mcp_servers."))!;
-  expect(quoted).toBe('mcp_servers.forge_root={command="/usr/bin/node",args=[],env_vars=["a\\"b\\\\c\\nd\\te"],default_tools_approval_mode="approve"}');
+  expect(quoted).toBe('mcp_servers.suplex_root={command="/usr/bin/node",args=[],env_vars=["a\\"b\\\\c\\nd\\te"],default_tools_approval_mode="approve"}');
   expect(quoted).not.toContain("\n");
 });
 
@@ -147,10 +147,10 @@ test("a Worker starts without resume, persists the Codex thread id, then resumes
   expect(await readCodexThreadId(f.runtimeDirectory)).toBeNull();
 
   await f.runtime.dispatch(f.scope, f.intent, async () => true);
-  expect(await eventually(f)).toMatchObject({ state: "completed", assistantMessageID: f.intent.messageID, native: { providerID: "codex", modelID: "gpt-5.6-sol", agent: "forge-worker" } });
+  expect(await eventually(f)).toMatchObject({ state: "completed", assistantMessageID: f.intent.messageID, native: { providerID: "codex", modelID: "gpt-5.6-sol", agent: "suplex-worker" } });
   expect(await readCodexThreadId(f.runtimeDirectory)).toBe(THREAD_ID);
 
-  const second = createOpenCodePromptIntent({ sessionID: f.sessionID, directory: f.scope.directory, prompt: "Check the change", model: { providerID: "codex", modelID: "gpt-5.6-sol" }, agent: "forge-worker", variant: "low" });
+  const second = createOpenCodePromptIntent({ sessionID: f.sessionID, directory: f.scope.directory, prompt: "Check the change", model: { providerID: "codex", modelID: "gpt-5.6-sol" }, agent: "suplex-worker", variant: "low" });
   await f.runtime.dispatch(f.scope, second, async () => true);
   expect(await eventually(f, second)).toMatchObject({ state: "completed" });
 
@@ -176,18 +176,18 @@ test("a Coordinator turn passes the bridge as a config override and no project f
   const f = await fixture("complete");
   const fakeGh = join(f.root, "gh");
   await writeFile(fakeGh, "#!/bin/sh\nexit 0\n", { mode: 0o700 });
-  process.env.FORGE_GH_COMMAND = fakeGh;
+  process.env.SUPLEX_GH_COMMAND = fakeGh;
   const scope: TaskScope = { ...f.scope, role: "root", identity: { taskId: "task-codex", sessionId: "session-codex", generation: 1 } };
 
   await expect(f.runtime.ensureSession(scope, null)).resolves.toMatch(/^codex-/);
   await f.runtime.dispatch(scope, f.intent, async () => true);
-  expect(await eventually(f, f.intent, scope)).toMatchObject({ state: "completed", native: { agent: "forge-root" } });
+  expect(await eventually(f, f.intent, scope)).toMatchObject({ state: "completed", native: { agent: "suplex-root" } });
 
   const [first] = await turns(f.root);
   expect(first).toContain('sandbox_mode="read-only"');
   const override = first!.find(argument => argument.startsWith("mcp_servers."))!;
-  expect(override).toContain(`mcp_servers.forge_root={command=`);
-  expect(override).toContain(`env_vars=["FORGE_ROOT_BINDING","FORGE_ROOT_TOKEN","FORGE_GH_COMMAND"],default_tools_approval_mode="approve"`);
+  expect(override).toContain(`mcp_servers.suplex_root={command=`);
+  expect(override).toContain(`env_vars=["SUPLEX_ROOT_BINDING","SUPLEX_ROOT_TOKEN","SUPLEX_GH_COMMAND"],default_tools_approval_mode="approve"`);
   expect(await readdir(f.scope.directory)).toEqual([]);
   const dispatched = (await readFile(join(f.root, "bridge-env.txt"), "utf8")).trim().split("|");
   expect(dispatched[0]).toBe(join(f.runtimeDirectory, "root.binding.json"));
@@ -205,14 +205,14 @@ test("an Advisor turn carries its result path and its bridge submission is the r
   await f.runtime.ensureSession(scope, f.sessionID);
   await f.runtime.dispatch(scope, f.intent, async () => true);
   const observation = await eventually(f, f.intent, scope);
-  expect(observation).toMatchObject({ state: "completed", native: { mode: "forge-advisor" } });
+  expect(observation).toMatchObject({ state: "completed", native: { mode: "suplex-advisor" } });
 
   const dispatched = (await readFile(join(f.root, "bridge-env.txt"), "utf8")).trim().split("|");
   expect(dispatched[2]).toBe(join(f.runtimeDirectory, "advisor.binding.json"));
   expect(dispatched[3]).toMatch(/^[0-9a-f-]{36}$/);
   expect(dispatched[4]).toBe(advisorBridgeResultPath(f.runtimeDirectory, f.intent.messageID));
   const [first] = await turns(f.root);
-  expect(first!.some(argument => argument.startsWith("mcp_servers.forge_advisor={command="))).toBe(true);
+  expect(first!.some(argument => argument.startsWith("mcp_servers.suplex_advisor={command="))).toBe(true);
 
   const text = await f.runtime.resultText(scope, observation);
   const evidence = await f.runtime.turnEvidence(scope, observation);
@@ -257,7 +257,7 @@ test("a CLI that is still running stays active after printing a final event with
 test("stopped CLI cleanup removes only its generation-owned command", async () => {
   const f = await fixture("unsettled_orphan");
   const orphanPath = join(f.root, "orphan.pid");
-  process.env.FORGE_TEST_ORPHAN = orphanPath;
+  process.env.SUPLEX_TEST_ORPHAN = orphanPath;
   const unrelated = spawn("sleep", ["30"], { detached: true, stdio: "ignore", env: { ...process.env, ...executionProcessEnvironment(f.runtimeDirectory, "other-generation") } });
   const unrelatedPid = unrelated.pid;
   if (!unrelatedPid) throw new Error("Unrelated command did not start");
@@ -285,13 +285,13 @@ test("an unresumable thread is forgotten once, so the next turn starts a fresh o
   expect(await eventually(f)).toMatchObject({ state: "completed" });
   expect(await readCodexThreadId(f.runtimeDirectory)).toBe(THREAD_ID);
 
-  const second = createOpenCodePromptIntent({ sessionID: f.sessionID, directory: f.scope.directory, prompt: "Continue", model: { providerID: "codex", modelID: "gpt-5.6-sol" }, agent: "forge-worker", variant: "low" });
+  const second = createOpenCodePromptIntent({ sessionID: f.sessionID, directory: f.scope.directory, prompt: "Continue", model: { providerID: "codex", modelID: "gpt-5.6-sol" }, agent: "suplex-worker", variant: "low" });
   await f.runtime.dispatch(f.scope, second, async () => true);
   expect(await eventually(f, second)).toMatchObject({ state: "error", reason: "native_startup_failed" });
   expect(await readCodexThreadId(f.runtimeDirectory)).toBeNull();
   expect(await readdir(f.runtimeDirectory)).not.toContain("session.json");
 
-  const third = createOpenCodePromptIntent({ sessionID: f.sessionID, directory: f.scope.directory, prompt: "Try again", model: { providerID: "codex", modelID: "gpt-5.6-sol" }, agent: "forge-worker", variant: "low" });
+  const third = createOpenCodePromptIntent({ sessionID: f.sessionID, directory: f.scope.directory, prompt: "Try again", model: { providerID: "codex", modelID: "gpt-5.6-sol" }, agent: "suplex-worker", variant: "low" });
   await f.runtime.dispatch(f.scope, third, async () => true);
   expect(await eventually(f, third)).toMatchObject({ state: "completed" });
   const [, resumed, fresh] = await turns(f.root);
@@ -316,18 +316,18 @@ test("a lost session record is rebuilt from the turn log so the thread still res
   expect(await eventually(f)).toMatchObject({ state: "completed" });
   await writeFile(join(f.runtimeDirectory, "session.json"), "{ not json");
 
-  const second = createOpenCodePromptIntent({ sessionID: f.sessionID, directory: f.scope.directory, prompt: "Check the change", model: { providerID: "codex", modelID: "gpt-5.6-sol" }, agent: "forge-worker", variant: "low" });
+  const second = createOpenCodePromptIntent({ sessionID: f.sessionID, directory: f.scope.directory, prompt: "Check the change", model: { providerID: "codex", modelID: "gpt-5.6-sol" }, agent: "suplex-worker", variant: "low" });
   await f.runtime.dispatch(f.scope, second, async () => true);
   expect(await eventually(f, second)).toMatchObject({ state: "completed" });
   expect((await turns(f.root))[1]!.slice(0, 3)).toEqual(["exec", "resume", THREAD_ID]);
   expect(await readCodexThreadId(f.runtimeDirectory)).toBe(THREAD_ID);
 });
 
-test("a Worker dispatch never inherits Forge's own bridge variables", async () => {
+test("a Worker dispatch never inherits Suplex's own bridge variables", async () => {
   const f = await fixture("complete");
-  process.env.FORGE_ROOT_BINDING = "/contaminated/root.binding.json";
-  process.env.FORGE_ROOT_TOKEN = "contaminated-token";
-  process.env.FORGE_ADVISOR_RESULT = "/contaminated/result.json";
+  process.env.SUPLEX_ROOT_BINDING = "/contaminated/root.binding.json";
+  process.env.SUPLEX_ROOT_TOKEN = "contaminated-token";
+  process.env.SUPLEX_ADVISOR_RESULT = "/contaminated/result.json";
   await f.runtime.ensureSession(f.scope, f.sessionID);
   await f.runtime.dispatch(f.scope, f.intent, async () => true);
   expect(await eventually(f)).toMatchObject({ state: "completed" });
@@ -397,8 +397,8 @@ async function waitForText(read: () => string, text: string): Promise<void> {
 
 test("the passive display renders the Codex event stream without owning the turn", async () => {
   const f = await fixture("complete");
-  process.env.FORGE_ROOT_BINDING = "/contaminated/root";
-  process.env.FORGE_ADVISOR_RESULT = "/contaminated/result";
+  process.env.SUPLEX_ROOT_BINDING = "/contaminated/root";
+  process.env.SUPLEX_ADVISOR_RESULT = "/contaminated/result";
   await writeFile(f.executable, `#!/bin/sh
 printf '%s\\n' '{"type":"thread.started","thread_id":"${THREAD_ID}"}'
 sleep 0.15
@@ -435,8 +435,8 @@ printf '%s\\n' '{"type":"turn.completed","usage":{"input_tokens":1}}'
   await runtime.ensureSession(f.scope, f.sessionID);
 
   expect(await runtime.attach({ scope: f.scope, nativeSessionId: f.sessionID, paneId: "pane", persistPane: () => {} })).toBe("pane");
-  expect(commands[0]).toContain("'-u' 'FORGE_ROOT_BINDING'");
-  expect(commands[0]).toContain("'-u' 'FORGE_ADVISOR_RESULT'");
+  expect(commands[0]).toContain("'-u' 'SUPLEX_ROOT_BINDING'");
+  expect(commands[0]).toContain("'-u' 'SUPLEX_ADVISOR_RESULT'");
   expect(commands[0]).not.toContain("contaminated");
   await waitForText(() => output.get("pane") ?? "", "Waiting for Codex output");
   expect(await runtime.attach({ scope: f.scope, nativeSessionId: f.sessionID, paneId: "pane", persistPane: () => {} })).toBe("pane");

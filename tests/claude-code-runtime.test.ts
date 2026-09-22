@@ -13,12 +13,12 @@ import { ClaudeCodeSessionReader } from "../src/runtimes/claude-code/session-rea
 import { claudeDisplayCommand } from "../src/runtimes/claude-code/display.js";
 
 const directories: string[] = [];
-afterEach(async () => { delete process.env.FORGE_GH_COMMAND; await Promise.all(directories.splice(0).map(path => rm(path, { recursive: true, force: true }))); });
+afterEach(async () => { delete process.env.SUPLEX_GH_COMMAND; await Promise.all(directories.splice(0).map(path => rm(path, { recursive: true, force: true }))); });
 
 const sessionID = "71618050-0d31-428e-a547-d6c4a2eca88f";
 
 async function fixture(behaviour: "complete" | "hang" | "crash" | "startup_failure") {
-  const root = await mkdtemp(join(tmpdir(), "forge-claude-runtime-"));
+  const root = await mkdtemp(join(tmpdir(), "suplex-claude-runtime-"));
   directories.push(root);
   const worktree = join(root, "worktree");
   await mkdir(worktree);
@@ -32,14 +32,14 @@ async function fixture(behaviour: "complete" | "hang" | "crash" | "startup_failu
     crash: [line({ type: "system", subtype: "init", session_id: sessionID, cwd: worktree, model: "m", tools: [] }), "exit 1"],
     startup_failure: ["echo 'Error: Not logged in' >&2", "exit 1"],
   }[behaviour];
-  await writeFile(executable, `#!/bin/sh\nprintf '%s\\n' "$@" > "$FORGE_TEST_ARGS"\nprintf '%s' "$CLAUDE_CONFIG_DIR" > "$FORGE_TEST_CONFIG_DIR"\ncat > "$FORGE_TEST_PROMPT"\n${script.join("\n")}\n`, { mode: 0o700 });
-  process.env.FORGE_TEST_ARGS = join(root, "args.txt");
-  process.env.FORGE_TEST_PROMPT = join(root, "prompt.txt");
-  process.env.FORGE_TEST_CONFIG_DIR = join(root, "config-dir.txt");
+  await writeFile(executable, `#!/bin/sh\nprintf '%s\\n' "$@" > "$SUPLEX_TEST_ARGS"\nprintf '%s' "$CLAUDE_CONFIG_DIR" > "$SUPLEX_TEST_CONFIG_DIR"\ncat > "$SUPLEX_TEST_PROMPT"\n${script.join("\n")}\n`, { mode: 0o700 });
+  process.env.SUPLEX_TEST_ARGS = join(root, "args.txt");
+  process.env.SUPLEX_TEST_PROMPT = join(root, "prompt.txt");
+  process.env.SUPLEX_TEST_CONFIG_DIR = join(root, "config-dir.txt");
   const scope: TaskScope = { id: "session-claude", taskId: "task-claude", directory: worktree, role: "worker", workerMode: "planned", purpose: "implementation", workflow: "standard", evidenceRoot: null, profile: { providerID: CLAUDE_CODE_PROVIDER, modelID: "haiku", reasoningEffort: "low", serviceTier: "default" } };
-  const runtime = new ClaudeCodeTaskRuntime(join(root, "forge.sqlite"), {} as HerdrClient, { executable, configDirectory });
-  const intent = createOpenCodePromptIntent({ sessionID, directory: worktree, prompt: "Implement the change", model: { providerID: CLAUDE_CODE_PROVIDER, modelID: "haiku" }, agent: "forge-worker", variant: "low" });
-  return { root, worktree, configDirectory, executable, scope, runtime, intent, runtimeDirectory: taskSessionRuntimeDirectory(join(root, "forge.sqlite"), scope.id) };
+  const runtime = new ClaudeCodeTaskRuntime(join(root, "suplex.sqlite"), {} as HerdrClient, { executable, configDirectory });
+  const intent = createOpenCodePromptIntent({ sessionID, directory: worktree, prompt: "Implement the change", model: { providerID: CLAUDE_CODE_PROVIDER, modelID: "haiku" }, agent: "suplex-worker", variant: "low" });
+  return { root, worktree, configDirectory, executable, scope, runtime, intent, runtimeDirectory: taskSessionRuntimeDirectory(join(root, "suplex.sqlite"), scope.id) };
 }
 
 test("a headless turn is dispatched once, observed from its stream, and reported as the result", async () => {
@@ -84,7 +84,7 @@ test("the session reader discovers a local instance transcript without a session
   const local = join(f.root, "provider-instances", "instance");
   await mkdir(join(local, "projects", "worktree"), { recursive: true });
   await writeFile(join(local, "projects", "worktree", `${sessionID}.jsonl`), JSON.stringify({ type: "assistant", uuid: "message", timestamp: new Date().toISOString(), message: { role: "assistant", content: [{ type: "text", text: "Local transcript" }] } }));
-  const reader = new ClaudeCodeSessionReader(join(f.root, "forge.sqlite"), f.configDirectory);
+  const reader = new ClaudeCodeSessionReader(join(f.root, "suplex.sqlite"), f.configDirectory);
   const session = { id: f.scope.id, taskId: f.scope.taskId, kind: "worker" as const, generation: 1, current: true, paneId: null, nativeSessionId: sessionID, lifecycle: "live" as const, assignmentHash: null, launchOwner: null, launchOwnerPid: null, launchOwnerStartTime: null, stopRequestedAt: null, stoppedAt: null, advisorRole: null, workflowInput: null, profile: null };
   expect((await reader.history(session))[0]?.content[0]).toMatchObject({ text: "Local transcript" });
   expect((await reader.execution(session)).tools).toEqual([]);
@@ -137,10 +137,10 @@ test("the display follows turn logs in a Herdr pane before the first turn and re
   const f = await fixture("complete");
   const fakeGh = join(f.root, "gh");
   await writeFile(fakeGh, "#!/bin/sh\nexit 0\n", { mode: 0o700 });
-  process.env.FORGE_GH_COMMAND = fakeGh;
+  process.env.SUPLEX_GH_COMMAND = fakeGh;
   const rootScope: TaskScope = { ...f.scope, id: "session-root", role: "root", identity: { taskId: "task-claude", sessionId: "session-root", generation: 1 } };
   const commands: string[] = [];
-  const runtimeDirectory = taskSessionRuntimeDirectory(join(f.root, "forge.sqlite"), rootScope.id);
+  const runtimeDirectory = taskSessionRuntimeDirectory(join(f.root, "suplex.sqlite"), rootScope.id);
   const display = claudeDisplayCommand(runtimeDirectory);
   const shell = (id: string): PaneProcessInfo => ({ pane_id: id, shell_pid: 10, foreground_process_group_id: 10, foreground_processes: [{ pid: 10, name: "zsh", argv: ["/bin/zsh"] }] });
   const processes = new Map<string, PaneProcessInfo>([["pane", shell("pane")]]);
@@ -151,15 +151,15 @@ test("the display follows turn logs in a Herdr pane before the first turn and re
     async renamePane() {}, async reportPaneMetadata() {},
     async runPaneCommand(id, command) { commands.push(command); processes.set(id, { pane_id: id, shell_pid: 10, foreground_process_group_id: 11, foreground_processes: [{ pid: 11, name: "node", argv: [display.executable, ...display.args] }] }); },
   };
-  const runtime = new ClaudeCodeTaskRuntime(join(f.root, "forge.sqlite"), herdr, { executable: f.executable, configDirectory: f.configDirectory });
+  const runtime = new ClaudeCodeTaskRuntime(join(f.root, "suplex.sqlite"), herdr, { executable: f.executable, configDirectory: f.configDirectory });
   await runtime.ensureSession(rootScope, sessionID);
-  const rootMcp = JSON.parse(await readFile(join(runtimeDirectory, "mcp.json"), "utf8")).mcpServers.forge_root;
-  expect(rootMcp.env).toMatchObject({ FORGE_ROOT_BINDING: expect.stringContaining("root.binding.json"), FORGE_ROOT_TOKEN: expect.stringMatching(/^[0-9a-f-]{36}$/), FORGE_GH_COMMAND: fakeGh });
+  const rootMcp = JSON.parse(await readFile(join(runtimeDirectory, "mcp.json"), "utf8")).mcpServers.suplex_root;
+  expect(rootMcp.env).toMatchObject({ SUPLEX_ROOT_BINDING: expect.stringContaining("root.binding.json"), SUPLEX_ROOT_TOKEN: expect.stringMatching(/^[0-9a-f-]{36}$/), SUPLEX_GH_COMMAND: fakeGh });
   const attach = () => runtime.attach({ scope: rootScope, nativeSessionId: sessionID, paneId: "pane", persistPane: () => {} });
   expect(await attach()).toBe("pane");
   expect(commands).toHaveLength(1);
   expect(commands[0]).toBe(display.command);
-  expect(commands[0]).toContain("'-u' 'FORGE_ROOT_TOKEN'");
+  expect(commands[0]).toContain("'-u' 'SUPLEX_ROOT_TOKEN'");
   expect(commands[0]).not.toContain("--resume");
   expect(commands[0]).not.toContain(f.executable);
   expect(await attach()).toBe("pane");
@@ -169,11 +169,11 @@ test("the display follows turn logs in a Herdr pane before the first turn and re
 test("an old interactive Claude process is not reused or stopped as a display", async () => {
   const f = await fixture("complete");
   const scope = f.scope;
-  const runtimeDirectory = taskSessionRuntimeDirectory(join(f.root, "forge.sqlite"), scope.id);
+  const runtimeDirectory = taskSessionRuntimeDirectory(join(f.root, "suplex.sqlite"), scope.id);
   const display = claudeDisplayCommand(runtimeDirectory);
   const commands: { paneId: string; command: string }[] = [];
   const herdr: Pick<HerdrClient, "getPane" | "getPaneProcessInfo" | "createWorkspace" | "splitPane" | "renamePane" | "runPaneCommand" | "reportPaneMetadata"> = {
-    async getPane(id): Promise<Pane> { return { paneId: id, cwd: f.worktree, tokens: id === "old" ? { forge_binding_id: scope.id } : {} }; },
+    async getPane(id): Promise<Pane> { return { paneId: id, cwd: f.worktree, tokens: id === "old" ? { suplex_binding_id: scope.id } : {} }; },
     async getPaneProcessInfo(id) {
       if (id === "old") return { pane_id: id, shell_pid: 10, foreground_process_group_id: 11, foreground_processes: [{ pid: 11, name: "claude", argv: [f.executable, "--resume", sessionID] }] };
       return { pane_id: id, shell_pid: 20, foreground_process_group_id: 20, foreground_processes: [{ pid: 20, name: "zsh", argv: ["/bin/zsh"] }] };
@@ -183,7 +183,7 @@ test("an old interactive Claude process is not reused or stopped as a display", 
     async renamePane() {}, async reportPaneMetadata() {},
     async runPaneCommand(paneId, command) { commands.push({ paneId, command }); },
   };
-  const runtime = new ClaudeCodeTaskRuntime(join(f.root, "forge.sqlite"), herdr, { executable: f.executable, configDirectory: f.configDirectory });
+  const runtime = new ClaudeCodeTaskRuntime(join(f.root, "suplex.sqlite"), herdr, { executable: f.executable, configDirectory: f.configDirectory });
   expect(await runtime.attach({ scope, nativeSessionId: sessionID, paneId: "old", rootPaneId: "root", persistPane: () => {} })).toBe("new-display");
   expect(commands).toEqual([{ paneId: "new-display", command: display.command }]);
 });
@@ -204,7 +204,7 @@ test("harness selection follows the profile provider and the native session iden
   void router.stop(scope, null);
   expect(calls).toEqual(["opencode", "claude-code", "stop:claude-code", "stop:opencode", "stop:opencode"]);
   const rootArguments = claudeArguments({ scope: { ...scope, role: "root", identity: { taskId: "t", sessionId: "s", generation: 1 } }, sessionID, resume: true, print: true, runtimeDirectory: "/runtime" });
-  expect(rootArguments).toEqual(expect.arrayContaining(["--tools", "--allowedTools", "mcp__forge_root,WebFetch,WebSearch", "--mcp-config", "/runtime/mcp.json", "--strict-mcp-config", "--permission-prompts", "none"]));
+  expect(rootArguments).toEqual(expect.arrayContaining(["--tools", "--allowedTools", "mcp__suplex_root,WebFetch,WebSearch", "--mcp-config", "/runtime/mcp.json", "--strict-mcp-config", "--permission-prompts", "none"]));
   expect(rootArguments).not.toContain("--dangerously-skip-permissions");
 });
 
@@ -218,13 +218,13 @@ test("Claude workflow roles retain their prompts, read-only Advisor tools, and e
   const args = claudeArguments({ scope, sessionID, resume: false, print: true, runtimeDirectory: f.runtimeDirectory });
   expect(args[args.indexOf("--tools") + 1]).toBe("Read,Glob,Grep,WebFetch,WebSearch,TodoWrite");
   expect(args[args.indexOf("--mcp-config") + 1]).toBe(join(f.runtimeDirectory, "mcp.json"));
-  expect(args).toEqual(expect.arrayContaining(["--allowedTools", "mcp__forge_advisor__submit_report,WebFetch,WebSearch"]));
+  expect(args).toEqual(expect.arrayContaining(["--allowedTools", "mcp__suplex_advisor__submit_report,WebFetch,WebSearch"]));
   expect(JSON.parse(await readFile(join(f.runtimeDirectory, "advisor.binding.json"), "utf8"))).toMatchObject({ version: 1, role: "reviewer", token: expect.stringMatching(/^[0-9a-f-]{36}$/), server: { command: process.execPath } });
-  expect(Object.keys(JSON.parse(await readFile(join(f.runtimeDirectory, "mcp.json"), "utf8")).mcpServers)).toEqual(["forge_advisor"]);
-  expect(JSON.parse(await readFile(join(f.runtimeDirectory, "mcp.json"), "utf8")).mcpServers.forge_advisor.env).toMatchObject({ FORGE_ADVISOR_BINDING: expect.stringContaining("advisor.binding.json"), FORGE_ADVISOR_TOKEN: expect.stringMatching(/^[0-9a-f-]{36}$/) });
+  expect(Object.keys(JSON.parse(await readFile(join(f.runtimeDirectory, "mcp.json"), "utf8")).mcpServers)).toEqual(["suplex_advisor"]);
+  expect(JSON.parse(await readFile(join(f.runtimeDirectory, "mcp.json"), "utf8")).mcpServers.suplex_advisor.env).toMatchObject({ SUPLEX_ADVISOR_BINDING: expect.stringContaining("advisor.binding.json"), SUPLEX_ADVISOR_TOKEN: expect.stringMatching(/^[0-9a-f-]{36}$/) });
   expect(args[args.indexOf("--add-dir") + 1]).toBe(scope.evidenceRoot);
   expect(args).not.toContain("--dangerously-skip-permissions");
-  expect(args).not.toContain("mcp__forge_root");
+  expect(args).not.toContain("mcp__suplex_root");
   expect(args[args.indexOf("--append-system-prompt") + 1]).toContain("Advisor");
   const worker = claudeArguments({ scope: { ...f.scope, role: "worker", workflow: "direct_build", workerMode: "direct", purpose: "verification" }, sessionID, resume: false, print: true, runtimeDirectory: f.runtimeDirectory });
   expect(worker[worker.indexOf("--append-system-prompt") + 1]).toContain("verification Worker");
@@ -240,7 +240,7 @@ test("workflow evidence routes to Claude and reads only the requested native tur
   opencode.turnEvidence = async () => { throw new Error("Wrong harness"); };
   const router = new HarnessRouter({ "claude-code": f.runtime, opencode });
   expect(await router.turnEvidence(f.scope, observation)).toMatchObject({ tools: [], limit: expect.stringContaining("missing") });
-  await writeFile(join(f.runtimeDirectory, "turn-other.jsonl"), JSON.stringify({ type: "assistant", uuid: "other", message: { role: "assistant", content: [{ type: "tool_use", id: "other-tool", name: "mcp__forge_advisor__submit_report", input: { summary: "wrong turn" } }] } }));
+  await writeFile(join(f.runtimeDirectory, "turn-other.jsonl"), JSON.stringify({ type: "assistant", uuid: "other", message: { role: "assistant", content: [{ type: "tool_use", id: "other-tool", name: "mcp__suplex_advisor__submit_report", input: { summary: "wrong turn" } }] } }));
   await writeFile(join(f.runtimeDirectory, `turn-${observation.messageID}.jsonl`), [
     { type: "assistant", uuid: "a1", message: { role: "assistant", content: [{ type: "tool_use", id: "check", name: "Bash", input: { command: "pnpm test" } }] } },
     { type: "user", uuid: "u1", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "check", content: "Tests passed" }] } },

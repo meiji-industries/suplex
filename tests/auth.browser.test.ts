@@ -21,7 +21,7 @@ const health = {
 };
 
 test("loopback requests create and preserve an Operator session", async () => {
-  const root = await mkdtemp(join(tmpdir(), "forge-auth-browser-test-"));
+  const root = await mkdtemp(join(tmpdir(), "suplex-auth-browser-test-"));
   const port = await freePort();
   const reachableAddress = `http://localhost:${port}`;
   const config = createTestConfig(root, { port, reachableAddress });

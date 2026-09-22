@@ -7,12 +7,12 @@ import type { TaskScope } from "../src/runtimes/task-harness.js";
 
 const servers = ProjectMcpSchema.parse([{ name: "context7", transport: { type: "http", url: "https://example.com/mcp", headers: { Authorization: "CONTEXT7_TOKEN" } }, grants: { root: ["query_docs"], advisor: [], worker: ["query_docs", "resolve_library_id"] } }]);
 
-test("MCP grants are exact, role scoped and cannot replace Forge bridges", () => {
+test("MCP grants are exact, role scoped and cannot replace Suplex bridges", () => {
   expect(projectMcpTools(servers, "root")).toEqual(["mcp__context7__query_docs"]);
   expect(projectMcpServers(servers, "advisor", {})).toEqual({});
   expect(projectMcpServers(servers, "root", { CONTEXT7_TOKEN: "fixture" })).toEqual({ context7: { type: "http", url: "https://example.com/mcp", headers: { Authorization: "fixture" } } });
   expect(() => projectMcpServers(servers, "root", {})).toThrow("CONTEXT7_TOKEN");
-  expect(ProjectMcpSchema.safeParse([{ ...servers[0], name: "forge_root" }]).success).toBe(false);
+  expect(ProjectMcpSchema.safeParse([{ ...servers[0], name: "suplex_root" }]).success).toBe(false);
   expect(ProjectMcpSchema.safeParse([{ ...servers[0], grants: { root: ["*"], advisor: [], worker: [] } }]).success).toBe(false);
 });
 

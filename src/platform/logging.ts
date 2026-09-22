@@ -90,7 +90,7 @@ const maxDevLogBytes = 50 * 1024 * 1024;
  * preserve Pino's record order and deliberately never take down the process
  * when an operator's disk is full or unavailable.
  */
-export function createDevLogFileSink(component: "api" | "worker", directory = join(process.cwd(), ".forge", "logs")): (line: string) => void {
+export function createDevLogFileSink(component: "api" | "worker", directory = join(process.cwd(), ".suplex", "logs")): (line: string) => void {
   const currentPath = join(directory, `${component}.log`);
   const previousPath = `${currentPath}.1`;
   return (line: string): void => {
@@ -160,7 +160,7 @@ function errorDetails(record: DevLogRecord): { message?: string | undefined; sta
 }
 
 function includeDebugLogs(all?: boolean): boolean {
-  return all ?? process.env.FORGE_LOG_REQUESTS === "1";
+  return all ?? process.env.SUPLEX_LOG_REQUESTS === "1";
 }
 
 /** Formats one Pino record for interactive development output. */
@@ -196,7 +196,7 @@ export function formatDevLogLine(input: DevLogRecord, options: { color?: boolean
 }
 
 function usePrettyLogs(): boolean {
-  return process.env.FORGE_PRETTY_LOGS === "1" || (process.env.NODE_ENV === "development" && Boolean(process.stdout.isTTY));
+  return process.env.SUPLEX_PRETTY_LOGS === "1" || (process.env.NODE_ENV === "development" && Boolean(process.stdout.isTTY));
 }
 
 function prettyDestination(): DestinationStream {

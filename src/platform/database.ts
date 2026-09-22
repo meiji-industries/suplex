@@ -44,12 +44,12 @@ export interface DatabaseHealth {
  * a non-migrating mode explicitly so observing a live database cannot change
  * it. A read-only connection also requires the database to already exist.
  */
-export type ForgeDatabaseOpenOptions =
+export type SuplexDatabaseOpenOptions =
   | { migrate?: true; readOnly?: false }
   | { migrate: false; readOnly?: false }
   | { migrate?: false; readOnly: true };
 
-export type ForgeDatabaseOpenMode = "migrate" | "read-write" | "read-only";
+export type SuplexDatabaseOpenMode = "migrate" | "read-write" | "read-only";
 
 export interface RepositoryIdentityCollision {
   projectId: string;
@@ -82,7 +82,7 @@ function migrationFolder(): string {
     }
   });
   if (!folder) {
-    throw new Error("Forge database migrations are not installed");
+    throw new Error("Suplex database migrations are not installed");
   }
   return folder;
 }
@@ -226,13 +226,13 @@ function determineSchemaState(expected: ExpectedMigration[], applied: AppliedMig
   return applied.length > expected.length ? "ahead" : "corrupt";
 }
 
-export class ForgeDatabase {
+export class SuplexDatabase {
   private readonly commitCallbacks: Array<Array<() => void>> = [];
   private readonly db: Database.Database;
   private readonly orm: BetterSQLite3Database<AuthSchema>;
-  private readonly mode: ForgeDatabaseOpenMode;
+  private readonly mode: SuplexDatabaseOpenMode;
 
-  constructor(filename: string, options: ForgeDatabaseOpenOptions = {}) {
+  constructor(filename: string, options: SuplexDatabaseOpenOptions = {}) {
     const readOnly = options.readOnly === true;
     const migrate = options.migrate ?? !readOnly;
     if (readOnly && migrate) throw new Error("A read-only database connection cannot run migrations");
@@ -258,7 +258,7 @@ export class ForgeDatabase {
     }
   }
 
-  openMode(): ForgeDatabaseOpenMode {
+  openMode(): SuplexDatabaseOpenMode {
     return this.mode;
   }
 
@@ -267,10 +267,10 @@ export class ForgeDatabase {
   }
 
   private preflightProjectRepositoryIdentities(): void {
-    const table = this.db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'forge_projects'").get() as { name: string } | undefined;
+    const table = this.db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' AND name = 'suplex_projects'").get() as { name: string } | undefined;
     if (!table) return;
 
-    const rows = this.db.prepare("SELECT id, company_id, repository_identity FROM forge_projects WHERE repository_identity IS NOT NULL").all() as Array<{ id: string; company_id: string; repository_identity: string }>;
+    const rows = this.db.prepare("SELECT id, company_id, repository_identity FROM suplex_projects WHERE repository_identity IS NOT NULL").all() as Array<{ id: string; company_id: string; repository_identity: string }>;
     const normalized = rows.map((row) => ({ ...row, repository_identity: row.repository_identity.trim().toLowerCase() }));
     const byIdentity = new Map<string, RepositoryIdentityCollision[]>();
     for (const row of normalized) {
@@ -284,7 +284,7 @@ export class ForgeDatabase {
 
     this.db.transaction(() => {
       for (const row of normalized) {
-        this.db.prepare("UPDATE forge_projects SET repository_identity = ? WHERE id = ? AND repository_identity IS NOT NULL").run(row.repository_identity, row.id);
+        this.db.prepare("UPDATE suplex_projects SET repository_identity = ? WHERE id = ? AND repository_identity IS NOT NULL").run(row.repository_identity, row.id);
       }
     })();
   }

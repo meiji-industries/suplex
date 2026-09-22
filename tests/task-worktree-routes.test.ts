@@ -14,7 +14,7 @@ async function fixture(withWorktree = true) {
   if (withWorktree) tasks.repository.controls.setWorktree(task.id, { path: "/worktrees/task", branch: task.configuration.branch, baseSha: "a", headSha: "a", dirty: false });
   const app = Fastify();
   let user = native.auth.listUsers(native.userId)[0]!;
-  app.decorateRequest("forgeUser", { getter: () => user });
+  app.decorateRequest("suplexUser", { getter: () => user });
   app.setValidatorCompiler(validatorCompiler);
   app.setSerializerCompiler(() => (data) => JSON.stringify(data));
   installHttpErrorHandlers(app);
@@ -33,7 +33,7 @@ test("opens a task worktree through the configured editor and records the action
     expect(response.statusCode).toBe(200);
     expect(response.json()).toEqual({ ok: true });
     expect(value.runCommand).toHaveBeenCalledWith(expect.objectContaining({ command: "/usr/local/bin/code", args: ["/worktrees/task"], taskId: value.task.id }));
-    expect(value.database.authQuery((db) => db.prepare("SELECT action FROM forge_audit_events WHERE action = 'worktree_opened'").all())).toEqual([{ action: "worktree_opened" }]);
+    expect(value.database.authQuery((db) => db.prepare("SELECT action FROM suplex_audit_events WHERE action = 'worktree_opened'").all())).toEqual([{ action: "worktree_opened" }]);
   } finally {
     await value.app.close();
     await value.native.close();
@@ -72,13 +72,13 @@ test("requires a direct loopback peer and exact configured Host", async () => {
   try {
     const local = await value.app.inject({ method: "GET", url: `/api/tasks/${value.task.id}/worktree/apps`, headers: { host: "127.0.0.1:4111" } });
     expect(local.json()).toEqual({ apps: [{ id: "finder", label: "Finder" }, { id: "terminal", label: "Terminal" }] });
-    const remote = await value.app.inject({ method: "GET", url: `/api/tasks/${value.task.id}/worktree/apps`, headers: { host: "forge.tailnet.ts.net:4111" } });
+    const remote = await value.app.inject({ method: "GET", url: `/api/tasks/${value.task.id}/worktree/apps`, headers: { host: "suplex.tailnet.ts.net:4111" } });
     expect(remote.json()).toEqual({ apps: [] });
     const forged = await value.app.inject({ method: "GET", url: `/api/tasks/${value.task.id}/worktree/apps`, headers: { host: "127.0.0.1:4111" }, remoteAddress: "203.0.113.10" });
     expect(forged.json()).toEqual({ apps: [] });
     const forwarded = await value.app.inject({ method: "GET", url: `/api/tasks/${value.task.id}/worktree/apps`, headers: { host: "127.0.0.1:4111", "x-forwarded-for": "127.0.0.1" } });
     expect(forwarded.json()).toEqual({ apps: [] });
-    const rejected = await value.app.inject({ method: "POST", url: `/api/tasks/${value.task.id}/worktree/open`, headers: { host: "forge.tailnet.ts.net:4111" }, payload: { app: "finder" } });
+    const rejected = await value.app.inject({ method: "POST", url: `/api/tasks/${value.task.id}/worktree/open`, headers: { host: "suplex.tailnet.ts.net:4111" }, payload: { app: "finder" } });
     expect(rejected.statusCode).toBe(403);
     const spoofed = await value.app.inject({ method: "POST", url: `/api/tasks/${value.task.id}/worktree/open`, headers: { host: "127.0.0.1:4111", forwarded: "for=127.0.0.1" }, payload: { app: "finder" } });
     expect(spoofed.statusCode).toBe(403);
@@ -110,7 +110,7 @@ test("does not audit failed launches or unavailable applications", async () => {
     value.runCommand.mockRejectedValueOnce(new Error("permission denied"));
     const denied = await value.app.inject({ method: "POST", url: `/api/tasks/${value.task.id}/worktree/open`, headers: { host: "127.0.0.1:4111" }, payload: { app: "finder" } });
     expect(denied.json()).toEqual({ ok: false, error: "permission denied" });
-    expect(value.database.authQuery((db) => db.prepare("SELECT action FROM forge_audit_events WHERE action = 'worktree_opened'").all())).toEqual([]);
+    expect(value.database.authQuery((db) => db.prepare("SELECT action FROM suplex_audit_events WHERE action = 'worktree_opened'").all())).toEqual([]);
   } finally {
     await value.app.close();
     await value.native.close();

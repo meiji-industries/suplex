@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 
-onepassword_token_file="${OP_SERVICE_ACCOUNT_TOKEN_FILE:-$HOME/.config/forge/op-service-account-token}"
-onepassword_token_reference="op://Forge/f2dxilmlrjfzwz42yzxv4jivki/credential"
+onepassword_token_file="${OP_SERVICE_ACCOUNT_TOKEN_FILE:-$HOME/.config/suplex/op-service-account-token}"
+onepassword_token_reference="op://Suplex/f2dxilmlrjfzwz42yzxv4jivki/credential"
 
 onepassword_setup_service_account() {
   command -v op >/dev/null || { echo "Install the 1Password CLI (op)." >&2; return 1; }
@@ -20,8 +20,8 @@ onepassword_setup_service_account() {
     chmod 600 "$onepassword_token_file"
   fi
 
-  OP_SERVICE_ACCOUNT_TOKEN="$token" op vault get Forge >/dev/null || {
-    echo "The Forge service account cannot access the Forge vault." >&2
+  OP_SERVICE_ACCOUNT_TOKEN="$token" op vault get Suplex >/dev/null || {
+    echo "The service account cannot access the Suplex vault." >&2
     return 1
   }
   export OP_SERVICE_ACCOUNT_TOKEN="$token"

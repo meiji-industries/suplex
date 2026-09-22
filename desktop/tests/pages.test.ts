@@ -25,13 +25,13 @@ test("the shared style is the app's dark look", () => {
 describe("choice", () => {
   const html = page("choice.html");
   test("carries C4's copy with the local card preselected", () => {
-    expect(html).toContain("<title>Set up Forge</title>");
-    expect(html).toContain("<h1>Set up Forge</h1>");
-    expect(html).toContain('<input type="radio" name="mode" value="local" checked><strong>Run Forge on this Mac</strong>');
-    expect(html).toContain("<p>Installs Herdr and Apple's developer tools if they are missing, then starts a private Forge on this computer. Works offline.</p>");
-    expect(html).toContain('<input type="radio" name="mode" value="remote"><strong>Connect to a Forge host</strong>');
-    expect(html).toContain("<p>Use a Forge that is already running elsewhere. Nothing is installed on this Mac.</p>");
-    expect(html).toContain("Data will live in ~/Library/Application Support/Forge.");
+    expect(html).toContain("<title>Set up Suplex</title>");
+    expect(html).toContain("<h1>Set up Suplex</h1>");
+    expect(html).toContain('<input type="radio" name="mode" value="local" checked><strong>Run Suplex on this Mac</strong>');
+    expect(html).toContain("<p>Installs Herdr and Apple's developer tools if they are missing, then starts a private Suplex on this computer. Works offline.</p>");
+    expect(html).toContain('<input type="radio" name="mode" value="remote"><strong>Connect to a Suplex host</strong>');
+    expect(html).toContain("<p>Use a Suplex that is already running elsewhere. Nothing is installed on this Mac.</p>");
+    expect(html).toContain("Data will live in ~/Library/Application Support/Suplex.");
   });
   test("is two cards in the middle 67% of the window, stacked under 720 px", () => {
     expect(styles).toContain("main { width: 67vw; margin: 0 auto;");
@@ -58,8 +58,8 @@ describe("install progress", () => {
 });
 
 test("ready offers one Launch button", () => {
-  expect(page("ready.html")).toContain("<h1>Forge is ready</h1>");
-  expect(page("ready.html")).toContain('<button class="primary" id="launch" type="button" autofocus>Launch Forge <span aria-hidden="true">→</span></button>');
+  expect(page("ready.html")).toContain("<h1>Suplex is ready</h1>");
+  expect(page("ready.html")).toContain('<button class="primary" id="launch" type="button" autofocus>Launch Suplex <span aria-hidden="true">→</span></button>');
 });
 
 test("connecting is the cold boot interstitial", () => {
@@ -79,7 +79,7 @@ test("the remote form proves health before Save is offered", () => {
   const html = page(join("..", "connect.html"));
   expect(html).toContain('<button id="test" type="button">Test connection</button>');
   expect(html).toContain('<button id="save" class="primary" type="submit" disabled>Save</button>');
-  expect(html).toContain("await window.forgeDesktop.testConnection(candidate)");
+  expect(html).toContain("await window.suplexDesktop.testConnection(candidate)");
   expect(html).toContain("if (result.ok) { proven = candidate; save.disabled = false;");
-  expect(html).toContain("window.forgeDesktop.back()");
+  expect(html).toContain("window.suplexDesktop.back()");
 });

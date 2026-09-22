@@ -20,7 +20,7 @@ test("task history authorizes the task and session before native fallback reads"
     const secondSession = firstStore.bindHarnessSession({ sessionId: secondReserved.id, generation: secondReserved.generation, nativeSessionId: "ses_foreign" });
     vi.spyOn(executables, "resolveOpenCodeExecutable").mockResolvedValue("/bin/opencode");
     const run = vi.spyOn(commands, "readCommandOutput").mockResolvedValue(JSON.stringify({ info: { id: "ses_history" }, messages: [{
-      info: { id: "msg_user", sessionID: "ses_history", role: "user", time: { created: 10 }, agent: "forge-root", model: { providerID: "openai", modelID: "model" } },
+      info: { id: "msg_user", sessionID: "ses_history", role: "user", time: { created: 10 }, agent: "suplex-root", model: { providerID: "openai", modelID: "model" } },
       parts: [{ id: "prt_user", type: "text", text: "Hello" }],
     }] }));
 
@@ -87,7 +87,7 @@ test("task history preserves an authorization failure after the native read", as
     const session = store.bindHarnessSession({ sessionId: reserved.id, generation: reserved.generation, nativeSessionId: "ses_history" });
     vi.spyOn(executables, "resolveOpenCodeExecutable").mockResolvedValue("/bin/opencode");
     vi.spyOn(commands, "readCommandOutput").mockImplementation(async () => {
-      value.database.authQuery(db => db.prepare("UPDATE forge_users SET status = 'revoked' WHERE id = ?").run(value.userId));
+      value.database.authQuery(db => db.prepare("UPDATE suplex_users SET status = 'revoked' WHERE id = ?").run(value.userId));
       return JSON.stringify({ info: { id: "ses_history" }, messages: [] });
     });
 

@@ -13,10 +13,10 @@ import { TaskBodySchema } from "../src/http/contracts/tasks.js";
 import { commitGitFixture, initializeGitFixture } from "./helpers/git-fixture.js";
 
 const roots: string[] = [];
-afterEach(() => { delete process.env.FORGE_MIN_FREE_DISK_GB; while (roots.length) rmSync(roots.pop()!, { recursive: true, force: true }); });
+afterEach(() => { delete process.env.SUPLEX_MIN_FREE_DISK_GB; while (roots.length) rmSync(roots.pop()!, { recursive: true, force: true }); });
 const sha = "a".repeat(40);
-const project = (repositoryPath = "/tmp/repo"): Project => ({ id: "p", companyId: "c", name: "Forge", repositoryPath, worktreeRoot: "/tmp/worktrees", repository: "acme/forge", baseBranch: "main", setupCommand: "true", verificationCommand: "true", rootProfileId: "profile_native_root", workerProfileId: "profile_native_worker", createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
-const pull = (value: Partial<GithubPullRequest> = {}): GithubPullRequest => ({ number: 7, url: "https://github.com/acme/forge/pull/7", repository: "acme/forge", headBranch: "feature", baseBranch: "main", headSha: sha, baseSha: sha, isDraft: false, state: "open", mergedAt: null, title: "Feature", body: "Body", author: "octo", ...value });
+const project = (repositoryPath = "/tmp/repo"): Project => ({ id: "p", companyId: "c", name: "Suplex", repositoryPath, worktreeRoot: "/tmp/worktrees", repository: "acme/suplex", baseBranch: "main", setupCommand: "true", verificationCommand: "true", rootProfileId: "profile_native_root", workerProfileId: "profile_native_worker", createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
+const pull = (value: Partial<GithubPullRequest> = {}): GithubPullRequest => ({ number: 7, url: "https://github.com/acme/suplex/pull/7", repository: "acme/suplex", headBranch: "feature", baseBranch: "main", headSha: sha, baseSha: sha, isDraft: false, state: "open", mergedAt: null, title: "Feature", body: "Body", author: "octo", ...value });
 const github = (row = pull()): Pick<GithubReleasePort, "listOpenPullRequests" | "getPullRequest"> => ({ async listOpenPullRequests() { return [row]; }, async getPullRequest() { return row; } });
 
 test("pull request discovery is bounded, shaped, and filters forks", async () => {
@@ -36,7 +36,7 @@ test("pull request provider failure stays isolated from branch capability", asyn
 });
 
 test("source resolution rejects forks and configured base branches", async () => {
-  await expect(new TaskSourceService(github(pull({ isCrossRepository: true, repository: "fork/forge" }))).resolve(project(), { kind: "pull_request", number: 7 })).rejects.toMatchObject({ code: "source-unsupported-fork" });
+  await expect(new TaskSourceService(github(pull({ isCrossRepository: true, repository: "fork/suplex" }))).resolve(project(), { kind: "pull_request", number: 7 })).rejects.toMatchObject({ code: "source-unsupported-fork" });
   const service = new TaskSourceService(github());
   await expect(service.resolve(project(), { kind: "branch", branch: "main" })).rejects.toMatchObject({ code: "source-base-branch" });
   await expect(new TaskSourceService(github(pull({ baseBranch: "bad branch" }))).resolve(project(), { kind: "pull_request", number: 7 })).rejects.toMatchObject({ code: "unsafe-branch" });
@@ -49,7 +49,7 @@ test("source resolution sanitizes provider failures", async () => {
 
 function git(cwd: string, ...args: string[]): string { return execFileSync("git", args, { cwd, encoding: "utf8" }).trim(); }
 async function fixture(): Promise<{ repo: string; worktrees: string; base: string; head: string }> {
-  const root = mkdtempSync(join(tmpdir(), "forge-source-")); roots.push(root);
+  const root = mkdtempSync(join(tmpdir(), "suplex-source-")); roots.push(root);
   const remote = join(root, "remote.git"); const repo = join(root, "repo"); const worktrees = join(root, "worktrees");
   mkdirSync(repo); mkdirSync(worktrees); mkdirSync(remote); await initializeGitFixture(remote, "main", true); await initializeGitFixture(repo, "main");
   writeFileSync(join(repo, "README.md"), "base\n"); const base = await commitGitFixture(repo, "base", ["README.md"]); await isomorphicGit.addRemote({ fs, dir: repo, remote: "origin", url: remote }); git(repo, "push", "-u", "origin", "main");
@@ -75,7 +75,7 @@ test("source capture reads the current remote branch head", async () => {
 });
 
 test("issues resolve from GitHub without a discovery receipt and retain full context", async () => {
-  const issue = { number: 42, url: "https://github.com/acme/forge/issues/42", title: "Fix search", body: "Original details", author: { login: "octo" }, state: "OPEN" as const, labels: [{ name: "bug" }], assignees: [{ login: "dev" }], milestone: { title: "Launch" }, updatedAt: "2026-09-07", comments: [{ html_url: "https://github.com/acme/forge/issues/42#issuecomment-1", body: "Use the new index", user: { login: "reviewer" }, created_at: "2026-09-07" }] };
+  const issue = { number: 42, url: "https://github.com/acme/suplex/issues/42", title: "Fix search", body: "Original details", author: { login: "octo" }, state: "OPEN" as const, labels: [{ name: "bug" }], assignees: [{ login: "dev" }], milestone: { title: "Launch" }, updatedAt: "2026-09-07", comments: [{ html_url: "https://github.com/acme/suplex/issues/42#issuecomment-1", body: "Use the new index", user: { login: "reviewer" }, created_at: "2026-09-07" }] };
   const service = new TaskSourceService({ ...github(), async listOpenIssues() { return [issue]; }, async getIssue() { return { ...issue, body: "Updated details" }; } });
   expect(TaskBodySchema.parse({ projectId: "p", title: "Task", description: "Do it", idempotencyKey: "issue-source-001", source: { kind: "issue", number: 42 } }).source).toEqual({ kind: "issue", number: 42 });
   const resolved = await service.resolve(project(), { kind: "issue", number: 42 });

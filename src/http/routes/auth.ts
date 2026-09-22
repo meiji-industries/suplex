@@ -2,7 +2,7 @@ import type { FastifyPluginAsync } from "fastify";
 import type { ZodTypeProvider } from "@fastify/type-provider-zod";
 
 import type { AuthService } from "../../identity/auth.js";
-import type { ForgeConfig } from "../../platform/config.js";
+import type { SuplexConfig } from "../../platform/config.js";
 import { LEGACY_SESSION_COOKIE_NAME, SESSION_COOKIE_NAME } from "../../identity/auth-identifiers.js";
 import type { FastifyReply } from "fastify";
 import { AuthEnvelopeSchema, AuthOptionsResponseSchema, AuthStatusResponseSchema, ErrorResponseSchema, SignOutResponseSchema, TokenBodySchema, RegistrationVerificationBodySchema, AuthenticationVerificationBodySchema } from "../contracts/common.js";
@@ -11,7 +11,7 @@ import { authenticatedUser, clearSessionCookies, setSessionCookie, sessionUser }
 
 export interface AuthRoutesOptions {
   auth: AuthService;
-  config: ForgeConfig;
+  config: SuplexConfig;
 }
 
 export const authMe: FastifyPluginAsync<Pick<AuthRoutesOptions, "auth">> = async (app, options) => {

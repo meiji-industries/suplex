@@ -2,12 +2,12 @@ import { existsSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { describe, expect, test } from "vitest";
-import { parseForgeTarget } from "../src/forge-target";
+import { parseSuplexTarget } from "../src/suplex-target";
 import { clearTargets, forgetTarget, readTargets, rememberTarget } from "../src/target-store";
 
-const file = (): string => join(mkdtempSync(join(tmpdir(), "forge-desktop-store-")), "desktop.json");
-const meiji = parseForgeTarget("https://meiji.tail1234.ts.net:4111/auth?invite=abc");
-const local = parseForgeTarget("http://localhost:4211");
+const file = (): string => join(mkdtempSync(join(tmpdir(), "suplex-desktop-store-")), "desktop.json");
+const meiji = parseSuplexTarget("https://meiji.tail1234.ts.net:4111/auth?invite=abc");
+const local = parseSuplexTarget("http://localhost:4211");
 
 describe("target registry", () => {
   test("remembers only origins, newest first, with the last remembered one current", async () => {
@@ -23,16 +23,16 @@ describe("target registry", () => {
     const path = file();
     await rememberTarget(path, meiji);
     await rememberTarget(path, local);
-    const registry = await rememberTarget(path, parseForgeTarget("https://meiji.tail1234.ts.net:4111/tasks/1"));
+    const registry = await rememberTarget(path, parseSuplexTarget("https://meiji.tail1234.ts.net:4111/tasks/1"));
     expect(registry.targets.map((target) => target.origin)).toEqual(["https://meiji.tail1234.ts.net:4111", "http://localhost:4211"]);
     expect(registry.current?.origin).toBe("https://meiji.tail1234.ts.net:4111");
   });
   test("keeps at most eight origins", async () => {
     const path = file();
-    for (let port = 1; port <= 10; port += 1) await rememberTarget(path, parseForgeTarget(`https://forge${port}.tail1234.ts.net`));
+    for (let port = 1; port <= 10; port += 1) await rememberTarget(path, parseSuplexTarget(`https://suplex${port}.tail1234.ts.net`));
     const registry = await readTargets(path);
     expect(registry.targets).toHaveLength(8);
-    expect(registry.targets[0]?.origin).toBe("https://forge10.tail1234.ts.net");
+    expect(registry.targets[0]?.origin).toBe("https://suplex10.tail1234.ts.net");
   });
   test("forgetting the current origin leaves nothing current; forgetting the last one deletes the file", async () => {
     const path = file();
@@ -67,7 +67,7 @@ describe("target registry", () => {
   });
   test("invalid entries are dropped on read and a current that is not listed is ignored", async () => {
     const path = file();
-    writeFileSync(path, JSON.stringify({ current: "https://gone.tail1234.ts.net/", targets: ["http://forge.example.com/", "https://u:p@meiji.tail1234.ts.net/", "https://meiji.tail1234.ts.net:4111/auth?invite=x", 42, "http://localhost:4211/"] }));
+    writeFileSync(path, JSON.stringify({ current: "https://gone.tail1234.ts.net/", targets: ["http://suplex.example.com/", "https://u:p@meiji.tail1234.ts.net/", "https://meiji.tail1234.ts.net:4111/auth?invite=x", 42, "http://localhost:4211/"] }));
     const registry = await readTargets(path);
     expect(registry.targets.map((target) => target.origin)).toEqual(["http://localhost:4211"]);
     expect(registry.current).toBeNull();

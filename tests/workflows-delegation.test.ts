@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { afterEach, expect, test } from "vitest";
 import { ArtifactStore } from "../src/platform/artifacts.js";
 import { runCommand } from "../src/platform/command-runner.js";
-import { ForgeDatabase } from "../src/platform/database.js";
+import { SuplexDatabase } from "../src/platform/database.js";
 import { inspectDeliveryDiff } from "../src/delivery/review.js";
 import { openCodeRoleConfig } from "../src/runtimes/opencode/server.js";
 import { taskRolePrompt } from "../src/tasks/execution/role-prompt.js";
@@ -24,7 +24,7 @@ const json = (value: unknown) => `Report prose.\n\n\`\`\`json\n${JSON.stringify(
 const rater = (rating: number, blockingFindings: string[] = [], verification = "passed") => json({ rating, blockingFindings, verification, verificationSummary: "pnpm test exit 0", summary: `Rated ${rating}` });
 
 async function fixture(workflow: WorkflowId, options: { image?: boolean } = {}) {
-  const directory = await mkdtemp(join(tmpdir(), "forge-workflow-delegation-"));
+  const directory = await mkdtemp(join(tmpdir(), "suplex-workflow-delegation-"));
   cleanups.push(async () => { await rm(directory, { recursive: true, force: true }); });
   const repo = join(directory, "repo");
   await git(directory, ["init", "-b", "main", repo]);
@@ -35,13 +35,13 @@ async function fixture(workflow: WorkflowId, options: { image?: boolean } = {}) 
   await git(repo, ["checkout", "-b", "task"]);
   await writeFile(join(repo, "big.txt"), Array.from({ length: 3000 }, (_, index) => `line ${index} ${"x".repeat(30)}`).join("\n"));
   await git(repo, ["add", "."]); await git(repo, ["commit", "-m", "task change"]);
-  const database = new ForgeDatabase(join(directory, "forge.sqlite"));
+  const database = new SuplexDatabase(join(directory, "suplex.sqlite"));
   cleanups.push(async () => database.close());
   const stamp = new Date().toISOString();
   const artifacts = new ArtifactStore(join(directory, "artifacts"), database);
   database.authTransaction(db => {
-    db.prepare("INSERT INTO forge_companies (id, name, status, created_at) VALUES ('company', 'Company', 'active', ?)").run(stamp);
-    db.prepare("INSERT INTO forge_projects (id, company_id, name, repository_path, worktree_root, repository_identity, base_branch, setup_command, verification_command, created_at, updated_at) VALUES ('project', 'company', 'Project', ?, ?, 'owner/repo', 'main', '', 'pnpm test', ?, ?)").run(repo, join(directory, "worktrees"), stamp, stamp);
+    db.prepare("INSERT INTO suplex_companies (id, name, status, created_at) VALUES ('company', 'Company', 'active', ?)").run(stamp);
+    db.prepare("INSERT INTO suplex_projects (id, company_id, name, repository_path, worktree_root, repository_identity, base_branch, setup_command, verification_command, created_at, updated_at) VALUES ('project', 'company', 'Project', ?, ?, 'owner/repo', 'main', '', 'pnpm test', ?, ?)").run(repo, join(directory, "worktrees"), stamp, stamp);
     insertNativeTaskRow(db, { directory: repo });
     if (options.image) artifacts.putArtifactSync(db, "company", "task-image", { filename: "design.png", mimeType: "image/png", bytes: Buffer.from([0x89, 0x50, 0x4e, 0x47]), taskId: "task" });
   });
@@ -122,7 +122,7 @@ test("Direct build has no mandatory Coordinator plan in system, initial, or assi
   expect(prompt).not.toMatch(/Coordinator plan:|Do not take over task planning/);
   expect(assignmentInput(f, worker)).toMatchObject({ kind: "worker", mode: "direct", purpose: "implementation", range: { baseSha: f.baseSha, files: ["big.txt"] } });
   expect(f.scopes.at(-1)).toMatchObject({ role: "worker", workerMode: "direct", purpose: "implementation", workflow: "direct_build", profile: { modelID: "openai/gpt-5.6-luna" } });
-  expect(f.harness.dispatched.at(-1)?.agent).toBe("forge-worker");
+  expect(f.harness.dispatched.at(-1)?.agent).toBe("suplex-worker");
   f.harness.evidence.set(f.harness.dispatched.at(-1)!.messageID, { tools: [{ id: "m:1", name: "bash", status: "completed", input: { command: "pnpm test" }, output: "1 passed", error: null }], limit: null });
   await f.finishDelegate("Implemented and tested.");
   const result = f.store.turns("task").find(turn => turn.sessionId === worker.id)!;
@@ -159,7 +159,7 @@ test("Plan A and Plan B are distinct sessions on the same range, Plan B never se
   expect(a.advisorRole).toBe("planner_a");
   expect(assignmentInput(f, a)).toMatchObject({ kind: "advisor", role: "planner_a", range: { baseSha: f.baseSha, files: ["big.txt"] } });
   expect(f.scopes.at(-1)).toMatchObject({ role: "advisor", label: "Plan A", profile: { modelID: "openai/gpt-5.6-nova", reasoningEffort: "high" }, evidenceRoot: join(f.directory, "evidence", "task") });
-  expect(f.harness.dispatched.at(-1)?.agent).toBe("forge-advisor");
+  expect(f.harness.dispatched.at(-1)?.agent).toBe("suplex-advisor");
   const promptA = f.store.turns("task").find(turn => turn.sessionId === a.id)!.promptText;
   expect(promptA).toContain("Role: Plan A");
   expect(promptA).toContain("patch.diff");
@@ -275,7 +275,7 @@ test("planner evidence preserves verification source proof, tools, and missing-t
   const missingObservation = JSON.parse(missingTurn.terminalObservation!);
   delete missingObservation.tools;
   delete missingObservation.toolsLimit;
-  f.database.authQuery(db => db.prepare("UPDATE forge_task_turns SET terminal_observation = ? WHERE id = ?").run(JSON.stringify(missingObservation), missingTurn.id));
+  f.database.authQuery(db => db.prepare("UPDATE suplex_task_turns SET terminal_observation = ? WHERE id = ?").run(JSON.stringify(missingObservation), missingTurn.id));
 
   const launched = await f.controller.delegatePlanners(f.identity()) as { evidenceDirectory: string };
   const observed = await f.controller.observe(f.identity());
@@ -313,7 +313,7 @@ test("planner reservations and admitted sibling turns survive controller reconst
   expect(reserved.launches).toEqual(["rejected", "rejected"]);
   const ids = reserved.planners.map(planner => planner.id);
   f.harness.ensureSession = ensure;
-  const database = new ForgeDatabase(join(f.directory, "forge.sqlite"), { migrate: false });
+  const database = new SuplexDatabase(join(f.directory, "suplex.sqlite"), { migrate: false });
   cleanups.push(async () => database.close());
   const store = new TaskControlStore(database, async () => ({ kind: "running", startTime: "test-process" }));
   const restarted = new RootController(store, f.harness, f.delivery, f.artifacts, { root: join(f.directory, "evidence") }, f.reader);
@@ -326,7 +326,7 @@ test("planner reservations and admitted sibling turns survive controller reconst
   const bTurn = store.pendingTurns(b!.id)[0]!;
   f.harness.finish(aTurn.id, "completed", json({ summary: "A survives restart" }));
   await restarted.recover("task");
-  const afterA = new ForgeDatabase(join(f.directory, "forge.sqlite"), { migrate: false });
+  const afterA = new SuplexDatabase(join(f.directory, "suplex.sqlite"), { migrate: false });
   cleanups.push(async () => afterA.close());
   const afterAStore = new TaskControlStore(afterA, async () => ({ kind: "running", startTime: "test-process" }));
   const afterAController = new RootController(afterAStore, f.harness, f.delivery, f.artifacts, { root: join(f.directory, "evidence") }, f.reader);
@@ -436,8 +436,8 @@ test("Worker and Rater reuse separate conversations with immutable turn inputs a
   await f.finishDelegate("First repair complete.");
   const firstWorkerNativeSessionId = f.store.sessions("task").find(session => session.id === firstWorker.id)?.nativeSessionId;
 
-  // Existing tasks can contain one-shot role sessions already stopped by an older Forge version.
-  f.database.authTransaction(db => db.prepare("UPDATE forge_task_sessions SET lifecycle = 'stopped', stop_requested_at = updated_at, stopped_at = updated_at WHERE id = ?").run(firstRater.id));
+  // Existing tasks can contain one-shot role sessions already stopped by an older Suplex version.
+  f.database.authTransaction(db => db.prepare("UPDATE suplex_task_sessions SET lifecycle = 'stopped', stop_requested_at = updated_at, stopped_at = updated_at WHERE id = ?").run(firstRater.id));
 
   await f.controller.delegateAdvisor(f.identity(), { role: "rater" });
   const secondRater = f.store.currentSession("task", "worker")!;
@@ -558,7 +558,7 @@ test("Rater results keep their launch range, invalid or stale reports record nul
   const fifth = f.store.currentSession("task", "worker")!;
   const before = f.store.get("task").workflowState.reviews.length;
   const wakesBefore = f.store.turns("task").filter(turn => turn.sessionId === f.identity().sessionId).length;
-  f.database.authQuery(db => db.exec("CREATE TRIGGER crash BEFORE INSERT ON forge_task_turns BEGIN SELECT RAISE(ABORT, 'crash'); END"));
+  f.database.authQuery(db => db.exec("CREATE TRIGGER crash BEFORE INSERT ON suplex_task_turns BEGIN SELECT RAISE(ABORT, 'crash'); END"));
   await f.controller.recover("task");
   f.harness.finish(f.harness.dispatched.at(-1)!.messageID, "completed", rater(9));
   await expect(f.controller.recover("task")).rejects.toThrow(/crash/);
@@ -583,7 +583,7 @@ test("Rater results keep their launch range, invalid or stale reports record nul
 
 test("Reviewer requires the Coordinator brief, records approvals against its range, and missing attachments are reported as missing input", async () => {
   const f = await fixture("independent_review", { image: true });
-  const artifact = f.database.authQuery(db => db.prepare("SELECT storage_path AS storagePath FROM forge_artifacts WHERE task_id = 'task'").get()) as { storagePath: string };
+  const artifact = f.database.authQuery(db => db.prepare("SELECT storage_path AS storagePath FROM suplex_artifacts WHERE task_id = 'task'").get()) as { storagePath: string };
   await rm(join(f.directory, "artifacts", artifact.storagePath));
   await expect(f.controller.delegateAdvisor(f.identity(), { role: "reviewer" })).rejects.toThrow("requires a brief");
   await f.controller.delegateAdvisor(f.identity(), { role: "reviewer", brief: "Plan: guard the dereference. Criteria: tests pass." });
@@ -603,7 +603,7 @@ test("Reviewer requires the Coordinator brief, records approvals against its ran
   expect(assignmentTurn(f, repeated)?.promptText).toContain("Same plan.");
   expect((assignmentInput(f, repeated) as { evidenceDirectory: string }).evidenceDirectory).not.toBe((assignmentInput(f, reviewer) as { evidenceDirectory: string }).evidenceDirectory);
   const submitted = { role: "reviewer", approved: true, blockingFindings: [], verification: "passed", verificationSummary: "pnpm test exit 0 in verification.json", summary: "Approved" };
-  f.harness.evidence.set(assignmentTurn(f, repeated)!.id, { tools: [{ id: "report", name: "forge_advisor_submit_report", status: "completed", input: {}, output: JSON.stringify(submitted), error: null }], limit: null });
+  f.harness.evidence.set(assignmentTurn(f, repeated)!.id, { tools: [{ id: "report", name: "suplex_advisor_submit_report", status: "completed", input: {}, output: JSON.stringify(submitted), error: null }], limit: null });
   await f.finishDelegate("The change is ready. This prose contains no JSON.");
   expect(f.store.get("task").workflowState.reviews.at(-1)).toMatchObject({ role: "reviewer", result: { approved: true }, range: { baseSha: f.baseSha } });
   const inspected = await f.controller.requestDelivery(f.identity(), "inspect_delivery_diff") as { evidenceDirectory: string; patchTruncated: boolean };
@@ -613,14 +613,14 @@ test("Reviewer requires the Coordinator brief, records approvals against its ran
 
 test("advisor native configuration is read-only with only the report bridge and task evidence directory", () => {
   const profile = { providerID: "opencode", modelID: "openai/gpt-5.6-nova", reasoningEffort: "high" as const, serviceTier: "default" as const };
-  const config = openCodeRoleConfig({ role: "advisor", profile, bridge: { command: "/node", args: ["bridge"], environment: { FORGE_ADVISOR_TOKEN: "token" } }, evidenceDirectory: "/data/runtime/task-evidence/task" }) as { mcp?: unknown; agent: Record<string, { permission: Record<string, unknown>; tools: Record<string, boolean> }> };
-  expect(config.mcp).toEqual({ forge_advisor: { type: "local", command: ["/node", "bridge"], environment: { FORGE_ADVISOR_TOKEN: "token" }, enabled: true } });
-  expect(config.agent["forge-advisor"]).toMatchObject({ permission: { edit: "deny", bash: "deny", task: "deny", question: "deny", "forge_root_*": "deny", external_directory: { "*": "deny", "/data/runtime/task-evidence/task/**": "allow" } }, tools: { bash: false, edit: false, write: false, apply_patch: false, task: false, question: false, "forge_root_*": false, "forge_advisor_*": true } });
-  const root = openCodeRoleConfig({ role: "root", profile, bridge: { command: "/node", args: ["bridge"], environment: { FORGE_ROOT_TOKEN: "token" } }, evidenceDirectory: "/data/runtime/task-evidence/task", directory: "/worktrees/task" }) as { mcp?: unknown; agent: Record<string, { permission: Record<string, unknown> }> };
+  const config = openCodeRoleConfig({ role: "advisor", profile, bridge: { command: "/node", args: ["bridge"], environment: { SUPLEX_ADVISOR_TOKEN: "token" } }, evidenceDirectory: "/data/runtime/task-evidence/task" }) as { mcp?: unknown; agent: Record<string, { permission: Record<string, unknown>; tools: Record<string, boolean> }> };
+  expect(config.mcp).toEqual({ suplex_advisor: { type: "local", command: ["/node", "bridge"], environment: { SUPLEX_ADVISOR_TOKEN: "token" }, enabled: true } });
+  expect(config.agent["suplex-advisor"]).toMatchObject({ permission: { edit: "deny", bash: "deny", task: "deny", question: "deny", "suplex_root_*": "deny", external_directory: { "*": "deny", "/data/runtime/task-evidence/task/**": "allow" } }, tools: { bash: false, edit: false, write: false, apply_patch: false, task: false, question: false, "suplex_root_*": false, "suplex_advisor_*": true } });
+  const root = openCodeRoleConfig({ role: "root", profile, bridge: { command: "/node", args: ["bridge"], environment: { SUPLEX_ROOT_TOKEN: "token" } }, evidenceDirectory: "/data/runtime/task-evidence/task", directory: "/worktrees/task" }) as { mcp?: unknown; agent: Record<string, { permission: Record<string, unknown> }> };
   expect(root.mcp).toBeDefined();
-  expect(root.agent["forge-root"]!.permission.external_directory).toEqual({ "*": "deny", "/data/runtime/task-evidence/task": "allow", "/data/runtime/task-evidence/task/**": "allow", "/worktrees/task": "allow", "/worktrees/task/**": "allow" });
-  expect((openCodeRoleConfig({ role: "root", profile }) as { agent: Record<string, { permission: Record<string, unknown> }> }).agent["forge-root"]!.permission.external_directory).toBe("deny");
-  expect((openCodeRoleConfig({ role: "worker", profile }) as { agent: Record<string, { permission: Record<string, unknown> }> }).agent["forge-worker"]!.permission).toMatchObject({ edit: "allow", bash: "allow" });
+  expect(root.agent["suplex-root"]!.permission.external_directory).toEqual({ "*": "deny", "/data/runtime/task-evidence/task": "allow", "/data/runtime/task-evidence/task/**": "allow", "/worktrees/task": "allow", "/worktrees/task/**": "allow" });
+  expect((openCodeRoleConfig({ role: "root", profile }) as { agent: Record<string, { permission: Record<string, unknown> }> }).agent["suplex-root"]!.permission.external_directory).toBe("deny");
+  expect((openCodeRoleConfig({ role: "worker", profile }) as { agent: Record<string, { permission: Record<string, unknown> }> }).agent["suplex-worker"]!.permission).toMatchObject({ edit: "allow", bash: "allow" });
 });
 
 test("a retained invalid Advisor turn is reconciled in place after its original evidence and range pass", async () => {
@@ -632,7 +632,7 @@ test("a retained invalid Advisor turn is reconciled in place after its original 
   const reviewBefore = f.store.get("task").workflowState.reviews.at(-1)!;
   const observation = JSON.parse(turn.terminalObservation!) as Record<string, unknown>;
   const retained = `${JSON.stringify({ rating: 9, blockingFindings: [], verification: "passed", verificationSummary: "Focused checks passed", summary: "Ready" })}\n`;
-  f.database.authTransaction(db => db.prepare("UPDATE forge_task_turns SET terminal_observation = ? WHERE id = ?").run(JSON.stringify({ ...observation, text: `Assessment complete.\n\n\`\`\`json\n${retained}` }), turn.id));
+  f.database.authTransaction(db => db.prepare("UPDATE suplex_task_turns SET terminal_observation = ? WHERE id = ?").run(JSON.stringify({ ...observation, text: `Assessment complete.\n\n\`\`\`json\n${retained}` }), turn.id));
   const workflowInput = assignmentInput(f, advisor);
   if (workflowInput?.kind !== "advisor") throw new Error("Expected Advisor input");
   const mismatch = await reconcileCompletedAdvisorReport({
@@ -740,6 +740,6 @@ test("E1: check-only Workers persist before/after range evidence that is valid o
   expect(verification.workerTurns.find(turn => turn.turnId === assignmentTurn(f, implementation)?.id)).toMatchObject({ verificationRange: null, sourceRangeProof: "none" });
   expect(assignmentTurn(f, advisor)!.promptText).toContain("verificationRange.valid");
   // The evidence survives native retirement and a reopened store.
-  const reopened = new TaskControlStore(new (await import("../src/platform/database.js")).ForgeDatabase(join(f.directory, "forge.sqlite"), { migrate: false }));
+  const reopened = new TaskControlStore(new (await import("../src/platform/database.js")).SuplexDatabase(join(f.directory, "suplex.sqlite"), { migrate: false }));
   expect(JSON.parse(reopened.turns("task").find(turn => turn.sessionId === clean.id)!.terminalObservation!)).toMatchObject({ verificationRange: { valid: true } });
 });

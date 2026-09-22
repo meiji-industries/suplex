@@ -1,28 +1,28 @@
 import { readFile, unlink, writeFile } from "node:fs/promises";
-import { parseForgeTarget, type ForgeTarget } from "./forge-target";
+import { parseSuplexTarget, type SuplexTarget } from "./suplex-target";
 
-/** The remembered Forge origins. `current` is always one of `targets`, or null when nothing is chosen. */
+/** The remembered Suplex origins. `current` is always one of `targets`, or null when nothing is chosen. */
 export interface TargetRegistry {
-  readonly current: ForgeTarget | null;
-  readonly targets: readonly ForgeTarget[];
+  readonly current: SuplexTarget | null;
+  readonly targets: readonly SuplexTarget[];
 }
 
 const LIMIT = 8;
 const EMPTY: TargetRegistry = { current: null, targets: [] };
 
 /** Only an origin (root path, no query) is ever remembered; a first page such as an invitation link is not. */
-function originTarget(value: unknown): ForgeTarget | null {
+function originTarget(value: unknown): SuplexTarget | null {
   if (typeof value !== "string") return null;
   try {
-    const target = parseForgeTarget(value);
+    const target = parseSuplexTarget(value);
     return target.url === `${target.origin}/` ? target : null;
   } catch {
     return null;
   }
 }
 
-function asOrigin(target: ForgeTarget): ForgeTarget {
-  return parseForgeTarget(`${target.origin}/`);
+function asOrigin(target: SuplexTarget): SuplexTarget {
+  return parseSuplexTarget(`${target.origin}/`);
 }
 
 async function write(file: string, registry: TargetRegistry): Promise<TargetRegistry> {
@@ -48,7 +48,7 @@ export async function readTargets(file: string): Promise<TargetRegistry> {
     return EMPTY;
   }
   const listed: unknown[] = Array.isArray(data.targets) ? data.targets : [data.url];
-  const targets: ForgeTarget[] = [];
+  const targets: SuplexTarget[] = [];
   for (const entry of listed.map(originTarget)) {
     if (entry && !targets.some((target) => target.origin === entry.origin)) targets.push(entry);
   }
@@ -62,7 +62,7 @@ export async function readTargets(file: string): Promise<TargetRegistry> {
 }
 
 /** Makes the target's origin current, adding it to the list when new. Returns the updated registry. */
-export async function rememberTarget(file: string, target: ForgeTarget): Promise<TargetRegistry> {
+export async function rememberTarget(file: string, target: SuplexTarget): Promise<TargetRegistry> {
   const entry = asOrigin(target);
   const others = (await readTargets(file)).targets.filter((known) => known.origin !== entry.origin);
   return write(file, { current: entry, targets: [entry, ...others].slice(0, LIMIT) });

@@ -22,7 +22,7 @@ export function classifyDevinAuthStatus(result: ProviderProbeResult): ProviderCo
   if (/not logged in|logged out|unauthenticated|no credentials/i.test(output)) return { status: "not-connected", summary: "Devin CLI is not signed in" };
   if (result.timedOut) return { status: "unknown", summary: "The Devin CLI sign-in check timed out" };
   if (/logged in/i.test(output)) return { status: "connected", summary: "Devin CLI is signed in. Model access is not tested." };
-  return { status: "unknown", summary: "Forge could not check the Devin CLI sign-in" };
+  return { status: "unknown", summary: "Suplex could not check the Devin CLI sign-in" };
 }
 
 /** One sign-in probe for a CLI that answers a status subcommand. */
@@ -40,7 +40,7 @@ function createCliLoginCheck(options: { label: string; resolve: () => Promise<st
       return options.classify(await run(executable, options.args, { timeout: 5_000 }));
     } catch (error) {
       if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") return missing;
-      return { status: "unknown", summary: `Forge could not check the ${options.label} sign-in` };
+      return { status: "unknown", summary: `Suplex could not check the ${options.label} sign-in` };
     }
   };
 }

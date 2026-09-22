@@ -16,7 +16,7 @@ import {
   type WorkerEvidenceRequest,
   type AdvisorRequest,
 } from "./root-contracts.js";
-import { ForgeDatabase } from "../platform/database.js";
+import { SuplexDatabase } from "../platform/database.js";
 import { CliHerdrClient } from "../integrations/herdr/client.js";
 import { RootController } from "./root-controller.js";
 import { TaskControlStore } from "./root-session-store.js";
@@ -61,7 +61,7 @@ export class RootBridge {
       throw new RootBridgeFailure("invalid_request", `Coordinator bridge request is invalid: ${parsed.error.issues.map(issue => `${issue.path.join(".") || "request"}: ${issue.message}`).join("; ")}`);
     await this.adapter.assertCurrentRoot(this.root);
     const token = await this.adapter.claimToolOwner(this.root);
-    if (token === null) throw new RootBridgeFailure("task_tool_busy", "Another Forge tool call for this task is still in progress. Retry after it finishes.");
+    if (token === null) throw new RootBridgeFailure("task_tool_busy", "Another Suplex tool call for this task is still in progress. Retry after it finishes.");
     try { return await this.dispatch(parsed.data); }
     finally { await this.adapter.releaseToolOwner(this.root, token); }
   }
@@ -98,8 +98,8 @@ export function startRootBridgeTransport(input: {
   taskId?: string;
 }): Interface {
   return startMcpStdioTransport({
-    serverName: "forge-root-bridge",
-    tools: [{ name: "forge_root", description: "Observe this task or request a Forge-owned delivery action.", inputSchema: rootToolInputSchema() }],
+    serverName: "suplex-root-bridge",
+    tools: [{ name: "suplex_root", description: "Observe this task or request a Suplex-owned delivery action.", inputSchema: rootToolInputSchema() }],
     call: async (_name, args) => {
       if (!input.systemEvents || !input.taskId) return input.bridge.call(args);
       const parsed = RootToolSchema.safeParse(args);
@@ -136,7 +136,7 @@ async function runRootBridge(): Promise<void> {
   authenticateBridgeToken(config.token, process.env, ROOT_BRIDGE_TOKEN_ENV, "Coordinator");
   const databasePath = config.databasePath;
   if (!databasePath) throw new Error("Coordinator bridge binding has no server database path");
-  const database = new ForgeDatabase(databasePath, { migrate: false });
+  const database = new SuplexDatabase(databasePath, { migrate: false });
   const herdr = new CliHerdrClient();
   const store = new TaskControlStore(database);
   const controller = new RootController(store, createTaskHarness(databasePath, herdr, { artifactRoot: config.artifactRoot }), undefined, new ArtifactStore(config.artifactRoot), { root: taskEvidenceRoot(databasePath) }, session => nativeSessionReader(databasePath, session));

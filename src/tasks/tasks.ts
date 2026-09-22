@@ -16,8 +16,8 @@ import type { TrackerConnection } from "../projects/integration-configuration.js
 import { supportsDeliveryTarget } from "../delivery/target-capabilities.js";
 import type { AuthService } from "../identity/auth.js";
 import { ArtifactStore, type StoredArtifact } from "../platform/artifacts.js";
-import type { ForgeConfig } from "../platform/config.js";
-import type { ForgeDatabase } from "../platform/database.js";
+import type { SuplexConfig } from "../platform/config.js";
+import type { SuplexDatabase } from "../platform/database.js";
 import type { ExternalAgentPrincipal } from "../identity/external-agents.js";
 import { AGENT_API_TASK_COMMANDS, AgentApiSafeTaskProjectionSchema, AgentApiTaskCommandBodySchema, AgentApiTaskCreateBodySchema, AgentApiTaskCreateDryRunResponseSchema, type AgentApiSafeTaskProjection, type AgentApiTaskCreateBody, type AgentApiTaskDependenciesDryRunResponseSchema, type AgentApiTaskFilter, type AgentApiTaskReadProjection, type AgentApiTaskSummaryProjection } from "../http/contracts/agent-api.js";
 import { createGithubReleasePort, GithubReleaseFailure, type GithubReleasePort } from "../integrations/github/delivery.js";
@@ -89,7 +89,7 @@ export class TaskService {
   private readonly pullRequestObserver: Pick<Required<GithubReleasePort>, "observePullRequest">;
   readonly repository: TaskRepository;
   private readonly artifacts: ArtifactStore;
-  constructor(private readonly database: ForgeDatabase, private readonly auth: AuthService, private readonly projects: Projects, config: Pick<ForgeConfig, "artifactRoot">, ports: TaskServicePorts = {}) {
+  constructor(private readonly database: SuplexDatabase, private readonly auth: AuthService, private readonly projects: Projects, config: Pick<SuplexConfig, "artifactRoot">, ports: TaskServicePorts = {}) {
     this.artifacts = new ArtifactStore(config.artifactRoot, database);
     this.repository = new TaskRepository(database, this.artifacts);
     this.removeWorktree = ports.removeWorktree ?? removeTaskWorktree;
@@ -161,7 +161,7 @@ export class TaskService {
     this.requireGithubTriggerAdmission(dispatch);
     const pull = await github.inspectPullRequest({ repository: dispatch.repositoryName, number: dispatch.pullRequestNumber });
     const protectedPath = pull.files.some(file => [file.filename, file.previousFilename].some(path => path && matchesGithubTriggerProtectedPaths(dispatch.policy.protectedPaths, { filename: path })));
-    const valid = pull.number === dispatch.pullRequestNumber && pull.state === "open" && !pull.isDraft && !pull.isCrossRepository && pull.baseRepository.id === dispatch.repositoryId && pull.baseRepository.fullName.toLowerCase() === dispatch.repositoryName && pull.headRepository?.id === dispatch.repositoryId && pull.headRepository.fullName.toLowerCase() === dispatch.repositoryName && pull.headSha === dispatch.policy.headSha && pull.baseSha === dispatch.policy.baseSha && pull.headBranch === dispatch.policy.headBranch && pull.baseBranch === dispatch.policy.baseBranch && pull.labels.includes(this.database.authQuery(db => db.prepare("SELECT label FROM forge_github_trigger_rules WHERE id = ?").get(dispatch.ruleId) as { label: string }).label) && !protectedPath;
+    const valid = pull.number === dispatch.pullRequestNumber && pull.state === "open" && !pull.isDraft && !pull.isCrossRepository && pull.baseRepository.id === dispatch.repositoryId && pull.baseRepository.fullName.toLowerCase() === dispatch.repositoryName && pull.headRepository?.id === dispatch.repositoryId && pull.headRepository.fullName.toLowerCase() === dispatch.repositoryName && pull.headSha === dispatch.policy.headSha && pull.baseSha === dispatch.policy.baseSha && pull.headBranch === dispatch.policy.headBranch && pull.baseBranch === dispatch.policy.baseBranch && pull.labels.includes(this.database.authQuery(db => db.prepare("SELECT label FROM suplex_github_trigger_rules WHERE id = ?").get(dispatch.ruleId) as { label: string }).label) && !protectedPath;
     if (!valid) throw new TaskFailure("GitHub trigger pull request is no longer eligible", 409);
     return this.database.authImmediateTransaction(() => {
       const current = new GithubTriggerDispatchRepository(this.database).get(dispatchId);
@@ -224,13 +224,13 @@ export class TaskService {
   listAgentApiWorkflows(principal: ExternalAgentPrincipal, projectId: string) {
     this.requireScope({ kind: "agentApi", principal }, principal.companyId, projectId);
     const policy = ProjectAgentTaskPolicySchema.parse(this.projects.getProjectInCompany(principal.companyId, projectId).agentTaskPolicy);
-    return this.database.authQuery(db => (db.prepare("SELECT id, name, description FROM forge_workflows WHERE archived_at IS NULL ORDER BY name COLLATE NOCASE, id").all() as Array<{ id: string; name: string; description: string }>).map(workflow => ({ ...workflow, permittedForAgentTaskCreation: policy.workflowIds.includes(workflow.id) })));
+    return this.database.authQuery(db => (db.prepare("SELECT id, name, description FROM suplex_workflows WHERE archived_at IS NULL ORDER BY name COLLATE NOCASE, id").all() as Array<{ id: string; name: string; description: string }>).map(workflow => ({ ...workflow, permittedForAgentTaskCreation: policy.workflowIds.includes(workflow.id) })));
   }
 
   listAgentApiTemplates(principal: ExternalAgentPrincipal, projectId: string) {
     this.requireScope({ kind: "agentApi", principal }, principal.companyId, projectId);
     const policy = ProjectAgentTaskPolicySchema.parse(this.projects.getProjectInCompany(principal.companyId, projectId).agentTaskPolicy);
-    return this.database.authQuery(db => (db.prepare("SELECT id, name, configuration_json FROM forge_task_templates WHERE project_id = ? ORDER BY name COLLATE NOCASE, id").all(projectId) as Array<{ id: string; name: string; configuration_json: string }>).map(template => ({ id: template.id, name: template.name, description: CreateTaskTemplateBodySchema.parse(JSON.parse(template.configuration_json)).description, permittedForAgentTaskCreation: policy.templateIds.includes(template.id) })));
+    return this.database.authQuery(db => (db.prepare("SELECT id, name, configuration_json FROM suplex_task_templates WHERE project_id = ? ORDER BY name COLLATE NOCASE, id").all(projectId) as Array<{ id: string; name: string; configuration_json: string }>).map(template => ({ id: template.id, name: template.name, description: CreateTaskTemplateBodySchema.parse(JSON.parse(template.configuration_json)).description, permittedForAgentTaskCreation: policy.templateIds.includes(template.id) })));
   }
 
   setTaskDependencies(userId: string, taskId: string, dependencies: string[]): Task;
@@ -318,7 +318,7 @@ export class TaskService {
       let value;
       const unavailable = () => new TaskFailure("The pull request is not available.", 422, "dependency_not_found", { details: { field: "blockedByPullRequests", value: String(input.number), reason: "The pull request is not available." } });
       try { value = await this.pullRequestObserver.observePullRequest({ repository, branch: "", pullRequestNumber: input.number }); }
-      catch { throw agentApi ? unavailable() : new TaskFailure(`Forge cannot observe pull request #${input.number}. Try again when GitHub is available.`, 422); }
+      catch { throw agentApi ? unavailable() : new TaskFailure(`Suplex cannot observe pull request #${input.number}. Try again when GitHub is available.`, 422); }
       if (!value.exists || value.number !== input.number || !value.state || !value.url) throw agentApi ? unavailable() : new TaskFailure(`Pull request #${input.number} was not found`, 422);
       observed.push({ number: input.number, state: value.state, title: value.title ?? `Pull request #${input.number}`, url: value.url, observedAt: new Date().toISOString() });
     }
@@ -384,7 +384,7 @@ export class TaskService {
     const authority: Authority = { kind: "agentApi", principal };
     this.requireTask(authority, taskId);
     // This historical table name preserves existing idempotency receipts across the public rename.
-    const stored = this.database.authQuery(db => db.prepare("SELECT request_hash, result_json FROM forge_hermes_task_command_receipts WHERE agent_id = ? AND task_id = ? AND idempotency_key = ?").get(principal.agentId, taskId, input.idempotencyKey) as { request_hash: string; result_json: string } | undefined);
+    const stored = this.database.authQuery(db => db.prepare("SELECT request_hash, result_json FROM suplex_hermes_task_command_receipts WHERE agent_id = ? AND task_id = ? AND idempotency_key = ?").get(principal.agentId, taskId, input.idempotencyKey) as { request_hash: string; result_json: string } | undefined);
     if (stored) {
       if (stored.request_hash !== requestHash) throw new TaskFailure("This idempotency key belongs to a different request", 409, "idempotency_conflict");
       return AgentApiSafeTaskProjectionSchema.parse(JSON.parse(stored.result_json));
@@ -398,7 +398,7 @@ export class TaskService {
       if (before.revision !== input.revision) throw new TaskFailure("Task revision is stale", 412, "revision_stale");
       if (!before.permittedCommands.includes(input.command)) throw new TaskFailure("This command is not legal for the current task", 409, "illegal_command");
       // The revision claim is the optimistic lock: a concurrent command on the same revision loses here.
-      const claimed = this.database.authImmediateTransaction(db => db.prepare("UPDATE forge_tasks SET command_revision = command_revision + 1 WHERE id = ? AND command_revision = ?").run(taskId, row.command_revision).changes);
+      const claimed = this.database.authImmediateTransaction(db => db.prepare("UPDATE suplex_tasks SET command_revision = command_revision + 1 WHERE id = ? AND command_revision = ?").run(taskId, row.command_revision).changes);
       if (claimed !== 1) throw new TaskFailure("Task revision is stale", 412, "revision_stale");
       let resultTaskId = taskId;
       switch (input.command) {
@@ -418,7 +418,7 @@ export class TaskService {
         case "duplicate_task": resultTaskId = await this.duplicateTaskForAgentApi(principal, taskId, input.idempotencyKey); break;
       }
       const result = this.getAgentApiTask(principal, resultTaskId);
-      this.database.authTransaction(db => db.prepare("INSERT INTO forge_hermes_task_command_receipts (agent_id, task_id, idempotency_key, request_hash, result_json, created_at) VALUES (?, ?, ?, ?, ?, ?)").run(principal.agentId, taskId, input.idempotencyKey, requestHash, JSON.stringify(result), new Date().toISOString()));
+      this.database.authTransaction(db => db.prepare("INSERT INTO suplex_hermes_task_command_receipts (agent_id, task_id, idempotency_key, request_hash, result_json, created_at) VALUES (?, ?, ?, ?, ?, ?)").run(principal.agentId, taskId, input.idempotencyKey, requestHash, JSON.stringify(result), new Date().toISOString()));
       this.audit(authority, principal.companyId, AGENT_API_COMMAND_AUDITS[input.command], taskId);
       return result;
     } finally { agentApiCommandsInFlight.delete(inFlight); }
@@ -427,9 +427,9 @@ export class TaskService {
   agentApiIdentity(principal: ExternalAgentPrincipal) {
     const projects = this.database.authQuery((db) => db.prepare(`
       SELECT p.id, p.name
-      FROM forge_external_agent_project_grants g
-      JOIN forge_projects p ON p.id = g.project_id AND p.company_id = g.company_id
-      JOIN forge_external_agents a ON a.id = g.agent_id AND a.company_id = g.company_id
+      FROM suplex_external_agent_project_grants g
+      JOIN suplex_projects p ON p.id = g.project_id AND p.company_id = g.company_id
+      JOIN suplex_external_agents a ON a.id = g.agent_id AND a.company_id = g.company_id
       WHERE a.id = ? AND a.company_id = ? AND a.status = 'paired'
       ORDER BY p.name COLLATE NOCASE, p.id
     `).all(principal.agentId, principal.companyId) as Array<{ id: string; name: string }>);
@@ -439,7 +439,7 @@ export class TaskService {
       return { ...project, agentTaskPolicy: { deliveryTargets: [policy.deliveryTarget], runProjectTests: policy.runProjectTests, visualEvidence: policy.visualEvidence } };
     });
     return {
-      agent: { id: principal.agentId, name: this.database.authQuery(db => (db.prepare("SELECT name FROM forge_agents WHERE id = ?").get(principal.agentId) as { name: string }).name), profileId: principal.profileId },
+      agent: { id: principal.agentId, name: this.database.authQuery(db => (db.prepare("SELECT name FROM suplex_agents WHERE id = ?").get(principal.agentId) as { name: string }).name), profileId: principal.profileId },
       capabilities: { taskDiscovery: true as const, taskRead: true as const, taskCreate: true as const, taskCommands: [...AGENT_API_TASK_COMMANDS] },
       projects: withPolicy,
     };
@@ -500,7 +500,7 @@ export class TaskService {
         catch { throw new TaskFailure("The dependency is not available.", 422, "dependency_not_found", { details: { field: "dependsOn", value: dependency, reason: "The dependency is not available." } }); }
       }
       const pullRequestDependencies = await this.observePullRequestDependencies(project.repository, request.blockedByPullRequests, authority.kind === "agentApi");
-      const defaults = this.database.authQuery(db => z.object({ root: z.string(), worker: z.string() }).parse(db.prepare("SELECT root_profile_id AS root, worker_profile_id AS worker FROM forge_projects WHERE id = ? AND company_id = ?").get(project.id, companyId)));
+      const defaults = this.database.authQuery(db => z.object({ root: z.string(), worker: z.string() }).parse(db.prepare("SELECT root_profile_id AS root, worker_profile_id AS worker FROM suplex_projects WHERE id = ? AND company_id = ?").get(project.id, companyId)));
       let rootProfile = capturedDispatch ? (this.profile(capturedDispatch.profiles.root.profileId, "root"), capturedDispatch.profiles.root) : this.projectProfile(request.rootProfileId, defaults.root, "root", project.providerPolicy);
       let workerProfile = capturedDispatch ? (this.profile(capturedDispatch.profiles.worker.profileId, "worker"), capturedDispatch.profiles.worker) : this.projectProfile(request.workerProfileId, defaults.worker, "worker", project.providerPolicy);
       let advisorProfiles: Partial<Record<AdvisorRole, TaskProfile>> = {};
@@ -569,7 +569,7 @@ export class TaskService {
             else this.requireTask(authority, dependency);
           }
           const stamp = new Date().toISOString();
-          for (const dependency of [...new Set(request.dependsOn)].sort()) db.prepare("INSERT INTO forge_task_dependencies (task_id, depends_on_task_id, created_at) VALUES (?, ?, ?)").run(result.task.id, dependency, stamp);
+          for (const dependency of [...new Set(request.dependsOn)].sort()) db.prepare("INSERT INTO suplex_task_dependencies (task_id, depends_on_task_id, created_at) VALUES (?, ?, ?)").run(result.task.id, dependency, stamp);
           if (pullRequestDependencies.length) replacePullRequestDependenciesInTransaction(db, result.task.id, pullRequestDependencies);
           // The prerequisites are written first, so a queued task starts now only when every one is already complete.
           if (request.startImmediately) this.repository.controls.admitQueued([result.task.id]);
@@ -593,9 +593,9 @@ export class TaskService {
     if (!authority || authority.role !== "admin") throw new TaskFailure("GitHub trigger authority is not available", 422);
     const company = this.auth.requireCompanyAccess(dispatch.authorityUserId, dispatch.companyId);
     if (company.status !== "active") throw new TaskFailure("Company is not active", 409);
-    const rule = this.database.authQuery(db => db.prepare("SELECT 1 FROM forge_github_trigger_rules WHERE id = ? AND company_id = ? AND project_id = ? AND repository_id = ? AND lower(repository_name) = lower(?) AND authority_user_id = ? AND enabled = 1 AND archived_at IS NULL").get(dispatch.ruleId, dispatch.companyId, dispatch.projectId, dispatch.repositoryId, dispatch.repositoryName, dispatch.authorityUserId));
+    const rule = this.database.authQuery(db => db.prepare("SELECT 1 FROM suplex_github_trigger_rules WHERE id = ? AND company_id = ? AND project_id = ? AND repository_id = ? AND lower(repository_name) = lower(?) AND authority_user_id = ? AND enabled = 1 AND archived_at IS NULL").get(dispatch.ruleId, dispatch.companyId, dispatch.projectId, dispatch.repositoryId, dispatch.repositoryName, dispatch.authorityUserId));
     if (!rule) throw new TaskFailure("GitHub trigger rule is not available", 409);
-    const preset = this.database.authQuery(db => db.prepare("SELECT 1 FROM forge_workflows WHERE id = ? AND archived_at IS NULL").get(dispatch.preset.id));
+    const preset = this.database.authQuery(db => db.prepare("SELECT 1 FROM suplex_workflows WHERE id = ? AND archived_at IS NULL").get(dispatch.preset.id));
     if (!preset) throw new TaskFailure("GitHub trigger preset is not available", 422);
     this.profile(dispatch.profiles.root.profileId, "root");
     this.profile(dispatch.profiles.worker.profileId, "worker");
@@ -649,21 +649,21 @@ export class TaskService {
   replaceWorker(userId: string, taskId: string, request: WorkerReplacementRequest): Task {
     this.getTask(userId, taskId);
     try { this.repository.controls.replaceWorker(taskId, request); }
-    catch (error) { throw new TaskFailure(error instanceof Error ? error.message : "Forge could not replace the Worker.", 409); }
+    catch (error) { throw new TaskFailure(error instanceof Error ? error.message : "Suplex could not replace the Worker.", 409); }
     return this.getTask(userId, taskId);
   }
 
   replaceCoordinator(userId: string, taskId: string, request: CoordinatorReplacementRequest): Task {
     this.getTask(userId, taskId);
     try { this.repository.controls.replaceCoordinator(taskId, request); }
-    catch (error) { throw new TaskFailure(error instanceof Error ? error.message : "Forge could not select the Coordinator.", 409); }
+    catch (error) { throw new TaskFailure(error instanceof Error ? error.message : "Suplex could not select the Coordinator.", 409); }
     return this.getTask(userId, taskId);
   }
 
   selectTaskAgent(userId: string, taskId: string, request: TaskAgentSelectionRequest): Task {
     this.getTask(userId, taskId);
     try { this.repository.controls.selectTaskAgent(taskId, request); }
-    catch (error) { throw new TaskFailure(error instanceof Error ? error.message : "Forge could not select the agent.", 409); }
+    catch (error) { throw new TaskFailure(error instanceof Error ? error.message : "Suplex could not select the agent.", 409); }
     return this.getTask(userId, taskId);
   }
 
@@ -678,7 +678,7 @@ export class TaskService {
     if (task.archivedAt) throw new TaskFailure("Open the archived task before you continue delivery.", 409);
     if (!supportsDeliveryTarget(task.configuration.integration?.repository, deliveryTarget)) throw new TaskFailure("Bitbucket supports draft pull requests. Select a supported delivery target.", 422);
     try { this.repository.controls.continueDelivery(taskId, deliveryTarget); }
-    catch (error) { throw new TaskFailure(error instanceof Error ? error.message : "Forge could not continue delivery.", 409); }
+    catch (error) { throw new TaskFailure(error instanceof Error ? error.message : "Suplex could not continue delivery.", 409); }
     return this.getTask(userId, taskId);
   }
 
@@ -741,8 +741,8 @@ export class TaskService {
     const resolved = issue ? (await this.issueTracker(taskTracker(task.configuration)).read(issue)).issue : null;
     return this.database.authImmediateTransaction(db => {
       const current = this.getTask(userId, taskId);
-      db.prepare("UPDATE forge_tasks SET issue_json = ?, updated_at = ? WHERE id = ?").run(resolved ? JSON.stringify(resolved) : null, new Date().toISOString(), taskId);
-      if (["backlog", "queued"].includes(current.status) && !hasStartedNativeWork(this.database, taskId)) db.prepare("UPDATE forge_tasks SET issue_context_json = NULL WHERE id = ?").run(taskId);
+      db.prepare("UPDATE suplex_tasks SET issue_json = ?, updated_at = ? WHERE id = ?").run(resolved ? JSON.stringify(resolved) : null, new Date().toISOString(), taskId);
+      if (["backlog", "queued"].includes(current.status) && !hasStartedNativeWork(this.database, taskId)) db.prepare("UPDATE suplex_tasks SET issue_context_json = NULL WHERE id = ?").run(taskId);
       return this.getTask(userId, taskId);
     });
   }
@@ -770,7 +770,7 @@ export class TaskService {
     archivesInProgress.add(taskId);
     try {
       const sessions = this.repository.controls.sessions(taskId);
-      const shellPaneId = this.database.authQuery(db => (db.prepare("SELECT shell_pane_id AS id FROM forge_task_controls WHERE task_id = ?").get(taskId) as { id: string | null } | undefined)?.id ?? null);
+      const shellPaneId = this.database.authQuery(db => (db.prepare("SELECT shell_pane_id AS id FROM suplex_task_controls WHERE task_id = ?").get(taskId) as { id: string | null } | undefined)?.id ?? null);
       const closeDisplays = await stopIdleArchiveSessions(this.database.filename(), taskId, sessions, shellPaneId);
       this.requireTask(authority, taskId);
       const result = await this.removeWorktree({ taskId, ...task.configuration }, task.worktree, confirmDiscardDirty, () => { this.requireTask(authority, taskId); });
@@ -780,7 +780,7 @@ export class TaskService {
       const current = this.repository.task(this.requireTask(authority, taskId));
       if (!["backlog", "queued", "cancelled", "delivered"].includes(current.status)) throw new TaskFailure("The task changed while its worktree was removed", 409, "illegal_command");
       this.database.authTransaction(db => {
-        db.prepare("UPDATE forge_task_controls SET worktree_json = NULL WHERE task_id = ?").run(taskId);
+        db.prepare("UPDATE suplex_task_controls SET worktree_json = NULL WHERE task_id = ?").run(taskId);
         this.repository.setArchived(taskId, true);
       });
       return this.repository.task(this.requireTask(authority, taskId));
@@ -808,7 +808,7 @@ export class TaskService {
         return { id: session.id, kind: session.kind, advisorRole: session.advisorRole, label: roleLabel(session), profileId: profile.profileId, harness: profile.provider, generation: session.generation, nativeSessionId: session.nativeSessionId, paneId: session.paneId, current: session.current, replacement: session.replacement };
       }),
       turns: this.repository.controls.turns(taskId).map(turn => ({ id: turn.id, sessionId: turn.sessionId, prompt: turn.promptText, status: turn.status, promptedAt: turn.promptedAt, completedAt: turn.completedAt, result: turn.terminalObservation })),
-      shellPaneId: this.database.authQuery(db => (db.prepare("SELECT shell_pane_id AS id FROM forge_task_controls WHERE task_id = ?").get(taskId) as { id: string | null } | undefined)?.id ?? null),
+      shellPaneId: this.database.authQuery(db => (db.prepare("SELECT shell_pane_id AS id FROM suplex_task_controls WHERE task_id = ?").get(taskId) as { id: string | null } | undefined)?.id ?? null),
     };
   }
 
@@ -834,7 +834,7 @@ export class TaskService {
   }
 
   private profile(profileId: string, role: "root" | "worker"): TaskProfile {
-    const value = this.database.authQuery(db => db.prepare("SELECT p.id AS profileId, p.provider, p.model, p.reasoning_level AS reasoningLevel, p.service_tier AS serviceTier, p.provider_instance_id AS providerInstanceId, i.home_directory AS instanceHomeDirectory FROM forge_profiles p LEFT JOIN forge_provider_instances i ON i.id = p.provider_instance_id WHERE p.id = ? AND p.role = ? AND p.archived_at IS NULL").get(profileId, role));
+    const value = this.database.authQuery(db => db.prepare("SELECT p.id AS profileId, p.provider, p.model, p.reasoning_level AS reasoningLevel, p.service_tier AS serviceTier, p.provider_instance_id AS providerInstanceId, i.home_directory AS instanceHomeDirectory FROM suplex_profiles p LEFT JOIN suplex_provider_instances i ON i.id = p.provider_instance_id WHERE p.id = ? AND p.role = ? AND p.archived_at IS NULL").get(profileId, role));
     if (!value) throw new TaskFailure("The selected agent profile does not exist", 422);
     return TaskProfileSchema.parse(value);
   }
@@ -847,7 +847,7 @@ export class TaskService {
     if (explicit) return this.profile(explicit, role);
     const preferred = this.profile(defaultId, role);
     if (isProfileAllowed(policy, preferred)) return preferred;
-    const ids = this.database.authQuery(db => z.array(z.object({ id: z.string() })).parse(db.prepare("SELECT id FROM forge_profiles WHERE role = ? AND archived_at IS NULL ORDER BY created_at, id").all(role)));
+    const ids = this.database.authQuery(db => z.array(z.object({ id: z.string() })).parse(db.prepare("SELECT id FROM suplex_profiles WHERE role = ? AND archived_at IS NULL ORDER BY created_at, id").all(role)));
     const eligible = ids.map(({ id }) => this.profile(id, role)).find(profile => isProfileAllowed(policy, profile));
     if (!eligible) throw new TaskFailure("Create an agent with a provider and login allowed by this project", 422);
     return eligible;
@@ -890,7 +890,7 @@ export class TaskService {
   }
 
   private workflowForAgentApi(policy: ProjectAgentTaskPolicy, workflowId: string): { id: string; name: string; request: Partial<z.infer<typeof CreateTaskTemplateBodySchema>> } {
-    const row = this.database.authQuery(db => db.prepare("SELECT name, description, configuration_json, engine FROM forge_workflows WHERE id = ? AND archived_at IS NULL").get(workflowId) as { name: string; description: string; configuration_json: string; engine: string } | undefined);
+    const row = this.database.authQuery(db => db.prepare("SELECT name, description, configuration_json, engine FROM suplex_workflows WHERE id = ? AND archived_at IS NULL").get(workflowId) as { name: string; description: string; configuration_json: string; engine: string } | undefined);
     if (!row) throw new TaskFailure("The selected workflow is not available", 422, "workflow_not_found", { details: { field: "workflowId", value: workflowId, reason: "The selected workflow is not available.", permittedWorkflowIds: policy.workflowIds } });
     if (!policy.workflowIds.includes(workflowId)) throw new TaskFailure("The selected workflow is not permitted", 422, "workflow_not_permitted", { details: { field: "workflowId", value: workflowId, reason: "The selected workflow is not permitted.", permittedWorkflowIds: policy.workflowIds } });
     const record = WorkflowRecordInputSchema.parse({ ...JSON.parse(row.configuration_json), name: row.name, description: row.description, engine: row.engine });
@@ -903,7 +903,7 @@ export class TaskService {
   }
 
   private templateForAgentApi(projectId: string, policy: ProjectAgentTaskPolicy, templateId: string): { request: z.infer<typeof CreateTaskTemplateBodySchema> } {
-    const row = this.database.authQuery(db => db.prepare("SELECT configuration_json FROM forge_task_templates WHERE id = ? AND project_id = ?").get(templateId, projectId) as { configuration_json: string } | undefined);
+    const row = this.database.authQuery(db => db.prepare("SELECT configuration_json FROM suplex_task_templates WHERE id = ? AND project_id = ?").get(templateId, projectId) as { configuration_json: string } | undefined);
     if (!row) throw new TaskFailure("The selected template is not available", 422, "template_not_found", { details: { field: "templateId", value: templateId, reason: "The selected template is not available.", permittedTemplateIds: policy.templateIds } });
     if (!policy.templateIds.includes(templateId)) throw new TaskFailure("The selected template is not permitted", 422, "template_not_permitted", { details: { field: "templateId", value: templateId, reason: "The selected template is not permitted.", permittedTemplateIds: policy.templateIds } });
     return { request: CreateTaskTemplateBodySchema.parse(JSON.parse(row.configuration_json)) };
@@ -1027,7 +1027,7 @@ export class TaskService {
 
   private agentApiProjection(row: TaskRow, principal: ExternalAgentPrincipal): AgentApiSafeTaskProjection {
     const task = this.repository.task(row);
-    const project = this.database.authQuery(db => db.prepare("SELECT id, name FROM forge_projects WHERE id = ? AND company_id = ?").get(row.project_id, row.company_id) as { id: string; name: string } | undefined);
+    const project = this.database.authQuery(db => db.prepare("SELECT id, name FROM suplex_projects WHERE id = ? AND company_id = ?").get(row.project_id, row.company_id) as { id: string; name: string } | undefined);
     if (!project) throw new TaskFailure("Not found", 404);
     const humanQuestion = task.humanQuestion?.text ?? null;
     const wait = task.workflowState.deliveryWait;
@@ -1087,7 +1087,7 @@ export class TaskService {
 
   /** Keeps the copy on the source workflow engine when the project still permits a record that runs it. */
   private agentApiWorkflowIdForEngine(policy: ProjectAgentTaskPolicy, engine: string): string {
-    const engines = this.database.authQuery(db => new Map(policy.workflowIds.map(id => [id, (db.prepare("SELECT engine FROM forge_workflows WHERE id = ? AND archived_at IS NULL").get(id) as { engine: string } | undefined)?.engine])));
+    const engines = this.database.authQuery(db => new Map(policy.workflowIds.map(id => [id, (db.prepare("SELECT engine FROM suplex_workflows WHERE id = ? AND archived_at IS NULL").get(id) as { engine: string } | undefined)?.engine])));
     return policy.workflowIds.find(id => engines.get(id) === engine) ?? policy.defaultWorkflowId;
   }
 
@@ -1116,7 +1116,7 @@ export class TaskService {
     }
     const principal = authority.principal;
     if (principal.companyId !== companyId) throw agentApiFailure ? new TaskFailure(agentApiFailure.reason, 422, agentApiFailure.code, { details: agentApiFailure }) : new TaskFailure("Not found", 404, "resource_not_found");
-    const allowed = this.database.authQuery(db => db.prepare("SELECT c.status FROM forge_external_agents a JOIN forge_external_agent_project_grants g ON g.agent_id = a.id AND g.company_id = a.company_id JOIN forge_companies c ON c.id = a.company_id WHERE a.id = ? AND a.company_id = ? AND a.status = 'paired' AND a.revoked_at IS NULL AND g.project_id = ?").get(principal.agentId, companyId, projectId));
+    const allowed = this.database.authQuery(db => db.prepare("SELECT c.status FROM suplex_external_agents a JOIN suplex_external_agent_project_grants g ON g.agent_id = a.id AND g.company_id = a.company_id JOIN suplex_companies c ON c.id = a.company_id WHERE a.id = ? AND a.company_id = ? AND a.status = 'paired' AND a.revoked_at IS NULL AND g.project_id = ?").get(principal.agentId, companyId, projectId));
     if (!allowed) throw agentApiFailure ? new TaskFailure(agentApiFailure.reason, 422, agentApiFailure.code, { details: agentApiFailure }) : new TaskFailure("Not found", 404, "resource_not_found");
     if (active && z.object({ status: z.string() }).parse(allowed).status !== "active") throw new TaskFailure("The company is not active", 409);
   }

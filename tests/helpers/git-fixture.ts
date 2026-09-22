@@ -2,7 +2,7 @@ import * as fs from "node:fs";
 import { join } from "node:path";
 import * as git from "isomorphic-git";
 
-const identity = { name: "Forge", email: "forge@example.invalid" };
+const identity = { name: "Suplex", email: "suplex@example.invalid" };
 
 export async function initializeGitFixture(directory: string, branch: string, bare = false): Promise<void> {
   await git.init({ fs, dir: directory, defaultBranch: branch, bare });

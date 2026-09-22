@@ -4,8 +4,8 @@ import { join } from "node:path";
 
 import type { Database } from "better-sqlite3";
 
-import type { ForgeConfig } from "../platform/config.js";
-import type { ForgeDatabase } from "../platform/database.js";
+import type { SuplexConfig } from "../platform/config.js";
+import type { SuplexDatabase } from "../platform/database.js";
 import { AuthRepository, type AuthCompanyRow } from "./auth-repository.js";
 import { neutralUsername, newInvitationToken, newSessionToken } from "./auth-identifiers.js";
 import { jsonRequired } from "../shared/json.js";
@@ -76,7 +76,7 @@ export class AuthService {
   private readonly installationId: string;
   private readonly artifactRoot: string;
 
-  constructor(private readonly database: ForgeDatabase, config: ForgeConfig, options: AuthServiceOptions = {}) {
+  constructor(private readonly database: SuplexDatabase, config: SuplexConfig, options: AuthServiceOptions = {}) {
     this.repository = new AuthRepository(database.authOrm());
     this.now = options.now ?? (() => new Date());
     this.invitationTtlMs = options.invitationTtlMs ?? 72 * 60 * 60 * 1000;
@@ -88,7 +88,7 @@ export class AuthService {
     this.rpId = reachable.hostname;
     this.origin = reachable.origin;
     if (reachable.protocol === "http:" && !["127.0.0.1", "localhost", "[::1]"].includes(reachable.hostname)) {
-      throw new Error("Forge passkey authentication requires an HTTPS reachable address");
+      throw new Error("Suplex passkey authentication requires an HTTPS reachable address");
     }
     // A database can be upgraded while the process is stopped, or an older
     // fixture can be attached after migrations have already run. Normalize any
@@ -104,7 +104,7 @@ export class AuthService {
     if (!this.getBootstrapState().required) {
       return undefined;
     }
-    return this.database.authTransaction((db) => this.issueInvitation(db, "bootstrap", "Forge administrator"));
+    return this.database.authTransaction((db) => this.issueInvitation(db, "bootstrap", "Suplex administrator"));
   }
 
   createRecoveryInvitation(request: LocalRecoveryRequest): IssuedInvitation {
@@ -228,7 +228,7 @@ export class AuthService {
       const now = this.now().toISOString();
       let user = this.repository.findUser(userId);
       if (!user) {
-        this.repository.createUser({ id: userId, displayName: "Operator", username: "operator@forge.local", avatarSeed: "operator@forge.local", role: "admin", status: "active", createdAt: now, updatedAt: now, identityVersion: 1 });
+        this.repository.createUser({ id: userId, displayName: "Operator", username: "operator@suplex.local", avatarSeed: "operator@suplex.local", role: "admin", status: "active", createdAt: now, updatedAt: now, identityVersion: 1 });
         user = this.repository.findUser(userId)!;
       }
       if (user.role !== "admin" || user.status !== "active") throw new AuthFailure("Development user is unavailable", 409);
@@ -510,7 +510,7 @@ export class AuthService {
       try {
         this.repository.addMembership(targetUserId, companyId, this.now().toISOString());
       } catch (error) {
-        if (error instanceof Error && /UNIQUE constraint failed: forge_memberships/i.test(error.message)) {
+        if (error instanceof Error && /UNIQUE constraint failed: suplex_memberships/i.test(error.message)) {
           throw new AuthFailure("Membership already exists", 409, "membership_duplicate");
         }
         throw error;

@@ -36,7 +36,7 @@ export function IssuePicker({ projectId, issue, onChange, disabled = false }: { 
       <Input aria-label="Search issues" placeholder="Search by key, number, or title" value={query} onChange={event => setQuery(event.target.value)} />
       <div className="flex max-h-80 min-w-0 flex-col gap-1 overflow-y-auto">
         {issue ? <Button type="button" variant="outline" disabled={busy} onClick={() => void select(null)}>Clear issue</Button> : null}
-        {loading ? <p>Forge reads the issues.</p> : issues.map(candidate => <Button key={`${candidate.kind}:${candidate.id}`} type="button" variant="ghost" disabled={busy} onClick={() => void select(candidate)}><span className="truncate">{candidate.key}: {candidate.title}</span></Button>)}
+        {loading ? <p>Suplex reads the issues.</p> : issues.map(candidate => <Button key={`${candidate.kind}:${candidate.id}`} type="button" variant="ghost" disabled={busy} onClick={() => void select(candidate)}><span className="truncate">{candidate.key}: {candidate.title}</span></Button>)}
         {!loading && !error && issues.length === 0 ? <p>No matching issues.</p> : null}
         {error ? <p role="alert">{error}</p> : null}
       </div>

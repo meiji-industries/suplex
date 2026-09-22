@@ -4,12 +4,12 @@ import { randomBytes } from "node:crypto";
 import { homedir } from "node:os";
 import { resolve } from "node:path";
 
-import { ForgeConfigSchema, ForgeEnvironmentSchema } from "./schemas.js";
+import { SuplexConfigSchema, SuplexEnvironmentSchema } from "./schemas.js";
 
 export type AccessMode = "tailscale" | "local";
 export type TailscaleExposure = "direct" | "serve";
 
-export interface ForgeConfig {
+export interface SuplexConfig {
   accessMode: AccessMode;
   tailscaleExposure: TailscaleExposure;
   bindAddress: string;
@@ -34,14 +34,14 @@ export class UnsafeBindingError extends Error {
 
 export class UnsupportedRuntimeError extends Error {
   constructor(supportedVersion: string, foundVersion: string) {
-    super(`Forge requires Node.js ${supportedVersion}; found ${foundVersion}`);
+    super(`Suplex requires Node.js ${supportedVersion}; found ${foundVersion}`);
     this.name = "UnsupportedRuntimeError";
   }
 }
 
 export const SUPPORTED_NODE_VERSION = "26.7.0";
 
-/** FORGE_EDITOR_COMMAND selects the editor command used when Forge opens a task worktree. */
+/** SUPLEX_EDITOR_COMMAND selects the editor command used when Suplex opens a task worktree. */
 function assertSupportedNodeRuntime(): void {
   if (process.versions.node !== SUPPORTED_NODE_VERSION) {
     throw new UnsupportedRuntimeError(SUPPORTED_NODE_VERSION, process.versions.node);
@@ -73,7 +73,7 @@ export function isTailscaleAddress(address: string): boolean {
 function parsePort(rawPort: string | undefined): number {
   const port = Number(rawPort ?? "4111");
   if (!Number.isInteger(port) || port < 1 || port > 65535) {
-    throw new Error(`FORGE_PORT must be an integer between 1 and 65535; received ${rawPort ?? ""}`);
+    throw new Error(`SUPLEX_PORT must be an integer between 1 and 65535; received ${rawPort ?? ""}`);
   }
   return port;
 }
@@ -101,8 +101,8 @@ function readEnvironmentFile(filename: string): Record<string, string> {
   }
 }
 
-function installationId(dataRoot: string, environment: { FORGE_INSTALLATION_ID?: string | undefined }, persist: boolean): string {
-  const configured = environment.FORGE_INSTALLATION_ID?.trim();
+function installationId(dataRoot: string, environment: { SUPLEX_INSTALLATION_ID?: string | undefined }, persist: boolean): string {
+  const configured = environment.SUPLEX_INSTALLATION_ID?.trim();
   if (configured) {
     return configured;
   }
@@ -126,26 +126,26 @@ function installationId(dataRoot: string, environment: { FORGE_INSTALLATION_ID?:
 
 type Binding = { tailscaleExposure: TailscaleExposure; bindAddress: string; reachableHost: string; scheme: "http" | "https" };
 
-type ForgeEnvironment = ReturnType<typeof ForgeEnvironmentSchema.parse>;
+type SuplexEnvironment = ReturnType<typeof SuplexEnvironmentSchema.parse>;
 
 /** Loopback is the whole boundary in local mode, so the Tailscale settings are ignored rather than validated. */
-function localBinding(environment: ForgeEnvironment): Binding {
-  const bindAddress = environment.FORGE_BIND_ADDRESS?.trim() || "127.0.0.1";
+function localBinding(environment: SuplexEnvironment): Binding {
+  const bindAddress = environment.SUPLEX_BIND_ADDRESS?.trim() || "127.0.0.1";
   if (bindAddress !== "127.0.0.1" && bindAddress !== "::1") {
     throw new UnsafeBindingError(`Local access binds loopback only; received ${bindAddress}`);
   }
   return { tailscaleExposure: "direct", bindAddress, reachableHost: bindAddress, scheme: "http" };
 }
 
-function tailscaleBinding(environment: ForgeEnvironment): Binding {
-  const tailscaleExposure = environment.FORGE_TAILSCALE_EXPOSURE ?? "direct";
+function tailscaleBinding(environment: SuplexEnvironment): Binding {
+  const tailscaleExposure = environment.SUPLEX_TAILSCALE_EXPOSURE ?? "direct";
   if (tailscaleExposure !== "direct" && tailscaleExposure !== "serve") {
-    throw new UnsafeBindingError(`FORGE_TAILSCALE_EXPOSURE must be direct or serve; received ${tailscaleExposure}`);
+    throw new UnsafeBindingError(`SUPLEX_TAILSCALE_EXPOSURE must be direct or serve; received ${tailscaleExposure}`);
   }
-  const configuredAddress = environment.FORGE_TAILSCALE_ADDRESS?.trim();
-  const bindAddress = environment.FORGE_BIND_ADDRESS?.trim() || configuredAddress;
+  const configuredAddress = environment.SUPLEX_TAILSCALE_ADDRESS?.trim();
+  const bindAddress = environment.SUPLEX_BIND_ADDRESS?.trim() || configuredAddress;
   if (!bindAddress) {
-    throw new UnsafeBindingError("FORGE_TAILSCALE_ADDRESS is required for Tailscale-only startup");
+    throw new UnsafeBindingError("SUPLEX_TAILSCALE_ADDRESS is required for Tailscale-only startup");
   }
   const loopbackServeBinding = tailscaleExposure === "serve" && (bindAddress === "127.0.0.1" || bindAddress === "::1");
   if (!loopbackServeBinding && !isTailscaleAddress(bindAddress)) {
@@ -155,45 +155,45 @@ function tailscaleBinding(environment: ForgeEnvironment): Binding {
     throw new UnsafeBindingError(`Refusing non-Tailscale reachable address: ${configuredAddress}`);
   }
   if (tailscaleExposure === "serve" && !configuredAddress) {
-    throw new UnsafeBindingError("FORGE_TAILSCALE_ADDRESS is required when Tailscale Serve HTTPS is enabled");
+    throw new UnsafeBindingError("SUPLEX_TAILSCALE_ADDRESS is required when Tailscale Serve HTTPS is enabled");
   }
   return { tailscaleExposure, bindAddress, reachableHost: configuredAddress ?? bindAddress, scheme: tailscaleExposure === "serve" ? "https" : "http" };
 }
 
-export function loadConfig(environment: NodeJS.ProcessEnv = process.env): ForgeConfig {
+export function loadConfig(environment: NodeJS.ProcessEnv = process.env): SuplexConfig {
   assertSupportedNodeRuntime();
-  const environmentFile = environment.FORGE_ENV_FILE ?? (environment === process.env ? ".forge/forge.env" : undefined);
+  const environmentFile = environment.SUPLEX_ENV_FILE ?? (environment === process.env ? ".suplex/suplex.env" : undefined);
   const fileEnvironment = environmentFile ? readEnvironmentFile(environmentFile) : {};
   const configuredEnvironment: NodeJS.ProcessEnv = { ...fileEnvironment, ...environment };
-  const parsedEnvironment = ForgeEnvironmentSchema.safeParse(configuredEnvironment);
+  const parsedEnvironment = SuplexEnvironmentSchema.safeParse(configuredEnvironment);
   if (!parsedEnvironment.success) {
-    throw new UnsafeBindingError(`Forge environment is invalid: ${parsedEnvironment.error.issues[0]?.message ?? "unknown error"}`);
+    throw new UnsafeBindingError(`Suplex environment is invalid: ${parsedEnvironment.error.issues[0]?.message ?? "unknown error"}`);
   }
-  const accessMode = parsedEnvironment.data.FORGE_ACCESS_MODE ?? "tailscale";
+  const accessMode = parsedEnvironment.data.SUPLEX_ACCESS_MODE ?? "tailscale";
   const { tailscaleExposure, bindAddress, reachableHost, scheme } = accessMode === "local"
     ? localBinding(parsedEnvironment.data)
     : tailscaleBinding(parsedEnvironment.data);
-  const port = parsePort(parsedEnvironment.data.FORGE_PORT);
-  const dataRoot = resolve(parsedEnvironment.data.FORGE_DATA_ROOT ?? ".forge/data");
+  const port = parsePort(parsedEnvironment.data.SUPLEX_PORT);
+  const dataRoot = resolve(parsedEnvironment.data.SUPLEX_DATA_ROOT ?? ".suplex/data");
   const stableInstallationId = installationId(dataRoot, parsedEnvironment.data, environment === process.env);
-  return ForgeConfigSchema.parse({
+  return SuplexConfigSchema.parse({
     accessMode,
     tailscaleExposure,
     bindAddress,
     reachableAddress: `${scheme}${formatReachableAddress(reachableHost, port).slice(4)}`,
     port,
     dataRoot,
-    databasePath: parsedEnvironment.data.FORGE_DATABASE_PATH ? resolve(parsedEnvironment.data.FORGE_DATABASE_PATH) : resolve(dataRoot, "forge.sqlite"),
-    artifactRoot: parsedEnvironment.data.FORGE_ARTIFACT_ROOT ? resolve(parsedEnvironment.data.FORGE_ARTIFACT_ROOT) : resolve(dataRoot, "artifacts"),
-    runtimeRoot: parsedEnvironment.data.FORGE_RUNTIME_ROOT ? resolve(parsedEnvironment.data.FORGE_RUNTIME_ROOT) : resolve(dataRoot, "runtime"),
-    repositoryRoot: resolve(parsedEnvironment.data.FORGE_REPOSITORY_ROOT ?? resolve(homedir(), "forge", "repos")),
-    worktreeRoot: resolve(parsedEnvironment.data.FORGE_WORKTREE_ROOT ?? resolve(homedir(), "forge", "worktrees")),
+    databasePath: parsedEnvironment.data.SUPLEX_DATABASE_PATH ? resolve(parsedEnvironment.data.SUPLEX_DATABASE_PATH) : resolve(dataRoot, "suplex.sqlite"),
+    artifactRoot: parsedEnvironment.data.SUPLEX_ARTIFACT_ROOT ? resolve(parsedEnvironment.data.SUPLEX_ARTIFACT_ROOT) : resolve(dataRoot, "artifacts"),
+    runtimeRoot: parsedEnvironment.data.SUPLEX_RUNTIME_ROOT ? resolve(parsedEnvironment.data.SUPLEX_RUNTIME_ROOT) : resolve(dataRoot, "runtime"),
+    repositoryRoot: resolve(parsedEnvironment.data.SUPLEX_REPOSITORY_ROOT ?? resolve(homedir(), "suplex", "repos")),
+    worktreeRoot: resolve(parsedEnvironment.data.SUPLEX_WORKTREE_ROOT ?? resolve(homedir(), "suplex", "worktrees")),
     installationId: stableInstallationId,
-    developmentAutoLogin: parsedEnvironment.data.FORGE_DEVELOPMENT_AUTO_LOGIN === "1",
+    developmentAutoLogin: parsedEnvironment.data.SUPLEX_DEVELOPMENT_AUTO_LOGIN === "1",
   });
 }
 
-export function createTestConfig(dataRoot: string, overrides: Partial<ForgeConfig> = {}): ForgeConfig {
+export function createTestConfig(dataRoot: string, overrides: Partial<SuplexConfig> = {}): SuplexConfig {
   const port = overrides.port ?? 4111;
   const bindAddress = overrides.bindAddress ?? "127.0.0.1";
   const tailscaleExposure = overrides.tailscaleExposure ?? "direct";
@@ -204,7 +204,7 @@ export function createTestConfig(dataRoot: string, overrides: Partial<ForgeConfi
     reachableAddress: overrides.reachableAddress ?? `http://${bindAddress}:${port}`,
     port,
     dataRoot,
-    databasePath: overrides.databasePath ?? resolve(dataRoot, "forge.sqlite"),
+    databasePath: overrides.databasePath ?? resolve(dataRoot, "suplex.sqlite"),
     artifactRoot: overrides.artifactRoot ?? resolve(dataRoot, "artifacts"),
     runtimeRoot: overrides.runtimeRoot ?? resolve(dataRoot, "runtime"),
     repositoryRoot: overrides.repositoryRoot ?? resolve(dataRoot, "repositories"),

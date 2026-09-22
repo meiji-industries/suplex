@@ -1,4 +1,4 @@
-CREATE TABLE forge_task_usage (
+CREATE TABLE suplex_task_usage (
   session_id TEXT NOT NULL,
   message_id TEXT NOT NULL,
   task_id TEXT NOT NULL,
@@ -7,16 +7,16 @@ CREATE TABLE forge_task_usage (
   PRIMARY KEY (session_id, message_id)
 );
 --> statement-breakpoint
-CREATE INDEX forge_task_usage_task ON forge_task_usage(task_id);
+CREATE INDEX suplex_task_usage_task ON suplex_task_usage(task_id);
 --> statement-breakpoint
-CREATE TABLE forge_task_analytics_sessions (
+CREATE TABLE suplex_task_analytics_sessions (
   session_id TEXT PRIMARY KEY,
   task_id TEXT NOT NULL,
   observed_at TEXT,
   error_at TEXT
 );
 --> statement-breakpoint
-CREATE TABLE forge_task_analytics_events (
+CREATE TABLE suplex_task_analytics_events (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   task_id TEXT NOT NULL,
   status TEXT NOT NULL,
@@ -24,4 +24,4 @@ CREATE TABLE forge_task_analytics_events (
   observed_at TEXT NOT NULL
 );
 --> statement-breakpoint
-CREATE INDEX forge_task_analytics_events_task ON forge_task_analytics_events(task_id, id);
+CREATE INDEX suplex_task_analytics_events_task ON suplex_task_analytics_events(task_id, id);

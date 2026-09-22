@@ -1,6 +1,6 @@
 node_modules/
 dist/
-.forge/
+.suplex/
 .scratch/
 .audit/
 logs/

@@ -16,7 +16,7 @@ test("a spend budget uses native usage and increases only after an explicit deci
   const root = value.store.currentSession("task", "root")!;
   value.harness.finish(value.harness.dispatched[0]!.messageID);
   value.nativeUsage.set(root.id, [usage(root.nativeSessionId!, 20)]);
-  value.database.authTransaction(db => db.prepare("INSERT INTO forge_task_usage (task_id, session_id, message_id, snapshot, observed_at) VALUES (?, 'stale-session', 'stale-message', ?, ?)").run("task", JSON.stringify(usage("stale-session", 100)), new Date().toISOString()));
+  value.database.authTransaction(db => db.prepare("INSERT INTO suplex_task_usage (task_id, session_id, message_id, snapshot, observed_at) VALUES (?, 'stale-session', 'stale-message', ?, ?)").run("task", JSON.stringify(usage("stale-session", 100)), new Date().toISOString()));
   await value.controller.recover("task");
   await value.controller.recover("task");
   expect(value.store.get("task")).toMatchObject({ status: "waiting_human", humanQuestion: expect.stringContaining("budget") });
@@ -106,7 +106,7 @@ test.each(["Old budget wording", ""])("a budget pause resumes with display quest
   await value.controller.recover("task");
   await value.controller.recover("task");
   const questionId = value.store.get("task").humanQuestionId;
-  value.database.authTransaction(db => db.prepare("UPDATE forge_task_controls SET human_question = ? WHERE task_id = 'task'").run(question));
+  value.database.authTransaction(db => db.prepare("UPDATE suplex_task_controls SET human_question = ? WHERE task_id = 'task'").run(question));
   value.nativeUsage.set(root.id, [usage(root.nativeSessionId!, 5)]);
   await value.controller.recover("task");
   expect(value.store.get("task")).toMatchObject({ status: "active", humanQuestionId: null, limitPause: null });
@@ -119,7 +119,7 @@ test("a real unrelated question clears stale limit intent and remains pending", 
   expect(value.store.pauseAtTaskLimit("task", { estimatedCostUsd: 20, admittedTurns: 0 })).toBe(true);
   const paused = value.store.get("task");
   value.store.answerTaskLimit("task", paused.humanQuestionId!, { kind: "add_allowance" });
-  value.database.authTransaction(db => db.prepare("UPDATE forge_task_controls SET limit_pause_json = ? WHERE task_id = 'task'").run(JSON.stringify(paused.limitPause)));
+  value.database.authTransaction(db => db.prepare("UPDATE suplex_task_controls SET limit_pause_json = ? WHERE task_id = 'task'").run(JSON.stringify(paused.limitPause)));
   value.store.askHuman("task", "Check repository access.");
   expect(value.store.get("task")).toMatchObject({ status: "waiting_human", humanQuestion: "Check repository access.", limitPause: null });
   await value.controller.recover("task");
@@ -178,7 +178,7 @@ test("a changed question ID and explicit cancellation remain authoritative durin
   value.nativeUsage.set(root.id, [usage(root.nativeSessionId!, 5)]);
   const reader = (session: Parameters<typeof value.reader>[0]) => ({ ...value.reader(session), timeline: async () => {
     const observed = await value.reader(session).timeline();
-    value.database.authTransaction(db => db.prepare("UPDATE forge_task_controls SET human_question_id = 'replacement-question' WHERE task_id = 'task'").run());
+    value.database.authTransaction(db => db.prepare("UPDATE suplex_task_controls SET human_question_id = 'replacement-question' WHERE task_id = 'task'").run());
     return observed;
   } });
   const controller = new RootController(new TaskControlStore(value.database), value.harness, undefined, undefined, undefined, reader, async () => undefined);
@@ -218,7 +218,7 @@ test("missing model pricing preserves usage, permits dispatch, and retries prici
   await controller.recover("task");
   expect(value.store.get("task")).toMatchObject({ status: "active", humanQuestion: null });
   expect(value.harness.dispatched).toHaveLength(2);
-  const stored = value.database.authQuery(db => db.prepare("SELECT snapshot FROM forge_task_usage WHERE task_id = 'task'").get() as { snapshot: string });
+  const stored = value.database.authQuery(db => db.prepare("SELECT snapshot FROM suplex_task_usage WHERE task_id = 'task'").get() as { snapshot: string });
   expect(JSON.parse(stored.snapshot)).toMatchObject({ cost: 0, tokens: { input: 100 } });
 
   value.harness.finish(value.harness.dispatched[1]!.messageID);
@@ -241,7 +241,7 @@ test("pricing lookup failure preserves usage and permits dispatch", async () => 
   await controller.recover("task");
   expect(value.store.get("task")).toMatchObject({ status: "active", humanQuestion: null, limitPause: null });
   expect(value.harness.dispatched).toHaveLength(2);
-  const stored = value.database.authQuery(db => db.prepare("SELECT snapshot FROM forge_task_usage WHERE task_id = 'task'").get() as { snapshot: string });
+  const stored = value.database.authQuery(db => db.prepare("SELECT snapshot FROM suplex_task_usage WHERE task_id = 'task'").get() as { snapshot: string });
   expect(JSON.parse(stored.snapshot)).toMatchObject({ cost: 0, tokens: { input: 100 } });
 });
 
@@ -343,7 +343,7 @@ test("a limit answer supersedes only the unadmitted idle prompt while dependenci
   value.database.authTransaction(db => insertNativeTaskRow(db, { taskId: "limit-prerequisite", directory: value.directory }));
   value.store.create({ taskId: "limit-prerequisite", startImmediately: true, objective: "Prepare the limit dependency", deliveryTarget: "merged", deliveryIntent: { repository: "owner/repo", headBranch: "limit-prerequisite", baseBranch: "main", baselineSha: "a", pullRequestNumber: null }, rootProfile: profile, workerProfile: profile });
   value.store.admitQueued(["limit-prerequisite"]);
-  value.database.authTransaction(db => db.prepare("INSERT INTO forge_task_dependencies (task_id, depends_on_task_id, created_at) VALUES ('task', 'limit-prerequisite', ?)").run(new Date().toISOString()));
+  value.database.authTransaction(db => db.prepare("INSERT INTO suplex_task_dependencies (task_id, depends_on_task_id, created_at) VALUES ('task', 'limit-prerequisite', ?)").run(new Date().toISOString()));
 
   expect(value.store.pauseAtTaskLimit("task", { estimatedCostUsd: 999, admittedTurns: 1 })).toBe(true);
   value.store.answerTaskLimit("task", value.store.get("task").humanQuestionId!, { kind: "add_allowance" });

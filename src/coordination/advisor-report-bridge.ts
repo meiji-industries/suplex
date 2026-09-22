@@ -26,7 +26,7 @@ export function startAdvisorReportBridgeTransport(input: { role: AdvisorRole; st
       if (request.method === "initialize") {
         const params = z.object({ protocolVersion: z.string(), capabilities: z.object({}).passthrough(), clientInfo: z.object({ name: z.string(), version: z.string() }).passthrough() }).strict().parse(request.params);
         initialized = true;
-        respond(request.id, { protocolVersion: params.protocolVersion, capabilities: { tools: {} }, serverInfo: { name: "forge-advisor-report", version: "1" } });
+        respond(request.id, { protocolVersion: params.protocolVersion, capabilities: { tools: {} }, serverInfo: { name: "suplex-advisor-report", version: "1" } });
         return;
       }
       if (!initialized) throw new Error("MCP client must initialize before calling tools");

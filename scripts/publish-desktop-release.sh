@@ -5,27 +5,27 @@ set -euo pipefail
 : "${CF_R2_ACCESS_KEY_ID:?Set CF_R2_ACCESS_KEY_ID}"
 : "${CF_R2_SECRET_ACCESS_KEY:?Set CF_R2_SECRET_ACCESS_KEY}"
 : "${CF_R2_BUCKET:?Set CF_R2_BUCKET}"
-: "${FORGE_DESKTOP_UPDATE_URL:?Set FORGE_DESKTOP_UPDATE_URL}"
+: "${SUPLEX_DESKTOP_UPDATE_URL:?Set SUPLEX_DESKTOP_UPDATE_URL}"
 
 release_dir=desktop/release
 prefix=stable/mac/arm64
 endpoint="https://${CF_R2_ACCOUNT_ID}.r2.cloudflarestorage.com"
-base_url="${FORGE_DESKTOP_UPDATE_URL%/}"
+base_url="${SUPLEX_DESKTOP_UPDATE_URL%/}"
 
 case "$base_url" in
   https://*/"$prefix") ;;
-  *) echo "FORGE_DESKTOP_UPDATE_URL must end in /$prefix/" >&2; exit 1 ;;
+  *) echo "SUPLEX_DESKTOP_UPDATE_URL must end in /$prefix/" >&2; exit 1 ;;
 esac
 
-zips=("$release_dir"/Forge-*-arm64-mac.zip)
-dmgs=("$release_dir"/Forge-*-arm64.dmg)
+zips=("$release_dir"/Suplex-*-arm64-mac.zip)
+dmgs=("$release_dir"/Suplex-*-arm64.dmg)
 (( ${#zips[@]} == 1 )) || { echo "Expected one arm64 ZIP in $release_dir" >&2; exit 1; }
 (( ${#dmgs[@]} == 1 )) || { echo "Expected one arm64 DMG in $release_dir" >&2; exit 1; }
 zip="${zips[0]}"
 dmg="${dmgs[0]}"
 blockmap="$zip.blockmap"
 manifest="$release_dir/latest-mac.yml"
-app="$release_dir/mac-arm64/Forge.app"
+app="$release_dir/mac-arm64/Suplex.app"
 for artifact in "$app" "$zip" "$blockmap" "$dmg" "$manifest"; do
   [[ -e "$artifact" ]] || { echo "Missing $artifact" >&2; exit 1; }
 done
@@ -36,7 +36,7 @@ xcrun stapler validate "$dmg"
 zip_check="$(mktemp -d)"
 trap 'rm -rf "$zip_check"' EXIT
 ditto -x -k "$zip" "$zip_check"
-codesign --verify --deep --strict "$zip_check/Forge.app"
+codesign --verify --deep --strict "$zip_check/Suplex.app"
 shasum -a 256 "$zip" "$blockmap" "$dmg"
 
 export AWS_ACCESS_KEY_ID="$CF_R2_ACCESS_KEY_ID"

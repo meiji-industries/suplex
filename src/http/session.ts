@@ -1,7 +1,7 @@
 import type { FastifyReply, FastifyRequest } from "fastify";
 
 import type { AuthService, AuthUser } from "../identity/auth.js";
-import type { ForgeConfig } from "../platform/config.js";
+import type { SuplexConfig } from "../platform/config.js";
 import {
   CSRF_COOKIE_NAME,
   LEGACY_SESSION_COOKIE_NAME,
@@ -11,11 +11,11 @@ import {
 
 declare module "fastify" {
   interface FastifyRequest {
-    forgeUser: AuthUser;
+    suplexUser: AuthUser;
   }
 }
 
-export async function sessionUser(auth: AuthService | undefined, request: Pick<FastifyRequest, "cookies" | "headers">, reply?: FastifyReply, config?: ForgeConfig): Promise<AuthUser | undefined> {
+export async function sessionUser(auth: AuthService | undefined, request: Pick<FastifyRequest, "cookies" | "headers">, reply?: FastifyReply, config?: SuplexConfig): Promise<AuthUser | undefined> {
   if (!auth) return undefined;
   const current = await auth.getUserBySession(request.cookies[SESSION_COOKIE_NAME] ?? "");
   if (current) return current;
@@ -33,30 +33,30 @@ export async function sessionUser(auth: AuthService | undefined, request: Pick<F
   return legacy;
 }
 
-export function isLoopbackHost(config: Pick<ForgeConfig, "port">, host: string | undefined): boolean {
+export function isLoopbackHost(config: Pick<SuplexConfig, "port">, host: string | undefined): boolean {
   return [`localhost:${config.port}`, `127.0.0.1:${config.port}`, `[::1]:${config.port}`].includes(host?.toLowerCase() ?? "");
 }
 
 /**
  * The tailnet is the login boundary (ADR 0009). A request is trusted when Tailscale Serve
  * stamped it with a tailnet identity, when it comes from the loopback host, or, in direct mode where
- * Forge binds a Tailscale address that only the tailnet reaches, when it is addressed to that host.
+ * Suplex binds a Tailscale address that only the tailnet reaches, when it is addressed to that host.
  * Funnel traffic and tagged devices carry no identity header and are not trusted.
  */
-export function isTrustedNetworkRequest(config: Pick<ForgeConfig, "port" | "tailscaleExposure" | "reachableAddress">, headers: FastifyRequest["headers"]): boolean {
+export function isTrustedNetworkRequest(config: Pick<SuplexConfig, "port" | "tailscaleExposure" | "reachableAddress">, headers: FastifyRequest["headers"]): boolean {
   if (headers["tailscale-user-login"] !== undefined) return true;
   if (isLoopbackHost(config, headers.host)) return true;
   return config.tailscaleExposure === "direct" && headers.host?.toLowerCase() === new URL(config.reachableAddress).host.toLowerCase();
 }
 
 export function authenticatedUser(request: FastifyRequest): AuthUser {
-  if (!request.forgeUser) {
+  if (!request.suplexUser) {
     throw new Error("Authenticated request context is missing");
   }
-  return request.forgeUser;
+  return request.suplexUser;
 }
 
-export function setSessionCookie(config: ForgeConfig, reply: FastifyReply, sessionToken: string, secure = config.reachableAddress.startsWith("https:")): void {
+export function setSessionCookie(config: SuplexConfig, reply: FastifyReply, sessionToken: string, secure = config.reachableAddress.startsWith("https:")): void {
   reply.setCookie(SESSION_COOKIE_NAME, sessionToken, {
     httpOnly: true,
     sameSite: "lax",

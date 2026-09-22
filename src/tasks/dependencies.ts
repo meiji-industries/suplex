@@ -1,17 +1,17 @@
 import { z } from "zod";
 import type Database from "better-sqlite3";
-import type { ForgeDatabase } from "../platform/database.js";
+import type { SuplexDatabase } from "../platform/database.js";
 
 const EdgeSchema = z.object({ task_id: z.string(), depends_on_task_id: z.string() });
-/** forge_task_dependencies is the only persisted prerequisite source; the UI calls each edge "Blocked by". */
-const EDGE_SOURCE = "SELECT task_id, depends_on_task_id FROM forge_task_dependencies";
+/** suplex_task_dependencies is the only persisted prerequisite source; the UI calls each edge "Blocked by". */
+const EDGE_SOURCE = "SELECT task_id, depends_on_task_id FROM suplex_task_dependencies";
 
 export class TaskDependencyFailure extends Error {
   constructor(readonly publicMessage: string, readonly statusCode = 422) { super(publicMessage); }
 }
 
 /** Every dependency edge for the given tasks, keyed by the dependent task. */
-export function taskDependencyMap(database: ForgeDatabase, taskIds: string[]): Map<string, string[]> {
+export function taskDependencyMap(database: SuplexDatabase, taskIds: string[]): Map<string, string[]> {
   const map = new Map<string, string[]>(taskIds.map(id => [id, []]));
   if (!taskIds.length) return map;
   const placeholders = taskIds.map(() => "?").join(", ");
@@ -24,11 +24,11 @@ const SummarySchema = z.object({ id: z.string(), title: z.string(), status: z.st
 export type TaskDependencySummary = z.infer<typeof SummarySchema>;
 
 export function taskDependencySummariesInTransaction(db: Database.Database, taskId: string): TaskDependencySummary[] {
-  return z.array(SummarySchema).parse(db.prepare(`SELECT t.id AS id, t.title AS title, COALESCE(c.status, 'backlog') AS status FROM (${EDGE_SOURCE} WHERE task_id = ?) d JOIN forge_tasks t ON t.id = d.depends_on_task_id LEFT JOIN forge_task_controls c ON c.task_id = t.id ORDER BY t.id`).all(taskId));
+  return z.array(SummarySchema).parse(db.prepare(`SELECT t.id AS id, t.title AS title, COALESCE(c.status, 'backlog') AS status FROM (${EDGE_SOURCE} WHERE task_id = ?) d JOIN suplex_tasks t ON t.id = d.depends_on_task_id LEFT JOIN suplex_task_controls c ON c.task_id = t.id ORDER BY t.id`).all(taskId));
 }
 
 /** The prerequisite tasks of one task with the title and status every reader shows: the task view, AgentApi, and the Coordinator. */
-export function taskDependencySummaries(database: ForgeDatabase, taskId: string): TaskDependencySummary[] {
+export function taskDependencySummaries(database: SuplexDatabase, taskId: string): TaskDependencySummary[] {
   return database.authQuery(db => taskDependencySummariesInTransaction(db, taskId));
 }
 
@@ -44,18 +44,18 @@ function readDependencies(db: Database.Database, taskId: string): string[] {
  * Replaces the dependency set of one task. The company scope and the absence of a cycle are proven
  * inside the same transaction that writes the edges, so a concurrent write cannot introduce a loop.
  */
-export function replaceTaskDependencies(database: ForgeDatabase, input: { taskId: string; companyId: string; dependsOn: string[] }, afterReplace?: (db: Database.Database, wasBlocked: boolean) => void): string[] {
+export function replaceTaskDependencies(database: SuplexDatabase, input: { taskId: string; companyId: string; dependsOn: string[] }, afterReplace?: (db: Database.Database, wasBlocked: boolean) => void): string[] {
   const dependsOn = [...new Set(input.dependsOn)].sort();
   if (dependsOn.includes(input.taskId)) throw new TaskDependencyFailure("A task cannot depend on itself");
   return database.authImmediateTransaction(db => {
     const wasBlocked = taskDependencyBlockersInTransaction(db, input.taskId).length > 0;
     for (const dependency of dependsOn) {
-      const row = db.prepare("SELECT company_id FROM forge_tasks WHERE id = ?").get(dependency) as { company_id: string } | undefined;
+      const row = db.prepare("SELECT company_id FROM suplex_tasks WHERE id = ?").get(dependency) as { company_id: string } | undefined;
       if (!row || row.company_id !== input.companyId) throw new TaskDependencyFailure("A dependency task is not available", 404);
     }
-    db.prepare("DELETE FROM forge_task_dependencies WHERE task_id = ?").run(input.taskId);
+    db.prepare("DELETE FROM suplex_task_dependencies WHERE task_id = ?").run(input.taskId);
     const stamp = new Date().toISOString();
-    for (const dependency of dependsOn) db.prepare("INSERT INTO forge_task_dependencies (task_id, depends_on_task_id, created_at) VALUES (?, ?, ?)").run(input.taskId, dependency, stamp);
+    for (const dependency of dependsOn) db.prepare("INSERT INTO suplex_task_dependencies (task_id, depends_on_task_id, created_at) VALUES (?, ?, ?)").run(input.taskId, dependency, stamp);
     assertNoCycle(db, input.taskId);
     afterReplace?.(db, wasBlocked);
     return readDependencies(db, input.taskId);

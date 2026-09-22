@@ -8,11 +8,11 @@ test("role panes migration maps legacy roles and keeps one current reviewer", as
   database.pragma("foreign_keys = ON");
   try {
     database.exec(`
-      CREATE TABLE forge_tasks (id TEXT PRIMARY KEY);
-      INSERT INTO forge_tasks VALUES ('task');
-      CREATE TABLE forge_herdr_role_sessions (
+      CREATE TABLE suplex_tasks (id TEXT PRIMARY KEY);
+      INSERT INTO suplex_tasks VALUES ('task');
+      CREATE TABLE suplex_herdr_role_sessions (
         id TEXT PRIMARY KEY NOT NULL,
-        task_id TEXT NOT NULL REFERENCES forge_tasks(id) ON DELETE cascade,
+        task_id TEXT NOT NULL REFERENCES suplex_tasks(id) ON DELETE cascade,
         session_role TEXT NOT NULL CHECK (session_role IN ('lead', 'developer', 'reviewer')),
         generation INTEGER NOT NULL CHECK (generation >= 0),
         is_current INTEGER NOT NULL DEFAULT 1 CHECK (is_current IN (0, 1)),
@@ -24,9 +24,9 @@ test("role panes migration maps legacy roles and keeps one current reviewer", as
         created_at TEXT NOT NULL, updated_at TEXT NOT NULL, last_seen_at TEXT, attention_excerpt TEXT,
         UNIQUE (task_id, session_role, generation)
       );
-      CREATE UNIQUE INDEX forge_herdr_current_persistent_role_unique ON forge_herdr_role_sessions (task_id, session_role) WHERE is_current = 1 AND session_role IN ('lead', 'developer');
-      CREATE INDEX forge_herdr_role_session_status_idx ON forge_herdr_role_sessions (status, updated_at);
-      INSERT INTO forge_herdr_role_sessions (id, task_id, session_role, generation, is_current, provider_kind, agent_name, pane_id, status, created_at, updated_at) VALUES
+      CREATE UNIQUE INDEX suplex_herdr_current_persistent_role_unique ON suplex_herdr_role_sessions (task_id, session_role) WHERE is_current = 1 AND session_role IN ('lead', 'developer');
+      CREATE INDEX suplex_herdr_role_session_status_idx ON suplex_herdr_role_sessions (status, updated_at);
+      INSERT INTO suplex_herdr_role_sessions (id, task_id, session_role, generation, is_current, provider_kind, agent_name, pane_id, status, created_at, updated_at) VALUES
         ('lead', 'task', 'lead', 0, 1, 'codex', 'live-lead-name', 'lead-pane', 'ready', '2026-08-29', '2026-08-29'),
         ('developer', 'task', 'developer', 0, 1, 'codex', 'live-developer-name', 'developer-pane', 'ready', '2026-08-29', '2026-08-29'),
         ('reviewer-0', 'task', 'reviewer', 0, 1, 'codex', 'live-reviewer-0', 'reviewer-pane-0', 'ready', '2026-08-29', '2026-08-29'),
@@ -35,7 +35,7 @@ test("role panes migration maps legacy roles and keeps one current reviewer", as
     const migration = await readFile(new URL("../drizzle/20260829121040158_role_panes.sql", import.meta.url), "utf8");
     for (const statement of migration.split("--> statement-breakpoint").map((value) => value.trim()).filter(Boolean)) database.exec(statement);
 
-    expect(database.prepare("SELECT id, session_role AS role, is_current AS current, agent_name AS agentName, pane_id AS paneId FROM forge_herdr_role_sessions ORDER BY id").all()).toEqual([
+    expect(database.prepare("SELECT id, session_role AS role, is_current AS current, agent_name AS agentName, pane_id AS paneId FROM suplex_herdr_role_sessions ORDER BY id").all()).toEqual([
       { id: "developer", role: "builder", current: 1, agentName: "live-developer-name", paneId: "developer-pane" },
       { id: "lead", role: "planner", current: 1, agentName: "live-lead-name", paneId: "lead-pane" },
       { id: "reviewer-0", role: "reviewer", current: 0, agentName: "live-reviewer-0", paneId: "reviewer-pane-0" },

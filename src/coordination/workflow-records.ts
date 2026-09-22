@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { AuthFailure, type AuthService } from "../identity/auth.js";
-import type { ForgeDatabase } from "../platform/database.js";
+import type { SuplexDatabase } from "../platform/database.js";
 import { WorkflowRecordInputSchema, WorkflowRecordPatchSchema, WorkflowRecordSchema, type WorkflowRecord, type WorkflowRecordInput, type WorkflowRecordPatch } from "../http/contracts/workflows.js";
 import { normalizeWorkflowInput, WorkflowInputFailure, workflowDefinition } from "./workflows.js";
 
@@ -14,11 +14,11 @@ function record(raw: unknown): WorkflowRecord {
 }
 
 export class WorkflowRecordService {
-  constructor(private readonly database: ForgeDatabase, private readonly auth: AuthService) {}
+  constructor(private readonly database: SuplexDatabase, private readonly auth: AuthService) {}
 
   list(userId: string, includeArchived = false): WorkflowRecord[] {
     if (!this.auth.getUserForAuthority(userId)) throw new AuthFailure("Authentication required", 401);
-    return this.database.authQuery(db => db.prepare(`SELECT * FROM forge_workflows${includeArchived ? "" : " WHERE archived_at IS NULL"} ORDER BY name COLLATE NOCASE, id`).all().map(record));
+    return this.database.authQuery(db => db.prepare(`SELECT * FROM suplex_workflows${includeArchived ? "" : " WHERE archived_at IS NULL"} ORDER BY name COLLATE NOCASE, id`).all().map(record));
   }
 
   get(userId: string, id: string): WorkflowRecord {
@@ -33,7 +33,7 @@ export class WorkflowRecordService {
     const now = new Date().toISOString();
     this.database.authTransaction(db => {
       this.assertName(values.name);
-      db.prepare("INSERT INTO forge_workflows (id, name, description, engine, configuration_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)").run(id, values.name, values.description, values.engine, JSON.stringify(Configuration.parse(values)), now, now);
+      db.prepare("INSERT INTO suplex_workflows (id, name, description, engine, configuration_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?)").run(id, values.name, values.description, values.engine, JSON.stringify(Configuration.parse(values)), now, now);
       this.auth.recordAuditEvent(userId, "workflow_created", undefined, undefined, { workflowId: id });
     });
     return this.read(id);
@@ -51,7 +51,7 @@ export class WorkflowRecordService {
       const values = this.validate(WorkflowRecordInputSchema.strip().parse(merged));
       this.assertName(values.name, id);
       const now = new Date().toISOString();
-      db.prepare("UPDATE forge_workflows SET name = ?, description = ?, engine = ?, configuration_json = ?, archived_at = ?, updated_at = ? WHERE id = ?").run(values.name, values.description, values.engine, JSON.stringify(Configuration.parse(values)), archived === undefined ? current.archivedAt : archived ? now : null, now, id);
+      db.prepare("UPDATE suplex_workflows SET name = ?, description = ?, engine = ?, configuration_json = ?, archived_at = ?, updated_at = ? WHERE id = ?").run(values.name, values.description, values.engine, JSON.stringify(Configuration.parse(values)), archived === undefined ? current.archivedAt : archived ? now : null, now, id);
       this.auth.recordAuditEvent(userId, "workflow_updated", undefined, undefined, { workflowId: id });
       return this.read(id);
     });
@@ -73,19 +73,19 @@ export class WorkflowRecordService {
     catch (error) { if (error instanceof WorkflowInputFailure) throw new AuthFailure(error.message, 422); throw error; }
     const checks: Array<[string | undefined, "root" | "worker", string]> = [[values.rootProfileId, "root", "Coordinator"], [values.workerProfileId, "worker", "Worker"], ...workflowDefinition(values.engine).advisorRoles.map(role => [values.advisorProfileIds[role], "root", "Advisor"] as [string | undefined, "root", string])];
     for (const [profileId, role, label] of checks) {
-      if (profileId && !this.database.authQuery(db => db.prepare("SELECT 1 FROM forge_profiles WHERE id = ? AND role = ?").get(profileId, role))) throw new AuthFailure(`The selected ${label} agent does not exist`, 422);
+      if (profileId && !this.database.authQuery(db => db.prepare("SELECT 1 FROM suplex_profiles WHERE id = ? AND role = ?").get(profileId, role))) throw new AuthFailure(`The selected ${label} agent does not exist`, 422);
     }
     return values;
   }
 
   private read(id: string): WorkflowRecord {
-    const row = this.database.authQuery(db => db.prepare("SELECT * FROM forge_workflows WHERE id = ?").get(id));
+    const row = this.database.authQuery(db => db.prepare("SELECT * FROM suplex_workflows WHERE id = ?").get(id));
     if (!row) throw new AuthFailure("Not found", 404);
     return record(row);
   }
 
   private assertName(name: string, id = ""): void {
-    if (this.database.authQuery(db => db.prepare("SELECT 1 FROM forge_workflows WHERE name = ? AND id <> ?").get(name, id))) throw new AuthFailure("This workflow name is already in use", 409);
+    if (this.database.authQuery(db => db.prepare("SELECT 1 FROM suplex_workflows WHERE name = ? AND id <> ?").get(name, id))) throw new AuthFailure("This workflow name is already in use", 409);
   }
 
   private requireAdmin(userId: string): void {

@@ -96,7 +96,7 @@ export function createInstaller(options: {
           const stage = entry as { name?: unknown; title?: unknown };
           return typeof stage.name === "string" && typeof stage.title === "string" ? [{ name: stage.name, title: stage.title }] : [];
         });
-        if (stages.length === 0) return fail("", "Read the install steps", `Forge could not read the install steps (exit ${manifest.code}).`, manifest.stderr.trim() || null);
+        if (stages.length === 0) return fail("", "Read the install steps", `Suplex could not read the install steps (exit ${manifest.code}).`, manifest.stderr.trim() || null);
         const start = from === null ? 0 : Math.max(0, stages.findIndex((stage) => stage.name === from));
         emit({ name: "stages", stages, from: start });
         for (const stage of stages.slice(start)) {

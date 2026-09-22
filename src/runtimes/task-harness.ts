@@ -89,7 +89,7 @@ export function supportsProviderInstances(providerID: string): boolean {
   return providerID === "claude-code";
 }
 
-// Forge reserves Devin and Codex identities with a prefix, because a Codex
+// Suplex reserves Devin and Codex identities with a prefix, because a Codex
 // thread id is itself a UUID. Native IDs otherwise remain backwards-compatible:
 // OpenCode uses "ses…" and Claude Code uses UUIDs.
 export function sessionHarness(nativeSessionId: string): HarnessKind {
@@ -151,7 +151,7 @@ let ghResolutionFailureLogged = false;
 /** The bridge command with `${VAR}` placeholders, for hosts that interpolate their MCP environment (Devin's project-local config). */
 export function environmentBridgeServer(kind: "root" | "advisor", ghCommand: string | null): TaskBridgeServer {
   const names = bridgeEnvironmentNames[kind];
-  return { ...bridgeCommand(kind), environment: { [names.binding]: `\${${names.binding}}`, [names.token]: `\${${names.token}}`, ...(ghCommand ? { FORGE_GH_COMMAND: ghCommand } : {}) } };
+  return { ...bridgeCommand(kind), environment: { [names.binding]: `\${${names.binding}}`, [names.token]: `\${${names.token}}`, ...(ghCommand ? { SUPLEX_GH_COMMAND: ghCommand } : {}) } };
 }
 
 export async function resolvedGhCommand(): Promise<string | null> {
@@ -186,7 +186,7 @@ async function writeBinding(kind: "root" | "advisor", runtimeDirectory: string, 
   await rename(pending, path);
   const names = bridgeEnvironmentNames[kind];
   const ghCommand = await resolvedGhCommand();
-  return { ...bridgeCommand(kind), environment: { [names.binding]: path, [names.token]: token, ...(ghCommand ? { FORGE_GH_COMMAND: ghCommand } : {}) } };
+  return { ...bridgeCommand(kind), environment: { [names.binding]: path, [names.token]: token, ...(ghCommand ? { SUPLEX_GH_COMMAND: ghCommand } : {}) } };
 }
 
 /** Writes the Coordinator bridge binding and returns the MCP server command that serves it. */

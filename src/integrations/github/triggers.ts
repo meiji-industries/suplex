@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 
 import { AuthFailure, type AuthService } from "../../identity/auth.js";
-import type { ForgeDatabase } from "../../platform/database.js";
+import type { SuplexDatabase } from "../../platform/database.js";
 import { GithubReleaseFailure } from "./failure.js";
 import type { GithubTriggerPort, GithubTriggerPullRequestInspection } from "./trigger-inspection.js";
 import { matchesGithubTriggerProtectedPaths, validateGithubTriggerProtectedPaths } from "./trigger-paths.js";
@@ -42,7 +42,7 @@ function message(error: unknown): { text: string; retryAt: string | null } {
 export class GithubTriggerService {
   readonly repository: GithubTriggerRepository;
   private queue: Promise<void> = Promise.resolve();
-  constructor(private readonly database: ForgeDatabase, private readonly auth: AuthService, private readonly projects: Projects, private readonly workflows: Workflows, private readonly github: GithubTriggerPort, private readonly tasks?: Tasks) { this.repository = new GithubTriggerRepository(database); }
+  constructor(private readonly database: SuplexDatabase, private readonly auth: AuthService, private readonly projects: Projects, private readonly workflows: Workflows, private readonly github: GithubTriggerPort, private readonly tasks?: Tasks) { this.repository = new GithubTriggerRepository(database); }
 
   list(userId: string, companyId: string): GithubTriggerRule[] { this.admin(userId, companyId); return this.repository.list(companyId); }
   activity(userId: string, companyId: string, ruleId: string): GithubTriggerActivity[] {
@@ -63,7 +63,7 @@ export class GithubTriggerService {
     const binding = await this.provider(local.repository, config.label);
     const time = timestamp();
     const created: GithubTriggerRule = { id: `github_trigger_${randomUUID().replaceAll("-", "")}`, companyId, ...config, repositoryId: binding.id, repositoryName: binding.fullName, enabled: false, archivedAt: null, revision: 1, lastSuccessfulCheckAt: null, nextRetryAt: null, latestError: null, failureCount: 0, createdAt: time, updatedAt: time };
-    try { this.repository.insert(created, () => this.sameLocal(userId, companyId, config, local), () => this.auth.recordAuditEventInTransaction(undefined, userId, "github_trigger_created", undefined, companyId, { ruleId: created.id })); } catch (error) { if (error instanceof Error && /UNIQUE constraint failed: forge_github_trigger_rules_enabled_repository_unique/i.test(error.message)) throw new AuthFailure("An enabled GitHub rule already exists for this repository", 409); throw error; }
+    try { this.repository.insert(created, () => this.sameLocal(userId, companyId, config, local), () => this.auth.recordAuditEventInTransaction(undefined, userId, "github_trigger_created", undefined, companyId, { ruleId: created.id })); } catch (error) { if (error instanceof Error && /UNIQUE constraint failed: suplex_github_trigger_rules_enabled_repository_unique/i.test(error.message)) throw new AuthFailure("An enabled GitHub rule already exists for this repository", 409); throw error; }
     return created;
   }
 
@@ -175,7 +175,7 @@ export class GithubTriggerService {
     catch (error) { if (error instanceof WorkflowInputFailure) throw new AuthFailure(error.message, 422); throw error; }
     const ids: Array<[string, "root" | "worker"]> = [[workflow.rootProfileId ?? project.rootProfileId, "root"], [workflow.workerProfileId ?? project.workerProfileId, "worker"], ...workflowDefinition(workflow.engine).advisorRoles.map(role => [workflow.advisorProfileIds[role] ?? workflow.rootProfileId ?? project.rootProfileId, "root"] as [string, "root" | "worker"])];
     const profiles = ids.map(([id, role]) => {
-      const profile = TaskProfileSchema.safeParse(this.database.authQuery(db => db.prepare("SELECT id AS profileId, provider, model, reasoning_level AS reasoningLevel, service_tier AS serviceTier FROM forge_profiles WHERE id = ? AND role = ? AND archived_at IS NULL").get(id, role)));
+      const profile = TaskProfileSchema.safeParse(this.database.authQuery(db => db.prepare("SELECT id AS profileId, provider, model, reasoning_level AS reasoningLevel, service_tier AS serviceTier FROM suplex_profiles WHERE id = ? AND role = ? AND archived_at IS NULL").get(id, role)));
       if (!profile.success) throw new AuthFailure("Selected workflow profile is unavailable", 422);
       return profile.data;
     });
@@ -267,7 +267,7 @@ export class GithubTriggerService {
   }
   private async provider(repository: string, label: string): Promise<{ id: number; fullName: string }> { const binding = await this.github.observeRepository({ repository }); await this.github.validateLabel({ repository: binding.fullName, label }); return binding; }
   private sameLocal(userId: string, companyId: string, config: Config, expected: Local): void { if (!isDeepStrictEqual(this.local(userId, companyId, config).dependencies, expected.dependencies)) throw new AuthFailure("This GitHub rule changed. Refresh and try again.", 409); }
-  private write(userId: string, current: GithubTriggerRule, next: GithubTriggerRule, expectedRevision: number, verify: () => void = () => {}): GithubTriggerRule { try { if (!this.repository.update(next, expectedRevision, () => { this.admin(userId, current.companyId); verify(); }, () => this.auth.recordAuditEventInTransaction(undefined, userId, "github_trigger_updated", undefined, current.companyId, { ruleId: current.id }))) throw new AuthFailure("This GitHub rule changed. Refresh and try again.", 409); } catch (error) { if (error instanceof Error && /UNIQUE constraint failed: forge_github_trigger_rules\.repository_id/i.test(error.message)) throw new AuthFailure("An enabled GitHub rule already exists for this repository", 409); throw error; } return next; }
+  private write(userId: string, current: GithubTriggerRule, next: GithubTriggerRule, expectedRevision: number, verify: () => void = () => {}): GithubTriggerRule { try { if (!this.repository.update(next, expectedRevision, () => { this.admin(userId, current.companyId); verify(); }, () => this.auth.recordAuditEventInTransaction(undefined, userId, "github_trigger_updated", undefined, current.companyId, { ruleId: current.id }))) throw new AuthFailure("This GitHub rule changed. Refresh and try again.", 409); } catch (error) { if (error instanceof Error && /UNIQUE constraint failed: suplex_github_trigger_rules\.repository_id/i.test(error.message)) throw new AuthFailure("An enabled GitHub rule already exists for this repository", 409); throw error; } return next; }
   private rule(companyId: string, ruleId: string): GithubTriggerRule { const rule = this.repository.get(companyId, ruleId); if (!rule) throw new AuthFailure("Not found", 404); return rule; }
   private admin(userId: string, companyId: string): void { this.auth.requireCompanyAccess(userId, companyId); if (this.auth.getUserForAuthority(userId)?.role !== "admin") throw new AuthFailure("Administrator access required", 403); }
 }

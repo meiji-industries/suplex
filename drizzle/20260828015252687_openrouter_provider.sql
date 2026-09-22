@@ -1,5 +1,5 @@
 -- Write migration SQL here.
-CREATE TABLE `forge_herdr_role_sessions_new` (
+CREATE TABLE `suplex_herdr_role_sessions_new` (
   `id` text PRIMARY KEY NOT NULL,
   `task_id` text NOT NULL,
   `session_role` text NOT NULL CHECK (`session_role` IN ('lead', 'developer', 'reviewer')),
@@ -11,21 +11,21 @@ CREATE TABLE `forge_herdr_role_sessions_new` (
   `status` text NOT NULL CHECK (`status` IN ('unbound', 'starting', 'ready', 'working', 'blocked', 'missing', 'closed', 'failed')),
   `last_agent_status` text, `attention_activated_at` text, `ensure_token` text, `ensure_expires_at` text,
   `created_at` text NOT NULL, `updated_at` text NOT NULL, `last_seen_at` text,
-  FOREIGN KEY (`task_id`) REFERENCES `forge_tasks`(`id`) ON DELETE cascade,
+  FOREIGN KEY (`task_id`) REFERENCES `suplex_tasks`(`id`) ON DELETE cascade,
   UNIQUE (`task_id`, `session_role`, `generation`)
 );
 --> statement-breakpoint
-INSERT INTO `forge_herdr_role_sessions_new` SELECT * FROM `forge_herdr_role_sessions`;
+INSERT INTO `suplex_herdr_role_sessions_new` SELECT * FROM `suplex_herdr_role_sessions`;
 --> statement-breakpoint
-DROP TABLE `forge_herdr_role_sessions`;
+DROP TABLE `suplex_herdr_role_sessions`;
 --> statement-breakpoint
-ALTER TABLE `forge_herdr_role_sessions_new` RENAME TO `forge_herdr_role_sessions`;
+ALTER TABLE `suplex_herdr_role_sessions_new` RENAME TO `suplex_herdr_role_sessions`;
 --> statement-breakpoint
-CREATE UNIQUE INDEX `forge_herdr_current_persistent_role_unique` ON `forge_herdr_role_sessions` (`task_id`, `session_role`) WHERE `is_current` = 1 AND `session_role` IN ('lead', 'developer');
+CREATE UNIQUE INDEX `suplex_herdr_current_persistent_role_unique` ON `suplex_herdr_role_sessions` (`task_id`, `session_role`) WHERE `is_current` = 1 AND `session_role` IN ('lead', 'developer');
 --> statement-breakpoint
-CREATE INDEX `forge_herdr_role_session_status_idx` ON `forge_herdr_role_sessions` (`status`, `updated_at`);
+CREATE INDEX `suplex_herdr_role_session_status_idx` ON `suplex_herdr_role_sessions` (`status`, `updated_at`);
 --> statement-breakpoint
-CREATE TABLE `forge_provider_credentials` (
+CREATE TABLE `suplex_provider_credentials` (
   `provider` text PRIMARY KEY CHECK (`provider` IN ('openrouter')),
   `secret` text NOT NULL,
   `last_four` text NOT NULL,

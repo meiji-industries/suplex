@@ -4,13 +4,13 @@ import { mkdir, open, rm } from "node:fs/promises";
 import { extname } from "node:path";
 import { fileURLToPath } from "node:url";
 
-import type { ForgeConfig } from "./config.js";
+import type { SuplexConfig } from "./config.js";
 import { defaultProcessController, hasCompleteProcessIdentity, ownedProcessIsRunning, processIdentityMatches, readProcessRegistry, type OwnedProcess, type ProcessController, type ProcessInspection, type ProcessRegistry, signalOwnedProcess, stopOwnedProcesses, writeProcessRegistry } from "./process-manager.js";
 import { configureTailscaleServe, disableTailscaleServe, isTailscaleServeConfigured, verifyTailscaleServe } from "./tailscale.js";
 
 export interface RuntimeReconciliationController {
   process: ProcessController;
-  serveIsConfigured(config: ForgeConfig): Promise<boolean>;
+  serveIsConfigured(config: SuplexConfig): Promise<boolean>;
   disableServe(port: number): Promise<void>;
   wait(milliseconds: number): Promise<void>;
 }
@@ -22,7 +22,7 @@ const runtimeReconciliationController: RuntimeReconciliationController = {
   wait: async (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds)),
 };
 
-export function healthProbeAddress(config: ForgeConfig): string {
+export function healthProbeAddress(config: SuplexConfig): string {
   if (config.tailscaleExposure !== "serve") {
     return config.reachableAddress;
   }
@@ -34,7 +34,7 @@ export function readinessProbePath(): string {
   return "/health";
 }
 
-async function waitForHealthPage(config: ForgeConfig, timeoutMs = 30_000): Promise<void> {
+async function waitForHealthPage(config: SuplexConfig, timeoutMs = 30_000): Promise<void> {
   const probeAddress = healthProbeAddress(config);
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -54,7 +54,7 @@ async function waitForHealthPage(config: ForgeConfig, timeoutMs = 30_000): Promi
     }
     await new Promise((resolve) => setTimeout(resolve, 500));
   }
-  throw new Error(`Forge API did not become reachable at ${probeAddress}; configured external address is ${config.reachableAddress}`);
+  throw new Error(`Suplex API did not become reachable at ${probeAddress}; configured external address is ${config.reachableAddress}`);
 }
 
 async function waitForProcessIdentity(pid: number, attempts = 10, delayMs = 50): Promise<ProcessInspection | undefined> {
@@ -72,28 +72,28 @@ export function supervisorEntryPath(): string {
   return fileURLToPath(new URL(`updates/supervisor${extname(self)}`, import.meta.url));
 }
 
-export function forgeProcessArguments(script: string): string[] {
+export function suplexProcessArguments(script: string): string[] {
   return [script];
 }
 
-async function spawnForgeProcess(name: string, script: string, config: ForgeConfig, runtimeRoot: string, foreground: boolean): Promise<{ child: ChildProcess; owned: OwnedProcess }> {
+async function spawnSuplexProcess(name: string, script: string, config: SuplexConfig, runtimeRoot: string, foreground: boolean): Promise<{ child: ChildProcess; owned: OwnedProcess }> {
   const command = process.execPath;
-  const args = forgeProcessArguments(script);
+  const args = suplexProcessArguments(script);
   const logHandle = foreground ? undefined : await open(`${runtimeRoot}/${name}.log`, "a", 0o600);
   const child = spawn(command, args, {
     cwd: process.cwd(),
     detached: true,
     env: {
       ...process.env,
-      FORGE_DATA_ROOT: config.dataRoot,
-      FORGE_INSTALLATION_ID: config.installationId,
+      SUPLEX_DATA_ROOT: config.dataRoot,
+      SUPLEX_INSTALLATION_ID: config.installationId,
     },
     stdio: foreground ? "inherit" : ["ignore", logHandle!.fd, logHandle!.fd],
   });
   child.unref();
   if (!child.pid) {
     await logHandle?.close();
-    throw new Error(`Could not start Forge ${name}`);
+    throw new Error(`Could not start Suplex ${name}`);
   }
   await logHandle?.close();
   const identity = await waitForProcessIdentity(child.pid);
@@ -117,12 +117,12 @@ async function spawnForgeProcess(name: string, script: string, config: ForgeConf
   };
 }
 
-const expectedForgeProcessNames = new Set(["server"]);
+const expectedSuplexProcessNames = new Set(["server"]);
 
 function hasCompleteRunningProcessSet(registry: ProcessRegistry): boolean {
-  return registry.processes.length === expectedForgeProcessNames.size
-    && registry.processes.every((process) => process.ready === true && expectedForgeProcessNames.has(process.name))
-    && new Set(registry.processes.map((process) => process.name)).size === expectedForgeProcessNames.size;
+  return registry.processes.length === expectedSuplexProcessNames.size
+    && registry.processes.every((process) => process.ready === true && expectedSuplexProcessNames.has(process.name))
+    && new Set(registry.processes.map((process) => process.name)).size === expectedSuplexProcessNames.size;
 }
 
 async function waitForRecordedProcessToStop(recorded: OwnedProcess, controller: RuntimeReconciliationController): Promise<void> {
@@ -132,10 +132,10 @@ async function waitForRecordedProcessToStop(recorded: OwnedProcess, controller: 
     }
     await controller.wait(100);
   }
-  throw new Error(`Could not prove recorded Forge process ${recorded.name} (${recorded.pid}) stopped before replacement startup`);
+  throw new Error(`Could not prove recorded Suplex process ${recorded.name} (${recorded.pid}) stopped before replacement startup`);
 }
 
-async function waitForRecordedServeToStop(config: ForgeConfig, controller: RuntimeReconciliationController): Promise<void> {
+async function waitForRecordedServeToStop(config: SuplexConfig, controller: RuntimeReconciliationController): Promise<void> {
   for (let attempt = 0; attempt < 10; attempt += 1) {
     if (!await controller.serveIsConfigured(config)) {
       return;
@@ -147,7 +147,7 @@ async function waitForRecordedServeToStop(config: ForgeConfig, controller: Runti
 
 export async function reconcileExistingRegistry(
   registry: ProcessRegistry,
-  config: ForgeConfig,
+  config: SuplexConfig,
   controller: RuntimeReconciliationController = runtimeReconciliationController,
 ): Promise<boolean> {
   const liveProcesses = await Promise.all(
@@ -162,7 +162,7 @@ export async function reconcileExistingRegistry(
     && !hasCompleteProcessIdentity(entry.recorded)
   ));
   if (ambiguousProcess) {
-    throw new Error(`Could not reconcile recorded Forge process ${ambiguousProcess.recorded.name}; ownership is ambiguous`);
+    throw new Error(`Could not reconcile recorded Suplex process ${ambiguousProcess.recorded.name}; ownership is ambiguous`);
   }
 
   let serveAlive = false;
@@ -186,14 +186,14 @@ export async function reconcileExistingRegistry(
   return false;
 }
 
-export async function startForge(config: ForgeConfig, foreground: boolean): Promise<ProcessRegistry> {
+export async function startSuplex(config: SuplexConfig, foreground: boolean): Promise<ProcessRegistry> {
   await mkdir(config.runtimeRoot, { recursive: true });
   let existingRegistry: ProcessRegistry | undefined;
   try {
     existingRegistry = await readProcessRegistry(`${config.runtimeRoot}/owned-processes.json`);
   } catch (error: unknown) {
     if ((error as NodeJS.ErrnoException).code !== "ENOENT") {
-      throw new Error("Forge owned-process registry could not be read safely; inspect it before starting another runtime", { cause: error });
+      throw new Error("Suplex owned-process registry could not be read safely; inspect it before starting another runtime", { cause: error });
     }
   }
   if (existingRegistry && await reconcileExistingRegistry(existingRegistry, config)) {
@@ -218,7 +218,7 @@ export async function startForge(config: ForgeConfig, foreground: boolean): Prom
       } : {}),
     };
     await writeProcessRegistry(`${config.runtimeRoot}/owned-processes.json`, registry);
-    const server = await spawnForgeProcess("server", supervisorEntryPath(), config, config.runtimeRoot, foreground);
+    const server = await spawnSuplexProcess("server", supervisorEntryPath(), config, config.runtimeRoot, foreground);
     registry.processes.push(server.owned);
     await writeProcessRegistry(`${config.runtimeRoot}/owned-processes.json`, registry);
     if (config.tailscaleExposure === "serve") {
@@ -248,7 +248,7 @@ export async function startForge(config: ForgeConfig, foreground: boolean): Prom
       await rm(`${config.runtimeRoot}/owned-processes.json`, { force: true });
     } catch (cleanupError) {
       const startupMessage = error instanceof Error ? error.message : "unknown startup error";
-      throw new Error(`Forge startup failed (${startupMessage}) and cleanup could not be proven; the owned-process registry was preserved`, { cause: cleanupError });
+      throw new Error(`Suplex startup failed (${startupMessage}) and cleanup could not be proven; the owned-process registry was preserved`, { cause: cleanupError });
     }
     throw error;
   }

@@ -15,13 +15,13 @@ test("child processes, the bridge, and the main-process channel each live in one
   for (const file of sources) {
     expect(/child_process/.test(read(file)), file).toBe(file === "local-runtime.ts" || file === "installer.ts");
     expect(/contextBridge|ipcRenderer/.test(read(file)), file).toBe(file === "preload.ts");
-    expect(/ipcMain/.test(read(file)), file).toBe(file === "forge-desktop.ts");
+    expect(/ipcMain/.test(read(file)), file).toBe(file === "suplex-desktop.ts");
   }
 });
 
 test("only the orchestration module and the preload import electron", () => {
   for (const file of sources) {
-    expect(/from "electron"/.test(read(file)), file).toBe(file === "forge-desktop.ts" || file === "preload.ts");
+    expect(/from "electron"/.test(read(file)), file).toBe(file === "suplex-desktop.ts" || file === "preload.ts");
   }
 });
 

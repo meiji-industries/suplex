@@ -16,11 +16,11 @@ export interface ExecutableSpec {
   fallbackPaths?: string[];
 }
 
-export const OPENCODE_EXECUTABLE: ExecutableSpec = { label: "OpenCode", binary: "opencode", envVar: "FORGE_OPENCODE_COMMAND", homePaths: [[".opencode", "bin", "opencode"]] };
-export const CLAUDE_EXECUTABLE: ExecutableSpec = { label: "Claude Code", binary: "claude", envVar: "FORGE_CLAUDE_COMMAND", homePaths: [[".local", "bin", "claude"], [".claude", "local", "claude"]] };
-export const DEVIN_EXECUTABLE: ExecutableSpec = { label: "Devin CLI", binary: "devin", envVar: "FORGE_DEVIN_COMMAND", homePaths: [[".local", "bin", "devin"], [".devin", "bin", "devin"]] };
-export const CODEX_EXECUTABLE: ExecutableSpec = { label: "Codex CLI", binary: "codex", envVar: "FORGE_CODEX_COMMAND", homePaths: [[".local", "bin", "codex"], [".codex", "bin", "codex"]] };
-export const GH_EXECUTABLE: ExecutableSpec = { label: "GitHub CLI", binary: "gh", envVar: "FORGE_GH_COMMAND", homePaths: [], fallbackPaths: ["/opt/homebrew/bin/gh", "/usr/local/bin/gh"] };
+export const OPENCODE_EXECUTABLE: ExecutableSpec = { label: "OpenCode", binary: "opencode", envVar: "SUPLEX_OPENCODE_COMMAND", homePaths: [[".opencode", "bin", "opencode"]] };
+export const CLAUDE_EXECUTABLE: ExecutableSpec = { label: "Claude Code", binary: "claude", envVar: "SUPLEX_CLAUDE_COMMAND", homePaths: [[".local", "bin", "claude"], [".claude", "local", "claude"]] };
+export const DEVIN_EXECUTABLE: ExecutableSpec = { label: "Devin CLI", binary: "devin", envVar: "SUPLEX_DEVIN_COMMAND", homePaths: [[".local", "bin", "devin"], [".devin", "bin", "devin"]] };
+export const CODEX_EXECUTABLE: ExecutableSpec = { label: "Codex CLI", binary: "codex", envVar: "SUPLEX_CODEX_COMMAND", homePaths: [[".local", "bin", "codex"], [".codex", "bin", "codex"]] };
+export const GH_EXECUTABLE: ExecutableSpec = { label: "GitHub CLI", binary: "gh", envVar: "SUPLEX_GH_COMMAND", homePaths: [], fallbackPaths: ["/opt/homebrew/bin/gh", "/usr/local/bin/gh"] };
 
 async function executableFile(path: string): Promise<boolean> {
   try {

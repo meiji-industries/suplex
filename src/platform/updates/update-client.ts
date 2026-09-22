@@ -14,7 +14,7 @@ type PendingRequest = { expected: "update:read-result" | "update:apply-result"; 
 export class SupervisorUpdateClient {
   private readonly pending = new Map<string, PendingRequest>();
   private readonly messageListener = (message: unknown): void => this.receive(message);
-  private readonly disconnectListener = (): void => this.rejectPending("Forge update control stopped.");
+  private readonly disconnectListener = (): void => this.rejectPending("Suplex update control stopped.");
 
   constructor() {
     process.on("message", this.messageListener);
@@ -24,26 +24,26 @@ export class SupervisorUpdateClient {
   get supported(): boolean { return typeof process.send === "function" && process.connected; }
 
   async read(check: boolean): Promise<UpdateResponse> {
-    if (!this.supported) return { status: { kind: "failed", action: "check", message: "Forge update control is not available.", error: "Start Forge with the Forge supervisor." }, canRestart: false };
+    if (!this.supported) return { status: { kind: "failed", action: "check", message: "Suplex update control is not available.", error: "Start Suplex with the Suplex supervisor." }, canRestart: false };
     return UpdateResponseSchema.parse(await this.request({ kind: "update:read", requestId: randomUUID(), check }));
   }
 
   async apply(): Promise<UpdateRestartResponse> {
-    if (!this.supported) throw new Error("Forge update control is not available.");
+    if (!this.supported) throw new Error("Suplex update control is not available.");
     return UpdateRestartResponseSchema.parse(await this.request({ kind: "update:apply", requestId: randomUUID() }));
   }
 
   close(): void {
     process.off("message", this.messageListener);
     process.off("disconnect", this.disconnectListener);
-    this.rejectPending("Forge update control stopped.");
+    this.rejectPending("Suplex update control stopped.");
   }
 
   private request(message: ParentRequest): Promise<unknown> {
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         this.pending.delete(message.requestId);
-        reject(new Error("Forge update control did not answer."));
+        reject(new Error("Suplex update control did not answer."));
       }, 35_000);
       const expected = message.kind === "update:read" ? "update:read-result" : "update:apply-result";
       this.pending.set(message.requestId, { expected, resolve, reject, timer });

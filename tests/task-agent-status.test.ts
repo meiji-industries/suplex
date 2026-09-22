@@ -46,7 +46,7 @@ test("company agent batches match individual reads and omit foreign, missing, an
     const first = await create("batch-first");
     const second = await create("batch-second");
     const archived = await create("batch-archived");
-    value.database.authTransaction(db => db.prepare("UPDATE forge_tasks SET archived_at = ? WHERE id = ?").run(new Date().toISOString(), archived.id));
+    value.database.authTransaction(db => db.prepare("UPDATE suplex_tasks SET archived_at = ? WHERE id = ?").run(new Date().toISOString(), archived.id));
     const store = value.tasks.repository.controls;
     const reserved = store.claimRoot({ taskId: first.id });
     store.bindHarnessSession({ sessionId: reserved.id, generation: reserved.generation, nativeSessionId: "ses_missing_batch" });
@@ -76,8 +76,8 @@ test.each(["archive", "revoke", "database failure"])("agent batches recheck auth
     const { task } = await value.tasks.createTask(value.userId, value.company.id, { projectId: value.project.id, title: "Batch access", description: "Observe only", startImmediately: false, idempotencyKey: "batch-access" });
     vi.spyOn(agentStatuses, "readTaskAgentStatuses").mockImplementationOnce(async () => {
       await Promise.resolve();
-      if (change === "archive") value.database.authTransaction(db => db.prepare("UPDATE forge_tasks SET archived_at = ? WHERE id = ?").run(new Date().toISOString(), task.id));
-      if (change === "revoke") value.database.authTransaction(db => db.prepare("UPDATE forge_users SET status = 'revoked' WHERE id = ?").run(value.userId));
+      if (change === "archive") value.database.authTransaction(db => db.prepare("UPDATE suplex_tasks SET archived_at = ? WHERE id = ?").run(new Date().toISOString(), task.id));
+      if (change === "revoke") value.database.authTransaction(db => db.prepare("UPDATE suplex_users SET status = 'revoked' WHERE id = ?").run(value.userId));
       if (change === "database failure") throw new Error("Database unavailable");
       return { agents: [] };
     });

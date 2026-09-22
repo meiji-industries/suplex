@@ -14,7 +14,7 @@ const probed = (stdout: string, exitCode = 0): ProviderProbeResult => ({ stdout,
 afterEach(() => { vi.restoreAllMocks(); vi.unstubAllEnvs(); });
 
 test("lists one row per agent tool with OpenCode's vendors folded into qualified model ids", async () => {
-  vi.stubEnv("CODEX_HOME", join(tmpdir(), "forge-missing-codex-home"));
+  vi.stubEnv("CODEX_HOME", join(tmpdir(), "suplex-missing-codex-home"));
   vi.spyOn(openCodeProviders, "readOpenCodeProviders").mockResolvedValue({ directory: "/workspace", observedAt: "2026-09-15T00:00:00.000Z", providers: [
     { id: "openai", label: "OpenAI", modelCount: 1, models: [{ id: "gpt-5.6-sol", label: "GPT-5.6 Sol" }], status: "configured" },
     { id: "github-copilot", label: "GitHub Copilot", modelCount: 1, models: [{ id: "claude-fable-5", label: "Claude Fable 5" }], status: "configured" },
@@ -36,7 +36,7 @@ test("lists one row per agent tool with OpenCode's vendors folded into qualified
 });
 
 test("Codex models come from its model cache, skipping hidden ones, with the static list as fallback", async () => {
-  const home = mkdtempSync(join(tmpdir(), "forge-codex-home-"));
+  const home = mkdtempSync(join(tmpdir(), "suplex-codex-home-"));
   expect(await readCodexModels(home)).toEqual(CODEX_MODELS);
   writeFileSync(join(home, "models_cache.json"), JSON.stringify({ models: [
     { slug: "gpt-7", display_name: "GPT-7", visibility: "list" },

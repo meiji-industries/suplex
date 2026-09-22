@@ -128,7 +128,7 @@ export class DevinTaskRuntime implements TaskHarness {
       ...base,
       admission: "observed" as const,
       retry: "forbidden" as const,
-      native: { messageID: intent.messageID, parentID: intent.messageID, providerID: "devin", modelID: scope.profile.modelID, mode: `forge-${scope.role}`, agent: `forge-${scope.role}`, cwd: scope.directory, root: scope.directory },
+      native: { messageID: intent.messageID, parentID: intent.messageID, providerID: "devin", modelID: scope.profile.modelID, mode: `suplex-${scope.role}`, agent: `suplex-${scope.role}`, cwd: scope.directory, root: scope.directory },
     };
     if (await headlessTurnRunning(record)) return { ...common, state: "running" as const, reason: "dispatch_process_running" };
     const exit = await readHeadlessText(files.exit);
@@ -150,7 +150,7 @@ export class DevinTaskRuntime implements TaskHarness {
     const bridge = await this.prepare(scope);
     const files = headlessTurnFiles(runtimeDirectory, intent.messageID);
     const resumeSessionId = await recoverDevinSessionId(runtimeDirectory);
-    const additions = scope.role === "advisor" ? { FORGE_ADVISOR_RESULT: advisorBridgeResultPath(runtimeDirectory, intent.messageID) } : {};
+    const additions = scope.role === "advisor" ? { SUPLEX_ADVISOR_RESULT: advisorBridgeResultPath(runtimeDirectory, intent.messageID) } : {};
     const record = await dispatchHeadless({ runtimeDirectory, scope, intent, executable, args: devinArguments({ scope, resumeSessionId, promptFile: files.prompt, exportFile: join(runtimeDirectory, `turn-${intent.messageID}.export.json`) }), prompt: rolePrompt(scope, intent), environment: taskBridgeEnvironment(bridge, process.env, additions), claim, label: "Devin" });
     return this.observe(scope, { ...intent, dispatch: "ambiguous" }, { serverGeneration: record.generation, claimedAt: new Date().toISOString() });
   }

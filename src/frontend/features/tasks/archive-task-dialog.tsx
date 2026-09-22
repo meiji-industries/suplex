@@ -47,7 +47,7 @@ export function ArchiveTaskDialog({ task, open, onOpenChange, onArchived, onErro
   return <AlertDialog open={current !== null} onOpenChange={nextOpen => { if (!nextOpen && !busy) { setConfirmation(null); onOpenChange(false); } }}>
     <AlertDialogContent><AlertDialogHeader>
       <AlertDialogTitle>{current?.kind === "discard" ? `Discard ${current.dirtyFileCount} uncommitted ${current.dirtyFileCount === 1 ? "change" : "changes"} and archive?` : "Archive task?"}</AlertDialogTitle>
-      <AlertDialogDescription>{current?.kind === "discard" ? "These uncommitted changes will be deleted. Forge keeps the branch, commits, and task history." : "Forge removes the local worktree and hides the task. Forge keeps the branch, commits, and task history."}</AlertDialogDescription>
+      <AlertDialogDescription>{current?.kind === "discard" ? "These uncommitted changes will be deleted. Suplex keeps the branch, commits, and task history." : "Suplex removes the local worktree and hides the task. Suplex keeps the branch, commits, and task history."}</AlertDialogDescription>
     </AlertDialogHeader>
     {current?.kind === "discard" ? <ScrollArea aria-label="Uncommitted files" className="max-h-64">
       <ul className="space-y-1 pr-3 text-xs" role="list">

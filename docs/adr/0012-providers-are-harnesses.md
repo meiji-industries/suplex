@@ -10,7 +10,7 @@ Supersedes [7. OpenRouter provider](0007-openrouter-provider.md).
 
 ## Context
 
-Forge runs four agent tools: OpenCode, Claude Code, Devin CLI, and Codex CLI.
+Suplex runs four agent tools: OpenCode, Claude Code, Devin CLI, and Codex CLI.
 Each is a separate executable with its own sign-in, session identity, evidence
 format, and runtime in `src/runtimes`.
 
@@ -23,7 +23,7 @@ Code, and read OpenCode's `auth.json` to give each vendor row its own sign-in
 state. Three vendor ids could never appear, because they collided with the
 reserved CLI names.
 
-The vendor was an OpenCode implementation detail that had leaked into Forge's
+The vendor was an OpenCode implementation detail that had leaked into Suplex's
 own vocabulary. Only OpenCode has vendors; the other three resolve a model name
 against the account their CLI is signed into.
 
@@ -36,7 +36,7 @@ the provider list, the model list, the provider instances, and the sign-in route
 parameter all use that enum, so an unknown provider is rejected at the boundary
 rather than silently routed to OpenCode.
 
-An OpenCode model id is vendor-qualified: `openai/gpt-5.6-sol`. Forge stores,
+An OpenCode model id is vendor-qualified: `openai/gpt-5.6-sol`. Suplex stores,
 lists, and displays that whole string. It splits the vendor off only where it
 speaks to OpenCode — creating a session, writing the role config, and building a
 recovery prompt intent — through `openCodeModel`, which throws when the id is
@@ -58,7 +58,7 @@ through a unidirectional transform.
 
 The migration converts existing rows the same way. It also re-seeds
 `profile_native_root` and `profile_native_worker` to Codex CLI GPT-5.6 Sol and
-GPT-5.6 Luna, but only when `forge_tasks` is empty. A fresh install has no
+GPT-5.6 Luna, but only when `suplex_tasks` is empty. A fresh install has no
 tasks, so it gets the Codex defaults; an installation with history keeps the
 OpenCode profiles its tasks already reference.
 

@@ -16,12 +16,12 @@ export function taskPreparationDirectory(databasePath: string, taskId: string): 
 export function sharedResourceCommand(): string {
   const candidates = [new URL("../../scripts/shared-resource-command.py", import.meta.url), new URL("../../../scripts/shared-resource-command.py", import.meta.url)].map(url => fileURLToPath(url));
   const path = candidates.find(existsSync);
-  if (!path) throw new Error("The shared resource command is missing from this Forge installation");
+  if (!path) throw new Error("The shared resource command is missing from this Suplex installation");
   return path;
 }
 
 export function setupEnvironment(configured: Record<string, string>, inherited: NodeJS.ProcessEnv = process.env): NodeJS.ProcessEnv {
-  return { ...Object.fromEntries(Object.entries(inherited).filter(([key]) => !/(?:TOKEN|SECRET|PASSWORD|API_KEY|CREDENTIAL|AUTH)/i.test(key) && !/^(?:CLAUDE|ANTHROPIC|AWS|GOOGLE|AZURE|FORGE)_/.test(key))), ...configured };
+  return { ...Object.fromEntries(Object.entries(inherited).filter(([key]) => !/(?:TOKEN|SECRET|PASSWORD|API_KEY|CREDENTIAL|AUTH)/i.test(key) && !/^(?:CLAUDE|ANTHROPIC|AWS|GOOGLE|AZURE|SUPLEX)_/.test(key))), ...configured };
 }
 
 export async function prepareProjectWorkspace(input: { databasePath: string; taskId: string; directory: string; execution: ProjectExecution; setupCommand: string; excludedEnvironmentKeys?: string[]; command?: typeof runCommand }): Promise<void> {
@@ -30,7 +30,7 @@ export async function prepareProjectWorkspace(input: { databasePath: string; tas
   const context = ["Project instructions", input.execution.instructions];
   const generated = join(taskEvidenceRoot(input.databasePath), input.taskId, "generated");
   await mkdir(generated, { recursive: true, mode: 0o700 });
-  context.push(`Worker: capture real Before command output before edits, then After output against the reviewed commit. Preserve passing evidence; do not invent output or repeat checks just to make a receipt. Write ${join(generated, "delivery-evidence.json")} with {"headSha":"40-character reviewed Git SHA","summary":"What changed","before":[{"command":"exact command","output":"full output"}],"after":[{"command":"exact command","output":"full output"}],"howToVerify":["steps"],"screenshots":[{"filename":"basename.png","phase":"before or after"}]}. Screenshots are optional unless this task requires them. Put any screenshots beside the manifest. Keep these artifacts outside delivered commits. Coordinator: read the manifest and source, assess the actual evidence independently, and request repairs for gaps. Forge owns remote publication.`);
+  context.push(`Worker: capture real Before command output before edits, then After output against the reviewed commit. Preserve passing evidence; do not invent output or repeat checks just to make a receipt. Write ${join(generated, "delivery-evidence.json")} with {"headSha":"40-character reviewed Git SHA","summary":"What changed","before":[{"command":"exact command","output":"full output"}],"after":[{"command":"exact command","output":"full output"}],"howToVerify":["steps"],"screenshots":[{"filename":"basename.png","phase":"before or after"}]}. Screenshots are optional unless this task requires them. Put any screenshots beside the manifest. Keep these artifacts outside delivered commits. Coordinator: read the manifest and source, assess the actual evidence independently, and request repairs for gaps. Suplex owns remote publication.`);
   for (const source of input.execution.skillDirectories) {
     try {
       const canonical = await realpath(source);

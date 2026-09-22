@@ -46,7 +46,7 @@ export function TaskPullRequestCard({ task, onChange }: { task: Task; onChange: 
     if (pending) return;
     setPending(true); setError("");
     try { onChange(await readJson<Task>(`/api/tasks/${task.id}/continue-delivery`, { method: "POST", body: JSON.stringify({ deliveryTarget }) })); }
-    catch (cause) { setError(cause instanceof Error ? cause.message : "Forge could not continue delivery."); }
+    catch (cause) { setError(cause instanceof Error ? cause.message : "Suplex could not continue delivery."); }
     finally { setPending(false); }
   };
   return <div data-active-pull-request className="rounded-md border">

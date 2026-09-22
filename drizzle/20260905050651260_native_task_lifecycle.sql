@@ -1,5 +1,5 @@
-CREATE TABLE forge_task_controls_native (
-  task_id text PRIMARY KEY NOT NULL REFERENCES forge_tasks(id) ON DELETE CASCADE,
+CREATE TABLE suplex_task_controls_native (
+  task_id text PRIMARY KEY NOT NULL REFERENCES suplex_tasks(id) ON DELETE CASCADE,
   objective text NOT NULL,
   delivery_target text NOT NULL,
   delivery_intent_json text NOT NULL,
@@ -19,14 +19,14 @@ CREATE TABLE forge_task_controls_native (
     OR (status <> 'waiting_human' AND human_question IS NULL AND human_question_id IS NULL))
 );
 --> statement-breakpoint
-INSERT INTO forge_task_controls_native
+INSERT INTO suplex_task_controls_native
 SELECT task_id, objective, delivery_target, delivery_intent_json, status, wake_at,
   CASE WHEN status = 'waiting_human' THEN human_question END,
   CASE WHEN status = 'waiting_human' THEN lower(hex(randomblob(16))) END,
   worktree_json, pull_request_json, root_session_id, worker_session_id,
   root_profile_json, worker_profile_json, created_at, updated_at
-FROM forge_task_controls;
+FROM suplex_task_controls;
 --> statement-breakpoint
-DROP TABLE forge_task_controls;
+DROP TABLE suplex_task_controls;
 --> statement-breakpoint
-ALTER TABLE forge_task_controls_native RENAME TO forge_task_controls;
+ALTER TABLE suplex_task_controls_native RENAME TO suplex_task_controls;

@@ -20,7 +20,7 @@ export type NativeProviderSummary = z.infer<typeof NativeProviderSummarySchema>;
 export const ProviderSummarySchema = NativeProviderSummarySchema.extend({ connection: ProviderConnectionSchema });
 export type ProviderSummary = z.infer<typeof ProviderSummarySchema>;
 
-/** A vendor list read from OpenCode. Forge qualifies these model ids and publishes them as the one OpenCode row. */
+/** A vendor list read from OpenCode. Suplex qualifies these model ids and publishes them as the one OpenCode row. */
 export interface ProviderObservation {
   directory: string;
   observedAt: string;

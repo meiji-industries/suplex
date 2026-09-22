@@ -9,7 +9,7 @@ const lines = [
   JSON.stringify({ type: "item.completed", item: { id: "item_0", type: "sparkle_dance", note: "from a later release" } }),
   JSON.stringify({ type: "item.started", item: { id: "item_1", type: "command_execution", command: "pnpm test", status: "in_progress" } }),
   JSON.stringify({ type: "item.completed", item: { id: "item_1", type: "command_execution", command: "pnpm test", aggregated_output: "2 passed", exit_code: 0, status: "completed" } }),
-  JSON.stringify({ type: "item.started", item: { id: "item_2", type: "mcp_tool_call", server: "forge_root", tool: "ask_human", arguments: { question: "Ship?" }, status: "in_progress" } }),
+  JSON.stringify({ type: "item.started", item: { id: "item_2", type: "mcp_tool_call", server: "suplex_root", tool: "ask_human", arguments: { question: "Ship?" }, status: "in_progress" } }),
   JSON.stringify({ type: "item.completed", item: { id: "item_3", type: "command_execution", command: "false", aggregated_output: "", exit_code: 3, status: "failed" } }),
   JSON.stringify({ type: "item.completed", item: { id: "item_4", type: "file_change", changes: [{ path: "src/a.ts", kind: "modify" }], status: "completed" } }),
   JSON.stringify({ type: "item.completed", item: { id: "item_5", type: "agent_message", text: "Reviewed the change." } }),
@@ -32,7 +32,7 @@ test("tool evidence records one row per item with its final status", () => {
   const tools = codexTools(parseCodexEvents(lines));
   expect(tools).toEqual([
     { id: "item_1", name: "command_execution", status: "completed", input: { command: "pnpm test" }, output: "2 passed", error: null },
-    { id: "item_2", name: "mcp__forge_root__ask_human", status: "running", input: { question: "Ship?" }, output: null, error: null },
+    { id: "item_2", name: "mcp__suplex_root__ask_human", status: "running", input: { question: "Ship?" }, output: null, error: null },
     { id: "item_3", name: "command_execution", status: "error", input: { command: "false" }, output: "", error: "exit 3" },
     { id: "item_4", name: "file_change", status: "completed", input: { changes: [{ path: "src/a.ts", kind: "modify" }] }, output: null, error: null },
   ]);

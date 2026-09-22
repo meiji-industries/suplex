@@ -6,18 +6,18 @@ import { expect, test } from "vitest";
 import { UnsafeBindingError, UnsupportedRuntimeError, loadConfig } from "../src/platform/config.js";
 
 const baseEnvironment = {
-  FORGE_TAILSCALE_ADDRESS: "forge.tailnet.ts.net",
-  FORGE_DATA_ROOT: "/tmp/forge-test-data",
+  SUPLEX_TAILSCALE_ADDRESS: "suplex.tailnet.ts.net",
+  SUPLEX_DATA_ROOT: "/tmp/suplex-test-data",
 };
 
 test("loads a Tailscale-only configuration and exposes the reachable address", () => {
   const config = loadConfig(baseEnvironment);
 
   expect(config.accessMode).toBe("tailscale");
-  expect(config.bindAddress).toBe("forge.tailnet.ts.net");
-  expect(config.reachableAddress).toBe("http://forge.tailnet.ts.net:4111");
-  expect(config.repositoryRoot).toBe(join(homedir(), "forge", "repos"));
-  expect(config.worktreeRoot).toBe(join(homedir(), "forge", "worktrees"));
+  expect(config.bindAddress).toBe("suplex.tailnet.ts.net");
+  expect(config.reachableAddress).toBe("http://suplex.tailnet.ts.net:4111");
+  expect(config.repositoryRoot).toBe(join(homedir(), "suplex", "repos"));
+  expect(config.worktreeRoot).toBe(join(homedir(), "suplex", "worktrees"));
 });
 
 
@@ -32,12 +32,12 @@ for (const address of [
   "*",
 ]) {
   test(`rejects an unsafe production binding: ${address}`, () => {
-    expect(() => loadConfig({ ...baseEnvironment, FORGE_TAILSCALE_ADDRESS: address })).toThrow(UnsafeBindingError);
+    expect(() => loadConfig({ ...baseEnvironment, SUPLEX_TAILSCALE_ADDRESS: address })).toThrow(UnsafeBindingError);
   });
 }
 
 test("accepts a Tailscale IPv4 address", () => {
-  const config = loadConfig({ ...baseEnvironment, FORGE_TAILSCALE_ADDRESS: "100.101.102.103" });
+  const config = loadConfig({ ...baseEnvironment, SUPLEX_TAILSCALE_ADDRESS: "100.101.102.103" });
 
   expect(config.reachableAddress).toBe("http://100.101.102.103:4111");
 });
@@ -45,36 +45,36 @@ test("accepts a Tailscale IPv4 address", () => {
 test("allows loopback only when Tailscale Serve is the explicit HTTPS boundary", () => {
   const config = loadConfig({
     ...baseEnvironment,
-    FORGE_TAILSCALE_EXPOSURE: "serve",
-    FORGE_BIND_ADDRESS: "127.0.0.1",
+    SUPLEX_TAILSCALE_EXPOSURE: "serve",
+    SUPLEX_BIND_ADDRESS: "127.0.0.1",
   });
 
   expect(config.tailscaleExposure).toBe("serve");
-  expect(config.reachableAddress).toBe("https://forge.tailnet.ts.net:4111");
+  expect(config.reachableAddress).toBe("https://suplex.tailnet.ts.net:4111");
 });
 
 test("allows development auto-login only on a loopback binding", () => {
   const development = loadConfig({
     ...baseEnvironment,
-    FORGE_TAILSCALE_EXPOSURE: "serve",
-    FORGE_BIND_ADDRESS: "127.0.0.1",
-    FORGE_DEVELOPMENT_AUTO_LOGIN: "1",
+    SUPLEX_TAILSCALE_EXPOSURE: "serve",
+    SUPLEX_BIND_ADDRESS: "127.0.0.1",
+    SUPLEX_DEVELOPMENT_AUTO_LOGIN: "1",
   });
   expect(development.developmentAutoLogin).toBe(true);
-  expect(() => loadConfig({ ...baseEnvironment, FORGE_DEVELOPMENT_AUTO_LOGIN: "1" })).toThrow(/loopback bind address/);
+  expect(() => loadConfig({ ...baseEnvironment, SUPLEX_DEVELOPMENT_AUTO_LOGIN: "1" })).toThrow(/loopback bind address/);
 });
 
 test("still rejects loopback direct production binding", () => {
-  expect(() => loadConfig({ ...baseEnvironment, FORGE_BIND_ADDRESS: "127.0.0.1" })).toThrow(UnsafeBindingError);
+  expect(() => loadConfig({ ...baseEnvironment, SUPLEX_BIND_ADDRESS: "127.0.0.1" })).toThrow(UnsafeBindingError);
 });
 
 test("local access mode binds loopback and ignores the Tailscale settings", () => {
   const config = loadConfig({
-    FORGE_ACCESS_MODE: "local",
-    FORGE_DATA_ROOT: "/tmp/forge-test-data",
-    FORGE_TAILSCALE_ADDRESS: "forge.tailnet.ts.net",
-    FORGE_TAILSCALE_EXPOSURE: "serve",
-    FORGE_PORT: "4222",
+    SUPLEX_ACCESS_MODE: "local",
+    SUPLEX_DATA_ROOT: "/tmp/suplex-test-data",
+    SUPLEX_TAILSCALE_ADDRESS: "suplex.tailnet.ts.net",
+    SUPLEX_TAILSCALE_EXPOSURE: "serve",
+    SUPLEX_PORT: "4222",
   });
 
   expect(config.accessMode).toBe("local");
@@ -84,13 +84,13 @@ test("local access mode binds loopback and ignores the Tailscale settings", () =
 });
 
 test("rejects a non-loopback bind address in local access mode", () => {
-  for (const address of ["0.0.0.0", "100.101.102.103", "forge.tailnet.ts.net"]) {
-    expect(() => loadConfig({ FORGE_ACCESS_MODE: "local", FORGE_DATA_ROOT: "/tmp/forge-test-data", FORGE_BIND_ADDRESS: address })).toThrow(UnsafeBindingError);
+  for (const address of ["0.0.0.0", "100.101.102.103", "suplex.tailnet.ts.net"]) {
+    expect(() => loadConfig({ SUPLEX_ACCESS_MODE: "local", SUPLEX_DATA_ROOT: "/tmp/suplex-test-data", SUPLEX_BIND_ADDRESS: address })).toThrow(UnsafeBindingError);
   }
 });
 
 test("rejects a non-Tailscale access mode", () => {
-  expect(() => loadConfig({ ...baseEnvironment, FORGE_ACCESS_MODE: "lan" })).toThrow(UnsafeBindingError);
+  expect(() => loadConfig({ ...baseEnvironment, SUPLEX_ACCESS_MODE: "lan" })).toThrow(UnsafeBindingError);
 });
 
 test("rejects an unsupported Node major before loading configuration", () => {

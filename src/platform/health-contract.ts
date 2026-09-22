@@ -23,7 +23,7 @@ export type HealthCheckId = (typeof HEALTH_CHECK_IDS)[number];
 
 export const OWNED_HEALTH_CHECK_IDS = ["database", "artifact-root"] as const satisfies readonly HealthCheckId[];
 
-// Host prerequisites: tools every Forge host needs regardless of the selected
+// Host prerequisites: tools every Suplex host needs regardless of the selected
 // task profiles. Provider readiness is contextual, not a host prerequisite.
 export const REQUIRED_HEALTH_CHECK_IDS = ["git", "herdr-readiness"] as const satisfies readonly HealthCheckId[];
 

@@ -5,7 +5,7 @@ import { z } from "zod";
 import { CSRF_COOKIE_NAME, CSRF_HEADER_NAME } from "../../identity/auth-identifiers.js";
 import type { AuthService } from "../../identity/auth.js";
 import { OAuthFailure, type OAuthService, oauthFailureFromExternal } from "../../identity/oauth.js";
-import type { ForgeConfig } from "../../platform/config.js";
+import type { SuplexConfig } from "../../platform/config.js";
 import type { ProjectService } from "../../projects/projects.js";
 import { OAuthClientRegistrationSchema, OAuthConsentApprovalSchema, OAuthConsentDecisionResponseSchema, OAuthConsentParamsSchema, OAuthConsentResponseSchema } from "../contracts/oauth.js";
 import { sessionUser } from "../session.js";
@@ -14,7 +14,7 @@ interface OAuthRoutesOptions {
   oauth: OAuthService;
   auth: AuthService;
   projects: ProjectService;
-  config: ForgeConfig;
+  config: SuplexConfig;
 }
 
 const AuthorizeQuerySchema = z.object({
@@ -41,7 +41,7 @@ function parseForm<T>(raw: unknown, schema: z.ZodType<T>): T {
 }
 
 function challenge(oauth: OAuthService): string {
-  return `Bearer resource_metadata="${oauth.issuer}/.well-known/oauth-protected-resource/mcp", scope="forge:mcp"`;
+  return `Bearer resource_metadata="${oauth.issuer}/.well-known/oauth-protected-resource/mcp", scope="suplex:mcp"`;
 }
 
 function oauthError(reply: FastifyReply, error: unknown, oauth: OAuthService): FastifyReply {

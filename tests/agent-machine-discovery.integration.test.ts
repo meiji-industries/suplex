@@ -6,13 +6,13 @@ import { PassThrough } from "node:stream";
 import { expect, test } from "vitest";
 
 import { DISCOVERY_ARTIFACT_PATHS } from "../src/http/routes/discovery.js";
-import { FORGE_MCP_TOOLS, ForgeMcpBridge, startForgeMcpTransport } from "../src/integrations/forge/mcp-bridge.js";
+import { SUPLEX_MCP_TOOLS, SuplexMcpBridge, startSuplexMcpTransport } from "../src/integrations/suplex/mcp-bridge.js";
 import { nativeApp } from "./helpers/native-app.js";
 
 type JsonRecord = Record<string, unknown>;
 
 /**
- * The whole journey of an agent that never opens the Forge web application: read the
+ * The whole journey of an agent that never opens the Suplex web application: read the
  * public artifacts, pair, discover the contract, work only inside its grants, and be
  * denied everything else without learning what exists.
  */
@@ -22,7 +22,7 @@ function mcpSession(settings: { baseUrl: string; credential: string }) {
   const stdout = new PassThrough();
   const responses: unknown[] = [];
   stdout.on("data", (chunk: Buffer) => { for (const line of chunk.toString().split("\n").filter(Boolean)) responses.push(JSON.parse(line)); });
-  const reader = startForgeMcpTransport({ bridge: new ForgeMcpBridge(settings), stdin, stdout });
+  const reader = startSuplexMcpTransport({ bridge: new SuplexMcpBridge(settings), stdin, stdout });
   let id = 0;
   return {
     async call(request: JsonRecord): Promise<JsonRecord> {
@@ -45,18 +45,18 @@ test("a paired agent completes the whole task journey without the web applicatio
   const fixture = await nativeApp({ logSink: (line) => { logLines.push(line); } });
   let session: ReturnType<typeof mcpSession> | undefined;
   try {
-    // An operator provisions a fresh company, a project named forge, and an agent scoped to it.
+    // An operator provisions a fresh company, a project named suplex, and an agent scoped to it.
     const company = fixture.auth.createCompany(fixture.userId, "Machine Discovery Company");
-    const repositoryPath = join(fixture.config.repositoryRoot, "forge");
-    const worktreeRoot = join(fixture.config.worktreeRoot, "forge");
+    const repositoryPath = join(fixture.config.repositoryRoot, "suplex");
+    const worktreeRoot = join(fixture.config.worktreeRoot, "suplex");
     await mkdir(repositoryPath, { recursive: true });
     await mkdir(worktreeRoot, { recursive: true });
-    const forgeProject = await fixture.projects.createProject(fixture.userId, company.id, { name: "forge", repositoryPath, worktreeRoot, repository: "owner/forge", baseBranch: "main", setupCommand: "pnpm install", verificationCommand: "pnpm test", rootProfileId: "profile_native_root", workerProfileId: "profile_native_worker" });
+    const suplexProject = await fixture.projects.createProject(fixture.userId, company.id, { name: "suplex", repositoryPath, worktreeRoot, repository: "owner/suplex", baseBranch: "main", setupCommand: "pnpm install", verificationCommand: "pnpm test", rootProfileId: "profile_native_root", workerProfileId: "profile_native_worker" });
     const ungrantedProject = fixture.project;
     // A real task the agent must never see, so the denial is proven to conceal rather than to be empty.
     const ungrantedTaskId = (await fixture.tasks.createTask(fixture.userId, fixture.company.id, { projectId: ungrantedProject.id, title: "Out of grant", description: "Not for this agent", idempotencyKey: "out-of-grant-1", startImmediately: false })).task.id;
 
-    const issued = fixture.externalAgent.create(fixture.userId, { name: "Machine Discovery Bot", companyId: company.id, projectIds: [forgeProject.id] });
+    const issued = fixture.externalAgent.create(fixture.userId, { name: "Machine Discovery Bot", companyId: company.id, projectIds: [suplexProject.id] });
     const pairingCode = issued.pairingCode;
 
     const baseUrl = await fixture.app.listen({ port: 0, host: "127.0.0.1" });
@@ -69,12 +69,12 @@ test("a paired agent completes the whole task journey without the web applicatio
       artifacts[path] = response.body;
       record(`artifact ${path}`, response.body);
     }
-    const catalog = JSON.parse(artifacts["/.well-known/forge/api-catalog.json"]!) as { pairing: Array<{ path: string; method: string }>; runtime: Array<{ path: string; method: string }> };
+    const catalog = JSON.parse(artifacts["/.well-known/suplex/api-catalog.json"]!) as { pairing: Array<{ path: string; method: string }>; runtime: Array<{ path: string; method: string }> };
     const exchangePath = catalog.pairing[0]!.path;
-    const skills = JSON.parse(artifacts["/.well-known/forge/agent-skills.json"]!) as { skills: Array<{ clients: Array<{ transport: string; preferred: boolean; tools?: string[] }> }> };
+    const skills = JSON.parse(artifacts["/.well-known/suplex/agent-skills.json"]!) as { skills: Array<{ clients: Array<{ transport: string; preferred: boolean; tools?: string[] }> }> };
     const preferred = skills.skills[0]!.clients.find(client => client.preferred)!;
     expect(preferred.transport).toBe("streamable-http");
-    expect(preferred.tools).toEqual(FORGE_MCP_TOOLS.map(entry => entry.name));
+    expect(preferred.tools).toEqual(SUPLEX_MCP_TOOLS.map(entry => entry.name));
     expect(skills.skills[0]!.clients.some(client => client.transport === "mcp-stdio" && !client.preferred)).toBe(true);
 
     // 2. Pair once, in the way the catalog describes.
@@ -97,25 +97,25 @@ test("a paired agent completes the whole task journey without the web applicatio
     // 4. Establish the documented local stdio fallback with the paired credential.
     session = mcpSession({ baseUrl, credential });
     const initialized = await session.call({ method: "initialize", params: { protocolVersion: "2025-11-25", capabilities: {}, clientInfo: { name: "machine-discovery", version: "1" } } });
-    expect(initialized).toMatchObject({ result: { serverInfo: { name: "forge-agent-bridge" } } });
+    expect(initialized).toMatchObject({ result: { serverInfo: { name: "suplex-agent-bridge" } } });
     record("initialize", initialized);
 
     // 5. Learn the allowed project from the credential's own identity, never from a list of everything.
-    const whoami = await session.call(tool("forge_whoami", {}));
+    const whoami = await session.call(tool("suplex_whoami", {}));
     record("whoami", whoami);
     const identity = structured(whoami).body as { agent: { id: string; name: string }; projects: Array<{ id: string; name: string }> };
-    expect(identity.projects.map(entry => entry.name)).toEqual(["forge"]);
-    expect(identity.projects.map(entry => entry.id)).toEqual([forgeProject.id]);
-    const projectId = identity.projects.find(entry => entry.name === "forge")!.id;
+    expect(identity.projects.map(entry => entry.name)).toEqual(["suplex"]);
+    expect(identity.projects.map(entry => entry.id)).toEqual([suplexProject.id]);
+    const projectId = identity.projects.find(entry => entry.name === "suplex")!.id;
 
     // 6. The project starts with no tasks.
-    const emptyList = await session.call(tool("forge_list_tasks", { projectId, limit: 50 }));
+    const emptyList = await session.call(tool("suplex_list_tasks", { projectId, limit: 50 }));
     record("list before", emptyList);
     expect(structured(emptyList)).toMatchObject({ status: 200, body: { tasks: [], nextCursor: null } });
 
     // 7. Create one backlog task idempotently, and prove the replay is the same task.
     const declared = { projectId, title: "Publish the machine discovery artifacts", description: "Serve the public artifacts and document the operator handoff.", idempotencyKey: "machine-discovery-journey-1" };
-    const created = await session.call(tool("forge_create_task", declared));
+    const created = await session.call(tool("suplex_create_task", declared));
     record("create", created);
     const task = structured(created).body as { id: string; revision: string; title: string; status: string };
     expect(structured(created)).toMatchObject({ status: 201, body: { title: declared.title, status: "backlog" } });
@@ -124,28 +124,28 @@ test("a paired agent completes the whole task journey without the web applicatio
     expect(stored.description).toBe(declared.description);
     expect(stored.projectId).toBe(projectId);
 
-    const replayed = await session.call(tool("forge_create_task", declared));
+    const replayed = await session.call(tool("suplex_create_task", declared));
     record("replay", replayed);
     expect(structured(replayed)).toMatchObject({ status: 200, body: { id: task.id, revision: task.revision, status: "backlog" } });
-    expect(fixture.database.authQuery(db => (db.prepare("SELECT COUNT(*) AS count FROM forge_tasks WHERE project_id = ?").get(projectId) as { count: number }).count)).toBe(1);
+    expect(fixture.database.authQuery(db => (db.prepare("SELECT COUNT(*) AS count FROM suplex_tasks WHERE project_id = ?").get(projectId) as { count: number }).count)).toBe(1);
 
     // 8. Poll it. An unchanged task answers without a body.
-    const unchanged = await session.call(tool("forge_get_task", { taskId: task.id, knownRevision: task.revision }));
+    const unchanged = await session.call(tool("suplex_get_task", { taskId: task.id, knownRevision: task.revision }));
     record("poll unchanged", unchanged);
     expect(structured(unchanged)).toEqual({ unchanged: true, revision: task.revision });
-    const polled = await session.call(tool("forge_get_task", { taskId: task.id }));
+    const polled = await session.call(tool("suplex_get_task", { taskId: task.id }));
     record("poll", polled);
     expect(structured(polled)).toMatchObject({ status: 200, body: { id: task.id, status: "backlog", revision: task.revision } });
 
     // 9. Forbidden work is denied without telling the agent what exists.
-    const outsideGrant = await session.call(tool("forge_create_task", { projectId: ungrantedProject.id, title: "Create outside the grant", idempotencyKey: "machine-discovery-forbidden-1" }));
+    const outsideGrant = await session.call(tool("suplex_create_task", { projectId: ungrantedProject.id, title: "Create outside the grant", idempotencyKey: "machine-discovery-forbidden-1" }));
     record("denied create", outsideGrant);
     expect(outsideGrant.result).toMatchObject({ isError: true });
     expect(structured(outsideGrant)).toMatchObject({ status: 422, body: { code: "project_not_found", field: "projectId", value: ungrantedProject.id, reason: "The project is not available." } });
     expect(JSON.stringify(outsideGrant)).not.toContain(ungrantedProject.name);
     expect(JSON.stringify(outsideGrant)).not.toContain(fixture.company.id);
     // A project outside the grant and a project that does not exist answer identically.
-    const missingProject = await session.call(tool("forge_create_task", { projectId: "project_does_not_exist", title: "Create in nothing", idempotencyKey: "machine-discovery-forbidden-1b" }));
+    const missingProject = await session.call(tool("suplex_create_task", { projectId: "project_does_not_exist", title: "Create in nothing", idempotencyKey: "machine-discovery-forbidden-1b" }));
     expect(structured(missingProject)).toMatchObject({ status: 422, body: { code: "project_not_found", field: "projectId", value: "project_does_not_exist", reason: "The project is not available." } });
     const withoutValue = (response: ReturnType<typeof structured>) => {
       const body = { ...response.body as Record<string, unknown> };
@@ -154,31 +154,31 @@ test("a paired agent completes the whole task journey without the web applicatio
     };
     expect(withoutValue(structured(missingProject))).toEqual(withoutValue(structured(outsideGrant)));
 
-    const illegal = await session.call(tool("forge_command_task", { taskId: task.id, command: "unarchive_task", revision: task.revision, idempotencyKey: "machine-discovery-forbidden-2" }));
+    const illegal = await session.call(tool("suplex_command_task", { taskId: task.id, command: "unarchive_task", revision: task.revision, idempotencyKey: "machine-discovery-forbidden-2" }));
     record("denied command", illegal);
     expect(illegal.result).toMatchObject({ isError: true });
     expect(structured(illegal)).toMatchObject({ status: 409, body: { code: "illegal_command" } });
 
-    const unknownTask = await session.call(tool("forge_get_task", { taskId: "task_does_not_exist" }));
+    const unknownTask = await session.call(tool("suplex_get_task", { taskId: "task_does_not_exist" }));
     record("denied unknown", unknownTask);
     // A task outside the grant and a task that does not exist answer identically, so neither reveals the other.
-    expect(structured(unknownTask)).toEqual(structured(await session.call(tool("forge_get_task", { taskId: ungrantedTaskId }))));
+    expect(structured(unknownTask)).toEqual(structured(await session.call(tool("suplex_get_task", { taskId: ungrantedTaskId }))));
     expect(structured(unknownTask)).toMatchObject({ status: 404, body: { code: "resource_not_found" } });
 
     // MCP keeps merge and human-answer commands outside its tool surface. The runtime capability contract reports whether its HTTP delivery routes are enabled.
-    const capabilities = await session.call(tool("forge_capabilities", {}));
+    const capabilities = await session.call(tool("suplex_capabilities", {}));
     record("capabilities", capabilities);
     expect((structured(capabilities).body as { unavailableCommands: string[] }).unavailableCommands).toContain("merge_pull_request");
-    expect(FORGE_MCP_TOOLS.map(entry => entry.name)).not.toContain("forge_merge_task");
+    expect(SUPLEX_MCP_TOOLS.map(entry => entry.name)).not.toContain("suplex_merge_task");
 
     // 10. Nothing ran. The task is still waiting for a person to start it.
-    const final = await session.call(tool("forge_get_task", { taskId: task.id }));
+    const final = await session.call(tool("suplex_get_task", { taskId: task.id }));
     record("final", final);
     expect(structured(final)).toMatchObject({ status: 200, body: { id: task.id, status: "backlog", revision: task.revision } });
     const count = (sql: string, ...parameters: unknown[]): number => fixture.database.authQuery(db => (db.prepare(sql).get(...parameters) as { count: number }).count);
-    expect(count("SELECT COUNT(*) AS count FROM forge_task_sessions")).toBe(0);
-    expect(count("SELECT COUNT(*) AS count FROM forge_task_turns")).toBe(0);
-    expect(count("SELECT COUNT(*) AS count FROM forge_audit_events WHERE action IN ('task_started', 'task_delivered', 'task_merged')")).toBe(0);
+    expect(count("SELECT COUNT(*) AS count FROM suplex_task_sessions")).toBe(0);
+    expect(count("SELECT COUNT(*) AS count FROM suplex_task_turns")).toBe(0);
+    expect(count("SELECT COUNT(*) AS count FROM suplex_audit_events WHERE action IN ('task_started', 'task_delivered', 'task_merged')")).toBe(0);
     expect(fixture.wakes).toEqual([]);
 
     // 11. Neither secret, nor its hash, reached any output an agent or an operator can read.

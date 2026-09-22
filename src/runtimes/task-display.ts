@@ -24,9 +24,9 @@ export function taskShellPaneBinding(taskId: string): string {
   return `${taskId}:shell`;
 }
 
-type ForgePaneMetadata = HerdrPaneMetadataReport & { title: string; tokens: Readonly<Record<string, string>> };
+type SuplexPaneMetadata = HerdrPaneMetadataReport & { title: string; tokens: Readonly<Record<string, string>> };
 
-async function publishPaneDisplay(herdr: TaskPanePort, pane: Pane, metadata: ForgePaneMetadata, fresh = false): Promise<void> {
+async function publishPaneDisplay(herdr: TaskPanePort, pane: Pane, metadata: SuplexPaneMetadata, fresh = false): Promise<void> {
   const { title, tokens } = metadata;
   const writes: Promise<void>[] = [];
   if (fresh || pane.label !== title) writes.push(Promise.resolve().then(() => herdr.renamePane(pane.paneId, title)));
@@ -37,13 +37,13 @@ async function publishPaneDisplay(herdr: TaskPanePort, pane: Pane, metadata: For
 }
 
 async function publishShellPane(herdr: TaskPanePort, pane: Pane, taskId: string, fresh = false): Promise<void> {
-  await publishPaneDisplay(herdr, pane, { paneId: pane.paneId, source: "forge", title: taskShellPaneTitle, tokens: { forge_binding_id: taskShellPaneBinding(taskId), forge_task_id: taskId, forge_task: taskId, forge_role: "shell" } }, fresh);
+  await publishPaneDisplay(herdr, pane, { paneId: pane.paneId, source: "suplex", title: taskShellPaneTitle, tokens: { suplex_binding_id: taskShellPaneBinding(taskId), suplex_task_id: taskId, suplex_task: taskId, suplex_role: "shell" } }, fresh);
 }
 
 /**
  * Resolves the task's interactive Shell pane. The persisted binding is only a
  * hint: Herdr decides which panes still exist. A bound pane that is gone is
- * rediscovered from the `forge-<taskId>` workspace by token, title, or an
+ * rediscovered from the `suplex-<taskId>` workspace by token, title, or an
  * interactive shell; an exhausted workspace gets a fresh shell row. When
  * `create` is not false and no workspace exists, a new workspace's root pane
  * becomes the Shell.
@@ -62,16 +62,16 @@ export async function ensureTaskShellPane(herdr: TaskPanePort, input: {
     return pane;
   };
   const persisted = input.paneId ? await herdr.getPane(input.paneId) : null;
-  const foreign = persisted?.tokens?.forge_task_id !== undefined && persisted.tokens.forge_task_id !== input.taskId;
+  const foreign = persisted?.tokens?.suplex_task_id !== undefined && persisted.tokens.suplex_task_id !== input.taskId;
   if (persisted && !foreign) return adopt(persisted);
   const excluded = new Set((input.excludePaneIds ?? []).filter((paneId): paneId is string => Boolean(paneId)));
   const shellBinding = taskShellPaneBinding(input.taskId);
   const workspaces = herdr.listWorkspaces ? await herdr.listWorkspaces() : [];
-  const allPanes = herdr.listPanes ? (await Promise.all(workspaces.filter(workspace => workspace.label === `forge-${input.taskId}`).map(workspace => herdr.listPanes!(workspace.workspaceId)))).flat() : [];
+  const allPanes = herdr.listPanes ? (await Promise.all(workspaces.filter(workspace => workspace.label === `suplex-${input.taskId}`).map(workspace => herdr.listPanes!(workspace.workspaceId)))).flat() : [];
   const panes = allPanes
     .filter(pane => !excluded.has(pane.paneId))
-    .filter(pane => pane.tokens?.forge_binding_id === undefined || pane.tokens.forge_binding_id === shellBinding);
-  const tokened = panes.find(pane => pane.tokens?.forge_task_id === input.taskId && pane.tokens.forge_role === "shell");
+    .filter(pane => pane.tokens?.suplex_binding_id === undefined || pane.tokens.suplex_binding_id === shellBinding);
+  const tokened = panes.find(pane => pane.tokens?.suplex_task_id === input.taskId && pane.tokens.suplex_role === "shell");
   if (tokened) return adopt(tokened);
   const named = panes.find(pane => pane.label === taskShellPaneTitle || pane.title === taskShellPaneTitle);
   if (named) return adopt(named);
@@ -82,7 +82,7 @@ export async function ensureTaskShellPane(herdr: TaskPanePort, input: {
   const anchor = allPanes[0];
   if (anchor) return adopt(await splitBalancedPaneRow(herdr, { paneId: anchor.paneId, cwd: anchor.cwd ?? input.cwd }), true);
   if (input.create === false) return null;
-  return adopt((await herdr.createWorkspace({ label: `forge-${input.taskId}`, cwd: input.cwd, focus: false })).rootPane, true);
+  return adopt((await herdr.createWorkspace({ label: `suplex-${input.taskId}`, cwd: input.cwd, focus: false })).rootPane, true);
 }
 
 export async function attachTaskDisplay(herdr: TaskPanePort, input: {
@@ -99,12 +99,12 @@ export async function attachTaskDisplay(herdr: TaskPanePort, input: {
 }): Promise<string> {
   const { scope } = input;
   const title = taskSessionTitle(scope);
-  const metadata = (paneId: string): ForgePaneMetadata => ({ paneId, source: "forge", title, tokens: { forge_binding_id: scope.id, forge_task_id: scope.taskId, forge_native_session_id: input.nativeSessionId, forge_server_generation: input.generation, forge_task: scope.taskId, forge_role: taskSessionRole(scope), forge_model: scope.profile.modelID, forge_provider: scope.profile.providerID } });
+  const metadata = (paneId: string): SuplexPaneMetadata => ({ paneId, source: "suplex", title, tokens: { suplex_binding_id: scope.id, suplex_task_id: scope.taskId, suplex_native_session_id: input.nativeSessionId, suplex_server_generation: input.generation, suplex_task: scope.taskId, suplex_role: taskSessionRole(scope), suplex_model: scope.profile.modelID, suplex_provider: scope.profile.providerID } });
   let pane = input.paneId ? await herdr.getPane(input.paneId) : null;
   if (pane) {
     const info = await herdr.getPaneProcessInfo(pane.paneId);
     if (info.foreground_processes.some(process => process.argv !== undefined && input.isAttached(process.argv))) { input.persistPane(pane.paneId); await publishPaneDisplay(herdr, pane, metadata(pane.paneId)); return pane.paneId; }
-    const owned = pane.tokens?.forge_binding_id === scope.id || !pane.tokens?.forge_binding_id && pane.cwd === scope.directory;
+    const owned = pane.tokens?.suplex_binding_id === scope.id || !pane.tokens?.suplex_binding_id && pane.cwd === scope.directory;
     if (owned && info.foreground_processes.length === 0) throw new Error("The task display process could not be inspected");
     if (!owned || !isInteractiveShell(info)) pane = null;
   }
@@ -114,7 +114,7 @@ export async function attachTaskDisplay(herdr: TaskPanePort, input: {
     else {
       // The workspace root pane is the task Shell; the session pane opens below it.
       const shell = await ensureTaskShellPane(herdr, { taskId: scope.taskId, cwd: scope.directory, paneId: input.shellPaneId ?? null, persist: input.persistShellPane, excludePaneIds: [input.paneId, input.rootPaneId] }).catch(() => null);
-      pane = shell ? await splitBalancedPaneRow(herdr, { paneId: shell.paneId, cwd: scope.directory }) : (await herdr.createWorkspace({ label: `forge-${scope.taskId}`, cwd: scope.directory, focus: false })).rootPane;
+      pane = shell ? await splitBalancedPaneRow(herdr, { paneId: shell.paneId, cwd: scope.directory }) : (await herdr.createWorkspace({ label: `suplex-${scope.taskId}`, cwd: scope.directory, focus: false })).rootPane;
     }
   }
   input.persistPane(pane.paneId);

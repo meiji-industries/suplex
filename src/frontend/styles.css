@@ -184,42 +184,42 @@
   [data-slot="sidebar"][data-state="expanded"] ~ main .titlebar-inset { padding-left: 0; }
 }
 
-.prose-forge {
+.prose-suplex {
   overflow-wrap: anywhere;
   font-size: 13px;
   line-height: 1.25rem;
 }
 
-.prose-forge > :first-child { margin-top: 0; }
-.prose-forge > :last-child { margin-bottom: 0; }
-.prose-forge p,
-.prose-forge ul,
-.prose-forge ol,
-.prose-forge blockquote,
-.prose-forge pre,
-.prose-forge table { margin: 0.5rem 0; }
-.prose-forge h1,
-.prose-forge h2,
-.prose-forge h3,
-.prose-forge h4,
-.prose-forge h5,
-.prose-forge h6 { margin: 0.75rem 0 0.375rem; font-size: 0.875rem; font-weight: 600; line-height: 1.25rem; }
-.prose-forge ul,
-.prose-forge ol { padding-left: 1.25rem; }
-.prose-forge ul { list-style: disc; }
-.prose-forge ol { list-style: decimal; }
-.prose-forge li > ul,
-.prose-forge li > ol { margin: 0.125rem 0; }
-.prose-forge a { color: var(--primary); text-decoration: underline; text-underline-offset: 2px; }
-.prose-forge code { border-radius: 0.25rem; background: var(--muted); padding: 0.0625rem 0.25rem; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 0.9em; }
-.prose-forge pre { overflow-x: auto; border-radius: 0.375rem; background: var(--muted); padding: 0.5rem 0.625rem; }
-.prose-forge pre code { background: transparent; padding: 0; }
-.prose-forge blockquote { border-left: 2px solid var(--border); padding-left: 0.75rem; color: var(--muted-foreground); }
-.prose-forge table { display: block; max-width: 100%; overflow-x: auto; border-collapse: collapse; }
-.prose-forge th,
-.prose-forge td { border: 1px solid var(--border); padding: 0.25rem 0.5rem; text-align: left; }
-.prose-forge th { background: var(--muted); font-weight: 600; }
-.prose-forge img { max-width: 100%; border-radius: 0.375rem; }
+.prose-suplex > :first-child { margin-top: 0; }
+.prose-suplex > :last-child { margin-bottom: 0; }
+.prose-suplex p,
+.prose-suplex ul,
+.prose-suplex ol,
+.prose-suplex blockquote,
+.prose-suplex pre,
+.prose-suplex table { margin: 0.5rem 0; }
+.prose-suplex h1,
+.prose-suplex h2,
+.prose-suplex h3,
+.prose-suplex h4,
+.prose-suplex h5,
+.prose-suplex h6 { margin: 0.75rem 0 0.375rem; font-size: 0.875rem; font-weight: 600; line-height: 1.25rem; }
+.prose-suplex ul,
+.prose-suplex ol { padding-left: 1.25rem; }
+.prose-suplex ul { list-style: disc; }
+.prose-suplex ol { list-style: decimal; }
+.prose-suplex li > ul,
+.prose-suplex li > ol { margin: 0.125rem 0; }
+.prose-suplex a { color: var(--primary); text-decoration: underline; text-underline-offset: 2px; }
+.prose-suplex code { border-radius: 0.25rem; background: var(--muted); padding: 0.0625rem 0.25rem; font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace; font-size: 0.9em; }
+.prose-suplex pre { overflow-x: auto; border-radius: 0.375rem; background: var(--muted); padding: 0.5rem 0.625rem; }
+.prose-suplex pre code { background: transparent; padding: 0; }
+.prose-suplex blockquote { border-left: 2px solid var(--border); padding-left: 0.75rem; color: var(--muted-foreground); }
+.prose-suplex table { display: block; max-width: 100%; overflow-x: auto; border-collapse: collapse; }
+.prose-suplex th,
+.prose-suplex td { border: 1px solid var(--border); padding: 0.25rem 0.5rem; text-align: left; }
+.prose-suplex th { background: var(--muted); font-weight: 600; }
+.prose-suplex img { max-width: 100%; border-radius: 0.375rem; }
 
 @keyframes phase-timing-candy-stripes {
   to {

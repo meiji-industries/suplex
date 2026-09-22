@@ -2,7 +2,7 @@ import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, screen, shell } f
 import { existsSync } from "node:fs";
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { classifyNavigation, parseForgeTarget, resolveForgeTarget, type ForgeTarget } from "./forge-target";
+import { classifyNavigation, parseSuplexTarget, resolveSuplexTarget, type SuplexTarget } from "./suplex-target";
 import { forgetTarget, readTargets, rememberTarget, type TargetRegistry } from "./target-store";
 import { createDesktopUpdater } from "./desktop-updater";
 import { DEFAULT_PORT, next, readInstallRecord, resolveBoot, runtimeRoot, runtimeStamp, writeInstallRecord, type BootEvent, type BootState } from "./boot";
@@ -10,8 +10,8 @@ import { createInstaller, type InstallEvent, type InstallStage, type Installer }
 import { createLocalRuntime, healthy, type LocalRuntime } from "./local-runtime";
 import type { DesktopMessage, DesktopSnapshot } from "./preload";
 
-const KEYCHAIN_ACCESS_GROUP = "6KY6743H52.dev.forge.desktop.webauthn"; // inert until build/entitlements.mac.plist grants it via a provisioning profile
-const INVALID_TITLE = "The Forge URL is not valid";
+const KEYCHAIN_ACCESS_GROUP = "6KY6743H52.dev.suplex.desktop.webauthn"; // inert until build/entitlements.mac.plist grants it via a provisioning profile
+const INVALID_TITLE = "The Suplex URL is not valid";
 
 type Bounds = { width: number; height: number; x?: number; y?: number };
 type Preventable = { preventDefault(): void };
@@ -19,7 +19,7 @@ type Preventable = { preventDefault(): void };
 export function retryPage(origin: string): string {
   const address = origin.replaceAll("&", "&amp;").replaceAll("<", "&lt;").replaceAll(">", "&gt;").replaceAll('"', "&quot;").replaceAll("'", "&#39;");
   return `data:text/html,${encodeURIComponent(`<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Connect to Forge</title>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Connect to Suplex</title>
 <style>
   * { box-sizing: border-box; }
   body { margin: 0; min-height: 100vh; display: grid; place-items: center; padding: max(48px, env(titlebar-area-height, 0px)) 24px 32px; background: #0a0a0a; color: #e5e5e5; font: 13px/1.5 -apple-system, system-ui, sans-serif; -webkit-app-region: drag; }
@@ -56,17 +56,17 @@ export function retryPage(origin: string): string {
   footer p { margin-top: 8px; }
   @media (max-width: 480px) { body { padding-left: 18px; padding-right: 18px; } .connection { grid-template-columns: minmax(0, 1fr) 36px minmax(0, 1fr); } }
 </style></head><body><main>
-  <div class="connection" role="img" aria-label="This Forge window cannot reach the Forge host">
-    <div class="node"><div class="icon"><svg aria-hidden="true" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="13" rx="2"/><path d="M8 21h8m-4-5v5"/></svg></div><strong>This window</strong><small>Forge.app</small></div>
+  <div class="connection" role="img" aria-label="This Suplex window cannot reach the Suplex host">
+    <div class="node"><div class="icon"><svg aria-hidden="true" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="13" rx="2"/><path d="M8 21h8m-4-5v5"/></svg></div><strong>This window</strong><small>Suplex.app</small></div>
     <div class="broken"><svg aria-hidden="true" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="m9 9 6 6m0-6-6 6"/></svg></div>
-    <div class="node"><div class="icon"><svg aria-hidden="true" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="7" rx="2"/><rect x="3" y="14" width="18" height="7" rx="2"/><path d="M7 6.5h.01M7 17.5h.01"/></svg></div><strong>Forge host</strong><small>${address}</small></div>
+    <div class="node"><div class="icon"><svg aria-hidden="true" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="7" rx="2"/><rect x="3" y="14" width="18" height="7" rx="2"/><path d="M7 6.5h.01M7 17.5h.01"/></svg></div><strong>Suplex host</strong><small>${address}</small></div>
   </div>
-  <section class="notice" aria-labelledby="connection-title"><svg aria-hidden="true" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 8v4m0 4h.01"/></svg><div><h1 id="connection-title">Forge is not available</h1><p>This window cannot reach the Forge host.</p></div></section>
-  <h2>Start Forge on the host</h2><p>Open the Terminal on the server host. Run this command from the Forge folder, then retry.</p>
-  <div class="command"><code id="command" tabindex="0">pnpm run forge start</code><button id="copy" type="button">Copy</button></div>
+  <section class="notice" aria-labelledby="connection-title"><svg aria-hidden="true" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 8v4m0 4h.01"/></svg><div><h1 id="connection-title">Suplex is not available</h1><p>This window cannot reach the Suplex host.</p></div></section>
+  <h2>Start Suplex on the host</h2><p>Open the Terminal on the server host. Run this command from the Suplex folder, then retry.</p>
+  <div class="command"><code id="command" tabindex="0">pnpm run suplex start</code><button id="copy" type="button">Copy</button></div>
   <p id="copy-status" role="status" aria-live="polite"></p>
-  <div class="actions"><a class="retry" id="retry" href="${address}">Retry</a><p>Forge retries every 5 seconds.</p></div>
-  <footer><a href="https://github.com/meiji-industries/forge#set-up-an-installation">Open the install guide</a><p>To use another host, select Navigate &gt; Add a Forge URL.</p></footer>
+  <div class="actions"><a class="retry" id="retry" href="${address}">Retry</a><p>Suplex retries every 5 seconds.</p></div>
+  <footer><a href="https://github.com/meiji-industries/suplex#set-up-an-installation">Open the install guide</a><p>To use another host, select Navigate &gt; Add a Suplex URL.</p></footer>
 </main><script>
   const command = document.getElementById("command");
   const copy = document.getElementById("copy");
@@ -96,15 +96,15 @@ export function retryPage(origin: string): string {
 }
 
 /**
- * The desktop app is one sandboxed window. It either supervises the packaged Forge on this Mac,
- * or attaches to a Forge origin somebody else runs, which it never starts, stops, or signals.
+ * The desktop app is one sandboxed window. It either supervises the packaged Suplex on this Mac,
+ * or attaches to a Suplex origin somebody else runs, which it never starts, stops, or signals.
  */
-export async function runForgeDesktop(input: { readonly argv: readonly string[]; readonly environment: NodeJS.ProcessEnv }): Promise<void> {
+export async function runSuplexDesktop(input: { readonly argv: readonly string[]; readonly environment: NodeJS.ProcessEnv }): Promise<void> {
   if (!app.requestSingleInstanceLock()) {
-    app.exit(0); // the running Forge.app received our argv through the lock; leave at once, no teardown to run
+    app.exit(0); // the running Suplex.app received our argv through the lock; leave at once, no teardown to run
     return;
   }
-  const probe = input.environment.FORGE_DESKTOP_PROBE === "1";
+  const probe = input.environment.SUPLEX_DESKTOP_PROBE === "1";
   const packagedFeed = app.isPackaged && typeof process.resourcesPath === "string" && existsSync(join(process.resourcesPath, "app-update.yml"));
   const desktopUpdater = createDesktopUpdater({ dialog, configured: packagedFeed });
   const connectPage = join(__dirname, "connect.html");
@@ -149,7 +149,7 @@ export async function runForgeDesktop(input: { readonly argv: readonly string[];
   const persistBounds = (): void => {
     if (window && !window.isDestroyed()) void writeFile(stateFile(), JSON.stringify(window.getBounds())).catch(() => undefined);
   };
-  const load = async (win: BrowserWindow, target: ForgeTarget): Promise<void> => {
+  const load = async (win: BrowserWindow, target: SuplexTarget): Promise<void> => {
     origin = target.origin;
     await win.loadURL(target.url).catch(() => undefined); // did-fail-load shows the retry page
   };
@@ -159,7 +159,7 @@ export async function runForgeDesktop(input: { readonly argv: readonly string[];
     await win.loadFile(connectPage);
   };
   /** Remembers the target's origin as current and loads the target. */
-  const switchTo = async (win: BrowserWindow, target: ForgeTarget): Promise<void> => {
+  const switchTo = async (win: BrowserWindow, target: SuplexTarget): Promise<void> => {
     if (!probe) registry = await rememberTarget(targetFile(), target);
     origin = target.origin;
     rebuildMenu();
@@ -195,7 +195,7 @@ export async function runForgeDesktop(input: { readonly argv: readonly string[];
     if (event.name === "stage-finished") { progress.finished.push({ stage: event.stage, skipped: event.skipped, elapsedMs: event.elapsedMs }); progress.current = null; }
     if (event.name === "log") { progress.log.push(event.line); if (progress.log.length > 500) progress.log.splice(0, progress.log.length - 500); }
     if (event.name === "failed") go({ name: "failed", failure: { from: "installing", title: event.title, reason: event.reason, remedy: event.remedy, stage: event.stage, log: [...progress.log] } });
-    if (window && !window.isDestroyed()) window.webContents.send("forge:event", event);
+    if (window && !window.isDestroyed()) window.webContents.send("suplex:event", event);
   };
   const runInstall = async (from: string | null): Promise<void> => {
     progress.stages = [];
@@ -220,13 +220,13 @@ export async function runForgeDesktop(input: { readonly argv: readonly string[];
       if (record && started.port !== record.port) await writeInstallRecord(installFile(), { ...record, port: started.port });
       go({ name: "connected", url: `http://127.0.0.1:${started.port}/` });
     } catch (error) {
-      go({ name: "failed", failure: { from: "starting", title: "Start Forge on this Mac", reason: (error as Error).message, remedy: "Open the logs for the server's own words, then retry.", stage: null, log: await tail(join(logsDirectory(), "server.log")) } });
+      go({ name: "failed", failure: { from: "starting", title: "Start Suplex on this Mac", reason: (error as Error).message, remedy: "Open the logs for the server's own words, then retry.", stage: null, log: await tail(join(logsDirectory(), "server.log")) } });
     }
   };
   const connectRemote = async (win: BrowserWindow, value: string, report: boolean): Promise<void> => {
-    let target: ForgeTarget;
+    let target: SuplexTarget;
     try {
-      target = parseForgeTarget(value);
+      target = parseSuplexTarget(value);
     } catch (error) {
       if (report) fail((error as Error).message);
       else await showConnectPage(win);
@@ -269,7 +269,7 @@ export async function runForgeDesktop(input: { readonly argv: readonly string[];
       case "connected": {
         localOrigin = new URL(state.url).origin;
         rebuildMenu();
-        await load(win, parseForgeTarget(state.url));
+        await load(win, parseSuplexTarget(state.url));
         return;
       }
       case "failed":
@@ -287,7 +287,7 @@ export async function runForgeDesktop(input: { readonly argv: readonly string[];
       click: () => { if (window) void switchTo(window, target); },
     }));
     Menu.setApplicationMenu(Menu.buildFromTemplate([
-      { label: "Forge", submenu: [{ role: "about" }, { type: "separator" }, { role: "services" }, { type: "separator" }, { role: "hide" }, { role: "hideOthers" }, { role: "unhide" }, { type: "separator" }, desktopUpdater.menuItem(), { type: "separator" }, { role: "quit" }] },
+      { label: "Suplex", submenu: [{ role: "about" }, { type: "separator" }, { role: "services" }, { type: "separator" }, { role: "hide" }, { role: "hideOthers" }, { role: "unhide" }, { type: "separator" }, desktopUpdater.menuItem(), { type: "separator" }, { role: "quit" }] },
       { role: "editMenu" },
       { role: "viewMenu" },
       { role: "windowMenu" },
@@ -297,8 +297,8 @@ export async function runForgeDesktop(input: { readonly argv: readonly string[];
         { type: "separator" },
         ...targets,
         ...(targets.length > 0 ? [{ type: "separator" as const }] : []),
-        { label: "Add a Forge URL", click: () => { if (window) void showConnectPage(window); } },
-        { label: "Forget this Forge", enabled: origin !== null && origin !== localOrigin, click: () => { void forgetCurrent(); } },
+        { label: "Add a Suplex URL", click: () => { if (window) void showConnectPage(window); } },
+        { label: "Forget this Suplex", enabled: origin !== null && origin !== localOrigin, click: () => { void forgetCurrent(); } },
       ] },
     ]));
   };
@@ -354,7 +354,7 @@ export async function runForgeDesktop(input: { readonly argv: readonly string[];
       if (!mainFrame || !origin || validatedUrl.startsWith("data:") || validatedUrl.startsWith("file:")) return;
       if (origin === localOrigin) {
         void tail(join(logsDirectory(), "server.log")).then((log) => {
-          go({ name: "failed", failure: { from: "starting", title: "Start Forge on this Mac", reason: `Forge on this Mac stopped answering (${description}).`, remedy: "Retry starts it again.", stage: null, log } });
+          go({ name: "failed", failure: { from: "starting", title: "Start Suplex on this Mac", reason: `Suplex on this Mac stopped answering (${description}).`, remedy: "Retry starts it again.", stage: null, log } });
         });
         return;
       }
@@ -370,10 +370,10 @@ export async function runForgeDesktop(input: { readonly argv: readonly string[];
       window.focus();
       return;
     }
-    let resolved: ReturnType<typeof resolveForgeTarget>;
+    let resolved: ReturnType<typeof resolveSuplexTarget>;
     try {
       registry = await readTargets(targetFile());
-      resolved = resolveForgeTarget({ argv: input.argv, environment: input.environment, persisted: null });
+      resolved = resolveSuplexTarget({ argv: input.argv, environment: input.environment, persisted: null });
     } catch (error) {
       fail((error as Error).message);
       app.exit(1);
@@ -391,11 +391,11 @@ export async function runForgeDesktop(input: { readonly argv: readonly string[];
     }
     if (probe) await runProbe(win);
   };
-  /** A second launch (for example `open -a Forge --args --url …`) may carry a target; otherwise it just focuses the window. */
+  /** A second launch (for example `open -a Suplex --args --url …`) may carry a target; otherwise it just focuses the window. */
   const openWith = async (argv: readonly string[]): Promise<void> => {
-    let requested: ForgeTarget | null;
+    let requested: SuplexTarget | null;
     try {
-      requested = resolveForgeTarget({ argv, environment: {}, persisted: null })?.target ?? null;
+      requested = resolveSuplexTarget({ argv, environment: {}, persisted: null })?.target ?? null;
     } catch (error) {
       warn((error as Error).message);
       return;
@@ -404,8 +404,8 @@ export async function runForgeDesktop(input: { readonly argv: readonly string[];
     if (requested && window) await switchTo(window, requested);
   };
 
-  ipcMain.removeHandler("forge:desktop");
-  ipcMain.handle("forge:desktop", async (event: Electron.IpcMainInvokeEvent, message: DesktopMessage): Promise<unknown> => {
+  ipcMain.removeHandler("suplex:desktop");
+  ipcMain.handle("suplex:desktop", async (event: Electron.IpcMainInvokeEvent, message: DesktopMessage): Promise<unknown> => {
     if (event.senderFrame?.url.startsWith("file:") !== true) return null; // only this app's own pages drive the boot sequence
     switch (message.action) {
       case "snapshot": return snapshot();
@@ -421,13 +421,13 @@ export async function runForgeDesktop(input: { readonly argv: readonly string[];
         return null;
       }
       case "test-connection": {
-        let target: ForgeTarget;
+        let target: SuplexTarget;
         try {
-          target = parseForgeTarget(message.url);
+          target = parseSuplexTarget(message.url);
         } catch (error) {
           return { ok: false, reason: (error as Error).message };
         }
-        return (await healthy(target.origin)) ? { ok: true, reason: null } : { ok: false, reason: `No Forge answered at ${target.origin}/health.` };
+        return (await healthy(target.origin)) ? { ok: true, reason: null } : { ok: false, reason: `No Suplex answered at ${target.origin}/health.` };
       }
       default: return null;
     }
@@ -441,7 +441,7 @@ export async function runForgeDesktop(input: { readonly argv: readonly string[];
   app.on("second-instance", (_event, argv) => { void openWith(argv); });
   app.on("window-all-closed", () => { if (process.platform !== "darwin") app.quit(); });
   app.on("activate", () => { void open(); });
-  app.setAboutPanelOptions({ applicationName: "Forge", applicationVersion: app.getVersion() });
+  app.setAboutPanelOptions({ applicationName: "Suplex", applicationVersion: app.getVersion() });
   await app.whenReady();
   app.configureWebAuthn({ touchID: { keychainAccessGroup: KEYCHAIN_ACCESS_GROUP, promptReason: "verify your identity on $1" } });
   rebuildMenu();

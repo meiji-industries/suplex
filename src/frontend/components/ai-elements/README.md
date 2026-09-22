@@ -4,12 +4,12 @@ Tool, Plan, Prompt Input, Test Results, and Shimmer come from the [Vercel AI Ele
 Code Block comes from the [AI Elements registry](https://registry.ai-sdk.dev/code-block.json).
 
 `prompt-input.tsx` is the current [AI Elements PromptInput registry source](https://ai-sdk.dev/elements/api/registry/prompt-input.json).
-Its only adaptations are Forge import paths, Base UI compatibility wrappers in
+Its only adaptations are Suplex import paths, Base UI compatibility wrappers in
 `prompt-input-primitives.tsx`, and `Array.from` for this project's DOM iterable
 TypeScript configuration. `input-group.tsx` is the shipped Base Vega source
-with Forge import paths. The task composer disables attachment intake.
+with Suplex import paths. The task composer disables attachment intake.
 
-Other local adaptations use Forge imports, Base UI Collapsible instead of Radix,
+Other local adaptations use Suplex imports, Base UI Collapsible instead of Radix,
 and explicit optional types for this project's TypeScript configuration.
 Code Block cancels obsolete highlighting updates when its input changes.
 Component styles remain upstream defaults.

@@ -4,7 +4,7 @@ import type { z } from "zod";
 // Workflow and Advisor selections are never remembered: every ordinary fresh task opens as Standard.
 const SettingsSchema = TaskInputSchema.pick({ projectId: true, rootProfileId: true, workerProfileId: true, startImmediately: true, deliveryTarget: true, runProjectTests: true, visualEvidence: true }).partial({ projectId: true });
 export type NewTaskMemory = z.input<typeof SettingsSchema>;
-const storageKey = "forge.newTask.lastSettings";
+const storageKey = "suplex.newTask.lastSettings";
 
 export function readNewTaskMemory(): NewTaskMemory {
   try {

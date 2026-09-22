@@ -5,9 +5,9 @@ import { fileURLToPath } from "node:url";
 
 import { loadConfig } from "./platform/config.js";
 import { AuthService } from "./identity/auth.js";
-import { ForgeDatabase } from "./platform/database.js";
+import { SuplexDatabase } from "./platform/database.js";
 import { readProcessRegistry, stopOwnedProcesses } from "./platform/process-manager.js";
-import { startForge } from "./platform/runtime.js";
+import { startSuplex } from "./platform/runtime.js";
 import { StructuredLogger } from "./platform/logging.js";
 import { runSetup } from "./platform/setup.js";
 import { runInstallCommand } from "./platform/install/command.js";
@@ -16,15 +16,15 @@ import { formatDoctor, runDoctor } from "./platform/diagnostics/doctor.js";
 import { formatTaskDiagnostic, inspectTask, writeTaskBundle } from "./platform/diagnostics/task.js";
 import { runLogViewer } from "./platform/log-viewer.js";
 import { runCommand } from "./platform/command-runner.js";
-import { ForgeMcpBridge, readForgeMcpBridgeSettings, startForgeMcpTransport } from "./integrations/forge/mcp-bridge.js";
+import { SuplexMcpBridge, readSuplexMcpBridgeSettings, startSuplexMcpTransport } from "./integrations/suplex/mcp-bridge.js";
 
 const command = process.argv[2] === "--" ? (process.argv[3] ?? "help") : (process.argv[2] ?? "help");
 const commandArgs = process.argv.slice(process.argv[2] === "--" ? 4 : 3);
 const foreground = process.argv.includes("--foreground");
 const verbose = process.argv.includes("--verbose");
 
-function openDiagnosticDatabase(filename: string): ForgeDatabase {
-  const database = new ForgeDatabase(filename, { readOnly: true });
+function openDiagnosticDatabase(filename: string): SuplexDatabase {
+  const database = new SuplexDatabase(filename, { readOnly: true });
   const schema = database.schemaStatus();
   if (database.openMode() === "read-only" && schema.state === "behind") {
     process.stderr.write("database is behind this build — restart the stack to migrate\n");
@@ -33,7 +33,7 @@ function openDiagnosticDatabase(filename: string): ForgeDatabase {
   return database;
 }
 
-async function stopForge(config: ReturnType<typeof loadConfig>): Promise<void> {
+async function stopSuplex(config: ReturnType<typeof loadConfig>): Promise<void> {
   const registryPath = `${config.runtimeRoot}/owned-processes.json`;
   const registry = await readProcessRegistry(registryPath);
   const report = await stopOwnedProcesses(registry);
@@ -47,8 +47,8 @@ async function main(): Promise<void> {
     return;
   }
   if (command === "install") {
-    // Install sets up a local Forge, so the stages read a local configuration even before they write the environment file.
-    process.env.FORGE_ACCESS_MODE ??= "local";
+    // Install sets up a local Suplex, so the stages read a local configuration even before they write the environment file.
+    process.env.SUPLEX_ACCESS_MODE ??= "local";
     process.exitCode = await runInstallCommand(commandArgs);
     return;
   }
@@ -74,13 +74,13 @@ async function main(): Promise<void> {
     return;
   }
   if (command === "mcp") {
-    // The MCP bridge drives the Agent API over stdio; it never starts a Forge server or takes the credential on the command line.
-    const settings = readForgeMcpBridgeSettings(process.env);
-    startForgeMcpTransport({ bridge: new ForgeMcpBridge(settings), stdin: process.stdin, stdout: process.stdout });
+    // The MCP bridge drives the Agent API over stdio; it never starts a Suplex server or takes the credential on the command line.
+    const settings = readSuplexMcpBridgeSettings(process.env);
+    startSuplexMcpTransport({ bridge: new SuplexMcpBridge(settings), stdin: process.stdin, stdout: process.stdout });
     return;
   }
   if (command === "help") {
-    process.stdout.write("Usage: pnpm run forge <setup [--local]|install|recover|backup|verify-backup|restore|migrate|task|doctor|mcp|start|stop|restart|logs> [--foreground]\n");
+    process.stdout.write("Usage: pnpm run suplex <setup [--local]|install|recover|backup|verify-backup|restore|migrate|task|doctor|mcp|start|stop|restart|logs> [--foreground]\n");
     return;
   }
   const config = loadConfig();
@@ -96,7 +96,7 @@ async function main(): Promise<void> {
     return;
   }
   if (command === "doctor") {
-    if (process.argv.includes("--fix")) throw new Error("doctor is read-only. Restart Forge to apply pending migrations.");
+    if (process.argv.includes("--fix")) throw new Error("doctor is read-only. Restart Suplex to apply pending migrations.");
     const database = openDiagnosticDatabase(config.databasePath);
     try {
       const checks = await runDoctor(config, database);
@@ -106,7 +106,7 @@ async function main(): Promise<void> {
     return;
   }
   if (command === "migrate") {
-    const database = new ForgeDatabase(config.databasePath);
+    const database = new SuplexDatabase(config.databasePath);
     try {
       const status = database.schemaStatus();
       if (status.state !== "current") {
@@ -134,7 +134,7 @@ async function main(): Promise<void> {
       const destination = process.argv[4];
       if (!archive || !destination) throw new Error("restore requires an archive path and separate destination");
       const result = await service.restore(archive, destination);
-      const restoredDatabase = new ForgeDatabase(`${destination}/forge-backup/app/forge.sqlite`);
+      const restoredDatabase = new SuplexDatabase(`${destination}/suplex-backup/app/suplex.sqlite`);
       try {
         const handoff = {
           version: 1,
@@ -145,26 +145,26 @@ async function main(): Promise<void> {
           restoreDurationMs: result.restoreDurationMs,
           verification: { valid: result.valid, verifiedAt: result.verifiedAt, errors: result.errors },
           requiresReauthentication: true,
-          nextSteps: ["Restore repository and worktree paths before starting Forge", "Sign in to OpenCode and GitHub on the restored host", "Preserve OpenCode session storage to continue existing tasks", "Start Forge and review any specific recovery question"],
+          nextSteps: ["Restore repository and worktree paths before starting Suplex", "Sign in to OpenCode and GitHub on the restored host", "Preserve OpenCode session storage to continue existing tasks", "Start Suplex and review any specific recovery question"],
         };
-        await writeFile(join(destination, "forge-backup", "restore-handoff.json"), `${JSON.stringify(handoff, null, 2)}\n`, { mode: 0o600 });
+        await writeFile(join(destination, "suplex-backup", "restore-handoff.json"), `${JSON.stringify(handoff, null, 2)}\n`, { mode: 0o600 });
       } finally { restoredDatabase.close(); }
-      process.stdout.write(`backup restored to ${destination}; verification ${result.valid ? "passed" : "failed"} (${result.restoreDurationMs}ms); see forge-backup/restore-handoff.json\n`);
+      process.stdout.write(`backup restored to ${destination}; verification ${result.valid ? "passed" : "failed"} (${result.restoreDurationMs}ms); see suplex-backup/restore-handoff.json\n`);
     }
     return;
   }
   if (command === "desktop") {
     const url = `http://localhost:${config.port}`;
-    const result = await runCommand({ taskId: null, stepId: null, command: "open", args: ["-na", "Forge", "--args", `--url=${url}`], expectNonZero: true }); // -n: a running Forge.app receives the URL through its single-instance lock
-    if (result.exitCode !== 0) throw new Error(`Forge.app did not open: ${result.stderr.trim() || "install Forge.app from desktop/release first"}`);
-    process.stdout.write(`Forge.app opened at ${url}\n`);
+    const result = await runCommand({ taskId: null, stepId: null, command: "open", args: ["-na", "Suplex", "--args", `--url=${url}`], expectNonZero: true }); // -n: a running Suplex.app receives the URL through its single-instance lock
+    if (result.exitCode !== 0) throw new Error(`Suplex.app did not open: ${result.stderr.trim() || "install Suplex.app from desktop/release first"}`);
+    process.stdout.write(`Suplex.app opened at ${url}\n`);
     return;
   }
   if (command === "recover") {
     if (!process.argv.includes("--confirm-recovery")) {
       throw new Error("recover requires --confirm-recovery");
     }
-    const database = new ForgeDatabase(config.databasePath);
+    const database = new SuplexDatabase(config.databasePath);
     try {
       const invitation = new AuthService(database, config).createRecoveryInvitation({ confirmed: true, initiationMethod: "local-cli", installationId: config.installationId });
       process.stdout.write(`Recovery enrollment (showing once): ${config.reachableAddress}/auth?mode=recovery&invite=${invitation.token}\n`);
@@ -174,32 +174,32 @@ async function main(): Promise<void> {
     return;
   }
   if (command === "start") {
-    const registry = await startForge(config, foreground);
-    process.stdout.write(`Forge started at ${config.reachableAddress}; owned processes: ${registry.processes.map((process) => `${process.name}#${process.pid}`).join(", ")}\n`);
+    const registry = await startSuplex(config, foreground);
+    process.stdout.write(`Suplex started at ${config.reachableAddress}; owned processes: ${registry.processes.map((process) => `${process.name}#${process.pid}`).join(", ")}\n`);
     return;
   }
   if (command === "stop") {
-    await stopForge(config);
+    await stopSuplex(config);
     return;
   }
   if (command === "restart") {
     try {
-      await stopForge(config);
+      await stopSuplex(config);
     } catch (error) {
       if (!(error instanceof Error) || !/ENOENT|no such file/i.test(error.message)) {
         throw error;
       }
     }
-    const registry = await startForge(config, foreground);
-    process.stdout.write(`Forge restarted at ${config.reachableAddress}; owned processes: ${registry.processes.length}\n`);
+    const registry = await startSuplex(config, foreground);
+    process.stdout.write(`Suplex restarted at ${config.reachableAddress}; owned processes: ${registry.processes.length}\n`);
     return;
   }
-  throw new Error(`Unknown Forge command: ${command}`);
+  throw new Error(`Unknown Suplex command: ${command}`);
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   main().catch((error: unknown) => {
-    new StructuredLogger().error("Forge command failed", {}, { error: error instanceof Error ? error.message : "unknown error" });
+    new StructuredLogger().error("Suplex command failed", {}, { error: error instanceof Error ? error.message : "unknown error" });
     process.exitCode = 1;
   });
 }

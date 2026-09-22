@@ -18,7 +18,7 @@ import { IssueEvidence } from "./issue-evidence.js";
 export { DeliveryOperationFailure } from "./failure.js";
 export type { DeliveryGithubPort } from "./publication.js";
 
-export const DELIVERY_WAIT_NEXT = "End this Coordinator turn. Forge will resume it when delivery state changes.";
+export const DELIVERY_WAIT_NEXT = "End this Coordinator turn. Suplex will resume it when delivery state changes.";
 type Recheck = () => void;
 type AdoptionOptions = { publication?: boolean | undefined; explicit?: boolean | undefined; recheck?: Recheck | undefined; deferCompletion?: boolean };
 type CompletionOptions = AdoptionOptions & { isDraft?: boolean | undefined; validatedRange?: ReviewRange | undefined };
@@ -82,7 +82,7 @@ export class DeliveryOperations {
       return this.store.resumeDeliveryWait(taskId, wait, prompt) ? "changed" : "none";
     }
     if (observed.exists && sameDeliveryWaitFingerprint(wait.fingerprint, observed)) return "unchanged";
-    const prompt = `Delivery state changed while Forge waited (${wait.reason}). Current observation: ${JSON.stringify({ exists: observed.exists, state: observed.state, headSha: observed.headSha, isDraft: observed.isDraft, mergeable: observed.mergeable, mergeStateStatus: observed.mergeStateStatus, reviewDecision: observed.reviewDecision, checks: observed.checks })}. If checks failed, obtain their evidence and continue the workflow; if the pull request is eligible, request merge_pull_request with your current review; otherwise observe_checks again.`;
+    const prompt = `Delivery state changed while Suplex waited (${wait.reason}). Current observation: ${JSON.stringify({ exists: observed.exists, state: observed.state, headSha: observed.headSha, isDraft: observed.isDraft, mergeable: observed.mergeable, mergeStateStatus: observed.mergeStateStatus, reviewDecision: observed.reviewDecision, checks: observed.checks })}. If checks failed, obtain their evidence and continue the workflow; if the pull request is eligible, request merge_pull_request with your current review; otherwise observe_checks again.`;
     return this.store.resumeDeliveryWait(taskId, wait, prompt) ? "changed" : "none";
   }
 
@@ -117,7 +117,7 @@ export class DeliveryOperations {
     const known = operation === "push_branch" ? null : await this.observeKnownPull(control, { recheck, deferCompletion: Boolean(review) });
     if (this.store.get(root.taskId).status === "delivered") return known;
     if (known?.state === "merged") return known;
-    if (!control.worktree) throw new DeliveryOperationFailure("worktree_missing", "Forge has no observed worktree for this task");
+    if (!control.worktree) throw new DeliveryOperationFailure("worktree_missing", "Suplex has no observed worktree for this task");
     const local = await this.forTask(control.taskId).inspectLocalRevision({ cwd: control.worktree.path });
     if (local.branch !== control.deliveryIntent.headBranch) throw new DeliveryOperationFailure("head_diverged", "The worktree branch does not match this task intent");
     this.store.setWorktree(root.taskId, { ...control.worktree, branch: local.branch, headSha: local.headSha, dirty: !local.clean });
@@ -199,7 +199,7 @@ export class DeliveryOperations {
 
   private async deliveryDiff(control: TaskControl, headSha: string) {
     const base = await this.resolveDeliveryBase(control);
-    if (!base.sha) throw new DeliveryOperationFailure("observation_unavailable", `GitHub did not return the head of ${base.branch}. Forge cannot compute the delivery range until that observation is available; no source change is needed.`);
+    if (!base.sha) throw new DeliveryOperationFailure("observation_unavailable", `GitHub did not return the head of ${base.branch}. Suplex cannot compute the delivery range until that observation is available; no source change is needed.`);
     return { ...await inspectDeliveryDiff(control.worktree!.path, base.sha, headSha), baseBranch: base.branch };
   }
 
@@ -233,7 +233,7 @@ export class DeliveryOperations {
       case "already":
         return { ok: true };
       case "cancelled":
-        return { ok: false, code: "workflow_review_required", reason: "The task was cancelled; Forge recorded no workflow completion.", cancelled: true };
+        return { ok: false, code: "workflow_review_required", reason: "The task was cancelled; Suplex recorded no workflow completion.", cancelled: true };
       case "declined":
         return { ok: false, code: result.code, reason: result.reason };
     }
@@ -381,7 +381,7 @@ export class DeliveryOperations {
     const blockers = this.store.dependencyBlockers(control.taskId);
     if (blockers.length) {
       const waiting = blockers.map(dependency => `${dependency.id} "${dependency.title}" (${dependency.status})`).join(", ");
-      throw new DeliveryOperationFailure("merge_not_eligible", `Waiting for these prerequisites: ${waiting}. Forge resumes when delivered.`);
+      throw new DeliveryOperationFailure("merge_not_eligible", `Waiting for these prerequisites: ${waiting}. Suplex resumes when delivered.`);
     }
     recheck();
     const requested = observed.number!;
@@ -412,7 +412,7 @@ export class DeliveryOperations {
       this.store.scheduleWake(control.taskId, new Date(Date.now() + 30_000).toISOString());
       return { kind: "merge_requested", pullRequest: pullReference(final), checkSummary: checkSummary(observed), wait, next: DELIVERY_WAIT_NEXT };
     }
-    // The merge result must identify this task's pull request before Forge records anything from it; a mismatched head is external, not verified.
+    // The merge result must identify this task's pull request before Suplex records anything from it; a mismatched head is external, not verified.
     this.assertMergeResultIdentity(control, repository, requested, final);
     return { ...await this.completeIfTargetMatches(control, pullReference(final), { validatedRange: actual, recheck }), checkSummary: checkSummary(observed), reviewedHead: observed.headSha };
   }
@@ -448,13 +448,13 @@ export class DeliveryOperations {
     this.store.recordWorkflowOutcome(control.taskId, this.externalCompletion(this.store.get(control.taskId), pull.number));
   }
 
-  /** Direct proof for a merge Forge requested: GitHub's pull request head must be the validated head; the merge commit itself can differ. */
+  /** Direct proof for a merge Suplex requested: GitHub's pull request head must be the validated head; the merge commit itself can differ. */
   private directMergeProof(pull: PullRequestReference, validatedRange: ReviewRange): Decision {
     if (pull.headSha !== validatedRange.headSha) return { ok: false, code: "head_diverged", reason: `GitHub reports the merged pull request head ${pull.headSha.slice(0, 12)}, not the reviewed head ${validatedRange.headSha.slice(0, 12)}.` };
     return { ok: true };
   }
 
-  /** Passive proof rejects concrete harm only: no accepted Forge decision, or a GitHub merge of a different head. */
+  /** Passive proof rejects concrete harm only: no accepted Suplex decision, or a GitHub merge of a different head. */
   private passiveMergeProof(control: TaskControl, pull: PullRequestReference): Decision {
     const accepted = control.workflowState.acceptedDelivery;
     if (!accepted) return { ok: false, code: "workflow_review_required", reason: "No accepted delivery decision exists for this pull request." };
@@ -471,9 +471,9 @@ export class DeliveryOperations {
     try { remoteBase = await this.resolveDeliveryBase(control); }
     catch (error) {
       if (!this.observationUnavailable(error)) throw error;
-      return { ok: false, code: "observation_unavailable", reason: "GitHub did not return the current delivery base; Forge will observe it again." };
+      return { ok: false, code: "observation_unavailable", reason: "GitHub did not return the current delivery base; Suplex will observe it again." };
     }
-    if (remoteBase.sha === null) return { ok: false, code: "observation_unavailable", reason: `GitHub did not return the head of ${remoteBase.branch}; Forge will observe it again.` };
+    if (remoteBase.sha === null) return { ok: false, code: "observation_unavailable", reason: `GitHub did not return the head of ${remoteBase.branch}; Suplex will observe it again.` };
     if (!control.worktree) return { ok: false, code: "worktree_missing", reason: "The task has no observed worktree to confirm the reviewed source." };
     const equivalent = await reviewEquivalence(control.worktree.path, accepted, remoteBase.sha);
     if (!equivalent.ok) return { ok: false, code: "delivery_review_required", reason: `${equivalent.reason}${freshReviewHint(control.workflow)}` };
@@ -516,7 +516,7 @@ export class DeliveryOperations {
     return pull;
   }
 
-  /** After cancellation, a merge Forge requested on the validated head is its own outcome; any other merged head is external. */
+  /** After cancellation, a merge Suplex requested on the validated head is its own outcome; any other merged head is external. */
   private cancelledOutcome(current: TaskControl, pull: PullRequestReference, validatedRange: ReviewRange | undefined): WorkflowCompletion {
     if (validatedRange && validatedRange.headSha === pull.headSha) return { kind: "workflow", reviewedHead: validatedRange.headSha, pullRequestNumber: pull.number, observedAt: new Date().toISOString() };
     return this.externalCompletion(current, pull.number);

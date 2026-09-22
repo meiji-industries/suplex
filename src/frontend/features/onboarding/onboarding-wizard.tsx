@@ -28,7 +28,7 @@ import { CreateProjectDialog } from "../projects/create-project-dialog.js";
 import { ProviderLoginTerminal, useProviderLogin } from "../settings/provider-login.js";
 import { ONBOARDING_TOOL_CHECKS, ONBOARDING_STEPS, connectedProviders, stepComplete, useOnboardingData, type OnboardingData, type OnboardingStepId } from "./onboarding.js";
 
-const providerCommands = { opencode: "FORGE_OPENCODE_COMMAND", devin: "FORGE_DEVIN_COMMAND", codex: "FORGE_CODEX_COMMAND", "claude-code": "FORGE_CLAUDE_COMMAND" } as const;
+const providerCommands = { opencode: "SUPLEX_OPENCODE_COMMAND", devin: "SUPLEX_DEVIN_COMMAND", codex: "SUPLEX_CODEX_COMMAND", "claude-code": "SUPLEX_CLAUDE_COMMAND" } as const;
 
 
 function stepFromUrl(state: OnboardingData["state"]): OnboardingStepId {
@@ -84,10 +84,10 @@ export function OnboardingView(): ReactElement {
   const current = stepFromUrl(state);
   const currentIndex = ONBOARDING_STEPS.findIndex(step => step.id === current);
   const [name, setName] = useState(currentCompany?.name || "My Company");
-  const [code, setCode] = useState(currentCompany?.issueCode ?? "FORGE");
+  const [code, setCode] = useState(currentCompany?.issueCode ?? "SUPLEX");
   const [error, setError] = useState("");
   const [projectsOpen, setProjectsOpen] = useState(false);
-  useEffect(() => { setName(currentCompany?.name || "My Company"); setCode(currentCompany?.issueCode ?? "FORGE"); }, [currentCompany?.id]);
+  useEffect(() => { setName(currentCompany?.name || "My Company"); setCode(currentCompany?.issueCode ?? "SUPLEX"); }, [currentCompany?.id]);
   const { login, loginPending, startLogin, closeLogin } = useProviderLogin({ reload });
   const go = (id: OnboardingStepId): void => navigate(withCompany(`/onboarding?step=${id}`, companyId));
   const continueStep = async (): Promise<void> => {
@@ -100,7 +100,7 @@ export function OnboardingView(): ReactElement {
         await reloadCompanies();
       }
       if (currentIndex < ONBOARDING_STEPS.length - 1) go(ONBOARDING_STEPS[currentIndex + 1]!.id);
-    } catch (reason) { setError(reason instanceof Error ? reason.message : "Forge could not save the onboarding step."); }
+    } catch (reason) { setError(reason instanceof Error ? reason.message : "Suplex could not save the onboarding step."); }
   };
   const body = current === "company" ? <FieldGroup>
     <Field><FieldLabel htmlFor="onboarding-name">Company name</FieldLabel><Input id="onboarding-name" value={name} onChange={event => setName(event.target.value)} /></Field>
@@ -135,9 +135,9 @@ export function OnboardingView(): ReactElement {
         </div>;
       })}
     </div>
-    : current === "providers" ? <div className="space-y-3"><div className="grid gap-3 sm:grid-cols-2" aria-busy={loading} aria-label="Providers">{loading && state.providers.length === 0 ? [0, 1, 2, 3].map(index => <Card key={index} size="sm" aria-label="Provider check in progress"><CardHeader><CardTitle><Skeleton className="h-5 w-20" /></CardTitle><CardAction><Skeleton className="h-5 w-20" /></CardAction></CardHeader><CardContent><Skeleton className="h-4 w-16" /><div className="space-y-1"><Skeleton className="h-4 w-full" /><Skeleton className="h-4 w-3/4" /></div><Skeleton className="h-8 w-full" /></CardContent></Card>) : state.providers.map(provider => <Card key={provider.id} size="sm"><CardHeader><CardTitle><span className="flex items-center gap-2"><ProviderIcon provider={provider.id} />{provider.label}</span></CardTitle><CardAction>{provider.status === "missing" ? <><StatusLight level="red" label="Not installed" /><Badge variant="outline">Not installed</Badge></> : provider.connection.status === "connected" ? <><StatusLight level="green" label="Connected" /><Badge variant="secondary">Connected</Badge></> : <><StatusLight level="amber" label="Needs auth" /><Badge variant="outline">Needs auth</Badge></>}</CardAction></CardHeader><CardContent className="space-y-2 text-xs text-muted-foreground"><div><Tooltip><TooltipTrigger><span className="cursor-help underline decoration-dashed underline-offset-4">{provider.modelCount} models available</span></TooltipTrigger><TooltipContent side="bottom" align="start"><ul className="max-h-60 overflow-y-auto font-mono text-xs">{provider.models.length ? provider.models.map(model => <li key={model.id} className="break-all">{model.id}</li>) : <li>No models available</li>}</ul></TooltipContent></Tooltip></div>{provider.connection.status === "connected" ? <p className="flex items-start gap-1"><Check aria-hidden="true" className="mt-0.5 size-3 shrink-0" /><span className="min-w-0 break-words">{provider.connection.account ? `Signed in as ${provider.connection.account}` : "Signed in"}</span></p> : provider.id === "opencode" && provider.connection.status === "not-connected" && provider.status !== "missing" ? null : <p>{provider.connection.summary}</p>}{provider.status === "missing" ? <p>Set <code>{providerCommands[provider.id]}</code> on the host.</p> : provider.connection.status !== "connected" ? <Button size="sm" disabled={loginPending !== null} onClick={() => void startLogin(`provider:${provider.id}`, provider.label, `/api/admin/providers/${provider.id}/login`).catch(reason => setError(reason instanceof Error ? reason.message : "Forge could not open a sign-in pane."))}>Sign in</Button> : null}</CardContent></Card>)}</div></div>
+    : current === "providers" ? <div className="space-y-3"><div className="grid gap-3 sm:grid-cols-2" aria-busy={loading} aria-label="Providers">{loading && state.providers.length === 0 ? [0, 1, 2, 3].map(index => <Card key={index} size="sm" aria-label="Provider check in progress"><CardHeader><CardTitle><Skeleton className="h-5 w-20" /></CardTitle><CardAction><Skeleton className="h-5 w-20" /></CardAction></CardHeader><CardContent><Skeleton className="h-4 w-16" /><div className="space-y-1"><Skeleton className="h-4 w-full" /><Skeleton className="h-4 w-3/4" /></div><Skeleton className="h-8 w-full" /></CardContent></Card>) : state.providers.map(provider => <Card key={provider.id} size="sm"><CardHeader><CardTitle><span className="flex items-center gap-2"><ProviderIcon provider={provider.id} />{provider.label}</span></CardTitle><CardAction>{provider.status === "missing" ? <><StatusLight level="red" label="Not installed" /><Badge variant="outline">Not installed</Badge></> : provider.connection.status === "connected" ? <><StatusLight level="green" label="Connected" /><Badge variant="secondary">Connected</Badge></> : <><StatusLight level="amber" label="Needs auth" /><Badge variant="outline">Needs auth</Badge></>}</CardAction></CardHeader><CardContent className="space-y-2 text-xs text-muted-foreground"><div><Tooltip><TooltipTrigger><span className="cursor-help underline decoration-dashed underline-offset-4">{provider.modelCount} models available</span></TooltipTrigger><TooltipContent side="bottom" align="start"><ul className="max-h-60 overflow-y-auto font-mono text-xs">{provider.models.length ? provider.models.map(model => <li key={model.id} className="break-all">{model.id}</li>) : <li>No models available</li>}</ul></TooltipContent></Tooltip></div>{provider.connection.status === "connected" ? <p className="flex items-start gap-1"><Check aria-hidden="true" className="mt-0.5 size-3 shrink-0" /><span className="min-w-0 break-words">{provider.connection.account ? `Signed in as ${provider.connection.account}` : "Signed in"}</span></p> : provider.id === "opencode" && provider.connection.status === "not-connected" && provider.status !== "missing" ? null : <p>{provider.connection.summary}</p>}{provider.status === "missing" ? <p>Set <code>{providerCommands[provider.id]}</code> on the host.</p> : provider.connection.status !== "connected" ? <Button size="sm" disabled={loginPending !== null} onClick={() => void startLogin(`provider:${provider.id}`, provider.label, `/api/admin/providers/${provider.id}/login`).catch(reason => setError(reason instanceof Error ? reason.message : "Suplex could not open a sign-in pane."))}>Sign in</Button> : null}</CardContent></Card>)}</div></div>
     : current === "agents" ? <InternalAgentsManager agents={state.profiles} onSaved={reload} />
-    : current === "projects" ? <div className="space-y-3">{state.projects.length ? <div className="grid gap-3"><ProjectCards projects={state.projects} agents={state.profiles} /></div> : <div className="rounded-md border border-dashed p-6 text-center"><p className="text-[13px]">No projects yet.</p><p className="mt-1 text-xs text-muted-foreground">Forge needs one connected GitHub repository before you can create a task.</p></div>}<NewButton onClick={() => setProjectsOpen(true)}>Add a project</NewButton><CreateProjectDialog open={projectsOpen} onOpenChange={setProjectsOpen} companyId={companyId} companyStatus={currentCompany?.status} onCreated={reload} reloadCompanies={reloadCompanies} /></div>
+    : current === "projects" ? <div className="space-y-3">{state.projects.length ? <div className="grid gap-3"><ProjectCards projects={state.projects} agents={state.profiles} /></div> : <div className="rounded-md border border-dashed p-6 text-center"><p className="text-[13px]">No projects yet.</p><p className="mt-1 text-xs text-muted-foreground">Suplex needs one connected GitHub repository before you can create a task.</p></div>}<NewButton onClick={() => setProjectsOpen(true)}>Add a project</NewButton><CreateProjectDialog open={projectsOpen} onOpenChange={setProjectsOpen} companyId={companyId} companyStatus={currentCompany?.status} onCreated={reload} reloadCompanies={reloadCompanies} /></div>
     : <div className="flex flex-1 flex-col items-center justify-center gap-4 text-center" aria-live="polite">
       <PartyPopper aria-hidden="true" className="size-12 text-amber-500" />
       <h2 className="text-xl font-semibold">You are all set!</h2>
@@ -146,13 +146,13 @@ export function OnboardingView(): ReactElement {
   const continueDisabled = current === "company" ? !name.trim() || !code.trim() : current === "providers" ? connected.length === 0 : current === "projects" ? state.projects.length === 0 : false;
   const heading = current === "company" ? "Set up your company" : current === "tools" ? "Check the host tools" : current === "providers" ? "Connect your accounts" : current === "agents" ? "Select the agent models" : current === "projects" ? "Add a project" : "Onboarding complete";
   const description = current === "company" ? "What is your startup, agency, or company called?"
-    : current === "tools" ? "Forge uses tools on your machine to get work done for you"
-    : current === "providers" ? "Connect your existing subscriptions and models to your new Forge agents"
+    : current === "tools" ? "Suplex uses tools on your machine to get work done for you"
+    : current === "providers" ? "Connect your existing subscriptions and models to your new Suplex agents"
     : current === "agents" ? "The Coordinator plans each task. The Worker builds the changes."
     : current === "projects" ? "Connect a GitHub repository for your first task."
     : "Review the setup, then open the tasks.";
   const checking = current === "tools" ? refreshing : loading;
-  const visibleError = error || loadError || (current === "tools" && freshness === "stale" ? "Forge could not check the host. Select Check again." : "");
+  const visibleError = error || loadError || (current === "tools" && freshness === "stale" ? "Suplex could not check the host. Select Check again." : "");
   return (
     <ApplicationFrame title="Onboarding" sidebar={<OnboardingSidebar companyId={companyId} current={current} state={state} />}>
       <div className="flex min-w-0 flex-1 p-3 sm:p-6">

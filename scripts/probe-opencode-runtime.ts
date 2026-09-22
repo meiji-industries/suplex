@@ -13,9 +13,9 @@ import { createGitCommandGuard } from "../src/coordination/worker-environment.js
 
 const executable = process.argv[2];
 if (!executable) throw new Error("Usage: tsx scripts/probe-opencode-runtime.ts <absolute-opencode-executable>");
-const directory = await mkdtemp(join(tmpdir(), "forge-opencode-runtime-"));
+const directory = await mkdtemp(join(tmpdir(), "suplex-opencode-runtime-"));
 await promisify(execFile)("git", ["init", "--quiet", directory]);
-const profile = { providerID: "forge-proof", modelID: "proof", reasoningEffort: "max", serviceTier: "priority" } as const;
+const profile = { providerID: "suplex-proof", modelID: "proof", reasoningEffort: "max", serviceTier: "priority" } as const;
 const live = new Set<OpenCodeServerReference>();
 const checks: unknown[] = [];
 let activeRole: "root" | "worker" = "root";
@@ -69,16 +69,16 @@ try {
     turn = 0;
     const runtimeDirectory = join(directory, role);
     const config = openCodeRoleConfig({ role, profile });
-    config.provider = { "forge-proof": { npm: "@ai-sdk/openai-compatible", options: { baseURL: `http://127.0.0.1:${address.port}/v1`, apiKey: "disposable-proof" }, models: { proof: { limit: { context: 128000, output: 4096 } } } } };
-    config.small_model = "forge-proof/proof";
+    config.provider = { "suplex-proof": { npm: "@ai-sdk/openai-compatible", options: { baseURL: `http://127.0.0.1:${address.port}/v1`, apiKey: "disposable-proof" }, models: { proof: { limit: { context: 128000, output: 4096 } } } } };
+    config.small_model = "suplex-proof/proof";
     const guard = role === "worker" ? await createGitCommandGuard(runtimeDirectory, "git-guard") : undefined;
     const input: Parameters<typeof ensureOpenCodeServer>[0] = { executable, directory, runtimeDirectory, config, ...(guard ? { env: guard.env } : {}) };
     const reference = await ensureOpenCodeServer(input);
     live.add(reference);
     assert.equal((await stat(join(runtimeDirectory, "server.json"))).mode & 0o777, 0o600);
     const client = openCodeServerClient(reference);
-    const session = await client.createSession({ title: `Forge ${role} native permission proof`, directory, model: { id: profile.modelID, providerID: profile.providerID, variant: "max" }, agent: `forge-${role}` });
-    const intent = createOpenCodePromptIntent({ sessionID: session.id, directory, model: { providerID: profile.providerID, modelID: profile.modelID }, agent: `forge-${role}`, variant: "max", prompt: "Execute the permission probe." });
+    const session = await client.createSession({ title: `Suplex ${role} native permission proof`, directory, model: { id: profile.modelID, providerID: profile.providerID, variant: "max" }, agent: `suplex-${role}` });
+    const intent = createOpenCodePromptIntent({ sessionID: session.id, directory, model: { providerID: profile.providerID, modelID: profile.modelID }, agent: `suplex-${role}`, variant: "max", prompt: "Execute the permission probe." });
     await replayOpenCodePrompt(client, intent, async () => true);
     const deadline = Date.now() + 60_000;
     for (;;) {
@@ -106,7 +106,7 @@ try {
     checks.push({ role, sessionID: session.id, advertisedTools: names, toolParts });
     if (role === "worker") {
       holdModelRequest = true;
-      const interrupted = createOpenCodePromptIntent({ sessionID: session.id, directory, model: { providerID: profile.providerID, modelID: profile.modelID }, agent: "forge-worker", variant: "max", prompt: "Wait for cancellation." });
+      const interrupted = createOpenCodePromptIntent({ sessionID: session.id, directory, model: { providerID: profile.providerID, modelID: profile.modelID }, agent: "suplex-worker", variant: "max", prompt: "Wait for cancellation." });
       await replayOpenCodePrompt(client, interrupted, async () => true);
       const abortDeadline = Date.now() + 10_000;
       while (!modelRequestHeld) {
@@ -126,7 +126,7 @@ try {
     if (role === "worker") {
       crashTool = true;
       turn = 0;
-      const intent = createOpenCodePromptIntent({ sessionID: session.id, directory, model: { providerID: profile.providerID, modelID: profile.modelID }, agent: "forge-worker", variant: "max", prompt: "Run the disposable crash probe." });
+      const intent = createOpenCodePromptIntent({ sessionID: session.id, directory, model: { providerID: profile.providerID, modelID: profile.modelID }, agent: "suplex-worker", variant: "max", prompt: "Run the disposable crash probe." });
       await replayOpenCodePrompt(client, intent, async () => true);
       const deadline = Date.now() + 15_000;
       let toolPid: number | undefined;

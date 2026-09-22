@@ -16,13 +16,13 @@ const health: HostHealthDependencies = {
 test("Fastify request logs are correlated and omit credential-shaped request data", async () => {
   const lines: string[] = [];
   const app = createApp({
-    config: createTestConfig("/tmp/forge-http-infrastructure-test"),
+    config: createTestConfig("/tmp/suplex-http-infrastructure-test"),
     health,
     getHealth: async () => ({ generatedAt: "2026-08-11T00:00:00.000Z", reachableAddress: "http://127.0.0.1:4111", ready: true, checks: [] }),
     logger: createFastifyLogger((line) => lines.push(line)),
   });
 
-  expect((await app.inject({ method: "GET", url: "/auth?token=query-secret", headers: { cookie: "forge_session=cookie-secret", authorization: "Bearer header-secret" } })).statusCode).toBe(200);
+  expect((await app.inject({ method: "GET", url: "/auth?token=query-secret", headers: { cookie: "suplex_session=cookie-secret", authorization: "Bearer header-secret" } })).statusCode).toBe(200);
   expect((await app.inject({ method: "GET", url: "/api/unknown?token=query-secret" })).statusCode).toBe(404);
   await app.close();
 
@@ -38,7 +38,7 @@ test("Fastify request logs are correlated and omit credential-shaped request dat
 test("unexpected route errors are generic to callers and correlated in logs", async () => {
   const lines: string[] = [];
   const app = createApp({
-    config: createTestConfig("/tmp/forge-http-error-test"),
+    config: createTestConfig("/tmp/suplex-http-error-test"),
     health,
     getHealth: async () => { throw new Error("provider secret=do-not-leak"); },
     logger: createFastifyLogger((line) => lines.push(line)),
@@ -57,7 +57,7 @@ test("unexpected route errors are generic to callers and correlated in logs", as
 test("expected request failures retain sanitized reasons in logs", async () => {
   const lines: string[] = [];
   const app = createApp({
-    config: createTestConfig("/tmp/forge-http-rejection-test"),
+    config: createTestConfig("/tmp/suplex-http-rejection-test"),
     health,
     getHealth: async () => { throw new ProjectFailure("Repository provisioning failed", [{ code: "repository-unavailable", field: "repositoryUrl", message: "Git could not clone token=secret" }], 422); },
     logger: createFastifyLogger((line) => lines.push(line)),

@@ -14,7 +14,7 @@ afterEach(async () => { for (const cleanup of cleanups.splice(0)) await cleanup(
 const git = async (cwd: string, args: string[]) => (await runCommand({ taskId: null, stepId: null, command: "git", args, cwd })).stdout.trim();
 
 async function fixture() {
-  const root = await mkdtemp(join(tmpdir(), "forge-task-worktree-"));
+  const root = await mkdtemp(join(tmpdir(), "suplex-task-worktree-"));
   cleanups.push(() => rm(root, { recursive: true, force: true }));
   const repositoryPath = join(root, "repository");
   await mkdir(repositoryPath);
@@ -127,8 +127,8 @@ test.each([false, true])("archive finds a detached command outside the worktree,
   const intent = await fixture();
   const worktree = await prepareTaskWorktree(intent);
   const owned = spawn("sleep", ["300"], { cwd: intent.repositoryPath, env: { ...process.env, ...taskProcessEnvironment(worktree.path) }, detached: true, stdio: "ignore" });
-  const marker = taskProcessEnvironment(worktree.path).FORGE_TASK_PROCESS_OWNER!;
-  const unrelated = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)", `FORGE_TASK_PROCESS_OWNER=${marker}`], { cwd: intent.repositoryPath, stdio: "ignore" });
+  const marker = taskProcessEnvironment(worktree.path).SUPLEX_TASK_PROCESS_OWNER!;
+  const unrelated = spawn(process.execPath, ["-e", "setInterval(() => {}, 1000)", `SUPLEX_TASK_PROCESS_OWNER=${marker}`], { cwd: intent.repositoryPath, stdio: "ignore" });
   await Promise.all([once(owned, "spawn"), once(unrelated, "spawn")]);
   cleanups.unshift(async () => { owned.kill("SIGKILL"); unrelated.kill("SIGKILL"); });
   if (removed) await git(intent.repositoryPath, ["worktree", "remove", worktree.path]);

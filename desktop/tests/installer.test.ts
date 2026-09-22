@@ -7,7 +7,7 @@ import { createInstaller, type InstallEvent } from "../src/installer";
 const FIXTURE = join(__dirname, "fixtures", "runtime");
 
 function workspace(settings?: Record<string, unknown>): string {
-  const userData = mkdtempSync(join(tmpdir(), "forge-desktop-install-"));
+  const userData = mkdtempSync(join(tmpdir(), "suplex-desktop-install-"));
   mkdirSync(join(userData, "data"), { recursive: true });
   if (settings) writeFileSync(join(userData, "data", "fixture.json"), JSON.stringify(settings));
   return userData;

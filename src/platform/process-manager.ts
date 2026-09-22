@@ -193,7 +193,7 @@ function ownershipError(owned: OwnedProcess, comparison: ProcessIdentityComparis
   const reason = comparison.kind === "incomplete_identity"
     ? `incomplete identity (${comparison.field})`
     : comparison.kind.replaceAll("_", " ");
-  return new Error(`Refusing to signal recorded Forge process ${owned.name} (${owned.pid}); ownership is ${reason}`);
+  return new Error(`Refusing to signal recorded Suplex process ${owned.name} (${owned.pid}); ownership is ${reason}`);
 }
 
 async function ownedOrphanedGroupIsAlive(owned: OwnedProcess, controller: ProcessController): Promise<boolean> {
@@ -203,7 +203,7 @@ async function ownedOrphanedGroupIsAlive(owned: OwnedProcess, controller: Proces
     || !controller.signalGroup
     || !controller.isProcessGroupAlive
   ) return false;
-  // A Forge-created process group has PGID === its recorded leader PID. If the
+  // A Suplex-created process group has PGID === its recorded leader PID. If the
   // leader is gone while that group remains live, the OS cannot reuse the PGID;
   // this is the only leaderless target whose ownership is independently proven.
   return controller.isProcessGroupAlive(owned.processGroup);
@@ -263,7 +263,7 @@ async function waitForOwnedProcessToStop(owned: OwnedProcess, controller: Proces
   await signalOwnedProcess(owned, "SIGKILL", controller, `${reason}: grace period expired`);
   await delay(shutdownGraceMs);
   if (!await ownedTargetIsRunning(owned, controller)) return;
-  throw new Error(`Recorded Forge process ${owned.name} (${owned.pid}) did not exit after SIGKILL`);
+  throw new Error(`Recorded Suplex process ${owned.name} (${owned.pid}) did not exit after SIGKILL`);
 }
 
 async function waitForServeToStop(serve: TailscaleServe, controller: ProcessController): Promise<void> {
@@ -317,7 +317,7 @@ export async function readProcessRegistry(filename: string): Promise<ProcessRegi
   const content = await readFile(filename, "utf8");
   const parsed = ProcessRegistrySchema.safeParse(jsonRequired(content));
   if (!parsed.success) {
-    throw new Error(`Forge process registry is invalid: ${parsed.error.issues[0]?.message ?? "unknown error"}`);
+    throw new Error(`Suplex process registry is invalid: ${parsed.error.issues[0]?.message ?? "unknown error"}`);
   }
   return parsed.data;
 }
@@ -327,20 +327,20 @@ export function taskProcessEnvironment(directory: string): Record<string, string
   try { canonical = realpathSync(canonical); } catch (error) {
     if (!(error instanceof Error && "code" in error && error.code === "ENOENT")) throw error;
   }
-  return { FORGE_TASK_PROCESS_OWNER: createHash("sha256").update(canonical).digest("hex") };
+  return { SUPLEX_TASK_PROCESS_OWNER: createHash("sha256").update(canonical).digest("hex") };
 }
 
 export function sessionProcessEnvironment(directory: string): Record<string, string> {
-  return { FORGE_SESSION_PROCESS_OWNER: taskProcessEnvironment(directory).FORGE_TASK_PROCESS_OWNER! };
+  return { SUPLEX_SESSION_PROCESS_OWNER: taskProcessEnvironment(directory).SUPLEX_TASK_PROCESS_OWNER! };
 }
 
 export function executionProcessEnvironment(runtimeDirectory: string, generation: string): Record<string, string> {
-  return { FORGE_EXECUTION_PROCESS_OWNER: taskProcessEnvironment(join(runtimeDirectory, generation)).FORGE_TASK_PROCESS_OWNER! };
+  return { SUPLEX_EXECUTION_PROCESS_OWNER: taskProcessEnvironment(join(runtimeDirectory, generation)).SUPLEX_TASK_PROCESS_OWNER! };
 }
 
 export async function taskOwnedProcessIds(directory: string, scope: "task" | "session" | "execution" = "task"): Promise<number[]> {
-  const key = `FORGE_${scope.toUpperCase()}_PROCESS_OWNER`;
-  const marker = taskProcessEnvironment(directory).FORGE_TASK_PROCESS_OWNER;
+  const key = `SUPLEX_${scope.toUpperCase()}_PROCESS_OWNER`;
+  const marker = taskProcessEnvironment(directory).SUPLEX_TASK_PROCESS_OWNER;
   // Process environments may contain credentials. Parse locally without logging the output.
   if (process.platform === "linux") {
     const plain = await execFileAsync("ps", ["-eww", "-o", "pid=,command="], { maxBuffer: 64 * 1024 * 1024 });

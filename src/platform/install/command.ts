@@ -4,7 +4,7 @@ import { dirname, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 
 import { runCommand, setCommandRunnerLogger } from "../command-runner.js";
-import { ForgeDatabase } from "../database.js";
+import { SuplexDatabase } from "../database.js";
 import { runDoctor } from "../diagnostics/doctor.js";
 import { StructuredLogger } from "../logging.js";
 import { checkHerdrReadiness } from "../../integrations/herdr/readiness.js";
@@ -43,8 +43,8 @@ export function createInstallContext(): InstallContext {
     freeBytes,
     herdrReadiness: () => checkHerdrReadiness(),
     doctor: async (config) => {
-      // A read-only handle reports the database as unwritable, which doctor grades as a failure, so the installer opens it the way Forge will.
-      const database = new ForgeDatabase(config.databasePath);
+      // A read-only handle reports the database as unwritable, which doctor grades as a failure, so the installer opens it the way Suplex will.
+      const database = new SuplexDatabase(config.databasePath);
       try {
         return await runDoctor(config, database);
       } finally {
@@ -61,7 +61,7 @@ export async function runInstallCommand(args: readonly string[], context = creat
   }
   const name = args[args.indexOf("--stage") + 1];
   if (!args.includes("--stage") || !name || name.startsWith("--")) {
-    process.stderr.write("Usage: forge install --manifest | forge install --stage <name> --json\n");
+    process.stderr.write("Usage: suplex install --manifest | suplex install --stage <name> --json\n");
     return 1;
   }
   const stage = installStage(name);

@@ -1,7 +1,7 @@
 import { expect, test, vi } from "vitest";
 
 import { createTestConfig } from "../src/platform/config.js";
-import { ForgeDatabase } from "../src/platform/database.js";
+import { SuplexDatabase } from "../src/platform/database.js";
 import { checkGit, checkPnpm, checkTailscale, createHostHealthDependencies } from "../src/platform/host-health.js";
 import type { HealthCheck } from "../src/platform/health.js";
 import type { CommandRunner } from "../src/profiles/provider-readiness.js";
@@ -9,7 +9,7 @@ import type { CommandRunner } from "../src/profiles/provider-readiness.js";
 const probes = [
   { name: "Git", factory: checkGit, id: "git", args: ["--version"], timeout: 3_000, maxBuffer: 4 * 1024, stdout: "git version 2.47.0\n", details: { version: "2.47.0" }, failurePrefix: "version", failedStatus: "unhealthy" },
   { name: "pnpm", factory: checkPnpm, id: "pnpm", args: ["--version"], timeout: 3_000, maxBuffer: 4 * 1024, stdout: "11.22.0\n", details: { version: "11.22.0" }, failurePrefix: "version", failedStatus: "warning" },
-  { name: "Tailscale", factory: checkTailscale, id: "tailscale", args: ["status", "--json"], timeout: 5_000, maxBuffer: 256 * 1024, stdout: JSON.stringify({ Self: { DNSName: "forge.tailnet.ts.net." }, User: { login: "private-account" } }), details: { hostname: "forge.tailnet.ts.net" }, failurePrefix: "status", failedStatus: "warning" },
+  { name: "Tailscale", factory: checkTailscale, id: "tailscale", args: ["status", "--json"], timeout: 5_000, maxBuffer: 256 * 1024, stdout: JSON.stringify({ Self: { DNSName: "suplex.tailnet.ts.net." }, User: { login: "private-account" } }), details: { hostname: "suplex.tailnet.ts.net" }, failurePrefix: "status", failedStatus: "warning" },
 ] satisfies Array<{ name: string; factory: (command: string, runner: CommandRunner) => () => Promise<HealthCheck>; id: string; args: string[]; timeout: number; maxBuffer: number; stdout: string; details: HealthCheck["details"]; failurePrefix: string; failedStatus: string }>;
 
 test.each(probes)("$name checks only the expected command and publishes safe facts", async (probe) => {
@@ -71,14 +71,14 @@ test.each(["not-json", '{"Self":{"DNSName":4}}', '{"Self":{"DNSName":"private-ho
 
 test("host dependencies register Tailscale only for Tailscale binding or Serve and expose provider readiness", async () => {
   const config = createTestConfig(":memory:");
-  const database = new ForgeDatabase(":memory:");
+  const database = new SuplexDatabase(":memory:");
   try {
     expect(createHostHealthDependencies({ ...config, bindAddress: "127.0.0.1", tailscaleExposure: "direct" }, database)).not.toHaveProperty("tailscale");
     expect(createHostHealthDependencies({ ...config, bindAddress: "100.100.1.2", tailscaleExposure: "direct" }, database)).toHaveProperty("tailscale");
     expect(createHostHealthDependencies({ ...config, bindAddress: "127.0.0.1", tailscaleExposure: "serve" }, database)).toHaveProperty("tailscale");
     const dependencies = createHostHealthDependencies(config, database);
     // Provider checks exist exactly for the harness kinds registered in src/task-harness-registry.ts.
-    vi.stubEnv("FORGE_OPENCODE_COMMAND", "/private/not-installed/opencode");
+    vi.stubEnv("SUPLEX_OPENCODE_COMMAND", "/private/not-installed/opencode");
     const result = await dependencies.provider("opencode");
     expect(result).toMatchObject({ id: "provider:opencode", provider: "opencode", status: "unhealthy", summary: "OpenCode is not installed", remedy: "curl -fsSL https://opencode.ai/install | bash", details: { state: "absent" } });
     expect(JSON.stringify(result)).not.toContain("private");

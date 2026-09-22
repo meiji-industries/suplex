@@ -65,7 +65,7 @@ test("keeps successful commands out of info output without hiding failures", asy
 });
 
 test("retains spawn failures and child signals", async () => {
-  const missing = await runCommand({ taskId: null, stepId: null, command: "/definitely/missing/forge-command", args: [] });
+  const missing = await runCommand({ taskId: null, stepId: null, command: "/definitely/missing/suplex-command", args: [] });
   expect(missing).toMatchObject({ exitCode: null, spawnError: { code: "ENOENT" }, timedOut: false });
 
   const killed = await runCommand({ taskId: null, stepId: null, command: process.execPath, args: ["-e", "process.kill(process.pid, 'SIGKILL')"] });
@@ -189,7 +189,7 @@ test.skipIf(process.platform === "win32")("timeout kills an owned group when a d
 // A detached child creates a new POSIX session; Windows cannot express or inspect this ownership boundary.
 // Real clocks are required because fake timers cannot advance OS process or descriptor lifetimes.
 test.skipIf(process.platform === "win32")("hard-stops after an escaped descendant retains command pipes", { timeout: 10_000 }, async () => {
-  const directory = await mkdtemp(join(tmpdir(), "forge-command-runner-"));
+  const directory = await mkdtemp(join(tmpdir(), "suplex-command-runner-"));
   const pidFile = join(directory, "descendant.pid");
   const secret = "escapedsecretvalue";
   const descendant = `process.stdout.write("escaped-output token=${secret}\\n"); setTimeout(() => process.exit(0), 30_000); setInterval(() => {}, 1_000)`;

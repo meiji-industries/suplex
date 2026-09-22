@@ -2,9 +2,9 @@ import { mkdir, readFile, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 
-import { loadConfig, type ForgeConfig } from "../config.js";
-import { ForgeDatabase } from "../database.js";
-import { upsertForgeEnvironment } from "../setup.js";
+import { loadConfig, type SuplexConfig } from "../config.js";
+import { SuplexDatabase } from "../database.js";
+import { upsertSuplexEnvironment } from "../setup.js";
 import type { DoctorCheck } from "../diagnostics/doctor.js";
 import type { HealthCheck } from "../health.js";
 
@@ -20,7 +20,7 @@ export interface InstallContext {
   wait: (milliseconds: number) => Promise<void>;
   freeBytes: (path: string) => Promise<number>;
   herdrReadiness: () => Promise<HealthCheck>;
-  doctor: (config: ForgeConfig) => Promise<DoctorCheck[]>;
+  doctor: (config: SuplexConfig) => Promise<DoctorCheck[]>;
 }
 
 export interface InstallStage {
@@ -49,17 +49,17 @@ const prerequisites: InstallStage = {
   async run(context) {
     const { platform, arch, release } = context.system;
     if (platform !== "darwin") {
-      return { ok: false, reason: `Forge runs on macOS and this computer reports ${platform}.`, remedy: "Install Forge on a Mac with Apple silicon." };
+      return { ok: false, reason: `Suplex runs on macOS and this computer reports ${platform}.`, remedy: "Install Suplex on a Mac with Apple silicon." };
     }
     if (Number(release.split(".")[0]) < MINIMUM_DARWIN_MAJOR) {
-      return { ok: false, reason: `Forge needs macOS 13 or newer and this Mac reports Darwin ${release}.`, remedy: "Update macOS in System Settings, then try again." };
+      return { ok: false, reason: `Suplex needs macOS 13 or newer and this Mac reports Darwin ${release}.`, remedy: "Update macOS in System Settings, then try again." };
     }
     if (arch !== "arm64") {
-      return { ok: false, reason: `Forge needs a Mac with Apple silicon and this Mac reports ${arch}.`, remedy: "Run Forge on an Apple silicon Mac." };
+      return { ok: false, reason: `Suplex needs a Mac with Apple silicon and this Mac reports ${arch}.`, remedy: "Run Suplex on an Apple silicon Mac." };
     }
-    const free = await context.freeBytes(resolve(context.env.FORGE_DATA_ROOT ?? ".forge/data"));
+    const free = await context.freeBytes(resolve(context.env.SUPLEX_DATA_ROOT ?? ".suplex/data"));
     if (free < MINIMUM_FREE_BYTES) {
-      return { ok: false, reason: `Forge needs 2 GB of free space and this disk has ${gigabytes(free)} GB.`, remedy: "Free up disk space, then try again." };
+      return { ok: false, reason: `Suplex needs 2 GB of free space and this disk has ${gigabytes(free)} GB.`, remedy: "Free up disk space, then try again." };
     }
     return { ok: true, reason: `macOS ${release} on ${arch} with ${gigabytes(free)} GB free` };
   },
@@ -105,7 +105,7 @@ const herdr: InstallStage = {
     const installed = (await context.run("herdr", ["--version"])).exitCode === 0;
     if (!installed) {
       context.progress("Downloading the Herdr installer");
-      const script = join(tmpdir(), "forge-herdr-install.sh");
+      const script = join(tmpdir(), "suplex-herdr-install.sh");
       const download = await context.run("curl", ["-fsSL", "-o", script, HERDR_INSTALL_URL], 120_000);
       if (download.exitCode !== 0) {
         return { ok: false, reason: `curl exited ${download.exitCode}`, remedy: "Check the network connection and try again." };
@@ -155,26 +155,26 @@ const herdr: InstallStage = {
 
 const data: InstallStage = {
   name: "data",
-  title: "Prepare Forge data",
+  title: "Prepare Suplex data",
   async run(context) {
     const config = loadConfig(context.env);
-    const envFile = resolve(context.env.FORGE_ENV_FILE ?? ".forge/forge.env");
+    const envFile = resolve(context.env.SUPLEX_ENV_FILE ?? ".suplex/suplex.env");
     const existingEnvironment = await readFile(envFile, "utf8").catch(() => "");
     const existingDatabase = await stat(config.databasePath).then(() => true, () => false);
     await mkdir(config.dataRoot, { recursive: true });
-    await upsertForgeEnvironment(envFile, {
-      FORGE_ACCESS_MODE: "local",
-      FORGE_BIND_ADDRESS: "127.0.0.1",
-      FORGE_PORT: String(config.port),
+    await upsertSuplexEnvironment(envFile, {
+      SUPLEX_ACCESS_MODE: "local",
+      SUPLEX_BIND_ADDRESS: "127.0.0.1",
+      SUPLEX_PORT: String(config.port),
     });
     const configured = existingEnvironment === await readFile(envFile, "utf8");
-    const database = new ForgeDatabase(config.databasePath);
+    const database = new SuplexDatabase(config.databasePath);
     try {
       const schema = database.schemaStatus();
       const reason = `schema ${schema.state} (${schema.applied.length}/${schema.expected.length} migrations)`;
       return schema.state === "current"
         ? { ok: true, skipped: configured && existingDatabase, reason }
-        : { ok: false, reason, remedy: "Move the Forge data folder aside and run the install again." };
+        : { ok: false, reason, remedy: "Move the Suplex data folder aside and run the install again." };
     } finally {
       database.close();
     }

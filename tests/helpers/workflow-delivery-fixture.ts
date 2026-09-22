@@ -2,7 +2,7 @@ import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { runCommand } from "../../src/platform/command-runner.js";
-import { ForgeDatabase } from "../../src/platform/database.js";
+import { SuplexDatabase } from "../../src/platform/database.js";
 import { DeliveryOperations, type DeliveryGithubPort } from "../../src/delivery/operations.js";
 import { GithubReleaseFailure, type GithubPullRequest, type GithubPullRequestObservation, type LocalRevision } from "../../src/integrations/github/delivery.js";
 import { RootController } from "../../src/coordination/root-controller.js";
@@ -29,7 +29,7 @@ export const failing = { total: 1, pending: 0, failing: 1, successful: 0, runs: 
 
 /** A local bare remote for actual Git behavior plus an injected GitHub adapter for pull request, check, and merge state. */
 export async function fixture(workflow: WorkflowId, options: { deliveryTarget?: string; evidenceRoot?: string } = {}) {
-  const directory = await mkdtemp(join(tmpdir(), "forge-workflow-delivery-"));
+  const directory = await mkdtemp(join(tmpdir(), "suplex-workflow-delivery-"));
   cleanups.push(async () => { await rm(directory, { recursive: true, force: true }); });
   const bare = join(directory, "origin.git"); const repo = join(directory, "repo"); const worktrees = join(directory, "worktrees");
   await git(directory, ["init", "--bare", "-b", "main", bare]);
@@ -44,14 +44,14 @@ export async function fixture(workflow: WorkflowId, options: { deliveryTarget?: 
   await git(repo, ["add", "."]); await git(repo, ["commit", "-m", "feature change"]); await git(repo, ["push", "origin", "feature"]);
   const featureSha = await git(repo, ["rev-parse", "HEAD"]);
   await git(repo, ["checkout", "main"]);
-  const database = new ForgeDatabase(join(directory, "forge.sqlite"));
+  const database = new SuplexDatabase(join(directory, "suplex.sqlite"));
   cleanups.push(async () => database.close());
   const stamp = new Date().toISOString();
   database.authTransaction(db => {
-    db.prepare("INSERT INTO forge_companies (id, name, status, created_at) VALUES ('company', 'Company', 'active', ?)").run(stamp);
-    db.prepare("INSERT INTO forge_projects (id, company_id, name, repository_path, worktree_root, repository_identity, base_branch, setup_command, verification_command, created_at, updated_at) VALUES ('project', 'company', 'Project', ?, ?, 'owner/repo', 'main', '', 'pnpm test', ?, ?)").run(repo, worktrees, stamp, stamp);
+    db.prepare("INSERT INTO suplex_companies (id, name, status, created_at) VALUES ('company', 'Company', 'active', ?)").run(stamp);
+    db.prepare("INSERT INTO suplex_projects (id, company_id, name, repository_path, worktree_root, repository_identity, base_branch, setup_command, verification_command, created_at, updated_at) VALUES ('project', 'company', 'Project', ?, ?, 'owner/repo', 'main', '', 'pnpm test', ?, ?)").run(repo, worktrees, stamp, stamp);
     insertNativeTaskRow(db, { directory: repo });
-    db.prepare("UPDATE forge_tasks SET configuration_json = json_set(configuration_json, '$.repositoryPath', ?, '$.worktreeRoot', ?, '$.branch', 'feature', '$.startingSha', ?, '$.baselineSha', ?, '$.verificationCommand', 'pnpm test') WHERE id = 'task'").run(repo, worktrees, featureSha, baseSha);
+    db.prepare("UPDATE suplex_tasks SET configuration_json = json_set(configuration_json, '$.repositoryPath', ?, '$.worktreeRoot', ?, '$.branch', 'feature', '$.startingSha', ?, '$.baselineSha', ?, '$.verificationCommand', 'pnpm test') WHERE id = 'task'").run(repo, worktrees, featureSha, baseSha);
   });
   const worktree = await prepareTaskWorktree({ taskId: "task", repositoryPath: repo, worktreeRoot: worktrees, branch: "feature", startingSha: featureSha });
   await git(worktree.path, ["config", "user.email", "t@example.com"]); await git(worktree.path, ["config", "user.name", "T"]);

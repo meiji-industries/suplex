@@ -8,10 +8,10 @@ import { AuthService, type WebAuthnAdapter } from "../src/identity/auth.js";
 import { CSRF_COOKIE_NAME, SESSION_COOKIE_NAME } from "../src/identity/auth-identifiers.js";
 import { createApp } from "../src/app.js";
 import { createTestConfig } from "../src/platform/config.js";
-import { ForgeDatabase } from "../src/platform/database.js";
+import { SuplexDatabase } from "../src/platform/database.js";
 import { healthyHost } from "./helpers/native-app.js";
 
-const webAuthn: WebAuthnAdapter = { async generateRegistrationOptions(input) { return { rp: { name: "Forge", id: input.rpId }, user: { id: input.userId, name: input.userName, displayName: input.displayName }, challenge: "environment-api", pubKeyCredParams: [{ type: "public-key" as const, alg: -7 }], attestation: "none" as const }; }, async verifyRegistrationResponse(input) { return { verified: true, credential: { id: input.response.id, publicKey: Uint8Array.from([1]), counter: 0 } }; }, async generateAuthenticationOptions() { return { challenge: "environment-api", rpId: "localhost", allowCredentials: [], userVerification: "required" as const }; }, async verifyAuthenticationResponse() { return { verified: true, newCounter: 1 }; } };
+const webAuthn: WebAuthnAdapter = { async generateRegistrationOptions(input) { return { rp: { name: "Suplex", id: input.rpId }, user: { id: input.userId, name: input.userName, displayName: input.displayName }, challenge: "environment-api", pubKeyCredParams: [{ type: "public-key" as const, alg: -7 }], attestation: "none" as const }; }, async verifyRegistrationResponse(input) { return { verified: true, credential: { id: input.response.id, publicKey: Uint8Array.from([1]), counter: 0 } }; }, async generateAuthenticationOptions() { return { challenge: "environment-api", rpId: "localhost", allowCredentials: [], userVerification: "required" as const }; }, async verifyAuthenticationResponse() { return { verified: true, newCounter: 1 }; } };
 
 function cookie(headers: OutgoingHttpHeaders, name: string): string {
   const all = Array.isArray(headers["set-cookie"]) ? headers["set-cookie"] : [headers["set-cookie"] ?? ""];
@@ -19,8 +19,8 @@ function cookie(headers: OutgoingHttpHeaders, name: string): string {
 }
 
 test("environment settings default and persist partial administrator updates", async () => {
-  const root = await mkdtemp(join(tmpdir(), "forge-environment-api-"));
-  const database = new ForgeDatabase(join(root, "forge.sqlite"));
+  const root = await mkdtemp(join(tmpdir(), "suplex-environment-api-"));
+  const database = new SuplexDatabase(join(root, "suplex.sqlite"));
   const config = createTestConfig(root, { reachableAddress: "http://127.0.0.1:4111" });
   const auth = new AuthService(database, config, { webAuthn });
   const app = createApp({ config, auth, database, health: healthyHost });

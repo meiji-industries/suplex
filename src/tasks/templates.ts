@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import type { AuthService } from "../identity/auth.js";
-import type { ForgeDatabase } from "../platform/database.js";
+import type { SuplexDatabase } from "../platform/database.js";
 import { TaskFailure, type TaskService } from "./tasks.js";
 import { CreateTaskTemplateBodySchema, TaskTemplateResponseSchema, UpdateTaskTemplateBodySchema } from "../http/contracts/task-templates.js";
 import { normalizeWorkflowInput, WorkflowInputFailure, type RawWorkflowInput } from "../coordination/workflows.js";
@@ -20,11 +20,11 @@ function template(raw: unknown): TaskTemplate {
 }
 
 export class TaskTemplateService {
-  constructor(private readonly database: ForgeDatabase, private readonly auth: AuthService, private readonly tasks: TaskService) {}
+  constructor(private readonly database: SuplexDatabase, private readonly auth: AuthService, private readonly tasks: TaskService) {}
 
   list(userId: string, projectId: string): TaskTemplate[] {
     this.requireProject(userId, projectId);
-    return this.database.authQuery(db => db.prepare("SELECT * FROM forge_task_templates WHERE project_id = ? ORDER BY name COLLATE NOCASE, id").all(projectId).map(template));
+    return this.database.authQuery(db => db.prepare("SELECT * FROM suplex_task_templates WHERE project_id = ? ORDER BY name COLLATE NOCASE, id").all(projectId).map(template));
   }
 
   create(userId: string, projectId: string, input: TaskTemplateInput): TaskTemplate {
@@ -34,7 +34,7 @@ export class TaskTemplateService {
     const now = new Date().toISOString();
     this.database.authTransaction(db => {
       this.assertName(projectId, configuration.name);
-      db.prepare("INSERT INTO forge_task_templates (id, project_id, name, configuration_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)").run(id, projectId, configuration.name, JSON.stringify(configuration), now, now);
+      db.prepare("INSERT INTO suplex_task_templates (id, project_id, name, configuration_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)").run(id, projectId, configuration.name, JSON.stringify(configuration), now, now);
     });
     return { ...configuration, id, projectId, createdAt: now, updatedAt: now };
   }
@@ -59,22 +59,22 @@ export class TaskTemplateService {
     const updatedAt = new Date().toISOString();
     this.database.authTransaction(db => {
       this.assertName(current.projectId, configuration.name, templateId);
-      db.prepare("UPDATE forge_task_templates SET name = ?, configuration_json = ?, updated_at = ? WHERE id = ?").run(configuration.name, JSON.stringify(configuration), updatedAt, templateId);
+      db.prepare("UPDATE suplex_task_templates SET name = ?, configuration_json = ?, updated_at = ? WHERE id = ?").run(configuration.name, JSON.stringify(configuration), updatedAt, templateId);
     });
     return { ...configuration, id: current.id, projectId: current.projectId, createdAt: current.createdAt, updatedAt };
   }
 
   delete(userId: string, templateId: string): void {
     this.get(userId, templateId);
-    this.database.authTransaction(db => db.prepare("DELETE FROM forge_task_templates WHERE id = ?").run(templateId));
+    this.database.authTransaction(db => db.prepare("DELETE FROM suplex_task_templates WHERE id = ?").run(templateId));
   }
 
   private assertName(projectId: string, name: string, id = ""): void {
-    if (this.database.authQuery(db => db.prepare("SELECT 1 FROM forge_task_templates WHERE project_id = ? AND name = ? AND id <> ?").get(projectId, name, id))) throw new TaskFailure("This template name is already in use", 409);
+    if (this.database.authQuery(db => db.prepare("SELECT 1 FROM suplex_task_templates WHERE project_id = ? AND name = ? AND id <> ?").get(projectId, name, id))) throw new TaskFailure("This template name is already in use", 409);
   }
 
   private get(userId: string, templateId: string): TaskTemplate {
-    const raw = this.database.authQuery(db => db.prepare("SELECT * FROM forge_task_templates WHERE id = ?").get(templateId));
+    const raw = this.database.authQuery(db => db.prepare("SELECT * FROM suplex_task_templates WHERE id = ?").get(templateId));
     if (!raw) throw new TaskFailure("Not found", 404);
     const current = template(raw);
     this.requireProject(userId, current.projectId);
@@ -82,7 +82,7 @@ export class TaskTemplateService {
   }
 
   private requireProject(userId: string, projectId: string): void {
-    const row = this.database.authQuery(db => db.prepare("SELECT company_id FROM forge_projects WHERE id = ?").get(projectId));
+    const row = this.database.authQuery(db => db.prepare("SELECT company_id FROM suplex_projects WHERE id = ?").get(projectId));
     if (!row) throw new TaskFailure("Not found", 404);
     this.auth.requireCompanyAccess(userId, z.object({ company_id: z.string() }).parse(row).company_id);
   }

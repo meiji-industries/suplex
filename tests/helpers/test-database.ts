@@ -2,18 +2,18 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import { tmpdir } from "node:os";
 import { dirname, join } from "node:path";
 
-import { ForgeDatabase } from "../../src/platform/database.js";
+import { SuplexDatabase } from "../../src/platform/database.js";
 
 let pristineDatabase: Buffer | undefined;
 
 function pristineBytes(): Buffer {
   if (pristineDatabase) return pristineDatabase;
 
-  const directory = mkdtempSync(join(tmpdir(), "forge-test-database-"));
-  const filename = join(directory, "forge.sqlite");
-  let database: ForgeDatabase | undefined;
+  const directory = mkdtempSync(join(tmpdir(), "suplex-test-database-"));
+  const filename = join(directory, "suplex.sqlite");
+  let database: SuplexDatabase | undefined;
   try {
-    database = new ForgeDatabase(filename);
+    database = new SuplexDatabase(filename);
     database.close();
     database = undefined;
     pristineDatabase = readFileSync(filename);
@@ -24,8 +24,8 @@ function pristineBytes(): Buffer {
   }
 }
 
-export function createTestDatabase(filename: string): ForgeDatabase {
+export function createTestDatabase(filename: string): SuplexDatabase {
   mkdirSync(dirname(filename), { recursive: true });
   writeFileSync(filename, pristineBytes(), { flag: "wx" });
-  return new ForgeDatabase(filename, { migrate: false });
+  return new SuplexDatabase(filename, { migrate: false });
 }

@@ -6,7 +6,7 @@ import { beforeAll, beforeEach, describe, expect, test, vi } from "vitest";
 import { healthy } from "../src/local-runtime";
 import type { DesktopMessage, DesktopSnapshot } from "../src/preload";
 
-const userData = mkdtempSync(join(tmpdir(), "forge-desktop-shell-"));
+const userData = mkdtempSync(join(tmpdir(), "suplex-desktop-shell-"));
 class FakeWebContents extends EventEmitter {
   url = "";
   windowOpenHandler: ((details: { url: string }) => { action: string }) | undefined;
@@ -54,7 +54,7 @@ const ipcMain = {
   removeHandler(channel: string): void { ipcMain.handlers.delete(channel); },
 };
 /** Drives one of the onboarding pages the way the preload does. */
-const desktop = async (message: DesktopMessage): Promise<unknown> => ipcMain.handlers.get("forge:desktop")!({ senderFrame: { url: "file:///pages/choice.html" } }, message);
+const desktop = async (message: DesktopMessage): Promise<unknown> => ipcMain.handlers.get("suplex:desktop")!({ senderFrame: { url: "file:///pages/choice.html" } }, message);
 const fake = {
   userData,
   FakeWindow,
@@ -78,8 +78,8 @@ const autoUpdater = Object.assign(new EventEmitter(), {
 vi.mock("electron", () => fake);
 vi.mock("electron-updater", () => ({ autoUpdater }));
 
-let runForgeDesktop: typeof import("../src/forge-desktop")["runForgeDesktop"];
-beforeAll(async () => { ({ runForgeDesktop } = await import("../src/forge-desktop")); });
+let runSuplexDesktop: typeof import("../src/suplex-desktop")["runSuplexDesktop"];
+beforeAll(async () => { ({ runSuplexDesktop } = await import("../src/suplex-desktop")); });
 
 const targetFile = join(fake.userData, "desktop.json");
 const openExternal = vi.spyOn(fake.shell, "openExternal");
@@ -91,7 +91,7 @@ type MenuEntry = { label?: string; type?: string; checked?: boolean; enabled?: b
 const setApplicationMenu = vi.spyOn(fake.Menu, "setApplicationMenu");
 const navigateMenu = (): MenuEntry[] => (setApplicationMenu.mock.lastCall?.[0] as unknown as MenuEntry[]).find((entry) => entry.label === "Navigate")!.submenu!;
 const menuItem = (label: string): MenuEntry => navigateMenu().find((entry) => entry.label === label)!;
-const ORIGIN = "https://forge.tail1234.ts.net";
+const ORIGIN = "https://suplex.tail1234.ts.net";
 
 beforeEach(() => {
   fake.app.removeAllListeners();
@@ -104,7 +104,7 @@ beforeEach(() => {
 
 describe("window", () => {
   test("is sandboxed, isolated, without Node integration, and loads the exact target", async () => {
-    await runForgeDesktop({ argv: ["--url", `${ORIGIN}/auth?invite=abc`], environment: {} });
+    await runSuplexDesktop({ argv: ["--url", `${ORIGIN}/auth?invite=abc`], environment: {} });
     const [win] = fake.FakeWindow.all;
     expect(fake.FakeWindow.all).toHaveLength(1);
     expect(win?.options.webPreferences).toEqual({ sandbox: true, contextIsolation: true, nodeIntegration: false, spellcheck: false, preload: expect.stringMatching(/preload\.js$/) });
@@ -114,21 +114,21 @@ describe("window", () => {
   });
 
   test("navigation fails closed: same origin stays, http(s) opens outside, the rest is dropped", async () => {
-    await runForgeDesktop({ argv: [], environment: { FORGE_DESKTOP_URL: ORIGIN } });
+    await runSuplexDesktop({ argv: [], environment: { SUPLEX_DESKTOP_URL: ORIGIN } });
     const contents = fake.FakeWindow.all[0]!.webContents;
     for (const eventName of ["will-navigate", "will-redirect"] as const) {
       const internal = preventable();
       contents.emit(eventName, internal, `${ORIGIN}/tasks/1`);
       expect(internal.preventDefault, eventName).not.toHaveBeenCalled();
       const external = preventable();
-      contents.emit(eventName, external, "https://github.com/meiji-industries/forge");
+      contents.emit(eventName, external, "https://github.com/meiji-industries/suplex");
       expect(external.preventDefault, eventName).toHaveBeenCalled();
-      expect(openExternal, eventName).toHaveBeenLastCalledWith("https://github.com/meiji-industries/forge");
+      expect(openExternal, eventName).toHaveBeenLastCalledWith("https://github.com/meiji-industries/suplex");
       const otherPort = preventable();
       contents.emit(eventName, otherPort, `${ORIGIN}:8443/`);
       expect(otherPort.preventDefault, eventName).toHaveBeenCalled();
       openExternal.mockClear();
-      for (const url of ["javascript:alert(1)", "file:///etc/passwd", "forge-desktop://x", "data:text/html,hi"]) {
+      for (const url of ["javascript:alert(1)", "file:///etc/passwd", "suplex-desktop://x", "data:text/html,hi"]) {
         const blocked = preventable();
         contents.emit(eventName, blocked, url);
         expect(blocked.preventDefault, url).toHaveBeenCalled();
@@ -138,7 +138,7 @@ describe("window", () => {
   });
 
   test("popups never open a second window", async () => {
-    await runForgeDesktop({ argv: [], environment: { FORGE_DESKTOP_URL: ORIGIN } });
+    await runSuplexDesktop({ argv: [], environment: { SUPLEX_DESKTOP_URL: ORIGIN } });
     const win = fake.FakeWindow.all[0]!;
     const handler = win.webContents.windowOpenHandler!;
     expect(handler({ url: "https://github.com/x" })).toEqual({ action: "deny" });
@@ -154,7 +154,7 @@ describe("window", () => {
 
 describe("lifecycle", () => {
   test("activation and second launches focus the one window; a closed window is recreated", async () => {
-    await runForgeDesktop({ argv: [], environment: { FORGE_DESKTOP_URL: ORIGIN } });
+    await runSuplexDesktop({ argv: [], environment: { SUPLEX_DESKTOP_URL: ORIGIN } });
     const first = fake.FakeWindow.all[0]!;
     fake.app.emit("activate");
     fake.app.emit("activate");
@@ -171,7 +171,7 @@ describe("lifecycle", () => {
 
   test("a second instance quits without touching anything", async () => {
     fake.app.lock = false;
-    await runForgeDesktop({ argv: [], environment: { FORGE_DESKTOP_URL: ORIGIN } });
+    await runSuplexDesktop({ argv: [], environment: { SUPLEX_DESKTOP_URL: ORIGIN } });
     fake.app.lock = true;
     expect(exit).toHaveBeenCalledWith(0);
     expect(fake.FakeWindow.all).toHaveLength(0);
@@ -180,9 +180,9 @@ describe("lifecycle", () => {
 
 describe("remembered targets", () => {
   const OTHER = "https://meiji.tail1234.ts.net:4111";
-  test("the Navigate menu lists every remembered Forge, checks the current one, and switches on click", async () => {
+  test("the Navigate menu lists every remembered Suplex, checks the current one, and switches on click", async () => {
     writeFileSync(targetFile, JSON.stringify({ current: `${OTHER}/`, targets: [`${OTHER}/`, "http://localhost:4211/"] }));
-    await runForgeDesktop({ argv: [], environment: {} });
+    await runSuplexDesktop({ argv: [], environment: {} });
     const win = fake.FakeWindow.all[0]!;
     expect(win.webContents.url).toBe(`${OTHER}/`);
     expect(navigateMenu().filter((entry) => entry.type === "radio").map((entry) => [entry.label, entry.checked])).toEqual([["meiji.tail1234.ts.net:4111", true], ["localhost:4211", false]]);
@@ -192,33 +192,33 @@ describe("remembered targets", () => {
     expect(JSON.parse(readFileSync(targetFile, "utf8")).current).toBe("http://localhost:4211/");
     const external = preventable();
     win.webContents.emit("will-navigate", external, `${OTHER}/tasks`);
-    expect(external.preventDefault, "the previous Forge is now external").toHaveBeenCalled();
+    expect(external.preventDefault, "the previous Suplex is now external").toHaveBeenCalled();
   });
 
-  test("Add a Forge URL shows the connection page without forgetting; Forget this Forge drops the current one", async () => {
+  test("Add a Suplex URL shows the connection page without forgetting; Forget this Suplex drops the current one", async () => {
     writeFileSync(targetFile, JSON.stringify({ current: `${OTHER}/`, targets: [`${OTHER}/`, "http://localhost:4211/"] }));
-    await runForgeDesktop({ argv: [], environment: {} });
+    await runSuplexDesktop({ argv: [], environment: {} });
     const win = fake.FakeWindow.all[0]!;
-    menuItem("Add a Forge URL").click!();
+    menuItem("Add a Suplex URL").click!();
     await vi.waitFor(() => expect(win.webContents.url).toMatch(/connect\.html$/));
     expect(JSON.parse(readFileSync(targetFile, "utf8")).targets).toHaveLength(2);
-    expect(menuItem("Forget this Forge").enabled).toBe(false);
+    expect(menuItem("Forget this Suplex").enabled).toBe(false);
     menuItem("meiji.tail1234.ts.net:4111").click!();
     await vi.waitFor(() => expect(win.webContents.url).toBe(`${OTHER}/`));
-    menuItem("Forget this Forge").click!();
+    menuItem("Forget this Suplex").click!();
     await vi.waitFor(() => expect(win.webContents.url).toMatch(/connect\.html$/));
     expect(JSON.parse(readFileSync(targetFile, "utf8"))).toEqual({ current: null, targets: ["http://localhost:4211/"] });
   });
 
   test("a second launch with --url switches the open window; without one it only focuses", async () => {
-    await runForgeDesktop({ argv: [], environment: { FORGE_DESKTOP_URL: ORIGIN } });
+    await runSuplexDesktop({ argv: [], environment: { SUPLEX_DESKTOP_URL: ORIGIN } });
     const win = fake.FakeWindow.all[0]!;
-    fake.app.emit("second-instance", {}, ["/Applications/Forge.app/Contents/MacOS/Forge", "--url", "--allow-file-access-from-files", "--enable-avfoundation", "http://localhost:4211"]);
+    fake.app.emit("second-instance", {}, ["/Applications/Suplex.app/Contents/MacOS/Suplex", "--url", "--allow-file-access-from-files", "--enable-avfoundation", "http://localhost:4211"]);
     await vi.waitFor(() => expect(win.webContents.url).toBe("http://localhost:4211/"));
-    fake.app.emit("second-instance", {}, ["/Applications/Forge.app/Contents/MacOS/Forge"]);
+    fake.app.emit("second-instance", {}, ["/Applications/Suplex.app/Contents/MacOS/Suplex"]);
     await vi.waitFor(() => expect(win.focused).toBe(2));
     expect(win.webContents.url).toBe("http://localhost:4211/");
-    fake.app.emit("second-instance", {}, ["Forge", "--url=http://forge.example.com"]);
+    fake.app.emit("second-instance", {}, ["Suplex", "--url=http://suplex.example.com"]);
     await vi.waitFor(() => expect(showMessageBox).toHaveBeenCalled());
     expect(showErrorBox, "a second launch must never block the main thread with a modal").not.toHaveBeenCalled();
     expect(fake.FakeWindow.all).toHaveLength(1);
@@ -228,40 +228,40 @@ describe("remembered targets", () => {
 describe("target sources", () => {
   test("an invalid explicit target fails visibly and does not fall through", async () => {
     writeFileSync(targetFile, JSON.stringify({ url: `${ORIGIN}/` }));
-    await runForgeDesktop({ argv: ["--url", "http://forge.example.com"], environment: {} });
-    expect(showErrorBox).toHaveBeenCalledWith("The Forge URL is not valid", expect.stringMatching(/^--url is not valid/));
+    await runSuplexDesktop({ argv: ["--url", "http://suplex.example.com"], environment: {} });
+    expect(showErrorBox).toHaveBeenCalledWith("The Suplex URL is not valid", expect.stringMatching(/^--url is not valid/));
     expect(exit).toHaveBeenCalledWith(1);
     expect(fake.FakeWindow.all).toHaveLength(0);
   });
 
   test("a packaged build accepts loopback http and rejects http elsewhere", async () => {
     fake.app.isPackaged = true;
-    await runForgeDesktop({ argv: [], environment: { FORGE_DESKTOP_URL: "http://localhost:4111" } });
+    await runSuplexDesktop({ argv: [], environment: { SUPLEX_DESKTOP_URL: "http://localhost:4111" } });
     expect(fake.FakeWindow.all[0]!.webContents.url).toBe("http://localhost:4111/");
     fake.app.removeAllListeners();
-    await runForgeDesktop({ argv: [], environment: { FORGE_DESKTOP_URL: "http://forge.example.com" } });
+    await runSuplexDesktop({ argv: [], environment: { SUPLEX_DESKTOP_URL: "http://suplex.example.com" } });
     expect(exit).toHaveBeenCalledWith(1);
   });
 
   test("a corrupt persisted target is deleted and the choice screen appears", async () => {
     writeFileSync(targetFile, "{corrupt");
-    await runForgeDesktop({ argv: [], environment: {} });
+    await runSuplexDesktop({ argv: [], environment: {} });
     expect(fake.FakeWindow.all[0]!.webContents.url).toMatch(/^file:.*pages\/choice\.html$/);
     expect(existsSync(targetFile)).toBe(false);
     expect(exit).not.toHaveBeenCalled();
   });
 
   test("the connection page submission is validated, persisted as an origin, and loaded", async () => {
-    await runForgeDesktop({ argv: [], environment: {} });
+    await runSuplexDesktop({ argv: [], environment: {} });
     const win = fake.FakeWindow.all[0]!;
     await desktop({ action: "choose", mode: "remote" });
     await vi.waitFor(() => expect(win.webContents.url).toMatch(/connect\.html$/));
     const page = win.webContents.url;
     expect(existsSync(targetFile)).toBe(false);
     const bad = preventable();
-    win.webContents.emit("will-navigate", bad, `${page}?url=${encodeURIComponent("http://forge.example.com")}`);
+    win.webContents.emit("will-navigate", bad, `${page}?url=${encodeURIComponent("http://suplex.example.com")}`);
     expect(bad.preventDefault).toHaveBeenCalled();
-    expect(showErrorBox).toHaveBeenCalledWith("The Forge URL is not valid", expect.stringMatching(/localhost/));
+    expect(showErrorBox).toHaveBeenCalledWith("The Suplex URL is not valid", expect.stringMatching(/localhost/));
     expect(win.webContents.url).toBe(page);
     const good = preventable();
     win.webContents.emit("will-navigate", good, `${page}?url=${encodeURIComponent(`${ORIGIN}/auth?invite=abc`)}`);
@@ -283,7 +283,7 @@ describe("local install", () => {
     writeFileSync(join(fake.userData, "data", "fixture.json"), JSON.stringify(value));
   };
   const start = async (): Promise<FakeWindow> => {
-    await runForgeDesktop({ argv: [], environment: { FORGE_DESKTOP_RUNTIME_ROOT: FIXTURE, HOME: process.env.HOME, USER: process.env.USER } });
+    await runSuplexDesktop({ argv: [], environment: { SUPLEX_DESKTOP_RUNTIME_ROOT: FIXTURE, HOME: process.env.HOME, USER: process.env.USER } });
     return fake.FakeWindow.all[0]!;
   };
   const onPage = async (win: FakeWindow, page: string, timeout = 20_000): Promise<void> => {
@@ -305,7 +305,7 @@ describe("local install", () => {
     await onPage(win, "ready");
     const record = JSON.parse(readFileSync(installFile, "utf8")) as { runtimeStamp: string; port: number };
     expect(record).toMatchObject({ runtimeStamp: "0.0.0-fixture", port: 4111 });
-    writeFileSync(installFile, JSON.stringify({ ...record, port: 0 })); // port 0 takes a free one, so the walk never adopts a Forge this machine is already running
+    writeFileSync(installFile, JSON.stringify({ ...record, port: 0 })); // port 0 takes a free one, so the walk never adopts a Suplex this machine is already running
     await desktop({ action: "launch" });
     await onPage(win, "connecting");
     await vi.waitFor(() => expect(win.webContents.url).toMatch(/^http:\/\/127\.0\.0\.1:\d+\/$/), { timeout: 20_000 });

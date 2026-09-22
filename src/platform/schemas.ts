@@ -4,23 +4,23 @@ import { HEALTH_CHECK_IDS, PROVIDER_HARNESS_KINDS } from "./health-contract.js";
 
 const primitive = z.union([z.string(), z.number(), z.boolean()]);
 
-export const ForgeEnvironmentSchema = z.object({
-  FORGE_ACCESS_MODE: z.enum(["tailscale", "local"]).optional(),
-  FORGE_TAILSCALE_EXPOSURE: z.enum(["direct", "serve"]).optional(),
-  FORGE_TAILSCALE_ADDRESS: z.string().min(1).optional(),
-  FORGE_BIND_ADDRESS: z.string().min(1).optional(),
-  FORGE_PORT: z.string().regex(/^\d+$/).optional(),
-  FORGE_DATA_ROOT: z.string().min(1).optional(),
-  FORGE_DATABASE_PATH: z.string().min(1).optional(),
-  FORGE_ARTIFACT_ROOT: z.string().min(1).optional(),
-  FORGE_RUNTIME_ROOT: z.string().min(1).optional(),
-  FORGE_REPOSITORY_ROOT: z.string().min(1).optional(),
-  FORGE_WORKTREE_ROOT: z.string().min(1).optional(),
-  FORGE_INSTALLATION_ID: z.string().regex(/^[a-z0-9][a-z0-9-]{7,63}$/).optional(),
-  FORGE_DEVELOPMENT_AUTO_LOGIN: z.literal("1").optional(),
+export const SuplexEnvironmentSchema = z.object({
+  SUPLEX_ACCESS_MODE: z.enum(["tailscale", "local"]).optional(),
+  SUPLEX_TAILSCALE_EXPOSURE: z.enum(["direct", "serve"]).optional(),
+  SUPLEX_TAILSCALE_ADDRESS: z.string().min(1).optional(),
+  SUPLEX_BIND_ADDRESS: z.string().min(1).optional(),
+  SUPLEX_PORT: z.string().regex(/^\d+$/).optional(),
+  SUPLEX_DATA_ROOT: z.string().min(1).optional(),
+  SUPLEX_DATABASE_PATH: z.string().min(1).optional(),
+  SUPLEX_ARTIFACT_ROOT: z.string().min(1).optional(),
+  SUPLEX_RUNTIME_ROOT: z.string().min(1).optional(),
+  SUPLEX_REPOSITORY_ROOT: z.string().min(1).optional(),
+  SUPLEX_WORKTREE_ROOT: z.string().min(1).optional(),
+  SUPLEX_INSTALLATION_ID: z.string().regex(/^[a-z0-9][a-z0-9-]{7,63}$/).optional(),
+  SUPLEX_DEVELOPMENT_AUTO_LOGIN: z.literal("1").optional(),
 }).passthrough();
 
-export const ForgeConfigSchema = z.object({
+export const SuplexConfigSchema = z.object({
   accessMode: z.enum(["tailscale", "local"]),
   tailscaleExposure: z.enum(["direct", "serve"]),
   bindAddress: z.string().min(1),

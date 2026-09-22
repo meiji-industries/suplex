@@ -66,7 +66,7 @@ export function ProviderSettingsView(): ReactElement {
       setAddOpen(false);
       await load(true);
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "Forge could not add the provider.");
+      setError(reason instanceof Error ? reason.message : "Suplex could not add the provider.");
     } finally {
       setBusy(false);
     }
@@ -78,11 +78,11 @@ export function ProviderSettingsView(): ReactElement {
       await readJson(`/api/admin/provider-instances/${encodeURIComponent(id)}`, { method: "DELETE" });
       await load();
     } catch (reason) {
-      setError(reason instanceof Error ? reason.message : "Forge could not delete the provider.");
+      setError(reason instanceof Error ? reason.message : "Suplex could not delete the provider.");
     }
   };
   const loginButton = (key: string, rowLabel: string, url: string): ReactElement => (
-    <Button size="sm" variant="outline" aria-label={`Login to ${rowLabel}`} disabled={loginPending !== null} onClick={() => void startLogin(key, rowLabel, url).catch(reason => setError(reason instanceof Error ? reason.message : "Forge could not open a sign-in pane."))}>{loginPending === key ? "Opening" : "Login"}</Button>
+    <Button size="sm" variant="outline" aria-label={`Login to ${rowLabel}`} disabled={loginPending !== null} onClick={() => void startLogin(key, rowLabel, url).catch(reason => setError(reason instanceof Error ? reason.message : "Suplex could not open a sign-in pane."))}>{loginPending === key ? "Opening" : "Login"}</Button>
   );
   return <SettingsLayout title="Providers" companyId={companyId} backHref={withCompany("/", companyId)} activeHref={withCompany("/admin/providers", companyId)}>
     <SettingsContent>
@@ -98,7 +98,7 @@ export function ProviderSettingsView(): ReactElement {
           <SettingsTableCell className="text-muted-foreground">System</SettingsTableCell>
           <SettingsTableCell>{provider.status === "configured"
             ? <Badge variant="secondary">Configured</Badge>
-            : <div className="space-y-1"><Badge variant="destructive">Not installed</Badge><p className="text-xs text-muted-foreground">Set <code>{{ opencode: "FORGE_OPENCODE_COMMAND", devin: "FORGE_DEVIN_COMMAND", codex: "FORGE_CODEX_COMMAND", "claude-code": "FORGE_CLAUDE_COMMAND" }[provider.id]}</code>.</p></div>}</SettingsTableCell>
+            : <div className="space-y-1"><Badge variant="destructive">Not installed</Badge><p className="text-xs text-muted-foreground">Set <code>{{ opencode: "SUPLEX_OPENCODE_COMMAND", devin: "SUPLEX_DEVIN_COMMAND", codex: "SUPLEX_CODEX_COMMAND", "claude-code": "SUPLEX_CLAUDE_COMMAND" }[provider.id]}</code>.</p></div>}</SettingsTableCell>
           <SettingsTableCell>{provider.modelCount}</SettingsTableCell>
           <SettingsTableCell><ConnectionBadge connection={provider.connection} /></SettingsTableCell>
           <SettingsTableCell>{provider.connection.status !== "connected" ? loginButton(`provider:${provider.id}`, provider.label, `/api/admin/providers/${encodeURIComponent(provider.id)}/login`) : null}</SettingsTableCell>
@@ -122,7 +122,7 @@ export function ProviderSettingsView(): ReactElement {
      <AlertDialog open={deleteTarget !== null} onOpenChange={open => { if (!open) setDeleteTarget(null); }}><AlertDialogContent><AlertDialogHeader><AlertDialogTitle>Delete {deleteTarget?.label}?</AlertDialogTitle><AlertDialogDescription>This deletes the local provider configuration. Change agent profiles and project provider restrictions that use it first.</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel>Cancel</AlertDialogCancel><AlertDialogAction onClick={() => { if (deleteTarget) void remove(deleteTarget.id); }}>Delete instance</AlertDialogAction></AlertDialogFooter></AlertDialogContent></AlertDialog>
      <Dialog open={addOpen} onOpenChange={open => { if (busy) return; setAddOpen(open); if (!open) setLabel(""); }}>
       <DialogContent showCloseButton={!busy}>
-       <DialogHeader><DialogTitle>Add Provider</DialogTitle><DialogDescription>Forge creates a local Claude Code instance with its own sign-in.</DialogDescription></DialogHeader>
+       <DialogHeader><DialogTitle>Add Provider</DialogTitle><DialogDescription>Suplex creates a local Claude Code instance with its own sign-in.</DialogDescription></DialogHeader>
        <form onSubmit={event => { event.preventDefault(); void create(); }}>
         <FieldGroup>
          <Field><FieldLabel htmlFor="provider-instance-label">Name</FieldLabel><Input id="provider-instance-label" autoFocus disabled={busy} value={label} onChange={event => setLabel(event.target.value)} placeholder="Work laptop" required /></Field>

@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { AgentDeliveryService } from "../../src/delivery/agent-delivery.js";
 import { AuthService } from "../../src/identity/auth.js";
 import { DeliveryOperations, type DeliveryGithubPort } from "../../src/delivery/operations.js";
-import { ForgeDatabase } from "../../src/platform/database.js";
+import { SuplexDatabase } from "../../src/platform/database.js";
 import { ExternalAgentService } from "../../src/identity/external-agents.js";
 import { ProjectService, type LocalRepositoryAdapter } from "../../src/projects/projects.js";
 import { TaskService } from "../../src/tasks/tasks.js";
@@ -55,7 +55,7 @@ export interface TrainTask {
  * only what GitHub reports.
  */
 export async function mergeTrainFixture(count = 3) {
-  const directory = await mkdtemp(join(tmpdir(), "forge-merge-train-"));
+  const directory = await mkdtemp(join(tmpdir(), "suplex-merge-train-"));
   cleanups.push(async () => { await rm(directory, { recursive: true, force: true }); });
   const bare = join(directory, "origin.git");
   const repo = join(directory, "repositories", "train");
@@ -73,7 +73,7 @@ export async function mergeTrainFixture(count = 3) {
   await git(repo, ["commit", "-m", "base"]);
   await git(repo, ["push", "origin", "main"]);
 
-  const database = new ForgeDatabase(join(directory, "forge.sqlite"));
+  const database = new SuplexDatabase(join(directory, "suplex.sqlite"));
   cleanups.push(async () => database.close());
   const config = createTestConfig(directory, { repositoryRoot: join(directory, "repositories"), worktreeRoot: worktrees, developmentAutoLogin: true });
   const auth = new AuthService(database, config);
@@ -107,7 +107,7 @@ export async function mergeTrainFixture(count = 3) {
     const created = await tasks.createTaskForAgentApi(principal, { projectId: project.id, title: `Train task ${index + 1}`, idempotencyKey: `train-task-${index + 1}`, images: [], advisorProfileIds: {} });
     const taskId = created.task.id;
     // The agent-managed train delivers merged pull requests, so an open pull request never completes the task.
-    database.authTransaction(db => db.prepare("UPDATE forge_task_controls SET delivery_target = 'merged' WHERE task_id = ?").run(taskId));
+    database.authTransaction(db => db.prepare("UPDATE suplex_task_controls SET delivery_target = 'merged' WHERE task_id = ?").run(taskId));
     store.start(taskId);
     const control = store.get(taskId);
     const worktree = await prepareTaskWorktree({ taskId, repositoryPath: repo, worktreeRoot: worktrees, branch: control.deliveryIntent.headBranch, startingSha: control.deliveryIntent.baselineSha });
@@ -176,7 +176,7 @@ export async function mergeTrainFixture(count = 3) {
   const delivery = new DeliveryOperations(store, port);
   /**
    * The Coordinator's own acceptance of the current head: it inspects the delivery range and publishes
-   * it through Forge. Nothing else may write acceptedDelivery, so the agent can never merge an
+   * it through Suplex. Nothing else may write acceptedDelivery, so the agent can never merge an
    * unaccepted head.
    */
   const acceptHead = async (taskId: string): Promise<string> => {
@@ -188,7 +188,7 @@ export async function mergeTrainFixture(count = 3) {
   };
   for (const task of train) {
     await acceptHead(task.id);
-    // Forge discovers and adopts each pull request from GitHub, exactly as the delivery workflow does.
+    // Suplex discovers and adopts each pull request from GitHub, exactly as the delivery workflow does.
     await delivery.observe(task.id);
   }
   const agentDelivery = new AgentDeliveryService({ database, tasks, store, delivery, auth });
@@ -228,7 +228,7 @@ export async function mergeTrainFixture(count = 3) {
   const dependOn = (task: TrainTask, dependencies: TrainTask[]): void => {
     tasks.setAgentApiTaskDependencies(principal, task.id, dependencies.map(dependency => dependency.id));
   };
-  const auditCount = (action: string): number => database.authQuery(db => (db.prepare("SELECT COUNT(*) AS count FROM forge_audit_events WHERE action = ?").get(action) as { count: number }).count);
+  const auditCount = (action: string): number => database.authQuery(db => (db.prepare("SELECT COUNT(*) AS count FROM suplex_audit_events WHERE action = ?").get(action) as { count: number }).count);
   const provenance = (taskId: string) => agentDelivery.provenance(principal, taskId);
 
   return { directory, bare, repo, worktrees, database, config, auth, adminId, company, project, projects, tasks, externalAgent, principal, credential, store, delivery, agentDelivery, port, pulls, train, merges, acceptHead, repairBranch, pushUnacceptedCommit, approveAndMerge, dependOn, blockOn, auditCount, provenance };

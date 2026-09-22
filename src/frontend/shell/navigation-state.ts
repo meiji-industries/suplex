@@ -19,7 +19,7 @@ export function navigate(href: string): void {
   }
   if (`${url.pathname}${url.search}${url.hash}` === `${window.location.pathname}${window.location.search}${window.location.hash}`) return;
   window.history.pushState({}, "", `${url.pathname}${url.search}${url.hash}`);
-  window.dispatchEvent(new Event("forge:navigate"));
+  window.dispatchEvent(new Event("suplex:navigate"));
 }
 
 export function shouldNavigate(event: MouseEvent, anchor: HTMLAnchorElement): boolean {

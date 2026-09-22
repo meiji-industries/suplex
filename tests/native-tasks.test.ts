@@ -4,7 +4,7 @@ import { join } from "node:path";
 import { afterEach, expect, test } from "vitest";
 import { AuthService } from "../src/identity/auth.js";
 import { createTestConfig } from "../src/platform/config.js";
-import { ForgeDatabase } from "../src/platform/database.js";
+import { SuplexDatabase } from "../src/platform/database.js";
 import { TaskService, type TaskServicePorts } from "../src/tasks/tasks.js";
 import { prepareIssueContext, taskTracker } from "../src/tasks/issue-context.js";
 import type { IssueAssociation } from "../src/tasks/issue-association.js";
@@ -40,17 +40,17 @@ test("Bitbucket rejects ready and merge targets on both create and backlog edits
 afterEach(async () => { for (const cleanup of cleanups.splice(0)) await cleanup(); });
 
 async function fixture(ports: TaskServicePorts = {}) {
-  const directory = await mkdtemp(join(tmpdir(), "forge-native-intake-"));
+  const directory = await mkdtemp(join(tmpdir(), "suplex-native-intake-"));
   const config = createTestConfig(directory);
-  const database = new ForgeDatabase(config.databasePath);
+  const database = new SuplexDatabase(config.databasePath);
   cleanups.push(async () => { database.close(); await rm(directory, { recursive: true, force: true }); });
   const auth = new AuthService(database, config);
   const stamp = new Date().toISOString();
   database.authTransaction(db => {
-    for (const id of ["alice", "bob"]) db.prepare("INSERT INTO forge_users (id, display_name, username, role, status, created_at, updated_at) VALUES (?, ?, ?, 'member', 'active', ?, ?)").run(id, id, id, stamp, stamp);
-    db.prepare("INSERT INTO forge_companies (id, name, status, issue_code, created_at) VALUES ('company', 'Company', 'active', 'TEST', ?)").run(stamp);
-    db.prepare("INSERT INTO forge_memberships (user_id, company_id, created_at) VALUES ('alice', 'company', ?)").run(stamp);
-    db.prepare("INSERT INTO forge_projects (id, company_id, name, repository_path, worktree_root, repository_identity, base_branch, setup_command, verification_command, created_at, updated_at) VALUES ('project', 'company', 'Project', ?, ?, 'owner/repo', 'main', '', '', ?, ?)").run(directory, join(directory, "worktrees"), stamp, stamp);
+    for (const id of ["alice", "bob"]) db.prepare("INSERT INTO suplex_users (id, display_name, username, role, status, created_at, updated_at) VALUES (?, ?, ?, 'member', 'active', ?, ?)").run(id, id, id, stamp, stamp);
+    db.prepare("INSERT INTO suplex_companies (id, name, status, issue_code, created_at) VALUES ('company', 'Company', 'active', 'TEST', ?)").run(stamp);
+    db.prepare("INSERT INTO suplex_memberships (user_id, company_id, created_at) VALUES ('alice', 'company', ?)").run(stamp);
+    db.prepare("INSERT INTO suplex_projects (id, company_id, name, repository_path, worktree_root, repository_identity, base_branch, setup_command, verification_command, created_at, updated_at) VALUES ('project', 'company', 'Project', ?, ?, 'owner/repo', 'main', '', '', ?, ?)").run(directory, join(directory, "worktrees"), stamp, stamp);
   });
   const project: Project = { id: "project", companyId: "company", name: "Project", repositoryPath: directory, worktreeRoot: join(directory, "worktrees"), repository: "owner/repo", baseBranch: "main", setupCommand: "pnpm install", verificationCommand: "pnpm test", rootProfileId: "profile_native_root", workerProfileId: "profile_native_worker", createdAt: stamp, updatedAt: stamp };
   let captures = 0;
@@ -85,12 +85,12 @@ test("issue association preserves authored scope and captures refreshed context 
   expect(new TaskControlStore(f.database).context(task.id).images).toEqual([{ artifactId: stored[0]?.artifactId, filename: image.filename }]);
   const artifact = new TaskControlStore(f.database).image(task.id, stored[0]!.artifactId);
   expect(await new ArtifactStore(imageRoot).getArtifact(artifact)).toEqual(image.bytes);
-  const context = () => f.database.authQuery(db => db.prepare("SELECT issue_context_json FROM forge_tasks WHERE id = ?").get(task.id));
+  const context = () => f.database.authQuery(db => db.prepare("SELECT issue_context_json FROM suplex_tasks WHERE id = ?").get(task.id));
   const before = context();
   expect(JSON.stringify(before)).toContain(text);
   expect(JSON.stringify(before)).toContain("PDF attachment was not loaded");
   expect(JSON.stringify(before)).not.toContain(image.bytes.toString("base64"));
-  f.database.authTransaction(db => db.prepare("INSERT INTO forge_task_sessions (id, task_id, kind, generation, is_current, native_session_id, lifecycle, created_at, updated_at) VALUES ('native-root', ?, 'root', 1, 1, 'native-id', 'live', 'now', 'now')").run(task.id));
+  f.database.authTransaction(db => db.prepare("INSERT INTO suplex_task_sessions (id, task_id, kind, generation, is_current, native_session_id, lifecycle, created_at, updated_at) VALUES ('native-root', ?, 'root', 1, 1, 'native-id', 'live', 'now', 'now')").run(task.id));
   await f.tasks.setTaskIssue("alice", task.id, { ...issue, id: "11", key: "APP-11", url: "https://client.atlassian.net/browse/APP-11" });
   await prepareIssueContext(f.database, task.id, issueTracker);
   expect(context()).toEqual(before);
@@ -106,9 +106,9 @@ test("project provider policy selects eligible defaults and rejects every disall
   const f = await fixture();
   f.project.providerPolicy = { allowedProviders: ["claude-code"], allowedInstanceIds: ["dedicated"] };
   f.database.authTransaction(db => {
-    db.prepare("INSERT INTO forge_provider_instances (id, provider, label, home_directory, created_at, updated_at) VALUES ('dedicated', 'claude-code', 'Client', ?, 'now', 'now')").run(join(f.directory, "client"));
-    for (const role of ["root", "worker"]) db.prepare("INSERT INTO forge_profiles (id, name, role, avatar_seed, provider, provider_instance_id, model, reasoning_level, service_tier, created_at, updated_at) VALUES (?, ?, ?, 'seed', 'claude-code', 'dedicated', 'sonnet', 'high', 'default', 'now', 'now')").run(`client-${role}`, role, role);
-    db.prepare("INSERT INTO forge_profiles (id, name, role, avatar_seed, provider, model, reasoning_level, service_tier, created_at, updated_at) VALUES ('global-claude', 'Global', 'root', 'seed', 'claude-code', 'sonnet', 'high', 'default', 'now', 'now')").run();
+    db.prepare("INSERT INTO suplex_provider_instances (id, provider, label, home_directory, created_at, updated_at) VALUES ('dedicated', 'claude-code', 'Client', ?, 'now', 'now')").run(join(f.directory, "client"));
+    for (const role of ["root", "worker"]) db.prepare("INSERT INTO suplex_profiles (id, name, role, avatar_seed, provider, provider_instance_id, model, reasoning_level, service_tier, created_at, updated_at) VALUES (?, ?, ?, 'seed', 'claude-code', 'dedicated', 'sonnet', 'high', 'default', 'now', 'now')").run(`client-${role}`, role, role);
+    db.prepare("INSERT INTO suplex_profiles (id, name, role, avatar_seed, provider, model, reasoning_level, service_tier, created_at, updated_at) VALUES ('global-claude', 'Global', 'root', 'seed', 'claude-code', 'sonnet', 'high', 'default', 'now', 'now')").run();
   });
   const { task } = await f.tasks.createTask("alice", "company", { ...f.input, startImmediately: false, workflow: "independent_review" });
   for (const profile of [task.rootProfile, task.workerProfile, task.advisorProfiles.reviewer]) expect(profile).toMatchObject({ providerInstanceId: "dedicated", instanceHomeDirectory: join(f.directory, "client") });
@@ -126,9 +126,9 @@ test("creation persists active intent without a planning projection or running h
   const result = await f.tasks.createTask("alice", "company", f.input);
   expect(result.created).toBe(true);
   expect(result.task).toMatchObject({ status: "active", issueKey: "TEST-1", rootProfile: { provider: "codex" }, workerProfile: { reasoningLevel: "max" }, configuration: { setupCommand: "pnpm install", verificationCommand: "pnpm test" } });
-  expect(f.database.authQuery(db => db.prepare("SELECT name FROM sqlite_master WHERE name = 'forge_issue_projections'").all())).toEqual([]);
+  expect(f.database.authQuery(db => db.prepare("SELECT name FROM sqlite_master WHERE name = 'suplex_issue_projections'").all())).toEqual([]);
   f.database.close();
-  const reopened = new ForgeDatabase(f.config.databasePath);
+  const reopened = new SuplexDatabase(f.config.databasePath);
   try { expect(new TaskControlStore(reopened).get(result.task.id).status).toBe("active"); } finally { reopened.close(); }
 });
 
@@ -151,9 +151,9 @@ test("concurrent identical creation produces one task, one control and one issue
 
 test("revoked scope during external capture prevents creation", async () => {
   const f = await fixture();
-  f.duringCapture(() => f.database.authTransaction(db => db.prepare("DELETE FROM forge_memberships WHERE user_id = 'alice'").run()));
+  f.duringCapture(() => f.database.authTransaction(db => db.prepare("DELETE FROM suplex_memberships WHERE user_id = 'alice'").run()));
   await expect(f.tasks.createTask("alice", "company", f.input)).rejects.toMatchObject({ statusCode: 404 });
-  expect(f.database.authQuery(db => db.prepare("SELECT * FROM forge_tasks").all())).toEqual([]);
+  expect(f.database.authQuery(db => db.prepare("SELECT * FROM suplex_tasks").all())).toEqual([]);
 });
 
 test("backlog starts explicitly and active tasks cannot be archived", async () => {
@@ -195,7 +195,7 @@ test("task recency follows control changes without a task-list projection", asyn
   const first = await f.tasks.createTask("alice", "company", f.input);
   await f.tasks.createTask("alice", "company", { ...f.input, idempotencyKey: "native-request-2" });
   const observedAt = "2099-01-01T00:00:00.000Z";
-  f.database.authTransaction(db => db.prepare("UPDATE forge_task_controls SET updated_at = ? WHERE task_id = ?").run(observedAt, first.task.id));
+  f.database.authTransaction(db => db.prepare("UPDATE suplex_task_controls SET updated_at = ? WHERE task_id = ?").run(observedAt, first.task.id));
   expect(f.tasks.listTasks("alice")[0]).toMatchObject({ id: first.task.id, updatedAt: observedAt });
 });
 
@@ -217,7 +217,7 @@ test("editing the objective checks backlog ownership in the same transaction as 
 test("editing a backlog task saves its profiles, workflow, delivery target and checks", async () => {
   const f = await fixture();
   const stamp = new Date().toISOString();
-  f.database.authTransaction(db => db.prepare("INSERT INTO forge_profiles (id, name, role, avatar_seed, provider, model, reasoning_level, service_tier, created_at, updated_at) VALUES ('profile_review', 'Review', 'root', 'review', 'claude-code', 'claude-opus-5', 'high', 'default', ?, ?)").run(stamp, stamp));
+  f.database.authTransaction(db => db.prepare("INSERT INTO suplex_profiles (id, name, role, avatar_seed, provider, model, reasoning_level, service_tier, created_at, updated_at) VALUES ('profile_review', 'Review', 'root', 'review', 'claude-code', 'claude-opus-5', 'high', 'default', ?, ?)").run(stamp, stamp));
   const { task } = await f.tasks.createTask("alice", "company", { ...f.input, startImmediately: false });
   const edited = f.tasks.updateTaskDetails("alice", task.id, {
     title: "Edited title", description: "Edited objective", rootProfileId: "profile_review", workerProfileId: "profile_native_worker",
@@ -252,7 +252,7 @@ test("editing to pull request repair needs a pull request source and forces its 
   const { task } = await f.tasks.createTask("alice", "company", { ...f.input, startImmediately: false });
   expect(task.configuration.source).toBeNull();
   expect(() => f.tasks.updateTaskDetails("alice", task.id, { workflow: "refine_pull_request" })).toThrow("Select a pull request source");
-  f.database.authTransaction(db => db.prepare("UPDATE forge_tasks SET configuration_json = json_set(configuration_json, '$.source', json(?)) WHERE id = ?").run(JSON.stringify({ kind: "pull_request", number: 7 }), task.id));
+  f.database.authTransaction(db => db.prepare("UPDATE suplex_tasks SET configuration_json = json_set(configuration_json, '$.source', json(?)) WHERE id = ?").run(JSON.stringify({ kind: "pull_request", number: 7 }), task.id));
   const repaired = f.tasks.updateTaskDetails("alice", task.id, { workflow: "refine_pull_request", visualEvidence: "capture" });
   expect(repaired).toMatchObject({ workflow: "refine_pull_request", deliveryTarget: "merged", configuration: { runProjectTests: true, visualEvidence: "capture" } });
   expect(() => f.tasks.updateTaskDetails("alice", task.id, { deliveryTarget: "remote_branch" })).toThrow("merged pull request");

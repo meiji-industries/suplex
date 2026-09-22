@@ -64,7 +64,7 @@ test("a missing CLI reports not installed with the documented install command", 
   expect(JSON.stringify(result)).not.toMatch(/\/private\/bin|ENOENT/);
 });
 
-test("a present CLI with an unreachable API reports Forge cannot reach Herdr", async () => {
+test("a present CLI with an unreachable API reports Suplex cannot reach Herdr", async () => {
   const command = runner(["herdr 0.9.0\n", "status: stopped\n"]);
   const result = await checkHerdrReadiness({
     runCommand: command.run,
@@ -72,7 +72,7 @@ test("a present CLI with an unreachable API reports Forge cannot reach Herdr", a
   });
 
   expect(result.status).toBe("unhealthy");
-  expect(result.summary).toBe("Forge cannot reach Herdr");
+  expect(result.summary).toBe("Suplex cannot reach Herdr");
   expect(result.remedy).toBe("herdr");
   expect(result.details).toMatchObject({ apiReachable: false, cliPresent: true, failure: "api-unreachable" });
   expect(JSON.stringify(result)).not.toContain("/private/");
@@ -127,12 +127,12 @@ test("a reachable API with a failed status probe warns with incomplete diagnosti
   expect(JSON.stringify(result)).not.toContain("/private/");
 });
 
-test("an ambiguous probe reports Forge could not check Herdr", async () => {
+test("an ambiguous probe reports Suplex could not check Herdr", async () => {
   const timedOut: HerdrReadinessCommand = async () => ({ stdout: "", stderr: "", exitCode: null, timedOut: true });
   const result = await checkHerdrReadiness({ runCommand: timedOut, listWorkspaces: async () => { throw new Error("unreachable"); } });
 
   expect(result.status).toBe("warning");
-  expect(result.summary).toBe("Forge could not check Herdr");
+  expect(result.summary).toBe("Suplex could not check Herdr");
   expect(result.details).toMatchObject({ apiReachable: false, failure: "probe-ambiguous" });
 });
 
@@ -144,7 +144,7 @@ test("a timed-out version probe with a reachable API still reports diagnostics",
   const result = await checkHerdrReadiness({ runCommand: command, listWorkspaces: async () => [] });
 
   expect(result.status).toBe("warning");
-  expect(result.summary).toBe("Forge could not check Herdr");
+  expect(result.summary).toBe("Suplex could not check Herdr");
   expect(result.details).toMatchObject({ apiReachable: true, clientVersion: "unknown", privateProtocolCompatibility: "compatible" });
 });
 
@@ -156,7 +156,7 @@ test("Herdr failures do not block host readiness", async () => {
     summary: status,
     details: {},
   });
-  const snapshot = await inspectHostHealth(createTestConfig("/tmp/forge-health-test"), {
+  const snapshot = await inspectHostHealth(createTestConfig("/tmp/suplex-health-test"), {
     database: async () => check("database", "healthy"),
     artifactRoot: async () => check("artifact-root", "healthy"),
     herdrReadiness: async () => check("herdr-readiness", "unhealthy"),

@@ -42,7 +42,7 @@ export class DesktopUpdater {
   async check(manual: boolean): Promise<void> {
     this.manualCheck = manual;
     if (!this.configured) {
-      if (manual) await this.dialog.showMessageBox({ type: "info", title: "Desktop app update", message: "Desktop app updates are not configured.", detail: "Install a new Forge.app build to update the desktop app.", buttons: ["Continue"] });
+      if (manual) await this.dialog.showMessageBox({ type: "info", title: "Desktop app update", message: "Desktop app updates are not configured.", detail: "Install a new Suplex.app build to update the desktop app.", buttons: ["Continue"] });
       return;
     }
     this.activeAction = "check";
@@ -50,7 +50,7 @@ export class DesktopUpdater {
   }
 
   private async offerDownload(info: UpdateInfo): Promise<void> {
-    const answer = await this.dialog.showMessageBox({ type: "info", title: "Desktop app update", message: `Forge desktop app ${info.version} is available.`, buttons: ["Start download", "Continue"], defaultId: 0, cancelId: 1 });
+    const answer = await this.dialog.showMessageBox({ type: "info", title: "Desktop app update", message: `Suplex desktop app ${info.version} is available.`, buttons: ["Start download", "Continue"], defaultId: 0, cancelId: 1 });
     if (answer.response === 0) {
       this.activeAction = "download";
       try { await this.updater.downloadUpdate(); } catch (error) { await this.showError("download", error); } finally { this.activeAction = undefined; }
@@ -58,16 +58,16 @@ export class DesktopUpdater {
   }
 
   private async offerRestart(info: UpdateInfo): Promise<void> {
-    const answer = await this.dialog.showMessageBox({ type: "info", title: "Desktop app update", message: `Forge desktop app ${info.version} was downloaded.`, detail: "Restart the desktop app to apply the update. A Forge host started by this app restarts too; an independent host is not changed.", buttons: ["Restart Forge", "Continue"], defaultId: 0, cancelId: 1 });
+    const answer = await this.dialog.showMessageBox({ type: "info", title: "Desktop app update", message: `Suplex desktop app ${info.version} was downloaded.`, detail: "Restart the desktop app to apply the update. A Suplex host started by this app restarts too; an independent host is not changed.", buttons: ["Restart Suplex", "Continue"], defaultId: 0, cancelId: 1 });
     if (answer.response === 0) this.updater.quitAndInstall(false, true);
   }
 
   private async showCurrent(): Promise<void> {
-    await this.dialog.showMessageBox({ type: "info", title: "Desktop app update", message: "The Forge desktop app is current.", buttons: ["Continue"] });
+    await this.dialog.showMessageBox({ type: "info", title: "Desktop app update", message: "The Suplex desktop app is current.", buttons: ["Continue"] });
   }
 
   private async showError(action: "check" | "download" | "install", error: unknown): Promise<void> {
-    const message = action === "check" ? "Forge could not check the desktop app update." : action === "download" ? "Forge could not download the desktop app update." : "Forge could not install the desktop app update.";
+    const message = action === "check" ? "Suplex could not check the desktop app update." : action === "download" ? "Suplex could not download the desktop app update." : "Suplex could not install the desktop app update.";
     await this.dialog.showMessageBox({ type: "error", title: "Desktop app update", message, detail: error instanceof Error ? error.message : String(error), buttons: ["Continue"] });
   }
 }

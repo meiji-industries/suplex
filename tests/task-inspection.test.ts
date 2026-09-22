@@ -133,8 +133,8 @@ test("task diffs fetch the observed base commit and ignore stale local refs and 
     await writeFile(join(cwd, "task.txt"), "task only\n");
     await commitGitFixture(cwd, "Task", ["task.txt"]);
     await git(join(cwd, ".."), ["clone", bare, publisher]);
-    await git(publisher, ["config", "user.name", "Forge"]);
-    await git(publisher, ["config", "user.email", "forge@example.invalid"]);
+    await git(publisher, ["config", "user.name", "Suplex"]);
+    await git(publisher, ["config", "user.email", "suplex@example.invalid"]);
     await writeFile(join(publisher, "published.txt"), "new published commit\n");
     await git(publisher, ["add", "published.txt"]);
     await git(publisher, ["commit", "-m", "Published"]);

@@ -14,5 +14,5 @@ test("an unavailable client ID cannot block an ordinary API mutation", async () 
   await expect(readJson<{ ok: boolean }>("/api/tasks/task-1/start", { method: "POST", body: "{}" })).resolves.toEqual({ ok: true });
   expect(fetchMock).toHaveBeenCalledTimes(1);
   const init = fetchMock.mock.calls[0]?.[1];
-  expect(init?.headers).not.toHaveProperty("X-Forge-Tab-Id");
+  expect(init?.headers).not.toHaveProperty("X-Suplex-Tab-Id");
 });

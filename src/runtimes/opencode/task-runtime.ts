@@ -43,16 +43,16 @@ export class OpenCodeTaskRuntime implements TaskHarness {
     });
     const client = openCodeServerClient(reference);
     if (scope.role !== "worker") {
-      const bridgeName = scope.role === "root" ? "forge_root" : "forge_advisor";
+      const bridgeName = scope.role === "root" ? "suplex_root" : "suplex_advisor";
       const bridgeStatus = (await client.mcpStatus(scope.directory))[bridgeName];
-      if (bridgeStatus?.status !== "connected") throw new Error(`Forge ${scope.role === "root" ? "Coordinator" : "Advisor report"} bridge is unavailable: ${bridgeStatus?.error ?? bridgeStatus?.status ?? "not configured"}`);
+      if (bridgeStatus?.status !== "connected") throw new Error(`Suplex ${scope.role === "root" ? "Coordinator" : "Advisor report"} bridge is unavailable: ${bridgeStatus?.error ?? bridgeStatus?.status ?? "not configured"}`);
     }
     if (nativeSessionId) return (await client.getSession(nativeSessionId, scope.directory)).id;
     const model = openCodeModel(scope.profile.modelID);
     const native = await client.createSession({
       title: taskSessionTitle(scope), directory: scope.directory,
       model: { providerID: model.providerID, id: model.modelID, variant: scope.profile.reasoningEffort },
-      agent: `forge-${scope.role}`,
+      agent: `suplex-${scope.role}`,
     });
     return native.id;
   }

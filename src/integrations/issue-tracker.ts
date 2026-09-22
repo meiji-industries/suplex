@@ -45,7 +45,7 @@ export function jiraEvidenceDocument(text: string) {
 }
 
 async function gh(path: string, body?: unknown, method = "POST"): Promise<unknown> {
-  const directory = body === undefined ? undefined : await mkdtemp(join(tmpdir(), "forge-issue-"));
+  const directory = body === undefined ? undefined : await mkdtemp(join(tmpdir(), "suplex-issue-"));
   try {
     const args = ["api", path];
     if (directory) {
@@ -53,7 +53,7 @@ async function gh(path: string, body?: unknown, method = "POST"): Promise<unknow
       await writeFile(file, JSON.stringify(body), { mode: 0o600 });
       args.push("--method", method, "--input", file);
     }
-    const result = await exec(process.env.FORGE_GH_COMMAND ?? "gh", args, { timeout: 30_000, maxBuffer: 8 * 1024 * 1024 });
+    const result = await exec(process.env.SUPLEX_GH_COMMAND ?? "gh", args, { timeout: 30_000, maxBuffer: 8 * 1024 * 1024 });
     return JSON.parse(result.stdout);
   } catch (error) {
     const failure = z.object({ stderr: z.string() }).safeParse(error);
@@ -65,7 +65,7 @@ async function gh(path: string, body?: unknown, method = "POST"): Promise<unknow
 }
 
 export class IssueTracker {
-  constructor(private readonly connection: TrackerConnection, private readonly request: typeof fetch = fetch, private readonly github: typeof gh = gh, private readonly githubCommand: (args: string[]) => Promise<{ stdout: string; stderr: string }> = args => exec(process.env.FORGE_GH_COMMAND ?? "gh", args, { timeout: 30_000, maxBuffer: 8 * 1024 * 1024 })) {}
+  constructor(private readonly connection: TrackerConnection, private readonly request: typeof fetch = fetch, private readonly github: typeof gh = gh, private readonly githubCommand: (args: string[]) => Promise<{ stdout: string; stderr: string }> = args => exec(process.env.SUPLEX_GH_COMMAND ?? "gh", args, { timeout: 30_000, maxBuffer: 8 * 1024 * 1024 })) {}
 
   private jiraCredentials() {
     if (this.connection.kind !== "jira") throw new Error("The project does not use Jira");
@@ -127,7 +127,7 @@ export class IssueTracker {
   async upload(issue: IssueAssociation, filename: string, bytes: Buffer, mimeType: string, beforeWrite: () => Promise<void> = async () => {}): Promise<string> {
     this.check(issue);
     const hash = createHash("sha256").update(bytes).digest("hex");
-    if (!new RegExp(`^forge-[A-Za-z0-9_-]+-${hash}\\.[a-z0-9]+$`).test(filename) || !bytes.length || bytes.length > MAX_TASK_IMAGE_BYTES) throw new Error("Invalid task evidence attachment");
+    if (!new RegExp(`^suplex-[A-Za-z0-9_-]+-${hash}\\.[a-z0-9]+$`).test(filename) || !bytes.length || bytes.length > MAX_TASK_IMAGE_BYTES) throw new Error("Invalid task evidence attachment");
     const actor = await this.actor();
     if (issue.kind === "jira") {
       const { origin, authorization } = this.jiraCredentials();
@@ -145,13 +145,13 @@ export class IssueTracker {
       if (createHash("sha256").update(uploaded).digest("hex") !== hash) throw new Error("The Jira attachment does not match the task evidence");
       return new URL(`/secure/attachment/${existing.id}/${encodeURIComponent(filename)}`, origin).href;
     }
-    const marker = `[Forge attachment ${filename}]`;
+    const marker = `[Suplex attachment ${filename}]`;
     const find = async () => (await this.comments(issue)).find(row => this.owned(row, actor) && issueText(row.body).includes(marker));
     let existing = await find();
     if (!existing) {
       const capability = await this.githubCommand(["issue", "comment", "--help"]);
       if (!capability.stdout.includes("--attach")) throw new Error("Update GitHub CLI to a version supporting issue comment --attach");
-      const directory = await mkdtemp(join(tmpdir(), "forge-evidence-upload-"));
+      const directory = await mkdtemp(join(tmpdir(), "suplex-evidence-upload-"));
       try {
         const path = join(directory, filename);
         const body = join(directory, "body.md");
@@ -210,7 +210,7 @@ export class IssueTracker {
         if (!rows.comments.length) throw new Error("Jira returned an incomplete comment page");
       }
     }
-    throw new Error("The issue has more comments than Forge can load");
+    throw new Error("The issue has more comments than Suplex can load");
   }
 
   async read(issue: IssueAssociation): Promise<IssueContext> {
@@ -256,14 +256,14 @@ export class IssueTracker {
 
   async publish(issue: IssueAssociation, taskId: string, body: string, beforeWrite: () => Promise<void> = async () => {}, knownCommentId?: string): Promise<string> {
     this.check(issue);
-    const marker = `[Forge task ${taskId}]`;
+    const marker = `[Suplex task ${taskId}]`;
     const actor = await this.actor();
     const text = `${body}\n\n${marker}`;
     const owned = (await this.comments(issue)).filter(row => this.owned(row, actor));
     const existing = owned.find(row => String(row.id) === knownCommentId) ?? owned.find(row => {
       const value = issueText(row.body);
       if (value === text) return true;
-      // Recover a complete Forge evidence comment, never a human note quoting its marker.
+      // Recover a complete Suplex evidence comment, never a human note quoting its marker.
       return value.startsWith("## What changed\n\n") && value.endsWith(`\n\n${marker}`)
         && /\n\nSource: [a-f0-9]{40,64}\n\n## Before\n\n[\s\S]*\n\n## After\n\n[\s\S]*\n\n## How to verify\n\n/i.test(value);
     });

@@ -48,7 +48,7 @@ function listenable(port: number): Promise<number | null> {
 /** The preferred port when it can still be bound, otherwise whatever the kernel hands out. */
 export async function freePort(preferred: number): Promise<number> {
   const port = (await listenable(preferred)) ?? (await listenable(0));
-  if (port === null) throw new Error("No local port is available for Forge.");
+  if (port === null) throw new Error("No local port is available for Suplex.");
   return port;
 }
 
@@ -102,10 +102,10 @@ export function createLocalRuntime(options: {
       for (let waited = 0; waited < READY_TIMEOUT_MS; waited += POLL_MS) {
         await wait(POLL_MS);
         if (await probe(origin(port))) return { port, adopted: false };
-        if (exited !== null) throw new Error(`The Forge server stopped while starting (exit ${exited}). The log is in logs/server.log.`);
+        if (exited !== null) throw new Error(`The Suplex server stopped while starting (exit ${exited}). The log is in logs/server.log.`);
       }
       groupSignal("SIGKILL");
-      throw new Error(`The Forge server did not answer ${origin(port)}/health within 60 seconds. The log is in logs/server.log.`);
+      throw new Error(`The Suplex server did not answer ${origin(port)}/health within 60 seconds. The log is in logs/server.log.`);
     },
     async stop(): Promise<void> {
       if (child === undefined) return;

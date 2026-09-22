@@ -8,7 +8,7 @@ import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { expect, test } from "vitest";
 
-import { canonicalForgeRepository } from "../src/platform/updates/supervisor.js";
+import { canonicalSuplexRepository } from "../src/platform/updates/supervisor.js";
 
 const projectRoot = resolve(dirname(fileURLToPath(import.meta.url)), "..");
 const supervisorPath = join(projectRoot, "src/platform/updates/supervisor.ts");
@@ -46,7 +46,7 @@ async function freePort(): Promise<number> {
 }
 
 async function fixture(): Promise<Fixture> {
-  const root = await mkdtemp(join(tmpdir(), "forge-supervisor-test-"));
+  const root = await mkdtemp(join(tmpdir(), "suplex-supervisor-test-"));
   const checkout = join(root, "checkout");
   const producer = join(root, "producer");
   const remote = join(root, "remote.git");
@@ -71,25 +71,25 @@ async function fixture(): Promise<Fixture> {
   await writeFile(join(checkout, ".gitignore"), "node_modules\n");
   await symlink(join(projectRoot, "node_modules"), join(checkout, "node_modules"));
   git(checkout, "init", "--initial-branch=main");
-  git(checkout, "config", "user.name", "Forge supervisor test");
-  git(checkout, "config", "user.email", "forge@example.invalid");
+  git(checkout, "config", "user.name", "Suplex supervisor test");
+  git(checkout, "config", "user.email", "suplex@example.invalid");
   git(checkout, "add", ".");
   git(checkout, "commit", "-m", "Initial");
   git(root, "clone", "--bare", checkout, remote);
-  git(checkout, "remote", "add", "origin", "git@github.com:meiji-industries/forge.git");
+  git(checkout, "remote", "add", "origin", "git@github.com:meiji-industries/suplex.git");
   git(checkout, "config", "branch.main.remote", "origin");
   git(checkout, "config", "branch.main.merge", "refs/heads/main");
   git(root, "clone", remote, producer);
-  git(producer, "config", "user.name", "Forge supervisor test");
-  git(producer, "config", "user.email", "forge@example.invalid");
+  git(producer, "config", "user.name", "Suplex supervisor test");
+  git(producer, "config", "user.email", "suplex@example.invalid");
   const ssh = join(bin, "ssh");
-  await writeFile(ssh, '#!/bin/sh\nexec git-upload-pack "$FORGE_TEST_REMOTE"\n');
+  await writeFile(ssh, '#!/bin/sh\nexec git-upload-pack "$SUPLEX_TEST_REMOTE"\n');
   await chmod(ssh, 0o755);
   const pnpm = join(bin, "pnpm");
-  await writeFile(pnpm, '#!/bin/sh\nprintf "%s\\n" "$*" >> "$FORGE_SUPERVISOR_TEST_COMMAND_LOG"\nif [ -f "$FORGE_SUPERVISOR_TEST_FAIL_INSTALL" ]; then echo "deliberate install failure" >&2; exit 1; fi\nif [ -f "$FORGE_SUPERVISOR_TEST_SLOW_INSTALL" ]; then stubborn-install & wait; fi\n');
+  await writeFile(pnpm, '#!/bin/sh\nprintf "%s\\n" "$*" >> "$SUPLEX_SUPERVISOR_TEST_COMMAND_LOG"\nif [ -f "$SUPLEX_SUPERVISOR_TEST_FAIL_INSTALL" ]; then echo "deliberate install failure" >&2; exit 1; fi\nif [ -f "$SUPLEX_SUPERVISOR_TEST_SLOW_INSTALL" ]; then stubborn-install & wait; fi\n');
   await chmod(pnpm, 0o755);
   const stubbornInstall = join(bin, "stubborn-install");
-  await writeFile(stubbornInstall, '#!/usr/bin/env node\nconst fs = require("node:fs");\nprocess.on("SIGTERM", () => {});\nfs.writeFileSync(process.env.FORGE_SUPERVISOR_TEST_INSTALL_PID, String(process.pid));\nsetTimeout(() => fs.writeFileSync(process.env.FORGE_SUPERVISOR_TEST_DELAYED_MARKER, "late\\n"), 2000);\nsetInterval(() => {}, 1000);\n');
+  await writeFile(stubbornInstall, '#!/usr/bin/env node\nconst fs = require("node:fs");\nprocess.on("SIGTERM", () => {});\nfs.writeFileSync(process.env.SUPLEX_SUPERVISOR_TEST_INSTALL_PID, String(process.pid));\nsetTimeout(() => fs.writeFileSync(process.env.SUPLEX_SUPERVISOR_TEST_DELAYED_MARKER, "late\\n"), 2000);\nsetInterval(() => {}, 1000);\n');
   await chmod(stubbornInstall, 0o755);
   const port = await freePort();
   return {
@@ -99,17 +99,17 @@ async function fixture(): Promise<Fixture> {
       PATH: `${bin}:${process.env.PATH ?? ""}`,
       GIT_SSH_COMMAND: ssh,
       GIT_SSH_VARIANT: "ssh",
-      FORGE_TEST_REMOTE: remote,
-      FORGE_FRONTEND_DEV_SERVER: "1",
-      FORGE_SUPERVISOR_TEST_PORT: String(port),
-      FORGE_SUPERVISOR_TEST_START_LOG: startLog,
-      FORGE_SUPERVISOR_TEST_COMMAND_LOG: commandLog,
-      FORGE_SUPERVISOR_TEST_FAIL_INSTALL: failInstall,
-      FORGE_SUPERVISOR_TEST_SLOW_INSTALL: slowInstall,
-      FORGE_SUPERVISOR_TEST_FAIL_READY: failReady,
-      FORGE_SUPERVISOR_TEST_LATE_READY: lateReady,
-      FORGE_SUPERVISOR_TEST_INSTALL_PID: installPid,
-      FORGE_SUPERVISOR_TEST_DELAYED_MARKER: delayedMarker,
+      SUPLEX_TEST_REMOTE: remote,
+      SUPLEX_FRONTEND_DEV_SERVER: "1",
+      SUPLEX_SUPERVISOR_TEST_PORT: String(port),
+      SUPLEX_SUPERVISOR_TEST_START_LOG: startLog,
+      SUPLEX_SUPERVISOR_TEST_COMMAND_LOG: commandLog,
+      SUPLEX_SUPERVISOR_TEST_FAIL_INSTALL: failInstall,
+      SUPLEX_SUPERVISOR_TEST_SLOW_INSTALL: slowInstall,
+      SUPLEX_SUPERVISOR_TEST_FAIL_READY: failReady,
+      SUPLEX_SUPERVISOR_TEST_LATE_READY: lateReady,
+      SUPLEX_SUPERVISOR_TEST_INSTALL_PID: installPid,
+      SUPLEX_SUPERVISOR_TEST_DELAYED_MARKER: delayedMarker,
     },
   };
 }
@@ -172,9 +172,9 @@ async function cleanup(value: Fixture): Promise<void> {
   await rm(value.root, { recursive: true, force: true });
 }
 
-test.each(["https://github.com/meiji-industries/forge.git", "git@github.com:meiji-industries/forge.git", "ssh://git@github.com/meiji-industries/forge.git"])("accepts the pinned Forge remote %s", (url) => {
-  expect(canonicalForgeRepository(url)).toBe(true);
-  expect(canonicalForgeRepository("https://github.com/another/forge.git")).toBe(false);
+test.each(["https://github.com/meiji-industries/suplex.git", "git@github.com:meiji-industries/suplex.git", "ssh://git@github.com/meiji-industries/suplex.git"])("accepts the pinned Suplex remote %s", (url) => {
+  expect(canonicalSuplexRepository(url)).toBe(true);
+  expect(canonicalSuplexRepository("https://github.com/another/suplex.git")).toBe(false);
 });
 
 test("real Git update preserves dirty work, refreshes stale notice, retries install, and stays single-flight", async () => {
@@ -182,7 +182,7 @@ test("real Git update preserves dirty work, refreshes stale notice, retries inst
   try {
     publish(value, { "remote.txt": "first\n" }, "First remote update");
     await writeFile(join(value.checkout, "keep.txt"), "local edit\n");
-    await writeFile(join(value.checkout, ".forge-old-update-lock"), "stale\n");
+    await writeFile(join(value.checkout, ".suplex-old-update-lock"), "stale\n");
     await start(value);
     const notice = await state(value, true);
     expect(notice).toMatchObject({ status: { kind: "available" } });

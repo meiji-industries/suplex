@@ -10,7 +10,7 @@ const directories: string[] = [];
 afterEach(async () => { await Promise.all(directories.splice(0).map(path => rm(path, { recursive: true, force: true }))); });
 
 async function runtimeDirectory(): Promise<string> {
-  const root = await mkdtemp(join(tmpdir(), "forge-claude-display-"));
+  const root = await mkdtemp(join(tmpdir(), "suplex-claude-display-"));
   directories.push(root);
   const runtime = join(root, "runtime");
   await mkdir(runtime);
@@ -103,7 +103,7 @@ test("the display keeps partial JSON and UTF-8 across reads and recovers after o
   await appendFile(path, `${JSON.stringify({ type: "assistant", uuid: "oversized-a", message: { id: "oversized-message", role: "assistant", content: [{ type: "text", text: "x".repeat(8 * 1024 * 1024) }] } })}\nnot json\n`);
   await appendFile(path, `${JSON.stringify({ type: "assistant", uuid: "recovered-a", message: { id: "recovered-message", role: "assistant", content: [{ type: "text", text: "Recovered" }] } })}\n`);
   await waitForText(() => output, "Recovered");
-  expect(output).toContain("Forge omitted a Claude record larger than 8 MiB.");
+  expect(output).toContain("Suplex omitted a Claude record larger than 8 MiB.");
   expect(output).not.toContain("x".repeat(100));
   controller.abort();
   await running;
@@ -124,7 +124,7 @@ test("the display parses large valid tool results and truncates only their previ
   expect(output).toContain("[Result: Read]\nresult-start");
   expect(output).toContain("[Output truncated]");
   expect(output).not.toContain("result-end");
-  expect(output).not.toContain("Forge omitted");
+  expect(output).not.toContain("Suplex omitted");
   controller.abort();
   await running;
 });

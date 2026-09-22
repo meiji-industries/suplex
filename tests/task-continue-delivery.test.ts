@@ -13,7 +13,7 @@ test("a delivered draft continues through review and merge on the same task and 
     store.markDelivered(task.id);
     store.retireDeliveredSessions(task.id);
     store.completeStop(root.id);
-    f.database.authTransaction(db => db.prepare("UPDATE forge_task_controls SET shell_pane_id = NULL, pull_request_json = NULL WHERE task_id = ?").run(task.id));
+    f.database.authTransaction(db => db.prepare("UPDATE suplex_task_controls SET shell_pane_id = NULL, pull_request_json = NULL WHERE task_id = ?").run(task.id));
 
     const send = (deliveryTarget: string) => f.app.inject({ method: "POST", url: `/api/tasks/${task.id}/continue-delivery`, headers: f.headers, payload: { deliveryTarget } });
     const review = await send("pull_request_ready");
@@ -53,11 +53,11 @@ test("continuation rejects invalid, unauthorized, archived, and unsupported comm
     expect((await send({ deliveryTarget: "merged", extra: true })).statusCode).toBe(400);
     expect((await f.app.inject({ method: "POST", url, payload: { deliveryTarget: "merged" } })).statusCode).toBe(401);
     const stamp = new Date().toISOString();
-    f.database.authTransaction(db => db.prepare("INSERT INTO forge_users (id, display_name, username, role, status, created_at, updated_at) VALUES ('outsider', 'Outsider', 'outsider', 'member', 'active', ?, ?)").run(stamp, stamp));
+    f.database.authTransaction(db => db.prepare("INSERT INTO suplex_users (id, display_name, username, role, status, created_at, updated_at) VALUES ('outsider', 'Outsider', 'outsider', 'member', 'active', ?, ?)").run(stamp, stamp));
     expect(() => f.tasks.continueDelivery("outsider", task.id, "merged")).toThrow("Not found");
-    f.database.authTransaction(db => db.prepare("UPDATE forge_tasks SET configuration_json = json_set(configuration_json, '$.integration', json(?)) WHERE id = ?").run(JSON.stringify({ repository: { kind: "bitbucket", tokenEnvironment: "BB_TOKEN" }, tracker: null }), task.id));
+    f.database.authTransaction(db => db.prepare("UPDATE suplex_tasks SET configuration_json = json_set(configuration_json, '$.integration', json(?)) WHERE id = ?").run(JSON.stringify({ repository: { kind: "bitbucket", tokenEnvironment: "BB_TOKEN" }, tracker: null }), task.id));
     expect((await send({ deliveryTarget: "merged" })).statusCode).toBe(422);
-    f.database.authTransaction(db => db.prepare("UPDATE forge_tasks SET archived_at = ? WHERE id = ?").run(stamp, task.id));
+    f.database.authTransaction(db => db.prepare("UPDATE suplex_tasks SET archived_at = ? WHERE id = ?").run(stamp, task.id));
     expect((await send({ deliveryTarget: "merged" })).statusCode).toBe(409);
     expect(store.turns(task.id)).toHaveLength(0);
   } finally { await f.close(); }
@@ -72,7 +72,7 @@ test("a competing task assignment rejects continuation without changing target, 
     store.markDelivered(first.task.id);
     f.database.authTransaction(db => {
       const intent = { repository: first.task.configuration.repository, headBranch: first.task.configuration.branch, baseBranch: "main", baselineSha: "a".repeat(40), pullRequestNumber: 247 };
-      db.prepare("UPDATE forge_task_controls SET delivery_intent_json = ? WHERE task_id IN (?, ?)").run(JSON.stringify(intent), first.task.id, second.task.id);
+      db.prepare("UPDATE suplex_task_controls SET delivery_intent_json = ? WHERE task_id IN (?, ?)").run(JSON.stringify(intent), first.task.id, second.task.id);
     });
     const response = await f.app.inject({ method: "POST", url: `/api/tasks/${first.task.id}/continue-delivery`, headers: f.headers, payload: { deliveryTarget: "merged" } });
     expect(response.statusCode).toBe(409);
@@ -89,7 +89,7 @@ test("a failed Coordinator turn rolls back the target, status, and delivery hist
     const store = f.tasks.repository.controls;
     store.claimRoot({ taskId: task.id });
     store.markDelivered(task.id);
-    f.database.authTransaction(db => db.exec("CREATE TRIGGER reject_continuation_turn BEFORE INSERT ON forge_task_turns BEGIN SELECT RAISE(ABORT, 'turn rejected'); END"));
+    f.database.authTransaction(db => db.exec("CREATE TRIGGER reject_continuation_turn BEFORE INSERT ON suplex_task_turns BEGIN SELECT RAISE(ABORT, 'turn rejected'); END"));
     const response = await f.app.inject({ method: "POST", url: `/api/tasks/${task.id}/continue-delivery`, headers: f.headers, payload: { deliveryTarget: "merged" } });
     expect(response.statusCode).toBe(409);
     expect(store.get(task.id)).toMatchObject({ status: "delivered", deliveryTarget: "pull_request_draft" });
@@ -104,11 +104,11 @@ test("a recreated Coordinator session and stale closed pull request observation 
     const { task } = await f.tasks.createTask(f.userId, f.company.id, { projectId: f.project.id, title: "Recovered continuation", idempotencyKey: "recreated-continuation", startImmediately: true });
     const store = f.tasks.repository.controls;
     const original = store.claimRoot({ taskId: task.id });
-    store.setPullRequest(task.id, { repository: task.configuration.repository, number: 247, url: "https://github.com/meiji-industries/forge/pull/247", headSha: "a".repeat(40), state: "closed", mergedAt: null });
+    store.setPullRequest(task.id, { repository: task.configuration.repository, number: 247, url: "https://github.com/meiji-industries/suplex/pull/247", headSha: "a".repeat(40), state: "closed", mergedAt: null });
     store.markDelivered(task.id);
     f.database.authTransaction(db => {
-      db.prepare("UPDATE forge_task_sessions SET is_current = 0, lifecycle = 'stopped' WHERE id = ?").run(original.id);
-      db.prepare("UPDATE forge_task_controls SET root_session_id = NULL, shell_pane_id = 'obsolete-pane' WHERE task_id = ?").run(task.id);
+      db.prepare("UPDATE suplex_task_sessions SET is_current = 0, lifecycle = 'stopped' WHERE id = ?").run(original.id);
+      db.prepare("UPDATE suplex_task_controls SET root_session_id = NULL, shell_pane_id = 'obsolete-pane' WHERE task_id = ?").run(task.id);
     });
     const response = await f.app.inject({ method: "POST", url: `/api/tasks/${task.id}/continue-delivery`, headers: f.headers, payload: { deliveryTarget: "pull_request_ready" } });
     expect(response.statusCode, response.body).toBe(200);

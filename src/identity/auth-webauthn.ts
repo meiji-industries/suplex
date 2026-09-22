@@ -58,7 +58,7 @@ export type AuthenticationVerification =
 
 export const productionWebAuthnAdapter: WebAuthnAdapter = {
   generateRegistrationOptions: async (input) => generateRegistrationOptions({
-    rpName: "Forge",
+    rpName: "Suplex",
     rpID: input.rpId,
     userID: Buffer.from(input.userId),
     userName: input.userName,

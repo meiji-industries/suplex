@@ -6,7 +6,7 @@ import { expect, test } from "vitest";
 import { parseSince, runLogViewer } from "../src/platform/log-viewer.js";
 
 async function fixture(): Promise<string> {
-  const directory = await mkdtemp(join(tmpdir(), "forge-logs-"));
+  const directory = await mkdtemp(join(tmpdir(), "suplex-logs-"));
   await writeFile(join(directory, "api.log"), [
     JSON.stringify({ time: "2026-08-22T12:00:02.000Z", level: 20, msg: "request", req: { method: "GET", url: "/api/tasks/task-a" }, res: { statusCode: 200 } }),
     JSON.stringify({ time: "2026-08-22T12:00:04.000Z", level: 50, msg: "api failure", taskId: "task-b", err: { message: "bad" } }),

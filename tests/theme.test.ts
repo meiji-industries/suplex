@@ -17,12 +17,12 @@ test("theme preferences parse external storage values and resolve system prefere
 });
 
 test("application and health pages apply the saved or system theme before frontend assets load", () => {
-  const snapshot: HealthSnapshot = { generatedAt: "2026-09-05T00:00:00.000Z", reachableAddress: "http://forge.test", ready: true, checks: [] };
+  const snapshot: HealthSnapshot = { generatedAt: "2026-09-05T00:00:00.000Z", reachableAddress: "http://suplex.test", ready: true, checks: [] };
   for (const html of [renderApplicationPage("tasks"), renderHealthPage(snapshot)]) {
-    const bootstrap = html.indexOf('localStorage.getItem("forge.theme")');
+    const bootstrap = html.indexOf('localStorage.getItem("suplex.theme")');
     expect(bootstrap).toBeGreaterThan(0);
-    expect(bootstrap).toBeLessThan(html.indexOf("/assets/forge-ui.css"));
-    expect(bootstrap).toBeLessThan(html.indexOf("/assets/forge-ui.js"));
+    expect(bootstrap).toBeLessThan(html.indexOf("/assets/suplex-ui.css"));
+    expect(bootstrap).toBeLessThan(html.indexOf("/assets/suplex-ui.js"));
     expect(html).toContain('const root = document.documentElement; root.classList.toggle("dark", dark)');
     expect(html).toContain('content = dark ? "#0a0a0a" : "#ffffff"');
     expect(html.match(/root\.classList\.toggle/g)).toHaveLength(1);

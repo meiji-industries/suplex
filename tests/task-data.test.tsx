@@ -59,7 +59,7 @@ test("staggered consumers share one list timer and one agent batch, and hidden i
   const lists = () => fetch.mock.calls.filter(([url]) => url.includes("/tasks?")).length;
   const batches = () => fetch.mock.calls.filter(([url]) => url.includes("/task-agents?")).length;
   expect([lists(), batches()]).toEqual([1, 1]);
-  expect(new URL(fetch.mock.calls.find(([url]) => url.includes("task-agents"))![0], "http://forge.test").searchParams.getAll("taskId")).toEqual(["a", "b", "c", "d", "e"]);
+  expect(new URL(fetch.mock.calls.find(([url]) => url.includes("task-agents"))![0], "http://suplex.test").searchParams.getAll("taskId")).toEqual(["a", "b", "c", "d", "e"]);
   await act(async () => vi.advanceTimersByTimeAsync(1000));
   await act(async () => render(true));
   expect(lists()).toBe(1);

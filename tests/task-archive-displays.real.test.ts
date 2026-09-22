@@ -7,14 +7,14 @@ import { CliHerdrClient } from "../src/integrations/herdr/client.js";
 import { prepareArchiveDisplays } from "../src/tasks/archive/displays.js";
 
 test("archive closes a real owned Herdr workspace and all its panes", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "forge-archive-display-proof-"));
+  const directory = await mkdtemp(join(tmpdir(), "suplex-archive-display-proof-"));
   const taskId = `task_archive_proof_${randomUUID()}`;
   const herdr = new CliHerdrClient();
-  const { workspace, rootPane } = await herdr.createWorkspace({ label: `forge-${taskId}`, cwd: directory, focus: false });
+  const { workspace, rootPane } = await herdr.createWorkspace({ label: `suplex-${taskId}`, cwd: directory, focus: false });
   try {
     const worker = await herdr.splitPane({ paneId: rootPane.paneId, direction: "right", cwd: directory, focus: false });
     for (const pane of [rootPane, worker]) {
-      await herdr.reportPaneMetadata({ paneId: pane.paneId, source: "forge", title: "Archive cleanup proof", tokens: { forge_task_id: taskId, forge_binding_id: "proof-session" } });
+      await herdr.reportPaneMetadata({ paneId: pane.paneId, source: "suplex", title: "Archive cleanup proof", tokens: { suplex_task_id: taskId, suplex_binding_id: "proof-session" } });
       await herdr.runPaneCommand(pane.paneId, "exec /bin/zsh -f");
       await expect.poll(async () => {
         const info = await herdr.getPaneProcessInfo(pane.paneId);

@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>Forge</title>
+<title>Suplex</title>
 <style>
   body { margin: 0; -webkit-app-region: drag; min-height: 100vh; display: grid; place-items: center; background: #0a0a0a; color: #e5e5e5; font: 13px/1.4 -apple-system, system-ui, sans-serif; }
   form { display: grid; gap: 8px; width: min(420px, 90vw); }
@@ -20,8 +20,8 @@
 </head>
 <body>
 <form method="get">
-  <label for="url">Forge URL</label>
-  <input id="url" name="url" type="url" required autofocus value="http://localhost:4111" placeholder="https://forge.<tailnet>.ts.net">
+  <label for="url">Suplex URL</label>
+  <input id="url" name="url" type="url" required autofocus value="http://localhost:4111" placeholder="https://suplex.<tailnet>.ts.net">
   <div class="row"><button id="test" type="button">Test connection</button><button id="save" class="primary" type="submit" disabled>Save</button></div>
   <p id="status" role="status" aria-live="polite"></p>
   <button id="back" type="button">Back</button>
@@ -37,13 +37,13 @@
     const candidate = url.value.trim();
     test.disabled = true;
     status.textContent = "Testing…";
-    const result = await window.forgeDesktop.testConnection(candidate);
+    const result = await window.suplexDesktop.testConnection(candidate);
     test.disabled = false;
-    if (result.ok) { proven = candidate; save.disabled = false; status.textContent = "Forge answered."; save.focus(); }
-    else { proven = ""; save.disabled = true; status.textContent = result.reason ?? "No Forge answered at that URL."; }
+    if (result.ok) { proven = candidate; save.disabled = false; status.textContent = "Suplex answered."; save.focus(); }
+    else { proven = ""; save.disabled = true; status.textContent = result.reason ?? "No Suplex answered at that URL."; }
   });
-  document.getElementById("back").addEventListener("click", () => window.forgeDesktop.back());
-  window.forgeDesktop.snapshot().then((snapshot) => {
+  document.getElementById("back").addEventListener("click", () => window.suplexDesktop.back());
+  window.suplexDesktop.snapshot().then((snapshot) => {
     if (snapshot.state === "connecting-remote") document.getElementById("back").style.display = "block";
   });
 </script>

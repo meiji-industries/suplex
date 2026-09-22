@@ -19,12 +19,12 @@ export async function observeTaskLimitUsage(input: {
   if (limits.budgetUsd === 0) return { estimatedCostUsd: null, admittedTurns };
   const sessions = input.store.sessionsWithNativeWork(input.taskId);
   if (!sessions.length) return { estimatedCostUsd: input.requireCompletePricing ? null : 0, admittedTurns };
-  if (!input.reader) throw new Error("Native task usage is not available. Forge will retry the observation.");
+  if (!input.reader) throw new Error("Native task usage is not available. Suplex will retry the observation.");
   const unique = new Map<string, Awaited<ReturnType<NativeSessionReader["timeline"]>>["usage"][number]>();
   let complete = true;
   for (const session of sessions) {
     const reader = input.reader(session);
-    if (!reader.timeline) throw new Error("Native task usage is not available. Forge will retry the observation.");
+    if (!reader.timeline) throw new Error("Native task usage is not available. Suplex will retry the observation.");
     const observed = await reader.timeline(session);
     if (!observed.usage.length || observed.liveMessageId || observed.usage.some(entry => entry.completedAt === null)) complete = false;
     for (const entry of observed.usage) unique.set(`${entry.sessionId}:${entry.messageId}`, entry);

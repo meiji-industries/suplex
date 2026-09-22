@@ -50,7 +50,7 @@ test("OpenCode reports absent, signed-out, signed-in, and indeterminate states",
   expect(JSON.stringify(signedIn)).not.toMatch(/\/private\//);
 
   const indeterminate = await check({ resolveExecutable: present(), runCommand: probe(new Error("auth list /private/state.db locked")) });
-  expect(indeterminate).toMatchObject({ status: "warning", summary: "Forge could not check the OpenCode sign-in", details: { state: "unknown" } });
+  expect(indeterminate).toMatchObject({ status: "warning", summary: "Suplex could not check the OpenCode sign-in", details: { state: "unknown" } });
   expect(JSON.stringify(indeterminate)).not.toMatch(/private/);
 });
 
@@ -69,11 +69,11 @@ test("Claude Code reports absent, signed-out, signed-in, and indeterminate state
   expect(JSON.stringify(signedIn)).not.toMatch(/private|account|@|org/);
 
   const malformed = await check({ resolveExecutable: present("/private/bin/claude"), runCommand: probe(ok("not json /private/config")) });
-  expect(malformed).toMatchObject({ status: "warning", summary: "Claude Code is installed. Forge could not check the sign-in.", details: { state: "present" } });
+  expect(malformed).toMatchObject({ status: "warning", summary: "Claude Code is installed. Suplex could not check the sign-in.", details: { state: "present" } });
   expect(JSON.stringify(malformed)).not.toMatch(/private/);
 
   const failed = await check({ resolveExecutable: present("/private/bin/claude"), runCommand: probe({ stdout: "", stderr: "boom", exitCode: 2, timedOut: false }) });
-  expect(failed).toMatchObject({ status: "warning", summary: "Forge could not check the Claude Code sign-in", details: { state: "unknown" } });
+  expect(failed).toMatchObject({ status: "warning", summary: "Suplex could not check the Claude Code sign-in", details: { state: "unknown" } });
 });
 
 test("provider listings can request the authenticated Claude account without exposing other auth fields", async () => {
@@ -104,7 +104,7 @@ test("Codex CLI reports absent, signed-out, signed-in, and indeterminate states"
   expect(JSON.stringify(signedIn)).not.toMatch(/private/);
 
   const indeterminate = await check({ resolveExecutable: present("/private/bin/codex"), runCommand: probe({ stdout: "", stderr: "", exitCode: null, timedOut: true }) });
-  expect(indeterminate).toMatchObject({ status: "warning", summary: "Forge could not check the Codex CLI sign-in", details: { state: "unknown" } });
+  expect(indeterminate).toMatchObject({ status: "warning", summary: "Suplex could not check the Codex CLI sign-in", details: { state: "unknown" } });
 });
 
 test("provider checks probe their documented sign-in commands", async () => {

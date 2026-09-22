@@ -1,5 +1,5 @@
 "use strict";
-// Speaks C3's install protocol without a Forge server behind it.
+// Speaks C3's install protocol without a Suplex server behind it.
 const { mkdirSync, readFileSync, writeFileSync } = require("node:fs");
 const { join } = require("node:path");
 
@@ -7,11 +7,11 @@ const STAGES = [
   { name: "prerequisites", title: "Check this Mac" },
   { name: "developer-tools", title: "Install Apple developer tools (git)" },
   { name: "herdr", title: "Install Herdr terminals" },
-  { name: "data", title: "Prepare Forge data" },
+  { name: "data", title: "Prepare Suplex data" },
   { name: "complete", title: "Finish" },
 ];
 
-const dataRoot = process.env.FORGE_DATA_ROOT ?? ".";
+const dataRoot = process.env.SUPLEX_DATA_ROOT ?? ".";
 const read = (file, fallback) => {
   try {
     return JSON.parse(readFileSync(join(dataRoot, file), "utf8"));
@@ -20,7 +20,7 @@ const read = (file, fallback) => {
   }
 };
 const settings = read("fixture.json", {});
-const failStage = process.env.FORGE_FIXTURE_FAIL_STAGE ?? settings.failStage ?? null;
+const failStage = process.env.SUPLEX_FIXTURE_FAIL_STAGE ?? settings.failStage ?? null;
 const frame = (value) => { process.stdout.write(`${JSON.stringify(value)}\n`); process.exit(value.ok ? 0 : 1); };
 
 const argv = process.argv.slice(2);

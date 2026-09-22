@@ -3,7 +3,7 @@ import { createContext, useCallback, useContext, useEffect, useState, type React
 
 import { Button } from "../ui/button.js";
 
-export const themeStorageKey = "forge.theme";
+export const themeStorageKey = "suplex.theme";
 
 export type ThemePreference = "light" | "dark" | "system";
 export type ResolvedTheme = Exclude<ThemePreference, "system">;

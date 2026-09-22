@@ -56,17 +56,17 @@ export class IssueEvidence {
       if (!stat.isFile() || stat.size === 0 || stat.size > limit) throw new Error("Evidence must be a regular file of at most 8 MiB");
       const bytes = Buffer.alloc(stat.size + 1);
       const { bytesRead } = await file.read(bytes, 0, bytes.length, 0);
-      if (bytesRead !== stat.size) throw new Error("Evidence changed while Forge read it");
+      if (bytesRead !== stat.size) throw new Error("Evidence changed while Suplex read it");
       return bytes.subarray(0, bytesRead);
     } finally { await file.close(); }
   }
 
   private retained(taskId: string, name: string) {
-    return this.store.database.authQuery(db => z.array(storedSchema).parse(db.prepare("SELECT id, company_id AS companyId, filename, mime_type AS mimeType, storage_path AS storagePath, sha256 FROM forge_artifacts WHERE task_id = ? AND filename = ? AND kind LIKE 'delivery-%' ORDER BY created_at DESC").all(taskId, name)));
+    return this.store.database.authQuery(db => z.array(storedSchema).parse(db.prepare("SELECT id, company_id AS companyId, filename, mime_type AS mimeType, storage_path AS storagePath, sha256 FROM suplex_artifacts WHERE task_id = ? AND filename = ? AND kind LIKE 'delivery-%' ORDER BY created_at DESC").all(taskId, name)));
   }
 
   private async retain(taskId: string, name: string, mimeType: string, bytes: Buffer) {
-    const companyId = this.store.database.authQuery(db => z.object({ company_id: z.string() }).parse(db.prepare("SELECT company_id FROM forge_tasks WHERE id = ?").get(taskId)).company_id);
+    const companyId = this.store.database.authQuery(db => z.object({ company_id: z.string() }).parse(db.prepare("SELECT company_id FROM suplex_tasks WHERE id = ?").get(taskId)).company_id);
     const existing = this.retained(taskId, name).find(item => item.sha256 === hash(bytes));
     if (existing) return existing;
     return this.artifacts.putArtifact(companyId, mimeType.startsWith("image/") ? "delivery-image" : "delivery-evidence", { filename: name, mimeType, bytes, taskId });
@@ -100,14 +100,14 @@ export class IssueEvidence {
   }
 
   private async publish(taskId: string, number: number, headSha: string, port: DeliveryGithubPort, recheck: () => void) {
-    const row = this.store.database.authQuery(db => z.object({ issue_json: z.string().nullable(), issue_publication_json: z.string().nullable() }).parse(db.prepare("SELECT issue_json, issue_publication_json FROM forge_tasks WHERE id = ?").get(taskId)));
+    const row = this.store.database.authQuery(db => z.object({ issue_json: z.string().nullable(), issue_publication_json: z.string().nullable() }).parse(db.prepare("SELECT issue_json, issue_publication_json FROM suplex_tasks WHERE id = ?").get(taskId)));
     if (!row.issue_json && !row.issue_publication_json) return;
     const configuration = this.store.context(taskId).configuration;
     // Issue-backed draft delivery is opt-in; existing ready/merge workflows keep their completion semantics.
     if (this.store.get(taskId).deliveryTarget !== "pull_request_draft") return;
     let publication = row.issue_publication_json ? publicationSchema.parse(JSON.parse(row.issue_publication_json)) : publicationSchema.parse({ issue: JSON.parse(row.issue_json!), tracker: taskTracker(configuration), headSha });
     if (publication.headSha !== headSha) publication = { issue: publication.issue, tracker: publication.tracker, headSha, ...(publication.commentId ? { commentId: publication.commentId } : {}) };
-    const save = () => this.store.database.authTransaction(db => db.prepare("UPDATE forge_tasks SET issue_publication_json = ? WHERE id = ?").run(JSON.stringify(publication), taskId));
+    const save = () => this.store.database.authTransaction(db => db.prepare("UPDATE suplex_tasks SET issue_publication_json = ? WHERE id = ?").run(JSON.stringify(publication), taskId));
     recheck();
     const current = this.store.get(taskId);
     if (current.status !== "active") throw new DeliveryOperationFailure("workflow_review_required", "Resume the task before publishing issue evidence.");
@@ -145,7 +145,7 @@ export class IssueEvidence {
           if (hash(bytes) !== item.sha256) throw new Error("Stored screenshot is corrupt");
         }
         await this.retain(taskId, `${headSha}-${screenshot.filename}`, mime, bytes);
-        const name = `forge-${taskId}-${hash(bytes)}.${extension}`;
+        const name = `suplex-${taskId}-${hash(bytes)}.${extension}`;
         recheck();
         const repositoryConnection = configuration.integration?.repository;
         const url = repositoryConnection?.kind === "bitbucket"
@@ -163,8 +163,8 @@ export class IssueEvidence {
       const repository = configuration.repository;
       const pull = await inspectBeforeWrite();
       if (pull.headSha !== headSha) throw new Error("The pull request source changed before evidence publication");
-      const marker = `<!-- forge-evidence:${taskId} -->`;
-      const endMarker = `<!-- /forge-evidence:${taskId} -->`;
+      const marker = `<!-- suplex-evidence:${taskId} -->`;
+      const endMarker = `<!-- /suplex-evidence:${taskId} -->`;
       if (pull.body === undefined || pull.title === undefined) throw new Error("The repository did not return the pull request title and body");
       const start = pull.body.indexOf(marker);
       const end = start < 0 ? -1 : pull.body.indexOf(endMarker, start + marker.length);

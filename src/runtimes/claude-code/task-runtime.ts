@@ -42,7 +42,7 @@ export function claudeArguments(input: { scope: TaskScope; sessionID: string; re
     ...(scope.evidenceRoot && (scope.projectContextPath || scope.role !== "worker" && scope.workflow !== "standard") ? ["--add-dir", scope.evidenceRoot] : []),
     ...(scope.projectContextPath ? ["--add-dir", dirname(scope.projectContextPath)] : []),
     ...(scope.role !== "worker"
-      ? ["--tools", ROOT_TOOLS, "--permission-mode", "dontAsk", "--allowedTools", [scope.role === "root" ? "mcp__forge_root" : "mcp__forge_advisor__submit_report", "WebFetch", "WebSearch", ...mcpTools].join(",")]
+      ? ["--tools", ROOT_TOOLS, "--permission-mode", "dontAsk", "--allowedTools", [scope.role === "root" ? "mcp__suplex_root" : "mcp__suplex_advisor__submit_report", "WebFetch", "WebSearch", ...mcpTools].join(",")]
       : ["--disallowedTools", "Agent,AskUserQuestion", ...(mcpTools.length > 0
         ? ["--permission-mode", "dontAsk", "--allowedTools", ["Bash", "Read", "Write", "Edit", "Glob", "Grep", "NotebookEdit", "WebFetch", "WebSearch", "TodoWrite", "Skill", ...mcpTools].join(",")]
         : ["--dangerously-skip-permissions"])]),
@@ -85,7 +85,7 @@ export class ClaudeCodeTaskRuntime implements TaskHarness {
       const server = scope.role === "root"
         ? await writeRootBridgeBinding({ runtimeDirectory, identity: scope.identity, databasePath: this.databasePath, artifactRoot: this.options.artifactRoot })
         : await writeAdvisorReportBridgeBinding({ runtimeDirectory, role: scope.advisorRole });
-      mcpServers[scope.role === "root" ? "forge_root" : "forge_advisor"] = { type: "stdio", command: server.command, args: server.args, env: server.environment };
+      mcpServers[scope.role === "root" ? "suplex_root" : "suplex_advisor"] = { type: "stdio", command: server.command, args: server.args, env: server.environment };
     }
     await writeFile(join(runtimeDirectory, "mcp.json"), JSON.stringify({ mcpServers }), { mode: 0o600 });
     return nativeSessionId ?? randomUUID();
@@ -107,7 +107,7 @@ export class ClaudeCodeTaskRuntime implements TaskHarness {
     const result = streamResult(values);
     const assistants = entries.filter(entry => entry.type === "assistant");
     const last = assistants.at(-1);
-    const agent = `forge-${scope.role}`;
+    const agent = `suplex-${scope.role}`;
     const common: PromptObservation = {
       ...base, state: "running", admission: "observed", retry: "forbidden",
       assistantMessageIDs: assistants.map(entry => entry.uuid),

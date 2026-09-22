@@ -25,7 +25,7 @@ test("does not advertise Linux applications that do not resolve to executable fi
 });
 
 test("resolves only executable regular files and preserves the configured editor command", () => {
-  const directory = mkdtempSync(join(tmpdir(), "forge-worktree-open-"));
+  const directory = mkdtempSync(join(tmpdir(), "suplex-worktree-open-"));
   try {
     const executable = join(directory, "editor");
     const nonExecutable = join(directory, "not-executable");

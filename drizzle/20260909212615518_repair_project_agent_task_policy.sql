@@ -1,5 +1,5 @@
 -- Write migration SQL here.
-UPDATE forge_projects
+UPDATE suplex_projects
 SET agent_task_policy_json = json_set(
   CASE WHEN agent_task_policy_json = '{}' THEN json_object(
     'workflowIds', json_array('workflow_native_standard'),

@@ -237,14 +237,14 @@ export function createProviderReadinessCheck(kind: ProviderHarnessKind, options:
       if (error && typeof error === "object" && "code" in error && error.code === "ENOENT") {
         return { ...base, status: "unhealthy", summary: `${label} is not installed`, ...probe.installRemedy(platform), details: { state: "absent" satisfies ProviderState } };
       }
-      return { ...base, status: "warning", summary: `Forge could not check the ${label} sign-in`, details: { command: basename(executable), state: "unknown" satisfies ProviderState } };
+      return { ...base, status: "warning", summary: `Suplex could not check the ${label} sign-in`, details: { command: basename(executable), state: "unknown" satisfies ProviderState } };
     }
     const classified = probe.classify(result);
     const details = { command: basename(executable), state: classified.state, ...(classified.credentials === undefined ? {} : { credentials: classified.credentials }), ...(options.includeAccount && classified.account ? { account: classified.account } : {}) };
     if (classified.state === "signed-in") return { ...base, status: "healthy", summary: `${label} is signed in. Model access is not tested.`, details };
     if (classified.state === "signed-out") return { ...base, status: "unhealthy", summary: `${label} is not signed in`, remedy: probe.loginRemedy, remedyKind: "command", details };
-    if (classified.state === "present") return { ...base, status: "warning", summary: `${label} is installed. Forge could not check the sign-in.`, details };
-    return { ...base, status: "warning", summary: `Forge could not check the ${label} sign-in`, details };
+    if (classified.state === "present") return { ...base, status: "warning", summary: `${label} is installed. Suplex could not check the sign-in.`, details };
+    return { ...base, status: "warning", summary: `Suplex could not check the ${label} sign-in`, details };
   };
 }
 

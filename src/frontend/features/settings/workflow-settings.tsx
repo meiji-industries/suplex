@@ -203,7 +203,7 @@ export function WorkflowSettingsView(): ReactElement {
       <AlertDialogContent>
         <AlertDialogHeader>
           <AlertDialogTitle>Archive {archiveTarget?.name}?</AlertDialogTitle>
-          <AlertDialogDescription>Forge removes archived workflows from the task dialog. Tasks that use this workflow continue. You can unarchive the workflow later.</AlertDialogDescription>
+          <AlertDialogDescription>Suplex removes archived workflows from the task dialog. Tasks that use this workflow continue. You can unarchive the workflow later.</AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>
           <AlertDialogCancel>Cancel</AlertDialogCancel>

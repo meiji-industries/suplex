@@ -124,7 +124,7 @@ export interface ReadOnlyTerminalViewport {
 }
 /**
  * Display-only pane hints for Herdr. Herdr does not persist this metadata across
- * server restarts, so callers must not treat it as durable Forge state.
+ * server restarts, so callers must not treat it as durable Suplex state.
  */
 export interface HerdrPaneMetadataReport {
   paneId: string;

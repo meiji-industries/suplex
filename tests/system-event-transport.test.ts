@@ -15,8 +15,8 @@ async function until(predicate: () => boolean): Promise<void> {
 }
 
 test("bridge events cross the socket with producer identity and causal IDs after restart", async () => {
-  const directory = mkdtempSync(join(tmpdir(), "forge-event-ipc-"));
-  const databasePath = join(directory, "forge.sqlite");
+  const directory = mkdtempSync(join(tmpdir(), "suplex-event-ipc-"));
+  const databasePath = join(directory, "suplex.sqlite");
   writeFileSync(databasePath, "database marker");
   const received: Array<{ event: SystemEvent; context: EventContext; meta?: ForwardedEventMeta }> = [];
   const sink = (event: SystemEvent, context: EventContext, meta?: ForwardedEventMeta): string | undefined => { received.push({ event, context, ...(meta ? { meta } : {}) }); return meta?.eventId; };
@@ -41,8 +41,8 @@ test("bridge events cross the socket with producer identity and causal IDs after
 });
 
 test("malformed and oversized input is ignored and shutdown closes open sockets", async () => {
-  const directory = mkdtempSync(join(tmpdir(), "forge-event-ipc-"));
-  const databasePath = join(directory, "forge.sqlite");
+  const directory = mkdtempSync(join(tmpdir(), "suplex-event-ipc-"));
+  const databasePath = join(directory, "suplex.sqlite");
   writeFileSync(databasePath, "database marker");
   const received: SystemEvent[] = [];
   const stop = await startSystemEventReceiver(databasePath, event => { received.push(event); return undefined; });

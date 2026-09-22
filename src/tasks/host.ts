@@ -2,7 +2,7 @@ import { CompletedPullRequests } from "../delivery/completed-pull-requests.js";
 import { z } from "zod";
 import { dirname, join } from "node:path";
 import { ArtifactStore } from "../platform/artifacts.js";
-import type { ForgeDatabase } from "../platform/database.js";
+import type { SuplexDatabase } from "../platform/database.js";
 import { DeliveryOperations } from "../delivery/operations.js";
 import { CliHerdrClient } from "../integrations/herdr/client.js";
 import { StructuredLogger } from "../platform/logging.js";
@@ -43,7 +43,7 @@ export class TaskHost {
   private prerequisiteRefresh: Promise<void> | undefined;
   private nextPrerequisiteRefresh = 0;
 
-  constructor(private readonly database: ForgeDatabase, options: { completedPullRequests?: Pick<CompletedPullRequests, "refresh">; artifactRoot?: string; controller?: Controller; delivery?: Pick<DeliveryOperations, "observe"> & Partial<Pick<DeliveryOperations, "observeDeliveryWait">>; worktree?: typeof prepareTaskWorktree; pullRequestObserver?: Pick<Required<GithubReleasePort>, "observePullRequest">; systemEvents?: EventSink } = {}) {
+  constructor(private readonly database: SuplexDatabase, options: { completedPullRequests?: Pick<CompletedPullRequests, "refresh">; artifactRoot?: string; controller?: Controller; delivery?: Pick<DeliveryOperations, "observe"> & Partial<Pick<DeliveryOperations, "observeDeliveryWait">>; worktree?: typeof prepareTaskWorktree; pullRequestObserver?: Pick<Required<GithubReleasePort>, "observePullRequest">; systemEvents?: EventSink } = {}) {
     this.systemEvents = options.systemEvents ?? (() => undefined);
     this.telemetryEnabled = options.systemEvents !== undefined;
     this.store = new TaskControlStore(database);
@@ -88,7 +88,7 @@ export class TaskHost {
         .then(() => { runWithSystemEvents(this.systemEvents, { source: "scheduler", trigger: "prerequisite completion" }, () => this.store.admitQueued()); })
         .finally(() => { this.prerequisiteRefresh = undefined; });
     }
-    const ids = this.database.authQuery(db => z.array(z.object({ task_id: z.string() })).parse(db.prepare("SELECT c.task_id FROM forge_task_controls c JOIN forge_tasks t ON t.id = c.task_id WHERE (t.archived_at IS NULL AND c.status IN ('active', 'waiting_human') AND (c.wake_at IS NULL OR c.wake_at <= ?)) OR EXISTS (SELECT 1 FROM forge_task_sessions s WHERE s.task_id = c.task_id AND s.stop_requested_at IS NOT NULL AND s.stopped_at IS NULL) ORDER BY COALESCE(c.wake_at, c.created_at)").all(new Date().toISOString())));
+    const ids = this.database.authQuery(db => z.array(z.object({ task_id: z.string() })).parse(db.prepare("SELECT c.task_id FROM suplex_task_controls c JOIN suplex_tasks t ON t.id = c.task_id WHERE (t.archived_at IS NULL AND c.status IN ('active', 'waiting_human') AND (c.wake_at IS NULL OR c.wake_at <= ?)) OR EXISTS (SELECT 1 FROM suplex_task_sessions s WHERE s.task_id = c.task_id AND s.stop_requested_at IS NOT NULL AND s.stopped_at IS NULL) ORDER BY COALESCE(c.wake_at, c.created_at)").all(new Date().toISOString())));
     for (const row of ids) {
       if (this.running.has(row.task_id)) continue;
       if (this.running.size >= 4) break;
@@ -97,7 +97,7 @@ export class TaskHost {
   }
 
   private async refreshPullRequestPrerequisites(): Promise<void> {
-    const rows = this.database.authQuery(db => db.prepare("SELECT d.task_id AS taskId, d.pull_request_number AS number, d.state, d.title, d.url, d.observed_at AS observedAt, json_extract(t.configuration_json, '$.repository') AS repository FROM forge_task_pull_request_dependencies d JOIN forge_tasks t ON t.id = d.task_id JOIN forge_task_controls c ON c.task_id = t.id WHERE t.archived_at IS NULL AND c.status = 'queued' ORDER BY d.task_id, d.pull_request_number").all() as Array<PullRequestDependency & { taskId: string; repository: string }>);
+    const rows = this.database.authQuery(db => db.prepare("SELECT d.task_id AS taskId, d.pull_request_number AS number, d.state, d.title, d.url, d.observed_at AS observedAt, json_extract(t.configuration_json, '$.repository') AS repository FROM suplex_task_pull_request_dependencies d JOIN suplex_tasks t ON t.id = d.task_id JOIN suplex_task_controls c ON c.task_id = t.id WHERE t.archived_at IS NULL AND c.status = 'queued' ORDER BY d.task_id, d.pull_request_number").all() as Array<PullRequestDependency & { taskId: string; repository: string }>);
     for (const row of rows) {
       try {
         const observed = await this.pullRequestObserver.observePullRequest({ repository: row.repository, branch: "", pullRequestNumber: row.number });
@@ -168,7 +168,7 @@ export class TaskHost {
           try { await prepareIssueContext(this.database, taskId, undefined, this.artifactRoot); }
           catch (error) {
             if (error instanceof MissingIntegrationCredential || error instanceof IssueTrackerScopeFailure || error instanceof ProviderHttpFailure && [401, 403, 404].includes(error.status)) {
-              if (this.store.get(taskId).status === "active") this.store.askHuman(taskId, `Forge cannot read the linked issue. ${error.message}. Check the issue and tracker access, then answer to retry.`);
+              if (this.store.get(taskId).status === "active") this.store.askHuman(taskId, `Suplex cannot read the linked issue. ${error.message}. Check the issue and tracker access, then answer to retry.`);
               return;
             }
             new StructuredLogger().warn("Issue context intake will be retried", { taskId }, { error: error instanceof Error ? error.message : String(error) });
@@ -180,7 +180,7 @@ export class TaskHost {
         this.controller.prepareRoot(taskId);
       } catch (error) {
         this.controller.prepareRoot(taskId);
-        if (this.store.get(taskId).status === "active") this.store.askHuman(taskId, `Forge could not prepare this task. ${error instanceof Error ? error.message : "Worktree preparation failed"}. Resolve the problem, then answer to retry.`);
+        if (this.store.get(taskId).status === "active") this.store.askHuman(taskId, `Suplex could not prepare this task. ${error instanceof Error ? error.message : "Worktree preparation failed"}. Resolve the problem, then answer to retry.`);
       }
     }
     try { await this.controller.recover(taskId); }

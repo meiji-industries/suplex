@@ -20,21 +20,21 @@ function adminOnly(role: AuthUser["role"], reply: FastifyReply): boolean {
 const update: FastifyPluginAsync<UpdateRoutesOptions> = async (app, options) => {
   const typed = app.withTypeProvider<ZodTypeProvider>();
   typed.get("/api/update", { schema: { querystring: UpdateQuerySchema, response: { 200: UpdateResponseSchema, 401: ErrorResponseSchema, 403: ErrorResponseSchema } } }, async (request, reply) => {
-    const observed = await options.readUpdate(request.query.check === "1", request.forgeUser);
+    const observed = await options.readUpdate(request.query.check === "1", request.suplexUser);
     return reply.header("Cache-Control", "private, no-store").send({
       ...observed,
-      canRestart: request.forgeUser.role === "admin" && observed.canRestart && options.requestRestart !== undefined,
+      canRestart: request.suplexUser.role === "admin" && observed.canRestart && options.requestRestart !== undefined,
       ...(options.instanceId && !observed.instanceId ? { instanceId: options.instanceId } : {}),
     });
   });
   if (options.requestRestart) {
     typed.post("/api/update/restart", { schema: { response: { 202: UpdateRestartResponseSchema, 401: ErrorResponseSchema, 403: ErrorResponseSchema, 503: ErrorResponseSchema } } }, async (request, reply) => {
-      if (!adminOnly(request.forgeUser.role, reply)) return;
+      if (!adminOnly(request.suplexUser.role, reply)) return;
       try {
-        return reply.code(202).send(await options.requestRestart!(request.forgeUser));
+        return reply.code(202).send(await options.requestRestart!(request.suplexUser));
       } catch (error) {
-        request.log.error({ err: error }, "Forge update request failed");
-        return reply.code(503).send({ error: error instanceof Error ? error.message : "Forge update control failed" });
+        request.log.error({ err: error }, "Suplex update request failed");
+        return reply.code(503).send({ error: error instanceof Error ? error.message : "Suplex update control failed" });
       }
     });
   }

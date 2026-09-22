@@ -27,7 +27,7 @@ test("live task history preserves authoritative order, removes drafts, and snaps
     let failure: Error | null = null;
     let reads = 0;
     await app.register(websocket);
-    app.decorateRequest("forgeUser", { getter: () => value.auth.listUsers(value.userId)[0]! });
+    app.decorateRequest("suplexUser", { getter: () => value.auth.listUsers(value.userId)[0]! });
     app.setValidatorCompiler(validatorCompiler);
     app.setSerializerCompiler(serializerCompiler);
     await app.register(taskRoutes, { tasks: value.tasks, config: value.config, readHistory: async () => {
@@ -57,7 +57,7 @@ test("live task history preserves authoritative order, removes drafts, and snaps
     expect(await nextEvent(second.events, "snapshot")).toMatchObject({ type: "snapshot", order: ["old", "final", "new"] });
     failure = new Error("offline");
     const errorOffset = first.events.length;
-    expect(await nextEvent(first.events, "error", errorOffset)).toEqual({ type: "error", message: "Live output is not available. Forge will retry." });
+    expect(await nextEvent(first.events, "error", errorOffset)).toEqual({ type: "error", message: "Live output is not available. Suplex will retry." });
     failure = null;
     const recovery = await nextEvent(first.events, "snapshot", errorOffset);
     expect(recovery).toMatchObject({ type: "snapshot", order: ["old", "final", "new"] });
@@ -81,7 +81,7 @@ test("live task history rejects a session from another task and closes observers
     const secondReserved = value.tasks.repository.controls.claimRoot({ taskId: second.task.id });
     const secondSession = value.tasks.repository.controls.bindHarnessSession({ sessionId: secondReserved.id, generation: secondReserved.generation, nativeSessionId: "ses_second" });
     await app.register(websocket);
-    app.decorateRequest("forgeUser", { getter: () => value.auth.listUsers(value.userId)[0]! });
+    app.decorateRequest("suplexUser", { getter: () => value.auth.listUsers(value.userId)[0]! });
     app.setValidatorCompiler(validatorCompiler);
     app.setSerializerCompiler(serializerCompiler);
     await app.register(taskRoutes, { tasks: value.tasks, config: value.config, readHistory: async () => [message("visible")] });
@@ -98,8 +98,8 @@ test("live task history rejects a session from another task and closes observers
     await new Promise<void>((resolve, reject) => { observer.once("open", resolve); observer.once("error", reject); });
     const closed = new Promise<number>(resolve => observer.once("close", resolve));
     value.database.authTransaction(db => {
-      db.prepare("UPDATE forge_users SET role = 'member' WHERE id = ?").run(value.userId);
-      db.prepare("DELETE FROM forge_memberships WHERE user_id = ?").run(value.userId);
+      db.prepare("UPDATE suplex_users SET role = 'member' WHERE id = ?").run(value.userId);
+      db.prepare("DELETE FROM suplex_memberships WHERE user_id = ?").run(value.userId);
     });
     expect(await closed).toBe(4403);
   } finally {
@@ -119,7 +119,7 @@ test("closing the application releases live history polling", async () => {
     const session = value.tasks.repository.controls.bindHarnessSession({ sessionId: reserved.id, generation: reserved.generation, nativeSessionId: "ses_close" });
     let reads = 0;
     await app.register(websocket);
-    app.decorateRequest("forgeUser", { getter: () => value.auth.listUsers(value.userId)[0]! });
+    app.decorateRequest("suplexUser", { getter: () => value.auth.listUsers(value.userId)[0]! });
     app.setValidatorCompiler(validatorCompiler);
     app.setSerializerCompiler(serializerCompiler);
     await app.register(taskRoutes, { tasks: value.tasks, config: value.config, readHistory: async () => { reads += 1; return []; } });

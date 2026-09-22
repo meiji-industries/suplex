@@ -3,11 +3,11 @@ import { mkdir, readdir, rm } from "node:fs/promises";
 import { dirname, join } from "node:path";
 import { z } from "zod";
 import { AuthFailure, type AuthService } from "../identity/auth.js";
-import type { ForgeDatabase } from "../platform/database.js";
+import type { SuplexDatabase } from "../platform/database.js";
 import { supportsProviderInstances } from "../runtimes/task-harness.js";
 import { ProviderInstanceSchema, type ProviderInstance } from "../http/contracts/providers.js";
 
-const selection = "SELECT id, provider, label, home_directory AS homeDirectory, created_at AS createdAt, updated_at AS updatedAt FROM forge_provider_instances";
+const selection = "SELECT id, provider, label, home_directory AS homeDirectory, created_at AS createdAt, updated_at AS updatedAt FROM suplex_provider_instances";
 
 export function providerInstancesDirectory(databasePath: string): string { return join(dirname(databasePath), "provider-instances"); }
 export async function providerInstanceDirectories(databasePath: string): Promise<string[]> {
@@ -16,7 +16,7 @@ export async function providerInstanceDirectories(databasePath: string): Promise
 }
 
 export class ProviderInstanceService {
-  constructor(private readonly database: ForgeDatabase, private readonly auth: AuthService) {}
+  constructor(private readonly database: SuplexDatabase, private readonly auth: AuthService) {}
   list(userId: string): ProviderInstance[] {
     this.requireAdmin(userId);
     return this.database.authQuery(db => z.array(ProviderInstanceSchema).parse(db.prepare(`${selection} ORDER BY provider, label COLLATE NOCASE, id`).all()));
@@ -30,17 +30,17 @@ export class ProviderInstanceService {
     const homeDirectory = join(providerInstancesDirectory(this.database.filename()), id);
     await mkdir(homeDirectory, { recursive: true, mode: 0o700 });
     const now = new Date().toISOString();
-    this.database.authTransaction(db => db.prepare("INSERT INTO forge_provider_instances (id, provider, label, home_directory, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)").run(id, provider, label, homeDirectory, now, now));
+    this.database.authTransaction(db => db.prepare("INSERT INTO suplex_provider_instances (id, provider, label, home_directory, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)").run(id, provider, label, homeDirectory, now, now));
     return this.get(id);
   }
   async delete(userId: string, id: string): Promise<void> {
     this.requireAdmin(userId);
     const instance = this.get(id);
     this.database.authTransaction(db => {
-      const profileReference = db.prepare("SELECT 1 FROM forge_profiles WHERE provider_instance_id = ? LIMIT 1").get(id);
-      const projectReference = db.prepare("SELECT 1 FROM forge_projects p, json_each(p.provider_policy_json, '$.allowedInstanceIds') allowed WHERE allowed.value = ? LIMIT 1").get(id);
+      const profileReference = db.prepare("SELECT 1 FROM suplex_profiles WHERE provider_instance_id = ? LIMIT 1").get(id);
+      const projectReference = db.prepare("SELECT 1 FROM suplex_projects p, json_each(p.provider_policy_json, '$.allowedInstanceIds') allowed WHERE allowed.value = ? LIMIT 1").get(id);
       if (profileReference || projectReference) throw new AuthFailure("This provider instance is used by an agent profile or project", 409);
-      db.prepare("DELETE FROM forge_provider_instances WHERE id = ?").run(id);
+      db.prepare("DELETE FROM suplex_provider_instances WHERE id = ?").run(id);
     });
     await rm(instance.homeDirectory, { recursive: true, force: true });
   }

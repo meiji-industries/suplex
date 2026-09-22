@@ -4,7 +4,7 @@ import { mkdtemp, rm, writeFile, readFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterEach, expect, test, vi } from "vitest";
-import { ForgeDatabase } from "../src/platform/database.js";
+import { SuplexDatabase } from "../src/platform/database.js";
 import { RootController } from "../src/coordination/root-controller.js";
 import { TaskControlStore } from "../src/coordination/root-session-store.js";
 import { TaskHost } from "../src/tasks/host.js";
@@ -22,7 +22,7 @@ afterEach(async () => { vi.restoreAllMocks(); for (const cleanup of cleanups.spl
 test.each([new MissingIntegrationCredential("Credential is not available"), new IssueTrackerScopeFailure("Issue moved"), new ProviderHttpFailure(401), new ProviderHttpFailure(403), new ProviderHttpFailure(404), new ProviderHttpFailure(503)])("issue intake handles $message without starting a native session", async error => {
   const f = await fixture();
   const issue = { kind: "github", repository: "owner/repo", number: 42, id: "42", key: "#42", title: "Fix", url: "https://github.com/owner/repo/issues/42" };
-  f.database.authTransaction(db => db.prepare("UPDATE forge_tasks SET issue_json = ? WHERE id = 'task'").run(JSON.stringify(issue)));
+  f.database.authTransaction(db => db.prepare("UPDATE suplex_tasks SET issue_json = ? WHERE id = 'task'").run(JSON.stringify(issue)));
   vi.spyOn(IssueTracker.prototype, "read").mockRejectedValue(error);
   await f.host.recover("task");
   const control = f.store.get("task");
@@ -38,19 +38,19 @@ test.each([new MissingIntegrationCredential("Credential is not available"), new 
 });
 
 async function fixture() {
-  const directory = await mkdtemp(join(tmpdir(), "forge-task-host-"));
+  const directory = await mkdtemp(join(tmpdir(), "suplex-task-host-"));
   const repository = join(directory, "repo");
   const git = (args: string[]) => runCommand({ taskId: null, stepId: null, command: "git", args });
   await git(["init", "-b", "main", repository]);
   await git(["-C", repository, "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "--allow-empty", "-m", "initial"]);
   const sha = (await git(["-C", repository, "rev-parse", "HEAD"])).stdout.trim();
-  const database = new ForgeDatabase(join(directory, "forge.sqlite"));
+  const database = new SuplexDatabase(join(directory, "suplex.sqlite"));
   const stamp = new Date().toISOString();
   database.authTransaction(db => {
-    db.prepare("INSERT INTO forge_companies (id, name, status, created_at) VALUES ('company', 'Company', 'active', ?)").run(stamp);
-    db.prepare("INSERT INTO forge_projects (id, company_id, name, repository_path, worktree_root, base_branch, setup_command, verification_command, created_at, updated_at) VALUES ('project', 'company', 'Project', ?, ?, 'main', '', '', ?, ?)").run(repository, join(directory, "worktrees"), stamp, stamp);
+    db.prepare("INSERT INTO suplex_companies (id, name, status, created_at) VALUES ('company', 'Company', 'active', ?)").run(stamp);
+    db.prepare("INSERT INTO suplex_projects (id, company_id, name, repository_path, worktree_root, base_branch, setup_command, verification_command, created_at, updated_at) VALUES ('project', 'company', 'Project', ?, ?, 'main', '', '', ?, ?)").run(repository, join(directory, "worktrees"), stamp, stamp);
     insertNativeTaskRow(db);
-    db.prepare("UPDATE forge_tasks SET configuration_json = json_set(configuration_json, '$.repositoryPath', ?, '$.worktreeRoot', ?, '$.startingSha', ?, '$.baselineSha', ?, '$.setupCommand', 'pnpm install', '$.verificationCommand', 'pnpm test') WHERE id = 'task'").run(repository, join(directory, "worktrees"), sha, sha);
+    db.prepare("UPDATE suplex_tasks SET configuration_json = json_set(configuration_json, '$.repositoryPath', ?, '$.worktreeRoot', ?, '$.startingSha', ?, '$.baselineSha', ?, '$.setupCommand', 'pnpm install', '$.verificationCommand', 'pnpm test') WHERE id = 'task'").run(repository, join(directory, "worktrees"), sha, sha);
   });
   const store = new TaskControlStore(database);
   const profile = { profileId: "profile", provider: "opencode", model: "openai/gpt-5.6-luna", reasoningLevel: "max", serviceTier: "priority" } as const;
@@ -75,7 +75,7 @@ test("native recovery prepares the Git worktree and delivers captured instructio
 
 test("project preparation and skill context exist before the first native session and survive restart", async () => {
   const f = await fixture();
-  f.database.authTransaction(db => db.prepare("UPDATE forge_tasks SET configuration_json = json_set(configuration_json, '$.execution', json(?), '$.setupCommand', ?) WHERE id = 'task'").run(JSON.stringify({ instructions: "Use the Acme workflow", skillDirectories: [], environment: {}, mcp: [] }), "printf prepared > setup-ready"));
+  f.database.authTransaction(db => db.prepare("UPDATE suplex_tasks SET configuration_json = json_set(configuration_json, '$.execution', json(?), '$.setupCommand', ?) WHERE id = 'task'").run(JSON.stringify({ instructions: "Use the Acme workflow", skillDirectories: [], environment: {}, mcp: [] }), "printf prepared > setup-ready"));
   const ensure = f.harness.ensureSession.bind(f.harness);
   vi.spyOn(f.harness, "ensureSession").mockImplementation(async (scope, nativeId) => {
     expect(await readFile(join(scope.directory, "setup-ready"), "utf8")).toBe("prepared");
@@ -125,7 +125,7 @@ test.each(["missing", "stale"] as const)("restart with %s worktree metadata reco
   const conflict = await readFile(join(worktree.path, "conflict.txt"), "utf8");
   const rebaseHeadNamePath = (await runCommand({ taskId: null, stepId: null, command: "git", cwd: worktree.path, args: ["rev-parse", "--path-format=absolute", "--git-path", "rebase-merge/head-name"] })).stdout.trim();
   const rebaseHeadName = await readFile(rebaseHeadNamePath, "utf8");
-  if (metadata === "missing") f.database.authTransaction(db => db.prepare("UPDATE forge_task_controls SET worktree_json = NULL WHERE task_id = 'task'").run());
+  if (metadata === "missing") f.database.authTransaction(db => db.prepare("UPDATE suplex_task_controls SET worktree_json = NULL WHERE task_id = 'task'").run());
 
   const restarted = new TaskHost(f.database, { controller: f.controller, delivery: f.delivery });
   try { await restarted.recover("task"); } finally { await restarted.stop(); }
@@ -245,7 +245,7 @@ test("delivered PR refresh updates facts in a batch without restarting agents or
   const pull = { repository: "owner/repo", number: 183, url: "https://github.com/owner/repo/pull/183", headSha: "a".repeat(40), state: "open", mergedAt: null };
   f.store.setPullRequest("task", pull);
   f.store.markDelivered("task");
-  f.database.authTransaction(db => db.prepare("UPDATE forge_task_controls SET delivery_target = 'pull_request_draft' WHERE task_id = 'task'").run());
+  f.database.authTransaction(db => db.prepare("UPDATE suplex_task_controls SET delivery_target = 'pull_request_draft' WHERE task_id = 'task'").run());
   const before = f.store.get("task");
   let calls = 0;
   const refresh = new CompletedPullRequests(f.database, { getPullRequestStates: async inputs => {
@@ -311,7 +311,7 @@ test("failed or missing PR observations preserve facts and closed PRs can reopen
   expect(f.store.get("task")).toEqual(before);
   await refresh.refresh();
   expect(f.store.get("task")).toMatchObject({ status: "delivered", pullRequest: { state: "open" } });
-  f.database.authTransaction(db => db.prepare("UPDATE forge_tasks SET archived_at = ? WHERE id = 'task'").run(new Date().toISOString()));
+  f.database.authTransaction(db => db.prepare("UPDATE suplex_tasks SET archived_at = ? WHERE id = 'task'").run(new Date().toISOString()));
   await refresh.refresh();
   expect(attempt).toBe(3);
 });
@@ -320,7 +320,7 @@ test("failed or missing PR observations preserve facts and closed PRs can reopen
 test("delivered PR refresh rediscovers missing observations from task intent", async () => {
   const f = await fixture();
   f.store.markDelivered("task");
-  f.database.authTransaction(db => db.prepare("UPDATE forge_task_controls SET delivery_intent_json = json_set(delivery_intent_json, '$.pullRequestNumber', 183) WHERE task_id = 'task'").run());
+  f.database.authTransaction(db => db.prepare("UPDATE suplex_task_controls SET delivery_intent_json = json_set(delivery_intent_json, '$.pullRequestNumber', 183) WHERE task_id = 'task'").run());
   const refresh = new CompletedPullRequests(f.database, { getPullRequestStates: async inputs => {
     expect(inputs).toEqual([{ repository: "owner/repo", number: 183 }]);
     return [{ repository: "owner/repo", number: 183, url: "https://github.com/owner/repo/pull/183", headSha: "a".repeat(40), state: "merged", mergedAt: "2026-09-10T02:32:47Z" }];

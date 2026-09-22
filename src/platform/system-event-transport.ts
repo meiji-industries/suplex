@@ -33,7 +33,7 @@ const maxBytes = 8192;
 export function systemEventSocketPath(databasePath: string): string {
   const canonical = realpathSync(databasePath);
   const digest = createHash("sha256").update(canonical).digest("hex").slice(0, 20);
-  return process.platform === "win32" ? `\\\\.\\pipe\\forge-system-${digest}` : join(tmpdir(), `forge-system-${process.getuid?.() ?? 0}-${digest}.sock`);
+  return process.platform === "win32" ? `\\\\.\\pipe\\suplex-system-${digest}` : join(tmpdir(), `suplex-system-${process.getuid?.() ?? 0}-${digest}.sock`);
 }
 
 export function createSystemEventProducer(databasePath: string): EventSink {

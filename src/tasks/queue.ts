@@ -11,7 +11,7 @@ type Prerequisite = z.infer<typeof PrerequisiteSchema>;
 
 /**
  * A prerequisite is complete when it is delivered at its own delivery target. Delivery at merged also needs the merged
- * pull request state Forge observed from GitHub; until Forge observes it, the dependent waits and Forge observes again.
+ * pull request state Suplex observed from GitHub; until Suplex observes it, the dependent waits and Suplex observes again.
  * Delivery at a pull request, remote branch, or local worktree target is complete without a merge.
  */
 function waitReason(prerequisite: Prerequisite): TaskQueueWait["reason"] | null {
@@ -30,7 +30,7 @@ function waitSummary(prerequisite: Prerequisite, reason: TaskQueueWait["reason"]
     case "prerequisite_needs_human": return `${prerequisite.title} needs an answer. Answer it. This task starts when ${condition}.`;
     case "prerequisite_cancelled": return `${prerequisite.title} is cancelled. Remove it from Blocked by, or send this task to the backlog.`;
     case "prerequisite_archived": return `${prerequisite.title} is archived and not delivered. Remove it from Blocked by, or open and deliver it.`;
-    case "prerequisite_merge_unobserved": return `${prerequisite.title} is delivered, but Forge did not observe its merged pull request. Forge checks GitHub again.`;
+    case "prerequisite_merge_unobserved": return `${prerequisite.title} is delivered, but Suplex did not observe its merged pull request. Suplex checks GitHub again.`;
     case "prerequisite_pull_request_open":
     case "prerequisite_pull_request_closed": throw new Error("Pull request prerequisite has no task summary");
     default: throw new Error("Invalid task prerequisite wait reason");
@@ -39,7 +39,7 @@ function waitSummary(prerequisite: Prerequisite, reason: TaskQueueWait["reason"]
 
 /** Every prerequisite that is not complete, with the exact reason, ordered by task id like Blocked by. */
 export function prerequisiteWaits(db: Database.Database, taskId: string): TaskQueueWait[] {
-  const rows = z.array(PrerequisiteSchema).parse(db.prepare("SELECT t.id, t.title, c.status, c.delivery_target AS deliveryTarget, t.archived_at IS NOT NULL AS archived, json_extract(c.pull_request_json, '$.state') AS pullRequestState FROM forge_task_dependencies d JOIN forge_tasks t ON t.id = d.depends_on_task_id JOIN forge_task_controls c ON c.task_id = t.id WHERE d.task_id = ? ORDER BY t.id").all(taskId));
+  const rows = z.array(PrerequisiteSchema).parse(db.prepare("SELECT t.id, t.title, c.status, c.delivery_target AS deliveryTarget, t.archived_at IS NOT NULL AS archived, json_extract(c.pull_request_json, '$.state') AS pullRequestState FROM suplex_task_dependencies d JOIN suplex_tasks t ON t.id = d.depends_on_task_id JOIN suplex_task_controls c ON c.task_id = t.id WHERE d.task_id = ? ORDER BY t.id").all(taskId));
   const pullRequests = pullRequestDependenciesInTransaction(db, taskId).flatMap(prerequisite => {
     if (prerequisite.state === "merged") return [];
     const reason: "prerequisite_pull_request_closed" | "prerequisite_pull_request_open" = prerequisite.state === "closed" ? "prerequisite_pull_request_closed" : "prerequisite_pull_request_open";
@@ -60,20 +60,20 @@ export function taskQueue(db: Database.Database, taskId: string, status: TaskCon
  * The only admission path for a queued task. The caller's transaction rechecks status, archive, ownership, and prerequisites.
  */
 export function admitQueuedTask(db: Database.Database, taskId: string): boolean {
-  const row = db.prepare("SELECT t.archived_at, c.status FROM forge_tasks t JOIN forge_task_controls c ON c.task_id = t.id WHERE t.id = ?").get(taskId) as { archived_at: string | null; status: string } | undefined;
+  const row = db.prepare("SELECT t.archived_at, c.status FROM suplex_tasks t JOIN suplex_task_controls c ON c.task_id = t.id WHERE t.id = ?").get(taskId) as { archived_at: string | null; status: string } | undefined;
   if (!row || row.archived_at !== null || row.status !== "queued") return false;
   if (prerequisiteWaits(db, taskId).length) return false;
   assertTaskPullRequestsAvailable(db, taskId);
   const time = new Date().toISOString();
-  if (db.prepare("UPDATE forge_task_controls SET status = 'active', wake_at = ?, updated_at = ? WHERE task_id = ? AND status = 'queued'").run(time, time, taskId).changes !== 1) return false;
+  if (db.prepare("UPDATE suplex_task_controls SET status = 'active', wake_at = ?, updated_at = ? WHERE task_id = ? AND status = 'queued'").run(time, time, taskId).changes !== 1) return false;
   return true;
 }
 
 /** Queued tasks whose prerequisites look complete now, or only the queued dependents of one prerequisite. Admission rechecks each one. */
 export function readyQueuedTaskIds(db: Database.Database, dependencyOf?: string): string[] {
   const rows = (dependencyOf === undefined
-    ? db.prepare("SELECT t.id FROM forge_tasks t JOIN forge_task_controls c ON c.task_id = t.id WHERE c.status = 'queued' AND t.archived_at IS NULL ORDER BY t.created_at, t.id").all()
-    : db.prepare("SELECT t.id FROM forge_task_dependencies d JOIN forge_tasks t ON t.id = d.task_id JOIN forge_task_controls c ON c.task_id = t.id WHERE d.depends_on_task_id = ? AND c.status = 'queued' AND t.archived_at IS NULL ORDER BY t.created_at, t.id").all(dependencyOf)) as Array<{ id: string }>;
+    ? db.prepare("SELECT t.id FROM suplex_tasks t JOIN suplex_task_controls c ON c.task_id = t.id WHERE c.status = 'queued' AND t.archived_at IS NULL ORDER BY t.created_at, t.id").all()
+    : db.prepare("SELECT t.id FROM suplex_task_dependencies d JOIN suplex_tasks t ON t.id = d.task_id JOIN suplex_task_controls c ON c.task_id = t.id WHERE d.depends_on_task_id = ? AND c.status = 'queued' AND t.archived_at IS NULL ORDER BY t.created_at, t.id").all(dependencyOf)) as Array<{ id: string }>;
   return rows.map(row => row.id).filter(id => !prerequisiteWaits(db, id).length);
 }
 

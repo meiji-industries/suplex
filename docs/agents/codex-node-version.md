@@ -14,8 +14,8 @@ directory-specific version from `mise.toml`.
 
 This also means every non-interactive `node`, `pnpm`, or other mise-managed
 command evaluates the repository's `mise.toml` before the command starts. In
-Forge, that evaluation runs `scripts/resolve-magicdns.sh` to populate
-`FORGE_TAILSCALE_ADDRESS`. If Tailscale exits successfully but prints something
+Suplex, that evaluation runs `scripts/resolve-magicdns.sh` to populate
+`SUPLEX_TAILSCALE_ADDRESS`. If Tailscale exits successfully but prints something
 other than JSON, `jq` fails and the requested command never starts. This is a
 local environment-rendering failure, not a TypeScript or test failure. To
 diagnose the project independently, invoke the pinned Node binary directly;
@@ -30,5 +30,5 @@ reproduces CI's clean global Git configuration without changing user settings.
 ## Verify
 
 From the repository, run `zsh -c 'node --version'` or:
-`codex exec -C /Users/dev/code/forge -- 'Run: node --version && node -e "require(\"better-sqlite3\")"'`.
+`codex exec -C /Users/dev/code/suplex -- 'Run: node --version && node -e "require(\"better-sqlite3\")"'`.
 Expected Node version: `v26.7.0`.

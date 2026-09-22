@@ -7,16 +7,16 @@ import { runCommand } from "../src/platform/command-runner.js";
 import { createGitCommandGuard } from "../src/coordination/worker-environment.js";
 
 async function git(cwd: string, ...args: string[]): Promise<string> {
-  const result = await runCommand({ command: process.env.FORGE_GIT_REAL_BIN || "git", args, cwd, taskId: null, stepId: null });
+  const result = await runCommand({ command: process.env.SUPLEX_GIT_REAL_BIN || "git", args, cwd, taskId: null, stepId: null });
   if (result.exitCode !== 0) throw new Error(result.stderr || `git ${args.join(" ")} failed`);
   return result.stdout.trim();
 }
 
 test("Worker guards permit local repairs and CI reads without provider writes", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "forge-worker-guard-"));
+  const directory = await mkdtemp(join(tmpdir(), "suplex-worker-guard-"));
   try {
     const guard = await createGitCommandGuard(directory);
-    const run = (name: string, args: string[]) => runCommand({ command: join(guard.directory, name), args, taskId: null, stepId: null, env: { ...guard.env, FORGE_GIT_REAL_BIN: "/bin/echo", FORGE_GH_REAL_BIN: "/bin/echo" } });
+    const run = (name: string, args: string[]) => runCommand({ command: join(guard.directory, name), args, taskId: null, stepId: null, env: { ...guard.env, SUPLEX_GIT_REAL_BIN: "/bin/echo", SUPLEX_GH_REAL_BIN: "/bin/echo" } });
     for (const args of [["add", "reset"], ["commit", "-m", "merge"], ["merge", "origin/main"], ["-C", "push", "status"]]) {
       expect((await run("git", args)).stdout.trim()).toBe(args.join(" "));
     }
@@ -29,7 +29,7 @@ test("Worker guards permit local repairs and CI reads without provider writes", 
 });
 
 test("Worker guard refreshes atomically replace complete executables", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "forge-worker-guard-refresh-"));
+  const directory = await mkdtemp(join(tmpdir(), "suplex-worker-guard-refresh-"));
   try {
     const first = await createGitCommandGuard(directory);
     const executable = join(first.directory, "git");
@@ -49,7 +49,7 @@ test("Worker guard refreshes atomically replace complete executables", async () 
 });
 
 test("Worker guards permit task rebases while every push form stays blocked", async () => {
-  const directory = await mkdtemp(join(tmpdir(), "forge-worker-rebase-"));
+  const directory = await mkdtemp(join(tmpdir(), "suplex-worker-rebase-"));
   const remote = join(directory, "origin.git");
   const publisher = join(directory, "publisher");
   const task = join(directory, "task");
@@ -59,7 +59,7 @@ test("Worker guards permit task rebases while every push form stays blocked", as
     await git(directory, "init", "--bare", remote);
     await git(directory, "--git-dir", remote, "symbolic-ref", "HEAD", "refs/heads/main");
     await git(publisher, "init", "-b", "main");
-    await git(publisher, "config", "user.name", "Forge Publisher");
+    await git(publisher, "config", "user.name", "Suplex Publisher");
     await git(publisher, "config", "user.email", "publisher@example.invalid");
     writeFileSync(join(publisher, "shared.txt"), "base\n");
     await git(publisher, "add", ".");
@@ -67,7 +67,7 @@ test("Worker guards permit task rebases while every push form stays blocked", as
     await git(publisher, "remote", "add", "origin", remote);
     await git(publisher, "push", "-u", "origin", "main");
     await git(directory, "clone", remote, task);
-    await git(task, "config", "user.name", "Forge Worker");
+    await git(task, "config", "user.name", "Suplex Worker");
     await git(task, "config", "user.email", "worker@example.invalid");
     await git(task, "switch", "-c", "task");
     writeFileSync(join(task, "task.txt"), "task change\n");

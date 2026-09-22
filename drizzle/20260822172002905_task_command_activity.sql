@@ -1,4 +1,4 @@
-CREATE TABLE IF NOT EXISTS `forge_task_command_activity` (
+CREATE TABLE IF NOT EXISTS `suplex_task_command_activity` (
   `id` text PRIMARY KEY NOT NULL,
   `task_id` text NOT NULL,
   `step_id` text NOT NULL,
@@ -13,8 +13,8 @@ CREATE TABLE IF NOT EXISTS `forge_task_command_activity` (
   `finished_at` text NOT NULL
 );
 --> statement-breakpoint
-CREATE INDEX IF NOT EXISTS `forge_task_command_activity_task_step_idx`
-  ON `forge_task_command_activity` (`task_id`, `step_id`, `finished_at`);
+CREATE INDEX IF NOT EXISTS `suplex_task_command_activity_task_step_idx`
+  ON `suplex_task_command_activity` (`task_id`, `step_id`, `finished_at`);
 --> statement-breakpoint
-CREATE INDEX IF NOT EXISTS `forge_task_command_activity_task_recent_idx`
-  ON `forge_task_command_activity` (`task_id`, `finished_at` DESC);
+CREATE INDEX IF NOT EXISTS `suplex_task_command_activity_task_recent_idx`
+  ON `suplex_task_command_activity` (`task_id`, `finished_at` DESC);

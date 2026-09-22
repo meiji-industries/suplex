@@ -9,7 +9,7 @@ const jira = { kind: "jira" as const, site: "https://example.atlassian.net", pro
 const issue = { kind: "jira" as const, site: jira.site, id: "42", key: "APP-42", title: "Fix", url: `${jira.site}/browse/APP-42` };
 const githubIssue = { kind: "github" as const, repository: "owner/repo", id: "42", number: 42, key: "#42", title: "Fix", url: "https://github.com/owner/repo/issues/42" };
 const bytes = Buffer.from("fixture-image");
-const filename = `forge-task_one-${createHash("sha256").update(bytes).digest("hex")}.png`;
+const filename = `suplex-task_one-${createHash("sha256").update(bytes).digest("hex")}.png`;
 const credentials = () => { vi.stubEnv("TEST_JIRA_EMAIL", "test@example.com"); vi.stubEnv("TEST_JIRA_TOKEN", "fixture-token"); };
 
 test("Jira evidence links stay clickable without changing read-back text", () => {
@@ -52,7 +52,7 @@ test("GitHub media uses supported CLI and recovers its owned comment after respo
     const file = args[args.indexOf("--body-file") + 1];
     if (!file) throw new Error("Body file missing");
     const suppliedBody = await readFile(file, "utf8");
-    expect(suppliedBody).toBe(`[Forge attachment ${filename}]`);
+    expect(suppliedBody).toBe(`[Suplex attachment ${filename}]`);
     expect(args[args.indexOf("--attach") + 1]).toMatch(new RegExp(`${filename}$`));
     body = `${suppliedBody}\n\n![${filename}](https://github.com/user-attachments/assets/fixture)`;
     throw new Error("Response lost");
@@ -72,7 +72,7 @@ test("GitHub media requests a CLI upgrade before uploading when --attach is abse
 });
 
 test("issue publication ignores another author's marker and confirms the new comment", async () => {
-  let body = "other author's work\n\n[Forge task task_one]";
+  let body = "other author's work\n\n[Suplex task task_one]";
   let own = false;
   const calls: string[] = [];
   const github = async (path: string, input?: unknown, method?: string) => {
@@ -119,8 +119,8 @@ test("publication requires matching remote content after the write", async () =>
 });
 
 test.each([undefined, "missing", "9"])("evidence publication preserves own quoted markers and recovers with known ID %s", async knownId => {
-  const quoted = "My note quotes [Forge task task_one] but is not Forge evidence";
-  const previous = `## What changed\n\nOld summary\n\nSource: ${"a".repeat(40)}\n\n## Before\n\nFailed\n\n## After\n\nPassed\n\n## How to verify\n\nClick\n\n[Forge task task_one]`;
+  const quoted = "My note quotes [Suplex task task_one] but is not Suplex evidence";
+  const previous = `## What changed\n\nOld summary\n\nSource: ${"a".repeat(40)}\n\n## Before\n\nFailed\n\n## After\n\nPassed\n\n## How to verify\n\nClick\n\n[Suplex task task_one]`;
   const rows = [{ id: 8, body: quoted, user: { id: 4 } }, { id: 9, body: previous, user: { id: 4 } }];
   let writes = 0;
   const github = async (path: string, input?: unknown, method?: string) => {
@@ -143,12 +143,12 @@ test.each([undefined, "missing", "9"])("evidence publication preserves own quote
 });
 
 test("a known comment ID wins over an earlier evidence-shaped comment", async () => {
-  const rows = [{ id: 8, body: "New evidence\n\n[Forge task task_one]", user: { id: 4 } }, { id: 9, body: "Edited known evidence", user: { id: 4 } }];
+  const rows = [{ id: 8, body: "New evidence\n\n[Suplex task task_one]", user: { id: 4 } }, { id: 9, body: "Edited known evidence", user: { id: 4 } }];
   const github = async (path: string, input?: unknown) => {
     if (path === "user") return { id: 4 };
     if (input) {
       expect(path).toBe("repos/owner/repo/issues/comments/9");
-      rows[1]!.body = "New evidence\n\n[Forge task task_one]";
+      rows[1]!.body = "New evidence\n\n[Suplex task task_one]";
       return rows[1];
     }
     return rows;

@@ -2,22 +2,22 @@
 
 This document has two halves. The first half is public. Any agent can read it and
 the artifacts it describes without a credential. The second half is the operator
-handoff. It needs an administrator session in Forge.
+handoff. It needs an administrator session in Suplex.
 
-Forge serves a remote Streamable HTTP MCP endpoint at `/mcp`. OAuth 2.1 browser
+Suplex serves a remote Streamable HTTP MCP endpoint at `/mcp`. OAuth 2.1 browser
 approval protects it. The local stdio bridge and the Agent API remain advanced
 pairing options. See [the MCP guide](../agent-mcp.md).
 
 ## Public discovery
 
-Forge serves six artifacts without authentication. They describe the contract.
+Suplex serves six artifacts without authentication. They describe the contract.
 They never contain task data, company data, or a credential.
 
 | Path | Type | Content |
 | --- | --- | --- |
 | `/llms.txt` | `text/plain` | A plain-text overview of the deployment. |
-| `/.well-known/forge/api-catalog.json` | `application/json` | Every public, pairing, and runtime path with its authentication. |
-| `/.well-known/forge/agent-skills.json` | `application/json` | The `forge` agent skill, its clients, and the variables to set. |
+| `/.well-known/suplex/api-catalog.json` | `application/json` | Every public, pairing, and runtime path with its authentication. |
+| `/.well-known/suplex/agent-skills.json` | `application/json` | The `suplex` agent skill, its clients, and the variables to set. |
 | `/.well-known/oauth-protected-resource/mcp` | `application/json` | The canonical MCP resource and its authorization server. |
 | `/.well-known/oauth-protected-resource` | `application/json` | The root compatibility form of the protected-resource metadata. |
 | `/.well-known/oauth-authorization-server` | `application/json` | OAuth endpoints, grants, scopes, and PKCE methods. |
@@ -25,8 +25,8 @@ They never contain task data, company data, or a credential.
 Read them in this order.
 
 1. Read `/llms.txt` to learn what the deployment is.
-2. Read `/.well-known/forge/api-catalog.json` to find the MCP, pairing, and runtime paths.
-3. Read `/.well-known/forge/agent-skills.json` to choose a client.
+2. Read `/.well-known/suplex/api-catalog.json` to find the MCP, pairing, and runtime paths.
+3. Read `/.well-known/suplex/agent-skills.json` to choose a client.
 
 `POST /mcp` stays closed until OAuth approval. Every Agent API runtime path stays closed until you pair. `GET /api/agent/openapi.json`,
 `GET /api/agent/capabilities`, `GET /api/agent/me`, the workflow and template
@@ -41,25 +41,25 @@ served document after you pair, and treat it as authoritative when the two diffe
 
 1. Add the canonical `/mcp` resource to the MCP client.
 2. Start the client login flow.
-3. Sign in to Forge when Forge asks you to sign in.
+3. Sign in to Suplex when Suplex asks you to sign in.
 4. Check the callback, and select the company and projects.
 5. Select **Approve**.
 
-Forge creates or reuses one stable external-agent identity for the registered
+Suplex creates or reuses one stable external-agent identity for the registered
 client, the administrator, and the company. Refresh and reconnect keep that
 identity. The Agents page controls its grants and revocation.
 
 ## Use advanced pairing
 
 1. Install the skill in the client that will use it. Hermes users copy
-   `skills/forge` into the active Hermes profile. [The skill guide](../agent-skill.md)
+   `skills/suplex` into the active Hermes profile. [The skill guide](../agent-skill.md)
    describes the files.
-2. Ask an operator for a pairing code. Forge prints the code once.
+2. Ask an operator for a pairing code. Suplex prints the code once.
 3. Exchange the code. Send `POST /api/agent/pairing/exchange` with the pairing
    code and your profile identifier. The response carries the credential. The
    code is single use.
 4. Store the credential in the MCP server environment. The bridge reads
-   `FORGE_BASE_URL` and `FORGE_AGENT_CREDENTIAL` from `process.env` only. Never
+   `SUPLEX_BASE_URL` and `SUPLEX_AGENT_CREDENTIAL` from `process.env` only. Never
    pass the credential on a command line. Command line arguments are visible to
    every process on the host, and shell history keeps them.
 5. Register the MCP bridge, or use the HTTP client. Prefer the bridge.
@@ -73,7 +73,7 @@ agent. It grants nothing else.
   identifier, and do not read a project list from anywhere else.
 - Read `GET /api/agent/capabilities` to learn what this deployment accepts. The
   reported surface is the registered surface.
-- List tasks with `forge_list_tasks`. It defaults to a compact summary. Filter
+- List tasks with `suplex_list_tasks`. It defaults to a compact summary. Filter
   by pull request number, source branch, or case-insensitive title substring,
   and set `view` to `full` when the complete projection is needed.
 - Create a task with `POST /api/agent/tasks`. An idempotency key is necessary. A
@@ -83,7 +83,7 @@ agent. It grants nothing else.
 - Send a lifecycle command with `POST /api/agent/tasks/{taskId}/commands`. The
   current revision and an idempotency key are both necessary.
 
-Forge conceals what you cannot reach. A task in another company, a task in a
+Suplex conceals what you cannot reach. A task in another company, a task in a
 project without a grant, and a task that does not exist all answer `404` with the
 same body. A denial never tells you which case applied. Treat every `404` as
 "not available to you" and stop. Reads include tasks that users or other agents
@@ -92,7 +92,7 @@ commands and dependency changes remain limited to tasks this agent created.
 
 Human answers are not available to paired agents. The runtime API exposes
 delivery and merge commands only when `GET /api/agent/capabilities` reports
-them. MCP exposes lifecycle task commands only. Forge can perform a task's
+them. MCP exposes lifecycle task commands only. Suplex can perform a task's
 configured delivery, including a merge after review, without an agent command.
 
 [The runtime API guide](../agent-api.md) describes pagination, filters,
@@ -107,7 +107,7 @@ call the routes directly. The routes are not part of the agent runtime contract.
 
 1. Create the agent. `POST /api/admin/external-agents` takes the name, the company,
    and the project identifiers to grant.
-2. Read the pairing code from the response. Forge shows it once.
+2. Read the pairing code from the response. Suplex shows it once.
 3. Give the code to the agent operator over a channel you trust.
 4. Confirm the exchange. The agent calls `POST /api/agent/pairing/exchange`. A
    second exchange of the same code fails.
@@ -120,10 +120,10 @@ To issue a further code for an existing agent, call
 Rotate when a credential can have leaked, when the agent host changes, or on your
 own schedule.
 
-1. Call `POST /api/admin/external-agents/{agentId}/rotate`. Forge returns a new
+1. Call `POST /api/admin/external-agents/{agentId}/rotate`. Suplex returns a new
    pairing code and stops the current credential.
 2. Give the new code to the agent operator.
-3. Ask the operator to exchange it and to replace `FORGE_AGENT_CREDENTIAL` in the
+3. Ask the operator to exchange it and to replace `SUPLEX_AGENT_CREDENTIAL` in the
    profile `.env` file.
 4. Confirm that `GET /api/agent/me` answers `200` with the new credential.
 
@@ -132,7 +132,7 @@ persisted credential on every request.
 
 ### Revoke a pairing
 
-1. Call `POST /api/admin/external-agents/{agentId}/revoke`. Forge answers `204`.
+1. Call `POST /api/admin/external-agents/{agentId}/revoke`. Suplex answers `204`.
 2. Confirm that the old credential answers `401` with `credential_invalid`.
 
 Revocation stops the agent. It changes no task the agent created.
@@ -154,9 +154,9 @@ Create a second agent instead.
 
 ### Verify an agent integration after an upgrade
 
-Run this sequence after every Forge upgrade, with the agent credential in hand.
+Run this sequence after every Suplex upgrade, with the agent credential in hand.
 
-1. Read `/llms.txt` and `/.well-known/forge/api-catalog.json` without a
+1. Read `/llms.txt` and `/.well-known/suplex/api-catalog.json` without a
    credential. Both must answer `200`. Neither can contain a credential.
 2. Read `GET /api/agent/openapi.json` with the credential. It must answer `200`.
    Compare its paths against the catalog `runtime` list. A path that the catalog

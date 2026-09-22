@@ -44,7 +44,7 @@ function matchesTask(record: LogRecord, taskId: string): boolean {
 }
 
 function matches(entry: LogEntry, options: LogViewerOptions, now: number): boolean {
-  if (!options.all && process.env.FORGE_LOG_REQUESTS !== "1" && typeof entry.record.level === "number" && entry.record.level < 30) return false;
+  if (!options.all && process.env.SUPLEX_LOG_REQUESTS !== "1" && typeof entry.record.level === "number" && entry.record.level < 30) return false;
   if (options.errors && (typeof entry.record.level !== "number" || entry.record.level < 40)) return false;
   if (options.taskId && !matchesTask(entry.record, options.taskId)) return false;
   return !options.since || entry.timestamp >= now - parseSince(options.since);
@@ -75,7 +75,7 @@ function print(entries: LogEntry[], options: LogViewerOptions): void {
 
 /** Prints the merged tail. With follow enabled, polls the two active files for new JSON records. */
 export async function runLogViewer(options: LogViewerOptions = {}): Promise<void> {
-  const directory = options.directory ?? join(process.cwd(), ".forge", "logs");
+  const directory = options.directory ?? join(process.cwd(), ".suplex", "logs");
   const now = Date.now();
   const initial = (await readAllEntries(directory)).filter((entry) => matches(entry, options, now));
   print(initial.slice(-200), options);

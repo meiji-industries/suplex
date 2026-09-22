@@ -113,5 +113,5 @@ export function createSystemEventWriter(options: { directory: string; now?: () =
 }
 
 export function systemLogDirectory(dataRoot: string): string {
-  return join(basename(dataRoot) === "data" && basename(dirname(dataRoot)) === ".forge" ? dirname(dataRoot) : dataRoot, "logs");
+  return join(basename(dataRoot) === "data" && basename(dirname(dataRoot)) === ".suplex" ? dirname(dataRoot) : dataRoot, "logs");
 }

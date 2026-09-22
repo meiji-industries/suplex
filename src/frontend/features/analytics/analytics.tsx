@@ -87,7 +87,7 @@ export function AnalyticsView() {
   const exportRows = () => {
     const cell = (value: string | number) => `"${String(value).replace(/^[=+@-]/, "'$&").replaceAll('"', '""')}"`;
     const csv = ["Task,Status,Estimated USD,Coordinator turns,Delegated turns,Tokens,Agent seconds", ...rows.map(({ task, metrics }) => [task.title, task.status, metrics.cost ?? "", metrics.rootTurns, metrics.workerTurns, metrics.totalTokens, metrics.durationMs / 1000].map(cell).join(","))].join("\r\n");
-    const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" })); const anchor = document.createElement("a"); anchor.href = url; anchor.download = "forge-task-analytics.csv"; anchor.click(); URL.revokeObjectURL(url);
+    const url = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" })); const anchor = document.createElement("a"); anchor.href = url; anchor.download = "suplex-task-analytics.csv"; anchor.click(); URL.revokeObjectURL(url);
   };
   return <ApplicationFrame title="Analytics" headerActions={<BarChart3 className="size-4 text-muted-foreground" />} headerRight={<><Button size="sm" variant="outline" onClick={exportRows} disabled={!rows.length}><ArrowDownToLine />Export CSV</Button><Button size="icon-sm" variant="ghost" aria-label="Refresh analytics" onClick={() => setRefresh(value => value + 1)}><RefreshCw /></Button></>}>
     <main className="min-w-0 flex-1 overflow-auto" data-analytics>

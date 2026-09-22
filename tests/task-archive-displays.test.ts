@@ -7,10 +7,10 @@ import { HerdrFailure, type Pane, type Workspace } from "../src/integrations/her
 import type { TaskSession } from "../src/tasks/control.js";
 
 function fixture(shared = false) {
-  const workspace: Workspace = { workspaceId: "w1", label: "forge-task" };
+  const workspace: Workspace = { workspaceId: "w1", label: "suplex-task" };
   let workspaceOpen = true;
-  const panes = new Map<string, Pane>([["w1:p1", { paneId: "w1:p1", workspaceId: "w1", cwd: process.cwd(), tokens: { forge_task_id: "task", forge_binding_id: "session" } }]]);
-  if (shared) panes.set("w1:p2", { paneId: "w1:p2", workspaceId: "w1", cwd: process.cwd(), tokens: { forge_task_id: "other" } });
+  const panes = new Map<string, Pane>([["w1:p1", { paneId: "w1:p1", workspaceId: "w1", cwd: process.cwd(), tokens: { suplex_task_id: "task", suplex_binding_id: "session" } }]]);
+  if (shared) panes.set("w1:p2", { paneId: "w1:p2", workspaceId: "w1", cwd: process.cwd(), tokens: { suplex_task_id: "other" } });
   const herdr = {
     getPane: async (id: string) => panes.get(id) ?? null,
     listPanes: async () => [...panes.values()],
@@ -31,7 +31,7 @@ function fixture(shared = false) {
 
 test("archive closes a task-only workspace, including historical display attachments", async () => {
   const f = fixture();
-  f.panes.set("w1:p3", { paneId: "w1:p3", workspaceId: "w1", tokens: { forge_task_id: "task", forge_binding_id: "session" } });
+  f.panes.set("w1:p3", { paneId: "w1:p3", workspaceId: "w1", tokens: { suplex_task_id: "task", suplex_binding_id: "session" } });
   const close = await prepareArchiveDisplays(f.sessions, f.herdr);
   expect(f.herdr.closeWorkspace).not.toHaveBeenCalled();
   await close();
@@ -50,14 +50,14 @@ test("archive preserves unrelated panes in a shared workspace", async () => {
 test("archive discovers a leftover attachment after the recorded pane was closed", async () => {
   const f = fixture();
   f.panes.delete("w1:p1");
-  f.panes.set("w1:p3", { paneId: "w1:p3", workspaceId: "w1", tokens: { forge_task_id: "task", forge_binding_id: "session" } });
+  f.panes.set("w1:p3", { paneId: "w1:p3", workspaceId: "w1", tokens: { suplex_task_id: "task", suplex_binding_id: "session" } });
   await (await prepareArchiveDisplays(f.sessions, f.herdr))();
   expect(f.herdr.closeWorkspace).toHaveBeenCalledWith("w1");
 });
 
 test("archive preserves a recorded pane whose id was reassigned before preparation", async () => {
   const f = fixture();
-  f.panes.set("w1:p1", { paneId: "w1:p1", workspaceId: "w1", tokens: { forge_task_id: "other" } });
+  f.panes.set("w1:p1", { paneId: "w1:p1", workspaceId: "w1", tokens: { suplex_task_id: "other" } });
   await (await prepareArchiveDisplays(f.sessions, f.herdr))();
   expect(f.herdr.closeWorkspace).not.toHaveBeenCalled();
   expect(f.herdr.closePane).not.toHaveBeenCalled();
@@ -73,9 +73,9 @@ test("archive preserves a recorded pane whose ownership metadata is missing befo
   expect([...f.panes.keys()]).toEqual(["w1:p1"]);
 });
 
-test("archive closes a Forge-owned shell pane", async () => {
+test("archive closes a Suplex-owned shell pane", async () => {
   const f = fixture();
-  f.panes.set("w1:shell", { paneId: "w1:shell", workspaceId: "w1", cwd: process.cwd(), label: "Shell", tokens: { forge_task_id: "task", forge_binding_id: "task:shell", forge_role: "shell" } });
+  f.panes.set("w1:shell", { paneId: "w1:shell", workspaceId: "w1", cwd: process.cwd(), label: "Shell", tokens: { suplex_task_id: "task", suplex_binding_id: "task:shell", suplex_role: "shell" } });
   const sessions = [...f.sessions, { id: "task:shell", taskId: "task", paneId: "w1:shell", nativeSessionId: null }];
   await (await prepareArchiveDisplays(sessions, f.herdr))();
   expect(f.herdr.closeWorkspace).toHaveBeenCalledWith("w1");
@@ -84,7 +84,7 @@ test("archive closes a Forge-owned shell pane", async () => {
 
 test("archive rediscovers a shell pane when its recorded id is stale", async () => {
   const f = fixture();
-  f.panes.set("w1:shell-new", { paneId: "w1:shell-new", workspaceId: "w1", cwd: process.cwd(), label: "Shell", tokens: { forge_task_id: "task", forge_binding_id: "task:shell", forge_role: "shell" } });
+  f.panes.set("w1:shell-new", { paneId: "w1:shell-new", workspaceId: "w1", cwd: process.cwd(), label: "Shell", tokens: { suplex_task_id: "task", suplex_binding_id: "task:shell", suplex_role: "shell" } });
   const sessions = [...f.sessions, { id: "task:shell", taskId: "task", paneId: "w1:shell-old", nativeSessionId: null }];
   await (await prepareArchiveDisplays(sessions, f.herdr))();
   expect(f.panes.size).toBe(0);
@@ -159,7 +159,7 @@ test("archive preserves a pane whose ownership metadata is lost before cleanup",
 test("archive preserves a newly appearing task display without requiring a retry", async () => {
   const f = fixture();
   const close = await prepareArchiveDisplays(f.sessions, f.herdr);
-  f.panes.set("w1:p3", { paneId: "w1:p3", workspaceId: "w1", tokens: { forge_task_id: "task", forge_binding_id: "session" } });
+  f.panes.set("w1:p3", { paneId: "w1:p3", workspaceId: "w1", tokens: { suplex_task_id: "task", suplex_binding_id: "session" } });
   await close();
   expect(f.herdr.closeWorkspace).not.toHaveBeenCalled();
   expect([...f.panes.keys()]).toEqual(["w1:p3"]);
@@ -183,7 +183,7 @@ test("archive preserves ownership lost while inspecting a pane during cleanup", 
 test("archive preserves a pane id reused after the owned pane is closed", async () => {
   const f = fixture(true);
   f.herdr.closePane = vi.fn(async paneId => {
-    f.panes.set(paneId, { paneId, workspaceId: "w1", tokens: { forge_task_id: "other" } });
+    f.panes.set(paneId, { paneId, workspaceId: "w1", tokens: { suplex_task_id: "other" } });
   });
   await (await prepareArchiveDisplays(f.sessions, f.herdr))();
   expect(f.herdr.closePane).toHaveBeenCalledWith("w1:p1");
@@ -223,7 +223,7 @@ test("a workspace group refusal falls back to verified pane closure", async () =
 
 test("archive retries pane cleanup after a group refusal and partial close", async () => {
   const f = fixture();
-  f.panes.set("w1:p3", { paneId: "w1:p3", workspaceId: "w1", tokens: { forge_task_id: "task", forge_binding_id: "session" } });
+  f.panes.set("w1:p3", { paneId: "w1:p3", workspaceId: "w1", tokens: { suplex_task_id: "task", suplex_binding_id: "session" } });
   f.herdr.closeWorkspace = vi.fn(async () => {
     throw new HerdrFailure("workspace_group_close_required", false, "Linked workspaces remain");
   });
@@ -254,8 +254,8 @@ test("archive propagates workspace close failures other than group refusal", asy
 });
 
 test("group fallback does not reuse a task worktree directory removed before display cleanup", async () => {
-  const removedWorktree = await mkdtemp(join(tmpdir(), "forge-removed-worktree-"));
-  const parentRepo = await mkdtemp(join(tmpdir(), "forge-parent-repo-"));
+  const removedWorktree = await mkdtemp(join(tmpdir(), "suplex-removed-worktree-"));
+  const parentRepo = await mkdtemp(join(tmpdir(), "suplex-parent-repo-"));
   try {
     const f = fixture();
     const taskPane = f.panes.get("w1:p1");

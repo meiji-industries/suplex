@@ -12,8 +12,8 @@ import { mapGithubPullRequestObservation, type GithubPullRequestObservation } fr
 import { GithubReleaseFailure } from "../src/integrations/github/failure.js";
 import { createApp } from "../src/app.js";
 import { createTestConfig } from "../src/platform/config.js";
-import type { ForgeConfig } from "../src/platform/config.js";
-import { ForgeDatabase } from "../src/platform/database.js";
+import type { SuplexConfig } from "../src/platform/config.js";
+import { SuplexDatabase } from "../src/platform/database.js";
 import type { GithubAdapter } from "../src/integrations/github/client.js";
 import { ExternalAgentService } from "../src/identity/external-agents.js";
 import { SESSION_COOKIE_NAME } from "../src/identity/auth-identifiers.js";
@@ -31,7 +31,7 @@ import { decodeTaskImage } from "../src/tasks/images.js";
 import { TaskSourceFailure } from "../src/tasks/sources.js";
 import { runCommand } from "../src/platform/command-runner.js";
 import { AGENT_API_MCP_AUTHORITY, AGENT_API_RUNTIME_AUTHORITY, AGENT_API_TASK_COMMANDS, AgentApiTaskCommandBodySchema, agentApiCapabilities } from "../src/http/contracts/agent-api.js";
-import { FORGE_MCP_TOOLS } from "../src/integrations/forge/mcp-bridge.js";
+import { SUPLEX_MCP_TOOLS } from "../src/integrations/suplex/mcp-bridge.js";
 
 let inspectionGate: Promise<void> | undefined;
 let inspectionStarted: (() => void) | undefined;
@@ -67,8 +67,8 @@ const github: GithubAdapter = {
 };
 
 let root: string;
-let config: ForgeConfig;
-let database: ForgeDatabase;
+let config: SuplexConfig;
+let database: SuplexDatabase;
 let auth: AuthService;
 let projects: ProjectService;
 let tasks: TaskService;
@@ -101,7 +101,7 @@ function ghPullRequest(input: { number: number; state: "OPEN" | "CLOSED" | "MERG
     mergeStateStatus: input.mergeStateStatus ?? "CLEAN",
     autoMergeRequest: null,
     reviewDecision: input.reviewDecision === undefined ? "APPROVED" : input.reviewDecision,
-    author: { login: "forge-bot", avatarUrl: "https://avatars.githubusercontent.com/forge-bot" },
+    author: { login: "suplex-bot", avatarUrl: "https://avatars.githubusercontent.com/suplex-bot" },
     changedFiles: 3,
     additions: 40,
     deletions: 2,
@@ -128,7 +128,7 @@ async function deliverTask(title: string, idempotencyKey: string, pullRequestNum
 /** Repoints a task at an upstream task's head branch, the way a source selection would. */
 function branchFrom(taskId: string, upstreamTaskId: string): void {
   const configuration = { ...tasks.getTask(adminId, taskId).configuration, source: { kind: "branch", branch: tasks.getTask(adminId, upstreamTaskId).configuration.branch } };
-  database.authTransaction(db => db.prepare("UPDATE forge_tasks SET configuration_json = ? WHERE id = ?").run(JSON.stringify(configuration), taskId));
+  database.authTransaction(db => db.prepare("UPDATE suplex_tasks SET configuration_json = ? WHERE id = ?").run(JSON.stringify(configuration), taskId));
 }
 
 const listTasks = async (query = "") => app.inject({ method: "GET", url: `/api/agent/tasks${query}`, headers: { Authorization: `Bearer ${agentCredential}` } });
@@ -146,8 +146,8 @@ function validateDocumentSchema(value: unknown, schema: unknown): void {
 
 function runtimeCounts(): Record<string, number> {
   return Object.fromEntries([
-    "forge_task_controls", "forge_tasks", "forge_artifacts", "forge_task_turns", "forge_task_sessions",
-  ].map((table) => [table, database.authQuery((db) => (db.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get() as { count: number }).count)]).concat([["task_created_audits", database.authQuery((db) => (db.prepare("SELECT COUNT(*) AS count FROM forge_audit_events WHERE action = 'task_created'").get() as { count: number }).count)], ["recovery_wakes", recoveryWakes]]));
+    "suplex_task_controls", "suplex_tasks", "suplex_artifacts", "suplex_task_turns", "suplex_task_sessions",
+  ].map((table) => [table, database.authQuery((db) => (db.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get() as { count: number }).count)]).concat([["task_created_audits", database.authQuery((db) => (db.prepare("SELECT COUNT(*) AS count FROM suplex_audit_events WHERE action = 'task_created'").get() as { count: number }).count)], ["recovery_wakes", recoveryWakes]]));
 }
 
 type CreateOperationDocument = {
@@ -175,7 +175,7 @@ beforeEach(async () => {
   inspectionGate = undefined;
   inspectionStarted = undefined;
   inspectionError = undefined;
-  root = await mkdtemp(join(tmpdir(), "forge-externalAgent-tasks-api-test-"));
+  root = await mkdtemp(join(tmpdir(), "suplex-externalAgent-tasks-api-test-"));
   const repositoryRoot = join(root, "repositories");
   const worktreeRoot = join(root, "worktrees");
   const repositoryPath = join(repositoryRoot, "project1");
@@ -192,30 +192,30 @@ beforeEach(async () => {
   await mkdir(crossWorktrees, { recursive: true });
 
   await git(["init", "-b", "main"], repositoryPath);
-  await git(["config", "user.name", "Forge Test"], repositoryPath);
-  await git(["config", "user.email", "forge-test@example.invalid"], repositoryPath);
+  await git(["config", "user.name", "Suplex Test"], repositoryPath);
+  await git(["config", "user.email", "suplex-test@example.invalid"], repositoryPath);
   await git(["config", "commit.gpgsign", "false"], repositoryPath);
   await writeFile(join(repositoryPath, "README.md"), "base\n");
   await git(["add", "README.md"], repositoryPath);
   await git(["commit", "-m", "base"], repositoryPath);
 
   await git(["init", "-b", "main"], otherRepoPath);
-  await git(["config", "user.name", "Forge Test"], otherRepoPath);
-  await git(["config", "user.email", "forge-test@example.invalid"], otherRepoPath);
+  await git(["config", "user.name", "Suplex Test"], otherRepoPath);
+  await git(["config", "user.email", "suplex-test@example.invalid"], otherRepoPath);
   await git(["config", "commit.gpgsign", "false"], otherRepoPath);
   await writeFile(join(otherRepoPath, "README.md"), "base\n");
   await git(["add", "README.md"], otherRepoPath);
   await git(["commit", "-m", "base"], otherRepoPath);
 
   await git(["init", "-b", "main"], crossRepoPath);
-  await git(["config", "user.name", "Forge Test"], crossRepoPath);
-  await git(["config", "user.email", "forge-test@example.invalid"], crossRepoPath);
+  await git(["config", "user.name", "Suplex Test"], crossRepoPath);
+  await git(["config", "user.email", "suplex-test@example.invalid"], crossRepoPath);
   await git(["config", "commit.gpgsign", "false"], crossRepoPath);
   await writeFile(join(crossRepoPath, "README.md"), "base\n");
   await git(["add", "README.md"], crossRepoPath);
   await git(["commit", "-m", "base"], crossRepoPath);
 
-  database = new ForgeDatabase(join(root, "forge.sqlite"));
+  database = new SuplexDatabase(join(root, "suplex.sqlite"));
   config = createTestConfig(root, { repositoryRoot, worktreeRoot, reachableAddress: "http://127.0.0.1:4111", developmentAutoLogin: true });
   auth = new AuthService(database, config);
   adminId = auth.ensureDevelopmentUser().id;
@@ -382,7 +382,7 @@ test("board sessions and development login cannot substitute for paired bearer a
   expect(boardOnly.statusCode).toBe(401);
   expect(boardOnly.json()).toEqual({ error: "Authentication failed", code: "credential_invalid" });
 
-  const before = database.authQuery(db => (db.prepare("SELECT COUNT(*) AS count FROM forge_tasks").get() as { count: number }).count);
+  const before = database.authQuery(db => (db.prepare("SELECT COUNT(*) AS count FROM suplex_tasks").get() as { count: number }).count);
   const deniedCreate = await app.inject({
     method: "POST",
     url: "/api/agent/tasks",
@@ -390,7 +390,7 @@ test("board sessions and development login cannot substitute for paired bearer a
     payload: { projectId, title: "Board session cannot create", idempotencyKey: "board-session-001" },
   });
   expect(deniedCreate.statusCode).toBe(401);
-  expect(database.authQuery(db => (db.prepare("SELECT COUNT(*) AS count FROM forge_tasks").get() as { count: number }).count)).toBe(before);
+  expect(database.authQuery(db => (db.prepare("SELECT COUNT(*) AS count FROM suplex_tasks").get() as { count: number }).count)).toBe(before);
 });
 
 test("runtime error responses are serialized against the documented status schemas", async () => {
@@ -449,7 +449,7 @@ test("all rejected credential states cannot discover or mutate runtime state", a
   const replacement = externalAgent.exchange({ pairingCode: rotation.pairingCode, profileId: "profile-bot" }).credential;
   externalAgent.revoke(adminId, agentId);
   const credentials = [undefined, "not-a-credential", pending.pairingCode, agentCredential, replacement];
-  const before = database.authQuery(db => (db.prepare("SELECT COUNT(*) AS count FROM forge_tasks").get() as { count: number }).count);
+  const before = database.authQuery(db => (db.prepare("SELECT COUNT(*) AS count FROM suplex_tasks").get() as { count: number }).count);
   for (const credential of credentials) {
     const headers = credential ? { Authorization: `Bearer ${credential}` } : {};
     for (const request of [
@@ -461,7 +461,7 @@ test("all rejected credential states cannot discover or mutate runtime state", a
       app.inject({ method: "POST", url: "/api/agent/tasks", headers, payload: { projectId, title: "Denied", idempotencyKey: `denied-${credential ?? "missing"}` } }),
     ]) expect((await request).statusCode).toBe(401);
   }
-  expect(database.authQuery(db => (db.prepare("SELECT COUNT(*) AS count FROM forge_tasks").get() as { count: number }).count)).toBe(before);
+  expect(database.authQuery(db => (db.prepare("SELECT COUNT(*) AS count FROM suplex_tasks").get() as { count: number }).count)).toBe(before);
 });
 
 test("pairing without client profile metadata preserves credential and grant access on canonical and legacy paths", async () => {
@@ -494,7 +494,7 @@ test("current persisted grants are rechecked before asynchronous creation persis
   const response = await request;
   expect(response.statusCode).toBe(404);
   expect(response.json()).toEqual({ error: "Not found", code: "not_found" });
-  expect(runtimeCounts()).toEqual({ forge_task_controls: 0, forge_tasks: 0, forge_artifacts: 0, forge_task_turns: 0, forge_task_sessions: 0, task_created_audits: 0, recovery_wakes: 0 });
+  expect(runtimeCounts()).toEqual({ suplex_task_controls: 0, suplex_tasks: 0, suplex_artifacts: 0, suplex_task_turns: 0, suplex_task_sessions: 0, task_created_audits: 0, recovery_wakes: 0 });
   expect(new ExternalAgentService(database, auth).authenticate(agentCredential).projectIds).toEqual([]);
 });
 
@@ -509,7 +509,7 @@ test("agent revocation during asynchronous creation prevents all task side effec
   const response = await request;
   expect(response.statusCode).toBe(404);
   expect(response.json()).toEqual({ error: "Not found", code: "not_found" });
-  expect(runtimeCounts()).toEqual({ forge_task_controls: 0, forge_tasks: 0, forge_artifacts: 0, forge_task_turns: 0, forge_task_sessions: 0, task_created_audits: 0, recovery_wakes: 0 });
+  expect(runtimeCounts()).toEqual({ suplex_task_controls: 0, suplex_tasks: 0, suplex_artifacts: 0, suplex_task_turns: 0, suplex_task_sessions: 0, task_created_audits: 0, recovery_wakes: 0 });
 });
 
 test("persisted paired authority has the same HTTP outcome after app recreation", async () => {
@@ -589,7 +589,7 @@ test("POST /api/agent/tasks creates task with native status, private no-store he
   expect(JSON.stringify(body)).not.toMatch(/Brief content|repositoryPath|worktree|credential|prompt/i);
 
   // Verify creator_agent_id persisted on task and intent
-  const taskRow = database.authQuery((db) => db.prepare("SELECT creator_agent_id FROM forge_tasks WHERE id = ?").get(body.id) as { creator_agent_id: string | null });
+  const taskRow = database.authQuery((db) => db.prepare("SELECT creator_agent_id FROM suplex_tasks WHERE id = ?").get(body.id) as { creator_agent_id: string | null });
   expect(taskRow.creator_agent_id).toBe(agentId);
 
   // Replay with identical payload and idempotency key returns 200 with unchanged projection
@@ -607,10 +607,10 @@ test("POST /api/agent/tasks creates task with native status, private no-store he
   const withoutObservedAt = (value: Record<string, any>) => ({ ...value, integration: { ...value.integration, observedAt: "" } });
   expect(withoutObservedAt(replay.json())).toEqual(withoutObservedAt(body));
   const count = (table: string, clause = ""): number => database.authQuery((db) => (db.prepare(`SELECT COUNT(*) AS count FROM ${table} ${clause}`).get() as { count: number }).count);
-  expect(count("forge_tasks")).toBe(1);
-  expect(count("forge_task_controls")).toBe(1);
-  expect(count("forge_artifacts")).toBe(0);
-  expect(count("forge_audit_events", "WHERE action = 'task_created'")).toBe(1);
+  expect(count("suplex_tasks")).toBe(1);
+  expect(count("suplex_task_controls")).toBe(1);
+  expect(count("suplex_artifacts")).toBe(0);
+  expect(count("suplex_audit_events", "WHERE action = 'task_created'")).toBe(1);
   expect(recoveryWakes).toBe(0);
 });
 
@@ -623,18 +623,18 @@ test("POST /api/agent/tasks accepts a title without a description", async () => 
   });
   expect(response.statusCode, response.body).toBe(201);
   const taskId = response.json().id as string;
-  expect(database.authQuery(db => db.prepare("SELECT description FROM forge_tasks WHERE id = ?").get(taskId))).toEqual({ description: "" });
-  expect(database.authQuery(db => db.prepare("SELECT objective FROM forge_task_controls WHERE task_id = ?").get(taskId))).toEqual({ objective: "AgentApi title only" });
+  expect(database.authQuery(db => db.prepare("SELECT description FROM suplex_tasks WHERE id = ?").get(taskId))).toEqual({ description: "" });
+  expect(database.authQuery(db => db.prepare("SELECT objective FROM suplex_task_controls WHERE task_id = ?").get(taskId))).toEqual({ objective: "AgentApi title only" });
 });
 
 test("workflow and template discovery is project scoped and reports creation permission", async () => {
   const templateId = "template_agentApi_discovery";
   database.authTransaction(db => {
-    db.prepare("INSERT INTO forge_task_templates (id, project_id, name, configuration_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)")
+    db.prepare("INSERT INTO suplex_task_templates (id, project_id, name, configuration_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)")
       .run(templateId, projectId, "Discovery template", JSON.stringify({ name: "Discovery template", description: "A discovered template", workflow: "standard", advisorProfileIds: {} }), new Date().toISOString(), new Date().toISOString());
-    db.prepare("INSERT INTO forge_task_templates (id, project_id, name, configuration_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)")
+    db.prepare("INSERT INTO suplex_task_templates (id, project_id, name, configuration_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)")
       .run("template_agentApi_disallowed", projectId, "Blocked template", JSON.stringify({ name: "Blocked template", description: "Not permitted", workflow: "standard", advisorProfileIds: {} }), new Date().toISOString(), new Date().toISOString());
-    db.prepare("UPDATE forge_workflows SET archived_at = ? WHERE id = 'workflow_native_refine_pull_request'").run(new Date().toISOString());
+    db.prepare("UPDATE suplex_workflows SET archived_at = ? WHERE id = 'workflow_native_refine_pull_request'").run(new Date().toISOString());
   });
   await updateProjectPolicy({ workflowIds: ["workflow_native_standard"], defaultWorkflowId: "workflow_native_standard", templateIds: [templateId], rootProfileIds: ["profile_native_root"], workerProfileIds: ["profile_native_worker"], advisorProfileIds: { reviewer: [], planner_a: [], planner_b: [], rater: [] }, deliveryTarget: "pull_request_draft", runProjectTests: true, visualEvidence: "off" });
 
@@ -667,7 +667,7 @@ test("POST /api/agent/tasks resolves only project-authorized workflow, template,
     deliveryTarget: "pull_request_draft", runProjectTests: true, visualEvidence: "off",
   };
   database.authTransaction(db => {
-    db.prepare("INSERT INTO forge_task_templates (id, project_id, name, configuration_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)")
+    db.prepare("INSERT INTO suplex_task_templates (id, project_id, name, configuration_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)")
       .run("template_agentApi_direct", projectId, "AgentApi direct", JSON.stringify({ name: "AgentApi direct", description: "", workflow: "direct_build", advisorProfileIds: {} }), new Date().toISOString(), new Date().toISOString());
   });
   const current = projects.getProject(adminId, projectId);
@@ -681,7 +681,7 @@ test("POST /api/agent/tasks resolves only project-authorized workflow, template,
   });
   expect(rich.statusCode, rich.body).toBe(201);
   expect(rich.json()).toMatchObject({ workflow: { id: "workflow_native_direct_build", engine: "direct_build", name: "Direct build" }, templateId: null, deliveryTarget: "pull_request_draft" });
-  expect(database.authQuery(db => db.prepare("SELECT COUNT(*) AS count FROM forge_artifacts").get())).toEqual({ count: 1 });
+  expect(database.authQuery(db => db.prepare("SELECT COUNT(*) AS count FROM suplex_artifacts").get())).toEqual({ count: 1 });
 
   // An omitted delivery configuration reports back the policy the project applied.
   const defaulted = await request({ projectId, title: "Policy default task", idempotencyKey: "externalAgent-policy-default-001" });
@@ -714,7 +714,7 @@ test("AgentApi dry runs validate creation and dependency changes without persist
   const headers = { Authorization: `Bearer ${agentCredential}` };
   const request = (payload: object) => app.inject({ method: "POST", url: "/api/agent/tasks", headers, payload });
   const prerequisite = (await request({ projectId, title: "Dry-run prerequisite", idempotencyKey: "dry-prerequisite-001" })).json().id as string;
-  const counts = () => Object.fromEntries(["forge_tasks", "forge_task_controls", "forge_artifacts", "forge_task_dependencies", "forge_audit_events"].map(table => [table, database.authQuery(db => (db.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get() as { count: number }).count)]));
+  const counts = () => Object.fromEntries(["suplex_tasks", "suplex_task_controls", "suplex_artifacts", "suplex_task_dependencies", "suplex_audit_events"].map(table => [table, database.authQuery(db => (db.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get() as { count: number }).count)]));
   const before = counts();
   const body = { projectId, title: "Dry-run task", idempotencyKey: "dry-create-001", queue: true, dependsOn: [prerequisite], images: [{ filename: "proof.png", mimeType: "image/png", base64: "iVBORw0KGgo=" }], dryRun: true };
   const preview = await request(body);
@@ -759,8 +759,8 @@ test("AgentApi dry runs validate creation and dependency changes without persist
 test("server-chosen default profiles outlive a policy that still lists the old ones", async () => {
   const stamp = new Date().toISOString();
   database.authTransaction(db => {
-    db.prepare("INSERT INTO forge_profiles (id, name, role, avatar_seed, provider, model, reasoning_level, service_tier, created_at, updated_at) VALUES ('profile_drift_worker', 'Drift Worker', 'worker', '00000000000000000000000000000009', 'openai', 'gpt-5.6-luna', 'medium', 'default', ?, ?)").run(stamp, stamp);
-    db.prepare("INSERT INTO forge_workflows (id, name, description, engine, configuration_json, created_at, updated_at) VALUES ('workflow_drift_record', 'Drift record', '', 'standard', ?, ?, ?)").run(JSON.stringify({ advisorProfileIds: {}, rootProfileId: "profile_native_root", workerProfileId: "profile_drift_worker" }), stamp, stamp);
+    db.prepare("INSERT INTO suplex_profiles (id, name, role, avatar_seed, provider, model, reasoning_level, service_tier, created_at, updated_at) VALUES ('profile_drift_worker', 'Drift Worker', 'worker', '00000000000000000000000000000009', 'openai', 'gpt-5.6-luna', 'medium', 'default', ?, ?)").run(stamp, stamp);
+    db.prepare("INSERT INTO suplex_workflows (id, name, description, engine, configuration_json, created_at, updated_at) VALUES ('workflow_drift_record', 'Drift record', '', 'standard', ?, ?, ?)").run(JSON.stringify({ advisorProfileIds: {}, rootProfileId: "profile_native_root", workerProfileId: "profile_drift_worker" }), stamp, stamp);
   });
   await updateProjectPolicy({ workflowIds: ["workflow_native_standard", "workflow_drift_record"], defaultWorkflowId: "workflow_native_standard", templateIds: [], rootProfileIds: ["profile_native_root"], workerProfileIds: ["profile_native_worker"], advisorProfileIds: { reviewer: [], planner_a: [], planner_b: [], rater: [] }, deliveryTarget: "pull_request_draft", runProjectTests: true, visualEvidence: "off" });
 
@@ -775,7 +775,7 @@ test("server-chosen default profiles outlive a policy that still lists the old o
   expect(tasks.getTask(adminId, plain.json().id as string).workerProfile.profileId).toBe("profile_drift_worker");
 
   // A stored policy that never learned the new default still must not block a caller who chose nothing.
-  database.authTransaction(db => db.prepare("UPDATE forge_projects SET agent_task_policy_json = json_set(agent_task_policy_json, '$.workerProfileIds', json_array('profile_native_worker')) WHERE id = ?").run(projectId));
+  database.authTransaction(db => db.prepare("UPDATE suplex_projects SET agent_task_policy_json = json_set(agent_task_policy_json, '$.workerProfileIds', json_array('profile_native_worker')) WHERE id = ?").run(projectId));
   const drifted = await request({ projectId, title: "Drifted policy", idempotencyKey: "externalAgent-drift-stored-001" });
   expect(drifted.statusCode, drifted.body).toBe(201);
   expect(tasks.getTask(adminId, drifted.json().id as string).workerProfile.profileId).toBe("profile_drift_worker");
@@ -805,14 +805,14 @@ test("AgentApi idempotency hashes the semantic caller request before policy reso
 
 test("rich conflicts are 409 and template descriptions preserve omission versus explicit override", async () => {
   const templateId = "template_agentApi_description";
-  database.authTransaction(db => db.prepare("INSERT INTO forge_task_templates (id, project_id, name, configuration_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)").run(templateId, projectId, "Description", JSON.stringify({ name: "Description", description: "Template brief", workflow: "standard", advisorProfileIds: {} }), new Date().toISOString(), new Date().toISOString()));
+  database.authTransaction(db => db.prepare("INSERT INTO suplex_task_templates (id, project_id, name, configuration_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)").run(templateId, projectId, "Description", JSON.stringify({ name: "Description", description: "Template brief", workflow: "standard", advisorProfileIds: {} }), new Date().toISOString(), new Date().toISOString()));
   await updateProjectPolicy({ workflowIds: ["workflow_native_standard"], defaultWorkflowId: "workflow_native_standard", templateIds: [templateId], rootProfileIds: ["profile_native_root"], workerProfileIds: ["profile_native_worker"], advisorProfileIds: { reviewer: [], planner_a: [], planner_b: [], rater: [] }, deliveryTarget: "pull_request_draft", runProjectTests: true, visualEvidence: "off" });
   const request = (payload: object) => app.inject({ method: "POST", url: "/api/agent/tasks", headers: { Authorization: `Bearer ${agentCredential}` }, payload });
   const omitted = await request({ projectId, title: "Template omission", idempotencyKey: "externalAgent-template-description-omitted", templateId });
   const empty = await request({ projectId, title: "Template empty", description: "", idempotencyKey: "externalAgent-template-description-empty", templateId });
   const explicit = await request({ projectId, title: "Template explicit", description: "Caller brief", idempotencyKey: "externalAgent-template-description-explicit", templateId });
   expect([omitted.statusCode, empty.statusCode, explicit.statusCode]).toEqual([201, 201, 201]);
-  const description = (response: typeof omitted) => database.authQuery(db => db.prepare("SELECT description FROM forge_tasks WHERE id = ?").get(response.json().id) as { description: string }).description;
+  const description = (response: typeof omitted) => database.authQuery(db => db.prepare("SELECT description FROM suplex_tasks WHERE id = ?").get(response.json().id) as { description: string }).description;
   expect(description(omitted)).toBe("Template brief");
   expect(description(empty)).toBe("");
   expect(description(explicit)).toBe("Caller brief");
@@ -856,7 +856,7 @@ test("AgentApi request validation rejects required fields, unapproved choices, a
   const testsDisabled = await request({ projectId, title: "Tests disabled", idempotencyKey: "tests-disabled-001", runProjectTests: false });
   expect(testsDisabled.statusCode).toBe(422);
   expect(testsDisabled.json()).toMatchObject({ code: "delivery_policy_rejected" });
-  database.authTransaction(db => db.prepare("INSERT INTO forge_task_templates (id, project_id, name, configuration_json, created_at, updated_at) VALUES ('template_disallowed', ?, 'Disallowed', ?, ?, ?)").run(projectId, JSON.stringify({ name: "Disallowed", description: "", workflow: "standard", advisorProfileIds: {} }), new Date().toISOString(), new Date().toISOString()));
+  database.authTransaction(db => db.prepare("INSERT INTO suplex_task_templates (id, project_id, name, configuration_json, created_at, updated_at) VALUES ('template_disallowed', ?, 'Disallowed', ?, ?, ?)").run(projectId, JSON.stringify({ name: "Disallowed", description: "", workflow: "standard", advisorProfileIds: {} }), new Date().toISOString(), new Date().toISOString()));
   const missingTemplate = await request({ projectId, title: "Unavailable template", idempotencyKey: "template-template_missing", templateId: "template_missing" });
   expect(missingTemplate).toMatchObject({ statusCode: 422 });
   expect(missingTemplate.json()).toMatchObject({ code: "template_not_found", field: "templateId", value: "template_missing", permittedTemplateIds: expect.any(Array) });
@@ -894,7 +894,7 @@ test("persisted grants remain authoritative when a principal project observation
 });
 
 test("archived Standard does not block unrelated human project creation or updates", async () => {
-  database.authTransaction(db => db.prepare("UPDATE forge_workflows SET archived_at = ? WHERE id = 'workflow_native_standard'").run(new Date().toISOString()));
+  database.authTransaction(db => db.prepare("UPDATE suplex_workflows SET archived_at = ? WHERE id = 'workflow_native_standard'").run(new Date().toISOString()));
   const repositoryPath = join(root, "repositories", "project4");
   const worktreeRoot = join(root, "worktrees", "project4");
   await mkdir(repositoryPath, { recursive: true });
@@ -916,27 +916,27 @@ test("AgentApi admission rechecks grants, profiles, and relevant project configu
   await expect(revoked.createTaskForAgentApi(principal, input("externalAgent-delayed-revoked-001"))).rejects.toMatchObject({ statusCode: 404 });
   externalAgent.replaceProjects(adminId, agentId, [projectId]);
 
-  const archived = delayed(() => database.authTransaction(db => db.prepare("UPDATE forge_profiles SET archived_at = ? WHERE id = 'profile_native_root'").run(new Date().toISOString())));
+  const archived = delayed(() => database.authTransaction(db => db.prepare("UPDATE suplex_profiles SET archived_at = ? WHERE id = 'profile_native_root'").run(new Date().toISOString())));
   await expect(archived.createTaskForAgentApi(principal, input("externalAgent-delayed-profile-001"))).rejects.toMatchObject({ statusCode: 422 });
-  database.authTransaction(db => db.prepare("UPDATE forge_profiles SET archived_at = NULL WHERE id = 'profile_native_root'").run());
+  database.authTransaction(db => db.prepare("UPDATE suplex_profiles SET archived_at = NULL WHERE id = 'profile_native_root'").run());
 
   for (const [key, sql] of [
-    ["externalAgent-delayed-setup-001", "UPDATE forge_projects SET setup_command = 'pnpm changed' WHERE id = ?"],
-    ["externalAgent-delayed-verification-001", "UPDATE forge_projects SET verification_command = 'pnpm changed' WHERE id = ?"],
-    ["externalAgent-delayed-repository-001", "UPDATE forge_projects SET repository_identity = 'meiji/changed' WHERE id = ?"],
+    ["externalAgent-delayed-setup-001", "UPDATE suplex_projects SET setup_command = 'pnpm changed' WHERE id = ?"],
+    ["externalAgent-delayed-verification-001", "UPDATE suplex_projects SET verification_command = 'pnpm changed' WHERE id = ?"],
+    ["externalAgent-delayed-repository-001", "UPDATE suplex_projects SET repository_identity = 'meiji/changed' WHERE id = ?"],
   ] satisfies Array<[string, string]>) {
     const changed = delayed(() => database.authTransaction(db => db.prepare(sql).run(projectId)));
     await expect(changed.createTaskForAgentApi(principal, input(key))).rejects.toMatchObject({ statusCode: 409 });
-    database.authTransaction(db => db.prepare("UPDATE forge_projects SET setup_command = 'pnpm install', verification_command = 'pnpm test', repository_identity = 'meiji/externalAgent-test' WHERE id = ?").run(projectId));
+    database.authTransaction(db => db.prepare("UPDATE suplex_projects SET setup_command = 'pnpm install', verification_command = 'pnpm test', repository_identity = 'meiji/externalAgent-test' WHERE id = ?").run(projectId));
   }
 
-  const metadata = delayed(() => database.authTransaction(db => db.prepare("UPDATE forge_projects SET name = 'Renamed project' WHERE id = ?").run(projectId)));
+  const metadata = delayed(() => database.authTransaction(db => db.prepare("UPDATE suplex_projects SET name = 'Renamed project' WHERE id = ?").run(projectId)));
   await expect(metadata.createTaskForAgentApi(principal, input("externalAgent-delayed-metadata-001"))).resolves.toMatchObject({ created: true });
 });
 
 test("a paused rich AgentApi retry returns its concurrent winner after policy changes, but not after grant revocation", async () => {
   const templateId = "template_agentApi_concurrent";
-  database.authTransaction(db => db.prepare("INSERT INTO forge_task_templates (id, project_id, name, configuration_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)").run(templateId, projectId, "Concurrent", JSON.stringify({ name: "Concurrent", description: "Template brief", workflow: "standard", advisorProfileIds: {} }), new Date().toISOString(), new Date().toISOString()));
+  database.authTransaction(db => db.prepare("INSERT INTO suplex_task_templates (id, project_id, name, configuration_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)").run(templateId, projectId, "Concurrent", JSON.stringify({ name: "Concurrent", description: "Template brief", workflow: "standard", advisorProfileIds: {} }), new Date().toISOString(), new Date().toISOString()));
   const policy: ProjectAgentTaskPolicy = { workflowIds: ["workflow_native_standard"], defaultWorkflowId: "workflow_native_standard", templateIds: [templateId], rootProfileIds: ["profile_native_root"], workerProfileIds: ["profile_native_worker"], advisorProfileIds: { reviewer: [], planner_a: [], planner_b: [], rater: [] }, deliveryTarget: "pull_request_draft", runProjectTests: true, visualEvidence: "off" };
   await updateProjectPolicy(policy);
   const principal = externalAgent.authenticate(agentCredential);
@@ -961,11 +961,11 @@ test("a paused rich AgentApi retry returns its concurrent winner after policy ch
   await updateProjectPolicy({ ...policy, templateIds: [] });
   retry.release();
   await expect(loser).resolves.toMatchObject({ created: false, task: { id: winner.task.id } });
-  expect(count("forge_tasks")).toBe(1);
-  expect(count("forge_task_controls")).toBe(1);
-  expect(count("forge_artifacts")).toBe(1);
-  expect(count("forge_task_sessions")).toBe(0);
-  expect(count("forge_audit_events", "WHERE action = 'task_created'")).toBe(1);
+  expect(count("suplex_tasks")).toBe(1);
+  expect(count("suplex_task_controls")).toBe(1);
+  expect(count("suplex_artifacts")).toBe(1);
+  expect(count("suplex_task_sessions")).toBe(0);
+  expect(count("suplex_audit_events", "WHERE action = 'task_created'")).toBe(1);
   expect(recoveryWakes).toBe(0);
 
   await updateProjectPolicy(policy);
@@ -1022,7 +1022,7 @@ test("basic retries accept pre-feature AgentApi request hashes only for the orig
   const created = await app.inject({ method: "POST", url: "/api/agent/tasks", headers: { Authorization: `Bearer ${agentCredential}` }, payload });
   expect(created.statusCode, created.body).toBe(201);
   const legacy = taskRequestHash(TaskInputSchema.parse(normalizeWorkflowInput(payload, { requireSource: true })), { kind: "agent", id: agentId });
-  database.authTransaction(db => db.prepare("UPDATE forge_tasks SET request_hash = ? WHERE id = ?").run(legacy, created.json().id));
+  database.authTransaction(db => db.prepare("UPDATE suplex_tasks SET request_hash = ? WHERE id = ?").run(legacy, created.json().id));
   const replay = await app.inject({ method: "POST", url: "/api/agent/tasks", headers: { Authorization: `Bearer ${agentCredential}` }, payload });
   expect(replay.statusCode, replay.body).toBe(200);
   const conflict = await app.inject({ method: "POST", url: "/api/agent/tasks", headers: { Authorization: `Bearer ${agentCredential}` }, payload: { ...payload, description: "Changed" } });
@@ -1049,15 +1049,15 @@ test("agent lifecycle commands use current revisions, durable receipts, note att
   const noteRevision = tasks.getAgentApiTask(externalAgent.authenticate(agentCredential), task.id).revision;
   const noted = await command({ command: "send_task_note", revision: noteRevision, idempotencyKey: "note-001", note: "Machine progress note" });
   expect(noted.statusCode, noted.body).toBe(200);
-  expect(database.authQuery(db => (db.prepare("SELECT prompt_text FROM forge_task_turns WHERE task_id = ? ORDER BY created_at DESC LIMIT 1").get(task.id) as { prompt_text: string }).prompt_text)).toContain(`Agent note (${agentId}):\nMachine progress note`);
+  expect(database.authQuery(db => (db.prepare("SELECT prompt_text FROM suplex_task_turns WHERE task_id = ? ORDER BY created_at DESC LIMIT 1").get(task.id) as { prompt_text: string }).prompt_text)).toContain(`Agent note (${agentId}):\nMachine progress note`);
   expect((await command({ command: "send_task_note", revision: noteRevision, idempotencyKey: "note-001", note: "Machine progress note" })).statusCode).toBe(200);
-  expect(database.authQuery(db => (db.prepare("SELECT COUNT(*) AS count FROM forge_task_turns WHERE task_id = ? AND prompt_text LIKE '%Machine progress note%'").get(task.id) as { count: number }).count)).toBe(1);
+  expect(database.authQuery(db => (db.prepare("SELECT COUNT(*) AS count FROM suplex_task_turns WHERE task_id = ? AND prompt_text LIKE '%Machine progress note%'").get(task.id) as { count: number }).count)).toBe(1);
 
   const duplicate = await command({ command: "duplicate_task", revision: noted.json().revision, idempotencyKey: "duplicate-001" });
   expect(duplicate.statusCode, duplicate.body).toBe(200);
   const copyId = duplicate.json().id as string;
   expect(duplicate.json()).toMatchObject({ status: "backlog" });
-  expect(database.authQuery(db => db.prepare("SELECT copied_from_task_id FROM forge_tasks WHERE id = ?").get(copyId))).toEqual({ copied_from_task_id: task.id });
+  expect(database.authQuery(db => db.prepare("SELECT copied_from_task_id FROM suplex_tasks WHERE id = ?").get(copyId))).toEqual({ copied_from_task_id: task.id });
 
   const cancelRevision = tasks.getAgentApiTask(externalAgent.authenticate(agentCredential), task.id).revision;
   const cancelled = await command({ command: "cancel_task", revision: cancelRevision, idempotencyKey: "cancel-001" });
@@ -1068,7 +1068,7 @@ test("agent lifecycle commands use current revisions, durable receipts, note att
   const unarchived = await command({ command: "unarchive_task", revision: archived.json().revision, idempotencyKey: "unarchive-001" });
   expect(unarchived.statusCode, unarchived.body).toBe(200);
   expect(unarchived.json()).toMatchObject({ archived: false });
-  expect(database.authQuery(db => (db.prepare("SELECT COUNT(*) AS count FROM forge_audit_events WHERE actor_agent_id = ? AND action IN ('task_started', 'task_note_added', 'task_duplicated', 'task_cancelled', 'task_archived', 'task_unarchived')").get(agentId) as { count: number }).count)).toBe(6);
+  expect(database.authQuery(db => (db.prepare("SELECT COUNT(*) AS count FROM suplex_audit_events WHERE actor_agent_id = ? AND action IN ('task_started', 'task_note_added', 'task_duplicated', 'task_cancelled', 'task_archived', 'task_unarchived')").get(agentId) as { count: number }).count)).toBe(6);
 });
 
 test("AgentApi start records queued intent while a prerequisite is undelivered", async () => {
@@ -1106,7 +1106,7 @@ test("project policy owns the default workflow and implicit Advisor profile", as
   expect(allowed.statusCode, allowed.body).toBe(201);
   expect(allowed.json()).toMatchObject({ workflow: { id: "workflow_native_independent_review", engine: "independent_review", name: "Second opinion" } });
 
-  database.authTransaction(db => db.prepare("UPDATE forge_projects SET agent_task_policy_json = ? WHERE id = ?").run("{invalid", projectId));
+  database.authTransaction(db => db.prepare("UPDATE suplex_projects SET agent_task_policy_json = ? WHERE id = ?").run("{invalid", projectId));
   const corrupt = await app.inject({ method: "POST", url: "/api/agent/tasks", headers: { Authorization: `Bearer ${agentCredential}` }, payload: { projectId, title: "Corrupt policy", idempotencyKey: "externalAgent-policy-corrupt" } });
   expect(corrupt.statusCode).toBe(422);
 });
@@ -1114,8 +1114,8 @@ test("project policy owns the default workflow and implicit Advisor profile", as
 
 test("cross-company and out-of-grant projects are non-enumerating with zero side effects", async () => {
   const counts = (): Record<string, number> => Object.fromEntries([
-    "forge_task_controls", "forge_tasks", "forge_artifacts", "forge_task_turns", "forge_task_sessions",
-  ].map((table) => [table, database.authQuery((db) => (db.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get() as { count: number }).count)]).concat([["task_created_audits", database.authQuery((db) => (db.prepare("SELECT COUNT(*) AS count FROM forge_audit_events WHERE action = 'task_created'").get() as { count: number }).count)], ["recovery_wakes", recoveryWakes]]));
+    "suplex_task_controls", "suplex_tasks", "suplex_artifacts", "suplex_task_turns", "suplex_task_sessions",
+  ].map((table) => [table, database.authQuery((db) => (db.prepare(`SELECT COUNT(*) AS count FROM ${table}`).get() as { count: number }).count)]).concat([["task_created_audits", database.authQuery((db) => (db.prepare("SELECT COUNT(*) AS count FROM suplex_audit_events WHERE action = 'task_created'").get() as { count: number }).count)], ["recovery_wakes", recoveryWakes]]));
   const denied = async (deniedProjectId: string, idempotencyKey: string) => app.inject({
     method: "POST",
     url: "/api/agent/tasks",
@@ -1337,7 +1337,7 @@ test("failed checks, pending review, and a base branch behind the pull request e
   expect((await readTask(stale)).json().actionRequired).toMatchObject({ owner: "agent", reasonCode: "stale_delivery" });
 
   const pending = await deliverTask("Pending checks", "integration-pending-001", 47, ghPullRequest({ number: 47, state: "OPEN", headSha: "d".repeat(40), checks: [{ name: "build", status: "IN_PROGRESS", conclusion: null }] }));
-  expect((await readTask(pending)).json().actionRequired).toMatchObject({ owner: "forge", reasonCode: "pending_checks" });
+  expect((await readTask(pending)).json().actionRequired).toMatchObject({ owner: "suplex", reasonCode: "pending_checks" });
 
   const missing = await deliverTask("Missing pull request", "integration-missing-001", 48, ABSENT);
   expect((await readTask(missing)).json().actionRequired).toMatchObject({ owner: "agent", reasonCode: "pull_request_missing" });
@@ -1356,7 +1356,7 @@ test("a GitHub read failure returns 200 with an unavailable observation and no i
   const response = await readTask(taskId);
   expect(response.statusCode).toBe(200);
   expect(response.json().integration).toMatchObject({ integrated: false, observation: "unavailable", observationReason: "provider-unavailable" });
-  expect(response.json().actionRequired).toMatchObject({ owner: "forge", reasonCode: "observation_unavailable" });
+  expect(response.json().actionRequired).toMatchObject({ owner: "suplex", reasonCode: "observation_unavailable" });
 });
 
 test("GET /api/agent/tasks lists every task in granted projects and exposes no build internals", async () => {
@@ -1393,7 +1393,7 @@ test("GET /api/agent/tasks filters stored sources and delivery pull requests bef
   const create = async (title: string, idempotencyKey: string, source: { kind: "pull_request"; number: number } | { kind: "branch"; branch: string }) => {
     const taskId = await createAgentApiTask(title, idempotencyKey);
     const configuration = { ...tasks.getTask(adminId, taskId).configuration, source };
-    database.authTransaction(db => db.prepare("UPDATE forge_tasks SET configuration_json = ? WHERE id = ?").run(JSON.stringify(configuration), taskId));
+    database.authTransaction(db => db.prepare("UPDATE suplex_tasks SET configuration_json = ? WHERE id = ?").run(JSON.stringify(configuration), taskId));
     return taskId;
   };
   const pullRequest = await create("Pull request backlog", "list-source-pr-001", { kind: "pull_request", number: 17 });
@@ -1405,7 +1405,7 @@ test("GET /api/agent/tasks filters stored sources and delivery pull requests bef
   const branchThree = await create("Needle gamma", "list-source-branch-003", { kind: "branch", branch: "feature/needle" });
   const delivery = await create("Delivery pull request", "list-delivery-pr-001", { kind: "branch", branch: "feature/delivery" });
   tasks.repository.controls.start(delivery);
-  database.authTransaction(db => db.prepare("UPDATE forge_task_controls SET pull_request_json = ? WHERE task_id = ?").run(JSON.stringify({ repository: "meiji/externalAgent-test", number: 17, url: "https://github.com/meiji/externalAgent-test/pull/17", headSha: "a".repeat(40), state: "open", mergedAt: null }), delivery));
+  database.authTransaction(db => db.prepare("UPDATE suplex_task_controls SET pull_request_json = ? WHERE task_id = ?").run(JSON.stringify({ repository: "meiji/externalAgent-test", number: 17, url: "https://github.com/meiji/externalAgent-test/pull/17", headSha: "a".repeat(40), state: "open", mergedAt: null }), delivery));
   await tasks.archiveTask(adminId, archivedPullRequest);
 
   const sourceTask = (await listTasks(`?pullRequestNumber=17`)).json().tasks as Array<Record<string, unknown>>;
@@ -1487,10 +1487,10 @@ test("real HTTP discovery applies current grants, creator authority, pagination,
   tasks.repository.controls.start(humanTask.task.id);
   database.authTransaction((db) => {
     const timestamp = "2030-01-01T00:00:00.000Z";
-    db.prepare("UPDATE forge_task_controls SET workflow_state_json = json_set(workflow_state_json, '$.deliveryWait', json(?)), updated_at = ? WHERE task_id = ?").run(JSON.stringify({ headSha: "a".repeat(40), fingerprint: "delivery-wait", since: timestamp, reason: "checks" }), timestamp, third.id);
-    db.prepare("UPDATE forge_task_controls SET workflow_state_json = json_set(workflow_state_json, '$.deliveryWait', json(?)), updated_at = ? WHERE task_id IN (?, ?)").run(JSON.stringify({ headSha: "a".repeat(40), fingerprint: "unauthorized-delivery-wait", since: timestamp, reason: "checks" }), timestamp, otherTask.json().id, humanTask.task.id);
-    db.prepare("UPDATE forge_task_controls SET updated_at = ? WHERE task_id IN (?, ?)").run(timestamp, first.id, second.id);
-    db.prepare("UPDATE forge_tasks SET updated_at = ? WHERE id = ?").run(timestamp, second.id);
+    db.prepare("UPDATE suplex_task_controls SET workflow_state_json = json_set(workflow_state_json, '$.deliveryWait', json(?)), updated_at = ? WHERE task_id = ?").run(JSON.stringify({ headSha: "a".repeat(40), fingerprint: "delivery-wait", since: timestamp, reason: "checks" }), timestamp, third.id);
+    db.prepare("UPDATE suplex_task_controls SET workflow_state_json = json_set(workflow_state_json, '$.deliveryWait', json(?)), updated_at = ? WHERE task_id IN (?, ?)").run(JSON.stringify({ headSha: "a".repeat(40), fingerprint: "unauthorized-delivery-wait", since: timestamp, reason: "checks" }), timestamp, otherTask.json().id, humanTask.task.id);
+    db.prepare("UPDATE suplex_task_controls SET updated_at = ? WHERE task_id IN (?, ?)").run(timestamp, first.id, second.id);
+    db.prepare("UPDATE suplex_tasks SET updated_at = ? WHERE id = ?").run(timestamp, second.id);
   });
 
   let address = await app.listen({ host: "127.0.0.1", port: 0 });
@@ -1582,7 +1582,7 @@ test("real HTTP discovery applies current grants, creator authority, pagination,
   const waitingDelivery = await request(`/api/agent/tasks/${third.id}`);
   const waitingDeliveryEtag = waitingDelivery.headers.get("etag");
   expect(await waitingDelivery.json()).toMatchObject({ workflowStage: "waiting_delivery", blocker: { kind: "delivery_wait", reason: "checks" }, delivery: { checks: null, waiting: { reason: "checks" } } });
-  database.authTransaction((db) => db.prepare("UPDATE forge_task_controls SET workflow_state_json = json_set(workflow_state_json, '$.deliveryWait', json('null'), '$.completion', json(?)), updated_at = ? WHERE task_id = ?").run(JSON.stringify({ kind: "workflow", reviewedHead: "a".repeat(40), pullRequestNumber: null, observedAt: "2030-01-01T00:00:01.000Z" }), "2030-01-01T00:00:01.000Z", third.id));
+  database.authTransaction((db) => db.prepare("UPDATE suplex_task_controls SET workflow_state_json = json_set(workflow_state_json, '$.deliveryWait', json('null'), '$.completion', json(?)), updated_at = ? WHERE task_id = ?").run(JSON.stringify({ kind: "workflow", reviewedHead: "a".repeat(40), pullRequestNumber: null, observedAt: "2030-01-01T00:00:01.000Z" }), "2030-01-01T00:00:01.000Z", third.id));
   const completedDelivery = await request(`/api/agent/tasks/${third.id}`, agentCredential, { "if-none-match": waitingDeliveryEtag! });
   expect(completedDelivery.status).toBe(200);
   expect(await completedDelivery.json()).toMatchObject({ workflowStage: "completed", delivery: { completion: { kind: "workflow", observedAt: "2030-01-01T00:00:01.000Z" } } });
@@ -1600,12 +1600,12 @@ test("real HTTP discovery applies current grants, creator authority, pagination,
 
 const duplicateKey = (taskId: string, key: string): string => `duplicate-${createHash("sha256").update(`${taskId}:${key}`).digest("hex")}`;
 const revisionOf = (taskId: string): string => tasks.getAgentApiTask(externalAgent.authenticate(agentCredential), taskId).revision;
-const commandRevision = (taskId: string): number => database.authQuery(db => (db.prepare("SELECT command_revision FROM forge_tasks WHERE id = ?").get(taskId) as { command_revision: number }).command_revision);
-const receipt = (taskId: string, key: string) => database.authQuery(db => db.prepare("SELECT result_json FROM forge_hermes_task_command_receipts WHERE agent_id = ? AND task_id = ? AND idempotency_key = ?").get(agentId, taskId, key) as { result_json: string } | undefined);
-const auditCount = (action: string, taskId: string): number => database.authQuery(db => (db.prepare("SELECT COUNT(*) AS count FROM forge_audit_events WHERE actor_agent_id = ? AND action = ? AND metadata_json LIKE ?").get(agentId, action, `%${taskId}%`) as { count: number }).count);
+const commandRevision = (taskId: string): number => database.authQuery(db => (db.prepare("SELECT command_revision FROM suplex_tasks WHERE id = ?").get(taskId) as { command_revision: number }).command_revision);
+const receipt = (taskId: string, key: string) => database.authQuery(db => db.prepare("SELECT result_json FROM suplex_hermes_task_command_receipts WHERE agent_id = ? AND task_id = ? AND idempotency_key = ?").get(agentId, taskId, key) as { result_json: string } | undefined);
+const auditCount = (action: string, taskId: string): number => database.authQuery(db => (db.prepare("SELECT COUNT(*) AS count FROM suplex_audit_events WHERE actor_agent_id = ? AND action = ? AND metadata_json LIKE ?").get(agentId, action, `%${taskId}%`) as { count: number }).count);
 const rowCount = (sql: string, ...params: unknown[]): number => database.authQuery(db => (db.prepare(sql).get(...params as never[]) as { count: number }).count);
 
-/** Builds a second TaskService over the same database, the way a second Forge process or instance would. */
+/** Builds a second TaskService over the same database, the way a second Suplex process or instance would. */
 function siblingService(): TaskService {
   return new TaskService(database, auth, projects, config);
 }
@@ -1628,8 +1628,8 @@ test("a receipt another writer completed replays on a stale revision without rer
   tasks.repository.controls.cancel(task.id);
   const winner = tasks.getAgentApiTask(externalAgent.authenticate(agentCredential), task.id);
   database.authImmediateTransaction(db => {
-    db.prepare("UPDATE forge_tasks SET command_revision = command_revision + 1 WHERE id = ?").run(task.id);
-    db.prepare("INSERT INTO forge_hermes_task_command_receipts (agent_id, task_id, idempotency_key, request_hash, result_json, created_at) VALUES (?, ?, ?, ?, ?, ?)")
+    db.prepare("UPDATE suplex_tasks SET command_revision = command_revision + 1 WHERE id = ?").run(task.id);
+    db.prepare("INSERT INTO suplex_hermes_task_command_receipts (agent_id, task_id, idempotency_key, request_hash, result_json, created_at) VALUES (?, ?, ?, ?, ?, ?)")
       .run(agentId, task.id, body.idempotencyKey, requestHash, JSON.stringify(winner), new Date().toISOString());
   });
   const claimedBefore = commandRevision(task.id);
@@ -1659,7 +1659,7 @@ test("concurrent commands admit one, hold the in-flight replay, and report the l
   expect(loser.json().code).toBe("revision_stale");
   release();
   expect((await winner).statusCode, (await winner).body).toBe(200);
-  expect(rowCount("SELECT COUNT(*) AS count FROM forge_tasks WHERE copied_from_task_id = ?", task.id)).toBe(1);
+  expect(rowCount("SELECT COUNT(*) AS count FROM suplex_tasks WHERE copied_from_task_id = ?", task.id)).toBe(1);
 
   const conflicting = await command(task.id, { command: "cancel_task", revision: revisionOf(task.id), idempotencyKey: "concurrent-duplicate" });
   expect(conflicting.statusCode).toBe(409);
@@ -1695,7 +1695,7 @@ test("duplicates carry the source configuration, attachments, and provenance the
   expect(copy.advisorProfiles).toEqual(source.advisorProfiles);
   expect(copy.images.map(item => item.filename)).toEqual(["shot.png"]);
   expect(copy.status).toBe("backlog");
-  expect(database.authQuery(db => db.prepare("SELECT copied_from_task_id, idempotency_key FROM forge_tasks WHERE id = ?").get(copy.id))).toEqual({ copied_from_task_id: task.id, idempotency_key: duplicateKey(task.id, "duplicate-configuration") });
+  expect(database.authQuery(db => db.prepare("SELECT copied_from_task_id, idempotency_key FROM suplex_tasks WHERE id = ?").get(copy.id))).toEqual({ copied_from_task_id: task.id, idempotency_key: duplicateKey(task.id, "duplicate-configuration") });
 });
 
 test("delivery rechecks stay bounded to active waiting tasks and never grant human, delivery, or merge powers", async () => {
@@ -1703,7 +1703,7 @@ test("delivery rechecks stay bounded to active waiting tasks and never grant hum
   await command(task.id, { command: "start_task", revision: task.revision, idempotencyKey: "recheck-start" });
   expect(tasks.getAgentApiTask(externalAgent.authenticate(agentCredential), task.id).permittedCommands).not.toContain("recheck_delivery_wait");
 
-  const setWait = (value: string | null) => database.authTransaction(db => db.prepare("UPDATE forge_task_controls SET workflow_state_json = json_set(workflow_state_json, '$.deliveryWait', json(?)), updated_at = ? WHERE task_id = ?").run(value ?? "null", new Date().toISOString(), task.id));
+  const setWait = (value: string | null) => database.authTransaction(db => db.prepare("UPDATE suplex_task_controls SET workflow_state_json = json_set(workflow_state_json, '$.deliveryWait', json(?)), updated_at = ? WHERE task_id = ?").run(value ?? "null", new Date().toISOString(), task.id));
   setWait(JSON.stringify({ headSha: "a".repeat(40), fingerprint: "recheck", since: "2030-01-01T00:00:00.000Z", reason: "checks" }));
   expect(tasks.getAgentApiTask(externalAgent.authenticate(agentCredential), task.id).permittedCommands).toContain("recheck_delivery_wait");
 
@@ -1737,7 +1737,7 @@ test("delivery rechecks stay bounded to active waiting tasks and never grant hum
     expect(rejected.statusCode, blocked).toBe(400);
     expect(rejected.json().code).toBe("request_invalid");
   }
-  expect(rowCount("SELECT COUNT(*) AS count FROM forge_hermes_task_command_receipts WHERE task_id = ? AND idempotency_key LIKE 'blocked-%'", task.id)).toBe(0);
+  expect(rowCount("SELECT COUNT(*) AS count FROM suplex_hermes_task_command_receipts WHERE task_id = ? AND idempotency_key LIKE 'blocked-%'", task.id)).toBe(0);
 });
 
 test("archiving observes authoritative task state, not pane or session mirrors", async () => {
@@ -1745,7 +1745,7 @@ test("archiving observes authoritative task state, not pane or session mirrors",
   await command(task.id, { command: "start_task", revision: task.revision, idempotencyKey: "mirror-start" });
   tasks.repository.controls.claimRoot({ taskId: task.id });
   // A restarted Herdr leaves recreated or missing pane tokens behind; they never decide whether archiving is legal.
-  database.authTransaction(db => db.prepare("UPDATE forge_task_sessions SET pane_id = ?, native_session_id = NULL WHERE task_id = ?").run("pane-from-a-previous-run", task.id));
+  database.authTransaction(db => db.prepare("UPDATE suplex_task_sessions SET pane_id = ?, native_session_id = NULL WHERE task_id = ?").run("pane-from-a-previous-run", task.id));
 
   const cancelled = await command(task.id, { command: "cancel_task", revision: revisionOf(task.id), idempotencyKey: "mirror-cancel" });
   expect(cancelled.statusCode, cancelled.body).toBe(200);
@@ -1774,7 +1774,7 @@ test("delivery rechecks follow the authoritative wait: an unchanged observation 
   const task = await createTask("Recheck observation", "recheck-observation-001");
   await command(task.id, { command: "start_task", revision: task.revision, idempotencyKey: "observation-start" });
   const wait = { headSha: "a".repeat(40), fingerprint: "checks-pending", since: "2030-01-01T00:00:00.000Z", reason: "checks" as const };
-  database.authTransaction(db => db.prepare("UPDATE forge_task_controls SET workflow_state_json = json_set(workflow_state_json, '$.deliveryWait', json(?)), updated_at = ? WHERE task_id = ?").run(JSON.stringify(wait), new Date().toISOString(), task.id));
+  database.authTransaction(db => db.prepare("UPDATE suplex_task_controls SET workflow_state_json = json_set(workflow_state_json, '$.deliveryWait', json(?)), updated_at = ? WHERE task_id = ?").run(JSON.stringify(wait), new Date().toISOString(), task.id));
 
   const rechecked = await command(task.id, { command: "recheck_delivery_wait", revision: revisionOf(task.id), idempotencyKey: "observation-recheck" });
   expect(rechecked.statusCode, rechecked.body).toBe(200);
@@ -1795,7 +1795,7 @@ test("delivery rechecks follow the authoritative wait: an unchanged observation 
 
   // A delivery that needs a person becomes a human question, and the agent still holds no power to answer it.
   tasks.repository.controls.claimRoot({ taskId: task.id });
-  database.authTransaction(db => db.prepare("UPDATE forge_task_controls SET workflow_state_json = json_set(workflow_state_json, '$.deliveryWait', json(?)), updated_at = ? WHERE task_id = ?").run(JSON.stringify(wait), new Date().toISOString(), task.id));
+  database.authTransaction(db => db.prepare("UPDATE suplex_task_controls SET workflow_state_json = json_set(workflow_state_json, '$.deliveryWait', json(?)), updated_at = ? WHERE task_id = ?").run(JSON.stringify(wait), new Date().toISOString(), task.id));
   expect(tasks.repository.controls.failDeliveryWait(task.id, wait, "Delivery checks failed. How do you want to continue?")).toBe(true);
   const blocked = tasks.getAgentApiTask(externalAgent.authenticate(agentCredential), task.id);
   expect(blocked).toMatchObject({ workflowStage: "waiting_human", blocker: { kind: "human_question" } });
@@ -1898,7 +1898,7 @@ test("identical concurrent requests for one key produce one effect and replay th
   expect(auditCount("task_cancelled", task.id)).toBe(1);
   expect(receipt(task.id, "identical-cancel")).toBeDefined();
   expect(commandRevision(task.id)).toBe(before + 1);
-  expect(rowCount("SELECT COUNT(*) AS count FROM forge_hermes_task_command_receipts WHERE task_id = ?", task.id)).toBe(1);
+  expect(rowCount("SELECT COUNT(*) AS count FROM suplex_hermes_task_command_receipts WHERE task_id = ?", task.id)).toBe(1);
 
   // A different key on the now-stale revision is still stale, and a mismatched payload on this key is still a conflict.
   const stale = await command(task.id, { command: "cancel_task", revision: body.revision, idempotencyKey: "identical-other-key" });
@@ -2070,11 +2070,11 @@ test("a cycle, a self-dependency, and dependencies outside the agent scope are r
   const ungranted = (await tasks.createTask(adminId, companyId, { projectId: otherProjectId, title: "Ungranted dependency", idempotencyKey: "ungranted-dependency-001" })).task;
   const crossCompany = (await tasks.createTask(adminId, crossCompanyId, { projectId: crossCompanyProjectId, title: "Cross-company dependency", idempotencyKey: "cross-company-dependency-001" })).task;
   for (const dependency of [ungranted.id, crossCompany.id]) {
-    const before = runtimeCounts().forge_tasks;
+    const before = runtimeCounts().suplex_tasks;
     const rejected = await createDependencyTask("Rejected dependency", `create-dependency-${dependency}`, [dependency]);
     expect(rejected.statusCode).toBe(422);
     expect(rejected.json()).toMatchObject({ code: "dependency_not_found", field: "dependsOn", value: dependency, reason: "The dependency is not available." });
-    expect(runtimeCounts().forge_tasks).toBe(before);
+    expect(runtimeCounts().suplex_tasks).toBe(before);
   }
   const foreignCreate = await createDependencyTask("Foreign dependency", "create-dependency-foreign-001", [foreign.json().id as string]);
   expect(foreignCreate.statusCode, foreignCreate.body).toBe(201);
@@ -2131,15 +2131,15 @@ test("configured agent delivery reports delivery, merge, and the agent delivery 
 });
 
 test("agent command advertisements agree across whoami, capabilities, schemas, and MCP for both delivery configurations", async () => {
-  const mcpCommandSchema = FORGE_MCP_TOOLS.find(tool => tool.name === "forge_command_task")!.inputSchema;
+  const mcpCommandSchema = SUPLEX_MCP_TOOLS.find(tool => tool.name === "suplex_command_task")!.inputSchema;
   const commandSchema = AgentApiTaskCommandBodySchema.shape.command.options;
 
   expect(commandSchema).toEqual([...AGENT_API_TASK_COMMANDS]);
   expect(mcpCommandSchema).toMatchObject({ properties: { command: { enum: [...AGENT_API_TASK_COMMANDS] } } });
   const whoami = await app.inject({ method: "GET", url: "/api/agent/me", headers: { Authorization: `Bearer ${agentCredential}` } });
   expect(whoami.json()).toMatchObject({ capabilities: { taskCommands: [...AGENT_API_TASK_COMMANDS] } });
-  expect(FORGE_MCP_TOOLS.find(tool => tool.name === "forge_whoami")!.description).toContain(AGENT_API_MCP_AUTHORITY);
-  expect(FORGE_MCP_TOOLS.find(tool => tool.name === "forge_capabilities")!.description).toContain(AGENT_API_MCP_AUTHORITY);
+  expect(SUPLEX_MCP_TOOLS.find(tool => tool.name === "suplex_whoami")!.description).toContain(AGENT_API_MCP_AUTHORITY);
+  expect(SUPLEX_MCP_TOOLS.find(tool => tool.name === "suplex_capabilities")!.description).toContain(AGENT_API_MCP_AUTHORITY);
 
   for (const agentDelivery of [false, true]) {
     const capabilities = agentApiCapabilities(agentDelivery);

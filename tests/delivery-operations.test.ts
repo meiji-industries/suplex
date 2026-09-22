@@ -34,7 +34,7 @@ async function revision(cwd: string): Promise<LocalRevision> {
 async function deliverySeed(): Promise<{ directory: string; local: LocalRevision }> {
   if (seed) return seed;
 
-  const directory = await mkdtemp(join(tmpdir(), "forge-delivery-seed-"));
+  const directory = await mkdtemp(join(tmpdir(), "suplex-delivery-seed-"));
   try {
     await initializeGitFixture(directory, "task-branch");
     await commitGitFixture(directory, "seed", []);
@@ -47,17 +47,17 @@ async function deliverySeed(): Promise<{ directory: string; local: LocalRevision
 }
 
 async function fixture() {
-  const directory = await mkdtemp(join(tmpdir(), "forge-delivery-"));
+  const directory = await mkdtemp(join(tmpdir(), "suplex-delivery-"));
   cleanup.push(directory);
   const value = await deliverySeed();
   await cp(value.directory, directory, { recursive: true });
   const local = { ...value.local };
-  const database = createTestDatabase(join(directory, "forge.sqlite"));
+  const database = createTestDatabase(join(directory, "suplex.sqlite"));
   const stamp = new Date().toISOString();
   database.authTransaction((db) => {
-    db.prepare("INSERT INTO forge_companies (id, name, status, created_at) VALUES ('company', 'Company', 'active', ?)").run(stamp);
-    db.prepare("INSERT INTO forge_projects (id, company_id, name, repository_path, worktree_root, repository_identity, base_branch, setup_command, verification_command, created_at, updated_at) VALUES ('project', 'company', 'Project', ?, ?, 'owner/repo', 'main', '', '', ?, ?)").run(directory, directory, stamp, stamp);
-    db.prepare("INSERT INTO forge_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES ('brief', 'company', 'task-brief', 'brief', 'text/plain', 1, ?, 'brief', ?)").run("a".repeat(64), stamp);
+    db.prepare("INSERT INTO suplex_companies (id, name, status, created_at) VALUES ('company', 'Company', 'active', ?)").run(stamp);
+    db.prepare("INSERT INTO suplex_projects (id, company_id, name, repository_path, worktree_root, repository_identity, base_branch, setup_command, verification_command, created_at, updated_at) VALUES ('project', 'company', 'Project', ?, ?, 'owner/repo', 'main', '', '', ?, ?)").run(directory, directory, stamp, stamp);
+    db.prepare("INSERT INTO suplex_artifacts (id, company_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES ('brief', 'company', 'task-brief', 'brief', 'text/plain', 1, ?, 'brief', ?)").run("a".repeat(64), stamp);
       insertNativeTaskRow(db);
   });
   const profile = { profileId: "profile", provider: "codex" as const, model: "gpt-5.6-sol", reasoningLevel: "medium" as const, serviceTier: "default" as const };
@@ -74,7 +74,7 @@ async function fixture() {
 it.each([null, "b".repeat(40)])("accepts current review before publishing existing draft evidence with %s authorization", async previous => {
   const value = await fixture();
   const fake = github(value.local, value.review.baseSha);
-  value.database.authTransaction(db => db.prepare("UPDATE forge_task_controls SET delivery_target = 'pull_request_draft' WHERE task_id = 'task'").run());
+  value.database.authTransaction(db => db.prepare("UPDATE suplex_task_controls SET delivery_target = 'pull_request_draft' WHERE task_id = 'task'").run());
   if (previous) value.store.updateWorkflowState("task", state => ({ ...state, acceptedDelivery: { ...value.review, headSha: previous } }));
   const evidence = vi.spyOn(IssueEvidence.prototype, "complete").mockImplementation(async () => {
     expect(value.store.get("task").workflowState.acceptedDelivery?.headSha).toBe(value.local.headSha);
@@ -107,10 +107,10 @@ function cachePull(store: TaskControlStore, pull: GithubPullRequest, number: num
 function attachTrigger(value: Awaited<ReturnType<typeof fixture>>, protectedPaths: string[] = []): void {
   const stamp = new Date().toISOString();
   value.database.authTransaction(db => {
-    db.prepare("INSERT INTO forge_workflows (id, name, description, engine, configuration_json, created_at, updated_at) VALUES ('workflow_trigger_test', 'Trigger test', '', 'standard', ?, ?, ?)").run(JSON.stringify({ advisorProfileIds: {}, deliveryTarget: "merged" }), stamp, stamp);
-    db.prepare("INSERT INTO forge_github_trigger_rules (id, company_id, project_id, name, label, workflow_id, delivery_target, protected_paths_json, repository_id, repository_name, authority_user_id, enabled, archived_at, revision, last_successful_check_at, next_retry_at, latest_error, failure_count, recent_activity_json, created_at, updated_at) VALUES ('rule_trigger_test', 'company', 'project', 'Rule', 'ready', 'workflow_trigger_test', 'merged', ?, 9, 'owner/repo', 'native-test-user', 0, NULL, 1, NULL, NULL, NULL, 0, '[]', ?, ?)").run(JSON.stringify(protectedPaths), stamp, stamp);
+    db.prepare("INSERT INTO suplex_workflows (id, name, description, engine, configuration_json, created_at, updated_at) VALUES ('workflow_trigger_test', 'Trigger test', '', 'standard', ?, ?, ?)").run(JSON.stringify({ advisorProfileIds: {}, deliveryTarget: "merged" }), stamp, stamp);
+    db.prepare("INSERT INTO suplex_github_trigger_rules (id, company_id, project_id, name, label, workflow_id, delivery_target, protected_paths_json, repository_id, repository_name, authority_user_id, enabled, archived_at, revision, last_successful_check_at, next_retry_at, latest_error, failure_count, recent_activity_json, created_at, updated_at) VALUES ('rule_trigger_test', 'company', 'project', 'Rule', 'ready', 'workflow_trigger_test', 'merged', ?, 9, 'owner/repo', 'native-test-user', 0, NULL, 1, NULL, NULL, NULL, 0, '[]', ?, ?)").run(JSON.stringify(protectedPaths), stamp, stamp);
     const policy = { headSha: value.review.headSha, baseSha: value.review.baseSha, headBranch: value.local.branch, baseBranch: "main", protectedPaths, repositoryId: 9, repositoryName: "owner/repo", deliveryTarget: "merged" };
-    db.prepare("INSERT INTO forge_github_trigger_dispatches (id, rule_id, company_id, project_id, repository_id, repository_name, pull_request_number, authority_user_id, request_json, policy_json, preset_json, profiles_json, idempotency_key, task_id, created_at, updated_at) VALUES ('dispatch_trigger_test', 'rule_trigger_test', 'company', 'project', 9, 'owner/repo', 7, 'native-test-user', '{}', ?, '{}', '{}', 'dispatch-trigger-test', 'task', ?, ?)").run(JSON.stringify(policy), stamp, stamp);
+    db.prepare("INSERT INTO suplex_github_trigger_dispatches (id, rule_id, company_id, project_id, repository_id, repository_name, pull_request_number, authority_user_id, request_json, policy_json, preset_json, profiles_json, idempotency_key, task_id, created_at, updated_at) VALUES ('dispatch_trigger_test', 'rule_trigger_test', 'company', 'project', 9, 'owner/repo', 7, 'native-test-user', '{}', ?, '{}', '{}', 'dispatch-trigger-test', 'task', ?, ?)").run(JSON.stringify(policy), stamp, stamp);
   });
 }
 
@@ -139,7 +139,7 @@ describe("Coordinator delivery operations", () => {
       expect(value.store.get("task")).toMatchObject({ status: "active", humanQuestion: null });
     } finally { value.database.close(); }
   });
-  it("adopts a reviewed teammate commit without a Forge push receipt", async () => {
+  it("adopts a reviewed teammate commit without a Suplex push receipt", async () => {
     const value = await fixture();
     try {
       attachTrigger(value);
@@ -197,7 +197,7 @@ describe("Coordinator delivery operations", () => {
   it("observing an existing draft does not complete a follow-up but explicit delivery does", async () => {
     const value = await fixture();
     try {
-      value.database.authTransaction(db => db.prepare("UPDATE forge_task_controls SET delivery_target = 'pull_request_draft' WHERE task_id = 'task'").run());
+      value.database.authTransaction(db => db.prepare("UPDATE suplex_task_controls SET delivery_target = 'pull_request_draft' WHERE task_id = 'task'").run());
       value.store.markDelivered("task");
       value.store.sendNote("task", "Fix the failing checks.");
       const fake = github(value.local, value.review.baseSha);
@@ -228,7 +228,7 @@ describe("Coordinator delivery operations", () => {
       fake.port.pushNormal = async () => { pushes += 1; remoteHead = repaired.headSha; };
       const delivery = new DeliveryOperations(value.store, fake.port);
       await expect(delivery.execute({ taskId: "task", sessionId: value.root.id, generation: value.root.generation }, "push_branch", repaired.headSha, review)).resolves.toMatchObject({ kind: "pushed", headSha: repaired.headSha });
-      expect(value.database.authQuery(db => db.prepare("SELECT from_head_sha, to_head_sha, review_json FROM forge_github_trigger_delivery_operations").get() as { from_head_sha: string; to_head_sha: string; review_json: string })).toMatchObject({ from_head_sha: teammate, to_head_sha: repaired.headSha });
+      expect(value.database.authQuery(db => db.prepare("SELECT from_head_sha, to_head_sha, review_json FROM suplex_github_trigger_delivery_operations").get() as { from_head_sha: string; to_head_sha: string; review_json: string })).toMatchObject({ from_head_sha: teammate, to_head_sha: repaired.headSha });
       await delivery.execute({ taskId: "task", sessionId: value.root.id, generation: value.root.generation }, "push_branch", repaired.headSha, review);
       expect(pushes).toBe(1);
       value.store.recordTriggerPush({ taskId: "task", dispatchId: "dispatch_trigger_test", fromHeadSha: teammate, toHeadSha: repaired.headSha, review });
@@ -240,10 +240,10 @@ describe("Coordinator delivery operations", () => {
     try {
       const fake = github(value.local);
       fake.port.listPullRequests = async () => [];
-      value.database.authTransaction(db => db.prepare("UPDATE forge_task_controls SET objective = ? WHERE task_id = 'task'").run("Auto Restart\n\nRight now the \"Update Forge\" notification does not have a call to action.  I want it to have the ability to self-reload itself somehow.. Please make it happen somehow.  \"Restart Now\"."));
+      value.database.authTransaction(db => db.prepare("UPDATE suplex_task_controls SET objective = ? WHERE task_id = 'task'").run("Auto Restart\n\nRight now the \"Update Suplex\" notification does not have a call to action.  I want it to have the ability to self-reload itself somehow.. Please make it happen somehow.  \"Restart Now\"."));
       const controller = new RootController(value.store, new FakeTaskHarness(), new DeliveryOperations(value.store, fake.port));
-      await controller.requestDelivery({ taskId: "task", sessionId: value.root.id, generation: value.root.generation }, "create_or_adopt_pull_request", value.local.headSha, value.review, "  Add a restart action to the Forge update notification  ", pullRequestBody);
-      expect(fake.createdTitles).toEqual(["Add a restart action to the Forge update notification"]);
+      await controller.requestDelivery({ taskId: "task", sessionId: value.root.id, generation: value.root.generation }, "create_or_adopt_pull_request", value.local.headSha, value.review, "  Add a restart action to the Suplex update notification  ", pullRequestBody);
+      expect(fake.createdTitles).toEqual(["Add a restart action to the Suplex update notification"]);
       expect(fake.createdBodies).toEqual([pullRequestBody]);
       expect(fake.createdBodies).not.toContain(value.store.get("task").objective);
     } finally { value.database.close(); }
@@ -344,7 +344,7 @@ describe("Coordinator delivery operations", () => {
   it("follows an explicitly pinned pull request after GitHub retargets it", async () => {
     const value = await fixture();
     try {
-      value.database.authTransaction(db => db.prepare("UPDATE forge_task_controls SET delivery_intent_json = json_set(delivery_intent_json, '$.pullRequestNumber', 7, '$.baseBranch', 'deleted-stack-parent') WHERE task_id = 'task'").run());
+      value.database.authTransaction(db => db.prepare("UPDATE suplex_task_controls SET delivery_intent_json = json_set(delivery_intent_json, '$.pullRequestNumber', 7, '$.baseBranch', 'deleted-stack-parent') WHERE task_id = 'task'").run());
       const fake = github(value.local, "stale-pr-base-sha");
       const pull = await fake.port.getPullRequest({ repository: "owner/repo", number: 7 });
       const branches: string[] = [];
@@ -399,7 +399,7 @@ describe("Coordinator delivery operations", () => {
       const fake = github(value.local);
       const pull = await fake.port.getPullRequest({ repository: "owner/repo", number: 7 });
       cachePull(value.store, pull, 42);
-      value.database.authTransaction((db) => db.prepare("UPDATE forge_task_controls SET delivery_intent_json = json_set(delivery_intent_json, '$.pullRequestNumber', 41) WHERE task_id = 'task'").run());
+      value.database.authTransaction((db) => db.prepare("UPDATE suplex_task_controls SET delivery_intent_json = json_set(delivery_intent_json, '$.pullRequestNumber', 41) WHERE task_id = 'task'").run());
       const requested: number[] = [];
       fake.port.getPullRequest = async ({ number }) => {
         requested.push(number);
@@ -485,7 +485,7 @@ describe("Coordinator delivery operations", () => {
     try {
       const fake = github(value.local);
       const pinned = await fake.port.getPullRequest({ repository: "owner/repo", number: 7 });
-      value.database.authTransaction((db) => db.prepare("UPDATE forge_task_controls SET delivery_intent_json = json_set(delivery_intent_json, '$.pullRequestNumber', 7) WHERE task_id = 'task'").run());
+      value.database.authTransaction((db) => db.prepare("UPDATE suplex_task_controls SET delivery_intent_json = json_set(delivery_intent_json, '$.pullRequestNumber', 7) WHERE task_id = 'task'").run());
       fake.setObserved({ exists: false, number: null, url: null, state: null, isDraft: null, headSha: null, baseSha: null, mergeable: null, mergeStateStatus: null, checks: { total: 0, pending: 0, failing: 0, successful: 0, runs: [] }, author: null, changedFiles: null, additions: null, deletions: null, autoMergeEnabled: null, reviewDecision: null });
       fake.port.getPullRequest = async () => pinned;
       let lists = 0;
@@ -533,7 +533,7 @@ describe("Coordinator delivery operations", () => {
     const fake = github(value.local);
     fake.port.listPullRequests = async () => { throw new Error("GitHub offline"); };
     fake.port.getRemoteRepository = async () => { throw new Error("GitHub must not be consulted"); };
-    value.database.authTransaction(db => db.prepare("UPDATE forge_task_controls SET delivery_target = 'local_worktree' WHERE task_id = 'task'").run());
+    value.database.authTransaction(db => db.prepare("UPDATE suplex_task_controls SET delivery_target = 'local_worktree' WHERE task_id = 'task'").run());
     expect(await new DeliveryOperations(value.store, fake.port).observe("task")).toBeNull();
     await new DeliveryOperations(value.store, fake.port).execute({ taskId: "task", sessionId: value.root.id, generation: value.root.generation }, "complete_local_work", value.local.headSha);
     expect(value.store.get("task").status).toBe("delivered");
@@ -544,7 +544,7 @@ describe("Coordinator delivery operations", () => {
     const value = await fixture();
     const fake = github(value.local);
     fake.port.getBranchHead = async () => value.local.headSha;
-    value.database.authTransaction(db => db.prepare("UPDATE forge_task_controls SET delivery_target = 'remote_branch' WHERE task_id = 'task'").run());
+    value.database.authTransaction(db => db.prepare("UPDATE suplex_task_controls SET delivery_target = 'remote_branch' WHERE task_id = 'task'").run());
     await new DeliveryOperations(value.store, fake.port).execute({ taskId: "task", sessionId: value.root.id, generation: value.root.generation }, "push_branch", value.local.headSha, value.review);
     expect(value.store.get("task").status).toBe("delivered");
     expect(fake.calls).not.toContain("push");
@@ -562,7 +562,7 @@ describe("Coordinator delivery operations", () => {
     const fake = github(value.local);
     const observed = await fake.port.observePullRequest!({ repository: "owner/repo", branch: value.local.branch });
     fake.setObserved({ ...observed, isDraft: true });
-    value.database.authTransaction((db) => db.prepare("UPDATE forge_task_controls SET delivery_target = 'pull_request_ready' WHERE task_id = 'task'").run());
+    value.database.authTransaction((db) => db.prepare("UPDATE suplex_task_controls SET delivery_target = 'pull_request_ready' WHERE task_id = 'task'").run());
     await new DeliveryOperations(value.store, fake.port).execute({ taskId: "task", sessionId: value.root.id, generation: value.root.generation }, "request_review", value.local.headSha, value.review);
     expect(fake.calls).toContain("ready");
     expect(value.store.get("task").status).toBe("delivered");
@@ -619,7 +619,7 @@ describe("Coordinator delivery operations", () => {
   it.each(["pull_request_draft", "pull_request_ready"])("adopts an existing ready PR for the %s target", async (target) => {
     const value = await fixture();
     const fake = github(value.local);
-    value.database.authTransaction((db) => db.prepare("UPDATE forge_task_controls SET delivery_target = ?, worktree_json = NULL WHERE task_id = 'task'").run(target));
+    value.database.authTransaction((db) => db.prepare("UPDATE suplex_task_controls SET delivery_target = ?, worktree_json = NULL WHERE task_id = 'task'").run(target));
     await new DeliveryOperations(value.store, fake.port).observe("task");
     expect(value.store.get("task").status).toBe("delivered");
     expect(fake.calls).not.toContain("inspect");
@@ -639,7 +639,7 @@ describe("Coordinator delivery operations", () => {
     const fake = github(value.local);
     const list = fake.port.listPullRequests;
     fake.port.listPullRequests = async (input) => (await list(input)).map((pull) => ({ ...pull, isDraft: true }));
-    value.database.authTransaction((db) => db.prepare("UPDATE forge_task_controls SET delivery_target = 'pull_request_ready' WHERE task_id = 'task'").run());
+    value.database.authTransaction((db) => db.prepare("UPDATE suplex_task_controls SET delivery_target = 'pull_request_ready' WHERE task_id = 'task'").run());
     await new DeliveryOperations(value.store, fake.port).observe("task");
     expect(value.store.get("task").status).toBe("active");
   });
@@ -658,7 +658,7 @@ describe("Coordinator delivery operations", () => {
     const value = await fixture();
     const fake = github(value.local);
     fake.port.getPullRequest = async () => ({ number: 7, url: "https://github.com/owner/repo/pull/7", repository: "owner/repo", headBranch: value.local.branch, baseBranch: "main", headSha: value.local.headSha, baseSha: "base", isDraft: false, state: "merged", mergedAt: new Date().toISOString() });
-    value.database.authTransaction((db) => db.prepare("UPDATE forge_task_controls SET delivery_intent_json = json_set(delivery_intent_json, '$.pullRequestNumber', 7), worktree_json = NULL WHERE task_id = 'task'").run());
+    value.database.authTransaction((db) => db.prepare("UPDATE suplex_task_controls SET delivery_intent_json = json_set(delivery_intent_json, '$.pullRequestNumber', 7), worktree_json = NULL WHERE task_id = 'task'").run());
     value.store.askHuman("task", "Resolve the branch manually");
     const delivery = new DeliveryOperations(value.store, fake.port);
     await delivery.observe("task");
@@ -679,7 +679,7 @@ describe("Coordinator delivery operations", () => {
     await expect(controller.requestDelivery({ taskId: "task", sessionId: value.root.id, generation: value.root.generation }, "merge_pull_request", value.local.headSha, value.review)).rejects.toMatchObject({ code: "head_diverged" });
     expect(fake.calls).not.toContain("merge");
     fake.setObserved({ exists: true, number: 7, url: "https://github.com/owner/repo/pull/7", state: "merged", isDraft: false, headSha: value.local.headSha, baseSha: "base", mergeable: "MERGEABLE", mergeStateStatus: "CLEAN", checks: { total: 0, pending: 0, failing: 0, successful: 0, runs: [] }, author: null, changedFiles: 1, additions: 1, deletions: 0, autoMergeEnabled: false, reviewDecision: null });
-    value.database.authTransaction((db) => db.prepare("UPDATE forge_task_controls SET worktree_json = NULL, pull_request_json = NULL WHERE task_id = 'task'").run());
+    value.database.authTransaction((db) => db.prepare("UPDATE suplex_task_controls SET worktree_json = NULL, pull_request_json = NULL WHERE task_id = 'task'").run());
     const inspections = fake.calls.filter((call) => call === "inspect").length;
     await controller.requestDelivery({ taskId: "task", sessionId: value.root.id, generation: value.root.generation }, "observe_pull_request");
     expect(value.store.get("task").status).toBe("delivered");
@@ -687,7 +687,7 @@ describe("Coordinator delivery operations", () => {
     expect(fake.calls).toEqual(expect.arrayContaining(["inspect", "remote", "observe"]));
   });
 
-  it("requests an exact-head merge without a Forge or GitHub review mirror", async () => {
+  it("requests an exact-head merge without a Suplex or GitHub review mirror", async () => {
     const value = await fixture();
     const fake = github(value.local);
     fake.setObserved({ exists: true, number: 7, url: "https://github.com/owner/repo/pull/7", state: "open", isDraft: false, headSha: value.local.headSha, baseSha: "base", mergeable: "MERGEABLE", mergeStateStatus: "CLEAN", checks: { total: 1, pending: 0, failing: 0, successful: 1, runs: [] }, author: null, changedFiles: 1, additions: 1, deletions: 0, autoMergeEnabled: false, reviewDecision: null });
@@ -704,11 +704,11 @@ describe("Coordinator delivery operations", () => {
     value.database.authTransaction(db => insertNativeTaskRow(db, { taskId: "merge-prerequisite", directory: value.directory }));
     value.store.create({ taskId: "merge-prerequisite", startImmediately: true, objective: "Prepare merge input", deliveryTarget: "merged", deliveryIntent: { repository: "owner/repo", headBranch: "merge-prerequisite", baseBranch: "main", baselineSha: value.local.headSha, pullRequestNumber: null }, rootProfile: profile, workerProfile: profile });
     value.store.admitQueued(["merge-prerequisite"]);
-    value.database.authTransaction(db => db.prepare("INSERT INTO forge_task_dependencies (task_id, depends_on_task_id, created_at) VALUES ('task', 'merge-prerequisite', ?)").run(new Date().toISOString()));
+    value.database.authTransaction(db => db.prepare("INSERT INTO suplex_task_dependencies (task_id, depends_on_task_id, created_at) VALUES ('task', 'merge-prerequisite', ?)").run(new Date().toISOString()));
 
     await expect(new DeliveryOperations(value.store, fake.port).execute({ taskId: "task", sessionId: value.root.id, generation: value.root.generation }, "merge_pull_request", value.local.headSha, value.review)).rejects.toMatchObject({
       code: "merge_not_eligible",
-      message: expect.stringContaining("Forge resumes when delivered"),
+      message: expect.stringContaining("Suplex resumes when delivered"),
     });
     expect(fake.calls).not.toContain("merge");
     expect(value.store.get("task")).toMatchObject({ status: "active", humanQuestion: null });

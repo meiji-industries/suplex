@@ -36,7 +36,7 @@ export function resolveExecutable(command: string, isExecutable = executable): s
   return undefined;
 }
 
-export function configuredEditorLauncher(command = process.env.FORGE_EDITOR_COMMAND ?? "code", resolve = resolveExecutable): ConfiguredEditorLauncher | undefined {
+export function configuredEditorLauncher(command = process.env.SUPLEX_EDITOR_COMMAND ?? "code", resolve = resolveExecutable): ConfiguredEditorLauncher | undefined {
   const executable = resolve(command);
   return executable ? { id: "editor", label: "Editor", command: executable, args: path => [path] } : undefined;
 }

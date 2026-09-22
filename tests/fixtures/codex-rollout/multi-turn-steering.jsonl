@@ -1,2 +1,2 @@
-{"timestamp":"2026-08-23T18:55:47.195Z","ordinal":8,"type":"response_item","payload":{"type":"message","id":"msg_example","role":"user","content":[{"type":"input_text","text":"[forge-turn:turn-second]\n\nRevise briefly."}]}}
+{"timestamp":"2026-08-23T18:55:47.195Z","ordinal":8,"type":"response_item","payload":{"type":"message","id":"msg_example","role":"user","content":[{"type":"input_text","text":"[suplex-turn:turn-second]\n\nRevise briefly."}]}}
 {"timestamp":"2026-08-23T18:55:48.195Z","type":"event_msg","payload":{"type":"task_started","turn_id":"turn-second"}}

@@ -7,7 +7,7 @@ import { runCommand } from "../src/platform/command-runner.js";
 import { createGitCommandGuard } from "../src/coordination/worker-environment.js";
 
 test("the Git integration environment creates worktrees while a new Worker guard stays active", async () => {
-  const root = await mkdtemp(join(tmpdir(), "forge-git-environment-proof-"));
+  const root = await mkdtemp(join(tmpdir(), "suplex-git-environment-proof-"));
   try {
     const repository = join(root, "repository");
     const worktree = join(root, "worktree");

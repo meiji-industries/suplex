@@ -54,7 +54,7 @@ test("project issues use the configured tracker through the HTTP route", async (
 test("project provider instances include configured logins without profile references", async () => {
   const f = await nativeApp();
   try {
-    f.database.authQuery((db) => db.prepare("INSERT INTO forge_provider_instances (id, provider, label, home_directory, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)").run("instance_acmelaude", "claude-code", "acmelaude", "/private/acmelaude", "2026-09-17T00:00:00.000Z", "2026-09-17T00:00:00.000Z"));
+    f.database.authQuery((db) => db.prepare("INSERT INTO suplex_provider_instances (id, provider, label, home_directory, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)").run("instance_acmelaude", "claude-code", "acmelaude", "/private/acmelaude", "2026-09-17T00:00:00.000Z", "2026-09-17T00:00:00.000Z"));
 
     const response = await f.app.inject({ method: "GET", url: `/api/projects/${f.project.id}/provider-instances`, headers: f.headers });
 

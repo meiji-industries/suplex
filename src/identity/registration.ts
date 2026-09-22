@@ -1,6 +1,6 @@
 import type { PublicKeyCredentialCreationOptionsJSON } from "@simplewebauthn/server";
 
-import type { ForgeDatabase } from "../platform/database.js";
+import type { SuplexDatabase } from "../platform/database.js";
 import { neutralUsername } from "./auth-identifiers.js";
 import type { AuthRepository } from "./auth-repository.js";
 import {
@@ -23,7 +23,7 @@ import type {
 } from "./auth-webauthn.js";
 
 export interface RegistrationDependencies {
-  database: Pick<ForgeDatabase, "authTransaction">;
+  database: Pick<SuplexDatabase, "authTransaction">;
   repository: AuthRepository;
   webAuthn: WebAuthnAdapter;
   rpId: string;
@@ -231,7 +231,7 @@ export async function completeRegistration(
     } catch (error) {
       if (
         error instanceof Error &&
-        /UNIQUE constraint failed: forge_credentials\.credential_id/i.test(
+        /UNIQUE constraint failed: suplex_credentials\.credential_id/i.test(
           error.message,
         )
       ) {

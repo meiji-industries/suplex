@@ -8,7 +8,7 @@ import { healthyHost, nativeApp } from "./helpers/native-app.js";
 
 const snapshot: HealthSnapshot = {
   generatedAt: "2026-08-11T00:00:00.000Z",
-  reachableAddress: "http://forge.tailnet.ts.net:4111",
+  reachableAddress: "http://suplex.tailnet.ts.net:4111",
   ready: true,
   checks: [
     { id: "database", label: "Database", status: "healthy", summary: "Reachable", details: {} },
@@ -20,7 +20,7 @@ const unhealthyCheck = (id: HealthCheck["id"]): HealthCheck => ({ id, label: id,
 
 test("health page renders the exact reachable address and distinct states", async () => {
   const app = createApp({
-    config: createTestConfig("/tmp/forge-app-test"),
+    config: createTestConfig("/tmp/suplex-app-test"),
     health: {
       database: async () => snapshot.checks[0]!,
       artifactRoot: async () => snapshot.checks[0]!,
@@ -32,7 +32,7 @@ test("health page renders the exact reachable address and distinct states", asyn
   const response = await app.inject({ method: "GET", url: "/health" });
   expect(response.statusCode).toBe(200);
   expect(response.headers["content-type"] ?? "").toMatch(/text\/html/);
-  expect(response.body).toMatch(/http:\/\/forge\.tailnet\.ts\.net:4111/);
+  expect(response.body).toMatch(/http:\/\/suplex\.tailnet\.ts\.net:4111/);
   expect(response.body).toMatch(/data-status="healthy"/);
   expect(response.body).toMatch(/data-status="unhealthy"/);
   await app.close();
@@ -40,7 +40,7 @@ test("health page renders the exact reachable address and distinct states", asyn
 
 test.each([...REQUIRED_HEALTH_CHECK_IDS, "provider:opencode" as const])("an unhealthy %s check never redirects application pages to setup", async (id) => {
   const app = createApp({
-    config: createTestConfig("/tmp/forge-setup-gate-test"),
+    config: createTestConfig("/tmp/suplex-setup-gate-test"),
     health: healthyHost,
     getHealth: async () => ({ ...snapshot, checks: [...snapshot.checks, unhealthyCheck(id)] }),
   });
@@ -53,14 +53,14 @@ test.each([...REQUIRED_HEALTH_CHECK_IDS, "provider:opencode" as const])("an unhe
     expect((await app.inject({ method: "GET", url: "/" })).headers.location).toBe("/tasks");
     for (const url of ["/auth", "/setup", "/health", "/api/health"]) expect((await app.inject({ method: "GET", url })).statusCode, url).toBe(200);
     const setup = await app.inject({ method: "GET", url: "/setup" });
-    expect(setup.body).toContain("<title>Forge · Set up</title>");
-    expect(setup.body).toContain('window.__FORGE_VIEW__ = "setup"');
+    expect(setup.body).toContain("<title>Suplex · Set up</title>");
+    expect(setup.body).toContain('window.__SUPLEX_VIEW__ = "setup"');
   } finally { await app.close(); }
 });
 
 test("a missing health snapshot does not gate application pages", async () => {
   const app = createApp({
-    config: createTestConfig("/tmp/forge-missing-health-test"),
+    config: createTestConfig("/tmp/suplex-missing-health-test"),
     health: healthyHost,
     getHealth: async () => { throw new Error("probe unavailable"); },
   });
@@ -77,7 +77,7 @@ test("the launch route opens onboarding only before the first project", async ()
   const fixture = await nativeApp();
   try {
     expect((await fixture.app.inject({ method: "GET", url: "/", headers: fixture.headers })).headers.location).toBe("/tasks");
-    fixture.database.authQuery(db => db.prepare("DELETE FROM forge_projects WHERE id = ?").run(fixture.project.id));
+    fixture.database.authQuery(db => db.prepare("DELETE FROM suplex_projects WHERE id = ?").run(fixture.project.id));
     expect((await fixture.app.inject({ method: "GET", url: "/", headers: fixture.headers })).headers.location).toBe("/onboarding");
   } finally {
     await fixture.close();
@@ -217,7 +217,7 @@ test("a tool installed after a failed check is healthy on the next forced reques
 
 test("development pages are transformable and load the Vite source entry", async () => {
   const app = createApp({
-    config: createTestConfig("/tmp/forge-vite-app-test"),
+    config: createTestConfig("/tmp/suplex-vite-app-test"),
     health: {
       database: async () => snapshot.checks[0]!,
       artifactRoot: async () => snapshot.checks[0]!,
@@ -234,7 +234,7 @@ test("development pages are transformable and load the Vite source entry", async
   expect(response.headers["cache-control"]).toBe("no-store");
   expect(response.body).toContain("development-transform");
   expect(response.body).toContain("/src/frontend/main.tsx");
-  expect(response.body).not.toContain("/assets/forge-ui.js");
-  expect((await app.inject({ method: "GET", url: "/assets/forge-ui.js" })).statusCode).toBe(404);
+  expect(response.body).not.toContain("/assets/suplex-ui.js");
+  expect((await app.inject({ method: "GET", url: "/assets/suplex-ui.js" })).statusCode).toBe(404);
   await app.close();
 });

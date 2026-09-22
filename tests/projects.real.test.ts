@@ -8,13 +8,13 @@ import { expect, test } from "vitest";
 
 import { AuthService } from "../src/identity/auth.js";
 import { createTestConfig } from "../src/platform/config.js";
-import { ForgeDatabase } from "../src/platform/database.js";
+import { SuplexDatabase } from "../src/platform/database.js";
 import { createGithubAdapter } from "../src/integrations/github/client.js";
 import { ProjectService } from "../src/projects/projects.js";
 
 const execFileAsync = promisify(execFile);
-const repositoryIdentity = process.env.FORGE_REAL_GITHUB_REPOSITORY?.trim().toLowerCase();
-const runRealGithubProof = process.env.FORGE_RUN_REAL_GITHUB === "1" && Boolean(repositoryIdentity);
+const repositoryIdentity = process.env.SUPLEX_REAL_GITHUB_REPOSITORY?.trim().toLowerCase();
+const runRealGithubProof = process.env.SUPLEX_RUN_REAL_GITHUB === "1" && Boolean(repositoryIdentity);
 
 async function gitSnapshot(repositoryPath: string): Promise<{ refs: string; status: string }> {
   const [refs, status] = await Promise.all([
@@ -27,7 +27,7 @@ async function gitSnapshot(repositoryPath: string): Promise<{ refs: string; stat
 test.skipIf(!runRealGithubProof)("captures a base through the production GitHub adapter without mutating GitHub or the local repository", async () => {
   const realRepository = repositoryIdentity;
   if (!realRepository) return;
-  const root = await mkdtemp(join(tmpdir(), "forge-real-github-proof-"));
+  const root = await mkdtemp(join(tmpdir(), "suplex-real-github-proof-"));
   const repositoryRoot = join(root, "repositories");
   const worktreeRoot = join(root, "worktrees");
   const repositoryPath = join(repositoryRoot, ...realRepository.split("/"));
@@ -35,15 +35,15 @@ test.skipIf(!runRealGithubProof)("captures a base through the production GitHub 
   await mkdir(repositoryPath, { recursive: true });
   await mkdir(projectWorktreeRoot, { recursive: true });
   await execFileAsync("git", ["init", "-b", "main", repositoryPath]);
-  await execFileAsync("git", ["-C", repositoryPath, "config", "user.name", "Forge real GitHub proof"]);
-  await execFileAsync("git", ["-C", repositoryPath, "config", "user.email", "forge-real-github@example.invalid"]);
-  await execFileAsync("git", ["-C", repositoryPath, "commit", "--allow-empty", "-m", "Forge real GitHub proof"]);
+  await execFileAsync("git", ["-C", repositoryPath, "config", "user.name", "Suplex real GitHub proof"]);
+  await execFileAsync("git", ["-C", repositoryPath, "config", "user.email", "suplex-real-github@example.invalid"]);
+  await execFileAsync("git", ["-C", repositoryPath, "commit", "--allow-empty", "-m", "Suplex real GitHub proof"]);
   await execFileAsync("git", ["-C", repositoryPath, "remote", "add", "origin", `https://github.com/${repositoryIdentity}.git`]);
 
-  const database = new ForgeDatabase(join(root, "forge.sqlite"));
+  const database = new SuplexDatabase(join(root, "suplex.sqlite"));
   try {
-    database.authQuery((db) => db.prepare("INSERT INTO forge_users (id, display_name, username, role, status, created_at, updated_at) VALUES ('real-gh-admin', 'Real GitHub proof', 'real-gh-admin@forge.local', 'admin', 'active', '2026-08-11T00:00:00.000Z', '2026-08-11T00:00:00.000Z')").run());
-    const config = createTestConfig(root, { reachableAddress: "https://forge.tailnet.ts.net:4111", repositoryRoot, worktreeRoot });
+    database.authQuery((db) => db.prepare("INSERT INTO suplex_users (id, display_name, username, role, status, created_at, updated_at) VALUES ('real-gh-admin', 'Real GitHub proof', 'real-gh-admin@suplex.local', 'admin', 'active', '2026-08-11T00:00:00.000Z', '2026-08-11T00:00:00.000Z')").run());
+    const config = createTestConfig(root, { reachableAddress: "https://suplex.tailnet.ts.net:4111", repositoryRoot, worktreeRoot });
     const auth = new AuthService(database, config);
     const projects = new ProjectService(database, auth, config);
     const company = auth.createCompany("real-gh-admin", "Real GitHub proof");

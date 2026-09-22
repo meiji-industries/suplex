@@ -21,7 +21,7 @@ const task = {
   advisorProfiles: {},
   workflowState: { version: 1, reviews: [], acceptedDelivery: null, deliveryWait: null, completion: null },
   configuration: {
-    repository: "meiji-industries/forge",
+    repository: "meiji-industries/suplex",
     repositoryPath: "/repo",
     worktreeRoot: "/worktrees",
     branch: "fix/task-links",
@@ -37,9 +37,9 @@ const task = {
   },
   worktree: null,
   pullRequest: {
-    repository: "meiji-industries/forge",
+    repository: "meiji-industries/suplex",
     number: 164,
-    url: "https://github.com/meiji-industries/forge/pull/164",
+    url: "https://github.com/meiji-industries/suplex/pull/164",
     headSha: "b".repeat(40),
     state: "open",
     mergedAt: null,
@@ -76,6 +76,6 @@ test("task rows render sibling task and pull request links", () => {
   expect(html).toContain("Blocked by Prepare task links · Queued");
   expect(links.flatMap(match => match[1] ?? [])).toEqual([
     "/tasks/task-1?company=company-1",
-    "https://github.com/meiji-industries/forge/pull/164",
+    "https://github.com/meiji-industries/suplex/pull/164",
   ]);
 });

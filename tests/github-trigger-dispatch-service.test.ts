@@ -64,12 +64,12 @@ test("recovery preserves immutable request and fails closed while the label is a
     vi.spyOn(value.tasks, "createTaskFromGithubTrigger").mockRejectedValueOnce(new Error("transient"));
     await value.service.processEnabledRules();
     expect(value.tasks.listTasks(value.f.userId, value.f.company.id)).toHaveLength(0);
-    const dispatch = value.f.database.authQuery(db => db.prepare("SELECT request_json, idempotency_key FROM forge_github_trigger_dispatches").get() as { request_json: string; idempotency_key: string });
+    const dispatch = value.f.database.authQuery(db => db.prepare("SELECT request_json, idempotency_key FROM suplex_github_trigger_dispatches").get() as { request_json: string; idempotency_key: string });
     expect(JSON.parse(dispatch.request_json)).toMatchObject({ title: "Repair 7", visualEvidence: "off" });
-    value.f.database.authQuery(db => db.prepare("UPDATE forge_github_trigger_rules SET next_retry_at = NULL").run());
+    value.f.database.authQuery(db => db.prepare("UPDATE suplex_github_trigger_rules SET next_retry_at = NULL").run());
     value.setLabels([]); await value.service.processEnabledRules();
     expect(value.tasks.listTasks(value.f.userId, value.f.company.id)).toHaveLength(0);
-    value.f.database.authQuery(db => db.prepare("UPDATE forge_github_trigger_rules SET next_retry_at = NULL").run());
+    value.f.database.authQuery(db => db.prepare("UPDATE suplex_github_trigger_rules SET next_retry_at = NULL").run());
     value.setLabels(["ready"]); value.f.workflows.update(value.f.userId, value.preset.id, { visualEvidence: "required" });
     await value.service.processEnabledRules();
     expect(value.tasks.listTasks(value.f.userId, value.f.company.id)).toHaveLength(1);
@@ -82,6 +82,6 @@ test.each(["head", "fork", "protected", "disable"] as const)("final inspection %
   try {
     value.setMutation(mutation); await value.service.processEnabledRules();
     expect(value.tasks.listTasks(value.f.userId, value.f.company.id)).toHaveLength(0);
-    expect(value.f.database.authQuery(db => db.prepare("SELECT count(*) AS count FROM forge_github_trigger_dispatches").get() as { count: number }).count).toBe(0);
+    expect(value.f.database.authQuery(db => db.prepare("SELECT count(*) AS count FROM suplex_github_trigger_dispatches").get() as { count: number }).count).toBe(0);
   } finally { await value.f.close(); }
 });

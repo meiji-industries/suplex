@@ -56,5 +56,5 @@ export function taskLimitQuestion(pause: TaskLimitPause): string {
   const budget = pause.reason === "turns" ? pause.proposedLimits.budgetUsd : roundSuggestedBudget(pause.proposedLimits.budgetUsd, pause.usage.estimatedCostUsd ?? 0);
   const proposedBudget = budget === 0 ? "no budget limit" : `a $${budget.toFixed(2)} budget`;
   const proposedTurns = pause.proposedLimits.maxTurns === 0 ? "no turn limit" : `${pause.proposedLimits.maxTurns} turns`;
-  return `This task reached its ${reached}. ${spend} ${turns} Forge proposes ${proposedBudget} and ${proposedTurns}. A native turn already in progress can finish before Forge pauses. Select how to continue.`;
+  return `This task reached its ${reached}. ${spend} ${turns} Suplex proposes ${proposedBudget} and ${proposedTurns}. A native turn already in progress can finish before Suplex pauses. Select how to continue.`;
 }

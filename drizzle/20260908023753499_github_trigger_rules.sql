@@ -1,16 +1,16 @@
 -- Write migration SQL here.
-CREATE TABLE forge_github_trigger_rules (
+CREATE TABLE suplex_github_trigger_rules (
   id TEXT PRIMARY KEY,
-  company_id TEXT NOT NULL REFERENCES forge_companies(id),
-  project_id TEXT NOT NULL REFERENCES forge_projects(id),
+  company_id TEXT NOT NULL REFERENCES suplex_companies(id),
+  project_id TEXT NOT NULL REFERENCES suplex_projects(id),
   name TEXT NOT NULL,
   label TEXT NOT NULL,
-  workflow_id TEXT NOT NULL REFERENCES forge_workflows(id),
+  workflow_id TEXT NOT NULL REFERENCES suplex_workflows(id),
   delivery_target TEXT NOT NULL,
   protected_paths_json TEXT NOT NULL,
   repository_id INTEGER NOT NULL,
   repository_name TEXT NOT NULL,
-  authority_user_id TEXT NOT NULL REFERENCES forge_users(id),
+  authority_user_id TEXT NOT NULL REFERENCES suplex_users(id),
   enabled INTEGER NOT NULL DEFAULT 0,
   archived_at TEXT,
   revision INTEGER NOT NULL DEFAULT 1,
@@ -25,8 +25,8 @@ CREATE TABLE forge_github_trigger_rules (
   CHECK (archived_at IS NULL OR enabled = 0)
 );
 --> statement-breakpoint
-CREATE UNIQUE INDEX forge_github_trigger_rules_enabled_repository_unique
-  ON forge_github_trigger_rules(repository_id)
+CREATE UNIQUE INDEX suplex_github_trigger_rules_enabled_repository_unique
+  ON suplex_github_trigger_rules(repository_id)
   WHERE enabled = 1 AND archived_at IS NULL;
 --> statement-breakpoint
-CREATE INDEX forge_github_trigger_rules_company_id_idx ON forge_github_trigger_rules(company_id, archived_at, name);
+CREATE INDEX suplex_github_trigger_rules_company_id_idx ON suplex_github_trigger_rules(company_id, archived_at, name);

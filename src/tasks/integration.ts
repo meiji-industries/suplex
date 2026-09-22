@@ -2,7 +2,7 @@ import type { GithubPullRequestObservation } from "../integrations/github/delive
 import type { AgentApiActionRequired, AgentApiIntegration, AgentApiTaskFilter } from "../http/contracts/agent-api.js";
 import type { Task } from "./contracts.js";
 
-/** What GitHub answered for one task, or why it could not answer. A null observation with a null failure means Forge did not ask. */
+/** What GitHub answered for one task, or why it could not answer. A null observation with a null failure means Suplex did not ask. */
 export interface PullRequestObservationResult {
   observation: GithubPullRequestObservation | null;
   failureCode: string | null;
@@ -54,12 +54,12 @@ export function deriveTaskIntegration(task: Task, observed: PullRequestObservati
     observedAt,
     observation: observed.failureCode === null ? "observed" : "unavailable",
     observationReason: observed.failureCode,
-    // Forge does not observe deployed runtimes, so it never claims that a change is live.
+    // Suplex does not observe deployed runtimes, so it never claims that a change is live.
     deployed: { included: null, reason: "not_determinable" },
   };
 }
 
-/** A task depends on another when Forge branched it from that task's head branch or its pull request. */
+/** A task depends on another when Suplex branched it from that task's head branch or its pull request. */
 export function isUpstreamOf(upstream: Task, task: Task): boolean {
   if (upstream.id === task.id) return false;
   if (upstream.configuration.repository.toLowerCase() !== task.configuration.repository.toLowerCase()) return false;
@@ -82,10 +82,10 @@ export function deriveActionRequired(task: Task, integration: AgentApiIntegratio
   const pull = integration.pullRequest;
   const reference = pull.number === null ? task.configuration.branch : `${pull.number} --repo ${task.configuration.repository}`;
   if (task.status === "waiting_human") {
-    return action({ owner: "human", reasonCode: "waiting_human", summary: "The task waits for your answer. Answer the question in Forge.", suggestedCommands: [], humanApprovalRequired: true }, at);
+    return action({ owner: "human", reasonCode: "waiting_human", summary: "The task waits for your answer. Answer the question in Suplex.", suggestedCommands: [], humanApprovalRequired: true }, at);
   }
   if (integration.observation === "unavailable") {
-    return action({ owner: "forge", reasonCode: "observation_unavailable", summary: "Forge could not read the pull request from GitHub. Check the GitHub access and retry.", suggestedCommands: [`gh pr view ${reference}`] }, at);
+    return action({ owner: "suplex", reasonCode: "observation_unavailable", summary: "Suplex could not read the pull request from GitHub. Check the GitHub access and retry.", suggestedCommands: [`gh pr view ${reference}`] }, at);
   }
   if (integration.integrated) return null;
   if (pull.state === "conflicting") {
@@ -98,14 +98,14 @@ export function deriveActionRequired(task: Task, integration: AgentApiIntegratio
     return action({ owner: "agent", reasonCode: "stale_delivery", summary: "The pull request is behind the base branch. The task owner must update the branch and push the result.", suggestedCommands: mergeCommands(task) }, at);
   }
   if (task.status === "delivered" && requiresPullRequest(task) && (pull.state === "absent" || pull.state === "closed")) {
-    return action({ owner: "agent", reasonCode: "pull_request_missing", summary: "Forge delivered the task without an open pull request. The task owner must create the pull request for the branch.", suggestedCommands: [`gh pr create --repo ${task.configuration.repository} --head ${task.configuration.branch} --base ${task.configuration.baseBranch}`] }, at);
+    return action({ owner: "agent", reasonCode: "pull_request_missing", summary: "Suplex delivered the task without an open pull request. The task owner must create the pull request for the branch.", suggestedCommands: [`gh pr create --repo ${task.configuration.repository} --head ${task.configuration.branch} --base ${task.configuration.baseBranch}`] }, at);
   }
   if (upstream) {
     return action({ owner: "upstream", reasonCode: "blocked_by_dependency", summary: "An upstream task is not integrated. Wait for the upstream pull request to merge.", suggestedCommands: [], upstream }, at);
   }
   if (pull.state === "absent") return null;
   if (pull.checks.pending > 0) {
-    return action({ owner: "forge", reasonCode: "pending_checks", summary: "CI checks are not complete on the pull request. Check the pull request after the checks finish.", suggestedCommands: [`gh pr checks ${reference}`] }, at);
+    return action({ owner: "suplex", reasonCode: "pending_checks", summary: "CI checks are not complete on the pull request. Check the pull request after the checks finish.", suggestedCommands: [`gh pr checks ${reference}`] }, at);
   }
   if (pull.reviewDecision !== "APPROVED") {
     return action({ owner: "human", reasonCode: "pending_review", summary: "The pull request waits for a review decision. Review the pull request.", suggestedCommands: [`gh pr view ${reference}`], humanApprovalRequired: true }, at);

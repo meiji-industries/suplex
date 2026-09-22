@@ -8,9 +8,9 @@ Accepted
 
 ## Context
 
-Forge drives AI agents exclusively through the Codex CLI today, and Claude is
+Suplex drives AI agents exclusively through the Codex CLI today, and Claude is
 about to be added as a second provider. Codex facts — the `codex` command and
-its `FORGE_CODEX_COMMAND`/PATH resolution, `exec`/`resume` argv construction,
+its `SUPLEX_CODEX_COMMAND`/PATH resolution, `exec`/`resume` argv construction,
 JSONL event parsing and session-ref extraction, failure-classification
 heuristics, the supervised-turn wrapper, and the version/auth/smoke readiness
 probe — were spread across the Lead service, Developer service, health checks,
@@ -42,7 +42,7 @@ adapter exists.
   `lead-contracts`) with shims, so every existing import keeps working.
 - Persisted/wire values stay frozen: profile `provider: "codex"`, capacity
   lane keys `codex:<profile>`, the `codex-auth` health id, and the
-  `FORGE_CODEX_*` env vars are contracts, not code seams; they remain
+  `SUPLEX_CODEX_*` env vars are contracts, not code seams; they remain
   literal (the env fallback now lives inside the codex adapter).
 - Claude provider details are recorded in [ADR 0006](0006-claude-code-provider.md).
 - `src/codex-lead.ts`/`src/codex-developer.ts` keep their historical file

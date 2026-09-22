@@ -103,11 +103,11 @@ export async function dispatchHeadless(input: { runtimeDirectory: string; scope:
   let child: ChildProcess | undefined;
   let exited = false;
   try {
-    // The wrapper writes an exit status even after Forge loses the child handle.
-    const command = '"$0" "$@"; code=$?; printf "%s\\n" "$code" > "$FORGE_HEADLESS_EXIT_FILE"; exit "$code"';
+    // The wrapper writes an exit status even after Suplex loses the child handle.
+    const command = '"$0" "$@"; code=$?; printf "%s\\n" "$code" > "$SUPLEX_HEADLESS_EXIT_FILE"; exit "$code"';
     child = spawn("/bin/sh", ["-c", command, input.executable, ...input.args], {
       cwd: input.scope.directory,
-      env: excludeEnvironmentKeys({ ...withWorktreeMiseTrust(input.environment ?? process.env, input.scope.directory), ...input.scope.projectEnvironment, ...taskProcessEnvironment(input.scope.directory), ...sessionProcessEnvironment(input.runtimeDirectory), ...executionProcessEnvironment(input.runtimeDirectory, generation), FORGE_HEADLESS_EXIT_FILE: files.exit }, input.scope.excludedEnvironmentKeys),
+      env: excludeEnvironmentKeys({ ...withWorktreeMiseTrust(input.environment ?? process.env, input.scope.directory), ...input.scope.projectEnvironment, ...taskProcessEnvironment(input.scope.directory), ...sessionProcessEnvironment(input.runtimeDirectory), ...executionProcessEnvironment(input.runtimeDirectory, generation), SUPLEX_HEADLESS_EXIT_FILE: files.exit }, input.scope.excludedEnvironmentKeys),
       detached: true,
       stdio: [promptFile.fd, log.fd, stderr.fd],
     });

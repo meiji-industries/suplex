@@ -26,7 +26,7 @@ export type ReadProviders = () => Promise<ProviderListResponse>;
 
 /**
  * One row per agent tool. OpenCode's own vendors are folded into its row as
- * vendor-qualified model ids, because Forge selects OpenCode as the harness and
+ * vendor-qualified model ids, because Suplex selects OpenCode as the harness and
  * names the vendor inside the model. Neither observation sends a model request.
  */
 export async function readProviders(input: { directory: string; connection?: ProviderConnectionProbe }): Promise<ProviderListResponse> {
@@ -46,7 +46,7 @@ export async function readProviders(input: { directory: string; connection?: Pro
   const providers: ProviderSummary[] = await Promise.all(rows.map(async row => ({
     id: row.id, label: row.label, modelCount: row.models.length, models: row.models,
     status: await row.resolve().then(() => "configured" as const, () => "missing" as const),
-    connection: probe ? await probe(row.id) : { status: "unknown" as const, summary: "Forge did not check the sign-in." },
+    connection: probe ? await probe(row.id) : { status: "unknown" as const, summary: "Suplex did not check the sign-in." },
   })));
   return { ...native, providers: providers.sort((a, b) => a.label.localeCompare(b.label)) };
 }

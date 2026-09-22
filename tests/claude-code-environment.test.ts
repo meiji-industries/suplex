@@ -32,13 +32,13 @@ afterEach(async () => {
 });
 
 async function fixture(): Promise<Fixture> {
-  const root = await mkdtemp(join(tmpdir(), "forge-claude-environment-"));
+  const root = await mkdtemp(join(tmpdir(), "suplex-claude-environment-"));
   directories.push(root);
   const worktree = join(root, "worktree");
   const providerConfig = join(root, "provider-config");
   const executable = join(root, "claude");
   const bin = join(root, "bin");
-  const tool = `forge-gh-config-probe-${randomUUID()}`;
+  const tool = `suplex-gh-config-probe-${randomUUID()}`;
   const observation = join(root, "environment.json");
   const expectation = join(root, "expected-environment.json");
   await Promise.all([mkdir(worktree), mkdir(providerConfig), mkdir(bin)]);
@@ -51,7 +51,7 @@ let checks = failed;
 try {
   const expected = JSON.parse(fs.readFileSync(${JSON.stringify(expectation)}, "utf8"));
   checks = {
-    sentinel: process.env.FORGE_CLAUDE_ENV_SENTINEL === expected.sentinel,
+    sentinel: process.env.SUPLEX_CLAUDE_ENV_SENTINEL === expected.sentinel,
     ghConfig: process.env.GH_CONFIG_DIR === expected.ghConfig,
     ghConfigFile: typeof process.env.GH_CONFIG_DIR === "string" && fs.readFileSync(path.join(process.env.GH_CONFIG_DIR, "hosts.yml"), "utf8") === "github.com:\\n  user: fixture\\n",
     homeUnchanged: createHash("sha256").update(process.env.HOME ?? "").digest("hex") === expected.homeHash,
@@ -90,7 +90,7 @@ async function configureCallerEnvironment(root: string, name: string): Promise<C
   const ghConfig = join(root, `${name}-gh-config`);
   await Promise.all([mkdir(parentConfig), mkdir(ghConfig)]);
   await writeFile(join(ghConfig, "hosts.yml"), "github.com:\n  user: fixture\n");
-  vi.stubEnv("FORGE_CLAUDE_ENV_SENTINEL", `${name}-sentinel`);
+  vi.stubEnv("SUPLEX_CLAUDE_ENV_SENTINEL", `${name}-sentinel`);
   vi.stubEnv("CLAUDE_CONFIG_DIR", parentConfig);
   vi.stubEnv("ANTHROPIC_API_KEY", "global-fixture");
   vi.stubEnv("ANTHROPIC_BASE_URL", "https://wrong.example");
@@ -142,7 +142,7 @@ function scope(input: { role: "root" | "advisor" | "worker"; worktree: string; p
 }
 
 function intent(role: "root" | "advisor" | "worker", prompt = "Inspect configuration") {
-  return createOpenCodePromptIntent({ sessionID, directory: "/fixture", prompt, model: { providerID: CLAUDE_CODE_PROVIDER, modelID: "haiku" }, agent: `forge-${role}`, variant: "low" });
+  return createOpenCodePromptIntent({ sessionID, directory: "/fixture", prompt, model: { providerID: CLAUDE_CODE_PROVIDER, modelID: "haiku" }, agent: `suplex-${role}`, variant: "low" });
 }
 
 test.each([
@@ -160,7 +160,7 @@ test.each([
   const providerConfig = instance === "custom" ? f.providerConfig : instance;
   if (providerConfig) await writeExpectation(f.root, { ...expected, claudeConfig: providerConfig, dedicated: true });
   const taskScope = scope(providerConfig === undefined ? { role, worktree: f.worktree } : { role, worktree: f.worktree, providerConfig });
-  const runtime = new ClaudeCodeTaskRuntime(join(f.root, "forge.sqlite"), noPane, { executable: f.executable });
+  const runtime = new ClaudeCodeTaskRuntime(join(f.root, "suplex.sqlite"), noPane, { executable: f.executable });
   const taskIntent = intent(role);
   await runtime.dispatch(taskScope, taskIntent, async () => true);
   expect(await readObservation(f.observation)).toEqual(expectedEnvironment);
@@ -176,7 +176,7 @@ test.each([null, "dedicated"])("a recreated runtime preserves %s auth isolation 
   const first = await configureCallerEnvironment(f.root, "first");
   if (providerConfig) await writeExpectation(f.root, { ...first, claudeConfig: providerConfig, dedicated: true });
   const firstIntent = intent("root");
-  const initialRuntime = new ClaudeCodeTaskRuntime(join(f.root, "forge.sqlite"), noPane, { executable: f.executable });
+  const initialRuntime = new ClaudeCodeTaskRuntime(join(f.root, "suplex.sqlite"), noPane, { executable: f.executable });
   await initialRuntime.dispatch(rootScope, firstIntent, async () => true);
   expect(await readObservation(f.observation)).toEqual(expectedEnvironment);
   expect((await waitForTerminalObservation(initialRuntime, rootScope, firstIntent)).state).toBe("completed");
@@ -185,7 +185,7 @@ test.each([null, "dedicated"])("a recreated runtime preserves %s auth isolation 
   const second = await configureCallerEnvironment(f.root, "second");
   if (providerConfig) await writeExpectation(f.root, { ...second, claudeConfig: providerConfig, dedicated: true });
   const secondIntent = intent("root", "Inspect configuration again");
-  const recreatedRuntime = new ClaudeCodeTaskRuntime(join(f.root, "forge.sqlite"), noPane, { executable: f.executable });
+  const recreatedRuntime = new ClaudeCodeTaskRuntime(join(f.root, "suplex.sqlite"), noPane, { executable: f.executable });
   await recreatedRuntime.dispatch(rootScope, secondIntent, async () => true);
   expect(await readObservation(f.observation)).toEqual(expectedEnvironment);
   expect((await waitForTerminalObservation(recreatedRuntime, rootScope, secondIntent)).state).toBe("completed");

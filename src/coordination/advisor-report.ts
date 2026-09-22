@@ -33,7 +33,7 @@ export type AdvisorReportOutcome = { result: AdvisorResult; invalidReason: null 
 type ToolEvidence = { name: string; status: "pending" | "running" | "completed" | "error"; output: string | null };
 
 const object = z.record(z.string(), z.unknown());
-const SUBMIT_REPORT_TOOL_NAMES = new Set(["submit_report", "forge_advisor_submit_report", "mcp__forge_advisor__submit_report"]);
+const SUBMIT_REPORT_TOOL_NAMES = new Set(["submit_report", "suplex_advisor_submit_report", "mcp__suplex_advisor__submit_report"]);
 
 function flattenFinding(value: unknown): unknown {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return value;

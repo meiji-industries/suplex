@@ -1,4 +1,4 @@
-export const taskAgentExpiryStorageKey = "forge.taskAgentExpiry";
+export const taskAgentExpiryStorageKey = "suplex.taskAgentExpiry";
 export const defaultTaskAgentExpiryMs = 300_000;
 
 export const taskAgentExpiryOptions = [

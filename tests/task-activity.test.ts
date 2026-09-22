@@ -60,7 +60,7 @@ test("task activity reports prompted and completed timestamps for each turn", as
     const promptedAt = "2026-09-21T10:00:00.000Z";
     const completedAt = "2026-09-21T10:05:23.000Z";
     value.database.authTransaction(db => {
-      db.prepare("INSERT INTO forge_task_turns (id, task_id, session_id, generation, prompt_hash, prompt_text, status, prompted_at, completed_at, created_at, updated_at) VALUES ('completed-turn', ?, ?, ?, 'hash', 'Completed prompt', 'completed', ?, ?, ?, ?), ('pending-turn', ?, ?, ?, 'hash', 'Pending prompt', 'pending_prompt', NULL, NULL, ?, ?)").run(task.id, session.id, session.generation, promptedAt, completedAt, promptedAt, completedAt, task.id, session.id, session.generation, promptedAt, promptedAt);
+      db.prepare("INSERT INTO suplex_task_turns (id, task_id, session_id, generation, prompt_hash, prompt_text, status, prompted_at, completed_at, created_at, updated_at) VALUES ('completed-turn', ?, ?, ?, 'hash', 'Completed prompt', 'completed', ?, ?, ?, ?), ('pending-turn', ?, ?, ?, 'hash', 'Pending prompt', 'pending_prompt', NULL, NULL, ?, ?)").run(task.id, session.id, session.generation, promptedAt, completedAt, promptedAt, completedAt, task.id, session.id, session.generation, promptedAt, promptedAt);
     });
 
     const response = await value.app.inject({ url: `/api/tasks/${task.id}/activity`, headers: value.headers });

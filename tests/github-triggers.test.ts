@@ -25,11 +25,11 @@ test("creates disabled rules with the actor as authority and allows Check now wi
     const created = await f.app.inject({ method: "POST", url: `/api/companies/${f.company.id}/github-triggers`, headers: f.headers, payload });
     expect(created.statusCode).toBe(201);
     expect(created.json()).toMatchObject({ enabled: false, authorityUserId: f.userId, repositoryId: 9 });
-    const before = f.database.authQuery(db => db.prepare("SELECT count(*) AS count FROM forge_tasks").get() as { count: number }).count;
+    const before = f.database.authQuery(db => db.prepare("SELECT count(*) AS count FROM suplex_tasks").get() as { count: number }).count;
     const checked = await f.app.inject({ method: "POST", url: `/api/companies/${f.company.id}/github-triggers/${created.json().id}/check`, headers: f.headers });
     expect(checked.statusCode).toBe(200);
     expect(checked.json()).toEqual({ activity: [] });
-    expect(f.database.authQuery(db => db.prepare("SELECT count(*) AS count FROM forge_tasks").get() as { count: number }).count).toBe(before);
+    expect(f.database.authQuery(db => db.prepare("SELECT count(*) AS count FROM suplex_tasks").get() as { count: number }).count).toBe(before);
   } finally { await f.close(); }
 });
 
@@ -100,12 +100,12 @@ test("retains the latest provider retry time after candidate failures", async ()
 });
 
 test.each([
-  ["configuring authority is disabled", async (f: Awaited<ReturnType<typeof nativeApp>>) => { f.database.authQuery(db => db.prepare("UPDATE forge_users SET status = 'revoked' WHERE id = ?").run(f.userId)); }],
+  ["configuring authority is disabled", async (f: Awaited<ReturnType<typeof nativeApp>>) => { f.database.authQuery(db => db.prepare("UPDATE suplex_users SET status = 'revoked' WHERE id = ?").run(f.userId)); }],
   ["company is paused", async (f: Awaited<ReturnType<typeof nativeApp>>) => { f.auth.setCompanyStatus(f.userId, f.company.id, "paused"); }],
   ["effective preset changes", async (f: Awaited<ReturnType<typeof nativeApp>>, workflowId: string) => { f.workflows.update(f.userId, workflowId, { runProjectTests: false }); }],
-  ["project base branch changes", async (f: Awaited<ReturnType<typeof nativeApp>>) => { f.database.authQuery(db => db.prepare("UPDATE forge_projects SET base_branch = 'release' WHERE id = ?").run(f.project.id)); }],
-  ["project repository changes", async (f: Awaited<ReturnType<typeof nativeApp>>) => { f.database.authQuery(db => db.prepare("UPDATE forge_projects SET repository_identity = 'owner/other' WHERE id = ?").run(f.project.id)); }],
-  ["resolved profile changes", async (f: Awaited<ReturnType<typeof nativeApp>>) => { f.database.authQuery(db => db.prepare("UPDATE forge_profiles SET model = 'changed', updated_at = ? WHERE id = ?").run(new Date().toISOString(), f.project.rootProfileId)); }],
+  ["project base branch changes", async (f: Awaited<ReturnType<typeof nativeApp>>) => { f.database.authQuery(db => db.prepare("UPDATE suplex_projects SET base_branch = 'release' WHERE id = ?").run(f.project.id)); }],
+  ["project repository changes", async (f: Awaited<ReturnType<typeof nativeApp>>) => { f.database.authQuery(db => db.prepare("UPDATE suplex_projects SET repository_identity = 'owner/other' WHERE id = ?").run(f.project.id)); }],
+  ["resolved profile changes", async (f: Awaited<ReturnType<typeof nativeApp>>) => { f.database.authQuery(db => db.prepare("UPDATE suplex_profiles SET model = 'changed', updated_at = ? WHERE id = ?").run(new Date().toISOString(), f.project.rootProfileId)); }],
 ])("rejects preview when %s during candidate inspection", async (_name, mutate) => {
   const started = deferred();
   const release = deferred();
@@ -125,20 +125,20 @@ test.each([
     release.resolve();
     await expect(check).rejects.toBeInstanceOf(Error);
     expect(f.githubTriggers.repository.get(f.company.id, rule.id)).toMatchObject({ lastSuccessfulCheckAt: null, latestError: expect.any(String) });
-    expect(f.database.authQuery(db => db.prepare("SELECT count(*) AS count FROM forge_tasks").get() as { count: number }).count).toBe(0);
+    expect(f.database.authQuery(db => db.prepare("SELECT count(*) AS count FROM suplex_tasks").get() as { count: number }).count).toBe(0);
   } finally { await f.close(); }
 });
 
 const irrelevantChanges = [
-  ["user display name", (f: Awaited<ReturnType<typeof nativeApp>>) => { f.database.authQuery(db => db.prepare("UPDATE forge_users SET display_name = 'Renamed user', updated_at = ? WHERE id = ?").run(new Date().toISOString(), f.userId)); }],
-  ["company display name", (f: Awaited<ReturnType<typeof nativeApp>>) => { f.database.authQuery(db => db.prepare("UPDATE forge_companies SET name = 'Renamed company' WHERE id = ?").run(f.company.id)); }],
-  ["project display name", (f: Awaited<ReturnType<typeof nativeApp>>) => { f.database.authQuery(db => db.prepare("UPDATE forge_projects SET name = 'Renamed project', updated_at = ? WHERE id = ?").run(new Date().toISOString(), f.project.id)); }],
-  ["workflow display name", (f: Awaited<ReturnType<typeof nativeApp>>, workflowId: string) => { f.database.authQuery(db => db.prepare("UPDATE forge_workflows SET name = 'Renamed workflow', updated_at = ? WHERE id = ?").run(new Date().toISOString(), workflowId)); }],
-  ["profile update time", (f: Awaited<ReturnType<typeof nativeApp>>) => { f.database.authQuery(db => db.prepare("UPDATE forge_profiles SET updated_at = ? WHERE id = ?").run(new Date(Date.now() + 1_000).toISOString(), f.project.rootProfileId)); }],
+  ["user display name", (f: Awaited<ReturnType<typeof nativeApp>>) => { f.database.authQuery(db => db.prepare("UPDATE suplex_users SET display_name = 'Renamed user', updated_at = ? WHERE id = ?").run(new Date().toISOString(), f.userId)); }],
+  ["company display name", (f: Awaited<ReturnType<typeof nativeApp>>) => { f.database.authQuery(db => db.prepare("UPDATE suplex_companies SET name = 'Renamed company' WHERE id = ?").run(f.company.id)); }],
+  ["project display name", (f: Awaited<ReturnType<typeof nativeApp>>) => { f.database.authQuery(db => db.prepare("UPDATE suplex_projects SET name = 'Renamed project', updated_at = ? WHERE id = ?").run(new Date().toISOString(), f.project.id)); }],
+  ["workflow display name", (f: Awaited<ReturnType<typeof nativeApp>>, workflowId: string) => { f.database.authQuery(db => db.prepare("UPDATE suplex_workflows SET name = 'Renamed workflow', updated_at = ? WHERE id = ?").run(new Date().toISOString(), workflowId)); }],
+  ["profile update time", (f: Awaited<ReturnType<typeof nativeApp>>) => { f.database.authQuery(db => db.prepare("UPDATE suplex_profiles SET updated_at = ? WHERE id = ?").run(new Date(Date.now() + 1_000).toISOString(), f.project.rootProfileId)); }],
   ["overridden workflow delivery target", (f: Awaited<ReturnType<typeof nativeApp>>, workflowId: string) => { f.workflows.update(f.userId, workflowId, { deliveryTarget: "merged" }); }],
   ["overridden project profile default", (f: Awaited<ReturnType<typeof nativeApp>>) => {
     const alternate = f.profiles.create(f.userId, { name: "Alternate default", role: "root", avatarSeed: "f".repeat(32), provider: "opencode", model: "openai/gpt-5.6-luna", reasoningLevel: "medium", serviceTier: "default" });
-    f.database.authQuery(db => db.prepare("UPDATE forge_projects SET root_profile_id = ?, updated_at = ? WHERE id = ?").run(alternate.id, new Date().toISOString(), f.project.id));
+    f.database.authQuery(db => db.prepare("UPDATE suplex_projects SET root_profile_id = ?, updated_at = ? WHERE id = ?").run(alternate.id, new Date().toISOString(), f.project.id));
   }],
 ] as const;
 
@@ -186,7 +186,7 @@ test("does not create a rule when the project changes during repository observat
     const workflow = f.workflows.create(f.userId, { name: "Race", description: "", engine: "standard", deliveryTarget: "pull_request_draft" });
     const created = f.githubTriggers.create(f.userId, f.company.id, { projectId: f.project.id, name: "Ready", label: "ready", workflowId: workflow.id, deliveryTarget: "pull_request_draft", protectedPaths: [] });
     await started.promise;
-    f.database.authQuery(db => db.prepare("UPDATE forge_projects SET base_branch = 'release' WHERE id = ?").run(f.project.id));
+    f.database.authQuery(db => db.prepare("UPDATE suplex_projects SET base_branch = 'release' WHERE id = ?").run(f.project.id));
     release.resolve();
     await expect(created).rejects.toMatchObject({ statusCode: 409 });
     expect(f.githubTriggers.repository.list(f.company.id)).toEqual([]);
@@ -298,12 +298,12 @@ test("excludes delivery-intent ownership in another company until its task is ca
     const other = f.auth.createCompany(f.userId, "Owner");
     const { task } = await f.tasks.createTask(f.userId, f.company.id, { projectId: f.project.id, title: "Private owner", description: "Private", startImmediately: false, idempotencyKey: "cross-owner" });
     f.database.authQuery(db => {
-      db.prepare("UPDATE forge_tasks SET company_id = ? WHERE id = ?").run(other.id, task.id);
-      db.prepare("UPDATE forge_task_controls SET status = 'active', delivery_intent_json = ? WHERE task_id = ?").run(JSON.stringify({ repository: "owner/repo", headBranch: "feature", baseBranch: "main", baselineSha: "a".repeat(40), pullRequestNumber: 7 }), task.id);
+      db.prepare("UPDATE suplex_tasks SET company_id = ? WHERE id = ?").run(other.id, task.id);
+      db.prepare("UPDATE suplex_task_controls SET status = 'active', delivery_intent_json = ? WHERE task_id = ?").run(JSON.stringify({ repository: "owner/repo", headBranch: "feature", baseBranch: "main", baselineSha: "a".repeat(40), pullRequestNumber: 7 }), task.id);
     });
     await expect(f.githubTriggers.check(f.userId, f.company.id, rule.id)).resolves.toMatchObject([{ outcome: "excluded", reason: "A task already uses this pull request." }]);
     expect(JSON.stringify(f.githubTriggers.activity(f.userId, f.company.id, rule.id))).not.toContain(task.id);
-    f.database.authQuery(db => db.prepare("UPDATE forge_task_controls SET status = 'cancelled' WHERE task_id = ?").run(task.id));
+    f.database.authQuery(db => db.prepare("UPDATE suplex_task_controls SET status = 'cancelled' WHERE task_id = ?").run(task.id));
     await expect(f.githubTriggers.check(f.userId, f.company.id, rule.id)).resolves.toMatchObject([{ outcome: "eligible" }]);
   } finally { await f.close(); }
 });
@@ -316,11 +316,11 @@ test("excludes adopted ownership in another company until the task is delivered"
     const other = f.auth.createCompany(f.userId, "Adopter");
     const { task } = await f.tasks.createTask(f.userId, f.company.id, { projectId: f.project.id, title: "Private adopted", description: "Private", startImmediately: false, idempotencyKey: "cross-adopted" });
     f.database.authQuery(db => {
-      db.prepare("UPDATE forge_tasks SET company_id = ? WHERE id = ?").run(other.id, task.id);
-      db.prepare("UPDATE forge_task_controls SET status = 'active', delivery_intent_json = ?, pull_request_json = ? WHERE task_id = ?").run(JSON.stringify({ repository: "owner/repo", headBranch: "feature", baseBranch: "main", baselineSha: "a".repeat(40), pullRequestNumber: null }), JSON.stringify({ repository: "owner/repo", number: 7, url: "https://github.com/owner/repo/pull/7", headSha: "a".repeat(40), state: "open", mergedAt: null }), task.id);
+      db.prepare("UPDATE suplex_tasks SET company_id = ? WHERE id = ?").run(other.id, task.id);
+      db.prepare("UPDATE suplex_task_controls SET status = 'active', delivery_intent_json = ?, pull_request_json = ? WHERE task_id = ?").run(JSON.stringify({ repository: "owner/repo", headBranch: "feature", baseBranch: "main", baselineSha: "a".repeat(40), pullRequestNumber: null }), JSON.stringify({ repository: "owner/repo", number: 7, url: "https://github.com/owner/repo/pull/7", headSha: "a".repeat(40), state: "open", mergedAt: null }), task.id);
     });
     await expect(f.githubTriggers.check(f.userId, f.company.id, rule.id)).resolves.toMatchObject([{ outcome: "excluded", reason: "A task already uses this pull request." }]);
-    f.database.authQuery(db => db.prepare("UPDATE forge_task_controls SET status = 'delivered' WHERE task_id = ?").run(task.id));
+    f.database.authQuery(db => db.prepare("UPDATE suplex_task_controls SET status = 'delivered' WHERE task_id = ?").run(task.id));
     await expect(f.githubTriggers.check(f.userId, f.company.id, rule.id)).resolves.toMatchObject([{ outcome: "eligible" }]);
   } finally { await f.close(); }
 });
@@ -335,7 +335,7 @@ test("allows exactly one concurrent enabled rule for a shared repository", async
   try {
     const other = f.auth.createCompany(f.userId, "Other rule");
     const projectId = "project_cross_company";
-    f.database.authQuery(db => db.prepare("INSERT INTO forge_projects (id, company_id, name, repository_path, worktree_root, repository_identity, base_branch, setup_command, verification_command, root_profile_id, worker_profile_id, created_at, updated_at) SELECT ?, ?, 'Repository B', repository_path || '-other', worktree_root || '-other', 'owner/other', base_branch, setup_command, verification_command, root_profile_id, worker_profile_id, ?, ? FROM forge_projects WHERE id = ?").run(projectId, other.id, new Date().toISOString(), new Date().toISOString(), f.project.id));
+    f.database.authQuery(db => db.prepare("INSERT INTO suplex_projects (id, company_id, name, repository_path, worktree_root, repository_identity, base_branch, setup_command, verification_command, root_profile_id, worker_profile_id, created_at, updated_at) SELECT ?, ?, 'Repository B', repository_path || '-other', worktree_root || '-other', 'owner/other', base_branch, setup_command, verification_command, root_profile_id, worker_profile_id, ?, ? FROM suplex_projects WHERE id = ?").run(projectId, other.id, new Date().toISOString(), new Date().toISOString(), f.project.id));
     const workflow = f.workflows.create(f.userId, { name: "Unique", description: "", engine: "standard", deliveryTarget: "pull_request_draft" });
     const first = await f.githubTriggers.create(f.userId, f.company.id, { projectId: f.project.id, name: "A", label: "ready", workflowId: workflow.id, deliveryTarget: "pull_request_draft", protectedPaths: [] });
     const second = await f.githubTriggers.create(f.userId, other.id, { projectId, name: "B", label: "ready", workflowId: workflow.id, deliveryTarget: "pull_request_draft", protectedPaths: [] });
@@ -345,7 +345,7 @@ test("allows exactly one concurrent enabled rule for a shared repository", async
     const settled = await Promise.allSettled(results);
     expect(settled.filter(result => result.status === "fulfilled")).toHaveLength(1);
     expect(settled.filter(result => result.status === "rejected")).toMatchObject([{ reason: { statusCode: 409 } }]);
-    expect(f.database.authQuery(db => db.prepare("SELECT count(*) AS count FROM forge_github_trigger_rules WHERE repository_id = 9 AND enabled = 1").get() as { count: number }).count).toBe(1);
+    expect(f.database.authQuery(db => db.prepare("SELECT count(*) AS count FROM suplex_github_trigger_rules WHERE repository_id = 9 AND enabled = 1").get() as { count: number }).count).toBe(1);
   } finally { await f.close(); }
 });
 
@@ -355,15 +355,15 @@ test("denies rule routes to an authenticated member without changing data", asyn
     const workflow = f.workflows.create(f.userId, { name: "Member", description: "", engine: "standard", deliveryTarget: "pull_request_draft" });
     const rule = await f.githubTriggers.create(f.userId, f.company.id, { projectId: f.project.id, name: "Ready", label: "ready", workflowId: workflow.id, deliveryTarget: "pull_request_draft", protectedPaths: [] });
     f.database.authQuery(db => {
-      db.prepare("INSERT INTO forge_memberships (user_id, company_id, created_at) VALUES (?, ?, ?)").run(f.userId, f.company.id, new Date().toISOString());
-      db.prepare("UPDATE forge_users SET role = 'member' WHERE id = ?").run(f.userId);
+      db.prepare("INSERT INTO suplex_memberships (user_id, company_id, created_at) VALUES (?, ?, ?)").run(f.userId, f.company.id, new Date().toISOString());
+      db.prepare("UPDATE suplex_users SET role = 'member' WHERE id = ?").run(f.userId);
     });
     const payload = { projectId: f.project.id, name: "New", label: "ready", workflowId: workflow.id, deliveryTarget: "pull_request_draft", protectedPaths: [] };
     expect((await f.app.inject({ method: "GET", url: `/api/companies/${f.company.id}/github-triggers`, headers: f.headers })).statusCode).toBe(403);
     expect((await f.app.inject({ method: "POST", url: `/api/companies/${f.company.id}/github-triggers`, headers: f.headers, payload })).statusCode).toBe(403);
     expect((await f.app.inject({ method: "POST", url: `/api/companies/${f.company.id}/github-triggers/${rule.id}/check`, headers: f.headers })).statusCode).toBe(403);
     expect(f.githubTriggers.repository.list(f.company.id)).toHaveLength(1);
-    expect(f.database.authQuery(db => db.prepare("SELECT count(*) AS count FROM forge_tasks").get() as { count: number }).count).toBe(0);
+    expect(f.database.authQuery(db => db.prepare("SELECT count(*) AS count FROM suplex_tasks").get() as { count: number }).count).toBe(0);
   } finally { await f.close(); }
 });
 

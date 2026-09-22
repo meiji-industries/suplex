@@ -74,19 +74,19 @@ export function AppRouter(): ReactElement {
       navigate(anchor.href);
     };
     window.addEventListener("popstate", updateRoute);
-    window.addEventListener("forge:navigate", updateRoute);
+    window.addEventListener("suplex:navigate", updateRoute);
     document.addEventListener("click", intercept);
     return () => {
       window.removeEventListener("popstate", updateRoute);
-      window.removeEventListener("forge:navigate", updateRoute);
+      window.removeEventListener("suplex:navigate", updateRoute);
       document.removeEventListener("click", intercept);
     };
   }, []);
-  if (window.__FORGE_VIEW__ === "auth") return <AuthView />;
-  if (window.__FORGE_VIEW__ === "oauth-consent") return <OAuthConsentView />;
+  if (window.__SUPLEX_VIEW__ === "auth") return <AuthView />;
+  if (window.__SUPLEX_VIEW__ === "oauth-consent") return <OAuthConsentView />;
   const shellKey = activityShellKey(window.location.pathname);
   const view = <AppView key={route} />;
-  return <CompanyProvider><ServerStateProvider><TaskDataProvider><UpdateProvider><SystemHealthProvider initialSnapshot={window.__FORGE_HEALTH__}>{shellKey ? <ApplicationShell key={shellKey}>{view}</ApplicationShell> : view}</SystemHealthProvider></UpdateProvider></TaskDataProvider></ServerStateProvider></CompanyProvider>;
+  return <CompanyProvider><ServerStateProvider><TaskDataProvider><UpdateProvider><SystemHealthProvider initialSnapshot={window.__SUPLEX_HEALTH__}>{shellKey ? <ApplicationShell key={shellKey}>{view}</ApplicationShell> : view}</SystemHealthProvider></UpdateProvider></TaskDataProvider></ServerStateProvider></CompanyProvider>;
 }
 
 export { isApplicationPath };

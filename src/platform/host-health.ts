@@ -2,8 +2,8 @@ import { access, constants, mkdir, statfs, unlink, writeFile } from "node:fs/pro
 import { delimiter, isAbsolute, join } from "node:path";
 import { randomUUID } from "node:crypto";
 
-import { isTailscaleAddress, type ForgeConfig } from "./config.js";
-import type { ForgeDatabase } from "./database.js";
+import { isTailscaleAddress, type SuplexConfig } from "./config.js";
+import type { SuplexDatabase } from "./database.js";
 import type { HealthCheck } from "./health.js";
 import { readEnvironmentSettings } from "./environment-settings.js";
 import { checkGithubAuthentication, commandFailure, createProviderReadiness, runCommand, type CommandRunner } from "../profiles/provider-readiness.js";
@@ -84,7 +84,7 @@ export function checkTailscale(command: string, runner: CommandRunner = runComma
 
 const minimumFreeBytes = 100 * 1024 * 1024;
 
-export async function checkDatabase(database: ForgeDatabase): Promise<HealthCheck> {
+export async function checkDatabase(database: SuplexDatabase): Promise<HealthCheck> {
   try {
     const health = database.health();
     const ahead = health.schemaState === "ahead" && health.walMode && health.readable && health.writable;
@@ -119,7 +119,7 @@ export async function checkDatabase(database: ForgeDatabase): Promise<HealthChec
 }
 
 export async function checkArtifactRoot(root: string): Promise<HealthCheck> {
-  const probeFilename = join(root, `.forge-health-${process.pid}-${randomUUID()}`);
+  const probeFilename = join(root, `.suplex-health-${process.pid}-${randomUUID()}`);
   try {
     await mkdir(root, { recursive: true });
     await access(root, constants.R_OK | constants.W_OK);
@@ -148,7 +148,7 @@ export async function checkArtifactRoot(root: string): Promise<HealthCheck> {
 
 type FilesystemReader = (root: string) => Promise<{ bavail: number | bigint; bsize: number | bigint }>;
 
-export function checkDiskSpace(config: ForgeConfig, database: ForgeDatabase, readFilesystem: FilesystemReader = statfs): () => Promise<HealthCheck> {
+export function checkDiskSpace(config: SuplexConfig, database: SuplexDatabase, readFilesystem: FilesystemReader = statfs): () => Promise<HealthCheck> {
   return async () => {
     try {
       const minFreeBytes = readEnvironmentSettings(database).minFreeDiskGb * 1024 ** 3;
@@ -168,16 +168,16 @@ export function checkDiskSpace(config: ForgeConfig, database: ForgeDatabase, rea
   };
 }
 
-export function createHostHealthDependencies(config: ForgeConfig, database: ForgeDatabase, providers: readonly ProviderHarnessKind[] = HARNESS_KINDS) {
+export function createHostHealthDependencies(config: SuplexConfig, database: SuplexDatabase, providers: readonly ProviderHarnessKind[] = HARNESS_KINDS) {
   return {
     database: () => checkDatabase(database),
     artifactRoot: () => checkArtifactRoot(config.artifactRoot),
     diskSpace: checkDiskSpace(config, database),
-    git: checkGit(process.env.FORGE_GIT_BIN ?? "git"),
+    git: checkGit(process.env.SUPLEX_GIT_BIN ?? "git"),
     herdrReadiness: createHerdrReadinessCheck(),
-    ghAuth: checkGithubAuthentication(process.env.FORGE_GH_COMMAND ?? "gh"),
+    ghAuth: checkGithubAuthentication(process.env.SUPLEX_GH_COMMAND ?? "gh"),
     pnpm: checkPnpm("pnpm"),
-    ...(config.tailscaleExposure === "serve" || isTailscaleAddress(config.bindAddress) ? { tailscale: checkTailscale(process.env.FORGE_TAILSCALE_COMMAND ?? "tailscale") } : {}),
+    ...(config.tailscaleExposure === "serve" || isTailscaleAddress(config.bindAddress) ? { tailscale: checkTailscale(process.env.SUPLEX_TAILSCALE_COMMAND ?? "tailscale") } : {}),
     backup: () => checkBackupHealth(config),
     provider: createProviderReadiness(undefined, providers),
   };

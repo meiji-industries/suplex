@@ -10,11 +10,11 @@ test("authenticated client reports are bounded and Start links the client to com
     const documentId = "22222222-2222-4222-8222-222222222222";
     const body = { state: "startup", tabId, documentId, clientTime: new Date().toISOString(), visible: true, online: true };
     expect((await f.app.inject({ method: "POST", url: "/api/system/client-lifecycle", payload: body })).statusCode).toBe(401);
-    expect((await f.app.inject({ method: "POST", url: "/api/system/client-lifecycle", headers: { ...f.headers, "x-forge-tab-id": tabId }, payload: { ...body, url: "https://private.example/secret" } })).statusCode).toBe(400);
-    expect((await f.app.inject({ method: "POST", url: "/api/system/client-lifecycle", headers: { ...f.headers, "x-forge-tab-id": tabId }, payload: body })).statusCode).toBe(204);
+    expect((await f.app.inject({ method: "POST", url: "/api/system/client-lifecycle", headers: { ...f.headers, "x-suplex-tab-id": tabId }, payload: { ...body, url: "https://private.example/secret" } })).statusCode).toBe(400);
+    expect((await f.app.inject({ method: "POST", url: "/api/system/client-lifecycle", headers: { ...f.headers, "x-suplex-tab-id": tabId }, payload: body })).statusCode).toBe(204);
     expect(observed.at(-1)).toMatchObject({ event: { type: "client_lifecycle", state: "startup", tabId, documentId }, context: { source: "http", clientId: tabId } });
     const created = await f.tasks.createTask(f.userId, f.company.id, { projectId: f.project.id, title: "Start log", idempotencyKey: "start-log-1" });
-    const response = await f.app.inject({ method: "POST", url: `/api/tasks/${created.task.id}/start`, headers: { ...f.headers, "x-forge-tab-id": tabId }, payload: {} });
+    const response = await f.app.inject({ method: "POST", url: `/api/tasks/${created.task.id}/start`, headers: { ...f.headers, "x-suplex-tab-id": tabId }, payload: {} });
     expect(response.statusCode, response.body).toBe(200);
     const action = observed.find(item => item.event.type === "task_action" && item.event.action === "start");
     const admitted = observed.find(item => item.event.type === "task_admitted" && item.event.taskId === created.task.id);
@@ -51,7 +51,7 @@ test("a failed queue diagnostic read cannot stop a committed Start", async () =>
     expect(() => runWithSystemEvents(sink, { source: "test" }, () => f.tasks.repository.controls.observeQueueWaits([task.id]))).not.toThrow();
     failing.mockRestore();
     expect(f.database.authQuery).toBeDefined();
-    expect(original(db => db.prepare("SELECT status FROM forge_task_controls WHERE task_id = ?").get(task.id))).toEqual({ status: "backlog" });
+    expect(original(db => db.prepare("SELECT status FROM suplex_task_controls WHERE task_id = ?").get(task.id))).toEqual({ status: "backlog" });
     const response = await f.app.inject({ method: "POST", url: `/api/tasks/${task.id}/start`, headers: f.headers, payload: {} });
     expect(response.statusCode, response.body).toBe(200);
     expect(f.tasks.repository.controls.get(task.id).status).toBe("active");

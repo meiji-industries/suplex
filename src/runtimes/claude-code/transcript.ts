@@ -8,7 +8,7 @@ import { emptyTokens, TaskUsageSchema, type TaskUsage } from "../../tasks/usage.
 import type { NativeHistoryMessage } from "../../tasks/history/contracts.js";
 
 // Claude Code owns the transcript at <config dir>/projects/<project>/<session>.jsonl
-// and the stream-json output of every headless turn. Forge reads both; it
+// and the stream-json output of every headless turn. Suplex reads both; it
 // never edits them.
 
 const ToolUseBlockSchema = z.object({ type: z.literal("tool_use"), id: z.string().min(1), name: z.string().min(1), input: z.record(z.string(), z.unknown()).default({}) }).passthrough();
@@ -79,7 +79,7 @@ export function claudeConfigDirectory(env: NodeJS.ProcessEnv = process.env): str
   return env.CLAUDE_CONFIG_DIR ?? join(homedir(), ".claude");
 }
 
-/** Claude Code resolves a session id across projects; so does Forge. */
+/** Claude Code resolves a session id across projects; so does Suplex. */
 export async function findClaudeTranscript(sessionId: string, configDirectory = claudeConfigDirectory()): Promise<string | null> {
   const projects = join(configDirectory, "projects");
   let directories: string[];

@@ -5,8 +5,8 @@ import { nativeApp } from "./helpers/native-app.js";
 
 const CONTENT_TYPES: Record<string, string> = {
   "/llms.txt": "text/plain; charset=utf-8",
-  "/.well-known/forge/api-catalog.json": "application/json; charset=utf-8",
-  "/.well-known/forge/agent-skills.json": "application/json; charset=utf-8",
+  "/.well-known/suplex/api-catalog.json": "application/json; charset=utf-8",
+  "/.well-known/suplex/agent-skills.json": "application/json; charset=utf-8",
   "/.well-known/oauth-protected-resource/mcp": "application/json; charset=utf-8",
   "/.well-known/oauth-protected-resource": "application/json; charset=utf-8",
   "/.well-known/oauth-authorization-server": "application/json; charset=utf-8",
@@ -43,10 +43,10 @@ test("the discovery artifacts state that pairing and a scoped credential are nec
     const overview = await fixture.app.inject({ method: "GET", url: "/llms.txt" });
     expect(overview.body).toContain("/api/agent/pairing/exchange");
     expect(overview.body).toContain("/api/agent/openapi.json");
-    expect(overview.body).toContain("forge mcp");
+    expect(overview.body).toContain("suplex mcp");
     expect(overview.body).toMatch(/paired-agent bearer credential/);
 
-    const catalog = (await fixture.app.inject({ method: "GET", url: "/.well-known/forge/api-catalog.json" })).json() as {
+    const catalog = (await fixture.app.inject({ method: "GET", url: "/.well-known/suplex/api-catalog.json" })).json() as {
       authorization: string;
       discovery: Array<{ path: string; authentication: string }>;
       runtime: Array<{ path: string; authentication: string }>;
@@ -60,12 +60,12 @@ test("the discovery artifacts state that pairing and a scoped credential are nec
     // Only the public artifacts themselves are reachable without a credential.
     expect(catalog.discovery.map(entry => entry.path).sort()).toEqual([...DISCOVERY_ARTIFACT_PATHS].sort());
 
-    const skills = (await fixture.app.inject({ method: "GET", url: "/.well-known/forge/agent-skills.json" })).json() as {
+    const skills = (await fixture.app.inject({ method: "GET", url: "/.well-known/suplex/agent-skills.json" })).json() as {
       authorization: string;
       skills: Array<{ name: string; instructions: string; clients: Array<{ transport: string; documentation: string }> }>;
     };
     expect(skills.authorization).toMatch(/paired-agent bearer credential/);
-    expect(skills.skills.map(entry => entry.name)).toEqual(["forge"]);
+    expect(skills.skills.map(entry => entry.name)).toEqual(["suplex"]);
     expect(skills.skills[0]!.clients.map(client => client.transport)).toEqual(["streamable-http", "mcp-stdio", "http-bearer"]);
   } finally { await fixture.close(); }
 });

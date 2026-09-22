@@ -210,7 +210,7 @@ test("issue context reads every comment page and validates provider data", async
 });
 
 test.each([false, true])("trigger inspection preserves large JSON through the real command runner (task-bound: %s)", async taskBound => {
-  const directory = await mkdtemp(join(tmpdir(), "forge-large-github-"));
+  const directory = await mkdtemp(join(tmpdir(), "suplex-large-github-"));
   try {
     const command = join(directory, "gh-fixture");
     const repo = { id: 9, full_name: "owner/repo" };

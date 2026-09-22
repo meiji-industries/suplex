@@ -3,7 +3,7 @@ import type { FastifyPluginAsync } from "fastify";
 import { z } from "zod";
 
 import { AuthFailure, type AuthService, type AuthUser } from "../../identity/auth.js";
-import type { ForgeConfig } from "../../platform/config.js";
+import type { SuplexConfig } from "../../platform/config.js";
 import type { HealthSnapshot } from "../../platform/health.js";
 import type { AgentProfileService } from "../../profiles/agent-profiles.js";
 import type { ProjectService } from "../../projects/projects.js";
@@ -18,7 +18,7 @@ export interface HealthContext {
 
 export interface HealthRoutesOptions {
   auth?: AuthService;
-  config?: ForgeConfig;
+  config?: SuplexConfig;
   profiles?: AgentProfileService;
   projects?: ProjectService;
   readHealth: (force?: boolean, context?: HealthContext) => Promise<HealthSnapshot>;

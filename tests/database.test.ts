@@ -5,20 +5,20 @@ import { join } from "node:path";
 import { expect, test } from "vitest";
 import Database from "better-sqlite3";
 
-import { type DatabaseMigrationFailure, ForgeDatabase } from "../src/platform/database.js";
+import { type DatabaseMigrationFailure, SuplexDatabase } from "../src/platform/database.js";
 
 test("initializes migrations in WAL mode after reopening", async () => {
-  const root = await mkdtemp(join(tmpdir(), "forge-db-test-"));
-  const filename = join(root, "forge.sqlite");
+  const root = await mkdtemp(join(tmpdir(), "suplex-db-test-"));
+  const filename = join(root, "suplex.sqlite");
 
   try {
-    const first = new ForgeDatabase(filename);
+    const first = new SuplexDatabase(filename);
     const firstHealth = first.health();
     expect(firstHealth.walMode).toBe(true);
     expect(firstHealth.schemaState).toBe("current");
     first.close();
 
-    const reopened = new ForgeDatabase(filename);
+    const reopened = new SuplexDatabase(filename);
     const reopenedHealth = reopened.health();
     expect(reopenedHealth.schemaState).toBe("current");
     expect(reopenedHealth.appliedMigrations).toBe(reopenedHealth.expectedMigrations);
@@ -28,16 +28,16 @@ test("initializes migrations in WAL mode after reopening", async () => {
   }
 });
 
-function lastAppliedHash(database: ForgeDatabase): string {
+function lastAppliedHash(database: SuplexDatabase): string {
   return database.authQuery((db) => (db.prepare("SELECT hash FROM __drizzle_migrations ORDER BY created_at DESC LIMIT 1").get() as { hash: string }).hash);
 }
 
 test("schema health distinguishes empty, current, behind, ahead, partial, and corrupt migration states", () => {
-  const root = mkdtempSync(join(tmpdir(), "forge-db-schema-test-"));
-  const filename = join(root, "forge.sqlite");
+  const root = mkdtempSync(join(tmpdir(), "suplex-db-schema-test-"));
+  const filename = join(root, "suplex.sqlite");
 
   try {
-    const database = new ForgeDatabase(filename);
+    const database = new SuplexDatabase(filename);
     expect(database.health().schemaState).toBe("current");
     const baselineMigrations = database.authQuery((db) => db.prepare("SELECT hash, created_at FROM __drizzle_migrations ORDER BY created_at ASC, hash ASC").all() as Array<{ hash: string; created_at: number }>);
 
@@ -88,11 +88,11 @@ test("schema health distinguishes empty, current, behind, ahead, partial, and co
 });
 
 test("schema health is current but unhealthy when WAL is disabled", () => {
-  const root = mkdtempSync(join(tmpdir(), "forge-db-wal-test-"));
-  const filename = join(root, "forge.sqlite");
+  const root = mkdtempSync(join(tmpdir(), "suplex-db-wal-test-"));
+  const filename = join(root, "suplex.sqlite");
 
   try {
-    const database = new ForgeDatabase(filename);
+    const database = new SuplexDatabase(filename);
     database.authQuery((db) => db.pragma("journal_mode = DELETE"));
     const health = database.health();
     expect(health.schemaState).toBe("current");
@@ -104,11 +104,11 @@ test("schema health is current but unhealthy when WAL is disabled", () => {
 });
 
 test("reports a write lock without discarding readable schema health", () => {
-  const root = mkdtempSync(join(tmpdir(), "forge-db-lock-test-"));
-  const filename = join(root, "forge.sqlite");
+  const root = mkdtempSync(join(tmpdir(), "suplex-db-lock-test-"));
+  const filename = join(root, "suplex.sqlite");
 
   try {
-    const database = new ForgeDatabase(filename);
+    const database = new SuplexDatabase(filename);
     const expectedMigrations = database.health().expectedMigrations;
     database.authQuery((db) => db.pragma("busy_timeout = 1"));
     const lockHolder = new Database(filename);
@@ -133,11 +133,11 @@ test("reports a write lock without discarding readable schema health", () => {
 });
 
 test("retains exact readable schema health when writes are disabled", () => {
-  const root = mkdtempSync(join(tmpdir(), "forge-db-readonly-test-"));
-  const filename = join(root, "forge.sqlite");
+  const root = mkdtempSync(join(tmpdir(), "suplex-db-readonly-test-"));
+  const filename = join(root, "suplex.sqlite");
 
   try {
-    const database = new ForgeDatabase(filename);
+    const database = new SuplexDatabase(filename);
     database.authQuery((db) => db.pragma("query_only = ON"));
 
     expect(database.health()).toMatchObject({
@@ -152,27 +152,27 @@ test("retains exact readable schema health when writes are disabled", () => {
 });
 
 test("reports normalized repository identity collisions before the unique index migration", async () => {
-  const root = await mkdtemp(join(tmpdir(), "forge-db-collision-test-"));
-  const filename = join(root, "forge.sqlite");
+  const root = await mkdtemp(join(tmpdir(), "suplex-db-collision-test-"));
+  const filename = join(root, "suplex.sqlite");
 
   try {
-    const database = new ForgeDatabase(filename);
+    const database = new SuplexDatabase(filename);
     database.close();
 
     const legacy = new Database(filename);
-    legacy.exec("DROP INDEX forge_projects_repository_identity_unique");
-    legacy.exec("INSERT INTO forge_companies (id, name, status, created_at) VALUES ('company-a', 'Company A', 'active', '2026-08-11T00:00:00.000Z'), ('company-b', 'Company B', 'active', '2026-08-11T00:00:00.000Z')");
-    const insert = legacy.prepare("INSERT INTO forge_projects (id, company_id, name, repository_path, worktree_root, repository_identity, base_branch, setup_command, verification_command, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, 'main', 'pnpm install', 'pnpm test', ?, ?)");
-    insert.run("project-a", "company-a", "Project A", "/repositories/a", "/worktrees/a", " Acme/Forge ", "2026-08-11T00:00:00.000Z", "2026-08-11T00:00:00.000Z");
-    insert.run("project-b", "company-b", "Project B", "/repositories/b", "/worktrees/b", "acme/forge", "2026-08-11T00:00:00.000Z", "2026-08-11T00:00:00.000Z");
+    legacy.exec("DROP INDEX suplex_projects_repository_identity_unique");
+    legacy.exec("INSERT INTO suplex_companies (id, name, status, created_at) VALUES ('company-a', 'Company A', 'active', '2026-08-11T00:00:00.000Z'), ('company-b', 'Company B', 'active', '2026-08-11T00:00:00.000Z')");
+    const insert = legacy.prepare("INSERT INTO suplex_projects (id, company_id, name, repository_path, worktree_root, repository_identity, base_branch, setup_command, verification_command, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, 'main', 'pnpm install', 'pnpm test', ?, ?)");
+    insert.run("project-a", "company-a", "Project A", "/repositories/a", "/worktrees/a", " Acme/Suplex ", "2026-08-11T00:00:00.000Z", "2026-08-11T00:00:00.000Z");
+    insert.run("project-b", "company-b", "Project B", "/repositories/b", "/worktrees/b", "acme/suplex", "2026-08-11T00:00:00.000Z", "2026-08-11T00:00:00.000Z");
     legacy.close();
 
-    expect(() => new ForgeDatabase(filename)).toThrowError(expect.objectContaining({
+    expect(() => new SuplexDatabase(filename)).toThrowError(expect.objectContaining({
       name: "DatabaseMigrationFailure",
       code: "repository_identity_collision",
       collisions: [
-        { projectId: "project-a", companyId: "company-a", repositoryIdentity: "acme/forge" },
-        { projectId: "project-b", companyId: "company-b", repositoryIdentity: "acme/forge" },
+        { projectId: "project-a", companyId: "company-a", repositoryIdentity: "acme/suplex" },
+        { projectId: "project-b", companyId: "company-b", repositoryIdentity: "acme/suplex" },
       ],
     } satisfies Partial<DatabaseMigrationFailure>));
   } finally {

@@ -6,16 +6,16 @@ import type { FastifyInstance, FastifyReply } from "fastify";
 import { z } from "zod";
 
 import type { OAuthService } from "../../identity/oauth.js";
-import type { ForgeConfig } from "../../platform/config.js";
+import type { SuplexConfig } from "../../platform/config.js";
 import type { TaskHost } from "../../tasks/host.js";
 import type { AgentApiGithubPort, TaskService } from "../../tasks/tasks.js";
 import { TaskFailure } from "../../tasks/tasks.js";
 import { ExternalAgentFailure } from "../../identity/external-agents.js";
-import { FORGE_MCP_TOOLS } from "../../integrations/forge/mcp-bridge.js";
-import { ForgeMcpRuntime, presentForgeMcpResult } from "../../integrations/forge/mcp-runtime.js";
+import { SUPLEX_MCP_TOOLS } from "../../integrations/suplex/mcp-bridge.js";
+import { SuplexMcpRuntime, presentSuplexMcpResult } from "../../integrations/suplex/mcp-runtime.js";
 import { oauthBearerChallenge } from "./oauth.js";
 
-function requestAuthorityAllowed(config: ForgeConfig, host: string | undefined, origin: string | undefined): boolean {
+function requestAuthorityAllowed(config: SuplexConfig, host: string | undefined, origin: string | undefined): boolean {
   const canonical = new URL(config.reachableAddress);
   if (host?.toLowerCase() !== canonical.host.toLowerCase()) return false;
   if (origin === undefined) return true;
@@ -23,7 +23,7 @@ function requestAuthorityAllowed(config: ForgeConfig, host: string | undefined, 
   catch { return false; }
 }
 
-export function registerMcpRoutes(app: FastifyInstance, options: { oauth: OAuthService; config: ForgeConfig; tasks: TaskService; agentDelivery: boolean; host?: Pick<TaskHost, "recover">; github?: AgentApiGithubPort }): void {
+export function registerMcpRoutes(app: FastifyInstance, options: { oauth: OAuthService; config: SuplexConfig; tasks: TaskService; agentDelivery: boolean; host?: Pick<TaskHost, "recover">; github?: AgentApiGithubPort }): void {
   const unauthorized = (reply: FastifyReply) => reply.header("WWW-Authenticate", oauthBearerChallenge(options.oauth)).header("Cache-Control", "no-store").code(401).send({ error: "invalid_token" });
 
   app.post("/mcp", { config: { oauthProtocol: true }, bodyLimit: 2 * 1024 * 1024 }, async (request, reply) => {
@@ -34,13 +34,13 @@ export function registerMcpRoutes(app: FastifyInstance, options: { oauth: OAuthS
     try { principal = options.oauth.authenticateAccessToken(authorization.slice(7).trim()); }
     catch { return unauthorized(reply); }
 
-    const runtime = new ForgeMcpRuntime({ principal, tasks: options.tasks, agentDelivery: options.agentDelivery, ...(options.host ? { host: options.host } : {}), ...(options.github ? { github: options.github } : {}), logRecoveryFailure: (taskId, error) => app.log.warn({ taskId, err: error }, "Task recovery will be retried") });
-    const server = new Server({ name: "forge", version: "1.0.0" }, { capabilities: { tools: {} } });
-    server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: [...FORGE_MCP_TOOLS] }));
+    const runtime = new SuplexMcpRuntime({ principal, tasks: options.tasks, agentDelivery: options.agentDelivery, ...(options.host ? { host: options.host } : {}), ...(options.github ? { github: options.github } : {}), logRecoveryFailure: (taskId, error) => app.log.warn({ taskId, err: error }, "Task recovery will be retried") });
+    const server = new Server({ name: "suplex", version: "1.0.0" }, { capabilities: { tools: {} } });
+    server.setRequestHandler(ListToolsRequestSchema, async () => ({ tools: [...SUPLEX_MCP_TOOLS] }));
     server.setRequestHandler(CallToolRequestSchema, async ({ params }) => {
       try {
         const result = await runtime.call(params.name, (params.arguments ?? {}) as Record<string, unknown>);
-        const presented = presentForgeMcpResult(result);
+        const presented = presentSuplexMcpResult(result);
         return { content: [{ type: "text", text: JSON.stringify(presented) }], structuredContent: presented as Record<string, unknown>, ...(result.status >= 400 ? { isError: true } : {}) };
       } catch (error) {
         const result = error instanceof TaskFailure || error instanceof ExternalAgentFailure

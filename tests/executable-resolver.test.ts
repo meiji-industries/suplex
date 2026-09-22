@@ -8,7 +8,7 @@ const directories: string[] = [];
 afterEach(async () => { await Promise.all(directories.splice(0).map((path) => rm(path, { recursive: true, force: true }))); });
 
 async function fixture() {
-  const homeDirectory = await mkdtemp(join(tmpdir(), "forge-opencode-executable-"));
+  const homeDirectory = await mkdtemp(join(tmpdir(), "suplex-opencode-executable-"));
   directories.push(homeDirectory);
   const bin = join(homeDirectory, ".opencode", "bin");
   await mkdir(bin, { recursive: true });
@@ -24,8 +24,8 @@ test("finds the standard OpenCode installation when the service PATH omits it", 
 
 test("prefers an explicit executable and does not hide invalid configuration", async () => {
   const { homeDirectory, executable } = await fixture();
-  expect(await resolveOpenCodeExecutable({ homeDirectory, env: { PATH: "", FORGE_OPENCODE_COMMAND: executable } })).toBe(executable);
-  await expect(resolveOpenCodeExecutable({ homeDirectory, env: { FORGE_OPENCODE_COMMAND: "/missing/opencode" } })).rejects.toThrow("FORGE_OPENCODE_COMMAND");
+  expect(await resolveOpenCodeExecutable({ homeDirectory, env: { PATH: "", SUPLEX_OPENCODE_COMMAND: executable } })).toBe(executable);
+  await expect(resolveOpenCodeExecutable({ homeDirectory, env: { SUPLEX_OPENCODE_COMMAND: "/missing/opencode" } })).rejects.toThrow("SUPLEX_OPENCODE_COMMAND");
   await expect(resolveOpenCodeExecutable({ homeDirectory, executable: "opencode", env: {} })).rejects.toThrow("absolute");
 });
 
@@ -41,7 +41,7 @@ test("uses an executable on PATH before the standard installation", async () => 
 test("reports a missing installation instead of passing an empty executable", async () => {
   const { homeDirectory, executable } = await fixture();
   await chmod(executable, 0o600);
-  await expect(resolveOpenCodeExecutable({ homeDirectory, env: { PATH: "" } })).rejects.toThrow("Install OpenCode or set FORGE_OPENCODE_COMMAND");
+  await expect(resolveOpenCodeExecutable({ homeDirectory, env: { PATH: "" } })).rejects.toThrow("Install OpenCode or set SUPLEX_OPENCODE_COMMAND");
 });
 
 test("resolves Devin from its standard path or explicit command", async () => {
@@ -51,8 +51,8 @@ test("resolves Devin from its standard path or explicit command", async () => {
   const executable = join(bin, "devin");
   await writeFile(executable, "#!/bin/sh\nexit 0\n", { mode: 0o700 });
   expect(await resolveDevinExecutable({ homeDirectory, env: { PATH: "" } })).toBe(executable);
-  expect(await resolveDevinExecutable({ homeDirectory, env: { PATH: "", FORGE_DEVIN_COMMAND: executable } })).toBe(executable);
-  await expect(resolveDevinExecutable({ homeDirectory, env: { FORGE_DEVIN_COMMAND: "devin" } })).rejects.toThrow("absolute");
+  expect(await resolveDevinExecutable({ homeDirectory, env: { PATH: "", SUPLEX_DEVIN_COMMAND: executable } })).toBe(executable);
+  await expect(resolveDevinExecutable({ homeDirectory, env: { SUPLEX_DEVIN_COMMAND: "devin" } })).rejects.toThrow("absolute");
 });
 
 test("resolves Codex from its standard path or explicit command", async () => {
@@ -62,7 +62,7 @@ test("resolves Codex from its standard path or explicit command", async () => {
   const executable = join(bin, "codex");
   await writeFile(executable, "#!/bin/sh\nexit 0\n", { mode: 0o700 });
   expect(await resolveCodexExecutable({ homeDirectory, env: { PATH: "" } })).toBe(executable);
-  expect(await resolveCodexExecutable({ homeDirectory, env: { PATH: "", FORGE_CODEX_COMMAND: executable } })).toBe(executable);
-  await expect(resolveCodexExecutable({ homeDirectory, env: { FORGE_CODEX_COMMAND: "codex" } })).rejects.toThrow("absolute");
-  await expect(resolveCodexExecutable({ homeDirectory: join(homeDirectory, "empty"), env: { PATH: "" } })).rejects.toThrow("Install Codex CLI or set FORGE_CODEX_COMMAND");
+  expect(await resolveCodexExecutable({ homeDirectory, env: { PATH: "", SUPLEX_CODEX_COMMAND: executable } })).toBe(executable);
+  await expect(resolveCodexExecutable({ homeDirectory, env: { SUPLEX_CODEX_COMMAND: "codex" } })).rejects.toThrow("absolute");
+  await expect(resolveCodexExecutable({ homeDirectory: join(homeDirectory, "empty"), env: { PATH: "" } })).rejects.toThrow("Install Codex CLI or set SUPLEX_CODEX_COMMAND");
 });

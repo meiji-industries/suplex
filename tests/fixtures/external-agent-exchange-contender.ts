@@ -2,13 +2,13 @@ import { dirname } from "node:path";
 
 import { AuthService } from "../../src/identity/auth.js";
 import { createTestConfig } from "../../src/platform/config.js";
-import { ForgeDatabase } from "../../src/platform/database.js";
+import { SuplexDatabase } from "../../src/platform/database.js";
 import { ExternalAgentFailure, ExternalAgentService } from "../../src/identity/external-agents.js";
 
 const [databasePath, pairingCode, profileId] = process.argv.slice(2);
 if (!databasePath || !pairingCode || !profileId) throw new Error("database path, pairing code, and profile ID are required");
 
-const database = new ForgeDatabase(databasePath);
+const database = new SuplexDatabase(databasePath);
 const auth = new AuthService(database, createTestConfig(dirname(databasePath), { databasePath }));
 const service = new ExternalAgentService(database, auth);
 

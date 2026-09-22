@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { isDeepStrictEqual } from "node:util";
 import { z } from "zod";
 
-import type { ForgeDatabase } from "../../platform/database.js";
+import type { SuplexDatabase } from "../../platform/database.js";
 import { validateGithubTriggerProtectedPaths } from "./trigger-paths.js";
 import { DeliveryTargetSchema, TaskConfigurationSchema, TaskInputSchema, type TaskRequest } from "../../tasks/contracts.js";
 import { TaskProfileSchema, type TaskProfile } from "../../tasks/control.js";
@@ -24,10 +24,10 @@ function dispatch(raw: unknown): GithubTriggerDispatch {
 }
 
 export class GithubTriggerDispatchRepository {
-  constructor(private readonly database: ForgeDatabase) {}
+  constructor(private readonly database: SuplexDatabase) {}
   prepare(input: GithubTriggerDispatchPrepare): GithubTriggerDispatch {
     return this.database.authImmediateTransaction(db => {
-    const existingRow = db.prepare("SELECT * FROM forge_github_trigger_dispatches WHERE rule_id = ? AND repository_id = ? AND pull_request_number = ?").get(input.ruleId, input.repositoryId, input.pullRequestNumber);
+    const existingRow = db.prepare("SELECT * FROM suplex_github_trigger_dispatches WHERE rule_id = ? AND repository_id = ? AND pull_request_number = ?").get(input.ruleId, input.repositoryId, input.pullRequestNumber);
     if (existingRow) {
       const existing = dispatch(existingRow);
       if (existing.companyId !== input.companyId || existing.projectId !== input.projectId || existing.repositoryName !== input.repositoryName.toLowerCase() || existing.authorityUserId !== input.authorityUserId) throw new Error("GitHub trigger dispatch binding does not match capture");
@@ -36,7 +36,7 @@ export class GithubTriggerDispatchRepository {
     const policy = GithubTriggerDispatchPolicySchema.parse(input.policy);
     const preset = WorkflowRecordSchema.parse(input.preset);
     const profiles = z.object({ root: TaskProfileSchema, worker: TaskProfileSchema, advisors: z.record(z.string(), TaskProfileSchema) }).parse(input.profiles);
-    const rule = db.prepare("SELECT company_id, project_id, repository_id, repository_name, authority_user_id, workflow_id, delivery_target, protected_paths_json FROM forge_github_trigger_rules WHERE id = ?").get(input.ruleId) as { company_id: string; project_id: string; repository_id: number; repository_name: string; authority_user_id: string; workflow_id: string; delivery_target: string; protected_paths_json: string } | undefined;
+    const rule = db.prepare("SELECT company_id, project_id, repository_id, repository_name, authority_user_id, workflow_id, delivery_target, protected_paths_json FROM suplex_github_trigger_rules WHERE id = ?").get(input.ruleId) as { company_id: string; project_id: string; repository_id: number; repository_name: string; authority_user_id: string; workflow_id: string; delivery_target: string; protected_paths_json: string } | undefined;
     if (!rule || rule.company_id !== input.companyId || rule.project_id !== input.projectId || rule.repository_id !== input.repositoryId || rule.repository_name.toLowerCase() !== input.repositoryName.toLowerCase() || rule.authority_user_id !== input.authorityUserId || rule.workflow_id !== preset.id || rule.delivery_target !== policy.deliveryTarget || JSON.stringify(JSON.parse(rule.protected_paths_json)) !== JSON.stringify(policy.protectedPaths)) throw new Error("GitHub trigger dispatch does not match rule");
     validateGithubTriggerProtectedPaths(policy.protectedPaths);
     if (policy.repositoryId !== input.repositoryId || policy.repositoryName.toLowerCase() !== input.repositoryName.toLowerCase() || policy.deliveryTarget !== input.request.deliveryTarget || input.request.projectId !== input.projectId || input.request.source?.kind !== "pull_request" || input.request.source.number !== input.pullRequestNumber) throw new Error("GitHub trigger dispatch capture is contradictory");
@@ -52,26 +52,26 @@ export class GithubTriggerDispatchRepository {
     if (JSON.stringify(requestedRoles) !== JSON.stringify([...roles].sort()) || JSON.stringify(capturedRoles) !== JSON.stringify([...roles].sort()) || roles.some(role => request.advisorProfileIds[role] !== profiles.advisors[role]?.profileId || !request.advisorProfileIds[role] || (preset.advisorProfileIds[role] !== undefined && preset.advisorProfileIds[role] !== request.advisorProfileIds[role]))) throw new Error("GitHub trigger dispatch Advisors do not match request");
     const now = new Date().toISOString();
     const value: GithubTriggerDispatch = { ...input, repositoryName: input.repositoryName.toLowerCase(), id, idempotencyKey: key, taskId: null, request, policy, preset, profiles, createdAt: now, updatedAt: now };
-    db.prepare("INSERT INTO forge_github_trigger_dispatches (id, rule_id, company_id, project_id, repository_id, repository_name, pull_request_number, authority_user_id, request_json, policy_json, preset_json, profiles_json, idempotency_key, task_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)").run(value.id, value.ruleId, value.companyId, value.projectId, value.repositoryId, value.repositoryName.toLowerCase(), value.pullRequestNumber, value.authorityUserId, JSON.stringify(value.request), JSON.stringify(value.policy), JSON.stringify(value.preset), JSON.stringify(value.profiles), value.idempotencyKey, now, now);
+    db.prepare("INSERT INTO suplex_github_trigger_dispatches (id, rule_id, company_id, project_id, repository_id, repository_name, pull_request_number, authority_user_id, request_json, policy_json, preset_json, profiles_json, idempotency_key, task_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, NULL, ?, ?)").run(value.id, value.ruleId, value.companyId, value.projectId, value.repositoryId, value.repositoryName.toLowerCase(), value.pullRequestNumber, value.authorityUserId, JSON.stringify(value.request), JSON.stringify(value.policy), JSON.stringify(value.preset), JSON.stringify(value.profiles), value.idempotencyKey, now, now);
     return value;
     });
   }
-  get(id: string): GithubTriggerDispatch | null { const row = this.database.authQuery(db => db.prepare("SELECT * FROM forge_github_trigger_dispatches WHERE id = ?").get(id)); return row ? dispatch(row) : null; }
-  find(ruleId: string, repositoryId: number, pullRequestNumber: number): GithubTriggerDispatch | null { const row = this.database.authQuery(db => db.prepare("SELECT * FROM forge_github_trigger_dispatches WHERE rule_id = ? AND repository_id = ? AND pull_request_number = ?").get(ruleId, repositoryId, pullRequestNumber)); return row ? dispatch(row) : null; }
-  listByRule(companyId: string, ruleId: string): GithubTriggerDispatch[] { return this.database.authQuery(db => db.prepare("SELECT * FROM forge_github_trigger_dispatches WHERE company_id = ? AND rule_id = ? ORDER BY created_at, id").all(companyId, ruleId).map(dispatch)); }
-  unfinished(): GithubTriggerDispatch[] { return this.database.authQuery(db => db.prepare("SELECT * FROM forge_github_trigger_dispatches WHERE task_id IS NULL ORDER BY created_at, id").all().map(dispatch)); }
-  previouslyProcessed(repositoryId: number, pullRequestNumber: number): boolean { return this.database.authQuery(db => Boolean(db.prepare("SELECT 1 FROM forge_github_trigger_dispatches WHERE repository_id = ? AND pull_request_number = ? LIMIT 1").get(repositoryId, pullRequestNumber))); }
+  get(id: string): GithubTriggerDispatch | null { const row = this.database.authQuery(db => db.prepare("SELECT * FROM suplex_github_trigger_dispatches WHERE id = ?").get(id)); return row ? dispatch(row) : null; }
+  find(ruleId: string, repositoryId: number, pullRequestNumber: number): GithubTriggerDispatch | null { const row = this.database.authQuery(db => db.prepare("SELECT * FROM suplex_github_trigger_dispatches WHERE rule_id = ? AND repository_id = ? AND pull_request_number = ?").get(ruleId, repositoryId, pullRequestNumber)); return row ? dispatch(row) : null; }
+  listByRule(companyId: string, ruleId: string): GithubTriggerDispatch[] { return this.database.authQuery(db => db.prepare("SELECT * FROM suplex_github_trigger_dispatches WHERE company_id = ? AND rule_id = ? ORDER BY created_at, id").all(companyId, ruleId).map(dispatch)); }
+  unfinished(): GithubTriggerDispatch[] { return this.database.authQuery(db => db.prepare("SELECT * FROM suplex_github_trigger_dispatches WHERE task_id IS NULL ORDER BY created_at, id").all().map(dispatch)); }
+  previouslyProcessed(repositoryId: number, pullRequestNumber: number): boolean { return this.database.authQuery(db => Boolean(db.prepare("SELECT 1 FROM suplex_github_trigger_dispatches WHERE repository_id = ? AND pull_request_number = ? LIMIT 1").get(repositoryId, pullRequestNumber))); }
   linkTask(dispatchId: string, taskId: string): GithubTriggerDispatch {
     return this.database.authImmediateTransaction(db => {
       const current = this.get(dispatchId); if (!current) throw new Error("GitHub trigger dispatch was not found");
       if (current.taskId) { if (current.taskId !== taskId) throw new Error("GitHub trigger dispatch already links another task"); return current; }
-      const task = db.prepare("SELECT t.company_id, t.project_id, t.idempotency_key, t.request_hash, t.creator_user_id, t.creator_agent_id, t.configuration_json, t.archived_at, c.status, c.delivery_target, c.workflow, c.root_profile_json, c.worker_profile_json, c.advisor_profiles_json FROM forge_tasks t JOIN forge_task_controls c ON c.task_id = t.id WHERE t.id = ?").get(taskId) as { company_id: string; project_id: string; idempotency_key: string; request_hash: string; creator_user_id: string | null; creator_agent_id: string | null; configuration_json: string; archived_at: string | null; status: string; delivery_target: string; workflow: string; root_profile_json: string; worker_profile_json: string; advisor_profiles_json: string } | undefined;
+      const task = db.prepare("SELECT t.company_id, t.project_id, t.idempotency_key, t.request_hash, t.creator_user_id, t.creator_agent_id, t.configuration_json, t.archived_at, c.status, c.delivery_target, c.workflow, c.root_profile_json, c.worker_profile_json, c.advisor_profiles_json FROM suplex_tasks t JOIN suplex_task_controls c ON c.task_id = t.id WHERE t.id = ?").get(taskId) as { company_id: string; project_id: string; idempotency_key: string; request_hash: string; creator_user_id: string | null; creator_agent_id: string | null; configuration_json: string; archived_at: string | null; status: string; delivery_target: string; workflow: string; root_profile_json: string; worker_profile_json: string; advisor_profiles_json: string } | undefined;
       if (!task || task.archived_at || task.status !== "backlog" || task.company_id !== current.companyId || task.project_id !== current.projectId || task.idempotency_key !== current.idempotencyKey || task.creator_user_id !== current.authorityUserId || task.creator_agent_id !== null || task.request_hash !== taskRequestHash(current.request, { kind: "user", id: current.authorityUserId })) throw new Error("Task does not match GitHub trigger dispatch");
       const config = TaskConfigurationSchema.parse(JSON.parse(task.configuration_json));
       if (config.repository.toLowerCase() !== current.repositoryName || config.source?.kind !== "pull_request" || config.source.number !== current.pullRequestNumber || config.startingSha !== current.policy.headSha || config.baselineSha !== current.policy.baseSha || config.branch !== current.policy.headBranch || config.baseBranch !== current.policy.baseBranch || config.runProjectTests !== current.request.runProjectTests || config.visualEvidence !== current.request.visualEvidence || task.delivery_target !== current.policy.deliveryTarget || task.workflow !== current.request.workflow) throw new Error("Task configuration does not match GitHub trigger dispatch");
       const profiles = { root: TaskProfileSchema.parse(JSON.parse(task.root_profile_json)), worker: TaskProfileSchema.parse(JSON.parse(task.worker_profile_json)), advisors: z.record(z.string(), TaskProfileSchema).parse(JSON.parse(task.advisor_profiles_json)) };
       if (!isDeepStrictEqual(profiles, current.profiles)) throw new Error("Task profiles do not match GitHub trigger dispatch");
-      db.prepare("UPDATE forge_github_trigger_dispatches SET task_id = ?, updated_at = ? WHERE id = ? AND (task_id IS NULL OR task_id = ?)").run(taskId, new Date().toISOString(), dispatchId, taskId);
+      db.prepare("UPDATE suplex_github_trigger_dispatches SET task_id = ?, updated_at = ? WHERE id = ? AND (task_id IS NULL OR task_id = ?)").run(taskId, new Date().toISOString(), dispatchId, taskId);
       return this.get(dispatchId)!;
     });
   }

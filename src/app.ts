@@ -5,8 +5,8 @@ import Fastify, { LogController, type FastifyInstance, type FastifyReply, type F
 import type { Logger } from "pino";
 
 import type { AuthService, AuthUser } from "./identity/auth.js";
-import type { ForgeDatabase } from "./platform/database.js";
-import type { ForgeConfig } from "./platform/config.js";
+import type { SuplexDatabase } from "./platform/database.js";
+import type { SuplexConfig } from "./platform/config.js";
 import type { TaskHost } from "./tasks/host.js";
 import type { ExternalAgentService } from "./identity/external-agents.js";
 import type { OAuthService } from "./identity/oauth.js";
@@ -52,7 +52,7 @@ import { runWithSystemEvents, type EventSink } from "./platform/system-events.js
 
 export interface AppDependencies {
   fullApp?: boolean;
-  config: ForgeConfig;
+  config: SuplexConfig;
   health: HostHealthDependencies;
   getHealth?: () => Promise<HealthSnapshot>;
   healthNow?: () => number;
@@ -66,7 +66,7 @@ export interface AppDependencies {
   workflows?: WorkflowRecordService;
   githubTriggers?: GithubTriggerService;
   host?: Pick<TaskHost, "recover">;
-  database?: ForgeDatabase;
+  database?: SuplexDatabase;
   logger?: Logger | false;
   systemEvents?: EventSink;
   externalAgent?: ExternalAgentService;
@@ -94,7 +94,7 @@ export function createAppServer(dependencies: AppDependencies): FastifyInstance 
   void app.register(websocket, { options: { maxPayload: 1 << 20 } });
   installHttpErrorHandlers(app);
   if (dependencies.systemEvents) app.addHook("onRequest", (request, _reply, done) => {
-    const rawClientId = request.headers["x-forge-tab-id"];
+    const rawClientId = request.headers["x-suplex-tab-id"];
     const clientId = typeof rawClientId === "string" && /^[a-f0-9-]{16,64}$/i.test(rawClientId) ? rawClientId : undefined;
     runWithSystemEvents(dependencies.systemEvents!, { source: "http", trigger: `${request.method} ${request.routeOptions.url ?? "unknown"}`, requestId: request.id, ...(clientId ? { clientId } : {}) }, done);
   });

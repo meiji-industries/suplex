@@ -25,7 +25,7 @@ mkdir -p desktop/runtime/node/bin
 cp "$node_root/bin/node" desktop/runtime/node/bin/node
 
 # --legacy: this workspace does not set inject-workspace-packages, which pnpm 10+ now requires for the default deploy.
-pnpm --filter=forge deploy --prod --legacy desktop/runtime/app
+pnpm --filter=suplex deploy --prod --legacy desktop/runtime/app
 rm -rf desktop/runtime/app/dist/tests desktop/runtime/app/dist/scripts
 
 pnpm install --frozen-lockfile

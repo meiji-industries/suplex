@@ -34,7 +34,7 @@ const task = { rootProfile: profile, workerProfile: profile };
 const session = { id: "root", kind: "root", generation: 1 } as const;
 function message(id: string, parentID: string, created: number, completed?: number) {
   return OpenCodeMessageEnvelopeSchema.parse({ info: {
-    id, sessionID: "ses_timeline", role: "assistant", time: { created, completed }, parentID, modelID: "model", providerID: "openai", mode: "primary", agent: "forge-root", path: { cwd: "/repo", root: "/repo" }, cost: 0, tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+    id, sessionID: "ses_timeline", role: "assistant", time: { created, completed }, parentID, modelID: "model", providerID: "openai", mode: "primary", agent: "suplex-root", path: { cwd: "/repo", root: "/repo" }, cost: 0, tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
   }, parts: [] });
 }
 
@@ -81,7 +81,7 @@ test("live observations merge with durable history and failures cannot extend un
     expect(offline.unavailableSessions).toBe(1);
     expect(offline.tasks[0]?.activity).toHaveLength(1);
     expect(offline.tasks[0]?.activity[0]).toMatchObject({ status: "completed", finishedAt: new Date(2000).toISOString() });
-    value.database.authQuery(db => db.exec("DROP TABLE forge_task_usage"));
+    value.database.authQuery(db => db.exec("DROP TABLE suplex_task_usage"));
     expect((await value.app.inject({ url: `/api/tasks/${task.id}/timeline`, headers: value.headers })).statusCode).toBe(500);
     expect(value.tasks.repository.controls.markDelivered(task.id).status).toBe("delivered");
     expect(value.wakes).toEqual([]);

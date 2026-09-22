@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { basename, join } from "node:path";
 import { expect, test } from "vitest";
 import { z } from "zod";
-import { ForgeDatabase } from "../src/platform/database.js";
+import { SuplexDatabase } from "../src/platform/database.js";
 import { TaskControlStore } from "../src/coordination/root-session-store.js";
 import { TaskSchema } from "../src/tasks/contracts.js";
 import { advisorResultWake, composeAdvisorAssignment, composeWorkerAssignment, IMPLEMENTATION_COMMIT_PROMPT, initialCoordinatorPrompt, VERIFICATION_WORKER_PROMPT, withCurrentDependencyStatus, workerAssignmentPreamble, workerResultWake } from "../src/coordination/workflow-prompts.js";
@@ -81,9 +81,9 @@ test("task creation captures workflow and Advisor profiles and keeps pre-upgrade
     expect(task).toMatchObject({ workflow: "standard", advisorProfiles: {}, workflowState: { version: 1, reviews: [], acceptedDelivery: null, deliveryWait: null, completion: null } });
     expect(created.json().workflowState).not.toHaveProperty("toolOwner");
     const preUpgradeHash = createHash("sha256").update(JSON.stringify({ input: { projectId: f.project.id, title: "Legacy task", description: "Created before workflows", idempotencyKey: "legacy-request-1", images: [], startImmediately: false, deliveryTarget: "pull_request_draft", runProjectTests: true, visualEvidence: "off" }, creator: { kind: "user", id: f.userId } })).digest("hex");
-    expect(f.database.authQuery(db => db.prepare("SELECT request_hash FROM forge_tasks WHERE id = ?").get(task.id))).toEqual({ request_hash: preUpgradeHash });
+    expect(f.database.authQuery(db => db.prepare("SELECT request_hash FROM suplex_tasks WHERE id = ?").get(task.id))).toEqual({ request_hash: preUpgradeHash });
     // A row written by the pre-upgrade build retries through the new code without conflict.
-    f.database.authTransaction(db => db.prepare("UPDATE forge_tasks SET request_hash = ? WHERE id = ?").run(preUpgradeHash, task.id));
+    f.database.authTransaction(db => db.prepare("UPDATE suplex_tasks SET request_hash = ? WHERE id = ?").run(preUpgradeHash, task.id));
     expect((await f.app.inject({ method: "POST", url, headers: f.headers, payload: { ...legacy, workflow: "standard", advisorProfileIds: {} } })).statusCode).toBe(200);
     expect((await f.app.inject({ method: "POST", url, headers: f.headers, payload: { ...legacy, workflow: "direct_build" } })).statusCode).toBe(409);
     expect(f.tasks.listTasks(f.userId)).toHaveLength(1);
@@ -167,7 +167,7 @@ test("templates round-trip workflow selections, switch to repair with its defaul
     const preserved = await f.app.inject({ method: "PATCH", url: `/api/task-templates/${id}`, headers: f.headers, payload: { workflow: "independent_review" } });
     expect(preserved.json()).toMatchObject({ workflow: "independent_review", deliveryTarget: "remote_branch" });
     const stamp = new Date().toISOString();
-    f.database.authTransaction(db => db.prepare("INSERT INTO forge_task_templates (id, project_id, name, configuration_json, created_at, updated_at) VALUES ('template_old', ?, 'Old', ?, ?, ?)").run(f.project.id, JSON.stringify({ name: "Old", description: "Pre-workflow template", deliveryTarget: "pull_request_draft", runProjectTests: true, visualEvidence: "off" }), stamp, stamp));
+    f.database.authTransaction(db => db.prepare("INSERT INTO suplex_task_templates (id, project_id, name, configuration_json, created_at, updated_at) VALUES ('template_old', ?, 'Old', ?, ?, ?)").run(f.project.id, JSON.stringify({ name: "Old", description: "Pre-workflow template", deliveryTarget: "pull_request_draft", runProjectTests: true, visualEvidence: "off" }), stamp, stamp));
     expect(f.templates.list(f.userId, f.project.id).find(template => template.id === "template_old")).toMatchObject({ workflow: "standard", advisorProfileIds: {} });
     const { task } = await f.tasks.createTask(f.userId, f.company.id, { projectId: f.project.id, title: "Save me", description: "As template", idempotencyKey: "save-template", workflow: "competing_plans", advisorProfileIds: { planner_a: "profile_native_root" } });
     const saved = await f.app.inject({ method: "POST", url: `/api/tasks/${task.id}/save-as-template`, headers: f.headers, payload: { name: "From task" } });
@@ -177,29 +177,29 @@ test("templates round-trip workflow selections, switch to repair with its defaul
 });
 
 test("a populated pre-workflow database keeps sessions, claims, turns, and templates and parses old tasks as Standard", async () => {
-  const root = await mkdtemp(join(tmpdir(), "forge-workflows-migration-"));
+  const root = await mkdtemp(join(tmpdir(), "suplex-workflows-migration-"));
   const repositoryRoot = process.cwd();
-  const filename = join(root, "forge.sqlite");
+  const filename = join(root, "suplex.sqlite");
   try {
     await cp(join(repositoryRoot, "drizzle"), join(root, "drizzle"), { recursive: true, filter: source => !source.endsWith(".sql") || basename(source) < "20260906224011461_workflows.sql" });
     process.chdir(root);
-    const legacy = new ForgeDatabase(filename);
+    const legacy = new SuplexDatabase(filename);
     const now = "2026-09-01T00:00:00.000Z";
     legacy.authTransaction(db => {
-      db.prepare("INSERT INTO forge_users (id, display_name, username, role, status, created_at, updated_at) VALUES ('user_1', 'User', 'user', 'admin', 'active', ?, ?)").run(now, now);
-      db.prepare("INSERT INTO forge_companies (id, name, status, created_at) VALUES ('company_1', 'Company', 'active', ?)").run(now);
-      db.prepare("INSERT INTO forge_projects (id, company_id, name, repository_path, worktree_root, repository_identity, base_branch, setup_command, verification_command, created_at, updated_at) VALUES ('project_1', 'company_1', 'Project', '/repo', '/worktrees', 'acme/forge', 'main', '', '', ?, ?)").run(now, now);
-      db.prepare("INSERT INTO forge_tasks (id, company_id, project_id, title, description, configuration_json, idempotency_key, request_hash, creator_user_id, created_at, updated_at) VALUES ('task_1', 'company_1', 'project_1', 'Old', 'Old task', ?, 'key', 'hash', 'user_1', ?, ?)").run(JSON.stringify({ repository: "acme/forge", repositoryPath: "/repo", worktreeRoot: "/worktrees", branch: "task", baseBranch: "main", baselineSha: sha("a"), startingSha: sha("a"), setupCommand: "", verificationCommand: "", runProjectTests: true, visualEvidence: "off", source: null, capturedAt: now }), now, now);
+      db.prepare("INSERT INTO suplex_users (id, display_name, username, role, status, created_at, updated_at) VALUES ('user_1', 'User', 'user', 'admin', 'active', ?, ?)").run(now, now);
+      db.prepare("INSERT INTO suplex_companies (id, name, status, created_at) VALUES ('company_1', 'Company', 'active', ?)").run(now);
+      db.prepare("INSERT INTO suplex_projects (id, company_id, name, repository_path, worktree_root, repository_identity, base_branch, setup_command, verification_command, created_at, updated_at) VALUES ('project_1', 'company_1', 'Project', '/repo', '/worktrees', 'acme/suplex', 'main', '', '', ?, ?)").run(now, now);
+      db.prepare("INSERT INTO suplex_tasks (id, company_id, project_id, title, description, configuration_json, idempotency_key, request_hash, creator_user_id, created_at, updated_at) VALUES ('task_1', 'company_1', 'project_1', 'Old', 'Old task', ?, 'key', 'hash', 'user_1', ?, ?)").run(JSON.stringify({ repository: "acme/suplex", repositoryPath: "/repo", worktreeRoot: "/worktrees", branch: "task", baseBranch: "main", baselineSha: sha("a"), startingSha: sha("a"), setupCommand: "", verificationCommand: "", runProjectTests: true, visualEvidence: "off", source: null, capturedAt: now }), now, now);
       const profile = JSON.stringify({ profileId: "profile_native_root", provider: "openai", model: "gpt-5.6-sol", reasoningLevel: "medium", serviceTier: "default" });
-      db.prepare("INSERT INTO forge_task_controls (task_id, objective, delivery_target, delivery_intent_json, status, root_session_id, root_profile_json, worker_profile_json, created_at, updated_at) VALUES ('task_1', 'Old', 'pull_request_draft', ?, 'active', 'session_1', ?, ?, ?, ?)").run(JSON.stringify({ repository: "acme/forge", headBranch: "task", baseBranch: "main", baselineSha: sha("a"), pullRequestNumber: null }), profile, profile, now, now);
-      db.prepare("INSERT INTO forge_task_sessions (id, task_id, kind, generation, is_current, native_session_id, lifecycle, launch_owner, launch_owner_pid, launch_owner_start_time, stop_requested_at, created_at, updated_at) VALUES ('session_1', 'task_1', 'root', 1, 1, 'ses_old', 'live', 'owner', 4242, 'start', NULL, ?, ?)").run(now, now);
-      db.prepare("INSERT INTO forge_task_sessions (id, task_id, kind, generation, is_current, native_session_id, lifecycle, stop_requested_at, created_at, updated_at) VALUES ('session_2', 'task_1', 'worker', 1, 1, 'ses_worker', 'stopped', ?, ?, ?)").run(now, now, now);
-      db.prepare("INSERT INTO forge_task_turns (id, task_id, session_id, generation, prompt_hash, prompt_text, status, created_at, updated_at) VALUES ('turn_1', 'task_1', 'session_1', 1, 'h', 'Pending prompt', 'pending_prompt', ?, ?)").run(now, now);
-      db.prepare("INSERT INTO forge_task_templates (id, project_id, name, configuration_json, created_at, updated_at) VALUES ('template_1', 'project_1', 'Old template', ?, ?, ?)").run(JSON.stringify({ name: "Old template", description: "Old", deliveryTarget: "pull_request_draft", runProjectTests: true, visualEvidence: "off" }), now, now);
+      db.prepare("INSERT INTO suplex_task_controls (task_id, objective, delivery_target, delivery_intent_json, status, root_session_id, root_profile_json, worker_profile_json, created_at, updated_at) VALUES ('task_1', 'Old', 'pull_request_draft', ?, 'active', 'session_1', ?, ?, ?, ?)").run(JSON.stringify({ repository: "acme/suplex", headBranch: "task", baseBranch: "main", baselineSha: sha("a"), pullRequestNumber: null }), profile, profile, now, now);
+      db.prepare("INSERT INTO suplex_task_sessions (id, task_id, kind, generation, is_current, native_session_id, lifecycle, launch_owner, launch_owner_pid, launch_owner_start_time, stop_requested_at, created_at, updated_at) VALUES ('session_1', 'task_1', 'root', 1, 1, 'ses_old', 'live', 'owner', 4242, 'start', NULL, ?, ?)").run(now, now);
+      db.prepare("INSERT INTO suplex_task_sessions (id, task_id, kind, generation, is_current, native_session_id, lifecycle, stop_requested_at, created_at, updated_at) VALUES ('session_2', 'task_1', 'worker', 1, 1, 'ses_worker', 'stopped', ?, ?, ?)").run(now, now, now);
+      db.prepare("INSERT INTO suplex_task_turns (id, task_id, session_id, generation, prompt_hash, prompt_text, status, created_at, updated_at) VALUES ('turn_1', 'task_1', 'session_1', 1, 'h', 'Pending prompt', 'pending_prompt', ?, ?)").run(now, now);
+      db.prepare("INSERT INTO suplex_task_templates (id, project_id, name, configuration_json, created_at, updated_at) VALUES ('template_1', 'project_1', 'Old template', ?, ?, ?)").run(JSON.stringify({ name: "Old template", description: "Old", deliveryTarget: "pull_request_draft", runProjectTests: true, visualEvidence: "off" }), now, now);
     });
     legacy.close();
     process.chdir(repositoryRoot);
-    const current = new ForgeDatabase(filename);
+    const current = new SuplexDatabase(filename);
     try {
       expect(current.schemaStatus().state).toBe("current");
       const store = new TaskControlStore(current);
@@ -207,9 +207,9 @@ test("a populated pre-workflow database keeps sessions, claims, turns, and templ
       expect(store.currentSession("task_1", "root")).toMatchObject({ nativeSessionId: "ses_old", lifecycle: "live", launchOwner: "owner", launchOwnerPid: 4242, launchOwnerStartTime: "start", advisorRole: null, workflowInput: null });
       expect(store.currentSession("task_1", "worker")).toMatchObject({ nativeSessionId: "ses_worker", stopRequestedAt: now, stoppedAt: null });
       expect(store.pendingTurns("session_1")).toMatchObject([{ id: "turn_1", status: "pending_prompt", promptText: "Pending prompt" }]);
-      expect(current.authQuery(db => db.prepare("SELECT configuration_json FROM forge_task_templates WHERE id = 'template_1'").get())).toEqual({ configuration_json: JSON.stringify({ name: "Old template", description: "Old", deliveryTarget: "pull_request_draft", runProjectTests: true, visualEvidence: "off" }) });
+      expect(current.authQuery(db => db.prepare("SELECT configuration_json FROM suplex_task_templates WHERE id = 'template_1'").get())).toEqual({ configuration_json: JSON.stringify({ name: "Old template", description: "Old", deliveryTarget: "pull_request_draft", runProjectTests: true, visualEvidence: "off" }) });
     } finally { current.close(); }
-    const empty = new ForgeDatabase(join(root, "empty.sqlite"));
+    const empty = new SuplexDatabase(join(root, "empty.sqlite"));
     try { expect(empty.schemaStatus().state).toBe("current"); } finally { empty.close(); }
   } finally {
     process.chdir(repositoryRoot);
@@ -326,9 +326,9 @@ test("the initial Coordinator prompt names undelivered dependencies and stays si
     const blocked = initialCoordinatorPrompt(control(workflow), context, dependencies);
     expect(blocked).toContain('This task depends on these tasks: task_upstream "Add the shared parser" (active).');
     expect(blocked).not.toContain("task_done");
-    expect(blocked).toContain("Forge does not admit new work for this task until every dependency is delivered.");
+    expect(blocked).toContain("Suplex does not admit new work for this task until every dependency is delivered.");
     expect(blocked).toContain("observe the actual Git and GitHub state for main");
-    expect(blocked).not.toContain("Forge merges their work");
+    expect(blocked).not.toContain("Suplex merges their work");
 
     // A task with no dependency, and a task whose dependencies are all delivered, read the same.
     const free = initialCoordinatorPrompt(control(workflow), context);
@@ -337,8 +337,8 @@ test("the initial Coordinator prompt names undelivered dependencies and stays si
   }
 });
 
-test("dependency context replaces only Forge's exact trailing suffix", () => {
-  const userText = "Keep this literal text:\n\n[Forge prerequisite status]\nDo not truncate it.";
+test("dependency context replaces only Suplex's exact trailing suffix", () => {
+  const userText = "Keep this literal text:\n\n[Suplex prerequisite status]\nDo not truncate it.";
   const active = [{ id: "task_upstream", title: "Prepare input", status: "active" }] as const;
   const delivered = [{ ...active[0], status: "delivered" as const }];
 

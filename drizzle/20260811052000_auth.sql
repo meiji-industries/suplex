@@ -1,4 +1,4 @@
-CREATE TABLE IF NOT EXISTS `forge_users` (
+CREATE TABLE IF NOT EXISTS `suplex_users` (
 	`id` text PRIMARY KEY NOT NULL,
 	`display_name` text NOT NULL,
 	`username` text NOT NULL,
@@ -6,10 +6,10 @@ CREATE TABLE IF NOT EXISTS `forge_users` (
 	`status` text NOT NULL,
 	`created_at` text NOT NULL,
 	`updated_at` text NOT NULL,
-	CONSTRAINT `forge_users_username_unique` UNIQUE(`username`)
+	CONSTRAINT `suplex_users_username_unique` UNIQUE(`username`)
 );
 --> statement-breakpoint
-CREATE TABLE IF NOT EXISTS `forge_invitations` (
+CREATE TABLE IF NOT EXISTS `suplex_invitations` (
 	`id` text PRIMARY KEY NOT NULL,
 	`token_hash` text NOT NULL,
 	`kind` text NOT NULL,
@@ -19,11 +19,11 @@ CREATE TABLE IF NOT EXISTS `forge_invitations` (
 	`consumed_at` text,
 	`replaced_at` text,
 	`created_at` text NOT NULL,
-	FOREIGN KEY (`user_id`) REFERENCES `forge_users`(`id`) ON UPDATE no action ON DELETE no action,
-	CONSTRAINT `forge_invitations_token_hash_unique` UNIQUE(`token_hash`)
+	FOREIGN KEY (`user_id`) REFERENCES `suplex_users`(`id`) ON UPDATE no action ON DELETE no action,
+	CONSTRAINT `suplex_invitations_token_hash_unique` UNIQUE(`token_hash`)
 );
 --> statement-breakpoint
-CREATE TABLE IF NOT EXISTS `forge_challenges` (
+CREATE TABLE IF NOT EXISTS `suplex_challenges` (
 	`id` text PRIMARY KEY NOT NULL,
 	`challenge` text NOT NULL,
 	`kind` text NOT NULL,
@@ -32,11 +32,11 @@ CREATE TABLE IF NOT EXISTS `forge_challenges` (
 	`expires_at` text NOT NULL,
 	`consumed_at` text,
 	`created_at` text NOT NULL,
-	FOREIGN KEY (`invitation_id`) REFERENCES `forge_invitations`(`id`) ON UPDATE no action ON DELETE no action,
-	FOREIGN KEY (`user_id`) REFERENCES `forge_users`(`id`) ON UPDATE no action ON DELETE no action
+	FOREIGN KEY (`invitation_id`) REFERENCES `suplex_invitations`(`id`) ON UPDATE no action ON DELETE no action,
+	FOREIGN KEY (`user_id`) REFERENCES `suplex_users`(`id`) ON UPDATE no action ON DELETE no action
 );
 --> statement-breakpoint
-CREATE TABLE IF NOT EXISTS `forge_credentials` (
+CREATE TABLE IF NOT EXISTS `suplex_credentials` (
 	`id` text PRIMARY KEY NOT NULL,
 	`user_id` text NOT NULL,
 	`credential_id` text NOT NULL,
@@ -45,38 +45,38 @@ CREATE TABLE IF NOT EXISTS `forge_credentials` (
 	`transports` text NOT NULL,
 	`created_at` text NOT NULL,
 	`revoked_at` text,
-	FOREIGN KEY (`user_id`) REFERENCES `forge_users`(`id`) ON UPDATE no action ON DELETE no action,
-	CONSTRAINT `forge_credentials_credential_id_unique` UNIQUE(`credential_id`)
+	FOREIGN KEY (`user_id`) REFERENCES `suplex_users`(`id`) ON UPDATE no action ON DELETE no action,
+	CONSTRAINT `suplex_credentials_credential_id_unique` UNIQUE(`credential_id`)
 );
 --> statement-breakpoint
-CREATE TABLE IF NOT EXISTS `forge_sessions` (
+CREATE TABLE IF NOT EXISTS `suplex_sessions` (
 	`id` text PRIMARY KEY NOT NULL,
 	`token_hash` text NOT NULL,
 	`user_id` text NOT NULL,
 	`expires_at` text NOT NULL,
 	`created_at` text NOT NULL,
 	`revoked_at` text,
-	FOREIGN KEY (`user_id`) REFERENCES `forge_users`(`id`) ON UPDATE no action ON DELETE no action,
-	CONSTRAINT `forge_sessions_token_hash_unique` UNIQUE(`token_hash`)
+	FOREIGN KEY (`user_id`) REFERENCES `suplex_users`(`id`) ON UPDATE no action ON DELETE no action,
+	CONSTRAINT `suplex_sessions_token_hash_unique` UNIQUE(`token_hash`)
 );
 --> statement-breakpoint
-CREATE TABLE IF NOT EXISTS `forge_companies` (
+CREATE TABLE IF NOT EXISTS `suplex_companies` (
 	`id` text PRIMARY KEY NOT NULL,
 	`name` text NOT NULL,
 	`created_at` text NOT NULL,
-	CONSTRAINT `forge_companies_name_unique` UNIQUE(`name`)
+	CONSTRAINT `suplex_companies_name_unique` UNIQUE(`name`)
 );
 --> statement-breakpoint
-CREATE TABLE IF NOT EXISTS `forge_memberships` (
+CREATE TABLE IF NOT EXISTS `suplex_memberships` (
 	`user_id` text NOT NULL,
 	`company_id` text NOT NULL,
 	`created_at` text NOT NULL,
 	PRIMARY KEY(`user_id`, `company_id`),
-	FOREIGN KEY (`user_id`) REFERENCES `forge_users`(`id`) ON UPDATE no action ON DELETE cascade,
-	FOREIGN KEY (`company_id`) REFERENCES `forge_companies`(`id`) ON UPDATE no action ON DELETE cascade
+	FOREIGN KEY (`user_id`) REFERENCES `suplex_users`(`id`) ON UPDATE no action ON DELETE cascade,
+	FOREIGN KEY (`company_id`) REFERENCES `suplex_companies`(`id`) ON UPDATE no action ON DELETE cascade
 );
 --> statement-breakpoint
-CREATE TABLE IF NOT EXISTS `forge_audit_events` (
+CREATE TABLE IF NOT EXISTS `suplex_audit_events` (
 	`id` text PRIMARY KEY NOT NULL,
 	`actor_user_id` text,
 	`action` text NOT NULL,
@@ -84,7 +84,7 @@ CREATE TABLE IF NOT EXISTS `forge_audit_events` (
 	`company_id` text,
 	`metadata_json` text NOT NULL,
 	`created_at` text NOT NULL,
-	FOREIGN KEY (`actor_user_id`) REFERENCES `forge_users`(`id`) ON UPDATE no action ON DELETE no action,
-	FOREIGN KEY (`target_user_id`) REFERENCES `forge_users`(`id`) ON UPDATE no action ON DELETE no action,
-	FOREIGN KEY (`company_id`) REFERENCES `forge_companies`(`id`) ON UPDATE no action ON DELETE no action
+	FOREIGN KEY (`actor_user_id`) REFERENCES `suplex_users`(`id`) ON UPDATE no action ON DELETE no action,
+	FOREIGN KEY (`target_user_id`) REFERENCES `suplex_users`(`id`) ON UPDATE no action ON DELETE no action,
+	FOREIGN KEY (`company_id`) REFERENCES `suplex_companies`(`id`) ON UPDATE no action ON DELETE no action
 );

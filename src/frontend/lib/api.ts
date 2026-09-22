@@ -37,7 +37,7 @@ export async function readJson<T>(url: string, init?: RequestInit): Promise<T> {
     headers: {
       ...(init?.body !== undefined ? { "Content-Type": "application/json" } : {}),
       ...(originToken ? { "X-CSRF-V1": originToken } : {}),
-      ...(clientId ? { "X-Forge-Tab-Id": clientId } : {}),
+      ...(clientId ? { "X-Suplex-Tab-Id": clientId } : {}),
       ...(init?.headers ?? {}),
     },
   });

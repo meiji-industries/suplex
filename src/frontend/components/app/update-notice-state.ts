@@ -16,7 +16,7 @@ export function observeRestart(attempt: RestartAttempt, update: UpdateResponse):
 }
 
 export function selectUpdateNotice(update: UpdateResponse): UpdateNoticeState | undefined {
-  if (update.status.kind === "available") return { kind: "available", message: "Forge update available." };
+  if (update.status.kind === "available") return { kind: "available", message: "Suplex update available." };
   if (update.status.kind === "applying") return { kind: "progress", message: update.status.message };
   if (update.status.kind === "failed" && update.status.action === "apply") return { kind: "failure", message: update.status.message };
   return undefined;

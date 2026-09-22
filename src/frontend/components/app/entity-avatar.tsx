@@ -13,7 +13,7 @@ interface EntityAvatarProps {
   kind: AvatarKind;
   id: string;
   name: string;
-  /** DiceBear seed for the default image. Without it Forge resolves the default on the server. */
+  /** DiceBear seed for the default image. Without it Suplex resolves the default on the server. */
   seed?: string;
   size?: "default" | "xs" | "sm" | "lg";
 }

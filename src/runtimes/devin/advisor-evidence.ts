@@ -8,7 +8,7 @@ export async function readDevinAdvisorEvidence(runtimeDirectory: string, turnId:
   try {
     const result = AdvisorResultSchema.parse(JSON.parse(await readFile(path, "utf8")));
     return {
-      tools: [{ id: `devin-advisor-report-${turnId}`, name: "mcp__forge_advisor__submit_report", status: "completed", input: {}, output: JSON.stringify({ structuredContent: result }), error: null }],
+      tools: [{ id: `devin-advisor-report-${turnId}`, name: "mcp__suplex_advisor__submit_report", status: "completed", input: {}, output: JSON.stringify({ structuredContent: result }), error: null }],
       limitation: "Devin CLI does not expose other machine-readable tool evidence.",
     };
   } catch (error) {

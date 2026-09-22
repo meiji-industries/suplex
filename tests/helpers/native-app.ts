@@ -30,14 +30,14 @@ export const healthyHost: HostHealthDependencies = {
 };
 
 const webAuthn: WebAuthnAdapter = {
-  async generateRegistrationOptions(input) { return { rp: { name: "Forge", id: input.rpId }, user: { id: input.userId, name: input.userName, displayName: input.displayName }, challenge: "native-app", pubKeyCredParams: [{ type: "public-key", alg: -7 }], attestation: "none" }; },
+  async generateRegistrationOptions(input) { return { rp: { name: "Suplex", id: input.rpId }, user: { id: input.userId, name: input.userName, displayName: input.displayName }, challenge: "native-app", pubKeyCredParams: [{ type: "public-key", alg: -7 }], attestation: "none" }; },
   async verifyRegistrationResponse(input) { return { verified: true, credential: { id: input.response.id, publicKey: Uint8Array.from([1]), counter: 0 } }; },
   async generateAuthenticationOptions() { return { challenge: "native-app", rpId: "localhost", allowCredentials: [], userVerification: "required" }; },
   async verifyAuthenticationResponse() { return { verified: true, newCounter: 1 }; },
 };
 
 export async function nativeApp(fixtureOptions: { githubTrigger?: GithubTriggerPort; herdr?: TaskPanePort; logSink?: (line: string) => void; systemEvents?: EventSink; issueTracker?: TaskServicePorts["issueTracker"]; pullRequestObserver?: TaskServicePorts["pullRequestObserver"]; reachableAddress?: string } = {}) {
-  const directory = await mkdtemp(join(tmpdir(), "forge-native-app-"));
+  const directory = await mkdtemp(join(tmpdir(), "suplex-native-app-"));
   const config = createTestConfig(directory, { reachableAddress: fixtureOptions.reachableAddress ?? "http://127.0.0.1:4111" });
   const database = createTestDatabase(config.databasePath);
   const auth = new AuthService(database, config, { webAuthn });

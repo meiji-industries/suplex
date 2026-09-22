@@ -12,9 +12,9 @@ import { z } from "zod";
 
 import type { AuthUser } from "../identity/auth.js";
 import { AuthFailure, type AuthService } from "../identity/auth.js";
-import type { ForgeConfig } from "../platform/config.js";
+import type { SuplexConfig } from "../platform/config.js";
 import { GithubFailure, createGithubAdapter, type GithubAdapter } from "../integrations/github/client.js";
-import type { ForgeDatabase } from "../platform/database.js";
+import type { SuplexDatabase } from "../platform/database.js";
 import { createGithubReleasePort, type GithubReleasePort } from "../integrations/github/delivery.js";
 import { TaskSourceService, type TaskSourceSelector } from "../tasks/sources.js";
 import { readProviders as readHostProviders, type ReadProviders } from "../profiles/provider-catalog.js";
@@ -212,9 +212,9 @@ export class ProjectService {
   private readonly readProviders: ReadProviders;
 
   constructor(
-    private readonly database: ForgeDatabase,
+    private readonly database: SuplexDatabase,
     private readonly auth: AuthService,
-    private readonly config: ForgeConfig,
+    private readonly config: SuplexConfig,
     options: ProjectServiceOptions = {},
   ) {
     this.now = options.now ?? (() => new Date());
@@ -242,7 +242,7 @@ export class ProjectService {
 
   listProjectProviderInstances(actorUserId: string, projectId: string): ProjectProviderInstance[] {
     this.getProject(actorUserId, projectId);
-    return this.database.authQuery((db) => z.array(ProjectProviderInstanceSchema).parse(db.prepare("SELECT id, provider, label FROM forge_provider_instances ORDER BY provider, label COLLATE NOCASE, id").all()));
+    return this.database.authQuery((db) => z.array(ProjectProviderInstanceSchema).parse(db.prepare("SELECT id, provider, label FROM suplex_provider_instances ORDER BY provider, label COLLATE NOCASE, id").all()));
   }
 
   createProject(actorUserId: string, companyId: string, input: ProjectInput): Promise<Project> {
@@ -260,7 +260,7 @@ export class ProjectService {
     const repositoryPath = resolve(this.config.repositoryRoot, owner, repositoryName);
     const worktreeRoot = resolve(this.config.worktreeRoot, owner, repositoryName);
     if (!inspectedWithinRoot(repositoryPath, resolve(this.config.repositoryRoot)) || !inspectedWithinRoot(worktreeRoot, resolve(this.config.worktreeRoot))) {
-      throw new ProjectFailure("Repository provisioning failed", [finding("path-outside-root", "repositoryUrl", "Derived project paths escaped the configured Forge roots")], 422);
+      throw new ProjectFailure("Repository provisioning failed", [finding("path-outside-root", "repositoryUrl", "Derived project paths escaped the configured Suplex roots")], 422);
     }
     await this.repositoryProvisioner.ensure({ cloneUrl: coordinate.cloneUrl, repository: coordinate.repository, repositoryPath, worktreeRoot });
     const commands = await inferRepositoryCommands(repositoryPath);
@@ -339,27 +339,27 @@ export class ProjectService {
         const stored = this.rowForProject(db, projectId);
         if (!stored || stored.company_id !== existing.companyId) throw new ProjectFailure("Not found", [], 404);
 
-        if (input.name !== undefined) db.prepare("UPDATE forge_projects SET name = ? WHERE id = ?").run(input.name.trim(), projectId);
-        if (input.repositoryPath !== undefined) db.prepare("UPDATE forge_projects SET repository_path = ? WHERE id = ?").run(repositoryPath, projectId);
-        if (input.worktreeRoot !== undefined) db.prepare("UPDATE forge_projects SET worktree_root = ? WHERE id = ?").run(worktreeRoot, projectId);
-        if (input.repository !== undefined) db.prepare("UPDATE forge_projects SET repository_identity = ? WHERE id = ?").run(input.repository.trim().toLowerCase(), projectId);
-        if (input.baseBranch !== undefined) db.prepare("UPDATE forge_projects SET base_branch = ? WHERE id = ?").run(input.baseBranch.trim(), projectId);
-        if (input.setupCommand !== undefined) db.prepare("UPDATE forge_projects SET setup_command = ? WHERE id = ?").run(input.setupCommand.trim(), projectId);
-        if (input.verificationCommand !== undefined) db.prepare("UPDATE forge_projects SET verification_command = ? WHERE id = ?").run(input.verificationCommand.trim(), projectId);
-        if (input.integration !== undefined) db.prepare("UPDATE forge_projects SET integration_json = ? WHERE id = ?").run(JSON.stringify(ProjectIntegrationSchema.parse(input.integration)), projectId);
+        if (input.name !== undefined) db.prepare("UPDATE suplex_projects SET name = ? WHERE id = ?").run(input.name.trim(), projectId);
+        if (input.repositoryPath !== undefined) db.prepare("UPDATE suplex_projects SET repository_path = ? WHERE id = ?").run(repositoryPath, projectId);
+        if (input.worktreeRoot !== undefined) db.prepare("UPDATE suplex_projects SET worktree_root = ? WHERE id = ?").run(worktreeRoot, projectId);
+        if (input.repository !== undefined) db.prepare("UPDATE suplex_projects SET repository_identity = ? WHERE id = ?").run(input.repository.trim().toLowerCase(), projectId);
+        if (input.baseBranch !== undefined) db.prepare("UPDATE suplex_projects SET base_branch = ? WHERE id = ?").run(input.baseBranch.trim(), projectId);
+        if (input.setupCommand !== undefined) db.prepare("UPDATE suplex_projects SET setup_command = ? WHERE id = ?").run(input.setupCommand.trim(), projectId);
+        if (input.verificationCommand !== undefined) db.prepare("UPDATE suplex_projects SET verification_command = ? WHERE id = ?").run(input.verificationCommand.trim(), projectId);
+        if (input.integration !== undefined) db.prepare("UPDATE suplex_projects SET integration_json = ? WHERE id = ?").run(JSON.stringify(ProjectIntegrationSchema.parse(input.integration)), projectId);
         if (input.execution) {
           const storedExecution = stored.execution_json ? ProjectExecutionSchema.parse(JSON.parse(stored.execution_json)) : ProjectExecutionSchema.parse({});
           const execution = ProjectExecutionSchema.parse({ ...storedExecution, ...input.execution });
-          db.prepare("UPDATE forge_projects SET execution_json = ? WHERE id = ?").run(JSON.stringify(execution), projectId);
+          db.prepare("UPDATE suplex_projects SET execution_json = ? WHERE id = ?").run(JSON.stringify(execution), projectId);
         }
 
         const agentChanged = input.rootProfileId !== undefined || input.workerProfileId !== undefined || input.agentTaskPolicy !== undefined || input.providerPolicy !== undefined;
         if (agentChanged) this.patchAgentConfiguration(db, stored, projectId, input);
-        db.prepare("UPDATE forge_projects SET updated_at = ? WHERE id = ?").run(now, projectId);
+        db.prepare("UPDATE suplex_projects SET updated_at = ? WHERE id = ?").run(now, projectId);
         this.auth.recordAuditEventInTransaction(db, actorUserId, "project_updated", undefined, existing.companyId, { projectId });
       });
     } catch (error) {
-      if (error instanceof Error && (error.message.includes("forge_projects.") || error.message.includes("forge_projects_repository_identity_unique"))) {
+      if (error instanceof Error && (error.message.includes("suplex_projects.") || error.message.includes("suplex_projects_repository_identity_unique"))) {
         const field = error.message.includes("repository_path") ? "repositoryPath" : error.message.includes("worktree_root") ? "worktreeRoot" : error.message.includes("repository_identity") ? "repository" : error.message.includes("company_id") && error.message.includes("name") ? "name" : undefined;
         if (!field) throw error;
         throw new ProjectFailure("Project configuration is invalid", [finding("already-assigned", field, "This coordinate is already assigned to another project")], 409);
@@ -376,7 +376,7 @@ export class ProjectService {
       if (!inspection.baseSha) throw new Error("branch unavailable");
       return { baseSha: inspection.baseSha };
     } catch {
-      throw new ProjectFailure("Project configuration could not be captured", [finding("repository-unavailable", "projectId", "Forge could not resolve the configured branches for this new task")], 422);
+      throw new ProjectFailure("Project configuration could not be captured", [finding("repository-unavailable", "projectId", "Suplex could not resolve the configured branches for this new task")], 422);
     }
   }
 
@@ -403,8 +403,8 @@ export class ProjectService {
     const row = this.database.authQuery((db) => {
       const user = this.user(actorUserId);
       const result = user.role === "admin"
-        ? db.prepare(`SELECT ${projectColumns} FROM forge_projects p WHERE p.id = ?`).get(projectId)
-        : db.prepare(`SELECT ${projectColumns} FROM forge_projects p JOIN forge_memberships m ON m.company_id = p.company_id WHERE p.id = ? AND m.user_id = ?`).get(projectId, actorUserId);
+        ? db.prepare(`SELECT ${projectColumns} FROM suplex_projects p WHERE p.id = ?`).get(projectId)
+        : db.prepare(`SELECT ${projectColumns} FROM suplex_projects p JOIN suplex_memberships m ON m.company_id = p.company_id WHERE p.id = ? AND m.user_id = ?`).get(projectId, actorUserId);
       return result as ProjectRow | undefined;
     });
     if (!row) throw new ProjectFailure("Not found", [], 404);
@@ -412,7 +412,7 @@ export class ProjectService {
   }
 
   getProjectInCompany(companyId: string, projectId: string): Project {
-    const row = this.database.authQuery(db => db.prepare(`SELECT ${projectColumns} FROM forge_projects p WHERE p.id = ? AND p.company_id = ?`).get(projectId, companyId) as ProjectRow | undefined);
+    const row = this.database.authQuery(db => db.prepare(`SELECT ${projectColumns} FROM suplex_projects p WHERE p.id = ? AND p.company_id = ?`).get(projectId, companyId) as ProjectRow | undefined);
     if (!row) throw new ProjectFailure("Not found", [], 404);
     return publicProject(row);
   }
@@ -438,8 +438,8 @@ export class ProjectService {
       const user = this.user(actorUserId);
       if (companyId) this.auth.requireCompanyAccess(actorUserId, companyId);
       const query = user.role === "admin"
-        ? companyId ? db.prepare(`SELECT ${projectColumns} FROM forge_projects p WHERE p.company_id = ? ORDER BY p.name`) : db.prepare(`SELECT ${projectColumns} FROM forge_projects p ORDER BY p.name`)
-        : companyId ? db.prepare(`SELECT ${projectColumns} FROM forge_projects p JOIN forge_memberships m ON m.company_id = p.company_id WHERE m.user_id = ? AND p.company_id = ? ORDER BY p.name`) : db.prepare(`SELECT ${projectColumns} FROM forge_projects p JOIN forge_memberships m ON m.company_id = p.company_id WHERE m.user_id = ? ORDER BY p.name`);
+        ? companyId ? db.prepare(`SELECT ${projectColumns} FROM suplex_projects p WHERE p.company_id = ? ORDER BY p.name`) : db.prepare(`SELECT ${projectColumns} FROM suplex_projects p ORDER BY p.name`)
+        : companyId ? db.prepare(`SELECT ${projectColumns} FROM suplex_projects p JOIN suplex_memberships m ON m.company_id = p.company_id WHERE m.user_id = ? AND p.company_id = ? ORDER BY p.name`) : db.prepare(`SELECT ${projectColumns} FROM suplex_projects p JOIN suplex_memberships m ON m.company_id = p.company_id WHERE m.user_id = ? ORDER BY p.name`);
       const result = companyId ? user.role === "admin" ? query.all(companyId) : query.all(actorUserId, companyId) : user.role === "admin" ? query.all() : query.all(actorUserId);
       return result as ProjectRow[];
     });
@@ -502,7 +502,7 @@ export class ProjectService {
       const currentCompany = this.auth.requireCompanyAccess(actorUserId, companyId);
       if (currentCompany.status !== "active") throw new ProjectFailure("Company is not active", [], 409);
       for (const [role, profileId] of [["root", normalized.rootProfileId], ["worker", normalized.workerProfileId]] as const) {
-        if (!db.prepare("SELECT 1 FROM forge_profiles WHERE id = ? AND role = ? AND archived_at IS NULL").get(profileId, role)) {
+        if (!db.prepare("SELECT 1 FROM suplex_profiles WHERE id = ? AND role = ? AND archived_at IS NULL").get(profileId, role)) {
           throw new ProjectFailure("Project configuration is invalid", [finding("profile-ineligible", `${role}ProfileId`, "Select an active profile with the matching role")], 422);
         }
       }
@@ -515,7 +515,7 @@ export class ProjectService {
       const providerPolicy = input.providerPolicy === undefined ? stored?.provider_policy_json ?? null : input.providerPolicy === null ? null : JSON.stringify(ProjectProviderPolicySchema.parse(input.providerPolicy));
       if (providerPolicy) {
         for (const instanceId of ProjectProviderPolicySchema.parse(JSON.parse(providerPolicy)).allowedInstanceIds) {
-          if (!db.prepare("SELECT 1 FROM forge_provider_instances WHERE id = ?").get(instanceId)) throw new ProjectFailure("Project configuration is invalid", [finding("instance-ineligible", "providerPolicy", "Select an existing provider login")], 422);
+          if (!db.prepare("SELECT 1 FROM suplex_provider_instances WHERE id = ?").get(instanceId)) throw new ProjectFailure("Project configuration is invalid", [finding("instance-ineligible", "providerPolicy", "Select an existing provider login")], 422);
         }
       }
       const storedPolicy = stored ? readAgentTaskPolicy(stored.agent_task_policy_json, defaultPolicy) : undefined;
@@ -525,17 +525,17 @@ export class ProjectService {
       if (updating) {
         const existing = this.rowForProject(db, id);
         if (!existing || existing.company_id !== companyId) throw new ProjectFailure("Not found", [], 404);
-        db.prepare("UPDATE forge_projects SET name = ?, repository_path = ?, worktree_root = ?, repository_identity = ?, base_branch = ?, setup_command = ?, verification_command = ?, root_profile_id = ?, worker_profile_id = ?, agent_task_policy_json = ?, updated_at = ? WHERE id = ?").run(normalized.name, normalized.repositoryPath, normalized.worktreeRoot, normalized.repository, normalized.baseBranch, normalized.setupCommand, normalized.verificationCommand, normalized.rootProfileId, normalized.workerProfileId, JSON.stringify(policy), now, id);
+        db.prepare("UPDATE suplex_projects SET name = ?, repository_path = ?, worktree_root = ?, repository_identity = ?, base_branch = ?, setup_command = ?, verification_command = ?, root_profile_id = ?, worker_profile_id = ?, agent_task_policy_json = ?, updated_at = ? WHERE id = ?").run(normalized.name, normalized.repositoryPath, normalized.worktreeRoot, normalized.repository, normalized.baseBranch, normalized.setupCommand, normalized.verificationCommand, normalized.rootProfileId, normalized.workerProfileId, JSON.stringify(policy), now, id);
       } else {
-        db.prepare("INSERT INTO forge_projects (id, company_id, name, repository_path, worktree_root, repository_identity, base_branch, setup_command, verification_command, root_profile_id, worker_profile_id, agent_task_policy_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(id, companyId, normalized.name, normalized.repositoryPath, normalized.worktreeRoot, normalized.repository, normalized.baseBranch, normalized.setupCommand, normalized.verificationCommand, normalized.rootProfileId, normalized.workerProfileId, JSON.stringify(policy), now, now);
+        db.prepare("INSERT INTO suplex_projects (id, company_id, name, repository_path, worktree_root, repository_identity, base_branch, setup_command, verification_command, root_profile_id, worker_profile_id, agent_task_policy_json, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)").run(id, companyId, normalized.name, normalized.repositoryPath, normalized.worktreeRoot, normalized.repository, normalized.baseBranch, normalized.setupCommand, normalized.verificationCommand, normalized.rootProfileId, normalized.workerProfileId, JSON.stringify(policy), now, now);
       }
-      db.prepare("UPDATE forge_projects SET integration_json = ?, execution_json = ? WHERE id = ?").run(input.integration === undefined ? stored?.integration_json ?? null : JSON.stringify(normalized.integration), input.execution === undefined ? stored?.execution_json ?? null : JSON.stringify(normalized.execution), id);
+      db.prepare("UPDATE suplex_projects SET integration_json = ?, execution_json = ? WHERE id = ?").run(input.integration === undefined ? stored?.integration_json ?? null : JSON.stringify(normalized.integration), input.execution === undefined ? stored?.execution_json ?? null : JSON.stringify(normalized.execution), id);
       this.auth.recordAuditEventInTransaction(db, actorUserId, updating ? "project_updated" : "project_created", undefined, companyId, { projectId: id });
-      db.prepare("UPDATE forge_projects SET provider_policy_json = ? WHERE id = ?").run(providerPolicy, id);
+      db.prepare("UPDATE suplex_projects SET provider_policy_json = ? WHERE id = ?").run(providerPolicy, id);
       return { id };
       });
     } catch (error) {
-      if (error instanceof Error && (error.message.includes("forge_projects.") || error.message.includes("forge_projects_repository_identity_unique"))) {
+      if (error instanceof Error && (error.message.includes("suplex_projects.") || error.message.includes("suplex_projects_repository_identity_unique"))) {
         const field = error.message.includes("repository_path") ? "repositoryPath" : error.message.includes("worktree_root") ? "worktreeRoot" : error.message.includes("repository_identity") ? "repository" : error.message.includes("company_id") && error.message.includes("name") ? "name" : undefined;
         if (!field) throw error;
         throw new ProjectFailure("Project configuration is invalid", [finding("already-assigned", field, "This coordinate is already assigned to another project")], 409);
@@ -600,7 +600,7 @@ export class ProjectService {
       ["worker", workerProfileId],
     ] as const;
     const resolvedProfiles = selectedProfiles.map(([role, profileId]) => {
-      const profile = projectProfileSchema.safeParse(db.prepare("SELECT provider, provider_instance_id AS providerInstanceId FROM forge_profiles WHERE id = ? AND role = ? AND archived_at IS NULL").get(profileId, role));
+      const profile = projectProfileSchema.safeParse(db.prepare("SELECT provider, provider_instance_id AS providerInstanceId FROM suplex_profiles WHERE id = ? AND role = ? AND archived_at IS NULL").get(profileId, role));
       if (!profile.success) throw new ProjectFailure("Project configuration is invalid", [finding("profile-ineligible", `${role}ProfileId`, "Select an active profile with the matching role")], 422);
       return { role, profileId, profile: profile.data };
     });
@@ -609,7 +609,7 @@ export class ProjectService {
       : stored.provider_policy_json ? ProjectProviderPolicySchema.parse(JSON.parse(stored.provider_policy_json)) : null;
     if (providerPolicy) {
       for (const instanceId of providerPolicy.allowedInstanceIds) {
-        if (!db.prepare("SELECT 1 FROM forge_provider_instances WHERE id = ?").get(instanceId)) throw new ProjectFailure("Project configuration is invalid", [finding("instance-ineligible", "providerPolicy", "Select an existing provider login")], 422);
+        if (!db.prepare("SELECT 1 FROM suplex_provider_instances WHERE id = ?").get(instanceId)) throw new ProjectFailure("Project configuration is invalid", [finding("instance-ineligible", "providerPolicy", "Select an existing provider login")], 422);
       }
       for (const selected of resolvedProfiles) {
         if (!isProfileAllowed(providerPolicy, selected.profile)) throw new ProjectFailure("Project configuration is invalid", [finding("profile-provider-ineligible", `${selected.role}ProfileId`, "Select an agent with a provider and login allowed by this project")], 422);
@@ -627,22 +627,22 @@ export class ProjectService {
       workerProfileIds: withProfile(storedPolicy.workerProfileIds, workerProfileId),
     });
     if (input.agentTaskPolicy) this.validateAgentTaskPolicy(db, policy, projectId);
-    if (input.rootProfileId !== undefined) db.prepare("UPDATE forge_projects SET root_profile_id = ? WHERE id = ?").run(rootProfileId, projectId);
-    if (input.workerProfileId !== undefined) db.prepare("UPDATE forge_projects SET worker_profile_id = ? WHERE id = ?").run(workerProfileId, projectId);
-    if (input.agentTaskPolicy !== undefined || input.rootProfileId !== undefined || input.workerProfileId !== undefined) db.prepare("UPDATE forge_projects SET agent_task_policy_json = ? WHERE id = ?").run(JSON.stringify(policy), projectId);
-    if (input.providerPolicy !== undefined) db.prepare("UPDATE forge_projects SET provider_policy_json = ? WHERE id = ?").run(providerPolicy === null ? null : JSON.stringify(ProjectProviderPolicySchema.parse(providerPolicy)), projectId);
+    if (input.rootProfileId !== undefined) db.prepare("UPDATE suplex_projects SET root_profile_id = ? WHERE id = ?").run(rootProfileId, projectId);
+    if (input.workerProfileId !== undefined) db.prepare("UPDATE suplex_projects SET worker_profile_id = ? WHERE id = ?").run(workerProfileId, projectId);
+    if (input.agentTaskPolicy !== undefined || input.rootProfileId !== undefined || input.workerProfileId !== undefined) db.prepare("UPDATE suplex_projects SET agent_task_policy_json = ? WHERE id = ?").run(JSON.stringify(policy), projectId);
+    if (input.providerPolicy !== undefined) db.prepare("UPDATE suplex_projects SET provider_policy_json = ? WHERE id = ?").run(providerPolicy === null ? null : JSON.stringify(ProjectProviderPolicySchema.parse(providerPolicy)), projectId);
   }
 
   private rowForProject(db: Database, projectId: string): ProjectRow | undefined {
-    return db.prepare(`SELECT ${projectColumns} FROM forge_projects p WHERE p.id = ?`).get(projectId) as ProjectRow | undefined;
+    return db.prepare(`SELECT ${projectColumns} FROM suplex_projects p WHERE p.id = ?`).get(projectId) as ProjectRow | undefined;
   }
 
   private validateAgentTaskPolicy(db: Database, policy: ProjectAgentTaskPolicy, projectId: string): void {
-    for (const workflowId of policy.workflowIds) if (!db.prepare("SELECT 1 FROM forge_workflows WHERE id = ? AND archived_at IS NULL").get(workflowId)) throw new ProjectFailure("Project configuration is invalid", [finding("workflow-ineligible", "agentTaskPolicy.workflowIds", "Select active workflows")], 422);
+    for (const workflowId of policy.workflowIds) if (!db.prepare("SELECT 1 FROM suplex_workflows WHERE id = ? AND archived_at IS NULL").get(workflowId)) throw new ProjectFailure("Project configuration is invalid", [finding("workflow-ineligible", "agentTaskPolicy.workflowIds", "Select active workflows")], 422);
     if (!policy.workflowIds.includes(policy.defaultWorkflowId)) throw new ProjectFailure("Project configuration is invalid", [finding("workflow-default-ineligible", "agentTaskPolicy.defaultWorkflowId", "Select one allowed workflow as the default")], 422);
-    for (const templateId of policy.templateIds) if (!db.prepare("SELECT 1 FROM forge_task_templates WHERE id = ? AND project_id = ?").get(templateId, projectId)) throw new ProjectFailure("Project configuration is invalid", [finding("template-ineligible", "agentTaskPolicy.templateIds", "Select templates that belong to this project")], 422);
-    for (const [role, ids] of [["root", policy.rootProfileIds], ["worker", policy.workerProfileIds]] as const) for (const profileId of ids) if (!db.prepare("SELECT 1 FROM forge_profiles WHERE id = ? AND role = ? AND archived_at IS NULL").get(profileId, role)) throw new ProjectFailure("Project configuration is invalid", [finding("profile-ineligible", "agentTaskPolicy", "Select active profiles with matching roles")], 422);
-    for (const ids of Object.values(policy.advisorProfileIds)) for (const profileId of ids) if (!db.prepare("SELECT 1 FROM forge_profiles WHERE id = ? AND role = 'root' AND archived_at IS NULL").get(profileId)) throw new ProjectFailure("Project configuration is invalid", [finding("profile-ineligible", "agentTaskPolicy", "Select active Advisor profiles")], 422);
+    for (const templateId of policy.templateIds) if (!db.prepare("SELECT 1 FROM suplex_task_templates WHERE id = ? AND project_id = ?").get(templateId, projectId)) throw new ProjectFailure("Project configuration is invalid", [finding("template-ineligible", "agentTaskPolicy.templateIds", "Select templates that belong to this project")], 422);
+    for (const [role, ids] of [["root", policy.rootProfileIds], ["worker", policy.workerProfileIds]] as const) for (const profileId of ids) if (!db.prepare("SELECT 1 FROM suplex_profiles WHERE id = ? AND role = ? AND archived_at IS NULL").get(profileId, role)) throw new ProjectFailure("Project configuration is invalid", [finding("profile-ineligible", "agentTaskPolicy", "Select active profiles with matching roles")], 422);
+    for (const ids of Object.values(policy.advisorProfileIds)) for (const profileId of ids) if (!db.prepare("SELECT 1 FROM suplex_profiles WHERE id = ? AND role = 'root' AND archived_at IS NULL").get(profileId)) throw new ProjectFailure("Project configuration is invalid", [finding("profile-ineligible", "agentTaskPolicy", "Select active Advisor profiles")], 422);
   }
 
   private user(userId: string): AuthUser {

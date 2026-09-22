@@ -78,7 +78,7 @@ export function resolveBoot(input: { readonly record: InstallRecord | null; read
 }
 
 export function runtimeRoot(environment: NodeJS.ProcessEnv, resourcesPath: string): string {
-  return environment.FORGE_DESKTOP_RUNTIME_ROOT ?? join(resourcesPath, "runtime");
+  return environment.SUPLEX_DESKTOP_RUNTIME_ROOT ?? join(resourcesPath, "runtime");
 }
 
 export function runtimePaths(root: string): { readonly node: string; readonly app: string; readonly cli: string; readonly supervisor: string } {
@@ -119,14 +119,14 @@ export async function writeInstallRecord(file: string, record: InstallRecord): P
 export function runtimeEnvironment(input: { readonly userData: string; readonly port: number; readonly base: NodeJS.ProcessEnv }): Record<string, string> {
   const home = input.base.HOME ?? homedir();
   return {
-    FORGE_PACKAGED: "1",
-    FORGE_ACCESS_MODE: "local",
-    FORGE_BIND_ADDRESS: "127.0.0.1",
-    FORGE_PORT: String(input.port),
-    FORGE_DATA_ROOT: join(input.userData, "data"),
-    FORGE_ENV_FILE: join(input.userData, "forge.env"),
-    FORGE_REPOSITORY_ROOT: join(home, "forge", "repos"),
-    FORGE_WORKTREE_ROOT: join(home, "forge", "worktrees"),
+    SUPLEX_PACKAGED: "1",
+    SUPLEX_ACCESS_MODE: "local",
+    SUPLEX_BIND_ADDRESS: "127.0.0.1",
+    SUPLEX_PORT: String(input.port),
+    SUPLEX_DATA_ROOT: join(input.userData, "data"),
+    SUPLEX_ENV_FILE: join(input.userData, "suplex.env"),
+    SUPLEX_REPOSITORY_ROOT: join(home, "suplex", "repos"),
+    SUPLEX_WORKTREE_ROOT: join(home, "suplex", "worktrees"),
     HOME: home,
     USER: input.base.USER ?? "",
     TMPDIR: input.base.TMPDIR ?? tmpdir(),

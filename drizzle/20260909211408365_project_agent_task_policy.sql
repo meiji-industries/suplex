@@ -1,7 +1,7 @@
 -- Write migration SQL here.
-ALTER TABLE forge_projects ADD COLUMN agent_task_policy_json text NOT NULL DEFAULT '{}';
+ALTER TABLE suplex_projects ADD COLUMN agent_task_policy_json text NOT NULL DEFAULT '{}';
 --> statement-breakpoint
-UPDATE forge_projects
+UPDATE suplex_projects
 SET agent_task_policy_json = json_object(
   'workflowIds', json_array('workflow_native_standard'),
   'templateIds', json_array(),

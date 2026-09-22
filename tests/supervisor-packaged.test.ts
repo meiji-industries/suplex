@@ -1,10 +1,10 @@
 import { tmpdir } from "node:os";
 import { expect, test } from "vitest";
 
-import { ForgeSupervisor } from "../src/platform/updates/supervisor.js";
+import { SuplexSupervisor } from "../src/platform/updates/supervisor.js";
 
 test("a packaged supervisor reports that updates come with the desktop app instead of running git or pnpm", async () => {
-  const supervisor = new ForgeSupervisor(tmpdir(), false, true);
+  const supervisor = new SuplexSupervisor(tmpdir(), false, true);
 
   await supervisor.check();
   expect(supervisor.snapshot()).toEqual({
@@ -12,7 +12,7 @@ test("a packaged supervisor reports that updates come with the desktop app inste
       kind: "failed",
       action: "check",
       message: "Updates come with the desktop app.",
-      error: "This Forge ships inside Forge.app; install the new app to update it.",
+      error: "This Suplex ships inside Suplex.app; install the new app to update it.",
     },
     canRestart: true,
   });

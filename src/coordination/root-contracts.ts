@@ -58,8 +58,8 @@ const WorkerAssignmentShape = z.object({
   purpose: z.enum(["implementation", "verification"]).optional().describe("verification runs the specified checks on the pinned revision without intentional source edits."),
   advisorTurnId: opaqueId.optional().describe("Pull request repair: the exact latest valid current-range Rater report turn that the Worker implements."),
   candidateTurnIds: z.tuple([opaqueId, opaqueId]).optional().describe("Combined planning: the exact Plan A and Plan B report turns, in that order, that the combined plan resolves."),
-  advisorSessionId: opaqueId.optional().describe("Legacy form of advisorTurnId. Forge resolves the latest valid report turn in this session."),
-  candidateSessionIds: z.tuple([opaqueId, opaqueId]).optional().describe("Legacy form of candidateTurnIds. Forge resolves the latest valid report turn in each session."),
+  advisorSessionId: opaqueId.optional().describe("Legacy form of advisorTurnId. Suplex resolves the latest valid report turn in this session."),
+  candidateSessionIds: z.tuple([opaqueId, opaqueId]).optional().describe("Legacy form of candidateTurnIds. Suplex resolves the latest valid report turn in each session."),
 }).strict();
 const plannedNeedsPlan = (assignment: { mode?: "planned" | "direct" | undefined; plan?: string | undefined }) => assignment.mode === "direct" || (assignment.plan?.length ?? 0) > 0;
 export const WorkerAssignmentSchema = WorkerAssignmentShape.refine(plannedNeedsPlan, "A planned assignment requires the Coordinator's plan");
@@ -67,7 +67,7 @@ export type WorkerAssignment = z.infer<typeof WorkerAssignmentSchema>;
 
 export const AdvisorRequestSchema = z.object({
   role: AdvisorRoleSchema,
-  brief: z.string().trim().min(1).max(20_000).optional().describe("Reviewer only: Coordinator's plan and acceptance criteria. Forge composes every other Advisor input."), // bound: 20,000 characters keeps the brief inside one native prompt
+  brief: z.string().trim().min(1).max(20_000).optional().describe("Reviewer only: Coordinator's plan and acceptance criteria. Suplex composes every other Advisor input."), // bound: 20,000 characters keeps the brief inside one native prompt
 }).strict();
 export type AdvisorRequest = z.infer<typeof AdvisorRequestSchema>;
 

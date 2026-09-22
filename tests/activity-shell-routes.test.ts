@@ -1,6 +1,6 @@
 /**
  * @vitest-environment jsdom
- * @vitest-environment-options { "url": "https://forge.test/tasks?company=company-a" }
+ * @vitest-environment-options { "url": "https://suplex.test/tasks?company=company-a" }
  */
 import { act, createElement, useEffect, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
@@ -109,7 +109,7 @@ function task(id: string, title: string): TaskRow {
   return { id, title, status: "backlog", queue: { waitingOn: [] }, statusChangedAt: "2026-09-09T00:00:00.000Z", pullRequest: null, archivedAt: null, blockedBy: [] };
 }
 
-function navigate(path: string, event = "forge:navigate"): void {
+function navigate(path: string, event = "suplex:navigate"): void {
   window.history.pushState({}, "", path);
   window.dispatchEvent(new Event(event));
 }
@@ -130,7 +130,7 @@ describe("Activity shell lifecycle", () => {
     state.viewMounts = [];
     state.readTaskList.mockReset();
     window.history.replaceState({}, "", "/tasks?company=company-a");
-    Object.assign(window, { __FORGE_VIEW__: undefined, __FORGE_HEALTH__: undefined });
+    Object.assign(window, { __SUPLEX_VIEW__: undefined, __SUPLEX_HEALTH__: undefined });
     container = document.createElement("div");
     document.body.append(container);
     root = createRoot(container);

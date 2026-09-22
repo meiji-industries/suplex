@@ -1,5 +1,5 @@
 import { z } from "zod";
-import type { ForgeDatabase } from "../platform/database.js";
+import type { SuplexDatabase } from "../platform/database.js";
 import { DeliveryIntentSchema, PullRequestReferenceSchema } from "../tasks/control.js";
 import { createGithubReleasePort } from "../integrations/github/delivery.js";
 import type { GithubReleaseAdapter } from "../integrations/github/delivery.js";
@@ -17,7 +17,7 @@ type Github = Required<Pick<GithubReleaseAdapter, "getPullRequestStates">>;
 export class CompletedPullRequests {
   private running: Promise<void> | undefined;
 
-  constructor(private readonly database: ForgeDatabase, private readonly github: Github = createGithubReleasePort(), private readonly bitbucket: (connection: Extract<RepositoryConnection, { kind: "bitbucket" }>) => Github = createBitbucketReleasePort) {}
+  constructor(private readonly database: SuplexDatabase, private readonly github: Github = createGithubReleasePort(), private readonly bitbucket: (connection: Extract<RepositoryConnection, { kind: "bitbucket" }>) => Github = createBitbucketReleasePort) {}
 
   refresh(): Promise<void> {
     if (this.running) return this.running;
@@ -29,7 +29,7 @@ export class CompletedPullRequests {
     const candidates = this.database.authQuery(db => z.array(Candidate).parse(db.prepare(`
       SELECT c.task_id AS taskId, c.pull_request_json AS pullJson, c.delivery_intent_json AS intentJson,
         json_extract(t.configuration_json, '$.integration.repository') AS connectionJson
-      FROM forge_task_controls c JOIN forge_tasks t ON t.id = c.task_id
+      FROM suplex_task_controls c JOIN suplex_tasks t ON t.id = c.task_id
       WHERE c.status = 'delivered' AND t.archived_at IS NULL
         AND (json_extract(c.pull_request_json, '$.state') != 'merged'
           OR (c.pull_request_json IS NULL AND json_extract(c.delivery_intent_json, '$.pullRequestNumber') IS NOT NULL))
@@ -51,9 +51,9 @@ export class CompletedPullRequests {
     const observed = await provider.getPullRequestStates(candidates.flatMap(candidate => candidate.number === null ? [] : [{ repository: candidate.repository, number: candidate.number }]));
     const byIdentity = new Map(observed.map(pull => [`${pull.repository.toLowerCase()}#${pull.number}`, pull]));
     this.database.authImmediateTransaction(db => {
-      const update = db.prepare(`UPDATE forge_task_controls SET pull_request_json = ?, updated_at = ?
+      const update = db.prepare(`UPDATE suplex_task_controls SET pull_request_json = ?, updated_at = ?
         WHERE task_id = ? AND status = 'delivered' AND pull_request_json IS ?
-          AND EXISTS (SELECT 1 FROM forge_tasks WHERE id = task_id AND archived_at IS NULL)`);
+          AND EXISTS (SELECT 1 FROM suplex_tasks WHERE id = task_id AND archived_at IS NULL)`);
       for (const candidate of candidates) {
         const pull = byIdentity.get(`${candidate.repository.toLowerCase()}#${candidate.number}`);
         if (!pull || JSON.stringify(pull) === JSON.stringify(candidate.pull)) continue;

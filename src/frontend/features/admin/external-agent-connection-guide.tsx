@@ -32,10 +32,10 @@ export function ExternalAgentConnectionGuide(): ReactElement {
           Connect an external client
         </h2>
         <p className="text-xs text-muted-foreground">
-          Connect Claude Code to Forge with OAuth. Forge asks you to approve the company and projects.
+          Connect Claude Code to Suplex with OAuth. Suplex asks you to approve the company and projects.
         </p>
       </div>
-      {mcpUrl ? <CodeBlock>{`claude mcp add --transport http forge ${mcpUrl}\nclaude mcp login forge`}</CodeBlock> : <p className="text-xs text-muted-foreground">Forge is reading the canonical MCP address.</p>}
+      {mcpUrl ? <CodeBlock>{`claude mcp add --transport http suplex ${mcpUrl}\nclaude mcp login suplex`}</CodeBlock> : <p className="text-xs text-muted-foreground">Suplex is reading the canonical MCP address.</p>}
       <p className="text-xs text-muted-foreground">
         You can also run <code>/mcp</code> in Claude Code and select <code>Authenticate</code>.
       </p>
@@ -44,7 +44,7 @@ export function ExternalAgentConnectionGuide(): ReactElement {
           <AccordionTrigger>Remote MCP clients</AccordionTrigger>
           <AccordionContent>
             <p>Use <code>{mcpUrl}</code> in clients that support Streamable HTTP and OAuth. Remote web clients need reachable HTTPS.</p>
-            <p>Forge has not tested the ChatGPT or Claude web setup in this release.</p>
+            <p>Suplex has not tested the ChatGPT or Claude web setup in this release.</p>
             <a href="https://modelcontextprotocol.io/specification/latest/basic/authorization" target="_blank" rel="noreferrer">Open the MCP authorization specification</a>
           </AccordionContent>
         </AccordionItem>
@@ -52,10 +52,10 @@ export function ExternalAgentConnectionGuide(): ReactElement {
           <AccordionTrigger>Advanced API and stdio setup</AccordionTrigger>
           <AccordionContent>
             <p>Create an external agent to use the HTTP API or the local stdio bridge. Exchange its pairing code once.</p>
-            <CodeBlock>{`FORGE_BASE_URL=${baseUrl}\nFORGE_AGENT_CREDENTIAL=<returned credential>`}</CodeBlock>
+            <CodeBlock>{`SUPLEX_BASE_URL=${baseUrl}\nSUPLEX_AGENT_CREDENTIAL=<returned credential>`}</CodeBlock>
             <p>Store the credential privately. Never paste it into chat, logs, shell history, or source control.</p>
-            <CodeBlock>{`[mcp_servers.forge]\ncommand = "forge"\nargs = ["mcp"]\nenv_vars = ["FORGE_BASE_URL", "FORGE_AGENT_CREDENTIAL"]`}</CodeBlock>
-            <p><a href="/.well-known/forge/api-catalog.json">Open the public API catalog</a></p>
+            <CodeBlock>{`[mcp_servers.suplex]\ncommand = "suplex"\nargs = ["mcp"]\nenv_vars = ["SUPLEX_BASE_URL", "SUPLEX_AGENT_CREDENTIAL"]`}</CodeBlock>
+            <p><a href="/.well-known/suplex/api-catalog.json">Open the public API catalog</a></p>
           </AccordionContent>
         </AccordionItem>
       </Accordion>

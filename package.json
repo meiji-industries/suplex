@@ -1,11 +1,11 @@
 {
-  "name": "forge",
+  "name": "suplex",
   "version": "0.1.2",
   "private": true,
   "type": "module",
   "packageManager": "pnpm@11.22.0",
   "bin": {
-    "forge": "dist/src/cli.js"
+    "suplex": "dist/src/cli.js"
   },
   "files": [
     "dist",
@@ -19,7 +19,7 @@
     "node": "26.7.0"
   },
   "scripts": {
-    "forge": "tsx src/cli.ts",
+    "suplex": "tsx src/cli.ts",
     "build": "tsc && vite build",
     "dev": "tsx src/cli.ts start --foreground",
     "migration:new": "tsx scripts/create-migration.ts",
@@ -36,12 +36,12 @@
     "test:browser": "pnpm run build && vitest run --config vitest.browser.config.ts",
     "verify": "pnpm run check:full",
     "test:all": "pnpm run check:full",
-    "desktop:dev": "pnpm --filter forge-desktop dev",
-    "desktop:dist": "pnpm --filter forge-desktop dist",
-    "desktop:build": "pnpm --filter forge-desktop build",
-    "desktop:typecheck": "pnpm --filter forge-desktop typecheck",
+    "desktop:dev": "pnpm --filter suplex-desktop dev",
+    "desktop:dist": "pnpm --filter suplex-desktop dist",
+    "desktop:build": "pnpm --filter suplex-desktop build",
+    "desktop:typecheck": "pnpm --filter suplex-desktop typecheck",
     "desktop:test": "vitest run --project unit desktop/tests",
-    "desktop:dist:signed": "pnpm --filter forge-desktop dist:signed",
+    "desktop:dist:signed": "pnpm --filter suplex-desktop dist:signed",
     "desktop:publish": "bash scripts/publish-desktop-release.sh"
   },
   "dependencies": {

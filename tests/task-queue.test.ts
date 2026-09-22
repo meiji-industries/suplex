@@ -19,7 +19,7 @@ async function create(f: Fixture, title: string, input: Partial<TaskInput> = {})
 const read = (f: Fixture, id: string) => f.tasks.getTask(f.userId, id);
 const work = (f: Fixture, id: string) => ({ sessions: f.tasks.repository.controls.sessions(id).length, turns: f.tasks.repository.controls.turns(id).length });
 const pull = (number: number, state: "open" | "merged") => ({ repository: "owner/repo", number, url: `https://github.com/owner/repo/pull/${number}`, headSha: "b".repeat(40), state, mergedAt: state === "merged" ? "2026-09-18T12:00:00.000Z" : null });
-/** What GitHub reports and Forge records when a merged-target task completes: the merged pull request, then delivery. */
+/** What GitHub reports and Suplex records when a merged-target task completes: the merged pull request, then delivery. */
 function merge(f: Fixture, id: string, number: number): void {
   f.tasks.repository.controls.setPullRequest(id, pull(number, "merged"));
   f.tasks.repository.controls.markDelivered(id);
@@ -64,7 +64,7 @@ test("the queue intent survives restart, and the startup sweep starts an eligibl
     const a = await create(f, "Restart A", { startImmediately: true });
     const b = await create(f, "Restart B", { startImmediately: true, dependsOn: [a.id] });
     // The prerequisite completed, but the process stopped before any wake reached its dependent.
-    f.database.authTransaction(db => db.prepare("UPDATE forge_task_controls SET status = 'delivered' WHERE task_id = ?").run(a.id));
+    f.database.authTransaction(db => db.prepare("UPDATE suplex_task_controls SET status = 'delivered' WHERE task_id = ?").run(a.id));
     expect(read(f, b.id)).toMatchObject({ status: "queued", queue: { waitingOn: [] } });
     expect(work(f, b.id)).toEqual({ sessions: 0, turns: 0 });
 
@@ -141,14 +141,14 @@ test("every blocker must complete, dependency edits re-evaluate, and only observ
     f.tasks.repository.controls.setPullRequest(merged.id, pull(201, "open"));
     f.tasks.repository.controls.markDelivered(merged.id);
     const dependent = await create(f, "After merge", { startImmediately: true, dependsOn: [merged.id] });
-    expect(dependent.queue.waitingOn).toEqual([expect.objectContaining({ id: merged.id, status: "delivered", reason: "prerequisite_merge_unobserved", summary: expect.stringContaining("Forge checks GitHub again") })]);
+    expect(dependent.queue.waitingOn).toEqual([expect.objectContaining({ id: merged.id, status: "delivered", reason: "prerequisite_merge_unobserved", summary: expect.stringContaining("Suplex checks GitHub again") })]);
 
     // Unknown external state retries; it never releases the dependent.
     await expect(new CompletedPullRequests(f.database, { getPullRequestStates: async () => { throw new Error("GitHub is unavailable"); } }).refresh()).rejects.toThrow("GitHub is unavailable");
     expect(f.tasks.repository.controls.admitQueued()).toEqual([]);
     expect(read(f, dependent.id).status).toBe("queued");
 
-    // A merge made outside Forge releases the dependent once Forge observes it.
+    // A merge made outside Suplex releases the dependent once Suplex observes it.
     await new CompletedPullRequests(f.database, { getPullRequestStates: async () => [pull(201, "merged")] }).refresh();
     expect(f.tasks.repository.controls.admitQueued()).toEqual([dependent.id]);
     expect(read(f, dependent.id).status).toBe("active");
@@ -223,7 +223,7 @@ test("HTTP, the paired-agent API, OpenAPI, and the UI report the same queue stat
     // The UI renders the same state and the prerequisite link, id, and reason.
     expect(taskStatusLabel(http)).toBe("Queued");
     expect(renderToStaticMarkup(createElement(TaskStatus, { status: http.status }))).toContain("Queued");
-    expect(backlogText(http)).toContain("Forge starts");
+    expect(backlogText(http)).toContain("Suplex starts");
     const waits = renderToStaticMarkup(createElement(TaskQueueWaits, { task: http }));
     expect(waits).toContain(`data-task-queue-wait="${prerequisite.id}"`);
     expect(waits).toContain(`data-reason="prerequisite_not_started"`);
@@ -246,10 +246,10 @@ test("HTTP, the paired-agent API, OpenAPI, and the UI report the same queue stat
       queue: { startIntent: "queued", state: "queued", waitingOn: requeued.json().queue.waitingOn.map((wait: { status: string }) => ({ ...wait, queued: wait.status === "queued" })) },
       blockedBy: requeued.json().blockedBy.map((blocker: { status: string }) => ({ ...blocker, queued: blocker.status === "queued" })),
     };
-    const receiptHash = f.database.authQuery(db => (db.prepare("SELECT request_hash FROM forge_hermes_task_command_receipts WHERE task_id = ? AND idempotency_key = ?").get(created.id, "agent-requeue") as { request_hash: string }).request_hash);
-    f.database.authTransaction(db => db.prepare("UPDATE forge_hermes_task_command_receipts SET result_json = ? WHERE task_id = ? AND idempotency_key = ?").run(JSON.stringify(previousReceipt), created.id, "agent-requeue"));
+    const receiptHash = f.database.authQuery(db => (db.prepare("SELECT request_hash FROM suplex_hermes_task_command_receipts WHERE task_id = ? AND idempotency_key = ?").get(created.id, "agent-requeue") as { request_hash: string }).request_hash);
+    f.database.authTransaction(db => db.prepare("UPDATE suplex_hermes_task_command_receipts SET result_json = ? WHERE task_id = ? AND idempotency_key = ?").run(JSON.stringify(previousReceipt), created.id, "agent-requeue"));
     const migration = await readFile(new URL("../drizzle/20260922030041770_canonical_queued_task_status.sql", import.meta.url), "utf8");
-    const receiptUpgrade = migration.split("--> statement-breakpoint").find(statement => statement.includes("UPDATE forge_hermes_task_command_receipts"));
+    const receiptUpgrade = migration.split("--> statement-breakpoint").find(statement => statement.includes("UPDATE suplex_hermes_task_command_receipts"));
     expect(receiptUpgrade).toBeDefined();
     f.database.authTransaction(db => db.exec(receiptUpgrade!));
     const movedBack = await agentApi("POST", `/api/agent/tasks/${created.id}/commands`, { command: "disarm_task", revision: requeued.json().revision, idempotencyKey: "agent-disarm-again" });
@@ -257,7 +257,7 @@ test("HTTP, the paired-agent API, OpenAPI, and the UI report the same queue stat
     const replayed = await agentApi("POST", `/api/agent/tasks/${created.id}/commands`, { command: "start_task", revision: disarmed.json().revision, idempotencyKey: "agent-requeue" });
     expect(replayed.statusCode, replayed.body).toBe(200);
     expect(replayed.json()).toEqual(requeued.json());
-    expect(f.database.authQuery(db => (db.prepare("SELECT request_hash FROM forge_hermes_task_command_receipts WHERE task_id = ? AND idempotency_key = ?").get(created.id, "agent-requeue") as { request_hash: string }).request_hash)).toBe(receiptHash);
+    expect(f.database.authQuery(db => (db.prepare("SELECT request_hash FROM suplex_hermes_task_command_receipts WHERE task_id = ? AND idempotency_key = ?").get(created.id, "agent-requeue") as { request_hash: string }).request_hash)).toBe(receiptHash);
     expect(read(f, created.id).status).toBe("backlog");
     expect(work(f, created.id)).toEqual({ sessions: 0, turns: 0 });
 
@@ -276,14 +276,14 @@ test("HTTP, the paired-agent API, OpenAPI, and the UI report the same queue stat
 test("the queue migration keeps waiting rows queued and touches no task control", async () => {
   const database = new Database(":memory:");
   try {
-    database.exec(`CREATE TABLE forge_tasks (id TEXT PRIMARY KEY, start_when_blocked_by_delivered INTEGER NOT NULL DEFAULT 0);
-      CREATE TABLE forge_task_controls (task_id TEXT PRIMARY KEY, status TEXT NOT NULL, updated_at TEXT NOT NULL);
-      INSERT INTO forge_tasks VALUES ('waiting', 1), ('manual', 0), ('running', 0);
-      INSERT INTO forge_task_controls VALUES ('waiting', 'backlog', 'before'), ('manual', 'backlog', 'before'), ('running', 'active', 'before');`);
+    database.exec(`CREATE TABLE suplex_tasks (id TEXT PRIMARY KEY, start_when_blocked_by_delivered INTEGER NOT NULL DEFAULT 0);
+      CREATE TABLE suplex_task_controls (task_id TEXT PRIMARY KEY, status TEXT NOT NULL, updated_at TEXT NOT NULL);
+      INSERT INTO suplex_tasks VALUES ('waiting', 1), ('manual', 0), ('running', 0);
+      INSERT INTO suplex_task_controls VALUES ('waiting', 'backlog', 'before'), ('manual', 'backlog', 'before'), ('running', 'active', 'before');`);
     const migration = await readFile(new URL("../drizzle/20260918200123065_task_start_queue.sql", import.meta.url), "utf8");
     for (const statement of migration.split("--> statement-breakpoint").map(value => value.trim()).filter(Boolean)) database.exec(statement);
-    expect(database.prepare("SELECT id, start_queued AS queued FROM forge_tasks ORDER BY id").all()).toEqual([{ id: "manual", queued: 0 }, { id: "running", queued: 0 }, { id: "waiting", queued: 1 }]);
-    expect(database.prepare("SELECT task_id AS id, status, updated_at AS updatedAt FROM forge_task_controls ORDER BY task_id").all()).toEqual([
+    expect(database.prepare("SELECT id, start_queued AS queued FROM suplex_tasks ORDER BY id").all()).toEqual([{ id: "manual", queued: 0 }, { id: "running", queued: 0 }, { id: "waiting", queued: 1 }]);
+    expect(database.prepare("SELECT task_id AS id, status, updated_at AS updatedAt FROM suplex_task_controls ORDER BY task_id").all()).toEqual([
       { id: "manual", status: "backlog", updatedAt: "before" }, { id: "running", status: "active", updatedAt: "before" }, { id: "waiting", status: "backlog", updatedAt: "before" },
     ]);
   } finally { database.close(); }

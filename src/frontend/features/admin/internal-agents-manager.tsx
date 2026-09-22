@@ -58,7 +58,7 @@ export function InternalAgentsManager({ agents, onSaved }: { agents: readonly Ap
       setModels(modelList.models);
       setProviderInstances(instanceList.instances);
     }).catch(reason => {
-      if (!controller.signal.aborted) setError(reason instanceof Error ? reason.message : "Forge cannot load the agent configuration.");
+      if (!controller.signal.aborted) setError(reason instanceof Error ? reason.message : "Suplex cannot load the agent configuration.");
     });
     return () => controller.abort();
   }, []);

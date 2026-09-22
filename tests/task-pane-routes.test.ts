@@ -8,9 +8,9 @@ import type { BridgeEvent } from "../src/integrations/herdr/terminal-bridge.js";
 import { nativeApp } from "./helpers/native-app.js";
 
 test("terminal origin accepts only the request host or configured origin", () => {
-  expect(originAllowed("http://127.0.0.1:4111", "127.0.0.1:4111", "https://forge.example")).toBe(true);
-  expect(originAllowed("https://forge.example", "127.0.0.1:4111", "https://forge.example")).toBe(true);
-  expect(originAllowed("https://evil.example", "127.0.0.1:4111", "https://forge.example")).toBe(false);
+  expect(originAllowed("http://127.0.0.1:4111", "127.0.0.1:4111", "https://suplex.example")).toBe(true);
+  expect(originAllowed("https://suplex.example", "127.0.0.1:4111", "https://suplex.example")).toBe(true);
+  expect(originAllowed("https://evil.example", "127.0.0.1:4111", "https://suplex.example")).toBe(false);
 });
 
 test("terminal observers are independent and close when the pane binding changes", async () => {
@@ -24,7 +24,7 @@ test("terminal observers are independent and close when the pane binding changes
     store.bindPane({ sessionId: root.id, generation: root.generation, paneId: "pane-root" });
     await app.register(websocket);
     const user = value.auth.listUsers(value.userId)[0]!;
-    app.decorateRequest("forgeUser", { getter: () => user });
+    app.decorateRequest("suplexUser", { getter: () => user });
     app.setValidatorCompiler(validatorCompiler);
     const bridges: Array<{ emit: (event: BridgeEvent) => void; input: ReturnType<typeof vi.fn>; resize: ReturnType<typeof vi.fn>; scroll: ReturnType<typeof vi.fn>; release: ReturnType<typeof vi.fn> }> = [];
     await app.register(taskPane, { tasks: value.tasks, config: value.config, openBridge: options => {
@@ -71,7 +71,7 @@ test("terminal observers are independent and close when the pane binding changes
 });
 
 test("shell terminal is writable and forwards input, resize, and scroll to the control bridge", async () => {
-  const shellPane = { paneId: "pane-shell", tokens: { forge_task_id: "", forge_role: "shell", forge_binding_id: "" } };
+  const shellPane = { paneId: "pane-shell", tokens: { suplex_task_id: "", suplex_role: "shell", suplex_binding_id: "" } };
   const herdr = {
     getPane: async (id: string) => id === shellPane.paneId ? shellPane : null,
     getPaneProcessInfo: async () => { throw new Error("unused"); },
@@ -86,12 +86,12 @@ test("shell terminal is writable and forwards input, resize, and scroll to the c
   let client: WebSocket | undefined;
   try {
     const { task } = await value.tasks.createTask(value.userId, value.company.id, { projectId: value.project.id, title: "Shell", description: "Interactive", idempotencyKey: "shell-terminal-test", startImmediately: true });
-    shellPane.tokens.forge_task_id = task.id;
-    shellPane.tokens.forge_binding_id = `${task.id}:shell`;
+    shellPane.tokens.suplex_task_id = task.id;
+    shellPane.tokens.suplex_binding_id = `${task.id}:shell`;
     value.tasks.repository.controls.bindShellPane(task.id, shellPane.paneId);
     await app.register(websocket);
     const user = value.auth.listUsers(value.userId)[0]!;
-    app.decorateRequest("forgeUser", { getter: () => user });
+    app.decorateRequest("suplexUser", { getter: () => user });
     app.setValidatorCompiler(validatorCompiler);
     const bridge = { input: vi.fn(), resize: vi.fn(), scroll: vi.fn(), release: vi.fn() };
     const openBridge = vi.fn((options: { paneId: string; mode?: string; onEvent: (event: BridgeEvent) => void }) => ({ ...bridge, emit: options.onEvent }));
@@ -136,7 +136,7 @@ test("shell terminal closes 4404 when no shell pane exists and 4498 after a take
     const { task } = await value.tasks.createTask(value.userId, value.company.id, { projectId: value.project.id, title: "Shell", description: "Missing pane", idempotencyKey: "shell-missing-test", startImmediately: true });
     await app.register(websocket);
     const user = value.auth.listUsers(value.userId)[0]!;
-    app.decorateRequest("forgeUser", { getter: () => user });
+    app.decorateRequest("suplexUser", { getter: () => user });
     app.setValidatorCompiler(validatorCompiler);
     let emit: ((event: BridgeEvent) => void) | undefined;
     await app.register(taskPane, { tasks: value.tasks, config: value.config, openBridge: (options: { onEvent: (event: BridgeEvent) => void }) => { emit = options.onEvent; return { input: vi.fn(), resize: vi.fn(), scroll: vi.fn(), release: vi.fn() }; } });
@@ -150,7 +150,7 @@ test("shell terminal closes 4404 when no shell pane exists and 4498 after a take
     const missingClose = new Promise<number>(resolve => missing.once("close", code => resolve(code)));
     expect(await missingClose).toBe(4404);
 
-    const pane = { paneId: "pane-shell", tokens: { forge_task_id: task.id, forge_role: "shell", forge_binding_id: `${task.id}:shell` } };
+    const pane = { paneId: "pane-shell", tokens: { suplex_task_id: task.id, suplex_role: "shell", suplex_binding_id: `${task.id}:shell` } };
     panes.set(pane.paneId, pane);
     value.tasks.repository.controls.bindShellPane(task.id, pane.paneId);
     const live = connect();
@@ -172,7 +172,7 @@ test("terminal observation closes after access revocation", async () => {
     value.tasks.repository.controls.bindPane({ sessionId: root.id, generation: root.generation, paneId: "pane-root" });
     await app.register(websocket);
     const user = value.auth.listUsers(value.userId)[0]!;
-    app.decorateRequest("forgeUser", { getter: () => user });
+    app.decorateRequest("suplexUser", { getter: () => user });
     app.setValidatorCompiler(validatorCompiler);
     const release = vi.fn();
     await app.register(taskPane, { tasks: value.tasks, config: value.config, openBridge: () => ({ input: vi.fn(), resize: vi.fn(), scroll: vi.fn(), release }) });
@@ -181,8 +181,8 @@ test("terminal observation closes after access revocation", async () => {
     await new Promise<void>((resolve, reject) => { client!.once("open", resolve); client!.once("error", reject); });
     const closed = new Promise<number>(resolve => client!.once("close", code => resolve(code)));
     value.database.authTransaction(db => {
-      db.prepare("UPDATE forge_users SET role = 'member' WHERE id = ?").run(value.userId);
-      db.prepare("DELETE FROM forge_memberships WHERE user_id = ?").run(value.userId);
+      db.prepare("UPDATE suplex_users SET role = 'member' WHERE id = ?").run(value.userId);
+      db.prepare("DELETE FROM suplex_memberships WHERE user_id = ?").run(value.userId);
     });
     expect(await closed).toBe(4403);
     await vi.waitFor(() => expect(release).toHaveBeenCalledOnce());

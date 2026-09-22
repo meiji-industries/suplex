@@ -1,30 +1,30 @@
 ---
-name: forge
+name: suplex
 version: 1
-description: Work with Forge tasks as a paired external agent. Use when the person you work for asks to create, find, check, or command a task in Forge, or to confirm this client's Forge pairing.
+description: Work with Suplex tasks as a paired external agent. Use when the person you work for asks to create, find, check, or command a task in Suplex, or to confirm this client's Suplex pairing.
 ---
 
-# Forge
+# Suplex
 
-Forge owns task intent and authorization. This skill only asks Forge to do
-things; it never decides task rules locally, and it never reads Forge's
+Suplex owns task intent and authorization. This skill only asks Suplex to do
+things; it never decides task rules locally, and it never reads Suplex's
 storage.
 
 Two transports, same API:
 
-- **Prefer the Forge MCP tools** when the bridge is registered (`forge mcp`,
-  or `pnpm --dir /absolute/path/to/forge run forge mcp` from a source checkout).
+- **Prefer the Suplex MCP tools** when the bridge is registered (`suplex mcp`,
+  or `pnpm --dir /absolute/path/to/suplex run suplex mcp` from a source checkout).
   Check for tools named
-  `forge_whoami`, `forge_capabilities`, `forge_list_workflows`,
-  `forge_list_templates`, `forge_list_tasks`, `forge_get_task`,
-  `forge_get_task_delivery`, `forge_create_task`,
-  `forge_set_task_dependencies`, `forge_command_task`.
-- **Otherwise use `forge_client.py`** in this directory. It is standard
+  `suplex_whoami`, `suplex_capabilities`, `suplex_list_workflows`,
+  `suplex_list_templates`, `suplex_list_tasks`, `suplex_get_task`,
+  `suplex_get_task_delivery`, `suplex_create_task`,
+  `suplex_set_task_dependencies`, `suplex_command_task`.
+- **Otherwise use `suplex_client.py`** in this directory. It is standard
   library only and speaks the same routes.
 
 ```python
-from forge_client import ForgeClient, ForgeError, ForgeCredentialInvalid
-client = ForgeClient()            # reads the environment at call time
+from suplex_client import SuplexClient, SuplexError, SuplexCredentialInvalid
+client = SuplexClient()            # reads the environment at call time
 identity = client.whoami()
 ```
 
@@ -35,10 +35,10 @@ identity = client.whoami()
   asks to start it. A queued task starts by itself when its prerequisites are
   complete; `disarm_task` returns it to the manual backlog.
 - Never approve, release, merge, cancel, archive, or make any other
-  consequential commitment unless Forge reports the command as permitted **and**
+  consequential commitment unless Suplex reports the command as permitted **and**
   the requesting person approved that exact action. `start_task`,
   `cancel_task`, and `archive_task` are not reversible by this agent.
-- Never scrape the Forge web UI, and never read the Forge SQLite database,
+- Never scrape the Suplex web UI, and never read the Suplex SQLite database,
   worktrees, logs, or artifact files. The HTTP API and the MCP tools are the
   only supported reads.
 - Never print, log, store, or repeat the credential or a pairing code. Report
@@ -48,23 +48,23 @@ identity = client.whoami()
 
 Two variables are read from the client process environment at runtime:
 
-- `FORGE_BASE_URL`, the Forge origin, for example `http://127.0.0.1:4111`.
-- `FORGE_AGENT_CREDENTIAL`, the paired-agent credential.
+- `SUPLEX_BASE_URL`, the Suplex origin, for example `http://127.0.0.1:4111`.
+- `SUPLEX_AGENT_CREDENTIAL`, the paired-agent credential.
 
 The client does not load a `.env` file. Never pass either value on a command
-line. Every Forge request carries
-`Authorization: Bearer <credential>`; `forge_client.py` adds it for you.
+line. Every Suplex request carries
+`Authorization: Bearer <credential>`; `suplex_client.py` adds it for you.
 
 ## Pairing and credential rotation
 
-An administrator creates the agent in Forge admin and hands over a one-time
+An administrator creates the agent in Suplex admin and hands over a one-time
 pairing code. To pair, or to re-pair after a rotation:
 
-1. `POST {FORGE_BASE_URL}/api/agent/pairing/exchange` with
+1. `POST {SUPLEX_BASE_URL}/api/agent/pairing/exchange` with
    `{"pairingCode": "…", "profileId": "<optional client profile metadata>"}`.
    This is the
    only unauthenticated route the skill uses.
-2. Store `credential` from the response as `FORGE_AGENT_CREDENTIAL` in the
+2. Store `credential` from the response as `SUPLEX_AGENT_CREDENTIAL` in the
    private client configuration, replacing any existing value. Keep the
    configuration readable by the current user only. Hermes users may use the
    active profile's `$HERMES_HOME/.env` when their Hermes setup loads it.
@@ -74,17 +74,17 @@ Do not echo the pairing code, the raw exchange response, or the credential.
 
 **Rotation.** When any call fails with HTTP 401 and code `credential_invalid`,
 the credential is revoked or replaced. Do not retry it. Tell the person you
-work for that Forge rejected the credential and that an administrator must
-issue a new pairing code (Forge admin, "rotate" on this agent), then repeat the
+work for that Suplex rejected the credential and that an administrator must
+issue a new pairing code (Suplex admin, "rotate" on this agent), then repeat the
 exchange above with the new code. The optional `profileId` is descriptive
 metadata and may change during rotation. It does not authorize the request.
-`forge_client.py`
-raises `ForgeCredentialInvalid` with exactly that instruction. There is no
+`suplex_client.py`
+raises `SuplexCredentialInvalid` with exactly that instruction. There is no
 agent-side rotation endpoint: issuing codes is an administrator action.
 
 ## Capability discovery
 
-Call `forge_capabilities` (`GET /api/agent/capabilities`) before assuming any
+Call `suplex_capabilities` (`GET /api/agent/capabilities`) before assuming any
 command exists. It reports `apiVersion`, `capabilities`, `autonomousCommands`,
 `unavailableCommands`, and `humanOnlyRecords`. A deployment can leave the agent
 delivery surface off, in which case `capabilities.delivery` and
@@ -98,7 +98,7 @@ you need the exact request shapes.
 
 - Answering a human question. `answer_human_question` does not exist; human
   answers are a human-only record. Surface the question to the person you work
-  for and let them answer in Forge.
+  for and let them answer in Suplex.
 - `deliver_task`: delivery is not an agent command.
 - Merging, when `capabilities.merge` is `false`.
 - Editing a task's title or description after creation, deleting a task, and
@@ -110,21 +110,21 @@ you need the exact request shapes.
 
 ## Project selection
 
-`forge_whoami` (`GET /api/agent/me`) returns the agent identity and the
+`suplex_whoami` (`GET /api/agent/me`) returns the agent identity and the
 `projects` this agent was granted, each with its `agentTaskPolicy`
 (`deliveryTargets`, `runProjectTests`, `visualEvidence`), the create-time
-configuration that project permits. Forge's persisted grants are authoritative:
+configuration that project permits. Suplex's persisted grants are authoritative:
 
 - One granted project: use it.
 - Several: ask the person you work for which one. Do not guess.
 - None: stop and report that project access is required. Do not create a task.
 
-`projectId` is always explicit in a create request. Forge rejects a project
+`projectId` is always explicit in a create request. Suplex rejects a project
 this agent was not granted with a non-enumerating `404`.
 
 ## Workflow and template selection
 
-Call `forge_list_workflows(projectId)` and `forge_list_templates(projectId)`
+Call `suplex_list_workflows(projectId)` and `suplex_list_templates(projectId)`
 before you set `workflowId` or `templateId`. Each result has `id`, `name`,
 `description`, and `permittedForAgentTaskCreation`. A workflow is shared by
 projects. A template belongs to the project in the request.
@@ -153,23 +153,23 @@ unless you send `"queue": true`; see [Queued tasks](#queued-tasks).
 task = client.create_task(project_id, "Add saved searches", "Users want …")
 ```
 
-`idempotencyKey` is required. `forge_client.py` derives it from the payload, so
+`idempotencyKey` is required. `suplex_client.py` derives it from the payload, so
 a retry of the same request reuses the key and a changed payload gets a new
 one. Keep that property whichever transport you use:
 
-- Same request, retried after a timeout or a `5xx` → **same key**. Forge
+- Same request, retried after a timeout or a `5xx` → **same key**. Suplex
   returns `200` with the task it already created.
 - Different title, description, or project → **new key**. Reusing a key for a
   different payload fails with `409 idempotency_conflict`, which means your key
   is wrong, not that the task is wrong.
 
-Optional fields Forge accepts: `queue`, `dependsOn`, `images`, `source`, `workflowId` or
+Optional fields Suplex accepts: `queue`, `dependsOn`, `images`, `source`, `workflowId` or
 `templateId` (never both), `rootProfileId`, `workerProfileId`,
 `advisorProfileIds`, `deliveryTarget`, `runProjectTests`, `visualEvidence`.
 Send them only when the project policy allows them; omitting a workflow and a
 template uses the policy default. `deliveryTarget`, `runProjectTests`, and
 `visualEvidence` must match the project's `agentTaskPolicy` from
-`forge_whoami`; anything else fails with `422 delivery_policy_rejected` and a
+`suplex_whoami`; anything else fails with `422 delivery_policy_rejected` and a
 message naming the permitted values. Omit them to take the policy default, the
 created task reports the applied values back. Omit `description` to keep a template's
 description; sending it, even as `""`, overrides it. Never send local paths,
@@ -184,10 +184,10 @@ The created task reports the applied `workflow` object, `templateId`, and
 
 ## Prerequisites (Blocked by)
 
-`dependsOn` lists the task IDs a task waits for. Forge shows them as
+`dependsOn` lists the task IDs a task waits for. Suplex shows them as
 **Blocked by**. Set them at creation with `dependsOn`, or replace the whole set
 later with `PUT /api/agent/tasks/{taskId}/dependencies` (MCP:
-`forge_set_task_dependencies`, client: `client.set_dependencies(task_id,
+`suplex_set_task_dependencies`, client: `client.set_dependencies(task_id,
 [...])`). Send the complete set: an omitted ID is removed, and `[]` removes
 every prerequisite.
 
@@ -196,7 +196,7 @@ task = client.set_dependencies(task_id, [first_id, second_id])
 ```
 
 Each prerequisite must be a task this agent created.
-Forge rejects a self-reference or a cycle with `422 task_unavailable`, and an
+Suplex rejects a self-reference or a cycle with `422 task_unavailable`, and an
 unavailable task with `404`; the current set stays unchanged. Unknown fields,
 such as `blockedByTaskId`, fail with `400 request_invalid`.
 
@@ -205,7 +205,7 @@ Every read reports the same stored set: `dependsOn` has the IDs and
 
 ## Queued tasks
 
-A queued task is a backlog task that Forge starts by itself when every
+A queued task is a backlog task that Suplex starts by itself when every
 prerequisite is complete. It has no sessions or turns until then. Queue it at
 creation with `"queue": true`, or send `start_task` to a manual backlog task.
 `start_task` starts the task now only when every prerequisite is complete; it
@@ -217,7 +217,7 @@ and `waitingOn`, one entry per incomplete prerequisite with `id`, `title`,
 `status`, `queued`, `deliveryTarget`, `reason`, and `summary`. `queued` is true
 when the prerequisite is a queued backlog task that starts by itself. A
 prerequisite is complete when it is delivered at its own delivery target; the
-`merged` target also needs the merged pull request that Forge observed from
+`merged` target also needs the merged pull request that Suplex observed from
 GitHub. Act on the `summary`:
 for example, a `prerequisite_cancelled` reason means remove that prerequisite
 or disarm the task.
@@ -231,7 +231,7 @@ or disarm the task.
 
 Poll with backoff, not in a tight loop. `client.poll_task(task_id, until=…)`
 doubles its delay up to 60 seconds. Over MCP, pass `knownRevision` to
-`forge_get_task`: an unchanged task answers `{"unchanged": true, "revision":
+`suplex_get_task`: an unchanged task answers `{"unchanged": true, "revision":
 "…"}` and costs nothing.
 
 ## Lifecycle commands
@@ -259,24 +259,24 @@ Failures worth handling:
 
 ## Reading approval, blocked, waiting_human, and stale answers
 
-- **`status: "waiting_human"`**: Forge is waiting for a person, not for you.
+- **`status: "waiting_human"`**: Suplex is waiting for a person, not for you.
   Read `humanQuestion` and `blocker`. If `blocker.kind` is `"human_question"`,
   relay the question to the person you work for. You cannot answer it.
-- **`blocker.kind: "delivery_wait"`**: Forge is waiting on delivery.
+- **`blocker.kind: "delivery_wait"`**: Suplex is waiting on delivery.
   `blocker.reason` is `checks`, `mergeability`, `merge_queue`, or
-  `observation`. `recheck_delivery_wait` asks Forge to look again; it is safe
+  `observation`. `recheck_delivery_wait` asks Suplex to look again; it is safe
   and does not commit anything.
 - **`actionRequired`**: the authoritative read of who must act next. `owner`
-  is `agent`, `human`, `forge`, or `upstream`. Act only when `owner` is
+  is `agent`, `human`, `suplex`, or `upstream`. Act only when `owner` is
   `agent`, and even then stop and ask first if `humanApprovalRequired` is
   `true`. `suggestedCommands` are suggestions, not authorization.
 - **`reasonCode`** values: `conflicting_pull_request`, `failed_checks`,
   `pending_checks`, `pending_review`, `stale_delivery`, `pull_request_missing`,
   `blocked_by_dependency`, `waiting_human`, `observation_unavailable`.
 - **Stale.** `stale_delivery` means the delivered branch fell behind its base;
-  it is routine and is repaired inside Forge, not by this agent.
+  it is routine and is repaired inside Suplex, not by this agent.
   `observation_unavailable` (`integration.observation == "unavailable"`, with
-  `observationReason`) means Forge could not read GitHub. The state is
+  `observationReason`) means Suplex could not read GitHub. The state is
   unknown, not bad. Report the reason and re-read later. `revision_stale` on a
   command is a different thing: it means your copy of the task is old.
 - **`blockedBy` / `blocked_by_dependency`**: the task waits on other tasks.
@@ -290,6 +290,6 @@ issue key or ID, and the status. Never the pairing code or the credential.
 ## Verify this skill
 
 ```bash
-python3 forge_client.py --self-check   # redaction and idempotency keys, no server
-python3 smoke_test.py                  # live pairing check against Forge
+python3 suplex_client.py --self-check   # redaction and idempotency keys, no server
+python3 smoke_test.py                  # live pairing check against Suplex
 ```

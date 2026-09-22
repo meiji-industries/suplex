@@ -26,8 +26,8 @@ test("Jira reads all comment pages and keeps custom field names", async () => {
 
 test("lost comment response is recovered by marker without another create", async () => {
   credentials();
-  const body = "Evidence\n\n[Forge task task_one]";
-  const request = vi.fn<typeof fetch>(async url => String(url).endsWith("/myself") ? Response.json({ accountId: "forge-user" }) : Response.json({ startAt: 0, total: 1, comments: [{ id: "9", body, author: { accountId: "forge-user" } }] }));
+  const body = "Evidence\n\n[Suplex task task_one]";
+  const request = vi.fn<typeof fetch>(async url => String(url).endsWith("/myself") ? Response.json({ accountId: "suplex-user" }) : Response.json({ startAt: 0, total: 1, comments: [{ id: "9", body, author: { accountId: "suplex-user" } }] }));
   expect(await new IssueTracker(connection, request).publish(issue, "task_one", "Evidence")).toBe("9");
   expect(request).toHaveBeenCalledTimes(2);
   expect(request.mock.calls[0]?.[1]?.method ?? "GET").toBe("GET");

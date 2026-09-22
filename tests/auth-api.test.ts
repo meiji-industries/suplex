@@ -8,7 +8,7 @@ import { expect, test } from "vitest";
 import { AuthService, type WebAuthnAdapter } from "../src/identity/auth.js";
 import { createApp } from "../src/app.js";
 import { createTestConfig } from "../src/platform/config.js";
-import { ForgeDatabase } from "../src/platform/database.js";
+import { SuplexDatabase } from "../src/platform/database.js";
 import { SESSION_COOKIE_NAME } from "../src/identity/auth-identifiers.js";
 
 function fakeWebAuthn(): WebAuthnAdapter {
@@ -16,7 +16,7 @@ function fakeWebAuthn(): WebAuthnAdapter {
   return {
     async generateRegistrationOptions(input) {
       sequence += 1;
-      return { rp: { name: "Forge", id: input.rpId }, user: { id: input.userId, name: input.userName, displayName: input.displayName }, challenge: Buffer.from(`registration-${sequence}`).toString("base64url"), pubKeyCredParams: [{ type: "public-key", alg: -7 }], attestation: "none" };
+      return { rp: { name: "Suplex", id: input.rpId }, user: { id: input.userId, name: input.userName, displayName: input.displayName }, challenge: Buffer.from(`registration-${sequence}`).toString("base64url"), pubKeyCredParams: [{ type: "public-key", alg: -7 }], attestation: "none" };
     },
     async verifyRegistrationResponse(input) {
       return { verified: true, credential: { id: input.response.id, publicKey: Uint8Array.from([4, 5, 6]), counter: 0 } };
@@ -50,9 +50,9 @@ function sessionCookie(response: { headers: OutgoingHttpHeaders }): string {
 }
 
 test("API enrollment and authorization fail closed before company details are returned", async () => {
-  const root = await mkdtemp(join(tmpdir(), "forge-auth-api-test-"));
-  const database = new ForgeDatabase(join(root, "forge.sqlite"));
-  const config = createTestConfig(root, { reachableAddress: "https://forge.tailnet.ts.net:4111" });
+  const root = await mkdtemp(join(tmpdir(), "suplex-auth-api-test-"));
+  const database = new SuplexDatabase(join(root, "suplex.sqlite"));
+  const config = createTestConfig(root, { reachableAddress: "https://suplex.tailnet.ts.net:4111" });
   const auth = new AuthService(database, config, { webAuthn: fakeWebAuthn() });
   const app = createApp({ config, auth, health, getHealth: async () => ({ generatedAt: new Date().toISOString(), reachableAddress: config.reachableAddress, ready: true, checks: [] }) });
   try {

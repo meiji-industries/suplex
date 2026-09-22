@@ -1,4 +1,4 @@
-CREATE TABLE `forge_developer_execution_leases_reissued` (
+CREATE TABLE `suplex_developer_execution_leases_reissued` (
   `execution_id` text PRIMARY KEY NOT NULL,
   `company_id` text NOT NULL,
   `task_id` text NOT NULL,
@@ -39,13 +39,13 @@ CREATE TABLE `forge_developer_execution_leases_reissued` (
   `confirmed_exit_at` text,
   `created_at` text NOT NULL,
   `updated_at` text NOT NULL,
-  FOREIGN KEY (`execution_id`) REFERENCES `forge_developer_executions`(`id`) ON UPDATE no action ON DELETE cascade,
-  FOREIGN KEY (`company_id`) REFERENCES `forge_companies`(`id`) ON UPDATE no action ON DELETE cascade
+  FOREIGN KEY (`execution_id`) REFERENCES `suplex_developer_executions`(`id`) ON UPDATE no action ON DELETE cascade,
+  FOREIGN KEY (`company_id`) REFERENCES `suplex_companies`(`id`) ON UPDATE no action ON DELETE cascade
 );
 --> statement-breakpoint
-INSERT INTO `forge_developer_execution_leases_reissued` SELECT * FROM `forge_developer_execution_leases`;
+INSERT INTO `suplex_developer_execution_leases_reissued` SELECT * FROM `suplex_developer_execution_leases`;
 --> statement-breakpoint
-CREATE TABLE `forge_developer_result_claims_reissued` (
+CREATE TABLE `suplex_developer_result_claims_reissued` (
   `execution_id` text PRIMARY KEY NOT NULL,
   `claim_key` text NOT NULL UNIQUE,
   `result_hash` text NOT NULL,
@@ -53,14 +53,14 @@ CREATE TABLE `forge_developer_result_claims_reissued` (
   `delivery_artifact_id` text NOT NULL,
   `evidence_artifact_id` text NOT NULL,
   `claimed_at` text NOT NULL,
-  FOREIGN KEY (`execution_id`) REFERENCES `forge_developer_execution_leases_reissued`(`execution_id`) ON UPDATE no action ON DELETE cascade,
-  FOREIGN KEY (`delivery_artifact_id`) REFERENCES `forge_artifacts`(`id`) ON UPDATE no action ON DELETE no action,
-  FOREIGN KEY (`evidence_artifact_id`) REFERENCES `forge_artifacts`(`id`) ON UPDATE no action ON DELETE no action
+  FOREIGN KEY (`execution_id`) REFERENCES `suplex_developer_execution_leases_reissued`(`execution_id`) ON UPDATE no action ON DELETE cascade,
+  FOREIGN KEY (`delivery_artifact_id`) REFERENCES `suplex_artifacts`(`id`) ON UPDATE no action ON DELETE no action,
+  FOREIGN KEY (`evidence_artifact_id`) REFERENCES `suplex_artifacts`(`id`) ON UPDATE no action ON DELETE no action
 );
 --> statement-breakpoint
-INSERT INTO `forge_developer_result_claims_reissued` SELECT * FROM `forge_developer_result_claims`;
+INSERT INTO `suplex_developer_result_claims_reissued` SELECT * FROM `suplex_developer_result_claims`;
 --> statement-breakpoint
-CREATE TABLE `forge_developer_result_conflicts_reissued` (
+CREATE TABLE `suplex_developer_result_conflicts_reissued` (
   `id` text PRIMARY KEY NOT NULL,
   `execution_id` text NOT NULL,
   `existing_result_hash` text NOT NULL,
@@ -71,36 +71,36 @@ CREATE TABLE `forge_developer_result_conflicts_reissued` (
   `conflicting_evidence_artifact_id` text NOT NULL,
   `recorded_at` text NOT NULL,
   UNIQUE (`execution_id`, `conflicting_result_hash`),
-  FOREIGN KEY (`execution_id`) REFERENCES `forge_developer_execution_leases_reissued`(`execution_id`) ON UPDATE no action ON DELETE cascade,
-  FOREIGN KEY (`existing_delivery_artifact_id`) REFERENCES `forge_artifacts`(`id`) ON UPDATE no action ON DELETE no action,
-  FOREIGN KEY (`existing_evidence_artifact_id`) REFERENCES `forge_artifacts`(`id`) ON UPDATE no action ON DELETE no action,
-  FOREIGN KEY (`conflicting_delivery_artifact_id`) REFERENCES `forge_artifacts`(`id`) ON UPDATE no action ON DELETE no action,
-  FOREIGN KEY (`conflicting_evidence_artifact_id`) REFERENCES `forge_artifacts`(`id`) ON UPDATE no action ON DELETE no action
+  FOREIGN KEY (`execution_id`) REFERENCES `suplex_developer_execution_leases_reissued`(`execution_id`) ON UPDATE no action ON DELETE cascade,
+  FOREIGN KEY (`existing_delivery_artifact_id`) REFERENCES `suplex_artifacts`(`id`) ON UPDATE no action ON DELETE no action,
+  FOREIGN KEY (`existing_evidence_artifact_id`) REFERENCES `suplex_artifacts`(`id`) ON UPDATE no action ON DELETE no action,
+  FOREIGN KEY (`conflicting_delivery_artifact_id`) REFERENCES `suplex_artifacts`(`id`) ON UPDATE no action ON DELETE no action,
+  FOREIGN KEY (`conflicting_evidence_artifact_id`) REFERENCES `suplex_artifacts`(`id`) ON UPDATE no action ON DELETE no action
 );
 --> statement-breakpoint
-INSERT INTO `forge_developer_result_conflicts_reissued` SELECT * FROM `forge_developer_result_conflicts`;
+INSERT INTO `suplex_developer_result_conflicts_reissued` SELECT * FROM `suplex_developer_result_conflicts`;
 --> statement-breakpoint
-DROP TABLE `forge_developer_result_conflicts`;
+DROP TABLE `suplex_developer_result_conflicts`;
 --> statement-breakpoint
-DROP TABLE `forge_developer_result_claims`;
+DROP TABLE `suplex_developer_result_claims`;
 --> statement-breakpoint
-DROP TABLE `forge_developer_execution_leases`;
+DROP TABLE `suplex_developer_execution_leases`;
 --> statement-breakpoint
-ALTER TABLE `forge_developer_execution_leases_reissued` RENAME TO `forge_developer_execution_leases`;
+ALTER TABLE `suplex_developer_execution_leases_reissued` RENAME TO `suplex_developer_execution_leases`;
 --> statement-breakpoint
-ALTER TABLE `forge_developer_result_claims_reissued` RENAME TO `forge_developer_result_claims`;
+ALTER TABLE `suplex_developer_result_claims_reissued` RENAME TO `suplex_developer_result_claims`;
 --> statement-breakpoint
-ALTER TABLE `forge_developer_result_conflicts_reissued` RENAME TO `forge_developer_result_conflicts`;
+ALTER TABLE `suplex_developer_result_conflicts_reissued` RENAME TO `suplex_developer_result_conflicts`;
 --> statement-breakpoint
-CREATE UNIQUE INDEX `forge_developer_active_worktree_lease_idx`
-  ON `forge_developer_execution_leases` (`worktree_identity_hash`)
+CREATE UNIQUE INDEX `suplex_developer_active_worktree_lease_idx`
+  ON `suplex_developer_execution_leases` (`worktree_identity_hash`)
   WHERE `status` IN ('reserved', 'supervisor_starting', 'running', 'result_ready', 'cancel_requested', 'cancelling');
 --> statement-breakpoint
-CREATE INDEX `forge_developer_execution_lease_status_heartbeat_idx`
-  ON `forge_developer_execution_leases` (`status`, `heartbeat_at`);
+CREATE INDEX `suplex_developer_execution_lease_status_heartbeat_idx`
+  ON `suplex_developer_execution_leases` (`status`, `heartbeat_at`);
 --> statement-breakpoint
-CREATE TRIGGER `forge_developer_execution_lease_supervisor_identity_immutable`
-BEFORE UPDATE ON `forge_developer_execution_leases`
+CREATE TRIGGER `suplex_developer_execution_lease_supervisor_identity_immutable`
+BEFORE UPDATE ON `suplex_developer_execution_leases`
 WHEN (`OLD`.`supervisor_pid` IS NOT NULL AND `NEW`.`supervisor_pid` IS NOT `OLD`.`supervisor_pid`)
   OR (`OLD`.`supervisor_process_group` IS NOT NULL AND `NEW`.`supervisor_process_group` IS NOT `OLD`.`supervisor_process_group`)
   OR (`OLD`.`supervisor_start_time` IS NOT NULL AND `NEW`.`supervisor_start_time` IS NOT `OLD`.`supervisor_start_time`)
@@ -111,8 +111,8 @@ BEGIN
   SELECT RAISE(ABORT, 'developer supervisor identity is immutable');
 END;
 --> statement-breakpoint
-CREATE TRIGGER `forge_developer_execution_lease_child_identity_immutable`
-BEFORE UPDATE ON `forge_developer_execution_leases`
+CREATE TRIGGER `suplex_developer_execution_lease_child_identity_immutable`
+BEFORE UPDATE ON `suplex_developer_execution_leases`
 WHEN (`OLD`.`child_pid` IS NOT NULL AND `NEW`.`child_pid` IS NOT `OLD`.`child_pid`)
   OR (`OLD`.`child_process_group` IS NOT NULL AND `NEW`.`child_process_group` IS NOT `OLD`.`child_process_group`)
   OR (`OLD`.`child_start_time` IS NOT NULL AND `NEW`.`child_start_time` IS NOT `OLD`.`child_start_time`)

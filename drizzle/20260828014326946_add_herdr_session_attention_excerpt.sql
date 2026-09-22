@@ -1,2 +1,2 @@
 -- Write migration SQL here.
-ALTER TABLE `forge_herdr_role_sessions` ADD `attention_excerpt` text;
+ALTER TABLE `suplex_herdr_role_sessions` ADD `attention_excerpt` text;

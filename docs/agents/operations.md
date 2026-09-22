@@ -5,7 +5,7 @@ See [recovery hardening](../recovery-hardening.md) for convergence, attention, a
 ## Logs
 
 `mise run logs` prints the latest 200 merged API and worker records from
-`.forge/logs/`, ordered by timestamp and formatted for scanning. The API and
+`.suplex/logs/`, ordered by timestamp and formatted for scanning. The API and
 worker retain structured JSON in `api.log` and `worker.log`; each rotates at
 50 MB and keeps one `.log.1` predecessor.
 
@@ -30,6 +30,6 @@ checks SQLite's in-flight engine activity ledger before allowing a restart.
 
 Create an agent with provider **Claude Code**, select a Claude model, then assign
 that agent to the required role. The worker user must already be logged in
-with `claude`. Forge pre-accepts
+with `claude`. Suplex pre-accepts
 `projects[realpath(cwd)].hasTrustDialogAccepted` and
 `bypassPermissionsModeAccepted` in `~/.claude.json`.

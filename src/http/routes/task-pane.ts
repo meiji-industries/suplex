@@ -3,12 +3,12 @@ import type { ZodTypeProvider } from "@fastify/type-provider-zod";
 import { z } from "zod";
 import { openHerdrTerminalBridge } from "../../integrations/herdr/terminal-bridge.js";
 import type { TaskService } from "../../tasks/tasks.js";
-import type { ForgeConfig } from "../../platform/config.js";
+import type { SuplexConfig } from "../../platform/config.js";
 import { TaskSessionKindSchema } from "../../tasks/control.js";
 import { TaskIdParamsSchema } from "../contracts/common.js";
 import { json } from "../../shared/json.js";
 
-export interface TaskPaneRoutesOptions { tasks: TaskService; config?: ForgeConfig; openBridge?: typeof openHerdrTerminalBridge }
+export interface TaskPaneRoutesOptions { tasks: TaskService; config?: SuplexConfig; openBridge?: typeof openHerdrTerminalBridge }
 const Params = TaskIdParamsSchema.extend({ role: TaskSessionKindSchema.or(z.literal("shell")) });
 const Query = z.object({ cols: z.coerce.number().int().min(20).max(300).default(80), rows: z.coerce.number().int().min(5).max(150).default(24) });
 
@@ -28,12 +28,12 @@ const taskPane: FastifyPluginAsync<TaskPaneRoutesOptions> = async (app, options)
     if (!originAllowed(origin, request.headers.host, options.config?.reachableAddress)) return socket.close(4403, "origin");
     const shell = request.params.role === "shell";
     const current = () => {
-      const activity = options.tasks.getTaskActivity(request.forgeUser.id, request.params.taskId);
+      const activity = options.tasks.getTaskActivity(request.suplexUser.id, request.params.taskId);
       return shell ? (activity.shellPaneId ? { paneId: activity.shellPaneId } : undefined) : activity.sessions.find(session => session.kind === request.params.role && session.current);
     };
     let paneId: string | null;
     if (shell) {
-      try { paneId = await options.tasks.taskShellPane(request.forgeUser.id, request.params.taskId); }
+      try { paneId = await options.tasks.taskShellPane(request.suplexUser.id, request.params.taskId); }
       catch { return socket.close(4404, "not found"); }
       if (!paneId) return socket.close(4404, "no shell pane");
     } else {

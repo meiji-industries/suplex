@@ -19,7 +19,7 @@ test("process observations retain foreground argv and reject another pane's iden
 
 test("client validates JSON envelopes and passes unambiguous argv", async () => {
   const argv: string[][] = [];
-  const client = new CliHerdrClient("herdr", async (_file, args) => { argv.push([...args]); return { stdout: JSON.stringify({ id: "request", result: { workspace: { workspace_id: "w1", label: "forge" } } }) }; });
+  const client = new CliHerdrClient("herdr", async (_file, args) => { argv.push([...args]); return { stdout: JSON.stringify({ id: "request", result: { workspace: { workspace_id: "w1", label: "suplex" } } }) }; });
   await expect(client.getWorkspace("w1; rm -rf /")).resolves.toMatchObject({ workspaceId: "w1" });
   expect(argv).toEqual([["workspace", "get", "w1; rm -rf /"]]);
 });
@@ -207,7 +207,7 @@ test("pane metadata reports use unambiguous argv for values and clears", async (
 
   await client.reportPaneMetadata({
     paneId: "w9:p2; echo unsafe",
-    source: "forge",
+    source: "suplex",
     agent: "codex --verbose",
     appliesToSource: "herdr:codex",
     title: "Review = now; still one arg",
@@ -217,19 +217,19 @@ test("pane metadata reports use unambiguous argv for values and clears", async (
       blocked: "Needs input",
     },
     tokens: {
-      forge_binding_id: "binding-1",
-      forge_task_id: "task=1",
+      suplex_binding_id: "binding-1",
+      suplex_task_id: "task=1",
     },
     seq: 42,
     ttlMs: 60_000,
   });
   await client.reportPaneMetadata({
     paneId: "w9:p2",
-    source: "forge",
+    source: "suplex",
     clearTitle: true,
     clearDisplayAgent: true,
     clearStateLabels: true,
-    clearTokens: ["forge_binding_id", "forge_task_id"],
+    clearTokens: ["suplex_binding_id", "suplex_task_id"],
   });
 
   expect(argv).toEqual([
@@ -238,7 +238,7 @@ test("pane metadata reports use unambiguous argv for values and clears", async (
       "report-metadata",
       "w9:p2; echo unsafe",
       "--source",
-      "forge",
+      "suplex",
       "--agent",
       "codex --verbose",
       "--applies-to-source",
@@ -252,9 +252,9 @@ test("pane metadata reports use unambiguous argv for values and clears", async (
       "--state-label",
       "blocked=Needs input",
       "--token",
-      "forge_binding_id=binding-1",
+      "suplex_binding_id=binding-1",
       "--token",
-      "forge_task_id=task=1",
+      "suplex_task_id=task=1",
       "--seq",
       "42",
       "--ttl-ms",
@@ -265,14 +265,14 @@ test("pane metadata reports use unambiguous argv for values and clears", async (
       "report-metadata",
       "w9:p2",
       "--source",
-      "forge",
+      "suplex",
       "--clear-title",
       "--clear-display-agent",
       "--clear-state-labels",
       "--clear-token",
-      "forge_binding_id",
+      "suplex_binding_id",
       "--clear-token",
-      "forge_task_id",
+      "suplex_task_id",
     ],
   ]);
 });

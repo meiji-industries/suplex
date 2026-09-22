@@ -43,7 +43,7 @@ async function runGh(command: string, args: string[], cwd?: string): Promise<{ s
   }
 }
 
-export function createGithubAdapter(command = process.env.FORGE_GH_COMMAND ?? "gh"): GithubAdapter {
+export function createGithubAdapter(command = process.env.SUPLEX_GH_COMMAND ?? "gh"): GithubAdapter {
   return {
     async checkAuthentication() {
       await runGh(command, ["auth", "status", "--hostname", "github.com"]);

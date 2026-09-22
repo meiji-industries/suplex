@@ -218,7 +218,7 @@ export function TaskTemplateSettings({ projectId: initialProjectId }: { projectI
 
     <AlertDialog open={deleteOpen} onOpenChange={(open) => { if (!busy) { setDeleteOpen(open); if (!open) setDeleteError(""); } }}>
       <AlertDialogContent>
-        <AlertDialogHeader><AlertDialogTitle>Delete {editingTemplate?.name}?</AlertDialogTitle><AlertDialogDescription>Forge permanently deletes this template. Existing tasks do not change.</AlertDialogDescription></AlertDialogHeader>
+        <AlertDialogHeader><AlertDialogTitle>Delete {editingTemplate?.name}?</AlertDialogTitle><AlertDialogDescription>Suplex permanently deletes this template. Existing tasks do not change.</AlertDialogDescription></AlertDialogHeader>
         {deleteError ? <Alert variant="destructive"><AlertDescription>{deleteError}</AlertDescription></Alert> : null}
         <AlertDialogFooter>
           <AlertDialogCancel disabled={busy}>Cancel</AlertDialogCancel>

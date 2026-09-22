@@ -57,7 +57,7 @@ function makeController(overrides: Partial<ProcessController> = {}): ProcessCont
 
 function makeOwned(overrides: Partial<OwnedProcess> = {}): OwnedProcess {
   return {
-    name: "forge-worker",
+    name: "suplex-worker",
     pid: 4101,
     command: "/usr/local/bin/node worker.js",
     startedAt: "2026-08-10T00:00:00.000Z",
@@ -103,7 +103,7 @@ test("shutdown targets only the recorded PID when it did not lead its process gr
       running = false;
     },
     async signalGroup() {
-      throw new Error("a process group not created by Forge must not be signalled");
+      throw new Error("a process group not created by Suplex must not be signalled");
     },
   });
 
@@ -189,7 +189,7 @@ test("shutdown refuses a live legacy record without exact ownership identity", a
   expect(signalled).toEqual([]);
 });
 
-test("shutdown can stop an independently proven orphaned Forge process group", async () => {
+test("shutdown can stop an independently proven orphaned Suplex process group", async () => {
   const owned = makeOwned();
   let groupRunning = true;
   const signalled: string[] = [];
@@ -245,7 +245,7 @@ test("shutdown passes the recorded Serve backend to cleanup", async () => {
 });
 
 test("rejects a tampered process registry", async () => {
-  const root = await mkdtemp(join(tmpdir(), "forge-registry-schema-test-"));
+  const root = await mkdtemp(join(tmpdir(), "suplex-registry-schema-test-"));
   const filename = join(root, "owned-processes.json");
   try {
     await writeFile(filename, JSON.stringify({ version: 2, processes: [] }));

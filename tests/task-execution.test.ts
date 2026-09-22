@@ -6,7 +6,7 @@ import { nativeApp } from "./helpers/native-app.js";
 
 function message(id: string, created: number, parts: unknown[]) {
   return OpenCodeMessageEnvelopeSchema.parse({ info: {
-    id, sessionID: "ses_execution", role: "assistant", time: { created }, parentID: "msg_user", modelID: "model", providerID: "openai", mode: "primary", agent: "forge-root", path: { cwd: "/repo", root: "/repo" }, cost: 0, tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
+    id, sessionID: "ses_execution", role: "assistant", time: { created }, parentID: "msg_user", modelID: "model", providerID: "openai", mode: "primary", agent: "suplex-root", path: { cwd: "/repo", root: "/repo" }, cost: 0, tokens: { input: 0, output: 0, reasoning: 0, cache: { read: 0, write: 0 } },
   }, parts });
 }
 

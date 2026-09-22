@@ -7,8 +7,8 @@ import type { FastifyInstance } from "fastify";
 
 import { createApp } from "./app.js";
 import { AuthService } from "./identity/auth.js";
-import { loadConfig, type ForgeConfig } from "./platform/config.js";
-import { ForgeDatabase } from "./platform/database.js";
+import { loadConfig, type SuplexConfig } from "./platform/config.js";
+import { SuplexDatabase } from "./platform/database.js";
 import { seedDevelopmentData } from "./platform/development.js";
 import { createHostHealthDependencies } from "./platform/host-health.js";
 import { TaskTemplateService } from "./tasks/templates.js";
@@ -32,18 +32,18 @@ import { AnalyticsHistoryReader, TaskAnalyticsCollector } from "./tasks/analytic
 import { createSystemEventWriter, runWithSystemEvents, systemEvent, systemLogDirectory, type EventSink } from "./platform/system-events.js";
 import { startSystemEventReceiver } from "./platform/system-event-transport.js";
 
-export interface ForgeServer {
+export interface SuplexServer {
   app: FastifyInstance;
-  database: ForgeDatabase;
+  database: SuplexDatabase;
   host: TaskHost;
   instanceId: string;
 }
 
-export async function createForgeServer(config: ForgeConfig = loadConfig(), options: { logSink?: (line: string) => void; systemEvents?: EventSink } = {}): Promise<ForgeServer> {
+export async function createSuplexServer(config: SuplexConfig = loadConfig(), options: { logSink?: (line: string) => void; systemEvents?: EventSink } = {}): Promise<SuplexServer> {
   await mkdir(config.artifactRoot, { recursive: true });
   await mkdir(config.worktreeRoot, { recursive: true });
   await mkdir(config.runtimeRoot, { recursive: true });
-  const database = new ForgeDatabase(config.databasePath);
+  const database = new SuplexDatabase(config.databasePath);
   const systemEvents = options.systemEvents ?? createSystemEventWriter({ directory: systemLogDirectory(config.dataRoot) });
   const host = new TaskHost(database, { artifactRoot: config.artifactRoot, systemEvents });
   const auth = new AuthService(database, config);
@@ -84,7 +84,7 @@ export async function createForgeServer(config: ForgeConfig = loadConfig(), opti
   } satisfies Parameters<typeof createApp>[0];
   let app: FastifyInstance;
   try {
-    if (process.env.FORGE_FRONTEND_DEV_SERVER === "1") {
+    if (process.env.SUPLEX_FRONTEND_DEV_SERVER === "1") {
       const { createDevelopmentApp } = await import("./platform/frontend-development.js");
       app = (await createDevelopmentApp(dependencies)).app;
     } else {
@@ -117,8 +117,8 @@ export async function createForgeServer(config: ForgeConfig = loadConfig(), opti
   return { app, database, host, instanceId };
 }
 
-export async function startServer(config: ForgeConfig = loadConfig()): Promise<void> {
-  const server = await createForgeServer(config);
+export async function startServer(config: SuplexConfig = loadConfig()): Promise<void> {
+  const server = await createSuplexServer(config);
   const events = server.host.systemEvents;
   let closed = false;
   let heartbeat: NodeJS.Timeout | undefined;
@@ -174,7 +174,7 @@ export async function startServer(config: ForgeConfig = loadConfig()): Promise<v
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
   startServer().catch((error: unknown) => {
-    new StructuredLogger().error("Forge API stopped", {}, { error: error instanceof Error ? error.message : "unknown error" });
+    new StructuredLogger().error("Suplex API stopped", {}, { error: error instanceof Error ? error.message : "unknown error" });
     process.exitCode = 1;
   });
 }

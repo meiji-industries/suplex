@@ -10,7 +10,7 @@ import { sharedResourceCommand } from "../src/tasks/preparation.js";
 const directories: string[] = [];
 afterEach(async () => { await Promise.all(directories.splice(0).map(path => rm(path, { recursive: true, force: true }))); });
 async function fixture() {
-  const path = await mkdtemp(join(tmpdir(), "forge-resource-command-"));
+  const path = await mkdtemp(join(tmpdir(), "suplex-resource-command-"));
   directories.push(path);
   return { path, events: join(path, "events") };
 }

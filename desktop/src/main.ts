@@ -1,3 +1,3 @@
-import { runForgeDesktop } from "./forge-desktop";
+import { runSuplexDesktop } from "./suplex-desktop";
 
-void runForgeDesktop({ argv: process.argv.slice(1), environment: process.env });
+void runSuplexDesktop({ argv: process.argv.slice(1), environment: process.env });

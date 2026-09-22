@@ -8,7 +8,7 @@ import { createApp } from "../src/app.js";
 import { SESSION_COOKIE_NAME } from "../src/identity/auth-identifiers.js";
 import { AuthService, type WebAuthnAdapter } from "../src/identity/auth.js";
 import { createTestConfig } from "../src/platform/config.js";
-import { ForgeDatabase } from "../src/platform/database.js";
+import { SuplexDatabase } from "../src/platform/database.js";
 
 const health = {
   database: async () => ({ id: "database" as const, label: "Database", status: "healthy" as const, summary: "Reachable", details: {} }),
@@ -18,7 +18,7 @@ const health = {
 };
 
 const webAuthn: WebAuthnAdapter = {
-  async generateRegistrationOptions(input) { return { rp: { name: "Forge", id: input.rpId }, user: { id: input.userId, name: input.userName, displayName: input.displayName }, challenge: "avatar-registration", pubKeyCredParams: [{ type: "public-key", alg: -7 }], attestation: "none" }; },
+  async generateRegistrationOptions(input) { return { rp: { name: "Suplex", id: input.rpId }, user: { id: input.userId, name: input.userName, displayName: input.displayName }, challenge: "avatar-registration", pubKeyCredParams: [{ type: "public-key", alg: -7 }], attestation: "none" }; },
   async verifyRegistrationResponse(input) { return { verified: true, credential: { id: input.response.id, publicKey: Uint8Array.from([1, 2, 3]), counter: 0 } }; },
   async generateAuthenticationOptions(input) { return { challenge: "avatar-auth", rpId: input.rpId, allowCredentials: input.allowCredentials.map((c) => ({ type: "public-key" as const, ...c })), userVerification: "required" }; },
   async verifyAuthenticationResponse() { return { verified: true, newCounter: 1 }; },
@@ -28,9 +28,9 @@ const webAuthn: WebAuthnAdapter = {
 const png = Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==", "base64");
 
 test("avatars share one table, one directory, and one image route across users, companies, projects, and agents", async () => {
-  const root = await mkdtemp(join(tmpdir(), "forge-avatars-api-test-"));
+  const root = await mkdtemp(join(tmpdir(), "suplex-avatars-api-test-"));
   const config = createTestConfig(root, { developmentAutoLogin: true });
-  const database = new ForgeDatabase(config.databasePath);
+  const database = new SuplexDatabase(config.databasePath);
   const auth = new AuthService(database, config, { webAuthn });
   const app = createApp({ config, auth, database, health });
   try {
@@ -40,7 +40,7 @@ test("avatars share one table, one directory, and one image route across users, 
     const company = auth.createCompany(admin.user.id, "Avatar Company");
     const now = new Date().toISOString();
     database.authTransaction((db) => {
-      db.prepare("INSERT INTO forge_projects (id, company_id, name, repository_path, worktree_root, repository_identity, base_branch, setup_command, verification_command, created_at, updated_at) VALUES ('project_avatar', ?, 'Avatar Project', ?, ?, 'meiji/avatar', 'main', '', '', ?, ?)").run(company.id, join(root, "repo"), join(root, "worktrees"), now, now);
+      db.prepare("INSERT INTO suplex_projects (id, company_id, name, repository_path, worktree_root, repository_identity, base_branch, setup_command, verification_command, created_at, updated_at) VALUES ('project_avatar', ?, 'Avatar Project', ?, ?, 'meiji/avatar', 'main', '', '', ?, ?)").run(company.id, join(root, "repo"), join(root, "worktrees"), now, now);
     });
     const member = auth.inviteUser(admin.user.id, { displayName: "Member" });
     const options = await app.inject({ method: "POST", url: "/api/auth/invitation/options", payload: { token: member.token } });

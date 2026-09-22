@@ -55,11 +55,11 @@ export function healthCheckPurpose(id: HealthCheckId): string {
   switch (id) {
     case "database": return "Store your tasks";
     case "artifact-root": return "Store task files";
-    case "disk-space": return "Keep room for Forge";
+    case "disk-space": return "Keep room for Suplex";
     case "git": return "Save code changes";
     case "herdr-readiness": return "Open the agent terminals";
     case "gh-auth": return "Publish pull requests";
-    case "pnpm": return "Update Forge";
+    case "pnpm": return "Update Suplex";
     case "tailscale": return "Reach this host";
     case "backup": return "Recover your data";
     case "provider:opencode": return "Run tasks with OpenCode";
@@ -76,8 +76,8 @@ export function getSystemHealthLevel(snapshot: HealthSnapshot | undefined, fresh
 }
 
 export function healthFreshnessLabel(freshness: HealthFreshness, lastSuccessfulCheckAt?: string): string {
-  if (freshness === "checking") return "Forge checks the host.";
-  if (freshness === "stale") return lastSuccessfulCheckAt ? `Forge could not check the host · Last successful check ${relativeTime(lastSuccessfulCheckAt)}` : "Forge could not check the host";
+  if (freshness === "checking") return "Suplex checks the host.";
+  if (freshness === "stale") return lastSuccessfulCheckAt ? `Suplex could not check the host · Last successful check ${relativeTime(lastSuccessfulCheckAt)}` : "Suplex could not check the host";
   if (!lastSuccessfulCheckAt) return "No successful health check";
   return `Last successful check ${relativeTime(lastSuccessfulCheckAt)}`;
 }
@@ -171,7 +171,7 @@ export function HealthRow({ check, compact = false }: { check: HealthCheck; comp
       <Collapsible.Panel className="bg-muted/20 px-4 py-3 sm:px-11">
         {compact ? <p className="mb-1 text-xs font-medium">{healthCheckPurpose(check.id)}</p> : null}
         <p className="mb-3 text-xs text-muted-foreground">{check.summary}</p>
-        {check.remedy === "Open the Tailscale app and sign in" ? <Alert><Network /><AlertTitle>Sign in to Tailscale on the host</AlertTitle><AlertDescription>Open the Tailscale app and sign in. Then check the host again.</AlertDescription></Alert> : check.remedy && check.remedyKind === "link" ? <div className="space-y-2 rounded-md border bg-background p-3"><p className="text-xs font-medium">Open the instructions</p><p className="text-xs text-muted-foreground">Install instructions are on the official page. Then check again.</p><Button size="xs" variant="outline" nativeButton={false} render={<a href={check.remedy} target="_blank" rel="noreferrer" />}>Open the instructions</Button></div> : check.remedy ? <div className="space-y-2 rounded-md border bg-background p-3"><p className="text-xs font-medium">Run on the Forge host</p><p className="text-xs text-muted-foreground">Open the Terminal on the host. Run this command, then check again.</p><div className="flex flex-wrap items-center gap-2"><code className="min-w-0 flex-1 break-all text-xs">{check.remedy}</code><Button size="xs" variant="outline" aria-label="Copy the command" onClick={async () => { try { await navigator.clipboard.writeText(check.remedy ?? ""); setCopyState("copied"); } catch { setCopyState("failed"); } }}>{copyState === "copied" ? <Check /> : <Copy />}{copyState === "copied" ? "Copied" : "Copy"}</Button></div>{copyState === "failed" ? <p role="status" className="text-xs text-destructive">Forge cannot copy the command. Select the command and copy it manually.</p> : null}</div> : null}
+        {check.remedy === "Open the Tailscale app and sign in" ? <Alert><Network /><AlertTitle>Sign in to Tailscale on the host</AlertTitle><AlertDescription>Open the Tailscale app and sign in. Then check the host again.</AlertDescription></Alert> : check.remedy && check.remedyKind === "link" ? <div className="space-y-2 rounded-md border bg-background p-3"><p className="text-xs font-medium">Open the instructions</p><p className="text-xs text-muted-foreground">Install instructions are on the official page. Then check again.</p><Button size="xs" variant="outline" nativeButton={false} render={<a href={check.remedy} target="_blank" rel="noreferrer" />}>Open the instructions</Button></div> : check.remedy ? <div className="space-y-2 rounded-md border bg-background p-3"><p className="text-xs font-medium">Run on the Suplex host</p><p className="text-xs text-muted-foreground">Open the Terminal on the host. Run this command, then check again.</p><div className="flex flex-wrap items-center gap-2"><code className="min-w-0 flex-1 break-all text-xs">{check.remedy}</code><Button size="xs" variant="outline" aria-label="Copy the command" onClick={async () => { try { await navigator.clipboard.writeText(check.remedy ?? ""); setCopyState("copied"); } catch { setCopyState("failed"); } }}>{copyState === "copied" ? <Check /> : <Copy />}{copyState === "copied" ? "Copied" : "Copy"}</Button></div>{copyState === "failed" ? <p role="status" className="text-xs text-destructive">Suplex cannot copy the command. Select the command and copy it manually.</p> : null}</div> : null}
         <HealthTechnicalDetails check={check} />
       </Collapsible.Panel>
     </Collapsible.Root>
@@ -195,11 +195,11 @@ export function HealthCheckSections({ snapshot, compact = false, attentionOnly =
   );
 }
 
-/** The host this page was loaded from, so a desktop window shows which Forge it is on. */
+/** The host this page was loaded from, so a desktop window shows which Suplex it is on. */
 const instanceHost = typeof location === "undefined" ? "" : location.host;
 const windowOrigin = typeof location === "undefined" ? "" : location.origin;
 
-/** How this window reaches Forge, derived from the address it loaded. */
+/** How this window reaches Suplex, derived from the address it loaded. */
 export function connectionRoute(origin: string): string {
   let url: URL;
   try { url = new URL(origin); } catch { return "Not available"; }
@@ -242,7 +242,7 @@ export function SystemHealthIndicator({ sidebar = false }: { sidebar?: boolean }
         <HealthCheckSections snapshot={health.snapshot} compact />
         <dl className="divide-y border-t text-xs" data-testid="connection-details">
           <div className="flex items-center justify-between gap-3 py-1.5"><dt className="text-muted-foreground">This window</dt><dd className="min-w-0 truncate font-mono" title={windowOrigin}>{windowOrigin || "Not available"}</dd></div>
-          <div className="flex items-center justify-between gap-3 py-1.5"><dt className="text-muted-foreground">Forge address</dt><dd className="min-w-0 truncate font-mono" title={health.snapshot?.reachableAddress}>{health.snapshot?.reachableAddress ?? "Not available"}</dd></div>
+          <div className="flex items-center justify-between gap-3 py-1.5"><dt className="text-muted-foreground">Suplex address</dt><dd className="min-w-0 truncate font-mono" title={health.snapshot?.reachableAddress}>{health.snapshot?.reachableAddress ?? "Not available"}</dd></div>
           <div className="flex items-center justify-between gap-3 py-1.5"><dt className="text-muted-foreground">Route</dt><dd>{connectionRoute(windowOrigin)}</dd></div>
         </dl>
       </DialogContent>

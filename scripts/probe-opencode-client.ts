@@ -12,7 +12,7 @@ const password = (await readFile(join(runtime, "state/password"), "utf8")).trim(
 const directory = await realpath(join(runtime, "project"));
 const client = new OpenCodeClient({ baseUrl, password });
 const model = { providerID: "openai", modelID: "gpt-5.6-luna" };
-const native = await client.createSession({ title: "Forge production OpenCode client proof", directory, model: { id: model.modelID, providerID: model.providerID, variant: "max" }, agent: "build" });
+const native = await client.createSession({ title: "Suplex production OpenCode client proof", directory, model: { id: model.modelID, providerID: model.providerID, variant: "max" }, agent: "build" });
 const receipts: unknown[] = [];
 for (const word of ["client-first-proof", "client-second-proof"]) {
   const intent = createOpenCodePromptIntent({ sessionID: native.id, directory, model, agent: "build", variant: "max", prompt: `Reply with exactly ${word}. Do not use tools.` });

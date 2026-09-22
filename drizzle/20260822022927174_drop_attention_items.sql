@@ -1,1 +1,1 @@
-DROP TABLE IF EXISTS `forge_attention_items`;
+DROP TABLE IF EXISTS `suplex_attention_items`;

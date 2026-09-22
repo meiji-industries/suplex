@@ -9,7 +9,7 @@
   <true/>
   <!--
     Do not add keychain-access-groups here without a provisioning profile: on a Developer ID build
-    AMFI kills the process at launch. Touch ID passkeys (KEYCHAIN_ACCESS_GROUP in src/forge-desktop.ts)
+    AMFI kills the process at launch. Touch ID passkeys (KEYCHAIN_ACCESS_GROUP in src/suplex-desktop.ts)
     stay unavailable until the app ships with a profile that grants the group.
   -->
 </dict>

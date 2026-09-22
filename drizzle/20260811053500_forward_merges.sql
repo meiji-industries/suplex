@@ -1,4 +1,4 @@
-CREATE TABLE IF NOT EXISTS `forge_forward_merges` (
+CREATE TABLE IF NOT EXISTS `suplex_forward_merges` (
 	`id` text PRIMARY KEY NOT NULL,
 	`task_id` text NOT NULL,
 	`company_id` text NOT NULL,
@@ -10,8 +10,8 @@ CREATE TABLE IF NOT EXISTS `forge_forward_merges` (
 	`status` text NOT NULL,
 	`conflict_files_json` text NOT NULL,
 	`created_at` text NOT NULL,
-	FOREIGN KEY (`task_id`) REFERENCES `forge_tasks`(`id`) ON UPDATE no action ON DELETE cascade,
-	FOREIGN KEY (`company_id`) REFERENCES `forge_companies`(`id`) ON UPDATE no action ON DELETE cascade
+	FOREIGN KEY (`task_id`) REFERENCES `suplex_tasks`(`id`) ON UPDATE no action ON DELETE cascade,
+	FOREIGN KEY (`company_id`) REFERENCES `suplex_companies`(`id`) ON UPDATE no action ON DELETE cascade
 );
 --> statement-breakpoint
-CREATE INDEX IF NOT EXISTS `forge_forward_merges_task_idx` ON `forge_forward_merges` (`task_id`, `created_at`);
+CREATE INDEX IF NOT EXISTS `suplex_forward_merges_task_idx` ON `suplex_forward_merges` (`task_id`, `created_at`);

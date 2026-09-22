@@ -8,7 +8,7 @@ test("Coordinator selection requires task access and the current session", async
   try {
     const { task } = await f.tasks.createTask(f.userId, f.company.id, { projectId: f.project.id, title: "Select a Coordinator", startImmediately: true, idempotencyKey: "coordinator-api" });
     const root = new RootController(f.tasks.repository.controls, new FakeTaskHarness()).prepareRoot(task.id);
-    f.tasks.repository.controls.database.authTransaction(db => db.prepare("INSERT INTO forge_profiles (id, name, role, avatar_seed, provider, model, reasoning_level, service_tier, created_at, updated_at) VALUES ('replacement-root', 'Replacement', 'root', 'replacement', 'codex', 'gpt-5.6-sol', 'medium', 'default', ?, ?)").run(new Date().toISOString(), new Date().toISOString()));
+    f.tasks.repository.controls.database.authTransaction(db => db.prepare("INSERT INTO suplex_profiles (id, name, role, avatar_seed, provider, model, reasoning_level, service_tier, created_at, updated_at) VALUES ('replacement-root', 'Replacement', 'root', 'replacement', 'codex', 'gpt-5.6-sol', 'medium', 'default', ?, ?)").run(new Date().toISOString(), new Date().toISOString()));
     const url = `/api/tasks/${task.id}/replace-coordinator`;
     const handoff = `Earlier work: ${"x".repeat(20_000)}`;
     const payload = { sessionId: root.id, rootProfileId: "replacement-root", handoff, resume: false };

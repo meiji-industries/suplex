@@ -76,7 +76,7 @@ export function CreateProjectDialog({
               <Field>
                 <FieldLabel htmlFor="project-repository-url">Repository URL</FieldLabel>
                 <Input id="project-repository-url" name="repositoryUrl" autoFocus autoComplete="off" spellCheck={false} placeholder="https://github.com/owner/repository" aria-describedby="project-repository-hint" value={repositoryUrl} onChange={(event) => setRepositoryUrl(event.target.value)} />
-                <FieldDescription id="project-repository-hint">HTTPS and SSH URLs are supported. Forge clones into <span className="font-mono">~/forge/repos</span> and creates worktrees in <span className="font-mono">~/forge/worktrees</span>.</FieldDescription>
+                <FieldDescription id="project-repository-hint">HTTPS and SSH URLs are supported. Suplex clones into <span className="font-mono">~/suplex/repos</span> and creates worktrees in <span className="font-mono">~/suplex/worktrees</span>.</FieldDescription>
               </Field>
               <Field><FieldLabel htmlFor="create-base-branch">Base branch</FieldLabel><Input id="create-base-branch" value={baseBranch} onChange={event => setBaseBranch(event.target.value)} /></Field>
               <ProjectConnections value={integration} onChange={setIntegration} />

@@ -2,7 +2,7 @@ import type { FastifyPluginAsync, FastifyReply, FastifyRequest } from "fastify";
 
 import type { AuthService } from "../../identity/auth.js";
 import type { ProjectService } from "../../projects/projects.js";
-import type { ForgeConfig } from "../../platform/config.js";
+import type { SuplexConfig } from "../../platform/config.js";
 import type { HealthSnapshot } from "../../platform/health.js";
 import { renderApplicationPage, renderHealthPage } from "../../platform/ui.js";
 import { sessionUser } from "../session.js";
@@ -10,7 +10,7 @@ import { sessionUser } from "../session.js";
 export interface PageRoutesOptions {
   auth?: AuthService;
   projects?: Pick<ProjectService, "listProjects">;
-  config?: ForgeConfig;
+  config?: SuplexConfig;
   readHealth: () => Promise<HealthSnapshot>;
   transformHtml?: (url: string, html: string) => Promise<string>;
 }

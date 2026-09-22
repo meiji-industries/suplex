@@ -11,7 +11,7 @@ test("completed observations keep identical repository coordinates on distinct h
   const original = f.store.get("task");
   f.database.authTransaction(db => {
     insertNativeTaskRow(db, { taskId: "bitbucket-task" });
-    db.prepare("UPDATE forge_tasks SET configuration_json = json_set(configuration_json, '$.integration', json(?)) WHERE id = 'bitbucket-task'").run(JSON.stringify({ repository: { kind: "bitbucket", tokenEnvironment: "BB_TOKEN" }, tracker: null }));
+    db.prepare("UPDATE suplex_tasks SET configuration_json = json_set(configuration_json, '$.integration', json(?)) WHERE id = 'bitbucket-task'").run(JSON.stringify({ repository: { kind: "bitbucket", tokenEnvironment: "BB_TOKEN" }, tracker: null }));
   });
   f.store.create({ taskId: "bitbucket-task", startImmediately: true, objective: "Client task", deliveryTarget: "pull_request_draft", deliveryIntent: original.deliveryIntent, rootProfile: original.rootProfile, workerProfile: original.workerProfile });
   f.store.admitQueued(["bitbucket-task"]);

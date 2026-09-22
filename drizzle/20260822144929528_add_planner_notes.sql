@@ -1,4 +1,4 @@
-CREATE TABLE IF NOT EXISTS `forge_planner_notes` (
+CREATE TABLE IF NOT EXISTS `suplex_planner_notes` (
   `id` text PRIMARY KEY NOT NULL,
   `task_id` text NOT NULL,
   `company_id` text NOT NULL,
@@ -6,9 +6,9 @@ CREATE TABLE IF NOT EXISTS `forge_planner_notes` (
   `actor` text NOT NULL,
   `note` text NOT NULL,
   `created_at` text NOT NULL,
-  FOREIGN KEY (`task_id`) REFERENCES `forge_tasks`(`id`) ON DELETE cascade,
-  FOREIGN KEY (`company_id`) REFERENCES `forge_companies`(`id`) ON DELETE cascade,
-  FOREIGN KEY (`actor`) REFERENCES `forge_users`(`id`) ON DELETE no action
+  FOREIGN KEY (`task_id`) REFERENCES `suplex_tasks`(`id`) ON DELETE cascade,
+  FOREIGN KEY (`company_id`) REFERENCES `suplex_companies`(`id`) ON DELETE cascade,
+  FOREIGN KEY (`actor`) REFERENCES `suplex_users`(`id`) ON DELETE no action
 );
 --> statement-breakpoint
-CREATE INDEX IF NOT EXISTS `forge_planner_notes_task_idx` ON `forge_planner_notes` (`task_id`, `revision`, `created_at`);
+CREATE INDEX IF NOT EXISTS `suplex_planner_notes_task_idx` ON `suplex_planner_notes` (`task_id`, `revision`, `created_at`);

@@ -1,10 +1,10 @@
-"""Forge external-agent client. Python standard library only.
+"""Suplex external-agent client. Python standard library only.
 
-Reads FORGE_BASE_URL and FORGE_AGENT_CREDENTIAL from the environment at call
+Reads SUPLEX_BASE_URL and SUPLEX_AGENT_CREDENTIAL from the environment at call
 time. The credential is never logged, printed, or written to a file: every
 message that leaves this module passes through redact().
 
-Run `python3 forge_client.py --self-check` to exercise the redaction and
+Run `python3 suplex_client.py --self-check` to exercise the redaction and
 idempotency-key logic without a server.
 """
 
@@ -18,12 +18,12 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-USER_AGENT = "forge-agent-skill/1"
+USER_AGENT = "suplex-agent-skill/1"
 RETRY_STATUSES = frozenset({429, 500, 502, 503, 504})
 
 
-class ForgeError(Exception):
-    """A Forge runtime failure carrying the server's safe error code."""
+class SuplexError(Exception):
+    """A Suplex runtime failure carrying the server's safe error code."""
 
     def __init__(self, message: str, status: int | None = None, code: str | None = None, findings: list | None = None):
         super().__init__(message)
@@ -32,11 +32,11 @@ class ForgeError(Exception):
         self.findings = findings or []
 
 
-class ForgeConfigError(ForgeError):
+class SuplexConfigError(SuplexError):
     """Configuration is missing. Never carries a value, only a variable name."""
 
 
-class ForgeCredentialInvalid(ForgeError):
+class SuplexCredentialInvalid(SuplexError):
     """The credential was rejected. Ask the human for a new pairing code."""
 
 
@@ -54,28 +54,28 @@ def idempotency_key(scope: str, payload: dict) -> str:
     """
     canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"))
     digest = hashlib.sha256(f"{scope}\n{canonical}".encode()).hexdigest()
-    return f"forge-{digest[:32]}"
+    return f"suplex-{digest[:32]}"
 
 
 def _host(base_url: str) -> str:
     return urllib.parse.urlparse(base_url).netloc or base_url
 
 
-class ForgeClient:
-    """Thin typed-route client over the Forge Agent API.
+class SuplexClient:
+    """Thin typed-route client over the Suplex Agent API.
 
-    Prefer the Forge MCP tools when the bridge is configured; this client is
-    the documented HTTP fallback and speaks only routes that exist in Forge.
+    Prefer the Suplex MCP tools when the bridge is configured; this client is
+    the documented HTTP fallback and speaks only routes that exist in Suplex.
     """
 
     def __init__(self, base_url: str | None = None, credential: str | None = None, env: dict | None = None):
         env = os.environ if env is None else env
-        self.base_url = (base_url or env.get("FORGE_BASE_URL", "")).strip().rstrip("/")
-        self.credential = (credential or env.get("FORGE_AGENT_CREDENTIAL", "")).strip()
+        self.base_url = (base_url or env.get("SUPLEX_BASE_URL", "")).strip().rstrip("/")
+        self.credential = (credential or env.get("SUPLEX_AGENT_CREDENTIAL", "")).strip()
         if not self.base_url:
-            raise ForgeConfigError("Set FORGE_BASE_URL in the client process environment.")
+            raise SuplexConfigError("Set SUPLEX_BASE_URL in the client process environment.")
         if not self.credential:
-            raise ForgeConfigError("Set FORGE_AGENT_CREDENTIAL in the client process environment.")
+            raise SuplexConfigError("Set SUPLEX_AGENT_CREDENTIAL in the client process environment.")
 
     @property
     def host(self) -> str:
@@ -95,7 +95,7 @@ class ForgeClient:
                 status, payload = self._send(method, path, data, request_headers)
             except urllib.error.URLError as error:
                 if attempt == attempts:
-                    raise ForgeError(redact(f"Forge is unreachable at {self.base_url}: {error.reason}", self.credential)) from None
+                    raise SuplexError(redact(f"Suplex is unreachable at {self.base_url}: {error.reason}", self.credential)) from None
                 time.sleep(delay)
                 delay = min(delay * 2, 8)
                 continue
@@ -104,7 +104,7 @@ class ForgeClient:
                 delay = min(delay * 2, 8)
                 continue
             return status, payload
-        raise ForgeError("Forge did not answer after retries")
+        raise SuplexError("Suplex did not answer after retries")
 
     def _send(self, method: str, path: str, data: bytes | None, headers: dict) -> tuple[int, object]:
         request = urllib.request.Request(f"{self.base_url}{path}", data=data, headers=headers, method=method)
@@ -126,14 +126,14 @@ class ForgeClient:
             return payload
         safe = payload if isinstance(payload, dict) else {}
         code = safe.get("code")
-        message = redact(str(safe.get("error") or f"Forge returned HTTP {status}"), self.credential)
+        message = redact(str(safe.get("error") or f"Suplex returned HTTP {status}"), self.credential)
         if status == 401 or code == "credential_invalid":
-            raise ForgeCredentialInvalid(
-                "The Forge credential was rejected. Ask the person you work for to issue a new pairing code "
-                "in Forge admin, then re-exchange it and replace FORGE_AGENT_CREDENTIAL.",
+            raise SuplexCredentialInvalid(
+                "The Suplex credential was rejected. Ask the person you work for to issue a new pairing code "
+                "in Suplex admin, then re-exchange it and replace SUPLEX_AGENT_CREDENTIAL.",
                 status, code,
             )
-        raise ForgeError(message, status, code, safe.get("findings"))
+        raise SuplexError(message, status, code, safe.get("findings"))
 
     # Routes that exist in src/http/routes/agent-api.ts.
 
@@ -200,23 +200,23 @@ def _self_check() -> None:
     assert idempotency_key("p1", payload) != idempotency_key("p2", payload), "scope must separate keys"
     assert len(idempotency_key("p1", payload)) <= 128
 
-    for missing in ({"FORGE_AGENT_CREDENTIAL": credential}, {"FORGE_BASE_URL": "http://127.0.0.1:4111"}, {}):
+    for missing in ({"SUPLEX_AGENT_CREDENTIAL": credential}, {"SUPLEX_BASE_URL": "http://127.0.0.1:4111"}, {}):
         try:
-            ForgeClient(env=missing)
+            SuplexClient(env=missing)
             raise AssertionError("missing configuration must fail")
-        except ForgeConfigError as error:
+        except SuplexConfigError as error:
             assert credential not in str(error), "configuration errors must not carry values"
 
-    client = ForgeClient(env={"FORGE_BASE_URL": "http://127.0.0.1:4111/", "FORGE_AGENT_CREDENTIAL": credential})
+    client = SuplexClient(env={"SUPLEX_BASE_URL": "http://127.0.0.1:4111/", "SUPLEX_AGENT_CREDENTIAL": credential})
     assert client.base_url == "http://127.0.0.1:4111"
     assert client.host == "127.0.0.1:4111"
-    print("forge_client self-check passed")
+    print("suplex_client self-check passed")
 
 
 if __name__ == "__main__":
     import sys
 
     if "--self-check" not in sys.argv:
-        print("Usage: python3 forge_client.py --self-check", file=sys.stderr)
+        print("Usage: python3 suplex_client.py --self-check", file=sys.stderr)
         raise SystemExit(2)
     _self_check()

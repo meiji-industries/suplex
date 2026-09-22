@@ -103,10 +103,10 @@ const AGENT_API_DELIVERY_COMMANDS = ["observe_delivery", "request_delivery_repai
 const AGENT_API_AUTONOMOUS_COMMANDS = ["create_backlog_task", "create_queued_task", ...AGENT_API_TASK_COMMANDS, ...AGENT_API_DELIVERY_COMMANDS] as const;
 const AGENT_API_UNAVAILABLE_COMMANDS = ["answer_human_question", "deliver_task", "merge_pull_request"] as const;
 
-export const AGENT_API_RUNTIME_AUTHORITY = "Human answers remain unavailable to paired agents. The runtime API exposes delivery and merge commands only when capabilities reports them. Forge can perform delivery for a task's configured target, including a merge after review, without an agent command.";
-export const AGENT_API_MCP_AUTHORITY = "MCP exposes task lifecycle commands only. It does not expose runtime delivery or merge commands. Human answers remain unavailable to paired agents. Forge can perform delivery for a task's configured target, including a merge after review, without an agent command.";
-export const AGENT_API_WHOAMI_DESCRIPTION = "taskCommands lists exactly the lifecycle commands accepted by forge_command_task. autonomousCommands also includes task creation and, when enabled, runtime delivery commands.";
-export const AGENT_API_CAPABILITIES_DESCRIPTION = "autonomousCommands lists every command available through the runtime API. unavailableCommands lists commands this deployment does not accept. taskCommands from forge_whoami is the lifecycle subset exposed by forge_command_task.";
+export const AGENT_API_RUNTIME_AUTHORITY = "Human answers remain unavailable to paired agents. The runtime API exposes delivery and merge commands only when capabilities reports them. Suplex can perform delivery for a task's configured target, including a merge after review, without an agent command.";
+export const AGENT_API_MCP_AUTHORITY = "MCP exposes task lifecycle commands only. It does not expose runtime delivery or merge commands. Human answers remain unavailable to paired agents. Suplex can perform delivery for a task's configured target, including a merge after review, without an agent command.";
+export const AGENT_API_WHOAMI_DESCRIPTION = "taskCommands lists exactly the lifecycle commands accepted by suplex_command_task. autonomousCommands also includes task creation and, when enabled, runtime delivery commands.";
+export const AGENT_API_CAPABILITIES_DESCRIPTION = "autonomousCommands lists every command available through the runtime API. unavailableCommands lists commands this deployment does not accept. taskCommands from suplex_whoami is the lifecycle subset exposed by suplex_command_task.";
 
 export const AgentApiTaskCreateBodySchema = z.object({
   projectId: z.string().min(1).max(128),
@@ -114,7 +114,7 @@ export const AgentApiTaskCreateBodySchema = z.object({
   description: z.string().trim().optional().meta({ default: "" }),
   idempotencyKey: z.string().trim().min(1).max(128),
   dependsOn: z.array(taskId).max(MAX_DEPENDENCIES).optional().describe(`${AGENT_API_PREREQUISITE_SCOPE} Shown as Blocked by. A self-reference, a cycle, or an unavailable task is rejected.`),
-  blockedByPullRequests: z.array(z.object({ number: z.number().int().min(1) }).strict()).max(MAX_DEPENDENCIES).optional().describe("Pull requests in the project repository. Forge observes each one before saving it. An open pull request blocks until it merges. A closed pull request blocks until it is reopened and merged or removed."),
+  blockedByPullRequests: z.array(z.object({ number: z.number().int().min(1) }).strict()).max(MAX_DEPENDENCIES).optional().describe("Pull requests in the project repository. Suplex observes each one before saving it. An open pull request blocks until it merges. A closed pull request blocks until it is reopened and merged or removed."),
   queue: z.boolean().optional().describe("Queue the task: it starts now when every prerequisite is complete, and otherwise starts by itself when the last one completes. Without it, the task stays in the manual backlog."),
   images: z.array(TaskImageInputSchema).max(MAX_TASK_IMAGES).default([]),
   source: TaskSourceInputSchema.optional(),
@@ -169,7 +169,7 @@ export const AgentApiActionReasonCodeSchema = z.enum([
 ]);
 
 export const AgentApiActionRequiredSchema = z.object({
-  owner: z.enum(["agent", "task_owner", "human", "forge", "upstream"]),
+  owner: z.enum(["agent", "task_owner", "human", "suplex", "upstream"]),
   reasonCode: AgentApiActionReasonCodeSchema,
   summary: z.string(),
   upstream: z.object({ taskId: z.string(), pullRequestNumber: z.number().int().min(1).nullable() }).strict().nullable(),
@@ -609,7 +609,7 @@ export function agentApiRuntimeOpenApi(): Record<string, unknown> {
   return {
     openapi: "3.0.3",
     info: {
-      title: "Forge AgentApi Runtime API",
+      title: "Suplex AgentApi Runtime API",
       version: "v1",
       description: "Version v1 is additive-only within a major version. Pairing, credential rotation, and administration are separate provisioning APIs and are not part of this contract. Company, project grants, and creator ownership come from current server persistence, never request fields. Reads cover every task in the agent's currently granted projects. Commands, dependency writes, and delivery operations remain creator-only. Denied company, grant, and missing-resource reads are all non-enumerating 404 responses.",
     },
@@ -650,7 +650,7 @@ export function agentApiRuntimeOpenApi(): Record<string, unknown> {
         get: {
           operationId: "getAgentApiCreatedTask",
           summary: "Read a task in a granted project",
-          description: "A paired agent can read every task in its currently granted company projects. A task created by another actor reports permittedCommands as an empty array. Task states are backlog, queued, active, waiting_human, cancelled, and delivered. queue.waitingOn lists the exact wait reason of each incomplete prerequisite. A prerequisite is complete when it is delivered at its own delivery target; the merged target also needs the merged pull request state Forge observed from GitHub. Human questions are records only: answering them remains human authority and no agent answer command exists. The server router rejects path parameters longer than 100 characters before this authenticated operation is matched; those router-level responses are outside this contract.",
+          description: "A paired agent can read every task in its currently granted company projects. A task created by another actor reports permittedCommands as an empty array. Task states are backlog, queued, active, waiting_human, cancelled, and delivered. queue.waitingOn lists the exact wait reason of each incomplete prerequisite. A prerequisite is complete when it is delivered at its own delivery target; the merged target also needs the merged pull request state Suplex observed from GitHub. Human questions are records only: answering them remains human authority and no agent answer command exists. The server router rejects path parameters longer than 100 characters before this authenticated operation is matched; those router-level responses are outside this contract.",
           security: [{ AgentApiBearer: [] }],
           parameters: [{ name: "taskId", in: "path", required: true, schema: jsonSchema(AgentApiRuntimeOperations.getTask.params.shape.taskId, "input") }],
           responses: openApiResponses(AgentApiRuntimeOperations.getTask.response),

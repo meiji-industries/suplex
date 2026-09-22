@@ -1,4 +1,4 @@
-import type { ForgeConfig } from "./config.js";
+import type { SuplexConfig } from "./config.js";
 import { HealthSnapshotSchema } from "./schemas.js";
 import { providerCheckId, providerCheckLabel, OWNED_HEALTH_CHECK_IDS, type HealthCheckId, type ProviderHarnessKind } from "./health-contract.js";
 
@@ -65,7 +65,7 @@ export async function inspectProviderChecks(dependencies: HostHealthDependencies
   return Promise.all(distinct.map((kind) => safelyCheck(providerCheckId(kind), providerCheckLabel(kind), () => readiness(kind))));
 }
 
-export async function inspectHostHealth(config: ForgeConfig, dependencies: HostHealthDependencies, providers: readonly ProviderHarnessKind[] = []): Promise<HealthSnapshot> {
+export async function inspectHostHealth(config: SuplexConfig, dependencies: HostHealthDependencies, providers: readonly ProviderHarnessKind[] = []): Promise<HealthSnapshot> {
   const checks = await Promise.all([
     safelyCheck("database", "SQLite database", dependencies.database),
     safelyCheck("artifact-root", "Artifact root", dependencies.artifactRoot),

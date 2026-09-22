@@ -32,7 +32,7 @@ export function OAuthConsentView(): ReactElement {
       const firstCompany = value.companies[0]?.id ?? "";
       setCompanyId(firstCompany);
       setProjectIds([]);
-    }).catch(() => setError("Forge could not read this authorization request."));
+    }).catch(() => setError("Suplex could not read this authorization request."));
   }, [requestId]);
 
   const chooseCompany = (value: string | null): void => {
@@ -50,7 +50,7 @@ export function OAuthConsentView(): ReactElement {
       });
       window.location.assign(result.redirectTo);
     } catch {
-      setError("Forge could not save this decision.");
+      setError("Suplex could not save this decision.");
       setBusy(false);
     }
   };
@@ -63,7 +63,7 @@ export function OAuthConsentView(): ReactElement {
         {consent ? (
           <section className="space-y-4 border bg-card p-4">
             <div className="space-y-1"><h1 className="text-sm font-semibold">Approve {consent.clientName}?</h1><p className="text-xs text-muted-foreground">The client name is not verified. Check the callback before you approve.</p></div>
-            <dl className="grid grid-cols-[8rem_1fr] gap-x-3 gap-y-2 text-xs"><dt className="text-muted-foreground">Callback</dt><dd className="break-all">{consent.redirectUri}</dd><dt className="text-muted-foreground">Destination</dt><dd>{consent.redirectOrigin}</dd><dt className="text-muted-foreground">Permission</dt><dd>Read and manage Forge tasks through MCP</dd></dl>
+            <dl className="grid grid-cols-[8rem_1fr] gap-x-3 gap-y-2 text-xs"><dt className="text-muted-foreground">Callback</dt><dd className="break-all">{consent.redirectUri}</dd><dt className="text-muted-foreground">Destination</dt><dd>{consent.redirectOrigin}</dd><dt className="text-muted-foreground">Permission</dt><dd>Read and manage Suplex tasks through MCP</dd></dl>
             <FieldGroup>
               <Field><FieldLabel>Company</FieldLabel><Select value={companyId} onValueChange={chooseCompany}><SelectTrigger><SelectValue placeholder="Select a company" /></SelectTrigger><SelectContent>{consent.companies.map((company) => <SelectItem key={company.id} value={company.id}>{company.name}</SelectItem>)}</SelectContent></Select></Field>
               <Field><FieldLabel>Projects</FieldLabel><div className="space-y-2">{visibleProjects.map((project) => <label className="flex items-center gap-2 text-xs" key={project.id}><Checkbox checked={projectIds.includes(project.id)} onCheckedChange={(checked) => setProjectIds((current) => checked ? [...new Set([...current, project.id])] : current.filter((id) => id !== project.id))} />{project.name}</label>)}</div></Field>

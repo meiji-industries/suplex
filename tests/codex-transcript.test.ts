@@ -84,7 +84,7 @@ test("usage counts cumulative native thread totals once across shuffled turns", 
   ]);
 });
 
-test("a reset native counter starts a new usage sequence", () => {
+test("a decreasing native counter does not recount the thread", () => {
   const events = (input: number) => parseCodexEvents([
     JSON.stringify({ type: "thread.started", thread_id: "thread-a" }),
     JSON.stringify({ type: "turn.completed", usage: { input_tokens: input, output_tokens: input / 10 } }),
@@ -93,7 +93,43 @@ test("a reset native counter starts a new usage sequence", () => {
     { id: "first", model: "gpt-5.6-sol", events: events(100), updatedAt: 10 },
     { id: "reset", model: "gpt-5.6-sol", events: events(20), updatedAt: 20 },
   ], "session", "worker");
-  expect(usage.map(entry => entry.tokens.input)).toEqual([100, 20]);
+  expect(usage.map(entry => [entry.tokens.input, entry.cost, entry.model])).toEqual([[100, 0, "gpt-5.6-sol"], [0, 0, "unknown"]]);
+});
+
+test("a decrease in one raw field does not price increases in the other fields", () => {
+  const events = (input: number, cached: number) => parseCodexEvents([
+    JSON.stringify({ type: "thread.started", thread_id: "thread-a" }),
+    JSON.stringify({ type: "turn.completed", usage: { input_tokens: input, cached_input_tokens: cached, output_tokens: 20 } }),
+  ].join("\n"));
+  const usage = codexUsage([
+    { id: "first", model: "gpt-5.6-sol", events: events(100, 80), updatedAt: 10 },
+    { id: "ambiguous", model: "gpt-5.6-sol", events: events(200, 0), updatedAt: 20 },
+  ], "session", "worker");
+  expect(usage[1]).toMatchObject({ model: "unknown", cost: 0, tokens: { input: 0, output: 0, cache: { read: 0 } } });
+});
+
+test("a model change across a missing snapshot leaves only that interval unpriced", () => {
+  const events = (model: string, input?: number) => ({
+    model, events: parseCodexEvents([
+      JSON.stringify({ type: "thread.started", thread_id: "thread-a" }),
+      input === undefined ? JSON.stringify({ type: "turn.started" }) : JSON.stringify({ type: "turn.completed", usage: { input_tokens: input, output_tokens: input / 10 } }),
+    ].join("\n")),
+  });
+  const usage = codexUsage([
+    { id: "first", ...events("model-a", 100), updatedAt: 10 },
+    { id: "gap", ...events("model-b"), updatedAt: 20 },
+    { id: "ambiguous", ...events("model-c", 200), updatedAt: 30 },
+    { id: "later", ...events("model-c", 250), updatedAt: 40 },
+  ], "session", "worker");
+  expect(usage.map(entry => [entry.turnId, entry.model, entry.tokens.input])).toEqual([
+    ["first", "model-a", 100], ["ambiguous", "unknown", 100], ["later", "model-c", 50],
+  ]);
+  const sameModel = codexUsage([
+    { id: "first", ...events("model-a", 100), updatedAt: 10 },
+    { id: "gap", ...events("model-b"), updatedAt: 20 },
+    { id: "next", ...events("model-b", 200), updatedAt: 30 },
+  ], "session", "worker");
+  expect(sameModel[1]?.model).toBe("model-b");
 });
 
 test("native message order wins over changed file timestamps and raw counters are subtracted first", () => {

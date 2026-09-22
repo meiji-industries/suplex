@@ -126,9 +126,14 @@ export interface CodexTurn {
 type CodexUsage = z.infer<typeof CodexUsageSchema>;
 const USAGE_FIELDS = ["input_tokens", "cached_input_tokens", "cache_write_input_tokens", "output_tokens", "reasoning_output_tokens"] as const;
 
-/** One usage record per completed turn with reported usage. Codex reports no cost, so listed prices estimate it. */
 export function codexUsage(turns: readonly CodexTurn[], sessionId: string, role: TaskUsage["role"], pricing?: ModelPricingCatalog): TaskUsage[] {
   const previousByThread = new Map<string, CodexUsage>();
+  const gapModels = new Map<string, Set<string>>();
+  const rememberGap = (threadId: string, model: string): void => {
+    const models = gapModels.get(threadId) ?? new Set<string>();
+    models.add(model);
+    gapModels.set(threadId, models);
+  };
   const nativeOrder = turns.every(turn => turn.id.startsWith("msg_"));
   const ordered = [...turns].sort((a, b) =>
     nativeOrder
@@ -136,32 +141,39 @@ export function codexUsage(turns: readonly CodexTurn[], sessionId: string, role:
       : a.updatedAt - b.updatedAt || a.id.localeCompare(b.id));
   return ordered.flatMap(turn => {
     const listed = pricing?.get(modelPricingKey("openai", turn.model));
+    const threadId = codexThreadId(turn.events);
     let reported: CodexUsage | undefined;
     for (const event of turn.events) if (event.type === "turn.completed" && event.usage) reported = event.usage;
-    if (!reported) return [];
-    const threadId = codexThreadId(turn.events);
+    if (!reported) {
+      if (threadId) rememberGap(threadId, turn.model);
+      return [];
+    }
     const previous = threadId ? previousByThread.get(threadId) : undefined;
-    const reset = previous && USAGE_FIELDS.some(field => reported[field] < previous[field]);
-    const baseline = previous && !reset ? previous : undefined;
+    const regressed = previous && USAGE_FIELDS.some(field => reported[field] < previous[field]);
+    const ambiguous = Boolean(regressed || threadId && [...gapModels.get(threadId) ?? []].some(model => model !== turn.model));
     const native = {
-      input_tokens: reported.input_tokens - (baseline?.input_tokens ?? 0),
-      cached_input_tokens: reported.cached_input_tokens - (baseline?.cached_input_tokens ?? 0),
-      cache_write_input_tokens: reported.cache_write_input_tokens - (baseline?.cache_write_input_tokens ?? 0),
-      output_tokens: reported.output_tokens - (baseline?.output_tokens ?? 0),
-      reasoning_output_tokens: reported.reasoning_output_tokens - (baseline?.reasoning_output_tokens ?? 0),
+      input_tokens: reported.input_tokens - (previous?.input_tokens ?? 0),
+      cached_input_tokens: reported.cached_input_tokens - (previous?.cached_input_tokens ?? 0),
+      cache_write_input_tokens: reported.cache_write_input_tokens - (previous?.cache_write_input_tokens ?? 0),
+      output_tokens: reported.output_tokens - (previous?.output_tokens ?? 0),
+      reasoning_output_tokens: reported.reasoning_output_tokens - (previous?.reasoning_output_tokens ?? 0),
     };
-    if (threadId) previousByThread.set(threadId, reported);
+    if (threadId) {
+      if (regressed) rememberGap(threadId, turn.model);
+      else { previousByThread.set(threadId, reported); gapModels.delete(threadId); }
+    }
     const tokens = emptyTokens();
-    // `input_tokens` is inclusive of both cache figures and `output_tokens` of
-    // reasoning, so each total is split into slices that partition it.
-    tokens.input = Math.max(0, native.input_tokens - native.cached_input_tokens - native.cache_write_input_tokens);
-    tokens.output = Math.max(0, native.output_tokens - native.reasoning_output_tokens);
-    tokens.reasoning = native.reasoning_output_tokens;
-    tokens.cache.read = native.cached_input_tokens;
-    tokens.cache.write = native.cache_write_input_tokens;
-    const estimate = listed ? estimateUsageCost(tokens, listed) : 0;
+    if (!regressed) {
+      // The inclusive native totals are split into non-overlapping token slices.
+      tokens.input = Math.max(0, native.input_tokens - native.cached_input_tokens - native.cache_write_input_tokens);
+      tokens.output = Math.max(0, native.output_tokens - native.reasoning_output_tokens);
+      tokens.reasoning = native.reasoning_output_tokens;
+      tokens.cache.read = native.cached_input_tokens;
+      tokens.cache.write = native.cache_write_input_tokens;
+    }
+    const estimate = !ambiguous && listed ? estimateUsageCost(tokens, listed) : 0;
     return [TaskUsageSchema.parse({
-      sessionId, messageId: turn.id, turnId: turn.id, role, provider: "openai", model: turn.model, startedAt: turn.updatedAt, completedAt: turn.updatedAt,
+      sessionId, messageId: turn.id, turnId: turn.id, role, provider: "openai", model: ambiguous ? "unknown" : turn.model, startedAt: turn.updatedAt, completedAt: turn.updatedAt,
       failed: codexFailure(turn.events) !== null, summary: false, steps: 1, cost: estimate, subsidized: estimate > 0, tokens, source: "message",
     })];
   });

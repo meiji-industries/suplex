@@ -9,7 +9,7 @@ import { Button } from "../../components/ui/button.js";
 import { BlockedByPickerDialog } from "./blocked-by-picker.js";
 import { IssuePicker } from "./issue-picker.js";
 import { TaskQuestion } from "./task-question.js";
-import { TaskCoordinator } from "./task-coordinator.js";
+import { TaskAgent, type TaskAgentRole } from "./task-agent.js";
 import { NewTaskDialog } from "./new-task-dialog.js";
 import { editTaskDraft, type NewTaskDraft } from "./lib/duplicate-task-prefill.js";
 import { Badge } from "../../components/ui/badge.js";
@@ -27,7 +27,7 @@ import { Progress, ProgressLabel, ProgressValue } from "../../components/ui/prog
 import { WorkflowHistory, WorkflowStatus } from "./workflow-history.js";
 import { TaskPullRequestCard } from "./pull-request-card.js";
 import { TaskWorktreeMenu } from "./task-worktree-menu.js";
-import { ADVISOR_LABELS, workflowDefinition, type AdvisorRole } from "../../../coordination/workflows.js";
+import { workflowDefinition } from "../../../coordination/workflows.js";
 
 function CopyValue({ label, value, children }: { label: string; value: string; children: ReactElement }): ReactElement {
   const [copied, setCopied] = useState(false);
@@ -76,6 +76,7 @@ export function TaskDetailsPage({ task, project, onChange }: { task: Task; proje
   const [busy, setBusy] = useState(false);
   const [image, setImage] = useState<Task["images"][number] | null>(null);
   const [edit, setEdit] = useState<NewTaskDraft | null>(null);
+  const [openWorkerSelection, setOpenWorkerSelection] = useState(0);
   const editable = task.status === "backlog" && !task.archivedAt;
   useEffect(() => {
     let closed = false;
@@ -106,7 +107,7 @@ export function TaskDetailsPage({ task, project, onChange }: { task: Task; proje
             {task.humanQuestion ? <TaskQuestion key={task.humanQuestion.id} question={task.humanQuestion} busy={busy} onAnswer={answer => act("answer", { questionId: task.humanQuestion?.id, ...answer })} onLimitDecision={limitDecision => act("answer", { questionId: task.humanQuestion?.id, limitDecision })} /> : null}
           </div></div> : null}
           {task.workflow !== "standard" ? <WorkflowHistory task={task} activity={activity} /> : null}
-          <TaskWork task={task} activity={activity} onChange={onChange} />
+          <TaskWork task={task} activity={activity} onChange={onChange} onSelectWorker={() => setOpenWorkerSelection(value => value + 1)} />
         </div></div>
       </div>
       <aside aria-label="Task properties" className="min-w-0 border-t px-4 py-5 lg:border-l lg:border-t-0">
@@ -125,8 +126,7 @@ export function TaskDetailsPage({ task, project, onChange }: { task: Task; proje
           <TaskBlockedByProperty task={task} onChange={onChange} />
           <div className="space-y-1.5"><dt className="text-muted-foreground">Issue</dt><dd><IssuePicker projectId={task.projectId} issue={task.issue} onChange={async issue => onChange(await readJson<Task>(`/api/tasks/${task.id}/issue`, { method: "PATCH", body: JSON.stringify({ issue }) }))} /></dd></div>
           <div className="space-y-1.5"><dt className="text-muted-foreground">Project</dt><dd className="flex min-w-0 items-center gap-2">{project ? <EntityAvatar kind="project" id={project.id} name={project.name} size="xs" /> : null}<span className="truncate">{project?.name ?? task.configuration.repository}</span></dd></div>
-          <TaskCoordinator task={task} activity={activity} onChange={onChange} onActivityChange={setActivity} />
-          {([["worker", "Worker", task.workerProfile], ...workflowDefinition(task.workflow).advisorRoles.map(role => [role, ADVISOR_LABELS[role], task.advisorProfiles[role as AdvisorRole] ?? task.rootProfile] as const)] as const).map(([role, label, profile]) => <div key={role} className="space-y-1.5"><dt className="text-muted-foreground">{label}</dt><dd className="flex items-center gap-2"><EntityAvatar kind="agent" id={profile.profileId} name={label} size="xs" /><span className="min-w-0"><span className="block truncate" title={`${profile.model} · ${profile.provider}`}>{profile.model}</span><span className="block text-[11px] text-muted-foreground">{profile.provider} · {profile.reasoningLevel}</span></span></dd></div>)}
+          {(["root", "worker", ...workflowDefinition(task.workflow).advisorRoles] satisfies TaskAgentRole[]).map(role => <TaskAgent key={role} task={task} role={role} onChange={onChange} onActivityChange={setActivity} {...(role === "worker" ? { openRequest: openWorkerSelection, onOpenRequestHandled: () => setOpenWorkerSelection(0) } : {})} />)}
           <div className="space-y-1.5"><dt className="text-muted-foreground">Branch</dt><dd><CopyValue label="branch" value={task.configuration.branch}><code className="truncate" title={task.configuration.branch}>{task.configuration.branch}</code></CopyValue></dd></div>
           {task.worktree ? <div className="space-y-1.5"><dt className="text-muted-foreground">Worktree</dt><dd><CopyValue label="worktree path" value={task.worktree.path}><span className="truncate font-mono text-[11px]" title={task.worktree.path}>{task.worktree.path.split("/").pop()}</span></CopyValue></dd></div> : null}
           <Collapsible.Root className="space-y-3">

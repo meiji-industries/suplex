@@ -54,12 +54,12 @@ function humanMessage(prompt: string): string {
   } catch { return ""; }
 }
 
-export function TaskWork({ task, activity, onChange }: { task: Task; activity: TaskActivity; onChange: (task: Task) => void }) {
+export function TaskWork({ task, activity, onChange, onSelectWorker }: { task: Task; activity: TaskActivity; onChange: (task: Task) => void; onSelectWorker: () => void }) {
   const [tab, setTab] = useState("chat");
   const { execution, error: executionError } = useTaskExecution(task.id);
   const diffSummary = useTaskDiffSummary(task);
   return <Tabs value={tab} onValueChange={value => setTab(String(value))} data-task-work-tabs>
-    <TaskWorker key={task.id} task={task} activity={activity} onChange={onChange} />
+    <TaskWorker key={task.id} task={task} activity={activity} onSelect={onSelectWorker} />
     <TaskActivityTimeline taskId={task.id} />
     <div className="max-w-full border-b"><TabsList variant="line"><TabsTrigger value="chat">Chat</TabsTrigger><TabsTrigger value="activity">Activity <span className="text-xs text-muted-foreground">{activity.turns.length}</span></TabsTrigger><TabsTrigger value="diffs">Diffs{diffSummary?.available ? <span className="text-xs text-muted-foreground"> ({diffSummary.files})</span> : null}</TabsTrigger><TabsTrigger value="checks">Checks</TabsTrigger><TabsTrigger value="other">Other</TabsTrigger></TabsList></div>
     <TabsContent value="chat"><div className="grid min-w-0 gap-5 pt-3" aria-label="Conversation">

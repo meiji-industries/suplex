@@ -38,7 +38,7 @@ function mount() {
   const container = document.createElement("div");
   document.body.append(container);
   const root = createRoot(container);
-  return { container, root, render: async () => { await act(async () => { root.render(<TaskWork task={task} activity={activity} onChange={() => {}} />); await Promise.resolve(); }); } };
+  return { container, root, render: async () => { await act(async () => { root.render(<TaskWork task={task} activity={activity} onChange={() => {}} onSelectWorker={() => {}} />); await Promise.resolve(); }); } };
 }
 
 function diffsTab(container: HTMLElement) {

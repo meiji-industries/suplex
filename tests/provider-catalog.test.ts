@@ -1,15 +1,20 @@
 import { afterEach, expect, test, vi } from "vitest";
 import * as executables from "../src/platform/executable-resolver.js";
 import * as openCodeProviders from "../src/runtimes/opencode/providers.js";
-import { readProviders } from "../src/profiles/provider-catalog.js";
+import { mkdtempSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { CODEX_MODELS } from "../src/runtimes/task-harness.js";
+import { readCodexModels, readProviders } from "../src/profiles/provider-catalog.js";
 import { createProviderConnectionProbe } from "../src/profiles/provider-connection.js";
 import type { ProviderProbeResult } from "../src/profiles/provider-readiness.js";
 
 const probed = (stdout: string, exitCode = 0): ProviderProbeResult => ({ stdout, stderr: "", exitCode, timedOut: false });
 
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => { vi.restoreAllMocks(); vi.unstubAllEnvs(); });
 
 test("lists one row per agent tool with OpenCode's vendors folded into qualified model ids", async () => {
+  vi.stubEnv("CODEX_HOME", join(tmpdir(), "forge-missing-codex-home"));
   vi.spyOn(openCodeProviders, "readOpenCodeProviders").mockResolvedValue({ directory: "/workspace", observedAt: "2026-09-15T00:00:00.000Z", providers: [
     { id: "openai", label: "OpenAI", modelCount: 1, models: [{ id: "gpt-5.6-sol", label: "GPT-5.6 Sol" }], status: "configured" },
     { id: "github-copilot", label: "GitHub Copilot", modelCount: 1, models: [{ id: "claude-fable-5", label: "Claude Fable 5" }], status: "configured" },
@@ -21,13 +26,25 @@ test("lists one row per agent tool with OpenCode's vendors folded into qualified
 
   const listed = await readProviders({ directory: "/workspace", connection: async id => ({ status: "connected", summary: `checked ${id}` }) });
   expect(listed.providers.map(provider => [provider.id, provider.status, provider.modelCount])).toEqual([
-    ["claude-code", "missing", 8], ["codex", "configured", 5], ["devin", "missing", 4], ["opencode", "configured", 2],
+    ["claude-code", "missing", 9], ["codex", "configured", 5], ["devin", "missing", 4], ["opencode", "configured", 2],
   ]);
   expect(listed.providers.find(provider => provider.id === "opencode")?.models).toEqual([
     { id: "openai/gpt-5.6-sol", label: "GPT-5.6 Sol (OpenAI)" },
     { id: "github-copilot/claude-fable-5", label: "Claude Fable 5 (GitHub Copilot)" },
   ]);
   expect(listed.providers.map(provider => provider.connection.summary)).toEqual(["checked claude-code", "checked codex", "checked devin", "checked opencode"]);
+});
+
+test("Codex models come from its model cache, skipping hidden ones, with the static list as fallback", async () => {
+  const home = mkdtempSync(join(tmpdir(), "forge-codex-home-"));
+  expect(await readCodexModels(home)).toEqual(CODEX_MODELS);
+  writeFileSync(join(home, "models_cache.json"), JSON.stringify({ models: [
+    { slug: "gpt-7", display_name: "GPT-7", visibility: "list" },
+    { slug: "codex-auto-review", display_name: "Codex Auto Review", visibility: "hide" },
+  ] }));
+  expect(await readCodexModels(home)).toEqual([{ id: "gpt-7", label: "GPT-7" }]);
+  writeFileSync(join(home, "models_cache.json"), "not json");
+  expect(await readCodexModels(home)).toEqual(CODEX_MODELS);
 });
 
 test("a failed OpenCode observation leaves its row empty and still reports the executable", async () => {

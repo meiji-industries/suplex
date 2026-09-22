@@ -1,9 +1,26 @@
+import { readFile } from "node:fs/promises";
+import { homedir } from "node:os";
+import { join } from "node:path";
+import { z } from "zod";
 import { resolveClaudeExecutable, resolveCodexExecutable, resolveDevinExecutable, resolveOpenCodeExecutable } from "../platform/executable-resolver.js";
 import type { ProviderListResponse, ProviderObservation, ProviderSummary } from "../http/contracts/providers.js";
 import { readOpenCodeProviders } from "../runtimes/opencode/providers.js";
 import { CLAUDE_CODE_MODELS, CODEX_MODELS, DEVIN_MODELS } from "../runtimes/task-harness.js";
 import type { HarnessKind } from "../runtimes/harness-kind.js";
 import type { ProviderConnectionProbe } from "./provider-connection.js";
+
+const CodexModelCache = z.object({ models: z.array(z.object({ slug: z.string().min(1), display_name: z.string().optional(), visibility: z.string().optional() })) });
+
+/** Codex keeps the account's current model list in its home; the static list only covers a fresh install. */
+export async function readCodexModels(codexHome = process.env.CODEX_HOME ?? join(homedir(), ".codex")): Promise<{ id: string; label: string }[]> {
+  try {
+    const cache = CodexModelCache.parse(JSON.parse(await readFile(join(codexHome, "models_cache.json"), "utf8")));
+    const models = cache.models.filter(model => model.visibility !== "hide").map(model => ({ id: model.slug, label: model.display_name ?? model.slug }));
+    return models.length > 0 ? models : CODEX_MODELS;
+  } catch {
+    return CODEX_MODELS;
+  }
+}
 
 export type ReadProviders = () => Promise<ProviderListResponse>;
 
@@ -23,7 +40,7 @@ export async function readProviders(input: { directory: string; connection?: Pro
     { resolve: resolveOpenCodeExecutable, id: "opencode", label: "OpenCode", models: openCodeModels },
     { resolve: resolveClaudeExecutable, id: "claude-code", label: "Claude Code", models: CLAUDE_CODE_MODELS },
     { resolve: resolveDevinExecutable, id: "devin", label: "Devin CLI", models: DEVIN_MODELS },
-    { resolve: resolveCodexExecutable, id: "codex", label: "Codex CLI", models: CODEX_MODELS },
+    { resolve: resolveCodexExecutable, id: "codex", label: "Codex CLI", models: await readCodexModels() },
   ];
   const probe = input.connection;
   const providers: ProviderSummary[] = await Promise.all(rows.map(async row => ({

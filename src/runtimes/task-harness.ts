@@ -64,13 +64,14 @@ export const CLAUDE_CODE_MODELS = [
   { id: "sonnet", label: "Sonnet (latest)" },
   { id: "haiku", label: "Haiku (latest)" },
   { id: "claude-fable-5-1", label: "Claude Fable 5.1" },
+  { id: "claude-opus-5-5", label: "Claude Opus 5.5" },
   { id: "claude-opus-5", label: "Claude Opus 5" },
   { id: "claude-sonnet-5", label: "Claude Sonnet 5" },
   { id: "claude-haiku-4-5-20251001", label: "Claude Haiku 4.5" },
 ];
 // Devin's documented aliases resolve current model families; its model listing is account scoped.
 export const DEVIN_MODELS = [{ id: "swe", label: "SWE (latest)" }, { id: "swe-2", label: "SWE-2" }, { id: "opus", label: "Opus (latest)" }, { id: "gpt", label: "GPT (latest)" }];
-// ponytail: static alias list; Codex has no model listing command.
+// Fallback when Codex has not written its model cache yet.
 export const CODEX_MODELS = [
   { id: "gpt-5.6-sol", label: "GPT-5.6 Sol" },
   { id: "gpt-5.6-terra", label: "GPT-5.6 Terra" },

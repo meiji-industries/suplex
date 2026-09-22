@@ -203,21 +203,22 @@ export function InternalAgentDialog({
             </Field>
             <Field>
               <FieldLabel htmlFor="agent-model">Model</FieldLabel>
-              <Select
-                value={agentModel || null}
-                onValueChange={(value) => onAgentModelChange(value ?? "")}
-              >
-                <SelectTrigger id="agent-model">
-                  <SelectValue placeholder="Select a model" />
-                </SelectTrigger>
-                <SelectContent>
-                  {providerModels.map((model) => (
-                    <SelectItem key={model.id} value={model.id}>
-                      {model.displayName} · {model.id}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              {/* Free text: the provider CLI accepts models that Forge does not list yet. */}
+              <Input
+                id="agent-model"
+                list="agent-model-options"
+                value={agentModel}
+                placeholder="Select or type a model"
+                autoComplete="off"
+                onChange={(event) => onAgentModelChange(event.target.value.trim())}
+              />
+              <datalist id="agent-model-options">
+                {providerModels.map((model) => (
+                  <option key={model.id} value={model.id}>
+                    {model.displayName}
+                  </option>
+                ))}
+              </datalist>
             </Field>
             <Field>
               <FieldLabel htmlFor="agent-reasoning">Reasoning level</FieldLabel>

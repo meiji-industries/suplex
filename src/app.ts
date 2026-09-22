@@ -48,6 +48,7 @@ import workflowRoutes from "./http/routes/workflows.js";
 import githubTriggerRoutes from "./http/routes/github-triggers.js";
 import oauthRoutes from "./http/routes/oauth.js";
 import { registerMcpRoutes } from "./http/routes/mcp.js";
+import { runWithSystemEvents, type EventSink } from "./platform/system-events.js";
 
 export interface AppDependencies {
   fullApp?: boolean;
@@ -67,6 +68,7 @@ export interface AppDependencies {
   host?: Pick<TaskHost, "recover">;
   database?: ForgeDatabase;
   logger?: Logger | false;
+  systemEvents?: EventSink;
   externalAgent?: ExternalAgentService;
   oauth?: OAuthService;
   agentDelivery?: AgentDeliveryService;
@@ -91,6 +93,11 @@ export function createAppServer(dependencies: AppDependencies): FastifyInstance 
   void app.register(cookie);
   void app.register(websocket, { options: { maxPayload: 1 << 20 } });
   installHttpErrorHandlers(app);
+  if (dependencies.systemEvents) app.addHook("onRequest", (request, _reply, done) => {
+    const rawClientId = request.headers["x-forge-tab-id"];
+    const clientId = typeof rawClientId === "string" && /^[a-f0-9-]{16,64}$/i.test(rawClientId) ? rawClientId : undefined;
+    runWithSystemEvents(dependencies.systemEvents!, { source: "http", trigger: `${request.method} ${request.routeOptions.url ?? "unknown"}`, requestId: request.id, ...(clientId ? { clientId } : {}) }, done);
+  });
   app.addHook("onResponse", (request, reply) => {
     const statusCode = reply.statusCode;
     const responseTime = reply.elapsedTime;
@@ -155,7 +162,7 @@ export function registerAppRoutes(app: FastifyInstance, dependencies: AppDepende
     if (dependencies.oauth && projectService) void app.register(oauthRoutes, { oauth: dependencies.oauth, auth, projects: projectService, config: dependencies.config });
     if (dependencies.oauth && taskService) registerMcpRoutes(app, { oauth: dependencies.oauth, config: dependencies.config, tasks: taskService, agentDelivery: Boolean(dependencies.agentDelivery), ...(dependencies.host ? { host: dependencies.host } : {}), ...(dependencies.agentApiGithub ? { github: dependencies.agentApiGithub } : {}) });
     if (dependencies.externalAgent && taskService) registerAgentApiTaskRoutes(app, { externalAgent: dependencies.externalAgent, tasks: taskService, ...(dependencies.host ? { host: dependencies.host } : {}), ...(dependencies.agentApiGithub ? { github: dependencies.agentApiGithub } : {}), ...(dependencies.agentDelivery ? { agentDelivery: dependencies.agentDelivery } : {}) });
-    void app.register(authenticated, { auth, ...(dependencies.profiles ? { profiles: dependencies.profiles } : {}), ...(dependencies.providerInstances ? { providerInstances: dependencies.providerInstances } : {}), ...(dependencies.readProviderInstanceReadiness ? { readProviderInstanceReadiness: dependencies.readProviderInstanceReadiness } : {}), config: dependencies.config, ...(dependencies.readProviders ? { readProviders: dependencies.readProviders } : {}), ...(dependencies.providerLoginHerdr ? { providerLoginHerdr: dependencies.providerLoginHerdr } : {}), ...(dependencies.readUpdate ? { readUpdate: dependencies.readUpdate } : {}), ...(dependencies.requestUpdateRestart ? { requestUpdateRestart: dependencies.requestUpdateRestart } : {}), ...(dependencies.instanceId ? { instanceId: dependencies.instanceId } : {}), ...(projectService ? { projects: projectService } : {}), ...(taskService ? { tasks: taskService } : {}), ...(dependencies.host ? { host: dependencies.host } : {}), ...(database ? { database } : {}), ...(dependencies.externalAgent ? { externalAgent: dependencies.externalAgent } : {}) });
+    void app.register(authenticated, { auth, ...(dependencies.systemEvents ? { systemEvents: dependencies.systemEvents } : {}), ...(dependencies.profiles ? { profiles: dependencies.profiles } : {}), ...(dependencies.providerInstances ? { providerInstances: dependencies.providerInstances } : {}), ...(dependencies.readProviderInstanceReadiness ? { readProviderInstanceReadiness: dependencies.readProviderInstanceReadiness } : {}), config: dependencies.config, ...(dependencies.readProviders ? { readProviders: dependencies.readProviders } : {}), ...(dependencies.providerLoginHerdr ? { providerLoginHerdr: dependencies.providerLoginHerdr } : {}), ...(dependencies.readUpdate ? { readUpdate: dependencies.readUpdate } : {}), ...(dependencies.requestUpdateRestart ? { requestUpdateRestart: dependencies.requestUpdateRestart } : {}), ...(dependencies.instanceId ? { instanceId: dependencies.instanceId } : {}), ...(projectService ? { projects: projectService } : {}), ...(taskService ? { tasks: taskService } : {}), ...(dependencies.host ? { host: dependencies.host } : {}), ...(database ? { database } : {}), ...(dependencies.externalAgent ? { externalAgent: dependencies.externalAgent } : {}) });
     if (templateService) void app.register(taskTemplates, { auth, config: dependencies.config, templates: templateService });
     if (dependencies.workflows) void app.register(workflowRoutes, { auth, config: dependencies.config, workflows: dependencies.workflows });
     if (dependencies.githubTriggers) void app.register(githubTriggerRoutes, { auth, config: dependencies.config, triggers: dependencies.githubTriggers });

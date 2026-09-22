@@ -3,7 +3,21 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, test, vi } from "vitest";
 
-import { compareProcessIdentity, inspectProcessOnce, readProcessRegistry, stopOwnedProcesses, type OwnedProcess, type ProcessController, type ProcessInspection } from "../src/platform/process-manager.js";
+import { compareProcessIdentity, inspectProcessOnce, readProcessRegistry, signalOwnedProcess, stopOwnedProcesses, type OwnedProcess, type ProcessController, type ProcessInspection } from "../src/platform/process-manager.js";
+import { runWithSystemEvents, type SystemEvent } from "../src/platform/system-events.js";
+
+test("a termination request records the requested signal without inventing a process exit", async () => {
+  const owned = makeOwned();
+  const events: SystemEvent[] = [];
+  await runWithSystemEvents((event) => { events.push(event); return undefined; }, { source: "recovery", taskId: "task-1" }, async () => {
+    await signalOwnedProcess(owned, "SIGTERM", makeController({ inspect: async () => makeInspection(owned), signal: async () => undefined }), "stale dispatch recovery");
+  });
+  expect(events).toMatchObject([
+    { type: "process_signal", state: "requested", targetPid: owned.pid, signal: "SIGTERM", reason: "stale dispatch recovery" },
+    { type: "process_signal", state: "sent", targetPid: owned.pid, signal: "SIGTERM", reason: "stale dispatch recovery" },
+  ]);
+  expect(events.some(event => event.type === "headless_process" && event.state === "exit_observed")).toBe(false);
+});
 
 test("process identity survives a change in the observing process locale", async () => {
   try {

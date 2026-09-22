@@ -9,6 +9,7 @@ import { setTimeout as delay } from "node:timers/promises";
 import type { ForgeDatabase } from "./database.js";
 import { StructuredLogger, redact } from "./logging.js";
 import { defaultProcessController, inspectProcessOnce, signalOwnedProcess, type OwnedProcess, type ProcessController } from "./process-manager.js";
+import { systemEvent } from "./system-events.js";
 
 const OUTPUT_TAIL_BYTES = 8 * 1024;
 const TERMINATION_GRACE_MS = 250;
@@ -175,6 +176,7 @@ function record(input: RunCommandInput, result: CommandRunResult): void {
 /** Runs one child process and records its redacted, interleaved output under its invoking task step. */
 export async function runCommand(input: RunCommandInput): Promise<CommandRunResult> {
   const started = Date.now();
+  const commandId = randomUUID();
   const startedAt = new Date(started).toISOString();
   const command = display(input.command, input.args);
   const entryTail: EntryTail = { entries: [], bytes: 0 };
@@ -189,6 +191,7 @@ export async function runCommand(input: RunCommandInput): Promise<CommandRunResu
     detached,
     stdio: ["ignore", "pipe", "pipe"],
   });
+  child.once("spawn", () => { if (input.taskId) systemEvent({ type: "command_process", state: "running", taskId: input.taskId, ...(input.stepId ? { stepId: input.stepId } : {}), commandId, ...(child.pid ? { targetPid: child.pid } : {}) }); });
   child.once("error", (error) => {
     const code = "code" in error && typeof error.code === "string" ? error.code : "UNKNOWN";
     spawnError = { code, message: error.message };
@@ -221,7 +224,7 @@ export async function runCommand(input: RunCommandInput): Promise<CommandRunResu
   const terminate = async (): Promise<OwnedProcess | undefined> => {
     if (!child.pid) return undefined;
     const fallback: OwnedProcess = {
-      name: input.command,
+      name: "task command",
       pid: child.pid,
       command,
       startedAt,
@@ -293,6 +296,7 @@ export async function runCommand(input: RunCommandInput): Promise<CommandRunResu
       close = await closed;
     }
   } catch (error) {
+    if (input.taskId) systemEvent({ type: "command_process", state: "error", taskId: input.taskId, ...(input.stepId ? { stepId: input.stepId } : {}), commandId, ...(child.pid ? { targetPid: child.pid } : {}), durationMs: Date.now() - started });
     closeController.abort();
     stopReading(true);
     throw error;
@@ -317,6 +321,7 @@ export async function runCommand(input: RunCommandInput): Promise<CommandRunResu
     finishedAt: new Date().toISOString(),
     timedOut,
   };
+  if (input.taskId) systemEvent({ type: "command_process", state: "finished", taskId: input.taskId, ...(input.stepId ? { stepId: input.stepId } : {}), commandId, ...(child.pid ? { targetPid: child.pid } : {}), exitCode: result.exitCode, exitSignal: result.signal, durationMs: result.durationMs, timedOut: result.timedOut });
   record(input, result);
   const context = { ...(input.taskId ? { taskId: input.taskId } : {}), command: result.command, exitCode: result.exitCode, durationMs: result.durationMs };
   if (cleanupUnproven) {

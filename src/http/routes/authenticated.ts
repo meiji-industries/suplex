@@ -26,6 +26,8 @@ import taskWorktree from "./task-worktree.js";
 import update from "./update.js";
 
 import externalAgentAdministration from "./external-agent-administration.js";
+import { ClientLifecycleSchema } from "../contracts/system-events.js";
+import { systemEvent, type EventSink } from "../../platform/system-events.js";
 
 export interface AuthenticatedRoutesOptions {
   auth: AuthService;
@@ -43,6 +45,7 @@ export interface AuthenticatedRoutesOptions {
   readUpdate?: (check: boolean, user: AuthUser) => Promise<UpdateResponse>;
   requestUpdateRestart?: (user: AuthUser) => Promise<UpdateRestartResponse>;
   instanceId?: string;
+  systemEvents?: EventSink;
 }
 
 const authenticated: FastifyPluginAsync<AuthenticatedRoutesOptions> = async (app, options) => {
@@ -57,13 +60,18 @@ const authenticated: FastifyPluginAsync<AuthenticatedRoutesOptions> = async (app
   });
 
   await app.register(authMe, { prefix: "/api/auth", auth: options.auth });
+  if (options.systemEvents) app.post("/api/system/client-lifecycle", { bodyLimit: 1024, schema: { body: ClientLifecycleSchema } }, async (request, reply) => {
+    const parsed = ClientLifecycleSchema.parse(request.body);
+    systemEvent({ type: "client_lifecycle", ...parsed });
+    return reply.code(204).send();
+  });
   await app.register(companies, { auth: options.auth });
   await app.register(administration, { auth: options.auth, ...(options.profiles ? { profiles: options.profiles } : {}), ...(options.providerInstances ? { providerInstances: options.providerInstances } : {}), ...(options.readProviderInstanceReadiness ? { readProviderInstanceReadiness: options.readProviderInstanceReadiness } : {}), ...(options.readProviders ? { readProviders: options.readProviders } : {}), ...(options.config ? { config: options.config } : {}), ...(options.projects ? { projects: options.projects } : {}), ...(options.database ? { database: options.database } : {}) });
   if (options.externalAgent) await app.register(externalAgentAdministration, { externalAgent: options.externalAgent });
   await app.register(providerLogin, { auth: options.auth, ...(options.providerInstances ? { providerInstances: options.providerInstances } : {}), ...(options.config ? { config: options.config } : {}), ...(options.providerLoginHerdr ? { herdr: options.providerLoginHerdr } : {}) });
   if (options.database) await app.register(avatars, { avatars: new AvatarService(options.database, options.auth), ...(options.projects ? { projects: options.projects } : {}) });
   if (options.projects) await app.register(projects, { projects: options.projects });
-  if (options.tasks) await app.register(tasks, { tasks: options.tasks, ...(options.config ? { config: options.config } : {}), ...(options.host ? { host: options.host } : {}) });
+  if (options.tasks) await app.register(tasks, { tasks: options.tasks, ...(options.config ? { config: options.config } : {}), ...(options.host ? { host: options.host } : {}), ...(options.systemEvents ? { systemEvents: options.systemEvents } : {}) });
   if (options.tasks) await app.register(taskPane, { tasks: options.tasks, ...(options.config ? { config: options.config } : {}) });
   if (options.tasks && options.database) await app.register(taskWorktree, { tasks: options.tasks, database: options.database, ...(options.config ? { config: options.config } : {}) });
   if (options.readUpdate) await app.register(update, { readUpdate: options.readUpdate, ...(options.requestUpdateRestart ? { requestRestart: options.requestUpdateRestart } : {}), ...(options.instanceId ? { instanceId: options.instanceId } : {}) });

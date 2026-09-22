@@ -114,9 +114,11 @@ export class ClaudeCodeTaskRuntime implements TaskHarness {
       ...(last ? { assistantMessageID: last.uuid } : {}),
       native: { messageID: last?.uuid ?? intent.messageID, parentID: intent.messageID, providerID: "claude-code", modelID: init?.model ?? scope.profile.modelID, mode: agent, agent, cwd: init?.cwd ?? scope.directory, root: scope.directory, ...(result ? { finish: result.subtype } : {}), ...(result?.is_error ? { error: { name: result.subtype } } : {}) },
       unsettledTools: claudeUnsettledToolIds(entries).length > 0,
+      unsettledToolIds: claudeUnsettledToolIds(entries).slice(0, 32),
+      nativeFinalObserved: Boolean(result),
     };
     if (result) return { ...common, state: result.is_error || result.subtype !== "success" ? "error" : "completed", ...(result.is_error || result.subtype !== "success" ? { reason: "native_error" } : {}) };
-    if (await claudeTurnRunning(record)) return { ...common, reason: "dispatch_process_running" };
+    if (await claudeTurnRunning(record)) return { ...common, processRunning: true, reason: "dispatch_process_running" };
     if (!init) return { ...common, state: "error", reason: "native_startup_failed" };
     if (common.unsettledTools) return { ...common, state: "unknown", reason: "tool_execution_after_process_stopped", executionUncertain: { stoppedServerGeneration: record.generation } };
     return { ...common, state: "interrupted", reason: "dispatch_process_stopped", interruptedExecution: { stoppedServerGeneration: record.generation } };

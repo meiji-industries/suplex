@@ -174,11 +174,13 @@ export class CodexTaskRuntime implements TaskHarness {
       ...base, state: "running", admission: "observed", retry: "forbidden",
       native: { messageID: intent.messageID, parentID: intent.messageID, providerID: "codex", modelID: scope.profile.modelID, mode: agent, agent, cwd: scope.directory, root: scope.directory },
       unsettledTools: codexUnsettledToolIds(events).length > 0,
+      unsettledToolIds: codexUnsettledToolIds(events).slice(0, 32),
+      nativeFinalObserved: codexCompletedTurn(events),
     };
     // Liveness outranks the log: a completed turn event is printed before Codex
     // exits, and reporting `completed` while it runs would dispatch the next
     // turn concurrently against the same thread.
-    if (await headlessTurnRunning(record)) return { ...common, reason: "dispatch_process_running" };
+    if (await headlessTurnRunning(record)) return { ...common, processRunning: true, reason: "dispatch_process_running" };
     const exit = await readHeadlessText(files.exit);
     if (common.unsettledTools) {
       if (exit === null) {
@@ -191,7 +193,7 @@ export class CodexTaskRuntime implements TaskHarness {
           if (!absent) throw new Error("Codex process liveness is uncertain. Recovery will retry.");
         }
       }
-      await stopExecutionProcesses(runtimeDirectory, record.generation);
+      await stopExecutionProcesses(runtimeDirectory, record.generation, "unsettled tools after agent process exit");
       return { ...common, state: "interrupted", reason: "tool_execution_after_process_stopped", interruptedExecution: { stoppedServerGeneration: record.generation } };
     }
     if (codexCompletedTurn(events)) return { ...common, state: "completed", assistantMessageID: intent.messageID };

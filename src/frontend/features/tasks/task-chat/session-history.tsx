@@ -2,6 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react
 import { ArrowDown } from "lucide-react";
 import { SessionHistoryLiveEventSchema, SessionHistoryPageSchema, type NativeHistoryMessage, type SessionHistoryLiveEvent } from "../../../../tasks/history/contracts.js";
 import { readJson } from "../../../lib/api.js";
+import { clientTabId } from "../../../shell/client-lifecycle.js";
 import { Alert, AlertDescription } from "../../../components/ui/alert.js";
 import { Button } from "../../../components/ui/button.js";
 import { Markdown } from "../../../components/app/markdown.js";
@@ -134,7 +135,8 @@ export function SessionHistory({ taskId, sessionId }: { taskId: string; sessionI
       setConnection(current => current.kind === "live" ? current : { kind: "connecting" });
       const scheme = location.protocol === "https:" ? "wss" : "ws";
       const path = `/api/tasks/${encodeURIComponent(taskId)}/sessions/${encodeURIComponent(sessionId)}/history/live`;
-      const nextSocket = new WebSocket(`${scheme}://${location.host}${path}`);
+      const tabId = clientTabId();
+      const nextSocket = new WebSocket(`${scheme}://${location.host}${path}${tabId ? `?tabId=${encodeURIComponent(tabId)}` : ""}`);
       socket = nextSocket;
       nextSocket.onmessage = messageEvent => {
         if (!isCurrent(nextSocket)) return;

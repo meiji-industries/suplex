@@ -24,15 +24,17 @@ import { TaskChecksResponseSchema, TaskDiffResponseSchema, TaskDiffSummaryRespon
 import { CompanyIdParamsSchema, TaskArtifactParamsSchema, TaskIdParamsSchema } from "../contracts/common.js";
 import { normalizeWorkflowInput, WorkflowInputFailure } from "../../coordination/workflows.js";
 import { MAX_TASK_REQUEST_BYTES, SessionHistoryPageSchema, TaskActivityResponseSchema, TaskAgentSelectionBodySchema, TaskAnswerBodySchema, TaskBodySchema, TaskContinueDeliveryBodySchema, TaskCoordinatorReplacementBodySchema, TaskDependenciesBodySchema, TaskDetailsBodySchema, TaskListResponseSchema, TaskNoteBodySchema, TaskSessionHistoryParamsSchema, TaskSessionHistoryQuerySchema, TaskWorkerReplacementBodySchema, TaskRenameBodySchema, TaskResponseSchema } from "../contracts/tasks.js";
+import { eventContext, runWithSystemEvents, systemEvent, withEventCause, type EventSink } from "../../platform/system-events.js";
 
 export interface TaskRoutesOptions {
   tasks: TaskService;
   host?: Pick<TaskHost, "recover">;
   config?: Pick<ForgeConfig, "databasePath" | "reachableAddress">;
   readHistory?: (databasePath: string, session: TaskSession) => Promise<NativeHistoryMessage[]>;
+  systemEvents?: EventSink;
 }
 
-const tasks: FastifyPluginAsync<TaskRoutesOptions> = async (app, { tasks, host, config, readHistory }) => {
+const tasks: FastifyPluginAsync<TaskRoutesOptions> = async (app, { tasks, host, config, readHistory, systemEvents }) => {
   const typed = app.withTypeProvider<ZodTypeProvider>();
   const liveConnections = new Set<() => void>();
   app.addHook("onClose", async () => {
@@ -78,11 +80,18 @@ const tasks: FastifyPluginAsync<TaskRoutesOptions> = async (app, { tasks, host, 
     return reply.header("Cache-Control", "private, no-store").send(result);
   });
   typed.get("/api/tasks/:taskId/sessions/:sessionId/history/live", { websocket: true, schema: { params: TaskSessionHistoryParamsSchema } }, (socket, request) => {
+    const rawTabId = new URL(request.url, "http://localhost").searchParams.get("tabId");
+    const socketContext = { ...eventContext(), source: "history_socket", ...(rawTabId && /^[a-f0-9-]{16,64}$/i.test(rawTabId) ? { clientId: rawTabId } : {}) };
+    const observeSocket = (state: "connected" | "closed"): void => {
+      if (systemEvents) runWithSystemEvents(systemEvents, socketContext, () => systemEvent({ type: "history_socket", state, taskId: request.params.taskId, sessionId: request.params.sessionId }));
+    };
+    observeSocket("connected");
     let stopPolling = (): void => {};
     let released = false;
     const release = (): void => {
       if (released) return;
       released = true;
+      observeSocket("closed");
       stopPolling();
       liveConnections.delete(release);
       if (socket.readyState === 0 || socket.readyState === 1) socket.close(1012, "server closing");
@@ -190,7 +199,10 @@ const tasks: FastifyPluginAsync<TaskRoutesOptions> = async (app, { tasks, host, 
     tasks.getTask(request.forgeUser.id, task.id);
     return reply.header("Cache-Control", "private, no-store").send(result);
   });
-  const wake = (taskId: string): void => { if (host) void host.recover(taskId).catch(error => app.log.warn({ taskId, err: error }, "Task recovery will be retried")); };
+  const wake = (taskId: string, action = "task mutation"): void => {
+    const cause = systemEvent({ type: "task_action", taskId, action });
+    if (host) void withEventCause(cause, () => host.recover(taskId)).catch(error => app.log.warn({ taskId, err: error }, "Task recovery will be retried"));
+  };
   typed.get("/api/tasks", { schema: { querystring: listQuery, response: { 200: TaskListResponseSchema } } }, async request => ({ tasks: tasks.listTasks(request.forgeUser.id, undefined, request.query.archived === "true") }));
   typed.get("/api/companies/:companyId/tasks", { schema: { params: CompanyIdParamsSchema, querystring: listQuery, response: { 200: TaskListResponseSchema } } }, async request => ({ tasks: tasks.listTasks(request.forgeUser.id, request.params.companyId, request.query.archived === "true") }));
   // Workflow defaults apply before schema defaults can erase whether the caller supplied a field.
@@ -200,7 +212,7 @@ const tasks: FastifyPluginAsync<TaskRoutesOptions> = async (app, { tasks, host, 
   };
   typed.post("/api/companies/:companyId/tasks", { bodyLimit: MAX_TASK_REQUEST_BYTES, preValidation: normalizeWorkflow, schema: { params: CompanyIdParamsSchema, body: TaskBodySchema, response: { 200: TaskResponseSchema, 201: TaskResponseSchema } } }, async (request, reply) => {
     const result = await tasks.createTask(request.forgeUser.id, request.params.companyId, request.body);
-    if (result.task.status === "active") wake(result.task.id);
+    if (result.task.status === "active") wake(result.task.id, "create");
     return reply.code(result.created ? 201 : 200).send(result.task);
   });
   typed.get("/api/tasks/:taskId", { schema: taskResponse }, async (request, reply) => reply.header("Cache-Control", "private, no-store").send(tasks.getTask(request.forgeUser.id, request.params.taskId)));
@@ -210,7 +222,7 @@ const tasks: FastifyPluginAsync<TaskRoutesOptions> = async (app, { tasks, host, 
   typed.post("/api/tasks/:taskId/rename", { schema: { ...taskResponse, body: TaskRenameBodySchema } }, async request => tasks.renameTask(request.forgeUser.id, request.params.taskId, request.body));
   typed.post("/api/tasks/:taskId/start", { schema: taskResponse }, async request => {
     const task = tasks.startTask(request.forgeUser.id, request.params.taskId);
-    wake(task.id);
+    wake(task.id, "start");
     return task;
   });
   typed.post("/api/tasks/:taskId/disarm", { schema: taskResponse }, async request => tasks.disarmTask(request.forgeUser.id, request.params.taskId));
@@ -253,7 +265,7 @@ const tasks: FastifyPluginAsync<TaskRoutesOptions> = async (app, { tasks, host, 
   });
   typed.post("/api/tasks/:taskId/refresh", { schema: taskResponse }, async request => {
     const task = tasks.getTask(request.forgeUser.id, request.params.taskId);
-    wake(task.id);
+    wake(task.id, "refresh");
     return task;
   });
   typed.post("/api/tasks/:taskId/archive", { schema: { params: TaskIdParamsSchema, body: TaskArchiveBodySchema.optional(), response: { 200: TaskArchiveResponseSchema } } }, async request => tasks.archiveTask(request.forgeUser.id, request.params.taskId, request.body?.confirmDiscardDirty));

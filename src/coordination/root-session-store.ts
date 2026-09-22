@@ -30,6 +30,8 @@ import { assertPullRequestAvailable, assertTaskPullRequestsAvailable } from "../
 import { recordTriggerPush, triggerDeliveryPolicy, type GithubTriggerDeliveryPolicy } from "../integrations/github/trigger-delivery-policy.js";
 import { integer, parseJson, text, type Row } from "./persistence/row-values.js";
 import { bindHarnessSession, bindPane, currentDelegates, currentSession, currentSessionByIdentity, hasTurns, markPrompted, pendingTurns, requeueFencedPrompt, releaseSessionOperation, session, sessions, turn, turns } from "./persistence/session-operations.js";
+import { eventContext, hasSystemEventSink, systemEvent } from "../platform/system-events.js";
+import { prerequisiteWaits } from "../tasks/queue.js";
 
 const now = (): string => new Date().toISOString();
 const hash = (value: string): string => createHash("sha256").update(value).digest("hex");
@@ -61,6 +63,8 @@ function control(row: Row): TaskControl {
 
 export class TaskControlStore {
   private readonly limitStore: TaskLimitStore;
+  private readonly observedStatuses = new Map<string, string>();
+  private readonly observedWaits = new Map<string, string>();
   constructor(readonly database: ForgeDatabase, private readonly inspectOwner: (pid: number) => Promise<ProcessOwnerObservation> = observeProcessOwner) { this.limitStore = new TaskLimitStore(database); }
   readTriggerDeliveryPolicy(taskId: string): GithubTriggerDeliveryPolicy | null { return this.database.authQuery(db => triggerDeliveryPolicy(db, taskId)); }
   recordTriggerPush(input: { taskId: string; dispatchId: string; fromHeadSha: string; toHeadSha: string; review: unknown }): void { this.database.authImmediateTransaction(db => recordTriggerPush(db, input)); }
@@ -97,6 +101,7 @@ export class TaskControlStore {
    * bypasses a prerequisite. An active task only receives an earlier wake.
    */
   start(taskId: string): TaskControl {
+    const before = this.get(taskId).status;
     const changed = this.database.authImmediateTransaction(db => {
       const time = now();
       if (db.prepare("UPDATE forge_task_controls SET wake_at = ?, updated_at = ? WHERE task_id = ? AND status = 'active'").run(time, time, taskId).changes === 1) return true;
@@ -108,7 +113,13 @@ export class TaskControlStore {
       return true;
     });
     if (!changed) throw new Error("task_not_startable");
-    return this.observeLifecycle(taskId);
+    const result = this.observeLifecycle(taskId);
+    if (before !== "active" && result.status === "active") {
+      const trigger = eventContext()?.trigger ?? "start request";
+      this.database.afterCommit(() => systemEvent({ type: "task_admitted", taskId, trigger }));
+    }
+    if (result.status === "queued") this.observeQueueWaits([taskId]);
+    return result;
   }
   /** Returns a queued task to the manual backlog. A manual backlog task is a no-op. */
   disarm(taskId: string): boolean {
@@ -126,8 +137,36 @@ export class TaskControlStore {
   admitQueued(taskIds?: string[]): string[] {
     if (!taskIds && !this.database.authQuery(db => readyQueuedTaskIds(db)).length) return [];
     const admitted = this.database.authImmediateTransaction(db => admitQueuedTasks(db, taskIds ?? readyQueuedTaskIds(db)));
-    for (const taskId of admitted) this.observeLifecycle(taskId);
+    for (const taskId of admitted) {
+      this.observeLifecycle(taskId);
+      const trigger = eventContext()?.trigger ?? "scheduler sweep";
+      this.database.afterCommit(() => systemEvent({ type: "task_admitted", taskId, trigger }));
+    }
     return admitted;
+  }
+  observeQueueWaits(taskIds?: string[]): void {
+    if (!hasSystemEventSink()) return;
+    try {
+      const waits = this.database.authQuery(db => {
+        const ids = taskIds ?? (db.prepare("SELECT task_id AS id FROM forge_task_controls WHERE status = 'queued'").all() as Array<{ id: string }>).map(row => row.id);
+        return ids.map(taskId => ({ taskId, waits: prerequisiteWaits(db, taskId).map(wait => ({ id: wait.id, reason: wait.reason })) }));
+      });
+      for (const entry of waits) {
+        const normalized = entry.waits.sort((a, b) => a.id.localeCompare(b.id));
+        const signature = JSON.stringify(normalized);
+        if (this.observedWaits.get(entry.taskId) === signature) continue;
+        this.database.afterCommit(() => {
+          if (this.observedWaits.get(entry.taskId) === signature) return;
+          this.observedWaits.set(entry.taskId, signature);
+          systemEvent({ type: "queue_wait", taskId: entry.taskId, waits: normalized });
+        });
+      }
+    } catch { /* A diagnostic read never changes queue admission. */ }
+  }
+  observeStartupSnapshot(): void {
+    if (!hasSystemEventSink()) return;
+    const rows = this.database.authQuery(db => (db.prepare("SELECT c.task_id AS taskId, c.status FROM forge_task_controls c JOIN forge_tasks t ON t.id = c.task_id WHERE t.archived_at IS NULL ORDER BY c.task_id").all() as Array<{ taskId: string; status: string }>).map(row => ({ ...row, waits: row.status === "queued" ? prerequisiteWaits(db, row.taskId).map(wait => ({ id: wait.id, reason: wait.reason })) : [] })));
+    for (const row of rows) systemEvent({ type: "task_snapshot", taskId: row.taskId, status: row.status, waits: row.waits });
   }
   sendNote(taskId: string, note: string, label = "Human note"): TaskControl {
     this.database.authImmediateTransaction(db => {
@@ -214,20 +253,27 @@ export class TaskControlStore {
     return this.get(taskId);
   }
   markDelivered(taskId: string): TaskControl {
-    const changed = this.database.authTransaction((db) => {
+    const result = this.database.authTransaction((db) => {
+      const queuedBefore = (db.prepare("SELECT c.task_id AS id FROM forge_task_dependencies d JOIN forge_task_controls c ON c.task_id = d.task_id WHERE d.depends_on_task_id = ? AND c.status = 'queued'").all(taskId) as Array<{ id: string }>).map(row => row.id);
       const previous = db.prepare("SELECT status FROM forge_task_controls WHERE task_id = ?").get(taskId) as { status: string } | undefined;
       const delivered = db.prepare("UPDATE forge_task_controls SET workflow_state_json = json_set(workflow_state_json, '$.followUp', json('false')), status = 'delivered', wake_at = NULL, human_question = NULL, human_question_id = NULL, limit_pause_json = NULL, updated_at = ? WHERE task_id = ? AND status IN ('active', 'waiting_human', 'delivered')").run(now(), taskId).changes;
-      if (delivered !== 1) return delivered;
+      if (delivered !== 1) return { changed: delivered, admitted: [] as string[] };
       // A queued dependent starts in the same transaction when this delivery completes its last prerequisite.
       admitQueuedTasks(db, readyQueuedTaskIds(db, taskId));
       if (previous?.status !== "delivered") {
         const dependents = db.prepare("SELECT task_id AS id FROM forge_task_dependencies WHERE depends_on_task_id = ? ORDER BY task_id").all(taskId) as Array<{ id: string }>;
         for (const dependent of dependents) this.reconcileDependencyReleaseInTransaction(db, dependent.id);
       }
-      return delivered;
+      const admitted = queuedBefore.filter(id => (db.prepare("SELECT status FROM forge_task_controls WHERE task_id = ?").get(id) as { status: string } | undefined)?.status === "active");
+      return { changed: delivered, admitted };
     });
-    if (changed !== 1) throw new Error("task_not_active");
-    return this.observeLifecycle(taskId);
+    if (result.changed !== 1) throw new Error("task_not_active");
+    const control = this.observeLifecycle(taskId);
+    for (const id of result.admitted) {
+      this.observeLifecycle(id);
+      this.database.afterCommit(() => systemEvent({ type: "task_admitted", taskId: id, trigger: "prerequisite completion", prerequisiteTaskId: taskId }));
+    }
+    return control;
   }
   /** Call when a task may have lost its last blocker. A queued task is admitted; an active task receives an earlier wake. */
   reconcileDependencyReleaseInTransaction(db: Database.Database, taskId: string): void {
@@ -695,6 +741,13 @@ export class TaskControlStore {
   }
   private observeLifecycle(taskId: string): TaskControl {
     const value = this.get(taskId);
+    const previousStatus = this.observedStatuses.get(taskId);
+    if (previousStatus !== value.status) this.database.afterCommit(() => {
+      const currentPreviousStatus = this.observedStatuses.get(taskId);
+      if (currentPreviousStatus === value.status) return;
+      this.observedStatuses.set(taskId, value.status);
+      systemEvent({ type: "task_status", taskId, status: value.status, ...(currentPreviousStatus ? { previousStatus: currentPreviousStatus } : {}) });
+    });
     try { new TaskAnalyticsStore(this.database).observe({ id: taskId, status: value.status, humanQuestion: value.humanQuestionId ? { id: value.humanQuestionId } : null }); }
     catch (error) { new StructuredLogger().warn("Analytics lifecycle observation failed", { taskId }, { error: error instanceof Error ? error.message : "unknown error" }); }
     return value;

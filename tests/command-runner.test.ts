@@ -9,6 +9,7 @@ import { CommandCleanupError, runCommand, setCommandRunnerLogger } from "../src/
 import { StructuredLogger } from "../src/platform/logging.js";
 import { compareProcessIdentity, defaultProcessController, inspectProcessOnce, signalOwnedProcess, type OwnedProcess } from "../src/platform/process-manager.js";
 import { json } from "../src/shared/json.js";
+import { runWithSystemEvents, type SystemEvent } from "../src/platform/system-events.js";
 
 let lines: string[];
 
@@ -20,6 +21,19 @@ beforeEach(() => {
 function records(): Array<Record<string, unknown>> {
   return lines.map((line) => json<Record<string, unknown>>(line, {}));
 }
+
+test("task command telemetry separates running from actual close without command text", async () => {
+  const events: SystemEvent[] = [];
+  await runWithSystemEvents(event => { events.push(event); return undefined; }, { source: "test", taskId: "task-1" }, async () => {
+    await runCommand({ taskId: "task-1", stepId: null, command: "sh", args: ["-c", "exit 3"] });
+  });
+  expect(events).toMatchObject([
+    { type: "command_process", state: "running", taskId: "task-1" },
+    { type: "command_process", state: "finished", taskId: "task-1", exitCode: 3, exitSignal: null },
+  ]);
+  expect(events[0]).not.toHaveProperty("command");
+  expect(events[1]).not.toHaveProperty("args");
+});
 
 test("logs failed commands with stderr detail", async () => {
   await runCommand({ taskId: null, stepId: null, command: "sh", args: ["-c", "echo boom >&2; exit 3"] });

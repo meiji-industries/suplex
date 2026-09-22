@@ -20,16 +20,20 @@ import { IssueTrackerScopeFailure } from "../integrations/issue-tracker.js";
 import { ProviderHttpFailure } from "../integrations/provider-http.js";
 import { createGithubReleasePort, type GithubReleasePort } from "../integrations/github/delivery.js";
 import { updatePullRequestDependencyInTransaction, type PullRequestDependency } from "./pull-request-dependencies.js";
+import { eventContext, runWithSystemEvents, systemEvent, withEventCause, withEventContext, type EventSink } from "../platform/system-events.js";
 
 type Controller = Pick<RootController, "prepareRoot" | "recover">;
 
 export class TaskHost {
+  readonly systemEvents: EventSink;
+  private readonly telemetryEnabled: boolean;
   private readonly store: TaskControlStore;
   private readonly controller: Controller;
   private readonly delivery: Pick<DeliveryOperations, "observe"> & Partial<Pick<DeliveryOperations, "observeDeliveryWait">>;
   private readonly worktree: typeof prepareTaskWorktree;
   private readonly artifactRoot: string;
   private readonly running = new Map<string, Promise<void>>();
+  private readonly lastRecoveryEvent = new Map<string, { result: string; at: number }>();
   private timer: NodeJS.Timeout | undefined;
   private stopping = false;
   private readonly completedPullRequests: Pick<CompletedPullRequests, "refresh">;
@@ -39,7 +43,9 @@ export class TaskHost {
   private prerequisiteRefresh: Promise<void> | undefined;
   private nextPrerequisiteRefresh = 0;
 
-  constructor(private readonly database: ForgeDatabase, options: { completedPullRequests?: Pick<CompletedPullRequests, "refresh">; artifactRoot?: string; controller?: Controller; delivery?: Pick<DeliveryOperations, "observe"> & Partial<Pick<DeliveryOperations, "observeDeliveryWait">>; worktree?: typeof prepareTaskWorktree; pullRequestObserver?: Pick<Required<GithubReleasePort>, "observePullRequest"> } = {}) {
+  constructor(private readonly database: ForgeDatabase, options: { completedPullRequests?: Pick<CompletedPullRequests, "refresh">; artifactRoot?: string; controller?: Controller; delivery?: Pick<DeliveryOperations, "observe"> & Partial<Pick<DeliveryOperations, "observeDeliveryWait">>; worktree?: typeof prepareTaskWorktree; pullRequestObserver?: Pick<Required<GithubReleasePort>, "observePullRequest">; systemEvents?: EventSink } = {}) {
+    this.systemEvents = options.systemEvents ?? (() => undefined);
+    this.telemetryEnabled = options.systemEvents !== undefined;
     this.store = new TaskControlStore(database);
     this.completedPullRequests = options.completedPullRequests ?? new CompletedPullRequests(database);
     const artifactRoot = this.artifactRoot = options.artifactRoot ?? join(dirname(database.filename()), "artifacts");
@@ -52,13 +58,15 @@ export class TaskHost {
 
   start(): void {
     if (this.timer || this.stopping) return;
-    this.tickSafely();
-    this.timer = setInterval(() => this.tickSafely(), 1_000);
+    try { if (this.telemetryEnabled) runWithSystemEvents(this.systemEvents, { source: "reconciliation", trigger: "startup recovery" }, () => this.store.observeStartupSnapshot()); }
+    catch { /* Telemetry observations cannot stop the host. */ }
+    this.tickSafely("startup recovery");
+    this.timer = setInterval(() => this.tickSafely("scheduler sweep"), 1_000);
     this.timer.unref();
   }
 
-  private tickSafely(): void {
-    try { this.tick(); }
+  private tickSafely(trigger: string): void {
+    try { if (this.telemetryEnabled) runWithSystemEvents(this.systemEvents, { source: "scheduler", trigger }, () => this.tick()); else this.tick(); }
     catch (error) { new StructuredLogger().warn("Task scheduling will be retried", {}, { error: error instanceof Error ? error.message : String(error) }); }
   }
 
@@ -71,12 +79,13 @@ export class TaskHost {
         .finally(() => { this.completedRefresh = undefined; });
     }
     // The queue sweep runs every tick. GitHub refresh is slower and single-flight, but a completed refresh gets its own admission pass.
+    this.store.observeQueueWaits();
     this.store.admitQueued();
     if (!this.prerequisiteRefresh && Date.now() >= this.nextPrerequisiteRefresh) {
       this.nextPrerequisiteRefresh = Date.now() + 60_000;
       this.prerequisiteRefresh = this.refreshPullRequestPrerequisites()
         .catch(error => new StructuredLogger().warn("Pull request prerequisite refresh will be retried", {}, { error: error instanceof Error ? error.message : String(error) }))
-        .then(() => { this.store.admitQueued(); })
+        .then(() => { runWithSystemEvents(this.systemEvents, { source: "scheduler", trigger: "prerequisite completion" }, () => this.store.admitQueued()); })
         .finally(() => { this.prerequisiteRefresh = undefined; });
     }
     const ids = this.database.authQuery(db => z.array(z.object({ task_id: z.string() })).parse(db.prepare("SELECT c.task_id FROM forge_task_controls c JOIN forge_tasks t ON t.id = c.task_id WHERE (t.archived_at IS NULL AND c.status IN ('active', 'waiting_human') AND (c.wake_at IS NULL OR c.wake_at <= ?)) OR EXISTS (SELECT 1 FROM forge_task_sessions s WHERE s.task_id = c.task_id AND s.stop_requested_at IS NOT NULL AND s.stopped_at IS NULL) ORDER BY COALESCE(c.wake_at, c.created_at)").all(new Date().toISOString())));
@@ -105,7 +114,33 @@ export class TaskHost {
     const current = this.running.get(taskId);
     if (current) return current;
     if (this.stopping) return Promise.reject(new Error("Task host is stopping"));
-    const operation = this.recoverOne(taskId).finally(() => this.running.delete(taskId));
+    const previous = this.lastRecoveryEvent.get(taskId);
+    const logRecovery = eventContext()?.source !== "scheduler" || !previous || Date.now() - previous.at >= 60_000;
+    const requested = logRecovery ? systemEvent({ type: "recovery", taskId, state: "requested", producer: "host" }) : undefined;
+    const operation = withEventCause(requested, () => withEventContext({ taskId }, async () => {
+      const startedAt = Date.now();
+      if (logRecovery) systemEvent({ type: "recovery", taskId, state: "started", producer: "host" });
+      try {
+        await this.recoverOne(taskId);
+      } catch (error) {
+        systemEvent({ type: "recovery", taskId, state: "error", producer: "host", durationMs: Date.now() - startedAt, result: error instanceof Error ? error.name : "unknown" });
+        this.lastRecoveryEvent.delete(taskId);
+        throw error;
+      }
+      if (this.telemetryEnabled && eventContext()) {
+        let result = "unknown";
+        try { result = this.store.get(taskId).status; } catch { /* A diagnostic read cannot fail recovery. */ }
+        if (logRecovery || previous?.result !== result) {
+          systemEvent({ type: "recovery", taskId, state: "finished", producer: "host", durationMs: Date.now() - startedAt, result });
+          this.lastRecoveryEvent.delete(taskId);
+          this.lastRecoveryEvent.set(taskId, { result, at: Date.now() });
+          if (this.lastRecoveryEvent.size > 1024) {
+            const oldest = this.lastRecoveryEvent.keys().next().value;
+            if (oldest) this.lastRecoveryEvent.delete(oldest);
+          }
+        }
+      }
+    })).finally(() => this.running.delete(taskId));
     this.running.set(taskId, operation);
     return operation;
   }

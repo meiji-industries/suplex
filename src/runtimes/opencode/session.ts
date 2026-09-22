@@ -99,6 +99,9 @@ export interface OpenCodePromptObservation {
   interruptedExecution?: { stoppedServerGeneration: string } | { lastActivityAt: number };
   executionUncertain?: { stoppedServerGeneration: string };
   unsettledTools?: boolean;
+  unsettledToolIds?: string[];
+  processRunning?: boolean;
+  nativeFinalObserved?: boolean;
   reason?: string;
 }
 
@@ -261,7 +264,8 @@ function classify(
   const assistantMessageIDs = assistantMessages.map((message) => message.info.id);
   const last = latest(assistantMessages);
   const activeTool = hasActiveTool(assistantMessages);
-  const common = { admission: "observed" as const, retry: "forbidden" as const, assistantMessageIDs, unsettledTools: assistantMessages.some(message => message.parts.some(part => part.type === "tool" && property(part.state, "status") !== "completed")), ...(status === undefined ? {} : { status }) };
+  const unsettledToolIds = assistantMessages.flatMap(message => message.parts.filter(part => part.type === "tool" && property(part.state, "status") !== "completed").map(part => part.type === "tool" ? part.callID : "")).slice(0, 32);
+  const common = { admission: "observed" as const, retry: "forbidden" as const, assistantMessageIDs, unsettledTools: unsettledToolIds.length > 0, unsettledToolIds, nativeFinalObserved: Boolean(last && isFinalAssistant(last)), ...(status === undefined ? {} : { status }) };
   if (activeTool || assistantMessages.some((message) => message.info.time.completed === undefined && !message.info.error)) {
     return { ...baseObservation(intent, { state: "running", ...common, reason: activeTool ? "tool_pending_or_running" : "assistant_not_terminal" }), ...(last?.info.role === "assistant" ? { assistantMessageID: last.info.id, native: assistantEvidence(last.info) } : {}) };
   }

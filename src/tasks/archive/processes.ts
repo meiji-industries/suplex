@@ -30,6 +30,6 @@ async function worktreeProcesses(path: string): Promise<Set<number>> {
   return result;
 }
 
-export async function stopWorktreeProcesses(path: string): Promise<void> {
-  await stopDiscoveredProcesses(() => worktreeProcesses(path));
+export async function stopWorktreeProcesses(path: string, reason = "worktree cleanup"): Promise<void> {
+  await stopDiscoveredProcesses(() => worktreeProcesses(path), reason);
 }

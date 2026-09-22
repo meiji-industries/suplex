@@ -18,6 +18,7 @@ import type { GithubTriggerPort } from "../../src/integrations/github/trigger-in
 import { providerCheckId, providerCheckLabel } from "../../src/platform/health-contract.js";
 import type { HostHealthDependencies } from "../../src/platform/health.js";
 import type { TaskPanePort } from "../../src/runtimes/task-display.js";
+import type { EventSink } from "../../src/platform/system-events.js";
 
 export const healthyHost: HostHealthDependencies = {
   database: async () => ({ id: "database", label: "Database", status: "healthy", summary: "Ready", details: {} }),
@@ -35,7 +36,7 @@ const webAuthn: WebAuthnAdapter = {
   async verifyAuthenticationResponse() { return { verified: true, newCounter: 1 }; },
 };
 
-export async function nativeApp(fixtureOptions: { githubTrigger?: GithubTriggerPort; herdr?: TaskPanePort; logSink?: (line: string) => void; issueTracker?: TaskServicePorts["issueTracker"]; pullRequestObserver?: TaskServicePorts["pullRequestObserver"]; reachableAddress?: string } = {}) {
+export async function nativeApp(fixtureOptions: { githubTrigger?: GithubTriggerPort; herdr?: TaskPanePort; logSink?: (line: string) => void; systemEvents?: EventSink; issueTracker?: TaskServicePorts["issueTracker"]; pullRequestObserver?: TaskServicePorts["pullRequestObserver"]; reachableAddress?: string } = {}) {
   const directory = await mkdtemp(join(tmpdir(), "forge-native-app-"));
   const config = createTestConfig(directory, { reachableAddress: fixtureOptions.reachableAddress ?? "http://127.0.0.1:4111" });
   const database = createTestDatabase(config.databasePath);
@@ -65,7 +66,7 @@ export async function nativeApp(fixtureOptions: { githubTrigger?: GithubTriggerP
   } satisfies GithubTriggerPort;
   const githubTriggers = new GithubTriggerService(database, auth, projects, workflows, githubTrigger, tasks);
   const wakes: string[] = [];
-  const app = createApp({ ...(fixtureOptions.logSink ? { logger: createFastifyLogger(fixtureOptions.logSink) } : {}), config, database, auth, profiles, projects, tasks, taskTemplates: templates, workflows, githubTriggers, externalAgent, oauth, health: healthyHost, readUpdate: async () => ({ status: { kind: "current" }, canRestart: false }), host: { async recover(id) { wakes.push(id); } } });
+  const app = createApp({ ...(fixtureOptions.logSink ? { logger: createFastifyLogger(fixtureOptions.logSink) } : {}), ...(fixtureOptions.systemEvents ? { systemEvents: fixtureOptions.systemEvents } : {}), config, database, auth, profiles, projects, tasks, taskTemplates: templates, workflows, githubTriggers, externalAgent, oauth, health: healthyHost, readUpdate: async () => ({ status: { kind: "current" }, canRestart: false }), host: { async recover(id) { wakes.push(id); } } });
   const invitation = auth.ensureBootstrapInvitation();
   if (!invitation) throw new Error("Fresh database did not create an invitation");
   const options = await app.inject({ method: "POST", url: "/api/auth/bootstrap/options", payload: { token: invitation.token } });

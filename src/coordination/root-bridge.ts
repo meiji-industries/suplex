@@ -26,6 +26,8 @@ import { configureProcessLogSink, createDevLogFileSink } from "../platform/loggi
 import { taskEvidenceRoot } from "./workflow-evidence.js";
 import { startMcpStdioTransport } from "../shared/mcp-stdio.js";
 import { ROOT_BRIDGE_BINDING_ENV, ROOT_BRIDGE_TOKEN_ENV, authenticateBridgeToken, bridgeBindingPath } from "./bridge-auth.js";
+import { runWithSystemEvents, systemEvent, withEventCause, type EventSink } from "../platform/system-events.js";
+import { createSystemEventProducer } from "../platform/system-event-transport.js";
 
 export class RootBridgeFailure extends Error {
   constructor(readonly code: "invalid_request" | "root_identity_mismatch" | "task_tool_busy", message: string) {
@@ -92,11 +94,30 @@ export function startRootBridgeTransport(input: {
   bridge: RootBridge;
   stdin: NodeJS.ReadableStream;
   stdout: { write(chunk: string): boolean };
+  systemEvents?: EventSink;
+  taskId?: string;
 }): Interface {
   return startMcpStdioTransport({
     serverName: "forge-root-bridge",
     tools: [{ name: "forge_root", description: "Observe this task or request a Forge-owned delivery action.", inputSchema: rootToolInputSchema() }],
-    call: async (_name, args) => input.bridge.call(args),
+    call: async (_name, args) => {
+      if (!input.systemEvents || !input.taskId) return input.bridge.call(args);
+      const parsed = RootToolSchema.safeParse(args);
+      const tool = parsed.success ? parsed.data.kind : "invalid";
+      return runWithSystemEvents(input.systemEvents, { source: "root_bridge", taskId: input.taskId, trigger: tool }, async () => {
+        const cause = systemEvent({ type: "bridge_tool", taskId: input.taskId!, state: "requested", tool });
+        return withEventCause(cause, async () => {
+          try {
+            const result = await input.bridge.call(args);
+            systemEvent({ type: "bridge_tool", taskId: input.taskId!, state: "completed", tool });
+            return result;
+          } catch (error) {
+            systemEvent({ type: "bridge_tool", taskId: input.taskId!, state: "error", tool, result: error instanceof Error ? error.name : "unknown" });
+            throw error;
+          }
+        });
+      });
+    },
     present: (result) => {
       const image = RootImageResultSchema.safeParse(result);
       return image.success ? { content: [{ type: "text", text: image.data.filename }, { type: "image", data: image.data.data, mimeType: image.data.mimeType }] } : undefined;
@@ -119,7 +140,7 @@ async function runRootBridge(): Promise<void> {
   const herdr = new CliHerdrClient();
   const store = new TaskControlStore(database);
   const controller = new RootController(store, createTaskHarness(databasePath, herdr, { artifactRoot: config.artifactRoot }), undefined, new ArtifactStore(config.artifactRoot), { root: taskEvidenceRoot(databasePath) }, session => nativeSessionReader(databasePath, session));
-  startRootBridgeTransport({ bridge: new RootBridge(config.root, controller), stdin: process.stdin, stdout: process.stdout });
+  startRootBridgeTransport({ bridge: new RootBridge(config.root, controller), stdin: process.stdin, stdout: process.stdout, systemEvents: createSystemEventProducer(databasePath), taskId: config.root.taskId });
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {

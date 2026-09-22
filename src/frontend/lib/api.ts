@@ -1,4 +1,5 @@
 import type { AuthUserResponse, CompanyResponse } from "../../http/contracts/common.js";
+import { clientTabId, reportApiActivity, reportAuthenticatedResume } from "../shell/client-lifecycle.js";
 
 export type ApiUser = AuthUserResponse;
 export type ApiCompany = CompanyResponse;
@@ -29,11 +30,14 @@ export async function readJson<T>(url: string, init?: RequestInit): Promise<T> {
   const method = init?.method?.toUpperCase() ?? "GET";
   const isSafe = method === "GET" || method === "HEAD" || method === "OPTIONS";
   const originToken = !isSafe ? cookieValue("csrf_v1") : undefined;
+  let clientId: string | undefined;
+  try { if (!isSafe) clientId = clientTabId(); } catch { /* Telemetry cannot block a mutation. */ }
   const response = await fetch(url, {
     ...init,
     headers: {
       ...(init?.body !== undefined ? { "Content-Type": "application/json" } : {}),
       ...(originToken ? { "X-CSRF-V1": originToken } : {}),
+      ...(clientId ? { "X-Forge-Tab-Id": clientId } : {}),
       ...(init?.headers ?? {}),
     },
   });
@@ -47,6 +51,8 @@ export async function readJson<T>(url: string, init?: RequestInit): Promise<T> {
   if (!response.ok) {
     throw new ApiError(body.error ?? "Request failed", response.status, body.findings, body.current);
   }
+  if (url.startsWith("/api/auth/") && url.endsWith("/verify")) reportAuthenticatedResume(true);
+  else if (url.startsWith("/api/")) reportApiActivity();
   return body;
 }
 

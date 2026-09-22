@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { systemEvent } from "./system-events.js";
 import { realpathSync } from "node:fs";
 import { createHash } from "node:crypto";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
@@ -212,23 +213,37 @@ export async function signalOwnedProcess(
   owned: OwnedProcess,
   signal: "SIGTERM" | "SIGKILL",
   controller: ProcessController,
+  reason = "process cleanup",
 ): Promise<void> {
-  const comparison = compareProcessIdentity(owned, await controller.inspect(owned.pid));
-  if (comparison.kind === "exact_match") {
-    if (comparison.inspection.processGroup === owned.pid && controller.signalGroup) {
-      await controller.signalGroup(comparison.inspection.processGroup, signal);
-    } else {
-      await controller.signal(comparison.inspection.pid, signal);
+  const event = (state: "requested" | "sent" | "skipped" | "error", result?: string): void => {
+    systemEvent({ type: "process_signal", state, targetPid: owned.pid, targetName: owned.name, ...(owned.startTime ? { targetStartTime: owned.startTime } : {}), senderPid: process.pid, signal, reason, ...(result ? { result } : {}) });
+  };
+  event("requested");
+  try {
+    const comparison = compareProcessIdentity(owned, await controller.inspect(owned.pid));
+    if (comparison.kind === "exact_match") {
+      if (comparison.inspection.processGroup === owned.pid && controller.signalGroup) {
+        await controller.signalGroup(comparison.inspection.processGroup, signal);
+      } else {
+        await controller.signal(comparison.inspection.pid, signal);
+      }
+      event("sent", "exact_match");
+      return;
     }
-    return;
-  }
-  if (comparison.kind === "not_running") {
-    if (await ownedOrphanedGroupIsAlive(owned, controller)) {
-      await controller.signalGroup!(owned.processGroup!, signal);
+    if (comparison.kind === "not_running") {
+      if (await ownedOrphanedGroupIsAlive(owned, controller)) {
+        await controller.signalGroup!(owned.processGroup!, signal);
+        event("sent", "orphaned_group");
+      } else {
+        event("skipped", "missing");
+      }
+      return;
     }
-    return;
+    throw ownershipError(owned, comparison);
+  } catch (error) {
+    event("error", error instanceof Error ? error.name : "unknown");
+    throw error;
   }
-  throw ownershipError(owned, comparison);
 }
 
 export async function ownedProcessIsRunning(owned: OwnedProcess, controller: ProcessController): Promise<boolean> {
@@ -242,10 +257,10 @@ async function ownedTargetIsRunning(owned: OwnedProcess, controller: ProcessCont
   throw ownershipError(owned, comparison);
 }
 
-async function waitForOwnedProcessToStop(owned: OwnedProcess, controller: ProcessController): Promise<void> {
+async function waitForOwnedProcessToStop(owned: OwnedProcess, controller: ProcessController, reason: string): Promise<void> {
   await delay(shutdownGraceMs);
   if (!await ownedTargetIsRunning(owned, controller)) return;
-  await signalOwnedProcess(owned, "SIGKILL", controller);
+  await signalOwnedProcess(owned, "SIGKILL", controller, `${reason}: grace period expired`);
   await delay(shutdownGraceMs);
   if (!await ownedTargetIsRunning(owned, controller)) return;
   throw new Error(`Recorded Forge process ${owned.name} (${owned.pid}) did not exit after SIGKILL`);
@@ -262,19 +277,20 @@ async function waitForServeToStop(serve: TailscaleServe, controller: ProcessCont
   throw new Error("Could not prove recorded Tailscale Serve route stopped before removing its registry");
 }
 
-export async function stopOwnedProcesses(registry: ProcessRegistry, controller: ProcessController = defaultProcessController): Promise<StopReport> {
+export async function stopOwnedProcesses(registry: ProcessRegistry, controller: ProcessController = defaultProcessController, reason = "process cleanup"): Promise<StopReport> {
   const report: StopReport = { stopped: [], skipped: [] };
   for (const ownedProcess of registry.processes) {
     const comparison = compareProcessIdentity(ownedProcess, await controller.inspect(ownedProcess.pid));
     if (comparison.kind === "not_running" && !await ownedOrphanedGroupIsAlive(ownedProcess, controller)) {
       report.skipped.push({ pid: ownedProcess.pid, reason: "missing" });
+      systemEvent({ type: "process_signal", state: "skipped", targetPid: ownedProcess.pid, targetName: ownedProcess.name, ...(ownedProcess.startTime ? { targetStartTime: ownedProcess.startTime } : {}), senderPid: process.pid, signal: "SIGTERM", reason, result: "missing" });
       continue;
     }
     if (comparison.kind !== "exact_match" && comparison.kind !== "not_running") {
       throw ownershipError(ownedProcess, comparison);
     }
-    await signalOwnedProcess(ownedProcess, "SIGTERM", controller);
-    await waitForOwnedProcessToStop(ownedProcess, controller);
+    await signalOwnedProcess(ownedProcess, "SIGTERM", controller, reason);
+    await waitForOwnedProcessToStop(ownedProcess, controller, reason);
     report.stopped.push(ownedProcess.pid);
   }
   if (registry.tailscaleServe) {
@@ -360,7 +376,7 @@ export async function taskOwnedProcessIds(directory: string, scope: "task" | "se
   return owned;
 }
 
-export async function stopDiscoveredProcesses(discover: () => Promise<Iterable<number>>): Promise<void> {
+export async function stopDiscoveredProcesses(discover: () => Promise<Iterable<number>>, reason = "discovered process cleanup"): Promise<void> {
   const deadline = Date.now() + 10_000;
   for (;;) {
     const identities: OwnedProcess[] = [];
@@ -379,14 +395,14 @@ export async function stopDiscoveredProcesses(discover: () => Promise<Iterable<n
         return original && compareProcessIdentity(original, current).kind === "exact_match" ? current : undefined;
       },
       signal: defaultProcessController.signal,
-    });
+    }, reason);
   }
 }
 
-export async function stopSessionProcesses(runtimeDirectory: string): Promise<void> {
-  await stopDiscoveredProcesses(() => taskOwnedProcessIds(runtimeDirectory, "session"));
+export async function stopSessionProcesses(runtimeDirectory: string, reason = "session stop"): Promise<void> {
+  await stopDiscoveredProcesses(() => taskOwnedProcessIds(runtimeDirectory, "session"), reason);
 }
 
-export async function stopExecutionProcesses(runtimeDirectory: string, generation: string): Promise<void> {
-  await stopDiscoveredProcesses(() => taskOwnedProcessIds(join(runtimeDirectory, generation), "execution"));
+export async function stopExecutionProcesses(runtimeDirectory: string, generation: string, reason = "execution cleanup"): Promise<void> {
+  await stopDiscoveredProcesses(() => taskOwnedProcessIds(join(runtimeDirectory, generation), "execution"), reason);
 }

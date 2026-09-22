@@ -340,7 +340,7 @@ test("cancellation retries detached command cleanup before recording the session
     expect(value.store.get("task").status).toBe("cancelled");
     expect(await value.store.pendingStops("task")).not.toHaveLength(0);
     await value.controller.recover("task");
-    expect(cleanup).toHaveBeenCalledWith(value.directory);
+    expect(cleanup).toHaveBeenCalledWith(value.directory, "task cancellation");
     expect(await value.store.pendingStops("task")).toHaveLength(0);
   } finally { cleanup.mockRestore(); }
 });

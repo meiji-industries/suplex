@@ -227,6 +227,7 @@ function determineSchemaState(expected: ExpectedMigration[], applied: AppliedMig
 }
 
 export class ForgeDatabase {
+  private readonly commitCallbacks: Array<Array<() => void>> = [];
   private readonly db: Database.Database;
   private readonly orm: BetterSQLite3Database<AuthSchema>;
   private readonly mode: ForgeDatabaseOpenMode;
@@ -289,11 +290,34 @@ export class ForgeDatabase {
   }
 
   authTransaction<T>(operation: (database: Database.Database) => T): T {
-    return this.db.transaction(() => operation(this.db))();
+    return this.runTransaction(operation, false);
   }
 
   authImmediateTransaction<T>(operation: (database: Database.Database) => T): T {
-    return this.db.transaction(() => operation(this.db)).immediate();
+    return this.runTransaction(operation, true);
+  }
+
+  private runTransaction<T>(operation: (database: Database.Database) => T, immediate: boolean): T {
+    const callbacks: Array<() => void> = [];
+    this.commitCallbacks.push(callbacks);
+    try {
+      const transaction = this.db.transaction(() => operation(this.db));
+      const result = immediate ? transaction.immediate() : transaction();
+      this.commitCallbacks.pop();
+      const parent = this.commitCallbacks.at(-1);
+      if (parent) parent.push(...callbacks);
+      else for (const callback of callbacks) { try { callback(); } catch { /* Diagnostics cannot change a committed command. */ } }
+      return result;
+    } catch (error) {
+      this.commitCallbacks.pop();
+      throw error;
+    }
+  }
+
+  afterCommit(callback: () => void): void {
+    const pending = this.commitCallbacks.at(-1);
+    if (pending) pending.push(callback);
+    else { try { callback(); } catch { /* Diagnostics cannot change a completed command. */ } }
   }
 
   authOrm(): BetterSQLite3Database<AuthSchema> {

@@ -10,6 +10,7 @@ import { compareProcessIdentity, executionProcessEnvironment, inspectProcessOnce
 import type { PromptDispatchAttempt } from "../../tasks/control.js";
 import type { PromptIntent, TaskScope } from "../task-harness.js";
 import { excludeEnvironmentKeys } from "../project-environment.js";
+import { systemEvent } from "../../platform/system-events.js";
 
 export const HeadlessTurnRecordSchema = z.object({
   generation: z.string().uuid(),
@@ -94,6 +95,7 @@ export async function dispatchHeadless(input: { runtimeDirectory: string; scope:
   await mkdir(input.runtimeDirectory, { recursive: true, mode: 0o700 });
   const generation = randomUUID();
   if (!await input.claim(generation)) throw new Error(`${input.label} prompt replay claim was not acquired`);
+  systemEvent({ type: "headless_process", state: "dispatched", taskId: input.scope.taskId, sessionId: input.intent.sessionID, turnId: input.intent.messageID, generation });
   const files = headlessTurnFiles(input.runtimeDirectory, input.intent.messageID);
   await writeFile(files.prompt, input.prompt, { mode: 0o600 });
   const [promptFile, log, stderr] = await Promise.all([open(files.prompt, "r"), open(files.log, "a", 0o600), open(files.stderr, "a", 0o600)]);
@@ -108,7 +110,10 @@ export async function dispatchHeadless(input: { runtimeDirectory: string; scope:
       detached: true,
       stdio: [promptFile.fd, log.fd, stderr.fd],
     });
-    child.once("exit", () => { exited = true; });
+    child.once("exit", (exitCode, exitSignal) => {
+      exited = true;
+      systemEvent({ type: "headless_process", state: "exit_observed", taskId: input.scope.taskId, sessionId: input.intent.sessionID, turnId: input.intent.messageID, generation, ...(child?.pid ? { targetPid: child.pid } : {}), exitCode, exitSignal });
+    });
     await new Promise<void>((resolve, reject) => { child!.once("spawn", resolve); child!.once("error", reject); });
   } finally { await Promise.all([promptFile.close(), log.close(), stderr.close()]); }
   if (!child?.pid) throw new Error(`${input.label} did not start`);
@@ -124,18 +129,19 @@ export async function dispatchHeadless(input: { runtimeDirectory: string; scope:
   await writeFile(pending, JSON.stringify(record), { mode: 0o600 });
   await rename(pending, join(input.runtimeDirectory, `dispatch-${generation}.json`));
   await writeFile(join(input.runtimeDirectory, "turn.json"), JSON.stringify(record), { mode: 0o600 });
+  systemEvent({ type: "headless_process", state: "started", taskId: input.scope.taskId, sessionId: input.intent.sessionID, turnId: input.intent.messageID, generation, targetPid: pid, startTime: processIdentity.startTime });
   return record;
 }
 
 export async function recoverHeadlessDispatch(input: { runtimeDirectory: string; attempt: PromptDispatchAttempt }): Promise<void> {
   const record = await readHeadlessTurnRecord(join(input.runtimeDirectory, `dispatch-${input.attempt.serverGeneration}.json`));
-  if (record && await headlessTurnRunning(record)) await stopOwnedProcesses({ version: 1, processes: [ownedHeadlessTurn(record)] });
-  await stopExecutionProcesses(input.runtimeDirectory, input.attempt.serverGeneration);
+  if (record && await headlessTurnRunning(record)) await stopOwnedProcesses({ version: 1, processes: [ownedHeadlessTurn(record)] }, undefined, "stale dispatch recovery");
+  await stopExecutionProcesses(input.runtimeDirectory, input.attempt.serverGeneration, "stale dispatch recovery");
 }
 
 export async function stopHeadlessSession(input: { runtimeDirectory: string; nativeSessionId: string | null }): Promise<void> {
   const record = await readHeadlessTurnRecord(join(input.runtimeDirectory, "turn.json"));
   if (record && input.nativeSessionId !== null && record.sessionID !== input.nativeSessionId) return;
-  if (record && await headlessTurnRunning(record)) await stopOwnedProcesses({ version: 1, processes: [ownedHeadlessTurn(record)] });
-  await stopSessionProcesses(input.runtimeDirectory);
+  if (record && await headlessTurnRunning(record)) await stopOwnedProcesses({ version: 1, processes: [ownedHeadlessTurn(record)] }, undefined, "session stop");
+  await stopSessionProcesses(input.runtimeDirectory, "session stop");
 }

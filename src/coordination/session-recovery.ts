@@ -12,8 +12,26 @@ import { verifyTaskEvidence } from "./workflow-evidence.js";
 import { ADVISOR_LABELS, type ReviewRange, type VerificationRange } from "./workflows.js";
 import { advisorReportFromTurn, type AdvisorReportOutcome } from "./advisor-report.js";
 import { turnWorkflowInput } from "./controller-reports.js";
+import { systemEvent } from "../platform/system-events.js";
 
 type SourceMatch = { ok: true; range: ReviewRange } | { ok: false; reason: string; range: ReviewRange | null; clean: boolean | null };
+const lastTurnObservation = new WeakMap<TaskControlStore, Map<string, { signature: string; at: number; finalEmitted: boolean }>>();
+
+function observeNativeTurn(store: TaskControlStore, session: TaskSession, turn: TaskTurn, observed: PromptObservation): void {
+  let observations = lastTurnObservation.get(store);
+  if (!observations) { observations = new Map(); lastTurnObservation.set(store, observations); }
+  const signature = `${observed.state}:${observed.reason ?? "unknown"}:${observed.admission}:${observed.processRunning ?? "unknown"}:${(observed.unsettledToolIds ?? []).join(",")}`;
+  const previous = observations.get(turn.id);
+  const time = Date.now();
+  if (observed.nativeFinalObserved && !previous?.finalEmitted) systemEvent({ type: "native_turn", state: "agent_final", taskId: session.taskId, sessionId: session.id, turnId: turn.id, nativeState: observed.state, ...(observed.reason ? { reason: observed.reason } : {}) });
+  if (previous?.signature === signature && time - previous.at < 60_000) {
+    if (observed.nativeFinalObserved && !previous.finalEmitted) observations.set(turn.id, { ...previous, finalEmitted: true });
+    return;
+  }
+  observations.set(turn.id, { signature, at: time, finalEmitted: Boolean(observed.nativeFinalObserved || previous?.finalEmitted) });
+  const startedAt = turn.promptedAt ?? turn.dispatchAttempt?.claimedAt;
+  systemEvent({ type: "native_turn", state: previous?.signature === signature ? "snapshot" : "observed", taskId: session.taskId, sessionId: session.id, turnId: turn.id, nativeState: observed.state, ...(observed.reason ? { reason: observed.reason } : {}), admission: observed.admission, ...(startedAt ? { elapsedMs: Math.max(0, time - Date.parse(startedAt)) } : {}), outputAgeMs: null, ...(observed.unsettledToolIds ? { unsettledToolIds: observed.unsettledToolIds } : {}), ...(observed.processRunning !== undefined ? { processRunning: observed.processRunning } : {}) });
+}
 
 export type SessionRecoveryDependencies = {
   store: TaskControlStore;
@@ -38,7 +56,7 @@ export async function stopRetiredSessions(dependencies: Pick<SessionRecoveryDepe
   const control = dependencies.store.get(taskId);
   const outstanding = dependencies.store.sessions(taskId).filter(session => session.stopRequestedAt && !session.stoppedAt);
   if (!failures.length && control.status === "cancelled" && control.worktree && stopped.length > 0 && outstanding.length === stopped.length) {
-    await stopWorktreeProcesses(control.worktree.path);
+    await stopWorktreeProcesses(control.worktree.path, "task cancellation");
   }
   for (const session of stopped) dependencies.store.completeStop(session.id);
   if (failures.length) {
@@ -114,9 +132,11 @@ export async function recoverSession(dependencies: SessionRecoveryDependencies, 
         dispatch: turn.status === "pending_prompt" ? "not_submitted" : "ambiguous",
       });
       let observed = await harness.observe(taskScope, intent, turn.dispatchAttempt);
+      observeNativeTurn(store, session, turn, observed);
       let replayable = turn.status === "pending_prompt";
       if (turn.status === "unknown" && turn.dispatchAttempt && observed.admission === "not_observed" && Date.now() - Date.parse(turn.dispatchAttempt.claimedAt) >= 30_000) {
         observed = await harness.recoverDispatch(taskScope, intent, turn.dispatchAttempt);
+        observeNativeTurn(store, session, turn, observed);
         if (observed.retry === "allowed") replayable = store.requeueFencedPrompt({ turnId: turn.id, attempt: turn.dispatchAttempt, owner });
       }
       if (observed.retry === "allowed" && replayable) {
@@ -129,6 +149,7 @@ export async function recoverSession(dependencies: SessionRecoveryDependencies, 
         const usage = await observeTaskLimitUsage({ taskId: control.taskId, store, ...(dependencies.reader ? { reader: dependencies.reader } : {}), readPricing: dependencies.readPricing });
         if (store.pauseAtTaskLimit(control.taskId, usage)) break;
         observed = await harness.dispatch(taskScope, { ...intent, dispatch: "not_submitted" }, async serverGeneration => store.claimPrompt({ taskId: control.taskId, turnId: turn.id, serverGeneration, owner, usage }));
+        systemEvent({ type: "native_turn", state: "dispatched", taskId: session.taskId, sessionId: session.id, turnId: turn.id, nativeState: observed.state, admission: observed.admission });
       }
       if (store.get(control.taskId).status === "cancelled") break;
       if (observed.admission === "observed" && turn.status !== "prompted") store.markPrompted({ turnId: turn.id, generation: session.generation });
@@ -146,6 +167,7 @@ export async function recoverSession(dependencies: SessionRecoveryDependencies, 
 
 async function finishTurn(dependencies: SessionRecoveryDependencies, taskScope: TaskScope, session: TaskSession, turn: TaskTurn, observed: PromptObservation): Promise<void> {
   const { harness, store } = dependencies;
+  systemEvent({ type: "native_turn", state: "finished", taskId: session.taskId, sessionId: session.id, turnId: turn.id, nativeState: observed.state, ...(observed.reason ? { reason: observed.reason } : {}), admission: observed.admission });
   const text = await harness.resultText(taskScope, observed);
   const base = { state: observed.state, native: observed.native, reason: observed.reason, interruptedExecution: observed.interruptedExecution, text };
   if (session.kind === "root") {

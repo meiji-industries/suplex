@@ -5,9 +5,11 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { afterEach, expect, test } from "vitest";
+import { executionProcessEnvironment, taskOwnedProcessIds } from "../src/platform/process-manager.js";
 import { advisorReportFromTurn } from "../src/coordination/advisor-report.js";
 import type { HerdrClient, Pane, PaneProcessInfo } from "../src/integrations/herdr/client.js";
 import { CodexSessionReader } from "../src/runtimes/codex/session-reader.js";
+import { readHeadlessTurnRecord } from "../src/runtimes/headless/turn-process.js";
 import { codexDisplayAttached, codexDisplayCommand } from "../src/runtimes/codex/display.js";
 import { CodexTaskRuntime, codexArguments, codexSessionBusy, readCodexThreadId } from "../src/runtimes/codex/task-runtime.js";
 import { createOpenCodePromptIntent } from "../src/runtimes/opencode/session.js";
@@ -30,7 +32,7 @@ afterEach(async () => {
     }
   })));
   await Promise.all(directories.splice(0).map(path => rm(path, { recursive: true, force: true })));
-  for (const key of ["FORGE_ROOT_BINDING", "FORGE_ROOT_TOKEN", "FORGE_ADVISOR_BINDING", "FORGE_ADVISOR_TOKEN", "FORGE_ADVISOR_RESULT", "FORGE_GH_COMMAND", "FORGE_TEST_ARGS", "FORGE_TEST_PROMPT", "FORGE_TEST_BRIDGE_ENV", "FORGE_TEST_COUNT"]) delete process.env[key];
+  for (const key of ["FORGE_ROOT_BINDING", "FORGE_ROOT_TOKEN", "FORGE_ADVISOR_BINDING", "FORGE_ADVISOR_TOKEN", "FORGE_ADVISOR_RESULT", "FORGE_GH_COMMAND", "FORGE_TEST_ARGS", "FORGE_TEST_PROMPT", "FORGE_TEST_BRIDGE_ENV", "FORGE_TEST_COUNT", "FORGE_TEST_ORPHAN"]) delete process.env[key];
 });
 
 const event = (value: unknown): string => `printf '%s\\n' '${JSON.stringify(value)}'`;
@@ -54,7 +56,10 @@ const BEHAVIOURS = {
   crash: [event({ type: "thread.started", thread_id: THREAD_ID }), event({ type: "turn.failed", error: { message: "stream disconnected" } }), "exit 1"],
   startup_failure: ["echo 'Error: Not logged in' >&2", "exit 1"],
   // A started tool the process never completes.
-  unsettled: [event({ type: "thread.started", thread_id: THREAD_ID }), event({ type: "item.started", item: { id: "item_0", type: "command_execution", command: "pnpm test", status: "in_progress" } }), "exit 0"],
+  unsettled: [event({ type: "thread.started", thread_id: THREAD_ID }), event({ type: "item.started", item: { id: "item_0", type: "command_execution", command: "pnpm test", aggregated_output: "37%", exit_code: null, status: "in_progress" } }), "exit 0"],
+  unsettled_final: [event({ type: "thread.started", thread_id: THREAD_ID }), event({ type: "item.started", item: { id: "item_0", type: "command_execution", command: "pnpm test", aggregated_output: "37%", exit_code: null, status: "in_progress" } }), event({ type: "item.completed", item: { id: "item_1", type: "agent_message", text: "Done." } }), event({ type: "turn.completed", usage: { input_tokens: 100, output_tokens: 10 } }), "exit 0"],
+  unsettled_final_slow: [event({ type: "thread.started", thread_id: THREAD_ID }), event({ type: "item.started", item: { id: "item_0", type: "command_execution", command: "pnpm test", exit_code: null, status: "in_progress" } }), event({ type: "turn.completed", usage: { input_tokens: 100, output_tokens: 10 } }), "sleep 30"],
+  unsettled_orphan: [event({ type: "thread.started", thread_id: THREAD_ID }), event({ type: "item.started", item: { id: "item_0", type: "command_execution", command: "sleep 30", exit_code: null, status: "in_progress" } }), "sleep 30 & echo $! > \"$FORGE_TEST_ORPHAN\"", "sleep 1", "exit 0"],
   resume_failure: [
     `if [ "$2" = "resume" ]; then printf 'error: no rollout found for thread id %s\\n' "$3" >&2; exit 1; fi`,
     `count=$(cat "$FORGE_TEST_COUNT" 2>/dev/null || echo 0); count=$((count + 1)); printf '%s' "$count" > "$FORGE_TEST_COUNT"`,
@@ -229,11 +234,48 @@ test("a turn that has already printed its result is still running until the proc
   expect(await codexSessionBusy(f.runtimeDirectory)).toBe(false);
 });
 
-test("a tool left running when the process stops makes the turn's execution uncertain", async () => {
-  const f = await fixture("unsettled");
+test.each(["unsettled", "unsettled_final"] as const)("a %s command left running after CLI exit interrupts the turn", async behaviour => {
+  const f = await fixture(behaviour);
   await f.runtime.ensureSession(f.scope, f.sessionID);
   await f.runtime.dispatch(f.scope, f.intent, async () => true);
-  expect(await eventually(f)).toMatchObject({ state: "unknown", reason: "tool_execution_after_process_stopped", unsettledTools: true, executionUncertain: { stoppedServerGeneration: expect.any(String) } });
+  const observed = await eventually(f);
+  expect(observed).toMatchObject({ state: "interrupted", reason: "tool_execution_after_process_stopped", unsettledTools: true, interruptedExecution: { stoppedServerGeneration: expect.any(String) } });
+  expect(await f.runtime.resultText(f.scope, observed)).toContain("item_0");
+  expect(await f.runtime.resultText(f.scope, observed)).toContain("pnpm test");
+  expect(await f.runtime.resultText(f.scope, observed)).toContain("37%");
+  expect(await f.runtime.resultText(f.scope, observed)).toContain("No exit result");
+});
+
+test("a CLI that is still running stays active after printing a final event with an unsettled command", async () => {
+  const f = await fixture("unsettled_final_slow");
+  await f.runtime.ensureSession(f.scope, f.sessionID);
+  await f.runtime.dispatch(f.scope, f.intent, async () => true);
+  expect(await f.runtime.observe(f.scope, { ...f.intent, dispatch: "ambiguous" })).toMatchObject({ state: "running", reason: "dispatch_process_running" });
+  await f.runtime.stop(f.scope, f.sessionID);
+});
+
+test("stopped CLI cleanup removes only its generation-owned command", async () => {
+  const f = await fixture("unsettled_orphan");
+  const orphanPath = join(f.root, "orphan.pid");
+  process.env.FORGE_TEST_ORPHAN = orphanPath;
+  const unrelated = spawn("sleep", ["30"], { detached: true, stdio: "ignore", env: { ...process.env, ...executionProcessEnvironment(f.runtimeDirectory, "other-generation") } });
+  const unrelatedPid = unrelated.pid;
+  if (!unrelatedPid) throw new Error("Unrelated command did not start");
+  displayProcesses.push({ child: unrelated, processGroup: unrelatedPid });
+  await f.runtime.ensureSession(f.scope, f.sessionID);
+  await f.runtime.dispatch(f.scope, f.intent, async () => true);
+  let orphanPid = 0;
+  for (let attempt = 0; attempt < 30 && !orphanPid; attempt += 1) {
+    orphanPid = Number(await readFile(orphanPath, "utf8").catch(() => "0"));
+    if (!orphanPid) await delay(50);
+  }
+  expect(orphanPid).toBeGreaterThan(0);
+  const record = await readHeadlessTurnRecord(join(f.runtimeDirectory, "turn.json"));
+  if (!record) throw new Error("Missing native turn record");
+  expect(await taskOwnedProcessIds(join(f.runtimeDirectory, record.generation), "execution")).toContain(orphanPid);
+  expect(await eventually(f)).toMatchObject({ state: "interrupted", reason: "tool_execution_after_process_stopped" });
+  expect(await taskOwnedProcessIds(join(f.runtimeDirectory, record.generation), "execution")).not.toContain(orphanPid);
+  expect(() => process.kill(unrelatedPid, 0)).not.toThrow();
 });
 
 test("an unresumable thread is forgotten once, so the next turn starts a fresh one", async () => {

@@ -12,7 +12,7 @@ const count = z.number().nonnegative().default(0);
 
 const AgentMessageItemSchema = z.object({ id: z.string().min(1), type: z.literal("agent_message"), text: z.string() }).passthrough();
 const ReasoningItemSchema = z.object({ id: z.string().min(1), type: z.literal("reasoning"), text: z.string() }).passthrough();
-const CommandExecutionItemSchema = z.object({ id: z.string().min(1), type: z.literal("command_execution"), command: z.string(), aggregated_output: z.string().optional(), exit_code: z.number().optional(), status: z.string().optional() }).passthrough();
+const CommandExecutionItemSchema = z.object({ id: z.string().min(1), type: z.literal("command_execution"), command: z.string(), aggregated_output: z.string().optional(), exit_code: z.number().nullable().optional(), status: z.string().optional() }).passthrough();
 const FileChangeItemSchema = z.object({ id: z.string().min(1), type: z.literal("file_change"), changes: z.array(z.object({ path: z.string(), kind: z.string() }).passthrough()).default([]), status: z.string().optional() }).passthrough();
 const McpToolCallItemSchema = z.object({ id: z.string().min(1), type: z.literal("mcp_tool_call"), server: z.string(), tool: z.string(), arguments: z.unknown().optional(), result: z.unknown().optional(), error: z.unknown().optional(), status: z.string().optional() }).passthrough();
 const WebSearchItemSchema = z.object({ id: z.string().min(1), type: z.literal("web_search"), query: z.string().optional() }).passthrough();
@@ -80,7 +80,7 @@ function toolStatus(status: string | undefined, lifecycle: "started" | "complete
 
 function taskTool(item: CodexItem, lifecycle: "started" | "completed"): TaskTool | null {
   if (item.type === "command_execution") {
-    const failed = item.exit_code !== undefined && item.exit_code !== 0;
+    const failed = item.exit_code != null && item.exit_code !== 0;
     return { id: item.id, name: "command_execution", status: failed ? "error" : toolStatus(item.status, lifecycle), input: { command: item.command }, output: item.aggregated_output ?? null, error: failed ? `exit ${item.exit_code}` : null };
   }
   if (item.type === "file_change") return { id: item.id, name: "file_change", status: toolStatus(item.status, lifecycle), input: { changes: item.changes }, output: null, error: null };
@@ -93,7 +93,7 @@ export function codexTools(events: readonly CodexEvent[]): TaskExecution["sessio
   const tools: TaskTool[] = [];
   const index = new Map<string, number>();
   for (const event of events) {
-    if (event.type !== "item.started" && event.type !== "item.completed") continue;
+    if (event.type !== "item.started" && event.type !== "item.updated" && event.type !== "item.completed") continue;
     const tool = taskTool(event.item, event.type === "item.completed" ? "completed" : "started");
     if (!tool) continue;
     const position = index.get(tool.id);

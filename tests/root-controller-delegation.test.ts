@@ -78,6 +78,31 @@ test("one completed Worker wakes Coordinator once and allows the next assignment
   expect(value.store.currentSession("task", "worker")?.generation).toBe(worker.generation + 1);
 });
 
+test("an interrupted Worker command wakes Coordinator once without replaying its admitted prompt", async () => {
+  const value = await fixture();
+  await value.controller.recover("task");
+  value.harness.finish(value.harness.dispatched[0]!.messageID);
+  await value.controller.recover("task");
+  await value.controller.delegateWorker(value.identity(), { plan: "Run the focused check", acceptanceCriteria: ["The check exits successfully"], instruction: "Check the change" });
+  await value.controller.recover("task");
+  const workerIntent = value.harness.dispatched.find(intent => intent.agent === "forge-worker")!;
+  const worktree = value.store.get("task").worktree;
+  value.harness.finish(workerIntent.messageID, "interrupted", "Unfinished command item_0: make test-local. No exit result.");
+  const interrupted = value.harness.observations.get(workerIntent.messageID)!;
+  value.harness.observations.set(workerIntent.messageID, { ...interrupted, reason: "tool_execution_after_process_stopped", unsettledTools: true, interruptedExecution: { stoppedServerGeneration: value.harness.serverGeneration } });
+
+  await value.controller.recover("task");
+  await value.controller.recover("task");
+  await value.controller.recover("task");
+
+  expect(value.store.get("task")).toMatchObject({ status: "active", worktree });
+  expect(value.harness.dispatched.filter(intent => intent.agent === "forge-worker")).toHaveLength(1);
+  const roots = value.harness.dispatched.filter(intent => intent.agent === "forge-root");
+  expect(roots).toHaveLength(2);
+  expect(value.store.turns("task").filter(turn => turn.sessionId === value.store.currentSession("task", "root")?.id && turn.promptText.includes("Unfinished command item_0"))).toHaveLength(1);
+  expect(value.store.turns("task").filter(turn => turn.sessionId === value.store.currentSession("task", "worker")?.id)).toHaveLength(1);
+});
+
 test("Coordinator reads bounded authoritative evidence for a historical Worker turn without stored observations", async () => {
   const value = await fixture();
   await value.controller.recover("task");

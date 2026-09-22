@@ -72,7 +72,7 @@ export function renderCodexEvent(event: CodexEvent): string {
   const started = event.type === "item.started";
   if (item.type === "agent_message") return started ? "" : `${item.text}\n`;
   if (item.type === "reasoning") return started ? "" : `${item.text.split("\n").map(line => `  · ${line}`).join("\n")}\n`;
-  if (item.type === "command_execution") return started ? `$ ${item.command}\n` : item.exit_code === undefined || item.exit_code === 0 ? "" : `exit ${item.exit_code}\n`;
+  if (item.type === "command_execution") return started ? `$ ${item.command}\n` : item.exit_code == null || item.exit_code === 0 ? "" : `exit ${item.exit_code}\n`;
   if (item.type === "file_change") return started ? "" : item.changes.map(change => `edit ${change.path}\n`).join("");
   if (item.type === "mcp_tool_call") return started ? `tool ${item.server}.${item.tool}\n` : "";
   if (item.type === "error") return started ? "" : `error: ${item.message}\n`;

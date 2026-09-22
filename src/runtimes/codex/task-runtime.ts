@@ -3,10 +3,11 @@ import { appendFile, mkdir, readdir, readFile, rename, rm, stat, writeFile } fro
 import { join } from "node:path";
 import { z } from "zod";
 import { resolveCodexExecutable } from "../../platform/executable-resolver.js";
+import { compareProcessIdentity, inspectProcessOnce, stopExecutionProcesses } from "../../platform/process-manager.js";
 import { createGitCommandGuard, type GitCommandGuard } from "../../coordination/worker-environment.js";
 import { PromptDispatchAttemptSchema, type PromptDispatchAttempt } from "../../tasks/control.js";
 import { taskRolePrompt } from "../../tasks/execution/role-prompt.js";
-import { dispatchHeadless, headlessObservationPrelude, headlessSessionBusy, headlessTurnFiles, headlessTurnRunning, readHeadlessText, recoverHeadlessDispatch, stopHeadlessSession } from "../headless/turn-process.js";
+import { dispatchHeadless, headlessObservationPrelude, headlessSessionBusy, headlessTurnFiles, headlessTurnRunning, ownedHeadlessTurn, readHeadlessText, recoverHeadlessDispatch, stopHeadlessSession } from "../headless/turn-process.js";
 import { advisorBridgeResultPath, taskBridgeEnvironment, taskSessionRuntimeDirectory, writeAdvisorReportBridgeBinding, writeRootBridgeBinding, type PromptIntent, type PromptObservation, type TaskBridgeServer, type TaskHarness, type TaskScope } from "../task-harness.js";
 import { attachTaskDisplay, type TaskPanePort } from "../task-display.js";
 import { codexCompletedTurn, codexFailure, codexResultText, codexThreadId, codexTools, codexUnsettledToolIds, parseCodexEvents } from "./transcript.js";
@@ -178,16 +179,30 @@ export class CodexTaskRuntime implements TaskHarness {
     // exits, and reporting `completed` while it runs would dispatch the next
     // turn concurrently against the same thread.
     if (await headlessTurnRunning(record)) return { ...common, reason: "dispatch_process_running" };
+    const exit = await readHeadlessText(files.exit);
+    if (common.unsettledTools) {
+      if (exit === null) {
+        const inspected = await inspectProcessOnce(record.pid);
+        if (compareProcessIdentity(ownedHeadlessTurn(record), inspected).kind === "exact_match") return { ...common, reason: "dispatch_process_running" };
+        if (!inspected) {
+          let absent = false;
+          try { process.kill(record.pid, 0); }
+          catch (error) { if (error instanceof Error && "code" in error && error.code === "ESRCH") absent = true; else throw error; }
+          if (!absent) throw new Error("Codex process liveness is uncertain. Recovery will retry.");
+        }
+      }
+      await stopExecutionProcesses(runtimeDirectory, record.generation);
+      return { ...common, state: "interrupted", reason: "tool_execution_after_process_stopped", interruptedExecution: { stoppedServerGeneration: record.generation } };
+    }
     if (codexCompletedTurn(events)) return { ...common, state: "completed", assistantMessageID: intent.messageID };
     if (codexFailure(events) !== null) return { ...common, state: "error", reason: "native_error" };
-    if (await readHeadlessText(files.exit) === null) return { ...common, state: "interrupted", reason: "dispatch_process_stopped", interruptedExecution: { stoppedServerGeneration: record.generation } };
+    if (exit === null) return { ...common, state: "interrupted", reason: "dispatch_process_stopped", interruptedExecution: { stoppedServerGeneration: record.generation } };
     if (!threadId) {
       // Only an unresumable thread is dropped. An auth or network failure keeps
       // it, because starting over would silently abandon the conversation.
       if (record.processIdentity.argv.includes("resume") && CODEX_UNRESUMABLE.test(await readHeadlessText(files.stderr) ?? "")) await forgetCodexThread(runtimeDirectory);
       return { ...common, state: "error", reason: "native_startup_failed" };
     }
-    if (common.unsettledTools) return { ...common, state: "unknown", reason: "tool_execution_after_process_stopped", executionUncertain: { stoppedServerGeneration: record.generation } };
     return { ...common, state: "interrupted", reason: "dispatch_process_stopped", interruptedExecution: { stoppedServerGeneration: record.generation } };
   }
 
@@ -217,7 +232,12 @@ export class CodexTaskRuntime implements TaskHarness {
 
   async resultText(scope: TaskScope, observation: PromptObservation): Promise<string> {
     const files = headlessTurnFiles(this.runtimeDirectory(scope), observation.messageID);
-    return codexResultText(parseCodexEvents(await readHeadlessText(files.log) ?? "")) || (await readHeadlessText(files.stderr) ?? "").trim().slice(-2_000);
+    const events = parseCodexEvents(await readHeadlessText(files.log) ?? "");
+    const result = codexResultText(events) || (await readHeadlessText(files.stderr) ?? "").trim().slice(-2_000);
+    if (!observation.interruptedExecution || !observation.unsettledTools) return result;
+    const commands = codexTools(events).filter(tool => tool.name === "command_execution" && tool.status === "running");
+    const unfinished = commands.map(tool => `Unfinished command ${tool.id}: ${String(tool.input.command)}\n${tool.output ? `Output: ${tool.output}\n` : ""}No exit result.`).join("\n");
+    return [result, unfinished].filter(Boolean).join("\n\n");
   }
 
   async turnEvidence(scope: TaskScope, observation: PromptObservation): ReturnType<TaskHarness["turnEvidence"]> {

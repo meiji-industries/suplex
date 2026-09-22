@@ -42,6 +42,14 @@ test("a started tool item with no completion stays unsettled", () => {
   expect(codexUnsettledToolIds(parseCodexEvents(lines))).toEqual(["item_2"]);
 });
 
+test("a native started command with null exit code remains visible and unsettled", () => {
+  const events = parseCodexEvents(JSON.stringify({ type: "item.started", item: { id: "item_31", type: "command_execution", command: "make test-local", aggregated_output: "37%", exit_code: null, status: "in_progress" } }));
+  expect(events[0]).toMatchObject({ type: "item.started", item: { id: "item_31", type: "command_execution" } });
+  expect(codexUnsettledToolIds(events)).toEqual(["item_31"]);
+  expect(codexTools(events)).toMatchObject([{ name: "command_execution", status: "running", output: "37%", error: null }]);
+  expect(renderCodexEvent(events[0]!)).toBe("$ make test-local\n");
+});
+
 test("usage subtracts the cache slices from input and reasoning from output", () => {
   const usage = codexUsage([{ id: "turn-1", model: "gpt-5.6-sol", events: parseCodexEvents(lines), updatedAt: 10 }], "codex-session", "worker");
   expect(usage).toHaveLength(1);

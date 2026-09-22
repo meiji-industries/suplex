@@ -140,7 +140,7 @@ export class TaskService {
     const dispatch = new GithubTriggerDispatchRepository(this.database).get(dispatchId);
     if (!dispatch || !dispatch.taskId) throw new TaskFailure("GitHub trigger dispatch is not linked to a task", 404);
     const existing = this.getTask(dispatch.authorityUserId, dispatch.taskId);
-    if (existing.archivedAt || existing.status !== "backlog") return existing;
+    if (existing.archivedAt || !["backlog", "queued"].includes(existing.status)) return existing;
     this.requireGithubTriggerAdmission(dispatch);
     const pull = await github.inspectPullRequest({ repository: dispatch.repositoryName, number: dispatch.pullRequestNumber });
     const protectedPath = pull.files.some(file => [file.filename, file.previousFilename].some(path => path && matchesGithubTriggerProtectedPaths(dispatch.policy.protectedPaths, { filename: path })));
@@ -150,7 +150,7 @@ export class TaskService {
       const current = new GithubTriggerDispatchRepository(this.database).get(dispatchId);
       if (!current?.taskId) throw new TaskFailure("GitHub trigger dispatch is not linked to a task", 404);
       const task = this.getTask(current.authorityUserId, current.taskId);
-      if (task.archivedAt || task.status !== "backlog") return task;
+      if (task.archivedAt || !["backlog", "queued"].includes(task.status)) return task;
       this.requireGithubTriggerAdmission(current);
       const source = task.configuration.source;
       if (task.configuration.repository.toLowerCase() !== current.repositoryName || task.configuration.startingSha !== current.policy.headSha || task.configuration.baselineSha !== current.policy.baseSha || task.configuration.branch !== current.policy.headBranch || task.configuration.baseBranch !== current.policy.baseBranch || source?.kind !== "pull_request" || source.number !== current.pullRequestNumber) throw new TaskFailure("GitHub trigger task source changed", 409);
@@ -264,7 +264,7 @@ export class TaskService {
     return this.dryRunTransaction(() => {
       this.setAgentApiTaskDependencies(principal, taskId, requested);
       const task = this.getAgentApiTask(principal, taskId);
-      return { dryRun: true, dependsOn: task.dependsOn, ...this.wouldStart(task.queue) };
+      return { dryRun: true, dependsOn: task.dependsOn, ...this.wouldStart(task) };
     });
   }
 
@@ -589,7 +589,7 @@ export class TaskService {
   startTask(userId: string, taskId: string): Task {
     const task = this.getTask(userId, taskId);
     if (archivesInProgress.has(taskId)) throw new TaskFailure("Archive cleanup is in progress", 409);
-    if (task.archivedAt || !["backlog", "active"].includes(task.status)) throw new TaskFailure("This task cannot be started", 409);
+    if (task.archivedAt || !["backlog", "queued", "active"].includes(task.status)) throw new TaskFailure("This task cannot be started", 409);
     this.repository.controls.start(taskId);
     this.audit({ kind: "user", userId }, task.companyId, "task_started", taskId);
     return this.getTask(userId, taskId);
@@ -725,7 +725,7 @@ export class TaskService {
     return this.database.authImmediateTransaction(db => {
       const current = this.getTask(userId, taskId);
       db.prepare("UPDATE forge_tasks SET issue_json = ?, updated_at = ? WHERE id = ?").run(resolved ? JSON.stringify(resolved) : null, new Date().toISOString(), taskId);
-      if (current.status === "backlog" && !hasStartedNativeWork(this.database, taskId)) db.prepare("UPDATE forge_tasks SET issue_context_json = NULL WHERE id = ?").run(taskId);
+      if (["backlog", "queued"].includes(current.status) && !hasStartedNativeWork(this.database, taskId)) db.prepare("UPDATE forge_tasks SET issue_context_json = NULL WHERE id = ?").run(taskId);
       return this.getTask(userId, taskId);
     });
   }
@@ -737,7 +737,7 @@ export class TaskService {
   private unarchive(authority: Authority, taskId: string): Task {
     const task = this.repository.task(this.requireTask(authority, taskId));
     if (archivesInProgress.has(taskId)) throw new TaskFailure("Archive cleanup is in progress", 409);
-    this.database.authImmediateTransaction(db => { if (["backlog", "active", "waiting_human"].includes(task.status)) assertTaskPullRequestsAvailable(db, taskId); this.repository.setArchived(taskId, false); });
+    this.database.authImmediateTransaction(db => { if (["backlog", "queued", "active", "waiting_human"].includes(task.status)) assertTaskPullRequestsAvailable(db, taskId); this.repository.setArchived(taskId, false); });
     return this.repository.task(this.requireTask(authority, taskId));
   }
 
@@ -749,7 +749,7 @@ export class TaskService {
   private async archive(authority: Authority, taskId: string, confirmDiscardDirty = false): Promise<Task | { status: "confirmation_required"; dirtyFileCount: number; dirtyFilePaths: string[] }> {
     const task = this.repository.task(this.requireTask(authority, taskId));
     if (archivesInProgress.has(taskId)) throw new TaskFailure("Archive cleanup is in progress", 409);
-    if (!["backlog", "cancelled", "delivered"].includes(task.status)) throw new TaskFailure("Cancel the task before archiving it", 409);
+    if (!["backlog", "queued", "cancelled", "delivered"].includes(task.status)) throw new TaskFailure("Cancel the task before archiving it", 409);
     archivesInProgress.add(taskId);
     try {
       const sessions = this.repository.controls.sessions(taskId);
@@ -761,7 +761,7 @@ export class TaskService {
       this.requireTask(authority, taskId);
       await closeDisplays();
       const current = this.repository.task(this.requireTask(authority, taskId));
-      if (!["backlog", "cancelled", "delivered"].includes(current.status)) throw new TaskFailure("The task changed while its worktree was removed", 409, "illegal_command");
+      if (!["backlog", "queued", "cancelled", "delivered"].includes(current.status)) throw new TaskFailure("The task changed while its worktree was removed", 409, "illegal_command");
       this.database.authTransaction(db => {
         db.prepare("UPDATE forge_task_controls SET worktree_json = NULL WHERE task_id = ?").run(taskId);
         this.repository.setArchived(taskId, true);
@@ -905,7 +905,7 @@ export class TaskService {
       deliveryTarget: task.deliveryTarget,
       branch: task.configuration.branch,
       dependsOn: task.dependsOn,
-      ...this.wouldStart(task.queue),
+      ...this.wouldStart(task),
     });
   }
 
@@ -928,7 +928,7 @@ export class TaskService {
       permittedCommands: [],
       humanQuestion: null,
       blocker: null,
-      workflowStage: task.queue.state,
+      workflowStage: task.status,
       workflow: { id: selection?.workflowId ?? null, engine: task.workflow, name: selection?.workflowName ?? null },
       templateId: selection?.templateId ?? null,
       deliveryTarget: task.deliveryTarget,
@@ -940,10 +940,10 @@ export class TaskService {
     });
   }
 
-  private wouldStart(queue: Task["queue"]): { wouldStart: "now" | "waiting" | "backlog"; blockingPrerequisiteIds: string[] } {
-    if (queue.startIntent === "manual") return { wouldStart: "backlog", blockingPrerequisiteIds: [] };
-    if (queue.state === "running") return { wouldStart: "now", blockingPrerequisiteIds: [] };
-    return { wouldStart: "waiting", blockingPrerequisiteIds: queue.waitingOn.map(prerequisite => prerequisite.id) };
+  private wouldStart(task: Pick<Task, "status" | "queue">): { wouldStart: "now" | "waiting" | "backlog"; blockingPrerequisiteIds: string[] } {
+    if (task.status === "backlog") return { wouldStart: "backlog", blockingPrerequisiteIds: [] };
+    if (task.status === "active") return { wouldStart: "now", blockingPrerequisiteIds: [] };
+    return { wouldStart: "waiting", blockingPrerequisiteIds: task.queue.waitingOn.map(prerequisite => prerequisite.id) };
   }
 
   private dryRunTransaction<T>(operation: () => T): T {
@@ -1016,11 +1016,12 @@ export class TaskService {
     const wait = task.workflowState.deliveryWait;
     const completion = task.workflowState.completion;
     const blocker = humanQuestion ? { kind: "human_question" as const } : wait ? { kind: "delivery_wait" as const, reason: wait.reason } : null;
-    const workflowStage = task.status === "cancelled" ? "cancelled" : completion || task.status === "delivered" ? "completed" : humanQuestion ? "waiting_human" : wait ? "waiting_delivery" : task.status === "active" ? "working" : task.queue.state;
+    const workflowStage = task.status === "cancelled" ? "cancelled" : completion || task.status === "delivered" ? "completed" : humanQuestion ? "waiting_human" : wait ? "waiting_delivery" : task.status === "active" ? "working" : task.status;
     const delivery = task.pullRequest || wait || completion ? { pullRequest: task.pullRequest ? { number: task.pullRequest.number, url: task.pullRequest.url, state: task.pullRequest.state, mergedAt: task.pullRequest.mergedAt } : null, checks: null, waiting: wait ? { reason: wait.reason, since: wait.since } : null, completion: completion ? { kind: completion.kind, pullRequestNumber: completion.pullRequestNumber, observedAt: completion.observedAt } : null } : null;
     const recheck = !task.archivedAt && wait && task.status === "active" ? ["recheck_delivery_wait"] as const : [] as const;
     const lifecycleCommands = task.archivedAt ? ["unarchive_task"] as const
-      : task.status === "backlog" ? [task.queue.startIntent === "queued" ? "disarm_task" : "start_task", "cancel_task", "archive_task", "duplicate_task"] as const
+      : task.status === "backlog" ? ["start_task", "cancel_task", "archive_task", "duplicate_task"] as const
+      : task.status === "queued" ? ["disarm_task", "cancel_task", "archive_task", "duplicate_task"] as const
       : task.status === "active" ? ["cancel_task", "duplicate_task", "send_task_note"] as const
       : task.status === "waiting_human" ? ["cancel_task", "duplicate_task"] as const
       : task.status === "cancelled" ? ["archive_task", "duplicate_task"] as const
@@ -1028,13 +1029,13 @@ export class TaskService {
       : ["duplicate_task"] as const;
     const permittedCommands = row.creator_agent_id === principal.agentId ? [...lifecycleCommands, ...recheck] : [];
     const selection = task.configuration.hermesSelection;
-    const value = { id: task.id, issueKey: task.issueKey, projectId: task.projectId, project, title: task.title, source: task.configuration.source, status: task.status, queue: task.queue, dependsOn: task.dependsOn, blockedBy: task.blockedBy.map(({ queued: _queued, ...blocker }) => blocker), archived: task.archivedAt !== null, permittedCommands, humanQuestion, blocker, workflowStage, workflow: { id: selection?.workflowId ?? null, engine: task.workflow, name: selection?.workflowName ?? null }, templateId: selection?.templateId ?? null, deliveryTarget: task.deliveryTarget, runProjectTests: task.configuration.runProjectTests, visualEvidence: task.configuration.visualEvidence, delivery, createdAt: task.createdAt, updatedAt: task.updatedAt };
+    const value = { id: task.id, issueKey: task.issueKey, projectId: task.projectId, project, title: task.title, source: task.configuration.source, status: task.status, queue: task.queue, dependsOn: task.dependsOn, blockedBy: task.blockedBy, archived: task.archivedAt !== null, permittedCommands, humanQuestion, blocker, workflowStage, workflow: { id: selection?.workflowId ?? null, engine: task.workflow, name: selection?.workflowName ?? null }, templateId: selection?.templateId ?? null, deliveryTarget: task.deliveryTarget, runProjectTests: task.configuration.runProjectTests, visualEvidence: task.configuration.visualEvidence, delivery, createdAt: task.createdAt, updatedAt: task.updatedAt };
     return { ...value, revision: createHash("sha256").update(JSON.stringify({ value, commandRevision: row.command_revision })).digest("base64url") };
   }
 
   private agentApiTaskSummary(task: AgentApiSafeTaskProjection): AgentApiTaskSummaryProjection {
     return {
-      id: task.id, title: task.title, status: task.status, archived: task.archived, queue: task.queue.state, dependsOn: task.dependsOn, updatedAt: task.updatedAt,
+      id: task.id, title: task.title, status: task.status, archived: task.archived, dependsOn: task.dependsOn, updatedAt: task.updatedAt,
       ...(task.workflow.name === null ? {} : { workflow: task.workflow.name }),
       ...(task.source === null ? {} : { source: task.source }),
       ...(task.delivery?.pullRequest === null || task.delivery === null ? {} : { pullRequestNumber: task.delivery.pullRequest.number }),

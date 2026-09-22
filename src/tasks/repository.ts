@@ -15,7 +15,7 @@ export type TaskCreator = { kind: "user"; id: string } | { kind: "agent"; id: st
 const RowSchema = z.object({
   issue_json: z.string().nullable(),
   id: z.string(), company_id: z.string(), project_id: z.string(), issue_number: z.number().nullable(), issue_code: z.string().nullable(),
-  title: z.string(), description: z.string(), configuration_json: z.string(), idempotency_key: z.string(), request_hash: z.string(), start_queued: z.number(),
+  title: z.string(), description: z.string(), configuration_json: z.string(), idempotency_key: z.string(), request_hash: z.string(),
   creator_user_id: z.string().nullable(), creator_agent_id: z.string().nullable(), copied_from_task_id: z.string().nullable(), command_revision: z.number(), created_at: z.string(), updated_at: z.string(), activity_updated_at: z.string(), status_changed_at: z.string(), archived_at: z.string().nullable(),
 });
 export type TaskRow = z.infer<typeof RowSchema>;
@@ -89,7 +89,7 @@ export class TaskRepository {
     taskId: string; companyId: string; creator: TaskCreator; request: TaskRequest;
     requestHash: string; configuration: TaskConfiguration; rootProfile: TaskProfile; workerProfile: TaskProfile; advisorProfiles: Partial<Record<AdvisorRole, TaskProfile>>;
     images: Array<{ filename: string; mimeType: string; bytes: Buffer }>;
-    /** The persisted start intent. Creation never starts the task; the caller admits it after its prerequisites are written. */
+    /** Creation records queued status; the caller admits it after its prerequisites are written. */
     startQueued: boolean;
     /** Provenance written with the row itself, so a copy is identifiable without a second write. */
     copiedFromTaskId?: string;
@@ -101,12 +101,12 @@ export class TaskRepository {
         if (existing) return { task: this.task(existing), created: false };
         const time = new Date().toISOString();
         const configuration = TaskConfigurationSchema.parse(input.configuration);
-        db.prepare("INSERT INTO forge_tasks (id, company_id, project_id, title, description, configuration_json, idempotency_key, request_hash, start_queued, creator_user_id, creator_agent_id, copied_from_task_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
-          .run(input.taskId, input.companyId, input.request.projectId, input.request.title, input.request.description, JSON.stringify(configuration), input.request.idempotencyKey, input.requestHash, input.startQueued ? 1 : 0, input.creator.kind === "user" ? input.creator.id : null, input.creator.kind === "agent" ? input.creator.id : null, input.copiedFromTaskId ?? null, time, time);
+        db.prepare("INSERT INTO forge_tasks (id, company_id, project_id, title, description, configuration_json, idempotency_key, request_hash, creator_user_id, creator_agent_id, copied_from_task_id, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)")
+          .run(input.taskId, input.companyId, input.request.projectId, input.request.title, input.request.description, JSON.stringify(configuration), input.request.idempotencyKey, input.requestHash, input.creator.kind === "user" ? input.creator.id : null, input.creator.kind === "agent" ? input.creator.id : null, input.copiedFromTaskId ?? null, time, time);
         for (const image of input.images) written.push(this.artifacts.putArtifactSync(db, input.companyId, "task-image", { ...image, taskId: input.taskId }));
         if (input.request.issue) db.prepare("UPDATE forge_tasks SET issue_json = ? WHERE id = ?").run(JSON.stringify(input.request.issue), input.taskId);
         this.controls.create({
-          taskId: input.taskId, startImmediately: false, objective: input.request.description ? `${input.request.title}\n\n${input.request.description}` : input.request.title, deliveryTarget: input.request.deliveryTarget,
+          taskId: input.taskId, startImmediately: input.startQueued, objective: input.request.description ? `${input.request.title}\n\n${input.request.description}` : input.request.title, deliveryTarget: input.request.deliveryTarget,
           deliveryIntent: { repository: configuration.repository, headBranch: configuration.branch, baseBranch: configuration.baseBranch, baselineSha: configuration.baselineSha, pullRequestNumber: configuration.source?.kind === "pull_request" ? configuration.source.number : null },
           rootProfile: input.rootProfile, workerProfile: input.workerProfile, workflow: input.request.workflow, advisorProfiles: input.advisorProfiles,
         });
@@ -123,7 +123,7 @@ export class TaskRepository {
 
   task(row: TaskRow): Task {
     const taskDependencies = taskDependencySummaries(this.database, row.id);
-    const blockedBy = [...taskDependencies, ...pullRequestDependencies(this.database, row.id).map(dependency => ({ kind: "pull_request" as const, id: `pull_request:${dependency.number}`, status: "backlog" as const, queued: false, ...dependency }))];
+    const blockedBy = [...taskDependencies, ...pullRequestDependencies(this.database, row.id).map(dependency => ({ kind: "pull_request" as const, id: `pull_request:${dependency.number}`, status: "backlog" as const, ...dependency }))];
     const control = this.controls.get(row.id);
     const limitState = this.controls.taskLimitState(row.id);
     const images = this.database.authQuery(db => z.array(TaskImageSchema).parse(db.prepare("SELECT id AS artifactId, filename, mime_type AS mimeType, byte_size AS byteSize FROM forge_artifacts WHERE task_id = ? AND company_id = ? AND kind = 'task-image' ORDER BY created_at, id").all(row.id, row.company_id)));
@@ -152,8 +152,11 @@ export class TaskRepository {
   }
 
   setArchived(taskId: string, archived: boolean): void {
-    // Archiving clears a queue intent, so opening the task again never starts it by itself.
-    this.database.authTransaction(db => db.prepare("UPDATE forge_tasks SET archived_at = ?, start_queued = CASE WHEN ? THEN 0 ELSE start_queued END, updated_at = ? WHERE id = ?").run(archived ? new Date().toISOString() : null, archived ? 1 : 0, new Date().toISOString(), taskId));
+    this.database.authTransaction(db => {
+      const time = new Date().toISOString();
+      if (archived) this.controls.disarm(taskId);
+      db.prepare("UPDATE forge_tasks SET archived_at = ?, updated_at = ? WHERE id = ?").run(archived ? time : null, time, taskId);
+    });
   }
 
   /** The caller resolves every field against the current task, so an edit writes one consistent snapshot of the editable settings. */
@@ -163,7 +166,7 @@ export class TaskRepository {
   }): boolean {
     return this.database.authTransaction(db => {
       const time = new Date().toISOString();
-      const updated = db.prepare("UPDATE forge_tasks SET title = ?, description = ?, configuration_json = json_set(configuration_json, '$.runProjectTests', json(?), '$.visualEvidence', ?), updated_at = ? WHERE id = ? AND archived_at IS NULL AND EXISTS (SELECT 1 FROM forge_task_controls WHERE task_id = forge_tasks.id AND status = 'backlog')")
+      const updated = db.prepare("UPDATE forge_tasks SET title = ?, description = ?, configuration_json = json_set(configuration_json, '$.runProjectTests', json(?), '$.visualEvidence', ?), updated_at = ? WHERE id = ? AND archived_at IS NULL AND EXISTS (SELECT 1 FROM forge_task_controls WHERE task_id = forge_tasks.id AND status IN ('backlog', 'queued'))")
         .run(details.title, details.description, details.runProjectTests ? "true" : "false", details.visualEvidence, time, taskId);
       if (updated.changes !== 1) return false;
       db.prepare("UPDATE forge_task_controls SET objective = (SELECT CASE WHEN description = '' THEN title ELSE title || char(10) || char(10) || description END FROM forge_tasks WHERE id = ?), delivery_target = ?, workflow = ?, root_profile_json = ?, worker_profile_json = ?, advisor_profiles_json = ?, updated_at = ? WHERE task_id = ?")
@@ -178,7 +181,7 @@ export class TaskRepository {
       const updated = db.prepare("UPDATE forge_tasks SET title = ?, updated_at = ? WHERE id = ? AND archived_at IS NULL")
         .run(title, time, taskId);
       if (updated.changes !== 1) return false;
-      db.prepare("UPDATE forge_task_controls SET objective = (SELECT CASE WHEN description = '' THEN title ELSE title || char(10) || char(10) || description END FROM forge_tasks WHERE id = ?), updated_at = ? WHERE task_id = ? AND status = 'backlog'").run(taskId, time, taskId);
+      db.prepare("UPDATE forge_task_controls SET objective = (SELECT CASE WHEN description = '' THEN title ELSE title || char(10) || char(10) || description END FROM forge_tasks WHERE id = ?), updated_at = ? WHERE task_id = ? AND status IN ('backlog', 'queued')").run(taskId, time, taskId);
       return true;
     });
   }

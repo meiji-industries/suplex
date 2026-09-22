@@ -14,6 +14,7 @@ test("completed observations keep identical repository coordinates on distinct h
     db.prepare("UPDATE forge_tasks SET configuration_json = json_set(configuration_json, '$.integration', json(?)) WHERE id = 'bitbucket-task'").run(JSON.stringify({ repository: { kind: "bitbucket", tokenEnvironment: "BB_TOKEN" }, tracker: null }));
   });
   f.store.create({ taskId: "bitbucket-task", startImmediately: true, objective: "Client task", deliveryTarget: "pull_request_draft", deliveryIntent: original.deliveryIntent, rootProfile: original.rootProfile, workerProfile: original.workerProfile });
+  f.store.admitQueued(["bitbucket-task"]);
   const common = { repository: "owner/repo", number: 42, headSha: "a".repeat(40), state: "open", mergedAt: null };
   const github = { ...common, url: "https://github.com/owner/repo/pull/42" };
   const bitbucket = { ...common, url: "https://bitbucket.org/owner/repo/pull-requests/42" };

@@ -61,6 +61,7 @@ export async function fixture(workflow: WorkflowId, options: { deliveryTarget?: 
   const store = new TaskControlStore(database, alive);
   const deliveryTarget = options.deliveryTarget ?? (workflow === "refine_pull_request" ? "merged" : "pull_request_draft");
   store.create({ taskId: "task", startImmediately: true, objective: "Repair the feature pull request", deliveryTarget, deliveryIntent: { repository: "owner/repo", headBranch: "feature", baseBranch: "main", baselineSha: baseSha, pullRequestNumber: workflow === "refine_pull_request" ? 7 : null }, rootProfile: profile, workerProfile: { ...profile, profileId: "profile_worker" }, workflow, advisorProfiles, worktree });
+  store.admitQueued(["task"]);
   // GitHub adapter state; Git refs live in the bare remote.
   const github = { headSha: featureSha, baseSha, isDraft: true, state: "open" as GithubPullRequest["state"], checks: { total: 0, pending: 0, failing: 0, successful: 0, runs: [] as GithubPullRequestObservation["checks"]["runs"] }, mergeable: "MERGEABLE" as string | null, mergeStateStatus: "CLEAN" as string | null, reviewDecision: null as string | null, baseBranch: "main", repository: "owner/repo", remote: "owner/repo", onPush: (_head: string) => {}, onMerge: (_head: string) => "merge" as "merge" | "queue", crossRepository: false };
   const calls: string[] = [];

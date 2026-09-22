@@ -30,29 +30,29 @@ test("Blocked by edits save the complete prerequisite set through the dependency
 
     const both = await f.app.inject({ method: "PUT", url, headers: f.headers, payload: { dependsOn: [second.task.id, first.task.id] } });
     expect(both.statusCode, both.body).toBe(200);
-    const expected = byId([{ id: first.task.id, title: "Prepare the schema", status: "backlog" as const, queued: false }, { id: second.task.id, title: "Prepare the API", status: "backlog" as const, queued: false }]);
+    const expected = byId([{ id: first.task.id, title: "Prepare the schema", status: "backlog" as const }, { id: second.task.id, title: "Prepare the API", status: "backlog" as const }]);
     expect(readers(f, dependent.task.id)).toEqual({ blockedBy: expected, dependsOn: expected.map(task => task.id), coordinator: expected, evaluation: expected.map(task => task.id) });
     expect((await f.app.inject({ method: "PATCH", url: `/api/tasks/${dependent.task.id}`, headers: f.headers, payload: { description: "Keep the prerequisites" } })).statusCode).toBe(200);
     expect(f.tasks.getTask(f.userId, dependent.task.id).dependsOn).toEqual(expected.map(task => task.id));
 
     f.tasks.renameTask(f.userId, second.task.id, { title: "Prepare the updated API" });
     f.tasks.startTask(f.userId, second.task.id);
-    expect(f.tasks.getTask(f.userId, dependent.task.id).blockedBy).toContainEqual({ id: second.task.id, title: "Prepare the updated API", status: "active", queued: false });
+    expect(f.tasks.getTask(f.userId, dependent.task.id).blockedBy).toContainEqual({ id: second.task.id, title: "Prepare the updated API", status: "active" });
 
     // Removing one prerequisite keeps the other.
     const removed = await f.app.inject({ method: "PUT", url, headers: f.headers, payload: { dependsOn: [second.task.id] } });
-    expect(TaskSchema.parse(removed.json()).blockedBy).toEqual([{ id: second.task.id, title: "Prepare the updated API", status: "active", queued: false }]);
+    expect(TaskSchema.parse(removed.json()).blockedBy).toEqual([{ id: second.task.id, title: "Prepare the updated API", status: "active" }]);
     expect(readers(f, dependent.task.id).evaluation).toEqual([second.task.id]);
 
     f.tasks.repository.setArchived(second.task.id, true);
-    expect(f.tasks.getTask(f.userId, dependent.task.id).blockedBy).toEqual([{ id: second.task.id, title: "Prepare the updated API", status: "active", queued: false }]);
+    expect(f.tasks.getTask(f.userId, dependent.task.id).blockedBy).toEqual([{ id: second.task.id, title: "Prepare the updated API", status: "active" }]);
     // Start queues; an archived prerequisite that was never delivered keeps the task queued.
-    expect(f.tasks.startTask(f.userId, dependent.task.id)).toMatchObject({ status: "backlog", queue: { startIntent: "queued", state: "queued", waitingOn: [{ id: second.task.id, reason: "prerequisite_archived" }] } });
+    expect(f.tasks.startTask(f.userId, dependent.task.id)).toMatchObject({ status: "queued", queue: { waitingOn: [{ id: second.task.id, reason: "prerequisite_archived" }] } });
 
     const cleared = await f.app.inject({ method: "PUT", url, headers: f.headers, payload: { dependsOn: [] } });
     expect(cleared.statusCode, cleared.body).toBe(200);
     expect(readers(f, dependent.task.id)).toEqual({ blockedBy: [], dependsOn: [], coordinator: [], evaluation: [] });
-    expect(TaskSchema.parse(cleared.json())).toMatchObject({ status: "active", queue: { startIntent: "manual", state: "running", waitingOn: [] } });
+    expect(TaskSchema.parse(cleared.json())).toMatchObject({ status: "active", queue: { waitingOn: [] } });
   } finally { await f.close(); }
 });
 
@@ -64,8 +64,8 @@ test("Blocked by derives queued state from the prerequisite start intent", async
     const dependent = await f.tasks.createTask(f.userId, f.company.id, { projectId: f.project.id, title: "Blocked task", idempotencyKey: "blocked-task", dependsOn: [manual.task.id, queued.task.id] });
 
     expect(TaskSchema.parse(f.tasks.getTask(f.userId, dependent.task.id)).blockedBy).toEqual(byId([
-      { id: manual.task.id, title: "Manual backlog prerequisite", status: "backlog", queued: false },
-      { id: queued.task.id, title: "Queued prerequisite", status: "backlog", queued: true },
+      { id: manual.task.id, title: "Manual backlog prerequisite", status: "backlog" },
+      { id: queued.task.id, title: "Queued prerequisite", status: "queued" },
     ]));
   } finally { await f.close(); }
 });
@@ -119,7 +119,7 @@ test("creation validates and persists several Blocked by tasks", async () => {
     const payload = { projectId: f.project.id, title: "Dependent", idempotencyKey: "creation-dependent", dependsOn: [first.task.id, second.task.id] };
     const response = await f.app.inject({ method: "POST", url, headers: f.headers, payload });
     expect(response.statusCode, response.body).toBe(201);
-    expect(TaskSchema.parse(response.json()).blockedBy).toEqual(byId([{ id: first.task.id, title: "First", status: "backlog", queued: false }, { id: second.task.id, title: "Second", status: "backlog", queued: false }]));
+    expect(TaskSchema.parse(response.json()).blockedBy).toEqual(byId([{ id: first.task.id, title: "First", status: "backlog" }, { id: second.task.id, title: "Second", status: "backlog" }]));
 
     const rejected = await f.app.inject({ method: "POST", url, headers: f.headers, payload: { ...payload, idempotencyKey: "creation-invalid", dependsOn: [first.task.id, "task_missing"] } });
     expect(rejected.statusCode, rejected.body).toBe(404);
@@ -132,18 +132,18 @@ test("an immediate task waits for its Blocked by task to deliver", async () => {
   try {
     const reference = await f.tasks.createTask(f.userId, f.company.id, { projectId: f.project.id, title: "Deliver first", idempotencyKey: "gate-reference", startImmediately: true });
     const waiting = await f.tasks.createTask(f.userId, f.company.id, { projectId: f.project.id, title: "Wait for delivery", idempotencyKey: "gate-waiting", startImmediately: true, dependsOn: [reference.task.id] });
-    expect(waiting.task).toMatchObject({ status: "backlog", queue: { state: "queued" }, blockedBy: [{ id: reference.task.id }] });
+    expect(waiting.task).toMatchObject({ status: "queued", queue: { waitingOn: expect.any(Array) }, blockedBy: [{ id: reference.task.id }] });
 
     f.tasks.repository.controls.markDelivered(reference.task.id);
-    expect(f.tasks.getTask(f.userId, waiting.task.id)).toMatchObject({ status: "active", queue: { startIntent: "manual" } });
+    expect(f.tasks.getTask(f.userId, waiting.task.id)).toMatchObject({ status: "active", queue: { waitingOn: [] } });
 
     const deliveredReference = await f.tasks.createTask(f.userId, f.company.id, { projectId: f.project.id, title: "Already delivered", idempotencyKey: "gate-delivered-reference", startImmediately: true });
     f.tasks.repository.controls.markDelivered(deliveredReference.task.id);
     const immediate = await f.tasks.createTask(f.userId, f.company.id, { projectId: f.project.id, title: "Start now", idempotencyKey: "gate-immediate", startImmediately: true, dependsOn: [deliveredReference.task.id] });
-    expect(immediate.task).toMatchObject({ status: "active", queue: { startIntent: "manual" } });
+    expect(immediate.task).toMatchObject({ status: "active", queue: { waitingOn: [] } });
 
     const backlog = await f.tasks.createTask(f.userId, f.company.id, { projectId: f.project.id, title: "Stay in backlog", idempotencyKey: "gate-backlog", dependsOn: [waiting.task.id] });
-    expect(backlog.task).toMatchObject({ status: "backlog", queue: { startIntent: "manual" } });
+    expect(backlog.task).toMatchObject({ status: "backlog", queue: { waitingOn: [{ id: waiting.task.id }] } });
     f.tasks.repository.controls.markDelivered(waiting.task.id);
     expect(f.tasks.getTask(f.userId, backlog.task.id).status).toBe("backlog");
   } finally { await f.close(); }
@@ -155,11 +155,11 @@ test("an explicit start records queued intent until live prerequisites are remov
     const prerequisite = await f.tasks.createTask(f.userId, f.company.id, { projectId: f.project.id, title: "Prepare first", idempotencyKey: "explicit-start-prerequisite", startImmediately: true });
     const dependent = await f.tasks.createTask(f.userId, f.company.id, { projectId: f.project.id, title: "Start after prepare", idempotencyKey: "explicit-start-dependent", dependsOn: [prerequisite.task.id] });
 
-    expect(f.tasks.startTask(f.userId, dependent.task.id)).toMatchObject({ status: "backlog", queue: { startIntent: "queued" } });
+    expect(f.tasks.startTask(f.userId, dependent.task.id)).toMatchObject({ status: "queued", queue: { waitingOn: [{ id: prerequisite.task.id }] } });
     expect(f.tasks.repository.controls.taskSpend(dependent.task.id).turns).toBe(0);
 
     f.tasks.setTaskDependencies(f.userId, dependent.task.id, []);
-    expect(f.tasks.getTask(f.userId, dependent.task.id)).toMatchObject({ status: "active", queue: { startIntent: "manual" } });
+    expect(f.tasks.getTask(f.userId, dependent.task.id)).toMatchObject({ status: "active", queue: { waitingOn: [] } });
   } finally { await f.close(); }
 });
 
@@ -183,13 +183,13 @@ test("an immediate task with two Blocked by tasks starts only after both deliver
     const first = await f.tasks.createTask(f.userId, f.company.id, { projectId: f.project.id, title: "A", idempotencyKey: "both-task-a", startImmediately: true });
     const second = await f.tasks.createTask(f.userId, f.company.id, { projectId: f.project.id, title: "B", idempotencyKey: "both-task-b", startImmediately: true });
     const waiting = await f.tasks.createTask(f.userId, f.company.id, { projectId: f.project.id, title: "C", idempotencyKey: "both-task-c", startImmediately: true, dependsOn: [first.task.id, second.task.id] });
-    expect(waiting.task).toMatchObject({ status: "backlog", queue: { state: "queued" } });
+    expect(waiting.task).toMatchObject({ status: "queued", queue: { waitingOn: expect.any(Array) } });
 
     f.tasks.repository.controls.markDelivered(second.task.id);
-    expect(f.tasks.getTask(f.userId, waiting.task.id)).toMatchObject({ status: "backlog", queue: { state: "queued" } });
+    expect(f.tasks.getTask(f.userId, waiting.task.id)).toMatchObject({ status: "queued", queue: { waitingOn: expect.any(Array) } });
 
     f.tasks.repository.controls.markDelivered(first.task.id);
-    expect(f.tasks.getTask(f.userId, waiting.task.id)).toMatchObject({ status: "active", queue: { startIntent: "manual" } });
+    expect(f.tasks.getTask(f.userId, waiting.task.id)).toMatchObject({ status: "active", queue: { waitingOn: [] } });
   } finally { await f.close(); }
 });
 
@@ -199,14 +199,14 @@ test("a chain of immediate tasks starts one dependency at a time", async () => {
     const first = await f.tasks.createTask(f.userId, f.company.id, { projectId: f.project.id, title: "A", idempotencyKey: "chain-task-a", startImmediately: true });
     const second = await f.tasks.createTask(f.userId, f.company.id, { projectId: f.project.id, title: "B", idempotencyKey: "chain-task-b", startImmediately: true, dependsOn: [first.task.id] });
     const third = await f.tasks.createTask(f.userId, f.company.id, { projectId: f.project.id, title: "C", idempotencyKey: "chain-task-c", startImmediately: true, dependsOn: [second.task.id] });
-    expect(second.task).toMatchObject({ status: "backlog", queue: { state: "queued" } });
-    expect(third.task).toMatchObject({ status: "backlog", queue: { state: "queued" } });
+    expect(second.task).toMatchObject({ status: "queued", queue: { waitingOn: expect.any(Array) } });
+    expect(third.task).toMatchObject({ status: "queued", queue: { waitingOn: expect.any(Array) } });
 
     f.tasks.repository.controls.markDelivered(first.task.id);
-    expect(f.tasks.getTask(f.userId, second.task.id)).toMatchObject({ status: "active", queue: { startIntent: "manual" } });
-    expect(f.tasks.getTask(f.userId, third.task.id)).toMatchObject({ status: "backlog", queue: { state: "queued" } });
+    expect(f.tasks.getTask(f.userId, second.task.id)).toMatchObject({ status: "active", queue: { waitingOn: [] } });
+    expect(f.tasks.getTask(f.userId, third.task.id)).toMatchObject({ status: "queued", queue: { waitingOn: expect.any(Array) } });
 
     f.tasks.repository.controls.markDelivered(second.task.id);
-    expect(f.tasks.getTask(f.userId, third.task.id)).toMatchObject({ status: "active", queue: { startIntent: "manual" } });
+    expect(f.tasks.getTask(f.userId, third.task.id)).toMatchObject({ status: "active", queue: { waitingOn: [] } });
   } finally { await f.close(); }
 });

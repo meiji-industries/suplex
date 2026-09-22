@@ -6,7 +6,7 @@ import { act, createElement, useEffect, type ReactNode } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-type TaskRow = { id: string; title: string; status: "backlog"; queue: { startIntent: "manual"; state: "backlog"; waitingOn: [] }; statusChangedAt: string; pullRequest: null; archivedAt: null; blockedBy: [] };
+type TaskRow = { id: string; title: string; status: "backlog"; queue: { waitingOn: [] }; statusChangedAt: string; pullRequest: null; archivedAt: null; blockedBy: [] };
 
 const state = vi.hoisted(() => ({
   companyId: "company-a",
@@ -103,7 +103,7 @@ import { AppRouter } from "../src/frontend/shell/app-router.js";
 import { ApplicationFrame } from "../src/frontend/shell/application-frame.js";
 
 function task(id: string, title: string): TaskRow {
-  return { id, title, status: "backlog", queue: { startIntent: "manual", state: "backlog", waitingOn: [] }, statusChangedAt: "2026-09-09T00:00:00.000Z", pullRequest: null, archivedAt: null, blockedBy: [] };
+  return { id, title, status: "backlog", queue: { waitingOn: [] }, statusChangedAt: "2026-09-09T00:00:00.000Z", pullRequest: null, archivedAt: null, blockedBy: [] };
 }
 
 function navigate(path: string, event = "forge:navigate"): void {

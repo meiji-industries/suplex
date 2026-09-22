@@ -27,13 +27,13 @@ afterEach(async () => { for (const fixture of fixtures.splice(0)) await fixture.
 test("an open pull request blocks until the host observes a merge", async () => {
   const states = new Map<number, "open" | "closed" | "merged">([[41, "open"]]); const f = await fixture(states);
   const task = await create(f, "Wait for pull", 41);
-  expect(task).toMatchObject({ status: "backlog", blockedBy: [{ kind: "pull_request", number: 41, state: "open" }], queue: { waitingOn: [{ kind: "pull_request", number: 41, state: "open", reason: "prerequisite_pull_request_open" }] } });
+  expect(task).toMatchObject({ status: "queued", blockedBy: [{ kind: "pull_request", number: 41, state: "open" }], queue: { waitingOn: [{ kind: "pull_request", number: 41, state: "open", reason: "prerequisite_pull_request_open" }] } });
   states.set(41, "merged");
   const taskHost = host(f, async number => observation(number, states.get(number)!));
   taskHost.start();
   await new Promise(resolve => setTimeout(resolve, 20));
   await taskHost.stop();
-  expect(f.tasks.getTask(f.userId, task.id)).toMatchObject({ status: "active", queue: { state: "running", waitingOn: [] } });
+  expect(f.tasks.getTask(f.userId, task.id)).toMatchObject({ status: "active", queue: { waitingOn: [] } });
 });
 
 test("merged prerequisites do not block and missing pull requests are rejected without persistence", async () => {
@@ -108,7 +108,7 @@ test("a failed pull request refresh does not stop other queued rows", async () =
     taskHost.start();
     await vi.advanceTimersByTimeAsync(0);
     await taskHost.stop();
-    expect(f.tasks.getTask(f.userId, failed.id)).toMatchObject({ status: "backlog", queue: { waitingOn: [{ kind: "pull_request", number: 47, state: "open" }] } });
+    expect(f.tasks.getTask(f.userId, failed.id)).toMatchObject({ status: "queued", queue: { waitingOn: [{ kind: "pull_request", number: 47, state: "open" }] } });
     expect(f.tasks.getTask(f.userId, merged.id)).toMatchObject({ status: "active", queue: { waitingOn: [] } });
   } finally {
     vi.useRealTimers();

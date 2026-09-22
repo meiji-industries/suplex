@@ -1082,8 +1082,8 @@ test("AgentApi start records queued intent while a prerequisite is undelivered",
 
   const started = await command(dependent.id, { command: "start_task", revision: dependent.revision, idempotencyKey: "externalAgent-start-blocked-001" });
   expect(started.statusCode, started.body).toBe(200);
-  expect(started.json()).toMatchObject({ status: "backlog", dependsOn: [prerequisite.id] });
-  expect(tasks.getTask(adminId, dependent.id)).toMatchObject({ status: "backlog", queue: { startIntent: "queued" } });
+  expect(started.json()).toMatchObject({ status: "queued", dependsOn: [prerequisite.id] });
+  expect(tasks.getTask(adminId, dependent.id)).toMatchObject({ status: "queued", queue: { waitingOn: [{ id: prerequisite.id }] } });
   expect(tasks.repository.controls.taskSpend(dependent.id).turns).toBe(0);
 });
 
@@ -1443,8 +1443,8 @@ test("GET /api/agent/tasks summary keeps a compact, stored task projection", asy
   const response = await listTasks("?view=summary");
   expect(response.statusCode).toBe(200);
   const summary = (response.json().tasks as Array<Record<string, unknown>>).find(item => item.id === task)!;
-  expect(Object.keys(summary).sort()).toEqual(["id", "title", "status", "archived", "queue", "workflow", "dependsOn", "updatedAt"].sort());
-  expect(summary).toMatchObject({ id: task, queue: "backlog" });
+  expect(Object.keys(summary).sort()).toEqual(["id", "title", "status", "archived", "workflow", "dependsOn", "updatedAt"].sort());
+  expect(summary).toMatchObject({ id: task, status: "backlog" });
 });
 
 test("a 100-task summary response stays below 20 KB", async () => {
@@ -1930,7 +1930,7 @@ test("an agent can wait for a readable human task without gaining command author
     payload: { projectId, title: "Created with human prerequisite", idempotencyKey: "human-prerequisite-create-001", dependsOn: [humanPrerequisite.id], queue: true },
   });
   expect(created.statusCode, created.body).toBe(201);
-  expect(created.json()).toMatchObject({ dependsOn: [humanPrerequisite.id], status: "backlog", queue: { startIntent: "queued", state: "queued" } });
+  expect(created.json()).toMatchObject({ dependsOn: [humanPrerequisite.id], status: "queued", queue: { waitingOn: [{ id: humanPrerequisite.id }] } });
   expect(tasks.repository.controls.taskSpend(created.json().id as string).turns).toBe(0);
 
   const later = await createDependencyTask("Set human prerequisite later", "human-prerequisite-put-001");
@@ -1941,7 +1941,7 @@ test("an agent can wait for a readable human task without gaining command author
   expect(setLater.statusCode, setLater.body).toBe(200);
   const queuedLater = await command(later.json().id as string, { command: "start_task", revision: setLater.json().revision, idempotencyKey: "human-prerequisite-start-001" });
   expect(queuedLater.statusCode, queuedLater.body).toBe(200);
-  expect(queuedLater.json()).toMatchObject({ dependsOn: [humanPrerequisite.id], status: "backlog", queue: { startIntent: "queued", state: "queued" } });
+  expect(queuedLater.json()).toMatchObject({ dependsOn: [humanPrerequisite.id], status: "queued", queue: { waitingOn: [{ id: humanPrerequisite.id }] } });
 
   const humanRead = await readTask(humanPrerequisite.id);
   expect(humanRead.statusCode, humanRead.body).toBe(200);
@@ -1952,8 +1952,8 @@ test("an agent can wait for a readable human task without gaining command author
 
   tasks.startTask(adminId, humanPrerequisite.id);
   tasks.repository.controls.markDelivered(humanPrerequisite.id);
-  expect(tasks.getTask(adminId, created.json().id as string)).toMatchObject({ status: "active", queue: { state: "running" } });
-  expect(tasks.getTask(adminId, later.json().id as string)).toMatchObject({ status: "active", queue: { state: "running" } });
+  expect(tasks.getTask(adminId, created.json().id as string)).toMatchObject({ status: "active", queue: { waitingOn: [] } });
+  expect(tasks.getTask(adminId, later.json().id as string)).toMatchObject({ status: "active", queue: { waitingOn: [] } });
 });
 
 test("task dependencies are declared on create, replaced through the agent route, and visible on the projection", async () => {

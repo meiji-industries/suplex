@@ -31,21 +31,21 @@ test("a merged-target chain starts one task at a time, exactly once, and only af
     const a = await create(f, "Chain A", { startImmediately: true, deliveryTarget: "merged" });
     const b = await create(f, "Chain B", { startImmediately: true, deliveryTarget: "merged", dependsOn: [a.id] });
     const c = await create(f, "Chain C", { startImmediately: true, deliveryTarget: "merged", dependsOn: [b.id] });
-    expect(a).toMatchObject({ status: "active", queue: { state: "running" } });
-    expect(b).toMatchObject({ status: "backlog", queue: { startIntent: "queued", state: "queued", waitingOn: [{ id: a.id, title: "Chain A", status: "active", deliveryTarget: "merged", reason: "prerequisite_running" }] } });
-    expect(c).toMatchObject({ status: "backlog", queue: { startIntent: "queued", state: "queued", waitingOn: [{ id: b.id, queued: true, reason: "prerequisite_not_started" }] } });
+    expect(a).toMatchObject({ status: "active", queue: { waitingOn: [] } });
+    expect(b).toMatchObject({ status: "queued", queue: { waitingOn: [{ id: a.id, title: "Chain A", status: "active", deliveryTarget: "merged", reason: "prerequisite_running" }] } });
+    expect(c).toMatchObject({ status: "queued", queue: { waitingOn: [{ id: b.id, reason: "prerequisite_not_started" }] } });
     expect(renderToStaticMarkup(createElement(TaskQueueWaits, { task: c }))).toContain(`title="Chain B · Queued"`);
 
     // The agent finished and opened the pull request, but GitHub has not merged it.
     f.tasks.repository.controls.setPullRequest(a.id, pull(101, "open"));
     expect(f.tasks.repository.controls.admitQueued()).toEqual([]);
-    expect(read(f, b.id)).toMatchObject({ status: "backlog", queue: { waitingOn: [{ id: a.id, reason: "prerequisite_running" }] } });
+    expect(read(f, b.id)).toMatchObject({ status: "queued", queue: { waitingOn: [{ id: a.id, reason: "prerequisite_running" }] } });
     expect([work(f, b.id), work(f, c.id)]).toEqual([{ sessions: 0, turns: 0 }, { sessions: 0, turns: 0 }]);
 
     merge(f, a.id, 101);
     const started = read(f, b.id);
-    expect(started).toMatchObject({ status: "active", wakeAt: expect.any(String), queue: { startIntent: "manual", state: "running", waitingOn: [] } });
-    expect(read(f, c.id)).toMatchObject({ status: "backlog", queue: { state: "queued", waitingOn: [{ id: b.id, reason: "prerequisite_running" }] } });
+    expect(started).toMatchObject({ status: "active", wakeAt: expect.any(String), queue: { waitingOn: [] } });
+    expect(read(f, c.id)).toMatchObject({ status: "queued", queue: { waitingOn: [{ id: b.id, reason: "prerequisite_running" }] } });
 
     // Duplicate completion events and sweeps change nothing.
     f.tasks.repository.controls.markDelivered(a.id);
@@ -53,7 +53,7 @@ test("a merged-target chain starts one task at a time, exactly once, and only af
     expect(read(f, b.id).statusChangedAt).toBe(started.statusChangedAt);
 
     merge(f, b.id, 102);
-    expect(read(f, c.id)).toMatchObject({ status: "active", queue: { state: "running" } });
+    expect(read(f, c.id)).toMatchObject({ status: "active", queue: { waitingOn: [] } });
     expect(f.tasks.repository.controls.admitQueued()).toEqual([]);
   } finally { await f.close(); }
 });
@@ -65,7 +65,7 @@ test("the queue intent survives restart, and the startup sweep starts an eligibl
     const b = await create(f, "Restart B", { startImmediately: true, dependsOn: [a.id] });
     // The prerequisite completed, but the process stopped before any wake reached its dependent.
     f.database.authTransaction(db => db.prepare("UPDATE forge_task_controls SET status = 'delivered' WHERE task_id = ?").run(a.id));
-    expect(read(f, b.id)).toMatchObject({ status: "backlog", queue: { startIntent: "queued", state: "queued", waitingOn: [] } });
+    expect(read(f, b.id)).toMatchObject({ status: "queued", queue: { waitingOn: [] } });
     expect(work(f, b.id)).toEqual({ sessions: 0, turns: 0 });
 
     const restart = async () => {
@@ -81,7 +81,7 @@ test("the queue intent survives restart, and the startup sweep starts an eligibl
     await restart();
     const started = read(f, b.id);
     expect(started.status).not.toBe("backlog");
-    expect(started.queue.startIntent).toBe("manual");
+    expect(started.status).toBe("active");
 
     // A second restart and a repeated sweep find nothing to admit: the task left the backlog exactly once.
     await restart();
@@ -103,7 +103,7 @@ test("a cancelled, unanswered, or archived prerequisite keeps its dependents que
 
     expect(f.tasks.repository.controls.admitQueued()).toEqual([]);
     const waiting = read(f, dependent.id);
-    expect(waiting).toMatchObject({ status: "backlog", queue: { state: "queued" } });
+    expect(waiting).toMatchObject({ status: "queued", queue: { waitingOn: expect.any(Array) } });
     const reasons = Object.fromEntries(waiting.queue.waitingOn.map(wait => [wait.id, wait]));
     expect(reasons[cancelled.id]).toMatchObject({ status: "cancelled", reason: "prerequisite_cancelled", summary: expect.stringContaining("Remove it from Blocked by") });
     expect(reasons[question.id]).toMatchObject({ status: "waiting_human", reason: "prerequisite_needs_human", summary: expect.stringContaining("Answer it") });
@@ -119,7 +119,7 @@ test("every blocker must complete, dependency edits re-evaluate, and only observ
     const y = await create(f, "Blocker Y", { startImmediately: true });
     const both = await create(f, "Needs both", { startImmediately: true, dependsOn: [x.id, y.id] });
     f.tasks.repository.controls.markDelivered(y.id);
-    expect(read(f, both.id)).toMatchObject({ status: "backlog", queue: { waitingOn: [{ id: x.id, reason: "prerequisite_running" }] } });
+    expect(read(f, both.id)).toMatchObject({ status: "queued", queue: { waitingOn: [{ id: x.id, reason: "prerequisite_running" }] } });
     f.tasks.repository.controls.markDelivered(x.id);
     expect(read(f, both.id).status).toBe("active");
 
@@ -131,10 +131,10 @@ test("every blocker must complete, dependency edits re-evaluate, and only observ
     const edited = await create(f, "Edited dependencies");
     const put = (dependsOn: string[]) => f.app.inject({ method: "PUT", url: `/api/tasks/${edited.id}/dependencies`, headers: f.headers, payload: { dependsOn } });
     expect((await put([running.id])).statusCode).toBe(200);
-    expect(f.tasks.startTask(f.userId, edited.id)).toMatchObject({ status: "backlog", queue: { state: "queued", waitingOn: [{ id: running.id }] } });
+    expect(f.tasks.startTask(f.userId, edited.id)).toMatchObject({ status: "queued", queue: { waitingOn: [{ id: running.id }] } });
     const manual = await create(f, "Manual blocker");
-    expect(TaskSchema.parse((await put([running.id, manual.id])).json())).toMatchObject({ status: "backlog", queue: { waitingOn: [{ reason: expect.any(String) }, { reason: expect.any(String) }] } });
-    expect(TaskSchema.parse((await put([x.id])).json())).toMatchObject({ status: "active", queue: { state: "running" } });
+    expect(TaskSchema.parse((await put([running.id, manual.id])).json())).toMatchObject({ status: "queued", queue: { waitingOn: [{ reason: expect.any(String) }, { reason: expect.any(String) }] } });
+    expect(TaskSchema.parse((await put([x.id])).json())).toMatchObject({ status: "active", queue: { waitingOn: [] } });
 
     // A merged-target prerequisite recorded as delivered with an unmerged pull request waits for GitHub.
     const merged = await create(f, "Merged target", { startImmediately: true, deliveryTarget: "merged" });
@@ -146,7 +146,7 @@ test("every blocker must complete, dependency edits re-evaluate, and only observ
     // Unknown external state retries; it never releases the dependent.
     await expect(new CompletedPullRequests(f.database, { getPullRequestStates: async () => { throw new Error("GitHub is unavailable"); } }).refresh()).rejects.toThrow("GitHub is unavailable");
     expect(f.tasks.repository.controls.admitQueued()).toEqual([]);
-    expect(read(f, dependent.id).status).toBe("backlog");
+    expect(read(f, dependent.id).status).toBe("queued");
 
     // A merge made outside Forge releases the dependent once Forge observes it.
     await new CompletedPullRequests(f.database, { getPullRequestStates: async () => [pull(201, "merged")] }).refresh();
@@ -162,7 +162,7 @@ test("manual backlog never starts by itself; start queues, disarm returns it to 
     f.tasks.repository.controls.markDelivered(delivered.id);
     const manual = await create(f, "Manual", { dependsOn: [delivered.id] });
     expect(f.tasks.repository.controls.admitQueued()).toEqual([]);
-    expect(read(f, manual.id)).toMatchObject({ status: "backlog", queue: { startIntent: "manual", state: "backlog", waitingOn: [] } });
+    expect(read(f, manual.id)).toMatchObject({ status: "backlog", queue: { waitingOn: [] } });
 
     const running = await create(f, "Running", { startImmediately: true });
     const task = await create(f, "Queue and disarm", { dependsOn: [running.id] });
@@ -170,10 +170,10 @@ test("manual backlog never starts by itself; start queues, disarm returns it to 
     expect((await post("disarm", { origin: f.config.reachableAddress })).statusCode).toBe(401);
     const queued = await post("start");
     expect(queued.statusCode, queued.body).toBe(200);
-    expect(TaskSchema.parse(queued.json())).toMatchObject({ status: "backlog", queue: { startIntent: "queued", state: "queued" } });
+    expect(TaskSchema.parse(queued.json())).toMatchObject({ status: "queued", queue: { waitingOn: [{ id: running.id }] } });
     const disarmed = await post("disarm");
     expect(disarmed.statusCode, disarmed.body).toBe(200);
-    expect(TaskSchema.parse(disarmed.json())).toMatchObject({ status: "backlog", queue: { startIntent: "manual", state: "backlog", waitingOn: [{ id: running.id }] } });
+    expect(TaskSchema.parse(disarmed.json())).toMatchObject({ status: "backlog", queue: { waitingOn: [{ id: running.id }] } });
     f.tasks.repository.controls.markDelivered(running.id);
     expect(read(f, task.id).status).toBe("backlog");
     expect(TaskSchema.parse((await post("start")).json()).status).toBe("active");
@@ -185,15 +185,15 @@ test("manual backlog never starts by itself; start queues, disarm returns it to 
     f.tasks.cancelTask(f.userId, cancelled.id);
     f.tasks.repository.controls.markDelivered(blocker.id);
     expect(f.tasks.repository.controls.admitQueued()).toEqual([]);
-    expect(read(f, cancelled.id)).toMatchObject({ status: "cancelled", queue: { startIntent: "manual", state: "cancelled" } });
+    expect(read(f, cancelled.id)).toMatchObject({ status: "cancelled", queue: { waitingOn: [] } });
     expect(work(f, cancelled.id)).toEqual({ sessions: 0, turns: 0 });
 
     // An archived queued task keeps no intent, so opening it again leaves it in the manual backlog.
     const parked = await create(f, "Parked queued", { startImmediately: true, dependsOn: [cancelled.id] });
-    expect(parked.queue.state).toBe("queued");
+    expect(parked.status).toBe("queued");
     f.tasks.repository.setArchived(parked.id, true);
     f.tasks.unarchiveTask(f.userId, parked.id);
-    expect(read(f, parked.id)).toMatchObject({ status: "backlog", queue: { startIntent: "manual", state: "backlog" } });
+    expect(read(f, parked.id)).toMatchObject({ status: "backlog", queue: { waitingOn: [{ id: cancelled.id }] } });
   } finally { await f.close(); }
 });
 
@@ -212,18 +212,18 @@ test("HTTP, the paired-agent API, OpenAPI, and the UI report the same queue stat
     const createdResponse = await agentApi("POST", "/api/agent/tasks", { projectId: f.project.id, title: "Agent queued", idempotencyKey: "agent-queued", queue: true, dependsOn: [prerequisite.id] });
     expect(createdResponse.statusCode, createdResponse.body).toBe(201);
     const created = createdResponse.json();
-    const expectedQueue = { startIntent: "queued", state: "queued", waitingOn: [{ id: prerequisite.id, title: "Agent prerequisite", status: "backlog", deliveryTarget: "pull_request_draft", reason: "prerequisite_not_started", summary: expect.stringContaining("Start it") }] };
-    expect(created).toMatchObject({ status: "backlog", workflowStage: "queued", queue: expectedQueue, permittedCommands: expect.arrayContaining(["disarm_task"]) });
+    const expectedQueue = { waitingOn: [{ id: prerequisite.id, title: "Agent prerequisite", status: "backlog", deliveryTarget: "pull_request_draft", reason: "prerequisite_not_started", summary: expect.stringContaining("Start it") }] };
+    expect(created).toMatchObject({ status: "queued", workflowStage: "queued", queue: expectedQueue, permittedCommands: expect.arrayContaining(["disarm_task"]) });
     expect(created.permittedCommands).not.toContain("start_task");
-    expect(prerequisite).toMatchObject({ workflowStage: "backlog", queue: { startIntent: "manual", state: "backlog" }, permittedCommands: expect.arrayContaining(["start_task"]) });
+    expect(prerequisite).toMatchObject({ workflowStage: "backlog", queue: { waitingOn: [] }, permittedCommands: expect.arrayContaining(["start_task"]) });
 
     const http = read(f, created.id);
     expect(http.queue).toEqual(created.queue);
 
     // The UI renders the same state and the prerequisite link, id, and reason.
     expect(taskStatusLabel(http)).toBe("Queued");
-    expect(renderToStaticMarkup(createElement(TaskStatus, { status: http.status, queued: http.queue.state === "queued" }))).toContain("Queued");
-    expect(backlogText(http.queue)).toContain("starts by itself");
+    expect(renderToStaticMarkup(createElement(TaskStatus, { status: http.status }))).toContain("Queued");
+    expect(backlogText(http)).toContain("Forge starts");
     const waits = renderToStaticMarkup(createElement(TaskQueueWaits, { task: http }));
     expect(waits).toContain(`data-task-queue-wait="${prerequisite.id}"`);
     expect(waits).toContain(`data-reason="prerequisite_not_started"`);
@@ -234,18 +234,39 @@ test("HTTP, the paired-agent API, OpenAPI, and the UI report the same queue stat
     expect((await agentApi("POST", `/api/agent/tasks/${created.id}/commands`, { command: "disarm_task", revision: created.revision, idempotencyKey: "other-disarm" }, other)).statusCode).toBe(404);
     const disarmed = await agentApi("POST", `/api/agent/tasks/${created.id}/commands`, { command: "disarm_task", revision: created.revision, idempotencyKey: "agent-disarm" });
     expect(disarmed.statusCode, disarmed.body).toBe(200);
-    expect(disarmed.json()).toMatchObject({ status: "backlog", workflowStage: "backlog", queue: { startIntent: "manual", state: "backlog" }, permittedCommands: expect.arrayContaining(["start_task"]) });
+    expect(disarmed.json()).toMatchObject({ status: "backlog", workflowStage: "backlog", queue: { waitingOn: [{ id: prerequisite.id }] }, permittedCommands: expect.arrayContaining(["start_task"]) });
     expect(read(f, created.id).queue).toEqual(disarmed.json().queue);
     const requeued = await agentApi("POST", `/api/agent/tasks/${created.id}/commands`, { command: "start_task", revision: disarmed.json().revision, idempotencyKey: "agent-requeue" });
-    expect(requeued.json()).toMatchObject({ status: "backlog", queue: { state: "queued" } });
+    expect(requeued.json()).toMatchObject({ status: "queued", queue: { waitingOn: [{ id: prerequisite.id }] } });
     expect((await agentApi("GET", `/api/agent/tasks/${created.id}`)).json().queue).toEqual(read(f, created.id).queue);
+
+    const previousReceipt = {
+      ...requeued.json(),
+      status: "backlog",
+      queue: { startIntent: "queued", state: "queued", waitingOn: requeued.json().queue.waitingOn.map((wait: { status: string }) => ({ ...wait, queued: wait.status === "queued" })) },
+      blockedBy: requeued.json().blockedBy.map((blocker: { status: string }) => ({ ...blocker, queued: blocker.status === "queued" })),
+    };
+    const receiptHash = f.database.authQuery(db => (db.prepare("SELECT request_hash FROM forge_hermes_task_command_receipts WHERE task_id = ? AND idempotency_key = ?").get(created.id, "agent-requeue") as { request_hash: string }).request_hash);
+    f.database.authTransaction(db => db.prepare("UPDATE forge_hermes_task_command_receipts SET result_json = ? WHERE task_id = ? AND idempotency_key = ?").run(JSON.stringify(previousReceipt), created.id, "agent-requeue"));
+    const migration = await readFile(new URL("../drizzle/20260922030041770_canonical_queued_task_status.sql", import.meta.url), "utf8");
+    const receiptUpgrade = migration.split("--> statement-breakpoint").find(statement => statement.includes("UPDATE forge_hermes_task_command_receipts"));
+    expect(receiptUpgrade).toBeDefined();
+    f.database.authTransaction(db => db.exec(receiptUpgrade!));
+    const movedBack = await agentApi("POST", `/api/agent/tasks/${created.id}/commands`, { command: "disarm_task", revision: requeued.json().revision, idempotencyKey: "agent-disarm-again" });
+    expect(movedBack.json().status).toBe("backlog");
+    const replayed = await agentApi("POST", `/api/agent/tasks/${created.id}/commands`, { command: "start_task", revision: disarmed.json().revision, idempotencyKey: "agent-requeue" });
+    expect(replayed.statusCode, replayed.body).toBe(200);
+    expect(replayed.json()).toEqual(requeued.json());
+    expect(f.database.authQuery(db => (db.prepare("SELECT request_hash FROM forge_hermes_task_command_receipts WHERE task_id = ? AND idempotency_key = ?").get(created.id, "agent-requeue") as { request_hash: string }).request_hash)).toBe(receiptHash);
+    expect(read(f, created.id).status).toBe("backlog");
+    expect(work(f, created.id)).toEqual({ sessions: 0, turns: 0 });
 
     const document = (await agentApi("GET", "/api/agent/openapi.json")).json();
     const commandEnum = document.paths["/api/agent/tasks/{taskId}/commands"].post.requestBody.content["application/json"].schema.properties.command.enum;
     expect(commandEnum).toEqual(expect.arrayContaining(["start_task", "disarm_task"]));
     expect(document.paths["/api/agent/tasks"].post.requestBody.content["application/json"].schema.properties).toHaveProperty("queue");
     const readSchema = document.paths["/api/agent/tasks/{taskId}"].get.responses["200"].content["application/json"].schema;
-    expect(readSchema.properties.queue.properties.state.enum).toEqual(["backlog", "queued", "running", "needs_attention", "delivered", "cancelled"]);
+    expect(readSchema.properties.status.enum).toContain("queued");
     expect(readSchema.properties.queue.properties.waitingOn.items.properties.reason.enum).toContain("prerequisite_merge_unobserved");
     const capabilities = (await agentApi("GET", "/api/agent/capabilities")).json();
     expect(capabilities).toMatchObject({ capabilities: { create: { queuedTask: true } }, autonomousCommands: expect.arrayContaining(["create_queued_task", "disarm_task"]) });

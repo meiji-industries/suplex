@@ -15,7 +15,7 @@ export function taskAnalytics(task: Task, sessions: TaskSession[], data: ReturnT
     observedWaitMs += Math.max(0, end - Date.parse(event.observedAt));
   }
   const historyStartsAtCreation = events[0] && Math.abs(Date.parse(events[0].observedAt) - Date.parse(task.createdAt)) < 1000;
-  const start = historyStartsAtCreation || events[0]?.status === "backlog" ? events.find(event => event.status === "active") : undefined;
+  const start = historyStartsAtCreation || ["backlog", "queued"].includes(events[0]?.status ?? "") ? events.find(event => event.status === "active") : undefined;
   const delivered = start ? events.find(event => event.status === "delivered" && event.observedAt >= start.observedAt) : null;
   return {
     id: task.id, title: task.title, issueKey: task.issueKey ?? null, projectId: task.projectId,

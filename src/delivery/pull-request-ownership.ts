@@ -10,7 +10,7 @@ export function hasPullRequestOwner(db: Database.Database, input: { taskId?: str
   ), known(id, name) AS (SELECT repository_id, repository_name FROM forge_github_trigger_rules UNION SELECT repository_id, repository_name FROM forge_github_trigger_dispatches),
   names(name) AS (SELECT lower(?) UNION SELECT lower(name) FROM known WHERE (SELECT kind FROM owner_host) = 'github' AND id IN (SELECT id FROM known WHERE lower(name) = lower(?)))
   SELECT 1 FROM forge_tasks t JOIN forge_task_controls c ON c.task_id = t.id
-  WHERE (? IS NULL OR t.id <> ?) AND t.archived_at IS NULL AND c.status IN ('backlog','active','waiting_human')
+  WHERE (? IS NULL OR t.id <> ?) AND t.archived_at IS NULL AND c.status IN ('backlog','queued','active','waiting_human')
     AND COALESCE(json_extract(t.configuration_json, '$.integration.repository.kind'), 'github') = (SELECT kind FROM owner_host)
     AND ((lower(json_extract(t.configuration_json, '$.repository')) IN (SELECT name FROM names) AND json_extract(t.configuration_json, '$.source.kind') = 'pull_request' AND json_extract(t.configuration_json, '$.source.number') = ?)
       OR (lower(json_extract(c.delivery_intent_json, '$.repository')) IN (SELECT name FROM names) AND json_extract(c.delivery_intent_json, '$.pullRequestNumber') = ?)

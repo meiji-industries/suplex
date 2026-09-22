@@ -28,13 +28,13 @@ import { TaskBlockedByProperty } from "../src/frontend/features/tasks/task-detai
 const self = { id: "task-self", projectId: "project-1", title: "This task", status: "active", archivedAt: null, queue: { state: "running" } };
 const active = { id: "task-active", projectId: "project-1", title: "Active prerequisite", status: "active", archivedAt: null, queue: { state: "running" } };
 const backlog = { id: "task-backlog", projectId: "project-1", title: "Backlog task", status: "backlog", archivedAt: null, queue: { state: "backlog" } };
-const queued = { id: "task-queued", projectId: "project-1", title: "Queued task", status: "backlog", archivedAt: null, queue: { state: "queued" } };
+const queued = { id: "task-queued", projectId: "project-1", title: "Queued task", status: "queued", archivedAt: null, queue: { waitingOn: [] } };
 const delivered = { id: "task-delivered", projectId: "project-1", title: "Delivered task", status: "delivered", archivedAt: null, queue: { state: "delivered" } };
 const otherProject = { id: "task-other-project", projectId: "project-2", title: "Other project", status: "active", archivedAt: null, queue: { state: "running" } };
 
 const activeTask: Pick<Task, "id" | "companyId" | "projectId" | "status" | "blockedBy"> = { id: "task-self", companyId: "company-1", projectId: "project-1", status: "active", blockedBy: [] };
-const first = { id: "task-first", title: "First prerequisite", status: "backlog" as const, queued: false };
-const second = { id: "task-second", title: "Second prerequisite", status: "delivered" as const, queued: false };
+const first = { id: "task-first", title: "First prerequisite", status: "backlog" as const };
+const second = { id: "task-second", title: "Second prerequisite", status: "delivered" as const };
 
 const saved = { id: "task-self", blockedBy: [] } as unknown as Task;
 
@@ -87,7 +87,7 @@ test("None opens the picker and selecting a task saves it as the only prerequisi
 });
 
 test("every prerequisite links to its task with its status", async () => {
-  const queuedPrerequisite = { id: "task-queued", title: "Queued prerequisite", status: "backlog" as const, queued: true };
+  const queuedPrerequisite = { id: "task-queued", title: "Queued prerequisite", status: "queued" as const };
   const view = mount({ ...activeTask, blockedBy: [first, queuedPrerequisite, second] });
   await view.render();
   expect(view.container.querySelector('a[href="/tasks/task-first?company=company-1"]')?.getAttribute("title")).toBe("First prerequisite · Backlog");

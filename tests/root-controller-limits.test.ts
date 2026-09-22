@@ -342,6 +342,7 @@ test("a limit answer supersedes only the unadmitted idle prompt while dependenci
   const profile = value.store.get("task").rootProfile;
   value.database.authTransaction(db => insertNativeTaskRow(db, { taskId: "limit-prerequisite", directory: value.directory }));
   value.store.create({ taskId: "limit-prerequisite", startImmediately: true, objective: "Prepare the limit dependency", deliveryTarget: "merged", deliveryIntent: { repository: "owner/repo", headBranch: "limit-prerequisite", baseBranch: "main", baselineSha: "a", pullRequestNumber: null }, rootProfile: profile, workerProfile: profile });
+  value.store.admitQueued(["limit-prerequisite"]);
   value.database.authTransaction(db => db.prepare("INSERT INTO forge_task_dependencies (task_id, depends_on_task_id, created_at) VALUES ('task', 'limit-prerequisite', ?)").run(new Date().toISOString()));
 
   expect(value.store.pauseAtTaskLimit("task", { estimatedCostUsd: 999, admittedTurns: 1 })).toBe(true);

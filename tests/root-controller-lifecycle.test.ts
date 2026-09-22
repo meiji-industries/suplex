@@ -167,6 +167,7 @@ test("a legacy active task preserves history without admitting dependency pollin
   const profile = value.store.get("task").rootProfile;
   value.database.authTransaction(db => insertNativeTaskRow(db, { taskId: "prerequisite", directory: value.directory }));
   value.store.create({ taskId: "prerequisite", startImmediately: true, objective: "Prepare the dependency", deliveryTarget: "merged", deliveryIntent: { repository: "owner/repo", headBranch: "prerequisite", baseBranch: "main", baselineSha: "a", pullRequestNumber: null }, rootProfile: profile, workerProfile: profile });
+  value.store.admitQueued(["prerequisite"]);
   value.database.authTransaction(db => {
     db.prepare("INSERT INTO forge_task_dependencies (task_id, depends_on_task_id, created_at) VALUES ('task', 'prerequisite', ?)").run(new Date().toISOString());
     db.prepare("UPDATE forge_task_sessions SET pane_id = NULL WHERE task_id = 'task'").run();
@@ -191,6 +192,7 @@ test("a blocked task recovers a natively completed turn whose local row is still
   const profile = value.store.get("task").rootProfile;
   value.database.authTransaction(db => insertNativeTaskRow(db, { taskId: "native-prerequisite", directory: value.directory }));
   value.store.create({ taskId: "native-prerequisite", startImmediately: true, objective: "Prepare native input", deliveryTarget: "merged", deliveryIntent: { repository: "owner/repo", headBranch: "native-prerequisite", baseBranch: "main", baselineSha: "a", pullRequestNumber: null }, rootProfile: profile, workerProfile: profile });
+  value.store.admitQueued(["native-prerequisite"]);
   value.database.authTransaction(db => db.prepare("INSERT INTO forge_task_dependencies (task_id, depends_on_task_id, created_at) VALUES ('task', 'native-prerequisite', ?)").run(new Date().toISOString()));
   value.harness.observations.set(pending.id, { sessionID: `ses_${root.id.replaceAll("-", "")}`, messageID: pending.id, state: "completed", admission: "observed", retry: "forbidden", assistantMessageID: `assistant-${pending.id}`, assistantMessageIDs: [`assistant-${pending.id}`] });
   value.harness.results.set(pending.id, "Native completion recovered");
@@ -212,6 +214,7 @@ test("a prerequisite added at the native admission claim prevents dispatch", asy
       added = true;
       value.database.authTransaction(db => insertNativeTaskRow(db, { taskId: "claim-prerequisite", directory: value.directory }));
       value.store.create({ taskId: "claim-prerequisite", startImmediately: true, objective: "Close the admission race", deliveryTarget: "merged", deliveryIntent: { repository: "owner/repo", headBranch: "claim-prerequisite", baseBranch: "main", baselineSha: "a", pullRequestNumber: null }, rootProfile: profile, workerProfile: profile });
+      value.store.admitQueued(["claim-prerequisite"]);
       value.database.authTransaction(db => db.prepare("INSERT INTO forge_task_dependencies (task_id, depends_on_task_id, created_at) VALUES ('task', 'claim-prerequisite', ?)").run(new Date().toISOString()));
     }
     return dispatch(...args);
@@ -239,6 +242,7 @@ test("a blocked active task retains an admitted Worker result until release", as
   const profile = value.store.get("task").rootProfile;
   value.database.authTransaction(db => insertNativeTaskRow(db, { taskId: "worker-prerequisite", directory: value.directory }));
   value.store.create({ taskId: "worker-prerequisite", startImmediately: true, objective: "Prepare Worker input", deliveryTarget: "merged", deliveryIntent: { repository: "owner/repo", headBranch: "worker-prerequisite", baseBranch: "main", baselineSha: "a", pullRequestNumber: null }, rootProfile: profile, workerProfile: profile });
+  value.store.admitQueued(["worker-prerequisite"]);
   value.database.authTransaction(db => db.prepare("INSERT INTO forge_task_dependencies (task_id, depends_on_task_id, created_at) VALUES ('task', 'worker-prerequisite', ?)").run(new Date().toISOString()));
 
   value.harness.finish(workerTurn.messageID);

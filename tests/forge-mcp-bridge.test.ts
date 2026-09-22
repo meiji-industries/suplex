@@ -105,12 +105,12 @@ test("the stdio bridge drives the paired ForgeMcp runtime API end to end", async
     expect(structured(read)).toMatchObject({ status: 200, body: { id: task.id, revision: task.revision } });
 
     const delivery = await session.call({ method: "tools/call", params: { name: "forge_get_task_delivery", arguments: { taskId: task.id } } });
-    expect(structured(delivery)).toEqual({ status: 200, body: { taskId: task.id, taskStatus: "backlog", revision: task.revision, queue: { startIntent: "manual", state: "backlog", waitingOn: [] }, blocker: null, delivery: null } });
+    expect(structured(delivery)).toEqual({ status: 200, body: { taskId: task.id, taskStatus: "backlog", revision: task.revision, queue: { waitingOn: [] }, blocker: null, delivery: null } });
 
     const list = await session.call({ method: "tools/call", params: { name: "forge_list_tasks", arguments: { projectId: fixture.project.id, limit: 10 } } });
     expect(structured(list)).toMatchObject({ status: 200, body: { tasks: [{ id: task.id }], nextCursor: null } });
     const listedTask = (structured(list).body as { tasks: Array<Record<string, unknown>> }).tasks.find(candidate => candidate.id === task.id)!;
-    expect(Object.keys(listedTask).sort()).toEqual(["id", "title", "status", "archived", "queue", "workflow", "dependsOn", "updatedAt"].sort());
+    expect(Object.keys(listedTask).sort()).toEqual(["id", "title", "status", "archived", "workflow", "dependsOn", "updatedAt"].sort());
     const fullList = await session.call({ method: "tools/call", params: { name: "forge_list_tasks", arguments: { projectId: fixture.project.id, limit: 10, view: "full" } } });
     expect((structured(fullList).body as { tasks: Array<Record<string, unknown>> }).tasks.find(candidate => candidate.id === task.id)).toHaveProperty("integration");
 

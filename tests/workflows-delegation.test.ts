@@ -51,6 +51,7 @@ async function fixture(workflow: WorkflowId, options: { image?: boolean } = {}) 
   const roles = workflow === "competing_plans" ? { planner_a: advisor, planner_b: root } : workflow === "independent_review" ? { reviewer: advisor } : workflow === "refine_pull_request" ? { rater: advisor } : {};
   const store = new TaskControlStore(database, async () => ({ kind: "running", startTime: "test-process" }));
   store.create({ taskId: "task", startImmediately: true, objective: "Ship it", deliveryTarget: workflow === "refine_pull_request" ? "merged" : "pull_request_draft", deliveryIntent: { repository: "owner/repo", headBranch: "task", baseBranch: "main", baselineSha: baseSha, pullRequestNumber: workflow === "refine_pull_request" ? 7 : null }, rootProfile: root, workerProfile: worker, workflow, advisorProfiles: roles, worktree: { path: repo, branch: "task", baseSha, headSha: baseSha, dirty: false } });
+  store.admitQueued(["task"]);
   // The fake delivery observes real Git; tests can move the intended base or make observation fail.
   const source = { base: baseSha, baseBranch: "main", failure: null as Error | null };
   const delivery: TaskDelivery = {

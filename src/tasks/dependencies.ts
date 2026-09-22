@@ -20,11 +20,11 @@ export function taskDependencyMap(database: ForgeDatabase, taskIds: string[]): M
   return map;
 }
 
-const SummarySchema = z.object({ id: z.string(), title: z.string(), status: z.string(), queued: z.number().transform(Boolean) });
+const SummarySchema = z.object({ id: z.string(), title: z.string(), status: z.string() });
 export type TaskDependencySummary = z.infer<typeof SummarySchema>;
 
 export function taskDependencySummariesInTransaction(db: Database.Database, taskId: string): TaskDependencySummary[] {
-  return z.array(SummarySchema).parse(db.prepare(`SELECT t.id AS id, t.title AS title, COALESCE(c.status, 'backlog') AS status, COALESCE(c.status, 'backlog') = 'backlog' AND t.start_queued = 1 AS queued FROM (${EDGE_SOURCE} WHERE task_id = ?) d JOIN forge_tasks t ON t.id = d.depends_on_task_id LEFT JOIN forge_task_controls c ON c.task_id = t.id ORDER BY t.id`).all(taskId));
+  return z.array(SummarySchema).parse(db.prepare(`SELECT t.id AS id, t.title AS title, COALESCE(c.status, 'backlog') AS status FROM (${EDGE_SOURCE} WHERE task_id = ?) d JOIN forge_tasks t ON t.id = d.depends_on_task_id LEFT JOIN forge_task_controls c ON c.task_id = t.id ORDER BY t.id`).all(taskId));
 }
 
 /** The prerequisite tasks of one task with the title and status every reader shows: the task view, AgentApi, and the Coordinator. */

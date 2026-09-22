@@ -48,7 +48,7 @@ function task(id: string, title: string, status: Task["status"]): Task {
     id, companyId: "company-1", projectId: "project-1", issueKey: null, title, description: "", status, deliveryTarget: "pull_request_draft",
     rootProfile: profile, workerProfile: profile, workflow: "standard", advisorProfiles: {}, workflowState: { version: 1, reviews: [], acceptedDelivery: null, deliveryWait: null, completion: null },
     configuration: { repository: "meiji-industries/forge", repositoryPath: "/repo", worktreeRoot: "/worktrees", branch: id, baseBranch: "main", baselineSha: "a".repeat(40), startingSha: "a".repeat(40), setupCommand: "", verificationCommand: "", runProjectTests: true, visualEvidence: "off", source: null, capturedAt: "2026-09-08T00:00:00.000Z" },
-    worktree: null, pullRequest: null, humanQuestion: null, blockedBy: [], queue: { startIntent: "manual", state: status === "active" ? "running" : status === "waiting_human" ? "needs_attention" : status, waitingOn: [] }, limits: { budgetUsd: 15, maxTurns: 40, admittedTurns: 0 }, wakeAt: null, images: [],
+    worktree: null, pullRequest: null, humanQuestion: null, blockedBy: [], queue: { waitingOn: [] }, limits: { budgetUsd: 15, maxTurns: 40, admittedTurns: 0 }, wakeAt: null, images: [],
     dependsOn: [], createdAt: "2026-09-08T00:00:00.000Z", updatedAt: "2026-09-08T00:00:00.000Z", statusChangedAt: "2026-09-08T00:00:00.000Z", archivedAt: null,
   };
 }
@@ -58,8 +58,8 @@ afterEach(async () => {
   await act(async () => { document.body.replaceChildren(); });
 });
 
-test("the board status filter narrows the visible columns and tasks", async () => {
-  const tasks = [task("task-1", "Repair the poller", "active"), task("task-2", "Plan the migration", "backlog")];
+test("the board keeps queued and backlog tasks in separate columns and filters", async () => {
+  const tasks = [task("task-1", "Repair the poller", "active"), task("task-2", "Plan the migration", "backlog"), task("task-3", "Ship after review", "queued")];
   api.readJson.mockImplementation(async (path: string) => path.includes("/projects") ? { projects: [] } : { tasks });
   const container = document.createElement("div");
   document.body.append(container);
@@ -69,7 +69,7 @@ test("the board status filter narrows the visible columns and tasks", async () =
   const iconThenLabel = () => [trigger()?.firstElementChild?.tagName.toLowerCase(), trigger()?.textContent];
   const columns = () => Array.from(container.querySelectorAll("section")).map(section => section.getAttribute("aria-label"));
   expect(iconThenLabel()).toEqual(["svg", "All statuses"]);
-  expect(columns()).toEqual(["Backlog", "Active"]);
+  expect(columns()).toEqual(["Backlog", "Queued", "Active"]);
   expect(container.textContent).toContain("Plan the migration");
 
   const option = container.querySelector<HTMLButtonElement>('[data-select="Filter by status"][data-value="active"]');
@@ -82,7 +82,16 @@ test("the board status filter narrows the visible columns and tasks", async () =
   expect(container.textContent).not.toContain("Plan the migration");
 
   await act(async () => { container.querySelector<HTMLButtonElement>('[data-select="Filter by status"][data-value="all"]')?.click(); });
-  expect(columns()).toEqual(["Backlog", "Active"]);
+  expect(columns()).toEqual(["Backlog", "Queued", "Active"]);
+  await act(async () => { container.querySelector<HTMLButtonElement>('[data-select="Filter by status"][data-value="queued"]')?.click(); });
+  expect(columns()).toEqual(["Queued"]);
+  expect(container.textContent).toContain("Ship after review");
+  expect(container.textContent).not.toContain("Plan the migration");
+  await act(async () => { container.querySelector<HTMLButtonElement>('[data-select="Filter by status"][data-value="all"]')?.click(); });
+  const backlogTab = Array.from(container.querySelectorAll<HTMLButtonElement>('[role="tab"]')).find(tab => tab.textContent === "Backlog");
+  await act(async () => { backlogTab?.click(); });
+  expect(columns()).toEqual(["Backlog"]);
+  expect(container.textContent).not.toContain("Ship after review");
 });
 
 test("board cards and list rows label every Blocked by task from the same prerequisite list", async () => {

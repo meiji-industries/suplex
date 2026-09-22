@@ -63,6 +63,7 @@ async function fixture() {
   const profile = { profileId: "profile", provider: "codex" as const, model: "gpt-5.6-sol", reasoningLevel: "medium" as const, serviceTier: "default" as const };
   const store = new TaskControlStore(database);
   store.create({ startImmediately: true, taskId: "task", objective: "Deliver the change", deliveryTarget: "merged", deliveryIntent: { repository: "owner/repo", headBranch: local.branch, baseBranch: "main", baselineSha: local.headSha, pullRequestNumber: null }, rootProfile: profile, workerProfile: profile, worktree: { path: directory, branch: local.branch, baseSha: local.headSha, headSha: local.headSha, dirty: false } });
+  store.admitQueued(["task"]);
   const root = store.claimRoot({ taskId: "task" });
   store.bindHarnessSession({ sessionId: root.id, generation: root.generation, nativeSessionId: "ses_root" });
   store.bindPane({ sessionId: root.id, generation: root.generation, paneId: "root-pane" });
@@ -702,6 +703,7 @@ describe("Coordinator delivery operations", () => {
     const profile = value.store.get("task").rootProfile;
     value.database.authTransaction(db => insertNativeTaskRow(db, { taskId: "merge-prerequisite", directory: value.directory }));
     value.store.create({ taskId: "merge-prerequisite", startImmediately: true, objective: "Prepare merge input", deliveryTarget: "merged", deliveryIntent: { repository: "owner/repo", headBranch: "merge-prerequisite", baseBranch: "main", baselineSha: value.local.headSha, pullRequestNumber: null }, rootProfile: profile, workerProfile: profile });
+    value.store.admitQueued(["merge-prerequisite"]);
     value.database.authTransaction(db => db.prepare("INSERT INTO forge_task_dependencies (task_id, depends_on_task_id, created_at) VALUES ('task', 'merge-prerequisite', ?)").run(new Date().toISOString()));
 
     await expect(new DeliveryOperations(value.store, fake.port).execute({ taskId: "task", sessionId: value.root.id, generation: value.root.generation }, "merge_pull_request", value.local.headSha, value.review)).rejects.toMatchObject({

@@ -38,6 +38,7 @@ export async function fixture(startImmediately = true) {
   const profile = { profileId: "profile", provider: "opencode", model: "openai/gpt-5.6-luna", reasoningLevel: "max", serviceTier: "priority" } as const;
   const store = new TaskControlStore(database);
   store.create({ taskId: "task", startImmediately, objective: "Ship it", deliveryTarget: "merged", deliveryIntent: { repository: "owner/repo", headBranch: "task", baseBranch: "main", baselineSha: "a", pullRequestNumber: null }, rootProfile: profile, workerProfile: profile, worktree: { path: directory, branch: "task", baseSha: "a", headSha: "a", dirty: false } });
+  if (startImmediately) store.admitQueued(["task"]);
   const harness = new FakeTaskHarness();
   const nativeUsage = new Map<string, ReturnType<typeof usage>[]>();
   let usageError: Error | null = null;

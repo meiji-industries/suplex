@@ -2,6 +2,7 @@ import { z } from "zod";
 import { AdvisorProfileIdsSchema } from "../../coordination/workflows.js";
 import { DeliveryTargetSchema, TaskImageInputSchema, TaskQueueSchema, TaskSourceInputSchema, VisualEvidenceSchema } from "../../tasks/contracts.js";
 import { MAX_TASK_IMAGES } from "../../tasks/limits/attachment-limits.js";
+import { TaskControlStatusSchema } from "../../tasks/control.js";
 
 export const AgentApiAdminAgentSchema = z.object({
   id: z.string(),
@@ -140,7 +141,7 @@ export const AgentApiTaskIdParamsSchema = z.object({
   taskId: z.string().min(1).max(100),
 });
 
-const AgentApiTaskStatusSchema = z.enum(["backlog", "active", "waiting_human", "cancelled", "delivered"]);
+const AgentApiTaskStatusSchema = TaskControlStatusSchema;
 
 export const AgentApiIntegrationSchema = z.object({
   integrated: z.boolean(),
@@ -226,7 +227,7 @@ const AgentApiTaskSourceSchema = z.discriminatedUnion("kind", [
 
 export const AgentApiTaskListQuerySchema = z.object({
   projectId: z.string().min(1).max(128).optional(),
-  status: z.enum(["backlog", "active", "waiting_human", "cancelled", "delivered"]).optional(),
+  status: TaskControlStatusSchema.optional(),
   pullRequestNumber: z.coerce.number().int().positive().optional(),
   sourceBranch: z.string().min(1).optional(),
   titleContains: z.string().min(1).optional(),
@@ -288,7 +289,7 @@ export const AgentApiSafeTaskProjectionSchema = z.object({
   title: z.string(),
   source: z.union([AgentApiTaskSourceSchema, z.null()]),
   status: AgentApiTaskStatusSchema,
-  queue: TaskQueueSchema.describe("startIntent is manual or queued. state separates backlog (manual), queued (waits to start by itself), running, needs_attention, delivered, and cancelled. waitingOn lists each incomplete prerequisite with its exact reason."),
+  queue: TaskQueueSchema.describe("waitingOn lists each incomplete prerequisite with its exact reason. status is the task lifecycle state."),
   dependsOn: z.array(z.string()).describe("The task ids of blockedBy, in the same order."),
   blockedBy: z.array(z.object({ id: z.string(), title: z.string(), status: AgentApiTaskStatusSchema, kind: z.enum(["task", "pull_request"]).optional(), number: z.number().int().min(1).optional(), url: z.string().url().optional(), state: z.enum(["open", "closed", "merged"]).optional(), observedAt: z.string().datetime().optional() }).strict()).describe("Task and pull request prerequisites with their observed state."),
   archived: z.boolean(),
@@ -352,7 +353,6 @@ export const AgentApiTaskSummaryProjectionSchema = z.object({
   title: z.string(),
   status: AgentApiTaskStatusSchema,
   archived: z.boolean(),
-  queue: TaskQueueSchema.shape.state,
   workflow: z.string().optional(),
   source: AgentApiTaskSourceSchema.optional(),
   pullRequestNumber: z.number().int().min(1).optional(),
@@ -640,7 +640,7 @@ export function agentApiRuntimeOpenApi(): Record<string, unknown> {
         post: {
           operationId: "createAgentApiBacklogTask",
           summary: "Create a backlog or queued task",
-          description: `Creates a backlog task. With queue true, the task is queued: it starts now when every prerequisite is complete, and otherwise stays in the backlog with zero sessions until the last prerequisite completes. Without queue, it never starts by itself. dryRun true validates the same request and returns its projection without writing a task, dependency, receipt, artifact, queue state, or audit event. The server defaults description to an empty string and rejects unknown fields with request_invalid. dependsOn sets the prerequisites, shown as Blocked by. ${AGENT_API_PREREQUISITE_SCOPE} Idempotency is scoped to the paired agent and company. An identical replay returns 200; reuse for a different request returns 409 with idempotency_conflict. GET /api/agent/tasks supports opaque cursors and returns nextCursor.`,
+          description: `Creates a backlog task. With queue true, the task is queued: it starts now when every prerequisite is complete, and otherwise stays queued with zero sessions until the last prerequisite completes. Without queue, it never starts by itself. dryRun true validates the same request and returns its projection without writing a task, dependency, receipt, artifact, or audit event. The server defaults description to an empty string and rejects unknown fields with request_invalid. dependsOn sets the prerequisites, shown as Blocked by. ${AGENT_API_PREREQUISITE_SCOPE} Idempotency is scoped to the paired agent and company. An identical replay returns 200; reuse for a different request returns 409 with idempotency_conflict. GET /api/agent/tasks supports opaque cursors and returns nextCursor.`,
           security: [{ AgentApiBearer: [] }],
           requestBody: { required: true, content: { "application/json": { schema: inputSchema(AgentApiRuntimeOperations.createTask.body) } } },
           responses: openApiResponses(AgentApiRuntimeOperations.createTask.response),
@@ -650,7 +650,7 @@ export function agentApiRuntimeOpenApi(): Record<string, unknown> {
         get: {
           operationId: "getAgentApiCreatedTask",
           summary: "Read a task in a granted project",
-          description: "A paired agent can read every task in its currently granted company projects. A task created by another actor reports permittedCommands as an empty array. Task states are backlog, active, waiting_human, cancelled, and delivered. queue separates a manual backlog task from a queued one and lists the exact wait reason of each incomplete prerequisite. A prerequisite is complete when it is delivered at its own delivery target; the merged target also needs the merged pull request state Forge observed from GitHub. Human questions are records only: answering them remains human authority and no agent answer command exists. The server router rejects path parameters longer than 100 characters before this authenticated operation is matched; those router-level responses are outside this contract.",
+          description: "A paired agent can read every task in its currently granted company projects. A task created by another actor reports permittedCommands as an empty array. Task states are backlog, queued, active, waiting_human, cancelled, and delivered. queue.waitingOn lists the exact wait reason of each incomplete prerequisite. A prerequisite is complete when it is delivered at its own delivery target; the merged target also needs the merged pull request state Forge observed from GitHub. Human questions are records only: answering them remains human authority and no agent answer command exists. The server router rejects path parameters longer than 100 characters before this authenticated operation is matched; those router-level responses are outside this contract.",
           security: [{ AgentApiBearer: [] }],
           parameters: [{ name: "taskId", in: "path", required: true, schema: jsonSchema(AgentApiRuntimeOperations.getTask.params.shape.taskId, "input") }],
           responses: openApiResponses(AgentApiRuntimeOperations.getTask.response),

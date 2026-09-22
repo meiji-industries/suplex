@@ -202,5 +202,5 @@ test("the picker reports an empty task result", async () => {
   await flush();
   const search = view.container.querySelector<HTMLInputElement>('[aria-label="Search tasks"]')!;
   await act(async () => { setText(search, "nothing"); });
-  expect(view.container.textContent).toContain("No matching active or backlog tasks.");
+  expect(view.container.textContent).toContain("No matching backlog, queued, or active tasks.");
 });

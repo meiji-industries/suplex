@@ -88,7 +88,7 @@ export class TaskHost {
   }
 
   private async refreshPullRequestPrerequisites(): Promise<void> {
-    const rows = this.database.authQuery(db => db.prepare("SELECT d.task_id AS taskId, d.pull_request_number AS number, d.state, d.title, d.url, d.observed_at AS observedAt, json_extract(t.configuration_json, '$.repository') AS repository FROM forge_task_pull_request_dependencies d JOIN forge_tasks t ON t.id = d.task_id JOIN forge_task_controls c ON c.task_id = t.id WHERE t.start_queued = 1 AND t.archived_at IS NULL AND c.status = 'backlog' ORDER BY d.task_id, d.pull_request_number").all() as Array<PullRequestDependency & { taskId: string; repository: string }>);
+    const rows = this.database.authQuery(db => db.prepare("SELECT d.task_id AS taskId, d.pull_request_number AS number, d.state, d.title, d.url, d.observed_at AS observedAt, json_extract(t.configuration_json, '$.repository') AS repository FROM forge_task_pull_request_dependencies d JOIN forge_tasks t ON t.id = d.task_id JOIN forge_task_controls c ON c.task_id = t.id WHERE t.archived_at IS NULL AND c.status = 'queued' ORDER BY d.task_id, d.pull_request_number").all() as Array<PullRequestDependency & { taskId: string; repository: string }>);
     for (const row of rows) {
       try {
         const observed = await this.pullRequestObserver.observePullRequest({ repository: row.repository, branch: "", pullRequestNumber: row.number });

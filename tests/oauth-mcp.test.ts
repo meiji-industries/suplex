@@ -186,7 +186,7 @@ test("official SDK discovers OAuth and calls Forge tools without an agent key", 
   const identity = await client.callTool({ name: "forge_whoami", arguments: {} });
   expect(identity.structuredContent).toMatchObject({ status: 200, body: { agent: { id: expect.stringMatching(/^agent_/) } } });
   const visible = await client.callTool({ name: "forge_list_tasks", arguments: { status: "active" } });
-  expect(visible.structuredContent).toMatchObject({ status: 200, body: { tasks: [expect.objectContaining({ id: uiTask.id, status: "active", queue: "running" })] } });
+  expect(visible.structuredContent).toMatchObject({ status: 200, body: { tasks: [expect.objectContaining({ id: uiTask.id, status: "active" })] } });
   const uiRead = await client.callTool({ name: "forge_get_task", arguments: { taskId: uiTask.id } });
   expect(uiRead.structuredContent).toMatchObject({ status: 200, body: { id: uiTask.id, status: "active", permittedCommands: [] } });
   const uiDelivery = await client.callTool({ name: "forge_get_task_delivery", arguments: { taskId: uiTask.id } });

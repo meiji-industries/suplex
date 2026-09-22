@@ -27,11 +27,11 @@ GitHub during queued-task sweeps, never repaired by a user.
 _Avoid_: Blocked by reference, single blocker.
 
 **Queued task**
-A backlog task with a persisted start intent. Forge starts it by itself, once,
-when every prerequisite is complete. Start and "Start immediately" queue a
-task; they never bypass a prerequisite. Disarm returns it to the manual
-backlog, which never starts by itself. APIs report `queue` with `startIntent`,
-`state`, and `waitingOn`.
+A task with Queued status. Forge starts it by itself, once, when every
+prerequisite is complete. Start and "Start immediately" queue a task; they
+never bypass a prerequisite. "Send to backlog" returns a queued task to
+Backlog, which never starts by itself. APIs report lifecycle status in
+`status` and incomplete prerequisites in `queue.waitingOn`.
 _Avoid_: Auto-start flag, armed task.
 
 **Coordinator**

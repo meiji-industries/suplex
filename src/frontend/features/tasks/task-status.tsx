@@ -4,25 +4,24 @@ import type { PullRequestReference, TaskControlStatus } from "../../../tasks/con
 import { Badge } from "../../components/ui/badge.js";
 import { withCompany } from "../../lib/api.js";
 
-export const taskStatusLabels = { backlog: "Backlog", active: "Active", waiting_human: "Answer necessary", cancelled: "Cancelled", delivered: "Delivered" } satisfies Record<TaskControlStatus, string>;
+export const taskStatusLabels = { backlog: "Backlog", queued: "Queued", active: "Active", waiting_human: "Answer necessary", cancelled: "Cancelled", delivered: "Delivered" } satisfies Record<TaskControlStatus, string>;
 const appearances = {
   backlog: { icon: CircleDashed, color: "text-muted-foreground" },
+  queued: { icon: Clock, color: "text-sky-500" },
   active: { icon: CircleDotDashed, color: "text-amber-500" },
   waiting_human: { icon: CircleHelp, color: "text-rose-500" },
   cancelled: { icon: CircleSlash, color: "text-muted-foreground" },
   delivered: { icon: CheckCircle2, color: "text-emerald-500" },
 } satisfies Record<TaskControlStatus, { icon: typeof CircleDashed; color: string }>;
 
-type TaskStatusProps = { status: TaskControlStatus; pullRequestState?: PullRequestReference["state"] | undefined; queued?: boolean | undefined };
+type TaskStatusProps = { status: TaskControlStatus; pullRequestState?: PullRequestReference["state"] | undefined };
 
-/** A queued task is a backlog task that starts by itself when its Blocked by tasks are complete. */
-export function taskStatusLabel(task: { status: TaskControlStatus; queued?: boolean | undefined; queue?: { state: string } | undefined }): string {
-  return task.status === "backlog" && (task.queued || task.queue?.state === "queued") ? "Queued" : taskStatusLabels[task.status];
+export function taskStatusLabel(task: { status: TaskControlStatus }): string {
+  return taskStatusLabels[task.status];
 }
 
-export function TaskStatusIcon({ status, pullRequestState, queued }: TaskStatusProps) {
+export function TaskStatusIcon({ status, pullRequestState }: TaskStatusProps) {
   const maskId = useId();
-  if (status === "backlog" && queued) return <Clock aria-hidden="true" className="size-3.5 shrink-0 text-sky-500" />;
   const { icon: Icon, color } = appearances[status];
   if (status === "delivered" && pullRequestState === "merged") return <svg role="img" aria-label="Delivered, merged" viewBox="0 0 24 24" className="size-3.5 shrink-0 text-emerald-500">
     <defs><mask id={maskId}><rect width="24" height="24" fill="white" /><path d="m9 12 2 2 4-4" fill="none" stroke="black" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></mask></defs>
@@ -31,13 +30,13 @@ export function TaskStatusIcon({ status, pullRequestState, queued }: TaskStatusP
   return <Icon aria-hidden="true" className={`size-3.5 shrink-0 ${color}`} />;
 }
 
-export function TaskStatus({ status, pullRequestState, queued }: TaskStatusProps) {
-  return <Badge variant={status === "waiting_human" ? "destructive" : "secondary"}><TaskStatusIcon status={status} pullRequestState={pullRequestState} queued={queued} />{status === "backlog" && queued ? "Queued" : taskStatusLabels[status]}</Badge>;
+export function TaskStatus({ status, pullRequestState }: TaskStatusProps) {
+  return <Badge variant={status === "waiting_human" ? "destructive" : "secondary"}><TaskStatusIcon status={status} pullRequestState={pullRequestState} />{taskStatusLabels[status]}</Badge>;
 }
 
 /** "Blocked by First · Active, Second · Backlog", or null when the task has no prerequisites. */
 type PullRequestBlockerState = "open" | "closed" | "merged";
-type BlockedByLabelInput = { title: string; status: TaskControlStatus; queued: boolean; kind?: "task" | "pull_request" | undefined; number?: number | undefined; state?: PullRequestBlockerState | undefined };
+type BlockedByLabelInput = { title: string; status: TaskControlStatus; kind?: "task" | "pull_request" | undefined; number?: number | undefined; state?: PullRequestBlockerState | undefined };
 const pullRequestBlockerStateLabels = { open: "Open", closed: "Closed", merged: "Merged" } satisfies Record<PullRequestBlockerState, string>;
 
 function isPullRequestBlocker(value: BlockedByLabelInput): value is BlockedByLabelInput & { kind: "pull_request"; number: number; state: PullRequestBlockerState } {
@@ -49,6 +48,6 @@ export function blockedByLabel(blockedBy: ReadonlyArray<BlockedByLabelInput>): s
 }
 
 /** Status icon beside a task title, linking to the task. */
-export function TaskTitleLink({ task, companyId, className = "" }: { task: { id: string; title: string; status: TaskControlStatus; queued: boolean; pullRequest?: PullRequestReference | null }; companyId: string; className?: string }) {
-  return <a className={`flex min-w-0 items-center gap-1.5 underline-offset-2 hover:underline ${className}`} href={withCompany(`/tasks/${task.id}`, companyId)} title={`${task.title} · ${taskStatusLabel(task)}`}><TaskStatusIcon status={task.status} pullRequestState={task.pullRequest?.state} queued={task.queued} /><span className="truncate">{task.title}</span></a>;
+export function TaskTitleLink({ task, companyId, className = "" }: { task: { id: string; title: string; status: TaskControlStatus; pullRequest?: PullRequestReference | null }; companyId: string; className?: string }) {
+  return <a className={`flex min-w-0 items-center gap-1.5 underline-offset-2 hover:underline ${className}`} href={withCompany(`/tasks/${task.id}`, companyId)} title={`${task.title} · ${taskStatusLabel(task)}`}><TaskStatusIcon status={task.status} pullRequestState={task.pullRequest?.state} /><span className="truncate">{task.title}</span></a>;
 }

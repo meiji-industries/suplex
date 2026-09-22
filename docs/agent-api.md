@@ -56,7 +56,7 @@ and `view`. `pullRequestNumber` matches a pull request source or a stored
 delivery pull request. `sourceBranch` matches a branch source. `titleContains`
 is a case-insensitive substring. Results are ordered by `updatedAt` descending
 and task ID ascending. `updatedSince` is inclusive. HTTP defaults to `full`.
-`summary` returns only the task id, title, status, archive flag, queue state,
+`summary` returns only the task id, title, status, archive flag,
 workflow name, source, delivery pull request number, dependencies, and update
 time. The response has `tasks` and `nextCursor`.
 
@@ -149,17 +149,10 @@ or image.
 
 ## Queued tasks
 
-A backlog task is either manual or queued. A manual task never starts by
-itself. A queued task stays in `backlog`, with no sessions or turns, and Forge
-starts it when every prerequisite is complete. Every task read reports `queue`:
-
-- `startIntent`: `manual` or `queued`. This is the persisted start intent.
-- `state`: `backlog` (manual), `queued`, `running`, `needs_attention`,
-  `delivered`, or `cancelled`.
-- `waitingOn`: each incomplete prerequisite with `id`, `title`, `status`,
-  `queued`, `deliveryTarget`, `reason`, and a `summary` that tells you what to do.
-  `queued` is true when the prerequisite is a queued backlog task that starts by
-  itself.
+A task has `backlog` status until someone starts it. A queued task has no
+sessions or turns. Forge starts it when every prerequisite is complete. Every
+task read reports `status` and `queue.waitingOn`. Each incomplete prerequisite
+has an `id`, `title`, `status`, `deliveryTarget`, `reason`, and `summary`.
 
 A prerequisite is complete when it is delivered at its own delivery target.
 The `merged` target also needs the merged pull request state that Forge
@@ -169,7 +162,7 @@ a merge, because that target is what its delivery promised. Wait reasons:
 
 | `reason` | Meaning |
 | --- | --- |
-| `prerequisite_not_started` | The prerequisite is in the backlog. |
+| `prerequisite_not_started` | The prerequisite is in the backlog or queued. |
 | `prerequisite_running` | The prerequisite is active. |
 | `prerequisite_needs_human` | The prerequisite waits for a human answer. |
 | `prerequisite_cancelled` | The prerequisite is cancelled. Remove it or disarm the task. |
@@ -181,7 +174,7 @@ backlog task. Both start the task now when every prerequisite is complete and
 never bypass one. `disarm_task` returns a queued task to the manual backlog.
 Forge re-evaluates a queued task when a prerequisite completes, when Forge
 observes a merged pull request, when the prerequisites change, and on every
-scheduler tick after a restart. Cancelling a queued task clears its intent.
+scheduler tick after a restart. Cancelling a queued task prevents admission.
 
 Rejected create inputs include `field`, `value`, and `reason`. Project IDs use
 `project_not_found`. Dependencies use `dependency_not_found`. Profile IDs use

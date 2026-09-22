@@ -20,7 +20,7 @@ export function BlockedByPickerDialog({ open, onOpenChange, companyId, projectId
     let cancelled = false;
     setLoading(true);
     void readJson<{ tasks: Task[] }>(`/api/companies/${companyId}/tasks`).then(result => {
-      if (!cancelled) setTasks(result.tasks.filter(task => task.projectId === projectId && (task.status === "active" || task.status === "backlog") && !task.archivedAt));
+      if (!cancelled) setTasks(result.tasks.filter(task => task.projectId === projectId && ["backlog", "queued", "active"].includes(task.status) && !task.archivedAt));
     }).catch(error => { if (!cancelled) onError?.(error instanceof Error ? error.message : "Tasks are not available"); }).finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
   }, [open, projectId, companyId, onError]);
@@ -29,7 +29,7 @@ export function BlockedByPickerDialog({ open, onOpenChange, companyId, projectId
     <DialogContent className="max-h-[min(80vh,480px)] grid-cols-[minmax(0,1fr)] overflow-y-auto overflow-x-hidden [&>*]:min-w-0">
       <DialogHeader><DialogTitle>Blocked by...</DialogTitle></DialogHeader>
       <Input aria-label="Search tasks" autoFocus placeholder="Search by title or ID" value={query} onChange={event => setQuery(event.target.value)} />
-      <div className="flex min-w-0 flex-col gap-1">{loading ? <span className="text-xs text-muted-foreground">Loading tasks...</span> : matchingTasks.length ? matchingTasks.map(task => <Button key={task.id} type="button" variant="ghost" className="w-full min-w-0 justify-start gap-2 overflow-hidden" onClick={() => { onSelect({ id: task.id, title: task.title, status: task.status, queued: task.queue.state === "queued" }); onOpenChange(false); }}><TaskStatusIcon status={task.status} pullRequestState={task.pullRequest?.state} queued={task.queue.state === "queued"} /><span className="min-w-0 flex-1 truncate text-left">{task.title}</span></Button>) : <span className="text-xs text-muted-foreground">No matching active or backlog tasks.</span>}</div>
+      <div className="flex min-w-0 flex-col gap-1">{loading ? <span className="text-xs text-muted-foreground">Loading tasks...</span> : matchingTasks.length ? matchingTasks.map(task => <Button key={task.id} type="button" variant="ghost" className="w-full min-w-0 justify-start gap-2 overflow-hidden" onClick={() => { onSelect({ id: task.id, title: task.title, status: task.status }); onOpenChange(false); }}><TaskStatusIcon status={task.status} pullRequestState={task.pullRequest?.state} /><span className="min-w-0 flex-1 truncate text-left">{task.title}</span></Button>) : <span className="text-xs text-muted-foreground">No matching backlog, queued, or active tasks.</span>}</div>
     </DialogContent>
   </Dialog>;
 }

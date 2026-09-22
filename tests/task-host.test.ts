@@ -55,6 +55,7 @@ async function fixture() {
   const store = new TaskControlStore(database);
   const profile = { profileId: "profile", provider: "opencode", model: "openai/gpt-5.6-luna", reasoningLevel: "max", serviceTier: "priority" } as const;
   store.create({ taskId: "task", startImmediately: true, objective: "Ship the objective", deliveryTarget: "merged", deliveryIntent: { repository: "owner/repo", headBranch: "task", baseBranch: "main", baselineSha: sha, pullRequestNumber: null }, rootProfile: profile, workerProfile: profile });
+  store.admitQueued(["task"]);
   const harness = new FakeTaskHarness();
   const controller = new RootController(store, harness);
   const delivery = { observe: async () => null };

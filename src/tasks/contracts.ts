@@ -81,15 +81,11 @@ export const TaskConfigurationSchema = z.object({
 export type TaskConfiguration = z.infer<typeof TaskConfigurationSchema>;
 
 export const TaskImageSchema = z.object({ artifactId: id, filename: z.string(), mimeType: z.string(), byteSize: z.number().int().nonnegative() }).strict();
-/** queued is derived from the prerequisite's backlog status and start intent on every read. */
-export const TaskReferenceSchema = z.object({ id, title: z.string(), status: TaskControlStatusSchema, queued: z.boolean() }).strict();
+export const TaskReferenceSchema = z.object({ id, title: z.string(), status: TaskControlStatusSchema }).strict();
 export const TaskBlockedBySchema = TaskReferenceSchema.extend({ kind: z.enum(["task", "pull_request"]).optional(), number: z.number().int().min(1).optional(), state: z.enum(["open", "closed", "merged"]).optional(), url: z.string().url().optional(), observedAt: z.string().datetime().optional() }).strict();
 export const TaskQueueWaitReasonSchema = z.enum(["prerequisite_not_started", "prerequisite_running", "prerequisite_needs_human", "prerequisite_cancelled", "prerequisite_archived", "prerequisite_merge_unobserved", "prerequisite_pull_request_open", "prerequisite_pull_request_closed"]);
-export const TaskQueueWaitSchema = z.object({ kind: z.enum(["task", "pull_request"]).optional(), id, title: z.string(), status: TaskControlStatusSchema, queued: z.boolean(), deliveryTarget: DeliveryTargetSchema, number: z.number().int().min(1).optional(), state: z.enum(["open", "closed", "merged"]).optional(), url: z.string().url().optional(), reason: TaskQueueWaitReasonSchema, summary: z.string() }).strict();
-/** startIntent is persisted; state and waitingOn are derived from the task and its prerequisites on every read. */
+export const TaskQueueWaitSchema = z.object({ kind: z.enum(["task", "pull_request"]).optional(), id, title: z.string(), status: TaskControlStatusSchema, deliveryTarget: DeliveryTargetSchema, number: z.number().int().min(1).optional(), state: z.enum(["open", "closed", "merged"]).optional(), url: z.string().url().optional(), reason: TaskQueueWaitReasonSchema, summary: z.string() }).strict();
 export const TaskQueueSchema = z.object({
-  startIntent: z.enum(["manual", "queued"]),
-  state: z.enum(["backlog", "queued", "running", "needs_attention", "delivered", "cancelled"]),
   waitingOn: z.array(TaskQueueWaitSchema),
 }).strict();
 export type TaskQueue = z.infer<typeof TaskQueueSchema>;

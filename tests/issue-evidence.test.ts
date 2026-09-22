@@ -30,6 +30,7 @@ async function fixture() {
   const store = new TaskControlStore(database);
   const profile = { profileId: "profile", provider: "codex" as const, model: "gpt-5.6-sol", reasoningLevel: "medium" as const, serviceTier: "default" as const };
   store.create({ startImmediately: true, taskId: "task", objective: "Fix", deliveryTarget: "pull_request_draft", deliveryIntent: { repository: "owner/repo", headBranch: "task", baseBranch: "main", baselineSha: headSha, pullRequestNumber: null }, rootProfile: profile, workerProfile: profile });
+  store.admitQueued(["task"]);
   store.updateWorkflowState("task", state => ({ ...state, acceptedDelivery: { baseSha: headSha, headSha, files: [], commits: [] } }));
   store.setWorktree("task", { path: directory, branch: "task", headSha, baseSha: headSha, dirty: false });
   const generated = join(taskEvidenceRoot(database.filename()), "task", "generated");

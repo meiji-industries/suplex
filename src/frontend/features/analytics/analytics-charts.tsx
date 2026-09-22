@@ -6,7 +6,7 @@ import { compact, money } from "./lib/analytics.js";
 import { TaskControlStatusSchema } from "../../../tasks/control.js";
 import { usageIsUnpriced } from "../../../tasks/analytics/metrics.js";
 
-const colors = { delivered: "#10b981", active: "#3b82f6", waiting_human: "#f59e0b", cancelled: "#ef4444", backlog: "#94a3b8" };
+const colors = { delivered: "#10b981", active: "#3b82f6", waiting_human: "#f59e0b", cancelled: "#ef4444", queued: "#0ea5e9", backlog: "#94a3b8" };
 const config = { root: { label: "Coordinator", color: "#3b82f6" }, worker: { label: "Delegated", color: "#8b5cf6" } };
 
 export function OutcomeChart({ tasks }: { tasks: TaskAnalytics[] }) {

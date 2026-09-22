@@ -36,12 +36,12 @@ function SummaryTable({
           No recorded time in this range.
         </div>
       ) : (
-        <table className="w-full text-left text-xs">
+        <table className="w-full table-fixed text-left text-xs">
           <thead className="sr-only">
             <tr>
               <th>Item</th>
-              <th>Invocations</th>
-              <th>Time</th>
+              <th className="w-20">Invocations</th>
+              <th className="w-24">Time</th>
             </tr>
           </thead>
           <tbody>
@@ -67,7 +67,9 @@ function SummaryTable({
                       {total.label}
                     </a>
                   ) : (
-                    <span className="block font-medium">{total.label}</span>
+                    <span className="block truncate font-medium">
+                      {total.label}
+                    </span>
                   )}
                   <span className="block truncate text-[11px] text-muted-foreground">
                     {total.secondary}

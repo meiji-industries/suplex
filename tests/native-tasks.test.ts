@@ -113,7 +113,9 @@ test("project provider policy selects eligible defaults and rejects every disall
   const { task } = await f.tasks.createTask("alice", "company", { ...f.input, startImmediately: false, workflow: "independent_review" });
   for (const profile of [task.rootProfile, task.workerProfile, task.advisorProfiles.reviewer]) expect(profile).toMatchObject({ providerInstanceId: "dedicated", instanceHomeDirectory: join(f.directory, "client") });
   expect(task.configuration.providerPolicy).toEqual(f.project.providerPolicy);
-  for (const selection of [{ rootProfileId: "profile_native_root" }, { rootProfileId: "global-claude" }, { workerProfileId: "profile_native_worker" }, { advisorProfileIds: { reviewer: "profile_native_root" } }]) {
+  const globalProfileTask = await f.tasks.createTask("alice", "company", { ...f.input, idempotencyKey: "global-claude", workflow: "independent_review", rootProfileId: "global-claude" });
+  expect(globalProfileTask.task.rootProfile).toMatchObject({ profileId: "global-claude", providerInstanceId: null });
+  for (const selection of [{ rootProfileId: "profile_native_root" }, { workerProfileId: "profile_native_worker" }, { advisorProfileIds: { reviewer: "profile_native_root" } }]) {
     await expect(f.tasks.createTask("alice", "company", { ...f.input, idempotencyKey: `rejected-${JSON.stringify(selection)}`.replace(/[^a-zA-Z0-9]/g, "-"), workflow: "independent_review", ...selection })).rejects.toThrow("allowed by this project");
     expect(() => f.tasks.updateTaskDetails("alice", task.id, selection)).toThrow("allowed by this project");
   }

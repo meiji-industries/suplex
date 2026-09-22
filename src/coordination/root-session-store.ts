@@ -14,7 +14,7 @@ import type { TaskUsage } from "../tasks/usage.js";
 import type Database from "better-sqlite3";
 import type { ForgeDatabase } from "../platform/database.js";
 import { createOpenCodeMessageID } from "../runtimes/opencode/session.js";
-import { TaskConfigurationSchema } from "../tasks/contracts.js";
+import { DeliveryTargetSchema, TaskConfigurationSchema, type DeliveryTarget } from "../tasks/contracts.js";
 import { taskDependencyBlockersInTransaction, taskDependencySummaries, taskDependencySummariesInTransaction, type TaskDependencySummary } from "../tasks/dependencies.js";
 import { admitQueuedTask, admitQueuedTasks, readyQueuedTaskIds } from "../tasks/queue.js";
 import type { PromptDispatchAttempt, PullRequestReference } from "../tasks/control.js";
@@ -133,6 +133,30 @@ export class TaskControlStore {
       const root = existing ?? this.claimRoot({ taskId });
       if (!existing) this.ensureInitialPrompt(root, initialCoordinatorPrompt(this.get(taskId), this.context(taskId)));
       const prompt = resuming ? JSON.stringify({ question: "The user has resumed this delivered task. Handle the follow-up below before completing delivery again. Preserve existing work and inspect current GitHub state. Earlier delivery is history, not completion of this request. For failing checks, read the logs, reproduce and repair the failure, verify locally, push, and observe checks on the current head. Keep the delivery target unchanged. Request delivery explicitly only when the follow-up is satisfied.", answer: note }) : `${label}:\n${note}`;
+      this.wakeRoot({ taskId, rootSessionId: root.id, generation: root.generation, prompt });
+    });
+    return this.observeLifecycle(taskId);
+  }
+  continueDelivery(taskId: string, deliveryTarget: Extract<DeliveryTarget, "pull_request_ready" | "merged">): TaskControl {
+    this.database.authImmediateTransaction(db => {
+      const current = this.get(taskId);
+      const archived = db.prepare("SELECT archived_at FROM forge_tasks WHERE id = ?").get(taskId) as { archived_at: string | null } | undefined;
+      if (!archived || archived.archived_at) throw new Error("Open the archived task before you continue delivery.");
+      const order: Record<DeliveryTarget, number> = { local_worktree: 0, remote_branch: 1, pull_request_draft: 2, pull_request_ready: 3, merged: 4 };
+      const previousTarget = DeliveryTargetSchema.parse(current.deliveryTarget);
+      if (order[deliveryTarget] < order[previousTarget]) throw new Error("The delivery target cannot move backward.");
+      if (order[deliveryTarget] === order[previousTarget] && ["active", "delivered"].includes(current.status)) return;
+      if (current.status !== "delivered" || order[previousTarget] < order.pull_request_draft) throw new Error("Only delivered pull request tasks can continue delivery.");
+      assertTaskPullRequestsAvailable(db, taskId);
+      const time = now();
+      const state = current.workflowState;
+      this.writeWorkflowState(db, taskId, { ...state, acceptedDelivery: null, completion: null, deliveryWait: null, followUp: true, deliveryHistory: [...state.deliveryHistory ?? [], { resumedAt: time, acceptedDelivery: state.acceptedDelivery, completion: state.completion }] });
+      db.prepare("UPDATE forge_task_controls SET delivery_target = ?, status = 'active', wake_at = ?, updated_at = ? WHERE task_id = ? AND status = 'delivered'").run(deliveryTarget, time, time, taskId);
+      if (current.rootSessionId) db.prepare("UPDATE forge_task_sessions SET is_current = 1, lifecycle = 'reserved', stop_requested_at = NULL, stopped_at = NULL, updated_at = ? WHERE id = ? AND task_id = ? AND kind = 'root'").run(time, current.rootSessionId, taskId);
+      const existing = this.currentSession(taskId, "root");
+      const root = existing ?? this.claimRoot({ taskId });
+      if (!existing) this.ensureInitialPrompt(root, initialCoordinatorPrompt(this.get(taskId), this.context(taskId)));
+      const prompt = JSON.stringify({ question: `The user changed the delivery target from ${previousTarget} to ${deliveryTarget}. Continue this task toward the NEW target ${deliveryTarget}. Preserve the existing branch, pull request, sessions, and useful review evidence. Inspect current Git and GitHub facts, repair conflicts and failing checks, and request delivery explicitly when the new target is satisfied. Earlier completion is history.`, answer: `Continue delivery to ${deliveryTarget}.` });
       this.wakeRoot({ taskId, rootSessionId: root.id, generation: root.generation, prompt });
     });
     return this.observeLifecycle(taskId);

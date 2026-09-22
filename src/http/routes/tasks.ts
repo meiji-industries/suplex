@@ -23,7 +23,7 @@ import { TaskExecutionResponseSchema } from "../../tasks/execution/contracts.js"
 import { TaskChecksResponseSchema, TaskDiffResponseSchema, TaskDiffSummaryResponseSchema } from "../contracts/tasks.js";
 import { CompanyIdParamsSchema, TaskArtifactParamsSchema, TaskIdParamsSchema } from "../contracts/common.js";
 import { normalizeWorkflowInput, WorkflowInputFailure } from "../../coordination/workflows.js";
-import { MAX_TASK_REQUEST_BYTES, SessionHistoryPageSchema, TaskActivityResponseSchema, TaskAnswerBodySchema, TaskBodySchema, TaskDependenciesBodySchema, TaskDetailsBodySchema, TaskListResponseSchema, TaskNoteBodySchema, TaskSessionHistoryParamsSchema, TaskSessionHistoryQuerySchema, TaskWorkerReplacementBodySchema, TaskRenameBodySchema, TaskResponseSchema } from "../contracts/tasks.js";
+import { MAX_TASK_REQUEST_BYTES, SessionHistoryPageSchema, TaskActivityResponseSchema, TaskAnswerBodySchema, TaskBodySchema, TaskContinueDeliveryBodySchema, TaskDependenciesBodySchema, TaskDetailsBodySchema, TaskListResponseSchema, TaskNoteBodySchema, TaskSessionHistoryParamsSchema, TaskSessionHistoryQuerySchema, TaskWorkerReplacementBodySchema, TaskRenameBodySchema, TaskResponseSchema } from "../contracts/tasks.js";
 
 export interface TaskRoutesOptions {
   tasks: TaskService;
@@ -229,6 +229,11 @@ const tasks: FastifyPluginAsync<TaskRoutesOptions> = async (app, { tasks, host, 
   typed.post("/api/tasks/:taskId/note", { schema: { ...taskResponse, body: TaskNoteBodySchema } }, async request => {
     const task = tasks.sendNote(request.forgeUser.id, request.params.taskId, request.body.note);
     wake(task.id);
+    return task;
+  });
+  typed.post("/api/tasks/:taskId/continue-delivery", { schema: { ...taskResponse, body: TaskContinueDeliveryBodySchema } }, async request => {
+    const task = tasks.continueDelivery(request.forgeUser.id, request.params.taskId, request.body.deliveryTarget);
+    if (task.status === "active") wake(task.id);
     return task;
   });
   typed.post("/api/tasks/:taskId/cancel", { schema: taskResponse }, async request => {

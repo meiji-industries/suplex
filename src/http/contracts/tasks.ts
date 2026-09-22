@@ -42,6 +42,7 @@ export const TaskAnswerBodySchema = z.union([
 ]);
 export const TaskWorkerReplacementBodySchema = WorkerReplacementRequestSchema;
 export const TaskNoteBodySchema = z.object({ note: z.string().trim().min(1).max(20_000) }).strict(); // bound: task note transport limit
+export const TaskContinueDeliveryBodySchema = z.object({ deliveryTarget: z.enum(["pull_request_ready", "merged"]) }).strict();
 export const TaskHarnessKindSchema = HarnessKindSchema;
 export const TaskActivityResponseSchema = z.object({
   sessions: z.array(z.object({ id: z.string(), kind: TaskSessionKindSchema, advisorRole: AdvisorRoleSchema.nullable(), label: z.string(), profileId: z.string(), harness: TaskHarnessKindSchema.optional(), generation: z.number(), nativeSessionId: z.string().nullable(), paneId: z.string().nullable(), current: z.boolean(), replacement: WorkerReplacementSchema.nullable().optional() })),

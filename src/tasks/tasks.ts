@@ -22,7 +22,7 @@ import { createGithubReleasePort, GithubReleaseFailure, type GithubReleasePort }
 import { deriveActionRequired, deriveTaskIntegration, isUpstreamOf, matchesAgentApiFilter, observableDelivery, type PullRequestObservationResult } from "./integration.js";
 import { ProjectAgentTaskPolicySchema, type ProjectAgentTaskPolicy } from "../http/contracts/projects.js";
 import { CreateTaskTemplateBodySchema } from "../http/contracts/task-templates.js";
-import { TaskDetailsBodySchema } from "../http/contracts/tasks.js";
+import { TaskDetailsBodySchema, type TaskContinueDeliveryBodySchema } from "../http/contracts/tasks.js";
 import { WorkflowRecordInputSchema } from "../http/contracts/workflows.js";
 import type { Project, ProjectService } from "../projects/projects.js";
 import { TaskProfileSchema, type TaskProfile } from "./control.js";
@@ -520,6 +520,16 @@ export class TaskService {
 
   sendNote(userId: string, taskId: string, note: string): Task {
     this.note({ kind: "user", userId }, taskId, note, "Human note");
+    return this.getTask(userId, taskId);
+  }
+
+  continueDelivery(userId: string, taskId: string, deliveryTarget: z.infer<typeof TaskContinueDeliveryBodySchema>["deliveryTarget"]): Task {
+    const task = this.getTask(userId, taskId);
+    if (archivesInProgress.has(taskId)) throw new TaskFailure("Archive cleanup is in progress", 409);
+    if (task.archivedAt) throw new TaskFailure("Open the archived task before you continue delivery.", 409);
+    if (!supportsDeliveryTarget(task.configuration.integration?.repository, deliveryTarget)) throw new TaskFailure("Bitbucket supports draft pull requests. Select a supported delivery target.", 422);
+    try { this.repository.controls.continueDelivery(taskId, deliveryTarget); }
+    catch (error) { throw new TaskFailure(error instanceof Error ? error.message : "Forge could not continue delivery.", 409); }
     return this.getTask(userId, taskId);
   }
 

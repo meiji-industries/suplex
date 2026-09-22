@@ -17,10 +17,22 @@ test("check run names add the workflow unless the name already qualifies itself"
   expect(checkRunName(run({}))).toBe("build");
 });
 
-test("check run labels report duration only when both timestamps are present", () => {
+test("check run labels report completed durations when both timestamps are present", () => {
   expect(checkRunLabel(run({ startedAt: "2026-09-13T04:57:33Z", completedAt: "2026-09-13T04:58:33Z" }))).toBe("Passed in 1m");
   expect(checkRunLabel(run({ status: "failing", startedAt: "2026-09-13T04:57:33Z", completedAt: "2026-09-13T04:58:11Z" }))).toBe("Failed in 38s");
   expect(checkRunLabel(run({}))).toBe("Passed");
-  expect(checkRunLabel(run({ status: "pending", startedAt: "2026-09-13T04:57:33Z" }))).toBe("Pending");
   expect(checkRunLabel(run({ conclusion: "SKIPPED" }))).toBe("Skipped");
+});
+
+test("pending check run labels show elapsed time from their start", () => {
+  const startedAt = "2026-09-13T04:57:33Z";
+  expect(checkRunLabel(run({ status: "pending", startedAt }), Date.parse("2026-09-13T05:01:40Z"))).toBe("Running 4m 07s");
+  expect(checkRunLabel(run({ status: "pending", startedAt }), Date.parse("2026-09-13T04:58:15Z"))).toBe("Running 42s");
+  expect(checkRunLabel(run({ status: "pending", startedAt }), Date.parse("2026-09-13T06:01:33Z"))).toBe("Running 1h 04m");
+  expect(checkRunLabel(run({ status: "pending", startedAt }), Date.parse("2026-09-13T04:57:32Z"))).toBe("Running 0s");
+});
+
+test("pending check runs without a usable start stay pending", () => {
+  expect(checkRunLabel(run({ status: "pending" }))).toBe("Pending");
+  expect(checkRunLabel(run({ status: "pending", startedAt: "not a date" }))).toBe("Pending");
 });

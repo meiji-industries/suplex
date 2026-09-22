@@ -28,9 +28,23 @@ function formatCheckDuration(durationMs: number): string {
   return remainder ? `${hours}h ${remainder}m` : `${hours}h`;
 }
 
-export function checkRunLabel(run: CheckRun): string {
+function formatRunningCheckDuration(durationMs: number): string {
+  const seconds = Math.max(0, Math.floor(durationMs / 1000));
+  if (seconds < 60) return `${seconds}s`;
+  const minutes = Math.floor(seconds / 60);
+  const remainderSeconds = seconds % 60;
+  if (minutes < 60) return `${minutes}m ${String(remainderSeconds).padStart(2, "0")}s`;
+  const hours = Math.floor(minutes / 60);
+  const remainderMinutes = minutes % 60;
+  return `${hours}h ${String(remainderMinutes).padStart(2, "0")}m`;
+}
+
+export function checkRunLabel(run: CheckRun, now = Date.now()): string {
   const status = checkRunStatus(run);
-  if (status === "pending") return "Pending";
+  if (status === "pending") {
+    const started = run.startedAt ? Date.parse(run.startedAt) : Number.NaN;
+    return Number.isFinite(started) ? `Running ${formatRunningCheckDuration(now - started)}` : "Pending";
+  }
   if (status === "skipped") return "Skipped";
   if (status === "neutral") return "Neutral";
   const started = run.startedAt ? Date.parse(run.startedAt) : Number.NaN;

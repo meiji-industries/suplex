@@ -141,12 +141,18 @@ test("a paired agent completes the whole task journey without the web applicatio
     const outsideGrant = await session.call(tool("forge_create_task", { projectId: ungrantedProject.id, title: "Create outside the grant", idempotencyKey: "machine-discovery-forbidden-1" }));
     record("denied create", outsideGrant);
     expect(outsideGrant.result).toMatchObject({ isError: true });
-    expect(structured(outsideGrant)).toMatchObject({ status: 404, body: { code: "not_found" } });
+    expect(structured(outsideGrant)).toMatchObject({ status: 422, body: { code: "project_not_found", field: "projectId", value: ungrantedProject.id, reason: "The project is not available." } });
     expect(JSON.stringify(outsideGrant)).not.toContain(ungrantedProject.name);
     expect(JSON.stringify(outsideGrant)).not.toContain(fixture.company.id);
     // A project outside the grant and a project that does not exist answer identically.
     const missingProject = await session.call(tool("forge_create_task", { projectId: "project_does_not_exist", title: "Create in nothing", idempotencyKey: "machine-discovery-forbidden-1b" }));
-    expect(structured(missingProject)).toEqual(structured(outsideGrant));
+    expect(structured(missingProject)).toMatchObject({ status: 422, body: { code: "project_not_found", field: "projectId", value: "project_does_not_exist", reason: "The project is not available." } });
+    const withoutValue = (response: ReturnType<typeof structured>) => {
+      const body = { ...response.body as Record<string, unknown> };
+      delete body.value;
+      return { ...response, body };
+    };
+    expect(withoutValue(structured(missingProject))).toEqual(withoutValue(structured(outsideGrant)));
 
     const illegal = await session.call(tool("forge_command_task", { taskId: task.id, command: "unarchive_task", revision: task.revision, idempotencyKey: "machine-discovery-forbidden-2" }));
     record("denied command", illegal);

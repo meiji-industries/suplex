@@ -28,6 +28,7 @@ import { taskRequestHash } from "../src/tasks/repository.js";
 import { normalizeWorkflowInput } from "../src/coordination/workflows.js";
 import { MAX_TASK_IMAGES, MAX_TASK_IMAGE_BASE64_LENGTH, MAX_TASK_IMAGE_BYTES } from "../src/tasks/limits/attachment-limits.js";
 import { decodeTaskImage } from "../src/tasks/images.js";
+import { TaskSourceFailure } from "../src/tasks/sources.js";
 import { runCommand } from "../src/platform/command-runner.js";
 import { AGENT_API_MCP_AUTHORITY, AGENT_API_RUNTIME_AUTHORITY, AGENT_API_TASK_COMMANDS, AgentApiTaskCommandBodySchema, agentApiCapabilities } from "../src/http/contracts/agent-api.js";
 import { FORGE_MCP_TOOLS } from "../src/integrations/forge/mcp-bridge.js";
@@ -776,7 +777,7 @@ test("server-chosen default profiles outlive a policy that still lists the old o
 
   const chosen = await request({ projectId, title: "Caller choice", idempotencyKey: "externalAgent-drift-chosen-001", workerProfileId: "profile_drift_worker" });
   expect(chosen.statusCode).toBe(422);
-  expect(chosen.body).toContain("The selected agent profile is not permitted");
+  expect(chosen.json()).toMatchObject({ code: "worker_profile_not_permitted", field: "workerProfileId", value: "profile_drift_worker", reason: "The selected worker profile is not permitted." });
 });
 
 test("AgentApi idempotency hashes the semantic caller request before policy resolution", async () => {
@@ -822,8 +823,10 @@ test("AgentApi request validation rejects required fields, unapproved choices, a
   expect((await request({ projectId, title: "Missing key" })).statusCode).toBe(400);
   const missingWorkflow = await request({ projectId, title: "Bad choice", idempotencyKey: "bad-choice-001", workflowId: "unknown" });
   expect(missingWorkflow).toMatchObject({ statusCode: 422 });
-  expect(missingWorkflow.json()).toMatchObject({ code: "workflow_not_found", permittedWorkflowIds: expect.any(Array) });
-  expect((await request({ projectId, title: "Bad profile", idempotencyKey: "bad-profile-001", rootProfileId: "profile_native_worker" })).statusCode).toBe(422);
+  expect(missingWorkflow.json()).toMatchObject({ code: "workflow_not_found", field: "workflowId", value: "unknown", permittedWorkflowIds: expect.any(Array) });
+  expect((await request({ projectId, title: "Bad profile", idempotencyKey: "bad-profile-001", rootProfileId: "profile_native_worker" })).json()).toMatchObject({ code: "root_profile_not_found", field: "rootProfileId", value: "profile_native_worker" });
+  expect((await request({ projectId, title: "Missing root", idempotencyKey: "missing-root-001", rootProfileId: "profile_missing" })).json()).toMatchObject({ code: "root_profile_not_found", field: "rootProfileId", value: "profile_missing" });
+  expect((await request({ projectId, title: "Missing worker", idempotencyKey: "missing-worker-001", workerProfileId: "profile_missing" })).json()).toMatchObject({ code: "worker_profile_not_found", field: "workerProfileId", value: "profile_missing" });
   for (const [key, deliveryTarget] of [["bad-delivery-001", "merged"], ["bad-delivery-002", "pull_request_ready"]] as const) {
     const rejected = await request({ projectId, title: "Bad delivery", idempotencyKey: key, deliveryTarget });
     expect(rejected.statusCode).toBe(422);
@@ -846,10 +849,21 @@ test("AgentApi request validation rejects required fields, unapproved choices, a
   database.authTransaction(db => db.prepare("INSERT INTO forge_task_templates (id, project_id, name, configuration_json, created_at, updated_at) VALUES ('template_disallowed', ?, 'Disallowed', ?, ?, ?)").run(projectId, JSON.stringify({ name: "Disallowed", description: "", workflow: "standard", advisorProfileIds: {} }), new Date().toISOString(), new Date().toISOString()));
   const missingTemplate = await request({ projectId, title: "Unavailable template", idempotencyKey: "template-template_missing", templateId: "template_missing" });
   expect(missingTemplate).toMatchObject({ statusCode: 422 });
-  expect(missingTemplate.json()).toMatchObject({ code: "template_not_found", permittedTemplateIds: expect.any(Array) });
+  expect(missingTemplate.json()).toMatchObject({ code: "template_not_found", field: "templateId", value: "template_missing", permittedTemplateIds: expect.any(Array) });
   const unpermittedTemplate = await request({ projectId, title: "Unavailable template", idempotencyKey: "template-template_disallowed", templateId: "template_disallowed" });
   expect(unpermittedTemplate).toMatchObject({ statusCode: 422 });
-  expect(unpermittedTemplate.json()).toMatchObject({ code: "template_not_permitted", permittedTemplateIds: expect.any(Array) });
+  expect(unpermittedTemplate.json()).toMatchObject({ code: "template_not_permitted", field: "templateId", value: "template_disallowed", permittedTemplateIds: expect.any(Array) });
+});
+
+test("AgentApi names unavailable and unpermitted advisor profiles", async () => {
+  await updateProjectPolicy({ workflowIds: ["workflow_native_independent_review"], defaultWorkflowId: "workflow_native_independent_review", templateIds: [], rootProfileIds: ["profile_native_root"], workerProfileIds: ["profile_native_worker"], advisorProfileIds: { reviewer: [], planner_a: [], planner_b: [], rater: [] }, deliveryTarget: "pull_request_draft", runProjectTests: true, visualEvidence: "off" });
+  const request = (idempotencyKey: string, reviewer: string) => app.inject({ method: "POST", url: "/api/agent/tasks", headers: { Authorization: `Bearer ${agentCredential}` }, payload: { projectId, title: "Advisor validation", idempotencyKey, advisorProfileIds: { reviewer } } });
+  const missing = await request("advisor-missing-001", "profile_missing");
+  expect(missing.statusCode).toBe(422);
+  expect(missing.json()).toMatchObject({ code: "advisor_profile_not_found", field: "advisorProfileIds.reviewer", value: "profile_missing", reason: "The selected agent profile is not available." });
+  const denied = await request("advisor-denied-001", "profile_native_root");
+  expect(denied.statusCode).toBe(422);
+  expect(denied.json()).toMatchObject({ code: "advisor_profile_not_permitted", field: "advisorProfileIds.reviewer", value: "profile_native_root", reason: "The selected Advisor profile is not permitted." });
 });
 
 test("persisted grants remain authoritative when a principal project observation is stale", async () => {
@@ -866,7 +880,7 @@ test("persisted grants remain authoritative when a principal project observation
   expect(() => tasks.getAgentApiTask(stalePrincipal, result.task.id)).toThrow("Not found");
   expect(tasks.listAgentApiTaskRows(stalePrincipal)).toEqual([]);
   const denied = await tasks.createTaskForAgentApi({ ...principal, projectIds: [projectId] }, { projectId, title: "Revoked grant", idempotencyKey: "externalAgent-revoked-grant-001", images: [], advisorProfileIds: {} }).catch(error => error);
-  expect(denied).toMatchObject({ statusCode: 404 });
+  expect(denied).toMatchObject({ statusCode: 422, code: "project_not_found", details: { field: "projectId", value: projectId } });
 });
 
 test("archived Standard does not block unrelated human project creation or updates", async () => {
@@ -961,6 +975,36 @@ test("a granted AgentApi agent can create from project-scoped resolved source me
   }, config);
   const result = await sourceTasks.createTaskForAgentApi(externalAgent.authenticate(agentCredential), { projectId, title: "Resolved source", idempotencyKey: "externalAgent-resolved-source-001", source: { kind: "branch", branch: "feature" }, images: [], advisorProfileIds: {} });
   expect(tasks.getTask(adminId, result.task.id).configuration.startingSha).toBe("b".repeat(40));
+});
+
+test("AgentApi source validation names rejected sources and preserves provider failures", async () => {
+  const request = (payload: object) => app.inject({ method: "POST", url: "/api/agent/tasks", headers: { Authorization: `Bearer ${agentCredential}` }, payload });
+  const branch = await request({ projectId, title: "Base branch", idempotencyKey: "source-base-001", source: { kind: "branch", branch: "main" } });
+  expect(branch.statusCode).toBe(422);
+  expect(branch.json()).toMatchObject({ code: "source_branch_rejected", field: "source.branch", value: "main", reason: "The configured base branch cannot be used as a task source" });
+
+  const unavailable = await request({ projectId, title: "Issue provider", idempotencyKey: "source-provider-001", source: { kind: "issue", number: 7 } });
+  expect(unavailable.statusCode).toBe(503);
+  expect(unavailable.json()).toMatchObject({ code: "task_unavailable" });
+});
+
+test("AgentApi names a closed pull request source", async () => {
+  const sourceTasks = new TaskService(database, auth, {
+    getProject: projects.getProject.bind(projects), getProjectInCompany: projects.getProjectInCompany.bind(projects), captureTaskConfiguration: projects.captureTaskConfiguration.bind(projects),
+    async resolveTaskSource() { throw new TaskSourceFailure("source-pull-request-closed", "The pull request is not open"); },
+  }, config);
+  const sourceApp = createApp({ config, auth, projects, tasks: sourceTasks, externalAgent, health: {
+    database: async () => ({ id: "database", label: "Database", status: "healthy", summary: "Ready", details: {} }),
+    artifactRoot: async () => ({ id: "artifact-root", label: "Artifacts", status: "healthy", summary: "Ready", details: {} }),
+    ghAuth: async () => ({ id: "gh-auth", label: "GitHub", status: "healthy", summary: "Ready", details: {} }),
+  } });
+  try {
+    const rejected = await sourceApp.inject({ method: "POST", url: "/api/agent/tasks", headers: { Authorization: `Bearer ${agentCredential}` }, payload: { projectId, title: "Closed source", idempotencyKey: "source-closed-pr-001", source: { kind: "pull_request", number: 42 } } });
+    expect(rejected.statusCode).toBe(422);
+    expect(rejected.json()).toMatchObject({ code: "source_pull_request_rejected", field: "source.pullRequest", value: "42", reason: "The pull request is not open" });
+  } finally {
+    await sourceApp.close();
+  }
 });
 
 test("basic retries accept pre-feature AgentApi request hashes only for the original payload", async () => {
@@ -1079,8 +1123,9 @@ test("cross-company and out-of-grant projects are non-enumerating with zero side
     const before = counts();
     const response = await denied(deniedProjectId, idempotencyKey);
     const unknown = await denied("project_unknown", `${idempotencyKey}-unknown`);
-    expect(response.statusCode).toBe(404);
-    expect(response.json()).toEqual(unknown.json());
+    expect(response.statusCode).toBe(422);
+    expect(response.json()).toMatchObject({ code: "project_not_found", reason: "The project is not available." });
+    expect(unknown.json()).toMatchObject({ code: "project_not_found", reason: "The project is not available." });
     expect(counts()).toEqual(before);
   }
 });
@@ -1935,11 +1980,36 @@ test("a cycle, a self-dependency, and a dependency outside the agent scope are r
     payload: { projectId, title: "Foreign task", idempotencyKey: "foreign-task-001" },
   });
   const outOfScope = await dependencies(firstId, [foreign.json().id as string]);
-  expect(outOfScope.statusCode).toBe(404);
+  expect(outOfScope.statusCode).toBe(422);
+  expect(outOfScope.json()).toMatchObject({ code: "dependency_not_permitted", field: "dependsOn", value: foreign.json().id, reason: "The dependency is not permitted." });
   expect(tasks.getTask(adminId, firstId).dependsOn).toEqual([]);
 
   const unknown = await dependencies(firstId, ["task_unknown"]);
-  expect(unknown.statusCode).toBe(404);
+  expect(unknown.statusCode).toBe(422);
+  expect(unknown.json()).toMatchObject({ code: "dependency_not_found", field: "dependsOn", value: "task_unknown", reason: "The dependency is not available." });
+
+  const ungranted = (await tasks.createTask(adminId, companyId, { projectId: otherProjectId, title: "Ungranted dependency", idempotencyKey: "ungranted-dependency-001" })).task;
+  const crossCompany = (await tasks.createTask(adminId, crossCompanyId, { projectId: crossCompanyProjectId, title: "Cross-company dependency", idempotencyKey: "cross-company-dependency-001" })).task;
+  for (const dependency of [ungranted.id, crossCompany.id]) {
+    const before = runtimeCounts().forge_tasks;
+    const rejected = await createDependencyTask("Rejected dependency", `create-dependency-${dependency}`, [dependency]);
+    expect(rejected.statusCode).toBe(422);
+    expect(rejected.json()).toMatchObject({ code: "dependency_not_found", field: "dependsOn", value: dependency, reason: "The dependency is not available." });
+    expect(runtimeCounts().forge_tasks).toBe(before);
+  }
+  const foreignBefore = runtimeCounts().forge_tasks;
+  const foreignCreate = await createDependencyTask("Foreign dependency", "create-dependency-foreign-001", [foreign.json().id as string]);
+  expect(foreignCreate.statusCode).toBe(422);
+  expect(foreignCreate.json()).toMatchObject({ code: "dependency_not_permitted", field: "dependsOn", value: foreign.json().id, reason: "The dependency is not permitted." });
+  expect(runtimeCounts().forge_tasks).toBe(foreignBefore);
+
+  const ungrantedUpdate = await dependencies(firstId, [ungranted.id]);
+  expect(ungrantedUpdate.statusCode).toBe(422);
+  expect(ungrantedUpdate.json()).toMatchObject({ code: "dependency_not_found", field: "dependsOn", value: ungranted.id, reason: "The dependency is not available." });
+  expect(tasks.getTask(adminId, firstId).dependsOn).toEqual([]);
+  const unknownPath = await dependencies("task_unknown", []);
+  expect(unknownPath.statusCode).toBe(404);
+  expect(unknownPath.json()).toMatchObject({ code: "not_found" });
 
   // Unsupported dependency input is rejected, never ignored.
   const legacyUpdate = await app.inject({ method: "PUT", url: `/api/agent/tasks/${firstId}/dependencies`, headers: { Authorization: `Bearer ${agentCredential}` }, payload: { dependsOn: [], blockedByTaskId: secondId } });

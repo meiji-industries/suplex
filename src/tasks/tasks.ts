@@ -24,7 +24,7 @@ import { ProjectAgentTaskPolicySchema, type ProjectAgentTaskPolicy } from "../ht
 import { CreateTaskTemplateBodySchema } from "../http/contracts/task-templates.js";
 import { TaskDetailsBodySchema, type TaskContinueDeliveryBodySchema } from "../http/contracts/tasks.js";
 import { WorkflowRecordInputSchema } from "../http/contracts/workflows.js";
-import type { Project, ProjectService } from "../projects/projects.js";
+import { ProjectFailure, type Project, type ProjectService } from "../projects/projects.js";
 import { TaskProfileSchema, type TaskProfile } from "./control.js";
 import { MAX_TASK_DEPENDENCIES, TaskConfigurationSchema, TaskImageInputSchema, TaskInputSchema, type Task, type TaskInput } from "./contracts.js";
 import { replaceTaskDependencies, TaskDependencyFailure } from "./dependencies.js";
@@ -40,15 +40,16 @@ import { normalizeWorkflowInput, roleLabel, workflowDefinition, WorkflowInputFai
 import type { TaskLimitDecision } from "./limits/limits.js";
 import { CliHerdrClient } from "../integrations/herdr/client.js";
 import { ensureTaskShellPane, type TaskPanePort } from "../runtimes/task-display.js";
+import { TaskSourceFailure } from "./sources.js";
 
 export class TaskFailure extends Error {
-  constructor(readonly publicMessage: string, readonly statusCode = 400, readonly code = "task_failure", options?: { cause?: unknown; details?: { permittedWorkflowIds?: string[]; permittedTemplateIds?: string[] } }) {
+  constructor(readonly publicMessage: string, readonly statusCode = 400, readonly code = "task_failure", options?: { cause?: unknown; details?: { field?: string; value?: string; reason?: string; permittedWorkflowIds?: string[]; permittedTemplateIds?: string[] } }) {
     super(publicMessage);
     this.cause = options?.cause;
     this.details = options?.details;
   }
 
-  readonly details: { permittedWorkflowIds?: string[]; permittedTemplateIds?: string[] } | undefined;
+  readonly details: { field?: string; value?: string; reason?: string; permittedWorkflowIds?: string[]; permittedTemplateIds?: string[] } | undefined;
 }
 type Authority = { kind: "user"; userId: string } | { kind: "agentApi"; principal: ExternalAgentPrincipal };
 type TaskCreationResult = { task: Task; created: boolean };
@@ -162,7 +163,7 @@ export class TaskService {
     const authority: Authority = { kind: "agentApi", principal };
     const creator: TaskCreator = { kind: "agent", id: principal.agentId };
     const requestHash = this.agentApiRequestHash(raw, creator);
-    this.requireScope(authority, principal.companyId, raw.projectId, true);
+    this.requireScope(authority, principal.companyId, raw.projectId, true, { code: "project_not_found", field: "projectId", value: raw.projectId, reason: "The project is not available." });
     let existing: TaskRow | null;
     try { existing = this.repository.existing(principal.companyId, raw.idempotencyKey, requestHash, creator); }
     catch (error) {
@@ -236,7 +237,17 @@ export class TaskService {
   }
 
   private applyDependencies(authority: Authority, companyId: string, taskId: string, dependsOn: string[]): void {
-    for (const dependency of dependsOn) this.requireTask(authority, dependency);
+    for (const dependency of dependsOn) {
+      if (authority.kind === "user") {
+        this.requireTask(authority, dependency);
+        continue;
+      }
+      const row = this.repository.row(dependency);
+      if (!row) throw new TaskFailure("The dependency is not available.", 422, "dependency_not_found", { details: { field: "dependsOn", value: dependency, reason: "The dependency is not available." } });
+      try { this.requireScope(authority, row.company_id, row.project_id); }
+      catch { throw new TaskFailure("The dependency is not available.", 422, "dependency_not_found", { details: { field: "dependsOn", value: dependency, reason: "The dependency is not available." } }); }
+      if (row.creator_agent_id !== authority.principal.agentId) throw new TaskFailure("The dependency is not permitted.", 422, "dependency_not_permitted", { details: { field: "dependsOn", value: dependency, reason: "The dependency is not permitted." } });
+    }
     try { replaceTaskDependencies(this.database, { taskId, companyId, dependsOn }, (db, wasBlocked) => { if (wasBlocked) this.repository.controls.reconcileDependencyReleaseInTransaction(db, taskId); }); }
     catch (error) {
       if (error instanceof TaskDependencyFailure) throw new TaskFailure(error.publicMessage, error.statusCode);
@@ -397,7 +408,7 @@ export class TaskService {
     catch (error) { if (error instanceof WorkflowInputFailure) throw new TaskFailure(error.message, error.statusCode); throw error; }
     const request = TaskInputSchema.parse(normalized);
     if (capturedDispatch && (request.startImmediately || request.images.length)) throw new TaskFailure("GitHub trigger dispatch is invalid", 422);
-    this.requireScope(authority, companyId, request.projectId, true);
+    this.requireScope(authority, companyId, request.projectId, true, agentApiRaw ? { code: "project_not_found", field: "projectId", value: request.projectId, reason: "The project is not available." } : undefined);
     const creator: TaskCreator = authority.kind === "user" ? { kind: "user", id: authority.userId } : { kind: "agent", id: authority.principal.agentId };
     const requestHash = requestHashOverride ?? taskRequestHash(request, creator);
     try {
@@ -422,7 +433,17 @@ export class TaskService {
       for (const role of workflowDefinition(request.workflow).advisorRoles) advisorProfiles[role] = capturedDispatch ? (this.profile(capturedDispatch.profiles.advisors[role]!.profileId, "root"), capturedDispatch.profiles.advisors[role]!) : this.profile(request.advisorProfileIds[role] ?? rootProfile.profileId, "root");
       const images = request.images.map(image => ({ filename: image.filename, mimeType: image.mimeType, bytes: decodeTaskImage(image) }));
       const legacyIssueSource = request.issue === undefined;
-      const source = request.source ? await this.projects.resolveTaskSource(project, request.source) : null;
+      let source = null;
+      try { source = request.source ? await this.projects.resolveTaskSource(project, request.source) : null; }
+      catch (error) {
+        if (authority.kind !== "agentApi" || !request.source || !(error instanceof TaskSourceFailure || error instanceof ProjectFailure)) throw error;
+        if (error.statusCode >= 500) throw error;
+        const field = request.source.kind === "issue" ? "source.issue" : request.source.kind === "pull_request" ? "source.pullRequest" : "source.branch";
+        const value = request.source.kind === "branch" ? request.source.branch : String(request.source.number);
+        const code = request.source.kind === "issue" ? "source_issue_rejected" : request.source.kind === "pull_request" ? "source_pull_request_rejected" : "source_branch_rejected";
+        const reason = error instanceof ProjectFailure ? error.publicMessage : error.message;
+        throw new TaskFailure(reason, 422, code, { details: { field, value, reason } });
+      }
       if (request.issue) request.issue = (await this.issueTracker(taskTracker({ repository: project.repository, ...(project.integration ? { integration: project.integration } : {}) })).read(request.issue)).issue;
       else if (request.issue === undefined && request.source?.kind === "issue") request.issue = IssueAssociationSchema.parse({ kind: "github", repository: project.repository, number: request.source.number, id: String(request.source.number), key: `#${request.source.number}`, title: request.title, url: `https://github.com/${project.repository}/issues/${request.source.number}` });
       if (source?.kind === "issue" && legacyIssueSource) request.description = request.description ? `${request.description}\n\n${source.context}` : source.context;
@@ -758,13 +779,17 @@ export class TaskService {
       throw error;
     }
     if (raw.deliveryTarget !== undefined && raw.deliveryTarget !== policy.deliveryTarget || raw.runProjectTests !== undefined && raw.runProjectTests !== policy.runProjectTests || raw.visualEvidence !== undefined && raw.visualEvidence !== policy.visualEvidence) throw new TaskFailure(`This project permits deliveryTarget "${policy.deliveryTarget}", runProjectTests ${policy.runProjectTests}, and visualEvidence "${policy.visualEvidence}"`, 422, "delivery_policy_rejected");
+    if (raw.rootProfileId !== undefined) this.agentApiProfile(raw.rootProfileId, "root", "rootProfileId");
+    if (raw.workerProfileId !== undefined) this.agentApiProfile(raw.workerProfileId, "worker", "workerProfileId");
     const root = this.projectProfile(request.rootProfileId, project.rootProfileId, "root", project.providerPolicy).profileId;
     const worker = this.projectProfile(request.workerProfileId, project.workerProfileId, "worker", project.providerPolicy).profileId;
     // The allowlist governs what a caller may choose; server-chosen defaults (project defaults, workflow and template records) are already trusted.
-    if (raw.rootProfileId !== undefined && !policy.rootProfileIds.includes(raw.rootProfileId) || raw.workerProfileId !== undefined && !policy.workerProfileIds.includes(raw.workerProfileId)) throw new TaskFailure("The selected agent profile is not permitted", 422);
+    if (raw.rootProfileId !== undefined && !policy.rootProfileIds.includes(raw.rootProfileId)) throw new TaskFailure("The selected root profile is not permitted.", 422, "root_profile_not_permitted", { details: { field: "rootProfileId", value: raw.rootProfileId, reason: "The selected root profile is not permitted." } });
+    if (raw.workerProfileId !== undefined && !policy.workerProfileIds.includes(raw.workerProfileId)) throw new TaskFailure("The selected worker profile is not permitted.", 422, "worker_profile_not_permitted", { details: { field: "workerProfileId", value: raw.workerProfileId, reason: "The selected worker profile is not permitted." } });
     for (const role of workflowDefinition(request.workflow).advisorRoles) {
       const profileId = request.advisorProfileIds[role] ?? root;
-      if (!policy.advisorProfileIds[role].includes(profileId)) throw new TaskFailure("The selected Advisor profile is not permitted", 422);
+      if (raw.advisorProfileIds[role] !== undefined) this.agentApiProfile(profileId, "root", `advisorProfileIds.${role}`);
+      if (!policy.advisorProfileIds[role].includes(profileId)) throw new TaskFailure("The selected Advisor profile is not permitted.", 422, "advisor_profile_not_permitted", { details: { field: `advisorProfileIds.${role}`, value: profileId, reason: "The selected Advisor profile is not permitted." } });
     }
     const resolved = { ...request, rootProfileId: root, workerProfileId: worker };
     return { request: resolved, selection, signature: JSON.stringify({ request: resolved, selection }) };
@@ -772,8 +797,8 @@ export class TaskService {
 
   private workflowForAgentApi(policy: ProjectAgentTaskPolicy, workflowId: string): { id: string; name: string; request: Partial<z.infer<typeof CreateTaskTemplateBodySchema>> } {
     const row = this.database.authQuery(db => db.prepare("SELECT name, description, configuration_json, engine FROM forge_workflows WHERE id = ? AND archived_at IS NULL").get(workflowId) as { name: string; description: string; configuration_json: string; engine: string } | undefined);
-    if (!row) throw new TaskFailure("The selected workflow is not available", 422, "workflow_not_found", { details: { permittedWorkflowIds: policy.workflowIds } });
-    if (!policy.workflowIds.includes(workflowId)) throw new TaskFailure("The selected workflow is not permitted", 422, "workflow_not_permitted", { details: { permittedWorkflowIds: policy.workflowIds } });
+    if (!row) throw new TaskFailure("The selected workflow is not available", 422, "workflow_not_found", { details: { field: "workflowId", value: workflowId, reason: "The selected workflow is not available.", permittedWorkflowIds: policy.workflowIds } });
+    if (!policy.workflowIds.includes(workflowId)) throw new TaskFailure("The selected workflow is not permitted", 422, "workflow_not_permitted", { details: { field: "workflowId", value: workflowId, reason: "The selected workflow is not permitted.", permittedWorkflowIds: policy.workflowIds } });
     const record = WorkflowRecordInputSchema.parse({ ...JSON.parse(row.configuration_json), name: row.name, description: row.description, engine: row.engine });
     return { id: workflowId, name: record.name, request: {
       workflow: record.engine,
@@ -785,8 +810,8 @@ export class TaskService {
 
   private templateForAgentApi(projectId: string, policy: ProjectAgentTaskPolicy, templateId: string): { request: z.infer<typeof CreateTaskTemplateBodySchema> } {
     const row = this.database.authQuery(db => db.prepare("SELECT configuration_json FROM forge_task_templates WHERE id = ? AND project_id = ?").get(templateId, projectId) as { configuration_json: string } | undefined);
-    if (!row) throw new TaskFailure("The selected template is not available", 422, "template_not_found", { details: { permittedTemplateIds: policy.templateIds } });
-    if (!policy.templateIds.includes(templateId)) throw new TaskFailure("The selected template is not permitted", 422, "template_not_permitted", { details: { permittedTemplateIds: policy.templateIds } });
+    if (!row) throw new TaskFailure("The selected template is not available", 422, "template_not_found", { details: { field: "templateId", value: templateId, reason: "The selected template is not available.", permittedTemplateIds: policy.templateIds } });
+    if (!policy.templateIds.includes(templateId)) throw new TaskFailure("The selected template is not permitted", 422, "template_not_permitted", { details: { field: "templateId", value: templateId, reason: "The selected template is not permitted.", permittedTemplateIds: policy.templateIds } });
     return { request: CreateTaskTemplateBodySchema.parse(JSON.parse(row.configuration_json)) };
   }
 
@@ -863,6 +888,16 @@ export class TaskService {
     const request = { ...input };
     delete request.dryRun;
     return createHash("sha256").update(JSON.stringify(sort({ input: request, creator }))).digest("hex");
+  }
+
+  private agentApiProfile(profileId: string, role: "root" | "worker", field: string): TaskProfile {
+    try { return this.profile(profileId, role); }
+    catch (error) {
+      if (!(error instanceof TaskFailure)) throw error;
+      const code = role === "worker" ? "worker_profile_not_found" : field === "rootProfileId" ? "root_profile_not_found" : "advisor_profile_not_found";
+      const reason = "The selected agent profile is not available.";
+      throw new TaskFailure(reason, 422, code, { details: { field, value: profileId, reason } });
+    }
   }
 
   private isLegacyAgentApiRequest(input: AgentApiTaskCreateBody): boolean {
@@ -978,16 +1013,16 @@ export class TaskService {
     }
   }
 
-  private requireScope(authority: Authority, companyId: string, projectId: string, active = false): void {
+  private requireScope(authority: Authority, companyId: string, projectId: string, active = false, agentApiFailure?: { code: string; field: string; value: string; reason: string }): void {
     if (authority.kind === "user") {
       const company = this.auth.requireCompanyAccess(authority.userId, companyId);
       if (active && company.status !== "active") throw new TaskFailure("The company is not active", 409);
       return;
     }
     const principal = authority.principal;
-    if (principal.companyId !== companyId) throw new TaskFailure("Not found", 404, "resource_not_found");
+    if (principal.companyId !== companyId) throw agentApiFailure ? new TaskFailure(agentApiFailure.reason, 422, agentApiFailure.code, { details: agentApiFailure }) : new TaskFailure("Not found", 404, "resource_not_found");
     const allowed = this.database.authQuery(db => db.prepare("SELECT c.status FROM forge_external_agents a JOIN forge_external_agent_project_grants g ON g.agent_id = a.id AND g.company_id = a.company_id JOIN forge_companies c ON c.id = a.company_id WHERE a.id = ? AND a.company_id = ? AND a.status = 'paired' AND a.revoked_at IS NULL AND g.project_id = ?").get(principal.agentId, companyId, projectId));
-    if (!allowed) throw new TaskFailure("Not found", 404, "resource_not_found");
+    if (!allowed) throw agentApiFailure ? new TaskFailure(agentApiFailure.reason, 422, agentApiFailure.code, { details: agentApiFailure }) : new TaskFailure("Not found", 404, "resource_not_found");
     if (active && z.object({ status: z.string() }).parse(allowed).status !== "active") throw new TaskFailure("The company is not active", 409);
   }
 

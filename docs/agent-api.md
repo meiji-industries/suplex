@@ -143,6 +143,10 @@ reports the applied `workflow`, `templateId`, `deliveryTarget`,
 and name when Forge selected a workflow record, plus the engine that the task
 runs. A template task has a null workflow record ID and name.
 
+Send `"dryRun": true` to validate a create request and receive its projected
+result without writing a task, receipt, dependency, queue state, audit event,
+or image.
+
 ## Queued tasks
 
 A backlog task is either manual or queued. A manual task never starts by
@@ -179,6 +183,15 @@ Forge re-evaluates a queued task when a prerequisite completes, when Forge
 observes a merged pull request, when the prerequisites change, and on every
 scheduler tick after a restart. Cancelling a queued task clears its intent.
 
+Rejected create inputs include `field`, `value`, and `reason`. Project IDs use
+`project_not_found`. Dependencies use `dependency_not_found` or
+`dependency_not_permitted`. Profile IDs use `root_profile_not_found`,
+`root_profile_not_permitted`, `worker_profile_not_found`,
+`worker_profile_not_permitted`, `advisor_profile_not_found`, or
+`advisor_profile_not_permitted`. Source issues, pull requests, and branches
+use `source_issue_rejected`, `source_pull_request_rejected`, and
+`source_branch_rejected`.
+
 An unknown or archived workflow returns `422 workflow_not_found`. A workflow
 that exists but is outside the project policy returns `422
 workflow_not_permitted`. Both error bodies include `permittedWorkflowIds`.
@@ -195,9 +208,14 @@ reports them twice from the same edges: `dependsOn` has the IDs, and
 Set them at creation with `dependsOn`, or replace the whole set with
 `PUT /api/agent/tasks/:taskId/dependencies` and `{ "dependsOn": [...] }`. The
 body is the complete set: an omitted ID is removed, and `[]` removes every
-prerequisite. Each prerequisite must be a task this agent created. A
-self-reference or a cycle returns `422 task_unavailable`, an
-unavailable task returns `404`, and the current set stays unchanged. Unknown
+prerequisite. Each prerequisite must be a task this agent created in the same
+company. A self-reference or a cycle returns `422 task_unavailable`. An
+unavailable prerequisite returns `422 dependency_not_found`. A readable task
+created by another agent returns `422 dependency_not_permitted`. Both include
+`field`, `value`, and `reason`, and the current set stays unchanged. Send
+`"dryRun": true` to validate a replacement and receive the projected
+dependencies and queue state without writing edges, queue state, or audits.
+Unknown
 fields, such as `blockedByTaskId`, return `400 request_invalid`.
 
 `docs/agent-mcp.md` describes the stdio MCP bridge that exposes these

@@ -13,7 +13,7 @@ test("desktop source never reaches the server's code, the engine, or the databas
 
 test("child processes, the bridge, and the main-process channel each live in one module", () => {
   for (const file of sources) {
-    expect(/child_process/.test(read(file)), file).toBe(file === "local-runtime.ts" || file === "installer.ts");
+    expect(/child_process/.test(read(file)), file).toBe(file === "local-runtime.ts" || file === "installer.ts" || file === "tailscale.ts");
     expect(/contextBridge|ipcRenderer/.test(read(file)), file).toBe(file === "preload.ts");
     expect(/ipcMain/.test(read(file)), file).toBe(file === "suplex-desktop.ts");
   }

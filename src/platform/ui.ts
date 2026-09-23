@@ -12,7 +12,8 @@ function frontendEntry(mode: FrontendAssetMode): string {
 }
 
 function themeBootstrap(): string {
-  return `    <style>html { background: #ffffff; } html.dark { background: #0a0a0a; }</style>
+  // The boot ring shows until React replaces #suplex-app, so a slow first load (a dev stack over the tailnet) is not a blank window.
+  return `    <style>html { background: #ffffff; } html.dark { background: #0a0a0a; } .suplex-boot { position: fixed; inset: 0; display: grid; place-items: center; opacity: 0; animation: suplex-boot-in 200ms 400ms forwards; } .suplex-boot span { width: 20px; height: 20px; border: 2px solid #e5e5e5; border-top-color: #737373; border-radius: 50%; animation: suplex-boot-spin 700ms linear infinite; } html.dark .suplex-boot span { border-color: #262626; border-top-color: #a3a3a3; } @keyframes suplex-boot-in { to { opacity: 1; } } @keyframes suplex-boot-spin { to { transform: rotate(360deg); } } @media (prefers-reduced-motion: reduce) { .suplex-boot span { animation-duration: 2s; } }</style>
     <script>(() => { let saved = null; try { saved = localStorage.getItem("suplex.theme"); } catch {} const dark = saved === "dark" || saved !== "light" && matchMedia("(prefers-color-scheme: dark)").matches; const root = document.documentElement; root.classList.toggle("dark", dark); root.style.colorScheme = dark ? "dark" : "light"; document.querySelector('meta[name="theme-color"]').content = dark ? "#0a0a0a" : "#ffffff"; })();</script>`;
 }
 
@@ -64,7 +65,7 @@ ${themeBootstrap()}
     <title>Suplex · ${view === "auth" ? "Sign in" : view === "oauth-consent" ? "Approve connection" : view === "admin" ? "Administration" : view === "projects" ? "Projects" : view === "project-prompts" ? "Project prompts" : view === "project-templates" ? "Project templates" : view === "tasks" ? "Tasks" : view === "board" ? "Board" : view === "timeline" ? "Timeline" : view === "profile" ? "Profile" : view === "setup" ? "Set up" : view === "onboarding" ? "Onboarding" : "Company settings"}</title>
 ${frontendHead(assetMode)}  </head>
   <body>
-    <div id="suplex-app"></div>
+    <div id="suplex-app"><div class="suplex-boot" role="status" aria-label="Suplex loads the app"><span></span></div></div>
     <noscript>Suplex requires JavaScript for passkey authentication.</noscript>
     <script>window.__SUPLEX_VIEW__ = ${JSON.stringify(view)};</script>
 ${frontendEntry(assetMode)}

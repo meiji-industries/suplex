@@ -24,19 +24,35 @@ test("the shared style is the app's dark look", () => {
 
 describe("choice", () => {
   const html = page("choice.html");
-  test("carries C4's copy with the local card preselected", () => {
+  test("carries C4's copy with no card preselected", () => {
     expect(html).toContain("<title>Set up Suplex</title>");
     expect(html).toContain('<h1><img src="wordmark.svg" alt="Suplex"></h1>');
-    expect(html).toContain('<input type="radio" name="mode" value="local" checked><strong>Run locally</strong>');
+    expect(html).toContain('<h2 id="where">Where do you work?</h2>');
+    expect(html).toContain('<input type="radio" name="mode" value="local"><svg');
+    expect(html).toContain("<strong>Run locally</strong>");
     expect(html).toContain("<p>Work directly in the app, or leave it running so other devices can connect remotely.</p>");
-    expect(html).toContain('<input type="radio" name="mode" value="remote"><strong>Remote access</strong>');
-    expect(html).toContain("<p>All tasks run on that machine, best if you are running Suplex on a remote development server.</p>");
+    expect(html).toContain('<input type="radio" name="mode" value="remote"><svg');
+    expect(html).toContain("<strong>Remote access</strong>");
+    expect(html).toContain("<p>Connect to Suplex on another machine in your tailnet. All tasks run on that machine.</p>");
   });
-  test("is two cards in the middle 67% of the window, stacked under 720 px", () => {
+  test("is square cards that wrap in the middle 67% of the window", () => {
     expect(styles).toContain("main { width: 67vw; margin: 0 auto;");
     expect(styles).toContain("@media (max-width: 720px) { main { width: auto;");
-    expect(html).toContain(".cards { display: grid; grid-template-columns: 1fr 1fr;");
-    expect(html).toContain("@media (max-width: 720px) { .cards { grid-template-columns: 1fr; } }");
+    expect(html).toContain(".cards { display: flex; flex-wrap: wrap; justify-content: center;");
+    expect(html).toContain("aspect-ratio: 1;");
+  });
+  test("shows the URL field only for remote, and proves health before Continue", () => {
+    expect(html).toContain('<fieldset id="remote" disabled>');
+    expect(html).toContain("remote.disabled = chosen() !== \"remote\";");
+    expect(html).toContain('<option value="tailscale" disabled>Tailscale</option><option value="https" selected>https://</option><option value="http">http://</option>');
+    expect(html).toContain('<input id="port" type="text" inputmode="numeric" pattern="[0-9]{1,5}" value="4111"');
+    expect(html).not.toContain("localhost");
+    expect(html).toContain('indicator.textContent = machines ? "Tailscale connected" : "Tailscale not available";');
+    expect(html).toContain("online.map(async (each) => (await window.suplexDesktop.testConnection(`https://${each.host}:4111`)).ok)");
+    expect(html).toContain('next.disabled = chosen() === null || (chosen() === "remote" && (url.value === "" || url.value !== proven));');
+    expect(html).toContain('<span id="scan-label">Scan Tailnet</span></button><button class="primary" id="continue"');
+    expect(html).toContain('document.getElementById("scan-label").textContent = "Scanning Tailnet";');
+    expect(html).toContain("await window.suplexDesktop.testConnection(candidate)");
   });
 });
 

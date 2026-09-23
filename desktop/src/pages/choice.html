@@ -5,35 +5,257 @@
 <title>Set up Suplex</title>
 <link rel="stylesheet" href="pages.css">
 <style>
-  .cards { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-top: 20px; }
-  .card { display: grid; gap: 8px; align-content: start; padding: 16px; border: 1px solid #303030; border-radius: 8px; background: #141414; cursor: pointer; }
+  .cards { display: flex; flex-wrap: wrap; justify-content: center; gap: 16px; margin-top: 20px; }
+  .card { display: grid; gap: 8px; align-content: start; width: 176px; aspect-ratio: 1; overflow: hidden; padding: 16px; border: 1px solid #303030; border-radius: 8px; background: #141414; cursor: pointer; }
   .card:hover { border-color: #404040; }
   .card:has(input:checked) { border-color: #e5e5e5; background: #171717; }
+  .card:focus-within { outline: none; }
+  .card:has(input:focus-visible) { outline: 2px solid #a3a3a3; outline-offset: 3px; }
   .card input { -webkit-appearance: none; appearance: none; position: absolute; opacity: 0; }
+  .card svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
   .card strong { font-size: 13px; font-weight: 600; }
+  #remote { display: grid; gap: 8px; width: min(100%, 584px); margin: 20px auto 0; padding: 0; border: 0; min-width: 0; }
+  #remote[disabled] { display: none; }
+  /* Same shape as shadcn's InputGroup: one bordered control with inline-start and inline-end addons. */
+  .input-group { display: flex; align-items: center; height: 32px; border: 1px solid #404040; border-radius: 6px; background: #141414; -webkit-app-region: no-drag; }
+  .input-group:focus-within { border-color: #a3a3a3; box-shadow: 0 0 0 3px rgb(163 163 163 / 0.25); }
+  .input-group input, .input-group select { font: inherit; height: 100%; min-width: 0; padding: 0 8px; border: 0; background: none; color: inherit; outline: none; }
+  .input-group select { padding-right: 4px; color: #a3a3a3; cursor: pointer; }
+  .input-group > span { color: #737373; }
+  #host, #machine { flex: 1; border-left: 1px solid #303030; }
+  #port { width: 64px; }
+  /* Styled like shadcn's Select through Chromium's customizable <select>; keyboard and screen reader behavior stay native. */
+  #machine, #machine::picker(select) { appearance: base-select; }
+  #machine { display: flex; align-items: center; gap: 8px; min-width: 0; padding: 0 10px 0 8px; color: inherit; cursor: pointer; }
+  #machine::picker-icon { color: #737373; }
+  #machine > button { display: flex; align-items: center; justify-content: flex-start; flex: 1; min-width: 0; min-height: 0; padding: 0; border: 0; background: none; color: inherit; font: inherit; text-align: left; }
+  #machine > button:hover { background: none; }
+  #machine selectedcontent { display: flex; align-items: center; gap: 8px; min-width: 0; overflow: hidden; white-space: nowrap; }
+  #machine selectedcontent .m-meta { display: none; }
+  #machine:has(option[value=""]:checked) selectedcontent { color: #737373; }
+  #machine option[value=""] { display: none; }
+  #machine::picker(select) { position-try-order: normal; margin-top: 4px; padding: 4px; max-height: 280px; border: 1px solid #303030; border-radius: 8px; background: #141414; color: #e5e5e5; box-shadow: 0 8px 24px rgb(0 0 0 / 0.45); }
+  #machine option { display: flex; align-items: center; gap: 8px; min-height: 30px; padding: 0 8px; border-radius: 5px; font-size: 13px; cursor: pointer; }
+  #machine option:hover, #machine option:focus-visible { background: #262626; outline: none; }
+  #machine option::checkmark { order: 1; content: "✓"; color: #a3a3a3; }
+  .m-dot { flex: none; width: 6px; height: 6px; border-radius: 50%; background: #737373; }
+  .m-dot[data-state="found"] { background: #22c55e; animation: pulse 1.6s ease-out infinite; }
+  .m-dot[data-state="offline"] { background: none; box-shadow: inset 0 0 0 1px #525252; }
+  .m-host { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #737373; font-size: 12px; }
+  .m-meta { color: #a3a3a3; font-size: 12px; }
+  .m-name { color: #e5e5e5; }
+  .m-dot[data-state="offline"] + .m-name { color: #737373; }
+  .label-row { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
+  #tailscale { display: inline-flex; align-items: center; gap: 6px; color: #a3a3a3; font-size: 12px; }
+  #tailscale::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: #737373; }
+  #tailscale[data-state="connected"]::before { background: #22c55e; }
+  #tailscale:empty, #hint:empty { display: none; }
+  #remote .row { display: flex; align-items: center; gap: 8px; }
+  #remote .row .input-group { flex: 1; min-width: 0; }
+  #test { min-height: 32px; }
+  #status:empty { display: none; }
+  #scan { gap: 8px; min-height: 32px; }
+  #scan .spinner { width: 12px; height: 12px; border: 1.5px solid #404040; border-top-color: #e5e5e5; border-radius: 50%; animation: spin 700ms linear infinite; }
+  #scan .spinner[hidden] { display: none; }
+  @keyframes spin { to { transform: rotate(360deg); } }
+  #where { margin-bottom: 32px; text-align: center; font-size: 36px; font-weight: 600; letter-spacing: -0.03em; line-height: 1.15; }
+  main { justify-self: stretch; width: auto; margin: 0 24px; }
+  .instance .where { display: flex; align-items: center; min-width: 0; }
+  .instance .host { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .instance .where + p { margin-top: -6px; }
+  .live { flex: none; width: 6px; height: 6px; margin-right: 6px; border-radius: 50%; background: #22c55e; animation: pulse 1.6s ease-out infinite; }
+  @keyframes pulse { from { box-shadow: 0 0 0 0 rgb(34 197 94 / 0.6); } to { box-shadow: 0 0 0 6px rgb(34 197 94 / 0); } }
+  @media (prefers-reduced-motion: reduce) { .live { animation: none; } }
   body { display: grid; place-items: center; }
-  h1 { display: flex; justify-content: center; margin-bottom: 32px; }
-  h1 img { width: 240px; height: auto; }
+  h1 { position: absolute; top: 14px; left: 0; right: 0; display: flex; justify-content: center; pointer-events: none; }
+  h1 img { width: 88px; height: auto; }
   .actions { justify-content: center; }
-  @media (max-width: 720px) { .cards { grid-template-columns: 1fr; } }
+  /* Intro: a large wordmark fades in, moves into the header wordmark, then the page appears. */
+  #intro { position: fixed; inset: 0; z-index: 10; display: grid; place-items: center; pointer-events: none; }
+  #intro img { width: min(360px, 60vw); height: auto; opacity: 0; }
+  html:not(.intro) #intro { display: none; }
+  html.intro main, html.intro h1 img { visibility: hidden; }
 </style>
+<script>
+  // Play the intro unless the viewer asks the system for less motion.
+  if (!matchMedia("(prefers-reduced-motion: reduce)").matches) document.documentElement.classList.add("intro");
+</script>
 </head>
 <body>
+<div id="intro" aria-hidden="true"><img src="wordmark.svg" alt=""></div>
 <main>
   <h1><img src="wordmark.svg" alt="Suplex"></h1>
-  <form class="cards" id="modes">
-    <label class="card"><input type="radio" name="mode" value="local" checked><strong>Run locally</strong><p>Work directly in the app, or leave it running so other devices can connect remotely.</p></label>
-    <label class="card"><input type="radio" name="mode" value="remote"><strong>Remote access</strong><p>All tasks run on that machine, best if you are running Suplex on a remote development server.</p></label>
+  <h2 id="where">Where do you work?</h2>
+  <form id="modes" method="get" aria-labelledby="where">
+    <template id="instance"><label class="card instance"><input type="radio" name="mode" value="instance"><svg viewBox="0 0 24 24" aria-hidden="true"><rect width="20" height="8" x="2" y="2" rx="2" ry="2"/><rect width="20" height="8" x="2" y="14" rx="2" ry="2"/><line x1="6" x2="6.01" y1="6" y2="6"/><line x1="6" x2="6.01" y1="18" y2="18"/></svg><strong></strong><p class="where"><span class="live" aria-hidden="true"></span><span class="host"></span></p><p>is running Suplex</p></label></template>
+    <div class="cards" id="cards">
+      <label class="card"><input type="radio" name="mode" value="local"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="M18 5a2 2 0 0 1 2 2v8.526a2 2 0 0 0 .212.897l1.068 2.127a1 1 0 0 1-.9 1.45H3.62a1 1 0 0 1-.9-1.45l1.068-2.127A2 2 0 0 0 4 15.526V7a2 2 0 0 1 2-2z"/><path d="M20.054 15.987H3.946"/></svg><strong>Run locally</strong><p>Work directly in the app, or leave it running so other devices can connect remotely.</p></label>
+      <label class="card"><input type="radio" name="mode" value="remote"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 11 2-2-2-2"/><path d="M11 13h4"/><rect width="18" height="18" x="3" y="3" rx="2" ry="2"/></svg><strong>Remote access</strong><p>Connect to Suplex on another machine in your tailnet. All tasks run on that machine.</p></label>
+    </div>
+    <fieldset id="remote" disabled>
+      <div class="label-row"><label id="url-label" for="host">Suplex URL</label><span id="tailscale" role="status"></span></div>
+      <div class="row">
+        <div class="input-group" role="group">
+          <select id="protocol" aria-label="Protocol"><option value="tailscale" disabled>Tailscale</option><option value="https" selected>https://</option><option value="http">http://</option></select>
+          <select id="machine" aria-label="Tailnet machine" hidden disabled><button><selectedcontent></selectedcontent></button><option value="" hidden>Select a machine</option></select>
+          <input id="host" type="text" required placeholder="suplex.tailnet.ts.net" autocomplete="off" spellcheck="false">
+          <span aria-hidden="true">:</span>
+          <input id="port" type="text" inputmode="numeric" pattern="[0-9]{1,5}" value="4111" placeholder="port" aria-label="Port">
+        </div>
+        <button id="test" type="button">Test</button>
+      </div>
+      <p id="hint"></p>
+      <p id="status" role="status" aria-live="polite"></p>
+    </fieldset>
+    <input id="url" name="url" type="hidden">
   </form>
-  <div class="actions"><button class="primary" id="continue" type="button">Continue</button></div>
+  <div class="actions"><button id="scan" type="button"><span class="spinner" aria-hidden="true" hidden></span><span id="scan-label">Scan Tailnet</span></button><button class="primary" id="continue" type="submit" form="modes">Continue</button></div>
 </main>
 <script>
   const modes = document.getElementById("modes");
-  const chosen = () => modes.elements.mode.value;
-  const go = () => { document.getElementById("continue").disabled = true; window.suplexDesktop.choose(chosen()); };
-  document.getElementById("continue").addEventListener("click", go);
-  modes.addEventListener("submit", (event) => { event.preventDefault(); go(); });
-  modes.addEventListener("dblclick", go);
+  const remote = document.getElementById("remote");
+  const url = document.getElementById("url");
+  const protocol = document.getElementById("protocol");
+  const host = document.getElementById("host");
+  const port = document.getElementById("port");
+  const machine = document.getElementById("machine");
+  const hint = document.getElementById("hint");
+  // Tailscale is https:// to a machine's MagicDNS name, where `tailscale serve` publishes Suplex.
+  const tailnet = () => protocol.value === "tailscale";
+  const address = () => {
+    const name = tailnet() ? machine.value : host.value.trim();
+    const number = port.value.trim();
+    return name ? `${tailnet() ? "https" : protocol.value}://${name}${number ? `:${number}` : ""}` : "";
+  };
+  const test = document.getElementById("test");
+  const status = document.getElementById("status");
+  const next = document.getElementById("continue");
+  const selected = () => modes.querySelector('input[name="mode"]:checked');
+  const chosen = () => selected()?.value ?? null;
+  let proven = "";
+  const sync = () => {
+    remote.disabled = chosen() !== "remote";
+    host.hidden = host.disabled = tailnet();
+    machine.hidden = machine.disabled = !tailnet();
+    document.getElementById("url-label").htmlFor = tailnet() ? "machine" : "host";
+    // A found instance answered its probe already, so it needs no second test.
+    url.value = chosen() === "instance" ? selected().dataset.url : address();
+    next.disabled = chosen() === null || (chosen() === "remote" && (url.value === "" || url.value !== proven));
+  };
+  modes.addEventListener("change", (event) => {
+    sync();
+    if (event.target.name === "mode" && !remote.disabled) (tailnet() ? machine : host).focus();
+    if (event.target === machine && machine.value) test.click();
+  });
+  remote.addEventListener("input", () => {
+    // A pasted full URL fills all three fields.
+    if (host.value.includes("://")) {
+      try {
+        const pasted = new URL(host.value.trim());
+        if (pasted.protocol === "https:" || pasted.protocol === "http:") protocol.value = pasted.protocol.slice(0, -1);
+        host.value = pasted.hostname;
+        port.value = pasted.port;
+      } catch { /* leave it for the connection test to report */ }
+    }
+    status.textContent = "";
+    sync();
+  });
+  test.addEventListener("click", async () => {
+    const candidate = address();
+    if (!candidate) { status.textContent = tailnet() ? "Select a machine." : "Enter a hostname."; (tailnet() ? machine : host).focus(); return; }
+    test.disabled = true;
+    status.textContent = "Testing…";
+    const result = await window.suplexDesktop.testConnection(candidate);
+    test.disabled = false;
+    proven = result.ok ? candidate : "";
+    status.textContent = result.ok ? "Suplex answered." : result.reason ?? "No Suplex answered at that URL.";
+    sync();
+    if (result.ok) next.focus();
+  });
+  // One row per machine: status dot, name, MagicDNS host, and what Suplex knows about it.
+  const machineOption = (each) => {
+    const option = new Option("", each.host);
+    for (const [name, text] of [["m-dot", ""], ["m-name", each.name], ["m-host", each.host], ["m-meta", each.online ? "" : "Offline"]]) {
+      const part = document.createElement("span");
+      part.className = name;
+      part.textContent = text;
+      option.append(part);
+    }
+    option.querySelector(".m-dot").dataset.state = each.online ? "online" : "offline";
+    return option;
+  };
+  const scanButton = document.getElementById("scan");
+  const indicator = document.getElementById("tailscale");
+  const cards = document.getElementById("cards");
+  // Find the tailnet machines, then probe every online one where `tailscale serve` publishes Suplex, and offer the ones that answer.
+  const scan = async () => {
+    scanButton.disabled = true;
+    scanButton.querySelector(".spinner").hidden = false;
+    document.getElementById("scan-label").textContent = "Scanning Tailnet";
+    try {
+      const machines = await window.suplexDesktop.tailnetMachines();
+      const kept = chosen() === "instance" ? selected().dataset.url : null;
+      const picked = machine.value;
+      machine.length = 1;
+      for (const card of cards.querySelectorAll(".instance")) card.remove();
+      indicator.dataset.state = machines ? "connected" : "absent";
+      indicator.textContent = machines ? "Tailscale connected" : "Tailscale not available";
+      hint.textContent = machines?.length ? "" : machines ? "Tailscale shows no other machines in your tailnet." : "Tailscale is not available on this Mac. Start Tailscale to select a machine from your tailnet.";
+      protocol.options[0].disabled = !machines?.length;
+      if (!machines?.length) {
+        if (tailnet()) protocol.value = "https";
+      } else {
+        for (const each of machines) machine.add(machineOption(each));
+        machine.value = picked;
+        if (!host.value.trim()) protocol.value = "tailscale";
+        const online = machines.filter((each) => each.online);
+        const answered = await Promise.all(online.map(async (each) => (await window.suplexDesktop.testConnection(`https://${each.host}:4111`)).ok));
+        const found = online.filter((_, index) => answered[index]);
+        const template = document.getElementById("instance");
+        for (const each of found) {
+          const option = [...machine.options].find((candidate) => candidate.value === each.host);
+          if (option) { option.querySelector(".m-dot").dataset.state = "found"; option.querySelector(".m-meta").textContent = "Suplex"; }
+          const card = template.content.firstElementChild.cloneNode(true);
+          const input = card.querySelector("input");
+          input.dataset.url = `https://${each.host}:4111`;
+          input.checked = input.dataset.url === kept;
+          card.querySelector("strong").textContent = each.name;
+          card.querySelector(".host").textContent = card.querySelector(".host").title = `${each.host}:4111`;
+          cards.insertBefore(card, cards.querySelector("label:not(.instance)"));
+        }
+      }
+      sync();
+    } finally {
+      scanButton.disabled = false;
+      scanButton.querySelector(".spinner").hidden = true;
+      document.getElementById("scan-label").textContent = "Scan Tailnet";
+    }
+  };
+  scanButton.addEventListener("click", () => { void scan(); });
+  sync();
+  void scan();
+  const intro = async () => {
+    const big = document.querySelector("#intro img");
+    const small = document.querySelector("h1 img");
+    await big.decode().catch(() => undefined);
+    await big.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 800, easing: "ease-out", fill: "forwards" }).finished;
+    await new Promise((resolve) => setTimeout(resolve, 1100));
+    const from = big.getBoundingClientRect();
+    const to = small.getBoundingClientRect();
+    const move = `translate(${to.left + to.width / 2 - (from.left + from.width / 2)}px, ${to.top + to.height / 2 - (from.top + from.height / 2)}px) scale(${to.width / from.width})`;
+    await big.animate([{ transform: "none" }, { transform: move }], { duration: 800, easing: "cubic-bezier(0.65, 0, 0.35, 1)", fill: "forwards" }).finished;
+    document.documentElement.classList.remove("intro");
+  };
+  if (document.documentElement.classList.contains("intro")) void intro();
+  // Local starts the install; an instance or a remote URL submits ?url=… and the main process connects to it.
+  modes.addEventListener("submit", (event) => {
+    if (chosen() !== "local" && chosen() !== null) return;
+    event.preventDefault();
+    if (chosen() === null) return;
+    next.disabled = true;
+    window.suplexDesktop.choose("local");
+  });
+  modes.addEventListener("dblclick", (event) => { if (event.target.closest(".card") && chosen() !== "remote") modes.requestSubmit(); });
 </script>
 </body>
 </html>

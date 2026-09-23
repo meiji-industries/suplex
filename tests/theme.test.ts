@@ -28,3 +28,7 @@ test("application and health pages apply the saved or system theme before fronte
     expect(html.match(/root\.classList\.toggle/g)).toHaveLength(1);
   }
 });
+
+test("the application shell shows a boot ring until React replaces the root", () => {
+  expect(renderApplicationPage("tasks")).toContain('<div id="suplex-app"><div class="suplex-boot" role="status" aria-label="Suplex loads the app"><span></span></div></div>');
+});

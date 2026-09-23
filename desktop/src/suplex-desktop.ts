@@ -8,10 +8,13 @@ import { createDesktopUpdater } from "./desktop-updater";
 import { DEFAULT_PORT, next, readInstallRecord, resolveBoot, runtimePaths, runtimeStamp, writeInstallRecord, type BootEvent, type BootState } from "./boot";
 import { createInstaller, type InstallEvent, type InstallStage, type Installer } from "./installer";
 import { createLocalRuntime, healthy, type LocalRuntime } from "./local-runtime";
+import { tailnetMachines } from "./tailscale";
 import type { DesktopMessage, DesktopSnapshot } from "./preload";
 
 const KEYCHAIN_ACCESS_GROUP = "6KY6743H52.dev.suplex.desktop.webauthn"; // inert until build/entitlements.mac.plist grants it via a provisioning profile
 const INVALID_TITLE = "The Suplex URL is not valid";
+/** The CONNECTING page (pages/connecting.html) as an overlay on a Suplex page that has not finished loading. */
+const CONNECTING_COVER = "html::after { content: \"CONNECTING\"; position: fixed; inset: 0; z-index: 2147483647; display: grid; place-items: center; background: #0a0a0a; color: #737373; font: 500 12px/1.5 -apple-system, system-ui, sans-serif; letter-spacing: 0.32em; animation: suplex-connecting 1.6s ease-in-out infinite; } @keyframes suplex-connecting { 50% { color: #e5e5e5; } }";
 
 type Bounds = { width: number; height: number; x?: number; y?: number };
 type Preventable = { preventDefault(): void };
@@ -154,6 +157,7 @@ export async function runSuplexDesktop(input: { readonly argv: readonly string[]
   };
   const load = async (win: BrowserWindow, target: SuplexTarget): Promise<void> => {
     origin = target.origin;
+    await win.loadFile(join(__dirname, "pages", "connecting.html")).catch(() => undefined); // shown while the target answers
     await win.loadURL(target.url).catch(() => undefined); // did-fail-load shows the retry page
   };
   const showConnectPage = async (win: BrowserWindow): Promise<void> => {
@@ -352,6 +356,17 @@ export async function runSuplexDesktop(input: { readonly argv: readonly string[]
     };
     win.webContents.on("will-navigate", guard);
     win.webContents.on("will-redirect", guard);
+    // A Suplex page draws nothing until its scripts finish loading, which is slow for a dev stack over the tailnet.
+    // Keep CONNECTING over it from commit to the load event.
+    let cover: Promise<string> | null = null;
+    win.webContents.on("did-navigate", (_event, url) => {
+      cover = url.startsWith("http:") || url.startsWith("https:") ? win.webContents.insertCSS(CONNECTING_COVER) : null;
+    });
+    win.webContents.on("did-finish-load", () => {
+      const inserted = cover;
+      cover = null;
+      if (inserted) void inserted.then((key) => win.webContents.removeInsertedCSS(key)).catch(() => undefined);
+    });
     win.webContents.on("did-fail-load", (_event, _code, description, validatedUrl, mainFrame) => {
       if (!mainFrame || !origin || validatedUrl.startsWith("data:") || validatedUrl.startsWith("file:")) return;
       if (origin === localOrigin) {
@@ -431,6 +446,7 @@ export async function runSuplexDesktop(input: { readonly argv: readonly string[]
         }
         return (await healthy(target.origin)) ? { ok: true, reason: null } : { ok: false, reason: `No Suplex answered at ${target.origin}/health.` };
       }
+      case "tailnet-machines": return tailnetMachines();
       default: return null;
     }
   });

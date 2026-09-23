@@ -1,6 +1,7 @@
 import { contextBridge, ipcRenderer } from "electron";
 import type { BootFailure, BootState } from "./boot";
 import type { InstallEvent, InstallStage } from "./installer";
+import type { TailnetMachine } from "./tailscale";
 
 export type DesktopSnapshot = {
   readonly state: BootState["name"];
@@ -20,7 +21,8 @@ export type DesktopMessage =
   | { readonly action: "back" }
   | { readonly action: "open-logs" }
   | { readonly action: "copy-output" }
-  | { readonly action: "test-connection"; readonly url: string };
+  | { readonly action: "test-connection"; readonly url: string }
+  | { readonly action: "tailnet-machines" };
 
 export type DesktopApi = {
   snapshot(): Promise<DesktopSnapshot>;
@@ -32,6 +34,7 @@ export type DesktopApi = {
   openLogs(): Promise<void>;
   copyOutput(): Promise<void>;
   testConnection(url: string): Promise<{ readonly ok: boolean; readonly reason: string | null }>;
+  tailnetMachines(): Promise<readonly TailnetMachine[] | null>;
   on(listener: (event: InstallEvent) => void): void;
 };
 
@@ -49,6 +52,7 @@ const api: DesktopApi = {
   openLogs: async () => { await send({ action: "open-logs" }); },
   copyOutput: async () => { await send({ action: "copy-output" }); },
   testConnection: async (url) => (await send({ action: "test-connection", url })) as { ok: boolean; reason: string | null },
+  tailnetMachines: async () => (await send({ action: "tailnet-machines" })) as TailnetMachine[] | null,
   on: (listener) => { ipcRenderer.on("suplex:event", (_event, payload: InstallEvent) => { listener(payload); }); },
 };
 

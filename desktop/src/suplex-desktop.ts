@@ -13,6 +13,7 @@ import type { DesktopMessage, DesktopSnapshot } from "./preload";
 
 const KEYCHAIN_ACCESS_GROUP = "6KY6743H52.dev.suplex.desktop.webauthn"; // inert until build/entitlements.mac.plist grants it via a provisioning profile
 const INVALID_TITLE = "The Suplex URL is not valid";
+const UPDATE_CHECK_INTERVAL_MS = 4 * 60 * 60 * 1000;
 /** The CONNECTING page (pages/connecting.html) as an overlay on a Suplex page that has not finished loading. */
 const CONNECTING_COVER = "html::after { content: \"CONNECTING\"; position: fixed; inset: 0; z-index: 2147483647; display: grid; place-items: center; background: #0a0a0a; color: #737373; font: 500 12px/1.5 -apple-system, system-ui, sans-serif; letter-spacing: 0.32em; animation: suplex-connecting 1.6s ease-in-out infinite; } @keyframes suplex-connecting { 50% { color: #e5e5e5; } }";
 
@@ -466,5 +467,6 @@ export async function runSuplexDesktop(input: { readonly argv: readonly string[]
   app.configureWebAuthn({ touchID: { keychainAccessGroup: KEYCHAIN_ACCESS_GROUP, promptReason: "verify your identity on $1" } });
   rebuildMenu();
   void desktopUpdater.check(false);
+  setInterval(() => { void desktopUpdater.check(false); }, UPDATE_CHECK_INTERVAL_MS); // an app left open still sees new releases
   await open();
 }

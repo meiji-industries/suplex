@@ -22,6 +22,10 @@ export class DesktopUpdater {
   private readonly configured: boolean;
   private manualCheck = false;
   private activeAction: "check" | "download" | undefined;
+  /** A prompt is open or a download is running; an automatic check waits for the next interval. */
+  private offering = false;
+  /** The version the viewer chose not to download; automatic checks stop offering it, a manual check still does. */
+  private declined: string | undefined;
 
   constructor(options: { updater: UpdaterPort; dialog: DialogPort; configured: boolean }) {
     this.updater = options.updater;
@@ -29,7 +33,11 @@ export class DesktopUpdater {
     this.configured = options.configured;
     this.updater.autoDownload = false;
     this.updater.autoInstallOnAppQuit = false;
-    this.updater.on("update-available", (info) => { this.manualCheck = false; void this.offerDownload(info); });
+    this.updater.on("update-available", (info) => {
+      const manual = this.manualCheck;
+      this.manualCheck = false;
+      if (manual || info.version !== this.declined) void this.offerDownload(info);
+    });
     this.updater.on("update-not-available", () => { const show = this.manualCheck; this.manualCheck = false; if (show) void this.showCurrent(); });
     this.updater.on("update-downloaded", (info) => { void this.offerRestart(info); });
     this.updater.on("error", (error) => { if (!this.activeAction) void this.showError("install", error); });
@@ -40,6 +48,7 @@ export class DesktopUpdater {
   }
 
   async check(manual: boolean): Promise<void> {
+    if (!manual && (this.offering || this.activeAction)) return;
     this.manualCheck = manual;
     if (!this.configured) {
       if (manual) await this.dialog.showMessageBox({ type: "info", title: "Desktop app update", message: "Desktop app updates are not configured.", detail: "Install a new Suplex.app build to update the desktop app.", buttons: ["Continue"] });
@@ -50,10 +59,15 @@ export class DesktopUpdater {
   }
 
   private async offerDownload(info: UpdateInfo): Promise<void> {
-    const answer = await this.dialog.showMessageBox({ type: "info", title: "Desktop app update", message: `Suplex desktop app ${info.version} is available.`, buttons: ["Start download", "Continue"], defaultId: 0, cancelId: 1 });
-    if (answer.response === 0) {
+    if (this.offering) return;
+    this.offering = true;
+    try {
+      const answer = await this.dialog.showMessageBox({ type: "info", title: "Desktop app update", message: `Suplex desktop app ${info.version} is available.`, buttons: ["Start download", "Continue"], defaultId: 0, cancelId: 1 });
+      if (answer.response !== 0) { this.declined = info.version; return; }
       this.activeAction = "download";
       try { await this.updater.downloadUpdate(); } catch (error) { await this.showError("download", error); } finally { this.activeAction = undefined; }
+    } finally {
+      this.offering = false;
     }
   }
 

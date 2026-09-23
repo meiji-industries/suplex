@@ -28,6 +28,8 @@ for artifact in "$app" "$zip" "$blockmap" "$dmg" "$manifest"; do
 done
 
 codesign --verify --deep --strict "$app"
+# The app checks this feed for its next update; a release that points elsewhere, or nowhere, strands its installs.
+grep -qx "url: $base_url/" "$app/Contents/Resources/app-update.yml" || { echo "$app does not update from $base_url/" >&2; exit 1; }
 spctl --assess --type execute -vv "$app"
 xcrun stapler validate "$dmg"
 zip_check="$(mktemp -d)"

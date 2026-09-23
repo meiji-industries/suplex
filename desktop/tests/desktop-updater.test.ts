@@ -64,3 +64,27 @@ test("an install-time error is reported once", async () => {
   await vi.waitFor(() => expect(showMessageBox).toHaveBeenCalledOnce());
   expect(showMessageBox).toHaveBeenCalledWith(expect.objectContaining({ message: "Suplex could not install the desktop app update.", detail: "signature rejected" }));
 });
+
+test("automatic checks do not offer a declined version again, but a manual check does", async () => {
+  const subject = new DesktopUpdater({ updater, dialog: { showMessageBox }, configured: true });
+  updater.checkForUpdates.mockImplementation(async () => { updater.emit("update-available", { version: "0.2.0" }); return null; });
+  showMessageBox.mockResolvedValue({ response: 1 });
+  await subject.check(false);
+  await vi.waitFor(() => expect(showMessageBox).toHaveBeenCalledTimes(1));
+  await subject.check(false);
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  expect(showMessageBox).toHaveBeenCalledTimes(1);
+  await subject.check(true);
+  await vi.waitFor(() => expect(showMessageBox).toHaveBeenCalledTimes(2));
+});
+
+test("an automatic check waits while an offer is open", async () => {
+  const subject = new DesktopUpdater({ updater, dialog: { showMessageBox }, configured: true });
+  updater.checkForUpdates.mockImplementation(async () => { updater.emit("update-available", { version: "0.2.0" }); return null; });
+  let answer: (value: { response: number }) => void = () => undefined;
+  showMessageBox.mockImplementation(() => new Promise((resolve) => { answer = resolve; }));
+  await subject.check(false);
+  await subject.check(false);
+  expect(updater.checkForUpdates).toHaveBeenCalledTimes(1);
+  answer({ response: 1 });
+});

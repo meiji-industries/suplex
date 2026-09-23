@@ -1,3 +1,4 @@
+/// <reference types="vite/client" />
 import type { HealthSnapshot } from "../platform/health.js";
 
 declare global {

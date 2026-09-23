@@ -16,6 +16,7 @@ import { RecentTasks } from "../features/tasks/recent-tasks.js";
 import { SystemHealthIndicator } from "../components/app/system-health.js";
 import { requestNewTask } from "./global-new-task-dialog.js";
 import { useSignOut } from "./server-state.js";
+import wordmark from "../assets/suplex-wordmark.png?inline";
 
 type NavItem = { href: string; label: string; icon: LucideIcon };
 
@@ -45,7 +46,7 @@ function CreateActions({ close }: { close?: () => void }): ReactElement {
   const context = useOptionalCompanyContext();
   const company = context?.currentCompany;
   return (
-    <div className="flex gap-2 p-2"><SidebarMenuButton className="min-w-8 flex-1 bg-primary text-primary-foreground duration-200 ease-linear hover:bg-primary/90 hover:text-primary-foreground active:bg-primary/90 active:text-primary-foreground" disabled={company?.status !== "active"} onClick={() => { close?.(); requestNewTask(); }}><CirclePlus />New task</SidebarMenuButton><button type="button" className={buttonVariants({ variant: "outline", size: "icon-sm" })} onClick={() => window.dispatchEvent(new Event("suplex:command-menu"))} aria-label="Search Suplex" title="Search Suplex (⌘K)"><Search /></button></div>
+    <div className="flex gap-2 p-2"><SidebarMenuButton className="flex-1 bg-primary text-primary-foreground duration-200 ease-linear hover:bg-primary/90 hover:text-primary-foreground active:bg-primary/90 active:text-primary-foreground" disabled={company?.status !== "active"} onClick={() => { close?.(); requestNewTask(); }}><CirclePlus />New task</SidebarMenuButton></div>
   );
 }
 
@@ -116,7 +117,7 @@ export function AppSidebar(): ReactElement {
   }, [context?.currentCompany?.id, context?.currentCompany?.status]);
   return (
     <Sidebar variant="inset" collapsible="offcanvas">
-      <SidebarHeader className="titlebar-drag titlebar-top"><div className="flex items-center gap-1"><div className="min-w-0 flex-1"><CompanySwitcher /></div>{context?.user ? <Button variant="ghost" size="icon-sm" nativeButton={false} render={<a href={settingsHref} onClick={close} aria-label="Settings" title="Settings" />}><Settings /></Button> : null}<span className="md:hidden"><SidebarTrigger aria-label="Close navigation" title="Close navigation" /></span></div></SidebarHeader>
+      <SidebarHeader className="titlebar-drag titlebar-top"><div className="flex h-8 items-center gap-1 pl-2 -mr-2"><img src={wordmark} alt="Suplex" className="h-4 w-auto invert dark:invert-0" /><button type="button" className={buttonVariants({ variant: "ghost", size: "icon-sm", className: "ml-auto" })} onClick={() => window.dispatchEvent(new Event("suplex:command-menu"))} aria-label="Search Suplex" title="Search Suplex (⌘K)"><Search /></button>{context?.user ? <Button variant="ghost" size="icon-sm" nativeButton={false} render={<a href={settingsHref} onClick={close} aria-label="Settings" title="Settings" />}><Settings /></Button> : null}<span className="md:hidden"><SidebarTrigger aria-label="Close navigation" title="Close navigation" /></span></div><CompanySwitcher /></SidebarHeader>
       <SidebarContent><MainNavigation close={close} /><RecentTasks close={close} /><SecondaryNavigation /></SidebarContent>
       <NavigationSearch close={close} />
       <SidebarFooter><UserMenu /></SidebarFooter>

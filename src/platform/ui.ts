@@ -12,7 +12,8 @@ function frontendEntry(mode: FrontendAssetMode): string {
 }
 
 function themeBootstrap(): string {
-  return `    <script>(() => { let saved = null; try { saved = localStorage.getItem("suplex.theme"); } catch {} const dark = saved === "dark" || saved !== "light" && matchMedia("(prefers-color-scheme: dark)").matches; const root = document.documentElement; root.classList.toggle("dark", dark); root.style.colorScheme = dark ? "dark" : "light"; document.querySelector('meta[name="theme-color"]').content = dark ? "#0a0a0a" : "#ffffff"; })();</script>`;
+  return `    <style>html { background: #ffffff; } html.dark { background: #0a0a0a; }</style>
+    <script>(() => { let saved = null; try { saved = localStorage.getItem("suplex.theme"); } catch {} const dark = saved === "dark" || saved !== "light" && matchMedia("(prefers-color-scheme: dark)").matches; const root = document.documentElement; root.classList.toggle("dark", dark); root.style.colorScheme = dark ? "dark" : "light"; document.querySelector('meta[name="theme-color"]').content = dark ? "#0a0a0a" : "#ffffff"; })();</script>`;
 }
 
 function escapeHtml(value: string): string {
@@ -35,16 +36,17 @@ ${themeBootstrap()}
     <title>Suplex · Host health</title>
 ${frontendHead(assetMode)}  </head>
   <body>
-    <div id="suplex-app">
+    <div id="suplex-app"></div>
+    <noscript>
       <main aria-label="Suplex host health">
         <p>Suplex · Host health</p>
         <h1>Host health</h1>
         <p>Reachable at ${escapeHtml(snapshot.reachableAddress)}</p>
         <p>${snapshot.ready ? "Everything is operational" : "Attention needed"}</p>
         <section aria-label="Health checks">${snapshot.checks.map(renderFallbackCheck).join("")}</section>
+        <p>Suplex host health requires JavaScript for live refresh.</p>
       </main>
-    </div>
-    <noscript>Suplex host health requires JavaScript for live refresh. The server-rendered checks above remain available.</noscript>
+    </noscript>
     <script>window.__SUPLEX_HEALTH__ = ${serialized};</script>
 ${frontendEntry(assetMode)}
   </body>

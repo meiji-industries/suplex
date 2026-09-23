@@ -10,6 +10,7 @@ import { Button } from "../ui/button.js";
 import { Alert, AlertDescription, AlertTitle } from "../ui/alert.js";
 import { Accordion, AccordionContent, AccordionItem, AccordionTrigger } from "../ui/accordion.js";
 import { Badge } from "../ui/badge.js";
+import { Progress, ProgressLabel, ProgressValue } from "../ui/progress.js";
 import { Collapsible } from "../ui/collapsible.js";
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle, DialogTrigger } from "../ui/dialog.js";
 import { StatusLight } from "./status-light.js";
@@ -136,11 +137,31 @@ export function SystemHealthAlert(): ReactElement | null {
   );
 }
 
-export function CheckStatusIndicator({ check, healthyLabel = "Healthy" }: { check: HealthCheck; healthyLabel?: string }): ReactElement {
+const diskSize = (bytes: number): string => bytes >= 1024 ** 4 ? `${(bytes / 1024 ** 4).toFixed(2)} TB` : `${(bytes / 1024 ** 3).toFixed(2)} GB`;
+
+/** The fact a healthy check proved, such as a version or account, so the badge says more than "Healthy". */
+export function healthyCheckLabel(check: HealthCheck): string {
+  const text = (key: string): string | undefined => typeof check.details[key] === "string" && check.details[key] !== "" ? check.details[key] : undefined;
+  const bytes = (key: string): string | undefined => typeof check.details[key] === "number" ? `${diskSize(check.details[key])} free` : undefined;
+  const verifiedAt = text("verifiedAt");
+  switch (check.id) {
+    case "database": return typeof check.details.appliedMigrations === "number" ? `${check.details.appliedMigrations} migrations` : "Healthy";
+    case "artifact-root": return bytes("freeBytes") ?? "Healthy";
+    case "disk-space": return bytes("freeBytes") ?? "Healthy";
+    case "git": case "pnpm": return text("version") ?? "Healthy";
+    case "herdr-readiness": return text("serverVersion") ?? "Healthy";
+    case "gh-auth": return text("logins") ?? "Healthy";
+    case "tailscale": return text("hostname") ?? "Healthy";
+    case "backup": return verifiedAt && verifiedAt !== "never" ? relativeTime(verifiedAt) : "Healthy";
+    default: return text("account") ?? "Signed in";
+  }
+}
+
+export function CheckStatusIndicator({ check, healthyLabel = healthyCheckLabel(check) }: { check: HealthCheck; healthyLabel?: string }): ReactElement {
   const healthy = check.status === "healthy";
   const degraded = check.status === "warning" || (!healthy && !isOwnedHealthCheck(check.id) && !isRequiredHealthCheck(check.id));
   return (
-    <Badge variant={healthy ? "secondary" : degraded ? "outline" : "destructive"}>
+    <Badge variant={healthy || degraded ? "secondary" : "destructive"} className={healthy ? "bg-emerald-500/10 text-emerald-700 dark:bg-emerald-500/20 dark:text-emerald-400" : degraded ? "bg-amber-500/10 text-amber-700 dark:bg-amber-500/20 dark:text-amber-400" : undefined}>
       {healthy ? <CheckCircle2 /> : degraded ? <CircleAlert /> : <XCircle />}
       {healthy ? healthyLabel : degraded ? "Degraded" : "Offline"}
     </Badge>
@@ -153,8 +174,38 @@ export function HealthTechnicalDetails({ check }: { check: HealthCheck }): React
   </AccordionContent></AccordionItem></Accordion>;
 }
 
+type DiskRoot = { label: string; path: string | number | boolean | undefined; free: number; total: number };
+
+function diskRoots(details: HealthCheck["details"]): DiskRoot[] {
+  return [
+    { label: "Worktree root", path: details.worktreeRoot, free: details.worktreeFreeBytes, total: details.worktreeTotalBytes },
+    { label: "Artifact root", path: details.artifactRoot, free: details.artifactFreeBytes, total: details.artifactTotalBytes },
+  ].flatMap((root) => typeof root.free === "number" && typeof root.total === "number" && root.total > 0 ? [{ ...root, free: root.free, total: root.total }] : []);
+}
+
+function DiskSpaceUsage({ roots, minFreeBytes }: { roots: DiskRoot[]; minFreeBytes: number }): ReactElement {
+  return (
+    <div className="grid gap-3">
+      {roots.map((root) => {
+        const low = minFreeBytes > 0 && root.free < minFreeBytes;
+        return (
+          <div key={root.label}>
+            <Progress value={((root.total - root.free) / root.total) * 100} className={low ? "[&_[data-slot=progress-indicator]]:bg-destructive" : "[&_[data-slot=progress-indicator]]:bg-emerald-600 dark:[&_[data-slot=progress-indicator]]:bg-emerald-500"}>
+              <ProgressLabel>{root.label}</ProgressLabel>
+              <ProgressValue>{() => `${diskSize(root.free)} free of ${diskSize(root.total)}`}</ProgressValue>
+            </Progress>
+            {typeof root.path === "string" ? <p className="mt-1 truncate text-xs text-muted-foreground">{root.path}</p> : null}
+            {low ? <p className="mt-1 text-xs text-destructive">{root.label}: {diskSize(root.free)} free; minimum is {diskSize(minFreeBytes)}</p> : null}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 export function HealthRow({ check, compact = false }: { check: HealthCheck; compact?: boolean }): ReactElement {
   const [copyState, setCopyState] = useState<"idle" | "copied" | "failed">("idle");
+  const disk = check.id === "disk-space" ? diskRoots(check.details) : [];
   useEffect(() => {
     if (copyState !== "copied") return;
     const timer = window.setTimeout(() => setCopyState("idle"), 1500);
@@ -170,9 +221,9 @@ export function HealthRow({ check, compact = false }: { check: HealthCheck; comp
       </Collapsible.Trigger>
       <Collapsible.Panel className="bg-muted/20 px-4 py-3 sm:px-11">
         {compact ? <p className="mb-1 text-xs font-medium">{healthCheckPurpose(check.id)}</p> : null}
-        <p className="mb-3 text-xs text-muted-foreground">{check.summary}</p>
+        {disk.length > 0 ? <DiskSpaceUsage roots={disk} minFreeBytes={typeof check.details.minFreeBytes === "number" ? check.details.minFreeBytes : 0} /> : <p className="mb-3 text-xs text-muted-foreground">{check.summary}</p>}
         {check.remedy === "Open the Tailscale app and sign in" ? <Alert><Network /><AlertTitle>Sign in to Tailscale on the host</AlertTitle><AlertDescription>Open the Tailscale app and sign in. Then check the host again.</AlertDescription></Alert> : check.remedy && check.remedyKind === "link" ? <div className="space-y-2 rounded-md border bg-background p-3"><p className="text-xs font-medium">Open the instructions</p><p className="text-xs text-muted-foreground">Install instructions are on the official page. Then check again.</p><Button size="xs" variant="outline" nativeButton={false} render={<a href={check.remedy} target="_blank" rel="noreferrer" />}>Open the instructions</Button></div> : check.remedy ? <div className="space-y-2 rounded-md border bg-background p-3"><p className="text-xs font-medium">Run on the Suplex host</p><p className="text-xs text-muted-foreground">Open the Terminal on the host. Run this command, then check again.</p><div className="flex flex-wrap items-center gap-2"><code className="min-w-0 flex-1 break-all text-xs">{check.remedy}</code><Button size="xs" variant="outline" aria-label="Copy the command" onClick={async () => { try { await navigator.clipboard.writeText(check.remedy ?? ""); setCopyState("copied"); } catch { setCopyState("failed"); } }}>{copyState === "copied" ? <Check /> : <Copy />}{copyState === "copied" ? "Copied" : "Copy"}</Button></div>{copyState === "failed" ? <p role="status" className="text-xs text-destructive">Suplex cannot copy the command. Select the command and copy it manually.</p> : null}</div> : null}
-        <HealthTechnicalDetails check={check} />
+        {disk.length === 0 ? <HealthTechnicalDetails check={check} /> : null}
       </Collapsible.Panel>
     </Collapsible.Root>
   );

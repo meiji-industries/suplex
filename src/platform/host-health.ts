@@ -146,21 +146,27 @@ export async function checkArtifactRoot(root: string): Promise<HealthCheck> {
   }
 }
 
-type FilesystemReader = (root: string) => Promise<{ bavail: number | bigint; bsize: number | bigint }>;
+type FilesystemReader = (root: string) => Promise<{ bavail: number | bigint; blocks: number | bigint; bsize: number | bigint }>;
 
 export function checkDiskSpace(config: SuplexConfig, database: SuplexDatabase, readFilesystem: FilesystemReader = statfs): () => Promise<HealthCheck> {
   return async () => {
     try {
       const minFreeBytes = readEnvironmentSettings(database).minFreeDiskGb * 1024 ** 3;
-      const filesystems = await Promise.all([readFilesystem(config.worktreeRoot), readFilesystem(config.artifactRoot)]);
-      const freeBytes = Math.min(...filesystems.map((filesystem) => Number(filesystem.bavail) * Number(filesystem.bsize)));
-      const healthy = minFreeBytes === 0 || freeBytes >= minFreeBytes;
+      const readBytes = async (root: string) => {
+        const filesystem = await readFilesystem(root);
+        return { free: Number(filesystem.bavail) * Number(filesystem.bsize), total: Number(filesystem.blocks) * Number(filesystem.bsize) };
+      };
+      const [worktree, artifact] = await Promise.all([readBytes(config.worktreeRoot), readBytes(config.artifactRoot)]);
+      const roots = [{ label: "Worktree root", freeBytes: worktree.free }, { label: "Artifact root", freeBytes: artifact.free }];
+      const freeBytes = Math.min(worktree.free, artifact.free);
+      const low = minFreeBytes === 0 ? [] : roots.filter((root) => root.freeBytes < minFreeBytes);
+      const gb = (bytes: number) => `${(bytes / 1024 ** 3).toFixed(2)} GB`;
       return {
         id: "disk-space",
         label: "Disk space",
-        status: healthy ? "healthy" : "warning",
-        summary: healthy ? "Free disk space meets the configured minimum" : `${(freeBytes / 1024 ** 3).toFixed(2)} GB free; minimum is ${(minFreeBytes / 1024 ** 3).toFixed(2)} GB`,
-        details: { freeBytes, minFreeBytes },
+        status: low.length === 0 ? "healthy" : "warning",
+        summary: low.length === 0 ? "Free disk space meets the configured minimum" : `${low.map((root) => `${root.label}: ${gb(root.freeBytes)} free`).join("; ")}; minimum is ${gb(minFreeBytes)}`,
+        details: { freeBytes, minFreeBytes, worktreeRoot: config.worktreeRoot, worktreeFreeBytes: worktree.free, worktreeTotalBytes: worktree.total, artifactRoot: config.artifactRoot, artifactFreeBytes: artifact.free, artifactTotalBytes: artifact.total },
       };
     } catch {
       return { id: "disk-space", label: "Disk space", status: "warning", summary: "Free disk space could not be read", details: {} };

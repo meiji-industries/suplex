@@ -84,10 +84,15 @@ test("disk space warns below its current configured minimum without affecting re
   const config = createTestConfig("/tmp/suplex-disk-space-test");
   const database = new SuplexDatabase(":memory:");
   updateEnvironmentSettings(database, { minFreeDiskGb: 5, defaultBudgetUsd: 15, defaultMaxTurns: 40 });
-  const diskSpace = checkDiskSpace(config, database, async (root) => ({ bavail: root === config.worktreeRoot ? 6 : 4, bsize: 1024 ** 3 }));
+  const diskSpace = checkDiskSpace(config, database, async (root) => ({ bavail: root === config.worktreeRoot ? 6 : 4, blocks: 10, bsize: 1024 ** 3 }));
   try {
     const disk = await diskSpace();
-    expect(disk).toMatchObject({ id: "disk-space", status: "warning", details: { freeBytes: 4 * 1024 ** 3, minFreeBytes: 5 * 1024 ** 3 } });
+    expect(disk).toMatchObject({
+      id: "disk-space",
+      status: "warning",
+      summary: "Artifact root: 4.00 GB free; minimum is 5.00 GB",
+      details: { freeBytes: 4 * 1024 ** 3, minFreeBytes: 5 * 1024 ** 3, worktreeRoot: config.worktreeRoot, worktreeFreeBytes: 6 * 1024 ** 3, worktreeTotalBytes: 10 * 1024 ** 3, artifactRoot: config.artifactRoot, artifactFreeBytes: 4 * 1024 ** 3, artifactTotalBytes: 10 * 1024 ** 3 },
+    });
     const snapshot = await inspectHostHealth(config, {
       database: async () => check("database", "healthy"),
       artifactRoot: async () => check("artifact-root", "healthy"),
@@ -102,7 +107,7 @@ test("disk space is healthy at or above the minimum, disabled at zero, and re-re
   const config = createTestConfig("/tmp/suplex-disk-space-settings-test");
   const database = new SuplexDatabase(":memory:");
   let freeGb = 5;
-  const diskSpace = checkDiskSpace(config, database, async () => ({ bavail: freeGb, bsize: 1024 ** 3 }));
+  const diskSpace = checkDiskSpace(config, database, async () => ({ bavail: freeGb, blocks: 10, bsize: 1024 ** 3 }));
   try {
     updateEnvironmentSettings(database, { minFreeDiskGb: 5, defaultBudgetUsd: 15, defaultMaxTurns: 40 });
     expect((await diskSpace()).status).toBe("healthy");

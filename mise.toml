@@ -7,6 +7,7 @@ postinstall = "pnpm install --frozen-lockfile"
 
 [settings]
 experimental = true
+activate_aggressive = true
 
 [env]
 NODE_ENV = "development"

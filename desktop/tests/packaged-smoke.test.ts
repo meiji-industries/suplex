@@ -33,8 +33,9 @@ describe("packaged Suplex.app", () => {
     expect(paths.some((path) => path.startsWith("dist/src/") && /server|database|coordination|runtimes/.test(path))).toBe(false);
     expect(paths.some((path) => path.includes("better-sqlite3"))).toBe(false);
   });
-  test("contains no Suplex backend, database, or better-sqlite3 binary", () => {
-    const result = spawnSync("grep", ["-rl", "-e", "better_sqlite3", "-e", "better-sqlite3", "-e", "suplex.sqlite", join(APP, "Contents")], { encoding: "utf8" });
+  // The backend ships only in Resources/runtime (see scripts/bundle-runtime.sh); _CodeSignature lists that folder's files by name.
+  test("keeps the Suplex backend, database, and better-sqlite3 inside Resources/runtime", () => {
+    const result = spawnSync("grep", ["-rl", "--exclude-dir=runtime", "--exclude-dir=_CodeSignature", "-e", "better_sqlite3", "-e", "better-sqlite3", "-e", "suplex.sqlite", join(APP, "Contents")], { encoding: "utf8" });
     expect(result.stdout.trim()).toBe("");
   });
   test.skipIf(SMOKE_URL === undefined)("loads from the exact configured origin", () => {

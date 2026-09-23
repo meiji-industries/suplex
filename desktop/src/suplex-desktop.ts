@@ -443,6 +443,8 @@ export async function runSuplexDesktop(input: { readonly argv: readonly string[]
   app.on("activate", () => { void open(); });
   app.setAboutPanelOptions({ applicationName: "Suplex", applicationVersion: app.getVersion() });
   await app.whenReady();
+  // Packaged builds get build/icon.png via electron-builder; `pnpm dev` would otherwise show the stock Electron icon.
+  if (!app.isPackaged) app.dock?.setIcon(join(__dirname, "../../build/icon.png"));
   app.configureWebAuthn({ touchID: { keychainAccessGroup: KEYCHAIN_ACCESS_GROUP, promptReason: "verify your identity on $1" } });
   rebuildMenu();
   void desktopUpdater.check(false);

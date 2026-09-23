@@ -4,6 +4,6 @@
 set -eu
 cd "$(dirname "$0")/.."
 pnpm dist
-dmg=$(ls release/Suplex-*-arm64.dmg)
+dmg="release/Suplex-$(node -p "require('./package.json').version")-arm64.dmg"
 xcrun notarytool submit "$dmg" --apple-id "$APPLE_ID" --password "$APPLE_APP_SPECIFIC_PASSWORD" --team-id "$APPLE_TEAM_ID" --wait
 xcrun stapler staple "$dmg"

@@ -16,7 +16,7 @@ import { RecentTasks } from "../features/tasks/recent-tasks.js";
 import { SystemHealthIndicator } from "../components/app/system-health.js";
 import { requestNewTask } from "./global-new-task-dialog.js";
 import { useSignOut } from "./server-state.js";
-import wordmark from "../assets/suplex-wordmark.png?inline";
+import wordmark from "../assets/suplex-wordmark.svg?inline";
 
 type NavItem = { href: string; label: string; icon: LucideIcon };
 

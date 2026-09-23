@@ -177,7 +177,7 @@ opens; quitting the app stops that server. Data, the env file, logs, and the
 install record live under `~/Library/Application Support/Suplex`; delete that
 directory to start over. If a Suplex from a checkout is already answering on
 the chosen port, the app uses it instead of starting its own and leaves it
-running on quit. **Connect to a Suplex instance** takes a URL, tests it, and
+running on quit. **Remote access** takes a URL, tests it, and
 installs nothing.
 
 `mise run desktop:dev` opens the app from source, `mise run desktop:dist`

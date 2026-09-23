@@ -103,7 +103,7 @@ for this checkout.
 ## Set up an installation
 
 The simplest install is the desktop app: open `Suplex-<version>-arm64.dmg`,
-drag Suplex to Applications, and choose **Run Suplex on this Mac**. The app
+drag Suplex to Applications, and choose **Run locally**. The app
 ships the server, its dependencies, and Node 26.7.0 inside the bundle. It
 checks the Mac, installs Apple's developer tools (for git) and Herdr if they
 are missing, prepares a database under `~/Library/Application Support/Suplex`,
@@ -170,14 +170,14 @@ carry no identity header and see the passkey sign-in instead.
 
 `desktop/` is a sandboxed Electron window that either runs Suplex on this Mac
 or connects to a Suplex host elsewhere. On first launch it offers those two
-choices. **Run Suplex on this Mac** runs the install stages from the bundled
+choices. **Run locally** runs the install stages from the bundled
 runtime under `Contents/Resources/runtime`, shows each stage's progress and
 log, and then starts the bundled server on `127.0.0.1` every time the app
 opens; quitting the app stops that server. Data, the env file, logs, and the
 install record live under `~/Library/Application Support/Suplex`; delete that
 directory to start over. If a Suplex from a checkout is already answering on
 the chosen port, the app uses it instead of starting its own and leaves it
-running on quit. **Connect to a Suplex host** takes a URL, tests it, and
+running on quit. **Connect to a Suplex instance** takes a URL, tests it, and
 installs nothing.
 
 `mise run desktop:dev` opens the app from source, `mise run desktop:dist`

@@ -182,7 +182,6 @@ export async function runSuplexDesktop(input: { readonly argv: readonly string[]
     current: progress.current,
     log: progress.log,
     failure: state.name === "failed" ? state.failure : null,
-    dataPath: app.getPath("userData").replace(app.getPath("home"), "~"),
   });
   const go = (event: BootEvent): void => {
     const previous = state;

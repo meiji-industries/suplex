@@ -26,12 +26,11 @@ describe("choice", () => {
   const html = page("choice.html");
   test("carries C4's copy with the local card preselected", () => {
     expect(html).toContain("<title>Set up Suplex</title>");
-    expect(html).toContain("<h1>Set up Suplex</h1>");
-    expect(html).toContain('<input type="radio" name="mode" value="local" checked><strong>Run Suplex on this Mac</strong>');
-    expect(html).toContain("<p>Installs Herdr and Apple's developer tools if they are missing, then starts a private Suplex on this computer. Works offline.</p>");
-    expect(html).toContain('<input type="radio" name="mode" value="remote"><strong>Connect to a Suplex host</strong>');
-    expect(html).toContain("<p>Use a Suplex that is already running elsewhere. Nothing is installed on this Mac.</p>");
-    expect(html).toContain("Data will live in ~/Library/Application Support/Suplex.");
+    expect(html).toContain('<h1><img src="wordmark.png" alt="Suplex"></h1>');
+    expect(html).toContain('<input type="radio" name="mode" value="local" checked><strong>Run locally</strong>');
+    expect(html).toContain("<p>Work directly in the app, or leave it running so other devices can connect remotely.</p>");
+    expect(html).toContain('<input type="radio" name="mode" value="remote"><strong>Connect to a Suplex instance</strong>');
+    expect(html).toContain("<p>All tasks run on that machine, best if you are running Suplex on a remote development server.</p>");
   });
   test("is two cards in the middle 67% of the window, stacked under 720 px", () => {
     expect(styles).toContain("main { width: 67vw; margin: 0 auto;");

@@ -11,19 +11,21 @@
   .card:has(input:checked) { border-color: #e5e5e5; background: #171717; }
   .card input { -webkit-appearance: none; appearance: none; position: absolute; opacity: 0; }
   .card strong { font-size: 13px; font-weight: 600; }
-  footer { margin-top: 24px; }
+  body { display: grid; place-items: center; }
+  h1 { display: flex; justify-content: center; margin-bottom: 32px; }
+  h1 img { width: 240px; height: auto; }
+  .actions { justify-content: center; }
   @media (max-width: 720px) { .cards { grid-template-columns: 1fr; } }
 </style>
 </head>
 <body>
 <main>
-  <h1>Set up Suplex</h1>
+  <h1><img src="wordmark.png" alt="Suplex"></h1>
   <form class="cards" id="modes">
-    <label class="card"><input type="radio" name="mode" value="local" checked><strong>Run Suplex on this Mac</strong><p>Installs Herdr and Apple's developer tools if they are missing, then starts a private Suplex on this computer. Works offline.</p></label>
-    <label class="card"><input type="radio" name="mode" value="remote"><strong>Connect to a Suplex host</strong><p>Use a Suplex that is already running elsewhere. Nothing is installed on this Mac.</p></label>
+    <label class="card"><input type="radio" name="mode" value="local" checked><strong>Run locally</strong><p>Work directly in the app, or leave it running so other devices can connect remotely.</p></label>
+    <label class="card"><input type="radio" name="mode" value="remote"><strong>Connect to a Suplex instance</strong><p>All tasks run on that machine, best if you are running Suplex on a remote development server.</p></label>
   </form>
   <div class="actions"><button class="primary" id="continue" type="button">Continue</button></div>
-  <footer><p id="data-path">Data will live in ~/Library/Application Support/Suplex.</p></footer>
 </main>
 <script>
   const modes = document.getElementById("modes");
@@ -32,9 +34,6 @@
   document.getElementById("continue").addEventListener("click", go);
   modes.addEventListener("submit", (event) => { event.preventDefault(); go(); });
   modes.addEventListener("dblclick", go);
-  window.suplexDesktop.snapshot().then((snapshot) => {
-    document.getElementById("data-path").textContent = `Data will live in ${snapshot.dataPath}.`;
-  });
 </script>
 </body>
 </html>

@@ -12,7 +12,15 @@ module.exports = {
   files: ["dist/src/**"],
   extraResources: [{ from: "runtime", to: "runtime" }],
   publish: feed ? [{ provider: "generic", url: feed, useMultipleRangeRequest: false }] : null,
-  dmg: { sign: true },
+  dmg: {
+    sign: true,
+    background: "build/background.png",
+    window: { width: 540, height: 380 },
+    contents: [
+      { x: 130, y: 220, type: "file" },
+      { x: 410, y: 220, type: "link", path: "/Applications" },
+    ],
+  },
   mac: {
     target: [{ target: "dmg", arch: ["arm64"] }, { target: "zip", arch: ["arm64"] }],
     hardenedRuntime: true,

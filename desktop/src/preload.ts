@@ -9,7 +9,6 @@ export type DesktopSnapshot = {
   readonly current: string | null;
   readonly log: readonly string[];
   readonly failure: BootFailure | null;
-  readonly dataPath: string;
 };
 
 export type DesktopMessage =

@@ -17,12 +17,9 @@ case "$base_url" in
   *) echo "SUPLEX_DESKTOP_UPDATE_URL must end in /$prefix/" >&2; exit 1 ;;
 esac
 
-zips=("$release_dir"/Suplex-*-arm64-mac.zip)
-dmgs=("$release_dir"/Suplex-*-arm64.dmg)
-(( ${#zips[@]} == 1 )) || { echo "Expected one arm64 ZIP in $release_dir" >&2; exit 1; }
-(( ${#dmgs[@]} == 1 )) || { echo "Expected one arm64 DMG in $release_dir" >&2; exit 1; }
-zip="${zips[0]}"
-dmg="${dmgs[0]}"
+version="$(node -p "require('./desktop/package.json').version")"
+zip="$release_dir/Suplex-$version-arm64-mac.zip"
+dmg="$release_dir/Suplex-$version-arm64.dmg"
 blockmap="$zip.blockmap"
 manifest="$release_dir/latest-mac.yml"
 app="$release_dir/mac-arm64/Suplex.app"

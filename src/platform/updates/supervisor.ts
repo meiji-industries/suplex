@@ -1,6 +1,6 @@
 // eslint-disable-next-line no-restricted-imports
 import { fork, spawn, type ChildProcess } from "node:child_process";
-import { watch, type FSWatcher } from "node:fs";
+import { realpathSync, watch, type FSWatcher } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { dirname, extname, join, resolve } from "node:path";
 import type { UpdateResponse, UpdateStatus } from "../../http/contracts/update.js";
@@ -446,6 +446,8 @@ async function main(): Promise<void> {
   await supervisor.run();
 }
 
-if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1])) {
+// Same test as src/shared/entrypoint.ts, inlined: `mise run dev` runs this file under plain `node`, which does not map a .js import to its .ts source.
+const entrypoint = (): boolean => { try { return realpathSync(fileURLToPath(import.meta.url)) === realpathSync(process.argv[1] ?? ""); } catch { return false; } };
+if (entrypoint()) {
   main().catch((error: unknown) => { process.stderr.write(`Suplex supervisor stopped: ${text(error)}\n`); process.exitCode = 1; });
 }

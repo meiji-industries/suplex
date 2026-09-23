@@ -1,10 +1,11 @@
 import { randomUUID } from "node:crypto";
 import { readFile, rename, writeFile } from "node:fs/promises";
-import { fileURLToPath } from "node:url";
+
 import { createInterface, type Interface } from "node:readline";
 import { z } from "zod";
 import { AdvisorBridgeBindingSchema, advisorReportInputSchema, validateAdvisorSubmission, type AdvisorResult, type AdvisorRole } from "./advisor-report.js";
 import { ADVISOR_BRIDGE_BINDING_ENV, ADVISOR_BRIDGE_RESULT_ENV, ADVISOR_BRIDGE_TOKEN_ENV, authenticateBridgeToken, bridgeBindingPath } from "./bridge-auth.js";
+import { isEntrypoint } from "../shared/entrypoint.js";
 
 const JsonRpcEnvelopeSchema = z.object({ jsonrpc: z.literal("2.0"), id: z.union([z.string(), z.number()]).optional(), method: z.string(), params: z.unknown().optional() }).strict();
 type Writable = { write(chunk: string): boolean };
@@ -71,7 +72,7 @@ async function runAdvisorReportBridge(): Promise<void> {
   startAdvisorReportBridgeTransport({ role: binding.role, stdin: process.stdin, stdout: process.stdout, ...(capture ? { capture } : {}) });
 }
 
-if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+if (isEntrypoint(import.meta.url)) {
   void runAdvisorReportBridge().catch((error) => {
     process.stderr.write(`${error instanceof Error ? error.message : "Advisor report bridge failed"}\n`);
     process.exitCode = 1;

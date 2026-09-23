@@ -2,7 +2,7 @@ import { spawn as spawnChild, type ChildProcess } from "node:child_process";
 import { createWriteStream, type WriteStream } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import { join } from "node:path";
-import { runtimeEnvironment, runtimePaths, DEFAULT_PORT } from "./boot";
+import { runtimeEnvironment, DEFAULT_PORT, type RuntimePaths } from "./boot";
 
 export type InstallStage = { readonly name: string; readonly title: string };
 
@@ -36,14 +36,14 @@ function lastJsonLine(stdout: string): Frame | null {
 
 /** Runs C3's stages, one child process each, and stops on the first failure. */
 export function createInstaller(options: {
-  readonly runtimeRoot: string;
+  readonly runtime: RuntimePaths;
   readonly userData: string;
   readonly base: NodeJS.ProcessEnv;
   readonly port?: number;
   readonly spawn?: (command: string, args: readonly string[], options: { cwd: string; env: Record<string, string>; detached: boolean; stdio: ["ignore", "pipe", "pipe"] }) => ChildProcess;
 }): Installer {
   const spawn = options.spawn ?? spawnChild;
-  const paths = runtimePaths(options.runtimeRoot);
+  const paths = options.runtime;
   let active: ChildProcess | undefined;
   let cancelled = false;
 

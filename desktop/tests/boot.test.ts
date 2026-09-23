@@ -9,7 +9,6 @@ import {
   resolveBoot,
   runtimeEnvironment,
   runtimePaths,
-  runtimeRoot,
   runtimeStamp,
   writeInstallRecord,
   type BootFailure,
@@ -70,15 +69,14 @@ describe("transitions", () => {
 });
 
 describe("runtime location", () => {
-  test("the environment override wins over the bundle's resources", () => {
-    expect(runtimeRoot({ SUPLEX_DESKTOP_RUNTIME_ROOT: FIXTURE }, "/Applications/Suplex.app/Contents/Resources")).toBe(FIXTURE);
-    expect(runtimeRoot({}, "/Applications/Suplex.app/Contents/Resources")).toBe("/Applications/Suplex.app/Contents/Resources/runtime");
+  test("the entry points are C2's, under the bundle's resources", () => {
+    expect(runtimePaths({}, "/r")).toEqual({ node: "/r/runtime/node/bin/node", app: "/r/runtime/app", cli: "/r/runtime/app/dist/src/cli.js", supervisor: "/r/runtime/app/dist/src/platform/updates/supervisor.js" });
   });
-  test("the entry points are C2's", () => {
-    expect(runtimePaths("/r")).toEqual({ node: "/r/node/bin/node", app: "/r/app", cli: "/r/app/dist/src/cli.js", supervisor: "/r/app/dist/src/platform/updates/supervisor.js" });
+  test("the environment points dev at another node and checkout", () => {
+    expect(runtimePaths({ SUPLEX_DESKTOP_NODE: "/n/bin/node", SUPLEX_DESKTOP_APP: "/checkout" }, "/r")).toMatchObject({ node: "/n/bin/node", app: "/checkout", cli: "/checkout/dist/src/cli.js" });
   });
   test("the stamp is the packaged app's version, and absent when there is no runtime", async () => {
-    expect(await runtimeStamp(FIXTURE)).toBe("0.0.0-fixture");
+    expect(await runtimeStamp(join(FIXTURE, "app"))).toBe("0.0.0-fixture");
     expect(await runtimeStamp(join(FIXTURE, "missing"))).toBeNull();
   });
 });

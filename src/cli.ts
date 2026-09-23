@@ -1,7 +1,6 @@
 #!/usr/bin/env node
 import { join } from "node:path";
 import { rm, stat, writeFile } from "node:fs/promises";
-import { fileURLToPath } from "node:url";
 
 import { loadConfig } from "./platform/config.js";
 import { AuthService } from "./identity/auth.js";
@@ -17,6 +16,7 @@ import { formatTaskDiagnostic, inspectTask, writeTaskBundle } from "./platform/d
 import { runLogViewer } from "./platform/log-viewer.js";
 import { runCommand } from "./platform/command-runner.js";
 import { SuplexMcpBridge, readSuplexMcpBridgeSettings, startSuplexMcpTransport } from "./integrations/suplex/mcp-bridge.js";
+import { isEntrypoint } from "./shared/entrypoint.js";
 
 const command = process.argv[2] === "--" ? (process.argv[3] ?? "help") : (process.argv[2] ?? "help");
 const commandArgs = process.argv.slice(process.argv[2] === "--" ? 4 : 3);
@@ -197,7 +197,7 @@ async function main(): Promise<void> {
   throw new Error(`Unknown Suplex command: ${command}`);
 }
 
-if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+if (isEntrypoint(import.meta.url)) {
   main().catch((error: unknown) => {
     new StructuredLogger().error("Suplex command failed", {}, { error: error instanceof Error ? error.message : "unknown error" });
     process.exitCode = 1;

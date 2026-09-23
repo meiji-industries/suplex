@@ -5,6 +5,7 @@ import { setTimeout as delay } from "node:timers/promises";
 
 import { TASK_BRIDGE_ENVIRONMENT_KEYS } from "../../coordination/bridge-auth.js";
 import { CodexEventSchema, type CodexEvent } from "./transcript.js";
+import { isEntrypoint } from "../../shared/entrypoint.js";
 
 const TURN_OUTPUT = /^turn-.+\.(?:jsonl|stderr\.log)$/;
 const WAITING_LABEL = "Waiting for Codex output...\n";
@@ -174,7 +175,7 @@ async function main(): Promise<void> {
   await runCodexDisplay(runtimeDirectory, { signal: controller.signal });
 }
 
-if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+if (isEntrypoint(import.meta.url)) {
   main().catch((error: unknown) => {
     process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
     process.exitCode = 1;

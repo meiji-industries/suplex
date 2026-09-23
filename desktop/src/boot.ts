@@ -77,14 +77,13 @@ export function resolveBoot(input: { readonly record: InstallRecord | null; read
   return { name: "bootstrap-needed" };
 }
 
-export function runtimeRoot(environment: NodeJS.ProcessEnv, resourcesPath: string): string {
-  return environment.SUPLEX_DESKTOP_RUNTIME_ROOT ?? join(resourcesPath, "runtime");
-}
+export type RuntimePaths = { readonly node: string; readonly app: string; readonly cli: string; readonly supervisor: string };
 
-export function runtimePaths(root: string): { readonly node: string; readonly app: string; readonly cli: string; readonly supervisor: string } {
-  const app = join(root, "app");
+/** Packaged builds carry the runtime in Resources/runtime. The overrides point dev at the pinned node and the checkout, with no symlinked layout in between. */
+export function runtimePaths(environment: NodeJS.ProcessEnv, resourcesPath: string): RuntimePaths {
+  const app = environment.SUPLEX_DESKTOP_APP ?? join(resourcesPath, "runtime", "app");
   return {
-    node: join(root, "node", "bin", "node"),
+    node: environment.SUPLEX_DESKTOP_NODE ?? join(resourcesPath, "runtime", "node", "bin", "node"),
     app,
     cli: join(app, "dist", "src", "cli.js"),
     supervisor: join(app, "dist", "src", "platform", "updates", "supervisor.js"),
@@ -92,9 +91,9 @@ export function runtimePaths(root: string): { readonly node: string; readonly ap
 }
 
 /** Identifies the runtime shipped in this bundle, so a desktop update reruns the install stages. */
-export async function runtimeStamp(root: string): Promise<string | null> {
+export async function runtimeStamp(app: string): Promise<string | null> {
   try {
-    const manifest = JSON.parse(await readFile(join(runtimePaths(root).app, "package.json"), "utf8")) as { version?: unknown };
+    const manifest = JSON.parse(await readFile(join(app, "package.json"), "utf8")) as { version?: unknown };
     return typeof manifest.version === "string" ? manifest.version : null;
   } catch {
     return null;

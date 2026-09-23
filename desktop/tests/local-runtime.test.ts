@@ -5,9 +5,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { PassThrough } from "node:stream";
 import { beforeEach, expect, test, vi } from "vitest";
+import { runtimePaths } from "../src/boot";
 import { createLocalRuntime, freePort, type LocalRuntimePorts } from "../src/local-runtime";
 
-const FIXTURE = join(__dirname, "fixtures", "runtime");
+const FIXTURE = runtimePaths({}, join(__dirname, "fixtures"));
 
 class FakeChild extends EventEmitter {
   pid = 4242;
@@ -23,7 +24,7 @@ const healthy = vi.fn(async () => false);
 
 const subject = (ports: Partial<LocalRuntimePorts> = {}, port = 4111): ReturnType<typeof createLocalRuntime> =>
   createLocalRuntime({
-    runtimeRoot: FIXTURE,
+    runtime: FIXTURE,
     userData: mkdtempSync(join(tmpdir(), "suplex-desktop-local-")),
     port,
     base: { HOME: "/Users/ada", USER: "ada", TMPDIR: "/tmp/x" },
@@ -48,12 +49,12 @@ test("a server already answering on the port is adopted, never spawned and never
 test("the supervisor is spawned detached with C2's entry point, cwd, and environment", async () => {
   healthy.mockResolvedValueOnce(false).mockResolvedValue(true);
   const userData = mkdtempSync(join(tmpdir(), "suplex-desktop-local-"));
-  const runtime = createLocalRuntime({ runtimeRoot: FIXTURE, userData, port: 4111, base: { HOME: "/Users/ada" }, ports: { spawn, kill, wait, healthy, freePort: async (preferred) => preferred } });
+  const runtime = createLocalRuntime({ runtime: FIXTURE, userData, port: 4111, base: { HOME: "/Users/ada" }, ports: { spawn, kill, wait, healthy, freePort: async (preferred) => preferred } });
   expect(await runtime.start()).toEqual({ port: 4111, adopted: false });
   expect(spawn).toHaveBeenCalledWith(
-    join(FIXTURE, "node", "bin", "node"),
-    [join(FIXTURE, "app", "dist", "src", "platform", "updates", "supervisor.js")],
-    expect.objectContaining({ cwd: join(FIXTURE, "app"), detached: true, stdio: ["ignore", "pipe", "pipe"] }),
+    FIXTURE.node,
+    [FIXTURE.supervisor],
+    expect.objectContaining({ cwd: FIXTURE.app, detached: true, stdio: ["ignore", "pipe", "pipe"] }),
   );
   expect(spawn.mock.lastCall?.[2].env).toMatchObject({ SUPLEX_PACKAGED: "1", SUPLEX_ACCESS_MODE: "local", SUPLEX_BIND_ADDRESS: "127.0.0.1", SUPLEX_PORT: "4111", SUPLEX_DATA_ROOT: join(userData, "data") });
   expect(wait).toHaveBeenCalledWith(500);

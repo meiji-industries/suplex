@@ -3,7 +3,7 @@ import { createWriteStream } from "node:fs";
 import { mkdir } from "node:fs/promises";
 import { createServer } from "node:net";
 import { join } from "node:path";
-import { runtimeEnvironment, runtimePaths } from "./boot";
+import { runtimeEnvironment, type RuntimePaths } from "./boot";
 
 const POLL_MS = 500;
 const READY_TIMEOUT_MS = 60_000;
@@ -57,7 +57,7 @@ export async function freePort(preferred: number): Promise<number> {
  * signalled; a server we did not start (a dev checkout on the port) is never signalled at all.
  */
 export function createLocalRuntime(options: {
-  readonly runtimeRoot: string;
+  readonly runtime: RuntimePaths;
   readonly userData: string;
   readonly port: number;
   readonly base: NodeJS.ProcessEnv;
@@ -85,7 +85,7 @@ export function createLocalRuntime(options: {
     async start(): Promise<LocalServer> {
       if (await probe(origin(options.port))) return { port: options.port, adopted: true };
       const port = await choosePort(options.port);
-      const paths = runtimePaths(options.runtimeRoot);
+      const paths = options.runtime;
       await mkdir(join(options.userData, "logs"), { recursive: true });
       const log = createWriteStream(join(options.userData, "logs", "server.log"), { flags: "a" });
       exited = null;

@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { classifyNavigation, parseSuplexTarget, resolveSuplexTarget, type SuplexTarget } from "./suplex-target";
 import { forgetTarget, readTargets, rememberTarget, type TargetRegistry } from "./target-store";
 import { createDesktopUpdater } from "./desktop-updater";
-import { DEFAULT_PORT, next, readInstallRecord, resolveBoot, runtimeRoot, runtimeStamp, writeInstallRecord, type BootEvent, type BootState } from "./boot";
+import { DEFAULT_PORT, next, readInstallRecord, resolveBoot, runtimePaths, runtimeStamp, writeInstallRecord, type BootEvent, type BootState } from "./boot";
 import { createInstaller, type InstallEvent, type InstallStage, type Installer } from "./installer";
 import { createLocalRuntime, healthy, type LocalRuntime } from "./local-runtime";
 import type { DesktopMessage, DesktopSnapshot } from "./preload";
@@ -100,6 +100,9 @@ export function retryPage(origin: string): string {
  * or attaches to a Suplex origin somebody else runs, which it never starts, stops, or signals.
  */
 export async function runSuplexDesktop(input: { readonly argv: readonly string[]; readonly environment: NodeJS.ProcessEnv }): Promise<void> {
+  // `pnpm dev` sets these so a dev run never shares the installed app's data, single-instance lock, or server port.
+  if (input.environment.SUPLEX_DESKTOP_USER_DATA) app.setPath("userData", input.environment.SUPLEX_DESKTOP_USER_DATA);
+  const defaultPort = Number(input.environment.SUPLEX_DESKTOP_PORT) || DEFAULT_PORT;
   if (!app.requestSingleInstanceLock()) {
     app.exit(0); // the running Suplex.app received our argv through the lock; leave at once, no teardown to run
     return;
@@ -112,7 +115,7 @@ export async function runSuplexDesktop(input: { readonly argv: readonly string[]
   const stateFile = (): string => join(app.getPath("userData"), "window-state.json");
   const installFile = (): string => join(app.getPath("userData"), "install.json");
   const logsDirectory = (): string => join(app.getPath("userData"), "logs");
-  const runtimeDirectory = runtimeRoot(input.environment, typeof process.resourcesPath === "string" ? process.resourcesPath : "");
+  const runtime = runtimePaths(input.environment, typeof process.resourcesPath === "string" ? process.resourcesPath : "");
   let window: BrowserWindow | undefined;
   let origin: string | null = null;
   let registry: TargetRegistry = { current: null, targets: [] };
@@ -202,17 +205,17 @@ export async function runSuplexDesktop(input: { readonly argv: readonly string[]
     progress.current = null;
     progress.log = [];
     const record = await readInstallRecord(installFile());
-    installer = createInstaller({ runtimeRoot: runtimeDirectory, userData: app.getPath("userData"), base: input.environment, port: record?.port ?? DEFAULT_PORT });
+    installer = createInstaller({ runtime, userData: app.getPath("userData"), base: input.environment, port: record?.port ?? defaultPort });
     const outcome = await installer.run(from, emit);
     if (outcome === "cancelled") { state = { name: "choosing" }; await enter(); return; }
     if (outcome !== "complete") return;
-    await writeInstallRecord(installFile(), { completedAt: new Date().toISOString(), runtimeStamp: (await runtimeStamp(runtimeDirectory)) ?? "", port: record?.port ?? DEFAULT_PORT });
+    await writeInstallRecord(installFile(), { completedAt: new Date().toISOString(), runtimeStamp: (await runtimeStamp(runtime.app)) ?? "", port: record?.port ?? defaultPort });
     go({ name: "installed" });
   };
   const startLocal = async (): Promise<void> => {
     const record = await readInstallRecord(installFile());
-    const port = record?.port ?? DEFAULT_PORT;
-    server = createLocalRuntime({ runtimeRoot: runtimeDirectory, userData: app.getPath("userData"), port, base: input.environment });
+    const port = record?.port ?? defaultPort;
+    server = createLocalRuntime({ runtime, userData: app.getPath("userData"), port, base: input.environment });
     try {
       const started = await server.start();
       adopted = started.adopted;
@@ -385,7 +388,7 @@ export async function runSuplexDesktop(input: { readonly argv: readonly string[]
     } else if (probe) {
       await showConnectPage(win);
     } else {
-      state = resolveBoot({ record: await readInstallRecord(installFile()), stamp: await runtimeStamp(runtimeDirectory), remote: registry.current?.url ?? null });
+      state = resolveBoot({ record: await readInstallRecord(installFile()), stamp: await runtimeStamp(runtime.app), remote: registry.current?.url ?? null });
       await enter();
     }
     if (probe) await runProbe(win);

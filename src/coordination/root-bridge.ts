@@ -1,7 +1,7 @@
 import type { WorkerReplacementRequest } from "./worker-replacement-contracts.js";
 import type { Interface } from "node:readline";
 import { readFile } from "node:fs/promises";
-import { fileURLToPath } from "node:url";
+
 import { dirname, join } from "node:path";
 
 import {
@@ -28,6 +28,7 @@ import { startMcpStdioTransport } from "../shared/mcp-stdio.js";
 import { ROOT_BRIDGE_BINDING_ENV, ROOT_BRIDGE_TOKEN_ENV, authenticateBridgeToken, bridgeBindingPath } from "./bridge-auth.js";
 import { runWithSystemEvents, systemEvent, withEventCause, type EventSink } from "../platform/system-events.js";
 import { createSystemEventProducer } from "../platform/system-event-transport.js";
+import { isEntrypoint } from "../shared/entrypoint.js";
 
 export class RootBridgeFailure extends Error {
   constructor(readonly code: "invalid_request" | "root_identity_mismatch" | "task_tool_busy", message: string) {
@@ -143,7 +144,7 @@ async function runRootBridge(): Promise<void> {
   startRootBridgeTransport({ bridge: new RootBridge(config.root, controller), stdin: process.stdin, stdout: process.stdout, systemEvents: createSystemEventProducer(databasePath), taskId: config.root.taskId });
 }
 
-if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+if (isEntrypoint(import.meta.url)) {
   void runRootBridge().catch((error) => {
     process.stderr.write(`${error instanceof Error ? error.message : "Coordinator bridge failed"}\n`);
     process.exitCode = 1;

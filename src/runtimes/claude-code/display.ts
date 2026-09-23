@@ -6,6 +6,7 @@ import { stripVTControlCharacters } from "node:util";
 import { z } from "zod";
 
 import { TASK_BRIDGE_ENVIRONMENT_KEYS } from "../../coordination/bridge-auth.js";
+import { isEntrypoint } from "../../shared/entrypoint.js";
 
 const TURN_OUTPUT = /^(turn-.+)\.(jsonl|stderr\.log)$/;
 const WAITING_LABEL = "No Claude output yet.\n";
@@ -431,7 +432,7 @@ async function main(): Promise<void> {
   await runClaudeDisplay(runtimeDirectory, { signal: controller.signal });
 }
 
-if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+if (isEntrypoint(import.meta.url)) {
   main().catch((error: unknown) => {
     process.stderr.write(`${error instanceof Error ? error.message : String(error)}\n`);
     process.exitCode = 1;

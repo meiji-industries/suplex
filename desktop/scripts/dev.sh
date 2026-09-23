@@ -16,6 +16,16 @@ if [ ! -d "$app" ] || [ "$(cat .electron-dev/source 2>/dev/null)" != "$stock" ];
   echo "$stock" > .electron-dev/source
 fi
 
+# Packaged builds carry the runtime in Contents/Resources/runtime. Dev runs the checkout with the pinned
+# node instead (see runtimePaths in src/boot.ts), so "Run locally" runs the current server code, and keeps
+# its data, single-instance lock, and port apart from the installed Suplex.app.
+node_bin="$(mise where node)/bin/node"  # the pinned node, as scripts/bundle-runtime.sh bundles
+(cd .. && PATH="$(dirname "$node_bin"):$PATH" pnpm build)
+export SUPLEX_DESKTOP_NODE="${SUPLEX_DESKTOP_NODE:-$node_bin}"
+export SUPLEX_DESKTOP_APP="${SUPLEX_DESKTOP_APP:-$(cd .. && pwd)}"
+export SUPLEX_DESKTOP_USER_DATA="${SUPLEX_DESKTOP_USER_DATA:-$HOME/Library/Application Support/Suplex Dev}"
+export SUPLEX_DESKTOP_PORT="${SUPLEX_DESKTOP_PORT:-4121}"
+
 pnpm build
 trap 'kill 0' EXIT INT TERM
 tsc -p tsconfig.json --watch --preserveWatchOutput &

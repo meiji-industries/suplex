@@ -1,7 +1,6 @@
 import { mkdir } from "node:fs/promises";
 import { randomUUID } from "node:crypto";
 import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
 
 import type { FastifyInstance } from "fastify";
 
@@ -31,6 +30,7 @@ import { createGithubReleasePort } from "./integrations/github/delivery.js";
 import { AnalyticsHistoryReader, TaskAnalyticsCollector } from "./tasks/analytics/collector.js";
 import { createSystemEventWriter, runWithSystemEvents, systemEvent, systemLogDirectory, type EventSink } from "./platform/system-events.js";
 import { startSystemEventReceiver } from "./platform/system-event-transport.js";
+import { isEntrypoint } from "./shared/entrypoint.js";
 
 export interface SuplexServer {
   app: FastifyInstance;
@@ -172,7 +172,7 @@ export async function startServer(config: SuplexConfig = loadConfig()): Promise<
   }
 }
 
-if (process.argv[1] && fileURLToPath(import.meta.url) === process.argv[1]) {
+if (isEntrypoint(import.meta.url)) {
   startServer().catch((error: unknown) => {
     new StructuredLogger().error("Suplex API stopped", {}, { error: error instanceof Error ? error.message : "unknown error" });
     process.exitCode = 1;

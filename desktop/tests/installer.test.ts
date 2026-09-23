@@ -2,9 +2,10 @@ import { mkdirSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { expect, test, vi } from "vitest";
+import { runtimePaths } from "../src/boot";
 import { createInstaller, type InstallEvent } from "../src/installer";
 
-const FIXTURE = join(__dirname, "fixtures", "runtime");
+const FIXTURE = runtimePaths({}, join(__dirname, "fixtures"));
 
 function workspace(settings?: Record<string, unknown>): string {
   const userData = mkdtempSync(join(tmpdir(), "suplex-desktop-install-"));
@@ -14,7 +15,7 @@ function workspace(settings?: Record<string, unknown>): string {
 }
 
 const installer = (userData: string): ReturnType<typeof createInstaller> =>
-  createInstaller({ runtimeRoot: FIXTURE, userData, base: { HOME: process.env.HOME ?? "", USER: process.env.USER ?? "", TMPDIR: process.env.TMPDIR ?? "" } });
+  createInstaller({ runtime: FIXTURE, userData, base: { HOME: process.env.HOME ?? "", USER: process.env.USER ?? "", TMPDIR: process.env.TMPDIR ?? "" } });
 
 const collect = (): { events: InstallEvent[]; emit: (event: InstallEvent) => void } => {
   const events: InstallEvent[] = [];
@@ -79,7 +80,7 @@ test("Cancel kills the running stage's process group", async () => {
 
 test("a runtime that is not there fails before any stage runs", async () => {
   const { events, emit } = collect();
-  const driver = createInstaller({ runtimeRoot: join(FIXTURE, "missing"), userData: workspace(), base: {} });
+  const driver = createInstaller({ runtime: runtimePaths({}, join(__dirname, "fixtures", "missing")), userData: workspace(), base: {} });
   expect(await driver.run(null, emit)).toBe("failed");
   expect(events.at(-1)).toMatchObject({ name: "failed", title: "Read the install steps" });
 });

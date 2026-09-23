@@ -283,7 +283,7 @@ describe("local install", () => {
     writeFileSync(join(fake.userData, "data", "fixture.json"), JSON.stringify(value));
   };
   const start = async (): Promise<FakeWindow> => {
-    await runSuplexDesktop({ argv: [], environment: { SUPLEX_DESKTOP_RUNTIME_ROOT: FIXTURE, HOME: process.env.HOME, USER: process.env.USER } });
+    await runSuplexDesktop({ argv: [], environment: { SUPLEX_DESKTOP_NODE: join(FIXTURE, "node", "bin", "node"), SUPLEX_DESKTOP_APP: join(FIXTURE, "app"), HOME: process.env.HOME, USER: process.env.USER } });
     return fake.FakeWindow.all[0]!;
   };
   const onPage = async (win: FakeWindow, page: string, timeout = 20_000): Promise<void> => {

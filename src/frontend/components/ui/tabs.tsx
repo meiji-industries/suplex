@@ -2,6 +2,7 @@
 
 import { Tabs as TabsPrimitive } from "@base-ui/react/tabs"
 import { cva, type VariantProps } from "class-variance-authority"
+import { createContext, useContext } from "react"
 
 import { cn } from "../../lib/utils.js"
 
@@ -30,6 +31,7 @@ const tabsListVariants = cva(
       variant: {
         default: "bg-muted",
         line: "gap-1 bg-transparent",
+        pill: "relative isolate rounded-full border bg-background",
       },
     },
     defaultVariants: {
@@ -38,22 +40,50 @@ const tabsListVariants = cva(
   }
 )
 
+const TabsListVariantContext = createContext<
+  VariantProps<typeof tabsListVariants>["variant"]
+>("default")
+
 function TabsList({
   className,
   variant = "default",
+  children,
   ...props
 }: TabsPrimitive.List.Props & VariantProps<typeof tabsListVariants>) {
   return (
-    <TabsPrimitive.List
-      data-slot="tabs-list"
-      data-variant={variant}
-      className={cn(tabsListVariants({ variant }), className)}
-      {...props}
-    />
+    <TabsListVariantContext.Provider value={variant}>
+      <TabsPrimitive.List
+        data-slot="tabs-list"
+        data-variant={variant}
+        className={cn(tabsListVariants({ variant }), className)}
+        {...props}
+      >
+        {variant === "pill" ? (
+          <TabsPrimitive.Indicator
+            data-slot="tabs-indicator"
+            className="absolute top-(--active-tab-top) left-(--active-tab-left) -z-10 h-(--active-tab-height) w-(--active-tab-width) rounded-full border bg-muted transition-[left,width] duration-200 ease-out motion-reduce:transition-none"
+          />
+        ) : null}
+        {children}
+      </TabsPrimitive.List>
+    </TabsListVariantContext.Provider>
   )
 }
 
 function TabsTrigger({ className, ...props }: TabsPrimitive.Tab.Props) {
+  const variant = useContext(TabsListVariantContext)
+  if (variant === "pill") {
+    return (
+      <TabsPrimitive.Tab
+        data-slot="tabs-trigger"
+        className={cn(
+          "relative inline-flex h-full flex-1 items-center justify-center gap-1.5 rounded-full border border-transparent px-3 py-1 text-sm font-medium whitespace-nowrap text-muted-foreground transition-colors hover:text-foreground focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50 focus-visible:outline-1 focus-visible:outline-ring disabled:pointer-events-none disabled:opacity-50 aria-disabled:pointer-events-none aria-disabled:opacity-50 data-active:text-foreground [&_svg]:pointer-events-none [&_svg]:shrink-0 [&_svg:not([class*='size-'])]:size-4",
+          className
+        )}
+        {...props}
+      />
+    )
+  }
   return (
     <TabsPrimitive.Tab
       data-slot="tabs-trigger"

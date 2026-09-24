@@ -60,7 +60,7 @@ export function ExternalAgentPairingCodeDialog({
             </Field>
             <button
               type="button"
-              className="relative w-full max-w-full cursor-pointer rounded-md border bg-muted/50 p-3 pr-10 text-left font-mono text-xs"
+              className="relative w-full max-w-full cursor-pointer rounded-control border bg-muted/50 p-3 pr-10 text-left font-mono text-xs"
               aria-label="Copy setup instructions"
               onClick={() => void onCopyInstructions()}
             >
@@ -91,7 +91,7 @@ export function ExternalAgentPairingCodeDialog({
             </div>
             <button
               type="button"
-              className="relative w-full max-w-full cursor-pointer rounded-md border bg-muted/50 p-3 pr-10 text-left font-mono text-xs"
+              className="relative w-full max-w-full cursor-pointer rounded-control border bg-muted/50 p-3 pr-10 text-left font-mono text-xs"
               aria-label="Copy pairing code"
               onClick={() => void onCopyCode()}
             >

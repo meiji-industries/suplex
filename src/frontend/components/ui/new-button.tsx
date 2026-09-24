@@ -7,7 +7,7 @@ function NewButton({ children, ...props }: Omit<React.ComponentProps<typeof Butt
   return (
     <Button
       {...props}
-      className="gap-2 rounded-md bg-primary p-2 font-normal text-primary-foreground duration-200 ease-linear hover:bg-primary/90 hover:text-primary-foreground active:bg-primary/90 active:text-primary-foreground"
+      className="gap-2 rounded-control bg-primary p-2 font-normal text-primary-foreground duration-200 ease-linear hover:bg-primary/90 hover:text-primary-foreground active:bg-primary/90 active:text-primary-foreground"
       size="sm"
     >
       <CirclePlus />

@@ -17,7 +17,7 @@ test("admin sees Company, AI, and System groups in order", () => {
   expect(titles(groups)).toEqual(["Company", "AI", "System"]);
   expect(items(groups, "Company")).toEqual(["Profile", "Projects", "Templates", "Workspace", "Workflows", "Triggers", "Onboarding"]);
   expect(items(groups, "AI")).toEqual(["Agents", "Models", "Providers"]);
-  expect(items(groups, "System")).toEqual(["Users", "Companies", "Passkeys", "Invitations", "Environment", "Host health"]);
+  expect(items(groups, "System")).toEqual(["Users", "Companies", "Passkeys", "Invitations", "Environment", "Backups", "Host health"]);
 });
 
 test("member sees Profile, Projects, Templates, and Host health only", () => {
@@ -50,6 +50,7 @@ test("items keep their existing hrefs", () => {
     Passkeys: "/admin/passkeys?company=company-1",
     Invitations: "/admin/invitations?company=company-1",
     Environment: "/admin/environment?company=company-1",
+    Backups: "/admin/backups?company=company-1",
     "Host health": "/health?company=company-1",
   });
 });

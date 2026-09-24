@@ -1,4 +1,4 @@
-import { Building2, Cpu, FileText, FolderGit2, HardDrive, KeyRound, ListChecks, Mail, Plug, ShieldCheck, UserRound, Users, Webhook, Workflow, type LucideIcon } from "lucide-react";
+import { Archive, Building2, Cpu, FileText, FolderGit2, HardDrive, KeyRound, ListChecks, Mail, Plug, ShieldCheck, UserRound, Users, Webhook, Workflow, type LucideIcon } from "lucide-react";
 
 import { companySettingsPath, withCompany, type ApiUser } from "../../lib/api.js";
 
@@ -33,6 +33,7 @@ export function buildSettingsGroups(companyId: string, user?: ApiUser): Settings
         { label: "Passkeys", href: withCompany("/admin/passkeys", companyId), icon: KeyRound },
         { label: "Invitations", href: withCompany("/admin/invitations", companyId), icon: Mail },
         { label: "Environment", href: withCompany("/admin/environment", companyId), icon: HardDrive },
+        { label: "Backups", href: withCompany("/admin/backups", companyId), icon: Archive },
       ] : []),
       { label: "Host health", href: withCompany("/health", companyId), icon: ShieldCheck },
     ] },

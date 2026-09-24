@@ -1,3 +1,5 @@
+import { createReadStream } from "node:fs";
+
 import type { FastifyPluginAsync, FastifyReply } from "fastify";
 import type { ZodTypeProvider } from "@fastify/type-provider-zod";
 import { z } from "zod";
@@ -16,9 +18,11 @@ import type { ProviderInstanceService } from "../../profiles/provider-instances.
 import { createProviderConnectionProbe, providerConnectionFromHealth } from "../../profiles/provider-connection.js";
 import { createProviderReadinessCheck } from "../../profiles/provider-readiness.js";
 import { readProviders as readHostProviders, type ReadProviders } from "../../profiles/provider-catalog.js";
+import { BackupFailure, BackupService } from "../../platform/backup.js";
 import { MAX_MIN_FREE_DISK_GB, readEnvironmentSettings, updateEnvironmentSettings } from "../../platform/environment-settings.js";
 
 const EnvironmentSettingsSchema = z.object({ minFreeDiskGb: z.number(), defaultBudgetUsd: z.number(), defaultMaxTurns: z.number().int() });
+const BackupEntrySchema = z.object({ name: z.string(), bytes: z.number().int(), createdAt: z.string() });
 const EnvironmentSettingsBodySchema = z.object({ minFreeDiskGb: z.number().finite().min(0).max(MAX_MIN_FREE_DISK_GB).optional(), defaultBudgetUsd: z.number().finite().min(0).optional(), defaultMaxTurns: z.number().int().min(0).optional() }).refine((body) => Object.keys(body).length > 0);
 
 export interface AdministrationRoutesOptions {
@@ -52,6 +56,38 @@ const administration: FastifyPluginAsync<AdministrationRoutesOptions> = async (a
     const updated = updateEnvironmentSettings(database, { minFreeDiskGb: request.body.minFreeDiskGb ?? previous.minFreeDiskGb, defaultBudgetUsd: request.body.defaultBudgetUsd ?? previous.defaultBudgetUsd, defaultMaxTurns: request.body.defaultMaxTurns ?? previous.defaultMaxTurns });
     auth.recordAuditEvent(request.suplexUser.id, "environment_settings_updated", undefined, undefined, { previousMinFreeDiskGb: String(previous.minFreeDiskGb), minFreeDiskGb: String(updated.minFreeDiskGb), previousDefaultBudgetUsd: String(previous.defaultBudgetUsd), defaultBudgetUsd: String(updated.defaultBudgetUsd), previousDefaultMaxTurns: String(previous.defaultMaxTurns), defaultMaxTurns: String(updated.defaultMaxTurns) });
     return reply.header("Cache-Control", "private, no-store").send(updated);
+  });
+  const backups = (): BackupService => {
+    if (!options.config) throw new Error("Configuration is unavailable");
+    return new BackupService(options.config);
+  };
+  typed.get("/api/admin/backups", { schema: { response: { 200: z.object({ backups: z.array(BackupEntrySchema) }), 403: ErrorResponseSchema } } }, async (request, reply) => {
+    if (!requireAdmin(request.suplexUser.role, reply)) return;
+    return reply.header("Cache-Control", "private, no-store").send({ backups: await backups().list() });
+  });
+  typed.post("/api/admin/backups", { schema: { response: { 200: BackupEntrySchema, 403: ErrorResponseSchema, 409: ErrorResponseSchema } } }, async (request, reply) => {
+    if (!requireAdmin(request.suplexUser.role, reply)) return;
+    reply.header("Cache-Control", "private, no-store");
+    try {
+      const backup = await backups().createInLibrary();
+      auth.recordAuditEvent(request.suplexUser.id, "backup_created", undefined, undefined, { name: backup.name, bytes: String(backup.bytes) });
+      return reply.send(backup);
+    } catch (error) {
+      if (error instanceof BackupFailure && error.code === "exists") return reply.code(409).send({ error: "A backup is already being created. Try again in a moment." });
+      throw error;
+    }
+  });
+  typed.get("/api/admin/backups/:name", { schema: { params: z.object({ name: z.string() }) } }, async (request, reply) => {
+    if (!requireAdmin(request.suplexUser.role, reply)) return;
+    const path = backups().pathOf(request.params.name);
+    if (!path) return reply.code(404).send({ error: "Backup not found" });
+    const stream = createReadStream(path);
+    try {
+      await new Promise((resolve, reject) => stream.once("open", resolve).once("error", reject));
+    } catch {
+      return reply.code(404).send({ error: "Backup not found" });
+    }
+    return reply.header("Cache-Control", "private, no-store").header("Content-Disposition", `attachment; filename="${request.params.name}"`).type("application/gzip").send(stream);
   });
   const readProviders = options.readProviders ?? (() => readHostProviders({ directory: process.cwd(), connection: createProviderConnectionProbe() }));
   let providerObservation: Promise<ProviderListResponse> | undefined;

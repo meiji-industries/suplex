@@ -66,6 +66,7 @@ const fake = {
   shell: { openExternal: async (_url: string): Promise<void> => undefined, openPath: async (_path: string): Promise<string> => "" },
   dialog: { showErrorBox: (_title: string, _content: string): void => undefined, showMessageBox: async (_options: unknown): Promise<unknown> => undefined },
   screen: { getPrimaryDisplay: () => ({ workArea: { x: 0, y: 0, width: 1920, height: 1080 } }) },
+  session: { defaultSession: { on: (): void => undefined } },
 };
 const autoUpdater = Object.assign(new EventEmitter(), {
   autoDownload: true,

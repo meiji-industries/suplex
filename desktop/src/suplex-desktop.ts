@@ -1,4 +1,4 @@
-import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, screen, shell } from "electron";
+import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, screen, session, shell } from "electron";
 import { existsSync } from "node:fs";
 import { readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -466,6 +466,11 @@ export async function runSuplexDesktop(input: { readonly argv: readonly string[]
   if (!app.isPackaged) app.dock?.setIcon(join(__dirname, "../../build/icon.png"));
   app.configureWebAuthn({ touchID: { keychainAccessGroup: KEYCHAIN_ACCESS_GROUP, promptReason: "verify your identity on $1" } });
   rebuildMenu();
+  // Electron has no download bar, so save without a dialog and reveal the file as confirmation.
+  session.defaultSession.on("will-download", (_event, item) => {
+    item.setSavePath(join(app.getPath(process.platform === "darwin" ? "desktop" : "downloads"), item.getFilename()));
+    item.once("done", (_doneEvent, state) => { if (state === "completed") shell.showItemInFolder(item.getSavePath()); });
+  });
   void desktopUpdater.check(false);
   setInterval(() => { void desktopUpdater.check(false); }, UPDATE_CHECK_INTERVAL_MS); // an app left open still sees new releases
   await open();

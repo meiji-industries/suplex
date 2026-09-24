@@ -15,6 +15,13 @@ const backupVersion = 1;
 const backupRoot = "suplex-backup";
 
 export const BACKUP_HEALTH_MAX_AGE_MS = 24 * 60 * 60 * 1_000;
+export const BACKUP_NAME = /^suplex-backup-[0-9TZ-]+\.tar\.gz$/;
+
+export interface BackupEntry {
+  name: string;
+  bytes: number;
+  createdAt: string;
+}
 
 export interface BackupManifestEntry {
   path: string;
@@ -143,6 +150,37 @@ function removeAuthenticationState(snapshotPath: string): void {
 export class BackupService {
   constructor(private readonly config: SuplexConfig) {}
 
+  get directory(): string {
+    return join(this.config.dataRoot, "backups");
+  }
+
+  /** The stored archive's path, or undefined when the name is not one this service writes. */
+  pathOf(name: string): string | undefined {
+    return BACKUP_NAME.test(name) ? join(this.directory, name) : undefined;
+  }
+
+  async list(): Promise<BackupEntry[]> {
+    const names = await readdir(this.directory).catch(() => []);
+    const entries = await Promise.all(names.filter((name) => BACKUP_NAME.test(name)).map(async (name) => {
+      const info = await stat(join(this.directory, name));
+      return { name, bytes: info.size, createdAt: info.mtime.toISOString() };
+    }));
+    return entries.sort((a, b) => b.createdAt.localeCompare(a.createdAt));
+  }
+
+  /** Creates and verifies a backup in the host's backup directory. */
+  async createInLibrary(now = new Date()): Promise<BackupEntry> {
+    await mkdir(this.config.artifactRoot, { recursive: true });
+    const name = `suplex-backup-${now.toISOString().replace(/\.\d+Z$/, "Z").replaceAll(":", "-")}.tar.gz`;
+    const created = await this.create({ destination: join(this.directory, name) });
+    const verification = await this.verify(created.archivePath);
+    if (!verification.valid) {
+      await rm(created.archivePath, { force: true });
+      throw new BackupFailure("verification");
+    }
+    return { name, bytes: created.archiveBytes, createdAt: now.toISOString() };
+  }
+
   async create(input: BackupCreateInput): Promise<{ archivePath: string; manifest: BackupManifest; archiveBytes: number; durationMs: number }> {
     const started = Date.now();
     const destination = resolve(input.destination);
@@ -192,7 +230,7 @@ export class BackupService {
     const staging = await mkdtemp(join(tmpdir(), "suplex-backup-verify-"));
     try {
       if (!(await exists(archive))) throw new BackupFailure("invalid");
-      const listing = (await execFileAsync("tar", ["-tzf", archive], { timeout: 30_000, maxBuffer: 512 * 1024 })).stdout.split(/\r?\n/).filter(Boolean);
+      const listing = (await execFileAsync("tar", ["-tzf", archive], { timeout: 30_000, maxBuffer: 256 * 1024 * 1024 })).stdout.split(/\r?\n/).filter(Boolean);
       if (listing.some((name) => !safeArchiveName(name.replace(/\/$/, "")))) {
         errors.push("archive contains an unsafe path");
         throw new BackupFailure("unsafe");
@@ -292,6 +330,6 @@ export async function checkBackupHealth(config: SuplexConfig, now: () => number 
       details: { verifiedAt: verifiedAt || "never", ageMs, errors: value.errors?.join(", ") ?? "" },
     };
   } catch {
-    return { id: "backup", label: "Backup verification", status: "warning", summary: "No backup has been made yet", remedy: "Run pnpm run suplex backup <archive> and verify it", details: { verifiedAt: "never", ageMs: -1, errors: "missing-status" } };
+    return { id: "backup", label: "Backup verification", status: "warning", summary: "No backup has been made yet", remedy: "Create a backup in Settings → Backups", details: { verifiedAt: "never", ageMs: -1, errors: "missing-status" } };
   }
 }

@@ -79,3 +79,29 @@ test("task rows render sibling task and pull request links", () => {
     "https://github.com/meiji-industries/suplex/pull/164",
   ]);
 });
+
+test("task rows keep every field, with the branch before the status bubble", () => {
+  const html = renderToStaticMarkup(createElement(TaskRow, { task, project: { id: "project-1", name: "Suplex" } as never, cost: undefined }));
+  const order = ["data-task-title", "data-task-project", "data-task-branch", "data-task-status", "data-task-cost", "data-task-time", "data-task-compact-details", "data-task-pr"].map(attribute => html.indexOf(`${attribute}="true"`));
+
+  expect(order.every(index => index >= 0)).toBe(true);
+  expect(order).toEqual([...order].sort((left, right) => left - right));
+  expect(html).toContain("FOR-1");
+  expect(html).toContain("Repair task links");
+  expect(html).toContain("fix/task-links");
+  expect(html).toContain("Suplex");
+  expect(html).toContain("data-task-compact-project");
+  expect(html).toContain('dateTime="2026-09-08T00:00:00.000Z"');
+  expect(html).toMatch(/data-task-branch="true" class="[^"]*font-mono/);
+  expect(html).toMatch(/<time data-task-time[^>]*class="[^"]*font-mono[^"]*tabular-nums/);
+  expect(html).toContain(">Active<");
+});
+
+test("task rows dim the titles of delivered and cancelled tasks only", () => {
+  const titleClass = (status: Task["status"]) => /class="truncate text-\[15px\] ([^"]+)">Repair task links</.exec(renderToStaticMarkup(createElement(TaskRow, { task: { ...task, status }, project: undefined, cost: undefined })))?.[1];
+
+  expect(titleClass("delivered")).toBe("text-muted-foreground");
+  expect(titleClass("cancelled")).toBe("text-muted-foreground");
+  expect(titleClass("active")).toBe("text-foreground");
+  expect(titleClass("waiting_human")).toBe("text-foreground");
+});

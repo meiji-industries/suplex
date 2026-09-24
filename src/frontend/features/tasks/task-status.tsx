@@ -5,13 +5,22 @@ import { Badge } from "../../components/ui/badge.js";
 import { withCompany } from "../../lib/api.js";
 
 export const taskStatusLabels = { backlog: "Backlog", queued: "Queued", active: "Active", waiting_human: "Answer necessary", cancelled: "Cancelled", delivered: "Delivered" } satisfies Record<TaskControlStatus, string>;
+/** Bubble tone for each status. The icon colors below use the same palette. */
+export const taskStatusTones = {
+  backlog: "neutral",
+  queued: "sky",
+  active: "teal",
+  waiting_human: "amber",
+  cancelled: "neutral",
+  delivered: "green",
+} as const satisfies Record<TaskControlStatus, "amber" | "teal" | "green" | "sky" | "neutral">;
 const appearances = {
   backlog: { icon: CircleDashed, color: "text-muted-foreground" },
   queued: { icon: Clock, color: "text-sky-500" },
-  active: { icon: CircleDotDashed, color: "text-amber-500" },
-  waiting_human: { icon: CircleHelp, color: "text-rose-500" },
+  active: { icon: CircleDotDashed, color: "text-teal-500" },
+  waiting_human: { icon: CircleHelp, color: "text-amber-500" },
   cancelled: { icon: CircleSlash, color: "text-muted-foreground" },
-  delivered: { icon: CheckCircle2, color: "text-emerald-500" },
+  delivered: { icon: CheckCircle2, color: "text-green-500" },
 } satisfies Record<TaskControlStatus, { icon: typeof CircleDashed; color: string }>;
 
 type TaskStatusProps = { status: TaskControlStatus; pullRequestState?: PullRequestReference["state"] | undefined };
@@ -23,7 +32,7 @@ export function taskStatusLabel(task: { status: TaskControlStatus }): string {
 export function TaskStatusIcon({ status, pullRequestState }: TaskStatusProps) {
   const maskId = useId();
   const { icon: Icon, color } = appearances[status];
-  if (status === "delivered" && pullRequestState === "merged") return <svg role="img" aria-label="Delivered, merged" viewBox="0 0 24 24" className="size-3.5 shrink-0 text-emerald-500">
+  if (status === "delivered" && pullRequestState === "merged") return <svg role="img" aria-label="Delivered, merged" viewBox="0 0 24 24" className="size-3.5 shrink-0 text-green-500">
     <defs><mask id={maskId}><rect width="24" height="24" fill="white" /><path d="m9 12 2 2 4-4" fill="none" stroke="black" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" /></mask></defs>
     <circle cx="12" cy="12" r="11" fill="currentColor" mask={`url(#${maskId})`} />
   </svg>;
@@ -31,7 +40,7 @@ export function TaskStatusIcon({ status, pullRequestState }: TaskStatusProps) {
 }
 
 export function TaskStatus({ status, pullRequestState }: TaskStatusProps) {
-  return <Badge variant={status === "waiting_human" ? "destructive" : "secondary"}><TaskStatusIcon status={status} pullRequestState={pullRequestState} />{taskStatusLabels[status]}</Badge>;
+  return <Badge variant={taskStatusTones[status]} size="lg">{taskStatusLabels[status]}{status === "delivered" && pullRequestState === "merged" ? <span className="sr-only">, merged</span> : null}</Badge>;
 }
 
 /** "Blocked by First · Active, Second · Backlog", or null when the task has no prerequisites. */

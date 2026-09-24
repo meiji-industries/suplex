@@ -85,7 +85,7 @@ test("projects desktop flow creates a project and opens its configuration", asyn
       auth.createCompany(adminId, "Browser Projects");
       const page = await context.newPage();
       await page.goto(`${baseUrl}/projects`);
-      await page.getByRole("heading", { name: "Projects", exact: true }).waitFor();
+      await page.getByRole("heading", { name: "Projects", exact: true, level: 2 }).waitFor();
       const newProject = page.getByRole("button", { name: "New project", exact: true });
       await newProject.click();
       await page.getByLabel("Repository", { exact: true }).click();
@@ -100,7 +100,7 @@ test("projects desktop flow creates a project and opens its configuration", asyn
       await page.getByRole("button", { name: "Save changes", exact: true }).click();
       await page.getByText("Saved", { exact: true }).waitFor();
       await page.getByRole("link", { name: "Back to projects", exact: true }).click();
-      await page.getByRole("heading", { name: "Projects", exact: true }).waitFor();
+      await page.getByRole("heading", { name: "Projects", exact: true, level: 2 }).waitFor();
       await page.getByText("Suplex renamed", { exact: true }).waitFor();
       await page.close();
       await context.close();

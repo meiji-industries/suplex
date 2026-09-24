@@ -1,8 +1,6 @@
 import { Alert, AlertDescription } from "../../components/ui/alert.js";
-import { Skeleton } from "../../components/ui/skeleton.js";
-import { Spinner } from "../../components/ui/spinner.js";
 import { useCompanyContext } from "../../shell/company-context.js";
-import { SettingsLayout } from "../settings/settings-layout.js";
+import { SettingRow, SettingsContent, SettingsLayout, SettingsSection } from "../settings/settings-layout.js";
 import { readJson, withCompany, type ApiUser } from "../../lib/api.js";
 import { useCallback, useEffect, useState, type ReactElement } from "react";
 import type {
@@ -26,6 +24,7 @@ import { ExternalAgentNewAgentDialog } from "./external-agent-new-dialog.js";
 import { ExternalAgentPairingCodeDialog } from "./external-agent-pairing-code-dialog.js";
 import { ExternalAgentProjectGrantsDialog } from "./external-agent-project-grants-dialog.js";
 import { createExternalAgentActions } from "./external-agent-actions.js";
+import { LoadingState } from "../../components/app/loading-state.js";
 
 export function AdminView(): ReactElement {
   const { user, companies, currentCompany, loading } = useCompanyContext();
@@ -326,6 +325,17 @@ export function AdminView(): ReactElement {
           : isPasskeys
             ? "Passkeys"
             : "Users";
+  const viewDescription = isAgents
+    ? "Agents plan and build the work of each task. Suplex runs internal agents. External agents connect to Suplex."
+    : isModels
+      ? "OpenCode, Claude Code, Devin CLI, and Codex CLI supply these models. Configure providers on the Suplex host."
+      : isCompanies
+        ? "Each company has its own projects and tasks. Select the accounts that can open each company."
+        : isInvitations
+          ? "An invitation lets a person create an account on this Suplex host."
+          : isPasskeys
+            ? "A passkey lets an account sign in to Suplex without a password."
+            : "These accounts can sign in to this Suplex host.";
   const activeHref = withCompany(window.location.pathname, currentCompany?.id);
   const backHref = withCompany("/projects", currentCompany?.id);
 
@@ -338,19 +348,7 @@ export function AdminView(): ReactElement {
         activeHref={activeHref}
         contentClassName=""
       >
-        <div
-          className="space-y-2 p-4"
-          aria-busy="true"
-          aria-label="Loading administration"
-        >
-          <div className="flex items-center gap-2 text-xs text-muted-foreground">
-            <Spinner />
-            <span>Loading…</span>
-          </div>
-          <Skeleton className="h-4 w-40" />
-          <Skeleton className="h-8 w-full" />
-          <Skeleton className="h-8 w-3/4" />
-        </div>
+        <LoadingState />
       </SettingsLayout>
     );
   }
@@ -363,9 +361,11 @@ export function AdminView(): ReactElement {
         activeHref={activeHref}
         contentClassName=""
       >
-        <div className="p-4 text-xs text-muted-foreground">
-          Administration is unavailable.
-        </div>
+        <SettingsContent title={viewTitle}>
+          <SettingsSection>
+            <SettingRow label="Administration is not available" description="Only administrators can open this page." />
+          </SettingsSection>
+        </SettingsContent>
       </SettingsLayout>
     );
   }
@@ -378,7 +378,7 @@ export function AdminView(): ReactElement {
       activeHref={activeHref}
       contentClassName=""
     >
-      <div>
+      <SettingsContent width="wide" title={viewTitle} description={viewDescription}>
         {!isAgents &&
         !isModels &&
         !isCompanies &&
@@ -517,7 +517,7 @@ export function AdminView(): ReactElement {
             </Alert>
           </div>
         ) : null}
-      </div>
+      </SettingsContent>
     </SettingsLayout>
   );
 }

@@ -3,7 +3,7 @@ import { Archive, ArchiveRestore, CirclePlus, Copy, Ellipsis, Pencil } from "luc
 import { DeliveryTargetSchema, VisualEvidenceSchema } from "../../../tasks/contracts.js";
 import type { WorkflowRecordInput } from "../../../http/contracts/workflows.js";
 import { ADVISOR_LABELS, WORKFLOWS, WorkflowIdSchema, workflowDefinition, type AdvisorRole } from "../../../coordination/workflows.js";
-import { SettingsLayout } from "./settings-layout.js";
+import { SettingsContent, SettingsLayout } from "./settings-layout.js";
 import { SettingsDataTable, SettingsTableCell, SettingsTableEmpty, SettingsTableGroup, SettingsTableRow, SettingsToolbar, type SettingsTableColumn } from "../../components/app/settings-table.js";
 import { useCompanyContext } from "../../shell/company-context.js";
 import { EntityAvatar } from "../../components/app/entity-avatar.js";
@@ -136,8 +136,8 @@ export function WorkflowSettingsView(): ReactElement {
     <Field><FieldLabel htmlFor={id}>{label}</FieldLabel><Select disabled={busy} value={value ?? "default"} onValueChange={(next) => onChange(next === "default" || !next ? undefined : next)}><SelectTrigger id={id}><SelectValue /></SelectTrigger><SelectContent><SelectItem value="default">{empty}</SelectItem>{profiles.filter((profile) => profile.role === role && (!profile.archivedAt || profile.id === value)).map((profile) => <SelectItem key={profile.id} value={profile.id}>{profile.name} · {profile.model} · {profile.provider}</SelectItem>)}</SelectContent></Select></Field>;
 
   return <SettingsLayout title="Workflows" companyId={companyId} backHref={withCompany("/projects", companyId)} activeHref={withCompany("/admin/workflows", companyId)}>
-    <section className="min-w-0 pt-3 lg:px-8">
-      <SettingsToolbar searchLabel="Filter workflows by name" searchPlaceholder="Filter by name" filterLabel="All workflows" searchWidth="compact" searchValue={search} onSearchChange={setSearch} actions={admin ? <NewButton disabled={busy} onClick={() => { setError(""); setEditor({ kind: "create", draft: emptyDraft() }); }}>New workflow</NewButton> : null} />
+    <SettingsContent width="wide" title="Workflows" description="A workflow sets the steps, default agents, and delivery that Suplex uses for a task.">
+      <SettingsToolbar searchLabel="Filter workflows by name" searchPlaceholder="Filter by name" searchWidth="compact" searchValue={search} onSearchChange={setSearch} actions={admin ? <NewButton disabled={busy} onClick={() => { setError(""); setEditor({ kind: "create", draft: emptyDraft() }); }}>New workflow</NewButton> : null} />
       {error && editor.kind === "closed" ? <div className="mt-3"><Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert></div> : null}
       <SettingsDataTable label="Workflows" columns={columns} className="mt-4">
         <SettingsTableGroup label="Workflows" count={visible.length} columnCount={columns.length}>
@@ -166,7 +166,7 @@ export function WorkflowSettingsView(): ReactElement {
         </SettingsTableGroup>
         {workflows.length > 0 && visible.length === 0 ? <SettingsTableEmpty columnCount={columns.length}>No workflows match the search.</SettingsTableEmpty> : null}
       </SettingsDataTable>
-    </section>
+    </SettingsContent>
 
     <Dialog open={editor.kind !== "closed"} onOpenChange={(open) => { if (!open && !busy) { setEditor({ kind: "closed" }); setError(""); } }}>
       <DialogContent showCloseButton={!busy}>

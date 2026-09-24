@@ -55,8 +55,8 @@ export function BackupSettingsView(): ReactElement {
   const createButton = <Button size="sm" onClick={() => void create()} disabled={creating}>{creating ? "Creating…" : "Create backup"}</Button>;
 
   return <SettingsLayout title="Backups" companyId={companyId} backHref={withCompany("/", companyId)} activeHref={withCompany("/admin/backups", companyId)}>
-    <SettingsContent>
-      <SettingsSection title="Backups" description="Each backup contains the database, artifacts and non-secret configuration. Credentials and passkeys are not in the backup.">
+    <SettingsContent title="Backups" description="Each backup contains the database, artifacts and non-secret configuration. Credentials and passkeys are not in the backup.">
+      <SettingsSection>
         {backups?.length === 0 ? <SettingRow label="No backups yet" description="Create one to download a copy of this Suplex host's data.">{createButton}</SettingRow> : null}
         {backups?.length ? <>
           <SettingRow label="New backup" description="Creates a backup on the host and downloads it.">{createButton}</SettingRow>

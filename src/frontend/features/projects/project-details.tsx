@@ -20,6 +20,7 @@ import type { ApiProfile, ApiProject } from "../../shell/view-shared.js";
 import { ProjectConnections } from "./project-connections.js";
 import { ProjectDetailsLayout } from "./project-details-layout.js";
 import { SettingRow, SettingsContent, SettingsSection } from "../settings/settings-layout.js";
+import { LoadingState } from "../../components/app/loading-state.js";
 import {
   agentsDraft,
   agentsDraftFindings,
@@ -252,7 +253,7 @@ export function ProjectDetails({ projectId }: { projectId: string }): ReactEleme
     }
   };
 
-  if (loading || companyLoading) return <ProjectDetailsLayout projectId={projectId} companyId={companyId} title="Project details" active={section} onSectionChange={selectSection}><SettingsContent><div className="flex items-center gap-2 text-xs text-muted-foreground" aria-busy="true"><Spinner /><span>Loading project details</span></div></SettingsContent></ProjectDetailsLayout>;
+  if (loading || companyLoading) return <ProjectDetailsLayout projectId={projectId} companyId={companyId} title="Project details" active={section} onSectionChange={selectSection}><LoadingState /></ProjectDetailsLayout>;
   if (loadError || !project || !general || !agentSettings || !execution || !connections) return <ProjectDetailsLayout projectId={projectId} companyId={companyId} title="Project details" active={section} onSectionChange={selectSection}><SettingsContent><Alert variant="destructive"><AlertDescription>{loadError || "Project not found"}</AlertDescription></Alert></SettingsContent></ProjectDetailsLayout>;
 
   const credentialLabel = (agent: ApiProfile): string => agent.providerInstanceId ? providerInstances.find((instance) => instance.id === agent.providerInstanceId)?.label ?? "Dedicated login" : `${agent.provider} system login`;
@@ -271,11 +272,11 @@ export function ProjectDetails({ projectId }: { projectId: string }): ReactEleme
       {section === "general" ? <form onSubmit={(event) => { event.preventDefault(); void saveGeneral(); }}>
         {sectionError(general.status) ? <Alert variant="destructive"><AlertDescription>{sectionError(general.status)}</AlertDescription></Alert> : null}
         <SettingsSection title="Profile">
-          <SettingRow label="Project name" description="Name shown in Suplex." htmlFor="project-name"><div className="w-full sm:w-80"><Input id="project-name" autoFocus disabled={general.status.kind === "saving"} aria-invalid={fieldFindings(general.status, "name").length > 0} value={general.draft.name} onChange={(event) => updateGeneral("name", event.target.value)} /><FieldError errors={fieldFindings(general.status, "name")} /></div></SettingRow>
+          <SettingRow label="Project name" description="Name shown in Suplex." htmlFor="project-name"><div className="w-full sm:w-80"><Input size="sm" id="project-name" autoFocus disabled={general.status.kind === "saving"} aria-invalid={fieldFindings(general.status, "name").length > 0} value={general.draft.name} onChange={(event) => updateGeneral("name", event.target.value)} /><FieldError errors={fieldFindings(general.status, "name")} /></div></SettingRow>
           <SettingRow label="Avatar" description="Shown with this project."><AvatarEditor kind="project" id={project.id} name={general.draft.name || project.name} /></SettingRow>
         </SettingsSection>
         <SettingsSection title="Repository">
-          <SettingRow label="Base branch" description="Default branch for new tasks." htmlFor="project-base-branch"><div className="w-full sm:w-80"><Input id="project-base-branch" disabled={general.status.kind === "saving"} aria-invalid={fieldFindings(general.status, "baseBranch").length > 0} value={general.draft.baseBranch} onChange={(event) => updateGeneral("baseBranch", event.target.value)} /><FieldError errors={fieldFindings(general.status, "baseBranch")} /></div></SettingRow>
+          <SettingRow label="Base branch" description="Default branch for new tasks." htmlFor="project-base-branch"><div className="w-full sm:w-80"><Input size="sm" id="project-base-branch" disabled={general.status.kind === "saving"} aria-invalid={fieldFindings(general.status, "baseBranch").length > 0} value={general.draft.baseBranch} onChange={(event) => updateGeneral("baseBranch", event.target.value)} /><FieldError errors={fieldFindings(general.status, "baseBranch")} /></div></SettingRow>
           <SettingRow label="Repository" description="Repository identity."><div className="w-full sm:w-80"><code className="select-all break-all text-xs text-muted-foreground">{project.repository ?? "Not available"}</code></div></SettingRow>
           <SettingRow label="Repository path" description="Local checkout path."><div className="w-full sm:w-80"><code className="select-all break-all text-xs text-muted-foreground">{project.repositoryPath}</code></div></SettingRow>
           <SettingRow label="Worktree root" description="Root for task worktrees."><div className="w-full sm:w-80"><code className="select-all break-all text-xs text-muted-foreground">{project.worktreeRoot}</code></div></SettingRow>
@@ -316,8 +317,8 @@ export function ProjectDetails({ projectId }: { projectId: string }): ReactEleme
       {section === "execution" ? <form onSubmit={(event) => { event.preventDefault(); void saveExecution(); }}>
         {sectionError(execution.status) ? <Alert variant="destructive"><AlertDescription>{sectionError(execution.status)}</AlertDescription></Alert> : null}
         <SettingsSection title="Commands">
-          <SettingRow label="Setup command" description="Runs before task work starts." htmlFor="project-setup-command"><div className="w-full sm:w-96"><Input id="project-setup-command" disabled={execution.status.kind === "saving"} aria-invalid={fieldFindings(execution.status, "setupCommand").length > 0} value={execution.draft.setupCommand} onChange={(event) => updateExecution("setupCommand", event.target.value)} /><FieldError errors={fieldFindings(execution.status, "setupCommand")} /></div></SettingRow>
-          <SettingRow label="Verification command" description="Checks completed task work." htmlFor="project-verification-command"><div className="w-full sm:w-96"><Input id="project-verification-command" disabled={execution.status.kind === "saving"} aria-invalid={fieldFindings(execution.status, "verificationCommand").length > 0} value={execution.draft.verificationCommand} onChange={(event) => updateExecution("verificationCommand", event.target.value)} /><FieldError errors={fieldFindings(execution.status, "verificationCommand")} /></div></SettingRow>
+          <SettingRow label="Setup command" description="Runs before task work starts." htmlFor="project-setup-command"><div className="w-full sm:w-96"><Input size="sm" id="project-setup-command" disabled={execution.status.kind === "saving"} aria-invalid={fieldFindings(execution.status, "setupCommand").length > 0} value={execution.draft.setupCommand} onChange={(event) => updateExecution("setupCommand", event.target.value)} /><FieldError errors={fieldFindings(execution.status, "setupCommand")} /></div></SettingRow>
+          <SettingRow label="Verification command" description="Checks completed task work." htmlFor="project-verification-command"><div className="w-full sm:w-96"><Input size="sm" id="project-verification-command" disabled={execution.status.kind === "saving"} aria-invalid={fieldFindings(execution.status, "verificationCommand").length > 0} value={execution.draft.verificationCommand} onChange={(event) => updateExecution("verificationCommand", event.target.value)} /><FieldError errors={fieldFindings(execution.status, "verificationCommand")} /></div></SettingRow>
         </SettingsSection>
         <SettingsSection title="Agent context">
           <SettingRow label="Project instructions" description="Instructions added to project tasks." htmlFor="project-instructions"><div className="w-full sm:w-[28rem]"><Textarea id="project-instructions" disabled={execution.status.kind === "saving"} value={execution.draft.instructions} onChange={(event) => updateExecution("instructions", event.target.value)} /></div></SettingRow>

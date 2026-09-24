@@ -21,7 +21,7 @@ export function buildSettingsGroups(companyId: string, user?: ApiUser): Settings
   ];
   return [
     ...(user && companyItems.length ? [{ title: "Company", items: companyItems }] : []),
-    ...(admin ? [{ title: "AI", items: [
+    ...(admin ? [{ title: "Features", items: [
       { label: "Agents", href: withCompany("/admin/agents", companyId), icon: Users },
       { label: "Models", href: withCompany("/admin/models", companyId), icon: Cpu },
       { label: "Providers", href: withCompany("/admin/providers", companyId), icon: Plug },

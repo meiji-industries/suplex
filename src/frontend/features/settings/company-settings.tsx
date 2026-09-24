@@ -1,16 +1,16 @@
 import { Alert, AlertDescription } from "../../components/ui/alert.js";
 import { Button } from "../../components/ui/button.js";
 import { Input } from "../../components/ui/input.js";
-import { Skeleton } from "../../components/ui/skeleton.js";
-import { Spinner } from "../../components/ui/spinner.js";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "../../components/ui/alert-dialog.js";
 import { ApplicationFrame } from "../../shell/application-frame.js";
 import { useCompanyContext } from "../../shell/company-context.js";
 import { AvatarEditor } from "../../components/app/entity-avatar.js";
 import { SettingsContent, SettingsLayout, SettingsSection, SettingRow } from "./settings-layout.js";
 import { companySettingsPath, readJson, withCompany, type CompanyStatus } from "../../lib/api.js";
-import { Archive, RotateCcw, Save, Pause, Trash2 } from "lucide-react";
+import { Archive, Building2, RotateCcw, Save, Pause, Trash2 } from "lucide-react";
+import { EmptyState } from "../../components/app/empty-state.js";
 import { useEffect, useMemo, useState, type ReactElement } from "react";
+import { LoadingState } from "../../components/app/loading-state.js";
 
 export function CompanySettingsView(): ReactElement {
   const { user, companies, currentCompany, loading, selectCompany, renameCompany, setCompanyIssueCode, setCompanyStatus } = useCompanyContext();
@@ -36,12 +36,11 @@ export function CompanySettingsView(): ReactElement {
 
   const notFound = !loading && (user?.role !== "admin" || !company);
   if (loading) {
-    return <ApplicationFrame title="Company settings"><div className="space-y-2 p-4" aria-busy="true" aria-label="Loading company settings"><div className="flex items-center gap-2 text-xs text-muted-foreground"><Spinner /><span>Loading settings…</span></div><Skeleton className="h-4 w-40" /><Skeleton className="h-8 w-full" /><Skeleton className="h-8 w-3/4" /></div></ApplicationFrame>;
+    return <ApplicationFrame title="Company settings"><LoadingState /></ApplicationFrame>;
   }
-  if (notFound) {
-    return <ApplicationFrame title="Company settings"><div className="p-4"><p className="text-xs text-muted-foreground">Company not found.</p><a className="mt-3 inline-flex text-xs text-primary underline underline-offset-2" href={withCompany("/projects", currentCompany?.id)}>Back to Projects</a></div></ApplicationFrame>;
+  if (notFound || !company) {
+    return <ApplicationFrame title="Company settings"><EmptyState icon={Building2} title="Company not found" action={<Button variant="outline" size="sm" nativeButton={false} render={<a href={withCompany("/projects", currentCompany?.id)} />}>Back to Projects</Button>} /></ApplicationFrame>;
   }
-  if (!company) return <ApplicationFrame title="Company settings"><div className="p-4 text-xs text-muted-foreground">Company not found.</div></ApplicationFrame>;
 
   const mutateStatus = async (status: CompanyStatus): Promise<void> => {
     setBusy(status); setError("");
@@ -80,11 +79,11 @@ export function CompanySettingsView(): ReactElement {
 
   return (
     <SettingsLayout title="Workspace" companyId={company.id} backHref={backHref} activeHref={companySettingsPath(company.id)}>
-      <SettingsContent>
+      <SettingsContent title="Workspace">
       <SettingsSection title="Profile">
         <SettingRow label="Company name" description="Public workspace name.">
           <form className="flex items-end gap-2" onSubmit={(event) => { event.preventDefault(); void save(); }}>
-            <Input id="company-name" value={name} onChange={(event) => { setName(event.target.value); setSaved(false); }} />
+            <Input size="sm" id="company-name" value={name} onChange={(event) => { setName(event.target.value); setSaved(false); }} />
             <Button type="submit" size="sm" disabled={busy !== "" || !name.trim() || name.trim() === company.name}><Save className="size-3.5" />{busy === "rename" ? "Saving…" : saved ? "Saved" : "Save"}</Button>
           </form>
         </SettingRow>
@@ -93,7 +92,7 @@ export function CompanySettingsView(): ReactElement {
         </SettingRow>
         <SettingRow label="Issue code" description="2–10 letters or numbers, beginning with a letter. Once set, it locks after the company has an issue.">
           <form className="flex items-end gap-2" onSubmit={(event) => { event.preventDefault(); void saveIssueCode(); }}>
-            <Input id="company-issue-code" aria-label="Issue code" maxLength={10} pattern="[A-Za-z][A-Za-z0-9]{1,9}" placeholder="ADAM" value={issueCode} onChange={(event) => { setIssueCode(event.target.value.toUpperCase()); setCodeSaved(false); }} />
+            <Input size="sm" id="company-issue-code" aria-label="Issue code" maxLength={10} pattern="[A-Za-z][A-Za-z0-9]{1,9}" placeholder="ADAM" value={issueCode} onChange={(event) => { setIssueCode(event.target.value.toUpperCase()); setCodeSaved(false); }} />
             <Button type="submit" size="sm" disabled={busy !== "" || (issueCode.trim().toUpperCase() || null) === company.issueCode}><Save className="size-3.5" />{busy === "issue-code" ? "Saving…" : codeSaved ? "Saved" : "Save"}</Button>
           </form>
         </SettingRow>

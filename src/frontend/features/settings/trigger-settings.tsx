@@ -4,7 +4,7 @@ import type { GithubTriggerActivity, GithubTriggerRule } from "../../../http/con
 import type { ApiProject, ApiWorkflow } from "../../shell/view-shared.js";
 import { readJson, withCompany } from "../../lib/api.js";
 import { useCompanyContext } from "../../shell/company-context.js";
-import { SettingsLayout } from "./settings-layout.js";
+import { SettingRow, SettingsContent, SettingsLayout, SettingsSection } from "./settings-layout.js";
 import { SettingsDataTable, SettingsTableCell, SettingsTableEmpty, SettingsTableGroup, SettingsTableRow, SettingsToolbar, type SettingsTableColumn } from "../../components/app/settings-table.js";
 import { Alert, AlertDescription } from "../../components/ui/alert.js";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "../../components/ui/alert-dialog.js";
@@ -17,6 +17,7 @@ import { NewButton } from "../../components/ui/new-button.js";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../components/ui/select.js";
 import { Textarea } from "../../components/ui/textarea.js";
 import { taskDeliveryTargetOptions } from "../tasks/task-delivery-target.js";
+import { LoadingState } from "../../components/app/loading-state.js";
 
 const columns: SettingsTableColumn[] = [
   { key: "name", label: "Name", width: 180 },
@@ -116,12 +117,12 @@ export function TriggerSettingsView(): ReactElement {
   const updateDraft = (patch: Partial<Draft>): void => setEditor((current) => current.kind === "closed" ? current : { ...current, draft: { ...current.draft, ...patch } });
   const backHref = withCompany("/projects", companyId);
 
-  if (loading) return <SettingsLayout title="Triggers" companyId={companyId} backHref={backHref} activeHref={withCompany("/admin/triggers", companyId)}><div className="p-4 text-xs text-muted-foreground">Loading...</div></SettingsLayout>;
-  if (!admin) return <SettingsLayout title="Triggers" companyId={companyId} backHref={backHref} activeHref={withCompany("/admin/triggers", companyId)}><div className="p-4 text-xs text-muted-foreground">Administration is unavailable.</div></SettingsLayout>;
+  if (loading) return <SettingsLayout title="Triggers" companyId={companyId} backHref={backHref} activeHref={withCompany("/admin/triggers", companyId)}><LoadingState /></SettingsLayout>;
+  if (!admin) return <SettingsLayout title="Triggers" companyId={companyId} backHref={backHref} activeHref={withCompany("/admin/triggers", companyId)}><SettingsContent title="Triggers"><SettingsSection><SettingRow label="Administration is not available" description="Only administrators can change triggers." /></SettingsSection></SettingsContent></SettingsLayout>;
 
   return <SettingsLayout title="Triggers" companyId={companyId} backHref={backHref} activeHref={withCompany("/admin/triggers", companyId)}>
-    <section className="min-w-0 pt-3 lg:px-8">
-      <SettingsToolbar searchLabel="Filter triggers by name, label, project, or workflow" searchPlaceholder="Filter triggers" filterLabel="All triggers" searchWidth="compact" searchValue={search} onSearchChange={setSearch} actions={<NewButton disabled={busy} onClick={() => { setError(""); setEditor({ kind: "create", draft: emptyDraft() }); }}>New trigger</NewButton>} />
+    <SettingsContent width="wide" title="Triggers" description="A trigger starts a task when a pull request has a specified label. Suplex uses the project and workflow of the trigger.">
+      <SettingsToolbar searchLabel="Filter triggers by name, label, project, or workflow" searchPlaceholder="Filter triggers" searchWidth="compact" searchValue={search} onSearchChange={setSearch} actions={<NewButton disabled={busy} onClick={() => { setError(""); setEditor({ kind: "create", draft: emptyDraft() }); }}>New trigger</NewButton>} />
       {error && editor.kind === "closed" ? <div className="mt-3"><Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert></div> : null}
       <SettingsDataTable label="Triggers" columns={columns} className="mt-4">
         <SettingsTableGroup label="Triggers" count={visible.length} columnCount={columns.length}>
@@ -147,7 +148,7 @@ export function TriggerSettingsView(): ReactElement {
         </SettingsTableGroup>
         {rules.length === 0 ? <SettingsTableEmpty columnCount={columns.length}>No triggers configured.</SettingsTableEmpty> : visible.length === 0 ? <SettingsTableEmpty columnCount={columns.length}>No triggers match the search.</SettingsTableEmpty> : null}
       </SettingsDataTable>
-    </section>
+    </SettingsContent>
 
     <Dialog open={editor.kind !== "closed"} onOpenChange={(open) => { if (!open && !busy) { setEditor({ kind: "closed" }); setError(""); } }}><DialogContent showCloseButton={!busy}><DialogHeader><DialogTitle>{editor.kind === "edit" ? "Edit trigger" : "New trigger"}</DialogTitle><DialogDescription>Run a workflow when a pull request has a label.</DialogDescription></DialogHeader>
       {draft ? <form className="max-h-[70dvh] overflow-y-auto" onSubmit={(event) => { event.preventDefault(); void save(); }}><FieldGroup>

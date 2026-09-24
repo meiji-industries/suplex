@@ -15,6 +15,7 @@ import {
   DropdownMenuTrigger,
 } from "../../components/ui/dropdown-menu.js";
 import { NewButton } from "../../components/ui/new-button.js";
+import { SettingsSectionHeader } from "../settings/settings-layout.js";
 import {
   adminDate,
   type ApiExternalAgent,
@@ -58,13 +59,14 @@ export function ExternalAgentsSection({
 }): ReactElement {
   return (
     <section>
-      <div className="flex justify-end">
-        <NewButton onClick={onOpenNewAgent}>New external agent</NewButton>
-      </div>
+      <SettingsSectionHeader
+        title="External agents"
+        description="An external agent connects to Suplex with its own credential. It can open only the projects that you select."
+        actions={<NewButton onClick={onOpenNewAgent}>New external agent</NewButton>}
+      />
       <SettingsDataTable
         label="External agents"
         columns={EXTERNAL_AGENT_AGENT_COLUMNS}
-        className="mt-4"
       >
         <SettingsTableGroup
           label="External agents"

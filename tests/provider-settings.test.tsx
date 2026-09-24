@@ -7,7 +7,7 @@ import { afterEach, beforeEach, expect, test, vi } from "vitest";
 const api = vi.hoisted(() => ({ readJson: vi.fn(), withCompany: (path: string) => path }));
 vi.mock("../src/frontend/lib/api.js", () => api);
 vi.mock("../src/frontend/shell/company-context.js", () => ({ useCompanyContext: () => ({ currentCompany: { id: "company-1", status: "active" } }) }));
-vi.mock("../src/frontend/features/settings/settings-layout.js", () => ({ SettingsLayout: ({ children }: { children: ReactNode }) => children, SettingsContent: ({ children }: { children: ReactNode }) => children }));
+vi.mock("../src/frontend/features/settings/settings-layout.js", () => ({ SettingsLayout: ({ children }: { children: ReactNode }) => children, SettingsContent: ({ actions, children }: { actions?: ReactNode; children: ReactNode }) => <>{actions}{children}</> }));
 vi.mock("../src/frontend/features/tasks/task-chat/live-pane-terminal.js", () => ({ PaneTerminal: (props: { path: string; paneId: string; label: string }) => <div data-pane-terminal={props.path} data-pane-id={props.paneId} aria-label={props.label} /> }));
 
 import { ProviderSettingsView } from "../src/frontend/features/settings/provider-settings.js";

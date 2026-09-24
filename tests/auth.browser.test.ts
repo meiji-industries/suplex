@@ -69,7 +69,7 @@ test("loopback requests create and preserve an Operator session", async () => {
         await page.getByRole("menuitem", { name: /New company/ }).click();
         await page.getByLabel("Company name", { exact: true }).fill("Browser Company");
         await page.getByRole("dialog", { name: "New company", exact: true }).getByRole("button", { name: "New company", exact: true }).click();
-        await page.getByRole("heading", { name: "Workspace", exact: true }).waitFor();
+        await page.getByRole("heading", { name: "Workspace", exact: true, level: 2 }).waitFor();
       } finally {
         await context.close();
       }

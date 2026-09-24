@@ -1,25 +1,31 @@
-import { ChevronDown } from "lucide-react";
 import type { ComponentProps, ReactElement, ReactNode, TdHTMLAttributes } from "react";
 
 import { cn } from "../../lib/utils.js";
 import { Button } from "../ui/button.js";
 import { Input } from "../ui/input.js";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../ui/select.js";
+import { Skeleton } from "../ui/skeleton.js";
 
 export type SettingsTableColumn = { key: string; label?: ReactNode; width: number };
 
-export function SettingsToolbar({ searchLabel, searchPlaceholder, filterLabel, searchWidth = "default", actions, searchValue, onSearchChange, filters }: { searchLabel: string; searchPlaceholder: string; filterLabel: string; searchWidth?: "default" | "compact"; actions: ReactNode; searchValue?: string; onSearchChange?: (value: string) => void; filters?: { options: readonly string[]; value: string; onChange: (value: string) => void } }): ReactElement {
+export function SettingsToolbar({ searchLabel, searchPlaceholder, searchWidth = "default", searchValue, onSearchChange, filters, actions }: { searchLabel: string; searchPlaceholder: string; searchWidth?: "default" | "compact"; searchValue: string; onSearchChange: (value: string) => void; filters?: { options: readonly string[]; value: string; onChange: (value: string) => void }; actions?: ReactNode }): ReactElement {
   return (
     <div className="flex min-h-[34px] flex-wrap items-center justify-between gap-x-6 gap-y-2">
       <div className="flex min-w-0 flex-1 basis-[239px] gap-1.5">
         <label className={cn("block max-w-full", searchWidth === "compact" ? "w-[286px]" : "w-[300px]")}>
-          {searchValue !== undefined && onSearchChange ? <Input aria-label={searchLabel} onChange={(event) => onSearchChange(event.target.value)} placeholder={searchPlaceholder} value={searchValue} /> : <Input aria-label={searchLabel} disabled placeholder={searchPlaceholder} />}
+          <Input size="sm" type="search" aria-label={searchLabel} onChange={(event) => onSearchChange(event.target.value)} placeholder={searchPlaceholder} value={searchValue} />
         </label>
-        {filters ? <Select value={filters.value} onValueChange={(value) => { if (value !== null) filters.onChange(value); }}><SelectTrigger size="sm"><SelectValue /></SelectTrigger><SelectContent>{filters.options.map((option) => <SelectItem key={option} value={option}>{option}</SelectItem>)}</SelectContent></Select> : <span className="hidden sm:inline-flex"><Button disabled size="sm" type="button" variant="outline">{filterLabel}<ChevronDown /></Button></span>}
+        {filters ? <Select value={filters.value} onValueChange={(value) => { if (value !== null) filters.onChange(value); }}><SelectTrigger size="sm"><SelectValue /></SelectTrigger><SelectContent>{filters.options.map((option) => <SelectItem key={option} value={option}>{option}</SelectItem>)}</SelectContent></Select> : null}
       </div>
-      <div className="flex shrink-0 items-center gap-2">{actions}</div>
+      {actions ? <div className="flex shrink-0 items-center gap-2">{actions}</div> : null}
     </div>
   );
+}
+
+/** True when the search term is empty or any value contains it, ignoring case. */
+export function matchesSearch(search: string, ...values: Array<string | null | undefined>): boolean {
+  const term = search.trim().toLowerCase();
+  return !term || values.some((value) => value?.toLowerCase().includes(term));
 }
 
 export function SettingsToolbarAction({ tone = "secondary", type = "button", ...props }: Omit<ComponentProps<typeof Button>, "className" | "size" | "variant"> & { tone?: "primary" | "secondary" }): ReactElement {
@@ -58,4 +64,9 @@ export function SettingsTableCell({ className, ...props }: TdHTMLAttributes<HTML
 
 export function SettingsTableEmpty({ columnCount, children }: { columnCount: number; children: ReactNode }): ReactElement {
   return <tbody><tr className="h-11 text-[13px] text-muted-foreground"><td colSpan={columnCount + 1}><div className="pl-[54px]">{children}</div></td></tr></tbody>;
+}
+
+/** Placeholder rows while a table loads its data. */
+export function SettingsTableLoading({ columnCount, rows = 3 }: { columnCount: number; rows?: number }): ReactElement {
+  return <tbody aria-busy="true" aria-label="Loading">{Array.from({ length: rows }, (_, row) => <tr key={row} className="h-11"><td />{Array.from({ length: columnCount }, (_, column) => <td key={column} className="px-1.5"><Skeleton className="h-3.5 w-2/3" /></td>)}</tr>)}</tbody>;
 }

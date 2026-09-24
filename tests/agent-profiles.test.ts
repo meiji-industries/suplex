@@ -4,10 +4,13 @@ import { stat } from "node:fs/promises";
 import { ProviderInstanceService } from "../src/profiles/provider-instances.js";
 import { TaskProfileSchema } from "../src/tasks/control.js";
 
+// The list sorts by name. These checks read the Coordinator and then the Worker.
+const byId = <T extends { id: string }>(profiles: T[]): T[] => [...profiles].sort((a, b) => a.id.localeCompare(b.id));
+
 test("fresh installs have one Coordinator and one Worker with Codex CLI settings", async () => {
   const f = await nativeApp();
   try {
-    expect(f.profiles.list(f.userId)).toMatchObject([
+    expect(byId(f.profiles.list(f.userId))).toMatchObject([
       { id: "profile_native_root", role: "root", provider: "codex", model: "gpt-5.6-sol", serviceTier: "default" },
       { id: "profile_native_worker", role: "worker", provider: "codex", model: "gpt-5.6-luna", reasoningLevel: "max", serviceTier: "priority" },
     ]);
@@ -18,7 +21,7 @@ test("fresh installs have one Coordinator and one Worker with Codex CLI settings
 
 test("fresh installs point the default agents at the best installed CLI until an admin changes them", async () => {
   const f = await nativeApp();
-  const settings = () => f.profiles.list(f.userId).map(({ provider, model, reasoningLevel, serviceTier }) => ({ provider, model, reasoningLevel, serviceTier }));
+  const settings = () => byId(f.profiles.list(f.userId)).map(({ provider, model, reasoningLevel, serviceTier }) => ({ provider, model, reasoningLevel, serviceTier }));
   const only = (...providers: string[]) => async (provider: string) => providers.includes(provider);
   try {
     await f.profiles.chooseDefaults(f.userId, only());
@@ -62,7 +65,7 @@ test("project defaults retain their role and cannot be archived", async () => {
     expect(() => f.profiles.update(f.userId, f.project.rootProfileId, { role: "worker" })).toThrow("Select another project default");
     expect(() => f.profiles.update(f.userId, f.project.rootProfileId, { archived: true })).toThrow("Select another project default");
     const copy = f.profiles.duplicate(f.userId, f.project.rootProfileId);
-    expect(copy).toMatchObject({ name: "Root (copy)", role: "root" });
+    expect(copy).toMatchObject({ name: "Smart Coordinator (copy)", role: "root" });
     f.profiles.update(f.userId, copy.id, { archived: true });
     expect(f.profiles.list(f.userId)).toHaveLength(2);
     expect(f.profiles.list(f.userId, true)).toHaveLength(3);

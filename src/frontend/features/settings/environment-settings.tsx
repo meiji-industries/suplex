@@ -56,11 +56,11 @@ export function EnvironmentSettingsView(): ReactElement {
   };
 
   return <SettingsLayout title="Environment" companyId={companyId} backHref={withCompany("/", companyId)} activeHref={withCompany("/admin/environment", companyId)}>
-    <SettingsContent>
+    <SettingsContent title="Environment">
       <SettingsSection title="Worktrees" description="Host-wide limits applied before Suplex creates or changes a worktree.">
         <SettingRow label="Minimum free disk space" description="Block worktree operations when available space falls below this threshold.">
           <form className="flex items-center gap-2" onSubmit={(event) => void save(event)}>
-            <div className="w-28"><Input aria-label="Minimum free disk space in GB" type="number" min="0" max="1024" step="0.1" inputMode="decimal" value={minFreeDiskGb} onChange={(event) => { setMinFreeDiskGb(event.target.value); setMessage(""); }} /></div>
+            <div className="w-28"><Input size="sm" aria-label="Minimum free disk space in GB" type="number" min="0" max="1024" step="0.1" inputMode="decimal" value={minFreeDiskGb} onChange={(event) => { setMinFreeDiskGb(event.target.value); setMessage(""); }} /></div>
             <span className="text-xs text-muted-foreground">GB</span>
             <Button size="sm" type="submit" disabled={!changed || saving}>{saving ? "Saving…" : "Save"}</Button>
           </form>
@@ -70,13 +70,13 @@ export function EnvironmentSettingsView(): ReactElement {
         <form className="space-y-2" onSubmit={(event) => void save(event)}>
           <SettingRow label="Default task budget" description="Pause a task when its estimated spend reaches this amount.">
             <div className="flex items-center gap-2">
-              <div className="w-28"><Input aria-label="Default task budget in USD" type="number" min="0" step="0.01" inputMode="decimal" value={defaultBudgetUsd} onChange={(event) => { setDefaultBudgetUsd(event.target.value); setMessage(""); }} /></div>
+              <div className="w-28"><Input size="sm" aria-label="Default task budget in USD" type="number" min="0" step="0.01" inputMode="decimal" value={defaultBudgetUsd} onChange={(event) => { setDefaultBudgetUsd(event.target.value); setMessage(""); }} /></div>
               <span className="text-xs text-muted-foreground">USD</span>
             </div>
           </SettingRow>
           <SettingRow label="Default maximum turns" description="Pause a task when all admitted agent turns reach this count.">
             <div className="flex items-center gap-2">
-              <div className="w-28"><Input aria-label="Default maximum task turns" type="number" min="0" step="1" inputMode="numeric" value={defaultMaxTurns} onChange={(event) => { setDefaultMaxTurns(event.target.value); setMessage(""); }} /></div>
+              <div className="w-28"><Input size="sm" aria-label="Default maximum task turns" type="number" min="0" step="1" inputMode="numeric" value={defaultMaxTurns} onChange={(event) => { setDefaultMaxTurns(event.target.value); setMessage(""); }} /></div>
               <span className="text-xs text-muted-foreground">Turns</span>
             </div>
           </SettingRow>

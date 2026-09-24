@@ -8,9 +8,8 @@ import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, 
 import { Badge } from "../../components/ui/badge.js";
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "../../components/ui/dialog.js";
 import { Field, FieldGroup, FieldLabel } from "../../components/ui/field.js";
-import { Spinner } from "../../components/ui/spinner.js";
 import { SettingsContent, SettingsLayout } from "./settings-layout.js";
-import { SettingsDataTable, SettingsTableCell, SettingsTableEmpty, SettingsTableGroup, SettingsTableRow, type SettingsTableColumn } from "../../components/app/settings-table.js";
+import { SettingsDataTable, SettingsTableCell, SettingsTableEmpty, SettingsTableGroup, SettingsTableLoading, SettingsTableRow, type SettingsTableColumn } from "../../components/app/settings-table.js";
 import { useCompanyContext } from "../../shell/company-context.js";
 import { readJson, withCompany } from "../../lib/api.js";
 import { ProviderLoginTerminal, useProviderLogin } from "./provider-login.js";
@@ -85,14 +84,13 @@ export function ProviderSettingsView(): ReactElement {
     <Button size="sm" variant="outline" aria-label={`Login to ${rowLabel}`} disabled={loginPending !== null} onClick={() => void startLogin(key, rowLabel, url).catch(reason => setError(reason instanceof Error ? reason.message : "Suplex could not open a sign-in pane."))}>{loginPending === key ? "Opening" : "Login"}</Button>
   );
   return <SettingsLayout title="Providers" companyId={companyId} backHref={withCompany("/", companyId)} activeHref={withCompany("/admin/providers", companyId)}>
-    <SettingsContent>
-     <div className="mb-3 flex items-center justify-end gap-2">
-      <Button size="sm" variant="outline" disabled={view.status === "loading"} onClick={() => void load()}>Check configuration</Button>
+    <SettingsContent width="wide" title="Providers" description="Suplex runs agents with these provider logins. Add a named login to give a project its own account." actions={<>
+      <Button size="sm" variant="outline" disabled={view.status === "loading"} onClick={() => void load()}>Refresh</Button>
       <NewButton onClick={() => { setError(""); setAddOpen(true); }}>Add Provider</NewButton>
-     </div>
+     </>}>
      {error ? <p role="alert" className="mb-3 text-xs text-destructive">{error}</p> : null}
     <SettingsDataTable label="Providers" columns={columns}>
-      <SettingsTableGroup label="System" count={providers.length} columnCount={columns.length}>
+      {view.status === "loading" ? <SettingsTableLoading columnCount={columns.length} /> : <SettingsTableGroup label="System" count={providers.length} columnCount={columns.length}>
         {providers.map((provider) => <SettingsTableRow key={`provider:${provider.id}`}>
           <SettingsTableCell className="truncate font-medium">{provider.label}</SettingsTableCell>
           <SettingsTableCell className="text-muted-foreground">System</SettingsTableCell>
@@ -103,7 +101,7 @@ export function ProviderSettingsView(): ReactElement {
           <SettingsTableCell><ConnectionBadge connection={provider.connection} /></SettingsTableCell>
           <SettingsTableCell>{provider.connection.status !== "connected" ? loginButton(`provider:${provider.id}`, provider.label, `/api/admin/providers/${encodeURIComponent(provider.id)}/login`) : null}</SettingsTableCell>
         </SettingsTableRow>)}
-      </SettingsTableGroup>
+      </SettingsTableGroup>}
       {instances.length ? <SettingsTableGroup label="Company" count={instances.length} columnCount={columns.length}>
         {instances.map((instance) => <SettingsTableRow key={`instance:${instance.id}`}>
           <SettingsTableCell className="truncate font-medium">{instance.label}</SettingsTableCell>
@@ -131,11 +129,7 @@ export function ProviderSettingsView(): ReactElement {
        </form>
       </DialogContent>
      </Dialog>
-    <div className="mt-3 space-y-2 text-xs text-muted-foreground" role="status" aria-busy={view.status === "loading"}>
-      {view.status === "loading" ? <span className="inline-flex items-center gap-2"><Spinner /><span>Please wait.</span></span> : null}
-      {view.status === "failed" ? <p role="alert">{view.message}</p> : null}
-      {view.status === "loaded" ? <p className="break-words">Host directory: <code>{view.data.directory}</code></p> : null}
-    </div>
+    {view.status === "failed" ? <p role="alert" className="mt-3 text-xs text-muted-foreground">{view.message}</p> : null}
     </SettingsContent>
     <ProviderLoginTerminal login={login} onClose={() => void closeLogin()} />
   </SettingsLayout>;

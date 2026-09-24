@@ -6,7 +6,6 @@ import {
   SettingsTableEmpty,
   SettingsTableGroup,
   SettingsTableRow,
-  SettingsToolbar,
   type SettingsTableColumn,
 } from "../../components/app/settings-table.js";
 import {
@@ -29,6 +28,7 @@ import {
 } from "../../components/ui/dropdown-menu.js";
 import { Input } from "../../components/ui/input.js";
 import { NewButton } from "../../components/ui/new-button.js";
+import { SettingsSectionHeader } from "../settings/settings-layout.js";
 import { Archive, ArchiveRestore, Copy, Ellipsis, Pencil, Trash2, Zap } from "lucide-react";
 import {
   useEffect,
@@ -152,17 +152,14 @@ export function InternalAgentsSection({
 }): ReactElement {
   return (
     <section>
-      <SettingsToolbar
-        searchLabel="Filter internal agents by name"
-        searchPlaceholder="Filter by name"
-        filterLabel="All roles"
-        searchWidth="compact"
+      <SettingsSectionHeader
+        title="Internal agents"
+        description="Suplex runs an internal agent as the Coordinator or Worker for a task."
         actions={<NewButton onClick={onOpenNewAgent}>New agent</NewButton>}
       />
       <SettingsDataTable
         label="Internal Agents"
         columns={AGENT_COLUMNS}
-        className="mt-4"
       >
         <SettingsTableGroup
           label="Internal agents"

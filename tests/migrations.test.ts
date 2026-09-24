@@ -76,6 +76,26 @@ describe("timestamp migrations", () => {
     }
   });
 
+  test("renames the default native agents and keeps a name you chose", () => {
+    const folder = resolve(process.cwd(), "drizzle");
+    const database = new Database(":memory:");
+    try {
+      const migration = readMigrations(folder).find((candidate) => candidate.tag.includes("rename_default_native_agents"))!;
+      database.exec("CREATE TABLE suplex_profiles (id TEXT PRIMARY KEY, name TEXT NOT NULL UNIQUE, updated_at TEXT NOT NULL); INSERT INTO suplex_profiles (id, name, updated_at) VALUES ('profile_native_root', 'Root', 'then'), ('profile_native_worker', 'Builder', 'then');");
+
+      for (const statement of readFileSync(`${folder}/${migration.tag}.sql`, "utf8").split("--> statement-breakpoint")) {
+        if (statement.trim()) database.exec(statement);
+      }
+
+      expect(database.prepare("SELECT id, name FROM suplex_profiles ORDER BY id").all()).toEqual([
+        { id: "profile_native_root", name: "Smart Coordinator" },
+        { id: "profile_native_worker", name: "Builder" },
+      ]);
+    } finally {
+      database.close();
+    }
+  });
+
   test("backfills nullable projection steps from legacy phases", () => {
     const folder = resolve(process.cwd(), "drizzle");
     const database = new Database(":memory:");

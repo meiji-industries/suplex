@@ -1,11 +1,10 @@
-import { useEffect, useMemo, useState, type ReactElement } from "react";
-import { Pencil } from "lucide-react";
+import { useEffect, useState, type ReactElement } from "react";
+import { Pencil, Plus } from "lucide-react";
 import type { TaskTemplateInput } from "../../../tasks/templates.js";
 import { DeliveryTargetSchema, VisualEvidenceSchema } from "../../../tasks/contracts.js";
 import { ADVISOR_LABELS, WORKFLOWS, WorkflowIdSchema, workflowDefinition, type AdvisorRole } from "../../../coordination/workflows.js";
-import { SettingsLayout } from "./settings-layout.js";
+import { SettingRow, SettingsContent, SettingsLayout, SettingsSection } from "./settings-layout.js";
 import { ProjectDetailsLayout } from "../projects/project-details-layout.js";
-import { SettingsDataTable, SettingsTableCell, SettingsTableEmpty, SettingsTableGroup, SettingsTableRow, SettingsToolbar, type SettingsTableColumn } from "../../components/app/settings-table.js";
 import { useCompanyContext } from "../../shell/company-context.js";
 import { taskDeliveryTargetOptions } from "../tasks/task-delivery-target.js";
 import { Alert, AlertDescription } from "../../components/ui/alert.js";
@@ -20,16 +19,6 @@ import { Textarea } from "../../components/ui/textarea.js";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../components/ui/select.js";
 import { readJson, withCompany } from "../../lib/api.js";
 import type { ApiProfile, ApiProject, ApiTaskTemplate } from "../../shell/view-shared.js";
-
-const columns: SettingsTableColumn[] = [
-  { key: "name", label: "Name", width: 180 },
-  { key: "description", label: "Description", width: 300 },
-  { key: "workflow", label: "Workflow", width: 140 },
-  { key: "delivery", label: "Delivery", width: 150 },
-  { key: "tests", label: "Tests", width: 80 },
-  { key: "evidence", label: "Evidence", width: 100 },
-  { key: "edit", width: 36 },
-];
 
 type EditorState =
   | { kind: "closed" }
@@ -51,7 +40,6 @@ const templateDraft = (template: ApiTaskTemplate): TaskTemplateInput => ({
 });
 
 const deliveryLabel = (value: ApiTaskTemplate["deliveryTarget"]): string => taskDeliveryTargetOptions.find((option) => option.value === value)?.label ?? value;
-const evidenceLabel = (value: ApiTaskTemplate["visualEvidence"]): string => value === "required" ? "Necessary" : value === "capture" ? "Capture" : "Off";
 
 export function TaskTemplateSettings({ projectId: initialProjectId }: { projectId?: string }): ReactElement {
   const companyId = useCompanyContext().currentCompany?.id ?? "";
@@ -62,7 +50,6 @@ export function TaskTemplateSettings({ projectId: initialProjectId }: { projectI
   const [editor, setEditor] = useState<EditorState>({ kind: "closed" });
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleteError, setDeleteError] = useState("");
-  const [search, setSearch] = useState("");
   const [projectError, setProjectError] = useState("");
   const [loadingProjects, setLoadingProjects] = useState(true);
   const [error, setError] = useState("");
@@ -94,7 +81,6 @@ export function TaskTemplateSettings({ projectId: initialProjectId }: { projectI
     setEditor({ kind: "closed" });
     setDeleteOpen(false);
     setDeleteError("");
-    setSearch("");
     setError("");
     if (!projectId) return () => { closed = true; };
     void readJson<{ templates: ApiTaskTemplate[] }>(`/api/projects/${projectId}/task-templates`)
@@ -102,11 +88,6 @@ export function TaskTemplateSettings({ projectId: initialProjectId }: { projectI
       .catch((reason) => { if (!closed) setError(String(reason)); });
     return () => { closed = true; };
   }, [projectId]);
-
-  const visibleTemplates = useMemo(() => {
-    const term = search.trim().toLowerCase();
-    return term ? templates.filter((template) => `${template.name} ${template.description}`.toLowerCase().includes(term)) : templates;
-  }, [search, templates]);
 
   const edit = (template: ApiTaskTemplate): void => {
     setError("");
@@ -155,33 +136,31 @@ export function TaskTemplateSettings({ projectId: initialProjectId }: { projectI
   const draft = editor.kind === "closed" ? null : editor.draft;
   const editingTemplate = editor.kind === "edit" ? templates.find((template) => template.id === editor.templateId) : undefined;
 
-  const content = <>
-    {projectError ? <div className="pt-3"><Alert variant="destructive"><AlertDescription>{projectError}</AlertDescription></Alert></div> : null}
-    {projectId ? <section className="min-w-0 pt-3 lg:px-8">
-      <SettingsToolbar searchLabel="Search templates" searchPlaceholder="Search templates" filterLabel="All templates" searchWidth="compact" searchValue={search} onSearchChange={setSearch} actions={<>
-        {!initialProjectId ? <Select value={projectId} disabled={busy} onValueChange={(value) => setProjectId(value ?? "")}>
-          <SelectTrigger aria-label="Template project"><SelectValue /></SelectTrigger>
-          <SelectContent>{projects.map((project) => <SelectItem key={project.id} value={project.id}>{project.name}</SelectItem>)}</SelectContent>
-        </Select> : null}
-        <NewButton disabled={busy} onClick={() => { setError(""); setEditor({ kind: "create", draft: emptyDraft() }); }}>New template</NewButton>
-      </>} />
-      {error && editor.kind === "closed" ? <div className="mt-3"><Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert></div> : null}
-      <SettingsDataTable label="Task templates" columns={columns} className="mt-4">
-        {templates.length > 0 ? <SettingsTableGroup label="Templates" count={visibleTemplates.length} columnCount={columns.length}>
-          {visibleTemplates.map((template) => <SettingsTableRow key={template.id}>
-            <SettingsTableCell className="truncate font-medium"><Button variant="link" size="sm" aria-label={`Edit ${template.name}`} onClick={() => edit(template)}>{template.name}</Button></SettingsTableCell>
-            <SettingsTableCell className="truncate text-muted-foreground">{template.description}</SettingsTableCell>
-            <SettingsTableCell className="truncate text-muted-foreground">{workflowDefinition(template.workflow).name}</SettingsTableCell>
-            <SettingsTableCell className="truncate text-muted-foreground">{deliveryLabel(template.deliveryTarget)}</SettingsTableCell>
-            <SettingsTableCell className="text-muted-foreground">{template.runProjectTests ? "Run" : "Skip"}</SettingsTableCell>
-            <SettingsTableCell className="text-muted-foreground">{evidenceLabel(template.visualEvidence)}</SettingsTableCell>
-            <SettingsTableCell className="p-0"><Button variant="ghost" size="icon-xs" aria-label={`Edit ${template.name} details`} title={`Edit ${template.name}`} onClick={() => edit(template)}><Pencil /></Button></SettingsTableCell>
-          </SettingsTableRow>)}
-        </SettingsTableGroup> : null}
-        {templates.length === 0 ? <SettingsTableEmpty columnCount={columns.length}>No templates configured.</SettingsTableEmpty> : null}
-        {templates.length > 0 && visibleTemplates.length === 0 ? <SettingsTableEmpty columnCount={columns.length}>No templates match the search.</SettingsTableEmpty> : null}
-      </SettingsDataTable>
-    </section> : !loadingProjects && !projectError ? <p className="pt-3 text-xs text-muted-foreground">Add a project before you add a template.</p> : null}
+  const create = (): void => { setError(""); setEditor({ kind: "create", draft: emptyDraft() }); };
+  const content = <><SettingsContent title="Task templates" description="A template sets the workflow, delivery, and checks for a new task in its project." actions={projectId ? <>
+      {!initialProjectId && projects.length > 1 ? <Select value={projectId} disabled={busy} onValueChange={(value) => setProjectId(value ?? "")}>
+        <SelectTrigger size="sm" aria-label="Template project"><SelectValue /></SelectTrigger>
+        <SelectContent>{projects.map((project) => <SelectItem key={project.id} value={project.id}>{project.name}</SelectItem>)}</SelectContent>
+      </Select> : null}
+      {templates.length > 0 ? <NewButton disabled={busy} onClick={create}>New template</NewButton> : null}
+    </> : null}>
+    {projectError ? <div className="mb-4"><Alert variant="destructive"><AlertDescription>{projectError}</AlertDescription></Alert></div> : null}
+    {error && editor.kind === "closed" ? <div className="mb-4"><Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert></div> : null}
+    {projectId ? <SettingsSection>
+      {templates.length === 0 ? <SettingRow label="No task templates">
+        <Button variant="ghost" size="sm" disabled={busy} onClick={create}><Plus />New template</Button>
+      </SettingRow> : templates.map((template) => <SettingRow key={template.id} label={template.name} description={template.description || workflowDefinition(template.workflow).name}>
+        <div className="flex items-center gap-3">
+          <span className="hidden text-xs text-muted-foreground sm:inline">{workflowDefinition(template.workflow).name} · {deliveryLabel(template.deliveryTarget)}</span>
+          <Button variant="ghost" size="icon-sm" aria-label={`Edit ${template.name}`} title={`Edit ${template.name}`} onClick={() => edit(template)}><Pencil /></Button>
+        </div>
+      </SettingRow>)}
+    </SettingsSection> : !loadingProjects && !projectError ? <SettingsSection>
+      <SettingRow label="No projects" description="Add a project before you add a template.">
+        <Button variant="ghost" size="sm" nativeButton={false} render={<a href={withCompany("/projects", companyId)} />}><Plus />New project</Button>
+      </SettingRow>
+    </SettingsSection> : null}
+  </SettingsContent>
 
     <Dialog open={editor.kind !== "closed"} onOpenChange={(open) => { if (!open && !busy) { setEditor({ kind: "closed" }); setDeleteOpen(false); setError(""); } }}>
       <DialogContent showCloseButton={!busy}>

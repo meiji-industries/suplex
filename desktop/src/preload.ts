@@ -1,7 +1,7 @@
 import { contextBridge, ipcRenderer } from "electron";
 import type { BootFailure, BootState } from "./boot";
 import type { InstallEvent, InstallStage } from "./installer";
-import type { TailnetMachine } from "./tailscale";
+import type { TailscaleStatus } from "./tailscale";
 
 export type DesktopSnapshot = {
   readonly state: BootState["name"];
@@ -22,7 +22,9 @@ export type DesktopMessage =
   | { readonly action: "open-logs" }
   | { readonly action: "copy-output" }
   | { readonly action: "test-connection"; readonly url: string }
-  | { readonly action: "tailnet-machines" };
+  | { readonly action: "tailscale-status" }
+  | { readonly action: "turn-on-tailscale" }
+  | { readonly action: "open-tailscale" };
 
 export type DesktopApi = {
   snapshot(): Promise<DesktopSnapshot>;
@@ -34,7 +36,9 @@ export type DesktopApi = {
   openLogs(): Promise<void>;
   copyOutput(): Promise<void>;
   testConnection(url: string): Promise<{ readonly ok: boolean; readonly reason: string | null }>;
-  tailnetMachines(): Promise<readonly TailnetMachine[] | null>;
+  tailscaleStatus(): Promise<TailscaleStatus>;
+  turnOnTailscale(): Promise<string | null>;
+  openTailscale(): Promise<void>;
   on(listener: (event: InstallEvent) => void): void;
 };
 
@@ -52,7 +56,9 @@ const api: DesktopApi = {
   openLogs: async () => { await send({ action: "open-logs" }); },
   copyOutput: async () => { await send({ action: "copy-output" }); },
   testConnection: async (url) => (await send({ action: "test-connection", url })) as { ok: boolean; reason: string | null },
-  tailnetMachines: async () => (await send({ action: "tailnet-machines" })) as TailnetMachine[] | null,
+  tailscaleStatus: async () => (await send({ action: "tailscale-status" })) as TailscaleStatus,
+  turnOnTailscale: async () => (await send({ action: "turn-on-tailscale" })) as string | null,
+  openTailscale: async () => { await send({ action: "open-tailscale" }); },
   on: (listener) => { ipcRenderer.on("suplex:event", (_event, payload: InstallEvent) => { listener(payload); }); },
 };
 

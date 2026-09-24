@@ -14,7 +14,9 @@
   .card input { -webkit-appearance: none; appearance: none; position: absolute; opacity: 0; }
   .card svg { width: 20px; height: 20px; fill: none; stroke: currentColor; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
   .card strong { font-size: 13px; font-weight: 600; }
-  #remote { display: grid; gap: 8px; width: min(100%, 584px); margin: 20px auto 0; padding: 0; border: 0; min-width: 0; }
+  /* The form is as wide as the row of cards, so the sections below line up with their edges. The sections add no width of their own. */
+  #modes { width: fit-content; max-width: 100%; margin: 0 auto; }
+  #remote, #tailscale-section { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; margin: 20px 0 0; padding: 0; border: 0; min-width: 0; contain: inline-size; }
   #remote[disabled] { display: none; }
   /* Same shape as shadcn's InputGroup: one bordered control with inline-start and inline-end addons. */
   .input-group { display: flex; align-items: center; height: 32px; border: 1px solid #404040; border-radius: 6px; background: #141414; -webkit-app-region: no-drag; }
@@ -27,6 +29,7 @@
   /* Styled like shadcn's Select through Chromium's customizable <select>; keyboard and screen reader behavior stay native. */
   #machine, #machine::picker(select) { appearance: base-select; }
   #machine { display: flex; align-items: center; gap: 8px; min-width: 0; padding: 0 10px 0 8px; color: inherit; cursor: pointer; }
+  #machine[hidden] { display: none; }
   #machine::picker-icon { color: #737373; }
   #machine > button { display: flex; align-items: center; justify-content: flex-start; flex: 1; min-width: 0; min-height: 0; padding: 0; border: 0; background: none; color: inherit; font: inherit; text-align: left; }
   #machine > button:hover { background: none; }
@@ -45,18 +48,19 @@
   .m-meta { color: #a3a3a3; font-size: 12px; }
   .m-name { color: #e5e5e5; }
   .m-dot[data-state="offline"] + .m-name { color: #737373; }
-  .label-row { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
-  #tailscale { display: inline-flex; align-items: center; gap: 6px; color: #a3a3a3; font-size: 12px; }
-  #tailscale::before { content: ""; width: 6px; height: 6px; border-radius: 50%; background: #737373; }
-  #tailscale[data-state="connected"]::before { background: #22c55e; }
-  #tailscale:empty, #hint:empty { display: none; }
+  .tailscale-row { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 28px; }
+  .tailscale-row > button { flex: none; white-space: nowrap; }
+  #tailscale { display: flex; gap: 6px; }
+  #tailscale::before { content: ""; flex: none; width: 6px; height: 6px; margin-top: 6px; border-radius: 50%; background: #737373; }
+  #tailscale[data-state="on"]::before { background: #22c55e; }
+  #tailscale-section:has(#tailscale:empty), #tailscale-action[hidden] { display: none; }
   #remote .row { display: flex; align-items: center; gap: 8px; }
   #remote .row .input-group { flex: 1; min-width: 0; }
   #test { min-height: 32px; }
   #status:empty { display: none; }
-  #scan { gap: 8px; min-height: 32px; }
+  #scan { gap: 8px; }
   #scan .spinner { width: 12px; height: 12px; border: 1.5px solid #404040; border-top-color: #e5e5e5; border-radius: 50%; animation: spin 700ms linear infinite; }
-  #scan .spinner[hidden] { display: none; }
+  #scan[hidden], #scan .spinner[hidden] { display: none; }
   @keyframes spin { to { transform: rotate(360deg); } }
   #where { margin-bottom: 32px; text-align: center; font-size: 36px; font-weight: 600; letter-spacing: -0.03em; line-height: 1.15; }
   main { justify-self: stretch; width: auto; margin: 0 24px; }
@@ -69,7 +73,8 @@
   body { display: grid; place-items: center; }
   h1 { position: absolute; top: 14px; left: 0; right: 0; display: flex; justify-content: center; pointer-events: none; }
   h1 img { width: 88px; height: auto; }
-  .actions { justify-content: center; }
+  .actions { flex-direction: column; }
+  #continue { align-self: stretch; }
   /* Intro: a large wordmark fades in, moves into the header wordmark, then the page appears. */
   #intro { position: fixed; inset: 0; z-index: 10; display: grid; place-items: center; pointer-events: none; }
   #intro img { width: min(360px, 60vw); height: auto; opacity: 0; }
@@ -93,7 +98,7 @@
       <label class="card"><input type="radio" name="mode" value="remote"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m7 11 2-2-2-2"/><path d="M11 13h4"/><rect width="18" height="18" x="3" y="3" rx="2" ry="2"/></svg><strong>Remote access</strong><p>Connect to Suplex on another machine in your tailnet. All tasks run on that machine.</p></label>
     </div>
     <fieldset id="remote" disabled>
-      <div class="label-row"><label id="url-label" for="host">Suplex URL</label><span id="tailscale" role="status"></span></div>
+      <label id="url-label" for="host">Suplex URL</label>
       <div class="row">
         <div class="input-group" role="group">
           <select id="protocol" aria-label="Protocol"><option value="tailscale" disabled>Tailscale</option><option value="https" selected>https://</option><option value="http">http://</option></select>
@@ -104,12 +109,14 @@
         </div>
         <button id="test" type="button">Test</button>
       </div>
-      <p id="hint"></p>
       <p id="status" role="status" aria-live="polite"></p>
     </fieldset>
+    <div id="tailscale-section">
+      <div class="tailscale-row"><p id="tailscale" role="status"></p><button id="tailscale-action" type="button" hidden></button><button id="scan" type="button" hidden><span class="spinner" aria-hidden="true" hidden></span><span id="scan-label">Rescan Tailnet</span></button></div>
+    </div>
     <input id="url" name="url" type="hidden">
+    <div class="actions"><button class="primary" id="continue" type="submit">Continue</button></div>
   </form>
-  <div class="actions"><button id="scan" type="button"><span class="spinner" aria-hidden="true" hidden></span><span id="scan-label">Scan Tailnet</span></button><button class="primary" id="continue" type="submit" form="modes">Continue</button></div>
 </main>
 <script>
   const modes = document.getElementById("modes");
@@ -119,7 +126,6 @@
   const host = document.getElementById("host");
   const port = document.getElementById("port");
   const machine = document.getElementById("machine");
-  const hint = document.getElementById("hint");
   // Tailscale is https:// to a machine's MagicDNS name, where `tailscale serve` publishes Suplex.
   const tailnet = () => protocol.value === "tailscale";
   const address = () => {
@@ -186,6 +192,30 @@
   };
   const scanButton = document.getElementById("scan");
   const indicator = document.getElementById("tailscale");
+  const action = document.getElementById("tailscale-action");
+  // One line for each Tailscale state, and the one action that moves it toward on.
+  const describe = ({ state, tailnet }) => {
+    switch (state) {
+      case "missing": return ["Tailscale is not installed on this Mac.", "Open the download page"];
+      case "not-running": return ["The Tailscale app is closed.", "Open Tailscale"];
+      case "signed-out": return ["You are not signed in to Tailscale.", "Sign in"];
+      case "approval": return ["An admin must approve this Mac in your tailnet.", "Open Tailscale"];
+      case "off": return [`Tailscale is off.${tailnet ? ` Tailnet: ${tailnet}.` : ""}`, "Start Tailscale"];
+      case "starting": return ["Tailscale connects to your tailnet.", ""];
+      default: return [tailnet ? `Tailnet: ${tailnet}` : "Tailscale is on.", ""];
+    }
+  };
+  let tailscale = null;
+  const show = (status) => {
+    tailscale = status;
+    const [text, label] = describe(status);
+    indicator.dataset.state = status.state;
+    indicator.textContent = text;
+    action.textContent = label;
+    action.hidden = !label;
+    // A scan finds nothing unless Tailscale is on.
+    scanButton.hidden = status.state !== "on";
+  };
   const cards = document.getElementById("cards");
   // Find the tailnet machines, then probe every online one where `tailscale serve` publishes Suplex, and offer the ones that answer.
   const scan = async () => {
@@ -193,16 +223,15 @@
     scanButton.querySelector(".spinner").hidden = false;
     document.getElementById("scan-label").textContent = "Scanning Tailnet";
     try {
-      const machines = await window.suplexDesktop.tailnetMachines();
+      const status = await window.suplexDesktop.tailscaleStatus();
+      const machines = status.machines;
       const kept = chosen() === "instance" ? selected().dataset.url : null;
       const picked = machine.value;
       machine.length = 1;
       for (const card of cards.querySelectorAll(".instance")) card.remove();
-      indicator.dataset.state = machines ? "connected" : "absent";
-      indicator.textContent = machines ? "Tailscale connected" : "Tailscale not available";
-      hint.textContent = machines?.length ? "" : machines ? "Tailscale shows no other machines in your tailnet." : "Tailscale is not available on this Mac. Start Tailscale to select a machine from your tailnet.";
-      protocol.options[0].disabled = !machines?.length;
-      if (!machines?.length) {
+      show(status);
+      protocol.options[0].disabled = !machines.length;
+      if (!machines.length) {
         if (tailnet()) protocol.value = "https";
       } else {
         for (const each of machines) machine.add(machineOption(each));
@@ -212,9 +241,14 @@
         const answered = await Promise.all(online.map(async (each) => (await window.suplexDesktop.testConnection(`https://${each.host}:4111`)).ok));
         const found = online.filter((_, index) => answered[index]);
         const template = document.getElementById("instance");
-        for (const each of found) {
+        // Machines that run Suplex go first, above the other online machines and then the offline ones.
+        for (const [index, each] of found.entries()) {
           const option = [...machine.options].find((candidate) => candidate.value === each.host);
-          if (option) { option.querySelector(".m-dot").dataset.state = "found"; option.querySelector(".m-meta").textContent = "Suplex"; }
+          if (option) {
+            option.querySelector(".m-dot").dataset.state = "found";
+            option.querySelector(".m-meta").textContent = "Suplex";
+            machine.insertBefore(option, machine.options[index + 1]);
+          }
           const card = template.content.firstElementChild.cloneNode(true);
           const input = card.querySelector("input");
           input.dataset.url = `https://${each.host}:4111`;
@@ -228,10 +262,24 @@
     } finally {
       scanButton.disabled = false;
       scanButton.querySelector(".spinner").hidden = true;
-      document.getElementById("scan-label").textContent = "Scan Tailnet";
+      document.getElementById("scan-label").textContent = "Rescan Tailnet";
     }
   };
   scanButton.addEventListener("click", () => { void scan(); });
+  action.addEventListener("click", async () => {
+    if (tailscale.state === "missing") { window.open("https://tailscale.com/download/mac"); return; }
+    if (tailscale.state !== "off") { await window.suplexDesktop.openTailscale(); return; }
+    action.disabled = true;
+    const reason = await window.suplexDesktop.turnOnTailscale();
+    action.disabled = false;
+    await scan();
+    if (reason && tailscale.state === "off") indicator.textContent = reason;
+  });
+  // Follow changes made in the Tailscale app, such as a sign-in, without a manual scan.
+  setInterval(async () => {
+    if (scanButton.disabled) return;
+    if ((await window.suplexDesktop.tailscaleStatus()).state !== tailscale?.state) void scan();
+  }, 3000);
   sync();
   void scan();
   const intro = async () => {

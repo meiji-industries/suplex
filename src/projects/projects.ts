@@ -1,4 +1,4 @@
-import { ProjectIntegrationSchema, type ProjectIntegration } from "./integration-configuration.js";
+import { ProjectIntegrationSchema, type ProjectIntegration, type RepositoryConnection } from "./integration-configuration.js";
 import { ProjectExecutionSchema, type ProjectExecution } from "./execution-configuration.js";
 import { BitbucketClient, createBitbucketReleasePort } from "../integrations/bitbucket.js";
 import { repositoryCoordinate } from "./repository-coordinate.js";
@@ -89,8 +89,16 @@ export interface LocalRepositoryAdapter {
   inspect(input: { repositoryPath: string; baseBranch: string }): Promise<LocalRepositoryInspection>;
 }
 
+export type GithubRepositoryOption = { name: string; defaultBranch: string };
+
 export interface RepositoryProvisioner {
   ensure(input: { cloneUrl: string; repository: string; repositoryPath: string; worktreeRoot: string }): Promise<void>;
+  /** Accounts that can own a new GitHub repository: the signed-in user first, then their organizations. */
+  githubOwners(): Promise<string[]>;
+  /** The owner's repositories that can be cloned, by name, with their default branch. */
+  githubRepositories(owner: string): Promise<GithubRepositoryOption[]>;
+  /** Create a private repository on the host with one empty commit on the base branch, checked out at repositoryPath. */
+  create(input: { connection: RepositoryConnection; repository: string; cloneUrl: string; repositoryPath: string; baseBranch: string }): Promise<void>;
 }
 
 interface ProjectServiceOptions {
@@ -247,6 +255,34 @@ export class ProjectService {
 
   createProject(actorUserId: string, companyId: string, input: ProjectInput): Promise<Project> {
     return this.mutateProject(actorUserId, companyId, input, false);
+  }
+
+  listGithubOwners(actorUserId: string, companyId: string): Promise<string[]> {
+    this.auth.requireCompanyAccess(actorUserId, companyId);
+    return this.repositoryProvisioner.githubOwners();
+  }
+
+  listGithubRepositories(actorUserId: string, companyId: string, owner: string): Promise<GithubRepositoryOption[]> {
+    this.auth.requireCompanyAccess(actorUserId, companyId);
+    return this.repositoryProvisioner.githubRepositories(owner);
+  }
+
+  /** Accepts `name` or `owner/name`; a GitHub name alone goes to the signed-in account. */
+  async createProjectWithNewRepository(actorUserId: string, companyId: string, repositoryName: string, options: { integration?: ProjectIntegration | undefined; baseBranch?: string | undefined } = {}): Promise<Project> {
+    const company = this.auth.requireCompanyAccess(actorUserId, companyId);
+    if (company.status !== "active") throw new ProjectFailure("Company is not active", [finding("company-inactive", "companyId", "Project configuration requires an active company")], 409);
+    const connection = options.integration?.repository ?? { kind: "github" as const };
+    const baseBranch = options.baseBranch ?? "main";
+    const [first, second] = repositoryName.trim().split("/");
+    const owner = second === undefined ? connection.kind === "github" ? (await this.repositoryProvisioner.githubOwners())[0] : undefined : first;
+    const name = second ?? first;
+    if (!owner) throw new ProjectFailure("Repository name is invalid", [finding("repository-name", "repositoryName", "Use workspace/name for a Bitbucket repository")], 422);
+    const coordinate = repositoryCoordinate(`https://${connection.kind === "bitbucket" ? "bitbucket.org" : "github.com"}/${owner}/${name}`);
+    if (!coordinate || !branchPattern.test(baseBranch)) throw new ProjectFailure("Repository name is invalid", [finding("repository-name", "repositoryName", "Use letters, numbers, dots, dashes, and underscores")], 422);
+    const repositoryPath = resolve(this.config.repositoryRoot, ...coordinate.repository.split("/"));
+    if (!inspectedWithinRoot(repositoryPath, resolve(this.config.repositoryRoot))) throw new ProjectFailure("Repository provisioning failed", [finding("path-outside-root", "repositoryName", "Derived project paths escaped the configured Suplex roots")], 422);
+    await this.repositoryProvisioner.create({ connection, repository: coordinate.repository, cloneUrl: coordinate.cloneUrl, repositoryPath, baseBranch });
+    return this.createProjectFromRepository(actorUserId, companyId, coordinate.cloneUrl, { ...options, baseBranch });
   }
 
   async createProjectFromRepository(actorUserId: string, companyId: string, repositoryUrl: string, options: { integration?: ProjectIntegration | undefined; baseBranch?: string | undefined } = {}): Promise<Project> {

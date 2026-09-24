@@ -16,6 +16,32 @@ test("fresh installs have one Coordinator and one Worker with Codex CLI settings
   } finally { await f.close(); }
 });
 
+test("fresh installs point the default agents at the best installed CLI until an admin changes them", async () => {
+  const f = await nativeApp();
+  const settings = () => f.profiles.list(f.userId).map(({ provider, model, reasoningLevel, serviceTier }) => ({ provider, model, reasoningLevel, serviceTier }));
+  const only = (...providers: string[]) => async (provider: string) => providers.includes(provider);
+  try {
+    await f.profiles.chooseDefaults(f.userId, only());
+    expect(settings()).toEqual([
+      { provider: "codex", model: "gpt-5.6-sol", reasoningLevel: "medium", serviceTier: "default" },
+      { provider: "codex", model: "gpt-5.6-luna", reasoningLevel: "max", serviceTier: "priority" },
+    ]);
+    await f.profiles.chooseDefaults(f.userId, only("devin", "codex"));
+    expect(settings()).toEqual([
+      { provider: "codex", model: "gpt-6-astra", reasoningLevel: "medium", serviceTier: "default" },
+      { provider: "codex", model: "gpt-6-sol", reasoningLevel: "medium", serviceTier: "default" },
+    ]);
+    await f.profiles.chooseDefaults(f.userId, only("devin"));
+    expect(settings().map(agent => [agent.model, agent.reasoningLevel])).toEqual([["swe-2", "high"], ["swe-2", "medium"]]);
+    // Installing Claude Code during onboarding still moves untouched defaults.
+    await f.profiles.chooseDefaults(f.userId, only("claude-code", "codex"));
+    expect(settings().map(agent => [agent.provider, agent.model, agent.reasoningLevel])).toEqual([["claude-code", "claude-fable-5-1", "medium"], ["claude-code", "claude-opus-5-5", "medium"]]);
+    f.profiles.update(f.userId, "profile_native_worker", { reasoningLevel: "high" });
+    await f.profiles.chooseDefaults(f.userId, only("codex"));
+    expect(settings().map(agent => [agent.model, agent.reasoningLevel])).toEqual([["claude-fable-5-1", "medium"], ["claude-opus-5-5", "high"]]);
+  } finally { await f.close(); }
+});
+
 test("agent API saves harness providers and rejects vendor providers and old fields", async () => {
   const f = await nativeApp();
   try {

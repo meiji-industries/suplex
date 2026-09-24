@@ -3,14 +3,17 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>Suplex is ready</title>
+<title>You’re all set</title>
 <link rel="stylesheet" href="pages.css">
+<script>
+  // Play the outro unless the viewer asks the system for less motion.
+  if (!matchMedia("(prefers-reduced-motion: reduce)").matches) document.documentElement.classList.add("outro");
+</script>
 </head>
 <body class="ready">
 <main>
-  <svg class="ready-mark" viewBox="0 0 64 64" fill="none" aria-hidden="true"><path d="M36 6 14 36h16l-2 22 22-30H34l2-22Z" stroke="currentColor" stroke-width="3" stroke-linejoin="round" /></svg>
-  <h1>Suplex is ready</h1>
-  <p>Your next idea starts here.</p>
+  <img class="ready-mark" src="wordmark.svg" alt="Suplex">
+  <h1>You’re all set</h1>
   <div class="actions"><button class="primary" id="launch" type="button" autofocus>Launch Suplex <span aria-hidden="true">→</span></button></div>
 </main>
 <script>
@@ -18,6 +21,19 @@
     document.getElementById("launch").disabled = true;
     window.suplexDesktop.launch();
   });
+  // Outro: the reverse of the onboarding intro. The header wordmark moves to the middle, then the page appears.
+  const outro = async () => {
+    const mark = document.querySelector(".ready-mark");
+    await mark.decode().catch(() => undefined);
+    const to = mark.getBoundingClientRect();
+    // Start where the install page shows the header wordmark: 88px wide, 14px from the top, centered.
+    const scale = 88 / to.width;
+    const from = `translate(${innerWidth / 2 - (to.left + to.width / 2)}px, ${14 + (to.height * scale) / 2 - (to.top + to.height / 2)}px) scale(${scale})`;
+    await mark.animate([{ transform: from, opacity: 1 }, { transform: "none", opacity: 1 }], { duration: 800, easing: "cubic-bezier(0.65, 0, 0.35, 1)", fill: "forwards" }).finished;
+    document.documentElement.classList.remove("outro");
+    for (const element of document.querySelectorAll(".ready h1, .ready .actions")) element.animate([{ opacity: 0 }, { opacity: 1 }], { duration: 400, easing: "ease-out" });
+  };
+  if (document.documentElement.classList.contains("outro")) void outro();
 </script>
 </body>
 </html>

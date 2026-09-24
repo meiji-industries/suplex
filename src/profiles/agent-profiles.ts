@@ -3,9 +3,30 @@ import { z } from "zod";
 import { AuthFailure, type AuthService } from "../identity/auth.js";
 import type { SuplexDatabase } from "../platform/database.js";
 import { ProjectAgentTaskPolicySchema } from "../http/contracts/projects.js";
+import { resolveClaudeExecutable, resolveCodexExecutable, resolveDevinExecutable } from "../platform/executable-resolver.js";
 import { AgentProfileInputSchema, AgentProfilePatchSchema, AgentProfileSchema, type AgentProfile } from "./agent-profile-contracts.js";
 
 const selection = "SELECT id, name, role, avatar_seed AS avatarSeed, provider, model, reasoning_level AS reasoningLevel, service_tier AS serviceTier, provider_instance_id AS providerInstanceId, archived_at AS archivedAt, created_at AS createdAt, updated_at AS updatedAt FROM suplex_profiles";
+
+type AgentSettings = Pick<AgentProfile, "provider" | "model" | "reasoningLevel" | "serviceTier">;
+type DefaultAgents = { root: AgentSettings; worker: AgentSettings };
+
+const agent = (provider: AgentSettings["provider"], model: string, reasoningLevel: AgentSettings["reasoningLevel"]): AgentSettings => ({ provider, model, reasoningLevel, serviceTier: "default" });
+/** Fresh-install agents in order of preference; the first provider whose CLI is installed wins. */
+const DEFAULT_AGENTS: readonly DefaultAgents[] = [
+  { root: agent("claude-code", "claude-fable-5-1", "medium"), worker: agent("claude-code", "claude-opus-5-5", "medium") },
+  { root: agent("codex", "gpt-6-astra", "medium"), worker: agent("codex", "gpt-6-sol", "medium") },
+  { root: agent("devin", "swe-2", "high"), worker: agent("devin", "swe-2", "medium") },
+];
+/** What the migrations seed; it stays when no listed CLI is installed. */
+const SEEDED_AGENTS: DefaultAgents = { root: agent("codex", "gpt-5.6-sol", "medium"), worker: { ...agent("codex", "gpt-5.6-luna", "max"), serviceTier: "priority" } };
+const RESOLVERS: Record<string, () => Promise<string>> = { "claude-code": resolveClaudeExecutable, codex: resolveCodexExecutable, devin: resolveDevinExecutable };
+async function cliInstalled(provider: string): Promise<boolean> {
+  const resolve = RESOLVERS[provider];
+  return resolve ? resolve().then(() => true, () => false) : false;
+}
+const sameSettings = (profile: AgentProfile | undefined, settings: AgentSettings): boolean =>
+  profile !== undefined && profile.archivedAt === null && !profile.providerInstanceId && (Object.keys(settings) as (keyof AgentSettings)[]).every(key => profile[key] === settings[key]);
 
 export class AgentProfileService {
   constructor(private readonly database: SuplexDatabase, private readonly auth: AuthService) {}
@@ -57,6 +78,30 @@ export class AgentProfileService {
     let name = `${base} (copy)`;
     for (let copy = 2; names.has(name); copy++) name = `${base} (copy ${copy})`;
     return this.create(userId, AgentProfileInputSchema.strip().parse({ ...source, name, avatarSeed: randomBytes(16).toString("hex") }));
+  }
+
+  /**
+   * Point the seeded Coordinator and Worker at the best installed CLI. Only a fresh install changes: no task has run and
+   * both agents still hold one set of defaults, so an admin's own choice always stays.
+   */
+  async chooseDefaults(userId: string, installed: (provider: string) => Promise<boolean> = cliInstalled): Promise<void> {
+    this.requireAdmin(userId);
+    let chosen: DefaultAgents | undefined;
+    for (const candidate of DEFAULT_AGENTS) if (await installed(candidate.root.provider)) { chosen = candidate; break; }
+    if (!chosen) return;
+    this.database.authTransaction(db => {
+      if (db.prepare("SELECT 1 FROM suplex_tasks LIMIT 1").get()) return;
+      const profiles = z.array(AgentProfileSchema).parse(db.prepare(`${selection} WHERE id IN ('profile_native_root', 'profile_native_worker')`).all());
+      const root = profiles.find(profile => profile.id === "profile_native_root");
+      const worker = profiles.find(profile => profile.id === "profile_native_worker");
+      if (![SEEDED_AGENTS, ...DEFAULT_AGENTS].some(defaults => sameSettings(root, defaults.root) && sameSettings(worker, defaults.worker))) return;
+      if (sameSettings(root, chosen.root) && sameSettings(worker, chosen.worker)) return;
+      const now = new Date().toISOString();
+      for (const [id, settings] of [["profile_native_root", chosen.root], ["profile_native_worker", chosen.worker]] as const) {
+        db.prepare("UPDATE suplex_profiles SET provider = ?, model = ?, reasoning_level = ?, service_tier = ?, updated_at = ? WHERE id = ?").run(settings.provider, settings.model, settings.reasoningLevel, settings.serviceTier, now, id);
+        this.auth.recordAuditEvent(userId, "agent_profile_updated", undefined, undefined, { profileId: id });
+      }
+    });
   }
 
   /** Tasks keep profile snapshots, so they continue after the agent is gone. */

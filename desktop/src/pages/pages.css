@@ -19,8 +19,8 @@ button:focus-visible, a:focus-visible, label:focus-within { outline: 2px solid #
 @media (max-width: 720px) { main { width: auto; margin: 0 24px; } }
 .ready { min-height: 100dvh; display: grid; place-items: center; padding: 64px 24px; }
 .ready main { width: 100%; max-width: 480px; margin: 0; text-align: center; }
-.ready-mark { width: 72px; height: 72px; margin-bottom: 24px; }
+.ready-mark { display: block; width: min(360px, 60vw); height: auto; margin: 0 auto 32px; }
 .ready h1 { font-size: clamp(28px, 5vw, 40px); font-weight: 600; letter-spacing: -0.04em; }
-.ready p { margin-top: 12px; font-size: 14px; }
 .ready .actions { justify-content: center; margin-top: 32px; }
+html.outro .ready-mark, html.outro .ready h1, html.outro .ready .actions { opacity: 0; }
 .ready button { min-height: 44px; padding: 0 24px; gap: 16px; font-size: 14px; }

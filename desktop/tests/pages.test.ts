@@ -47,10 +47,10 @@ describe("choice", () => {
     expect(html).toContain('<option value="tailscale" disabled>Tailscale</option><option value="https" selected>https://</option><option value="http">http://</option>');
     expect(html).toContain('<input id="port" type="text" inputmode="numeric" pattern="[0-9]{1,5}" value="4111"');
     expect(html).not.toContain("localhost");
-    expect(html).toContain('indicator.textContent = machines ? "Tailscale connected" : "Tailscale not available";');
+    expect(html).toContain('case "off": return [`Tailscale is off.${tailnet ? ` Tailnet: ${tailnet}.` : ""}`, "Start Tailscale"];');
     expect(html).toContain("online.map(async (each) => (await window.suplexDesktop.testConnection(`https://${each.host}:4111`)).ok)");
     expect(html).toContain('next.disabled = chosen() === null || (chosen() === "remote" && (url.value === "" || url.value !== proven));');
-    expect(html).toContain('<span id="scan-label">Scan Tailnet</span></button><button class="primary" id="continue"');
+    expect(html).toContain('<button id="tailscale-action" type="button" hidden></button><button id="scan" type="button" hidden>');
     expect(html).toContain('document.getElementById("scan-label").textContent = "Scanning Tailnet";');
     expect(html).toContain("await window.suplexDesktop.testConnection(candidate)");
   });
@@ -73,7 +73,7 @@ describe("install progress", () => {
 });
 
 test("ready offers one Launch button", () => {
-  expect(page("ready.html")).toContain("<h1>Suplex is ready</h1>");
+  expect(page("ready.html")).toContain("<h1>You’re all set</h1>");
   expect(page("ready.html")).toContain('<button class="primary" id="launch" type="button" autofocus>Launch Suplex <span aria-hidden="true">→</span></button>');
 });
 

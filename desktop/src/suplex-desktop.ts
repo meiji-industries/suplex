@@ -8,7 +8,7 @@ import { createDesktopUpdater } from "./desktop-updater";
 import { DEFAULT_PORT, next, readInstallRecord, resolveBoot, runtimePaths, runtimeStamp, writeInstallRecord, type BootEvent, type BootState } from "./boot";
 import { createInstaller, type InstallEvent, type InstallStage, type Installer } from "./installer";
 import { createLocalRuntime, healthy, type LocalRuntime } from "./local-runtime";
-import { tailnetMachines } from "./tailscale";
+import { openTailscale, tailscaleStatus, turnOnTailscale } from "./tailscale";
 import type { DesktopMessage, DesktopSnapshot } from "./preload";
 
 const KEYCHAIN_ACCESS_GROUP = "6KY6743H52.dev.suplex.desktop.webauthn"; // inert until build/entitlements.mac.plist grants it via a provisioning profile
@@ -449,7 +449,9 @@ export async function runSuplexDesktop(input: { readonly argv: readonly string[]
         }
         return (await healthy(target.origin)) ? { ok: true, reason: null } : { ok: false, reason: `No Suplex answered at ${target.origin}/health.` };
       }
-      case "tailnet-machines": return tailnetMachines();
+      case "tailscale-status": return tailscaleStatus();
+      case "turn-on-tailscale": return turnOnTailscale();
+      case "open-tailscale": await openTailscale(); return null;
       default: return null;
     }
   });

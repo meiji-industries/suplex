@@ -50,7 +50,8 @@ export const ProjectPatchBodySchema = ProjectBodySchema.partial().extend({
   }).strict().optional(),
 }).strict().refine((value) => Object.keys(value).length > 0, "Provide at least one project field");
 export const ProjectRepositoryBodySchema = z.object({ repositoryUrl: z.string().min(1), integration: ProjectIntegrationSchema.optional(), baseBranch: z.string().min(1).optional() }).strict();
-export const ProjectCreateBodySchema = z.union([ProjectRepositoryBodySchema, ProjectBodySchema]);
+export const ProjectNewRepositoryBodySchema = z.object({ repositoryName: z.string().min(1).max(200), integration: ProjectIntegrationSchema.optional(), baseBranch: z.string().min(1).optional() }).strict();
+export const ProjectCreateBodySchema = z.union([ProjectRepositoryBodySchema, ProjectNewRepositoryBodySchema, ProjectBodySchema]);
 export const ProjectResponseSchema = ProjectBodySchema.extend({
   id: z.string(), companyId: z.string(), repository: z.string().optional(), createdAt: z.string(), updatedAt: z.string(),
 }).strip();

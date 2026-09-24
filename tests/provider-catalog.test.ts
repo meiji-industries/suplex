@@ -26,7 +26,7 @@ test("lists one row per agent tool with OpenCode's vendors folded into qualified
 
   const listed = await readProviders({ directory: "/workspace", connection: async id => ({ status: "connected", summary: `checked ${id}` }) });
   expect(listed.providers.map(provider => [provider.id, provider.status, provider.modelCount])).toEqual([
-    ["claude-code", "missing", 9], ["codex", "configured", 5], ["devin", "missing", 4], ["opencode", "configured", 2],
+    ["claude-code", "missing", 9], ["codex", "configured", 6], ["devin", "missing", 4], ["opencode", "configured", 2],
   ]);
   expect(listed.providers.find(provider => provider.id === "opencode")?.models).toEqual([
     { id: "openai/gpt-5.6-sol", label: "GPT-5.6 Sol (OpenAI)" },

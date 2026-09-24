@@ -169,7 +169,7 @@ test("clones a GitHub repository under the configured Suplex roots", async () =>
   }), {
     localRepository: { async inspect(input) { return { canonicalPath: input.repositoryPath, remoteRepository: "meiji-industries/sampler", clean: true, baseSha: "a".repeat(40), targetSha: "b".repeat(40) }; } },
     github,
-    repositoryProvisioner: { async ensure(coordinate) { provisioned.push(coordinate); await mkdir(coordinate.repositoryPath, { recursive: true }); await mkdir(coordinate.worktreeRoot, { recursive: true }); await writeFile(join(coordinate.repositoryPath, "mise.toml"), "[tasks.setup]\nrun = \"cargo fetch --locked\"\n[tasks.test]\nrun = \"cargo test\"\n"); } },
+    repositoryProvisioner: { async ensure(coordinate) { provisioned.push(coordinate); await mkdir(coordinate.repositoryPath, { recursive: true }); await mkdir(coordinate.worktreeRoot, { recursive: true }); await writeFile(join(coordinate.repositoryPath, "mise.toml"), "[tasks.setup]\nrun = \"cargo fetch --locked\"\n[tasks.test]\nrun = \"cargo test\"\n"); }, githubOwners: async () => ["unused"], githubRepositories: async () => [], async create() { throw new Error("unused"); } },
   });
   try {
     const project = await projects.createProjectFromRepository(value.adminId, value.companyId, "https://github.com/meiji-industries/sampler.git");
@@ -184,6 +184,35 @@ test("clones a GitHub repository under the configured Suplex roots", async () =>
       rootProfileId: "profile_native_root", workerProfileId: "profile_native_worker",
     });
     expect(provisioned).toEqual([expect.objectContaining({ cloneUrl: "https://github.com/meiji-industries/sampler.git", repository: "meiji-industries/sampler" })]);
+  } finally {
+    await close(value);
+  }
+});
+
+test("creates a new repository on the host, then adds it like a clone", async () => {
+  const value = await fixture();
+  const created: Array<{ repository: string; cloneUrl: string; repositoryPath: string; baseBranch: string }> = [];
+  const projects = new ProjectService(value.database, value.auth, createTestConfig(value.root, {
+    reachableAddress: "https://suplex.tailnet.ts.net:4111",
+    repositoryRoot: join(value.root, "repositories"),
+    worktreeRoot: value.worktreeRoot,
+  }), {
+    localRepository: { async inspect(input) { return { canonicalPath: input.repositoryPath, remoteRepository: "meiji-industries/fresh", clean: true, baseSha: "a".repeat(40), targetSha: "b".repeat(40) }; } },
+    github,
+    repositoryProvisioner: {
+      async ensure(input) { await mkdir(input.worktreeRoot, { recursive: true }); },
+      githubOwners: async () => ["Meiji-Industries", "acme"],
+      githubRepositories: async () => [],
+      async create({ connection: _connection, ...input }) { created.push(input); await mkdir(input.repositoryPath, { recursive: true }); },
+    },
+  });
+  try {
+    const project = await projects.createProjectWithNewRepository(value.adminId, value.companyId, "fresh", { baseBranch: "trunk" });
+    expect(project).toMatchObject({ name: "fresh", repository: "meiji-industries/fresh", baseBranch: "trunk" });
+    expect(created).toEqual([{ repository: "meiji-industries/fresh", cloneUrl: "https://github.com/meiji-industries/fresh.git", repositoryPath: join(value.root, "repositories", "meiji-industries", "fresh"), baseBranch: "trunk" }]);
+    await expect(projects.createProjectWithNewRepository(value.adminId, value.companyId, "fresh", { integration: { repository: { kind: "bitbucket", tokenEnvironment: "BITBUCKET_TOKEN" }, tracker: null } })).rejects.toMatchObject({ findings: [expect.objectContaining({ code: "repository-name" })] });
+    await expect(projects.createProjectWithNewRepository(value.adminId, value.companyId, "../escape")).rejects.toMatchObject({ statusCode: 422 });
+    expect(created).toHaveLength(1);
   } finally {
     await close(value);
   }

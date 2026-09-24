@@ -20,9 +20,17 @@ const projects: FastifyPluginAsync<ProjectRoutesOptions> = async (app, options) 
   typed.post("/api/companies/:companyId/projects", { schema: { params: CompanyIdParamsSchema, body: ProjectCreateBodySchema, response: { 201: ProjectResponseSchema } } }, async (request, reply) => {
     const project = "repositoryUrl" in request.body
       ? await projects.createProjectFromRepository(request.suplexUser.id, request.params.companyId, request.body.repositoryUrl, request.body)
+      : "repositoryName" in request.body
+        ? await projects.createProjectWithNewRepository(request.suplexUser.id, request.params.companyId, request.body.repositoryName, request.body)
       : await projects.createProject(request.suplexUser.id, request.params.companyId, request.body);
     return reply.code(201).send(project);
   });
+  typed.get("/api/companies/:companyId/repository-owners", { schema: { params: CompanyIdParamsSchema, response: { 200: z.object({ owners: z.array(z.string()) }) } } }, async (request, reply) => reply.send({ owners: await projects.listGithubOwners(request.suplexUser.id, request.params.companyId) }));
+  typed.get("/api/companies/:companyId/repository-owners/:owner/repositories", { schema: {
+    // A GitHub login: letters, numbers, and single dashes, never a leading dash, so it cannot read as a CLI flag.
+    params: CompanyIdParamsSchema.extend({ owner: z.string().regex(/^[A-Za-z0-9][A-Za-z0-9-]{0,38}$/) }),
+    response: { 200: z.object({ repositories: z.array(z.object({ name: z.string(), defaultBranch: z.string() })) }) },
+  } }, async (request, reply) => reply.send({ repositories: await projects.listGithubRepositories(request.suplexUser.id, request.params.companyId, request.params.owner) }));
   typed.get("/api/projects/:projectId", { schema: { params: ProjectIdParamsSchema, response: { 200: ProjectResponseSchema } } }, async (request, reply) => reply.send(projects.getProject(request.suplexUser.id, request.params.projectId)));
   typed.get("/api/projects/:projectId/issues", { schema: {
     params: ProjectIdParamsSchema,

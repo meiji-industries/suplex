@@ -58,14 +58,14 @@ export function useOnboardingData(company: ApiCompany | undefined): OnboardingDa
     setLoading(true);
     setError("");
     try {
-      const [providerResponse, profileResponse, projectResponse] = await Promise.all([
-        readJson<ProviderListResponse>("/api/admin/providers"),
-        readJson<{ profiles: ApiProfile[] }>("/api/profiles?includeArchived=true"),
-        readJson<{ projects: ApiProject[] }>(`/api/companies/${encodeURIComponent(company.id)}/projects`),
+      // Show each list when it arrives: the provider checks take seconds, the agents and projects do not.
+      await Promise.all([
+        readJson<ProviderListResponse>("/api/admin/providers").then(result => setProviders(result.providers)),
+        // A fresh install points its default agents at the installed CLI before the list is read.
+        readJson("/api/admin/profiles/defaults", { method: "POST" }).catch(() => undefined)
+          .then(() => readJson<{ profiles: ApiProfile[] }>("/api/profiles?includeArchived=true")).then(result => setProfiles(result.profiles)),
+        readJson<{ projects: ApiProject[] }>(`/api/companies/${encodeURIComponent(company.id)}/projects`).then(result => setProjects(result.projects)),
       ]);
-      setProviders(providerResponse.providers);
-      setProfiles(profileResponse.profiles);
-      setProjects(projectResponse.projects);
     } catch (reason) {
       setError(reason instanceof Error ? reason.message : "Suplex could not check the providers. Select Check again.");
     } finally {

@@ -60,7 +60,7 @@ test("projects desktop flow creates a project and opens its configuration", asyn
   const auth = new AuthService(database, config, { webAuthn: webAuthn() });
   const projects = new ProjectService(database, auth, config, {
     github,
-    repositoryProvisioner: { async ensure(input) { await mkdir(input.repositoryPath, { recursive: true }); await mkdir(input.worktreeRoot, { recursive: true }); } },
+    repositoryProvisioner: { async ensure(input) { await mkdir(input.repositoryPath, { recursive: true }); await mkdir(input.worktreeRoot, { recursive: true }); }, githubOwners: async () => ["acme"], githubRepositories: async () => [{ name: "suplex", defaultBranch: "main" }], async create() { throw new Error("Browser tests clone"); } },
   });
   const app = createApp({ config, auth, projects, profiles: new AgentProfileService(database, auth), health: {
     database: async () => ({ id: "database", label: "Database", status: "healthy", summary: "Ready", details: {} }),
@@ -88,7 +88,8 @@ test("projects desktop flow creates a project and opens its configuration", asyn
       await page.getByRole("heading", { name: "Projects", exact: true }).waitFor();
       const newProject = page.getByRole("button", { name: "New project", exact: true });
       await newProject.click();
-      await page.getByLabel("Repository URL", { exact: true }).fill("https://github.com/acme/suplex.git");
+      await page.getByLabel("Repository", { exact: true }).click();
+      await page.getByRole("option", { name: "suplex", exact: true }).click();
       await page.getByRole("dialog", { name: "New project", exact: true }).getByRole("button", { name: "New project", exact: true }).click();
       await page.getByText("suplex", { exact: true }).waitFor();
       const suplexProject = page.locator("article").filter({ hasText: "suplex" });

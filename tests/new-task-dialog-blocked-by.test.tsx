@@ -205,3 +205,31 @@ test("the picker reports an empty task result", async () => {
   await act(async () => { setText(search, "nothing"); });
   expect(view.container.textContent).toContain("No matching backlog, queued, or active tasks.");
 });
+
+test("Workflow picker shows a non-default workflow by name and clears back to Standard", async () => {
+  const review = { ...workflow, id: "workflow_native_independent_review", name: "Second opinion", engine: "independent_review" };
+  const fallback = api.readJson.getMockImplementation()!;
+  api.readJson.mockImplementation(async (url: string, init?: RequestInit) => url === "/api/workflows?includeArchived=true" ? { workflows: [workflow, review] } : fallback(url, init));
+  const view = mount();
+  await flush();
+  const trigger = () => view.container.querySelector<HTMLButtonElement>('[aria-label="Workflow"]')!;
+  const clear = () => view.container.querySelector<HTMLButtonElement>('[aria-label="Clear workflow"]');
+  const title = view.container.querySelector<HTMLInputElement>('[aria-label="Task title"]')!;
+  const submit = async () => { await act(async () => { setText(title, "Pick a workflow"); title.form?.dispatchEvent(new Event("submit", { bubbles: true, cancelable: true })); await Promise.resolve(); }); };
+  const lastPost = () => JSON.parse(api.readJson.mock.calls.filter(([url, init]) => url === "/api/companies/company-1/tasks" && init?.method === "POST").at(-1)![1].body);
+  expect(trigger().textContent).toBe("Workflow");
+  expect(clear()).toBeNull();
+
+  await act(async () => { trigger().click(); });
+  await act(async () => { button(view.container, "Second opinion").click(); });
+  expect(trigger().textContent).toBe("Second opinion");
+  expect(clear()).not.toBeNull();
+  await submit();
+  expect(lastPost().workflow).toBe("independent_review");
+
+  await act(async () => { clear()!.click(); });
+  expect(trigger().textContent).toBe("Workflow");
+  expect(clear()).toBeNull();
+  await submit();
+  expect(lastPost().workflow).toBe("standard");
+});

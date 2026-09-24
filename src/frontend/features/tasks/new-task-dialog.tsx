@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ReactElement } from "react";
 import { isProfileAllowed } from "../../../projects/provider-policy.js";
-import { FileText, FolderKanban, MoreHorizontal, X } from "lucide-react";
+import { FileText, FolderKanban, MoreHorizontal, Workflow as WorkflowIcon, X } from "lucide-react";
 import { TaskImageInputSchema, DeliveryTargetSchema, VisualEvidenceSchema, type Task, type TaskInput } from "../../../tasks/contracts.js";
 import { ADVISOR_LABELS, workflowDefinition, type AdvisorProfileIds, type AdvisorRole, type WorkflowId } from "../../../coordination/workflows.js";
 import type { ApiProfile, ApiProject, ApiTaskTemplate, ApiWorkflow } from "../../shell/view-shared.js";
@@ -228,6 +228,10 @@ export function NewTaskDialog({ open, onOpenChange, companyId, onCreated, initia
     if (Object.values(advisorProfileIds).some(id => id && !allowed(id))) setAdvisorProfileIds(current => Object.fromEntries(Object.entries(current).filter(([, id]) => id && allowed(id))));
   }, [editing, open, settingsLoaded, project, profiles, rootProfileId, workerProfileId, advisorProfileIds]);
   const definition = workflowDefinition(workflow);
+  // The default Standard record shows as the plain Workflow trigger; any other selection shows its name and a clear button.
+  const defaultWorkflow = findRecord(workflows, undefined, "standard");
+  const selectedWorkflow = workflows.find(record => record.id === workflowId);
+  const pickedWorkflow = selectedWorkflow && selectedWorkflow.id !== defaultWorkflow?.id ? selectedWorkflow : undefined;
   return <Dialog open={open} onOpenChange={value => { if (!busy) onOpenChange(value); }}>
     <DialogContent className="max-h-[min(85vh,460px)] w-[min(92vw,936px)] max-w-none gap-0 overflow-y-auto rounded-xl p-0 shadow-2xl sm:max-w-[936px]" showCloseButton={false}>
       <DialogHeader className="px-4 py-3 sm:px-5">
@@ -238,7 +242,13 @@ export function NewTaskDialog({ open, onOpenChange, companyId, onCreated, initia
         </BreadcrumbItem><BreadcrumbSeparator /><BreadcrumbItem><DialogTitle className="font-normal">{editing ? "Edit task" : "New task"}</DialogTitle></BreadcrumbItem></BreadcrumbList></Breadcrumb>
         <div className="ml-auto flex flex-wrap items-center justify-end gap-1">
           <TaskSourcePicker projectId={projectId} value={sourceSummary} disabled={busy || editing} pullRequestsOnly={repair} onClear={() => { setSource(undefined); setSourceSummary(undefined); }} onSelect={(summary, selector) => { setSource(selector); setSourceSummary(summary); const prefill = prefillForTaskSource(summary); if (!title) setTitle(prefill.title); if (!description) setDescription(prefill.description); }} />
-          <label className="flex items-center gap-1.5 text-xs"><span className="text-muted-foreground">Workflow</span><Select value={workflowId} onValueChange={value => { const record = workflows.find(candidate => candidate.id === value); if (record) selectRecord(record); }}><SelectTrigger aria-label="Workflow" size="sm" disabled={busy}><SelectValue /></SelectTrigger><SelectContent>{workflows.filter(record => (!record.archivedAt || record.id === workflowId) && (repositoryConnection?.kind !== "bitbucket" || record.engine !== REPAIR)).map(record => <SelectItem key={record.id} value={record.id}>{record.name}</SelectItem>)}</SelectContent></Select></label>
+          <DropdownMenu>
+            <div className="flex items-center gap-2">
+              <DropdownMenuTrigger render={<Button type="button" variant="ghost" size="sm" aria-label="Workflow" disabled={busy} />}>{pickedWorkflow ? <span className="max-w-[24rem] truncate">{pickedWorkflow.name}</span> : <><WorkflowIcon className="size-3.5" />Workflow</>}</DropdownMenuTrigger>
+              {pickedWorkflow && defaultWorkflow ? <Button type="button" variant="ghost" size="icon-sm" aria-label="Clear workflow" disabled={busy} onClick={() => selectRecord(defaultWorkflow)}><X className="size-3.5" /></Button> : null}
+            </div>
+            <DropdownMenuContent align="end">{workflows.filter(record => (!record.archivedAt || record.id === workflowId) && (repositoryConnection?.kind !== "bitbucket" || record.engine !== REPAIR)).map(record => <DropdownMenuItem key={record.id} onClick={() => selectRecord(record)}><span className="min-w-0 flex-1 truncate">{record.name}</span>{record.id === workflowId ? <span aria-label="Selected">✓</span> : null}</DropdownMenuItem>)}</DropdownMenuContent>
+          </DropdownMenu>
           <DropdownMenu><DropdownMenuTrigger render={<Button type="button" variant="ghost" size="sm" disabled={busy || !projectId} />}><FileText className="size-3.5" />Template</DropdownMenuTrigger><DropdownMenuContent align="end">{templates.length ? templates.map(template => <DropdownMenuItem key={template.id} onClick={() => applyTemplate(template)}>{template.name}</DropdownMenuItem>) : <DropdownMenuItem render={<a href={withCompany(`/projects/${encodeURIComponent(projectId)}/templates`, companyId)} />}>Open templates</DropdownMenuItem>}</DropdownMenuContent></DropdownMenu>
         </div></div>
       </DialogHeader>

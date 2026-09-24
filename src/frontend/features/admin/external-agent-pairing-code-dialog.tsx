@@ -44,7 +44,7 @@ export function ExternalAgentPairingCodeDialog({
                 <p className="text-sm font-medium">Copy the setup instructions</p>
                 <Badge variant="secondary">Recommended</Badge>
               </div>
-              <p className="text-[11px] text-muted-foreground">
+              <p className="text-xs text-muted-foreground">
                 Give the instructions to the client that will use this identity.
               </p>
             </div>
@@ -79,13 +79,13 @@ export function ExternalAgentPairingCodeDialog({
               </span>
             </button>
           </div>
-          <div className="flex items-center gap-2 text-[11px] text-muted-foreground before:h-px before:flex-1 before:bg-border after:h-px after:flex-1 after:bg-border">
+          <div className="flex items-center gap-2 text-xs text-muted-foreground before:h-px before:flex-1 before:bg-border after:h-px after:flex-1 after:bg-border">
             or
           </div>
           <div className="space-y-2">
             <div>
               <p className="text-sm font-medium">Manual setup</p>
-              <p className="text-[11px] text-muted-foreground">
+              <p className="text-xs text-muted-foreground">
                 Use this single-use code to configure the client yourself.
               </p>
             </div>
@@ -105,7 +105,7 @@ export function ExternalAgentPairingCodeDialog({
               </span>
             </button>
             {data?.expiresAt ? (
-              <p className="text-[11px] text-muted-foreground">
+              <p className="text-xs text-muted-foreground">
                 Expires {adminDate(data.expiresAt)}
               </p>
             ) : null}
@@ -113,7 +113,7 @@ export function ExternalAgentPairingCodeDialog({
         </div>
         {codeCopied || instructionsCopied ? (
           <span
-            className="pointer-events-none fixed top-4 left-1/2 z-50 -translate-x-1/2 whitespace-nowrap rounded-md border bg-popover px-2 py-1 text-[11px] text-popover-foreground animate-in slide-in-from-top-2 duration-150"
+            className="pointer-events-none fixed top-4 left-1/2 z-50 -translate-x-1/2 whitespace-nowrap rounded-md border bg-popover px-2 py-1 text-xs text-popover-foreground animate-in slide-in-from-top-2 duration-150"
             role="status"
             aria-live="polite"
           >

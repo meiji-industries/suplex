@@ -61,10 +61,10 @@ export function TaskActivityTimeline({ taskId }: { taskId: string }) {
   const lanes = [...laneMap.values()];
 
   return <section aria-label="Task timeline" data-task-timeline className="min-w-0 border-b border-border/70 pb-3">
-    <div className="mb-2 flex flex-wrap items-center gap-2"><h3 className="text-xs font-semibold">Timeline</h3>{intervals.length ? <span className="text-[11px] tabular-nums text-muted-foreground" title="Total Coordinator and Worker execution time. Concurrent executions count separately. Elapsed span from the first agent response to the last.">Worked for {taskTimelineDuration(worked)} during {taskTimelineDuration(end - start)}</span> : null}</div>
+    <div className="mb-2 flex flex-wrap items-center gap-2"><h3 className="text-xs font-semibold">Timeline</h3>{intervals.length ? <span className="text-xs tabular-nums text-muted-foreground" title="Total Coordinator and Worker execution time. Concurrent executions count separately. Elapsed span from the first agent response to the last.">Worked for {taskTimelineDuration(worked)} during {taskTimelineDuration(end - start)}</span> : null}</div>
     {error ? <Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert> : null}
     {!intervals.length ? <p className="text-xs text-muted-foreground">{snapshot ? "No agent time yet." : error ? "Agent time is not available." : "Loading timeline…"}</p> : <div className="overflow-x-auto" aria-label="Task timeline Gantt chart">
-      <div className="grid min-w-[45rem] grid-cols-[13rem_minmax(32rem,1fr)] text-[11px]">
+      <div className="grid min-w-[45rem] grid-cols-[13rem_minmax(32rem,1fr)] text-xs">
         <div className="sticky left-0 z-20 border-b border-border bg-background px-2 py-1 text-muted-foreground">Agent</div>
         <div className="relative h-6 border-b border-border" data-task-time-axis>
           {ticks.map((tick, index) => <span key={index} className="absolute top-1 whitespace-nowrap text-muted-foreground" style={index === 4 ? { right: 0 } : { left: `${index * 25}%` }}>{new Date(tick).toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit", ...(span < 300_000 ? { second: "2-digit" } : {}) })}</span>)}
@@ -80,7 +80,7 @@ export function TaskActivityTimeline({ taskId }: { taskId: string }) {
               const status = entry.status === "running" && !entry.live ? "Observation not available" : statuses[entry.status];
               const role = entry.label ?? roleLabel({ kind: entry.role, advisorRole: entry.advisorRole ?? null });
               const label = `${lane.name}, ${role}, session ${entry.attempt}: ${timestamp(entry.start)} to ${timestamp(entry.end)}, ${taskTimelineDuration(entry.end - entry.start)}. ${status}.`;
-              return <div role="listitem" tabIndex={0} key={entry.id} data-task-timing={entry.role} data-task-agent-id={entry.agentId} data-task-timing-active={entry.live || undefined} aria-label={label} title={label} className={`absolute top-3 flex h-5 items-center overflow-hidden rounded-sm px-1 text-left text-[10px] leading-5 outline-none focus-visible:ring-2 focus-visible:ring-ring ${entry.live ? "phase-timing-active text-emerald-950 motion-reduce:animate-none" : entry.status === "failed" ? "bg-destructive/20 text-destructive" : "bg-primary/15 text-foreground"}`} style={{ left: `${left}%`, width: `${width}%` }}><span className="truncate">{role}</span></div>;
+              return <div role="listitem" tabIndex={0} key={entry.id} data-task-timing={entry.role} data-task-agent-id={entry.agentId} data-task-timing-active={entry.live || undefined} aria-label={label} title={label} className={`absolute top-3 flex h-5 items-center overflow-hidden rounded-sm px-1 text-left text-xs leading-5 outline-none focus-visible:ring-2 focus-visible:ring-ring ${entry.live ? "phase-timing-active text-emerald-950 motion-reduce:animate-none" : entry.status === "failed" ? "bg-destructive/20 text-destructive" : "bg-primary/15 text-foreground"}`} style={{ left: `${left}%`, width: `${width}%` }}><span className="truncate">{role}</span></div>;
             })}
           </div>
         </div>)}

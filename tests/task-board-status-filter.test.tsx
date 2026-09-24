@@ -126,7 +126,7 @@ test("the board keeps queued and backlog tasks in separate columns and filters",
   await act(async () => root.unmount());
 });
 
-test("board cards and list rows label every Blocked by task from the same prerequisite list", async () => {
+test("board cards label every Blocked by task and list rows omit it", async () => {
   const blocked = { ...task("task-3", "Ship the release", "backlog"), dependsOn: ["task-1", "task-2"], blockedBy: [{ id: "task-1", title: "Repair the poller", status: "active" as const }, { id: "task-2", title: "Plan the migration", status: "delivered" as const }] };
   const tasks = [task("task-1", "Repair the poller", "active"), blocked];
   api.readJson.mockImplementation(async (path: string) => path.includes("/projects") ? { projects: [] } : { tasks });
@@ -135,7 +135,7 @@ test("board cards and list rows label every Blocked by task from the same prereq
     document.body.append(container);
     const root = createRoot(container);
     await act(async () => { root.render(<ServerStateProvider><TaskDataProvider><TasksView mode={mode} /></TaskDataProvider></ServerStateProvider>); });
-    expect(Array.from(container.querySelectorAll("[data-task-blocked-by]")).map(label => label.textContent)).toEqual(["Blocked by Repair the poller · Active, Plan the migration · Delivered"]);
+    expect(Array.from(container.querySelectorAll("[data-task-blocked-by]")).map(label => label.textContent)).toEqual(mode === "board" ? ["Blocked by Repair the poller · Active, Plan the migration · Delivered"] : []);
     await act(async () => { root.unmount(); container.remove(); });
   }
 });

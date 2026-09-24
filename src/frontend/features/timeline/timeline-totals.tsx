@@ -76,7 +76,7 @@ function SummaryTable({
                       {total.label}
                     </span>
                   )}
-                  <span className="block truncate text-[11px] text-muted-foreground">
+                  <span className="block truncate text-xs text-muted-foreground">
                     {total.secondary}
                   </span>
                 </td>

@@ -36,7 +36,7 @@ function RecentTasksContent({ close, costs }: { close?: () => void; costs: Retur
         <span className="flex min-w-0 flex-1 items-center gap-2">
           <span data-recent-task-status={task.status} className={`inline-flex shrink-0${task.status === "active" ? " animate-spin" : ""}`}><TaskStatusIcon status={task.status} pullRequestState={task.pullRequest?.state} /></span>
           <span className="min-w-0 flex-1 truncate">{task.title}{task.blockedBy.length ? <span data-recent-task-blocked-by className="text-muted-foreground"> · {blockedByLabel(task.blockedBy)}</span> : null}</span>
-          {cost?.cost != null ? <CostValue value={cost.cost} subsidized={cost.subsidized} partial={cost.partial} className="shrink-0 text-[10px] tabular-nums text-muted-foreground" suffix={cost.partial ? "+" : ""} /> : null}
+          {cost?.cost != null ? <CostValue value={cost.cost} subsidized={cost.subsidized} partial={cost.partial} className="shrink-0 text-xs tabular-nums text-muted-foreground" suffix={cost.partial ? "+" : ""} /> : null}
         </span>
       </a>} isActive={window.location.pathname === `/tasks/${task.id}`} tooltip={`${task.title}${task.blockedBy.length ? ` · ${blockedByLabel(task.blockedBy)}` : ""}`} />
       {task.pullRequest ? <RecentPullRequest taskId={task.id} number={task.pullRequest.number} state={task.pullRequest.state} headSha={task.pullRequest.headSha} status={task.status} archivedAt={task.archivedAt} onArchived={cacheTask} onError={setArchiveError} /> : null}

@@ -188,7 +188,7 @@ export function TimelineView(): ReactElement {
       }
       headerRight={
         <span
-          className="hidden text-[11px] text-muted-foreground sm:inline"
+          className="hidden text-xs text-muted-foreground sm:inline"
           title="Concurrent agent invocations are summed"
         >
           Recorded agent time ·{" "}
@@ -236,7 +236,7 @@ export function TimelineView(): ReactElement {
             </label>
           </div>
         </div>
-        <div className="flex min-h-8 flex-wrap items-center gap-x-4 gap-y-2 border-b border-border/70 px-3 py-1 text-[11px] text-muted-foreground sm:px-4">
+        <div className="flex min-h-8 flex-wrap items-center gap-x-4 gap-y-2 border-b border-border/70 px-3 py-1 text-xs text-muted-foreground sm:px-4">
           {(Object.keys(roleColors) as AgentRole[]).map((role) => (
             <span key={role} className="flex items-center gap-1.5">
               <span className={`size-2 rounded-sm ${roleColors[role]}`} />
@@ -330,7 +330,7 @@ export function TimelineView(): ReactElement {
           />
         ) : null}
         {scopeLoaded ? (
-          <div className="flex h-8 items-center gap-2 border-b border-border/70 px-3 text-[11px] text-muted-foreground sm:px-4">
+          <div className="flex h-8 items-center gap-2 border-b border-border/70 px-3 text-xs text-muted-foreground sm:px-4">
             <label className="flex items-center gap-2">
               <Checkbox
                 checked={groupByProject}

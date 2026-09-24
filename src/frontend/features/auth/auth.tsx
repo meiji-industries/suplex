@@ -53,7 +53,7 @@ export function AuthView(): ReactElement {
     <ApplicationFrame title={enrollment ? "Enroll passkey" : "Sign in"}>
       <div className="mx-auto max-w-md px-4 py-4 sm:px-8">
         <div className="bg-card p-4">
-          <div className="mb-5 flex items-center justify-between"><span className="text-[13px] font-semibold">{enrollment ? "Passkey enrollment" : "Passkey sign-in"}</span><span className="text-xs text-muted-foreground">No password</span></div>
+          <div className="mb-5 flex items-center justify-between"><span className="text-sm font-semibold">{enrollment ? "Passkey enrollment" : "Passkey sign-in"}</span><span className="text-xs text-muted-foreground">No password</span></div>
           {enrollment ? <FieldGroup><Field><FieldLabel htmlFor="invitation">Invitation token</FieldLabel><Input id="invitation" autoComplete="off" value={token} onChange={(event) => setToken(event.target.value)} /></Field><Button onClick={() => void enroll()} disabled={busy || token.length < 16}>{busy ? "Waiting for passkey…" : "Enroll passkey"}</Button></FieldGroup> : <Button className="w-full" onClick={() => void signIn()} disabled={busy}>{busy ? "Waiting for passkey…" : "Sign in with passkey"}</Button>}
           {error ? <div className="mt-3 text-xs text-destructive"><Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert></div> : null}
         </div>

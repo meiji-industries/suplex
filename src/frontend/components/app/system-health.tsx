@@ -215,7 +215,7 @@ export function HealthRow({ check, compact = false }: { check: HealthCheck; comp
     <Collapsible.Root data-slot="health-row" data-status={check.status} className="group">
       <Collapsible.Trigger className="flex min-h-9 w-full items-center gap-2.5 px-3 py-2 text-left outline-none transition-colors hover:bg-muted/50 focus-visible:bg-muted/70 focus-visible:ring-1 focus-visible:ring-ring/50 sm:px-4">
         <HealthCheckIcon check={check} />
-        <span className="min-w-0 flex-1"><span className="block truncate text-[13px] font-medium text-foreground">{check.label}</span>{!compact ? <span className="block text-xs text-muted-foreground">{healthCheckPurpose(check.id)}</span> : null}</span>
+        <span className="min-w-0 flex-1"><span className="block truncate text-sm font-medium text-foreground">{check.label}</span>{!compact ? <span className="block text-xs text-muted-foreground">{healthCheckPurpose(check.id)}</span> : null}</span>
         <CheckStatusIndicator check={check} />
         <ChevronRight className="size-3.5 shrink-0 text-muted-foreground transition-transform group-data-[panel-open]:rotate-90" />
       </Collapsible.Trigger>
@@ -240,7 +240,7 @@ export function HealthCheckSections({ snapshot, compact = false, attentionOnly =
   ];
   return (
     <div className="space-y-4">
-      {groups.filter(group => group.checks.length > 0).map((group, index) => <section key={group.title} aria-labelledby={`${sectionId}-${index}`}><div className="flex h-8 items-center justify-between px-3 sm:px-4"><h2 id={`${sectionId}-${index}`} className="text-[11px] font-semibold text-muted-foreground">{group.title}</h2><span className="text-[11px] text-muted-foreground">{group.checks.length}</span></div><div>{group.checks.map(check => <HealthRow check={check} compact={compact} key={`${check.id}-${check.remedy ?? ""}`} />)}</div></section>)}
+      {groups.filter(group => group.checks.length > 0).map((group, index) => <section key={group.title} aria-labelledby={`${sectionId}-${index}`}><div className="flex h-8 items-center justify-between px-3 sm:px-4"><h2 id={`${sectionId}-${index}`} className="text-xs font-semibold text-muted-foreground">{group.title}</h2><span className="text-xs text-muted-foreground">{group.checks.length}</span></div><div>{group.checks.map(check => <HealthRow check={check} compact={compact} key={`${check.id}-${check.remedy ?? ""}`} />)}</div></section>)}
       {checks.length === 0 ? <p className="p-4 text-xs text-muted-foreground">{attentionOnly ? "No checks need attention." : "No checks are available."}</p> : null}
     </div>
   );
@@ -279,7 +279,7 @@ export function SystemHealthIndicator({ sidebar = false }: { sidebar?: boolean }
           <StatusLight level={level} label={label} />
         </span>
         {sidebar ? <span>{label}</span> : null}
-        {sidebar && instanceHost ? <span className="ml-auto min-w-0 truncate rounded-[5px] bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground" title={instanceHost} data-testid="instance-host">{instanceHost}</span> : null}
+        {sidebar && instanceHost ? <span className="ml-auto min-w-0 truncate rounded-[5px] bg-muted px-1.5 py-0.5 text-xs font-medium text-muted-foreground" title={instanceHost} data-testid="instance-host">{instanceHost}</span> : null}
       </DialogTrigger>
       <DialogContent showCloseButton>
         <DialogHeader>

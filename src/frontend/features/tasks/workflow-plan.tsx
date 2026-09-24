@@ -16,7 +16,7 @@ function StationView({ task, station }: { task: Task; station: WorkflowStation }
   const Icon = station.icon === "delivery" ? GitPullRequest : station.icon === "merge" ? GitMerge : station.icon === "target" ? Route : Wrench;
   return <li data-workflow-station={station.id} className="absolute z-10 flex min-w-0 items-center gap-2 border border-border bg-background px-2 py-1.5 text-xs" style={{ left: `${station.x / 3.9}%`, top: station.y, width: `${(station.width ?? 190) / 3.9}%`, height: station.height }}>
     {profile ? <EntityAvatar kind="agent" id={profile.profileId} name={name} size="xs" /> : <Icon className="size-3.5 shrink-0 text-muted-foreground" aria-hidden="true" />}
-    <span className="min-w-0"><span className="block font-medium leading-4">{station.label}</span>{station.note ? <span className="block text-[11px] leading-4 text-muted-foreground">{station.note}</span> : null}</span>
+    <span className="min-w-0"><span className="block font-medium leading-4">{station.label}</span>{station.note ? <span className="block text-xs leading-4 text-muted-foreground">{station.note}</span> : null}</span>
   </li>;
 }
 

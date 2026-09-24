@@ -14,7 +14,7 @@ function ProjectDefaultAgents({ project, agents }: { project: ApiProject; agents
         const agent = agents.find((candidate) => candidate.id === project[`${role}ProfileId`]);
         const label = role === "root" ? "Coordinator" : "Worker";
         return (
-          <span className="flex items-center gap-1.5 text-[11px] text-muted-foreground" key={role} title={`${label}: ${agent?.name ?? "Unassigned"}`}>
+          <span className="flex items-center gap-1.5 text-xs text-muted-foreground" key={role} title={`${label}: ${agent?.name ?? "Unassigned"}`}>
             {agent ? <EntityAvatar kind="agent" id={agent.id} name={agent.name} seed={agent.avatarSeed} size="xs" /> : null}
             <span>{label}</span>
             <span className="text-foreground">{agent?.name ?? "Unassigned"}</span>
@@ -37,7 +37,7 @@ export function ProjectCards({ projects, agents }: { projects: readonly ApiProje
       <article key={project.id}>
         <Card size="sm">
           <CardHeader>
-            <CardTitle><a className="flex items-center gap-2" href={withCompany(`/projects/${encodeURIComponent(project.id)}`, project.companyId)}><ProjectIcon project={project} /><span className="text-[13px]">{project.name}</span></a></CardTitle>
+            <CardTitle><a className="flex items-center gap-2" href={withCompany(`/projects/${encodeURIComponent(project.id)}`, project.companyId)}><ProjectIcon project={project} /><span className="text-sm">{project.name}</span></a></CardTitle>
             <CardAction>
               <Button variant="ghost" size="sm" render={<a href={withCompany(`/projects/${encodeURIComponent(project.id)}`, project.companyId)} />}>Configure</Button>
             </CardAction>
@@ -46,9 +46,9 @@ export function ProjectCards({ projects, agents }: { projects: readonly ApiProje
             <div className="grid gap-3 text-xs">
               <div className="min-w-0">
                 <div className="truncate font-medium" title={project.repository}>{project.repository ?? "Repository unavailable"}</div>
-                <div className="truncate text-[11px] text-muted-foreground" title={project.repositoryPath}>{project.repositoryPath}</div>
+                <div className="truncate text-xs text-muted-foreground" title={project.repositoryPath}>{project.repositoryPath}</div>
               </div>
-              <div className="flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
+              <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
                 <span>Base <span className="font-mono text-foreground">{project.baseBranch}</span></span>
               </div>
               <ProjectDefaultAgents project={project} agents={agents} />

@@ -38,7 +38,7 @@ export function SettingsDataTable({ label, columns, className, children }: { lab
     <div className={cn("-mx-4 overflow-x-auto lg:-mx-6", className)}>
       <table aria-label={label} className="w-full table-fixed border-separate border-spacing-0 text-left" style={{ minWidth: width }}>
         <colgroup><col style={{ width: 60 }} />{columns.map((column) => <col key={column.key} style={{ width: column.width }} />)}</colgroup>
-        <thead><tr className="h-8 text-[12px] font-medium text-muted-foreground"><th className="font-medium" scope="col" />{columns.map((column) => <th className="font-medium" key={column.key} scope="col">{column.label ? <span className="-ml-[6.5px] inline-flex h-6 items-center rounded-full px-1.5">{column.label}</span> : null}</th>)}</tr></thead>
+        <thead><tr className="h-8 text-xs font-medium text-muted-foreground"><th className="font-medium" scope="col" />{columns.map((column) => <th className="font-medium" key={column.key} scope="col">{column.label ? <span className="-ml-[6.5px] inline-flex h-6 items-center rounded-full px-1.5">{column.label}</span> : null}</th>)}</tr></thead>
         {children}
       </table>
     </div>
@@ -48,14 +48,14 @@ export function SettingsDataTable({ label, columns, className, children }: { lab
 export function SettingsTableGroup({ label, count, columnCount, children }: { label: string; count: number; columnCount: number; children: ReactNode }): ReactElement {
   return (
     <tbody>
-      <tr className="h-8"><td className="p-0" colSpan={columnCount + 1}><div className="mx-2 flex h-8 items-center gap-1 rounded-lg bg-muted/60 px-[52px] text-[12px] text-muted-foreground"><span>{label}</span><span>{count}</span></div></td></tr>
+      <tr className="h-8"><td className="p-0" colSpan={columnCount + 1}><div className="mx-2 flex h-8 items-center gap-1 rounded-lg bg-muted/60 px-[52px] text-xs text-muted-foreground"><span>{label}</span><span>{count}</span></div></td></tr>
       {children}
     </tbody>
   );
 }
 
 export function SettingsTableRow({ size = "compact", className, children, ...props }: ComponentProps<"tr"> & { size?: "compact" | "member" }): ReactElement {
-  return <tr className={cn("text-[13px] [&>td]:transition-colors hover:[&>td]:bg-muted/40 [&>td:first-child]:rounded-l-lg [&>td:last-child]:rounded-r-lg", props.onClick && "cursor-pointer focus-visible:outline-none focus-visible:[&>td]:bg-muted/60", size === "member" ? "h-[50px]" : "h-11", className)} {...props}><td className="align-middle p-0" />{children}</tr>;
+  return <tr className={cn("text-sm [&>td]:transition-colors hover:[&>td]:bg-muted/40 [&>td:first-child]:rounded-l-lg [&>td:last-child]:rounded-r-lg", props.onClick && "cursor-pointer focus-visible:outline-none focus-visible:[&>td]:bg-muted/60", size === "member" ? "h-[50px]" : "h-11", className)} {...props}><td className="align-middle p-0" />{children}</tr>;
 }
 
 export function SettingsTableCell({ className, ...props }: TdHTMLAttributes<HTMLTableCellElement>): ReactElement {
@@ -63,7 +63,7 @@ export function SettingsTableCell({ className, ...props }: TdHTMLAttributes<HTML
 }
 
 export function SettingsTableEmpty({ columnCount, children }: { columnCount: number; children: ReactNode }): ReactElement {
-  return <tbody><tr className="h-11 text-[13px] text-muted-foreground"><td colSpan={columnCount + 1}><div className="pl-[54px]">{children}</div></td></tr></tbody>;
+  return <tbody><tr className="h-11 text-sm text-muted-foreground"><td colSpan={columnCount + 1}><div className="pl-[54px]">{children}</div></td></tr></tbody>;
 }
 
 /** Placeholder rows while a table loads its data. */

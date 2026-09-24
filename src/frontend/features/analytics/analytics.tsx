@@ -22,7 +22,7 @@ function Filter({ label, value, options, onChange }: { label: string; value: str
   return <Select value={value} onValueChange={value => { if (value !== null) onChange(value); }}><SelectTrigger aria-label={label} size="sm"><SelectValue /></SelectTrigger><SelectContent>{options.map(option => <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>)}</SelectContent></Select>;
 }
 function Metric({ label, value, detail }: { label: string; value: ReactNode; detail: string }) {
-  return <div className="min-w-0 border-b border-r px-4 py-4"><dt className="text-xs text-muted-foreground">{label}</dt><dd className="mt-1 text-2xl font-semibold tabular-nums tracking-tight">{value}</dd><p className="mt-1 text-[11px] text-muted-foreground">{detail}</p></div>;
+  return <div className="min-w-0 border-b border-r px-4 py-4"><dt className="text-xs text-muted-foreground">{label}</dt><dd className="mt-1 text-2xl font-semibold tabular-nums tracking-tight">{value}</dd><p className="mt-1 text-xs text-muted-foreground">{detail}</p></div>;
 }
 function taskUsageIsPartial(task: AnalyticsResponse["tasks"][number]): boolean {
   return task.staleSessions > 0 || task.observedSessions < task.sessions || task.usage.some(entry => entry.completedAt === null);

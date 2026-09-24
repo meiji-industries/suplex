@@ -63,7 +63,7 @@ function SettingsSidebar({ companyId, backHref, activeHref }: { companyId: strin
             </SidebarGroupContent>
           </SidebarGroup>
         ))}
-        {filtered.length === 0 ? <div className="px-2 py-4 text-[11px] text-muted-foreground">No settings found.</div> : null}
+        {filtered.length === 0 ? <div className="px-2 py-4 text-xs text-muted-foreground">No settings found.</div> : null}
       </SidebarContent>
     </Sidebar>
   );
@@ -85,7 +85,7 @@ function SettingsHeader({ title, description, actions }: SettingsHeaderProps): R
     <div className="mb-6 space-y-4">
       <div className="space-y-1.5">
         <h2 className="text-xl font-semibold">{title}</h2>
-        {description ? <p className="text-[13px] text-muted-foreground">{description}</p> : null}
+        {description ? <p className="text-sm text-muted-foreground">{description}</p> : null}
       </div>
       <HeaderActions actions={actions} />
     </div>
@@ -109,7 +109,7 @@ export function SettingsSectionHeader({ title, description, actions }: { title?:
   return (
     <div className="mb-3 space-y-3 px-4">
       {title || description ? <div className="space-y-1">
-        {title ? <h3 className="text-[15px] font-medium">{title}</h3> : null}
+        {title ? <h3 className="text-base font-medium">{title}</h3> : null}
         {description ? <p className="text-xs text-muted-foreground">{description}</p> : null}
       </div> : null}
       <HeaderActions actions={actions} />
@@ -127,7 +127,7 @@ export function SettingsSection({ title, description, actions, children }: { tit
 }
 
 export function SettingRow({ label, description, children, destructive, htmlFor }: { label: string; description?: ReactNode; children?: ReactNode; destructive?: boolean; htmlFor?: string }): ReactElement {
-  const labelClassName = destructive ? "text-[13px] font-medium text-destructive" : "text-[13px] font-medium";
+  const labelClassName = destructive ? "text-sm font-medium text-destructive" : "text-sm font-medium";
   return (
     <div className="flex min-h-15 flex-col gap-2 border-t py-3 first:border-t-0 sm:flex-row sm:items-center sm:justify-between sm:gap-6">
       <div className="min-w-0 flex-1">

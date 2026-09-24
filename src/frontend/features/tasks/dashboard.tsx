@@ -22,7 +22,7 @@ export function Dashboard(): ReactElement {
   return <SettingsLayout title="Host health" companyId={companyId} backHref={withCompany("/tasks", companyId)} activeHref={withCompany("/health", companyId)}>
     <div className="flex flex-wrap items-center gap-3 border-b py-4">
       <div className="flex size-9 shrink-0 items-center justify-center rounded-md border bg-muted/40"><Server className="size-4" /></div>
-      <div className="min-w-0 flex-1"><p className="break-all text-[13px] font-medium">{snapshot?.reachableAddress ?? window.location.origin}</p><p className="text-xs text-muted-foreground">Suplex host · {connectionRoute(snapshot?.reachableAddress ?? window.location.origin)}</p></div>
+      <div className="min-w-0 flex-1"><p className="break-all text-sm font-medium">{snapshot?.reachableAddress ?? window.location.origin}</p><p className="text-xs text-muted-foreground">Suplex host · {connectionRoute(snapshot?.reachableAddress ?? window.location.origin)}</p></div>
       <Button aria-label="Refresh" title="Refresh" variant="outline" size="sm" onClick={() => void refresh()} disabled={refreshing}><RefreshCw aria-hidden="true" className={refreshing ? "size-3.5 animate-spin" : "size-3.5"} />{refreshing ? "Check in progress" : "Check again"}</Button>
     </div>
     <section aria-label="Host health overview" className="flex flex-wrap items-center justify-between gap-5 py-5">

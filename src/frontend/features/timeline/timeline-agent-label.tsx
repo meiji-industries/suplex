@@ -13,7 +13,7 @@ export function TimelineAgentLabel({ avatarSeed, name, role, executionCount, dur
     <EntityAvatar kind="agent" id={avatarSeed} name={name} />
     <span className="min-w-0">
       <span className="block truncate text-xs font-medium">{name}</span>
-      <span className="block truncate text-[11px] text-muted-foreground">{role} · {executionCount}× · {duration}</span>
+      <span className="block truncate text-xs text-muted-foreground">{role} · {executionCount}× · {duration}</span>
     </span>
   </span>;
 }

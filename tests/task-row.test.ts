@@ -73,7 +73,7 @@ test("task rows render sibling task and pull request links", () => {
 
   expect(anchorDepth).toBe(0);
   expect(html).toContain("data-task-row");
-  expect(html).toContain("Blocked by Prepare task links · Queued");
+  expect(html).not.toContain("Blocked by");
   expect(links.flatMap(match => match[1] ?? [])).toEqual([
     "/tasks/task-1?company=company-1",
     "https://github.com/meiji-industries/suplex/pull/164",
@@ -98,7 +98,7 @@ test("task rows keep every field, with the branch before the status bubble", () 
 });
 
 test("task rows dim the titles of delivered and cancelled tasks only", () => {
-  const titleClass = (status: Task["status"]) => /class="truncate text-\[15px\] ([^"]+)">Repair task links</.exec(renderToStaticMarkup(createElement(TaskRow, { task: { ...task, status }, project: undefined, cost: undefined })))?.[1];
+  const titleClass = (status: Task["status"]) => /class="truncate ([^"]+)">Repair task links</.exec(renderToStaticMarkup(createElement(TaskRow, { task: { ...task, status }, project: undefined, cost: undefined })))?.[1];
 
   expect(titleClass("delivered")).toBe("text-muted-foreground");
   expect(titleClass("cancelled")).toBe("text-muted-foreground");

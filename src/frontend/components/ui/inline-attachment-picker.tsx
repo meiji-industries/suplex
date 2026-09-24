@@ -49,14 +49,14 @@ function InlineAttachmentPicker({
           <Paperclip className="size-3.5" />
           {compact ? null : "Add images"}
         </Button>
-        {compact ? null : <span className="text-[11px] text-muted-foreground">PNG, JPEG, WebP, or GIF · {attachments.length}/{maxFiles}</span>}
+        {compact ? null : <span className="text-xs text-muted-foreground">PNG, JPEG, WebP, or GIF · {attachments.length}/{maxFiles}</span>}
       </div>
       {attachments.length ? (
         <ul className="flex flex-wrap gap-1.5" aria-label="Selected attachments" aria-live="polite">
           {attachments.map((attachment, index) => (
             <li className="relative inline-flex h-9 max-w-full items-center gap-1.5 rounded-md bg-muted/35 pl-1 pr-2" key={attachment.id}>
               {attachment.previewUrl ? <img className="size-7 rounded-sm object-cover" src={attachment.previewUrl} alt="" /> : <span className="flex size-7 items-center justify-center text-muted-foreground"><ImageIcon className="size-3.5" /></span>}
-              <span className="max-w-44 truncate text-[11px]" title={attachment.filename}>{attachment.filename}</span>
+              <span className="max-w-44 truncate text-xs" title={attachment.filename}>{attachment.filename}</span>
               <Button type="button" variant="secondary" size="icon" className="absolute -right-1 -top-1 size-4 rounded-full" aria-label={`Remove ${attachment.filename}`} disabled={disabled} onClick={() => onRemove(index)}><X className="size-2.5" /></Button>
             </li>
           ))}

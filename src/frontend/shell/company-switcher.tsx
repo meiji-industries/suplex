@@ -16,12 +16,12 @@ import { useOptionalCompanyContext } from "./company-context.js";
 import { EntityAvatar } from "../components/app/entity-avatar.js";
 
 function SuplexMark(): ReactElement {
-  return <span className="flex size-5 shrink-0 items-center justify-center rounded-[5px] bg-foreground text-[10px] font-bold text-background">F</span>;
+  return <span className="flex size-5 shrink-0 items-center justify-center rounded-[5px] bg-foreground text-xs font-bold text-background">F</span>;
 }
 
 function StatusBadge({ status }: { status: "active" | "paused" | "archived" }): ReactElement | null {
   if (status === "active") return null;
-  return <Badge variant="secondary" className="ml-auto text-[10px]">{status[0]!.toUpperCase() + status.slice(1)}</Badge>;
+  return <Badge variant="secondary" className="ml-auto text-xs">{status[0]!.toUpperCase() + status.slice(1)}</Badge>;
 }
 
 function CreateCompanyDialog({ open, onOpenChange }: { open: boolean; onOpenChange: (open: boolean) => void }): ReactElement {
@@ -65,7 +65,7 @@ function CreateCompanyDialog({ open, onOpenChange }: { open: boolean; onOpenChan
 export function CompanySwitcher(): ReactElement {
   const context = useOptionalCompanyContext();
   const [createOpen, setCreateOpen] = useState(false);
-  if (!context) return <div className="flex h-8 items-center gap-2 px-2"><SuplexMark /><span className="text-[13px] font-semibold tracking-[-0.02em]">Suplex</span></div>;
+  if (!context) return <div className="flex h-8 items-center gap-2 px-2"><SuplexMark /><span className="text-sm font-semibold tracking-[-0.02em]">Suplex</span></div>;
   const { currentCompany, companies, loading, error, user } = context;
   const label = loading ? "Loading companies" : currentCompany?.name ?? "No company";
   return (
@@ -78,15 +78,15 @@ export function CompanySwitcher(): ReactElement {
         <DropdownMenuContent className="w-64" align="start">
               <DropdownMenuGroup>
                 <DropdownMenuLabel>Switch company</DropdownMenuLabel>
-                  {companies.length ? companies.map((company, index) => <span className="block" key={company.id}>{company.status === "archived" && companies[index - 1]?.status !== "archived" ? <div className="px-2 pb-1 pt-2 text-[10px] font-medium text-muted-foreground">Archived</div> : null}<DropdownMenuItem onClick={() => context.selectCompany(company.id)}>
+                  {companies.length ? companies.map((company, index) => <span className="block" key={company.id}>{company.status === "archived" && companies[index - 1]?.status !== "archived" ? <div className="px-2 pb-1 pt-2 text-xs font-medium text-muted-foreground">Archived</div> : null}<DropdownMenuItem onClick={() => context.selectCompany(company.id)}>
                     <EntityAvatar kind="company" id={company.id} name={company.name} seed={company.name} size="sm" />
                     <span className="min-w-0 flex-1 truncate">{company.name}</span>
                     <StatusBadge status={company.status} />
                     {company.id === currentCompany?.id ? <Check className="ml-1 size-3.5 shrink-0 text-primary" /> : null}
-                  </DropdownMenuItem></span>) : <div className="px-2 py-2 text-[11px] text-muted-foreground">{user?.role === "admin" ? "No companies yet" : "No company access"}</div>}
+                  </DropdownMenuItem></span>) : <div className="px-2 py-2 text-xs text-muted-foreground">{user?.role === "admin" ? "No companies yet" : "No company access"}</div>}
               </DropdownMenuGroup>
               <DropdownMenuSeparator />
-              {error ? <div className="flex items-center gap-2 px-2 py-2 text-[11px] text-destructive"><CircleAlert className="size-3.5 shrink-0" />Unable to load companies</div> : null}
+              {error ? <div className="flex items-center gap-2 px-2 py-2 text-xs text-destructive"><CircleAlert className="size-3.5 shrink-0" />Unable to load companies</div> : null}
               {error ? <DropdownMenuItem aria-label="Refresh" title="Refresh" onClick={() => void context.reloadCompanies()}><RefreshCw aria-hidden="true" className="size-3.5 text-muted-foreground" /></DropdownMenuItem> : null}
               {user?.role === "admin" ? <DropdownMenuItem onClick={() => setCreateOpen(true)}><CirclePlus className="size-3.5 text-muted-foreground" />New company…</DropdownMenuItem> : null}
               {user?.role === "admin" && currentCompany ? <DropdownMenuItem render={<a href={withCompany(`/companies/${encodeURIComponent(currentCompany.id)}/settings`, currentCompany.id)} />}><Settings2 className="size-3.5 text-muted-foreground" />Company settings</DropdownMenuItem> : null}

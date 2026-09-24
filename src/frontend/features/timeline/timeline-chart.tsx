@@ -154,7 +154,7 @@ export function WorkChart({
           onPointerUp={(event) => endSelection(event, true)}
           onPointerCancel={(event) => endSelection(event, false)}
         >
-          <div className="flex h-9 border-b border-border/70 bg-muted/30 text-[11px] text-muted-foreground">
+          <div className="flex h-9 border-b border-border/70 bg-muted/30 text-xs text-muted-foreground">
             <div className="flex w-52 shrink-0 items-center border-r border-border/70 px-3 font-medium sm:px-4">
               Agent
             </div>

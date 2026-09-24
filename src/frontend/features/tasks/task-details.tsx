@@ -77,6 +77,8 @@ export function TaskDetailsPage({ task, project, onChange }: { task: Task; proje
   const [image, setImage] = useState<Task["images"][number] | null>(null);
   const [edit, setEdit] = useState<NewTaskDraft | null>(null);
   const [openWorkerSelection, setOpenWorkerSelection] = useState(0);
+  const blockedBy = <TaskBlockedByProperty task={task} onChange={onChange} />;
+  const issue = <div className="space-y-1.5"><dt className="text-muted-foreground">Issue</dt><dd><IssuePicker projectId={task.projectId} issue={task.issue} onChange={async issue => onChange(await readJson<Task>(`/api/tasks/${task.id}/issue`, { method: "PATCH", body: JSON.stringify({ issue }) }))} /></dd></div>;
   const editable = ["backlog", "queued"].includes(task.status) && !task.archivedAt;
   useEffect(() => {
     let closed = false;
@@ -123,8 +125,8 @@ export function TaskDetailsPage({ task, project, onChange }: { task: Task; proje
               <ProgressValue className="text-xs">{() => task.limits.maxTurns ? `${task.limits.admittedTurns} of ${task.limits.maxTurns}` : `${task.limits.admittedTurns}`}</ProgressValue>
             </Progress>
           </div>
-          <TaskBlockedByProperty task={task} onChange={onChange} />
-          <div className="space-y-1.5"><dt className="text-muted-foreground">Issue</dt><dd><IssuePicker projectId={task.projectId} issue={task.issue} onChange={async issue => onChange(await readJson<Task>(`/api/tasks/${task.id}/issue`, { method: "PATCH", body: JSON.stringify({ issue }) }))} /></dd></div>
+          {task.blockedBy.length ? blockedBy : null}
+          {task.issue ? issue : null}
           <div className="space-y-1.5"><dt className="text-muted-foreground">Project</dt><dd className="flex min-w-0 items-center gap-2">{project ? <EntityAvatar kind="project" id={project.id} name={project.name} size="xs" /> : null}<span className="truncate">{project?.name ?? task.configuration.repository}</span></dd></div>
           {(["root", "worker", ...workflowDefinition(task.workflow).advisorRoles] satisfies TaskAgentRole[]).map(role => <TaskAgent key={role} task={task} role={role} onChange={onChange} onActivityChange={setActivity} {...(role === "worker" ? { openRequest: openWorkerSelection, onOpenRequestHandled: () => setOpenWorkerSelection(0) } : {})} />)}
           <div className="space-y-1.5"><dt className="text-muted-foreground">Branch</dt><dd><CopyValue label="branch" value={task.configuration.branch}><code className="truncate" title={task.configuration.branch}>{task.configuration.branch}</code></CopyValue></dd></div>
@@ -132,6 +134,8 @@ export function TaskDetailsPage({ task, project, onChange }: { task: Task; proje
           <Collapsible.Root className="space-y-3">
             <Collapsible.Trigger className="group flex items-center gap-1 text-muted-foreground hover:text-foreground"><ChevronRight className="size-3.5 transition-transform group-data-[panel-open]:rotate-90" />Properties</Collapsible.Trigger>
             <Collapsible.Panel className="grid grid-cols-1 gap-5">
+              {task.blockedBy.length ? null : blockedBy}
+              {task.issue ? null : issue}
               <div className="space-y-1.5"><dt className="text-muted-foreground">Workflow</dt><dd data-task-workflow>{workflowDefinition(task.workflow).name}</dd>{task.workflow !== "standard" ? <dd><WorkflowStatus task={task} /></dd> : null}</div>
               <div className="space-y-1.5"><dt className="text-muted-foreground">Delivery</dt><dd>{taskDeliveryTargetOptions.find(option => option.value === task.deliveryTarget)?.label}</dd></div>
               <div className="space-y-1.5"><dt className="text-muted-foreground">Run project tests</dt><dd>{task.configuration.runProjectTests ? "Enabled" : "Off"}</dd></div>

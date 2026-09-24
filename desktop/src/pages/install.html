@@ -16,17 +16,33 @@
   li.done .mark::before { content: "✓"; width: auto; height: auto; background: none; color: #4ade80; font-size: 12px; }
   li.running .mark::before { width: 12px; height: 12px; border: 1.5px solid #404040; border-top-color: #e5e5e5; border-radius: 50%; background: none; animation: spin 700ms linear infinite; }
   @keyframes spin { to { transform: rotate(360deg); } }
+  body { display: grid; place-items: center; }
+  h1 { position: absolute; top: 14px; left: 0; right: 0; display: flex; justify-content: center; pointer-events: none; }
+  h1 img { width: 88px; height: auto; }
+  main { justify-self: stretch; width: auto; margin: 0 24px; }
+  #stage { margin-bottom: 8px; text-align: center; font-size: 36px; font-weight: 600; letter-spacing: -0.03em; line-height: 1.15; }
+  #count { text-align: center; }
+  .progress { width: min(100%, 584px); margin: 20px auto 0; }
+  .actions { justify-content: center; }
+  #demo-toggle { position: fixed; bottom: 12px; left: 0; right: 0; text-align: center; }
+  #demo-toggle[hidden] { display: none; }
+  #demo-toggle a { color: #525252; font-size: 11px; text-decoration: none; }
+  #demo-toggle a:hover { color: #a3a3a3; text-decoration: underline; }
 </style>
 </head>
 <body>
 <main>
-  <h1 id="stage">Setting up Suplex</h1>
+  <h1><img src="wordmark.svg" alt="Suplex"></h1>
+  <h2 id="stage">Setting you up…</h2>
   <p id="count"></p>
+  <div class="progress">
   <div class="bar"><div id="fill"></div></div>
   <ol id="steps"></ol>
   <details class="log"><summary>Show log</summary><pre id="log"></pre></details>
+  </div>
   <div class="actions"><button id="cancel" type="button">Cancel</button></div>
 </main>
+<p id="demo-toggle" hidden><a href="?demo">Show demo steps</a></p>
 <script>
   const LOG_LINES = 500;
   const state = { stages: [], finished: new Map(), current: null, log: [] };
@@ -36,7 +52,7 @@
     const total = state.stages.length;
     const done = state.finished.size;
     const running = state.stages.find((stage) => stage.name === state.current);
-    document.getElementById("stage").textContent = running ? running.title : done === total && total > 0 ? "Finishing" : "Setting up Suplex";
+    document.getElementById("stage").textContent = running ? running.title : done === total && total > 0 ? "Finishing" : "Setting you up…";
     document.getElementById("count").textContent = total === 0 ? "" : `${Math.min(done + (running ? 1 : 0), total)} of ${total} steps`;
     document.getElementById("fill").style.width = total === 0 ? "0%" : `${((done + (running ? 0.5 : 0)) / total) * 100}%`;
     const steps = document.getElementById("steps");
@@ -68,20 +84,47 @@
 
   let live = false;
   const pending = [];
-  window.suplexDesktop.on((event) => { if (live) apply(event); else pending.push(event); });
   document.getElementById("cancel").addEventListener("click", () => {
     document.getElementById("cancel").disabled = true;
-    window.suplexDesktop.cancel();
+    window.suplexDesktop?.cancel?.();
   });
-  window.suplexDesktop.snapshot().then((snapshot) => {
-    state.stages = snapshot.stages;
-    state.current = snapshot.current;
-    state.log = snapshot.log.slice(-LOG_LINES);
-    for (const entry of snapshot.finished) state.finished.set(entry.stage, entry);
-    live = true;
-    for (const event of pending) apply(event);
+  if (new URLSearchParams(location.search).has("demo")) {
+    state.stages = [
+      { name: "check", title: "Check this Mac" },
+      { name: "xcode", title: "Install Apple developer tools (git)" },
+      { name: "herdr", title: "Install Herdr terminals" },
+      { name: "data", title: "Prepare Suplex data" },
+      { name: "finish", title: "Finish" },
+    ];
+    state.finished.set("check", { stage: "check", elapsedMs: 400 });
+    state.finished.set("xcode", { stage: "xcode", elapsedMs: 1200, skipped: true });
+    state.finished.set("herdr", { stage: "herdr", elapsedMs: 300, skipped: true });
+    state.current = "data";
+    state.log = ["[demo] preparing Suplex data…"];
     render();
-  });
+  } else if (window.suplexDesktop) {
+    window.suplexDesktop.on((event) => { if (live) apply(event); else pending.push(event); });
+    window.suplexDesktop.snapshot().then((snapshot) => {
+      state.stages = snapshot.stages;
+      state.current = snapshot.current;
+      state.log = snapshot.log.slice(-LOG_LINES);
+      for (const entry of snapshot.finished) state.finished.set(entry.stage, entry);
+      live = true;
+      for (const event of pending) apply(event);
+      render();
+    });
+  } else {
+    render();
+  }
+  // Browser preview only: Electron always provides window.suplexDesktop, so this stays hidden in the installer.
+  if (!window.suplexDesktop) {
+    const toggle = document.getElementById("demo-toggle");
+    const link = toggle.querySelector("a");
+    const showing = new URLSearchParams(location.search).has("demo");
+    link.href = showing ? location.pathname : "?demo";
+    link.textContent = showing ? "Hide demo steps" : "Show demo steps";
+    toggle.hidden = false;
+  }
 </script>
 </body>
 </html>

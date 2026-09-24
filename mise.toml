@@ -174,3 +174,9 @@ export PATH="$(dirname "$(mise which node)"):$PATH"
 export SUPLEX_PORT=${CONDUCTOR_PORT:-4111}
 exec tsx src/cli.ts desktop
 '''
+[tasks."desktop:pages"]
+description = "Serve the desktop setup pages for browser preview"
+run = '''
+echo "Preview: http://localhost:8123/install.html and http://localhost:8123/choice.html"
+exec python3 -m http.server 8123 --directory desktop/src/pages
+'''

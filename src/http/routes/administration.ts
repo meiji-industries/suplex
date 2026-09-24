@@ -1,4 +1,9 @@
-import { createReadStream } from "node:fs";
+import { createReadStream, createWriteStream } from "node:fs";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import type { Readable } from "node:stream";
+import { pipeline } from "node:stream/promises";
 
 import type { FastifyPluginAsync, FastifyReply } from "fastify";
 import type { ZodTypeProvider } from "@fastify/type-provider-zod";
@@ -88,6 +93,25 @@ const administration: FastifyPluginAsync<AdministrationRoutesOptions> = async (a
       return reply.code(404).send({ error: "Backup not found" });
     }
     return reply.header("Cache-Control", "private, no-store").header("Content-Disposition", `attachment; filename="${request.params.name}"`).type("application/gzip").send(stream);
+  });
+  // Backups can be hundreds of megabytes, so the archive streams to disk instead of through the body limit.
+  app.addContentTypeParser("application/gzip", (_request, payload, done) => done(null, payload));
+  typed.post("/api/admin/backups/restore", { schema: { response: { 204: z.null(), 403: ErrorResponseSchema, 422: ErrorResponseSchema } } }, async (request, reply) => {
+    if (!requireAdmin(request.suplexUser.role, reply)) return;
+    const staging = await mkdtemp(join(tmpdir(), "suplex-backup-upload-"));
+    try {
+      const archive = join(staging, "upload.tar.gz");
+      await pipeline(request.body as Readable, createWriteStream(archive));
+      await backups().restoreInPlace(archive);
+      // The restored users can hold this username under another id, so the event names the user instead of referencing it.
+      auth.recordAuditEvent(undefined, "backup_restored", undefined, undefined, { username: request.suplexUser.username });
+      return reply.code(204).send(null);
+    } catch (error) {
+      if (error instanceof BackupFailure) return reply.code(422).send({ error: "The file is not a valid Suplex backup." });
+      throw error;
+    } finally {
+      await rm(staging, { recursive: true, force: true });
+    }
   });
   const readProviders = options.readProviders ?? (() => readHostProviders({ directory: process.cwd(), connection: createProviderConnectionProbe() }));
   let providerObservation: Promise<ProviderListResponse> | undefined;

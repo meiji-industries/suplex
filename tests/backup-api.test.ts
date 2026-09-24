@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { expect, test } from "vitest";
 
 import { AuthService, type WebAuthnAdapter } from "../src/identity/auth.js";
+import { suplexUsers } from "../src/identity/auth-schema.js";
 import { CSRF_COOKIE_NAME, SESSION_COOKIE_NAME } from "../src/identity/auth-identifiers.js";
 import { createApp } from "../src/app.js";
 import { BackupService, checkBackupHealth } from "../src/platform/backup.js";
@@ -47,7 +48,46 @@ test("administrators create, list and download backups on a fresh host", async (
     await writeFile(copy, download.rawPayload);
     expect((await new BackupService(config).verify(copy)).valid).toBe(true);
 
+    const before = (await app.inject({ method: "GET", url: "/api/admin/environment", headers })).json() as { defaultMaxTurns: number };
+    expect((await app.inject({ method: "PATCH", url: "/api/admin/environment", headers, payload: { defaultMaxTurns: before.defaultMaxTurns + 7 } })).json().defaultMaxTurns).toBe(before.defaultMaxTurns + 7);
+    const restored = await app.inject({ method: "POST", url: "/api/admin/backups/restore", headers: { ...headers, "content-type": "application/gzip" }, payload: download.rawPayload });
+    expect(restored.statusCode).toBe(204);
+    // The same session still works, and the live connection reads the restored data.
+    expect((await app.inject({ method: "GET", url: "/api/admin/environment", headers })).json()).toEqual(before);
+    expect((await app.inject({ method: "POST", url: "/api/admin/backups/restore", headers: { ...headers, "content-type": "application/gzip" }, payload: Buffer.from("not a backup") })).statusCode).toBe(422);
+
     expect((await app.inject({ method: "GET", url: "/api/admin/backups/..%2Fsuplex.sqlite", headers })).statusCode).toBe(404);
     expect((await app.inject({ method: "GET", url: "/api/admin/backups/suplex-backup-2000-01-01T00-00-00Z.tar.gz", headers })).statusCode).toBe(404);
   } finally { await app.close(); database.close(); await rm(root, { recursive: true, force: true }); }
+});
+
+test("an administrator on a new host stays signed in after restoring another host's backup", async () => {
+  const root = await mkdtemp(join(tmpdir(), "suplex-backup-restore-"));
+  const hosts = await Promise.all(["old", "new"].map(async (name) => {
+    const config = createTestConfig(join(root, name), { reachableAddress: "http://127.0.0.1:4111" });
+    const database = new SuplexDatabase(config.databasePath);
+    const auth = new AuthService(database, config, { webAuthn });
+    const app = createApp({ config, auth, database, health: healthyHost });
+    const invitation = auth.ensureBootstrapInvitation()!;
+    const options = await app.inject({ method: "POST", url: "/api/auth/bootstrap/options", payload: { token: invitation.token } });
+    const enrolled = await app.inject({ method: "POST", url: "/api/auth/bootstrap/verify", payload: { token: invitation.token, challengeId: options.json().challengeId, response: { id: `${name}-admin`, type: "public-key" } } });
+    const session = cookie(enrolled.headers, SESSION_COOKIE_NAME); const csrf = cookie(enrolled.headers, CSRF_COOKIE_NAME);
+    const [admin] = database.authOrm().select().from(suplexUsers).all();
+    auth.updateProfile(admin!.id, { username: "adam" }); // the same person on both hosts
+    return { app, database, headers: { cookie: `${SESSION_COOKIE_NAME}=${session}; ${CSRF_COOKIE_NAME}=${csrf}`, origin: config.reachableAddress, "x-csrf-v1": csrf } };
+  }));
+  const [previous, next] = hosts as [typeof hosts[0], typeof hosts[0]];
+  try {
+    const { name } = (await previous.app.inject({ method: "POST", url: "/api/admin/backups", headers: previous.headers })).json() as { name: string };
+    const archive = (await previous.app.inject({ method: "GET", url: `/api/admin/backups/${name}`, headers: previous.headers })).rawPayload;
+    const previousAdmin = (await previous.app.inject({ method: "GET", url: "/api/admin/users", headers: previous.headers })).json().users[0].id as string;
+
+    expect((await next.app.inject({ method: "POST", url: "/api/admin/backups/restore", headers: { ...next.headers, "content-type": "application/gzip" }, payload: archive })).statusCode).toBe(204);
+    const users = await next.app.inject({ method: "GET", url: "/api/admin/users", headers: next.headers });
+    expect(users.statusCode).toBe(200);
+    expect(users.json().users.map((user: { id: string }) => user.id)).toContain(previousAdmin);
+  } finally {
+    for (const host of hosts) { await host.app.close(); host.database.close(); }
+    await rm(root, { recursive: true, force: true });
+  }
 });

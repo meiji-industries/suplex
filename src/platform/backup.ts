@@ -8,6 +8,7 @@ import { promisify } from "node:util";
 import Database from "better-sqlite3";
 
 import type { SuplexConfig } from "./config.js";
+import { SuplexDatabase } from "./database.js";
 import type { HealthCheck } from "./health.js";
 
 const execFileAsync = promisify(execFile);
@@ -306,6 +307,43 @@ export class BackupService {
     await mkdir(target, { recursive: true });
     await execFileAsync("tar", ["-xzf", resolve(archivePath), "-C", target, "--no-same-owner"], { timeout: 60_000, maxBuffer: 64 * 1024 });
     return { ...verification, restoreDurationMs: Date.now() - started };
+  }
+
+  /**
+   * Replaces the live database and adds the backup's artifacts. Current users,
+   * passkeys and sessions are kept, because the backup excludes them and the
+   * administrator who restores must stay signed in.
+   */
+  async restoreInPlace(archivePath: string): Promise<BackupRestoreResult> {
+    const staging = await mkdtemp(join(tmpdir(), "suplex-backup-restore-"));
+    try {
+      const result = await this.restore(archivePath, staging);
+      const root = join(staging, backupRoot);
+      const stagedPath = join(root, "app", "suplex.sqlite");
+      new SuplexDatabase(stagedPath).close(); // migrates the backup to this build's schema
+      const staged = new Database(stagedPath);
+      try {
+        staged.pragma("foreign_keys = ON");
+        staged.prepare("ATTACH DATABASE ? AS live").run(this.config.databasePath);
+        const columns = (table: string): string[] => (staged.pragma(`table_info('${table}')`) as Array<{ name: string }>).map((column) => `"${column.name}"`);
+        staged.transaction(() => {
+          staged.prepare(`INSERT OR IGNORE INTO main.suplex_users SELECT ${columns("suplex_users").join(", ")} FROM live.suplex_users`).run();
+          // A backup from another host can hold the same username under another id; passkeys follow the username.
+          for (const table of ["suplex_credentials", "suplex_sessions"]) {
+            const names = columns(table);
+            const values = names.map((name) => name === "\"user_id\"" ? "restored.id" : `row.${name}`);
+            staged.prepare(`INSERT OR IGNORE INTO main.${table} (${names.join(", ")}) SELECT ${values.join(", ")} FROM live.${table} row JOIN live.suplex_users current ON current.id = row.user_id JOIN main.suplex_users restored ON restored.username = current.username`).run();
+          }
+        })();
+        staged.exec("DETACH DATABASE live");
+        await cp(join(root, "app", "artifacts"), this.config.artifactRoot, { recursive: true, force: true });
+        // SQLite's backup API swaps the pages under open connections, which see the restored data on their next read.
+        await staged.backup(this.config.databasePath);
+      } finally { staged.close(); }
+      return result;
+    } finally {
+      await rm(staging, { recursive: true, force: true });
+    }
   }
 }
 

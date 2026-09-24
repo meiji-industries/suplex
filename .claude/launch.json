@@ -1,0 +1,14 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "dev",
+      "runtimeExecutable": "mise",
+      "runtimeArgs": [
+        "run",
+        "dev"
+      ],
+      "port": 4111
+    }
+  ]
+}

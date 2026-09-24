@@ -14,12 +14,16 @@ type DefaultAgents = { root: AgentSettings; worker: AgentSettings };
 const agent = (provider: AgentSettings["provider"], model: string, reasoningLevel: AgentSettings["reasoningLevel"]): AgentSettings => ({ provider, model, reasoningLevel, serviceTier: "default" });
 /** Fresh-install agents in order of preference; the first provider whose CLI is installed wins. */
 const DEFAULT_AGENTS: readonly DefaultAgents[] = [
-  { root: agent("claude-code", "claude-fable-5-1", "medium"), worker: agent("claude-code", "claude-opus-5-5", "medium") },
+  { root: agent("claude-code", "claude-opus-5-5", "high"), worker: agent("claude-code", "claude-opus-5-5", "medium") },
   { root: agent("codex", "gpt-6-astra", "medium"), worker: agent("codex", "gpt-6-sol", "medium") },
   { root: agent("devin", "swe-2", "high"), worker: agent("devin", "swe-2", "medium") },
 ];
 /** What the migrations seed; it stays when no listed CLI is installed. */
 const SEEDED_AGENTS: DefaultAgents = { root: agent("codex", "gpt-5.6-sol", "medium"), worker: { ...agent("codex", "gpt-5.6-luna", "max"), serviceTier: "priority" } };
+/** Earlier fresh-install defaults. They still count as untouched, but a fresh install never receives them again. */
+const PREVIOUS_AGENTS: readonly DefaultAgents[] = [
+  { root: agent("claude-code", "claude-fable-5-1", "medium"), worker: agent("claude-code", "claude-opus-5-5", "medium") },
+];
 const RESOLVERS: Record<string, () => Promise<string>> = { "claude-code": resolveClaudeExecutable, codex: resolveCodexExecutable, devin: resolveDevinExecutable };
 async function cliInstalled(provider: string): Promise<boolean> {
   const resolve = RESOLVERS[provider];
@@ -94,7 +98,7 @@ export class AgentProfileService {
       const profiles = z.array(AgentProfileSchema).parse(db.prepare(`${selection} WHERE id IN ('profile_native_root', 'profile_native_worker')`).all());
       const root = profiles.find(profile => profile.id === "profile_native_root");
       const worker = profiles.find(profile => profile.id === "profile_native_worker");
-      if (![SEEDED_AGENTS, ...DEFAULT_AGENTS].some(defaults => sameSettings(root, defaults.root) && sameSettings(worker, defaults.worker))) return;
+      if (![SEEDED_AGENTS, ...DEFAULT_AGENTS, ...PREVIOUS_AGENTS].some(defaults => sameSettings(root, defaults.root) && sameSettings(worker, defaults.worker))) return;
       if (sameSettings(root, chosen.root) && sameSettings(worker, chosen.worker)) return;
       const now = new Date().toISOString();
       for (const [id, settings] of [["profile_native_root", chosen.root], ["profile_native_worker", chosen.worker]] as const) {

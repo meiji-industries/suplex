@@ -38,10 +38,40 @@ test("fresh installs point the default agents at the best installed CLI until an
     expect(settings().map(agent => [agent.model, agent.reasoningLevel])).toEqual([["swe-2", "high"], ["swe-2", "medium"]]);
     // Installing Claude Code during onboarding still moves untouched defaults.
     await f.profiles.chooseDefaults(f.userId, only("claude-code", "codex"));
-    expect(settings().map(agent => [agent.provider, agent.model, agent.reasoningLevel])).toEqual([["claude-code", "claude-fable-5-1", "medium"], ["claude-code", "claude-opus-5-5", "medium"]]);
+    expect(settings()).toEqual([
+      { provider: "claude-code", model: "claude-opus-5-5", reasoningLevel: "high", serviceTier: "default" },
+      { provider: "claude-code", model: "claude-opus-5-5", reasoningLevel: "medium", serviceTier: "default" },
+    ]);
     f.profiles.update(f.userId, "profile_native_worker", { reasoningLevel: "high" });
     await f.profiles.chooseDefaults(f.userId, only("codex"));
-    expect(settings().map(agent => [agent.model, agent.reasoningLevel])).toEqual([["claude-fable-5-1", "medium"], ["claude-opus-5-5", "high"]]);
+    expect(settings().map(agent => [agent.model, agent.reasoningLevel])).toEqual([["claude-opus-5-5", "high"], ["claude-opus-5-5", "high"]]);
+  } finally { await f.close(); }
+});
+
+test("installs with no tasks move from the previous Claude Code defaults, and installs with tasks keep them", async () => {
+  const f = await nativeApp();
+  const settings = () => byId(f.profiles.list(f.userId)).map(({ provider, model, reasoningLevel, serviceTier }) => ({ provider, model, reasoningLevel, serviceTier }));
+  const only = (...providers: string[]) => async (provider: string) => providers.includes(provider);
+  const previous = [
+    { provider: "claude-code", model: "claude-fable-5-1", reasoningLevel: "medium", serviceTier: "default" },
+    { provider: "claude-code", model: "claude-opus-5-5", reasoningLevel: "medium", serviceTier: "default" },
+  ] as const;
+  const holdPrevious = () => {
+    f.profiles.update(f.userId, "profile_native_root", previous[0]);
+    f.profiles.update(f.userId, "profile_native_worker", previous[1]);
+  };
+  try {
+    holdPrevious();
+    await f.profiles.chooseDefaults(f.userId, only("claude-code"));
+    expect(settings().map(agent => [agent.model, agent.reasoningLevel])).toEqual([["claude-opus-5-5", "high"], ["claude-opus-5-5", "medium"]]);
+    // The previous defaults are never chosen again, so another installed CLI replaces them.
+    holdPrevious();
+    await f.profiles.chooseDefaults(f.userId, only("codex"));
+    expect(settings().map(agent => [agent.provider, agent.model])).toEqual([["codex", "gpt-6-astra"], ["codex", "gpt-6-sol"]]);
+    holdPrevious();
+    await f.tasks.createTask(f.userId, f.company.id, { projectId: f.project.id, title: "Ran", description: "Keep settings", idempotencyKey: "previous-defaults-task", startImmediately: false });
+    await f.profiles.chooseDefaults(f.userId, only("claude-code"));
+    expect(settings()).toEqual(previous);
   } finally { await f.close(); }
 });
 

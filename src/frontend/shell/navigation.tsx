@@ -1,4 +1,4 @@
-import { ChartNoAxesGantt, CirclePlus, Columns3, ClipboardList, EllipsisVertical, LogOut, Search, Settings, Shield, UserRound, type LucideIcon } from "lucide-react";
+import { ChartNoAxesGantt, Columns3, ClipboardList, EllipsisVertical, LogOut, Plus, Search, Settings, Shield, UserRound, type LucideIcon } from "lucide-react";
 import { useEffect, useMemo, useState, type ReactElement } from "react";
 import { BarChart3 } from "lucide-react";
 
@@ -6,6 +6,7 @@ import { Button, buttonVariants } from "../components/ui/button.js";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "../components/ui/dialog.js";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from "../components/ui/dropdown-menu.js";
 import { Input } from "../components/ui/input.js";
+import { NewButton } from "../components/ui/new-button.js";
 import { Sidebar, SidebarContent, SidebarFooter, SidebarGroup, SidebarGroupContent, SidebarHeader, SidebarMenu, SidebarMenuButton, SidebarMenuItem, SidebarTrigger, useSidebar } from "../components/ui/sidebar.js";
 import { companySettingsPath, withCompany } from "../lib/api.js";
 import { navigate } from "./navigation-state.js";
@@ -15,6 +16,7 @@ import { EntityAvatar } from "../components/app/entity-avatar.js";
 import { RecentTasks } from "../features/tasks/recent-tasks.js";
 import { SystemHealthIndicator } from "../components/app/system-health.js";
 import { requestNewTask } from "./global-new-task-dialog.js";
+import { opensCommandMenu } from "./shortcuts.js";
 import { useSignOut } from "./server-state.js";
 import wordmark from "../assets/suplex-wordmark.svg?inline";
 
@@ -46,7 +48,7 @@ function CreateActions({ close }: { close?: () => void }): ReactElement {
   const context = useOptionalCompanyContext();
   const company = context?.currentCompany;
   return (
-    <div className="flex gap-2 p-2"><SidebarMenuButton className="flex-1 bg-primary text-primary-foreground duration-200 ease-linear hover:bg-primary/90 hover:text-primary-foreground active:bg-primary/90 active:text-primary-foreground" disabled={company?.status !== "active"} onClick={() => { close?.(); requestNewTask(); }}><CirclePlus />New task</SidebarMenuButton></div>
+    <div className="grid p-2"><NewButton disabled={company?.status !== "active"} onClick={() => { close?.(); requestNewTask(); }}>New task</NewButton></div>
   );
 }
 
@@ -66,7 +68,7 @@ function NavigationSearch({ close }: { close?: () => void }): ReactElement {
     window.addEventListener("suplex:command-menu", openMenu);
     return () => window.removeEventListener("suplex:command-menu", openMenu);
   }, []);
-  return <><Dialog open={open} onOpenChange={setOpen}><DialogContent><DialogHeader><DialogTitle>Command menu</DialogTitle></DialogHeader><Input autoFocus aria-label="Search Suplex" placeholder="Search the views" value={query} onChange={(event) => setQuery(event.target.value)} /><div className="space-y-1"><button type="button" className={buttonVariants({ variant: "ghost", className: "w-full justify-start" })} onClick={() => { setOpen(false); close?.(); requestNewTask(); }}><CirclePlus />New task <kbd className="ml-auto text-[11px] text-muted-foreground">C</kbd></button>{visible.map(({ href, label, icon: Icon }) => <a className={buttonVariants({ variant: "ghost", className: "w-full justify-start" })} href={href} onClick={() => { setOpen(false); close?.(); }} key={href}><Icon />{label}</a>)}</div><p className="text-[11px] text-muted-foreground">⌘K or / search. G then T or B navigates. C starts a new task.</p></DialogContent></Dialog></>;
+  return <><Dialog open={open} onOpenChange={setOpen}><DialogContent><DialogHeader><DialogTitle>Command menu</DialogTitle></DialogHeader><Input autoFocus aria-label="Search Suplex" placeholder="Search the views" value={query} onChange={(event) => setQuery(event.target.value)} /><div className="space-y-1"><button type="button" className={buttonVariants({ variant: "ghost", className: "w-full justify-start" })} onClick={() => { setOpen(false); close?.(); requestNewTask(); }}><Plus />New task <kbd className="ml-auto text-[11px] text-muted-foreground">C</kbd></button>{visible.map(({ href, label, icon: Icon }) => <a className={buttonVariants({ variant: "ghost", className: "w-full justify-start" })} href={href} onClick={() => { setOpen(false); close?.(); }} key={href}><Icon />{label}</a>)}</div><p className="text-[11px] text-muted-foreground">⌘K or / search. G then T or B navigates. C starts a new task.</p></DialogContent></Dialog></>;
 }
 
 function SecondaryNavigation(): ReactElement {
@@ -97,7 +99,7 @@ export function AppSidebar(): ReactElement {
       const target = event.target instanceof HTMLElement ? event.target : null;
       if (target?.matches("input, textarea, select, button, [contenteditable=true]")) return;
       const key = event.key.toLowerCase();
-      if ((event.metaKey || event.ctrlKey) && !event.altKey && key === "k" || !event.metaKey && !event.ctrlKey && key === "/") {
+      if (opensCommandMenu(event)) {
         event.preventDefault(); window.dispatchEvent(new Event("suplex:command-menu")); return;
       }
       if (!event.metaKey && !event.ctrlKey && !event.altKey && key === "c" && context?.currentCompany?.status === "active") {

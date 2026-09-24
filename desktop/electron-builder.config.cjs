@@ -1,3 +1,6 @@
+// One build per Mac architecture, each in its own release/<arch> folder with its own latest-mac.yml and update feed.
+const arch = process.env.SUPLEX_DESKTOP_ARCH ?? "arm64";
+if (arch !== "arm64" && arch !== "x64") throw new Error("SUPLEX_DESKTOP_ARCH must be arm64 or x64");
 const feed = process.env.SUPLEX_DESKTOP_UPDATE_URL;
 if (feed && (!URL.canParse(feed) || new URL(feed).protocol !== "https:")) throw new Error("SUPLEX_DESKTOP_UPDATE_URL must be a valid HTTPS URL");
 
@@ -8,11 +11,12 @@ const notarize = Boolean(process.env.APPLE_ID && process.env.APPLE_APP_SPECIFIC_
 module.exports = {
   appId: "dev.suplex.desktop",
   productName: "Suplex",
-  directories: { output: "release" },
+  directories: { output: `release/${arch}` },
   files: ["dist/src/**"],
   extraResources: [{ from: "runtime", to: "runtime" }],
   publish: feed ? [{ provider: "generic", url: feed, useMultipleRangeRequest: false }] : null,
   dmg: {
+    artifactName: "${productName}-${version}-${arch}.${ext}",
     sign: true,
     background: "build/background.png",
     window: { width: 540, height: 380 },
@@ -22,7 +26,8 @@ module.exports = {
     ],
   },
   mac: {
-    target: [{ target: "dmg", arch: ["arm64"] }, { target: "zip", arch: ["arm64"] }],
+    target: [{ target: "dmg", arch: [arch] }, { target: "zip", arch: [arch] }],
+    artifactName: "${productName}-${version}-${arch}-mac.${ext}",
     hardenedRuntime: true,
     entitlements: "build/entitlements.mac.plist",
     entitlementsInherit: "build/entitlements.mac.plist",

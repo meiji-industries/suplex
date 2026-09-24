@@ -69,6 +69,10 @@ test("prerequisites pass on an Apple silicon Mac with room to spare", async () =
   expect(await stage("prerequisites").run(context())).toEqual({ ok: true, reason: "macOS 24.6.0 on arm64 with 8.0 GB free" });
 });
 
+test("prerequisites pass on an Intel Mac", async () => {
+  expect(await stage("prerequisites").run(context({ system: { platform: "darwin", arch: "x64", release: "24.6.0" } }))).toEqual({ ok: true, reason: "macOS 24.6.0 on x64 with 8.0 GB free" });
+});
+
 test("prerequisites fail on a full disk and on an older macOS", async () => {
   expect(await stage("prerequisites").run(context({ freeBytes: async () => 512 * 1024 ** 2 }))).toMatchObject({ ok: false, reason: expect.stringContaining("2 GB") });
   expect(await stage("prerequisites").run(context({ system: { platform: "darwin", arch: "arm64", release: "21.6.0" } }))).toMatchObject({ ok: false, reason: expect.stringContaining("macOS 13") });

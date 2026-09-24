@@ -49,13 +49,14 @@ const prerequisites: InstallStage = {
   async run(context) {
     const { platform, arch, release } = context.system;
     if (platform !== "darwin") {
-      return { ok: false, reason: `Suplex runs on macOS and this computer reports ${platform}.`, remedy: "Install Suplex on a Mac with Apple silicon." };
+      return { ok: false, reason: `Suplex runs on macOS and this computer reports ${platform}.`, remedy: "Install Suplex on a Mac." };
     }
     if (Number(release.split(".")[0]) < MINIMUM_DARWIN_MAJOR) {
       return { ok: false, reason: `Suplex needs macOS 13 or newer and this Mac reports Darwin ${release}.`, remedy: "Update macOS in System Settings, then try again." };
     }
-    if (arch !== "arm64") {
-      return { ok: false, reason: `Suplex needs a Mac with Apple silicon and this Mac reports ${arch}.`, remedy: "Run Suplex on an Apple silicon Mac." };
+    // The desktop app ships an arm64 and an x64 build, each with a runtime for that architecture.
+    if (arch !== "arm64" && arch !== "x64") {
+      return { ok: false, reason: `Suplex needs an Apple silicon or Intel Mac and this Mac reports ${arch}.`, remedy: "Run Suplex on an Apple silicon or Intel Mac." };
     }
     const free = await context.freeBytes(resolve(context.env.SUPLEX_DATA_ROOT ?? ".suplex/data"));
     if (free < MINIMUM_FREE_BYTES) {

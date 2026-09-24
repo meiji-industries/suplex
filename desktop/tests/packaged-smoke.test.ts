@@ -3,7 +3,8 @@ import { existsSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { beforeAll, describe, expect, test } from "vitest";
 
-const APP = join(__dirname, "..", "release", "mac-arm64", "Suplex.app");
+const ARCH = process.env.SUPLEX_DESKTOP_ARCH ?? "arm64";
+const APP = join(__dirname, "..", "release", ARCH, ARCH === "arm64" ? "mac-arm64" : "mac", "Suplex.app");
 const BINARY = join(APP, "Contents", "MacOS", "Suplex");
 const SMOKE_URL = process.env.SUPLEX_DESKTOP_SMOKE_URL;
 

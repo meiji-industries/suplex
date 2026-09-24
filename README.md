@@ -102,7 +102,8 @@ for this checkout.
 
 ## Set up an installation
 
-The simplest install is the desktop app: open `Suplex-<version>-arm64.dmg`,
+The simplest install is the desktop app: open `Suplex-<version>-arm64.dmg`
+(Apple silicon) or `Suplex-<version>-x64.dmg` (Intel),
 drag Suplex to Applications, and choose **Run locally**. The app
 ships the server, its dependencies, and Node 26.7.0 inside the bundle. It
 checks the Mac, installs Apple's developer tools (for git) and Herdr if they
@@ -181,8 +182,9 @@ running on quit. **Remote access** takes a URL, tests it, and
 installs nothing.
 
 `mise run desktop:dev` opens the app from source, `mise run desktop:dist`
-bundles the runtime and packages `desktop/release/Suplex-<version>-arm64.dmg`,
-`mise run desktop:dist:signed` also signs, notarizes, and staples it with the
+bundles the runtime and packages `desktop/release/<arch>/Suplex-<version>-<arch>.dmg`
+(`SUPLEX_DESKTOP_ARCH=arm64`, the default, or `x64` for Intel),
+`mise run desktop:dist:signed` builds both architectures and signs, notarizes, and staples them with the
 credentials in 1Password, and `mise run desktop:open` or `suplex desktop` opens
 the installed app at this host's `http://localhost:<port>`. The Navigate menu
 lists every Suplex the app has opened: pick one to switch, use "Add a Suplex

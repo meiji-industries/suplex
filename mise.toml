@@ -88,15 +88,17 @@ run = "pnpm run desktop:typecheck"
 [tasks."desktop:test"]
 run = "pnpm run desktop:test"
 [tasks."desktop:dist"]
-description = "Bundle the server runtime, then package the arm64 Suplex.app, DMG, and ZIP under desktop/release (Developer ID signed if the cert is in the keychain, not notarized)"
+description = "Bundle the server runtime, then package Suplex.app, DMG, and ZIP under desktop/release/<arch> (SUPLEX_DESKTOP_ARCH=arm64 or x64, default arm64; Developer ID signed if the cert is in the keychain, not notarized)"
 run = "pnpm run desktop:dist"
 [tasks."desktop:dist:signed"]
-description = "Bundle the server runtime, then package, sign, notarize, and staple the arm64 DMG for distribution; Apple credentials come from the 1Password Suplex vault (.env.production)"
+description = "Bundle the server runtime, then package, sign, notarize, and staple the Apple silicon and Intel DMGs for distribution; Apple credentials come from the 1Password Suplex vault (.env.production)"
 run = '''
 source scripts/onepassword.sh
 onepassword_setup_service_account
-pnpm run desktop:dist:signed
-shasum -a 256 desktop/release/Suplex-*-arm64.dmg
+for arch in arm64 x64; do
+  SUPLEX_DESKTOP_ARCH=$arch pnpm run desktop:dist:signed
+done
+shasum -a 256 desktop/release/*/Suplex-*.dmg
 '''
 [tasks."_1password:setup"]
 hide = true
@@ -110,7 +112,9 @@ description = "Publish the signed desktop release with R2 credentials from 1Pass
 run = '''
 source scripts/onepassword.sh
 onepassword_setup_service_account
-op run --env-file desktop/release.env -- pnpm run desktop:publish
+for arch in arm64 x64; do
+  SUPLEX_DESKTOP_ARCH=$arch op run --env-file desktop/release.env -- pnpm run desktop:publish
+done
 '''
 [tasks."_release:bump"]
 hide = true

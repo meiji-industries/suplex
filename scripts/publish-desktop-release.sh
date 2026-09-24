@@ -7,10 +7,12 @@ set -euo pipefail
 : "${CF_R2_BUCKET:?Set CF_R2_BUCKET}"
 : "${SUPLEX_DESKTOP_UPDATE_URL:?Set SUPLEX_DESKTOP_UPDATE_URL}"
 
-release_dir=desktop/release
-prefix=stable/mac/arm64
+arch="${SUPLEX_DESKTOP_ARCH:-arm64}"
+release_dir="desktop/release/$arch"
+prefix="stable/mac/$arch"
 endpoint="https://${CF_R2_ACCOUNT_ID}.r2.cloudflarestorage.com"
-base_url="${SUPLEX_DESKTOP_UPDATE_URL%/}"
+# release.env holds the Apple silicon feed; each architecture publishes to its own folder beside it.
+base_url="$(printf %s "${SUPLEX_DESKTOP_UPDATE_URL%/}" | sed -E "s#/mac/arm64\$#/mac/$arch#")"
 
 case "$base_url" in
   https://*/"$prefix") ;;
@@ -18,11 +20,11 @@ case "$base_url" in
 esac
 
 version="$(node -p "require('./desktop/package.json').version")"
-zip="$release_dir/Suplex-$version-arm64-mac.zip"
-dmg="$release_dir/Suplex-$version-arm64.dmg"
+zip="$release_dir/Suplex-$version-$arch-mac.zip"
+dmg="$release_dir/Suplex-$version-$arch.dmg"
 blockmap="$zip.blockmap"
 manifest="$release_dir/latest-mac.yml"
-app="$release_dir/mac-arm64/Suplex.app"
+app="$(ls -d "$release_dir"/mac*/Suplex.app 2>/dev/null | head -1)"
 for artifact in "$app" "$zip" "$blockmap" "$dmg" "$manifest"; do
   [[ -e "$artifact" ]] || { echo "Missing $artifact" >&2; exit 1; }
 done

@@ -8,9 +8,9 @@
     "build": "tsc -p tsconfig.json && cp src/connect.html dist/src/ && mkdir -p dist/src/pages && cp src/pages/* dist/src/pages/",
     "typecheck": "tsc -p tsconfig.json --noEmit",
     "dev": "sh scripts/dev.sh",
-    "dist": "sh ../scripts/bundle-runtime.sh && pnpm build && electron-builder --config electron-builder.config.cjs --mac --arm64 --publish never",
+    "dist": "sh ../scripts/bundle-runtime.sh && pnpm build && electron-builder --config electron-builder.config.cjs --mac --publish never",
     "dist:signed": "op run --env-file signing.env -- scripts/dist-signed.sh",
-    "verify:signed": "spctl --assess --type execute -vv release/mac-arm64/Suplex.app && xcrun stapler validate release/Suplex-*-arm64.dmg"
+    "verify:signed": "spctl --assess --type execute -vv release/${SUPLEX_DESKTOP_ARCH:-arm64}/mac*/Suplex.app && xcrun stapler validate release/${SUPLEX_DESKTOP_ARCH:-arm64}/Suplex-*.dmg"
   },
   "devDependencies": {
     "@types/node": "^24.10.1",

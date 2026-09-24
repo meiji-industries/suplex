@@ -46,8 +46,10 @@ version.
 After `mise run desktop:dist:signed`, publish with `mise run desktop:publish`.
 Both tasks fetch their Apple signing and R2 values through the Suplex 1Password
 service account. The publisher verifies the signed app and stapled DMG, uploads
-immutable versioned artifacts to `stable/mac/arm64`, checks their public URLs,
-then uploads `latest-mac.yml` last with `no-cache`.
+immutable versioned artifacts to `stable/mac/arm64` (Apple silicon) and
+`stable/mac/x64` (Intel), checks their public URLs, then uploads each folder's
+`latest-mac.yml` last with `no-cache`. Each build updates only from its own
+folder, so an Intel Mac never downloads the Apple silicon app.
 
 `mise run release:major`, `release:minor`, and `release:patch` run the full
 release pipeline: verify a clean checkout, fetch the service account, bump both

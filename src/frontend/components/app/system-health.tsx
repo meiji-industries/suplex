@@ -153,7 +153,7 @@ export function healthyCheckLabel(check: HealthCheck): string {
     case "gh-auth": return text("logins") ?? "Healthy";
     case "tailscale": return text("hostname") ?? "Healthy";
     case "backup": return verifiedAt && verifiedAt !== "never" ? relativeTime(verifiedAt) : "Healthy";
-    default: return text("account") ?? "Signed in";
+    case "provider:opencode": case "provider:claude-code": case "provider:codex": return text("account") ?? "Signed in";
   }
 }
 

@@ -8,12 +8,12 @@ import { ApplicationFrame } from "../../shell/application-frame.js";
 import { useCompanyContext } from "../../shell/company-context.js";
 import { AvatarEditor } from "../../components/app/entity-avatar.js";
 import { SettingsContent, SettingsLayout, SettingsSection, SettingRow } from "./settings-layout.js";
-import { companySettingsPath, withCompany, type CompanyStatus } from "../../lib/api.js";
+import { companySettingsPath, readJson, withCompany, type CompanyStatus } from "../../lib/api.js";
 import { Archive, RotateCcw, Save, Pause, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useState, type ReactElement } from "react";
 
 export function CompanySettingsView(): ReactElement {
-  const { user, companies, currentCompany, loading, selectCompany, renameCompany, setCompanyIssueCode, setCompanyStatus, clearCompany } = useCompanyContext();
+  const { user, companies, currentCompany, loading, selectCompany, renameCompany, setCompanyIssueCode, setCompanyStatus } = useCompanyContext();
   const [name, setName] = useState("");
   const [issueCode, setIssueCode] = useState("");
   const [busy, setBusy] = useState("");
@@ -59,9 +59,12 @@ export function CompanySettingsView(): ReactElement {
   };
   const clearAccount = async (): Promise<void> => {
     setBusy("clear"); setError("");
-    try { await clearCompany(company.id); setClearOpen(false); }
-    catch (reason) { setError(reason instanceof Error ? reason.message : "Unable to clear company"); }
-    finally { setBusy(""); }
+    try { await readJson("/api/admin/factory-reset", { method: "POST", body: "{}" }); }
+    catch (reason) { setError(reason instanceof Error ? reason.message : "Unable to factory reset"); setBusy(""); setClearOpen(false); return; }
+    window.localStorage.clear();
+    window.sessionStorage.clear();
+    // The desktop app closes and its next start shows the choice screen. A browser starts onboarding now.
+    if (window.suplexApp) await window.suplexApp.accountCleared(); else window.location.assign("/");
   };
   const saveIssueCode = async (): Promise<void> => {
     const normalized = issueCode.trim().toUpperCase();
@@ -107,11 +110,11 @@ export function CompanySettingsView(): ReactElement {
         {company.status === "paused" ? <SettingRow label="Reactivate company" description="Restore creation of new projects and tasks."><Button size="sm" onClick={() => void mutateStatus("active")} disabled={busy !== ""}><RotateCcw className="size-3.5" />{busy === "active" ? "Reactivating…" : "Reactivate company"}</Button></SettingRow> : null}
         {company.status !== "archived" ? <SettingRow label="Archive company" description="Archive is reversible, retains history, and blocks new work." destructive><Button variant="destructive" size="sm" onClick={() => setArchiveOpen(true)} disabled={busy !== ""}><Archive className="size-3.5" />Archive company</Button></SettingRow> : null}
         {company.status === "archived" ? <SettingRow label="Restore company" description="Restore the company to active status."><Button size="sm" onClick={() => void mutateStatus("active")} disabled={busy !== ""}><RotateCcw className="size-3.5" />{busy === "active" ? "Restoring…" : "Restore company"}</Button></SettingRow> : null}
-        <SettingRow label="Clear account" description="Permanently delete every project, task, and record for this workspace, then reset it to factory state." destructive><Button variant="destructive" size="sm" onClick={() => setClearOpen(true)} disabled={busy !== ""}><Trash2 className="size-3.5" />Clear account</Button></SettingRow>
+        <SettingRow label="Factory reset" description="Delete all Suplex data on this host and start onboarding again." destructive><Button variant="destructive" size="sm" onClick={() => setClearOpen(true)} disabled={busy !== ""}><Trash2 className="size-3.5" />Factory reset</Button></SettingRow>
       </SettingsSection>
       </SettingsContent>
       <AlertDialog open={archiveOpen} onOpenChange={setArchiveOpen}><AlertDialogContent><AlertDialogHeader><AlertDialogTitle>Archive {company.name}?</AlertDialogTitle><AlertDialogDescription>You can reverse this action. You can read the project and task history, but you cannot start new work.</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel>Cancel</AlertDialogCancel><AlertDialogAction variant="destructive" onClick={() => void mutateStatus("archived")} disabled={busy !== ""}>{busy === "archived" ? "Archiving…" : "Archive"}</AlertDialogAction></AlertDialogFooter></AlertDialogContent></AlertDialog>
-      <AlertDialog open={clearOpen} onOpenChange={setClearOpen}><AlertDialogContent><AlertDialogHeader><AlertDialogTitle>Clear {company.name}?</AlertDialogTitle><AlertDialogDescription>This permanently deletes every project, task, artifact, and execution record for this workspace and resets it to factory state. Memberships and audit history are kept. This cannot be undone.</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel>Cancel</AlertDialogCancel><AlertDialogAction variant="destructive" onClick={() => void clearAccount()} disabled={busy !== ""}>{busy === "clear" ? "Clearing…" : "Clear account"}</AlertDialogAction></AlertDialogFooter></AlertDialogContent></AlertDialog>
+      <AlertDialog open={clearOpen} onOpenChange={setClearOpen}><AlertDialogContent><AlertDialogHeader><AlertDialogTitle>Factory reset Suplex?</AlertDialogTitle><AlertDialogDescription>Suplex deletes all companies, projects, tasks, users, settings, and artifacts on this host. Suplex keeps backups, repositories, and worktrees. You cannot undo this.</AlertDialogDescription></AlertDialogHeader><AlertDialogFooter><AlertDialogCancel>Cancel</AlertDialogCancel><AlertDialogAction variant="destructive" onClick={() => void clearAccount()} disabled={busy !== ""}>{busy === "clear" ? "Resetting…" : "Factory reset"}</AlertDialogAction></AlertDialogFooter></AlertDialogContent></AlertDialog>
     </SettingsLayout>
   );
 }

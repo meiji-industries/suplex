@@ -1,6 +1,4 @@
 import { createHash, randomBytes } from "node:crypto";
-import { rmSync } from "node:fs";
-import { join } from "node:path";
 
 import type { Database } from "better-sqlite3";
 
@@ -9,7 +7,6 @@ import type { SuplexDatabase } from "../platform/database.js";
 import { AuthRepository, type AuthCompanyRow } from "./auth-repository.js";
 import { neutralUsername, newInvitationToken, newSessionToken } from "./auth-identifiers.js";
 import { jsonRequired } from "../shared/json.js";
-import { CompanyHasLiveSessions, wipeCompanyData } from "./company-clear.js";
 import {
   productionWebAuthnAdapter,
   type AuthenticationVerification,
@@ -74,7 +71,6 @@ export class AuthService {
   private readonly rpId: string;
   private readonly origin: string;
   private readonly installationId: string;
-  private readonly artifactRoot: string;
 
   constructor(private readonly database: SuplexDatabase, config: SuplexConfig, options: AuthServiceOptions = {}) {
     this.repository = new AuthRepository(database.authOrm());
@@ -83,7 +79,6 @@ export class AuthService {
     this.sessionTtlMs = options.sessionTtlMs ?? 7 * 24 * 60 * 60 * 1000;
     this.webAuthn = options.webAuthn ?? productionWebAuthnAdapter;
     this.installationId = config.installationId;
-    this.artifactRoot = config.artifactRoot;
     const reachable = new URL(config.reachableAddress);
     this.rpId = reachable.hostname;
     this.origin = reachable.origin;
@@ -443,29 +438,6 @@ export class AuthService {
       this.recordAuditEventInTransaction(undefined, actorUserId, "company_issue_code_updated", undefined, companyId, { previousIssueCode: company.issueCode ?? "", newIssueCode: issueCode ?? "" });
       return this.publicCompany({ ...company, issueCode });
     });
-  }
-
-  async clearCompany(actorUserId: string, companyId: string): Promise<Company> {
-    if (!idSchema.safeParse(companyId).success) throw new AuthFailure("Not found", 404);
-    const cleared = this.database.authTransaction(() => {
-      this.requireAdminById(actorUserId);
-      const company = this.repository.findCompany(companyId);
-      if (!company) throw new AuthFailure("Not found", 404);
-      try {
-        wipeCompanyData(this.database, companyId);
-      } catch (error) {
-        if (error instanceof CompanyHasLiveSessions) throw new AuthFailure(error.message, 409, "company_has_live_sessions");
-        throw error;
-      }
-      this.recordAuditEventInTransaction(undefined, actorUserId, "company_cleared", undefined, companyId, {});
-      return this.publicCompany({ ...company, status: "active", issueCode: null });
-    });
-    try {
-      rmSync(join(this.artifactRoot, cleared.id), { recursive: true, force: true });
-    } catch {
-      // Artifact files may already be gone; the durable wipe already completed.
-    }
-    return cleared;
   }
 
   setCompanyStatus(actorUserId: string, companyId: string, status: "active" | "paused" | "archived"): Company {

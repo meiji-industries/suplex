@@ -20,7 +20,6 @@ export type CompanyContextValue = {
   renameCompany: (companyId: string, name: string) => Promise<ApiCompany>;
   setCompanyIssueCode: (companyId: string, issueCode: string | null) => Promise<ApiCompany>;
   setCompanyStatus: (companyId: string, status: CompanyStatus) => Promise<ApiCompany>;
-  clearCompany: (companyId: string) => Promise<ApiCompany>;
   updateProfile: (profile: { displayName: string; username: string; avatarSeed: string }) => Promise<ApiUser>;
   avatars: Record<string, AvatarRecord>;
   saveAvatar: (ownerId: string, patch: AvatarUpdateBody) => Promise<AvatarRecord>;
@@ -159,12 +158,6 @@ export function CompanyProvider({ children }: { children: ReactNode }): ReactEle
     return updated;
   }, [reloadCompanies]);
 
-  const clearCompany = useCallback(async (companyId: string): Promise<ApiCompany> => {
-    const cleared = await readJson<ApiCompany>(`/api/admin/companies/${encodeURIComponent(companyId)}/clear`, { method: "POST", body: "{}" });
-    await reloadCompanies();
-    return cleared;
-  }, [reloadCompanies]);
-
   const setCompanyIssueCode = useCallback(async (companyId: string, issueCode: string | null): Promise<ApiCompany> => {
     const updated = await readJson<ApiCompany>(`/api/admin/companies/${encodeURIComponent(companyId)}/issue-code`, { method: "PATCH", body: JSON.stringify({ issueCode }) });
     await reloadCompanies();
@@ -198,12 +191,11 @@ export function CompanyProvider({ children }: { children: ReactNode }): ReactEle
     renameCompany,
     setCompanyIssueCode,
     setCompanyStatus,
-    clearCompany,
     updateProfile,
     avatars,
     saveAvatar,
     reloadCompanies,
-  }), [avatars, clearCompany, companies, createCompany, currentCompany, error, loading, reloadCompanies, renameCompany, saveAvatar, selectCompany, setCompanyIssueCode, setCompanyStatus, updateProfile, user]);
+  }), [avatars, companies, createCompany, currentCompany, error, loading, reloadCompanies, renameCompany, saveAvatar, selectCompany, setCompanyIssueCode, setCompanyStatus, updateProfile, user]);
   return <CompanyContext.Provider value={value}>{children}</CompanyContext.Provider>;
 }
 

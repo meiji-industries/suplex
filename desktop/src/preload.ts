@@ -57,4 +57,6 @@ const api: DesktopApi = {
 };
 
 // Only the app's own onboarding pages get the bridge; a loaded Suplex origin must never see it.
+// A Suplex origin gets one action: report that it cleared its account, which closes the app.
 if (location.protocol === "file:") contextBridge.exposeInMainWorld("suplexDesktop", api);
+else contextBridge.exposeInMainWorld("suplexApp", { accountCleared: async () => { await ipcRenderer.invoke("suplex:account-cleared"); } });

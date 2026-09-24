@@ -1,6 +1,6 @@
 import { app, BrowserWindow, clipboard, dialog, ipcMain, Menu, screen, session, shell } from "electron";
 import { existsSync } from "node:fs";
-import { readFile, writeFile } from "node:fs/promises";
+import { readFile, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { classifyNavigation, parseSuplexTarget, resolveSuplexTarget, type SuplexTarget } from "./suplex-target";
 import { forgetTarget, readTargets, rememberTarget, type TargetRegistry } from "./target-store";
@@ -175,7 +175,9 @@ export async function runSuplexDesktop(input: { readonly argv: readonly string[]
   };
   const forgetCurrent = async (): Promise<void> => {
     if (origin) registry = await forgetTarget(targetFile(), origin);
-    if (window) await showConnectPage(window);
+    state = { name: "choosing" }; // back to the first screen, where you can run Suplex here or add another
+    await enter();
+    rebuildMenu();
   };
   const showPage = async (win: BrowserWindow, page: string): Promise<void> => {
     origin = null;
@@ -450,6 +452,14 @@ export async function runSuplexDesktop(input: { readonly argv: readonly string[]
       case "tailnet-machines": return tailnetMachines();
       default: return null;
     }
+  });
+  ipcMain.removeHandler("suplex:account-cleared");
+  ipcMain.handle("suplex:account-cleared", async (event: Electron.IpcMainInvokeEvent): Promise<void> => {
+    const url = event.senderFrame?.url;
+    if (!url || origin === null || new URL(url).origin !== origin) return; // only the loaded Suplex, never a frame it embeds
+    // This Mac's Suplex was cleared, so the next launch starts at the choice screen. A remote Suplex leaves the local install alone.
+    if (origin === localOrigin) await rm(installFile(), { force: true });
+    app.quit();
   });
   app.on("before-quit", (event) => {
     if (quitting || server === undefined || adopted) return; // an adopted server outlives this window

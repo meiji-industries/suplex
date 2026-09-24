@@ -53,6 +53,7 @@ const ipcMain = {
   handle(channel: string, handler: (event: unknown, message: DesktopMessage) => Promise<unknown>): void { ipcMain.handlers.set(channel, handler); },
   removeHandler(channel: string): void { ipcMain.handlers.delete(channel); },
 };
+const accountCleared = async (url: string): Promise<unknown> => ipcMain.handlers.get("suplex:account-cleared")!({ senderFrame: { url } }, { action: "snapshot" });
 /** Drives one of the onboarding pages the way the preload does. */
 const desktop = async (message: DesktopMessage): Promise<unknown> => ipcMain.handlers.get("suplex:desktop")!({ senderFrame: { url: "file:///pages/choice.html" } }, message);
 const fake = {
@@ -138,6 +139,18 @@ describe("window", () => {
     }
   });
 
+  test("only the loaded Suplex can close the app after it clears its account; a remote clear keeps the local install", async () => {
+    const quit = vi.spyOn(fake.app, "quit");
+    writeFileSync(join(fake.userData, "install.json"), "{}");
+    await runSuplexDesktop({ argv: [], environment: { SUPLEX_DESKTOP_URL: ORIGIN } });
+    await accountCleared("https://evil.example/frame");
+    expect(quit).not.toHaveBeenCalled();
+    await accountCleared(`${ORIGIN}/companies/c/settings`);
+    expect(quit).toHaveBeenCalledOnce();
+    expect(existsSync(join(fake.userData, "install.json"))).toBe(true);
+    rmSync(join(fake.userData, "install.json"));
+  });
+
   test("popups never open a second window", async () => {
     await runSuplexDesktop({ argv: [], environment: { SUPLEX_DESKTOP_URL: ORIGIN } });
     const win = fake.FakeWindow.all[0]!;
@@ -196,7 +209,7 @@ describe("remembered targets", () => {
     expect(external.preventDefault, "the previous Suplex is now external").toHaveBeenCalled();
   });
 
-  test("Add a Suplex URL shows the connection page without forgetting; Forget this Suplex drops the current one", async () => {
+  test("Add a Suplex URL shows the connection page without forgetting; Forget this Suplex drops the current one and returns to the choice screen", async () => {
     writeFileSync(targetFile, JSON.stringify({ current: `${OTHER}/`, targets: [`${OTHER}/`, "http://localhost:4211/"] }));
     await runSuplexDesktop({ argv: [], environment: {} });
     const win = fake.FakeWindow.all[0]!;
@@ -207,7 +220,9 @@ describe("remembered targets", () => {
     menuItem("meiji.tail1234.ts.net:4111").click!();
     await vi.waitFor(() => expect(win.webContents.url).toBe(`${OTHER}/`));
     menuItem("Forget this Suplex").click!();
-    await vi.waitFor(() => expect(win.webContents.url).toMatch(/connect\.html$/));
+    await vi.waitFor(() => expect(win.webContents.url).toMatch(/pages\/choice\.html$/));
+    expect(menuItem("Forget this Suplex").enabled).toBe(false);
+    expect(((await desktop({ action: "snapshot" })) as DesktopSnapshot).state).toBe("choosing");
     expect(JSON.parse(readFileSync(targetFile, "utf8"))).toEqual({ current: null, targets: ["http://localhost:4211/"] });
   });
 
@@ -314,6 +329,8 @@ describe("local install", () => {
     expect(await healthy(origin)).toBe(true);
     expect(JSON.parse(readFileSync(installFile, "utf8")).port, "the chosen port is remembered").toBe(Number(new URL(origin).port));
     expect(readFileSync(join(fake.userData, "logs", "server.log"), "utf8")).toContain("fixture supervisor listening");
+    await accountCleared(`${origin}/companies/c/settings`);
+    expect(existsSync(installFile), "a cleared local Suplex starts at the choice screen next launch").toBe(false);
     const quit = preventable();
     fake.app.emit("before-quit", quit);
     expect(quit.preventDefault).toHaveBeenCalled();

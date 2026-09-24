@@ -24,6 +24,8 @@ import { createProviderConnectionProbe, providerConnectionFromHealth } from "../
 import { createProviderReadinessCheck } from "../../profiles/provider-readiness.js";
 import { readProviders as readHostProviders, type ReadProviders } from "../../profiles/provider-catalog.js";
 import { BackupFailure, BackupService } from "../../platform/backup.js";
+import { factoryReset, LiveSessionsBlockReset } from "../../platform/factory-reset.js";
+import { seedDevelopmentData } from "../../platform/development.js";
 import { MAX_MIN_FREE_DISK_GB, readEnvironmentSettings, updateEnvironmentSettings } from "../../platform/environment-settings.js";
 
 const EnvironmentSettingsSchema = z.object({ minFreeDiskGb: z.number(), defaultBudgetUsd: z.number(), defaultMaxTurns: z.number().int() });
@@ -112,6 +114,19 @@ const administration: FastifyPluginAsync<AdministrationRoutesOptions> = async (a
     } finally {
       await rm(staging, { recursive: true, force: true });
     }
+  });
+  typed.post("/api/admin/factory-reset", { schema: { response: { 204: z.null(), 403: ErrorResponseSchema, 409: ErrorResponseSchema } } }, async (request, reply) => {
+    if (!requireAdmin(request.suplexUser.role, reply)) return;
+    if (!database || !options.config) throw new Error("Database is unavailable");
+    try {
+      await factoryReset(database, options.config);
+    } catch (error) {
+      if (error instanceof LiveSessionsBlockReset) return reply.code(409).send({ error: error.message });
+      throw error;
+    }
+    // Same seed as a first start, so the next page load signs in and opens onboarding.
+    await seedDevelopmentData(auth, options.config);
+    return reply.code(204).send(null);
   });
   const readProviders = options.readProviders ?? (() => readHostProviders({ directory: process.cwd(), connection: createProviderConnectionProbe() }));
   let providerObservation: Promise<ProviderListResponse> | undefined;

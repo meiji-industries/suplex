@@ -4,7 +4,7 @@ import { FileText, FolderKanban, MoreHorizontal, Workflow as WorkflowIcon, X } f
 import { TaskImageInputSchema, DeliveryTargetSchema, VisualEvidenceSchema, type Task, type TaskInput } from "../../../tasks/contracts.js";
 import { ADVISOR_LABELS, workflowDefinition, type AdvisorProfileIds, type AdvisorRole, type WorkflowId } from "../../../coordination/workflows.js";
 import type { ApiProfile, ApiProject, ApiTaskTemplate, ApiWorkflow } from "../../shell/view-shared.js";
-import { readJson, withCompany } from "../../lib/api.js";
+import { ApiError, readJson, withCompany } from "../../lib/api.js";
 import { useTaskCache } from "./task-data.js";
 import { Button } from "../../components/ui/button.js";
 import { NewButton } from "../../components/ui/new-button.js";
@@ -80,6 +80,8 @@ export function NewTaskDialog({ open, onOpenChange, companyId, onCreated, initia
   const [readingImages, setReadingImages] = useState(false);
   const imageRead = useRef({ generation: 0, pending: false });
   const [error, setError] = useState("");
+  // Project settings problems that stop task creation; the alert links to the settings that fix them.
+  const [projectFindings, setProjectFindings] = useState<string[]>([]);
   const request = useRef<{ body: string; key: string } | null>(null);
   const repair = workflow === REPAIR;
   /** Explicit draft fields win, then the record's default agents and settings, then the fallback; repair always merges with tests. */
@@ -179,7 +181,7 @@ export function NewTaskDialog({ open, onOpenChange, companyId, onCreated, initia
   const missingSource = repair && source?.kind !== "pull_request";
   const submit = async () => {
     if (busy || imageRead.current.pending || !projectId || !title.trim() || missingSource) return;
-    setBusy(true); setError("");
+    setBusy(true); setError(""); setProjectFindings([]);
     try {
       if (editTask) {
         const saved = await readJson<Task>(`/api/tasks/${editTask.id}`, { method: "PATCH", body: JSON.stringify({ title, description, deliveryTarget, runProjectTests, visualEvidence, workflow, advisorProfileIds: admittedAdvisors(workflow, advisorProfileIds), ...(rootProfileId ? { rootProfileId } : {}), ...(workerProfileId ? { workerProfileId } : {}) }) });
@@ -194,7 +196,10 @@ export function NewTaskDialog({ open, onOpenChange, companyId, onCreated, initia
       setTitle(""); setDescription(""); setImages([]); setSource(undefined); setSourceSummary(undefined); setBlockedBy([]);
       cacheTask(task);
       onCreated(task);
-    } catch (error) { setError(error instanceof Error ? error.message : "Suplex could not save the task"); }
+    } catch (error) {
+      setError(error instanceof Error ? error.message : "Suplex could not save the task");
+      if (error instanceof ApiError) setProjectFindings((error.findings ?? []).filter(finding => ["repositoryPath", "repository", "baseBranch"].includes(finding.field)).map(finding => finding.message));
+    }
     finally { setBusy(false); }
   };
   const addImages = async (files: File[]) => {
@@ -257,7 +262,7 @@ export function NewTaskDialog({ open, onOpenChange, companyId, onCreated, initia
           <Input aria-label="Task title" autoFocus placeholder="Task title" value={title} onChange={event => setTitle(event.target.value)} className="h-10 border-0 bg-transparent px-0 text-lg font-semibold placeholder:text-muted-foreground/70 shadow-none focus-visible:ring-0 md:text-lg dark:bg-transparent" />
           <Textarea aria-label="Task description" placeholder="Write a description" value={description} onChange={event => setDescription(event.target.value)} className="min-h-20 resize-none border-0 bg-transparent px-0 py-1 text-sm font-normal placeholder:text-muted-foreground/70 shadow-none focus-visible:ring-0 md:text-sm dark:bg-transparent" />
         </div>
-        {error ? <div className="px-5 pb-3"><Alert variant="destructive"><AlertDescription>{error}</AlertDescription></Alert></div> : null}
+        {error ? <div className="px-5 pb-3"><Alert variant="destructive"><AlertDescription>{error}{projectFindings.length && projectId ? <>. {projectFindings.join(". ")}. <a className="underline" href={withCompany(`/projects/${encodeURIComponent(projectId)}`, companyId)}>Open the project settings</a></> : null}</AlertDescription></Alert></div> : null}
         <div className="mt-auto flex flex-wrap items-end gap-2 px-5 pb-4">
           {editing ? null : <InlineAttachmentPicker compact attachments={images.map((image, index) => ({ id: String(index), filename: image.filename, previewUrl: `data:${image.mimeType};base64,${image.base64}` }))} onSelect={addImages} onRemove={index => setImages(current => current.filter((_, item) => item !== index))} disabled={busy || readingImages} />}
           <TaskRoleSelector role="root" profiles={eligibleProfiles} assignment={rootProfileId} defaultProfileId={project?.rootProfileId} busy={busy} onChange={setRootProfileId} />

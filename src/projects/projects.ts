@@ -407,13 +407,16 @@ export class ProjectService {
 
   /** Resolve the runtime values that a newly-created task owns thereafter. */
   async captureTaskConfiguration(project: Project): Promise<{ baseSha: string }> {
+    const captureFailure = (findings: ProjectFinding[]) => new ProjectFailure("Project configuration could not be captured", findings, 422);
+    if (!(await stat(project.repositoryPath).then((entry) => entry.isDirectory(), () => false))) throw captureFailure([finding("repository-path-missing", "repositoryPath", "The repository path does not exist on this host")]);
+    let baseSha: string | undefined;
     try {
-      const inspection = await (this.localRepository ?? await createLocalRepositoryAdapter(project.integration?.repository.kind)).inspect({ repositoryPath: project.repositoryPath, baseBranch: project.baseBranch });
-      if (!inspection.baseSha) throw new Error("branch unavailable");
-      return { baseSha: inspection.baseSha };
-    } catch {
-      throw new ProjectFailure("Project configuration could not be captured", [finding("repository-unavailable", "projectId", "Suplex could not resolve the configured branches for this new task")], 422);
+      baseSha = (await (this.localRepository ?? await createLocalRepositoryAdapter(project.integration?.repository.kind)).inspect({ repositoryPath: project.repositoryPath, baseBranch: project.baseBranch })).baseSha;
+    } catch (reason) {
+      throw captureFailure(reason instanceof ProjectFailure && reason.findings.length ? reason.findings : [finding("repository-unavailable", "repositoryPath", "Suplex could not resolve the configured branches for this new task")]);
     }
+    if (!baseSha) throw captureFailure([finding("branch-unavailable", "baseBranch", "Git cannot resolve the base branch")]);
+    return { baseSha };
   }
 
   async discoverTaskSources(actorUserId: string, projectId: string, kind: TaskSourceSelector["kind"]): Promise<Awaited<ReturnType<TaskSourceService["discover"]>>> {

@@ -14,14 +14,14 @@ export const PROJECT_SECTIONS = [
   { id: "connections", label: "Connections" },
 ] as const satisfies ReadonlyArray<{ id: ProjectSection; label: string }>;
 
-export type GeneralDraft = Pick<ApiProject, "name" | "baseBranch">;
+export type GeneralDraft = Pick<ApiProject, "name" | "baseBranch" | "repositoryPath">;
 export type AgentsDraft = Pick<ApiProject, "rootProfileId" | "workerProfileId"> & { providerPolicy: ProjectProviderPolicy | null };
 export type AgentsDraftFinding = { field: "rootProfileId" | "workerProfileId"; message: string };
 export type ExecutionDraft = Pick<ApiProject, "setupCommand" | "verificationCommand"> & Pick<ProjectExecution, "instructions"> & { skillDirectories: string };
 export type ConnectionsDraft = { integration: ProjectIntegration; environment: string; mcp: string };
 
 export function generalDraft(project: ApiProject): GeneralDraft {
-  return { name: project.name, baseBranch: project.baseBranch };
+  return { name: project.name, baseBranch: project.baseBranch, repositoryPath: project.repositoryPath };
 }
 
 export function agentsDraft(project: ApiProject): AgentsDraft {
@@ -49,6 +49,7 @@ export function generalProjectPatch(saved: GeneralDraft, draft: GeneralDraft): P
   return {
     ...(draft.name !== saved.name ? { name: draft.name } : {}),
     ...(draft.baseBranch !== saved.baseBranch ? { baseBranch: draft.baseBranch } : {}),
+    ...(draft.repositoryPath !== saved.repositoryPath ? { repositoryPath: draft.repositoryPath } : {}),
   };
 }
 

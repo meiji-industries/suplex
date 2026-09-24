@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, realpath, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, realpath, rename, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
@@ -238,6 +238,21 @@ test("keeps saved project changes live without mutating prior configuration valu
   } finally {
     await close(value);
   }
+});
+
+test("a moved checkout names the repository path and recovers after the path is saved", async () => {
+  const f = await fixture();
+  try {
+    const project = await f.projects.createProject(f.adminId, f.companyId, input(f));
+    const movedPath = join(f.root, "repositories", "renamed");
+    await rename(f.repositoryPath, movedPath);
+
+    await expect(f.projects.captureTaskConfiguration(project)).rejects.toMatchObject({ statusCode: 422, findings: [{ code: "repository-path-missing", field: "repositoryPath" }] });
+
+    const repaired = await f.projects.patchProject(f.adminId, project.id, { repositoryPath: movedPath });
+    expect(repaired.repositoryPath).toBe(await realpath(movedPath));
+    await expect(f.projects.captureTaskConfiguration(repaired)).resolves.toEqual({ baseSha: "a".repeat(40) });
+  } finally { await close(f); }
 });
 
 test("partial project updates preserve omitted fields and validate only changed domains", async () => {

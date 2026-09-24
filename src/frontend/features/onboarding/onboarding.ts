@@ -4,13 +4,14 @@ import type { HealthCheck } from "../../../platform/health.js";
 import type { ProviderSummary, ProviderListResponse } from "../../../http/contracts/providers.js";
 import type { ProfileResponse, ProjectResponse } from "../../../http/contracts/projects.js";
 import { useSystemHealth } from "../../components/app/system-health.js";
+import type { ToolIconId } from "../../components/app/tool-icons.js";
 import { readJson, withCompany, type ApiCompany } from "../../lib/api.js";
 
 export type ApiProfile = ProfileResponse;
 export type ApiProject = ProjectResponse;
 export type OnboardingStepId = "company" | "tools" | "providers" | "agents" | "projects" | "done";
 
-export const ONBOARDING_TOOL_CHECKS: readonly HealthCheck["id"][] = ["git", "gh-auth", "herdr-readiness"];
+export const ONBOARDING_TOOL_CHECKS: readonly (HealthCheck["id"] & ToolIconId)[] = ["git", "gh-auth", "herdr-readiness"];
 
 export const ONBOARDING_STEPS: readonly { id: OnboardingStepId; label: string; description: string }[] = [
   { id: "company", label: "Company", description: "Name the company." },

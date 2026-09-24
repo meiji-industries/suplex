@@ -1,8 +1,9 @@
 import { ArrowLeft, Check, Copy, PartyPopper, RefreshCw } from "lucide-react";
 import { useEffect, useState, type ReactElement } from "react";
 
-import { CheckStatusIndicator, HealthCheckIcon, healthCheckPurpose, useSystemHealth } from "../../components/app/system-health.js";
+import { CheckStatusIndicator, healthCheckPurpose, useSystemHealth } from "../../components/app/system-health.js";
 import { ProviderIcon } from "../../components/app/provider-icons.js";
+import { ToolIcon } from "../../components/app/tool-icons.js";
 import { AvatarEditor } from "../../components/app/entity-avatar.js";
 import { StatusLight } from "../../components/app/status-light.js";
 import { Alert, AlertDescription } from "../../components/ui/alert.js";
@@ -113,7 +114,7 @@ export function OnboardingView(): ReactElement {
         const loading = !check && freshness === "checking";
         return <div key={id} className="border-b pb-3">
           <div className="flex items-center gap-3">
-            {check ? <HealthCheckIcon check={check} /> : <div className="size-4 shrink-0">{loading ? <Skeleton className="h-full w-full" /> : null}</div>}
+            {check || !loading ? <ToolIcon tool={id} /> : <Skeleton className="size-4 shrink-0" />}
             <div className="min-w-0 flex-1">
               <span className="text-[13px] font-medium">{id === "git" ? "Git" : id === "gh-auth" ? "GitHub" : "Herdr"}</span>{" "}
               <span className="text-xs text-muted-foreground">{id === "git" ? "for source control" : id === "gh-auth" ? "for branches, pull requests, and merges" : "runs your agents in the background"}</span>

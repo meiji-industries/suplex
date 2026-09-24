@@ -6,6 +6,7 @@ cd "$(dirname "$0")/.."
 
 # `electron .` shows "Electron" in the menu bar and Cmd+Tab (macOS reads the bundle's plist).
 # Launch an APFS clone renamed to Suplex; never edit node_modules, pnpm hardlinks it to the store.
+node -e "require('electron')" >&2  # first require downloads the binary and logs to stdout
 stock="$(dirname "$(dirname "$(dirname "$(node -p "require('electron')")")")")"
 app=.electron-dev/Suplex.app
 if [ ! -d "$app" ] || [ "$(cat .electron-dev/source 2>/dev/null)" != "$stock" ]; then

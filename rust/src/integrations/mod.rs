@@ -1,3 +1,4 @@
+pub mod bitbucket;
 pub mod github;
 pub mod github_delivery;
 pub mod github_device;
@@ -5,3 +6,4 @@ pub mod github_triggers;
 pub mod github_triggers_dispatches;
 pub mod github_triggers_inspection;
 pub mod issue_tracker;
+pub mod provider_http;

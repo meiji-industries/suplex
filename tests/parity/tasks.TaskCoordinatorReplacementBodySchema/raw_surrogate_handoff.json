@@ -1,0 +1,10 @@
+{
+  "contract": "tasks.TaskCoordinatorReplacementBodySchema",
+  "case": "raw_surrogate_handoff",
+  "encoding": "raw-json",
+  "input": "{\"sessionId\":\"session\",\"rootProfileId\":\"root\",\"handoff\":\"\\ud800\",\"resume\":false}",
+  "expected": {
+    "accepted": true,
+    "value": "{\"sessionId\":\"session\",\"rootProfileId\":\"root\",\"handoff\":\"\\ud800\",\"resume\":false}"
+  }
+}

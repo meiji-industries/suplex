@@ -41,7 +41,10 @@ pub(super) fn validate_detailed(
     contract: &str,
     input: Option<&JsDocument>,
 ) -> Option<DetailedJsParseResult> {
-    if contract != "tasks.TaskBodySchema" {
+    if !matches!(
+        contract,
+        "tasks.TaskBodySchema" | "tasks.TaskIssueBodySchema" | "tasks.TaskDependenciesBodySchema"
+    ) {
         return None;
     }
     let Some(source) = input else {
@@ -58,7 +61,12 @@ pub(super) fn validate_detailed(
         output: source.clone(),
         thrown: None,
     };
-    let result = parser.body(source.root(), &[]);
+    let result = match contract {
+        "tasks.TaskBodySchema" => parser.body(source.root(), &[]),
+        "tasks.TaskIssueBodySchema" => parser.issue_body(source.root(), &[]),
+        "tasks.TaskDependenciesBodySchema" => parser.dependencies_body(source.root(), &[]),
+        _ => unreachable!(),
+    };
     if let Some(thrown) = parser.thrown {
         return Some(Err(JsContractFailure::Thrown(thrown)));
     }
@@ -107,6 +115,56 @@ impl Parser<'_> {
     }
     fn default_array(&mut self) -> usize {
         self.output.append_node(JsNode::Array(Vec::new()))
+    }
+    fn issue_body(&mut self, node: usize, path: &[Value]) -> NodeResult {
+        let object = self.core().object(Some(node), path)?;
+        let mut fields = Vec::new();
+        let mut issues = IssueList::new();
+        let issue_path = child(path, "issue");
+        match self.field(object, "issue") {
+            None => issues.push(self.core().invalid_type("object", None, &issue_path)),
+            Some(value) if matches!(self.source.node(value), JsNode::Null) => {
+                fields.push(("issue", value))
+            }
+            Some(value) => match self.issue(value, &issue_path) {
+                Ok(value) => fields.push(("issue", value)),
+                Err(error) => issues.extend(error),
+            },
+        }
+        issues.extend(self.core().strict(object, path, &["issue"]));
+        if issues.is_empty() {
+            Ok(object_node(&mut self.output, fields))
+        } else {
+            Err(issues)
+        }
+    }
+    fn dependencies_body(&mut self, node: usize, path: &[Value]) -> NodeResult {
+        let object = self.core().object(Some(node), path)?;
+        let mut fields = Vec::new();
+        let mut issues = IssueList::new();
+        match self.field(object, "dependsOn") {
+            Some(value) => match self.depends_on(value, &child(path, "dependsOn")) {
+                Ok(value) => fields.push(("dependsOn", value)),
+                Err(error) => issues.extend(error),
+            },
+            None => fields.push(("dependsOn", self.default_array())),
+        }
+        match self.field(object, "blockedByPullRequests") {
+            Some(value) => match self.blocked_prs(value, &child(path, "blockedByPullRequests")) {
+                Ok(value) => fields.push(("blockedByPullRequests", value)),
+                Err(error) => issues.extend(error),
+            },
+            None => fields.push(("blockedByPullRequests", self.default_array())),
+        }
+        issues.extend(
+            self.core()
+                .strict(object, path, &["dependsOn", "blockedByPullRequests"]),
+        );
+        if issues.is_empty() {
+            Ok(object_node(&mut self.output, fields))
+        } else {
+            Err(issues)
+        }
     }
     fn body(&mut self, node: usize, path: &[Value]) -> NodeResult {
         let object = self.core().object(Some(node), path)?;

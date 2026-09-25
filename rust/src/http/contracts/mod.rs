@@ -10,7 +10,9 @@ mod profile;
 mod project_aux;
 mod project_creation_js;
 mod providers;
+mod task_answer_js;
 mod task_aux;
+mod task_control_js;
 mod task_create_js;
 mod workflow_records_js;
 
@@ -77,6 +79,12 @@ pub fn validate_js_detailed(
         return Some(result);
     }
     if let Some(result) = task_create_js::validate_detailed(contract, input) {
+        return Some(result);
+    }
+    if let Some(result) = task_control_js::validate_detailed(contract, input) {
+        return Some(result);
+    }
+    if let Some(result) = task_answer_js::validate_detailed(contract, input) {
         return Some(result);
     }
     auth_js::validate(contract, input).map(|result| {

@@ -1,0 +1,19 @@
+{
+  "contract": "tasks.TaskAnswerBodySchema",
+  "case": "add_allowance",
+  "input": {
+    "questionId": "question",
+    "limitDecision": {
+      "kind": "add_allowance"
+    }
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "questionId": "question",
+      "limitDecision": {
+        "kind": "add_allowance"
+      }
+    }
+  }
+}

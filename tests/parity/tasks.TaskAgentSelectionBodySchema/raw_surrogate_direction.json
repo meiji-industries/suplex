@@ -1,0 +1,10 @@
+{
+  "contract": "tasks.TaskAgentSelectionBodySchema",
+  "case": "raw_surrogate_direction",
+  "encoding": "raw-json",
+  "input": "{\"role\":\"root\",\"expectedProfileId\":\"old\",\"expectedSessionId\":null,\"profileId\":\"new\",\"direction\":\"\\ud800\",\"resume\":false}",
+  "expected": {
+    "accepted": true,
+    "value": "{\"role\":\"root\",\"expectedProfileId\":\"old\",\"expectedSessionId\":null,\"profileId\":\"new\",\"direction\":\"\\ud800\",\"resume\":false}"
+  }
+}

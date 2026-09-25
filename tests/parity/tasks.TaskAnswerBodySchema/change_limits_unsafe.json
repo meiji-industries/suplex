@@ -1,0 +1,32 @@
+{
+  "contract": "tasks.TaskAnswerBodySchema",
+  "case": "change_limits_unsafe",
+  "input": {
+    "questionId": "question",
+    "limitDecision": {
+      "kind": "change_limits",
+      "limits": {
+        "budgetUsd": 1,
+        "maxTurns": 9007199254740992
+      }
+    }
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "too_big",
+        "maximum": 9007199254740991,
+        "note": "Integers must be within the safe integer range.",
+        "origin": "int",
+        "inclusive": true,
+        "path": [
+          "limitDecision",
+          "limits",
+          "maxTurns"
+        ],
+        "message": "Too big: expected int to be <=9007199254740991"
+      }
+    ]
+  }
+}

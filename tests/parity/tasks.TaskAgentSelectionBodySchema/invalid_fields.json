@@ -1,0 +1,73 @@
+{
+  "contract": "tasks.TaskAgentSelectionBodySchema",
+  "case": "invalid_fields",
+  "input": {
+    "role": "root",
+    "expectedProfileId": "",
+    "expectedSessionId": "",
+    "profileId": null,
+    "direction": 1,
+    "resume": true,
+    "questionId": "",
+    "extra": true
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "origin": "string",
+        "code": "too_small",
+        "minimum": 1,
+        "inclusive": true,
+        "path": [
+          "expectedProfileId"
+        ],
+        "message": "Too small: expected string to have >=1 characters"
+      },
+      {
+        "origin": "string",
+        "code": "too_small",
+        "minimum": 1,
+        "inclusive": true,
+        "path": [
+          "expectedSessionId"
+        ],
+        "message": "Too small: expected string to have >=1 characters"
+      },
+      {
+        "expected": "string",
+        "code": "invalid_type",
+        "path": [
+          "profileId"
+        ],
+        "message": "Invalid input: expected string, received null"
+      },
+      {
+        "expected": "string",
+        "code": "invalid_type",
+        "path": [
+          "direction"
+        ],
+        "message": "Invalid input: expected string, received number"
+      },
+      {
+        "origin": "string",
+        "code": "too_small",
+        "minimum": 1,
+        "inclusive": true,
+        "path": [
+          "questionId"
+        ],
+        "message": "Too small: expected string to have >=1 characters"
+      },
+      {
+        "code": "unrecognized_keys",
+        "keys": [
+          "extra"
+        ],
+        "path": [],
+        "message": "Unrecognized key: \"extra\""
+      }
+    ]
+  }
+}

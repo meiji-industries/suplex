@@ -1,0 +1,10 @@
+{
+  "contract": "tasks.TaskWorkerReplacementBodySchema",
+  "case": "raw_surrogate_reason",
+  "encoding": "raw-json",
+  "input": "{\"sessionId\":\"session\",\"reason\":\"\\ud800\"}",
+  "expected": {
+    "accepted": true,
+    "value": "{\"sessionId\":\"session\",\"reason\":\"\\ud800\"}"
+  }
+}

@@ -1,0 +1,38 @@
+{
+  "contract": "tasks.TaskDependenciesBodySchema",
+  "case": "invalid_and_unknown",
+  "input": {
+    "dependsOn": null,
+    "blockedByPullRequests": "x",
+    "extra": true
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "expected": "array",
+        "code": "invalid_type",
+        "path": [
+          "dependsOn"
+        ],
+        "message": "Invalid input: expected array, received null"
+      },
+      {
+        "expected": "array",
+        "code": "invalid_type",
+        "path": [
+          "blockedByPullRequests"
+        ],
+        "message": "Invalid input: expected array, received string"
+      },
+      {
+        "code": "unrecognized_keys",
+        "keys": [
+          "extra"
+        ],
+        "path": [],
+        "message": "Unrecognized key: \"extra\""
+      }
+    ]
+  }
+}

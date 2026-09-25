@@ -44,6 +44,12 @@ fn ported_contracts_match_zod_fixtures() {
         "projects.ProjectResponseSchema",
         "projects.ProjectListResponseSchema",
         "tasks.TaskBodySchema",
+        "tasks.TaskIssueBodySchema",
+        "tasks.TaskDependenciesBodySchema",
+        "tasks.TaskWorkerReplacementBodySchema",
+        "tasks.TaskCoordinatorReplacementBodySchema",
+        "tasks.TaskAgentSelectionBodySchema",
+        "tasks.TaskAnswerBodySchema",
         "workflows.WorkflowRecordInputSchema",
         "workflows.WorkflowRecordPatchSchema",
         "workflows.WorkflowRecordSchema",
@@ -137,7 +143,7 @@ fn ported_contracts_match_zod_fixtures() {
             }
         }
     }
-    assert_eq!(schemas.len(), 75, "seventy-five explicitly ported schemas");
+    assert_eq!(schemas.len(), 81, "eighty-one explicitly ported schemas");
     assert!(
         verified >= 140,
         "every ported schema has multiple Zod cases"

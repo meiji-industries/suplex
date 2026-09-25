@@ -1,0 +1,69 @@
+{
+  "contract": "tasks.TaskAnswerBodySchema",
+  "case": "change_limits_invalid",
+  "input": {
+    "questionId": "question",
+    "limitDecision": {
+      "kind": "change_limits",
+      "limits": {
+        "budgetUsd": -1,
+        "maxTurns": 1.5
+      }
+    }
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid_union",
+        "errors": [
+          [
+            {
+              "expected": "string",
+              "code": "invalid_type",
+              "path": [
+                "answer"
+              ],
+              "message": "Invalid input: expected string, received undefined"
+            },
+            {
+              "code": "unrecognized_keys",
+              "keys": [
+                "limitDecision"
+              ],
+              "path": [],
+              "message": "Unrecognized key: \"limitDecision\""
+            }
+          ],
+          [
+            {
+              "origin": "number",
+              "code": "too_small",
+              "minimum": 0,
+              "inclusive": true,
+              "path": [
+                "limitDecision",
+                "limits",
+                "budgetUsd"
+              ],
+              "message": "Too small: expected number to be >=0"
+            },
+            {
+              "expected": "int",
+              "format": "safeint",
+              "code": "invalid_type",
+              "path": [
+                "limitDecision",
+                "limits",
+                "maxTurns"
+              ],
+              "message": "Invalid input: expected int, received number"
+            }
+          ]
+        ],
+        "path": [],
+        "message": "Invalid input"
+      }
+    ]
+  }
+}

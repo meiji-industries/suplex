@@ -1,0 +1,28 @@
+{
+  "contract": "tasks.TaskCoordinatorReplacementBodySchema",
+  "case": "invalid_resume",
+  "input": {
+    "sessionId": "session",
+    "rootProfileId": "root",
+    "resume": "yes"
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid_union",
+        "errors": [],
+        "note": "No matching discriminator",
+        "discriminator": "resume",
+        "options": [
+          false,
+          true
+        ],
+        "path": [
+          "resume"
+        ],
+        "message": "Invalid discriminator value. Expected 'false' | 'true'"
+      }
+    ]
+  }
+}

@@ -1,0 +1,27 @@
+{
+  "contract": "tasks.TaskAnswerBodySchema",
+  "case": "change_limits_fractional_budget",
+  "input": {
+    "questionId": "question",
+    "limitDecision": {
+      "kind": "change_limits",
+      "limits": {
+        "budgetUsd": 1.5,
+        "maxTurns": 3
+      }
+    }
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "questionId": "question",
+      "limitDecision": {
+        "kind": "change_limits",
+        "limits": {
+          "budgetUsd": 1.5,
+          "maxTurns": 3
+        }
+      }
+    }
+  }
+}

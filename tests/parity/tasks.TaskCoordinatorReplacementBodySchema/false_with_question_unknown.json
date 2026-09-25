@@ -1,0 +1,23 @@
+{
+  "contract": "tasks.TaskCoordinatorReplacementBodySchema",
+  "case": "false_with_question_unknown",
+  "input": {
+    "sessionId": "session",
+    "rootProfileId": "root",
+    "resume": false,
+    "questionId": "question"
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "unrecognized_keys",
+        "keys": [
+          "questionId"
+        ],
+        "path": [],
+        "message": "Unrecognized key: \"questionId\""
+      }
+    ]
+  }
+}

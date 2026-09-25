@@ -1,0 +1,64 @@
+{
+  "contract": "tasks.TaskDependenciesBodySchema",
+  "case": "invalid_items",
+  "input": {
+    "dependsOn": [
+      "",
+      null
+    ],
+    "blockedByPullRequests": [
+      {
+        "number": 0,
+        "extra": true
+      }
+    ]
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "origin": "string",
+        "code": "too_small",
+        "minimum": 1,
+        "inclusive": true,
+        "path": [
+          "dependsOn",
+          0
+        ],
+        "message": "Too small: expected string to have >=1 characters"
+      },
+      {
+        "expected": "string",
+        "code": "invalid_type",
+        "path": [
+          "dependsOn",
+          1
+        ],
+        "message": "Invalid input: expected string, received null"
+      },
+      {
+        "origin": "number",
+        "code": "too_small",
+        "minimum": 0,
+        "inclusive": false,
+        "path": [
+          "blockedByPullRequests",
+          0,
+          "number"
+        ],
+        "message": "Too small: expected number to be >0"
+      },
+      {
+        "code": "unrecognized_keys",
+        "keys": [
+          "extra"
+        ],
+        "path": [
+          "blockedByPullRequests",
+          0
+        ],
+        "message": "Unrecognized key: \"extra\""
+      }
+    ]
+  }
+}

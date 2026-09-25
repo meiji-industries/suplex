@@ -1,0 +1,48 @@
+{
+  "contract": "tasks.TaskAnswerBodySchema",
+  "case": "answer_null",
+  "input": {
+    "questionId": "question",
+    "answer": null
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid_union",
+        "errors": [
+          [
+            {
+              "expected": "string",
+              "code": "invalid_type",
+              "path": [
+                "answer"
+              ],
+              "message": "Invalid input: expected string, received null"
+            }
+          ],
+          [
+            {
+              "code": "invalid_type",
+              "expected": "object",
+              "path": [
+                "limitDecision"
+              ],
+              "message": "Invalid input: expected object, received undefined"
+            },
+            {
+              "code": "unrecognized_keys",
+              "keys": [
+                "answer"
+              ],
+              "path": [],
+              "message": "Unrecognized key: \"answer\""
+            }
+          ]
+        ],
+        "path": [],
+        "message": "Invalid input"
+      }
+    ]
+  }
+}

@@ -1,0 +1,51 @@
+{
+  "contract": "tasks.TaskWorkerReplacementBodySchema",
+  "case": "invalid_and_unknown",
+  "input": {
+    "sessionId": "",
+    "reason": null,
+    "workerProfileId": "",
+    "extra": true
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "origin": "string",
+        "code": "too_small",
+        "minimum": 1,
+        "inclusive": true,
+        "path": [
+          "sessionId"
+        ],
+        "message": "Too small: expected string to have >=1 characters"
+      },
+      {
+        "expected": "string",
+        "code": "invalid_type",
+        "path": [
+          "reason"
+        ],
+        "message": "Invalid input: expected string, received null"
+      },
+      {
+        "origin": "string",
+        "code": "too_small",
+        "minimum": 1,
+        "inclusive": true,
+        "path": [
+          "workerProfileId"
+        ],
+        "message": "Too small: expected string to have >=1 characters"
+      },
+      {
+        "code": "unrecognized_keys",
+        "keys": [
+          "extra"
+        ],
+        "path": [],
+        "message": "Unrecognized key: \"extra\""
+      }
+    ]
+  }
+}

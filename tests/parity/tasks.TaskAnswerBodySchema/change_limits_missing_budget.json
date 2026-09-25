@@ -1,0 +1,55 @@
+{
+  "contract": "tasks.TaskAnswerBodySchema",
+  "case": "change_limits_missing_budget",
+  "input": {
+    "questionId": "question",
+    "limitDecision": {
+      "kind": "change_limits",
+      "limits": {
+        "maxTurns": 2
+      }
+    }
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid_union",
+        "errors": [
+          [
+            {
+              "expected": "string",
+              "code": "invalid_type",
+              "path": [
+                "answer"
+              ],
+              "message": "Invalid input: expected string, received undefined"
+            },
+            {
+              "code": "unrecognized_keys",
+              "keys": [
+                "limitDecision"
+              ],
+              "path": [],
+              "message": "Unrecognized key: \"limitDecision\""
+            }
+          ],
+          [
+            {
+              "expected": "number",
+              "code": "invalid_type",
+              "path": [
+                "limitDecision",
+                "limits",
+                "budgetUsd"
+              ],
+              "message": "Invalid input: expected number, received undefined"
+            }
+          ]
+        ],
+        "path": [],
+        "message": "Invalid input"
+      }
+    ]
+  }
+}

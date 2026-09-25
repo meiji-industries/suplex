@@ -235,6 +235,14 @@ impl IssueList {
     pub(super) fn is_empty(&self) -> bool {
         self.values.is_empty()
     }
+    pub(super) fn is_continuable(&self) -> bool {
+        self.values.iter().all(|issue| {
+            matches!(
+                issue.get("code").and_then(Value::as_str),
+                Some("too_small" | "too_big" | "invalid_format" | "custom")
+            )
+        })
+    }
     pub(super) fn push(&mut self, value: Value) {
         self.values.push(value);
         self.metadata.push(IssueMeta::default());

@@ -1,0 +1,19 @@
+{
+  "contract": "tasks.TaskCoordinatorReplacementBodySchema",
+  "case": "resume_false",
+  "input": {
+    "sessionId": "session",
+    "rootProfileId": "root",
+    "resume": false,
+    "handoff": "  Context  "
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "sessionId": "session",
+      "rootProfileId": "root",
+      "handoff": "Context",
+      "resume": false
+    }
+  }
+}

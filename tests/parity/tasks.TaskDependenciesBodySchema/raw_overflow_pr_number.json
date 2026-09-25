@@ -1,0 +1,10 @@
+{
+  "contract": "tasks.TaskDependenciesBodySchema",
+  "case": "raw_overflow_pr_number",
+  "encoding": "raw-json",
+  "input": "{\"blockedByPullRequests\":[{\"number\":1e400}]}",
+  "expected": {
+    "accepted": false,
+    "error": "[{\"expected\":\"number\",\"code\":\"invalid_type\",\"received\":\"Infinity\",\"path\":[\"blockedByPullRequests\",0,\"number\"],\"message\":\"Invalid input: expected number, received number\"}]"
+  }
+}

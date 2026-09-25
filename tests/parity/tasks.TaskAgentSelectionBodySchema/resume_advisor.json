@@ -1,0 +1,25 @@
+{
+  "contract": "tasks.TaskAgentSelectionBodySchema",
+  "case": "resume_advisor",
+  "input": {
+    "role": "reviewer",
+    "expectedProfileId": "old",
+    "expectedSessionId": "session",
+    "profileId": "new",
+    "direction": "  ",
+    "resume": true,
+    "questionId": "question"
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "role": "reviewer",
+      "expectedProfileId": "old",
+      "expectedSessionId": "session",
+      "profileId": "new",
+      "direction": "",
+      "resume": true,
+      "questionId": "question"
+    }
+  }
+}

@@ -1,0 +1,25 @@
+{
+  "contract": "tasks.TaskAgentSelectionBodySchema",
+  "case": "missing_question",
+  "input": {
+    "role": "worker",
+    "expectedProfileId": "old",
+    "expectedSessionId": null,
+    "profileId": "new",
+    "direction": "go",
+    "resume": true
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "expected": "string",
+        "code": "invalid_type",
+        "path": [
+          "questionId"
+        ],
+        "message": "Invalid input: expected string, received undefined"
+      }
+    ]
+  }
+}

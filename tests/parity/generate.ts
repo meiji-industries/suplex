@@ -29,6 +29,67 @@ const taskBody = { projectId: "project", title: "  Build  ", idempotencyKey: "ta
 const githubIssue = { kind: "github", repository: "team/repo", number: 12, id: "123", key: "GH-12", title: "Issue", url: "https://github.com/team/repo/issues/12" };
 const jiraIssue = { kind: "jira", site: "https://team.atlassian.net", id: "123", key: "APP-12", title: "Issue", url: "https://team.atlassian.net/browse/APP-12" };
 const semanticInputs: Record<string, Record<string, unknown>> = {
+  "tasks.TaskAnswerBodySchema": {
+    trimmed_answer: { questionId: "question", answer: "  Yes  ", confirmCommandsStopped: true },
+    blank_answer: { questionId: "question", answer: "  " },
+    add_allowance: { questionId: "question", limitDecision: { kind: "add_allowance" } },
+    cancel_task: { questionId: "question", limitDecision: { kind: "cancel_task" } },
+    change_limits: { questionId: "question", limitDecision: { kind: "change_limits", limits: { budgetUsd: 0, maxTurns: 0 } } },
+    change_limits_fractional_budget: { questionId: "question", limitDecision: { kind: "change_limits", limits: { budgetUsd: 1.5, maxTurns: 3 } } },
+    change_limits_max_turns: { questionId: "question", limitDecision: { kind: "change_limits", limits: { budgetUsd: 0, maxTurns: Number.MAX_SAFE_INTEGER } } },
+    change_limits_invalid: { questionId: "question", limitDecision: { kind: "change_limits", limits: { budgetUsd: -1, maxTurns: 1.5 } } },
+    change_limits_unsafe: { questionId: "question", limitDecision: { kind: "change_limits", limits: { budgetUsd: 1, maxTurns: Number.MAX_SAFE_INTEGER + 1 } } },
+    change_limits_unknown: { questionId: "question", limitDecision: { kind: "change_limits", limits: { budgetUsd: 1, maxTurns: 2, extra: true } } },
+    change_limits_missing_budget: { questionId: "question", limitDecision: { kind: "change_limits", limits: { maxTurns: 2 } } },
+    invalid_decision_kind: { questionId: "question", limitDecision: { kind: "other" } },
+    both_branches: { questionId: "question", answer: "yes", limitDecision: { kind: "cancel_task" } },
+    answer_wrong_type: { questionId: "question", answer: 1 },
+    answer_null: { questionId: "question", answer: null },
+    invalid_confirm: { questionId: "question", answer: "yes", confirmCommandsStopped: 1 },
+    decision_unknown: { questionId: "question", limitDecision: { kind: "add_allowance", extra: true } },
+    unknown_top: { questionId: "question", answer: "yes", extra: true },
+  },
+  "tasks.TaskWorkerReplacementBodySchema": {
+    trimmed_optional: { sessionId: "session", reason: "  Replace  ", handoff: "  Context  ", workerProfileId: "worker" },
+    blank_reason: { sessionId: "session", reason: " \t " },
+    empty_handoff: { sessionId: "session", reason: "reason", handoff: "   " },
+    invalid_and_unknown: { sessionId: "", reason: null, workerProfileId: "", extra: true },
+  },
+  "tasks.TaskCoordinatorReplacementBodySchema": {
+    resume_false: { sessionId: "session", rootProfileId: "root", resume: false, handoff: "  Context  " },
+    resume_true: { sessionId: "session", rootProfileId: "root", resume: true, questionId: "question" },
+    missing_question: { sessionId: "session", rootProfileId: "root", resume: true },
+    false_with_question_unknown: { sessionId: "session", rootProfileId: "root", resume: false, questionId: "question" },
+    invalid_resume: { sessionId: "session", rootProfileId: "root", resume: "yes" },
+    invalid_fields: { sessionId: "", rootProfileId: "", handoff: 1, resume: true, questionId: "", extra: true },
+  },
+  "tasks.TaskAgentSelectionBodySchema": {
+    select_root: { role: "root", expectedProfileId: "old", expectedSessionId: null, profileId: "new", direction: "  Build  ", resume: false },
+    resume_advisor: { role: "reviewer", expectedProfileId: "old", expectedSessionId: "session", profileId: "new", direction: "  ", resume: true, questionId: "question" },
+    missing_question: { role: "worker", expectedProfileId: "old", expectedSessionId: null, profileId: "new", direction: "go", resume: true },
+    invalid_role: { role: "advisor", expectedProfileId: "old", expectedSessionId: null, profileId: "new", direction: "go", resume: false },
+    false_with_question_unknown: { role: "root", expectedProfileId: "old", expectedSessionId: null, profileId: "new", direction: "go", resume: false, questionId: "question" },
+    invalid_fields: { role: "root", expectedProfileId: "", expectedSessionId: "", profileId: null, direction: 1, resume: true, questionId: "", extra: true },
+  },
+  "tasks.TaskIssueBodySchema": {
+    github_issue: { issue: githubIssue },
+    jira_issue: { issue: jiraIssue },
+    null_issue: { issue: null },
+    missing_issue_with_unknown: { extra: true },
+    github_wrong_origin: { issue: { ...githubIssue, url: "https://example.com/x" } },
+    github_invalid_url_throws: { issue: { ...githubIssue, url: "x" } },
+    jira_invalid_site_throws: { issue: { ...jiraIssue, site: "x" } },
+    nested_strict_unknown: { issue: { ...githubIssue, extra: true } },
+  },
+  "tasks.TaskDependenciesBodySchema": {
+    both_defaults: {},
+    both_lists: { dependsOn: ["one", "two"], blockedByPullRequests: [{ number: 1 }, { number: Number.MAX_SAFE_INTEGER }] },
+    invalid_items: { dependsOn: ["", null], blockedByPullRequests: [{ number: 0, extra: true }] },
+    max_depends_on: { dependsOn: Array.from({ length: 50 }, (_, index) => `task-${index}`) },
+    too_many_depends_on: { dependsOn: Array.from({ length: 51 }, (_, index) => `task-${index}`) },
+    too_many_pull_requests: { blockedByPullRequests: Array.from({ length: 51 }, (_, index) => ({ number: index + 1 })) },
+    invalid_and_unknown: { dependsOn: null, blockedByPullRequests: "x", extra: true },
+  },
   "tasks.TaskBodySchema": {
     defaults_trim: taskBody,
     all_fields: { ...taskBody, description: "  Description  ", images: [{ filename: "screen.png", mimeType: "image/png", base64: "eA==" }], rootProfileId: "root", workerProfileId: "worker", startImmediately: true, deliveryTarget: "merged", runProjectTests: false, visualEvidence: "capture", source: { kind: "branch", branch: "feature/x" }, issue: githubIssue, workflow: "direct_build", advisorProfileIds: { reviewer: "reviewer" }, dependsOn: ["task-1"], blockedByPullRequests: [{ number: 12 }] },
@@ -470,6 +531,34 @@ const semanticInputs: Record<string, Record<string, unknown>> = {
 
 type Fixture = { contract: string; case: string; input?: unknown; expected: { accepted: true; value: unknown } | { accepted: false; error: unknown } };
 const rawInputs: Record<string, Record<string, string>> = {
+  "tasks.TaskAnswerBodySchema": {
+    lone_surrogate_answer: String.raw`{"questionId":"question","answer":"\ud800"}`,
+    strict_surrogate_key: String.raw`{"questionId":"question","answer":"yes","\ud800":1}`,
+    overflow_budget: String.raw`{"questionId":"question","limitDecision":{"kind":"change_limits","limits":{"budgetUsd":1e400,"maxTurns":1}}}`,
+    nested_strict_surrogate: String.raw`{"questionId":"question","limitDecision":{"kind":"change_limits","limits":{"budgetUsd":1,"maxTurns":2,"\ud800":1}}}`,
+  },
+  "tasks.TaskWorkerReplacementBodySchema": {
+    surrogate_reason: String.raw`{"sessionId":"session","reason":"\ud800"}`,
+    strict_surrogate_key: String.raw`{"sessionId":"session","reason":"reason","\ud800":1}`,
+  },
+  "tasks.TaskCoordinatorReplacementBodySchema": {
+    surrogate_handoff: String.raw`{"sessionId":"session","rootProfileId":"root","handoff":"\ud800","resume":false}`,
+    strict_surrogate_key: String.raw`{"sessionId":"session","rootProfileId":"root","resume":false,"\ud800":1}`,
+  },
+  "tasks.TaskAgentSelectionBodySchema": {
+    surrogate_direction: String.raw`{"role":"root","expectedProfileId":"old","expectedSessionId":null,"profileId":"new","direction":"\ud800","resume":false}`,
+    strict_surrogate_key: String.raw`{"role":"root","expectedProfileId":"old","expectedSessionId":null,"profileId":"new","direction":"go","resume":false,"\ud800":1}`,
+  },
+  "tasks.TaskIssueBodySchema": {
+    lone_surrogate_title: String.raw`{"issue":{"kind":"github","repository":"team/repo","number":12,"id":"123","key":"GH-12","title":"\ud800","url":"https://github.com/team/repo/issues/12"}}`,
+    lone_surrogate_url_throw: String.raw`{"issue":{"kind":"github","repository":"team/repo","number":12,"id":"123","key":"GH-12","title":"Issue","url":"\ud800"}}`,
+    nested_strict_surrogate: String.raw`{"issue":{"kind":"github","repository":"team/repo","number":12,"id":"123","key":"GH-12","title":"Issue","url":"https://github.com/team/repo/issues/12","\ud800":1}}`,
+  },
+  "tasks.TaskDependenciesBodySchema": {
+    surrogate_task_id: String.raw`{"dependsOn":["\ud800"],"blockedByPullRequests":[]}`,
+    overflow_pr_number: String.raw`{"blockedByPullRequests":[{"number":1e400}]}`,
+    strict_surrogate: String.raw`{"\ud800":1}`,
+  },
   "tasks.TaskBodySchema": {
     lone_surrogate_title: String.raw`{"projectId":"project","title":"\ud800","idempotencyKey":"task-0001"}`,
     strict_surrogate_key: String.raw`{"projectId":"project","title":"Build","idempotencyKey":"task-0001","\ud800":1}`,

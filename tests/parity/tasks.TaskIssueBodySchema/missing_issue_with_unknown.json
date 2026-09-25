@@ -1,0 +1,28 @@
+{
+  "contract": "tasks.TaskIssueBodySchema",
+  "case": "missing_issue_with_unknown",
+  "input": {
+    "extra": true
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid_type",
+        "expected": "object",
+        "path": [
+          "issue"
+        ],
+        "message": "Invalid input: expected object, received undefined"
+      },
+      {
+        "code": "unrecognized_keys",
+        "keys": [
+          "extra"
+        ],
+        "path": [],
+        "message": "Unrecognized key: \"extra\""
+      }
+    ]
+  }
+}

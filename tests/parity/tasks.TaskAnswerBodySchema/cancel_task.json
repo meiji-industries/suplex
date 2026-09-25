@@ -1,0 +1,19 @@
+{
+  "contract": "tasks.TaskAnswerBodySchema",
+  "case": "cancel_task",
+  "input": {
+    "questionId": "question",
+    "limitDecision": {
+      "kind": "cancel_task"
+    }
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "questionId": "question",
+      "limitDecision": {
+        "kind": "cancel_task"
+      }
+    }
+  }
+}

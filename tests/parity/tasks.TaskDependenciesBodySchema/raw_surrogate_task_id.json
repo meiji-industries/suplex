@@ -1,0 +1,10 @@
+{
+  "contract": "tasks.TaskDependenciesBodySchema",
+  "case": "raw_surrogate_task_id",
+  "encoding": "raw-json",
+  "input": "{\"dependsOn\":[\"\\ud800\"],\"blockedByPullRequests\":[]}",
+  "expected": {
+    "accepted": true,
+    "value": "{\"dependsOn\":[\"\\ud800\"],\"blockedByPullRequests\":[]}"
+  }
+}

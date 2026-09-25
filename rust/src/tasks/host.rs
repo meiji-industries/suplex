@@ -302,6 +302,14 @@ fn observe_turn(
     )?)
 }
 
+/// TypeScript `dependencyBlockers`: native work waits until every
+/// prerequisite is delivered. `claim_prompt` rechecks this atomically.
+fn dependency_blocked(rows: &root_session_store::RootObservationRows) -> bool {
+    rows.dependencies
+        .iter()
+        .any(|dependency| dependency["status"] != "delivered")
+}
+
 /// Record native admission. An execution Suplex cannot identify
 /// (TypeScript `executionUncertain`) asks a human to stop its commands.
 fn persist_native_admission(
@@ -753,19 +761,44 @@ fn recover_prepared_root_blocking(
         )? {
             return Err(io::Error::other("Native Root session changed before dispatch").into());
         }
-        let (before, replayable) = observe_or_recover_fenced(
-            &mut database,
-            database_path,
-            &session,
-            &native_id,
-            &turn,
-            &owner,
-        )?;
-        if !before.retry_allowed || !replayable {
-            persist_native_admission(&mut database, &turn, &before)?;
-            complete_root_if_terminal(&mut database, database_path, &session, &turn, &before)?;
+        let mut turn = turn.clone();
+        let before = loop {
+            let (before, replayable) = observe_or_recover_fenced(
+                &mut database,
+                database_path,
+                &session,
+                &native_id,
+                &turn,
+                &owner,
+            )?;
+            if !before.retry_allowed || !replayable {
+                persist_native_admission(&mut database, &turn, &before)?;
+                complete_root_if_terminal(&mut database, database_path, &session, &turn, &before)?;
+                return Ok(before);
+            }
+            if !root_session_store::coalesce_unadmitted_idle_root_turn(
+                &mut database,
+                &turn.id,
+                Utc::now(),
+            )? {
+                break before;
+            }
+            let Some(next) = root_session_store::pending_turns(&database, &session.id)?
+                .into_iter()
+                .next()
+            else {
+                return Ok(before);
+            };
+            turn = next;
+        };
+        if dependency_blocked(&rows) {
             return Ok(before);
         }
+        let turn = root_session_store::refresh_pending_root_dependency_context(
+            &mut database,
+            &turn.id,
+            Utc::now(),
+        )?;
         let worktree = rows.control["worktree"]["path"]
             .as_str()
             .ok_or_else(|| io::Error::other("Task worktree is not prepared"))?;
@@ -942,6 +975,9 @@ fn recover_prepared_worker_blocking(
                 &before,
                 purpose,
             )?;
+            return Ok(before);
+        }
+        if dependency_blocked(&rows) {
             return Ok(before);
         }
         let worktree = rows.control["worktree"]["path"]
@@ -1297,7 +1333,10 @@ pub async fn sweep_task(
     {
         let mut database = SuplexDatabase::open(database_path, OpenMode::ReadWrite)?;
         let rows = root_session_store::root_observation_rows(&database, task_id)?;
-        let prompt = idle_root_prompt(&rows.dependencies);
+        let prompt = root_session_store::with_current_dependency_status(
+            root_session_store::IDLE_ROOT_PROMPT,
+            &rows.dependencies,
+        );
         root_session_store::wake_idle_root(&mut database, task_id, &prompt, Utc::now())?;
     }
     let database = SuplexDatabase::open(database_path, OpenMode::ReadWrite)?;
@@ -1307,29 +1346,6 @@ pub async fn sweep_task(
         rusqlite::params![(now + chrono::Duration::seconds(15)).to_rfc3339_opts(SecondsFormat::Millis, true), now.to_rfc3339_opts(SecondsFormat::Millis, true), task_id],
     )?;
     Ok(())
-}
-
-const IDLE_ROOT_PROMPT: &str = "Observe the current task, worktree, and GitHub state and continue toward the delivery target. Adopt out-of-band progress. If checks or another external operation are pending, report what you are waiting for. Ask a specific human question only if a necessary decision or external failure requires it.";
-
-fn idle_root_prompt(dependencies: &[serde_json::Value]) -> String {
-    if dependencies.is_empty() {
-        return IDLE_ROOT_PROMPT.to_owned();
-    }
-    let list = dependencies
-        .iter()
-        .map(|dependency| {
-            format!(
-                "{} \"{}\" ({})",
-                dependency["id"].as_str().unwrap_or_default(),
-                dependency["title"].as_str().unwrap_or_default(),
-                dependency["status"].as_str().unwrap_or_default()
-            )
-        })
-        .collect::<Vec<_>>()
-        .join(", ");
-    format!(
-        "{IDLE_ROOT_PROMPT}\n\n[Suplex prerequisite status]\nCurrent prerequisites: {list}. Prerequisites constrain delivery ordering. Suplex resumes native work when all are delivered. Observe actual Git and GitHub state before integration.\n[/Suplex prerequisite status]"
-    )
 }
 
 #[cfg(test)]
@@ -1714,6 +1730,93 @@ mod tests {
             .unwrap();
         assert_eq!(status, "waiting_human");
         assert_eq!(recovery_turn_id.as_deref(), Some(turn_id.as_str()));
+        fs::remove_dir_all(base).unwrap();
+    }
+
+    #[tokio::test]
+    async fn dispatch_coalesces_idle_wakes_waits_for_prerequisites_and_refreshes_status() {
+        let (base, database_path, task_id) = fixture_task();
+        let root = root_controller::prepare_root(&database_path, &task_id).unwrap();
+        let turn_status = |id: &str| -> (String, String) {
+            let database = SuplexDatabase::open(&database_path, OpenMode::ReadOnly).unwrap();
+            database
+                .connection()
+                .query_row(
+                    "SELECT status,prompt_text FROM suplex_task_turns WHERE id = ?1",
+                    [id],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .unwrap()
+        };
+        {
+            let database = SuplexDatabase::open(&database_path, OpenMode::ReadWrite).unwrap();
+            database.connection().execute_batch(&format!(
+                "UPDATE suplex_task_turns SET status = 'completed' WHERE task_id = '{task_id}';
+                 CREATE TEMP TABLE blocker_task AS SELECT * FROM suplex_tasks WHERE id = '{task_id}';
+                 UPDATE blocker_task SET id = 'blocker', title = 'Blocker', idempotency_key = 'blocker-key', issue_number = issue_number + 1;
+                 INSERT INTO suplex_tasks SELECT * FROM blocker_task;
+                 CREATE TEMP TABLE blocker_control AS SELECT * FROM suplex_task_controls WHERE task_id = '{task_id}';
+                 UPDATE blocker_control SET task_id = 'blocker', status = 'active';
+                 INSERT INTO suplex_task_controls SELECT * FROM blocker_control;
+                 INSERT INTO suplex_task_dependencies (task_id,depends_on_task_id,created_at) VALUES ('{task_id}','blocker','2026-01-01T00:00:00.000Z');"
+            )).unwrap();
+            for (id, prompt, created) in [
+                (
+                    "msg_idle",
+                    root_session_store::IDLE_ROOT_PROMPT,
+                    "2026-01-01T00:00:01.000Z",
+                ),
+                (
+                    "msg_note",
+                    "Human note:\nCheck the result.",
+                    "2026-01-01T00:00:02.000Z",
+                ),
+            ] {
+                database.connection().execute(
+                    "INSERT INTO suplex_task_turns (id,task_id,session_id,generation,prompt_hash,prompt_text,status,created_at,updated_at) VALUES (?1,?2,?3,?4,'hash',?5,'pending_prompt',?6,?6)",
+                    rusqlite::params![id, task_id, root.id, root.generation, prompt, created],
+                ).unwrap();
+            }
+        }
+        // The idle wake yields to the note, and the note waits for its prerequisite.
+        recover_prepared_root(&database_path, &base, &task_id, None, &HashMap::new())
+            .await
+            .unwrap();
+        assert_eq!(turn_status("msg_idle").0, "cancelled");
+        assert_eq!(
+            turn_status("msg_note"),
+            (
+                "pending_prompt".into(),
+                "Human note:\nCheck the result.".into()
+            )
+        );
+        {
+            let database = SuplexDatabase::open(&database_path, OpenMode::ReadWrite).unwrap();
+            database
+                .connection()
+                .execute(
+                    "UPDATE suplex_task_controls SET status = 'delivered' WHERE task_id = 'blocker'",
+                    [],
+                )
+                .unwrap();
+        }
+        let mut database = SuplexDatabase::open(&database_path, OpenMode::ReadWrite).unwrap();
+        let refreshed = root_session_store::refresh_pending_root_dependency_context(
+            &mut database,
+            "msg_note",
+            Utc::now(),
+        )
+        .unwrap();
+        assert!(refreshed.prompt_text.starts_with(
+            "Human note:\nCheck the result.\n\n[Suplex prerequisite status]\nCurrent prerequisites: blocker \"Blocker\" (delivered). "
+        ));
+        let again = root_session_store::refresh_pending_root_dependency_context(
+            &mut database,
+            "msg_note",
+            Utc::now(),
+        )
+        .unwrap();
+        assert_eq!(again.prompt_text, refreshed.prompt_text);
         fs::remove_dir_all(base).unwrap();
     }
 

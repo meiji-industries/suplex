@@ -1855,6 +1855,90 @@ pub fn require_execution_cleanup(
     })
 }
 
+pub const IDLE_ROOT_PROMPT: &str = "Observe the current task, worktree, and GitHub state and continue toward the delivery target. Adopt out-of-band progress. If checks or another external operation are pending, report what you are waiting for. Ask a specific human question only if a necessary decision or external failure requires it.";
+
+/// TypeScript `withCurrentDependencyStatus`.
+pub fn with_current_dependency_status(prompt: &str, dependencies: &[Value]) -> String {
+    let base = without_current_dependency_status(prompt);
+    if dependencies.is_empty() {
+        return base.to_owned();
+    }
+    let list = dependencies
+        .iter()
+        .map(|dependency| {
+            format!(
+                "{} \"{}\" ({})",
+                dependency["id"].as_str().unwrap_or_default(),
+                dependency["title"].as_str().unwrap_or_default(),
+                dependency["status"].as_str().unwrap_or_default()
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!(
+        "{base}\n\n[Suplex prerequisite status]\nCurrent prerequisites: {list}. Prerequisites constrain delivery ordering. Suplex resumes native work when all are delivered. Observe actual Git and GitHub state before integration.\n[/Suplex prerequisite status]"
+    )
+}
+
+/// TypeScript `TaskControlStore.coalesceUnadmittedIdleRootTurn`: an idle
+/// Root wake is dropped when real Root work is also pending.
+pub fn coalesce_unadmitted_idle_root_turn(
+    database: &mut SuplexDatabase,
+    turn_id: &str,
+    now: DateTime<Utc>,
+) -> DatabaseResult<bool> {
+    let idle = |prompt: &str| without_current_dependency_status(prompt) == IDLE_ROOT_PROMPT;
+    database.transaction(false, |database| {
+        let candidate: Option<(String, String, String)> = database.connection().query_row(
+            "SELECT t.task_id, t.session_id, t.prompt_text FROM suplex_task_turns t JOIN suplex_task_sessions s ON s.id = t.session_id WHERE t.id = ?1 AND t.status = 'pending_prompt' AND s.kind = 'root'",
+            [turn_id], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        ).optional()?;
+        let Some((task_id, session_id, prompt)) = candidate else { return Ok(false); };
+        if !idle(&prompt) { return Ok(false); }
+        let mut statement = database.connection().prepare(
+            "SELECT prompt_text FROM suplex_task_turns WHERE task_id = ?1 AND session_id = ?2 AND id <> ?3 AND status = 'pending_prompt'",
+        )?;
+        let others = statement
+            .query_map(params![task_id, session_id, turn_id], |row| row.get::<_, String>(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        drop(statement);
+        if !others.iter().any(|other| !idle(other)) { return Ok(false); }
+        Ok(database.connection().execute(
+            "UPDATE suplex_task_turns SET status = 'cancelled', updated_at = ?1 WHERE id = ?2 AND status = 'pending_prompt'",
+            params![timestamp(now), turn_id],
+        )? == 1)
+    })
+}
+
+/// TypeScript `TaskControlStore.refreshPendingRootDependencyContext`: an
+/// unsent Root prompt carries the current prerequisite status.
+pub fn refresh_pending_root_dependency_context(
+    database: &mut SuplexDatabase,
+    turn_id: &str,
+    now: DateTime<Utc>,
+) -> DatabaseResult<RootTurn> {
+    database.transaction(false, |database| {
+        let current = database.connection().query_row(
+            "SELECT t.* FROM suplex_task_turns t JOIN suplex_task_sessions s ON s.id = t.session_id WHERE t.id = ?1 AND t.status = 'pending_prompt' AND s.kind = 'root'",
+            [turn_id], turn,
+        ).optional()?;
+        if let Some(current) = current {
+            let dependencies = root_observation_rows(database, &current.task_id)?.dependencies;
+            let prompt = with_current_dependency_status(&current.prompt_text, &dependencies);
+            if prompt != current.prompt_text {
+                let hash = format!("{:x}", Sha256::digest(prompt.as_bytes()));
+                database.connection().execute(
+                    "UPDATE suplex_task_turns SET prompt_text = ?1, prompt_hash = ?2, updated_at = ?3 WHERE id = ?4 AND status = 'pending_prompt'",
+                    params![prompt, hash, timestamp(now), turn_id],
+                )?;
+            }
+        }
+        Ok(database.connection().query_row(
+            "SELECT * FROM suplex_task_turns WHERE id = ?1", [turn_id], turn,
+        )?)
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

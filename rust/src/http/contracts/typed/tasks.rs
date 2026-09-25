@@ -949,6 +949,79 @@ pub struct TaskNoteBody {
     pub note: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Validate)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TaskWorkerReplacementBody {
+    #[garde(length(utf16, min = 1))]
+    pub session_id: String,
+    #[serde(deserialize_with = "trimmed")]
+    #[garde(length(utf16, min = 1))]
+    pub reason: String,
+    #[serde(
+        default,
+        deserialize_with = "optional_trimmed",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[garde(skip)]
+    pub handoff: Option<String>,
+    #[serde(
+        default,
+        deserialize_with = "optional_nonnull",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[garde(inner(length(utf16, min = 1)))]
+    pub worker_profile_id: Option<String>,
+}
+
+/// A user may select another allowed Worker profile; the Root MCP contract
+/// deliberately omits that field and preserves the outgoing profile.
+pub fn parse_task_worker_replacement(
+    input: Option<&Value>,
+) -> ContractResult<TaskWorkerReplacementBody> {
+    let fields = object(input)?;
+    let mut issues = Vec::new();
+    for (name, trim) in [
+        ("sessionId", false),
+        ("reason", true),
+        ("handoff", false),
+        ("workerProfileId", false),
+    ] {
+        match fields.get(name) {
+            Some(Value::String(value)) => {
+                let value = if trim {
+                    crate::identity::auth::js_trim(value)
+                } else {
+                    value
+                };
+                if value.is_empty() && name != "handoff" {
+                    issues.push(finding("too_small", &[Value::String(name.into())]));
+                }
+            }
+            None if name == "handoff" || name == "workerProfileId" => {}
+            _ => {
+                issues.push(finding("invalid_type", &[Value::String(name.into())]));
+            }
+        }
+    }
+    if fields.keys().any(|key| {
+        !matches!(
+            key.as_str(),
+            "sessionId" | "reason" | "handoff" | "workerProfileId"
+        )
+    }) {
+        issues.push(finding("unrecognized_keys", &[]));
+    }
+    if !issues.is_empty() {
+        return Err(ContractFailure::Issues(issues));
+    }
+    let parsed: TaskWorkerReplacementBody = serde_json::from_value(Value::Object(fields.clone()))
+        .map_err(|_| ContractFailure::Unhandled)?;
+    parsed
+        .validate()
+        .map_err(|report| ContractFailure::Issues(garde_findings(&report)))?;
+    Ok(parsed)
+}
+
 /// The user note body is a strict object; Zod trims before checking UTF-16 length.
 pub fn parse_task_note(input: Option<&Value>) -> ContractResult<TaskNoteBody> {
     let fields = object(input)?;
@@ -984,6 +1057,15 @@ pub fn parse_task_note(input: Option<&Value>) -> ContractResult<TaskNoteBody> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn task_worker_replacement_matches_public_zod_contract() {
+        assert_request_fixtures(
+            "tasks.TaskWorkerReplacementBodySchema",
+            13,
+            parse_task_worker_replacement,
+        );
+    }
 
     fn assert_request_fixtures<T: Serialize>(
         name: &str,

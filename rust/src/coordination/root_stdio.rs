@@ -15,6 +15,7 @@ use serde_json::{Map, Value, json};
 
 use crate::{
     delivery,
+    http::contracts::typed::tasks::TaskWorkerReplacementBody,
     identity::auth::js_trim,
     platform::database::{OpenMode, SuplexDatabase},
 };
@@ -37,6 +38,7 @@ enum RootCall {
     ReadImage(String),
     ReadWorkerEvidence(WorkerEvidenceRequest),
     DelegateWorker(StandardWorkerAssignment),
+    ReplaceWorker(TaskWorkerReplacementBody),
     InspectDeliveryDiff,
     RequestDelivery { expected_head: Option<String> },
     AskHuman { question: String, options: Value },
@@ -52,6 +54,13 @@ enum WireCall {
     },
     ReadWorkerEvidence(WorkerEvidenceInput),
     DelegateWorker(Box<WorkerInput>),
+    ReplaceWorker {
+        #[serde(rename = "sessionId")]
+        session_id: String,
+        reason: String,
+        #[serde(default, deserialize_with = "present")]
+        handoff: Option<String>,
+    },
     RequestDelivery(DeliveryInput),
     AskHuman {
         question: String,
@@ -224,6 +233,22 @@ fn parse_call(mut input: Map<String, Value>) -> Result<RootCall, String> {
         serde_json::from_value(Value::Object(input)).map_err(|error| error.to_string())?;
     match call {
         WireCall::Observe(_) => Ok(RootCall::Observe),
+        WireCall::ReplaceWorker {
+            session_id,
+            reason,
+            handoff,
+        } => {
+            let reason = js_trim(&reason).to_owned();
+            if session_id.is_empty() || reason.is_empty() {
+                return Err("Worker replacement requires sessionId and reason".into());
+            }
+            Ok(RootCall::ReplaceWorker(TaskWorkerReplacementBody {
+                session_id,
+                reason,
+                handoff: handoff.map(|text| js_trim(&text).to_owned()),
+                worker_profile_id: None,
+            }))
+        }
         WireCall::ReadImage { artifact_id } => {
             if !root_bridge::valid_opaque_id(&artifact_id) {
                 return Err("Task image artifact id is invalid".into());
@@ -387,7 +412,10 @@ fn tool() -> Tool {
         serde_json::from_value::<Map<String, Value>>(json!({
             "type":"object",
             "properties":{
-                "kind":{"type":"string","enum":["observe","read_image","read_worker_evidence","delegate_worker","request_delivery","ask_human"],"description":"Fields per kind. observe: no other fields. read_image: required artifactId. read_worker_evidence: required turnId; optional toolId, field (input/output/error), position (head/tail), cursor, maxCharacters (1000..20000). delegate_worker: required plan, acceptanceCriteria, instruction; optional mode (planned), purpose (implementation), Advisor references (unused in Standard). request_delivery: required operation (inspect_delivery_diff or complete_local_work); optional expectedHead and source review fields. ask_human: required question, options."},
+                "kind":{"type":"string","enum":["observe","read_image","read_worker_evidence","delegate_worker","replace_worker","request_delivery","ask_human"],"description":"Fields per kind. observe: no other fields. read_image: required artifactId. read_worker_evidence: required turnId; optional toolId, field (input/output/error), position (head/tail), cursor, maxCharacters (1000..20000). delegate_worker: required plan, acceptanceCriteria, instruction; optional mode (planned), purpose (implementation), Advisor references (unused in Standard). replace_worker: required sessionId and reason; optional handoff. request_delivery: required operation (inspect_delivery_diff or complete_local_work); optional expectedHead and source review fields. ask_human: required question, options."},
+                "sessionId":{"type":"string","minLength":1},
+                "reason":{"type":"string","minLength":1},
+                "handoff":{"type":"string"},
                 "artifactId":{"type":"string","minLength":1,"maxLength":256,"pattern":"^[A-Za-z0-9][A-Za-z0-9._:-]*$"},
                 "operation":{"type":"string","enum":["inspect_delivery_diff","complete_local_work"],"description":"Inspect the published-base-to-head patch or complete reviewed Standard local work."},
                 "expectedHead":{"type":"string","minLength":1},
@@ -448,6 +476,9 @@ impl RootBridgeServer {
                     root_controller::delegate_worker(&database_path, &root, &token, &assignment)
                         .map_err(|error| error.to_string())
                 }
+                RootCall::ReplaceWorker(request) => root_controller::replace_worker(
+                    &database_path, &root, &token, &request,
+                ).map_err(|error| error.to_string()),
                 RootCall::InspectDeliveryDiff => runtime
                     .block_on(delivery::inspection::inspect_standard_delivery_diff(
                         &database_path,
@@ -565,6 +596,7 @@ mod tests {
                 "read_image",
                 "read_worker_evidence",
                 "delegate_worker",
+                "replace_worker",
                 "request_delivery",
                 "ask_human"
             ])
@@ -591,6 +623,20 @@ mod tests {
         assert!(parse_call(json!({"kind":"delegate_worker","plan":"Plan","acceptanceCriteria":["Done"],"instruction":"Build","mode":null}).as_object().unwrap().clone()).is_err());
         assert!(parse_call(json!({"kind":"delegate_worker","plan":"Plan","acceptanceCriteria":["Done"],"instruction":"Build","advisorTurnId":"report_1","candidateSessionIds":["a","b"]}).as_object().unwrap().clone()).is_ok());
         assert!(parse_call(json!({"kind":"delegate_worker","plan":"Plan","acceptanceCriteria":["Done"],"instruction":"Build","advisorTurnId":null}).as_object().unwrap().clone()).is_err());
+        let replaced = parse_call(json!({"kind":"replace_worker","sessionId":"worker_1","reason":"  Change strategy  ","handoff":"  Continue work  "}).as_object().unwrap().clone()).unwrap();
+        assert!(
+            matches!(replaced, RootCall::ReplaceWorker(request) if request.session_id == "worker_1" && request.reason == "Change strategy" && request.handoff.as_deref() == Some("Continue work") && request.worker_profile_id.is_none())
+        );
+        assert!(
+            parse_call(
+                json!({"kind":"replace_worker","sessionId":"worker_1","reason":"  "})
+                    .as_object()
+                    .unwrap()
+                    .clone()
+            )
+            .is_err()
+        );
+        assert!(parse_call(json!({"kind":"replace_worker","sessionId":"worker_1","reason":"Change","workerProfileId":"other"}).as_object().unwrap().clone()).is_err());
         assert!(parse_call(json!({"kind":"ask_human","question":"Choose","options":[{"label":"One","description":"First","recommended":true},{"label":"Two","description":"Second","recommended":false}],"extra":1}).as_object().unwrap().clone()).is_err());
         assert!(
             parse_call(

@@ -13,7 +13,10 @@ use crate::{
     http::contracts::typed::{
         projects::ProjectProviderPolicy,
         task_answers::{AnswerBody, LimitDecisionBody, TaskLimitDecision},
-        tasks::{TaskCreateBody, TaskDetailsBody, TaskNoteBody, TaskRenameBody},
+        tasks::{
+            TaskCreateBody, TaskDetailsBody, TaskNoteBody, TaskRenameBody,
+            TaskWorkerReplacementBody,
+        },
     },
     identity::companies,
     platform::{
@@ -165,7 +168,7 @@ pub fn existing_user_task(
     repository::task_by_id(database, &task_id)
 }
 
-fn allowed_profile(policy: Option<&ProjectProviderPolicy>, value: &Value) -> bool {
+pub(crate) fn allowed_profile(policy: Option<&ProjectProviderPolicy>, value: &Value) -> bool {
     let Some(policy) = policy else {
         return true;
     };
@@ -188,7 +191,11 @@ fn allowed_profile(policy: Option<&ProjectProviderPolicy>, value: &Value) -> boo
     }
 }
 
-fn read_profile(database: &SuplexDatabase, id: &str, role: &str) -> DatabaseResult<Option<Value>> {
+pub(crate) fn read_profile(
+    database: &SuplexDatabase,
+    id: &str,
+    role: &str,
+) -> DatabaseResult<Option<Value>> {
     let profile = database.connection().query_row(
             "SELECT p.id, p.provider, p.model, p.reasoning_level, p.service_tier, p.provider_instance_id, i.home_directory FROM suplex_profiles p LEFT JOIN suplex_provider_instances i ON i.id = p.provider_instance_id WHERE p.id = ?1 AND p.role = ?2 AND p.archived_at IS NULL",
             params![id, role],
@@ -707,6 +714,42 @@ pub fn answer_user_task(
         let id = task_id.to_owned();
         database.after_commit(move || wake(id));
         Ok(answered)
+    })
+}
+
+/// User replacement authorizes the task, persists the fresh Worker, then
+/// wakes the host after commit. The outgoing native execution is stopped by
+/// normal host recovery before the replacement can be admitted.
+pub fn replace_user_worker(
+    database: &mut SuplexDatabase,
+    actor_user_id: &str,
+    task_id: &str,
+    request: &TaskWorkerReplacementBody,
+    now: DateTime<Utc>,
+    wake: impl FnOnce(String) + Send + 'static,
+) -> DatabaseResult<TaskRecord> {
+    database.transaction(true, |database| {
+        let task = repository::task_by_id(database, task_id)?
+            .ok_or_else(|| Box::new(TaskFailure::new("Not found", 404)) as Box<dyn Error>)?;
+        companies::require_company_access(database, actor_user_id, &task.company_id)?;
+        root_session_store::replace_worker(database, task_id, request, now).map_err(|error| {
+            let message = error.to_string();
+            if message.starts_with("experimental_not_ported:") {
+                Box::new(TaskFailure {
+                    public_message: "This task workflow is not implemented in the Rust engine"
+                        .into(),
+                    status_code: 501,
+                    code: "experimental_not_ported",
+                }) as Box<dyn Error>
+            } else {
+                Box::new(TaskFailure::new(message, 409)) as Box<dyn Error>
+            }
+        })?;
+        let task = repository::task_by_id(database, task_id)?
+            .ok_or_else(|| Box::new(TaskFailure::new("Not found", 404)) as Box<dyn Error>)?;
+        let id = task_id.to_owned();
+        database.after_commit(move || wake(id));
+        Ok(task)
     })
 }
 

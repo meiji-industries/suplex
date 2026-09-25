@@ -7,6 +7,7 @@ use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 
 use crate::{
+    http::contracts::typed::tasks::TaskWorkerReplacementBody,
     platform::{
         artifacts,
         database::{DatabaseResult, OpenMode, SuplexDatabase},
@@ -30,6 +31,7 @@ pub struct StandardWorkerAssignment {
 }
 
 const DELEGATED_NEXT: &str = "End this Coordinator turn now. Suplex will send the Worker's native result as a new turn on this same session. Do not poll or wait inside this turn.";
+const REPLACED_NEXT: &str = "End this Coordinator turn. Suplex will stop the outgoing execution before starting this fresh Worker. Existing task limits remain in effect.";
 
 /// Reserve an active Root and persist its first prompt once. Repeated host
 /// recovery returns the same session without replaying a completed turn.
@@ -359,6 +361,36 @@ pub fn delegate_worker(
     let after = root_session_store::root_observation_rows(&database, &root.task_id)?;
     let accepted = accepted_assignment(&after.turns, &worker).unwrap_or(Value::Null);
     Ok(json!({"worker":worker,"acceptedAssignment":accepted,"next":DELEGATED_NEXT}))
+}
+
+pub fn replace_worker(
+    database_path: &Path,
+    root: &RootIdentity,
+    owner_token: &str,
+    request: &TaskWorkerReplacementBody,
+) -> DatabaseResult<Value> {
+    let mut database = SuplexDatabase::open(database_path, OpenMode::ReadWrite)?;
+    database.transaction(true, |database| {
+        root_session_store::assert_current_root(
+            database,
+            &root.task_id,
+            &root.session_id,
+            root.generation,
+        )?;
+        root_session_store::assert_tool_owner(database, &root.task_id, owner_token)?;
+        let worker = root_session_store::replace_worker(
+            database,
+            &root.task_id,
+            request,
+            chrono::Utc::now(),
+        )?;
+        let rows = root_session_store::root_observation_rows(database, &root.task_id)?;
+        Ok(json!({
+            "acceptedAssignment": accepted_assignment(&rows.turns, &worker),
+            "worker": worker,
+            "next": REPLACED_NEXT,
+        }))
+    })
 }
 
 pub fn ask_human(

@@ -808,6 +808,9 @@ fn recover_prepared_worker_blocking(
     else {
         return Ok(None);
     };
+    if !root_session_store::worker_replacement_ready(&database, &session.id)? {
+        return Ok(None);
+    }
     if current_owner_still_running(&session) {
         return Ok(None);
     }
@@ -1699,6 +1702,73 @@ mod tests {
         );
         assert_eq!(fs::read(&marker).unwrap(), b"xx");
         drop(database);
+        let replacement_id = {
+            let mut database = SuplexDatabase::open(&database_path, OpenMode::ReadWrite).unwrap();
+            let request = crate::http::contracts::typed::tasks::TaskWorkerReplacementBody {
+                session_id: worker.id.clone(),
+                reason: "Change strategy".into(),
+                handoff: Some("Finish the checks".into()),
+                worker_profile_id: None,
+            };
+            let replacement =
+                root_session_store::replace_worker(&mut database, &task_id, &request, Utc::now())
+                    .unwrap();
+            let id = replacement["id"].as_str().unwrap().to_owned();
+            assert!(!root_session_store::worker_replacement_ready(&database, &id).unwrap());
+            id
+        };
+        assert!(
+            recover_prepared_worker(&database_path, &task_id, Some(&codex), &environment)
+                .await
+                .unwrap()
+                .is_none()
+        );
+        assert_eq!(fs::read(&marker).unwrap(), b"xx");
+        stop_retired_sessions(&database_path, &task_id)
+            .await
+            .unwrap();
+        {
+            let database = SuplexDatabase::open(&database_path, OpenMode::ReadOnly).unwrap();
+            assert!(
+                root_session_store::worker_replacement_ready(&database, &replacement_id).unwrap()
+            );
+        }
+        let replacement_launch =
+            recover_prepared_worker(&database_path, &task_id, Some(&codex), &environment)
+                .await
+                .unwrap()
+                .unwrap();
+        assert!(replacement_launch.admission_observed);
+        let replacement_directory =
+            session_reader::session_directory(&database_path, &replacement_id).unwrap();
+        let replacement_turn_id = {
+            let database = SuplexDatabase::open(&database_path, OpenMode::ReadOnly).unwrap();
+            root_session_store::root_observation_rows(&database, &task_id)
+                .unwrap()
+                .turns
+                .into_iter()
+                .find(|turn| turn["sessionId"] == replacement_id)
+                .unwrap()["id"]
+                .as_str()
+                .unwrap()
+                .to_owned()
+        };
+        let replacement_exit = crate::runtimes::headless::turn_file(
+            &replacement_directory,
+            &replacement_turn_id,
+            "exit",
+        );
+        for _ in 0..40 {
+            if replacement_exit.exists() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        assert!(replacement_exit.exists());
+        recover_prepared_worker(&database_path, &task_id, Some(&codex), &environment)
+            .await
+            .unwrap();
+        assert_eq!(fs::read(&marker).unwrap(), b"xxx");
         let pricing = HashMap::from([(
             "openai/gpt-6-sol".into(),
             ModelPricing {

@@ -62,6 +62,10 @@ pub fn router() -> Router<AppState> {
         )
         .route("/api/tasks/{task_id}/note", axum::routing::post(send_note))
         .route(
+            "/api/tasks/{task_id}/replace-worker",
+            axum::routing::post(replace_worker),
+        )
+        .route(
             "/api/tasks/{task_id}/answer",
             axum::routing::post(answer_pending),
         )
@@ -1021,6 +1025,54 @@ async fn answer_pending(
     }
 }
 
+async fn replace_worker(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    if let Err(response) = validated_task_id(&id) {
+        return *response;
+    }
+    let request = match auth::validated_typed_body(
+        &headers,
+        &body,
+        task_contracts::parse_task_worker_replacement,
+    ) {
+        Ok(request) => request,
+        Err(response) => return *response,
+    };
+    if !session::csrf_allowed(&state.session_config, &headers, "POST", false) {
+        return auth::error(StatusCode::FORBIDDEN, "request_origin_invalid");
+    }
+    let (user_id, cookies) = match authorize(&state, &headers) {
+        Ok(value) => value,
+        Err(response) => return *response,
+    };
+    let host = state.task_host.clone();
+    let result = state.with_database(
+        |database| -> Result<task_response::TaskResponse, Box<dyn Error>> {
+            commands::replace_user_worker(
+                database,
+                &user_id,
+                &id,
+                &request,
+                Utc::now(),
+                move |id| {
+                    if let Some(host) = host {
+                        host.wake(id);
+                    }
+                },
+            )?;
+            task_response::get(database, &id)?.ok_or_else(|| "replacement task disappeared".into())
+        },
+    );
+    match result {
+        Ok(task) => with_cookies(Json(task).into_response(), cookies),
+        Err(error) => with_cookies(service_error(error), cookies),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1743,6 +1795,87 @@ mod tests {
         )
         .await;
         assert_eq!(stale_answer.status(), StatusCode::CONFLICT);
+        let old_worker_id = state.with_database(|database| {
+            let root =
+                crate::coordination::root_session_store::current_root(database, &immediate_id)
+                    .unwrap()
+                    .unwrap();
+            crate::coordination::root_session_store::launch_standard_worker(
+                database,
+                &root,
+                "Finish the behavior",
+                "Worker assignment: Finish the behavior",
+                None,
+                Utc::now(),
+            )
+            .unwrap()["id"]
+                .as_str()
+                .unwrap()
+                .to_owned()
+        });
+        let invalid_replacement = replace_worker(
+            State(state.clone()),
+            Path(immediate_id.clone()),
+            headers.clone(),
+            Bytes::from_static(br#"{"sessionId":"","reason":"  "}"#),
+        )
+        .await;
+        assert_eq!(invalid_replacement.status(), StatusCode::BAD_REQUEST);
+        let replacement_body = Bytes::from(json!({"sessionId":old_worker_id,"reason":"  Change strategy  ","handoff":"  Finish the checks  "}).to_string());
+        let replaced = replace_worker(
+            State(state.clone()),
+            Path(immediate_id.clone()),
+            headers.clone(),
+            replacement_body.clone(),
+        )
+        .await;
+        assert_eq!(replaced.status(), StatusCode::OK);
+        let replaced_raw = to_bytes(replaced.into_body(), 128 * 1024).await.unwrap();
+        assert_typescript_task_body(&db_path, &root.join("artifacts"), &replaced_raw);
+        let replacement_id = state.with_database(|database| {
+            let worker =
+                crate::coordination::root_session_store::current_worker(database, &immediate_id)
+                    .unwrap()
+                    .unwrap();
+            assert_ne!(worker.id, old_worker_id);
+            assert!(
+                !crate::coordination::root_session_store::worker_replacement_ready(
+                    database, &worker.id
+                )
+                .unwrap()
+            );
+            worker.id
+        });
+        let replayed = replace_worker(
+            State(state.clone()),
+            Path(immediate_id.clone()),
+            headers.clone(),
+            replacement_body,
+        )
+        .await;
+        assert_eq!(replayed.status(), StatusCode::OK);
+        assert_eq!(
+            to_bytes(replayed.into_body(), 128 * 1024).await.unwrap(),
+            replaced_raw
+        );
+        state
+            .with_database(|database| {
+                database.connection().execute(
+                    "UPDATE suplex_task_sessions SET stopped_at = ?1 WHERE id = ?2",
+                    rusqlite::params![Utc::now().to_rfc3339(), old_worker_id],
+                )
+            })
+            .unwrap();
+        assert!(
+            state
+                .with_database(|database| {
+                    crate::coordination::root_session_store::worker_replacement_ready(
+                        database,
+                        &replacement_id,
+                    )
+                })
+                .unwrap()
+        );
         let pause = json!({
             "kind":"task_limit", "reason":"budget",
             "limits":{"budgetUsd":15,"maxTurns":40},

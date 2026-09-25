@@ -9,11 +9,14 @@ use std::sync::Mutex;
 use uuid::Uuid;
 
 use crate::coordination::root_prompts::{self, STANDARD_WORKER_RESULT_WAKE};
+use crate::http::contracts::typed::projects::ProjectProviderPolicy;
 use crate::http::contracts::typed::task_answers::TaskLimitDecision;
+use crate::http::contracts::typed::tasks::TaskWorkerReplacementBody;
 use crate::identity::auth::js_trim;
 use crate::platform::database::{DatabaseResult, SuplexDatabase};
 use crate::runtimes::process::inspect_process;
 use crate::shared::js_json;
+use crate::tasks::commands::{allowed_profile, read_profile};
 use crate::tasks::repository::{self, PullRequestOwned};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -820,6 +823,142 @@ pub fn launch_standard_worker(
         .ok_or_else(|| std::io::Error::other("worker_session_missing").into())
 }
 
+/// Replace one current Worker without reusing its native session or replaying
+/// its pending turn. The retired session stays durable until the host observes
+/// its native owner stopped; the new session waits for that observation.
+pub fn replace_worker(
+    database: &mut SuplexDatabase,
+    task_id: &str,
+    request: &TaskWorkerReplacementBody,
+    now: DateTime<Utc>,
+) -> DatabaseResult<Value> {
+    let time = timestamp(now);
+    database.transaction(true, |database| {
+        let task: Option<(String, Option<String>, String, String)> = database.connection().query_row(
+            "SELECT c.status,t.archived_at,t.configuration_json,c.worker_profile_json FROM suplex_task_controls c JOIN suplex_tasks t ON t.id = c.task_id WHERE c.task_id = ?1",
+            [task_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        ).optional()?;
+        let Some((status, archived_at, configuration_json, control_profile)) = task else {
+            return Err(std::io::Error::other("Only active or paused tasks can replace a Worker.").into());
+        };
+        if archived_at.is_some() || !matches!(status.as_str(), "active" | "waiting_human") {
+            return Err(std::io::Error::other("Only active or paused tasks can replace a Worker.").into());
+        }
+        let previous: Option<(i64, Option<String>, Option<String>)> = database.connection().query_row(
+            "SELECT is_current,profile_json,replacement_handoff FROM suplex_task_sessions WHERE task_id = ?1 AND id = ?2 AND kind = 'worker' AND advisor_role IS NULL",
+            params![task_id, request.session_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        ).optional()?;
+        let Some((is_current, previous_profile_json, previous_handoff)) = previous else {
+            return Err(std::io::Error::other("The Worker does not belong to this task.").into());
+        };
+        let existing: Option<String> = database.connection().query_row(
+            "SELECT id FROM suplex_task_sessions WHERE replaces_session_id = ?1",
+            [&request.session_id], |row| row.get(0),
+        ).optional()?;
+        if let Some(existing) = existing {
+            return root_observation_rows(database, task_id)?.sessions.into_iter()
+                .find(|session| session["id"] == existing)
+                .ok_or_else(|| std::io::Error::other("replacement_session_missing").into());
+        }
+        if is_current != 1 {
+            return Err(std::io::Error::other("The Worker changed. Read the current Worker before replacing it.").into());
+        }
+        let assignment: Option<(String, Option<String>, Option<String>)> = database.connection().query_row(
+            "SELECT prompt_text,workflow_input_json,terminal_observation FROM suplex_task_turns WHERE session_id = ?1 ORDER BY created_at DESC,id DESC LIMIT 1",
+            [&request.session_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        ).optional()?;
+        let Some((assignment_prompt, workflow_input, _)) = assignment else {
+            return Err(std::io::Error::other("The Worker has no saved assignment.").into());
+        };
+        let previous_profile_json = previous_profile_json.unwrap_or(control_profile);
+        let previous_profile: Value = serde_json::from_str(&previous_profile_json)?;
+        let profile = match request.worker_profile_id.as_deref() {
+            Some(id) => read_profile(database, id, "worker")?
+                .ok_or_else(|| std::io::Error::other("The selected Worker profile does not exist."))?,
+            None => previous_profile.clone(),
+        };
+        let configuration: Value = serde_json::from_str(&configuration_json)?;
+        let policy: Option<ProjectProviderPolicy> = serde_json::from_value(configuration["providerPolicy"].clone())?;
+        if !allowed_profile(policy.as_ref(), &profile) {
+            return Err(std::io::Error::other("Select an agent with a provider and login allowed by this project").into());
+        }
+        let (workflow, delivery_target): (String, String) = database.connection().query_row(
+            "SELECT workflow,delivery_target FROM suplex_task_controls WHERE task_id = ?1",
+            [task_id], |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+        if workflow != "standard" || delivery_target != "local_worktree" || profile["provider"] != "codex" {
+            return Err(std::io::Error::other("experimental_not_ported: Only Codex Standard local-worktree Worker replacement is implemented").into());
+        }
+        let latest_result: Option<String> = database.connection().query_row(
+            "SELECT terminal_observation FROM suplex_task_turns WHERE session_id = ?1 AND terminal_observation IS NOT NULL ORDER BY created_at DESC,id DESC LIMIT 1",
+            [&request.session_id], |row| row.get(0),
+        ).optional()?;
+        let result = latest_result.as_deref()
+            .and_then(|raw| serde_json::from_str::<Value>(raw).ok())
+            .and_then(|value| value["text"].as_str().map(ToOwned::to_owned))
+            .unwrap_or_else(|| if latest_result.is_some() { String::new() } else { "No completed Worker result exists.".into() });
+        let result_units = result.encode_utf16().collect::<Vec<_>>();
+        let excerpt = String::from_utf16_lossy(&result_units[result_units.len().saturating_sub(12_000)..]);
+        let handoff = [
+            format!("Reason for replacement: {}", request.reason),
+            request.handoff.as_ref().filter(|text| !text.is_empty()).map(|text| format!("Additional direction:\n{text}")).unwrap_or_default(),
+            format!("Latest Worker result (verify its claims against source and command evidence):\n{excerpt}"),
+            "Inspect the preserved worktree, branch, and current Git status. Preserve existing commits and uncommitted work. Finish the remaining assignment and its checks. Report exact verification and the resulting commit. Use a different approach if the previous attempts did not advance the assignment.".into(),
+        ].into_iter().filter(|text| !text.is_empty()).collect::<Vec<_>>().join("\n\n");
+        let previous_suffix = previous_handoff.map(|text| format!("\n\nFresh Worker handoff:\n{text}"));
+        let saved_assignment = previous_suffix.as_deref()
+            .and_then(|suffix| assignment_prompt.strip_suffix(suffix))
+            .unwrap_or(&assignment_prompt);
+        let prompt = format!("{saved_assignment}\n\nFresh Worker handoff:\n{handoff}");
+        let hash = format!("{:x}", Sha256::digest(prompt.as_bytes()));
+        let generation: i64 = database.connection().query_row(
+            "SELECT COALESCE(MAX(generation),0)+1 FROM suplex_task_sessions WHERE task_id = ?1 AND kind = 'worker'",
+            [task_id], |row| row.get(0),
+        )?;
+        let id = Uuid::new_v4().to_string();
+        database.connection().execute(
+            "UPDATE suplex_task_sessions SET profile_json = ?1 WHERE task_id = ?2 AND kind = 'worker' AND advisor_role IS NULL AND profile_json IS NULL",
+            params![previous_profile_json, task_id],
+        )?;
+        database.connection().execute(
+            "UPDATE suplex_task_sessions SET is_current = 0,lifecycle = 'cancelled',stopped_at = NULL,stop_requested_at = ?1,profile_json = COALESCE(profile_json,?2),updated_at = ?1 WHERE id = ?3",
+            params![time, previous_profile_json, request.session_id],
+        )?;
+        database.connection().execute(
+            "UPDATE suplex_task_turns SET status = 'cancelled',updated_at = ?1 WHERE session_id = ?2 AND status IN ('pending_prompt','prompted','unknown')",
+            params![time, request.session_id],
+        )?;
+        database.connection().execute(
+            "INSERT INTO suplex_task_sessions (id,task_id,kind,generation,is_current,lifecycle,assignment_hash,delegate_slot,workflow_input_json,profile_json,replaces_session_id,replacement_reason,replacement_handoff,created_at,updated_at) VALUES (?1,?2,'worker',?3,1,'reserved',?4,'delegate',?5,?6,?7,?8,?9,?10,?10)",
+            params![id, task_id, generation, hash, workflow_input, serde_json::to_string(&profile)?, request.session_id, request.reason, handoff, time],
+        )?;
+        database.connection().execute(
+            "INSERT INTO suplex_task_turns (id,task_id,session_id,generation,assignment_hash,prompt_hash,prompt_text,status,workflow_input_json,created_at,updated_at) VALUES (?1,?2,?3,?4,?5,?5,?6,'pending_prompt',?7,?8,?8)",
+            params![new_turn_id(now)?, task_id, id, generation, hash, prompt, workflow_input, time],
+        )?;
+        database.connection().execute(
+            "UPDATE suplex_task_controls SET worker_session_id = ?1,worker_profile_json = ?2,wake_at = NULL,updated_at = ?3 WHERE task_id = ?4",
+            params![id, serde_json::to_string(&profile)?, time, task_id],
+        )?;
+        root_observation_rows(database, task_id)?.worker
+            .ok_or_else(|| std::io::Error::other("replacement_session_missing").into())
+    })
+}
+
+pub fn worker_replacement_ready(
+    database: &SuplexDatabase,
+    session_id: &str,
+) -> DatabaseResult<bool> {
+    let outstanding: bool = database.connection().query_row(
+        "WITH RECURSIVE ancestors(id) AS (SELECT replaces_session_id FROM suplex_task_sessions WHERE id = ?1 UNION ALL SELECT s.replaces_session_id FROM suplex_task_sessions s JOIN ancestors a ON s.id = a.id) SELECT EXISTS(SELECT 1 FROM suplex_task_sessions s JOIN ancestors a ON s.id = a.id WHERE s.stop_requested_at IS NOT NULL AND s.stopped_at IS NULL)",
+        [session_id], |row| row.get(0),
+    )?;
+    Ok(!outstanding)
+}
+
 /// Reserve one Root generation for an active task; a repeated admission returns it.
 pub fn reserve_root(
     database: &mut SuplexDatabase,
@@ -1364,6 +1503,132 @@ mod tests {
         tasks::repository::{self, PreparedTask, TaskCreator},
     };
     use std::{collections::HashMap, path::Path};
+
+    #[test]
+    fn worker_replacement_preserves_prompt_hash_and_waits_for_retired_native_session() {
+        let filename =
+            std::env::temp_dir().join(format!("suplex_replace_{}.sqlite", Uuid::new_v4()));
+        let now = DateTime::parse_from_rfc3339("2026-09-25T12:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let mut database = SuplexDatabase::open(&filename, OpenMode::Migrate).unwrap();
+        let user = auth::development_sign_in(&mut database, now).unwrap().user;
+        database.connection().execute("INSERT INTO suplex_companies (id,name,status,created_at) VALUES ('replace_company','Replace','active',?1)", [timestamp(now)]).unwrap();
+        database.connection().execute("INSERT INTO suplex_projects (id,company_id,name,repository_path,worktree_root,repository_identity,base_branch,setup_command,verification_command,root_profile_id,worker_profile_id,agent_task_policy_json,created_at,updated_at) VALUES ('replace_project','replace_company','Replace','/tmp/replace-repo','/tmp/replace-worktrees',NULL,'main','','','root','worker','{}',?1,?1)", [timestamp(now)]).unwrap();
+        let prepared = PreparedTask {
+            id: repository::new_task_id(),
+            company_id: "replace_company".into(),
+            project_id: "replace_project".into(),
+            title: "Replace Worker".into(),
+            description: String::new(),
+            configuration: serde_json::json!({"repository":"owner/repo","branch":"task-replace","baseBranch":"main","baselineSha":"head"}),
+            idempotency_key: "replace-key".into(),
+            request_hash: "replace-hash".into(),
+            creator: TaskCreator::User(user.id),
+            delivery_target: "local_worktree".into(),
+            delivery_intent: serde_json::json!({"repository":"owner/repo","headBranch":"task-replace","baseBranch":"main","baselineSha":"head","pullRequestNumber":null}),
+            root_profile: serde_json::json!({"profileId":"root","provider":"codex","model":"test","reasoningLevel":"medium","serviceTier":"default"}),
+            worker_profile: serde_json::json!({"profileId":"worker","provider":"codex","model":"test","reasoningLevel":"medium","serviceTier":"default"}),
+            advisor_profiles: serde_json::json!({}),
+            issue: None,
+            start_queued: true,
+            copied_from_task_id: None,
+            depends_on: vec![],
+        };
+        let task = repository::create(&mut database, &prepared, now)
+            .unwrap()
+            .task;
+        let root = reserve_root(&mut database, &task.id, now).unwrap();
+        let old = launch_standard_worker(
+            &mut database,
+            &root,
+            "Assignment: build",
+            "Worker assignment: build",
+            None,
+            now,
+        )
+        .unwrap();
+        let old_id = old["id"].as_str().unwrap().to_owned();
+        database
+            .connection()
+            .execute(
+                "UPDATE suplex_task_sessions SET native_session_id = 'codex-old' WHERE id = ?1",
+                [&old_id],
+            )
+            .unwrap();
+        database.connection().execute("UPDATE suplex_task_turns SET status = 'completed',terminal_observation = ?1 WHERE session_id = ?2", params![r#"{"state":"completed","text":"Made a partial change."}"#, old_id]).unwrap();
+        let request = TaskWorkerReplacementBody {
+            session_id: old_id.clone(),
+            reason: "Change strategy".into(),
+            handoff: Some("Finish the test".into()),
+            worker_profile_id: None,
+        };
+        let next = replace_worker(&mut database, &task.id, &request, now).unwrap();
+        assert_ne!(next["id"], old_id);
+        assert_eq!(next["nativeSessionId"], Value::Null);
+        assert_eq!(next["profile"], old["profile"]);
+        let next_id = next["id"].as_str().unwrap();
+        assert!(!worker_replacement_ready(&database, next_id).unwrap());
+        let saved: (String, String, String) = database.connection().query_row(
+            "SELECT prompt_text,prompt_hash,assignment_hash FROM suplex_task_turns WHERE session_id = ?1", [next_id],
+            |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?)),
+        ).unwrap();
+        assert!(saved.0.starts_with("Worker assignment: build\n\nFresh Worker handoff:\nReason for replacement: Change strategy"));
+        assert!(saved.0.contains("Latest Worker result (verify its claims against source and command evidence):\nMade a partial change."));
+        assert_eq!(saved.1, format!("{:x}", Sha256::digest(saved.0.as_bytes())));
+        assert_eq!(saved.1, saved.2);
+        assert_eq!(
+            replace_worker(&mut database, &task.id, &request, now).unwrap()["id"],
+            next["id"]
+        );
+        drop(database);
+        let mut database = SuplexDatabase::open(&filename, OpenMode::ReadWrite).unwrap();
+        assert_eq!(
+            current_worker(&database, &task.id).unwrap().unwrap().id,
+            next_id
+        );
+        assert!(!worker_replacement_ready(&database, next_id).unwrap());
+        database
+            .connection()
+            .execute(
+                "UPDATE suplex_task_sessions SET stopped_at = ?1 WHERE id = ?2",
+                params![timestamp(now), old_id],
+            )
+            .unwrap();
+        assert!(worker_replacement_ready(&database, next_id).unwrap());
+        database.connection().execute(
+            "INSERT INTO suplex_profiles (id,name,role,avatar_seed,provider,model,reasoning_level,service_tier,created_at,updated_at) VALUES ('alternate-worker','Alternate','worker','alternate','codex','gpt-6-sol','high','default',?1,?1)",
+            [timestamp(now)],
+        ).unwrap();
+        let second = replace_worker(
+            &mut database,
+            &task.id,
+            &TaskWorkerReplacementBody {
+                session_id: next_id.into(),
+                reason: "Try another approach".into(),
+                handoff: None,
+                worker_profile_id: Some("alternate-worker".into()),
+            },
+            now,
+        )
+        .unwrap();
+        assert_eq!(second["profile"]["profileId"], "alternate-worker");
+        assert_eq!(second["profile"]["reasoningLevel"], "high");
+        assert_eq!(next["profile"], old["profile"]);
+        let latest: String = database
+            .connection()
+            .query_row(
+                "SELECT prompt_text FROM suplex_task_turns WHERE session_id = ?1",
+                [second["id"].as_str().unwrap()],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(latest.matches("Fresh Worker handoff:").count(), 1);
+        drop(database);
+        let _ = std::fs::remove_file(&filename);
+        let _ = std::fs::remove_file(filename.with_extension("sqlite-wal"));
+        let _ = std::fs::remove_file(filename.with_extension("sqlite-shm"));
+    }
 
     #[test]
     fn human_note_reuses_root_and_resumes_delivered_intent_without_replay() {

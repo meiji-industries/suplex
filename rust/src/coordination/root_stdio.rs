@@ -473,7 +473,7 @@ impl RootBridgeServer {
                         .map_err(|error| error.to_string())
                 }
                 RootCall::DelegateWorker(assignment) => {
-                    root_controller::delegate_worker(&database_path, &root, &token, &assignment)
+                    root_controller::delegate_worker(&database_path, &root, &assignment)
                         .map_err(|error| error.to_string())
                 }
                 RootCall::ReplaceWorker(request) => root_controller::replace_worker(
@@ -494,7 +494,7 @@ impl RootBridgeServer {
                     ))
                     .map_err(|error| error.to_string()),
                 RootCall::AskHuman { question, options } => {
-                    root_controller::ask_human(&database_path, &root, &token, &question, &options)
+                    root_controller::ask_human(&database_path, &root, &question, &options)
                         .map_err(|error| error.to_string())
                 }
             };

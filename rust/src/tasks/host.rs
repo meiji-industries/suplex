@@ -2,13 +2,14 @@
 //! and the outer task wake loop call this after durable task/root setup.
 
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{BTreeSet, HashMap, HashSet},
     io,
     path::{Path, PathBuf},
-    sync::OnceLock,
+    sync::{Mutex, OnceLock, PoisonError},
 };
 
 use chrono::{DateTime, SecondsFormat, Utc};
+use rusqlite::OptionalExtension;
 use serde::Serialize;
 use tokio::{
     sync::{mpsc, watch},
@@ -37,6 +38,7 @@ use crate::{
     shared::js_json,
     tasks::{
         archive::processes,
+        commands::TaskFailure,
         worktree::{self, TaskWorktreeIntent, WorktreeReference},
     },
 };
@@ -204,6 +206,26 @@ fn retired_owner_can_stop(saved_start: Option<&str>, observed: ProcessOwnerObser
     }
 }
 
+/// Sessions whose unported provider was already reported. The sweep skips
+/// them before any claim, so it does not fail the task every second.
+// ponytail: process-local; a restart reports each unported session once more.
+static UNPORTED_SESSIONS: Mutex<BTreeSet<String>> = Mutex::new(BTreeSet::new());
+
+fn skip_unported(session_id: &str, message: &str) -> Option<PromptObservation> {
+    let failure = TaskFailure::not_ported(message);
+    if UNPORTED_SESSIONS
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .insert(session_id.to_owned())
+    {
+        eprintln!(
+            "warning: session {session_id} is skipped: {failure} ({})",
+            failure.code
+        );
+    }
+    None
+}
+
 fn dispatch_state(turn: &RootTurn) -> DispatchState {
     if turn.status == "pending_prompt" && turn.dispatch_attempt.is_none() {
         DispatchState::NotSubmitted
@@ -280,15 +302,28 @@ fn observe_turn(
     )?)
 }
 
+/// TypeScript `dependencyBlockers`: native work waits until every
+/// prerequisite is delivered. `claim_prompt` rechecks this atomically.
+fn dependency_blocked(rows: &root_session_store::RootObservationRows) -> bool {
+    rows.dependencies
+        .iter()
+        .any(|dependency| dependency["status"] != "delivered")
+}
+
+/// Record native admission. An execution Suplex cannot identify
+/// (TypeScript `executionUncertain`) asks a human to stop its commands.
 fn persist_native_admission(
     database: &mut SuplexDatabase,
     turn: &RootTurn,
     observation: &PromptObservation,
 ) -> DatabaseResult<()> {
-    if !observation.admission_observed {
-        return Ok(());
+    if observation.admission_observed {
+        root_session_store::mark_prompted(database, turn, None, Utc::now())?;
     }
-    root_session_store::mark_prompted(database, turn, None, Utc::now())?;
+    // Codex reports `executionUncertain` only with this reason.
+    if observation.reason == "dispatch_identity_missing" {
+        root_session_store::require_execution_cleanup(database, turn, Utc::now())?;
+    }
     Ok(())
 }
 
@@ -488,7 +523,13 @@ fn complete_worker_if_terminal(
     )
 }
 
-async fn observed_usage(database_path: &Path, task_id: &str) -> DatabaseResult<TaskLimitUsage> {
+/// TypeScript `observeTaskLimitUsage`. `require_complete` reports no cost
+/// unless every session has settled, fully priced usage.
+async fn observed_usage(
+    database_path: &Path,
+    task_id: &str,
+    require_complete: bool,
+) -> DatabaseResult<TaskLimitUsage> {
     let (sessions, budget, max_turns, admitted_turns) = {
         let database = SuplexDatabase::open(database_path, OpenMode::ReadOnly)?;
         let (budget_override, turns_override): (Option<f64>, Option<i64>) =
@@ -532,7 +573,7 @@ async fn observed_usage(database_path: &Path, task_id: &str) -> DatabaseResult<T
     }
     if sessions.is_empty() {
         return Ok(TaskLimitUsage {
-            estimated_cost_usd: Some(0.0),
+            estimated_cost_usd: (!require_complete).then_some(0.0),
         });
     }
     let native_database_path = database_path.to_path_buf();
@@ -552,6 +593,8 @@ async fn observed_usage(database_path: &Path, task_id: &str) -> DatabaseResult<T
     )
     .await?
     .map_err(io::Error::other)?;
+    // TypeScript `observeTaskLimitUsage`: a session without usage leaves the
+    // observation incomplete; dispatch continues with the partial cost.
     static PRICING: OnceLock<Result<ModelsDevCatalogReader, String>> = OnceLock::new();
     let unpriced = observed.iter().any(|(_, _, _, session)| {
         session.turns.iter().any(|turn| {
@@ -574,6 +617,28 @@ async fn observed_usage(database_path: &Path, task_id: &str) -> DatabaseResult<T
     } else {
         None
     };
+    if require_complete
+        && observed.iter().any(|(_, _, _, session)| {
+            session.turns.is_empty()
+                || session.live_turn_id.is_some()
+                || session.turns.iter().any(|turn| {
+                    let cost = pricing
+                        .as_deref()
+                        .and_then(|catalog| catalog.get(&format!("openai/{}", turn.model)))
+                        .map_or(turn.cost_usd, |price| price.estimate(turn.tokens));
+                    let tokens = turn.tokens.input
+                        + turn.tokens.output
+                        + turn.tokens.reasoning
+                        + turn.tokens.cache_read
+                        + turn.tokens.cache_write;
+                    turn.model == "unknown" || (cost == 0.0 && tokens > 0.0)
+                })
+        })
+    {
+        return Ok(TaskLimitUsage {
+            estimated_cost_usd: None,
+        });
+    }
     let cost = replace_observed_usage(database_path, task_id, observed, pricing.as_deref())?;
     Ok(TaskLimitUsage {
         estimated_cost_usd: cost,
@@ -667,6 +732,13 @@ fn recover_prepared_root_blocking(
     else {
         return Ok(None);
     };
+    let rows = root_session_store::root_observation_rows(&database, task_id)?;
+    if rows.control["rootProfile"]["provider"] != "codex" {
+        return Ok(skip_unported(
+            &session.id,
+            "Only Codex Standard Root execution is ported",
+        ));
+    }
     if current_owner_still_running(&session) {
         return Ok(None);
     }
@@ -697,28 +769,47 @@ fn recover_prepared_root_blocking(
         )? {
             return Err(io::Error::other("Native Root session changed before dispatch").into());
         }
-        let (before, replayable) = observe_or_recover_fenced(
-            &mut database,
-            database_path,
-            &session,
-            &native_id,
-            &turn,
-            &owner,
-        )?;
-        if !before.retry_allowed || !replayable {
-            persist_native_admission(&mut database, &turn, &before)?;
-            complete_root_if_terminal(&mut database, database_path, &session, &turn, &before)?;
+        let mut turn = turn.clone();
+        let before = loop {
+            let (before, replayable) = observe_or_recover_fenced(
+                &mut database,
+                database_path,
+                &session,
+                &native_id,
+                &turn,
+                &owner,
+            )?;
+            if !before.retry_allowed || !replayable {
+                persist_native_admission(&mut database, &turn, &before)?;
+                complete_root_if_terminal(&mut database, database_path, &session, &turn, &before)?;
+                return Ok(before);
+            }
+            if !root_session_store::coalesce_unadmitted_idle_root_turn(
+                &mut database,
+                &turn.id,
+                Utc::now(),
+            )? {
+                break before;
+            }
+            let Some(next) = root_session_store::pending_turns(&database, &session.id)?
+                .into_iter()
+                .next()
+            else {
+                return Ok(before);
+            };
+            turn = next;
+        };
+        if dependency_blocked(&rows) {
             return Ok(before);
         }
-        let rows = root_session_store::root_observation_rows(&database, task_id)?;
+        let turn = root_session_store::refresh_pending_root_dependency_context(
+            &mut database,
+            &turn.id,
+            Utc::now(),
+        )?;
         let worktree = rows.control["worktree"]["path"]
             .as_str()
             .ok_or_else(|| io::Error::other("Task worktree is not prepared"))?;
-        if rows.control["rootProfile"]["provider"] != "codex" {
-            return Err(
-                io::Error::other("Only Codex Standard Root execution is implemented").into(),
-            );
-        }
         let model = rows.control["rootProfile"]["model"]
             .as_str()
             .ok_or_else(|| io::Error::other("Root model is missing"))?;
@@ -781,7 +872,7 @@ pub async fn recover_prepared_root(
     inherited_environment: &HashMap<String, String>,
 ) -> DatabaseResult<Option<PromptObservation>> {
     let usage = if needs_admission_usage(database_path, task_id, "root")? {
-        observed_usage(database_path, task_id).await?
+        observed_usage(database_path, task_id, false).await?
     } else {
         TaskLimitUsage {
             estimated_cost_usd: None,
@@ -827,6 +918,13 @@ fn recover_prepared_worker_blocking(
     if !root_session_store::worker_replacement_ready(&database, &session.id)? {
         return Ok(None);
     }
+    let rows = root_session_store::root_observation_rows(&database, task_id)?;
+    if rows.control["workerProfile"]["provider"] != "codex" {
+        return Ok(skip_unported(
+            &session.id,
+            "Only Codex Standard Worker execution is ported",
+        ));
+    }
     if current_owner_still_running(&session) {
         return Ok(None);
     }
@@ -857,7 +955,6 @@ fn recover_prepared_worker_blocking(
         )? {
             return Err(io::Error::other("Native Worker session changed before dispatch").into());
         }
-        let rows = root_session_store::root_observation_rows(&database, task_id)?;
         let worker = rows
             .worker
             .as_ref()
@@ -888,15 +985,13 @@ fn recover_prepared_worker_blocking(
             )?;
             return Ok(before);
         }
+        if dependency_blocked(&rows) {
+            return Ok(before);
+        }
         let worktree = rows.control["worktree"]["path"]
             .as_str()
             .ok_or_else(|| io::Error::other("Task worktree is not prepared"))?;
         let profile = &rows.control["workerProfile"];
-        if profile["provider"] != "codex" {
-            return Err(
-                io::Error::other("Only Codex Standard Worker execution is implemented").into(),
-            );
-        }
         let model = profile["model"]
             .as_str()
             .ok_or_else(|| io::Error::other("Worker model is missing"))?;
@@ -959,7 +1054,7 @@ pub async fn recover_prepared_worker(
     inherited_environment: &HashMap<String, String>,
 ) -> DatabaseResult<Option<PromptObservation>> {
     let usage = if needs_admission_usage(database_path, task_id, "worker")? {
-        observed_usage(database_path, task_id).await?
+        observed_usage(database_path, task_id, false).await?
     } else {
         TaskLimitUsage {
             estimated_cost_usd: None,
@@ -1025,7 +1120,7 @@ pub fn spawn_task_host(database_path: PathBuf, artifact_root: PathBuf) -> TaskHo
                     Vec::new()
                 },
                 Some(task_id) = wake_rx.recv() => vec![task_id],
-                _ = interval.tick() => match due_task_ids(&database_path) {
+                _ = interval.tick() => match scheduled_task_ids(&database_path) {
                     Ok(ids) => ids,
                     Err(error) => { eprintln!("Task scheduling will retry: {error}"); Vec::new() },
                 },
@@ -1066,6 +1161,29 @@ pub fn spawn_task_host(database_path: PathBuf, artifact_root: PathBuf) -> TaskHo
     handle
 }
 
+/// TypeScript `TaskHost.tick`: the queue sweep admits every ready queued
+/// task on each tick, starting with the immediate first tick at startup.
+fn scheduled_task_ids(database_path: &Path) -> DatabaseResult<Vec<String>> {
+    {
+        let mut database = SuplexDatabase::open(database_path, OpenMode::ReadWrite)?;
+        // A diagnostic read never changes queue admission.
+        let queued = database
+            .connection()
+            .prepare("SELECT task_id FROM suplex_task_controls WHERE status = 'queued'")
+            .and_then(|mut statement| {
+                statement
+                    .query_map([], |row| row.get::<_, String>(0))?
+                    .collect::<rusqlite::Result<Vec<_>>>()
+            })
+            .unwrap_or_default();
+        for task_id in queued {
+            root_session_store::observe_queue_wait(&mut database, &task_id);
+        }
+        root_session_store::admit_queued(&mut database, Utc::now())?;
+    }
+    due_task_ids(database_path)
+}
+
 fn due_task_ids(database_path: &Path) -> DatabaseResult<Vec<String>> {
     let database = SuplexDatabase::open(database_path, OpenMode::ReadOnly)?;
     let mut statement = database.connection().prepare(
@@ -1077,29 +1195,6 @@ fn due_task_ids(database_path: &Path) -> DatabaseResult<Vec<String>> {
             |row| row.get::<_, String>(0),
         )?
         .collect::<rusqlite::Result<Vec<_>>>()?)
-}
-
-pub async fn sweep_active_tasks(
-    database_path: &Path,
-    artifact_root: &Path,
-    codex_executable: Option<&Path>,
-    inherited_environment: &HashMap<String, String>,
-) -> DatabaseResult<()> {
-    let task_ids = due_task_ids(database_path)?;
-    for task_id in task_ids {
-        if let Err(error) = sweep_task(
-            database_path,
-            artifact_root,
-            &task_id,
-            codex_executable,
-            inherited_environment,
-        )
-        .await
-        {
-            eprintln!("Task {task_id} observation will retry: {error}");
-        }
-    }
-    Ok(())
 }
 
 async fn stop_retired_sessions(database_path: &Path, task_id: &str) -> DatabaseResult<()> {
@@ -1172,6 +1267,41 @@ async fn stop_retired_sessions(database_path: &Path, task_id: &str) -> DatabaseR
     Ok(())
 }
 
+/// TypeScript `RootController.recover`: a task paused at its limits resumes
+/// once complete native usage is within the current limits. A paused task is
+/// observed again in 15 seconds either way.
+async fn reconcile_limit_pause(database_path: &Path, task_id: &str) -> DatabaseResult<()> {
+    let question_id: Option<String> = {
+        let database = SuplexDatabase::open(database_path, OpenMode::ReadOnly)?;
+        database.connection().query_row(
+            "SELECT human_question_id FROM suplex_task_controls WHERE task_id = ?1 AND status = 'waiting_human' AND limit_pause_json IS NOT NULL",
+            [task_id], |row| row.get(0),
+        ).optional()?.flatten()
+    };
+    let Some(question_id) = question_id else {
+        return Ok(());
+    };
+    let reconciled = async {
+        let usage = observed_usage(database_path, task_id, true).await?;
+        let mut database = SuplexDatabase::open(database_path, OpenMode::ReadWrite)?;
+        root_session_store::reconcile_task_limit_pause(
+            &mut database,
+            task_id,
+            &question_id,
+            usage,
+            Utc::now(),
+        )
+    }
+    .await;
+    let database = SuplexDatabase::open(database_path, OpenMode::ReadWrite)?;
+    let now = Utc::now();
+    database.connection().execute(
+        "UPDATE suplex_task_controls SET wake_at = ?1,updated_at = ?2 WHERE task_id = ?3 AND status = 'waiting_human'",
+        rusqlite::params![(now + chrono::Duration::seconds(15)).to_rfc3339_opts(SecondsFormat::Millis, true), now.to_rfc3339_opts(SecondsFormat::Millis, true), task_id],
+    )?;
+    reconciled.map(|_| ())
+}
+
 pub async fn sweep_task(
     database_path: &Path,
     artifact_root: &Path,
@@ -1184,6 +1314,7 @@ pub async fn sweep_task(
         root_session_store::retire_delivered_sessions(&mut database, task_id, Utc::now())?;
     }
     stop_retired_sessions(database_path, task_id).await?;
+    reconcile_limit_pause(database_path, task_id).await?;
     let (active, needs_worktree) = {
         let database = SuplexDatabase::open(database_path, OpenMode::ReadOnly)?;
         let rows = root_session_store::root_observation_rows(&database, task_id)?;
@@ -1223,7 +1354,10 @@ pub async fn sweep_task(
     {
         let mut database = SuplexDatabase::open(database_path, OpenMode::ReadWrite)?;
         let rows = root_session_store::root_observation_rows(&database, task_id)?;
-        let prompt = idle_root_prompt(&rows.dependencies);
+        let prompt = root_session_store::with_current_dependency_status(
+            root_session_store::IDLE_ROOT_PROMPT,
+            &rows.dependencies,
+        );
         root_session_store::wake_idle_root(&mut database, task_id, &prompt, Utc::now())?;
     }
     let database = SuplexDatabase::open(database_path, OpenMode::ReadWrite)?;
@@ -1233,29 +1367,6 @@ pub async fn sweep_task(
         rusqlite::params![(now + chrono::Duration::seconds(15)).to_rfc3339_opts(SecondsFormat::Millis, true), now.to_rfc3339_opts(SecondsFormat::Millis, true), task_id],
     )?;
     Ok(())
-}
-
-const IDLE_ROOT_PROMPT: &str = "Observe the current task, worktree, and GitHub state and continue toward the delivery target. Adopt out-of-band progress. If checks or another external operation are pending, report what you are waiting for. Ask a specific human question only if a necessary decision or external failure requires it.";
-
-fn idle_root_prompt(dependencies: &[serde_json::Value]) -> String {
-    if dependencies.is_empty() {
-        return IDLE_ROOT_PROMPT.to_owned();
-    }
-    let list = dependencies
-        .iter()
-        .map(|dependency| {
-            format!(
-                "{} \"{}\" ({})",
-                dependency["id"].as_str().unwrap_or_default(),
-                dependency["title"].as_str().unwrap_or_default(),
-                dependency["status"].as_str().unwrap_or_default()
-            )
-        })
-        .collect::<Vec<_>>()
-        .join(", ");
-    format!(
-        "{IDLE_ROOT_PROMPT}\n\n[Suplex prerequisite status]\nCurrent prerequisites: {list}. Prerequisites constrain delivery ordering. Suplex resumes native work when all are delivered. Observe actual Git and GitHub state before integration.\n[/Suplex prerequisite status]"
-    )
 }
 
 #[cfg(test)]
@@ -1459,6 +1570,605 @@ mod tests {
             observe_process_owner(exited_pid),
             ProcessOwnerObservation::Absent
         );
+    }
+
+    /// A queued Standard local-worktree task with Codex profiles.
+    fn fixture_task() -> (PathBuf, PathBuf, String) {
+        let base = std::env::temp_dir().join(format!("suplex-usage-{}", Uuid::new_v4()));
+        fs::create_dir_all(&base).unwrap();
+        let database_path = base.join("suplex.sqlite");
+        let now = Utc::now();
+        let task_id = {
+            let mut database = SuplexDatabase::open(&database_path, OpenMode::Migrate).unwrap();
+            let user = auth::development_sign_in(&mut database, now).unwrap().user;
+            let time = now.to_rfc3339();
+            database.connection().execute("INSERT INTO suplex_companies (id,name,status,created_at) VALUES ('usage_company','Usage','active',?1)", [&time]).unwrap();
+            database.connection().execute("INSERT INTO suplex_projects (id,company_id,name,repository_path,worktree_root,repository_identity,base_branch,setup_command,verification_command,root_profile_id,worker_profile_id,agent_task_policy_json,created_at,updated_at) VALUES ('usage_project','usage_company','Project','/tmp/repo','/tmp/worktrees',NULL,'main','','','root_profile','worker_profile','{}',?1,?1)", [&time]).unwrap();
+            let prepared = PreparedTask {
+                id: repository::new_task_id(),
+                company_id: "usage_company".into(),
+                project_id: "usage_project".into(),
+                title: "Usage task".into(),
+                description: "Observe usage".into(),
+                configuration: serde_json::json!({"repository":"owner/repo","branch":"task-usage","baseBranch":"main"}),
+                idempotency_key: "usage-key".into(),
+                request_hash: "usage-request".into(),
+                creator: TaskCreator::User(user.id),
+                delivery_target: "local_worktree".into(),
+                delivery_intent: serde_json::json!({"repository":"owner/repo","headBranch":"task-usage","baseBranch":"main"}),
+                root_profile: serde_json::json!({"profileId":"root_profile","provider":"codex","model":"gpt-6-sol","reasoningLevel":"medium","serviceTier":"default"}),
+                worker_profile: serde_json::json!({"profileId":"worker_profile","provider":"codex","model":"gpt-6-sol","reasoningLevel":"medium","serviceTier":"default"}),
+                advisor_profiles: serde_json::json!({}),
+                issue: None,
+                start_queued: true,
+                copied_from_task_id: None,
+                depends_on: vec![],
+            };
+            repository::create(&mut database, &prepared, now)
+                .unwrap()
+                .task
+                .id
+        };
+        (base, database_path, task_id)
+    }
+
+    #[test]
+    fn scheduler_tick_admits_a_queued_task_whose_blocker_cleared() {
+        let (base, database_path, task_id) = fixture_task();
+        {
+            let database = SuplexDatabase::open(&database_path, OpenMode::ReadWrite).unwrap();
+            database.connection().execute(
+                "UPDATE suplex_task_controls SET status = 'queued', wake_at = NULL WHERE task_id = ?1",
+                [&task_id],
+            ).unwrap();
+            database.connection().execute(
+                "INSERT INTO suplex_task_pull_request_dependencies (task_id,pull_request_number,state,title,url,observed_at) VALUES (?1,7,'open','Blocker','https://github.com/owner/repo/pull/7',?2)",
+                rusqlite::params![task_id, Utc::now().to_rfc3339()],
+            ).unwrap();
+        }
+        let status = || -> String {
+            let database = SuplexDatabase::open(&database_path, OpenMode::ReadOnly).unwrap();
+            database
+                .connection()
+                .query_row(
+                    "SELECT status FROM suplex_task_controls WHERE task_id = ?1",
+                    [&task_id],
+                    |row| row.get(0),
+                )
+                .unwrap()
+        };
+        assert!(
+            !scheduled_task_ids(&database_path)
+                .unwrap()
+                .contains(&task_id)
+        );
+        assert_eq!(status(), "queued");
+        // The blocker merges out of band. No user action follows.
+        {
+            let database = SuplexDatabase::open(&database_path, OpenMode::ReadWrite).unwrap();
+            database.connection().execute(
+                "UPDATE suplex_task_pull_request_dependencies SET state = 'merged' WHERE task_id = ?1",
+                [&task_id],
+            ).unwrap();
+        }
+        assert!(
+            scheduled_task_ids(&database_path)
+                .unwrap()
+                .contains(&task_id)
+        );
+        assert_eq!(status(), "active");
+        fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
+    fn scheduler_tick_reports_admission_and_queue_wait() {
+        let logs = crate::platform::system_events::install_for_test();
+        let (base, database_path, admitted) = fixture_task();
+        let waiting = {
+            let mut database = SuplexDatabase::open(&database_path, OpenMode::ReadWrite).unwrap();
+            let user = auth::development_sign_in(&mut database, Utc::now())
+                .unwrap()
+                .user;
+            let prepared = PreparedTask {
+                id: repository::new_task_id(),
+                company_id: "usage_company".into(),
+                project_id: "usage_project".into(),
+                title: "Waiting task".into(),
+                description: "".into(),
+                configuration: serde_json::json!({"repository":"owner/repo","branch":"task-waiting","baseBranch":"main"}),
+                idempotency_key: "waiting-key".into(),
+                request_hash: "waiting-request".into(),
+                creator: TaskCreator::User(user.id),
+                delivery_target: "local_worktree".into(),
+                delivery_intent: serde_json::json!({"repository":"owner/repo","headBranch":"task-waiting","baseBranch":"main"}),
+                root_profile: serde_json::json!({"profileId":"root_profile","provider":"codex","model":"gpt-6-sol","reasoningLevel":"medium","serviceTier":"default"}),
+                worker_profile: serde_json::json!({"profileId":"worker_profile","provider":"codex","model":"gpt-6-sol","reasoningLevel":"medium","serviceTier":"default"}),
+                advisor_profiles: serde_json::json!({}),
+                issue: None,
+                start_queued: false,
+                copied_from_task_id: None,
+                depends_on: vec![],
+            };
+            let waiting = repository::create(&mut database, &prepared, Utc::now())
+                .unwrap()
+                .task
+                .id;
+            database.connection().execute(
+                "UPDATE suplex_task_controls SET status = 'queued', wake_at = NULL WHERE task_id IN (?1, ?2)",
+                [&admitted, &waiting],
+            ).unwrap();
+            database.connection().execute(
+                "INSERT INTO suplex_task_pull_request_dependencies (task_id,pull_request_number,state,title,url,observed_at) VALUES (?1,7,'open','Blocker','https://github.com/owner/repo/pull/7',?2)",
+                rusqlite::params![waiting, Utc::now().to_rfc3339()],
+            ).unwrap();
+            waiting
+        };
+        let log = logs.join("system.log");
+        let before = fs::read_to_string(&log).map_or(0, |log| log.len());
+        assert!(
+            scheduled_task_ids(&database_path)
+                .unwrap()
+                .contains(&admitted)
+        );
+        let events = fs::read_to_string(&log).unwrap()[before..]
+            .lines()
+            .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+            .filter(|event| {
+                (event["taskId"] == admitted.as_str() || event["taskId"] == waiting.as_str())
+                    && (event["type"] == "task_admitted" || event["type"] == "queue_wait")
+            })
+            .map(|mut event| {
+                let fields = event.as_object_mut().unwrap();
+                for key in ["schemaVersion", "time", "eventId", "pid"] {
+                    assert!(fields.remove(key).is_some());
+                }
+                event
+            })
+            .collect::<Vec<_>>();
+        // TypeScript `tick` observes queue waits before it admits.
+        assert_eq!(
+            events,
+            vec![
+                serde_json::json!({"type":"queue_wait","taskId":admitted,"waits":[]}),
+                serde_json::json!({"type":"queue_wait","taskId":waiting,"waits":[{"id":"pull_request:7","reason":"prerequisite_pull_request_open"}]}),
+                serde_json::json!({"type":"task_admitted","taskId":admitted,"trigger":"scheduler sweep"}),
+            ]
+        );
+        fs::remove_dir_all(base).unwrap();
+    }
+
+    #[tokio::test]
+    async fn recovery_resumes_a_limit_pause_once_usage_is_within_limits() {
+        let (base, database_path, task_id) = fixture_task();
+        let control = || -> (String, Option<String>) {
+            let database = SuplexDatabase::open(&database_path, OpenMode::ReadOnly).unwrap();
+            database
+                .connection()
+                .query_row(
+                    "SELECT status,wake_at FROM suplex_task_controls WHERE task_id = ?1",
+                    [&task_id],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .unwrap()
+        };
+        {
+            let database = SuplexDatabase::open(&database_path, OpenMode::ReadWrite).unwrap();
+            let pause = r#"{"kind":"task_limit","reason":"budget","limits":{"budgetUsd":1,"maxTurns":5},"usage":{"estimatedCostUsd":1,"admittedTurns":0},"proposedLimits":{"budgetUsd":20,"maxTurns":5}}"#;
+            database.connection().execute(
+                "UPDATE suplex_task_controls SET status = 'waiting_human', limit_pause_json = ?1, human_question = 'Limit', human_question_id = 'limit-question', budget_usd = 1, max_turns = 5, wake_at = NULL WHERE task_id = ?2",
+                rusqlite::params![pause, task_id],
+            ).unwrap();
+        }
+        // Without complete native usage the pause stays and is observed again.
+        reconcile_limit_pause(&database_path, &task_id)
+            .await
+            .unwrap();
+        let (status, wake_at) = control();
+        assert_eq!(status, "waiting_human");
+        assert!(wake_at.is_some());
+        // The budget was removed outside the pause answer. Recovery resumes.
+        {
+            let database = SuplexDatabase::open(&database_path, OpenMode::ReadWrite).unwrap();
+            database
+                .connection()
+                .execute(
+                    "UPDATE suplex_task_controls SET budget_usd = 0 WHERE task_id = ?1",
+                    [&task_id],
+                )
+                .unwrap();
+        }
+        reconcile_limit_pause(&database_path, &task_id)
+            .await
+            .unwrap();
+        assert_eq!(control().0, "active");
+        fs::remove_dir_all(base).unwrap();
+    }
+
+    #[tokio::test]
+    async fn unidentified_execution_asks_for_command_cleanup() {
+        let (base, database_path, task_id) = fixture_task();
+        let root = root_controller::prepare_root(&database_path, &task_id).unwrap();
+        let turn_id = {
+            let database = SuplexDatabase::open(&database_path, OpenMode::ReadWrite).unwrap();
+            let turn = root_session_store::pending_turns(&database, &root.id)
+                .unwrap()
+                .remove(0);
+            let attempt = PromptDispatchAttempt {
+                server_generation: "lost-record".into(),
+                claimed_at: Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true),
+            };
+            database.connection().execute(
+                "UPDATE suplex_task_turns SET status = 'unknown', dispatch_attempt_json = ?1 WHERE id = ?2",
+                rusqlite::params![serde_json::to_string(&attempt).unwrap(), turn.id],
+            ).unwrap();
+            turn.id
+        };
+        // A native log exists, but no dispatch record identifies its process.
+        let directory = session_reader::session_directory(&database_path, &root.id).unwrap();
+        fs::create_dir_all(&directory).unwrap();
+        fs::write(
+            crate::runtimes::headless::turn_file(&directory, &turn_id, "jsonl"),
+            "",
+        )
+        .unwrap();
+        let observed =
+            recover_prepared_root(&database_path, &base, &task_id, None, &HashMap::new())
+                .await
+                .unwrap()
+                .unwrap();
+        assert_eq!(observed.reason, "dispatch_identity_missing");
+        let database = SuplexDatabase::open(&database_path, OpenMode::ReadOnly).unwrap();
+        let (status, recovery_turn_id): (String, Option<String>) = database
+            .connection()
+            .query_row(
+                "SELECT status,recovery_turn_id FROM suplex_task_controls WHERE task_id = ?1",
+                [&task_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(status, "waiting_human");
+        assert_eq!(recovery_turn_id.as_deref(), Some(turn_id.as_str()));
+        fs::remove_dir_all(base).unwrap();
+    }
+
+    #[tokio::test]
+    async fn dispatch_coalesces_idle_wakes_waits_for_prerequisites_and_refreshes_status() {
+        let (base, database_path, task_id) = fixture_task();
+        let root = root_controller::prepare_root(&database_path, &task_id).unwrap();
+        let turn_status = |id: &str| -> (String, String) {
+            let database = SuplexDatabase::open(&database_path, OpenMode::ReadOnly).unwrap();
+            database
+                .connection()
+                .query_row(
+                    "SELECT status,prompt_text FROM suplex_task_turns WHERE id = ?1",
+                    [id],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .unwrap()
+        };
+        {
+            let database = SuplexDatabase::open(&database_path, OpenMode::ReadWrite).unwrap();
+            database.connection().execute_batch(&format!(
+                "UPDATE suplex_task_turns SET status = 'completed' WHERE task_id = '{task_id}';
+                 CREATE TEMP TABLE blocker_task AS SELECT * FROM suplex_tasks WHERE id = '{task_id}';
+                 UPDATE blocker_task SET id = 'blocker', title = 'Blocker', idempotency_key = 'blocker-key', issue_number = issue_number + 1;
+                 INSERT INTO suplex_tasks SELECT * FROM blocker_task;
+                 CREATE TEMP TABLE blocker_control AS SELECT * FROM suplex_task_controls WHERE task_id = '{task_id}';
+                 UPDATE blocker_control SET task_id = 'blocker', status = 'active';
+                 INSERT INTO suplex_task_controls SELECT * FROM blocker_control;
+                 INSERT INTO suplex_task_dependencies (task_id,depends_on_task_id,created_at) VALUES ('{task_id}','blocker','2026-01-01T00:00:00.000Z');"
+            )).unwrap();
+            for (id, prompt, created) in [
+                (
+                    "msg_idle",
+                    root_session_store::IDLE_ROOT_PROMPT,
+                    "2026-01-01T00:00:01.000Z",
+                ),
+                (
+                    "msg_note",
+                    "Human note:\nCheck the result.",
+                    "2026-01-01T00:00:02.000Z",
+                ),
+            ] {
+                database.connection().execute(
+                    "INSERT INTO suplex_task_turns (id,task_id,session_id,generation,prompt_hash,prompt_text,status,created_at,updated_at) VALUES (?1,?2,?3,?4,'hash',?5,'pending_prompt',?6,?6)",
+                    rusqlite::params![id, task_id, root.id, root.generation, prompt, created],
+                ).unwrap();
+            }
+        }
+        // The idle wake yields to the note, and the note waits for its prerequisite.
+        recover_prepared_root(&database_path, &base, &task_id, None, &HashMap::new())
+            .await
+            .unwrap();
+        assert_eq!(turn_status("msg_idle").0, "cancelled");
+        assert_eq!(
+            turn_status("msg_note"),
+            (
+                "pending_prompt".into(),
+                "Human note:\nCheck the result.".into()
+            )
+        );
+        {
+            let database = SuplexDatabase::open(&database_path, OpenMode::ReadWrite).unwrap();
+            database
+                .connection()
+                .execute(
+                    "UPDATE suplex_task_controls SET status = 'delivered' WHERE task_id = 'blocker'",
+                    [],
+                )
+                .unwrap();
+        }
+        let mut database = SuplexDatabase::open(&database_path, OpenMode::ReadWrite).unwrap();
+        let refreshed = root_session_store::refresh_pending_root_dependency_context(
+            &mut database,
+            "msg_note",
+            Utc::now(),
+        )
+        .unwrap();
+        assert!(refreshed.prompt_text.starts_with(
+            "Human note:\nCheck the result.\n\n[Suplex prerequisite status]\nCurrent prerequisites: blocker \"Blocker\" (delivered). "
+        ));
+        let again = root_session_store::refresh_pending_root_dependency_context(
+            &mut database,
+            "msg_note",
+            Utc::now(),
+        )
+        .unwrap();
+        assert_eq!(again.prompt_text, refreshed.prompt_text);
+        fs::remove_dir_all(base).unwrap();
+    }
+
+    #[tokio::test]
+    async fn empty_native_usage_is_incomplete_and_does_not_block_dispatch() {
+        let (base, database_path, task_id) = fixture_task();
+        let now = Utc::now();
+        let root = root_controller::prepare_root(&database_path, &task_id).unwrap();
+        let turn_id = {
+            let mut database = SuplexDatabase::open(&database_path, OpenMode::ReadWrite).unwrap();
+            assert!(
+                root_session_store::bind_native_session(&mut database, &root, "codex-usage", now)
+                    .unwrap()
+            );
+            let turn = root_session_store::pending_turns(&database, &root.id)
+                .unwrap()
+                .remove(0);
+            database
+                .connection()
+                .execute(
+                    "UPDATE suplex_task_turns SET status = 'prompted', prompted_at = ?1 WHERE id = ?2",
+                    rusqlite::params![now.to_rfc3339(), turn.id],
+                )
+                .unwrap();
+            turn.id
+        };
+        let directory = session_reader::session_directory(&database_path, &root.id).unwrap();
+        fs::create_dir_all(&directory).unwrap();
+        fs::write(
+            directory.join(format!("turn-{turn_id}.jsonl")),
+            "{\"type\":\"thread.started\",\"thread_id\":\"codex-usage\"}\n",
+        )
+        .unwrap();
+        assert!(
+            !usage::observe_session(&directory, "codex-usage", None)
+                .unwrap()
+                .complete
+        );
+        let observed = observed_usage(&database_path, &task_id, false)
+            .await
+            .unwrap();
+        assert_eq!(observed.estimated_cost_usd, Some(0.0));
+        fs::remove_dir_all(base).unwrap();
+    }
+
+    #[tokio::test]
+    async fn unported_workflows_report_501_and_the_sweep_skips_them() {
+        let (base, database_path, task_id) = fixture_task();
+        let root = root_controller::prepare_root(&database_path, &task_id).unwrap();
+        let identity = RootIdentity {
+            task_id: task_id.clone(),
+            session_id: root.id.clone(),
+            generation: root.generation,
+        };
+        {
+            let database = SuplexDatabase::open(&database_path, OpenMode::ReadWrite).unwrap();
+            database.connection().execute(
+                "UPDATE suplex_task_controls SET root_profile_json = json_set(root_profile_json,'$.provider','opencode'), workflow = 'competing_plans' WHERE task_id = ?1",
+                [&task_id],
+            ).unwrap();
+        }
+        let failure = root_controller::observe(&database_path, &identity).unwrap_err();
+        let failure = failure.downcast_ref::<TaskFailure>().unwrap();
+        assert_eq!(
+            (failure.status_code, failure.code),
+            (501, "experimental_not_ported")
+        );
+        let environment = HashMap::new();
+        for _ in 0..2 {
+            assert!(
+                recover_prepared_root(&database_path, &base, &task_id, None, &environment)
+                    .await
+                    .unwrap()
+                    .is_none()
+            );
+        }
+        let database = SuplexDatabase::open(&database_path, OpenMode::ReadOnly).unwrap();
+        let root = root_session_store::current_root(&database, &task_id)
+            .unwrap()
+            .unwrap();
+        assert!(root.native_session_id.is_none() && root.launch_owner.is_none());
+        assert!(UNPORTED_SESSIONS.lock().unwrap().contains(&root.id));
+        fs::remove_dir_all(base).unwrap();
+    }
+
+    fn tagged_sleep(markers: &[(&str, &Path)]) -> std::process::Child {
+        use std::os::unix::process::CommandExt;
+        let mut command = std::process::Command::new("/usr/bin/python3");
+        command
+            .args(["-c", "import time; time.sleep(300)"])
+            .env_clear()
+            .process_group(0);
+        for (key, directory) in markers {
+            command.env(key, crate::runtimes::process::owner_marker(directory));
+        }
+        command.spawn().unwrap()
+    }
+
+    fn visible(key: &str, directory: &Path, child: &std::process::Child) -> bool {
+        (0..40).any(|_| {
+            let found = crate::runtimes::headless::discovered_process_ids(key, directory)
+                .is_ok_and(|pids| pids.contains(&child.id()));
+            if !found {
+                std::thread::sleep(Duration::from_millis(100));
+            }
+            found
+        })
+    }
+
+    #[test]
+    fn retired_session_cleanup_preserves_another_session_in_the_same_worktree() {
+        let base = std::env::temp_dir().join(format!("suplex-retired-{}", Uuid::new_v4()));
+        let worktree = base.join("worktree");
+        let retired_directory = base.join("retired-session");
+        let current_directory = base.join("current-session");
+        fs::create_dir_all(&worktree).unwrap();
+        let mut retired = tagged_sleep(&[
+            ("SUPLEX_TASK_PROCESS_OWNER", &worktree),
+            ("SUPLEX_SESSION_PROCESS_OWNER", &retired_directory),
+        ]);
+        let mut current = tagged_sleep(&[
+            ("SUPLEX_TASK_PROCESS_OWNER", &worktree),
+            ("SUPLEX_SESSION_PROCESS_OWNER", &current_directory),
+        ]);
+        let result = (|| {
+            assert!(visible(
+                "SUPLEX_SESSION_PROCESS_OWNER",
+                &retired_directory,
+                &retired
+            ));
+            crate::runtimes::headless::stop_session(&retired_directory, None)?;
+            retired.wait()?;
+            assert!(current.try_wait()?.is_none());
+            io::Result::Ok(())
+        })();
+        let _ = retired.kill();
+        let _ = retired.wait();
+        let _ = current.kill();
+        let _ = current.wait();
+        fs::remove_dir_all(base).unwrap();
+        result.unwrap();
+    }
+
+    #[test]
+    fn dispatch_recovery_stops_the_old_execution_without_stopping_its_replacement() {
+        let runtime = std::env::temp_dir().join(format!("suplex-execution-{}", Uuid::new_v4()));
+        let launch = |generation: &str| {
+            tagged_sleep(&[
+                ("SUPLEX_SESSION_PROCESS_OWNER", &runtime),
+                ("SUPLEX_EXECUTION_PROCESS_OWNER", &runtime.join(generation)),
+            ])
+        };
+        let mut old = launch("old");
+        let mut replacement = launch("replacement");
+        let result = (|| {
+            assert!(visible(
+                "SUPLEX_EXECUTION_PROCESS_OWNER",
+                &runtime.join("old"),
+                &old
+            ));
+            crate::runtimes::headless::stop_execution(&runtime, "old")?;
+            old.wait()?;
+            assert!(replacement.try_wait()?.is_none());
+            io::Result::Ok(())
+        })();
+        let _ = old.kill();
+        let _ = old.wait();
+        let _ = replacement.kill();
+        let _ = replacement.wait();
+        result.unwrap();
+    }
+
+    /// TypeScript `RootController.recordWorkerResult` recovers Root inline.
+    /// One Rust sweep records the Worker result and dispatches the Root wake.
+    #[tokio::test]
+    async fn sweep_dispatches_the_root_wake_from_a_worker_result() {
+        let (base, database_path, task_id) = fixture_task();
+        let worktree = base.join("worktree");
+        fs::create_dir(&worktree).unwrap();
+        let repository = git2::Repository::init(&worktree).unwrap();
+        let tree = repository
+            .find_tree(repository.index().unwrap().write_tree().unwrap())
+            .unwrap();
+        let signature = git2::Signature::now("Suplex fixture", "fixture@example.invalid").unwrap();
+        let head = repository
+            .commit(Some("HEAD"), &signature, &signature, "fixture", &tree, &[])
+            .unwrap()
+            .to_string();
+        let codex = base.join("codex");
+        fs::write(&codex, "#!/bin/sh\ncat >/dev/null\nprintf '%s\\n' '{\"type\":\"thread.started\",\"thread_id\":\"inline-thread\"}' '{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":0,\"cached_input_tokens\":0,\"cache_write_input_tokens\":0,\"output_tokens\":0,\"reasoning_output_tokens\":0}}'\n").unwrap();
+        fs::set_permissions(&codex, fs::Permissions::from_mode(0o700)).unwrap();
+        let root = root_controller::prepare_root(&database_path, &task_id).unwrap();
+        let worker_turn = {
+            let mut database = SuplexDatabase::open(&database_path, OpenMode::ReadWrite).unwrap();
+            database.connection().execute(
+                "UPDATE suplex_task_controls SET worktree_json = ?1 WHERE task_id = ?2",
+                rusqlite::params![serde_json::json!({"path":worktree,"branch":"task-usage","baseSha":head,"headSha":head,"dirty":false}).to_string(), task_id],
+            ).unwrap();
+            database
+                .connection()
+                .execute(
+                    "UPDATE suplex_task_turns SET status = 'completed' WHERE session_id = ?1",
+                    [&root.id],
+                )
+                .unwrap();
+            root_session_store::launch_standard_worker(
+                &mut database,
+                &root,
+                "Implement the fixture",
+                "Worker prompt",
+                Some(&serde_json::json!({"kind":"worker","purpose":"implementation"})),
+                Utc::now(),
+            )
+            .unwrap();
+            let worker = root_session_store::current_worker(&database, &task_id)
+                .unwrap()
+                .unwrap();
+            root_session_store::pending_turns(&database, &worker.id)
+                .unwrap()
+                .remove(0)
+        };
+        let environment = HashMap::from([("PATH".into(), "/usr/bin:/bin".into())]);
+        let launched =
+            recover_prepared_worker(&database_path, &task_id, Some(&codex), &environment)
+                .await
+                .unwrap()
+                .unwrap();
+        assert!(launched.admission_observed);
+        let directory =
+            session_reader::session_directory(&database_path, &worker_turn.session_id).unwrap();
+        let exit = crate::runtimes::headless::turn_file(&directory, &worker_turn.id, "exit");
+        // Poll for up to 20 s. A loaded full-suite run starts processes slowly.
+        for _ in 0..400 {
+            if exit.exists() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        assert!(exit.exists());
+        sweep_task(&database_path, &base, &task_id, Some(&codex), &environment)
+            .await
+            .unwrap();
+        let database = SuplexDatabase::open(&database_path, OpenMode::ReadOnly).unwrap();
+        let (worker_status, wake_attempt): (String, Option<String>) = database
+            .connection()
+            .query_row(
+                "SELECT (SELECT status FROM suplex_task_turns WHERE id = ?1), (SELECT dispatch_attempt_json FROM suplex_task_turns WHERE session_id = ?2 AND prompt_text LIKE 'Worker result %')",
+                rusqlite::params![worker_turn.id, root.id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(worker_status, "completed");
+        assert!(wake_attempt.is_some());
+        fs::remove_dir_all(base).unwrap();
     }
 
     #[tokio::test]
@@ -1671,6 +2381,8 @@ mod tests {
                 complete: false,
                 estimated_cost_usd: 0.0,
             };
+            // TypeScript `replaceNativeUsage` replaces the task usage with the
+            // partial observation; missing native usage never blocks dispatch.
             assert_eq!(
                 replace_observed_usage(
                     &database_path,

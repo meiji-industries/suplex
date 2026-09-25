@@ -13,7 +13,7 @@ use crate::{
         database::{DatabaseResult, OpenMode, SuplexDatabase},
     },
     runtimes::codex::{session_reader, tool_evidence},
-    tasks::worktree,
+    tasks::{commands::TaskFailure, worktree},
 };
 
 use super::{
@@ -48,6 +48,10 @@ pub fn prepare_root(database_path: &Path, task_id: &str) -> DatabaseResult<RootS
 
 fn invalid(message: &'static str) -> Box<dyn std::error::Error> {
     std::io::Error::other(message).into()
+}
+
+fn not_ported(message: &'static str) -> Box<dyn std::error::Error> {
+    Box::new(TaskFailure::not_ported(message))
 }
 
 fn completed_worker_turn<'a>(turns: &'a [Value], session_id: &str) -> Option<&'a Value> {
@@ -119,7 +123,11 @@ fn public_control(mut control: Value) -> DatabaseResult<Value> {
     Ok(control)
 }
 
-fn assemble_observation(rows: RootObservationRows, worktree: Value) -> DatabaseResult<Value> {
+fn assemble_observation(
+    rows: RootObservationRows,
+    worktree: Value,
+    pull_request: Value,
+) -> DatabaseResult<Value> {
     let mut results = Map::new();
     for worker in &rows.workers {
         let id = worker["id"]
@@ -143,7 +151,6 @@ fn assemble_observation(rows: RootObservationRows, worktree: Value) -> DatabaseR
         .filter(|worker| worker["advisorRole"].is_null())
         .and_then(|worker| accepted_assignment(&rows.turns, worker))
         .unwrap_or(Value::Null);
-    let pull_request = rows.control["pullRequest"].clone();
     Ok(json!({
         "control": public_control(rows.control)?,
         "context": rows.context,
@@ -156,6 +163,7 @@ fn assemble_observation(rows: RootObservationRows, worktree: Value) -> DatabaseR
         "results": results,
         "worktree": worktree,
         "pullRequest": pull_request,
+        // Reached only after `delivery::operations::observe` succeeded.
         "github": {"available":true},
     }))
 }
@@ -175,10 +183,11 @@ pub fn observe(database_path: &Path, root: &RootIdentity) -> DatabaseResult<Valu
     };
     if rows.control["workflow"] != "standard" || rows.control["deliveryTarget"] != "local_worktree"
     {
-        return Err(invalid(
-            "Only Standard local-worktree Root observation is implemented",
+        return Err(not_ported(
+            "Only Standard local-worktree Root observation is ported",
         ));
     }
+    let pull_request = crate::delivery::operations::observe(&rows.control)?;
     let worktree = match rows.control["worktree"]["path"].as_str() {
         Some(path) => match worktree::observe_worktree(Path::new(path)) {
             Ok(observed) => json!({"headSha":observed.head_sha,"dirty":observed.dirty}),
@@ -186,7 +195,7 @@ pub fn observe(database_path: &Path, root: &RootIdentity) -> DatabaseResult<Valu
         },
         None => Value::Null,
     };
-    assemble_observation(rows, worktree)
+    assemble_observation(rows, worktree, pull_request)
 }
 
 /// Return task-owned image bytes to the Root MCP tool after a fresh Root check.
@@ -291,15 +300,15 @@ pub fn read_worker_evidence(
     Ok(Value::Object(output))
 }
 
+/// TypeScript `delegateWorker` (Standard path) checks no tool owner.
 pub fn delegate_worker(
     database_path: &Path,
     root: &RootIdentity,
-    owner_token: &str,
     assignment: &StandardWorkerAssignment,
 ) -> DatabaseResult<Value> {
     if assignment.purpose != "implementation" {
-        return Err(invalid(
-            "Only Standard implementation Worker delegation is implemented",
+        return Err(not_ported(
+            "Only Standard implementation Worker delegation is ported",
         ));
     }
     if assignment.plan.is_empty()
@@ -317,13 +326,12 @@ pub fn delegate_worker(
         &root.session_id,
         root.generation,
     )?;
-    root_session_store::assert_tool_owner(&database, &root.task_id, owner_token)?;
     let before = root_session_store::root_observation_rows(&database, &root.task_id)?;
     if before.control["workflow"] != "standard"
         || before.control["deliveryTarget"] != "local_worktree"
     {
-        return Err(invalid(
-            "Only Standard local-worktree Worker delegation is implemented",
+        return Err(not_ported(
+            "Only Standard local-worktree Worker delegation is ported",
         ));
     }
     let visual_evidence = before.context["configuration"]["visualEvidence"]
@@ -347,7 +355,6 @@ pub fn delegate_worker(
         &root.session_id,
         root.generation,
     )?;
-    root_session_store::assert_tool_owner(&database, &root.task_id, owner_token)?;
     let current_root = root_session_store::current_root(&database, &root.task_id)?
         .ok_or_else(|| invalid("current Root session is missing"))?;
     let worker = root_session_store::launch_standard_worker(
@@ -393,10 +400,10 @@ pub fn replace_worker(
     })
 }
 
+/// TypeScript `askHuman` checks no tool owner.
 pub fn ask_human(
     database_path: &Path,
     root: &RootIdentity,
-    owner_token: &str,
     question: &str,
     options: &Value,
 ) -> DatabaseResult<Value> {
@@ -407,7 +414,6 @@ pub fn ask_human(
         &root.session_id,
         root.generation,
     )?;
-    root_session_store::assert_tool_owner(&database, &root.task_id, owner_token)?;
     if !root_session_store::ask_human_for_root(
         &mut database,
         &root.task_id,
@@ -435,7 +441,7 @@ mod tests {
     #[test]
     fn absent_worktree_evidence_does_not_remove_task_context() {
         let rows = RootObservationRows {
-            control: json!({"workflow":"standard","deliveryTarget":"local_worktree","pullRequest":null,"workflowState":{"version":1,"reviews":[],"acceptedDelivery":null,"deliveryWait":null,"completion":null,"toolOwner":{"token":"private"}}}),
+            control: json!({"workflow":"standard","deliveryTarget":"local_worktree","status":"active","pullRequest":{"number":7},"workflowState":{"version":1,"reviews":[],"acceptedDelivery":null,"deliveryWait":null,"completion":null,"toolOwner":{"token":"private"}}}),
             context: json!({"configuration":{"visualEvidence":"off"},"images":[]}),
             dependencies: vec![],
             root: None,
@@ -444,9 +450,15 @@ mod tests {
             sessions: vec![],
             turns: vec![],
         };
-        let result =
-            assemble_observation(rows, json!({"state":"unknown","error":"missing worktree"}))
-                .unwrap();
+        let pull_request = crate::delivery::operations::observe(&rows.control).unwrap();
+        assert_eq!(pull_request, Value::Null);
+        let result = assemble_observation(
+            rows,
+            json!({"state":"unknown","error":"missing worktree"}),
+            pull_request,
+        )
+        .unwrap();
+        assert_eq!(result["pullRequest"], Value::Null);
         assert_eq!(result["worktree"]["state"], "unknown");
         assert!(
             result["control"]["workflowState"]

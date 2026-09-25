@@ -3,9 +3,10 @@
 use chrono::{DateTime, SecondsFormat, Utc};
 use rusqlite::{OptionalExtension, Row, params};
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
-use std::sync::Mutex;
+use std::collections::HashMap;
+use std::sync::{Mutex, PoisonError};
 use uuid::Uuid;
 
 use crate::coordination::root_prompts::{self, STANDARD_WORKER_RESULT_WAKE};
@@ -16,6 +17,7 @@ use crate::http::contracts::typed::tasks::{
 };
 use crate::identity::auth::js_trim;
 use crate::platform::database::{DatabaseResult, SuplexDatabase};
+use crate::platform::system_events;
 use crate::runtimes::process::inspect_process;
 use crate::shared::js_json;
 use crate::tasks::commands::{allowed_profile, read_profile};
@@ -307,7 +309,7 @@ fn timestamp(now: DateTime<Utc>) -> String {
     now.to_rfc3339_opts(SecondsFormat::Millis, true)
 }
 
-fn new_turn_id(now: DateTime<Utc>) -> DatabaseResult<String> {
+pub(crate) fn new_turn_id(now: DateTime<Utc>) -> DatabaseResult<String> {
     const BASE62: &[u8; 62] = b"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
     static COUNTER: Mutex<(i64, u64)> = Mutex::new((0, 0));
     let millis = now.timestamp_millis();
@@ -510,12 +512,110 @@ pub fn ask_human_for_root(
         return Err(std::io::Error::other("question_is_empty").into());
     }
     let options = serde_json::to_string(options)?;
-    database.transaction(true, |database| {
+    let changed = database.transaction(true, |database| {
         Ok(database.connection().execute(
             "UPDATE suplex_task_controls SET status = 'waiting_human', human_question = ?1, human_question_options_json = ?2, human_question_id = ?3, limit_pause_json = NULL, wake_at = NULL, workflow_state_json = json_set(workflow_state_json, '$.deliveryWait', json('null')), updated_at = ?4 WHERE task_id = ?5 AND status = 'active' AND root_session_id = ?6 AND EXISTS (SELECT 1 FROM suplex_task_sessions s WHERE s.id = ?6 AND s.task_id = suplex_task_controls.task_id AND s.kind = 'root' AND s.generation = ?7 AND s.is_current = 1 AND s.lifecycle <> 'cancelled')",
             params![question, options, Uuid::new_v4().to_string(), timestamp(now), task_id, session_id, generation],
         )? == 1)
-    })
+    })?;
+    if changed {
+        observe_lifecycle(database, task_id)?;
+    }
+    Ok(changed)
+}
+
+static OBSERVED_STATUSES: Mutex<Option<HashMap<String, String>>> = Mutex::new(None);
+static OBSERVED_WAITS: Mutex<Option<HashMap<String, String>>> = Mutex::new(None);
+
+/// Report a task status change once the transaction that wrote it commits.
+pub(crate) fn observe_lifecycle(
+    database: &mut SuplexDatabase,
+    task_id: &str,
+) -> DatabaseResult<()> {
+    if !system_events::enabled() {
+        return Ok(());
+    }
+    let status: String = database.connection().query_row(
+        "SELECT status FROM suplex_task_controls WHERE task_id = ?1",
+        [task_id],
+        |row| row.get(0),
+    )?;
+    let observed = OBSERVED_STATUSES
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner);
+    if observed.as_ref().and_then(|map| map.get(task_id)) == Some(&status) {
+        return Ok(());
+    }
+    drop(observed);
+    let task_id = task_id.to_owned();
+    database.after_commit(move || {
+        let mut observed = OBSERVED_STATUSES
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        let previous = observed
+            .get_or_insert_default()
+            .insert(task_id.clone(), status.clone());
+        if previous.as_ref() == Some(&status) {
+            return;
+        }
+        let mut event = json!({"type": "task_status", "taskId": task_id, "status": status});
+        if let Some(previous) = previous {
+            event["previousStatus"] = previous.into();
+        }
+        system_events::emit(event);
+    });
+    Ok(())
+}
+
+pub(crate) fn observe_admission(
+    database: &mut SuplexDatabase,
+    task_id: &str,
+    trigger: &str,
+    prerequisite_task_id: Option<&str>,
+) {
+    let mut event = json!({"type": "task_admitted", "taskId": task_id, "trigger": trigger});
+    if let Some(prerequisite) = prerequisite_task_id {
+        event["prerequisiteTaskId"] = prerequisite.into();
+    }
+    database.after_commit(move || system_events::emit(event));
+}
+
+/// A diagnostic read never changes queue admission.
+pub(crate) fn observe_queue_wait(database: &mut SuplexDatabase, task_id: &str) {
+    if !system_events::enabled() {
+        return;
+    }
+    let Ok((_, _, waiting_on)) = crate::tasks::response::task_dependencies(database, task_id)
+    else {
+        return;
+    };
+    let mut waits = waiting_on
+        .iter()
+        .map(|wait| json!({"id": wait["id"], "reason": wait["reason"]}))
+        .collect::<Vec<_>>();
+    waits.sort_by(|left, right| left["id"].as_str().cmp(&right["id"].as_str()));
+    let signature = Value::from(waits.clone()).to_string();
+    let observed = OBSERVED_WAITS
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner);
+    if observed.as_ref().and_then(|map| map.get(task_id)) == Some(&signature) {
+        return;
+    }
+    drop(observed);
+    let task_id = task_id.to_owned();
+    database.after_commit(move || {
+        let mut observed = OBSERVED_WAITS
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        if observed
+            .get_or_insert_default()
+            .insert(task_id.clone(), signature.clone())
+            == Some(signature)
+        {
+            return;
+        }
+        system_events::emit(json!({"type": "queue_wait", "taskId": task_id, "waits": waits}));
+    });
 }
 
 /// Cancel durable task intent and request native cleanup in one transaction.
@@ -525,7 +625,7 @@ pub fn cancel_task(
     task_id: &str,
     now: DateTime<Utc>,
 ) -> DatabaseResult<bool> {
-    database.transaction(true, |database| {
+    let cancelled = database.transaction(true, |database| {
         let time = timestamp(now);
         let changed = database.connection().execute(
             "UPDATE suplex_task_controls SET status = 'cancelled', wake_at = NULL, human_question = NULL, human_question_id = NULL, limit_pause_json = NULL, workflow_state_json = json_set(workflow_state_json, '$.deliveryWait', json('null')), updated_at = ?1 WHERE task_id = ?2 AND status <> 'delivered'",
@@ -543,7 +643,11 @@ pub fn cancel_task(
             params![time, task_id],
         )?;
         Ok(true)
-    })
+    })?;
+    if cancelled {
+        observe_lifecycle(database, task_id)?;
+    }
+    Ok(cancelled)
 }
 
 /// Answer only the current human question. Confirmed interrupted native work
@@ -633,7 +737,8 @@ pub fn answer_human(
             params![time, task_id],
         )?;
         Ok(())
-    })
+    })?;
+    observe_lifecycle(database, task_id)
 }
 
 /// Apply the current task-limit decision as one durable control and prompt update.
@@ -716,7 +821,8 @@ pub fn answer_task_limit(
             params![limits.budget_usd, limits.max_turns, time, task_id],
         )?;
         Ok(())
-    })
+    })?;
+    observe_lifecycle(database, task_id)
 }
 
 /// Reserve the next Standard Worker turn atomically with Root identity and
@@ -744,7 +850,9 @@ pub fn launch_standard_worker(
             |row| row.get(0),
         )?;
         if workflow != "standard" {
-            return Err(std::io::Error::other("standard_worker_requires_standard_workflow").into());
+            return Err(Box::new(crate::tasks::commands::TaskFailure::not_ported(
+                "Only Standard workflow Worker launch is ported",
+            )));
         }
         let active_turn: bool = database.connection().query_row(
             "SELECT EXISTS(SELECT 1 FROM suplex_task_sessions s JOIN suplex_task_turns t ON t.session_id = s.id AND t.generation = s.generation WHERE s.task_id = ?1 AND s.kind = 'worker' AND s.is_current = 1 AND t.status IN ('pending_prompt','prompted','unknown'))",
@@ -1266,7 +1374,7 @@ pub fn send_note(
     if note.is_empty() || note.encode_utf16().count() > 20_000 {
         return Err(std::io::Error::other("note_invalid").into());
     }
-    database.transaction(true, |database| {
+    let turn = database.transaction(true, |database| {
         let (status, archived, root_session_id, workflow_state): (String, bool, Option<String>, String) = database.connection().query_row(
             "SELECT c.status,t.archived_at IS NOT NULL,c.root_session_id,c.workflow_state_json FROM suplex_task_controls c JOIN suplex_tasks t ON t.id = c.task_id WHERE c.task_id = ?1",
             [task_id],
@@ -1333,7 +1441,9 @@ pub fn send_note(
             params![id, task_id, root.id, root.generation, hash, prompt, time],
         )?;
         database.connection().query_row("SELECT * FROM suplex_task_turns WHERE id = ?1", [&id], turn).map_err(Into::into)
-    })
+    })?;
+    observe_lifecycle(database, task_id)?;
+    Ok(turn)
 }
 
 pub fn pending_turns(database: &SuplexDatabase, session_id: &str) -> DatabaseResult<Vec<RootTurn>> {
@@ -1639,7 +1749,7 @@ pub fn mark_delivered(
     task_id: &str,
     now: DateTime<Utc>,
 ) -> DatabaseResult<Vec<String>> {
-    database.transaction(false, |database| {
+    let admitted = database.transaction(false, |database| {
         let previous: Option<String> = database.connection().query_row(
             "SELECT status FROM suplex_task_controls WHERE task_id = ?1",
             [task_id], |row| row.get(0),
@@ -1666,24 +1776,18 @@ pub fn mark_delivered(
                 )?;
                 if !queued { continue; }
             }
-            let blocked: bool = database.connection().query_row(
-                "SELECT EXISTS(SELECT 1 FROM suplex_task_dependencies d LEFT JOIN suplex_task_controls c ON c.task_id = d.depends_on_task_id WHERE d.task_id = ?1 AND COALESCE(c.status,'backlog') <> 'delivered')",
-                [&dependent], |row| row.get(0),
-            )?;
-            if blocked { continue; }
-            match repository::admit_queued(database, &dependent, now) {
-                Ok(true) => { admitted.push(dependent); continue; }
-                Ok(false) => {}
-                Err(error) if error.is::<PullRequestOwned>() => continue,
-                Err(error) => return Err(error),
+            if repository::reconcile_dependency_release(database, &dependent, now)? {
+                admitted.push(dependent);
             }
-            database.connection().execute(
-                "UPDATE suplex_task_controls SET wake_at = ?1, updated_at = ?1 WHERE task_id = ?2 AND status = 'active'",
-                params![time, dependent],
-            )?;
         }
         Ok(admitted)
-    })
+    })?;
+    observe_lifecycle(database, task_id)?;
+    for id in &admitted {
+        observe_lifecycle(database, id)?;
+        observe_admission(database, id, "prerequisite completion", Some(task_id));
+    }
+    Ok(admitted)
 }
 
 pub fn retire_delivered_sessions(
@@ -1725,6 +1829,220 @@ pub fn wake_idle_root(
         Ok(Some(database.connection().query_row(
             "SELECT * FROM suplex_task_turns WHERE id = ?1", [&id], turn,
         )?))
+    })
+}
+
+// WP3a admission sweep
+
+/// TypeScript `TaskControlStore.admitQueued()` without ids: the sweep over
+/// every ready queued task that runs from host startup on. A task whose pull
+/// request another task owns stays queued and the next sweep retries.
+pub fn admit_queued(
+    database: &mut SuplexDatabase,
+    now: DateTime<Utc>,
+) -> DatabaseResult<Vec<String>> {
+    if ready_queued_task_ids(database)?.is_empty() {
+        return Ok(Vec::new());
+    }
+    let admitted = database.transaction(true, |database| {
+        let mut admitted = Vec::new();
+        for task_id in ready_queued_task_ids(database)? {
+            match repository::admit_queued(database, &task_id, now) {
+                Ok(true) => admitted.push(task_id),
+                Ok(false) => {}
+                Err(error) if error.is::<PullRequestOwned>() => {}
+                Err(error) => return Err(error),
+            }
+        }
+        Ok(admitted)
+    })?;
+    for id in &admitted {
+        observe_lifecycle(database, id)?;
+        observe_admission(database, id, "scheduler sweep", None);
+    }
+    Ok(admitted)
+}
+
+/// TypeScript `readyQueuedTaskIds` without a prerequisite filter.
+fn ready_queued_task_ids(database: &SuplexDatabase) -> DatabaseResult<Vec<String>> {
+    let mut statement = database.connection().prepare(
+        "SELECT t.id FROM suplex_tasks t JOIN suplex_task_controls c ON c.task_id = t.id WHERE c.status = 'queued' AND t.archived_at IS NULL ORDER BY t.created_at, t.id",
+    )?;
+    let ids = statement
+        .query_map([], |row| row.get::<_, String>(0))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    let mut ready = Vec::new();
+    for id in ids {
+        if repository::prerequisites_complete(database, &id)? {
+            ready.push(id);
+        }
+    }
+    Ok(ready)
+}
+
+/// TypeScript `TaskLimitStore.reconcilePause`: resume a limit-paused task
+/// when observed usage is within its current limits, or refresh the pause.
+pub fn reconcile_task_limit_pause(
+    database: &mut SuplexDatabase,
+    task_id: &str,
+    question_id: &str,
+    usage: TaskLimitUsage,
+    now: DateTime<Utc>,
+) -> DatabaseResult<bool> {
+    database.transaction(true, |database| {
+        let row: Option<(Option<f64>, Option<i64>, String)> = database.connection().query_row(
+            "SELECT budget_usd, max_turns, limit_pause_json FROM suplex_task_controls WHERE task_id = ?1 AND human_question_id = ?2 AND status = 'waiting_human' AND limit_pause_json IS NOT NULL",
+            params![task_id, question_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        ).optional()?;
+        let Some((budget_usd, max_turns, raw_pause)) = row else { return Ok(false); };
+        let _: PersistedLimitPause = serde_json::from_str(&raw_pause)?;
+        let defaults = database.connection().query_row(
+            "SELECT default_budget_usd, default_max_turns FROM suplex_environment_settings WHERE id = 'host'",
+            [], |row| Ok(TaskLimits { budget_usd: row.get(0)?, max_turns: row.get(1)? }),
+        ).optional()?.unwrap_or(TaskLimits { budget_usd: 15.0, max_turns: 40 });
+        let limits = TaskLimits { budget_usd: budget_usd.unwrap_or(defaults.budget_usd), max_turns: max_turns.unwrap_or(defaults.max_turns) };
+        if limits.budget_usd > 0.0 && usage.estimated_cost_usd.is_none() { return Ok(false); }
+        let admitted_turns: i64 = database.connection().query_row(
+            "SELECT COUNT(*) FROM suplex_task_turns WHERE task_id = ?1 AND prompted_at IS NOT NULL",
+            [task_id], |row| row.get(0),
+        )?;
+        let time = timestamp(now);
+        let hit_budget = limits.budget_usd > 0.0 && usage.estimated_cost_usd.is_some_and(|cost| cost >= limits.budget_usd);
+        let hit_turns = limits.max_turns > 0 && admitted_turns >= limits.max_turns;
+        if !hit_budget && !hit_turns {
+            return Ok(database.connection().execute(
+                "UPDATE suplex_task_controls SET status = 'active', limit_pause_json = NULL, human_question = NULL, human_question_id = NULL, human_question_options_json = '[]', wake_at = ?1, updated_at = ?1 WHERE task_id = ?2 AND status = 'waiting_human' AND human_question_id = ?3",
+                params![time, task_id, question_id],
+            )? == 1);
+        }
+        // ponytail: same evaluation as `claim_prompt`; share one helper once both packages merge.
+        let reason = match (hit_budget, hit_turns) { (true, true) => "budget_and_turns", (true, false) => "budget", _ => "turns" };
+        let budget_allowance = if defaults.budget_usd > 0.0 { defaults.budget_usd } else { limits.budget_usd };
+        let turn_allowance = if defaults.max_turns > 0 { defaults.max_turns } else { limits.max_turns };
+        let proposed = TaskLimits {
+            budget_usd: if hit_budget { suggested_budget(usage.estimated_cost_usd.unwrap_or(0.0) + budget_allowance, usage.estimated_cost_usd.unwrap_or(0.0)) } else { limits.budget_usd },
+            max_turns: if hit_turns { admitted_turns + turn_allowance } else { limits.max_turns },
+        };
+        let observed = PersistedLimitUsage { estimated_cost_usd: usage.estimated_cost_usd, admitted_turns };
+        let pause = js_json::stringify(&serde_json::json!({ "kind": "task_limit", "reason": reason, "limits": limits, "usage": observed, "proposedLimits": proposed }));
+        if pause != js_json::stringify(&serde_json::from_str(&raw_pause)?) {
+            database.connection().execute(
+                "UPDATE suplex_task_controls SET limit_pause_json = ?1, human_question = ?2, updated_at = ?3 WHERE task_id = ?4 AND status = 'waiting_human' AND human_question_id = ?5",
+                params![pause, task_limit_question(reason, limits, proposed, observed), time, task_id, question_id],
+            )?;
+        }
+        Ok(false)
+    })
+}
+
+/// TypeScript `TaskControlStore.requireExecutionCleanup`: a current session
+/// whose execution Suplex cannot identify asks a human to stop its commands.
+pub fn require_execution_cleanup(
+    database: &mut SuplexDatabase,
+    turn: &RootTurn,
+    now: DateTime<Utc>,
+) -> DatabaseResult<()> {
+    database.transaction(false, |database| {
+        let current: bool = database.connection().query_row(
+            "SELECT EXISTS(SELECT 1 FROM suplex_task_sessions s JOIN suplex_task_controls c ON c.task_id = s.task_id WHERE s.id = ?1 AND s.generation = ?2 AND s.is_current = 1 AND s.lifecycle <> 'cancelled' AND c.status = 'active' AND (s.kind = 'worker' OR c.root_session_id = s.id))",
+            params![turn.session_id, turn.generation], |row| row.get(0),
+        )?;
+        if !current { return Ok(()); }
+        let changed = database.connection().execute(
+            "UPDATE suplex_task_controls SET status = 'waiting_human', human_question = ?1, human_question_options_json = '[]', human_question_id = ?2, limit_pause_json = NULL, wake_at = NULL, workflow_state_json = json_set(workflow_state_json, '$.deliveryWait', json('null')), updated_at = ?3 WHERE task_id = ?4 AND status = 'active'",
+            params!["The agent stopped during a tool call. A command can still be active in the worktree. Stop those commands before you continue. Describe what you checked, then confirm that all commands from this session have stopped.", Uuid::new_v4().to_string(), timestamp(now), turn.task_id],
+        )?;
+        if changed != 1 { return Err(std::io::Error::other("task_not_active").into()); }
+        database.connection().execute(
+            "UPDATE suplex_task_controls SET recovery_turn_id = ?1 WHERE task_id = ?2",
+            params![turn.id, turn.task_id],
+        )?;
+        Ok(())
+    })
+}
+
+pub const IDLE_ROOT_PROMPT: &str = "Observe the current task, worktree, and GitHub state and continue toward the delivery target. Adopt out-of-band progress. If checks or another external operation are pending, report what you are waiting for. Ask a specific human question only if a necessary decision or external failure requires it.";
+
+/// TypeScript `withCurrentDependencyStatus`.
+pub fn with_current_dependency_status(prompt: &str, dependencies: &[Value]) -> String {
+    let base = without_current_dependency_status(prompt);
+    if dependencies.is_empty() {
+        return base.to_owned();
+    }
+    let list = dependencies
+        .iter()
+        .map(|dependency| {
+            format!(
+                "{} \"{}\" ({})",
+                dependency["id"].as_str().unwrap_or_default(),
+                dependency["title"].as_str().unwrap_or_default(),
+                dependency["status"].as_str().unwrap_or_default()
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!(
+        "{base}\n\n[Suplex prerequisite status]\nCurrent prerequisites: {list}. Prerequisites constrain delivery ordering. Suplex resumes native work when all are delivered. Observe actual Git and GitHub state before integration.\n[/Suplex prerequisite status]"
+    )
+}
+
+/// TypeScript `TaskControlStore.coalesceUnadmittedIdleRootTurn`: an idle
+/// Root wake is dropped when real Root work is also pending.
+pub fn coalesce_unadmitted_idle_root_turn(
+    database: &mut SuplexDatabase,
+    turn_id: &str,
+    now: DateTime<Utc>,
+) -> DatabaseResult<bool> {
+    let idle = |prompt: &str| without_current_dependency_status(prompt) == IDLE_ROOT_PROMPT;
+    database.transaction(false, |database| {
+        let candidate: Option<(String, String, String)> = database.connection().query_row(
+            "SELECT t.task_id, t.session_id, t.prompt_text FROM suplex_task_turns t JOIN suplex_task_sessions s ON s.id = t.session_id WHERE t.id = ?1 AND t.status = 'pending_prompt' AND s.kind = 'root'",
+            [turn_id], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        ).optional()?;
+        let Some((task_id, session_id, prompt)) = candidate else { return Ok(false); };
+        if !idle(&prompt) { return Ok(false); }
+        let mut statement = database.connection().prepare(
+            "SELECT prompt_text FROM suplex_task_turns WHERE task_id = ?1 AND session_id = ?2 AND id <> ?3 AND status = 'pending_prompt'",
+        )?;
+        let others = statement
+            .query_map(params![task_id, session_id, turn_id], |row| row.get::<_, String>(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        drop(statement);
+        if !others.iter().any(|other| !idle(other)) { return Ok(false); }
+        Ok(database.connection().execute(
+            "UPDATE suplex_task_turns SET status = 'cancelled', updated_at = ?1 WHERE id = ?2 AND status = 'pending_prompt'",
+            params![timestamp(now), turn_id],
+        )? == 1)
+    })
+}
+
+/// TypeScript `TaskControlStore.refreshPendingRootDependencyContext`: an
+/// unsent Root prompt carries the current prerequisite status.
+pub fn refresh_pending_root_dependency_context(
+    database: &mut SuplexDatabase,
+    turn_id: &str,
+    now: DateTime<Utc>,
+) -> DatabaseResult<RootTurn> {
+    database.transaction(false, |database| {
+        let current = database.connection().query_row(
+            "SELECT t.* FROM suplex_task_turns t JOIN suplex_task_sessions s ON s.id = t.session_id WHERE t.id = ?1 AND t.status = 'pending_prompt' AND s.kind = 'root'",
+            [turn_id], turn,
+        ).optional()?;
+        if let Some(current) = current {
+            let dependencies = root_observation_rows(database, &current.task_id)?.dependencies;
+            let prompt = with_current_dependency_status(&current.prompt_text, &dependencies);
+            if prompt != current.prompt_text {
+                let hash = format!("{:x}", Sha256::digest(prompt.as_bytes()));
+                database.connection().execute(
+                    "UPDATE suplex_task_turns SET prompt_text = ?1, prompt_hash = ?2, updated_at = ?3 WHERE id = ?4 AND status = 'pending_prompt'",
+                    params![prompt, hash, timestamp(now), turn_id],
+                )?;
+            }
+        }
+        Ok(database.connection().query_row(
+            "SELECT * FROM suplex_task_turns WHERE id = ?1", [turn_id], turn,
+        )?)
     })
 }
 
@@ -2034,6 +2352,92 @@ mod tests {
         assert_eq!(
             current_worker(&database, &task.id).unwrap().unwrap().id,
             second["id"].as_str().unwrap()
+        );
+        drop(database);
+        let _ = std::fs::remove_file(&filename);
+        let _ = std::fs::remove_file(filename.with_extension("sqlite-wal"));
+        let _ = std::fs::remove_file(filename.with_extension("sqlite-shm"));
+    }
+
+    #[test]
+    fn lifecycle_events_follow_start_queue_wait_and_prerequisite_release() {
+        let filename =
+            std::env::temp_dir().join(format!("suplex_events_{}.sqlite", Uuid::new_v4()));
+        let logs = crate::platform::system_events::install_for_test();
+        let now = DateTime::parse_from_rfc3339("2026-09-25T12:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let mut database = SuplexDatabase::open(&filename, OpenMode::Migrate).unwrap();
+        let user = auth::development_sign_in(&mut database, now).unwrap().user;
+        database.connection().execute("INSERT INTO suplex_companies (id,name,status,created_at) VALUES ('event_company','Events','active',?1)", [timestamp(now)]).unwrap();
+        database.connection().execute("INSERT INTO suplex_projects (id,company_id,name,repository_path,worktree_root,repository_identity,base_branch,setup_command,verification_command,root_profile_id,worker_profile_id,agent_task_policy_json,created_at,updated_at) VALUES ('event_project','event_company','Events','/tmp/event-repo','/tmp/event-worktrees',NULL,'main','','','root','worker','{}',?1,?1)", [timestamp(now)]).unwrap();
+        let first = PreparedTask {
+            id: repository::new_task_id(),
+            company_id: "event_company".into(),
+            project_id: "event_project".into(),
+            title: "First".into(),
+            description: "".into(),
+            configuration: serde_json::json!({"repository":"owner/repo","branch":"task-first","baseBranch":"main","baselineSha":"head"}),
+            idempotency_key: "event-first".into(),
+            request_hash: "event-first-hash".into(),
+            creator: TaskCreator::User(user.id),
+            delivery_target: "local_worktree".into(),
+            delivery_intent: serde_json::json!({"repository":"owner/repo","headBranch":"task-first","baseBranch":"main","baselineSha":"head","pullRequestNumber":null}),
+            root_profile: serde_json::json!({"profileId":"root","provider":"codex","model":"test","reasoningLevel":"medium","serviceTier":"default"}),
+            worker_profile: serde_json::json!({"profileId":"worker","provider":"codex","model":"test","reasoningLevel":"medium","serviceTier":"default"}),
+            advisor_profiles: serde_json::json!({}),
+            issue: None,
+            start_queued: true,
+            copied_from_task_id: None,
+            depends_on: vec![],
+        };
+        let a = repository::create(&mut database, &first, now)
+            .unwrap()
+            .task
+            .id;
+        let second = PreparedTask {
+            id: repository::new_task_id(),
+            idempotency_key: "event-second".into(),
+            request_hash: "event-second-hash".into(),
+            start_queued: false,
+            depends_on: vec![a.clone()],
+            ..first.clone()
+        };
+        let b = repository::create(&mut database, &second, now)
+            .unwrap()
+            .task
+            .id;
+        repository::start(&mut database, &b, now).unwrap();
+        assert_eq!(
+            mark_delivered(&mut database, &a, now).unwrap(),
+            vec![b.clone()]
+        );
+        let events = std::fs::read_to_string(logs.join("system.log"))
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str::<Value>(line).unwrap())
+            .filter(|event| event["taskId"] == a.as_str() || event["taskId"] == b.as_str())
+            .map(|mut event| {
+                let fields = event.as_object_mut().unwrap();
+                for key in ["schemaVersion", "time", "eventId", "pid"] {
+                    assert!(fields.remove(key).is_some());
+                }
+                event
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            events,
+            vec![
+                json!({"type":"task_status","taskId":a,"status":"queued"}),
+                json!({"type":"task_status","taskId":a,"status":"active","previousStatus":"queued"}),
+                json!({"type":"task_admitted","taskId":a,"trigger":"scheduler sweep"}),
+                json!({"type":"task_status","taskId":b,"status":"backlog"}),
+                json!({"type":"task_status","taskId":b,"status":"queued","previousStatus":"backlog"}),
+                json!({"type":"queue_wait","taskId":b,"waits":[{"id":a,"reason":"prerequisite_running"}]}),
+                json!({"type":"task_status","taskId":a,"status":"delivered","previousStatus":"active"}),
+                json!({"type":"task_status","taskId":b,"status":"active","previousStatus":"queued"}),
+                json!({"type":"task_admitted","taskId":b,"trigger":"prerequisite completion","prerequisiteTaskId":a}),
+            ]
         );
         drop(database);
         let _ = std::fs::remove_file(&filename);
@@ -2567,6 +2971,17 @@ mod tests {
                 .status,
             "active"
         );
+        // As in TypeScript, the released dependent is woken by its committed
+        // wake_at; the host's scheduled scan admits it without a notification.
+        let due: bool = database
+            .connection()
+            .query_row(
+                "SELECT wake_at <= ?1 FROM suplex_task_controls WHERE task_id = ?2",
+                params![timestamp(now), waiting.task.id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(due);
         assert!(
             mark_delivered(&mut database, &created.task.id, now)
                 .unwrap()

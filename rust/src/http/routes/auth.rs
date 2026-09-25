@@ -547,14 +547,14 @@ async fn sign_out(State(state): State<AppState>, headers: HeaderMap) -> Response
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use std::sync::atomic::{AtomicU64, Ordering};
 
     use super::*;
     use crate::platform::database::{OpenMode, SuplexDatabase};
     use axum::body::to_bytes;
 
-    fn state() -> (AppState, std::path::PathBuf) {
+    pub(crate) fn state() -> (AppState, std::path::PathBuf) {
         static NEXT_DATABASE: AtomicU64 = AtomicU64::new(0);
         let filename = std::env::temp_dir().join(format!(
             "suplex_auth_route_{}_{}_{}.sqlite",

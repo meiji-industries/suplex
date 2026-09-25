@@ -70,6 +70,7 @@ cargo test
 
 [tasks."test:parity"]
 run = '''
+pnpm exec tsx scripts/rust-route-coverage.ts
 pnpm exec tsx tests/parity/generate.ts
 pnpm exec tsx tests/parity/hash-bytes/generate.ts
 cd rust
@@ -77,6 +78,33 @@ unset RUSTUP_TOOLCHAIN
 cargo test --test contract_parity --test hash_bytes --test project_dependency_parity
 cargo test --lib signed_fresh_passkey_survives_reopen_and_updates_counter -- --ignored --nocapture
 cargo test --lib signed_fresh_passkey_over_isolated_tcp_listener -- --ignored --nocapture
+'''
+
+[tasks."test:journey:rust"]
+description = "Run the four deterministic Codex browser journeys against the Rust backend"
+run = '''
+set -e
+[ -f dist/web/suplex-ui.js ] || pnpm exec vite build
+(cd rust && unset RUSTUP_TOOLCHAIN && cargo build --bin suplex)
+export SUPLEX_RUST_BIN="${CARGO_TARGET_DIR:-$PWD/rust/target}/debug/suplex"
+export SUPLEX_BROWSER_BACKEND=rust SUPLEX_DETERMINISTIC_CODEX_RUN=1
+for phase in deliver answer restart cancel; do
+  SUPLEX_DETERMINISTIC_PHASE=$phase pnpm exec tsx tests/interop/real-codex-standard.ts
+done
+'''
+
+[tasks."test:interop:rust"]
+description = "Run the Rust interop scripts other than the Codex journey"
+run = '''
+set -e
+[ -f dist/web/suplex-ui.js ] || pnpm exec vite build
+(cd rust && unset RUSTUP_TOOLCHAIN && cargo build --bin suplex --features github-test-endpoint)
+export SUPLEX_RUST_BIN="${CARGO_TARGET_DIR:-$PWD/rust/target}/debug/suplex"
+export SUPLEX_BROWSER_BACKEND=rust
+for script in root-delivery-inspection root-image root-worker-evidence root-worker-replacement task-timeline; do
+  echo "[interop] $script" >&2
+  pnpm exec tsx --import ./tests/helpers/interop-deadline.ts tests/interop/$script.ts
+done
 '''
 
 [tasks.down]

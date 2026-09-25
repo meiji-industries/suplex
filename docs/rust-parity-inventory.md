@@ -4,109 +4,105 @@ Baseline: TypeScript backend at `a57a47f5` (2026-09-24). This is a development s
 
 States: `not started` means no complete Rust equivalent; `ported` means implementation exists with verification outstanding; `verified` means the relevant parity and integration checks pass. Tests for a smaller helper do not verify its containing route or workflow. The [PRD](plans/2026-09-24-experimental-rust-backend.md) defines release criteria; keep completion and test evidence here.
 
-The table lists all 238 backend TypeScript modules present at the baseline, including contracts, routes, and each provider adapter. Contract extractions already committed during M0 are tracked with their source rows; no further extraction is required. Shared SQL migrations remain unchanged. Inventory introduced in `ea44af63`.
+The table lists all 238 backend TypeScript modules present at the baseline (117 not started, 109 ported, 12 verified), including contracts, routes, and each provider adapter. Contract extractions already committed during M0 are tracked with their source rows; no further extraction is required. Shared SQL migrations remain unchanged. Inventory introduced in `ea44af63`.
 
-Current sequence: complete one Codex Standard task through the UI with cancellation and restart recovery. A deterministic Codex process stand-in now completes the React journey through real Rust Root MCP, Worker Git changes/tests/commit and local delivery; UI answers, backend restart with retained native execution, and cancellation also pass. Successful real Codex execution remains pending. History updates, reconnect and shutdown pass the TS oracle. High-level WebAuthn and typed requests replace the custom compatibility machinery; only the JS hash serializer remains. The GitHub credential/API layer passes controlled tests; device sign-in and real private access are next. Wider parity and packaging remain unfinished.
+Current sequence: follow the work packages in [the Rust backend 9/10 plan](plans/2026-09-25-rust-backend-to-nine.md).
 
-Request corpus: 1,141 fixtures across 95 request exports plus 23 stored-project cases across three exports. Implemented checks cover 522 cases across 43 schemas, all stored-project cases, seven hash fixtures, and separate task DTO checks for 60 TaskBody, nine TaskIdParams, 27 TaskAnswer, 16 TaskDetails, 13 TaskRename, 15 TaskNote and 13 TaskWorkerReplacement cases. Unused validators remain deferred with their routes. Unit evidence is recorded below; final commit snapshots use separate Cargo targets. The TypeScript full suite baseline is 1,613/1,623: seven failures reproduce at pre-port `a57a47f5`, and three Devin failures pass focused reruns. Hosted CI, packages, full task execution, switching, and the eight-hour run remain unverified.
-
-`f59366a5`, `0f3f3065`, `eb1df757`: the [browser helper](../tests/helpers/native-browser.ts) supports isolated Rust listeners and preserves failed fixtures; TypeScript remains default. The [on-demand Standard journey](../tests/interop/real-codex-standard.ts) uses an explicit deterministic Codex stand-in. Continuation source `4844ddc62a87f2150436aefd6b9272080f97297d` passes Node syntax, TS checks and all 11 default browser tests across seven files. Isolated answer, restart and cancel phases pass: actual MCP question and UI answer lead to delivery; backend restart preserves Worker PID/start, turn and dispatch count through completion; cancellation stops owned groups without a Worker edit or commit. Completed Worker chat is visible. Runs used the copied binary from source `3e44f1814b9ba626b05b1192c8d749e5241d6dc0`, before the Timeline port: [answer](../.context/deterministic-codex-answer/delivered.png), [restart](../.context/deterministic-codex-restart/delivered.png), [cancel](../.context/deterministic-codex-cancel/cancelled.png). A later test-startup cleanup change passed static checks. This is Node stand-in process/MCP/UI evidence, not real-model or no-Node packaging proof.
-
-`ec13982e`: exact host/evidence/read source tree `b4acd01aaa32f9f4e666e1472dd4788ba3836e8a` passes 120 library tests, three integration tests, fmt and all-target Clippy. Four Node-backed tests are ignored by the default run; the two task-read/template oracles pass explicitly. The real MCP Worker-evidence/local-delivery comparison also passes. These compare complete parsed JSON with TypeScript on shared fixtures, not response-schema output. Actual UI create/start admitted a native Codex Root, but the signed-in ChatGPT account rejected `gpt-6-sol` with HTTP 400; the host persisted failure and moved the task to `waiting_human`. No real Worker or delivery was observed. A supported test-model choice, cancellation and full restart recovery remain pending.
+Request corpus: 1,141 fixtures across 95 request exports in `tests/parity/`; `rust/tests/contract_parity.rs` checks every schema that Rust implements.
 
 | TypeScript source | Status | Rust equivalent and evidence |
 |---|---|---|
-| [app.ts](../src/app.ts) | not started | Cargo/CI, isolated startup, SQLite and sign-in assets pass local checks. `ec13982e` starts recovery after listener bind and drains in-flight work while retaining native sessions. History sockets now close with source code 1012 on shutdown. Full route wiring remains pending. |
-| [cli.ts](../src/cli.ts) | not started | Real `mcp advisor` and `mcp root` dispatch run before installation/database/listener startup and pass staged-binary stdio probes. Other operational commands remain pending. |
+| [app.ts](../src/app.ts) | ported | `rust/src/http/mod.rs` (`router`) and `rust/src/main.rs`; routes without a port return 501. Test: `committed_callback_can_reenter_shared_database`. |
+| [cli.ts](../src/cli.ts) | ported | `rust/src/main.rs` dispatches `mcp advisor` and `mcp root` only; other commands are absent. |
 | [coordination/advisor-evidence.ts](../src/coordination/advisor-evidence.ts) | not started | |
-| [coordination/advisor-report-bridge.ts](../src/coordination/advisor-report-bridge.ts) | ported | `31ce45ae`: `rust/src/coordination/advisor_bridge.rs` passes 86 library tests, three integration tests, fmt and all-target Clippy; focused Advisor 4/4 and TS report 10/10 pass. Actual stdio checks cover token denial, initialize/list, invalid report without capture, exact valid result and 0600 file. Role/schema, JS trimming, numeric output and binding writer match source. Native Advisor launch composition remains pending. |
-| [coordination/advisor-report.ts](../src/coordination/advisor-report.ts) | not started | `1c24c183`: existing schemas extracted with compatible exports and passing TypeScript checks; Rust service remains pending |
-| [coordination/bridge-auth.ts](../src/coordination/bridge-auth.ts) | ported | `rust/src/coordination/bridge_auth.rs` validates source UUID grammar and compares original token bytes with `subtle::ConstantTimeEq`; no token values enter errors. Advisor and Root wrong-token stdio checks pass. Root bindings use private directories and 0600 files. |
-| [coordination/controller-reports.ts](../src/coordination/controller-reports.ts) | not started | `tasks::worktree::observe_worktree` reads live Git HEAD and dirty state for Root observation. A real worktree check passes; it adds no comparison against saved branch intent. Report interpretation remains pending. |
-| [coordination/coordinator-replacement-contracts.ts](../src/coordination/coordinator-replacement-contracts.ts) | ported | Named strict replacement DTO passes focused validation fixtures; unsupported provider/workflow branches remain explicit. |
-| [coordination/coordinator-replacement.ts](../src/coordination/coordinator-replacement.ts) | not started | Standard Codex replacement source `919343e5f79256dc2cbd2a04ccdf594ab03e88bd` passes 151 library tests (seven ignored), three integrations, fmt and all-target Clippy. A same-database TypeScript oracle compares both replacement prompts and hashes, including two terminal Root outcomes, an accepted numeric limit decision, carried unanswered question and second replacement. Direct-handler responses match raw TypeScript TaskResponse. Reopen and fake native checks preserve current delegates and stop the retired Root before new admission; other providers/workflows and status events remain pending. |
-| [coordination/human-question.ts](../src/coordination/human-question.ts) | not started | |
-| [coordination/persistence/row-values.ts](../src/coordination/persistence/row-values.ts) | not started | |
-| [coordination/persistence/session-operations.ts](../src/coordination/persistence/session-operations.ts) | not started | |
-| [coordination/root-bridge.ts](../src/coordination/root-bridge.ts) | ported | `993e8dc`: actual staged binary opens the same SQLite controller directly and passes token denial, initialize/list, delegate, conflicting delegate, observe and ask-human checks. Detached handler cancellation cannot strand the tool-owner claim. Final unit passes 98 library tests, three integration tests, fmt, all-target Clippy and six focused Root tests; two Node signer tests remain explicitly ignored in this run. |
-| [coordination/root-contracts.ts](../src/coordination/root-contracts.ts) | not started | Named Serde operation DTOs cover observe, Standard planned delegation and ask-human, including valid optional Advisor/candidate references. The advertised schema remains flat as in TS. Remaining operations follow their implementations. |
-| [coordination/root-controller.ts](../src/coordination/root-controller.ts) | not started | Initial observe matches complete TS JSON on the same database. Standard delegation, Worker evidence and local completion pass actual MCP checks. `read_image` returns exact text/image content for TS-created artifacts, rejects foreign/corrupt images and rechecks current Root after reading. Owner claims survive dropped handler futures. Lifecycle events and remaining workflows/operations are pending. |
-| [coordination/root-session-store.ts](../src/coordination/root-session-store.ts) | not started | `76ff7e2b`, `ec13982e`, `ec4106de`: admission, ownership, terminal persistence, Worker wake and cancellation/recovery. Answers and limits atomically persist source prompts, state and wake. Human notes retain Root/native identity across reopen; delivered follow-up records delivery history, clears completion and revives the same Root without replaying its initial prompt. Source prompt bytes/hashes and after-commit ordering pass. Remaining workflows and status-event/analytics hooks are pending. |
-| [coordination/session-recovery.ts](../src/coordination/session-recovery.ts) | not started | Standard recovery checks cover claim-before-launch crashes, admitted-child reopen without replay, native exit before terminal persistence, idempotent Worker receipt/wake and delivery retry. Cancellation after database reopen stops a real owned child. Real Codex recovery remains pending. TS also skips worktree cleanup when no outstanding session stops; that source lifecycle limitation is retained and unverified for escaped processes. |
-| [coordination/task-agent-selection-contracts.ts](../src/coordination/task-agent-selection-contracts.ts) | not started | |
-| [coordination/task-agent-selection.ts](../src/coordination/task-agent-selection.ts) | not started | |
-| [coordination/worker-environment.ts](../src/coordination/worker-environment.ts) | not started | `51331fec`: `rust/src/runtimes/git_guard.rs` preserves guarded Git/GitHub commands, configured Git lookup, private executable files and cleanup. Real Git permits status and denies reset/branch deletion; a fake gh permits PR reads and denies mutation. The isolated staged unit passes 93 library tests, three integration tests, fmt and all-target Clippy. Full native launch composition remains pending. |
-| [coordination/worker-replacement-contracts.ts](../src/coordination/worker-replacement-contracts.ts) | verified | Strict Serde/Garde request DTO passes all 13 existing Zod fixtures; Root MCP omits the user-only profile override and passes parser/stdio checks. |
-| [coordination/worker-replacement.ts](../src/coordination/worker-replacement.ts) | not started | Standard Codex replacement source `d5bb332c1399659a52458c397761d5e103cce215`: 149 library tests (seven ignored), three integrations, fmt and all-target Clippy pass. Actual Root MCP matches TS prompt/hash and replay; a direct-handler raw TaskResponse oracle passes. SQLite reopen preserves handoff and readiness; native host checks stop the outgoing Worker before fresh admission. Other providers/workflows remain pending. |
-| [coordination/worker-turn-evidence.ts](../src/coordination/worker-turn-evidence.ts) | not started | `rust/src/coordination/worker_evidence.rs`: index, tail, head and cursor reads through actual MCP match complete TS results on the same database/native log. UTF-16 offsets are preserved; a slice splitting a surrogate pair uses replacement text under the documented lone-surrogate exception. |
+| [coordination/advisor-report-bridge.ts](../src/coordination/advisor-report-bridge.ts) | ported | `rust/src/coordination/advisor_bridge.rs`; native Advisor launch is absent. Test: `mcp_stdio_transport_lists_and_calls_the_assigned_tool`. |
+| [coordination/advisor-report.ts](../src/coordination/advisor-report.ts) | ported | `validate_submission` in `rust/src/coordination/advisor_bridge.rs`; report parsing from turns is absent. Test: `advisor_submission_checks_role_and_recommendation_before_capture`. |
+| [coordination/bridge-auth.ts](../src/coordination/bridge-auth.ts) | verified | `rust/src/coordination/bridge_auth.rs`. Tests: `token_binding_requires_exact_uuid_without_exposing_it`, `tests/interop/root-worker-evidence.ts`. |
+| [coordination/controller-reports.ts](../src/coordination/controller-reports.ts) | ported | `observe_worktree` in `rust/src/tasks/worktree.rs`; Advisor report resolution is absent. Test: `prepares_and_reobserves_a_real_local_git_worktree`. |
+| [coordination/coordinator-replacement-contracts.ts](../src/coordination/coordinator-replacement-contracts.ts) | verified | `rust/src/http/contracts/typed/tasks.rs`. Test: `task_coordinator_replacement_matches_public_zod_contract`. |
+| [coordination/coordinator-replacement.ts](../src/coordination/coordinator-replacement.ts) | ported | `replace_coordinator` in `rust/src/coordination/root_session_store.rs`; Standard Codex only. Test: `worker_and_coordinator_replacement_preserve_handoffs_and_native_readiness`. |
+| [coordination/human-question.ts](../src/coordination/human-question.ts) | ported | `HumanOption` in `rust/src/coordination/root_stdio.rs` validates `ask_human` options. |
+| [coordination/persistence/row-values.ts](../src/coordination/persistence/row-values.ts) | ported | `parse_json` in `rust/src/tasks/response.rs`; `text` and `integer` use rusqlite row accessors. |
+| [coordination/persistence/session-operations.ts](../src/coordination/persistence/session-operations.ts) | ported | Claim, prompt and requeue operations in `rust/src/coordination/root_session_store.rs`. Test: `committed_claim_survives_reopen_and_budget_pause_never_dispatches`. |
+| [coordination/root-bridge.ts](../src/coordination/root-bridge.ts) | verified | `rust/src/coordination/root_bridge.rs`. Tests: `root_binding_tracks_current_identity_and_reuses_valid_token`, `tests/interop/root-worker-evidence.ts`. |
+| [coordination/root-contracts.ts](../src/coordination/root-contracts.ts) | ported | `rust/src/coordination/root_stdio.rs`; Standard operations only. Test: `advertised_kinds_are_only_the_implemented_standard_operations`. |
+| [coordination/root-controller.ts](../src/coordination/root-controller.ts) | ported | `rust/src/coordination/root_controller.rs`; Standard workflow only. Tests: `worker_evidence_reads_only_the_admitted_native_turn`, `tests/interop/root-image.ts`. |
+| [coordination/root-session-store.ts](../src/coordination/root-session-store.ts) | ported | `rust/src/coordination/root_session_store.rs`; Standard workflow only, no status-event or analytics hooks. Test: `human_note_reuses_root_and_resumes_delivered_intent_without_replay`. |
+| [coordination/session-recovery.ts](../src/coordination/session-recovery.ts) | ported | Recovery in `rust/src/tasks/host.rs`. Tests: `root_dispatch_claim_survives_reopen_without_replaying_child`, `mise run test:journey:rust` (restart phase). |
+| [coordination/task-agent-selection-contracts.ts](../src/coordination/task-agent-selection-contracts.ts) | verified | `rust/src/http/contracts/typed/tasks.rs`. Test: `task_agent_selection_request_fixtures_match_public_zod_contract`. |
+| [coordination/task-agent-selection.ts](../src/coordination/task-agent-selection.ts) | ported | `select_user_task_agent` in `rust/src/tasks/commands.rs`. Test: `agent_selection_starts_a_coordinator_and_records_a_worker_profile`. |
+| [coordination/worker-environment.ts](../src/coordination/worker-environment.ts) | ported | `rust/src/runtimes/git_guard.rs`. Test: `guarded_git_allows_observation_and_blocks_destructive_operations`. |
+| [coordination/worker-replacement-contracts.ts](../src/coordination/worker-replacement-contracts.ts) | verified | `rust/src/http/contracts/typed/tasks.rs`. Test: `task_worker_replacement_matches_public_zod_contract`. |
+| [coordination/worker-replacement.ts](../src/coordination/worker-replacement.ts) | ported | `replace_worker` in `rust/src/coordination/root_controller.rs` and `root_session_store.rs`; Standard Codex only. Test: `tests/interop/root-worker-replacement.ts`. |
+| [coordination/worker-turn-evidence.ts](../src/coordination/worker-turn-evidence.ts) | verified | `rust/src/coordination/worker_evidence.rs`. Tests: `selected_tail_and_head_cursors_preserve_native_failure_text`, `tests/interop/root-worker-evidence.ts`. |
 | [coordination/workflow-evidence.ts](../src/coordination/workflow-evidence.ts) | not started | |
-| [coordination/workflow-prompts.ts](../src/coordination/workflow-prompts.ts) | not started | Standard initial, planned Worker and Worker-result wake prompts match pinned TS bytes. Other workflows remain pending. |
-| [coordination/workflow-records.ts](../src/coordination/workflow-records.ts) | not started | Seeded workflow listing and typed advisor serialization pass the cleanup's isolated Cargo and raw HTTP checks. CRUD remains deferred. |
-| [coordination/workflows.ts](../src/coordination/workflows.ts) | not started | `1c24c183`: existing schemas extracted with compatible exports and passing TypeScript checks; next Rust work is limited to the Standard task slice |
+| [coordination/workflow-prompts.ts](../src/coordination/workflow-prompts.ts) | ported | `rust/src/coordination/root_prompts.rs`; Standard prompts only. Test: `standard_worker_wake_matches_pinned_typescript_bytes`. |
+| [coordination/workflow-records.ts](../src/coordination/workflow-records.ts) | ported | `rust/src/coordination/workflow_records.rs`; list only, CRUD returns 501. Test: `seeded_list_applies_archive_filter_after_query_validation_and_session`. |
+| [coordination/workflows.ts](../src/coordination/workflows.ts) | not started | Only Standard is hard-coded in `rust/src/tasks/host.rs`; other workflows return 501. |
 | [delivery/agent-delivery.ts](../src/delivery/agent-delivery.ts) | not started | |
 | [delivery/completed-pull-requests.ts](../src/delivery/completed-pull-requests.ts) | not started | |
-| [delivery/failure.ts](../src/delivery/failure.ts) | not started | |
+| [delivery/failure.ts](../src/delivery/failure.ts) | ported | `DeliveryOperationFailure` in `rust/src/delivery/operations.rs`. |
 | [delivery/issue-evidence.ts](../src/delivery/issue-evidence.ts) | not started | |
-| [delivery/operations.ts](../src/delivery/operations.ts) | not started | Standard `complete_local_work` observes actual Git branch/HEAD/dirty state, rechecks the tool owner and persists delivery through the store. Real Git/MCP checks reject the wrong expected HEAD and accept dirty local completion as TS does. Standard `inspect_delivery_diff` reads live HEAD then the published base; complete parsed TS/Root MCP comparison passes. Private GitHub credentials, PR-backed inspection and delivery mutations remain pending. |
+| [delivery/operations.ts](../src/delivery/operations.ts) | ported | `rust/src/delivery/operations.rs`; Standard local completion only. Test: `standard_completion_uses_actual_branch_and_head_without_a_clean_tree_gate`. |
 | [delivery/publication.ts](../src/delivery/publication.ts) | not started | |
 | [delivery/pull-reference.ts](../src/delivery/pull-reference.ts) | not started | |
-| [delivery/pull-request-ownership.ts](../src/delivery/pull-request-ownership.ts) | not started | |
-| [delivery/review.ts](../src/delivery/review.ts) | not started | `b5b64e10`: inspection source `ce848cfa82757a4714bc5e86de3c4da73bc951ab` passes 140 library tests (six ignored), three integrations, fmt, all-target Clippy and TS checks. Actual Root MCP matches the complete parsed TS result on the same Git fixture: no-rename merge-base patch, base-to-head commit list, binary/mode/no-final-newline cases, configured context, source redaction, full patch digest and stale saved metadata. Missing published branch and cancelled Root fail. Display truncation uses 64,000 UTF-16 units; a split surrogate becomes replacement text, while the full digest remains intact. Private credentials, PR ranges and review equivalence remain pending. |
+| [delivery/pull-request-ownership.ts](../src/delivery/pull-request-ownership.ts) | ported | `assert_pull_request_available` in `rust/src/tasks/repository.rs`. |
+| [delivery/review.ts](../src/delivery/review.ts) | ported | `rust/src/delivery/inspection.rs`; pull request ranges are absent. Test: `tests/interop/root-delivery-inspection.ts`. |
 | [delivery/target-capabilities.ts](../src/delivery/target-capabilities.ts) | not started | |
 | [http/agent-api-runtime.ts](../src/http/agent-api-runtime.ts) | not started | |
 | [http/contracts/agent-api.ts](../src/http/contracts/agent-api.ts) | not started | |
-| [http/contracts/auth.ts](../src/http/contracts/auth.ts) | ported | `b43d8fa3`: named Serde/Garde requests replace the special JSON validators; the cleanup removes a net 3,132 Rust source lines. Request corpus and signed registration/sign-in pass after conversion. |
+| [http/contracts/auth.ts](../src/http/contracts/auth.ts) | verified | `rust/src/http/contracts/typed/auth.rs`. Test: `ported_contracts_match_zod_fixtures` (all five schemas). |
 | [http/contracts/avatars.ts](../src/http/contracts/avatars.ts) | not started | |
-| [http/contracts/common.ts](../src/http/contracts/common.ts) | not started | Live identity/company/admin bodies use named DTOs and public findings. Current request corpus passes; remaining schemas are deferred. |
+| [http/contracts/common.ts](../src/http/contracts/common.ts) | ported | `rust/src/http/contracts/common.rs` and `common_commands.rs`. Test: `ported_contracts_match_zod_fixtures`. |
 | [http/contracts/github-triggers.ts](../src/http/contracts/github-triggers.ts) | not started | |
 | [http/contracts/oauth.ts](../src/http/contracts/oauth.ts) | not started | |
-| [http/contracts/projects.ts](../src/http/contracts/projects.ts) | not started | Typed project creation and nested configurations pass public findings and HTTP checks, including optional/null distinctions, source bounds, ASCII patterns and field ordering. Unused PATCH validation is deferred with its route. |
-| [http/contracts/providers.ts](../src/http/contracts/providers.ts) | ported | `88bb9b9d`: nine validators pass the ordinary corpus; provider runtime/HTTP integration remains unverified. |
+| [http/contracts/projects.ts](../src/http/contracts/projects.ts) | ported | `rust/src/http/contracts/typed/projects.rs` and `project_aux.rs`. Test: `serde_dtos_project_all_accepted_project_request_fixtures`. |
+| [http/contracts/providers.ts](../src/http/contracts/providers.ts) | ported | `rust/src/http/contracts/providers.rs`; provider routes return 501. Test: `ported_contracts_match_zod_fixtures`. |
 | [http/contracts/system-events.ts](../src/http/contracts/system-events.ts) | not started | |
-| [http/contracts/task-templates.ts](../src/http/contracts/task-templates.ts) | not started | Named stored-template DTO normalization preserves source strictness, defaults, trimming and optional fields. The same-DB GET oracle and strict unknown/null checks pass. Mutation contracts remain pending. |
-| [http/contracts/tasks.ts](../src/http/contracts/tasks.ts) | not started | Named DTOs pass 60 TaskBody, nine TaskIdParams, 27 TaskAnswer, 16 TaskDetails, 13 TaskRename and 15 TaskNote fixtures, preserving strictness, findings and normalized values. Empty edit passes the HTTP schema but returns the source service's generic 500. Complete raw response comparisons cover creation, reads, answers, edits, renaming and notes. Other command contracts remain pending. |
+| [http/contracts/task-templates.ts](../src/http/contracts/task-templates.ts) | ported | `rust/src/http/contracts/typed/task_templates.rs`; mutation contracts are absent. Test: `stored_configuration_defaults_and_rejects_extra_keys`. |
+| [http/contracts/tasks.ts](../src/http/contracts/tasks.ts) | ported | `rust/src/http/contracts/typed/tasks.rs`, `typed/task_answers.rs` and `task_aux.rs`. Test: `task_create_request_fixtures_match_public_zod_contract`. |
 | [http/contracts/update.ts](../src/http/contracts/update.ts) | not started | |
-| [http/contracts/workflows.ts](../src/http/contracts/workflows.ts) | not started | List query preserves literal/strict rules and passes corpus/HTTP checks. Special JSON validators for other operations are removed and deferred with their routes. |
-| [http/errors.ts](../src/http/errors.ts) | not started | `b369604d`: validationFindings exported unchanged; removed100 response-only groups and65 raw fixtures. Typed request parsers return DTOs directly and map public findings once. Isolated request/stored corpus and HTTP checks pass, including project400 and source Jira500. Wider route integration remains pending. |
+| [http/contracts/workflows.ts](../src/http/contracts/workflows.ts) | ported | List query and `WorkflowRecord` in `rust/src/coordination/workflow_records.rs`; CRUD contracts are absent. |
+| [http/errors.ts](../src/http/errors.ts) | ported | `rust/src/http/validation.rs`. Test: `public_findings_keep_issue_order_and_paths`. |
 | [http/oauth-runtime.ts](../src/http/oauth-runtime.ts) | not started | |
-| [http/routes/administration.ts](../src/http/routes/administration.ts) | not started | `e49977ee`, `99c6e5f8`, `f23bab60`: known-route registration and identity/profile administration tested; wider administration deferred. |
+| [http/routes/administration.ts](../src/http/routes/administration.ts) | ported | `rust/src/http/routes/admin_identity.rs` and `profiles.rs`; environment, backups, factory reset, providers and models return 501. Test: `invitation_body_validation_precedes_csrf_and_admin_routes_preserve_raw_order`. |
 | [http/routes/agent-api.ts](../src/http/routes/agent-api.ts) | not started | |
 | [http/routes/agent-pairing.ts](../src/http/routes/agent-pairing.ts) | not started | |
-| [http/routes/assets.ts](../src/http/routes/assets.ts) | not started | |
-| [http/routes/auth.ts](../src/http/routes/auth.ts) | ported | `40b7e8aa`: high-level signed TCP registration/sign-in, exact user response, session/CSRF cookies and detached admitted completion pass. Both signed checks pass again after typed request conversion; old-passkey reenrollment is accepted. |
-| [http/routes/authenticated.ts](../src/http/routes/authenticated.ts) | not started | |
-| [http/routes/avatars.ts](../src/http/routes/avatars.ts) | not started | |
-| [http/routes/companies.ts](../src/http/routes/companies.ts) | ported | `f50af424`: company mutations, authority and raw response checks pass. Named request DTO conversion passes the cleanup's isolated Cargo checks. |
+| [http/routes/assets.ts](../src/http/routes/assets.ts) | ported | `/assets/{filename}` in `rust/src/http/mod.rs` with `rust/src/platform/embedded.rs`. Test: `bundled_frontend_entry_is_readable_when_built`. |
+| [http/routes/auth.ts](../src/http/routes/auth.ts) | ported | `rust/src/http/routes/auth.rs`. Tests: `status_cookie_and_sign_out_follow_existing_order`, `signed_fresh_passkey_over_isolated_tcp_listener` (ignored by default). |
+| [http/routes/authenticated.ts](../src/http/routes/authenticated.ts) | not started | 501 stub. |
+| [http/routes/avatars.ts](../src/http/routes/avatars.ts) | not started | 501 stub. |
+| [http/routes/companies.ts](../src/http/routes/companies.ts) | ported | `rust/src/http/routes/companies.rs`. Test: `company_routes_apply_live_user_and_membership_scope`. |
 | [http/routes/discovery.ts](../src/http/routes/discovery.ts) | not started | |
 | [http/routes/external-agent-administration.ts](../src/http/routes/external-agent-administration.ts) | not started | |
-| [http/routes/github-triggers.ts](../src/http/routes/github-triggers.ts) | not started | |
-| [http/routes/health.ts](../src/http/routes/health.ts) | not started | |
+| [http/routes/github-triggers.ts](../src/http/routes/github-triggers.ts) | not started | 501 stub. |
+| [http/routes/health.ts](../src/http/routes/health.ts) | not started | 501 stub. |
 | [http/routes/mcp.ts](../src/http/routes/mcp.ts) | not started | |
-| [http/routes/oauth.ts](../src/http/routes/oauth.ts) | not started | |
-| [http/routes/pages.ts](../src/http/routes/pages.ts) | verified | `6631e45c`: five focused checks, live redirect/HTML/OAuth policy and desktop/narrow React boot pass. `40b7e8aa` removes two accidentally committed deferred-workflow registrations; its exact index export passes 54 library tests, five integration tests, fmt and all-target Clippy. Health and task execution remain separate pending capabilities. |
-| [http/routes/projects.ts](../src/http/routes/projects.ts) | not started | `1e2b2f0c`: reads/defaults/provider instances, GitHub pickers and local/existing/new GitHub creation tested. Typed creation passes isolated checks and preserves raw response order/nullability. Bitbucket/PATCH/ancillary routes remain deferred. |
-| [http/routes/provider-login.ts](../src/http/routes/provider-login.ts) | not started | |
-| [http/routes/task-pane.ts](../src/http/routes/task-pane.ts) | not started | |
-| [http/routes/task-templates.ts](../src/http/routes/task-templates.ts) | not started | GET returns source-ordered, normalized stored templates and matches complete TS JSON/status on the same database. Invalid strict stored configuration returns the source 500. CRUD remains pending. |
-| [http/routes/task-worktree.ts](../src/http/routes/task-worktree.ts) | not started | |
-| [http/routes/tasks.ts](../src/http/routes/tasks.ts) | not started | `bf426610`, `ec13982e`, `ec4106de`: create/read/start/cancel; `cf1bfad`, `4a5e7a0`: Codex history/live and agent status; `cca86c03`: local archive/unarchive; `67e70593`: edit/rename. Raw TS comparisons and live image GET/413 checks pass. On-demand React backlog creation, editing text/settings, renaming, archiving, viewing Archived and reopening pass against the frozen Rust binary, with desktop/narrow inspection and no model calls: [desktop](../.context/edit-archive-preview/desktop-edit.png), [narrow](../.context/edit-archive-preview/narrow-edit-settings.png). Task timeline passes complete parsed HTTP comparison and React rendering. Public-repository diff summary passes raw direct-handler/helper comparison; private credentials, PR summaries, other commands and company timeline remain pending. |
-| [http/routes/update.ts](../src/http/routes/update.ts) | not started | |
-| [http/routes/workflows.ts](../src/http/routes/workflows.ts) | not started | GET listing passes query findings, session authority and ordered raw response checks in the isolated cleanup export. CRUD remains 501. TS tests2/2 pass with an added seeded raw-body assertion; no contract or existing expectation changed. |
-| [http/session.ts](../src/http/session.ts) | not started | `92f290e3`, `0856b0d4`: session lookup, trusted sign-in, legacy rollover, cookies and CSRF tested; full route integration pending. |
-| [identity/auth-contracts.ts](../src/identity/auth-contracts.ts) | not started | |
-| [identity/auth-identifiers.ts](../src/identity/auth-identifiers.ts) | not started | |
-| [identity/auth-repository.ts](../src/identity/auth-repository.ts) | not started | |
-| [identity/auth-schema.ts](../src/identity/auth-schema.ts) | not started | |
-| [identity/auth-webauthn.ts](../src/identity/auth-webauthn.ts) | verified | `40b7e8aa`: high-level webauthn-rs replaces custom attestation/core/CBOR glue; library state uses existing columns and old credential rows remain intact. Signed registration/sign-in/reopen, counters7→8, equal-counter/replay rejection and detached TCP completion pass. Exact index export: fmt/all-target Clippy,54 library tests and5 integration tests pass; both ignored Node signer tests also pass explicitly, as do TS signer1/1, ESLint and typecheck. Reenrollment is accepted; OpenSSL remains transitive. |
-| [identity/auth.ts](../src/identity/auth.ts) | not started | `905b7b82`, `99c6e5f8`, `f50af424`: identity/company administration and metadata tested. Serde metadata/transports and typed consumers pass isolated cleanup checks; M2 integration and operational CLI remain pending. |
+| [http/routes/oauth.ts](../src/http/routes/oauth.ts) | not started | 501 stub for the consent API; `/oauth/*` endpoints are absent. |
+| [http/routes/pages.ts](../src/http/routes/pages.ts) | verified | `rust/src/http/routes/pages.rs`. Tests: `root_and_application_pages_follow_live_session_and_project_state`, `tests/task-detail.browser.test.ts` with `SUPLEX_BROWSER_BACKEND=rust`. |
+| [http/routes/projects.ts](../src/http/routes/projects.ts) | ported | `rust/src/http/routes/projects.rs`; issues, task sources and models return 501. Test: `project_reads_serialize_normalized_configuration_and_enforce_scope`. |
+| [http/routes/provider-login.ts](../src/http/routes/provider-login.ts) | not started | 501 stub. |
+| [http/routes/task-pane.ts](../src/http/routes/task-pane.ts) | not started | 501 stub. |
+| [http/routes/task-templates.ts](../src/http/routes/task-templates.ts) | ported | `rust/src/http/routes/task_templates.rs`; list only, other routes return 501. Test: `stored_configuration_defaults_and_rejects_extra_keys`. |
+| [http/routes/task-worktree.ts](../src/http/routes/task-worktree.ts) | not started | 501 stub. |
+| [http/routes/tasks.ts](../src/http/routes/tasks.ts) | ported | `rust/src/http/routes/tasks.rs`, `task_reads.rs`, `task_history.rs`, `task_timeline.rs`, `task_agents.rs` and `task_artifacts.rs`; checks, refresh, analytics, task costs and company timeline return 501. Tests: `tests/task-detail.browser.test.ts`, `tests/task-archive.browser.test.ts` with `SUPLEX_BROWSER_BACKEND=rust`. |
+| [http/routes/update.ts](../src/http/routes/update.ts) | not started | 501 stub. |
+| [http/routes/workflows.ts](../src/http/routes/workflows.ts) | ported | `rust/src/http/routes/workflows.rs`; list only, admin CRUD returns 501. Test: `seeded_list_applies_archive_filter_after_query_validation_and_session`. |
+| [http/session.ts](../src/http/session.ts) | ported | `rust/src/http/session.rs`. Test: `session_lookup_keeps_trusted_sign_in_before_legacy_rollover`. |
+| [identity/auth-contracts.ts](../src/identity/auth-contracts.ts) | ported | Types in `rust/src/identity/auth.rs`, `admin.rs`, `ceremony.rs` and `companies.rs`. |
+| [identity/auth-identifiers.ts](../src/identity/auth-identifiers.ts) | ported | `new_session_token` in `rust/src/identity/auth.rs`; cookie and header names in `rust/src/http/session.rs`. |
+| [identity/auth-repository.ts](../src/identity/auth-repository.ts) | ported | Queries are inline in `rust/src/identity/auth.rs`, `admin.rs`, `ceremony.rs` and `companies.rs`. Test: `session_lookup_development_sign_in_sign_out_and_legacy_rollover`. |
+| [identity/auth-schema.ts](../src/identity/auth-schema.ts) | ported | Tables come from the shared SQL migrations that `rust/src/platform/database.rs` applies. Test: `migrates_shared_sql_and_reopens_read_only`. |
+| [identity/auth-webauthn.ts](../src/identity/auth-webauthn.ts) | verified | `rust/src/identity/webauthn.rs` and `ceremony.rs`. Test: `signed_fresh_passkey_survives_reopen_and_updates_counter` (ignored by default; run manually). |
+| [identity/auth.ts](../src/identity/auth.ts) | ported | `rust/src/identity/auth.rs`, `admin.rs` and `companies.rs`. Test: `session_lookup_development_sign_in_sign_out_and_legacy_rollover`. |
 | [identity/avatar-kinds.ts](../src/identity/avatar-kinds.ts) | not started | |
 | [identity/avatars.ts](../src/identity/avatars.ts) | not started | |
 | [identity/external-agents.ts](../src/identity/external-agents.ts) | not started | |
 | [identity/oauth.ts](../src/identity/oauth.ts) | not started | |
-| [identity/registration.ts](../src/identity/registration.ts) | not started | |
+| [identity/registration.ts](../src/identity/registration.ts) | ported | `begin_registration` and `complete_registration` in `rust/src/identity/ceremony.rs`. Test: `signed_fresh_passkey_survives_reopen_and_updates_counter` (ignored by default). |
 | [integrations/bitbucket.ts](../src/integrations/bitbucket.ts) | not started | |
-| [integrations/github/client.ts](../src/integrations/github/client.ts) | not started | `6a997d88`, source `17a579fe5147c9ad730b1af6c2b591424c3f24e1`: 147 library tests (seven ignored), three integrations, fmt and all-target Clippy pass. Octocrab user/branch reads, credential precedence, scoped Git2 credentials, redirect handling and single-request failure behavior pass controlled checks; actual Root MCP still matches the complete parsed TS inspection result. Native Keychain interaction is disabled and optional inaccessible entries are skipped. A bounded real probe finished in 0.35 seconds with no usable credential and `/user` 401; private access is unverified. Device sign-in and remaining GitHub operations are pending. Six unused custom attestation PEM assets are also removed. |
-| [integrations/github/delivery.ts](../src/integrations/github/delivery.ts) | not started | |
+| [integrations/github/client.ts](../src/integrations/github/client.ts) | ported | `rust/src/integrations/github.rs`. Test: `current_user_and_encoded_branch_use_token_backed_api`. |
+| [integrations/github/delivery.ts](../src/integrations/github/delivery.ts) | ported | `published_branch_sha` and `current_user_login` in `rust/src/integrations/github.rs` port `getBranchHead` and `checkAuthentication` only; pull request operations are absent. Test: `current_user_and_encoded_branch_use_token_backed_api`. |
 | [integrations/github/failure.ts](../src/integrations/github/failure.ts) | not started | |
 | [integrations/github/issues.ts](../src/integrations/github/issues.ts) | not started | |
 | [integrations/github/pull-request-states.ts](../src/integrations/github/pull-request-states.ts) | not started | |
@@ -122,55 +118,55 @@ Request corpus: 1,141 fixtures across 95 request exports plus 23 stored-project 
 | [integrations/herdr/terminal-bridge.ts](../src/integrations/herdr/terminal-bridge.ts) | not started | |
 | [integrations/issue-tracker.ts](../src/integrations/issue-tracker.ts) | not started | |
 | [integrations/provider-http.ts](../src/integrations/provider-http.ts) | not started | |
-| [integrations/suplex/mcp-bridge.ts](../src/integrations/suplex/mcp-bridge.ts) | not started | `4d0861e3`: rmcp stdio/HTTP initialize/list/call transport probes pass; [spike](rust-spikes/mcp.md). Real Rust bridges/tools/auth remain M2 work. |
+| [integrations/suplex/mcp-bridge.ts](../src/integrations/suplex/mcp-bridge.ts) | not started | |
 | [integrations/suplex/mcp-runtime.ts](../src/integrations/suplex/mcp-runtime.ts) | not started | |
-| [platform/artifacts.ts](../src/platform/artifacts.ts) | ported | Private opaque files and task/company-scoped rows back task images. File/row creation, idempotent replay, nested/outer rollback cleanup, path rejection and read integrity pass focused command, HTTP and MCP checks. Other artifact producers remain unverified. |
-| [platform/backup.ts](../src/platform/backup.ts) | not started | |
-| [platform/command-runner.ts](../src/platform/command-runner.ts) | not started | |
-| [platform/config.ts](../src/platform/config.ts) | not started | `924c9efe`: isolated defaults/port; `cd7c1f93`: plain cargo selects nested toolchain, config2/2 and isolated root/listener checks pass, Clippy passes. Full configuration pending |
-| [platform/database.ts](../src/platform/database.ts) | verified | `0555c057`: all149 migrations,155 schema rows, transactions/savepoints/callbacks/rollback/read-only/rebuild and TS↔Rust reopening pass; callers must preserve each source transaction boundary. |
+| [platform/artifacts.ts](../src/platform/artifacts.ts) | ported | `rust/src/platform/artifacts.rs`; task images only. Tests: `task_image_file_and_row_share_commit_and_rollback_cleanup`, `tests/interop/root-image.ts`. |
+| [platform/backup.ts](../src/platform/backup.ts) | not started | 501 stub. |
+| [platform/command-runner.ts](../src/platform/command-runner.ts) | ported | Bounded subprocess execution in `rust/src/projects/repository.rs`; no shared runner. Test: `subprocess_output_and_timeout_match_git_adapter_limits`. |
+| [platform/config.ts](../src/platform/config.ts) | ported | `rust/src/platform/config.rs`. Test: `paths_stay_under_experimental_root`. |
+| [platform/database.ts](../src/platform/database.ts) | verified | `rust/src/platform/database.rs`. Test: `opens_typescript_database_and_creates_reverse_fixture_when_requested`. |
 | [platform/development.ts](../src/platform/development.ts) | not started | |
 | [platform/diagnostics/doctor.ts](../src/platform/diagnostics/doctor.ts) | not started | |
 | [platform/diagnostics/task.ts](../src/platform/diagnostics/task.ts) | not started | |
-| [platform/environment-settings.ts](../src/platform/environment-settings.ts) | not started | |
-| [platform/executable-resolver.ts](../src/platform/executable-resolver.ts) | not started | Codex lookup reuses configured executable discovery and passes focused path/override checks. Other executable resolvers remain pending. |
-| [platform/factory-reset.ts](../src/platform/factory-reset.ts) | not started | |
-| [platform/frontend-development.ts](../src/platform/frontend-development.ts) | not started | `e555e83b`: built-asset watch/refresh and release embedding checks pass; no frontend helper rewrite. |
+| [platform/environment-settings.ts](../src/platform/environment-settings.ts) | not started | 501 stub. |
+| [platform/executable-resolver.ts](../src/platform/executable-resolver.ts) | ported | Codex only in `rust/src/runtimes/codex/executable.rs`; Git in `rust/src/runtimes/git_guard.rs`. Test: `override_path_precedes_path_and_home_and_requires_executable_file`. |
+| [platform/factory-reset.ts](../src/platform/factory-reset.ts) | not started | 501 stub. |
+| [platform/frontend-development.ts](../src/platform/frontend-development.ts) | ported | Development asset refresh in `rust/src/http/mod.rs`. Test: `development_assets_refresh_without_restarting_the_server`. |
 | [platform/health-contract.ts](../src/platform/health-contract.ts) | not started | |
-| [platform/health.ts](../src/platform/health.ts) | not started | |
+| [platform/health.ts](../src/platform/health.ts) | not started | 501 stub. |
 | [platform/host-health.ts](../src/platform/host-health.ts) | not started | |
 | [platform/install/command.ts](../src/platform/install/command.ts) | not started | |
 | [platform/install/stages.ts](../src/platform/install/stages.ts) | not started | |
 | [platform/log-viewer.ts](../src/platform/log-viewer.ts) | not started | |
-| [platform/logging.ts](../src/platform/logging.ts) | not started | Small shared string redactor preserves the command-output boundary used by delivery inspection, including ASCII word boundaries next to Unicode. Synthetic credential-shaped content and filenames match TS before patch hashing and display. Structured logging remains pending. |
-| [platform/process-manager.ts](../src/platform/process-manager.ts) | not started | `rust/src/runtimes/process.rs` inspects live PID/start/argv/UID before each signal and stops proven groups. Coordinator recovery distinguishes an absent PID from an unobservable owner: unknown claims remain retained, while absent/reused owners can recover. Ownership, reused/unsafe PID and missing-turn-record cases pass. Full process-manager integration remains pending. |
-| [platform/runtime.ts](../src/platform/runtime.ts) | not started | `otool -L` on two arm64 development executables shows only Apple system libraries, with no Node or external OpenSSL dylib linkage. Rust owns startup and MCP entrypoints; native Codex remains a separate executable. This is not packaged, Intel or complete provider-availability proof. |
+| [platform/logging.ts](../src/platform/logging.ts) | ported | `redact` only, as `rust/src/platform/redaction.rs`. Test: `masks_synthetic_token_and_assignment_in_command_output`. |
+| [platform/process-manager.ts](../src/platform/process-manager.ts) | ported | `rust/src/runtimes/process.rs`. Test: `only_exact_process_identity_allows_owned_signal`. |
+| [platform/runtime.ts](../src/platform/runtime.ts) | not started | `rust/src/main.rs` starts directly; supervisor and registry reconciliation are absent. |
 | [platform/schemas.ts](../src/platform/schemas.ts) | not started | |
 | [platform/setup.ts](../src/platform/setup.ts) | not started | |
 | [platform/system-event-transport.ts](../src/platform/system-event-transport.ts) | not started | |
-| [platform/system-events.ts](../src/platform/system-events.ts) | not started | |
+| [platform/system-events.ts](../src/platform/system-events.ts) | ported | `rust/src/platform/system_events.rs` (`install`, `enabled`, `emit`); event context is absent. |
 | [platform/tailscale.ts](../src/platform/tailscale.ts) | not started | |
-| [platform/ui.ts](../src/platform/ui.ts) | not started | `924c9efe`, `e555e83b`, `6631e45c`: sign-in shell, assets and ordinary page rendering tested, including desktop/narrow React boot. Health rendering remains pending. |
+| [platform/ui.ts](../src/platform/ui.ts) | ported | `application_page` in `rust/src/http/ui.rs`; the health page is absent. Test: `application_shell_uses_the_page_view_and_built_assets`. |
 | [platform/updates/supervisor.ts](../src/platform/updates/supervisor.ts) | not started | |
-| [platform/updates/update-client.ts](../src/platform/updates/update-client.ts) | not started | |
-| [profiles/agent-profile-contracts.ts](../src/profiles/agent-profile-contracts.ts) | not started | |
-| [profiles/agent-profiles.ts](../src/profiles/agent-profiles.ts) | ported | `f23bab60`: CRUD/duplicate/defaults, references, policy pruning/rollback, audit and CLI discovery tested. Typed stored-policy conversion passes isolated cleanup checks. |
-| [profiles/model-pricing.ts](../src/profiles/model-pricing.ts) | ported | `rust/src/profiles/model_pricing.rs` preserves token/cache pricing and invalid-value handling. Formula and cumulative-usage checks pass. Host integration persists native usage: a priced million-token fixture records $1 with source fields; missing native logs cannot erase saved snapshots. |
-| [profiles/models-dev-catalog.ts](../src/profiles/models-dev-catalog.ts) | ported | The models.dev reader uses JSON, a five-second timeout and no redirects. Local HTTP checks cover shared requests, successful caching and retry after failure. Parser checks preserve provider/model keys and optional cache rates. |
-| [profiles/provider-catalog.ts](../src/profiles/provider-catalog.ts) | not started | |
+| [platform/updates/update-client.ts](../src/platform/updates/update-client.ts) | not started | 501 stub. |
+| [profiles/agent-profile-contracts.ts](../src/profiles/agent-profile-contracts.ts) | ported | `rust/src/http/contracts/profile.rs`. Test: `profile_validation_precedes_origin_and_session_checks`. |
+| [profiles/agent-profiles.ts](../src/profiles/agent-profiles.ts) | ported | `rust/src/profiles/agent_profiles.rs`. Test: `profile_commands_keep_role_visibility_references_and_audit_atomic`. |
+| [profiles/model-pricing.ts](../src/profiles/model-pricing.ts) | ported | `rust/src/profiles/model_pricing.rs`. Test: `parses_valid_prices_and_uses_source_cost_formula`. |
+| [profiles/models-dev-catalog.ts](../src/profiles/models-dev-catalog.ts) | ported | `rust/src/profiles/model_pricing.rs`. Test: `catalog_read_shares_inflight_request_and_retries_failure`. |
+| [profiles/provider-catalog.ts](../src/profiles/provider-catalog.ts) | not started | 501 stub. |
 | [profiles/provider-connection.ts](../src/profiles/provider-connection.ts) | not started | |
-| [profiles/provider-instances.ts](../src/profiles/provider-instances.ts) | not started | |
-| [profiles/provider-login.ts](../src/profiles/provider-login.ts) | not started | |
+| [profiles/provider-instances.ts](../src/profiles/provider-instances.ts) | ported | `list_provider_instances` in `rust/src/projects/service.rs`; instance CRUD returns 501. |
+| [profiles/provider-login.ts](../src/profiles/provider-login.ts) | not started | 501 stub. |
 | [profiles/provider-readiness.ts](../src/profiles/provider-readiness.ts) | not started | |
-| [projects/contracts.ts](../src/projects/contracts.ts) | not started | |
-| [projects/execution-configuration.ts](../src/projects/execution-configuration.ts) | not started | Typed stored configuration passes the 23-case corpus and project HTTP checks, including nested public finding paths and order. Full execution integration remains pending. |
-| [projects/integration-configuration.ts](../src/projects/integration-configuration.ts) | not started | Typed stored configuration passes the 23-case corpus and project HTTP checks, including source Jira bounds and GitHub ASCII rules. Full delivery integration remains pending. |
-| [projects/projects.ts](../src/projects/projects.ts) | not started | `035f253b`, `1e2b2f0c`: creation, configuration persistence, reads and HTTP tested; typed DTO conversion passes. Git2 task-base capture now checks live origin, fetches the base branch and reads its refreshed SHA; real bare-origin/stale-ref/host checks pass. Credentials and other project operations remain pending. |
-| [projects/provider-policy.ts](../src/projects/provider-policy.ts) | not started | Typed stored policy replaces the special JSON representation and passes corpus/project/profile checks. Full task integration remains pending. |
-| [projects/repository-commands.ts](../src/projects/repository-commands.ts) | not started | |
-| [projects/repository-coordinate.ts](../src/projects/repository-coordinate.ts) | not started | GitHub coordinate/remote parsing covered by repository tests; full provider coverage remains incomplete |
-| [projects/repository-inspection.ts](../src/projects/repository-inspection.ts) | not started | `09db91ae`: local GitHub inspection/preflight, real Git, controlled gh, path/buffer/timeout checks pass; other providers deferred. |
-| [projects/repository-provisioning.ts](../src/projects/repository-provisioning.ts) | not started | `1e2b2f0c`: existing/new GitHub provisioning and admitted completion after HTTP disconnect tested; Bitbucket deferred. |
+| [projects/contracts.ts](../src/projects/contracts.ts) | ported | `ProjectFailure` in `rust/src/projects/service.rs`. |
+| [projects/execution-configuration.ts](../src/projects/execution-configuration.ts) | ported | Typed stored configuration in `rust/src/http/contracts/typed/projects.rs`. Test: `stored_project_nested_schemas_match_zod`. |
+| [projects/integration-configuration.ts](../src/projects/integration-configuration.ts) | ported | Typed stored configuration in `rust/src/http/contracts/typed/projects.rs`; credential keys are excluded in `rust/src/tasks/host.rs`. Test: `stored_project_nested_schemas_match_zod`. |
+| [projects/projects.ts](../src/projects/projects.ts) | ported | `rust/src/projects/service.rs`. Test: `local_create_audits_once_and_reads_follow_live_membership`. |
+| [projects/provider-policy.ts](../src/projects/provider-policy.ts) | ported | `allowed_profile` in `rust/src/tasks/commands.rs`. |
+| [projects/repository-commands.ts](../src/projects/repository-commands.ts) | ported | `infer_commands` in `rust/src/projects/provisioning.rs`. Test: `repository_commands_follow_mise_then_cargo_and_make_selection_order`. |
+| [projects/repository-coordinate.ts](../src/projects/repository-coordinate.ts) | ported | `rust/src/projects/repository.rs`. Test: `repository_coordinates_preserve_host_and_reject_credentials`. |
+| [projects/repository-inspection.ts](../src/projects/repository-inspection.ts) | ported | `rust/src/projects/repository.rs`; GitHub only. Test: `local_inspection_fetches_origin_and_checks_github_identity`. |
+| [projects/repository-provisioning.ts](../src/projects/repository-provisioning.ts) | ported | `rust/src/projects/provisioning.rs`; GitHub only. Test: `admitted_project_create_finishes_after_request_task_is_dropped`. |
 | [runtimes/claude-code/display.ts](../src/runtimes/claude-code/display.ts) | not started | |
 | [runtimes/claude-code/environment.ts](../src/runtimes/claude-code/environment.ts) | not started | |
 | [runtimes/claude-code/live-history.ts](../src/runtimes/claude-code/live-history.ts) | not started | |
@@ -178,17 +174,17 @@ Request corpus: 1,141 fixtures across 95 request exports plus 23 stored-project 
 | [runtimes/claude-code/task-runtime.ts](../src/runtimes/claude-code/task-runtime.ts) | not started | |
 | [runtimes/claude-code/transcript.ts](../src/runtimes/claude-code/transcript.ts) | not started | |
 | [runtimes/codex/display.ts](../src/runtimes/codex/display.ts) | not started | |
-| [runtimes/codex/session-reader.ts](../src/runtimes/codex/session-reader.ts) | not started | Native turn filenames follow the observed Node lexical order; a reversed-mtime two-turn TS oracle proves the difference. Usage retains source msg-ID/legacy-mtime chronology. Codex history page/live tests pass; remaining native observation and real-provider success remain pending. |
-| [runtimes/codex/task-runtime.ts](../src/runtimes/codex/task-runtime.ts) | not started | `d00a50ca`: Root and planned Worker adapters compose executable lookup, prompts, guards, bindings and durable claim-before-spawn. Fake CLI checks cover launch refusal, child capabilities and separate persisted/native/thread identities. Final isolated unit passes 106 library tests, three integration tests, fmt and all-target Clippy; two Node signer tests are ignored in this run. Full host, real Codex and UI remain pending. |
-| [runtimes/codex/transcript.ts](../src/runtimes/codex/transcript.ts) | not started | Parsing, result text, completion, cumulative usage and native tool projection pass focused checks. The Worker-evidence MCP oracle matches TS on the same transcript, including stripped file-change extras and source web-search status handling. Real-provider verification remains pending. |
+| [runtimes/codex/session-reader.ts](../src/runtimes/codex/session-reader.ts) | ported | `rust/src/runtimes/codex/session_reader.rs`. Test: `reads_native_history_without_changing_it`. |
+| [runtimes/codex/task-runtime.ts](../src/runtimes/codex/task-runtime.ts) | ported | `rust/src/runtimes/codex/task_runtime.rs`, `runtime.rs`, `invocation.rs` and `thread.rs`. Tests: `root_binding_and_guard_reach_child_only_after_claim`, `mise run test:journey:rust`. |
+| [runtimes/codex/transcript.ts](../src/runtimes/codex/transcript.ts) | ported | `rust/src/runtimes/codex/transcript.rs`, `tool_evidence.rs` and `usage.rs`. Tests: `source_transcript_sample_projects_exact_tool_rows`, `tests/interop/root-worker-evidence.ts`. |
 | [runtimes/devin/advisor-evidence.ts](../src/runtimes/devin/advisor-evidence.ts) | not started | |
 | [runtimes/devin/display.ts](../src/runtimes/devin/display.ts) | not started | |
 | [runtimes/devin/mcp-config.ts](../src/runtimes/devin/mcp-config.ts) | not started | |
 | [runtimes/devin/session-reader.ts](../src/runtimes/devin/session-reader.ts) | not started | |
 | [runtimes/devin/task-runtime.ts](../src/runtimes/devin/task-runtime.ts) | not started | |
 | [runtimes/devin/transcript.ts](../src/runtimes/devin/transcript.ts) | not started | |
-| [runtimes/harness-kind.ts](../src/runtimes/harness-kind.ts) | not started | |
-| [runtimes/headless/turn-process.ts](../src/runtimes/headless/turn-process.ts) | not started | Detached claim-before-launch, records, group stop, missing-record recovery and environment isolation pass controlled-process checks. `e0f68c3` adds a macOS recordless-stop test: the owned Python child is rediscovered from its live OS marker; an unrelated child survives. Focused 1/1, test Clippy and fmt pass. Same-host probes find the marker on installed Codex in idle app-server mode; macOS hides shell/sleep markers even from TS, so total record loss for those executables remains a platform/source limit. Successful real Codex turns remain unverified. |
+| [runtimes/harness-kind.ts](../src/runtimes/harness-kind.ts) | ported | `HarnessKind` in `rust/src/http/contracts/providers.rs`, `project_aux.rs` and `task_aux.rs`. |
+| [runtimes/headless/turn-process.ts](../src/runtimes/headless/turn-process.ts) | ported | `rust/src/runtimes/headless.rs`. Test: `claim_precedes_detached_launch_and_record_uses_source_shape`. |
 | [runtimes/opencode/client.ts](../src/runtimes/opencode/client.ts) | not started | |
 | [runtimes/opencode/contracts.ts](../src/runtimes/opencode/contracts.ts) | not started | |
 | [runtimes/opencode/providers.ts](../src/runtimes/opencode/providers.ts) | not started | |
@@ -197,60 +193,60 @@ Request corpus: 1,141 fixtures across 95 request exports plus 23 stored-project 
 | [runtimes/opencode/session-reader.ts](../src/runtimes/opencode/session-reader.ts) | not started | |
 | [runtimes/opencode/session.ts](../src/runtimes/opencode/session.ts) | not started | |
 | [runtimes/opencode/task-runtime.ts](../src/runtimes/opencode/task-runtime.ts) | not started | |
-| [runtimes/project-environment.ts](../src/runtimes/project-environment.ts) | not started | |
+| [runtimes/project-environment.ts](../src/runtimes/project-environment.ts) | ported | Project scope in `rust/src/tasks/host.rs`. Test: `project_scope_keeps_context_and_excludes_credential_references`. |
 | [runtimes/project-mcp.ts](../src/runtimes/project-mcp.ts) | not started | |
 | [runtimes/task-display.ts](../src/runtimes/task-display.ts) | not started | |
-| [runtimes/task-harness-registry.ts](../src/runtimes/task-harness-registry.ts) | not started | |
-| [runtimes/task-harness.ts](../src/runtimes/task-harness.ts) | not started | `e38b0718`: removal of stale bridge capabilities and actual child isolation pass. Native adapters now compose configured project context, prepared context and the source missing-file fallback. Full provider routing and controller integration remain pending. |
-| [server.ts](../src/server.ts) | not started | |
+| [runtimes/task-harness-registry.ts](../src/runtimes/task-harness-registry.ts) | ported | `rust/src/tasks/host.rs` routes `codex` profiles to `rust/src/runtimes/codex`; other providers are not ported. |
+| [runtimes/task-harness.ts](../src/runtimes/task-harness.ts) | ported | `rust/src/runtimes/task_harness.rs`. Test: `detached_child_receives_only_its_current_bridge_capability`. |
+| [server.ts](../src/server.ts) | ported | `rust/src/main.rs` binds the listener, starts recovery and shuts down gracefully. |
 | [shared/abort-signal.ts](../src/shared/abort-signal.ts) | not started | |
 | [shared/assert-never.ts](../src/shared/assert-never.ts) | not started | |
 | [shared/canonical-json.ts](../src/shared/canonical-json.ts) | not started | |
 | [shared/entrypoint.ts](../src/shared/entrypoint.ts) | not started | |
 | [shared/ids.ts](../src/shared/ids.ts) | not started | |
-| [shared/json.ts](../src/shared/json.ts) | not started | `40eac0e1`: [hash bytes spike](spikes/rust-json-hash-bytes.md). Only Value-based stringify/ryu-js remains; seven hash fixtures pass. Document tree and raw-JSON machinery are removed. The task-create hash is connected; the remaining three task hash sites await their commands. |
-| [shared/mcp-stdio.ts](../src/shared/mcp-stdio.ts) | not started | |
-| [tasks/agent-status.ts](../src/tasks/agent-status.ts) | not started | Codex batch/single status follows actual nativeSessionId rather than mutable profile metadata. `4a5e7a0`: exact source tree `352adc0980a10e1f37e49458a6eee591c50c2072`: 125 library tests (six ignored), three integrations, fmt and all-target Clippy pass. Explicit same-DB TS response oracle covers ordering, missing records, stale profile, archive/revocation and query findings; TS checks and source peer pass. Other runtimes remain pending. |
-| [tasks/analytics/analytics.ts](../src/tasks/analytics/analytics.ts) | not started | |
+| [shared/json.ts](../src/shared/json.ts) | ported | `serde_json` replaces `json` and `jsonRequired`; `rust/src/shared/js_json.rs` reproduces `JSON.stringify` bytes. Test: `persisted_hash_bytes_match_json_stringify`. |
+| [shared/mcp-stdio.ts](../src/shared/mcp-stdio.ts) | ported | rmcp stdio in `rust/src/coordination/root_stdio.rs` and `advisor_bridge.rs`. Test: `mcp_stdio_transport_lists_and_calls_the_assigned_tool`. |
+| [tasks/agent-status.ts](../src/tasks/agent-status.ts) | ported | `rust/src/http/routes/task_agents.rs`; Codex only. Test: `same_database_agent_reads_match_typescript_and_refresh_native_state` (ignored by default; needs Node). |
+| [tasks/analytics/analytics.ts](../src/tasks/analytics/analytics.ts) | not started | 501 stub. |
 | [tasks/analytics/collector.ts](../src/tasks/analytics/collector.ts) | not started | |
 | [tasks/analytics/contracts.ts](../src/tasks/analytics/contracts.ts) | not started | |
 | [tasks/analytics/metrics.ts](../src/tasks/analytics/metrics.ts) | not started | |
 | [tasks/analytics/store.ts](../src/tasks/analytics/store.ts) | not started | |
 | [tasks/archive/displays.ts](../src/tasks/archive/displays.ts) | not started | |
-| [tasks/archive/processes.ts](../src/tasks/archive/processes.ts) | ported | Task worktree cleanup checks actual process ownership; real macOS child and absent/symlinked path tests pass. Missing worktree paths follow source lexical resolution and marker rules. Missing/stale launch-owner metadata cannot block independently proven native stop; the source zero-outstanding-session lifecycle limitation remains. |
-| [tasks/archive/sessions.ts](../src/tasks/archive/sessions.ts) | not started | Local archive selects the reader from native session identity, not profile metadata. Focused checks cover live launch ownership, stale profile/start metadata, active Codex records and a cancelled reserved Root with no native session or server record. Other runtimes, including nonempty OpenCode server records, remain explicitly unported; Herdr display cleanup remains separate. |
-| [tasks/branch.ts](../src/tasks/branch.ts) | not started | |
-| [tasks/contracts.ts](../src/tasks/contracts.ts) | not started | |
-| [tasks/control.ts](../src/tasks/control.ts) | not started | Cancel persists task status and Root/Worker stop intent atomically, then wakes recovery after commit. A dropped request does not cancel admitted durable work. Broader control operations remain pending. |
-| [tasks/dependencies.ts](../src/tasks/dependencies.ts) | not started | |
+| [tasks/archive/processes.ts](../src/tasks/archive/processes.ts) | ported | `rust/src/tasks/archive/processes.rs`. Test: `cancellation_stops_live_worktree_process_without_a_display_receipt`. |
+| [tasks/archive/sessions.ts](../src/tasks/archive/sessions.ts) | ported | `archive_sessions_idle` in `rust/src/tasks/archive/operations.rs`; Codex only. Tests: `archive_uses_live_native_and_git_facts_then_commits_once`, `tests/task-archive.browser.test.ts`. |
+| [tasks/branch.ts](../src/tasks/branch.ts) | ported | `task_branch_name` in `rust/src/tasks/commands.rs`. |
+| [tasks/contracts.ts](../src/tasks/contracts.ts) | ported | `rust/src/tasks/response.rs` and `rust/src/http/contracts/typed/mod.rs`. |
+| [tasks/control.ts](../src/tasks/control.ts) | ported | Control, session and turn rows are read in `rust/src/coordination/root_session_store.rs`. |
+| [tasks/dependencies.ts](../src/tasks/dependencies.ts) | ported | `set_user_task_dependencies` in `rust/src/tasks/commands.rs`. Test: `dependency_replacement_rejects_cycles_and_admits_a_released_queued_task`. |
 | [tasks/duplicate-title.ts](../src/tasks/duplicate-title.ts) | not started | |
-| [tasks/execution/contracts.ts](../src/tasks/execution/contracts.ts) | not started | |
-| [tasks/execution/execution.ts](../src/tasks/execution/execution.ts) | not started | |
+| [tasks/execution/contracts.ts](../src/tasks/execution/contracts.ts) | ported | `execution_document` in `rust/src/http/routes/task_reads.rs`. |
+| [tasks/execution/execution.ts](../src/tasks/execution/execution.ts) | ported | `/api/tasks/{task_id}/execution` in `rust/src/http/routes/task_reads.rs`. Test: `task_detail_reads_follow_live_scope_and_saved_native_intent`. |
 | [tasks/execution/pane-layout.ts](../src/tasks/execution/pane-layout.ts) | not started | |
-| [tasks/execution/role-prompt.ts](../src/tasks/execution/role-prompt.ts) | not started | Native Standard Root and planned implementation/verification Worker prompts use source text. Direct-build and other workflow roles remain pending. |
-| [tasks/history/contracts.ts](../src/tasks/history/contracts.ts) | ported | Named query parsing preserves cursor bounds and public findings; cursor checks and the actual HTTP/WebSocket oracle pass. No response validators were introduced. |
-| [tasks/history/history.ts](../src/tasks/history/history.ts) | not started | Codex page messages and ordering match complete TS JSON on the same database and native logs. Other providers remain pending. |
-| [tasks/history/live.ts](../src/tasks/history/live.ts) | not started | `cf1bfad`: exact source tree `512810366944c05328ed989245498c4bd167759a` passes 123 library tests (five ignored), three integrations, fmt and all-target Clippy. Explicit same-DB TS oracle checks page, initial snapshot, appended-turn update and reconnect; both open Rust sockets close 1012 `server closing`. TS checks and source peer pass. Other providers and system-event telemetry remain pending. |
-| [tasks/history/read.ts](../src/tasks/history/read.ts) | not started | Codex session reads preserve live task scope and native output; the HTTP/WebSocket oracle passes. Other providers remain pending. |
-| [tasks/host.ts](../src/tasks/host.ts) | not started | `ec13982e` ports Standard scheduling, admission, terminal routing and local delivery. `ec4106de` cancellation/restart source tree `53cab56e1ce74fb0ecdb6c23d3d8bd17618e62ef` passes 124 library tests (five ignored), three integrations, fmt and all-target Clippy. Focused recovery/process checks and deterministic UI answer/restart/cancel pass; successful real Codex checks remain pending. One preserved run lost the final Root reply after local delivery; source tracing shows both backends retire delivered sessions before recovering that final turn. This shared lifecycle limitation is retained; no executed TypeScript comparison of that race is claimed. |
-| [tasks/images.ts](../src/tasks/images.ts) | verified | `3e5d027d`, source tree `87a5bfe5ef332ab46f2a558cf1783fe0c6e5deeb`: 132 library tests (six ignored), three integrations, fmt, all-target Clippy, binary build, TS checks and HTTP/MCP probes pass. Canonical decoding, limits, creation/replay/rollback and complete raw responses match source. On-demand React creation with a valid PNG loads its thumbnail and preview at 1280px and 390px, without page errors or model calls: [desktop](../.context/image-preview/desktop-dialog.png), [narrow](../.context/image-preview/narrow-dialog.png). |
-| [tasks/inspection.ts](../src/tasks/inspection.ts) | not started | Local GitHub summary and full diff are implemented. Full-diff source `5d76a297f183fa0a9a705c1b7fdcdd820478a85d` passes 149 library tests (seven ignored), three integrations, fmt and all-target Clippy. Raw direct-handler/TS helper bodies match for a large Unicode patch with tracked staged/unstaged edits and redaction; Git comparisons cover rename settings, binary content, mode changes and missing final newline. Untracked files are excluded; the full patch is not truncated. Earlier `9c34f0ed` covers advanced published base, stale/missing tracking refs and changed origin with a cached commit. GitHub API observations now supply the published SHA. Real private access, PR/Bitbucket ranges and checks remain pending. |
+| [tasks/execution/role-prompt.ts](../src/tasks/execution/role-prompt.ts) | ported | `rust/src/runtimes/codex/role_prompt.rs`; Standard roles only. |
+| [tasks/history/contracts.ts](../src/tasks/history/contracts.ts) | ported | `rust/src/http/routes/task_history.rs`. Test: `history_cursor_query_uses_public_zod_findings`. |
+| [tasks/history/history.ts](../src/tasks/history/history.ts) | ported | `rust/src/http/routes/task_history.rs`; Codex only. Test: `page_cursor_and_live_delta_follow_native_message_ids`. |
+| [tasks/history/live.ts](../src/tasks/history/live.ts) | ported | `rust/src/http/routes/task_history.rs`; Codex only. Test: `same_database_history_page_and_live_snapshot_match_typescript` (ignored by default; needs Node). |
+| [tasks/history/read.ts](../src/tasks/history/read.ts) | ported | `rust/src/http/routes/task_history.rs` with `rust/src/runtimes/codex/session_reader.rs`; Codex only. |
+| [tasks/host.ts](../src/tasks/host.ts) | ported | `rust/src/tasks/host.rs`; Standard Codex only. Tests: `root_dispatch_claim_survives_reopen_without_replaying_child`, `mise run test:journey:rust`. |
+| [tasks/images.ts](../src/tasks/images.ts) | verified | `rust/src/tasks/images.rs`. Tests: `decoder_rejects_noncanonical_padding_wrong_type_magic_and_decoded_oversize`, `tests/interop/root-image.ts`. |
+| [tasks/inspection.ts](../src/tasks/inspection.ts) | ported | Diff and diff summary in `rust/src/http/routes/task_reads.rs`; checks return 501. |
 | [tasks/integration.ts](../src/tasks/integration.ts) | not started | |
-| [tasks/issue-association.ts](../src/tasks/issue-association.ts) | not started | |
+| [tasks/issue-association.ts](../src/tasks/issue-association.ts) | ported | `IssueAssociation` in `rust/src/http/contracts/typed/tasks.rs`. Test: `issue_link_clears_locally_and_reports_tracker_reads_as_not_ported`. |
 | [tasks/issue-context.ts](../src/tasks/issue-context.ts) | not started | |
-| [tasks/limits/attachment-limits.ts](../src/tasks/limits/attachment-limits.ts) | verified | Image count, decoded/encoded limits and the eight-image request envelope are connected to DTO validation, decoding and the create route. Focused boundaries and a live over-limit 413 response check pass. |
-| [tasks/limits/limit-observer.ts](../src/tasks/limits/limit-observer.ts) | not started | Host admission observes and prices native Codex usage, honors max-turn/budget short circuits and atomically replaces usage snapshots. Missing native logs leave saved usage intact and prevent treating unknown spend as zero, matching source behavior. Other providers remain pending. |
-| [tasks/limits/limit-store.ts](../src/tasks/limits/limit-store.ts) | not started | |
-| [tasks/limits/limits.ts](../src/tasks/limits/limits.ts) | not started | |
-| [tasks/preparation.ts](../src/tasks/preparation.ts) | not started | |
-| [tasks/pull-request-dependencies.ts](../src/tasks/pull-request-dependencies.ts) | not started | |
-| [tasks/queue.ts](../src/tasks/queue.ts) | not started | Task repository tests cover queued prerequisite admission and backlog start. Queue host/controller integration remains pending. |
-| [tasks/repository.ts](../src/tasks/repository.ts) | not started | Atomic task/control/dependency/audit creation and replay are connected to local HTTP creation, including immediate admission and image artifacts. Image replay creates one artifact; a later dependency failure rolls back its row and file. Request hashes preserve JS stringify and field order. Answer/limit prompt hashes are pinned separately; the three remaining tasks.ts request hash sites are not yet connected. |
-| [tasks/sources.ts](../src/tasks/sources.ts) | not started | |
-| [tasks/tasks.ts](../src/tasks/tasks.ts) | not started | `2c95b8e8`: immediate creation/answers; `572f2400`: limits; `cca86c03`: archive; `67e70593`: edit/rename; `92589c86`: human notes. Human-note source `3db72cd9b79a4dba2241cccfd02ff4efc4387110` passes 135 library tests (six ignored), three integrations, fmt and all-target Clippy. The exact-export direct-handler oracle compares full raw TS responses for active/delivered notes; fixtures, reopen/native identity, PR ownership and after-commit checks pass. User notes add no audit row, matching source. Pinned Root prompt hashes do not cover the three remaining request hash sites. Other workflows/commands and status-event/analytics hooks remain pending. |
-| [tasks/templates.ts](../src/tasks/templates.ts) | not started | GET reads and normalizes stored configurations with named DTOs; ordered/default/trim/optional-field behavior matches TS on a shared database. Mutations remain pending. |
-| [tasks/timeline/contracts.ts](../src/tasks/timeline/contracts.ts) | ported | Named task timeline response structs preserve source fields and nulls; complete parsed TypeScript HTTP comparison passes. Company timeline remains pending. |
-| [tasks/timeline/timeline.ts](../src/tasks/timeline/timeline.ts) | ported | `1ff4614`: source tree `54a2f403c38838d5e4ff9e2a71c66f668c648f9b` passes 138 library tests (six ignored), three integrations, fmt, all-target Clippy and TS checks. Saved usage projection, current Codex overlay, missing-native fallback, archive behavior and live access recheck pass focused tests and source peer. Same-database TypeScript inject/Rust HTTP responses match as complete parsed JSON, and React renders saved execution time. Company timeline and other native providers remain pending. |
-| [tasks/usage.ts](../src/tasks/usage.ts) | not started | |
-| [tasks/worktree-open.ts](../src/tasks/worktree-open.ts) | not started | |
-| [tasks/worktree.ts](../src/tasks/worktree.ts) | not started | `7986a84f`: Git2 creation and live delivery observations pass. Removal now checks actual registered path/repository ownership and dirty content after process cleanup and reauthorization; real Git tests cover confirmation, populated submodules, foreign repositories and replay. Changed branch references are preserved, and empty/stale submodule metadata does not block cleanup: intentional no-mirror exceptions documented in PRD §8. No atomicity against an unrelated concurrent writer is claimed. Remote missing-commit fetch, credentials and wider delivery remain pending; transitive native OpenSSL remains. |
+| [tasks/limits/attachment-limits.ts](../src/tasks/limits/attachment-limits.ts) | verified | Limits in `rust/src/tasks/images.rs`. Test: `decoder_rejects_noncanonical_padding_wrong_type_magic_and_decoded_oversize`. |
+| [tasks/limits/limit-observer.ts](../src/tasks/limits/limit-observer.ts) | ported | Usage observation in `rust/src/tasks/host.rs`; Codex only. Test: `recovery_resumes_a_limit_pause_once_usage_is_within_limits`. |
+| [tasks/limits/limit-store.ts](../src/tasks/limits/limit-store.ts) | ported | `answer_task_limit` and `reconcile_task_limit_pause` in `rust/src/coordination/root_session_store.rs`. |
+| [tasks/limits/limits.ts](../src/tasks/limits/limits.ts) | ported | `task_limit_question` in `rust/src/coordination/root_session_store.rs`. |
+| [tasks/preparation.ts](../src/tasks/preparation.ts) | not started | Only the preparation directory path is reproduced in `rust/src/tasks/host.rs`; the setup command does not run. |
+| [tasks/pull-request-dependencies.ts](../src/tasks/pull-request-dependencies.ts) | ported | `PullRequestDependency` in `rust/src/http/contracts/typed/tasks.rs`, stored by `rust/src/tasks/repository.rs`. |
+| [tasks/queue.ts](../src/tasks/queue.ts) | ported | `admit_queued` in `rust/src/coordination/root_session_store.rs`. Test: `scheduler_tick_admits_a_queued_task_whose_blocker_cleared`. |
+| [tasks/repository.ts](../src/tasks/repository.ts) | ported | `rust/src/tasks/repository.rs`. Tests: `local_backlog_create_fetches_git_and_returns_full_task_shape`, `standard_request_hash_matches_typescript_parsed_request`. |
+| [tasks/sources.ts](../src/tasks/sources.ts) | not started | 501 stub. |
+| [tasks/tasks.ts](../src/tasks/tasks.ts) | ported | `rust/src/tasks/commands.rs`; Standard workflow only. Test: `live_authority_and_after_commit_wake_follow_task_start`. |
+| [tasks/templates.ts](../src/tasks/templates.ts) | ported | `rust/src/tasks/templates.rs`; list only. |
+| [tasks/timeline/contracts.ts](../src/tasks/timeline/contracts.ts) | ported | `rust/src/http/routes/task_timeline.rs`; company timeline returns 501. Test: `tests/interop/task-timeline.ts`. |
+| [tasks/timeline/timeline.ts](../src/tasks/timeline/timeline.ts) | ported | `rust/src/tasks/timeline.rs`; company timeline returns 501. Tests: `native_overlay_and_missing_record_preserve_saved_timing`, `tests/interop/task-timeline.ts`. |
+| [tasks/usage.ts](../src/tasks/usage.ts) | ported | `rust/src/runtimes/codex/usage.rs`; Codex only. Test: `cumulative_native_thread_usage_uses_dispatched_model_and_optional_pricing`. |
+| [tasks/worktree-open.ts](../src/tasks/worktree-open.ts) | not started | 501 stub. |
+| [tasks/worktree.ts](../src/tasks/worktree.ts) | ported | `rust/src/tasks/worktree.rs`. Tests: `prepares_and_reobserves_a_real_local_git_worktree`, `tests/task-archive.browser.test.ts`. |

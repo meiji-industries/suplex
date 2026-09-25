@@ -103,21 +103,6 @@ const ROUTES: &[(Method, &str, Access)] = &[
     ),
     (Method::GET, "/api/models", Authenticated),
     (
-        Method::GET,
-        "/api/oauth/consent/{request_id}",
-        Authenticated,
-    ),
-    (
-        Method::POST,
-        "/api/oauth/consent/{request_id}/approve",
-        Authenticated,
-    ),
-    (
-        Method::POST,
-        "/api/oauth/consent/{request_id}/deny",
-        Authenticated,
-    ),
-    (
         Method::PATCH,
         "/api/task-templates/{template_id}",
         Authenticated,

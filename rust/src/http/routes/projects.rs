@@ -52,6 +52,120 @@ pub fn router() -> Router<AppState> {
             "/api/projects/{project_id}/provider-instances",
             get(provider_instances),
         )
+        .route("/api/projects/{project_id}/issues", get(issues))
+        .route("/api/projects/{project_id}/task-sources", get(task_sources))
+}
+
+/// Query pairs as a JSON object; a repeated key keeps its last value.
+fn query_object(uri: &axum::http::Uri) -> serde_json::Value {
+    serde_json::Value::Object(
+        url::form_urlencoded::parse(uri.query().unwrap_or("").as_bytes())
+            .map(|(key, value)| (key.into_owned(), json!(value.into_owned())))
+            .collect(),
+    )
+}
+
+pub(super) fn source_error(error: Box<dyn Error>) -> Response {
+    match error.downcast::<crate::tasks::sources::TaskSourceFailure>() {
+        Ok(failure) => (
+            StatusCode::from_u16(failure.status_code).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
+            axum::Json(json!({"error": failure.message, "code": failure.code})),
+        )
+            .into_response(),
+        Err(error) => match error.downcast::<crate::tasks::commands::TaskFailure>() {
+            Ok(failure) if failure.code == "experimental_not_ported" => auth::not_ported(),
+            Ok(failure) => auth::error(
+                StatusCode::from_u16(failure.status_code)
+                    .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
+                &failure.public_message,
+            ),
+            Err(error) => service_error(error),
+        },
+    }
+}
+
+/// TypeScript `searchIssues`: the configured tracker, else the project's GitHub Issues.
+async fn issues(
+    State(state): State<AppState>,
+    Path(project_id): Path<String>,
+    axum::extract::OriginalUri(uri): axum::extract::OriginalUri,
+    headers: HeaderMap,
+) -> Response {
+    if let Err(response) = validated_path("common.ProjectIdParamsSchema", "projectId", &project_id)
+    {
+        return *response;
+    }
+    let query = query_object(&uri)["query"]
+        .as_str()
+        .unwrap_or("")
+        .to_owned();
+    if query.encode_utf16().count() > 200 {
+        return auth::validation_error(vec![json!({"code": "too_big", "path": ["query"]})]);
+    }
+    let (user_id, cookies) = match authorize(&state, &headers) {
+        Ok(value) => value,
+        Err(response) => return *response,
+    };
+    let project =
+        match state.with_database(|database| service::get(database, &user_id, &project_id)) {
+            Ok(project) => project,
+            Err(source) => return with_cookies(service_error(source), cookies),
+        };
+    let tracker = match &project.integration {
+        Some(integration) => serde_json::to_value(&integration.tracker).unwrap_or_default(),
+        None => project.repository.as_ref().map_or(
+            serde_json::Value::Null,
+            |repository| json!({"kind": "github", "repository": repository}),
+        ),
+    };
+    if tracker.is_null() {
+        return with_cookies(axum::Json(json!({"issues": []})).into_response(), cookies);
+    }
+    let found = async {
+        crate::integrations::issue_tracker::IssueTracker::new(&tracker)
+            .await?
+            .search(&query)
+            .await
+    };
+    let response = match found.await {
+        Ok(issues) => axum::Json(json!({"issues": issues})).into_response(),
+        Err(error) => auth::service_error(error.to_string().into()),
+    };
+    with_cookies(response, cookies)
+}
+
+/// TypeScript `discoverTaskSources`.
+async fn task_sources(
+    State(state): State<AppState>,
+    Path(project_id): Path<String>,
+    axum::extract::OriginalUri(uri): axum::extract::OriginalUri,
+    headers: HeaderMap,
+) -> Response {
+    if let Err(response) = validated_path("common.ProjectIdParamsSchema", "projectId", &project_id)
+    {
+        return *response;
+    }
+    let query = query_object(&uri);
+    match contracts::validate("projects.TaskSourceQuerySchema", Some(&query)) {
+        Some(Ok(_)) => {}
+        Some(Err(issues)) => return auth::validation_error(issues),
+        None => return auth::error(StatusCode::INTERNAL_SERVER_ERROR, "Internal server error"),
+    }
+    let kind = query["kind"].as_str().unwrap_or("").to_owned();
+    let (user_id, cookies) = match authorize(&state, &headers) {
+        Ok(value) => value,
+        Err(response) => return *response,
+    };
+    let project =
+        match state.with_database(|database| service::get(database, &user_id, &project_id)) {
+            Ok(project) => project,
+            Err(source) => return with_cookies(service_error(source), cookies),
+        };
+    let response = match crate::tasks::sources::discover(&project, &kind).await {
+        Ok(sources) => axum::Json(sources).into_response(),
+        Err(error) => source_error(error),
+    };
+    with_cookies(response, cookies)
 }
 
 fn validated_path(contract: &str, name: &str, value: &str) -> Result<(), Box<Response>> {
@@ -1071,5 +1185,94 @@ exit 1
         assert_eq!(duplicate.status(), StatusCode::CONFLICT);
         drop(state);
         let _ = fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn issue_search_and_task_sources_follow_the_configured_tracker() {
+        let path = std::env::temp_dir().join(format!(
+            "{}.sqlite",
+            identity_auth::random_hex_id("suplex_project_sources").unwrap()
+        ));
+        let mut database = SuplexDatabase::open(&path, OpenMode::Migrate).unwrap();
+        let now = Utc::now();
+        let admin = identity_auth::development_sign_in(&mut database, now).unwrap();
+        let company =
+            companies::create_company(&mut database, &admin.user.id, "Sources", now).unwrap();
+        database.connection().execute(
+            "INSERT INTO suplex_projects (id, company_id, name, repository_path, worktree_root, repository_identity, base_branch, setup_command, verification_command, root_profile_id, worker_profile_id, integration_json, agent_task_policy_json, created_at, updated_at) VALUES ('project_sources', ?1, 'Project', '/tmp/repository', '/tmp/worktrees', 'owner/repo', 'main', '', '', 'profile_native_root', 'profile_native_worker', '{}', '{}', ?2, ?2)",
+            rusqlite::params![company.id, now.to_rfc3339()],
+        ).unwrap();
+        let state = AppState::new(
+            database,
+            session::SessionConfig {
+                port: 4113,
+                reachable_address: "http://127.0.0.1:4113".to_owned(),
+                tailscale_exposure: "off".to_owned(),
+            },
+        );
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            "cookie",
+            HeaderValue::from_str(&format!("sid_v1={}", admin.session_token)).unwrap(),
+        );
+        let uri = |value: &str| axum::extract::OriginalUri(value.parse().unwrap());
+        let body = |response: Response| async move {
+            serde_json::from_slice::<serde_json::Value>(
+                &to_bytes(response.into_body(), 1024 * 1024).await.unwrap(),
+            )
+            .unwrap()
+        };
+        let long = format!(
+            "/api/projects/project_sources/issues?query={}",
+            "x".repeat(201)
+        );
+        let rejected = issues(
+            State(state.clone()),
+            Path("project_sources".into()),
+            uri(&long),
+            headers.clone(),
+        )
+        .await;
+        assert_eq!(rejected.status(), StatusCode::BAD_REQUEST);
+        // An integration without a tracker searches nothing; it never falls back to GitHub Issues.
+        let none = issues(
+            State(state.clone()),
+            Path("project_sources".into()),
+            uri("/api/projects/project_sources/issues?query=bug"),
+            headers.clone(),
+        )
+        .await;
+        assert_eq!(none.status(), StatusCode::OK);
+        assert_eq!(body(none).await, json!({"issues": []}));
+        let invalid = task_sources(
+            State(state.clone()),
+            Path("project_sources".into()),
+            uri("/api/projects/project_sources/task-sources?kind=tag"),
+            headers.clone(),
+        )
+        .await;
+        assert_eq!(invalid.status(), StatusCode::BAD_REQUEST);
+        let mismatch = task_sources(
+            State(state.clone()),
+            Path("project_sources".into()),
+            uri("/api/projects/project_sources/task-sources?kind=issue"),
+            headers.clone(),
+        )
+        .await;
+        assert_eq!(mismatch.status(), StatusCode::OK);
+        assert_eq!(
+            body(mismatch).await,
+            json!({"available": false, "reason": "The source issue does not match the configured tracker.", "sources": []})
+        );
+        let anonymous = task_sources(
+            State(state.clone()),
+            Path("project_sources".into()),
+            uri("/api/projects/project_sources/task-sources?kind=issue"),
+            HeaderMap::new(),
+        )
+        .await;
+        assert_eq!(anonymous.status(), StatusCode::UNAUTHORIZED);
+        drop(state);
+        let _ = fs::remove_file(path);
     }
 }

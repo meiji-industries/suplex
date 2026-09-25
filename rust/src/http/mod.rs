@@ -21,6 +21,7 @@ pub mod contracts;
 pub mod routes {
     pub mod admin_identity;
     pub mod agent_pairing;
+    pub mod admin_platform;
     pub mod auth;
     pub mod companies;
     pub mod external_agent_administration;
@@ -37,6 +38,7 @@ pub mod routes {
     pub mod task_timeline;
     pub mod tasks;
     pub mod unported;
+    pub mod update;
     pub mod workflows;
 }
 pub mod session;
@@ -129,6 +131,7 @@ pub fn router(state: AppState) -> Router {
         .merge(routes::admin_identity::router())
         .merge(routes::agent_pairing::router())
         .merge(routes::external_agent_administration::router())
+        .merge(routes::admin_platform::router())
         .merge(routes::auth::router())
         .merge(routes::companies::router())
         .merge(routes::github_auth::router())
@@ -144,6 +147,7 @@ pub fn router(state: AppState) -> Router {
         .merge(routes::task_templates::router())
         .merge(routes::tasks::router())
         .merge(routes::workflows::router())
+        .merge(routes::update::router())
         .merge(routes::unported::router())
         .route("/auth", get(auth_page))
         .route("/assets/{filename}", get(asset))

@@ -29,6 +29,7 @@ use crate::{
         },
     },
     identity::external_agents::{self, Principal},
+    integrations::github_delivery::{Github, Observation},
     platform::{
         artifacts,
         database::{DatabaseResult, SuplexDatabase},
@@ -42,7 +43,7 @@ use crate::{
 use super::{
     archive::operations as archive,
     commands::{self, TaskFailure},
-    images,
+    images, integration, sources,
     repository::{self, TaskCreator},
     response,
 };
@@ -619,151 +620,42 @@ fn summary(task: &Value) -> Value {
     Value::Object(fields)
 }
 
-// Integration health, a private port of `tasks/integration.ts` (W1 owns the
-// shared module and the GitHub observer). Until the GitHub observer is
-// ported, a task whose delivery needs GitHub reports an unavailable
-// observation instead of a guessed state.
+// Integration health: `withAgentApiIntegration` over `tasks/integration.rs`
+// with live GitHub observations taken outside the database lock.
 
 struct Observed {
-    observation: Option<Value>,
+    observation: Option<Observation>,
     failure: Option<String>,
 }
 
-fn requires_pull_request(task: &Value) -> bool {
-    matches!(task["deliveryTarget"].as_str(), Some("pull_request_draft" | "pull_request_ready" | "merged"))
-}
-
-fn observable_delivery(task: &Value) -> bool {
-    !task["pullRequest"].is_null() || (task["status"] == "delivered" && requires_pull_request(task))
-}
-
-fn observe(task: &Value) -> Observed {
-    if !observable_delivery(task) {
+async fn observe(github: &mut Option<Result<Github, String>>, task: &Value) -> Observed {
+    if !integration::observable_delivery(task) {
         return Observed { observation: None, failure: None };
     }
-    Observed { observation: None, failure: Some("experimental_not_ported".into()) }
-}
-
-fn pull_request_state(observation: Option<&Value>) -> &'static str {
-    let Some(observation) = observation.filter(|value| value["exists"] == true) else {
-        return "absent";
+    if github.is_none() {
+        *github = Some(Github::load().await.map_err(|failure| failure.code.to_owned()));
+    }
+    let client = match github.as_ref().expect("GitHub client loaded") {
+        Ok(client) => client,
+        Err(code) => return Observed { observation: None, failure: Some(code.clone()) },
     };
-    match observation["state"].as_str() {
-        Some("merged") => "merged",
-        Some("closed") => "closed",
-        _ if observation["mergeable"] == "CONFLICTING" || observation["mergeStateStatus"] == "DIRTY" => "conflicting",
-        _ if observation["isDraft"] == true => "draft",
-        _ if observation["isDraft"] == false => "ready",
-        _ => "open",
-    }
-}
-
-fn integration(task: &Value, observed: &Observed, observed_at: &str) -> Value {
-    let observation = observed.observation.as_ref();
-    let state = pull_request_state(observation);
-    let integrated = state == "merged" || (task["status"] == "delivered" && !requires_pull_request(task) && observed.failure.is_none());
-    let field = |name: &str| observation.and_then(|value| value.get(name)).cloned().unwrap_or(Value::Null);
-    let count = |name: &str| observation.and_then(|value| value["checks"].get(name)).cloned().unwrap_or(json!(0));
-    let number = match field("number") {
-        Value::Null => task["pullRequest"].get("number").cloned().unwrap_or(Value::Null),
-        number => number,
-    };
-    json!({
-        "integrated": integrated,
-        "pullRequest": {
-            "state": state, "number": number, "url": field("url"), "targetBranch": task["configuration"]["baseBranch"],
-            "headSha": field("headSha"), "baseSha": field("baseSha"), "mergeable": field("mergeable"),
-            "mergeStateStatus": field("mergeStateStatus"), "reviewDecision": field("reviewDecision"),
-            "checks": {"total": count("total"), "pending": count("pending"), "failing": count("failing"), "successful": count("successful")},
-        },
-        "observedAt": observed_at,
-        "observation": if observed.failure.is_none() { "observed" } else { "unavailable" },
-        "observationReason": observed.failure,
-        "deployed": {"included": null, "reason": "not_determinable"},
-    })
-}
-
-fn is_upstream_of(upstream: &Value, task: &Value) -> bool {
-    if upstream["id"] == task["id"] {
-        return false;
-    }
-    let repository = |value: &Value| value["configuration"]["repository"].as_str().unwrap_or_default().to_lowercase();
-    if repository(upstream) != repository(task) {
-        return false;
-    }
-    let source = &task["configuration"]["source"];
-    let upstream_branch = &upstream["configuration"]["branch"];
-    if source["kind"] == "branch" && &source["branch"] == upstream_branch {
-        return true;
-    }
-    if source["kind"] == "pull_request" && !upstream["pullRequest"].is_null() && upstream["pullRequest"]["number"] == source["number"] {
-        return true;
-    }
-    &task["configuration"]["baseBranch"] == upstream_branch
-}
-
-fn action(owner: &str, reason: &str, summary: &str, commands: Vec<String>, human: bool, upstream: Value, at: &Value) -> Value {
-    json!({"owner": owner, "reasonCode": reason, "summary": summary, "upstream": upstream, "evidenceAt": at, "suggestedCommands": commands, "humanApprovalRequired": human})
-}
-
-fn action_required(task: &Value, integration: &Value, upstream: Option<Value>) -> Value {
-    let at = &integration["observedAt"];
-    let pull = &integration["pullRequest"];
     let configuration = &task["configuration"];
-    let text = |value: &Value| value.as_str().unwrap_or_default().to_owned();
-    let (repository, branch, base) = (text(&configuration["repository"]), text(&configuration["branch"]), text(&configuration["baseBranch"]));
-    let reference = if pull["number"].is_null() { branch.clone() } else { format!("{} --repo {repository}", pull["number"]) };
-    let merge = || vec![format!("git fetch origin {base}"), format!("git merge origin/{base}")];
-    let state = pull["state"].as_str().unwrap_or_default();
-    if task["status"] == "waiting_human" {
-        return action("human", "waiting_human", "The task waits for your answer. Answer the question in Suplex.", vec![], true, Value::Null, at);
+    let number = task["pullRequest"]["number"].as_u64();
+    let repository = configuration["repository"].as_str().unwrap_or_default();
+    let branch = configuration["branch"].as_str().unwrap_or_default();
+    match client.observe_pull_request(repository, branch, number).await {
+        Ok(observation) => Observed { observation: Some(observation), failure: None },
+        Err(failure) => Observed { observation: None, failure: Some(failure.code.to_owned()) },
     }
-    if integration["observation"] == "unavailable" {
-        return action("suplex", "observation_unavailable", "Suplex could not read the pull request from GitHub. Check the GitHub access and retry.", vec![format!("gh pr view {reference}")], false, Value::Null, at);
-    }
-    if integration["integrated"] == true {
-        return Value::Null;
-    }
-    if state == "conflicting" {
-        return action("agent", "conflicting_pull_request", "GitHub reports merge conflicts on the pull request. The task owner must merge the base branch and resolve the conflicts.", merge(), false, Value::Null, at);
-    }
-    if pull["checks"]["failing"].as_i64().unwrap_or(0) > 0 {
-        return action("agent", "failed_checks", "CI reports failed checks on the pull request. The task owner must read the checks and repair the build.", vec![format!("gh pr checks {reference}")], false, Value::Null, at);
-    }
-    let stored_head = task["pullRequest"].get("headSha");
-    if state != "absent" && state != "closed" && (pull["mergeStateStatus"] == "BEHIND" || (stored_head.is_some() && !pull["headSha"].is_null() && stored_head != Some(&pull["headSha"]))) {
-        return action("agent", "stale_delivery", "The pull request is behind the base branch. The task owner must update the branch and push the result.", merge(), false, Value::Null, at);
-    }
-    if task["status"] == "delivered" && requires_pull_request(task) && (state == "absent" || state == "closed") {
-        return action("agent", "pull_request_missing", "Suplex delivered the task without an open pull request. The task owner must create the pull request for the branch.", vec![format!("gh pr create --repo {repository} --head {branch} --base {base}")], false, Value::Null, at);
-    }
-    if let Some(upstream) = upstream {
-        return action("upstream", "blocked_by_dependency", "An upstream task is not integrated. Wait for the upstream pull request to merge.", vec![], false, upstream, at);
-    }
-    if state == "absent" {
-        return Value::Null;
-    }
-    if pull["checks"]["pending"].as_i64().unwrap_or(0) > 0 {
-        return action("suplex", "pending_checks", "CI checks are not complete on the pull request. Check the pull request after the checks finish.", vec![format!("gh pr checks {reference}")], false, Value::Null, at);
-    }
-    if pull["reviewDecision"] != "APPROVED" {
-        return action("human", "pending_review", "The pull request waits for a review decision. Review the pull request.", vec![format!("gh pr view {reference}")], true, Value::Null, at);
-    }
-    action("human", "waiting_human", "The pull request is approved and not merged. Merge the pull request.", vec![format!("gh pr view {reference}")], true, Value::Null, at)
 }
 
-fn matches_filter(projection: &Value, filter: &str) -> bool {
-    if filter == "not_integrated" {
-        return projection["integration"]["integrated"] != true;
-    }
-    projection["actionRequired"]["reasonCode"] == filter
+/// The stored facts integration reads: each target row and task, and the agent's upstream pool.
+struct Targets {
+    targets: Vec<(Row, Value)>,
+    pool: Vec<Value>,
 }
 
-/// `withAgentApiIntegration`: add observed delivery health to stored projections.
-fn with_integration(database: &SuplexDatabase, principal: &Principal, projections: Vec<Value>) -> DatabaseResult<Vec<Value>> {
-    if projections.is_empty() {
-        return Ok(projections);
-    }
+fn targets(database: &SuplexDatabase, principal: &Principal, projections: &[Value]) -> DatabaseResult<Targets> {
     let targets = projections
         .iter()
         .map(|projection| {
@@ -775,17 +667,28 @@ fn with_integration(database: &SuplexDatabase, principal: &Principal, projection
         .iter()
         .map(|row| task_json(database, &row.id))
         .collect::<DatabaseResult<Vec<_>>>()?;
+    Ok(Targets { targets, pool })
+}
+
+async fn with_integration(principal: &Principal, projections: Vec<Value>, stored: Targets) -> Vec<Value> {
+    let Targets { targets, pool } = stored;
     let observed_at = timestamp(Utc::now());
-    let mut integrations = std::collections::HashMap::new();
     let upstreams = targets
         .iter()
-        .map(|(_, task)| pool.iter().filter(|other| is_upstream_of(other, task)).collect::<Vec<_>>())
+        .map(|(_, task)| pool.iter().filter(|other| integration::is_upstream_of(other, task)).collect::<Vec<_>>())
         .collect::<Vec<_>>();
+    let mut github = None;
+    let mut integrations = std::collections::HashMap::new();
     for task in targets.iter().map(|(_, task)| task).chain(upstreams.iter().flatten().copied()) {
         let id = task["id"].as_str().unwrap_or_default().to_owned();
-        integrations.entry(id).or_insert_with(|| integration(task, &observe(task), &observed_at));
+        if integrations.contains_key(&id) {
+            continue;
+        }
+        let observed = observe(&mut github, task).await;
+        let value = integration::derive_task_integration(task, observed.observation.as_ref(), observed.failure.as_deref(), &observed_at);
+        integrations.insert(id, value);
     }
-    Ok(projections
+    projections
         .into_iter()
         .zip(targets.iter().zip(&upstreams))
         .map(|(mut projection, ((row, task), upstream))| {
@@ -794,8 +697,8 @@ fn with_integration(database: &SuplexDatabase, principal: &Principal, projection
             let blocking = upstream
                 .iter()
                 .find(|other| integrations.get(other["id"].as_str().unwrap_or_default()).is_none_or(|value| value["integrated"] != true));
-            let upstream = blocking.map(|other| json!({"taskId": other["id"], "pullRequestNumber": other["pullRequest"].get("number").cloned().unwrap_or(Value::Null)}));
-            let mut required = action_required(task, &integration, upstream);
+            let upstream = blocking.map_or(Value::Null, |other| json!({"taskId": other["id"], "pullRequestNumber": other["pullRequest"].get("number").cloned().unwrap_or(Value::Null)}));
+            let mut required = integration::derive_action_required(task, &integration, &upstream);
             if required["owner"] == "agent" && row.creator_agent_id.as_deref() != Some(principal.agent_id.as_str()) {
                 required["owner"] = json!("task_owner");
                 required["suggestedCommands"] = json!([]);
@@ -808,26 +711,31 @@ fn with_integration(database: &SuplexDatabase, principal: &Principal, projection
             }
             projection
         })
-        .collect())
+        .collect()
 }
 
 /// `readAgentApiTask`: the stored projection plus observed integration health.
-pub fn read(database: &SuplexDatabase, principal: &Principal, task_id: &str) -> DatabaseResult<Value> {
-    let projection = projection(database, principal, task_id)?;
-    Ok(with_integration(database, principal, vec![projection])?.remove(0))
+pub async fn read(state: &AppState, principal: &Principal, task_id: &str) -> DatabaseResult<Value> {
+    let (projection, stored) = state.with_database(|database| {
+        let projection = projection(database, principal, task_id)?;
+        let stored = targets(database, principal, std::slice::from_ref(&projection))?;
+        Ok::<_, Box<dyn Error>>((projection, stored))
+    })?;
+    Ok(with_integration(principal, vec![projection], stored).await.remove(0))
 }
 
 /// `readAgentApiTasks`; `view` defaults differ between HTTP (full) and MCP (summary).
-pub fn read_list(database: &SuplexDatabase, principal: &Principal, query: &TaskListQuery, view: &str) -> DatabaseResult<Value> {
-    let (tasks, next) = list_page(database, principal, query)?;
+pub async fn read_list(state: &AppState, principal: &Principal, query: &TaskListQuery, view: &str) -> DatabaseResult<Value> {
+    let (tasks, next) = state.with_database(|database| list_page(database, principal, query))?;
     if view == "summary" && query.filter.is_none() {
         return Ok(json!({"tasks": tasks.iter().map(summary).collect::<Vec<_>>(), "nextCursor": next}));
     }
-    let tasks = with_integration(database, principal, tasks)?;
+    let stored = state.with_database(|database| targets(database, principal, &tasks))?;
+    let tasks = with_integration(principal, tasks, stored).await;
     // Integration health comes from GitHub, not the query, so the filter narrows a page already drawn.
     let tasks = tasks
         .into_iter()
-        .filter(|task| query.filter.as_deref().is_none_or(|filter| matches_filter(task, filter)))
+        .filter(|task| query.filter.as_deref().is_none_or(|filter| integration::matches_agent_api_filter(&task["integration"], &task["actionRequired"], filter)))
         .map(|task| if view == "summary" { summary(&task) } else { task })
         .collect::<Vec<_>>();
     Ok(json!({"tasks": tasks, "nextCursor": next}))
@@ -1278,12 +1186,9 @@ fn admit(database: &SuplexDatabase, principal: &Principal, raw: &TaskCreateBody)
         task_row(database, dependency)?.ok_or_else(|| dependency_unavailable(dependency))?;
         require_readable(database, principal, dependency).map_err(|_| dependency_unavailable(dependency))?;
     }
-    // The same local-engine limits as board creation in `routes/tasks.rs`; W1 and W7 lift them.
-    if !request.blocked_by_pull_requests.is_empty() {
-        return Err(not_ported("Pull request prerequisites are not ported"));
-    }
-    if request.workflow != "standard" || request.source.is_some() || request.delivery_target != "local_worktree" {
-        return Err(not_ported("Only Standard local-worktree tasks without a source are ported"));
+    // The same engine limits as board creation in `routes/tasks.rs`.
+    if request.workflow != "standard" || !request.blocked_by_pull_requests.is_empty() {
+        return Err(not_ported("Only Standard tasks without pull request prerequisites are ported"));
     }
     let images = request
         .images
@@ -1301,6 +1206,7 @@ fn write(
     raw: &TaskCreateBody,
     pending: &Pending,
     base_sha: &str,
+    source: sources::CreationSource,
     copied_from: Option<&str>,
     artifact_root: Option<&std::path::Path>,
     now: DateTime<Utc>,
@@ -1311,6 +1217,7 @@ fn write(
         let profiles = commands::select_local_profiles(database, &pending.project, request)?;
         commands::prepare_local_user_task(&principal.company_id, &principal.agent_id, &pending.project, request, profiles, base_sha, now)?
     };
+    sources::apply(&mut prepared, source);
     prepared.creator = TaskCreator::Agent(principal.agent_id.clone());
     prepared.request_hash = pending.hash.clone();
     prepared.copied_from_task_id = copied_from.map(str::to_owned);
@@ -1388,6 +1295,12 @@ pub async fn create(state: &AppState, principal: &Principal, raw: &TaskCreateBod
         Admission::Done(creation) => return Ok(creation),
         Admission::Capture(pending) => pending,
     };
+    let request = &pending.resolved.request;
+    let selector = request.source.as_ref().map(serde_json::to_value).transpose()?;
+    let source = match sources::creation_source(&pending.project, &request.title, &request.description, selector.as_ref(), None).await {
+        Ok(source) => source,
+        Err(error) => return Err(source_rejection(error, selector.as_ref())),
+    };
     let repository_path = PathBuf::from(&pending.project.repository_path);
     let base_branch = pending.project.base_branch.clone();
     let host = match pending.project.integration.as_ref().map(|integration| &integration.repository) {
@@ -1399,7 +1312,27 @@ pub async fn create(state: &AppState, principal: &Principal, raw: &TaskCreateBod
         Box::new(ProjectFailure { message: "Project configuration could not be captured", status_code: 422, findings }) as Box<dyn Error>
     })?;
     let artifact_root = state.artifact_root.clone();
-    state.with_database(|database| write(database, principal, raw, &pending, &base_sha, copied_from, artifact_root.as_deref(), Utc::now()))
+    state.with_database(|database| write(database, principal, raw, &pending, &base_sha, source, copied_from, artifact_root.as_deref(), Utc::now()))
+}
+
+/// A rejected source names its field, value, and reason; provider outages keep their own failure.
+fn source_rejection(error: Box<dyn Error>, selector: Option<&Value>) -> Box<dyn Error> {
+    let reason = if let Some(failure) = error.downcast_ref::<sources::TaskSourceFailure>() {
+        (failure.status_code < 500).then(|| failure.message.to_owned())
+    } else if let Some(failure) = error.downcast_ref::<ProjectFailure>() {
+        (failure.status_code < 500).then(|| failure.message.to_owned())
+    } else {
+        None
+    };
+    let (Some(reason), Some(selector)) = (reason, selector) else {
+        return error;
+    };
+    let (field, code, value) = match selector["kind"].as_str() {
+        Some("issue") => ("source.issue", "source_issue_rejected", selector["number"].to_string()),
+        Some("pull_request") => ("source.pullRequest", "source_pull_request_rejected", selector["number"].to_string()),
+        _ => ("source.branch", "source_branch_rejected", selector["branch"].as_str().unwrap_or_default().to_owned()),
+    };
+    fail_with(&reason, 422, code, json!({"field": field, "value": value, "reason": reason}))
 }
 
 // Dependencies.

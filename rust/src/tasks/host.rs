@@ -26,14 +26,13 @@ use crate::{
     platform::database::{DatabaseResult, OpenMode, SuplexDatabase},
     profiles::model_pricing::ModelsDevCatalogReader,
     runtimes::{
-        codex::{
-            role_prompt::WorkerPurpose,
-            runtime::{self, DispatchState, PromptObservation, PromptState},
-            session_reader,
-            task_runtime::{self, RootCodexLaunch, WorkerCodexLaunch},
-            usage,
-        },
+        codex::session_reader,
         process::{ProcessOwnerObservation, inspect_process, observe_process_owner},
+        task_harness::{
+            DispatchState, NativeTimeline, PromptObservation, PromptState, ReaderSession,
+            TaskHarness, TaskRole, TaskScope, UsageEntry, WorkerPurpose, task_context_prompt,
+        },
+        task_harness_registry,
     },
     shared::js_json,
     tasks::{
@@ -43,14 +42,14 @@ use crate::{
     },
 };
 
-struct ProjectLaunchScope {
+pub(crate) struct ProjectLaunchScope {
     context: Option<String>,
-    context_path: Option<PathBuf>,
+    pub(crate) context_path: Option<PathBuf>,
     environment: HashMap<String, String>,
-    excluded_keys: Vec<String>,
+    pub(crate) excluded_keys: Vec<String>,
 }
 
-fn project_launch_scope(
+pub(crate) fn project_launch_scope(
     configuration: &serde_json::Value,
     issue_context: &serde_json::Value,
     database_path: &Path,
@@ -134,6 +133,11 @@ fn project_launch_scope(
         environment,
         excluded_keys,
     }
+}
+
+/// TypeScript `execution.mcp`, passed only when the project configures it.
+fn project_mcp(rows: &root_session_store::RootObservationRows) -> Option<&serde_json::Value> {
+    Some(&rows.context["configuration"]["execution"]["mcp"]).filter(|value| value.is_array())
 }
 
 fn required_path(value: &serde_json::Value, name: &str) -> DatabaseResult<PathBuf> {
@@ -237,12 +241,13 @@ fn dispatch_state(turn: &RootTurn) -> DispatchState {
 fn observe_or_recover_fenced(
     database: &mut SuplexDatabase,
     database_path: &Path,
+    harness: &dyn TaskHarness,
     session: &RootSession,
     native_id: &str,
     turn: &RootTurn,
     owner: &str,
 ) -> DatabaseResult<(PromptObservation, bool)> {
-    let observed = observe_turn(database_path, session, native_id, turn)?;
+    let observed = observe_turn(database_path, harness, session, native_id, turn)?;
     if turn.status == "pending_prompt" && turn.dispatch_attempt.is_none() {
         let replayable = observed.retry_allowed;
         return Ok((observed, replayable));
@@ -262,18 +267,8 @@ fn observe_or_recover_fenced(
         return Ok((observed, false));
     }
     let directory = session_reader::session_directory(database_path, &session.id)?;
-    let record_path = directory.join(format!("dispatch-{}.json", attempt.server_generation));
-    if let Some(record) = crate::runtimes::headless::read_record(&record_path)? {
-        crate::runtimes::headless::stop_owned(&record)?;
-    }
-    crate::runtimes::headless::stop_execution(&directory, &attempt.server_generation)?;
-    let recovered = runtime::observe(
-        &directory,
-        native_id,
-        &turn.id,
-        DispatchState::NotSubmitted,
-        Some(&attempt.server_generation),
-    )?;
+    let recovered =
+        harness.recover_dispatch(&directory, native_id, &turn.id, &attempt.server_generation)?;
     if recovered.retry_allowed {
         root_session_store::requeue_fenced_prompt(database, turn, attempt, owner, Utc::now())?;
     }
@@ -284,6 +279,7 @@ fn observe_or_recover_fenced(
 
 fn observe_turn(
     database_path: &Path,
+    harness: &dyn TaskHarness,
     session: &RootSession,
     native_id: &str,
     turn: &RootTurn,
@@ -293,7 +289,7 @@ fn observe_turn(
         .dispatch_attempt
         .as_ref()
         .map(|attempt: &PromptDispatchAttempt| attempt.server_generation.as_str());
-    Ok(runtime::observe(
+    Ok(harness.observe(
         &directory,
         native_id,
         &turn.id,
@@ -320,8 +316,7 @@ fn persist_native_admission(
     if observation.admission_observed {
         root_session_store::mark_prompted(database, turn, None, Utc::now())?;
     }
-    // Codex reports `executionUncertain` only with this reason.
-    if observation.reason == "dispatch_identity_missing" {
+    if observation.execution_uncertain {
         root_session_store::require_execution_cleanup(database, turn, Utc::now())?;
     }
     Ok(())
@@ -397,9 +392,50 @@ fn terminal_observation<'a>(
     })
 }
 
+/// TypeScript `observation.native`, completed by the harness.
+fn native_observation(
+    harness: &dyn TaskHarness,
+    directory: &Path,
+    rows: &root_session_store::RootObservationRows,
+    kind: &str,
+    turn: &RootTurn,
+) -> DatabaseResult<serde_json::Value> {
+    let profile = selected_profile(rows, kind);
+    let provider =
+        task_harness_registry::profile_harness(profile["provider"].as_str().unwrap_or_default());
+    let agent = format!("suplex-{kind}");
+    Ok(harness.native(
+        directory,
+        &turn.id,
+        serde_json::json!({
+            "messageID":turn.id,"parentID":turn.id,"providerID":provider,
+            "modelID":profile["model"],"mode":agent,
+            "agent":agent,"cwd":rows.control["worktree"]["path"],
+            "root":rows.control["worktree"]["path"],
+        }),
+    )?)
+}
+
+/// TypeScript `session.profile ?? control.<role>Profile`.
+fn selected_profile<'a>(
+    rows: &'a root_session_store::RootObservationRows,
+    kind: &str,
+) -> &'a serde_json::Value {
+    let (session, fallback) = if kind == "root" {
+        (rows.root.as_ref(), &rows.control["rootProfile"])
+    } else {
+        (rows.worker.as_ref(), &rows.control["workerProfile"])
+    };
+    session
+        .map(|session| &session["profile"])
+        .filter(|profile| profile.is_object())
+        .unwrap_or(fallback)
+}
+
 fn complete_root_if_terminal(
     database: &mut SuplexDatabase,
     database_path: &Path,
+    harness: &dyn TaskHarness,
     session: &RootSession,
     turn: &RootTurn,
     observation: &PromptObservation,
@@ -409,13 +445,8 @@ fn complete_root_if_terminal(
     }
     let rows = root_session_store::root_observation_rows(database, &session.task_id)?;
     let directory = session_reader::session_directory(database_path, &session.id)?;
-    let text = runtime::result_text(&directory, &turn.id)?;
-    let native = serde_json::json!({
-        "messageID":turn.id,"parentID":turn.id,"providerID":"codex",
-        "modelID":rows.control["rootProfile"]["model"],"mode":"suplex-root",
-        "agent":"suplex-root","cwd":rows.control["worktree"]["path"],
-        "root":rows.control["worktree"]["path"],
-    });
+    let text = harness.result_text(&directory, &turn.id)?;
+    let native = native_observation(harness, &directory, &rows, "root", turn)?;
     let terminal_observation = terminal_observation(observation, native, &text, &directory, turn)?;
     let continuation = (observation.state == PromptState::Interrupted).then_some("The previous execution stopped before a final response. Its admitted message will not be replayed. Observe current task, worktree and GitHub state, preserve any partial work, and continue from that evidence.");
     let completed = root_session_store::complete_root_turn(
@@ -480,9 +511,11 @@ fn worker_result_wake(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn complete_worker_if_terminal(
     database: &mut SuplexDatabase,
     database_path: &Path,
+    harness: &dyn TaskHarness,
     session: &RootSession,
     native_id: &str,
     turn: &RootTurn,
@@ -494,13 +527,8 @@ fn complete_worker_if_terminal(
     }
     let rows = root_session_store::root_observation_rows(database, &session.task_id)?;
     let directory = session_reader::session_directory(database_path, &session.id)?;
-    let text = runtime::result_text(&directory, &turn.id)?;
-    let native = serde_json::json!({
-        "messageID":turn.id,"parentID":turn.id,"providerID":"codex",
-        "modelID":rows.control["workerProfile"]["model"],"mode":"suplex-worker",
-        "agent":"suplex-worker","cwd":rows.control["worktree"]["path"],
-        "root":rows.control["worktree"]["path"],
-    });
+    let text = harness.result_text(&directory, &turn.id)?;
+    let native = native_observation(harness, &directory, &rows, "worker", turn)?;
     let terminal_observation = terminal_observation(observation, native, &text, &directory, turn)?;
     let receipt = format!(
         "{native_id}:{}:{}",
@@ -548,7 +576,7 @@ async fn observed_usage(
             |row| row.get(0),
         )?;
         let mut statement = database.connection().prepare(
-            "SELECT DISTINCT s.id,s.native_session_id,s.kind FROM suplex_task_sessions s JOIN suplex_task_turns t ON t.session_id = s.id WHERE s.task_id = ?1 AND s.native_session_id IS NOT NULL AND (t.prompted_at IS NOT NULL OR t.status = 'unknown') ORDER BY s.created_at,s.id",
+            "SELECT DISTINCT s.id,s.native_session_id,s.kind,json_extract(s.profile_json,'$.instanceHomeDirectory') FROM suplex_task_sessions s JOIN suplex_task_turns t ON t.session_id = s.id WHERE s.task_id = ?1 AND s.native_session_id IS NOT NULL AND (t.prompted_at IS NOT NULL OR t.status = 'unknown') ORDER BY s.created_at,s.id",
         )?;
         let sessions = statement
             .query_map([task_id], |row| {
@@ -556,6 +584,7 @@ async fn observed_usage(
                     row.get::<_, String>(0)?,
                     row.get::<_, String>(1)?,
                     row.get::<_, String>(2)?,
+                    row.get::<_, Option<String>>(3)?,
                 ))
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -578,15 +607,22 @@ async fn observed_usage(
     }
     let native_database_path = database_path.to_path_buf();
     let observed = tokio::task::spawn_blocking(
-        move || -> Result<Vec<(String, String, String, usage::CodexUsageObservation)>, String> {
+        move || -> Result<Vec<(String, String, NativeTimeline)>, String> {
             let mut observed = Vec::new();
-            for (session_id, native_id, role) in sessions {
-                let directory =
-                    session_reader::session_directory(&native_database_path, &session_id)
-                        .map_err(|error| error.to_string())?;
-                let snapshot = usage::observe_session(&directory, &native_id, None)
+            for (session_id, native_id, role, instance) in sessions {
+                let reader = task_harness_registry::native_session_reader(&native_id).ok_or(
+                    "Native task usage is not available. Suplex will retry the observation.",
+                )?;
+                let session = ReaderSession {
+                    database_path: &native_database_path,
+                    session_id: &session_id,
+                    native_session_id: &native_id,
+                    instance_home_directory: instance.as_deref().map(Path::new),
+                };
+                let timeline = reader
+                    .timeline(&session, None)
                     .map_err(|error| error.to_string())?;
-                observed.push((session_id, native_id, role, snapshot));
+                observed.push((native_id, role, timeline));
             }
             Ok(observed)
         },
@@ -596,18 +632,10 @@ async fn observed_usage(
     // TypeScript `observeTaskLimitUsage`: a session without usage leaves the
     // observation incomplete; dispatch continues with the partial cost.
     static PRICING: OnceLock<Result<ModelsDevCatalogReader, String>> = OnceLock::new();
-    let unpriced = observed.iter().any(|(_, _, _, session)| {
-        session.turns.iter().any(|turn| {
-            !turn.priced
-                && turn.tokens.input
-                    + turn.tokens.output
-                    + turn.tokens.reasoning
-                    + turn.tokens.cache_read
-                    + turn.tokens.cache_write
-                    > 0.0
-        })
-    });
-    let pricing = if unpriced {
+    let pricing = if observed
+        .iter()
+        .any(|(_, _, timeline)| timeline.usage.iter().any(unpriced))
+    {
         let reader = PRICING
             .get_or_init(|| ModelsDevCatalogReader::new().map_err(|error| error.to_string()));
         match reader {
@@ -617,21 +645,21 @@ async fn observed_usage(
     } else {
         None
     };
+    let observed = observed
+        .into_iter()
+        .map(|(native_id, role, mut timeline)| {
+            if let Some(pricing) = pricing.as_deref() {
+                estimate_unpriced_usage(&mut timeline.usage, pricing);
+            }
+            (native_id, role, timeline)
+        })
+        .collect::<Vec<_>>();
     if require_complete
-        && observed.iter().any(|(_, _, _, session)| {
-            session.turns.is_empty()
-                || session.live_turn_id.is_some()
-                || session.turns.iter().any(|turn| {
-                    let cost = pricing
-                        .as_deref()
-                        .and_then(|catalog| catalog.get(&format!("openai/{}", turn.model)))
-                        .map_or(turn.cost_usd, |price| price.estimate(turn.tokens));
-                    let tokens = turn.tokens.input
-                        + turn.tokens.output
-                        + turn.tokens.reasoning
-                        + turn.tokens.cache_read
-                        + turn.tokens.cache_write;
-                    turn.model == "unknown" || (cost == 0.0 && tokens > 0.0)
+        && observed.iter().any(|(_, _, timeline)| {
+            timeline.usage.is_empty()
+                || timeline.live_message_id.is_some()
+                || timeline.usage.iter().any(|entry| {
+                    entry.completed_at_ms.is_none() || entry.model == "unknown" || unpriced(entry)
                 })
         })
     {
@@ -639,39 +667,63 @@ async fn observed_usage(
             estimated_cost_usd: None,
         });
     }
-    let cost = replace_observed_usage(database_path, task_id, observed, pricing.as_deref())?;
+    let cost = replace_observed_usage(database_path, task_id, observed)?;
     Ok(TaskLimitUsage {
         estimated_cost_usd: Some(cost),
     })
 }
 
+/// TypeScript `usageIsUnpriced`.
+fn unpriced(entry: &UsageEntry) -> bool {
+    let tokens = entry.tokens;
+    entry.cost_usd == 0.0
+        && tokens.input + tokens.output + tokens.reasoning + tokens.cache_read + tokens.cache_write
+            > 0.0
+}
+
+/// TypeScript `estimateUnpricedUsage`: listed prices estimate unpriced usage.
+fn estimate_unpriced_usage(
+    usage: &mut [UsageEntry],
+    pricing: &crate::profiles::model_pricing::ModelPricingCatalog,
+) {
+    for entry in usage.iter_mut().filter(|entry| unpriced(entry)) {
+        if let Some(price) = pricing.get(&format!("{}/{}", entry.provider, entry.model)) {
+            entry.cost_usd = price.estimate(entry.tokens);
+        }
+    }
+}
+
+/// TypeScript `replaceNativeUsage`, keyed by native session and message.
 fn replace_observed_usage(
     database_path: &Path,
     task_id: &str,
-    observed: Vec<(String, String, String, usage::CodexUsageObservation)>,
-    pricing: Option<&crate::profiles::model_pricing::ModelPricingCatalog>,
+    observed: Vec<(String, String, NativeTimeline)>,
 ) -> DatabaseResult<f64> {
-    let mut snapshots = Vec::new();
-    let mut cost = 0.0;
-    for (_, native_id, role, session) in observed {
-        let live_turn_id = session.live_turn_id.clone();
-        for turn in session.turns {
-            let listed = pricing.and_then(|catalog| catalog.get(&format!("openai/{}", turn.model)));
-            let turn_cost = listed.map_or(turn.cost_usd, |price| price.estimate(turn.tokens));
-            cost += turn_cost;
-            snapshots.push((native_id.clone(), serde_json::json!({
-                "sessionId":native_id,"messageId":turn.turn_id,"turnId":turn.turn_id,
-                "role":role,"provider":"openai","model":turn.model,
-                "startedAt":turn.updated_at_ms,
-                "completedAt":(live_turn_id.as_deref() != Some(turn.turn_id.as_str())).then_some(turn.updated_at_ms),
-                "failed":turn.failed,"summary":false,"steps":1,"cost":turn_cost,
-                "subsidized":turn_cost > 0.0,
-                "tokens":{"input":turn.tokens.input,"output":turn.tokens.output,
-                    "reasoning":turn.tokens.reasoning,"cache":{"read":turn.tokens.cache_read,
-                        "write":turn.tokens.cache_write}},"source":"message",
-            })));
+    let mut snapshots: Vec<(String, serde_json::Value)> = Vec::new();
+    for (native_id, role, timeline) in observed {
+        for entry in timeline.usage {
+            snapshots.retain(|(session, snapshot)| {
+                session != &native_id || snapshot["messageId"] != entry.message_id.as_str()
+            });
+            snapshots.push((
+                native_id.clone(),
+                serde_json::json!({
+                    "sessionId":native_id,"messageId":entry.message_id,"turnId":entry.turn_id,
+                    "role":role,"provider":entry.provider,"model":entry.model,
+                    "startedAt":entry.started_at_ms,"completedAt":entry.completed_at_ms,
+                    "failed":entry.failed,"summary":false,"steps":1,"cost":entry.cost_usd,
+                    "subsidized":entry.cost_usd > 0.0,
+                    "tokens":{"input":entry.tokens.input,"output":entry.tokens.output,
+                        "reasoning":entry.tokens.reasoning,"cache":{"read":entry.tokens.cache_read,
+                            "write":entry.tokens.cache_write}},"source":"message",
+                }),
+            ));
         }
     }
+    let cost = snapshots
+        .iter()
+        .map(|(_, snapshot)| snapshot["cost"].as_f64().unwrap_or_default())
+        .sum();
     let mut database = SuplexDatabase::open(database_path, OpenMode::ReadWrite)?;
     database.transaction(false, |database| {
         for (session_id, _) in &snapshots {
@@ -708,7 +760,7 @@ fn recover_prepared_root_blocking(
     database_path: &Path,
     artifact_root: &Path,
     task_id: &str,
-    codex_executable: Option<&Path>,
+    executable: Option<&Path>,
     inherited_environment: &HashMap<String, String>,
     usage: TaskLimitUsage,
 ) -> DatabaseResult<Option<PromptObservation>> {
@@ -727,12 +779,14 @@ fn recover_prepared_root_blocking(
         return Ok(None);
     };
     let rows = root_session_store::root_observation_rows(&database, task_id)?;
-    if rows.control["rootProfile"]["provider"] != "codex" {
+    let profile = selected_profile(&rows, "root");
+    let provider = profile["provider"].as_str().unwrap_or_default();
+    let Some(harness) = task_harness_registry::for_profile(provider) else {
         return Ok(skip_unported(
             &session.id,
-            "Only Codex Standard Root execution is ported",
+            &format!("No task harness for {provider}"),
         ));
-    }
+    };
     if current_owner_still_running(&session) {
         return Ok(None);
     }
@@ -754,7 +808,7 @@ fn recover_prepared_root_blocking(
         let native_id = session
             .native_session_id
             .clone()
-            .unwrap_or_else(|| format!("codex-{}", Uuid::new_v4()));
+            .unwrap_or_else(|| harness.new_session_id());
         if !root_session_store::bind_native_session(
             &mut database,
             &session,
@@ -768,6 +822,7 @@ fn recover_prepared_root_blocking(
             let (before, replayable) = observe_or_recover_fenced(
                 &mut database,
                 database_path,
+                harness,
                 &session,
                 &native_id,
                 &turn,
@@ -775,7 +830,14 @@ fn recover_prepared_root_blocking(
             )?;
             if !before.retry_allowed || !replayable {
                 persist_native_admission(&mut database, &turn, &before)?;
-                complete_root_if_terminal(&mut database, database_path, &session, &turn, &before)?;
+                complete_root_if_terminal(
+                    &mut database,
+                    database_path,
+                    harness,
+                    &session,
+                    &turn,
+                    &before,
+                )?;
                 return Ok(before);
             }
             if !root_session_store::coalesce_unadmitted_idle_root_turn(
@@ -804,10 +866,10 @@ fn recover_prepared_root_blocking(
         let worktree = rows.control["worktree"]["path"]
             .as_str()
             .ok_or_else(|| io::Error::other("Task worktree is not prepared"))?;
-        let model = rows.control["rootProfile"]["model"]
+        let model = profile["model"]
             .as_str()
             .ok_or_else(|| io::Error::other("Root model is missing"))?;
-        let reasoning = rows.control["rootProfile"]["reasoningLevel"]
+        let reasoning = profile["reasoningLevel"]
             .as_str()
             .ok_or_else(|| io::Error::other("Root reasoning level is missing"))?;
         let project_scope = project_launch_scope(
@@ -821,35 +883,49 @@ fn recover_prepared_root_blocking(
             session_id: session.id.clone(),
             generation: session.generation,
         };
-        let launch = RootCodexLaunch {
+        let scope = TaskScope {
             database_path,
             artifact_root,
-            identity: &identity,
+            task_id,
+            session_id: &session.id,
             native_session_id: &native_id,
-            turn_id: &turn.id,
+            role: TaskRole::Root(&identity),
             worktree: Path::new(worktree),
-            prompt: &turn.prompt_text,
-            project_context: project_scope.context.as_deref(),
+            model,
+            reasoning_effort: reasoning,
+            instance_home_directory: profile["instanceHomeDirectory"].as_str().map(Path::new),
+            project_mcp: project_mcp(&rows),
             project_context_path: project_scope.context_path.as_deref(),
             project_environment: &project_scope.environment,
             excluded_environment_keys: &project_scope.excluded_keys,
-            model,
-            reasoning_effort: reasoning,
-            codex_executable,
+            executable,
             inherited_environment,
         };
-        let observation = task_runtime::dispatch_codex_root(launch, |server_generation| {
-            root_session_store::claim_prompt(
-                &mut database,
-                &turn,
-                &owner,
-                server_generation,
-                usage,
-                Utc::now(),
-            )
-        })?;
+        let prompt = task_context_prompt(
+            &turn.prompt_text,
+            project_scope.context.as_deref(),
+            project_scope.context_path.as_deref(),
+        );
+        let observation =
+            harness.dispatch(&scope, &turn.id, &prompt, &mut |server_generation| {
+                root_session_store::claim_prompt(
+                    &mut database,
+                    &turn,
+                    &owner,
+                    server_generation,
+                    usage,
+                    Utc::now(),
+                )
+            })?;
         persist_native_admission(&mut database, &turn, &observation)?;
-        complete_root_if_terminal(&mut database, database_path, &session, &turn, &observation)?;
+        complete_root_if_terminal(
+            &mut database,
+            database_path,
+            harness,
+            &session,
+            &turn,
+            &observation,
+        )?;
         Ok(observation)
     })();
     root_session_store::release_session_operation(&mut database, &session.id, &owner, Utc::now())?;
@@ -862,7 +938,7 @@ pub async fn recover_prepared_root(
     database_path: &Path,
     artifact_root: &Path,
     task_id: &str,
-    codex_executable: Option<&Path>,
+    executable: Option<&Path>,
     inherited_environment: &HashMap<String, String>,
 ) -> DatabaseResult<Option<PromptObservation>> {
     let usage = if needs_admission_usage(database_path, task_id, "root")? {
@@ -875,14 +951,14 @@ pub async fn recover_prepared_root(
     let database_path = database_path.to_path_buf();
     let artifact_root = artifact_root.to_path_buf();
     let task_id = task_id.to_owned();
-    let codex_executable: Option<PathBuf> = codex_executable.map(Path::to_path_buf);
+    let executable: Option<PathBuf> = executable.map(Path::to_path_buf);
     let inherited_environment = inherited_environment.clone();
     tokio::task::spawn_blocking(move || {
         recover_prepared_root_blocking(
             &database_path,
             &artifact_root,
             &task_id,
-            codex_executable.as_deref(),
+            executable.as_deref(),
             &inherited_environment,
             usage,
         )
@@ -894,8 +970,9 @@ pub async fn recover_prepared_root(
 
 fn recover_prepared_worker_blocking(
     database_path: &Path,
+    artifact_root: &Path,
     task_id: &str,
-    codex_executable: Option<&Path>,
+    executable: Option<&Path>,
     inherited_environment: &HashMap<String, String>,
     usage: TaskLimitUsage,
 ) -> DatabaseResult<Option<PromptObservation>> {
@@ -913,12 +990,14 @@ fn recover_prepared_worker_blocking(
         return Ok(None);
     }
     let rows = root_session_store::root_observation_rows(&database, task_id)?;
-    if rows.control["workerProfile"]["provider"] != "codex" {
+    let profile = selected_profile(&rows, "worker");
+    let provider = profile["provider"].as_str().unwrap_or_default();
+    let Some(harness) = task_harness_registry::for_profile(provider) else {
         return Ok(skip_unported(
             &session.id,
-            "Only Codex Standard Worker execution is ported",
+            &format!("No task harness for {provider}"),
         ));
-    }
+    };
     if current_owner_still_running(&session) {
         return Ok(None);
     }
@@ -940,7 +1019,7 @@ fn recover_prepared_worker_blocking(
         let native_id = session
             .native_session_id
             .clone()
-            .unwrap_or_else(|| format!("codex-{}", Uuid::new_v4()));
+            .unwrap_or_else(|| harness.new_session_id());
         if !root_session_store::bind_native_session(
             &mut database,
             &session,
@@ -961,6 +1040,7 @@ fn recover_prepared_worker_blocking(
         let (before, replayable) = observe_or_recover_fenced(
             &mut database,
             database_path,
+            harness,
             &session,
             &native_id,
             &turn,
@@ -971,6 +1051,7 @@ fn recover_prepared_worker_blocking(
             complete_worker_if_terminal(
                 &mut database,
                 database_path,
+                harness,
                 &session,
                 &native_id,
                 &turn,
@@ -985,7 +1066,6 @@ fn recover_prepared_worker_blocking(
         let worktree = rows.control["worktree"]["path"]
             .as_str()
             .ok_or_else(|| io::Error::other("Task worktree is not prepared"))?;
-        let profile = &rows.control["workerProfile"];
         let model = profile["model"]
             .as_str()
             .ok_or_else(|| io::Error::other("Worker model is missing"))?;
@@ -998,37 +1078,45 @@ fn recover_prepared_worker_blocking(
             database_path,
             task_id,
         );
-        let launch = WorkerCodexLaunch {
+        let scope = TaskScope {
             database_path,
+            artifact_root,
+            task_id,
             session_id: &session.id,
             native_session_id: &native_id,
-            turn_id: &turn.id,
+            role: TaskRole::Worker(purpose),
             worktree: Path::new(worktree),
-            prompt: &turn.prompt_text,
-            project_context: project_scope.context.as_deref(),
+            model,
+            reasoning_effort: reasoning,
+            instance_home_directory: profile["instanceHomeDirectory"].as_str().map(Path::new),
+            project_mcp: project_mcp(&rows),
             project_context_path: project_scope.context_path.as_deref(),
             project_environment: &project_scope.environment,
             excluded_environment_keys: &project_scope.excluded_keys,
-            purpose,
-            model,
-            reasoning_effort: reasoning,
-            codex_executable,
+            executable,
             inherited_environment,
         };
-        let observation = task_runtime::dispatch_codex_worker(launch, |server_generation| {
-            root_session_store::claim_prompt(
-                &mut database,
-                &turn,
-                &owner,
-                server_generation,
-                usage,
-                Utc::now(),
-            )
-        })?;
+        let prompt = task_context_prompt(
+            &turn.prompt_text,
+            project_scope.context.as_deref(),
+            project_scope.context_path.as_deref(),
+        );
+        let observation =
+            harness.dispatch(&scope, &turn.id, &prompt, &mut |server_generation| {
+                root_session_store::claim_prompt(
+                    &mut database,
+                    &turn,
+                    &owner,
+                    server_generation,
+                    usage,
+                    Utc::now(),
+                )
+            })?;
         persist_native_admission(&mut database, &turn, &observation)?;
         complete_worker_if_terminal(
             &mut database,
             database_path,
+            harness,
             &session,
             &native_id,
             &turn,
@@ -1043,8 +1131,9 @@ fn recover_prepared_worker_blocking(
 
 pub async fn recover_prepared_worker(
     database_path: &Path,
+    artifact_root: &Path,
     task_id: &str,
-    codex_executable: Option<&Path>,
+    executable: Option<&Path>,
     inherited_environment: &HashMap<String, String>,
 ) -> DatabaseResult<Option<PromptObservation>> {
     let usage = if needs_admission_usage(database_path, task_id, "worker")? {
@@ -1055,14 +1144,16 @@ pub async fn recover_prepared_worker(
         }
     };
     let database_path = database_path.to_path_buf();
+    let artifact_root = artifact_root.to_path_buf();
     let task_id = task_id.to_owned();
-    let codex_executable = codex_executable.map(Path::to_path_buf);
+    let executable = executable.map(Path::to_path_buf);
     let inherited_environment = inherited_environment.clone();
     tokio::task::spawn_blocking(move || {
         recover_prepared_worker_blocking(
             &database_path,
+            &artifact_root,
             &task_id,
-            codex_executable.as_deref(),
+            executable.as_deref(),
             &inherited_environment,
             usage,
         )
@@ -1219,7 +1310,12 @@ async fn stop_retired_sessions(database_path: &Path, task_id: &str) -> DatabaseR
         }
         let directory = session_reader::session_directory(database_path, &session_id)?;
         match tokio::task::spawn_blocking(move || {
-            crate::runtimes::headless::stop_session(&directory, native_id.as_deref())
+            match task_harness_registry::for_session(native_id.as_deref()) {
+                Some(harness) => harness.stop(&directory, native_id.as_deref()),
+                // An unbound session never started a native process.
+                None if native_id.is_none() => Ok(()),
+                None => Err(io::Error::other("No task harness for session")),
+            }
         })
         .await?
         {
@@ -1300,7 +1396,7 @@ pub async fn sweep_task(
     database_path: &Path,
     artifact_root: &Path,
     task_id: &str,
-    codex_executable: Option<&Path>,
+    executable: Option<&Path>,
     inherited_environment: &HashMap<String, String>,
 ) -> DatabaseResult<()> {
     {
@@ -1309,6 +1405,7 @@ pub async fn sweep_task(
     }
     stop_retired_sessions(database_path, task_id).await?;
     reconcile_limit_pause(database_path, task_id).await?;
+    crate::delivery::operations::host_observation(database_path, artifact_root, task_id).await;
     let (active, needs_worktree) = {
         let database = SuplexDatabase::open(database_path, OpenMode::ReadOnly)?;
         let rows = root_session_store::root_observation_rows(&database, task_id)?;
@@ -1329,11 +1426,16 @@ pub async fn sweep_task(
         let mut database = SuplexDatabase::open(database_path, OpenMode::ReadWrite)?;
         root_session_store::set_worktree(&mut database, task_id, &worktree, Utc::now())?;
     }
+    if !super::issue_context::prepare_for_host(database_path, artifact_root, task_id).await? {
+        return Ok(());
+    }
+    crate::tasks::preparation::prepare_before_native_work(database_path, task_id).await?;
     crate::coordination::root_controller::prepare_root(database_path, task_id)?;
     recover_prepared_worker(
         database_path,
+        artifact_root,
         task_id,
-        codex_executable,
+        executable,
         inherited_environment,
     )
     .await?;
@@ -1341,7 +1443,7 @@ pub async fn sweep_task(
         database_path,
         artifact_root,
         task_id,
-        codex_executable,
+        executable,
         inherited_environment,
     )
     .await?;
@@ -1374,7 +1476,7 @@ mod tests {
         delivery::operations,
         identity::auth,
         profiles::model_pricing::ModelPricing,
-        runtimes::codex::usage::{CodexTurnUsage, CodexUsageObservation, UsageTokens},
+        runtimes::codex::usage::{self, UsageTokens},
         tasks::{
             commands,
             repository::{self, PreparedTask, TaskCreator},
@@ -1423,6 +1525,7 @@ mod tests {
             unsettled_tool_ids: Vec::new(),
             native_final_observed: true,
             process_running: false,
+            execution_uncertain: false,
         };
         let prompt = worker_result_wake(
             "codex-one:msg-one:completed",
@@ -1474,6 +1577,7 @@ mod tests {
             unsettled_tool_ids: Vec::new(),
             native_final_observed: false,
             process_running: false,
+            execution_uncertain: false,
         };
         let terminal =
             terminal_observation(&observation, serde_json::json!({}), "", &directory, &turn)
@@ -1713,7 +1817,15 @@ mod tests {
             })
             .map(|mut event| {
                 let fields = event.as_object_mut().unwrap();
-                for key in ["schemaVersion", "time", "eventId", "pid"] {
+                for key in [
+                    "schemaVersion",
+                    "time",
+                    "eventId",
+                    "bootId",
+                    "sequence",
+                    "pid",
+                    "bootElapsedMs",
+                ] {
                     assert!(fields.remove(key).is_some());
                 }
                 event
@@ -2132,7 +2244,7 @@ mod tests {
         };
         let environment = HashMap::from([("PATH".into(), "/usr/bin:/bin".into())]);
         let launched =
-            recover_prepared_worker(&database_path, &task_id, Some(&codex), &environment)
+            recover_prepared_worker(&database_path, &base, &task_id, Some(&codex), &environment)
                 .await
                 .unwrap()
                 .unwrap();
@@ -2189,7 +2301,8 @@ mod tests {
         drop(repository);
         let marker = base.join("launches");
         let codex = base.join("codex");
-        fs::write(&codex, format!("#!/bin/sh\nprintf x >> '{}'\ncat >/dev/null\nprintf '%s\\n' '{{\"type\":\"thread.started\",\"thread_id\":\"host-thread\"}}' '{{\"type\":\"turn.completed\",\"usage\":{{\"input_tokens\":1,\"cached_input_tokens\":0,\"cache_write_input_tokens\":0,\"output_tokens\":1,\"reasoning_output_tokens\":0}}}}'\n", marker.display())).unwrap();
+        // The child outlives both recoveries, so the second one observes an admitted, running turn.
+        fs::write(&codex, format!("#!/bin/sh\nprintf x >> '{}'\ncat >/dev/null\nsleep 0.5\nprintf '%s\\n' '{{\"type\":\"thread.started\",\"thread_id\":\"host-thread\"}}' '{{\"type\":\"turn.completed\",\"usage\":{{\"input_tokens\":1,\"cached_input_tokens\":0,\"cache_write_input_tokens\":0,\"output_tokens\":1,\"reasoning_output_tokens\":0}}}}'\n", marker.display())).unwrap();
         fs::set_permissions(&codex, fs::Permissions::from_mode(0o700)).unwrap();
         let now = Utc::now();
         let task_id = {
@@ -2369,25 +2482,14 @@ mod tests {
                 "INSERT INTO suplex_task_usage (task_id,session_id,message_id,snapshot,observed_at) VALUES (?1,?2,'prior-native','{}',?3)",
                 rusqlite::params![task_id, native_id, Utc::now().to_rfc3339()],
             ).unwrap();
-            let no_usage_event = usage::CodexUsageObservation {
-                turns: vec![],
-                live_turn_id: None,
-                complete: false,
-                estimated_cost_usd: 0.0,
-            };
+            let no_usage_event = NativeTimeline::default();
             // TypeScript `replaceNativeUsage` replaces the task usage with the
             // partial observation; missing native usage never blocks dispatch.
             assert_eq!(
                 replace_observed_usage(
                     &database_path,
                     &task_id,
-                    vec![(
-                        root.id.clone(),
-                        native_id.to_owned(),
-                        "root".into(),
-                        no_usage_event
-                    )],
-                    None
+                    vec![(native_id.to_owned(), "root".into(), no_usage_event)],
                 )
                 .unwrap(),
                 0.0
@@ -2416,7 +2518,7 @@ mod tests {
             .remove(0);
         drop(database);
         let launched =
-            recover_prepared_worker(&database_path, &task_id, Some(&codex), &environment)
+            recover_prepared_worker(&database_path, &base, &task_id, Some(&codex), &environment)
                 .await
                 .unwrap()
                 .unwrap();
@@ -2432,7 +2534,7 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
         assert!(worker_exit.exists());
-        recover_prepared_worker(&database_path, &task_id, Some(&codex), &environment)
+        recover_prepared_worker(&database_path, &base, &task_id, Some(&codex), &environment)
             .await
             .unwrap();
         let database = SuplexDatabase::open(&database_path, OpenMode::ReadOnly).unwrap();
@@ -2484,7 +2586,7 @@ mod tests {
             id
         };
         assert!(
-            recover_prepared_worker(&database_path, &task_id, Some(&codex), &environment)
+            recover_prepared_worker(&database_path, &base, &task_id, Some(&codex), &environment)
                 .await
                 .unwrap()
                 .is_none()
@@ -2500,7 +2602,7 @@ mod tests {
             );
         }
         let replacement_launch =
-            recover_prepared_worker(&database_path, &task_id, Some(&codex), &environment)
+            recover_prepared_worker(&database_path, &base, &task_id, Some(&codex), &environment)
                 .await
                 .unwrap()
                 .unwrap();
@@ -2531,7 +2633,7 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
         assert!(replacement_exit.exists());
-        recover_prepared_worker(&database_path, &task_id, Some(&codex), &environment)
+        recover_prepared_worker(&database_path, &base, &task_id, Some(&codex), &environment)
             .await
             .unwrap();
         assert_eq!(fs::read(&marker).unwrap(), b"xxx");
@@ -2548,14 +2650,16 @@ mod tests {
             &database_path,
             &task_id,
             vec![(
-                root.id.clone(),
                 root.native_session_id.clone().unwrap(),
                 "root".into(),
-                CodexUsageObservation {
-                    turns: vec![CodexTurnUsage {
+                NativeTimeline {
+                    usage: vec![UsageEntry {
+                        message_id: "msg-usage".into(),
                         turn_id: "msg-usage".into(),
+                        provider: "openai",
                         model: "gpt-6-sol".into(),
-                        updated_at_ms: 1_234_567,
+                        started_at_ms: 1_234_567,
+                        completed_at_ms: None,
                         failed: false,
                         tokens: UsageTokens {
                             input: 1_000_000.0,
@@ -2565,14 +2669,10 @@ mod tests {
                             cache_write: 0.0,
                         },
                         cost_usd: 0.0,
-                        priced: false,
                     }],
-                    live_turn_id: Some("msg-usage".into()),
-                    complete: false,
-                    estimated_cost_usd: 0.0,
+                    live_message_id: Some("msg-usage".into()),
                 },
             )],
-            None,
         )
         .unwrap();
         assert_eq!(unpriced, 0.0);
@@ -2587,15 +2687,15 @@ mod tests {
         let cost = replace_observed_usage(
             &database_path,
             &task_id,
-            vec![(
-                root.id.clone(),
-                root.native_session_id.clone().unwrap(),
-                "root".into(),
-                CodexUsageObservation {
-                    turns: vec![CodexTurnUsage {
+            vec![(root.native_session_id.clone().unwrap(), "root".into(), {
+                let mut timeline = NativeTimeline {
+                    usage: vec![UsageEntry {
+                        message_id: "msg-usage".into(),
                         turn_id: "msg-usage".into(),
+                        provider: "openai",
                         model: "gpt-6-sol".into(),
-                        updated_at_ms: 1_234_567,
+                        started_at_ms: 1_234_567,
+                        completed_at_ms: Some(1_234_567),
                         failed: false,
                         tokens: UsageTokens {
                             input: 1_000_000.0,
@@ -2605,14 +2705,12 @@ mod tests {
                             cache_write: 0.0,
                         },
                         cost_usd: 0.0,
-                        priced: false,
                     }],
-                    live_turn_id: None,
-                    complete: true,
-                    estimated_cost_usd: 0.0,
-                },
-            )],
-            Some(&pricing),
+                    live_message_id: None,
+                };
+                estimate_unpriced_usage(&mut timeline.usage, &pricing);
+                timeline
+            })],
         )
         .unwrap();
         assert_eq!(cost, 1.0);
@@ -2739,11 +2837,13 @@ mod tests {
             unsettled_tool_ids: vec![],
             native_final_observed: false,
             process_running: false,
+            execution_uncertain: false,
         };
         assert!(
             complete_root_if_terminal(
                 &mut database,
                 &database_path,
+                &crate::runtimes::codex::harness::CodexTaskRuntime,
                 &failing_root,
                 &failing_turn,
                 &failure

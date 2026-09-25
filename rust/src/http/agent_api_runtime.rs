@@ -162,6 +162,10 @@ pub(crate) fn failure(error: Box<dyn Error>, runtime: bool) -> Response {
         };
         return json_response(status(failure.status_code), body);
     }
+    if let Some(failure) = error.downcast_ref::<crate::tasks::sources::TaskSourceFailure>() {
+        let code = if runtime { "task_unavailable" } else { failure.code };
+        return json_response(status(failure.status_code), json!({"error": failure.message, "code": code}));
+    }
     if let Some(failure) = error.downcast_ref::<ArtifactFailure>() {
         let code = if runtime { "task_unavailable" } else { failure.code };
         return json_response(

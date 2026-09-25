@@ -3,8 +3,6 @@
 use std::{
     error::Error,
     fs, io,
-    io::Write,
-    os::unix::fs::OpenOptionsExt,
     path::{Path, PathBuf},
     sync::OnceLock,
 };
@@ -243,18 +241,8 @@ fn write_credential_file(path: &Path, stored: &StoredCredential) -> AccessResult
             yaml.push_str(&format!("    {key}: {value}\n"));
         }
     }
-    let directory = path.parent().ok_or("Credential path has no directory")?;
-    fs::create_dir_all(directory)?;
-    let temporary = directory.join(format!(".github-hosts-{}.yml", uuid::Uuid::new_v4()));
-    let mut file = fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(0o600)
-        .open(&temporary)?;
-    file.write_all(yaml.as_bytes())?;
-    file.sync_all()?;
-    fs::rename(&temporary, path)?;
-    Ok(())
+    fs::create_dir_all(path.parent().ok_or("Credential path has no directory")?)?;
+    Ok(crate::shared::fs::write_private(path, yaml.as_bytes())?)
 }
 
 fn read_credential_file(path: &Path) -> AccessResult<Option<StoredCredential>> {

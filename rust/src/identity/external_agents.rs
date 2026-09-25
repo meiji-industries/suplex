@@ -1,10 +1,11 @@
 //! External agents: administration, pairing, credentials, and OAuth-provisioned identities.
 
+use crate::shared::hash::sha256_hex;
+use crate::shared::ids::{random_hex, random_hex_id, random_secret};
+use crate::shared::time::rfc3339_millis;
 use std::{error::Error, fmt};
 
-use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
-use chrono::{DateTime, Duration, SecondsFormat, Utc};
-use getrandom::fill as rand_bytes;
+use chrono::{DateTime, Duration, Utc};
 use rusqlite::{OptionalExtension, Row, params, params_from_iter};
 use serde::Serialize;
 use serde_json::{Map, Value, json};
@@ -12,7 +13,7 @@ use serde_json::{Map, Value, json};
 use crate::platform::database::{DatabaseResult, SuplexDatabase};
 
 use super::{
-    auth::{self, hash_secret, js_trim, random_hex_id},
+    auth::{self, js_trim},
     companies,
 };
 
@@ -143,22 +144,6 @@ pub struct CreateInput<'a> {
     pub avatar_seed: Option<&'a str>,
 }
 
-fn timestamp(now: DateTime<Utc>) -> String {
-    now.to_rfc3339_opts(SecondsFormat::Millis, true)
-}
-
-fn secret(prefix: &str) -> DatabaseResult<String> {
-    let mut bytes = [0_u8; 32];
-    rand_bytes(&mut bytes)?;
-    Ok(format!("{prefix}_{}", URL_SAFE_NO_PAD.encode(bytes)))
-}
-
-pub(crate) fn random_hex(bytes: usize) -> DatabaseResult<String> {
-    let mut buffer = vec![0_u8; bytes];
-    rand_bytes(&mut buffer)?;
-    Ok(buffer.iter().map(|byte| format!("{byte:02x}")).collect())
-}
-
 fn secret_shape(value: &str, prefix: &str) -> bool {
     value.strip_prefix(prefix).is_some_and(|rest| {
         rest.len() == 43
@@ -206,7 +191,7 @@ pub(crate) fn audit(
 ) -> DatabaseResult<()> {
     database.connection().execute(
         "INSERT INTO suplex_audit_events (id, actor_user_id, actor_agent_id, action, target_user_id, company_id, metadata_json, created_at) VALUES (?1, ?2, ?3, ?4, NULL, ?5, ?6, ?7)",
-        params![random_hex_id("audit")?, actor.0, actor.1, action, company_id, Value::Object(metadata).to_string(), timestamp(now)],
+        params![random_hex_id("audit")?, actor.0, actor.1, action, company_id, Value::Object(metadata).to_string(), rfc3339_millis(now)],
     )?;
     Ok(())
 }
@@ -279,7 +264,7 @@ fn insert_pairing(
 ) -> DatabaseResult<()> {
     database.connection().execute(
         "INSERT INTO suplex_external_agent_pairing_codes (id, agent_id, code_hash, purpose, expires_at, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-        params![random_hex_id("pairing")?, agent_id, hash_secret(code), purpose, expires_at, now],
+        params![random_hex_id("pairing")?, agent_id, sha256_hex(code), purpose, expires_at, now],
     )?;
     Ok(())
 }
@@ -305,9 +290,9 @@ pub fn create(
             "configuration_invalid",
         ));
     }
-    let raw_code = secret("fhp")?;
-    let now_iso = timestamp(now);
-    let expires_at = timestamp(now + Duration::minutes(PAIRING_TTL_MINUTES));
+    let raw_code = random_secret("fhp")?;
+    let now_iso = rfc3339_millis(now);
+    let expires_at = rfc3339_millis(now + Duration::minutes(PAIRING_TTL_MINUTES));
     let agent_id = random_hex_id("agent")?;
     let avatar_seed = match input
         .avatar_seed
@@ -515,7 +500,7 @@ pub fn replace_projects(
             "configuration_invalid",
         ));
     }
-    let now_iso = timestamp(now);
+    let now_iso = rfc3339_millis(now);
     database.transaction(false, |database| {
         let Some((company_id, status)) = agent_state(database, agent_id)? else {
             return Err(ExternalAgentFailure::not_found("agent_not_found"));
@@ -582,9 +567,9 @@ fn issue_pairing(
     if !valid_id(agent_id) {
         return Err(ExternalAgentFailure::not_found("agent_not_found"));
     }
-    let raw_code = secret("fhp")?;
-    let now_iso = timestamp(now);
-    let expires_at = timestamp(now + Duration::minutes(PAIRING_TTL_MINUTES));
+    let raw_code = random_secret("fhp")?;
+    let now_iso = rfc3339_millis(now);
+    let expires_at = rfc3339_millis(now + Duration::minutes(PAIRING_TTL_MINUTES));
     database.transaction(false, |database| {
         let company_id = match agent_state(database, agent_id)? {
             Some((company_id, status)) if status == required_status => company_id,
@@ -641,14 +626,14 @@ pub fn exchange(
         Some(profile) if !valid_profile_id(profile) => return Err(pairing_failure()),
         profile => profile.map(str::to_owned),
     };
-    let raw_credential = secret("fha")?;
-    let now_iso = timestamp(now);
+    let raw_credential = random_secret("fha")?;
+    let now_iso = rfc3339_millis(now);
     let result = database.transaction(false, |database| {
         let pairing = database
             .connection()
             .query_row(
                 "SELECT id, agent_id, purpose, expires_at, consumed_at, replaced_at FROM suplex_external_agent_pairing_codes WHERE code_hash = ?1",
-                [hash_secret(pairing_code)],
+                [sha256_hex(pairing_code)],
                 |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?, row.get::<_, String>(3)?, row.get::<_, Option<String>>(4)?, row.get::<_, Option<String>>(5)?)),
             )
             .optional()?;
@@ -681,7 +666,7 @@ pub fn exchange(
         }
         database.connection().execute(
             "INSERT INTO suplex_external_agent_credentials (id, agent_id, credential_hash, created_at) VALUES (?1, ?2, ?3, ?4)",
-            params![random_hex_id("agent_credential")?, agent_id, hash_secret(&raw_credential), now_iso],
+            params![random_hex_id("agent_credential")?, agent_id, sha256_hex(&raw_credential), now_iso],
         )?;
         database.connection().execute(
             "UPDATE suplex_external_agents SET client_profile_id = ?1, status = 'paired', paired_at = COALESCE(paired_at, ?2), revoked_at = NULL, updated_at = ?2 WHERE id = ?3",
@@ -711,13 +696,13 @@ pub fn authenticate(
     if !secret_shape(raw_credential, "fha_") {
         return Err(authentication_failure());
     }
-    let now_iso = timestamp(now);
+    let now_iso = rfc3339_millis(now);
     database.transaction(false, |database| {
         let row = database
             .connection()
             .query_row(
                 "SELECT c.id, c.credential_hash, a.id, a.company_id, a.client_profile_id FROM suplex_external_agent_credentials c JOIN suplex_external_agents a ON a.id = c.agent_id WHERE c.credential_hash = ?1 AND c.revoked_at IS NULL AND a.status = 'paired' AND a.revoked_at IS NULL",
-                [hash_secret(raw_credential)],
+                [sha256_hex(raw_credential)],
                 |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?, row.get::<_, String>(3)?, row.get::<_, Option<String>>(4)?)),
             )
             .optional()?;
@@ -771,7 +756,7 @@ pub fn provision_oauth_agent(
     if matching_projects(database, input.company_id, &project_ids)? != project_ids.len() {
         return Err(ExternalAgentFailure::not_found("scope_not_found"));
     }
-    let now_iso = timestamp(now);
+    let now_iso = rfc3339_millis(now);
     let agent_id = random_hex_id("agent")?;
     let utf16 = |value: &str, count: usize| {
         String::from_utf16_lossy(&value.encode_utf16().take(count).collect::<Vec<_>>())
@@ -832,7 +817,7 @@ pub fn oauth_principal(
     cursor_key: &str,
     now: DateTime<Utc>,
 ) -> DatabaseResult<Principal> {
-    let now_iso = timestamp(now);
+    let now_iso = rfc3339_millis(now);
     database.transaction(false, |database| {
         let row = database
             .connection()
@@ -875,7 +860,7 @@ pub fn revoke(
     now: DateTime<Utc>,
 ) -> DatabaseResult<()> {
     require_admin(database, actor_user_id)?;
-    let now_iso = timestamp(now);
+    let now_iso = rfc3339_millis(now);
     database.transaction(false, |database| {
         let company_id = match agent_state(database, agent_id)? {
             Some((company_id, status)) if status != "revoked" => company_id,
@@ -939,7 +924,7 @@ pub(crate) mod tests {
             .unwrap()
             .user
             .id;
-        let stamp = timestamp(now);
+        let stamp = rfc3339_millis(now);
         let connection = database.connection();
         connection.execute("INSERT INTO suplex_users (id, display_name, username, role, status, created_at, updated_at, identity_version) VALUES ('member_test_1', 'Member', 'member', 'member', 'active', ?1, ?1, 1)", [&stamp]).unwrap();
         for (id, name) in [

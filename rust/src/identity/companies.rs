@@ -1,3 +1,5 @@
+use crate::shared::ids::random_hex_id;
+use crate::shared::time::rfc3339_millis;
 use chrono::{DateTime, Utc};
 use rusqlite::{Error as SqliteError, OptionalExtension, Row, params};
 use serde::Serialize;
@@ -142,7 +144,7 @@ fn audit(
 ) -> DatabaseResult<()> {
     database.connection().execute(
         "INSERT INTO suplex_audit_events (id, actor_user_id, actor_agent_id, action, target_user_id, company_id, metadata_json, created_at) VALUES (?1, ?2, NULL, ?3, ?4, ?5, ?6, ?7)",
-        params![auth::random_hex_id("audit")?, actor_user_id, action, target_user_id, company_id, metadata_json, now.to_rfc3339_opts(chrono::SecondsFormat::Millis, true)],
+        params![random_hex_id("audit")?, actor_user_id, action, target_user_id, company_id, metadata_json, rfc3339_millis(now)],
     )?;
     Ok(())
 }
@@ -169,8 +171,8 @@ pub fn create_company(
     let name = company_name(raw_name)?;
     database.transaction(false, |database| {
         require_admin(database, actor_user_id)?;
-        let company_id = auth::random_hex_id("company")?;
-        let created_at = now.to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+        let company_id = random_hex_id("company")?;
+        let created_at = rfc3339_millis(now);
         if database.connection().execute(
             "INSERT INTO suplex_companies (id, name, status, issue_code, next_issue_number, created_at) VALUES (?1, ?2, 'active', NULL, 1, ?3)",
             params![company_id, name, created_at],
@@ -354,7 +356,7 @@ pub fn add_membership(
         require_company_access(database, actor_user_id, company_id)?;
         if let Err(error) = database.connection().execute(
             "INSERT INTO suplex_memberships (user_id, company_id, created_at) VALUES (?1, ?2, ?3)",
-            params![target_user_id, company_id, now.to_rfc3339_opts(chrono::SecondsFormat::Millis, true)],
+            params![target_user_id, company_id, rfc3339_millis(now)],
         ) {
             if matches!(&error, SqliteError::SqliteFailure(_, Some(message)) if message.contains("UNIQUE constraint failed: suplex_memberships")) {
                 return Err(Box::new(AuthFailure::new("Membership already exists", 409, "membership_duplicate")));
@@ -404,7 +406,7 @@ mod tests {
     fn company_visibility_uses_live_membership_and_admin_role() {
         let filename = std::env::temp_dir().join(format!(
             "{}.sqlite",
-            auth::random_hex_id("suplex_company").unwrap()
+            random_hex_id("suplex_company").unwrap()
         ));
         let mut database = SuplexDatabase::open(&filename, OpenMode::Migrate).unwrap();
         let now = DateTime::parse_from_rfc3339("2026-09-24T12:00:00Z")
@@ -459,7 +461,7 @@ mod tests {
     fn company_mutations_enforce_role_uniqueness_issue_lock_and_audit() {
         let filename = std::env::temp_dir().join(format!(
             "{}.sqlite",
-            auth::random_hex_id("suplex_company_mutations").unwrap()
+            random_hex_id("suplex_company_mutations").unwrap()
         ));
         let mut database = SuplexDatabase::open(&filename, OpenMode::Migrate).unwrap();
         let now = DateTime::parse_from_rfc3339("2026-09-24T12:00:00Z")

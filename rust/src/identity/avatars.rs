@@ -1,16 +1,17 @@
 //! One avatar table for users, companies, projects, and agents
 //! (`src/identity/avatars.ts`, `src/identity/avatar-kinds.ts`).
 
+use crate::shared::ids::random_hex_id;
+use crate::shared::time::now_millis_rfc3339;
 use std::fs;
 
-use chrono::{SecondsFormat, Utc};
 use rusqlite::{OptionalExtension, params};
 use serde::Serialize;
 use serde_json::{Map, Value, json};
 
 use crate::{
     http::contracts::typed::{avatars::AvatarUpdateBody, tasks::TaskImage},
-    identity::auth::{self, AuthFailure},
+    identity::auth::AuthFailure,
     platform::database::{DatabaseResult, SuplexDatabase},
     projects::service as projects,
     tasks::images::decode_task_image,
@@ -220,7 +221,7 @@ pub fn update(
             None => (current.1, current.2),
             Some(value) => (value.as_ref().map(|image| image.mime_type.clone()), bytes),
         };
-        let updated_at = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
+        let updated_at = now_millis_rfc3339();
         if shape.is_none() && image.is_none() {
             database
                 .connection()
@@ -233,7 +234,7 @@ pub fn update(
         }
         database.connection().execute(
             "INSERT INTO suplex_audit_events (id, actor_user_id, actor_agent_id, action, target_user_id, company_id, metadata_json, created_at) VALUES (?1, ?2, NULL, 'avatar_updated', ?3, NULL, ?4, ?5)",
-            params![auth::random_hex_id("audit")?, user_id, (kind == "user").then_some(owner_id), json!({"ownerId": owner_id}).to_string(), updated_at],
+            params![random_hex_id("audit")?, user_id, (kind == "user").then_some(owner_id), json!({"ownerId": owner_id}).to_string(), updated_at],
         )?;
         Ok(AvatarRecord {
             shape,

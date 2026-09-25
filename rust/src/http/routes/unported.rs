@@ -83,7 +83,6 @@ mod tests {
     use std::sync::atomic::{AtomicU64, Ordering};
 
     use axum::{body::to_bytes, http::HeaderValue};
-    use sha2::{Digest, Sha256};
 
     use super::*;
     use crate::{
@@ -106,10 +105,7 @@ mod tests {
             "INSERT INTO suplex_users (id, display_name, username, role, status, created_at, updated_at, identity_version) VALUES ('stub_member', 'Member', 'user_v1_stub_member', 'member', 'active', ?1, ?1, 1)",
             [now.to_rfc3339()],
         ).unwrap();
-        let member_hash = Sha256::digest(b"stub_member_token")
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect::<String>();
+        let member_hash = crate::shared::hash::sha256_hex(b"stub_member_token");
         database.connection().execute(
             "INSERT INTO suplex_sessions (id, token_hash, user_id, expires_at, created_at, token_version) VALUES ('stub_member_session', ?1, 'stub_member', ?2, ?3, 1)",
             rusqlite::params![member_hash, (now + chrono::Duration::days(1)).to_rfc3339(), now.to_rfc3339()],

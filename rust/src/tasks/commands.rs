@@ -1,11 +1,12 @@
 //! User task commands keep authorization, intent, audit, and wake admission together.
 
+use crate::shared::hash::sha256_hex;
+use crate::shared::time::rfc3339_millis;
 use std::{error::Error, fmt, path::Path};
 
-use chrono::{DateTime, SecondsFormat, Utc};
+use chrono::{DateTime, Utc};
 use rusqlite::{OptionalExtension, params};
 use serde_json::{Map, Value, json};
-use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use crate::{
@@ -69,10 +70,6 @@ fn project_signature(project: &Project) -> Value {
         "integration": project.integration,
         "execution": project.execution,
     })
-}
-
-fn timestamp(now: DateTime<Utc>) -> String {
-    now.to_rfc3339_opts(SecondsFormat::Millis, true)
 }
 
 /// Hash the parsed request in the same field order as TaskInputSchema. Standard
@@ -140,8 +137,9 @@ pub fn task_request_hash(input: &TaskCreateBody, creator_user_id: &str) -> Datab
     }
     let payload =
         json!({"input": Value::Object(fields), "creator": {"kind": "user", "id": creator_user_id}});
-    let digest = Sha256::digest(crate::shared::js_json::stringify(&payload).as_bytes());
-    Ok(digest.iter().map(|byte| format!("{byte:02x}")).collect())
+    Ok(sha256_hex(
+        crate::shared::js_json::stringify(&payload).as_bytes(),
+    ))
 }
 
 /// Check the idempotency key before an external Git fetch. A retry is answered
@@ -404,7 +402,7 @@ pub fn prepare_local_user_task(
         ("runProjectTests", json!(input.run_project_tests)),
         ("visualEvidence", json!(input.visual_evidence)),
         ("source", Value::Null),
-        ("capturedAt", json!(timestamp(now))),
+        ("capturedAt", json!(rfc3339_millis(now))),
     ] {
         configuration.insert(key.to_owned(), value);
     }
@@ -446,7 +444,7 @@ fn audit(
     let resulting_state = json!({"status": task.status, "archived": archived}).to_string();
     database.connection().execute(
         "INSERT INTO suplex_audit_events (id, actor_user_id, actor_agent_id, action, target_user_id, company_id, metadata_json, created_at) VALUES (?1, ?2, NULL, ?3, NULL, ?4, ?5, ?6)",
-        params![format!("audit_{}", Uuid::new_v4().simple()), actor_user_id, action, task.company_id, json!({"taskId": task.id, "resultingState": resulting_state}).to_string(), timestamp(now)],
+        params![format!("audit_{}", Uuid::new_v4().simple()), actor_user_id, action, task.company_id, json!({"taskId": task.id, "resultingState": resulting_state}).to_string(), rfc3339_millis(now)],
     )?;
     Ok(())
 }
@@ -719,7 +717,7 @@ pub fn continue_user_delivery(
         }
         repository::assert_task_pull_requests_available(database, task_id)
             .map_err(|error| conflict(&error.to_string()))?;
-        let time = timestamp(Utc::now());
+        let time = crate::shared::time::now_millis_rfc3339();
         let rows = root_session_store::root_observation_rows(database, task_id)?;
         let mut state = rows.control["workflowState"].clone();
         let mut history = state["deliveryHistory"].as_array().cloned().unwrap_or_default();
@@ -757,7 +755,7 @@ pub fn continue_user_delivery(
         }));
         database.connection().execute(
             "INSERT INTO suplex_task_turns (id, task_id, session_id, generation, prompt_hash, prompt_text, status, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'pending_prompt', ?7, ?7)",
-            params![root_session_store::new_turn_id(Utc::now())?, task_id, root.id, root.generation, format!("{:x}", Sha256::digest(prompt.as_bytes())), prompt, time],
+            params![root_session_store::new_turn_id(Utc::now())?, task_id, root.id, root.generation, sha256_hex(prompt.as_bytes()), prompt, time],
         )?;
         root_session_store::observe_lifecycle(database, task_id)?;
         let id = task_id.to_owned();
@@ -809,8 +807,8 @@ pub fn select_user_task_agent(
     let initial =
         root_prompts::initial_coordinator_prompt(&rows.control, &rows.context, &rows.dependencies)
             .map_err(|message| Box::new(TaskFailure::new(message, 501)) as Box<dyn Error>)?;
-    let hash = |text: &str| format!("{:x}", Sha256::digest(text.as_bytes()));
-    let time = timestamp(now);
+    let hash = |text: &str| sha256_hex(text.as_bytes());
+    let time = rfc3339_millis(now);
     database.transaction(true, |database| {
         let row = database.connection().query_row(
             "SELECT c.status, t.archived_at IS NOT NULL, c.workflow, c.delivery_target, c.workflow_state_json, c.root_session_id, c.root_profile_json, c.worker_profile_json, t.configuration_json, c.human_question_id, c.human_question, c.human_question_options_json, c.limit_pause_json IS NOT NULL OR c.recovery_turn_id IS NOT NULL, c.advisor_profiles_json, c.worker_session_id FROM suplex_task_controls c JOIN suplex_tasks t ON t.id = c.task_id WHERE c.task_id = ?1",
@@ -1074,7 +1072,7 @@ pub fn set_user_task_dependencies(
             422,
         )));
     }
-    let time = timestamp(now);
+    let time = rfc3339_millis(now);
     database.transaction(true, |database| {
         for dependency in &depends_on {
             let company: Option<String> = database
@@ -1168,7 +1166,7 @@ pub fn set_user_task_issue(
         let current = require_user_task(database, actor_user_id, task_id)?;
         database.connection().execute(
             "UPDATE suplex_tasks SET issue_json = ?1, updated_at = ?2 WHERE id = ?3",
-            params![resolved.map(crate::shared::js_json::stringify), timestamp(now), task_id],
+            params![resolved.map(crate::shared::js_json::stringify), rfc3339_millis(now), task_id],
         )?;
         let started: bool = database.connection().query_row(
             "SELECT EXISTS(SELECT 1 FROM suplex_task_sessions WHERE task_id = ?1 AND native_session_id IS NOT NULL UNION ALL SELECT 1 FROM suplex_task_turns WHERE task_id = ?1 AND status IN ('prompted', 'unknown', 'completed'))",
@@ -1658,11 +1656,11 @@ mod tests {
         let user = auth::development_sign_in(&mut database, now).unwrap().user;
         database.connection().execute(
             "INSERT INTO suplex_companies (id, name, status, created_at) VALUES ('command_company', 'Command company', 'active', ?1)",
-            [timestamp(now)],
+            [rfc3339_millis(now)],
         ).unwrap();
         database.connection().execute(
             "INSERT INTO suplex_projects (id, company_id, name, repository_path, worktree_root, repository_identity, base_branch, setup_command, verification_command, root_profile_id, worker_profile_id, agent_task_policy_json, created_at, updated_at) VALUES ('command_project', 'command_company', 'Command project', '/tmp/suplex-command-project', '/tmp/suplex-command-worktrees', 'owner/repo', 'main', '', '', 'profile_native_root', 'profile_native_worker', '{}', ?1, ?1)",
-            [timestamp(now)],
+            [rfc3339_millis(now)],
         ).unwrap();
         let prepared = PreparedTask {
             id: repository::new_task_id(),
@@ -2024,7 +2022,7 @@ mod tests {
         for (id, role) in [("alternate-root", "root"), ("alternate-worker", "worker")] {
             database.connection().execute(
                 "INSERT INTO suplex_profiles (id,name,role,avatar_seed,provider,model,reasoning_level,service_tier,created_at,updated_at) VALUES (?1,?1,?2,?1,'codex','test','medium','default',?3,?3)",
-                params![id, role, timestamp(now)],
+                params![id, role, rfc3339_millis(now)],
             ).unwrap();
         }
         let active = PreparedTask {
@@ -2094,15 +2092,15 @@ mod tests {
         // An unfinished Worker assignment moves to a fresh session with the new profile.
         database.connection().execute(
             "INSERT INTO suplex_profiles (id,name,role,avatar_seed,provider,model,reasoning_level,service_tier,created_at,updated_at) VALUES ('third-worker','third-worker','worker','third-worker','codex','test','medium','default',?1,?1)",
-            [timestamp(now)],
+            [rfc3339_millis(now)],
         ).unwrap();
         database.connection().execute(
             "INSERT INTO suplex_task_sessions (id,task_id,kind,generation,is_current,lifecycle,delegate_slot,created_at,updated_at) VALUES ('worker-one',?1,'worker',1,1,'live','delegate',?2,?2)",
-            params![task.id, timestamp(now)],
+            params![task.id, rfc3339_millis(now)],
         ).unwrap();
         database.connection().execute(
             "INSERT INTO suplex_task_turns (id,task_id,session_id,generation,prompt_hash,prompt_text,status,created_at,updated_at) VALUES ('worker-turn',?1,'worker-one',1,'hash','Build the feature','prompted',?2,?2)",
-            params![task.id, timestamp(now)],
+            params![task.id, rfc3339_millis(now)],
         ).unwrap();
         select(&mut database, json!({"role":"worker","expectedProfileId":"alternate-worker","expectedSessionId":"worker-one","profileId":"third-worker","direction":"Use tests","resume":false})).unwrap();
         let (replacement, prompt, old_lifecycle): (String, String, String) = database.connection().query_row(
@@ -2223,11 +2221,11 @@ mod tests {
         let user = auth::development_sign_in(&mut database, now).unwrap().user;
         database.connection().execute(
             "INSERT INTO suplex_companies (id, name, status, created_at) VALUES ('command_company', 'Command company', 'active', ?1)",
-            [timestamp(now)],
+            [rfc3339_millis(now)],
         ).unwrap();
         database.connection().execute(
             "INSERT INTO suplex_projects (id, company_id, name, repository_path, worktree_root, repository_identity, base_branch, setup_command, verification_command, root_profile_id, worker_profile_id, agent_task_policy_json, created_at, updated_at) VALUES ('command_project', 'command_company', 'Command project', '/tmp/suplex-command-project', '/tmp/suplex-command-worktrees', 'owner/repo', 'main', '', '', 'profile_native_root', 'profile_native_worker', ?1, ?2, ?2)",
-            params![json!({"workflowIds":["standard"],"defaultWorkflowId":"standard","rootProfileIds":["profile_native_root"],"workerProfileIds":["profile_native_worker"]}).to_string(), timestamp(now)],
+            params![json!({"workflowIds":["standard"],"defaultWorkflowId":"standard","rootProfileIds":["profile_native_root"],"workerProfileIds":["profile_native_worker"]}).to_string(), rfc3339_millis(now)],
         ).unwrap();
         let project = service::get(&database, &user.id, "command_project").unwrap();
         let prepared = PreparedTask {

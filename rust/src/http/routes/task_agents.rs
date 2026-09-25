@@ -1,5 +1,6 @@
 //! Current task-agent rows use saved session intent and live native process observation.
 
+use crate::shared::time::rfc3339_millis;
 use std::{error::Error, path::PathBuf};
 
 use axum::{
@@ -9,7 +10,7 @@ use axum::{
     response::{IntoResponse, Response},
     routing::get,
 };
-use chrono::{DateTime, SecondsFormat, Utc};
+use chrono::{DateTime, Utc};
 use rusqlite::OptionalExtension;
 use serde_json::{Value, json};
 
@@ -231,9 +232,7 @@ fn native_status(database_path: &std::path::Path, session: &Value) -> Option<(&'
 fn iso_timestamp(value: f64) -> Value {
     DateTime::<Utc>::from_timestamp_millis(value as i64)
         .filter(|_| value.is_finite())
-        .map_or(Value::Null, |time| {
-            json!(time.to_rfc3339_opts(SecondsFormat::Millis, true))
-        })
+        .map_or(Value::Null, |time| json!(rfc3339_millis(time)))
 }
 
 fn agents(task: &AgentTask, database_path: &std::path::Path) -> Vec<Value> {

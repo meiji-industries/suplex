@@ -2,6 +2,7 @@
 //! as `platform/system-event-transport.ts` does. Delivery is best effort: a
 //! missing receiver drops the event and never affects the producer.
 
+use crate::shared::time::now_millis_rfc3339;
 use std::{
     io::Write,
     os::unix::{
@@ -16,7 +17,7 @@ use std::{
     time::Duration,
 };
 
-use chrono::{DateTime, SecondsFormat, Utc};
+use chrono::DateTime;
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 use tokio::{io::AsyncReadExt, net::UnixListener, task::JoinHandle};
@@ -77,7 +78,7 @@ impl Producer {
             "context": wire_context,
             "meta": {
                 "eventId": event_id,
-                "producerTime": Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true),
+                "producerTime": now_millis_rfc3339(),
                 "producerPid": std::process::id(),
                 "producerSequence": self.sequence.fetch_add(1, Ordering::Relaxed) + 1,
                 "processInstanceId": self.process_instance_id,

@@ -1,9 +1,9 @@
 //! TypeScript `delivery/completed-pull-requests.ts`: refresh the pull request
 //! state of delivered tasks from GitHub or Bitbucket. A refresh never changes task status.
 
+use crate::shared::time::now_millis_rfc3339;
 use std::path::Path;
 
-use chrono::{SecondsFormat, Utc};
 use rusqlite::params;
 use serde_json::{Value, json};
 
@@ -127,7 +127,7 @@ async fn observe_group(
                 "UPDATE suplex_task_controls SET pull_request_json = ?1, updated_at = ?2
                  WHERE task_id = ?3 AND status = 'delivered' AND pull_request_json IS ?4
                    AND EXISTS (SELECT 1 FROM suplex_tasks WHERE id = task_id AND archived_at IS NULL)",
-                params![value, Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true), candidate.task_id, candidate.pull_json],
+                params![value, now_millis_rfc3339(), candidate.task_id, candidate.pull_json],
             )?;
         }
         Ok(())

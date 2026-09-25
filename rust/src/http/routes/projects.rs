@@ -947,7 +947,6 @@ mod tests {
         http::{HeaderValue, header},
     };
     use chrono::DateTime;
-    use sha2::{Digest, Sha256};
 
     use super::*;
     use crate::{
@@ -972,7 +971,7 @@ mod tests {
     async fn project_reads_serialize_normalized_configuration_and_enforce_scope() {
         let path = std::env::temp_dir().join(format!(
             "{}.sqlite",
-            identity_auth::random_hex_id("suplex_project_http").unwrap()
+            crate::shared::ids::random_hex_id("suplex_project_http").unwrap()
         ));
         let mut database = SuplexDatabase::open(&path, OpenMode::Migrate).unwrap();
         let now = DateTime::parse_from_rfc3339("2026-09-24T12:00:00Z")
@@ -990,10 +989,7 @@ mod tests {
             "INSERT INTO suplex_users (id, display_name, username, role, status, created_at, updated_at, identity_version) VALUES ('project_member', 'Member', 'user_v1_project_member', 'member', 'active', ?1, ?1, 1)",
             [member_now.to_rfc3339()],
         ).unwrap();
-        let member_hash = Sha256::digest(b"project_member_token")
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect::<String>();
+        let member_hash = crate::shared::hash::sha256_hex(b"project_member_token");
         database.connection().execute(
             "INSERT INTO suplex_sessions (id, token_hash, user_id, expires_at, created_at, token_version) VALUES ('project_member_session', ?1, 'project_member', ?2, ?3, 1)",
             rusqlite::params![member_hash, (member_now + chrono::Duration::days(1)).to_rfc3339(), member_now.to_rfc3339()],
@@ -1091,8 +1087,8 @@ mod tests {
 
     #[tokio::test]
     async fn admitted_project_create_finishes_after_request_task_is_dropped() {
-        let root =
-            std::env::temp_dir().join(identity_auth::random_hex_id("suplex_project_drop").unwrap());
+        let root = std::env::temp_dir()
+            .join(crate::shared::ids::random_hex_id("suplex_project_drop").unwrap());
         let repositories = root.join("repositories");
         let worktrees = root.join("worktrees");
         let repository = repositories.join("owner/repo");
@@ -1430,7 +1426,7 @@ mod tests {
     async fn issue_search_and_task_sources_follow_the_configured_tracker() {
         let path = std::env::temp_dir().join(format!(
             "{}.sqlite",
-            identity_auth::random_hex_id("suplex_project_sources").unwrap()
+            crate::shared::ids::random_hex_id("suplex_project_sources").unwrap()
         ));
         let mut database = SuplexDatabase::open(&path, OpenMode::Migrate).unwrap();
         let now = Utc::now();
@@ -1518,7 +1514,7 @@ mod tests {
     #[tokio::test]
     async fn project_patch_replaces_or_patches_and_checks_git_only_for_repository_changes() {
         let root = std::env::temp_dir()
-            .join(identity_auth::random_hex_id("suplex_project_patch").unwrap());
+            .join(crate::shared::ids::random_hex_id("suplex_project_patch").unwrap());
         let repositories = root.join("repositories");
         let worktrees = root.join("worktrees");
         let repository = repositories.join("owner/repo");

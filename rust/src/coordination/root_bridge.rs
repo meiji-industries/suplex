@@ -95,7 +95,7 @@ pub fn write_binding(
             args: vec!["mcp".into(), "root".into()],
         },
     };
-    bridge_auth::atomic_write_private(
+    crate::shared::fs::write_private(
         &binding_path,
         &serde_json::to_vec(&binding).map_err(io::Error::other)?,
     )?;

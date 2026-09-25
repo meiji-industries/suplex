@@ -3,6 +3,8 @@
 //! Reads cover every task in the agent's current project grants. Commands,
 //! dependency writes, and duplicates stay limited to tasks the agent created.
 
+use crate::shared::hash::sha256_hex;
+use crate::shared::time::rfc3339_millis;
 use std::{
     collections::HashSet,
     error::Error,
@@ -12,7 +14,7 @@ use std::{
 };
 
 use base64::{Engine, engine::general_purpose::STANDARD, engine::general_purpose::URL_SAFE_NO_PAD};
-use chrono::{DateTime, SecondsFormat, Utc};
+use chrono::{DateTime, Utc};
 use rusqlite::{OptionalExtension, params, params_from_iter, types::Value as SqlValue};
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
@@ -90,14 +92,6 @@ fn fail_with(
 
 fn not_found() -> Box<dyn Error> {
     fail("Not found", 404, "resource_not_found")
-}
-
-fn timestamp(now: DateTime<Utc>) -> String {
-    now.to_rfc3339_opts(SecondsFormat::Millis, true)
-}
-
-fn sha256_hex(value: &str) -> String {
-    format!("{:x}", Sha256::digest(value.as_bytes()))
 }
 
 /// HMAC-SHA256 as `createHmac("sha256", key)`, encoded as base64url.
@@ -899,7 +893,7 @@ async fn with_integration(
     stored: Targets,
 ) -> Vec<Value> {
     let Targets { targets, pool } = stored;
-    let observed_at = timestamp(Utc::now());
+    let observed_at = crate::shared::time::now_millis_rfc3339();
     let upstreams = targets
         .iter()
         .map(|(_, task)| {
@@ -1154,7 +1148,7 @@ fn request_hash(raw: &TaskCreateBody, agent_id: &str) -> DatabaseResult<String> 
         fields.remove("dryRun");
     }
     let payload = sorted(&json!({"input": input, "creator": {"kind": "agent", "id": agent_id}}));
-    Ok(sha256_hex(&crate::shared::js_json::stringify(&payload)))
+    Ok(sha256_hex(crate::shared::js_json::stringify(&payload)))
 }
 
 fn is_legacy_request(raw: &TaskCreateBody) -> bool {
@@ -1194,7 +1188,7 @@ fn legacy_hash(raw: &TaskCreateBody, agent_id: &str) -> DatabaseResult<String> {
         fields.remove(name);
     }
     let payload = json!({"input": fields, "creator": {"kind": "agent", "id": agent_id}});
-    Ok(sha256_hex(&crate::shared::js_json::stringify(&payload)))
+    Ok(sha256_hex(crate::shared::js_json::stringify(&payload)))
 }
 
 fn conflict() -> Box<dyn Error> {
@@ -2001,7 +1995,7 @@ fn replace_dependencies(
             code: "task_failure",
         }));
     }
-    let time = timestamp(now);
+    let time = rfc3339_millis(now);
     database.transaction(true, |database| {
         let was_blocked: bool = database.connection().query_row(
             "SELECT EXISTS(SELECT 1 FROM suplex_task_dependencies d LEFT JOIN suplex_task_controls c ON c.task_id = d.depends_on_task_id WHERE d.task_id = ?1 AND COALESCE(c.status, 'backlog') <> 'delivered')",
@@ -2257,7 +2251,7 @@ fn claim(
     task_id: &str,
     input: &TaskCommandBody,
 ) -> DatabaseResult<Claim> {
-    let hash = sha256_hex(&crate::shared::js_json::stringify(&serde_json::to_value(
+    let hash = sha256_hex(crate::shared::js_json::stringify(&serde_json::to_value(
         input,
     )?));
     require_owned(database, principal, task_id)?;
@@ -2338,7 +2332,7 @@ fn finish(
     database.transaction(false, |database| {
         database.connection().execute(
             "INSERT INTO suplex_hermes_task_command_receipts (agent_id, task_id, idempotency_key, request_hash, result_json, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            params![principal.agent_id, task_id, input.idempotency_key, hash, crate::shared::js_json::stringify(&result), timestamp(now)],
+            params![principal.agent_id, task_id, input.idempotency_key, hash, crate::shared::js_json::stringify(&result), rfc3339_millis(now)],
         )?;
         Ok(())
     })?;
@@ -2515,7 +2509,7 @@ fn duplicate_request(
                 .unwrap_or_default()
                 .to_owned(),
         ),
-        idempotency_key: format!("duplicate-{}", sha256_hex(&format!("{task_id}:{key}"))),
+        idempotency_key: format!("duplicate-{}", sha256_hex(format!("{task_id}:{key}"))),
         depends_on: None,
         blocked_by_pull_requests: None,
         queue: None,

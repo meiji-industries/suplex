@@ -1,6 +1,7 @@
 //! Task intent and control persistence. Callers resolve project and provider facts before writing.
 
-use chrono::{DateTime, SecondsFormat, Utc};
+use crate::shared::time::rfc3339_millis;
+use chrono::{DateTime, Utc};
 use rusqlite::{OptionalExtension, Row, params};
 use serde_json::Value;
 use std::path::Path;
@@ -104,10 +105,6 @@ pub struct TaskDetailsWrite {
 pub struct TaskWrite {
     pub task: TaskRecord,
     pub created: bool,
-}
-
-fn timestamp(now: DateTime<Utc>) -> String {
-    now.to_rfc3339_opts(SecondsFormat::Millis, true)
 }
 
 fn task(row: &Row<'_>) -> rusqlite::Result<TaskRecord> {
@@ -242,7 +239,7 @@ pub(crate) fn admit_queued(
     assert_task_pull_requests_available(database, task_id)?;
     Ok(database.connection().execute(
         "UPDATE suplex_task_controls SET status = 'active', wake_at = ?1, updated_at = ?1 WHERE task_id = ?2 AND status = 'queued' AND EXISTS(SELECT 1 FROM suplex_tasks WHERE id = ?2 AND archived_at IS NULL)",
-        params![timestamp(now), task_id],
+        params![rfc3339_millis(now), task_id],
     )? == 1)
 }
 
@@ -279,7 +276,7 @@ fn create_inner(
     let result = database.transaction(true, |database| {
         if let Some(task) = existing(database, input)? { return Ok(TaskWrite { task, created: false }); }
         let id = &input.id;
-        let time = timestamp(now);
+        let time = rfc3339_millis(now);
         let (creator_user_id, creator_agent_id) = match &input.creator {
             TaskCreator::User(id) => (Some(id.as_str()), None),
             TaskCreator::Agent(id) => (None, Some(id.as_str())),
@@ -385,7 +382,7 @@ pub fn update_details(
     now: DateTime<Utc>,
 ) -> DatabaseResult<bool> {
     database.transaction(true, |database| {
-        let time = timestamp(now);
+        let time = rfc3339_millis(now);
         let changed = database.connection().execute(
             "UPDATE suplex_tasks SET title = ?1, description = ?2, configuration_json = json_set(configuration_json, '$.runProjectTests', json(?3), '$.visualEvidence', ?4), updated_at = ?5 WHERE id = ?6 AND archived_at IS NULL AND EXISTS (SELECT 1 FROM suplex_task_controls WHERE task_id = suplex_tasks.id AND status IN ('backlog', 'queued'))",
             params![details.title, details.description, if details.run_project_tests { "true" } else { "false" }, details.visual_evidence, time, task_id],
@@ -406,7 +403,7 @@ pub fn rename(
     now: DateTime<Utc>,
 ) -> DatabaseResult<bool> {
     database.transaction(true, |database| {
-        let time = timestamp(now);
+        let time = rfc3339_millis(now);
         let changed = database.connection().execute(
             "UPDATE suplex_tasks SET title = ?1, updated_at = ?2 WHERE id = ?3 AND archived_at IS NULL",
             params![title, time, task_id],
@@ -442,7 +439,7 @@ pub(crate) fn reconcile_dependency_release(
     }
     database.connection().execute(
         "UPDATE suplex_task_controls SET wake_at = ?1, updated_at = ?1 WHERE task_id = ?2 AND status = 'active'",
-        params![timestamp(now), task_id],
+        params![rfc3339_millis(now), task_id],
     )?;
     Ok(false)
 }
@@ -462,7 +459,7 @@ pub fn disarm(
             Some("queued") => {
                 database.connection().execute(
                     "UPDATE suplex_task_controls SET status = 'backlog', updated_at = ?1 WHERE task_id = ?2 AND status = 'queued'",
-                    params![timestamp(now), task_id],
+                    params![rfc3339_millis(now), task_id],
                 )?;
                 Ok(Some(true))
             }
@@ -482,7 +479,7 @@ pub fn start(
     now: DateTime<Utc>,
 ) -> DatabaseResult<Option<TaskRecord>> {
     database.transaction(true, |database| {
-        let time = timestamp(now);
+        let time = rfc3339_millis(now);
         let active = database.connection().execute(
             "UPDATE suplex_task_controls SET wake_at = ?1, updated_at = ?1 WHERE task_id = ?2 AND status = 'active'",
             params![time, task_id],

@@ -1,10 +1,11 @@
 //! Durable Root session and prompt intent. Native runtime evidence stays with the harness.
 
-use chrono::{DateTime, SecondsFormat, Utc};
+use crate::shared::hash::sha256_hex;
+use crate::shared::time::rfc3339_millis;
+use chrono::{DateTime, Utc};
 use rusqlite::{OptionalExtension, Row, params};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 use std::sync::{Mutex, PoisonError};
 use uuid::Uuid;
@@ -305,10 +306,6 @@ fn task_limit_question(
     )
 }
 
-fn timestamp(now: DateTime<Utc>) -> String {
-    now.to_rfc3339_opts(SecondsFormat::Millis, true)
-}
-
 pub(crate) fn new_turn_id(now: DateTime<Utc>) -> DatabaseResult<String> {
     const BASE62: &[u8; 62] = b"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
     static COUNTER: Mutex<(i64, u64)> = Mutex::new((0, 0));
@@ -471,7 +468,7 @@ pub fn claim_tool_owner(
     let changed = database.transaction(true, |database| {
         Ok(database.connection().execute(
             "UPDATE suplex_task_controls SET workflow_state_json = json_set(workflow_state_json, '$.toolOwner', json(?1)), updated_at = ?2 WHERE task_id = ?3 AND json_extract(workflow_state_json, '$.toolOwner.token') IS ?4",
-            params![owner.to_string(), timestamp(now), task_id, prior],
+            params![owner.to_string(), rfc3339_millis(now), task_id, prior],
         )?)
     })?;
     Ok((changed == 1).then_some(token))
@@ -524,7 +521,7 @@ pub fn ask_human_for_root(
     let changed = database.transaction(true, |database| {
         Ok(database.connection().execute(
             "UPDATE suplex_task_controls SET status = 'waiting_human', human_question = ?1, human_question_options_json = ?2, human_question_id = ?3, limit_pause_json = NULL, wake_at = NULL, workflow_state_json = json_set(workflow_state_json, '$.deliveryWait', json('null')), updated_at = ?4 WHERE task_id = ?5 AND status = 'active' AND root_session_id = ?6 AND EXISTS (SELECT 1 FROM suplex_task_sessions s WHERE s.id = ?6 AND s.task_id = suplex_task_controls.task_id AND s.kind = 'root' AND s.generation = ?7 AND s.is_current = 1 AND s.lifecycle <> 'cancelled')",
-            params![question, options, Uuid::new_v4().to_string(), timestamp(now), task_id, session_id, generation],
+            params![question, options, Uuid::new_v4().to_string(), rfc3339_millis(now), task_id, session_id, generation],
         )? == 1)
     })?;
     if changed {
@@ -639,7 +636,7 @@ pub fn cancel_task(
     now: DateTime<Utc>,
 ) -> DatabaseResult<bool> {
     let cancelled = database.transaction(true, |database| {
-        let time = timestamp(now);
+        let time = rfc3339_millis(now);
         let changed = database.connection().execute(
             "UPDATE suplex_task_controls SET status = 'cancelled', wake_at = NULL, human_question = NULL, human_question_id = NULL, limit_pause_json = NULL, workflow_state_json = json_set(workflow_state_json, '$.deliveryWait', json('null')), updated_at = ?1 WHERE task_id = ?2 AND status <> 'delivered'",
             params![time, task_id],
@@ -740,8 +737,8 @@ pub fn answer_human(
         }
         let prompt = js_json::stringify(&serde_json::json!({"question":question,"answer":answer}));
         let id = new_turn_id(now)?;
-        let hash = format!("{:x}", Sha256::digest(prompt.as_bytes()));
-        let time = timestamp(now);
+        let hash = sha256_hex(prompt.as_bytes());
+        let time = rfc3339_millis(now);
         database.connection().execute(
             "INSERT INTO suplex_task_turns (id,task_id,session_id,generation,prompt_hash,prompt_text,status,created_at,updated_at) VALUES (?1,?2,?3,?4,?5,?6,'pending_prompt',?7,?7)",
             params![id, task_id, root.id, root.generation, hash, prompt, time],
@@ -789,7 +786,7 @@ pub fn answer_task_limit(
         {
             return Err(std::io::Error::other("invalid_task_limit_pause").into());
         }
-        let time = timestamp(now);
+        let time = rfc3339_millis(now);
         if matches!(decision, TaskLimitDecision::CancelTask) {
             database.connection().execute(
                 "UPDATE suplex_task_controls SET status = 'cancelled', wake_at = NULL, human_question = NULL, human_question_id = NULL, limit_pause_json = NULL, workflow_state_json = json_set(workflow_state_json, '$.deliveryWait', json('null')), updated_at = ?1 WHERE task_id = ?2",
@@ -825,7 +822,7 @@ pub fn answer_task_limit(
         };
         let prompt = js_json::stringify(&serde_json::json!({"question": question, "decision": decision}));
         let id = new_turn_id(now)?;
-        let hash = format!("{:x}", Sha256::digest(prompt.as_bytes()));
+        let hash = sha256_hex(prompt.as_bytes());
         database.connection().execute(
             "INSERT INTO suplex_task_turns (id,task_id,session_id,generation,prompt_hash,prompt_text,status,created_at,updated_at) VALUES (?1,?2,?3,?4,?5,?6,'pending_prompt',?7,?7)",
             params![id, task_id, root.id, root.generation, hash, prompt, time],
@@ -905,13 +902,13 @@ fn launch_delegate(
     let task_id = root.task_id.as_str();
     let root_session_id = root.id.as_str();
     let root_generation = root.generation;
-    let assignment_hash = format!("{:x}", Sha256::digest(assignment_text.as_bytes()));
-    let prompt_hash = format!("{:x}", Sha256::digest(prompt_text.as_bytes()));
+    let assignment_hash = sha256_hex(assignment_text.as_bytes());
+    let prompt_hash = sha256_hex(prompt_text.as_bytes());
     let workflow_json = workflow_input.map(serde_json::to_string).transpose()?;
     let slot = advisor_role
         .filter(|role| matches!(*role, "planner_a" | "planner_b"))
         .unwrap_or("delegate");
-    let time = timestamp(now);
+    let time = rfc3339_millis(now);
     database.transaction(true, |database| {
         assert_current_root(database, task_id, root_session_id, root_generation)?;
         let active_turn: bool = database.connection().query_row(
@@ -1020,7 +1017,7 @@ pub fn launch_planner_pair(
     {
         return Err(std::io::Error::other("invalid_planner_pair").into());
     }
-    let time = timestamp(now);
+    let time = rfc3339_millis(now);
     let ids = database.transaction(true, |database| {
         assert_current_root(database, task_id, &root.id, root.generation)?;
         let workflow: String = database.connection().query_row(
@@ -1052,7 +1049,7 @@ pub fn launch_planner_pair(
         for (index, (role, prompt, input)) in [("planner_a", prompt_a, input_a), ("planner_b", prompt_b, input_b)].into_iter().enumerate() {
             let id = Uuid::new_v4().to_string();
             let generation = latest + index as i64 + 1;
-            let hash = format!("{:x}", Sha256::digest(prompt.as_bytes()));
+            let hash = sha256_hex(prompt.as_bytes());
             let profile = delegate_profile(database, task_id, Some(role))?;
             database.connection().execute(
                 "INSERT INTO suplex_task_sessions (id,task_id,kind,generation,is_current,lifecycle,assignment_hash,advisor_role,delegate_slot,workflow_input_json,profile_json,created_at,updated_at) VALUES (?1,?2,'worker',?3,1,'reserved',?4,?5,?5,?6,?7,?8,?8)",
@@ -1090,7 +1087,7 @@ pub fn replace_worker(
     request: &TaskWorkerReplacementBody,
     now: DateTime<Utc>,
 ) -> DatabaseResult<Value> {
-    let time = timestamp(now);
+    let time = rfc3339_millis(now);
     database.transaction(true, |database| {
         let task: Option<(String, Option<String>, String, String)> = database.connection().query_row(
             "SELECT c.status,t.archived_at,t.configuration_json,c.worker_profile_json FROM suplex_task_controls c JOIN suplex_tasks t ON t.id = c.task_id WHERE c.task_id = ?1",
@@ -1164,7 +1161,7 @@ pub fn replace_worker(
             .and_then(|suffix| assignment_prompt.strip_suffix(suffix))
             .unwrap_or(&assignment_prompt);
         let prompt = format!("{saved_assignment}\n\nFresh Worker handoff:\n{handoff}");
-        let hash = format!("{:x}", Sha256::digest(prompt.as_bytes()));
+        let hash = sha256_hex(prompt.as_bytes());
         let generation: i64 = database.connection().query_row(
             "SELECT COALESCE(MAX(generation),0)+1 FROM suplex_task_sessions WHERE task_id = ?1 AND kind = 'worker'",
             [task_id], |row| row.get(0),
@@ -1268,7 +1265,7 @@ pub fn replace_coordinator(
     initial_prompt: &str,
     now: DateTime<Utc>,
 ) -> DatabaseResult<Value> {
-    let time = timestamp(now);
+    let time = rfc3339_millis(now);
     database.transaction(true, |database| {
         let task: Option<CoordinatorControlRow> = database.connection().query_row(
             "SELECT c.status,t.archived_at,t.configuration_json,c.root_session_id,c.human_question_id,c.human_question,c.human_question_options_json,c.limit_pause_json,c.recovery_turn_id,c.root_profile_json,c.worktree_json,c.pull_request_json,c.workflow_state_json FROM suplex_task_controls c JOIN suplex_tasks t ON t.id = c.task_id WHERE c.task_id = ?1",
@@ -1429,7 +1426,7 @@ pub fn replace_coordinator(
             if handoff.is_empty() { String::new() } else { format!("Additional direction from the user:\n{handoff}") },
         ].into_iter().filter(|part| !part.is_empty()).collect::<Vec<_>>().join("\n\n");
         let prompt = format!("{initial_prompt}\n\n{handoff_text}");
-        let prompt_hash = format!("{:x}",Sha256::digest(prompt.as_bytes()));
+        let prompt_hash = sha256_hex(prompt.as_bytes());
         let generation: i64 = database.connection().query_row("SELECT COALESCE(MAX(generation),0)+1 FROM suplex_task_sessions WHERE task_id = ?1 AND kind = 'root'",[task_id],|row| row.get(0))?;
         let id = Uuid::new_v4().to_string();
         database.connection().execute("UPDATE suplex_task_sessions SET profile_json = ?1 WHERE task_id = ?2 AND kind = 'root' AND advisor_role IS NULL AND profile_json IS NULL",params![old_profile_json,task_id])?;
@@ -1464,7 +1461,7 @@ pub fn reserve_root(
             [task_id], |row| row.get(0),
         )?;
         let id = Uuid::new_v4().to_string();
-        let time = timestamp(now);
+        let time = rfc3339_millis(now);
         database.connection().execute(
             "INSERT INTO suplex_task_sessions (id, task_id, kind, generation, is_current, lifecycle, created_at, updated_at) VALUES (?1, ?2, 'root', ?3, 1, 'reserved', ?4, ?4)",
             params![id, task_id, generation, time],
@@ -1490,8 +1487,8 @@ pub fn ensure_initial_prompt(
         )?;
         if existing { return Ok(None); }
         let id = new_turn_id(now)?;
-        let hash = format!("{:x}", Sha256::digest(prompt.as_bytes()));
-        let time = timestamp(now);
+        let hash = sha256_hex(prompt.as_bytes());
+        let time = rfc3339_millis(now);
         database.connection().execute(
             "INSERT INTO suplex_task_turns (id, task_id, session_id, generation, prompt_hash, prompt_text, status, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'pending_prompt', ?7, ?7)",
             params![id, root.task_id, root.id, root.generation, hash, prompt, time],
@@ -1535,7 +1532,7 @@ pub fn send_labeled_note(
             return Err(std::io::Error::other("task_note_unavailable").into());
         }
         let resuming = status == "delivered";
-        let time = timestamp(now);
+        let time = rfc3339_millis(now);
         if resuming {
             repository::assert_task_pull_requests_available(database, task_id)?;
             let mut state: Value = serde_json::from_str(&workflow_state)?;
@@ -1586,7 +1583,7 @@ pub fn send_labeled_note(
             format!("{label}:\n{note}")
         };
         let id = new_turn_id(now)?;
-        let hash = format!("{:x}", Sha256::digest(prompt.as_bytes()));
+        let hash = sha256_hex(prompt.as_bytes());
         database.connection().execute(
             "INSERT INTO suplex_task_turns (id,task_id,session_id,generation,prompt_hash,prompt_text,status,created_at,updated_at) VALUES (?1,?2,?3,?4,?5,?6,'pending_prompt',?7,?7)",
             params![id, task_id, root.id, root.generation, hash, prompt, time],
@@ -1618,7 +1615,7 @@ pub fn claim_session_operation(
     database.transaction(true, |database| {
         Ok(database.connection().execute(
             "UPDATE suplex_task_sessions SET launch_owner = ?1, launch_owner_pid = ?2, launch_owner_start_time = ?3, launch_claimed_at = ?4, updated_at = ?4 WHERE id = ?5 AND generation = ?6 AND is_current = 1 AND lifecycle <> 'cancelled' AND launch_owner IS ?7",
-            params![owner, owner_pid, owner_start_time, timestamp(now), root.id, root.generation, root.launch_owner],
+            params![owner, owner_pid, owner_start_time, rfc3339_millis(now), root.id, root.generation, root.launch_owner],
         )? == 1)
     })
 }
@@ -1632,7 +1629,7 @@ pub fn release_session_operation(
     database.transaction(false, |database| {
         database.connection().execute(
             "UPDATE suplex_task_sessions SET launch_owner = NULL, launch_owner_pid = NULL, launch_owner_start_time = NULL, launch_claimed_at = NULL, updated_at = ?1 WHERE id = ?2 AND launch_owner = ?3",
-            params![timestamp(now), session_id, owner],
+            params![rfc3339_millis(now), session_id, owner],
         )?;
         Ok(())
     })
@@ -1647,7 +1644,7 @@ pub fn bind_native_session(
     database.transaction(true, |database| {
         Ok(database.connection().execute(
             "UPDATE suplex_task_sessions SET native_session_id = ?1, lifecycle = 'live', updated_at = ?2 WHERE id = ?3 AND generation = ?4 AND is_current = 1 AND lifecycle <> 'cancelled' AND (native_session_id IS NULL OR native_session_id = ?1)",
-            params![native_id, timestamp(now), root.id, root.generation],
+            params![native_id, rfc3339_millis(now), root.id, root.generation],
         )? == 1)
     })
 }
@@ -1699,7 +1696,7 @@ pub fn claim_prompt(
             };
             let observed = PersistedLimitUsage { estimated_cost_usd: usage.estimated_cost_usd, admitted_turns };
             let pause = serde_json::json!({ "kind": "task_limit", "reason": reason, "limits": limits, "usage": observed, "proposedLimits": proposed });
-            let time = timestamp(now);
+            let time = rfc3339_millis(now);
             database.connection().execute(
                 "UPDATE suplex_task_controls SET status = 'waiting_human', limit_pause_json = ?1, human_question = ?2, human_question_options_json = '[]', human_question_id = ?3, wake_at = NULL, updated_at = ?4 WHERE task_id = ?5 AND status = 'active'",
                 params![pause.to_string(), task_limit_question(reason, limits, proposed, observed), Uuid::new_v4().to_string(), time, turn.task_id],
@@ -1707,7 +1704,7 @@ pub fn claim_prompt(
             return Ok(false);
         }
         if limits.max_turns > 0 && admitted_turns + reservations >= limits.max_turns { return Ok(false); }
-        let attempt = PromptDispatchAttempt { server_generation: server_generation.to_owned(), claimed_at: timestamp(now) };
+        let attempt = PromptDispatchAttempt { server_generation: server_generation.to_owned(), claimed_at: rfc3339_millis(now) };
         let raw = serde_json::to_string(&attempt)?;
         Ok(database.connection().execute(
             "UPDATE suplex_task_turns SET status = 'unknown', dispatch_attempt_json = ?1, updated_at = ?2 WHERE id = ?3 AND task_id = ?4 AND status = 'pending_prompt' AND EXISTS (SELECT 1 FROM suplex_task_sessions s JOIN suplex_task_controls c ON c.task_id = s.task_id WHERE s.id = suplex_task_turns.session_id AND s.generation = suplex_task_turns.generation AND s.launch_owner = ?5 AND s.is_current = 1 AND s.lifecycle <> 'cancelled' AND c.status = 'active')",
@@ -1725,7 +1722,7 @@ pub fn mark_prompted(
     database.transaction(true, |database| {
         Ok(database.connection().execute(
             "UPDATE suplex_task_turns SET status = 'prompted', native_turn_id = COALESCE(?1, native_turn_id), prompted_at = ?2, updated_at = ?2 WHERE id = ?3 AND generation = ?4 AND status IN ('pending_prompt', 'unknown') AND EXISTS (SELECT 1 FROM suplex_task_sessions s WHERE s.id = suplex_task_turns.session_id AND s.is_current = 1 AND s.generation = suplex_task_turns.generation)",
-            params![native_turn_id, timestamp(now), turn.id, turn.generation],
+            params![native_turn_id, rfc3339_millis(now), turn.id, turn.generation],
         )? == 1)
     })
 }
@@ -1744,7 +1741,7 @@ pub fn requeue_fenced_prompt(
     database.transaction(true, |database| {
         Ok(database.connection().execute(
             "UPDATE suplex_task_turns SET status = 'pending_prompt', dispatch_attempt_json = NULL, updated_at = ?1 WHERE id = ?2 AND status = 'unknown' AND dispatch_attempt_json = ?3 AND EXISTS (SELECT 1 FROM suplex_task_sessions s JOIN suplex_task_controls c ON c.task_id = s.task_id WHERE s.id = suplex_task_turns.session_id AND s.generation = suplex_task_turns.generation AND s.launch_owner = ?4 AND s.is_current = 1 AND s.lifecycle <> 'cancelled' AND c.status = 'active')",
-            params![timestamp(now), turn.id, attempt_json, owner],
+            params![rfc3339_millis(now), turn.id, attempt_json, owner],
         )? == 1)
     })
 }
@@ -1759,7 +1756,7 @@ pub fn complete_root_turn(
     now: DateTime<Utc>,
 ) -> DatabaseResult<bool> {
     database.transaction(false, |database| {
-        let time = timestamp(now);
+        let time = rfc3339_millis(now);
         let previous: Option<(String, String, i64)> = database.connection().query_row(
             "UPDATE suplex_task_turns SET status = 'completed', terminal_observation = ?1, completed_at = ?2, updated_at = ?2 WHERE id = ?3 AND status IN ('pending_prompt','unknown','prompted') RETURNING task_id,session_id,generation",
             params![observation, time, turn_id],
@@ -1780,7 +1777,7 @@ pub fn complete_root_turn(
         }
         assert_current_root(database, &task_id, &session_id, generation)?;
         let id = new_turn_id(now)?;
-        let hash = format!("{:x}", Sha256::digest(prompt.as_bytes()));
+        let hash = sha256_hex(prompt.as_bytes());
         database.connection().execute(
             "INSERT INTO suplex_task_turns (id,task_id,session_id,generation,prompt_hash,prompt_text,status,created_at,updated_at) VALUES (?1,?2,?3,?4,?5,?6,'pending_prompt',?7,?7)",
             params![id, task_id, session_id, generation, hash, prompt, time],
@@ -1832,7 +1829,7 @@ pub fn write_workflow_state(
 ) -> DatabaseResult<()> {
     database.connection().execute(
         "UPDATE suplex_task_controls SET workflow_state_json = ?1, updated_at = ?2 WHERE task_id = ?3",
-        params![state.to_string(), timestamp(now), task_id],
+        params![state.to_string(), rfc3339_millis(now), task_id],
     )?;
     Ok(())
 }
@@ -1844,9 +1841,9 @@ fn insert_root_wake(
     prompt: &str,
     now: DateTime<Utc>,
 ) -> DatabaseResult<RootTurn> {
-    let time = timestamp(now);
+    let time = rfc3339_millis(now);
     let wake_id = new_turn_id(now)?;
-    let hash = format!("{:x}", Sha256::digest(prompt.as_bytes()));
+    let hash = sha256_hex(prompt.as_bytes());
     database.connection().execute(
         "INSERT INTO suplex_task_turns (id,task_id,session_id,generation,prompt_hash,prompt_text,status,created_at,updated_at) VALUES (?1,?2,?3,?4,?5,?6,'pending_prompt',?7,?7)",
         params![wake_id, task_id, root.id, root.generation, hash, prompt, time],
@@ -1905,7 +1902,7 @@ pub fn record_standard_worker_result_and_wake(
         }
         let root = current_root(database, task_id)?
             .ok_or_else(|| std::io::Error::other("root_notification_unavailable"))?;
-        let time = timestamp(now);
+        let time = rfc3339_millis(now);
         database.connection().execute(
             "UPDATE suplex_task_turns SET status = 'completed', result_receipt_id = ?1, terminal_observation = ?2, native_turn_id = ?3, completed_at = ?4, updated_at = ?4 WHERE id = ?5",
             params![receipt_id, observation, native_turn_id, time, worker_turn_id],
@@ -2010,7 +2007,7 @@ pub fn reconcile_advisor_result(
         base.insert("advisor".into(), json!({"role":role,"result":result,"invalidReason":null}));
         database.connection().execute(
             "UPDATE suplex_task_turns SET terminal_observation = ?1, updated_at = ?2 WHERE id = ?3",
-            params![Value::Object(base).to_string(), timestamp(now), turn_id],
+            params![Value::Object(base).to_string(), rfc3339_millis(now), turn_id],
         )?;
         if matches!(role.as_str(), "reviewer" | "rater") {
             let mut state = workflow_state(database, task_id)?;
@@ -2150,7 +2147,7 @@ pub fn fail_delivery_wait(
         }
         let changed = database.connection().execute(
             "UPDATE suplex_task_controls SET status = 'waiting_human', human_question = ?1, human_question_options_json = ?2, human_question_id = ?3, limit_pause_json = NULL, wake_at = NULL, workflow_state_json = json_set(workflow_state_json, '$.deliveryWait', json('null')), updated_at = ?4 WHERE task_id = ?5 AND status = 'active'",
-            params![question, options.to_string(), Uuid::new_v4().to_string(), timestamp(now), task_id],
+            params![question, options.to_string(), Uuid::new_v4().to_string(), rfc3339_millis(now), task_id],
         )?;
         Ok(changed == 1)
     })?;
@@ -2184,7 +2181,7 @@ pub fn set_worktree(
     database.transaction(false, |database| {
         let changed = database.connection().execute(
             "UPDATE suplex_task_controls SET worktree_json = ?1, updated_at = ?2 WHERE task_id = ?3 AND status = 'active'",
-            params![worktree.to_string(), timestamp(now), task_id],
+            params![worktree.to_string(), rfc3339_millis(now), task_id],
         )?;
         if changed != 1 { return Err(std::io::Error::other("task_not_active").into()); }
         Ok(())
@@ -2203,7 +2200,7 @@ pub fn mark_delivered(
             "SELECT status FROM suplex_task_controls WHERE task_id = ?1",
             [task_id], |row| row.get(0),
         ).optional()?;
-        let time = timestamp(now);
+        let time = rfc3339_millis(now);
         let changed = database.connection().execute(
             "UPDATE suplex_task_controls SET workflow_state_json = json_set(workflow_state_json, '$.followUp', json('false')), status = 'delivered', wake_at = NULL, human_question = NULL, human_question_id = NULL, limit_pause_json = NULL, updated_at = ?1 WHERE task_id = ?2 AND status IN ('active','waiting_human','delivered')",
             params![time, task_id],
@@ -2247,7 +2244,7 @@ pub fn retire_delivered_sessions(
     database.transaction(false, |database| {
         database.connection().execute(
             "UPDATE suplex_task_sessions SET is_current = 0,lifecycle = 'stopped',stop_requested_at = COALESCE(stop_requested_at,?1),updated_at = ?1 WHERE task_id = ?2 AND stopped_at IS NULL AND EXISTS (SELECT 1 FROM suplex_task_controls c WHERE c.task_id = suplex_task_sessions.task_id AND c.status = 'delivered')",
-            params![timestamp(now), task_id],
+            params![rfc3339_millis(now), task_id],
         )?;
         Ok(())
     })
@@ -2268,8 +2265,8 @@ pub fn wake_idle_root(
         )?;
         if blocked { return Ok(None); }
         let id = new_turn_id(now)?;
-        let hash = format!("{:x}", Sha256::digest(prompt.as_bytes()));
-        let time = timestamp(now);
+        let hash = sha256_hex(prompt.as_bytes());
+        let time = rfc3339_millis(now);
         let inserted = database.connection().execute(
             "INSERT INTO suplex_task_turns (id,task_id,session_id,generation,prompt_hash,prompt_text,status,created_at,updated_at) SELECT ?1,c.task_id,s.id,s.generation,?2,?3,'pending_prompt',?4,?4 FROM suplex_task_controls c JOIN suplex_task_sessions s ON s.id = c.root_session_id WHERE c.task_id = ?5 AND c.status = 'active' AND json_extract(c.workflow_state_json,'$.deliveryWait') IS NULL AND s.is_current = 1 AND s.lifecycle = 'live' AND s.native_session_id IS NOT NULL AND s.launch_owner IS NULL AND NOT EXISTS (SELECT 1 FROM suplex_task_turns t WHERE t.session_id = s.id AND t.status IN ('pending_prompt','prompted','unknown')) AND NOT EXISTS (SELECT 1 FROM suplex_task_sessions w JOIN suplex_task_turns wt ON wt.session_id = w.id AND wt.generation = w.generation WHERE w.task_id = c.task_id AND w.kind = 'worker' AND w.is_current = 1 AND wt.status IN ('pending_prompt','prompted','unknown'))",
             params![id, hash, prompt, time, task_id],
@@ -2356,7 +2353,7 @@ pub fn reconcile_task_limit_pause(
             "SELECT COUNT(*) FROM suplex_task_turns WHERE task_id = ?1 AND prompted_at IS NOT NULL",
             [task_id], |row| row.get(0),
         )?;
-        let time = timestamp(now);
+        let time = rfc3339_millis(now);
         let hit_budget = limits.budget_usd > 0.0 && usage.estimated_cost_usd.is_some_and(|cost| cost >= limits.budget_usd);
         let hit_turns = limits.max_turns > 0 && admitted_turns >= limits.max_turns;
         if !hit_budget && !hit_turns {
@@ -2400,7 +2397,7 @@ pub fn require_execution_cleanup(
         if !current { return Ok(()); }
         let changed = database.connection().execute(
             "UPDATE suplex_task_controls SET status = 'waiting_human', human_question = ?1, human_question_options_json = '[]', human_question_id = ?2, limit_pause_json = NULL, wake_at = NULL, workflow_state_json = json_set(workflow_state_json, '$.deliveryWait', json('null')), updated_at = ?3 WHERE task_id = ?4 AND status = 'active'",
-            params!["The agent stopped during a tool call. A command can still be active in the worktree. Stop those commands before you continue. Describe what you checked, then confirm that all commands from this session have stopped.", Uuid::new_v4().to_string(), timestamp(now), turn.task_id],
+            params!["The agent stopped during a tool call. A command can still be active in the worktree. Stop those commands before you continue. Describe what you checked, then confirm that all commands from this session have stopped.", Uuid::new_v4().to_string(), rfc3339_millis(now), turn.task_id],
         )?;
         if changed != 1 { return Err(std::io::Error::other("task_not_active").into()); }
         database.connection().execute(
@@ -2461,7 +2458,7 @@ pub fn coalesce_unadmitted_idle_root_turn(
         if !others.iter().any(|other| !idle(other)) { return Ok(false); }
         Ok(database.connection().execute(
             "UPDATE suplex_task_turns SET status = 'cancelled', updated_at = ?1 WHERE id = ?2 AND status = 'pending_prompt'",
-            params![timestamp(now), turn_id],
+            params![rfc3339_millis(now), turn_id],
         )? == 1)
     })
 }
@@ -2482,10 +2479,10 @@ pub fn refresh_pending_root_dependency_context(
             let dependencies = root_observation_rows(database, &current.task_id)?.dependencies;
             let prompt = with_current_dependency_status(&current.prompt_text, &dependencies);
             if prompt != current.prompt_text {
-                let hash = format!("{:x}", Sha256::digest(prompt.as_bytes()));
+                let hash = sha256_hex(prompt.as_bytes());
                 database.connection().execute(
                     "UPDATE suplex_task_turns SET prompt_text = ?1, prompt_hash = ?2, updated_at = ?3 WHERE id = ?4 AND status = 'pending_prompt'",
-                    params![prompt, hash, timestamp(now), turn_id],
+                    params![prompt, hash, rfc3339_millis(now), turn_id],
                 )?;
             }
         }
@@ -2515,8 +2512,8 @@ mod tests {
             .with_timezone(&Utc);
         let mut database = SuplexDatabase::open(&filename, OpenMode::Migrate).unwrap();
         let user = auth::development_sign_in(&mut database, now).unwrap().user;
-        database.connection().execute("INSERT INTO suplex_companies (id,name,status,created_at) VALUES ('replace_company','Replace','active',?1)", [timestamp(now)]).unwrap();
-        database.connection().execute("INSERT INTO suplex_projects (id,company_id,name,repository_path,worktree_root,repository_identity,base_branch,setup_command,verification_command,root_profile_id,worker_profile_id,agent_task_policy_json,created_at,updated_at) VALUES ('replace_project','replace_company','Replace','/tmp/replace-repo','/tmp/replace-worktrees',NULL,'main','','','root','worker','{}',?1,?1)", [timestamp(now)]).unwrap();
+        database.connection().execute("INSERT INTO suplex_companies (id,name,status,created_at) VALUES ('replace_company','Replace','active',?1)", [rfc3339_millis(now)]).unwrap();
+        database.connection().execute("INSERT INTO suplex_projects (id,company_id,name,repository_path,worktree_root,repository_identity,base_branch,setup_command,verification_command,root_profile_id,worker_profile_id,agent_task_policy_json,created_at,updated_at) VALUES ('replace_project','replace_company','Replace','/tmp/replace-repo','/tmp/replace-worktrees',NULL,'main','','','root','worker','{}',?1,?1)", [rfc3339_millis(now)]).unwrap();
         let prepared = PreparedTask {
             id: repository::new_task_id(),
             company_id: "replace_company".into(),
@@ -2578,7 +2575,7 @@ mod tests {
         ).unwrap();
         assert!(saved.0.starts_with("Worker assignment: build\n\nFresh Worker handoff:\nReason for replacement: Change strategy"));
         assert!(saved.0.contains("Latest Worker result (verify its claims against source and command evidence):\nMade a partial change."));
-        assert_eq!(saved.1, format!("{:x}", Sha256::digest(saved.0.as_bytes())));
+        assert_eq!(saved.1, sha256_hex(saved.0.as_bytes()));
         assert_eq!(saved.1, saved.2);
         assert_eq!(
             replace_worker(&mut database, &task.id, &request, now).unwrap()["id"],
@@ -2595,13 +2592,13 @@ mod tests {
             .connection()
             .execute(
                 "UPDATE suplex_task_sessions SET stopped_at = ?1 WHERE id = ?2",
-                params![timestamp(now), old_id],
+                params![rfc3339_millis(now), old_id],
             )
             .unwrap();
         assert!(worker_replacement_ready(&database, next_id).unwrap());
         database.connection().execute(
             "INSERT INTO suplex_profiles (id,name,role,avatar_seed,provider,model,reasoning_level,service_tier,created_at,updated_at) VALUES ('alternate-worker','Alternate','worker','alternate','codex','gpt-6-sol','high','default',?1,?1)",
-            [timestamp(now)],
+            [rfc3339_millis(now)],
         ).unwrap();
         let second = replace_worker(
             &mut database,
@@ -2629,7 +2626,7 @@ mod tests {
         assert_eq!(latest.matches("Fresh Worker handoff:").count(), 1);
         database.connection().execute(
             "INSERT INTO suplex_profiles (id,name,role,avatar_seed,provider,model,reasoning_level,service_tier,created_at,updated_at) VALUES ('alternate-root','Alternate Root','root','alternate-root','codex','gpt-6-sol','medium','default',?1,?1)",
-            [timestamp(now)],
+            [rfc3339_millis(now)],
         ).unwrap();
         let rows = root_observation_rows(&database, &task.id).unwrap();
         let initial = root_prompts::initial_coordinator_prompt(
@@ -2647,14 +2644,14 @@ mod tests {
         ] {
             database.connection().execute(
                 "INSERT INTO suplex_task_turns (id,task_id,session_id,generation,prompt_hash,prompt_text,status,created_at,updated_at) VALUES (?1,?2,?3,?4,?5,?6,'completed',?7,?7)",
-                params![new_turn_id(now).unwrap(),task.id,root.id,root.generation,format!("{:x}",Sha256::digest(prompt.as_bytes())),prompt,timestamp(now)],
+                params![new_turn_id(now).unwrap(),task.id,root.id,root.generation,sha256_hex(prompt.as_bytes()),prompt,rfc3339_millis(now)],
             ).unwrap();
         }
         for text in ["Checked the branch", "Compared the failed provider"] {
             let prompt = "Continue the task";
             database.connection().execute(
                 "INSERT INTO suplex_task_turns (id,task_id,session_id,generation,prompt_hash,prompt_text,status,terminal_observation,created_at,updated_at) VALUES (?1,?2,?3,?4,?5,?6,'completed',?7,?8,?8)",
-                params![new_turn_id(now).unwrap(),task.id,root.id,root.generation,format!("{:x}",Sha256::digest(prompt.as_bytes())),prompt,js_json::stringify(&serde_json::json!({"state":"completed","text":text})),timestamp(now)],
+                params![new_turn_id(now).unwrap(),task.id,root.id,root.generation,sha256_hex(prompt.as_bytes()),prompt,js_json::stringify(&serde_json::json!({"state":"completed","text":text})),rfc3339_millis(now)],
             ).unwrap();
         }
         database.connection().execute(
@@ -2750,10 +2747,7 @@ mod tests {
                 .0
                 .contains("Additional direction from the user:\nCheck the failed provider.")
         );
-        assert_eq!(
-            first_prompt.1,
-            format!("{:x}", Sha256::digest(first_prompt.0.as_bytes()))
-        );
+        assert_eq!(first_prompt.1, sha256_hex(first_prompt.0.as_bytes()));
         if let Some(source) = &source_oracle {
             assert_eq!(first_prompt.0, source["firstPrompt"]);
             assert_eq!(first_prompt.1, source["firstHash"]);
@@ -2762,7 +2756,7 @@ mod tests {
             .connection()
             .execute(
                 "UPDATE suplex_task_sessions SET stopped_at = ?1 WHERE id = ?2",
-                params![timestamp(now), root.id],
+                params![rfc3339_millis(now), root.id],
             )
             .unwrap();
         assert!(worker_replacement_ready(&database, &first_id).unwrap());
@@ -2812,10 +2806,7 @@ mod tests {
         assert!(second_prompt.contains("The task is active. Reassess these questions"));
         if let Some(source) = &source_oracle {
             assert_eq!(second_prompt, source["secondPrompt"]);
-            assert_eq!(
-                format!("{:x}", Sha256::digest(second_prompt.as_bytes())),
-                source["secondHash"]
-            );
+            assert_eq!(sha256_hex(second_prompt.as_bytes()), source["secondHash"]);
         }
         assert_eq!(
             current_worker(&database, &task.id).unwrap().unwrap().id,
@@ -2837,8 +2828,8 @@ mod tests {
             .with_timezone(&Utc);
         let mut database = SuplexDatabase::open(&filename, OpenMode::Migrate).unwrap();
         let user = auth::development_sign_in(&mut database, now).unwrap().user;
-        database.connection().execute("INSERT INTO suplex_companies (id,name,status,created_at) VALUES ('event_company','Events','active',?1)", [timestamp(now)]).unwrap();
-        database.connection().execute("INSERT INTO suplex_projects (id,company_id,name,repository_path,worktree_root,repository_identity,base_branch,setup_command,verification_command,root_profile_id,worker_profile_id,agent_task_policy_json,created_at,updated_at) VALUES ('event_project','event_company','Events','/tmp/event-repo','/tmp/event-worktrees',NULL,'main','','','root','worker','{}',?1,?1)", [timestamp(now)]).unwrap();
+        database.connection().execute("INSERT INTO suplex_companies (id,name,status,created_at) VALUES ('event_company','Events','active',?1)", [rfc3339_millis(now)]).unwrap();
+        database.connection().execute("INSERT INTO suplex_projects (id,company_id,name,repository_path,worktree_root,repository_identity,base_branch,setup_command,verification_command,root_profile_id,worker_profile_id,agent_task_policy_json,created_at,updated_at) VALUES ('event_project','event_company','Events','/tmp/event-repo','/tmp/event-worktrees',NULL,'main','','','root','worker','{}',?1,?1)", [rfc3339_millis(now)]).unwrap();
         let first = PreparedTask {
             id: repository::new_task_id(),
             company_id: "event_company".into(),
@@ -2931,8 +2922,8 @@ mod tests {
             .with_timezone(&Utc);
         let mut database = SuplexDatabase::open(&filename, OpenMode::Migrate).unwrap();
         let user = auth::development_sign_in(&mut database, now).unwrap().user;
-        database.connection().execute("INSERT INTO suplex_companies (id,name,status,created_at) VALUES ('note_company','Notes','active',?1)", [timestamp(now)]).unwrap();
-        database.connection().execute("INSERT INTO suplex_projects (id,company_id,name,repository_path,worktree_root,repository_identity,base_branch,setup_command,verification_command,root_profile_id,worker_profile_id,agent_task_policy_json,created_at,updated_at) VALUES ('note_project','note_company','Notes','/tmp/note-repo','/tmp/note-worktrees',NULL,'main','','','root','worker','{}',?1,?1)", [timestamp(now)]).unwrap();
+        database.connection().execute("INSERT INTO suplex_companies (id,name,status,created_at) VALUES ('note_company','Notes','active',?1)", [rfc3339_millis(now)]).unwrap();
+        database.connection().execute("INSERT INTO suplex_projects (id,company_id,name,repository_path,worktree_root,repository_identity,base_branch,setup_command,verification_command,root_profile_id,worker_profile_id,agent_task_policy_json,created_at,updated_at) VALUES ('note_project','note_company','Notes','/tmp/note-repo','/tmp/note-worktrees',NULL,'main','','','root','worker','{}',?1,?1)", [rfc3339_millis(now)]).unwrap();
         let prepared = PreparedTask {
             id: repository::new_task_id(),
             company_id: "note_company".into(),
@@ -2983,7 +2974,7 @@ mod tests {
             "UPDATE suplex_task_controls SET status = 'delivered',workflow_state_json = json_set(workflow_state_json,'$.acceptedDelivery',json(?1),'$.completion',json(?2)) WHERE task_id = ?3",
             params![r#"{"baseSha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","headSha":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","files":["file.txt"],"commits":["bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"]}"#, r#"{"kind":"workflow","reviewedHead":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","pullRequestNumber":1597,"observedAt":"2026-09-25T12:00:00.000Z"}"#, task.id],
         ).unwrap();
-        database.connection().execute("UPDATE suplex_task_sessions SET is_current = 0,lifecycle = 'stopped',stop_requested_at = ?1,stopped_at = ?1 WHERE id = ?2", params![timestamp(now), root_id]).unwrap();
+        database.connection().execute("UPDATE suplex_task_sessions SET is_current = 0,lifecycle = 'stopped',stop_requested_at = ?1,stopped_at = ?1 WHERE id = ?2", params![rfc3339_millis(now), root_id]).unwrap();
         let resumed = send_note(&mut database, &task.id, " Follow up ", now).unwrap();
         assert_eq!(resumed.session_id, root_id);
         assert_eq!(
@@ -3040,11 +3031,11 @@ mod tests {
         let user = auth::development_sign_in(&mut database, now).unwrap().user;
         database.connection().execute(
             "INSERT INTO suplex_companies (id, name, status, created_at) VALUES ('company_task_test', 'Task test', 'active', ?1)",
-            [timestamp(now)],
+            [rfc3339_millis(now)],
         ).unwrap();
         database.connection().execute(
             "INSERT INTO suplex_projects (id, company_id, name, repository_path, worktree_root, repository_identity, base_branch, setup_command, verification_command, root_profile_id, worker_profile_id, agent_task_policy_json, created_at, updated_at) VALUES ('project_task_test', 'company_task_test', 'Task project', '/tmp/suplex-task-project', '/tmp/suplex-task-worktrees', NULL, 'main', '', '', 'profile_native_root', 'profile_native_worker', '{}', ?1, ?1)",
-            [timestamp(now)],
+            [rfc3339_millis(now)],
         ).unwrap();
         let prepared = PreparedTask {
             id: repository::new_task_id(),
@@ -3297,7 +3288,7 @@ mod tests {
         let second_id = Uuid::new_v4().to_string();
         database.connection().execute(
             "INSERT INTO suplex_task_turns (id, task_id, session_id, generation, prompt_hash, prompt_text, status, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, 'hash', 'Continue', 'pending_prompt', ?5, ?5)",
-            params![second_id, created.task.id, root.id, root.generation, timestamp(now)],
+            params![second_id, created.task.id, root.id, root.generation, rfc3339_millis(now)],
         ).unwrap();
         let second = pending_turns(&database, &root.id)
             .unwrap()
@@ -3313,7 +3304,7 @@ mod tests {
             .unwrap();
         database.connection().execute(
             "INSERT INTO suplex_task_dependencies (task_id, depends_on_task_id, created_at) VALUES (?1, ?2, ?3)",
-            params![created.task.id, backlog.task.id, timestamp(now)],
+            params![created.task.id, backlog.task.id, rfc3339_millis(now)],
         ).unwrap();
         assert!(
             !claim_prompt(
@@ -3460,7 +3451,7 @@ mod tests {
             .connection()
             .query_row(
                 "SELECT wake_at <= ?1 FROM suplex_task_controls WHERE task_id = ?2",
-                params![timestamp(now), waiting.task.id],
+                params![rfc3339_millis(now), waiting.task.id],
                 |row| row.get(0),
             )
             .unwrap();

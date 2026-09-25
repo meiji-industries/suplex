@@ -1,5 +1,6 @@
 //! Environment, backup and factory reset routes from `http/routes/administration.ts`.
 
+use crate::shared::time::now_millis_rfc3339;
 use std::path::PathBuf;
 
 use axum::{
@@ -10,13 +11,13 @@ use axum::{
     response::{IntoResponse, Response},
     routing::{get, post},
 };
-use chrono::{SecondsFormat, Utc};
+use chrono::Utc;
 use serde_json::{Map, Value, json};
 use tokio::io::AsyncWriteExt;
 
 use crate::{
     http::{AppState, contracts::typed::finding, session, validation},
-    identity::auth::{self as identity_auth, AuthUser},
+    identity::auth::AuthUser,
     platform::{
         backup::{BackupFailure, BackupService},
         database::SuplexDatabase,
@@ -132,11 +133,11 @@ pub(crate) fn record_audit(
     database.connection().execute(
         "INSERT INTO suplex_audit_events (id, actor_user_id, actor_agent_id, action, target_user_id, company_id, metadata_json, created_at) VALUES (?1, ?2, NULL, ?3, NULL, NULL, ?4, ?5)",
         rusqlite::params![
-            identity_auth::random_hex_id("audit")?,
+            crate::shared::ids::random_hex_id("audit")?,
             actor_user_id,
             action,
             metadata.to_string(),
-            Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true)
+            now_millis_rfc3339()
         ],
     )?;
     Ok(())

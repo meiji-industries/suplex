@@ -1,4 +1,9 @@
+pub mod blocking;
+pub mod fs;
+pub mod hash;
+pub mod ids;
 pub mod js_json;
+pub mod time;
 
 /// JavaScript `encodeURIComponent`.
 pub fn encode_uri_component(value: &str) -> String {

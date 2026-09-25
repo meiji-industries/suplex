@@ -1,3 +1,4 @@
+use crate::shared::ids::random_hex_id;
 use std::{
     fs,
     path::{Path, PathBuf},
@@ -56,8 +57,8 @@ fn github_reason(error: &(dyn std::error::Error + 'static)) -> String {
 
 fn temporary_path(parent: &Path, prefix: &str) -> std::io::Result<PathBuf> {
     for _ in 0..8 {
-        let name = crate::identity::auth::random_hex_id(prefix)
-            .map_err(|error| std::io::Error::other(error.to_string()))?;
+        let name =
+            random_hex_id(prefix).map_err(|error| std::io::Error::other(error.to_string()))?;
         let path = parent.join(name);
         match fs::create_dir(&path) {
             Ok(()) => return Ok(path),
@@ -817,8 +818,7 @@ mod tests {
 
     #[test]
     fn repository_commands_follow_mise_then_cargo_and_make_selection_order() {
-        let root = std::env::temp_dir()
-            .join(crate::identity::auth::random_hex_id("suplex_command_inference").unwrap());
+        let root = std::env::temp_dir().join(random_hex_id("suplex_command_inference").unwrap());
         fs::create_dir_all(&root).unwrap();
         fs::write(root.join("Cargo.toml"), "[package]\nname = 'fixture'\n").unwrap();
         fs::write(

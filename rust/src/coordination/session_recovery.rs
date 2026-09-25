@@ -65,13 +65,6 @@ pub fn native_tools(
     read().map_err(|error| format!("Native tool evidence could not be read: {error}"))
 }
 
-/// Callers run on a blocking thread, as the task host's recovery does.
-fn block_on<T>(future: impl std::future::Future<Output = T>) -> DatabaseResult<T> {
-    let handle = tokio::runtime::Handle::try_current()
-        .map_err(|_| std::io::Error::other("Task source observation needs the async runtime"))?;
-    Ok(handle.block_on(future))
-}
-
 /// TypeScript `verifyAdvisorOutcome`: a valid report stays valid only while
 /// its pinned evidence files and committed source are unchanged.
 fn verify_advisor_outcome(
@@ -94,12 +87,9 @@ fn verify_advisor_outcome(
         advisor_label(input["role"].as_str().unwrap_or_default())
     );
     Ok(
-        match block_on(root_controller::source_still_matches(
-            database_path,
-            task_id,
-            &range,
-            &activity,
-        ))? {
+        match crate::shared::blocking::block_on(|| {
+            root_controller::source_still_matches(database_path, task_id, &range, &activity)
+        }) {
             Ok(_) => outcome,
             Err((reason, _, _)) => Err(format!("{reason}. Request a new assessment.")),
         },
@@ -235,12 +225,14 @@ pub fn finish_delegate_turn(
     if purpose == "verification" && input["kind"] == "worker" {
         let before = ReviewRange::from_value(&input["range"]).unwrap_or_default();
         verification_range = Some(
-            match block_on(root_controller::source_still_matches(
-                database_path,
-                &session.task_id,
-                &before,
-                "check",
-            ))? {
+            match crate::shared::blocking::block_on(|| {
+                root_controller::source_still_matches(
+                    database_path,
+                    &session.task_id,
+                    &before,
+                    "check",
+                )
+            }) {
                 Ok(after) => {
                     json!({"before":before,"after":after,"cleanAfter":true,"valid":true,"invalidReason":null})
                 }

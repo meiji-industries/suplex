@@ -189,6 +189,7 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+    use crate::shared::time::rfc3339_millis;
     use crate::{
         http::routes::avatars::tests::{call, json_body},
         identity::auth as identity_auth,
@@ -199,7 +200,7 @@ mod tests {
     async fn company_analytics_costs_and_timeline_read_saved_usage_for_visible_tasks() {
         let (state, filename) = auth::tests::state();
         let now = Utc::now();
-        let time = analytics::timestamp(now);
+        let time = rfc3339_millis(now);
         let admin = state
             .with_database(|database| identity_auth::development_sign_in(database, now))
             .unwrap();

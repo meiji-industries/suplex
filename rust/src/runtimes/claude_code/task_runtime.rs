@@ -2,13 +2,8 @@
 //! `claude -p --resume` process whose stream-json output is the turn record;
 //! the transcript Claude Code keeps under its config directory is the session.
 
-use std::{
-    collections::HashMap,
-    error::Error,
-    fs, io,
-    os::unix::fs::{OpenOptionsExt, PermissionsExt},
-    path::Path,
-};
+use crate::shared::fs::read_optional;
+use std::{collections::HashMap, error::Error, fs, io, os::unix::fs::PermissionsExt, path::Path};
 
 use serde_json::{Value, json};
 
@@ -148,14 +143,6 @@ pub fn claude_arguments(
     args
 }
 
-fn read_optional(path: &Path) -> io::Result<Option<String>> {
-    match fs::read_to_string(path) {
-        Ok(text) => Ok(Some(text)),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
-        Err(error) => Err(error),
-    }
-}
-
 fn turn_values(directory: &Path, turn_id: &str) -> io::Result<Vec<Value>> {
     Ok(transcript::parse_json_lines(
         &read_optional(&headless::turn_file(directory, turn_id, "jsonl"))?.unwrap_or_default(),
@@ -233,18 +220,10 @@ fn prepare_session(
             json!({"type":"stdio","command":suplex,"args":["mcp","root"],"env":env}),
         );
     }
-    let path = directory.join("mcp.json");
-    let pending = directory.join(format!("mcp.json.{}.pending", uuid::Uuid::new_v4()));
-    fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(0o600)
-        .open(&pending)
-        .and_then(|mut file| {
-            use std::io::Write;
-            file.write_all(json!({"mcpServers":servers}).to_string().as_bytes())
-        })?;
-    fs::rename(pending, path)
+    crate::shared::fs::write_private(
+        &directory.join("mcp.json"),
+        json!({"mcpServers":servers}).to_string().as_bytes(),
+    )
 }
 
 fn last_assistant(entries: &[ClaudeMessageEntry]) -> Option<&ClaudeMessageEntry> {

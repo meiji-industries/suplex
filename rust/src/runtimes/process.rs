@@ -120,10 +120,7 @@ pub fn inspect_process(pid: u32) -> Option<ProcessIdentity> {
 pub fn owner_marker(directory: &Path) -> String {
     let absolute = std::path::absolute(directory).unwrap_or_else(|_| directory.to_path_buf());
     let canonical = absolute.canonicalize().unwrap_or(absolute);
-    format!(
-        "{:x}",
-        Sha256::digest(canonical.to_string_lossy().as_bytes())
-    )
+    crate::shared::hash::sha256_hex(canonical.to_string_lossy().as_bytes())
 }
 
 fn normalized_argv(command: &str) -> Vec<String> {

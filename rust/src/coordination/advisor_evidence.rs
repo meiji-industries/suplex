@@ -1,10 +1,10 @@
 //! TypeScript `coordination/advisor-evidence.ts`: pins the Worker evidence,
 //! task configuration, and task images an Advisor reviews.
 
+use crate::shared::hash::sha256_hex;
 use std::path::Path;
 
 use serde_json::{Value, json};
-use sha2::{Digest, Sha256};
 
 use crate::platform::{artifacts, database::SuplexDatabase};
 
@@ -61,7 +61,7 @@ fn image(
     let bytes = artifacts::read(artifact_root, &artifact.company_id, &artifact.storage_path)
         .map_err(|error| error.to_string())
         .and_then(|bytes| {
-            if format!("{:x}", Sha256::digest(&bytes)) == artifact.sha256 {
+            if sha256_hex(&bytes) == artifact.sha256 {
                 Ok(bytes)
             } else {
                 Err("The task image changed in storage".to_owned())

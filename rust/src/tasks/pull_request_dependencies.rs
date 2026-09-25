@@ -2,9 +2,9 @@
 //! observation of `TaskService.observePullRequestDependencies`: GitHub is the
 //! authority for every pull request prerequisite before Suplex saves it.
 
+use crate::shared::time::now_millis_rfc3339;
 use std::path::Path;
 
-use chrono::{SecondsFormat, Utc};
 use rusqlite::params;
 use serde_json::{Value, json};
 
@@ -20,10 +20,6 @@ pub enum Rejection {
     Unobservable(u64),
     /// GitHub answered without this pull request.
     NotFound(u64),
-}
-
-fn now() -> String {
-    Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true)
 }
 
 /// Observe each distinct requested pull request, in first-request order.
@@ -62,7 +58,7 @@ async fn observe_with(
             return Err(Rejection::NotFound(number));
         };
         observed.push(json!({
-            "number": number, "state": state, "url": url, "observedAt": now(),
+            "number": number, "state": state, "url": url, "observedAt": now_millis_rfc3339(),
             "title": value.title.unwrap_or_else(|| format!("Pull request #{number}")),
         }));
     }
@@ -130,7 +126,7 @@ pub async fn refresh(database_path: &Path) -> DatabaseResult<()> {
         };
         SuplexDatabase::open(database_path, OpenMode::ReadWrite)?.connection().execute(
             "UPDATE suplex_task_pull_request_dependencies SET state = ?1, title = ?2, url = ?3, observed_at = ?4 WHERE task_id = ?5 AND pull_request_number = ?6",
-            params![state, observed.title.unwrap_or(title), url, now(), task_id, number],
+            params![state, observed.title.unwrap_or(title), url, now_millis_rfc3339(), task_id, number],
         )?;
     }
     Ok(())

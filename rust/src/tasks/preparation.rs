@@ -15,7 +15,6 @@ use std::{
 use regex::Regex;
 use rusqlite::OptionalExtension;
 use serde_json::{Value, json};
-use sha2::{Digest, Sha256};
 
 use crate::{
     coordination::root_session_store,
@@ -98,10 +97,7 @@ fn prepare_skill(source: &str, directory: &Path) -> io::Result<PathBuf> {
     if !std::fs::symlink_metadata(&canonical)?.is_dir() {
         return Err(io::Error::other("Skill source must be a directory"));
     }
-    let digest = Sha256::digest(canonical.as_os_str().as_encoded_bytes())
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect::<String>();
+    let digest = crate::shared::hash::sha256_hex(canonical.as_os_str().as_encoded_bytes());
     let name = canonical
         .file_name()
         .map(|name| name.to_string_lossy().into_owned())
@@ -251,8 +247,7 @@ pub async fn prepare_project_workspace(input: Preparation<'_>) -> io::Result<()>
         }
     }
     let path = directory.join("context.md");
-    std::fs::write(&path, context.join("\n\n"))?;
-    std::fs::set_permissions(&path, std::os::unix::fs::PermissionsExt::from_mode(0o600))?;
+    crate::shared::fs::write_private(&path, context.join("\n\n").as_bytes())?;
     Ok(())
 }
 

@@ -1,9 +1,9 @@
+use crate::shared::fs::read_optional;
 use nix::errno::Errno;
 use nix::sys::signal::kill;
 use nix::unistd::Pid;
 use std::collections::HashMap;
 use std::error::Error;
-use std::fs;
 use std::io;
 use std::path::Path;
 
@@ -56,14 +56,6 @@ fn observation(
         native_final_observed: false,
         process_running: false,
         execution_uncertain: false,
-    }
-}
-
-fn read_optional(path: &Path) -> io::Result<Option<String>> {
-    match fs::read_to_string(path) {
-        Ok(content) => Ok(Some(content)),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
-        Err(error) => Err(error),
     }
 }
 
@@ -280,6 +272,7 @@ pub fn result_text(directory: &Path, turn_id: &str) -> io::Result<String> {
 mod tests {
     use super::*;
     use crate::runtimes::headless::RecordedProcessIdentity;
+    use std::fs;
 
     #[test]
     fn native_log_and_record_determine_completion_without_replay_receipt() {

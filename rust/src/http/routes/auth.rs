@@ -697,7 +697,7 @@ pub(crate) mod tests {
         let now = Utc::now();
         state.with_database(|database| {
             database.connection().execute("INSERT INTO suplex_users (id, display_name, username, avatar_seed, role, status, created_at, updated_at, identity_version) VALUES ('user_existing', 'Fixture member', 'user_v1_user_existing', 'user_v1_user_existing', 'member', 'pending', ?1, ?1, 1)", [now.to_rfc3339()]).unwrap();
-            database.connection().execute("INSERT INTO suplex_invitations (id, token_hash, kind, display_name, user_id, expires_at, created_at, metadata_json) VALUES ('invitation_tcp', ?1, 'user', 'Fixture member', 'user_existing', ?2, ?3, '{}')", params![auth::hash_secret(&token), (now + Duration::days(1)).to_rfc3339(), now.to_rfc3339()]).unwrap();
+            database.connection().execute("INSERT INTO suplex_invitations (id, token_hash, kind, display_name, user_id, expires_at, created_at, metadata_json) VALUES ('invitation_tcp', ?1, 'user', 'Fixture member', 'user_existing', ?2, ?3, '{}')", params![crate::shared::hash::sha256_hex(&token), (now + Duration::days(1)).to_rfc3339(), now.to_rfc3339()]).unwrap();
         });
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
@@ -772,7 +772,7 @@ pub(crate) mod tests {
         let detached_token = format!("invite_v1_user_{}", "B".repeat(43));
         state.with_database(|database| {
             database.connection().execute("INSERT INTO suplex_users (id, display_name, username, avatar_seed, role, status, created_at, updated_at, identity_version) VALUES ('user_detached', 'Detached member', 'user_v1_user_detached', 'user_v1_user_detached', 'member', 'pending', ?1, ?1, 1)", [now.to_rfc3339()]).unwrap();
-            database.connection().execute("INSERT INTO suplex_invitations (id, token_hash, kind, display_name, user_id, expires_at, created_at, metadata_json) VALUES ('invitation_detached', ?1, 'user', 'Detached member', 'user_detached', ?2, ?3, '{}')", params![auth::hash_secret(&detached_token), (now + Duration::days(1)).to_rfc3339(), now.to_rfc3339()]).unwrap();
+            database.connection().execute("INSERT INTO suplex_invitations (id, token_hash, kind, display_name, user_id, expires_at, created_at, metadata_json) VALUES ('invitation_detached', ?1, 'user', 'Detached member', 'user_detached', ?2, ?3, '{}')", params![crate::shared::hash::sha256_hex(&detached_token), (now + Duration::days(1)).to_rfc3339(), now.to_rfc3339()]).unwrap();
         });
         let detached_options = state.with_database(|database| {
             ceremony::begin_registration(

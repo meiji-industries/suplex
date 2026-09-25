@@ -1,6 +1,7 @@
+use crate::shared::time::rfc3339_millis;
 use std::{error::Error, fmt};
 
-use chrono::{DateTime, SecondsFormat, Utc};
+use chrono::{DateTime, Utc};
 use getrandom::fill;
 use rusqlite::{OptionalExtension, Row, params};
 use serde::{Deserialize, Serialize};
@@ -104,22 +105,6 @@ fn profile(row: &Row<'_>) -> rusqlite::Result<AgentProfile> {
     })
 }
 
-fn timestamp(now: DateTime<Utc>) -> String {
-    now.to_rfc3339_opts(SecondsFormat::Millis, true)
-}
-
-fn random_id(prefix: &str) -> DatabaseResult<String> {
-    let mut bytes = [0_u8; 16];
-    fill(&mut bytes)?;
-    Ok(format!(
-        "{prefix}_{}",
-        bytes
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect::<String>()
-    ))
-}
-
 fn profile_id() -> DatabaseResult<String> {
     let mut bytes = [0_u8; 16];
     fill(&mut bytes)?;
@@ -220,7 +205,7 @@ fn audit(
 ) -> DatabaseResult<()> {
     database.connection().execute(
         "INSERT INTO suplex_audit_events (id, actor_user_id, actor_agent_id, action, target_user_id, company_id, metadata_json, created_at) VALUES (?1, ?2, NULL, ?3, NULL, NULL, ?4, ?5)",
-        params![random_id("audit")?, actor_id, action, serde_json::json!({"profileId": profile_id}).to_string(), timestamp(now)],
+        params![crate::shared::ids::random_hex_id("audit")?, actor_id, action, serde_json::json!({"profileId": profile_id}).to_string(), rfc3339_millis(now)],
     )?;
     Ok(())
 }
@@ -253,7 +238,7 @@ pub fn create(
 ) -> DatabaseResult<AgentProfile> {
     actor(database, user_id, true)?;
     let id = profile_id()?;
-    let now_iso = timestamp(now);
+    let now_iso = rfc3339_millis(now);
     database.transaction(false, |database| {
         assert_name(database, &input.name, "")?;
         assert_instance(database, input)?;
@@ -299,7 +284,7 @@ pub fn update(
             }
         }
         assert_instance(database, &input)?;
-        let now_iso = timestamp(now);
+        let now_iso = rfc3339_millis(now);
         let archived_at = match changes.archived {
             None => current.archived_at,
             Some(true) => Some(now_iso.clone()),
@@ -554,7 +539,7 @@ pub fn choose_defaults(
         if !untouched || matching_defaults(&root, &worker, chosen) {
             return Ok(());
         }
-        let now_iso = timestamp(now);
+        let now_iso = rfc3339_millis(now);
         for (id, values) in [
             ("profile_native_root", chosen.root),
             ("profile_native_worker", chosen.worker),
@@ -892,7 +877,7 @@ mod tests {
         assert_eq!(audit_count, 4);
         database.connection().execute(
             "INSERT INTO suplex_users (id, display_name, username, role, status, created_at, updated_at, identity_version) VALUES ('profile_member', 'Member', 'user_v1_profile_member', 'member', 'active', ?1, ?1, 1)",
-            [timestamp(now)],
+            [rfc3339_millis(now)],
         ).unwrap();
         assert!(!list(&database, "profile_member", false).unwrap().is_empty());
         let forbidden = create(&mut database, "profile_member", &input, now).unwrap_err();
@@ -905,11 +890,11 @@ mod tests {
         assert_eq!(patch.provider_instance_id, Some(None));
         database.connection().execute(
             "INSERT INTO suplex_companies (id, name, created_at) VALUES ('profile_test_company', 'Profile test', ?1)",
-            [timestamp(now)],
+            [rfc3339_millis(now)],
         ).unwrap();
         database.connection().execute(
             "INSERT INTO suplex_projects (id, company_id, name, repository_path, worktree_root, base_branch, setup_command, verification_command, root_profile_id, worker_profile_id, agent_task_policy_json, created_at, updated_at) VALUES ('profile_test_project', 'profile_test_company', 'Profile test', '/tmp/profile-repo', '/tmp/profile-worktrees', 'main', '', '', 'profile_native_root', 'profile_native_worker', '{broken', ?1, ?1)",
-            [timestamp(now)],
+            [rfc3339_millis(now)],
         ).unwrap();
         assert!(delete(&mut database, &admin.user.id, &created.id, now).is_err());
         assert!(

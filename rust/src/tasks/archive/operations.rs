@@ -1,6 +1,7 @@
 //! Archive a task only after native sessions and its live Git worktree are safe.
 //! Saved pane and worktree display fields do not decide whether cleanup may run.
 
+use crate::shared::time::now_millis_rfc3339;
 use std::{
     collections::HashSet,
     io,
@@ -8,7 +9,6 @@ use std::{
     sync::{Mutex, OnceLock},
 };
 
-use chrono::{SecondsFormat, Utc};
 use rusqlite::params;
 use serde_json::Value;
 
@@ -222,7 +222,7 @@ pub fn unarchive_task(
         if ["backlog", "queued", "active", "waiting_human"].contains(&task.status.as_str()) {
             repository::assert_task_pull_requests_available(database, task_id)?;
         }
-        let now = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
+        let now = now_millis_rfc3339();
         database.connection().execute(
             "UPDATE suplex_tasks SET archived_at = NULL, updated_at = ?1 WHERE id = ?2",
             params![now, task_id],
@@ -302,7 +302,7 @@ pub fn archive_task(
         if !["backlog", "queued", "cancelled", "delivered"].contains(&current.status.as_str()) {
             return Err(failure_code("The task changed while its worktree was removed", 409, "illegal_command"));
         }
-        let now = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
+        let now = now_millis_rfc3339();
         database.connection().execute(
             "UPDATE suplex_task_controls SET worktree_json = NULL WHERE task_id = ?1",
             [task_id],
@@ -324,6 +324,7 @@ pub fn archive_task(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::shared::time::rfc3339_millis;
     use crate::{
         identity::auth,
         runtimes::headless::{HeadlessTurnRecord, RecordedProcessIdentity},
@@ -352,10 +353,10 @@ mod tests {
         drop(tree);
         drop(repository);
         let database_path = base.join("suplex.sqlite");
-        let now = Utc::now();
+        let now = chrono::Utc::now();
         let mut database = SuplexDatabase::open(&database_path, OpenMode::Migrate).unwrap();
         let user = auth::development_sign_in(&mut database, now).unwrap().user;
-        let time = now.to_rfc3339_opts(SecondsFormat::Millis, true);
+        let time = rfc3339_millis(now);
         database.connection().execute("INSERT INTO suplex_companies (id,name,status,created_at) VALUES ('archive_company','Archive','active',?1)", [&time]).unwrap();
         database.connection().execute("INSERT INTO suplex_projects (id,company_id,name,repository_path,worktree_root,repository_identity,base_branch,setup_command,verification_command,root_profile_id,worker_profile_id,agent_task_policy_json,created_at,updated_at) VALUES ('archive_project','archive_company','Project',?1,?2,NULL,'main','','','root_profile','worker_profile','{}',?3,?3)", params![repository_path.to_string_lossy(),worktree_root.to_string_lossy(),time]).unwrap();
         let task_id = repository::new_task_id();

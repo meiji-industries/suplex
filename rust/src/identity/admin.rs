@@ -1,10 +1,11 @@
+use crate::shared::ids::random_hex_id;
+use crate::shared::time::rfc3339_millis;
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use chrono::{DateTime, Duration, Utc};
 use getrandom::fill as rand_bytes;
 use rusqlite::{OptionalExtension, params};
 use serde::Serialize;
 use serde_json::Value;
-use sha2::{Digest, Sha256};
 
 use crate::platform::database::{DatabaseResult, SuplexDatabase};
 
@@ -59,10 +60,6 @@ pub struct AuditEvent {
     pub created_at: String,
 }
 
-fn timestamp(now: DateTime<Utc>) -> String {
-    now.to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
-}
-
 fn audit(
     database: &SuplexDatabase,
     actor_user_id: Option<&str>,
@@ -73,7 +70,7 @@ fn audit(
 ) -> DatabaseResult<()> {
     database.connection().execute(
         "INSERT INTO suplex_audit_events (id, actor_user_id, actor_agent_id, action, target_user_id, company_id, metadata_json, created_at) VALUES (?1, ?2, NULL, ?3, ?4, NULL, ?5, ?6)",
-        params![auth::random_hex_id("audit")?, actor_user_id, action, target_user_id, metadata_json, timestamp(now)],
+        params![random_hex_id("audit")?, actor_user_id, action, target_user_id, metadata_json, rfc3339_millis(now)],
     )?;
     Ok(())
 }
@@ -99,9 +96,9 @@ pub fn invite_user(
     let display_name = valid_display_name(raw_display_name)?;
     database.transaction(false, |database| {
         companies::require_admin(database, actor_user_id)?;
-        let user_id = auth::random_hex_id("user")?;
+        let user_id = random_hex_id("user")?;
         let neutral_username = format!("user_v1_{user_id}");
-        let now_iso = timestamp(now);
+        let now_iso = rfc3339_millis(now);
         database.connection().execute(
             "INSERT INTO suplex_users (id, display_name, username, avatar_seed, role, status, created_at, updated_at, identity_version) VALUES (?1, ?2, ?3, ?3, 'member', 'pending', ?4, ?4, 1)",
             params![user_id, display_name, neutral_username, now_iso],
@@ -109,14 +106,11 @@ pub fn invite_user(
         let mut secret = [0_u8; 32];
         rand_bytes(&mut secret)?;
         let token = format!("invite_v1_user_{}", URL_SAFE_NO_PAD.encode(secret));
-        let hash = Sha256::digest(token.as_bytes())
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect::<String>();
-        let expires_at = timestamp(now + Duration::hours(72));
+        let hash = crate::shared::hash::sha256_hex(token.as_bytes());
+        let expires_at = rfc3339_millis(now + Duration::hours(72));
         database.connection().execute(
             "INSERT INTO suplex_invitations (id, token_hash, kind, display_name, user_id, expires_at, consumed_at, replaced_at, created_at, metadata_json) VALUES (?1, ?2, 'user', ?3, ?4, ?5, NULL, NULL, ?6, '{}')",
-            params![auth::random_hex_id("invitation")?, hash, display_name, user_id, expires_at, now_iso],
+            params![random_hex_id("invitation")?, hash, display_name, user_id, expires_at, now_iso],
         )?;
         audit(database, None, "user_invitation_created", Some(&user_id), "{}", now)?;
         audit(database, Some(actor_user_id), "user_invited", Some(&user_id), "{}", now)?;
@@ -219,7 +213,7 @@ pub fn revoke_credential(
         }
         database.connection().execute(
             "UPDATE suplex_credentials SET revoked_at = ?2 WHERE id = ?1",
-            params![credential_id, timestamp(now)],
+            params![credential_id, rfc3339_millis(now)],
         )?;
         audit(
             database,
@@ -244,7 +238,7 @@ pub fn revoke_user(
         if status.is_none() || status.as_deref() == Some("revoked") || target_user_id == actor_user_id {
             return Err(Box::new(AuthFailure::new("Not found", 404, "auth_failure")));
         }
-        let now_iso = timestamp(now);
+        let now_iso = rfc3339_millis(now);
         database.connection().execute("UPDATE suplex_users SET status = 'revoked', updated_at = ?2 WHERE id = ?1", params![target_user_id, now_iso])?;
         database.connection().execute("UPDATE suplex_credentials SET revoked_at = ?2 WHERE user_id = ?1 AND revoked_at IS NULL", params![target_user_id, now_iso])?;
         database.connection().execute("UPDATE suplex_sessions SET revoked_at = ?2 WHERE user_id = ?1 AND revoked_at IS NULL", params![target_user_id, now_iso])?;
@@ -281,10 +275,8 @@ mod tests {
 
     #[test]
     fn audit_listing_filters_nonstring_metadata() {
-        let path = std::env::temp_dir().join(format!(
-            "{}.sqlite",
-            auth::random_hex_id("suplex_admin").unwrap()
-        ));
+        let path =
+            std::env::temp_dir().join(format!("{}.sqlite", random_hex_id("suplex_admin").unwrap()));
         let mut database = SuplexDatabase::open(&path, OpenMode::Migrate).unwrap();
         let now = DateTime::parse_from_rfc3339("2026-09-24T12:00:00Z")
             .unwrap()
@@ -307,10 +299,8 @@ mod tests {
 
     #[test]
     fn invitation_and_revocation_keep_shared_database_lifecycle() {
-        let path = std::env::temp_dir().join(format!(
-            "{}.sqlite",
-            auth::random_hex_id("suplex_admin").unwrap()
-        ));
+        let path =
+            std::env::temp_dir().join(format!("{}.sqlite", random_hex_id("suplex_admin").unwrap()));
         let mut database = SuplexDatabase::open(&path, OpenMode::Migrate).unwrap();
         let now = DateTime::parse_from_rfc3339("2026-09-24T12:00:00Z")
             .unwrap()
@@ -326,10 +316,7 @@ mod tests {
         assert_eq!(issued.user.display_name, "API member");
         assert_eq!(issued.user.status, "pending");
         assert_eq!(issued.user.username, format!("user_v1_{}", issued.user.id));
-        let token_hash = Sha256::digest(issued.token.as_bytes())
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect::<String>();
+        let token_hash = crate::shared::hash::sha256_hex(issued.token.as_bytes());
         let stored_hash: String = database
             .connection()
             .query_row(
@@ -371,10 +358,10 @@ mod tests {
                 .status,
             "expired"
         );
-        let credential_id = auth::random_hex_id("credential").unwrap();
+        let credential_id = random_hex_id("credential").unwrap();
         database.connection().execute(
             "INSERT INTO suplex_credentials (id, user_id, credential_id, public_key, counter, transports, created_at) VALUES (?1, ?2, 'member-passkey', X'00', 0, '[]', ?3)",
-            params![credential_id, issued.user.id, timestamp(now)],
+            params![credential_id, issued.user.id, rfc3339_millis(now)],
         ).unwrap();
         assert_eq!(
             list_credentials(&database, &admin.user.id).unwrap().len(),

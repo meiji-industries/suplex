@@ -1,6 +1,7 @@
 //! Host health uses the installation's live resources. Contextual provider
 //! selection is authorized even while provider-specific probes are unported.
 
+use crate::shared::time::now_millis_rfc3339;
 use std::{ffi::CString, fs::OpenOptions, os::unix::ffi::OsStrExt, path::Path};
 
 use axum::{
@@ -544,7 +545,7 @@ pub async fn snapshot(
         .filter(|check| check["id"] == "database" || check["id"] == "artifact-root")
         .all(|check| check["status"] != "unhealthy");
     json!({
-        "generatedAt":Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+        "generatedAt":now_millis_rfc3339(),
         "reachableAddress":state.session_config.reachable_address,
         "ready":ready,"checks":checks,
     })

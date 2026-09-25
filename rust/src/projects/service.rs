@@ -1,7 +1,8 @@
+use crate::shared::ids::random_hex_id;
+use crate::shared::time::rfc3339_millis;
 use std::{error::Error, fmt};
 
-use chrono::{DateTime, SecondsFormat, Utc};
-use getrandom::fill;
+use chrono::{DateTime, Utc};
 use rusqlite::{OptionalExtension, Row, params};
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -49,15 +50,7 @@ fn finding(code: &str, field: &str, message: &str) -> Finding {
 }
 
 fn project_id() -> DatabaseResult<String> {
-    let mut bytes = [0_u8; 12];
-    fill(&mut bytes)?;
-    Ok(format!(
-        "project_{}",
-        bytes
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect::<String>()
-    ))
+    Ok(format!("project_{}", crate::shared::ids::random_hex(12)?))
 }
 
 /// Internal database view. HTTP output still requires the full project
@@ -597,8 +590,8 @@ pub fn create_local(
         ));
     }
     let id = project_id()?;
-    let audit_id = auth::random_hex_id("audit")?;
-    let stamp = options.now.to_rfc3339_opts(SecondsFormat::Millis, true);
+    let audit_id = random_hex_id("audit")?;
+    let stamp = rfc3339_millis(options.now);
     let policy_json = match &explicit_policy {
         Some(policy) => json_text(policy)?,
         None => {
@@ -781,7 +774,7 @@ fn audit_update(
 ) -> DatabaseResult<()> {
     database.connection().execute(
         "INSERT INTO suplex_audit_events (id, actor_user_id, actor_agent_id, action, target_user_id, company_id, metadata_json, created_at) VALUES (?1, ?2, NULL, 'project_updated', NULL, ?3, ?4, ?5)",
-        params![auth::random_hex_id("audit")?, actor_user_id, company_id, crate::shared::js_json::stringify(&json!({"projectId": project_id})), stamp],
+        params![random_hex_id("audit")?, actor_user_id, company_id, crate::shared::js_json::stringify(&json!({"projectId": project_id})), stamp],
     )?;
     Ok(())
 }
@@ -809,7 +802,7 @@ pub fn update_local(
 ) -> DatabaseResult<Project> {
     let root = auth::js_trim(&body.root_profile_id);
     let worker = auth::js_trim(&body.worker_profile_id);
-    let stamp = now.to_rfc3339_opts(SecondsFormat::Millis, true);
+    let stamp = rfc3339_millis(now);
     let company_id = existing.company_id.as_str();
     let project_id = existing.id.as_str();
     database
@@ -1106,7 +1099,7 @@ pub fn apply_patch(
     (repository_path, worktree_root): (&str, &str),
     now: DateTime<Utc>,
 ) -> DatabaseResult<Project> {
-    let stamp = now.to_rfc3339_opts(SecondsFormat::Millis, true);
+    let stamp = rfc3339_millis(now);
     let company_id = existing.company_id.as_str();
     let project_id = existing.id.as_str();
     database
@@ -1280,7 +1273,7 @@ mod tests {
     fn local_create_audits_once_and_reads_follow_live_membership() {
         let filename = std::env::temp_dir().join(format!(
             "{}.sqlite",
-            auth::random_hex_id("suplex_project").unwrap()
+            random_hex_id("suplex_project").unwrap()
         ));
         let mut database = SuplexDatabase::open(&filename, OpenMode::Migrate).unwrap();
         let now = DateTime::parse_from_rfc3339("2026-09-24T12:00:00Z")
@@ -1525,7 +1518,7 @@ mod tests {
     fn stored_configuration_contracts_normalize_defaults_and_unknown_fields() {
         let filename = std::env::temp_dir().join(format!(
             "{}.sqlite",
-            auth::random_hex_id("suplex_project_json").unwrap()
+            random_hex_id("suplex_project_json").unwrap()
         ));
         let mut database = SuplexDatabase::open(&filename, OpenMode::Migrate).unwrap();
         let now = DateTime::parse_from_rfc3339("2026-09-24T12:00:00Z")

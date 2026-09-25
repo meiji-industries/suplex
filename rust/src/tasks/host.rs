@@ -1,6 +1,7 @@
 //! Restart-safe admission of a prepared Standard Root turn. Worktree preparation
 //! and the outer task wake loop call this after durable task/root setup.
 
+use crate::shared::time::{now_millis_rfc3339, rfc3339_millis};
 use std::{
     collections::{HashMap, HashSet},
     io,
@@ -8,7 +9,7 @@ use std::{
     sync::OnceLock,
 };
 
-use chrono::{DateTime, SecondsFormat, Utc};
+use chrono::{DateTime, Utc};
 use rusqlite::OptionalExtension;
 use serde::Serialize;
 use tokio::{
@@ -716,7 +717,7 @@ fn replace_observed_usage(
             if !belongs { return Err(io::Error::other("Native usage does not match a task session").into()); }
         }
         database.connection().execute("DELETE FROM suplex_task_usage WHERE task_id = ?1", [task_id])?;
-        let time = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
+        let time = now_millis_rfc3339();
         for (session_id, _, snapshot) in &snapshots {
             database.connection().execute(
                 "INSERT INTO suplex_task_usage (task_id,session_id,message_id,snapshot,observed_at) VALUES (?1,?2,?3,?4,?5)",
@@ -1342,10 +1343,7 @@ fn due_task_ids(database_path: &Path) -> DatabaseResult<Vec<String>> {
         "SELECT c.task_id FROM suplex_task_controls c JOIN suplex_tasks t ON t.id = c.task_id WHERE (t.archived_at IS NULL AND c.status IN ('active','waiting_human') AND (c.wake_at IS NULL OR c.wake_at <= ?1)) OR (c.status = 'delivered' AND EXISTS (SELECT 1 FROM suplex_task_sessions s WHERE s.task_id = c.task_id AND s.stopped_at IS NULL)) OR EXISTS (SELECT 1 FROM suplex_task_sessions s WHERE s.task_id = c.task_id AND s.stop_requested_at IS NOT NULL AND s.stopped_at IS NULL) ORDER BY COALESCE(c.wake_at,c.created_at)",
     )?;
     Ok(statement
-        .query_map(
-            [Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true)],
-            |row| row.get::<_, String>(0),
-        )?
+        .query_map([now_millis_rfc3339()], |row| row.get::<_, String>(0))?
         .collect::<rusqlite::Result<Vec<_>>>()?)
 }
 
@@ -1408,7 +1406,7 @@ async fn stop_retired_sessions(database_path: &Path, task_id: &str) -> DatabaseR
     }
     for session_id in stopped {
         let database = SuplexDatabase::open(database_path, OpenMode::ReadWrite)?;
-        let time = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
+        let time = now_millis_rfc3339();
         database.connection().execute(
             "UPDATE suplex_task_sessions SET stopped_at = ?1, launch_owner = NULL, launch_owner_pid = NULL, launch_owner_start_time = NULL, launch_claimed_at = NULL, updated_at = ?1 WHERE id = ?2 AND stop_requested_at IS NOT NULL AND stopped_at IS NULL",
             rusqlite::params![time, session_id],
@@ -1454,7 +1452,7 @@ async fn reconcile_limit_pause(database_path: &Path, task_id: &str) -> DatabaseR
     let now = Utc::now();
     database.connection().execute(
         "UPDATE suplex_task_controls SET wake_at = ?1,updated_at = ?2 WHERE task_id = ?3 AND status = 'waiting_human'",
-        rusqlite::params![(now + chrono::Duration::seconds(15)).to_rfc3339_opts(SecondsFormat::Millis, true), now.to_rfc3339_opts(SecondsFormat::Millis, true), task_id],
+        rusqlite::params![rfc3339_millis(now + chrono::Duration::seconds(15)), rfc3339_millis(now), task_id],
     )?;
     reconciled.map(|_| ())
 }
@@ -1479,9 +1477,7 @@ pub async fn sweep_task(
     .await;
     let database = SuplexDatabase::open(database_path, OpenMode::ReadWrite)?;
     let now = Utc::now();
-    let time = |seconds| {
-        (now + chrono::Duration::seconds(seconds)).to_rfc3339_opts(SecondsFormat::Millis, true)
-    };
+    let time = |seconds| rfc3339_millis(now + chrono::Duration::seconds(seconds));
     database.connection().execute(
         "UPDATE suplex_task_controls SET wake_at = CASE WHEN json_extract(workflow_state_json,'$.deliveryWait') IS NULL THEN ?1 ELSE ?2 END,updated_at = ?3 WHERE task_id = ?4 AND status IN ('active','waiting_human')",
         rusqlite::params![time(15), time(30), time(0), task_id],
@@ -1559,7 +1555,6 @@ async fn sweep_task_once(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sha2::Digest;
     use std::{fs, os::unix::fs::PermissionsExt, time::Duration};
 
     use crate::{
@@ -1610,7 +1605,7 @@ mod tests {
             "implementation",
         );
         assert_eq!(
-            format!("{:x}", sha2::Sha256::digest(prompt.as_bytes())),
+            crate::shared::hash::sha256_hex(prompt.as_bytes()),
             "0006b216cc05f1c1ec971806987c6347b055fc06ea7e566704453e26feeb2267"
         );
     }
@@ -2040,7 +2035,7 @@ mod tests {
                 .remove(0);
             let attempt = PromptDispatchAttempt {
                 server_generation: "lost-record".into(),
-                claimed_at: Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true),
+                claimed_at: now_millis_rfc3339(),
             };
             database.connection().execute(
                 "UPDATE suplex_task_turns SET status = 'unknown', dispatch_attempt_json = ?1 WHERE id = ?2",
@@ -2654,7 +2649,7 @@ mod tests {
                 .remove(0);
             let attempted = PromptDispatchAttempt {
                 server_generation: "crash-before-native-launch".into(),
-                claimed_at: Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true),
+                claimed_at: now_millis_rfc3339(),
             };
             database.connection().execute(
                 "UPDATE suplex_task_turns SET status = 'unknown', dispatch_attempt_json = ?1 WHERE id = ?2",
@@ -2679,8 +2674,7 @@ mod tests {
                 .remove(0);
             let attempted = PromptDispatchAttempt {
                 server_generation: "crash-before-native-launch".into(),
-                claimed_at: (Utc::now() - chrono::Duration::seconds(31))
-                    .to_rfc3339_opts(SecondsFormat::Millis, true),
+                claimed_at: rfc3339_millis(Utc::now() - chrono::Duration::seconds(31)),
             };
             database
                 .connection()

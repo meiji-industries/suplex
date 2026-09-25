@@ -1,12 +1,12 @@
+use crate::shared::hash::sha256_hex;
+use crate::shared::ids::random_hex_id;
+use crate::shared::time::rfc3339_millis;
 use std::{error::Error, fmt};
 
-use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use chrono::{DateTime, Duration, Utc};
-use getrandom::fill as rand_bytes;
 use rusqlite::{OptionalExtension, params};
 use serde::Serialize;
 use serde_json::{Map, Value};
-use sha2::{Digest, Sha256};
 
 use crate::platform::database::{DatabaseResult, SuplexDatabase};
 
@@ -87,29 +87,6 @@ impl fmt::Display for AuthFailure {
 
 impl Error for AuthFailure {}
 
-pub(crate) fn random_hex_id(prefix: &str) -> DatabaseResult<String> {
-    let mut bytes = [0_u8; 16];
-    rand_bytes(&mut bytes)?;
-    let hex = bytes
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect::<String>();
-    Ok(format!("{prefix}_{hex}"))
-}
-
-fn new_session_token() -> DatabaseResult<String> {
-    let mut bytes = [0_u8; 32];
-    rand_bytes(&mut bytes)?;
-    Ok(format!("session_v1_{}", URL_SAFE_NO_PAD.encode(bytes)))
-}
-
-pub(crate) fn hash_secret(secret: &str) -> String {
-    Sha256::digest(secret.as_bytes())
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect()
-}
-
 pub(crate) fn js_trim(value: &str) -> &str {
     value.trim_matches(|character| {
         matches!(
@@ -174,12 +151,12 @@ pub fn get_user_by_session(
     if raw_token.is_empty() {
         return Ok(None);
     }
-    let now_iso = now.to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+    let now_iso = rfc3339_millis(now);
     let user_id: Option<String> = database
         .connection()
         .query_row(
             "SELECT suplex_users.id FROM suplex_sessions INNER JOIN suplex_users ON suplex_sessions.user_id = suplex_users.id WHERE (suplex_sessions.token_hash = ?1 OR (suplex_sessions.legacy_token_hash = ?1 AND suplex_sessions.legacy_token_expires_at > ?2)) AND suplex_sessions.revoked_at IS NULL AND suplex_users.status = 'active' AND suplex_sessions.expires_at > ?2",
-            params![hash_secret(raw_token), now_iso],
+            params![sha256_hex(raw_token), now_iso],
             |row| row.get(0),
         )
         .optional()?;
@@ -203,15 +180,15 @@ pub(crate) fn create_session(
     user_id: &str,
     now: DateTime<Utc>,
 ) -> DatabaseResult<String> {
-    let token = new_session_token()?;
+    let token = crate::shared::ids::random_secret("session_v1")?;
     database.connection().execute(
         "INSERT INTO suplex_sessions (id, token_hash, user_id, expires_at, created_at, revoked_at, token_version, legacy_token_hash, legacy_token_expires_at) VALUES (?1, ?2, ?3, ?4, ?5, NULL, 1, NULL, NULL)",
         params![
             random_hex_id("session")?,
-            hash_secret(&token),
+            sha256_hex(&token),
             user_id,
-            (now + Duration::days(SESSION_TTL_DAYS)).to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
-            now.to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+            rfc3339_millis(now + Duration::days(SESSION_TTL_DAYS)),
+            rfc3339_millis(now),
         ],
     )?;
     Ok(token)
@@ -222,7 +199,7 @@ pub fn development_sign_in(
     now: DateTime<Utc>,
 ) -> DatabaseResult<AuthResult> {
     database.transaction(false, |database| {
-        let now_iso = now.to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+        let now_iso = rfc3339_millis(now);
         database.connection().execute(
             "INSERT OR IGNORE INTO suplex_users (id, display_name, username, avatar_seed, role, status, created_at, updated_at, identity_version) VALUES ('user_development', 'Operator', 'operator@suplex.local', 'operator@suplex.local', 'admin', 'active', ?1, ?1, 1)",
             [now_iso],
@@ -253,7 +230,7 @@ pub fn sign_out(
     }
     database.connection().execute(
         "UPDATE suplex_sessions SET revoked_at = ?2 WHERE (token_hash = ?1 OR legacy_token_hash = ?1) AND revoked_at IS NULL",
-        params![hash_secret(raw_token), now.to_rfc3339_opts(chrono::SecondsFormat::Millis, true)],
+        params![sha256_hex(raw_token), rfc3339_millis(now)],
     )?;
     Ok(())
 }
@@ -267,11 +244,11 @@ pub fn rollover_legacy_session(
         return Ok(None);
     }
     database.transaction(false, |database| {
-        let token = new_session_token()?;
-        let old_hash = hash_secret(raw_token);
+        let token = crate::shared::ids::random_secret("session_v1")?;
+        let old_hash = sha256_hex(raw_token);
         let changes = database.connection().execute(
             "UPDATE suplex_sessions SET token_hash = ?2, token_version = 1, legacy_token_hash = ?1, legacy_token_expires_at = ?3 WHERE token_hash = ?1 AND token_version = 0 AND revoked_at IS NULL",
-            params![old_hash, hash_secret(&token), (now + Duration::days(SESSION_TTL_DAYS)).to_rfc3339_opts(chrono::SecondsFormat::Millis, true)],
+            params![old_hash, sha256_hex(&token), rfc3339_millis(now + Duration::days(SESSION_TTL_DAYS))],
         )?;
         Ok((changes == 1).then_some(token))
     })
@@ -359,7 +336,7 @@ pub fn update_profile(
         {
             return Ok(user);
         }
-        let now_iso = now.to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+        let now_iso = rfc3339_millis(now);
         if user.username != next_username
             && database
                 .connection()
@@ -492,7 +469,7 @@ mod tests {
         let legacy = "suplex_legacy_test_token";
         database.connection().execute(
             "INSERT INTO suplex_sessions (id, token_hash, user_id, expires_at, created_at, token_version) VALUES ('legacy_session', ?1, 'user_development', ?2, ?3, 0)",
-            params![hash_secret(legacy), (now + Duration::days(7)).to_rfc3339_opts(chrono::SecondsFormat::Millis, true), now.to_rfc3339_opts(chrono::SecondsFormat::Millis, true)],
+            params![sha256_hex(legacy), rfc3339_millis(now + Duration::days(7)), rfc3339_millis(now)],
         ).unwrap();
         let replacement = rollover_legacy_session(&mut database, legacy, now)
             .unwrap()
@@ -588,7 +565,7 @@ mod tests {
         assert_eq!(count, 3);
         database.connection().execute(
             "INSERT INTO suplex_users (id, display_name, username, avatar_seed, role, status, created_at, updated_at, identity_version) VALUES ('other', 'Other', 'taken', 'taken', 'member', 'active', ?1, ?1, 1)",
-            [now.to_rfc3339_opts(chrono::SecondsFormat::Millis, true)],
+            [rfc3339_millis(now)],
         ).unwrap();
         let failure = update_profile(
             &mut database,

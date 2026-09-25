@@ -1,10 +1,10 @@
 //! Read the published-base-to-local-head range for a Standard task.
 
+use crate::shared::hash::sha256_hex;
 use std::{error::Error, io, path::Path};
 
 use git2::{DiffFormat, DiffOptions, Repository, Sort};
 use serde::Serialize;
-use sha2::{Digest, Sha256};
 
 use crate::{integrations::github_delivery::valid_sha, platform::redaction, tasks::worktree};
 
@@ -244,7 +244,7 @@ pub fn inspect_git_range(
         true
     })?;
     let patch = redaction::command_output(&String::from_utf8_lossy(&patch_bytes));
-    let patch_digest = format!("{:x}", Sha256::digest(patch.as_bytes()));
+    let patch_digest = sha256_hex(patch.as_bytes());
     let (patch, patch_truncated) = patch_display(&patch);
 
     let mut revisions = repository.revwalk()?;

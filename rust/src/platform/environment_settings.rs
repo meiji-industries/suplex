@@ -1,6 +1,6 @@
 //! Host environment settings from `platform/environment-settings.ts`.
 
-use chrono::{SecondsFormat, Utc};
+use crate::shared::time::now_millis_rfc3339;
 use rusqlite::{OptionalExtension, params};
 use serde_json::{Value, json};
 
@@ -86,7 +86,7 @@ pub fn update(
                 settings.min_free_disk_gb,
                 settings.default_budget_usd,
                 settings.default_max_turns,
-                Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true)
+                now_millis_rfc3339()
             ],
         )?;
         Ok(())

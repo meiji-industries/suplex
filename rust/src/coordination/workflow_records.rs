@@ -1,6 +1,7 @@
 //! Workflow records: named, editable presets over one built-in engine.
 
-use chrono::{SecondsFormat, Utc};
+use crate::shared::ids::random_hex_id;
+use crate::shared::time::now_millis_rfc3339;
 use rusqlite::{OptionalExtension, Row, params};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
@@ -8,7 +9,7 @@ use serde_json::{Map, Value, json};
 use crate::{
     coordination::workflows::{advisor_label, workflow_definition},
     http::contracts::typed::workflows as contracts,
-    identity::auth::{self, AuthFailure},
+    identity::auth::AuthFailure,
     platform::database::{DatabaseResult, SuplexDatabase},
     tasks::commands::TaskFailure,
 };
@@ -297,10 +298,6 @@ fn audit(database: &SuplexDatabase, user_id: &str, action: &str, id: &str) -> Da
     )
 }
 
-fn now() -> String {
-    Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true)
-}
-
 pub fn create(
     database: &mut SuplexDatabase,
     user_id: &str,
@@ -308,8 +305,8 @@ pub fn create(
 ) -> DatabaseResult<WorkflowRecord> {
     require_admin(database, user_id)?;
     validate(database, &values)?;
-    let id = auth::random_hex_id("workflow")?;
-    let stamp = now();
+    let id = random_hex_id("workflow")?;
+    let stamp = now_millis_rfc3339();
     database.transaction(false, |database| {
         let name = values["name"].as_str().unwrap_or_default();
         assert_name(database, name, "")?;
@@ -359,7 +356,7 @@ pub fn update(
             .map_err(|_| "Stored workflow record is not a valid workflow input")?;
         validate(database, &values)?;
         assert_name(database, values["name"].as_str().unwrap_or_default(), id)?;
-        let stamp = now();
+        let stamp = now_millis_rfc3339();
         let archived_at = match archived {
             None => current.archived_at.clone(),
             Some(true) => Some(stamp.clone()),

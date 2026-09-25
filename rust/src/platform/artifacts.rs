@@ -1,5 +1,7 @@
 //! Opaque artifact files and their single durable database row.
 
+use crate::shared::hash::sha256_hex;
+use crate::shared::time::rfc3339_millis;
 use std::{
     error::Error,
     fmt, fs,
@@ -8,9 +10,8 @@ use std::{
     path::{Component, Path, PathBuf},
 };
 
-use chrono::{DateTime, SecondsFormat, Utc};
+use chrono::{DateTime, Utc};
 use rusqlite::params;
-use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use super::database::{DatabaseResult, SuplexDatabase};
@@ -153,7 +154,7 @@ pub fn put_in_transaction(
 ) -> DatabaseResult<StoredArtifact> {
     validate(company_id, kind, input)?;
     let id = format!("artifact_{}", Uuid::new_v4().simple());
-    let sha256 = format!("{:x}", Sha256::digest(input.bytes));
+    let sha256 = sha256_hex(input.bytes);
     let storage_path = format!("{company_id}/objects/{}/{}.bin", &sha256[..2], id);
     let path = checked(root, company_id, &storage_path)?;
     fs::DirBuilder::new()
@@ -178,7 +179,7 @@ pub fn put_in_transaction(
         byte_size: input.bytes.len(),
         sha256,
         storage_path,
-        created_at: now.to_rfc3339_opts(SecondsFormat::Millis, true),
+        created_at: rfc3339_millis(now),
     };
     let insert = database.connection().execute(
         "INSERT INTO suplex_artifacts (id, company_id, task_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
@@ -269,7 +270,7 @@ mod tests {
             input.bytes
         );
         assert_eq!(stored.byte_size, input.bytes.len());
-        assert_eq!(stored.sha256, format!("{:x}", Sha256::digest(input.bytes)));
+        assert_eq!(stored.sha256, sha256_hex(input.bytes));
         assert!(stored.storage_path.starts_with("company/objects/"));
         let recorded_path: String = database
             .connection()

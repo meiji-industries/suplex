@@ -500,7 +500,6 @@ mod tests {
         tasks::repository::{self, PreparedTask, TaskCreator},
     };
     use axum::{body::to_bytes, http::HeaderValue};
-    use sha2::{Digest, Sha256};
     use std::{
         fs,
         io::{BufRead, BufReader, Write},
@@ -993,10 +992,7 @@ mod tests {
                 [&task.id],
             ).unwrap();
         });
-        let member_hash = Sha256::digest(b"read_member_token")
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect::<String>();
+        let member_hash = crate::shared::hash::sha256_hex(b"read_member_token");
         state.with_database(|database| {
             let connection = database.connection();
             connection.execute(

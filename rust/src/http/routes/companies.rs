@@ -324,6 +324,7 @@ async fn remove_membership(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::shared::time::{now_millis_rfc3339, rfc3339_millis};
     use crate::{
         identity::auth,
         platform::database::{OpenMode, SuplexDatabase},
@@ -355,7 +356,7 @@ mod tests {
             .collect::<String>();
         database.connection().execute(
             "INSERT INTO suplex_sessions (id, token_hash, user_id, expires_at, created_at, token_version) VALUES ('member_route_session', ?1, 'member_route', ?2, ?3, 1)",
-            rusqlite::params![member_hash, (Utc::now() + chrono::Duration::days(1)).to_rfc3339_opts(chrono::SecondsFormat::Millis, true), Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)],
+            rusqlite::params![member_hash, rfc3339_millis(Utc::now() + chrono::Duration::days(1)), now_millis_rfc3339()],
         ).unwrap();
         let state = AppState::new(
             database,

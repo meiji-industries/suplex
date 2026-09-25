@@ -97,7 +97,7 @@ pub fn write_binding(
             args: vec!["mcp".into(), "advisor".into()],
         },
     };
-    bridge_auth::atomic_write_private(
+    crate::shared::fs::write_private(
         &binding_path,
         &serde_json::to_vec(&binding).map_err(io::Error::other)?,
     )?;
@@ -506,7 +506,7 @@ pub fn advisor_role(role: &str) -> Option<AdvisorRole> {
 }
 
 fn capture(path: &std::path::Path, report: &Value) -> io::Result<()> {
-    bridge_auth::atomic_write_private(path, &serde_json::to_vec(report).map_err(io::Error::other)?)
+    crate::shared::fs::write_private(path, &serde_json::to_vec(report).map_err(io::Error::other)?)
 }
 
 pub async fn serve_from_environment() -> Result<(), Box<dyn std::error::Error>> {

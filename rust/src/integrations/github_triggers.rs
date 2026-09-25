@@ -2,6 +2,7 @@
 //! (`src/integrations/github/triggers.ts`, `trigger-repository.ts`,
 //! `trigger-poller.ts`, and the trigger admission paths of `tasks/tasks.ts`).
 
+use crate::shared::ids::random_hex_id;
 use std::{
     error::Error,
     fmt, io,
@@ -10,6 +11,7 @@ use std::{
     time::Duration,
 };
 
+use crate::shared::time::{now_millis_rfc3339, rfc3339_millis};
 use chrono::{DateTime, Utc};
 use rusqlite::{OptionalExtension, Row, params};
 use serde::{Deserialize, Serialize};
@@ -40,7 +42,6 @@ use crate::{
         service::{self as projects, Project, ProjectFailure},
     },
     tasks::{
-        analytics::timestamp,
         commands::{self, TaskFailure},
         repository::{PullRequestOwned, assert_pull_request_available},
         sources::{self, TaskSourceFailure},
@@ -179,7 +180,7 @@ pub struct Activity {
 impl Activity {
     fn new(number: i64, url: Option<&str>, outcome: &str, reason: &str) -> Self {
         Self {
-            at: timestamp(Utc::now()),
+            at: now_millis_rfc3339(),
             pull_request_number: Some(number),
             url: url.map(str::to_owned),
             outcome: outcome.into(),
@@ -255,7 +256,7 @@ fn required_rule(database: &SuplexDatabase, company_id: &str, id: &str) -> Datab
 fn enabled_due(database: &SuplexDatabase) -> DatabaseResult<Vec<Rule>> {
     let mut statement = database.connection().prepare("SELECT r.* FROM suplex_github_trigger_rules r JOIN suplex_companies c ON c.id = r.company_id WHERE r.enabled = 1 AND r.archived_at IS NULL AND c.status = 'active' AND (r.next_retry_at IS NULL OR r.next_retry_at <= ?1) ORDER BY r.created_at, r.id")?;
     Ok(statement
-        .query_map([timestamp(Utc::now())], rule)?
+        .query_map([now_millis_rfc3339()], rule)?
         .collect::<rusqlite::Result<Vec<_>>>()?)
 }
 
@@ -298,7 +299,7 @@ fn audit(
 ) -> DatabaseResult<()> {
     database.connection().execute(
         "INSERT INTO suplex_audit_events (id, actor_user_id, actor_agent_id, action, target_user_id, company_id, metadata_json, created_at) VALUES (?1, ?2, NULL, ?3, NULL, ?4, ?5, ?6)",
-        params![crate::identity::auth::random_hex_id("audit")?, user_id, action, rule.company_id, json!({"ruleId": rule.id}).to_string(), timestamp(Utc::now())],
+        params![random_hex_id("audit")?, user_id, action, rule.company_id, json!({"ruleId": rule.id}).to_string(), now_millis_rfc3339()],
     )?;
     Ok(())
 }
@@ -331,7 +332,7 @@ fn record(
         let mut all = stored_activity(database, &rule.company_id, &rule.id)?;
         all.extend_from_slice(activity);
         let recent = &all[all.len().saturating_sub(100)..];
-        let now = timestamp(Utc::now());
+        let now = now_millis_rfc3339();
         Ok(database.connection().execute(
             "UPDATE suplex_github_trigger_rules SET recent_activity_json=?1, enabled=?2, last_successful_check_at=?3, latest_error=?4, next_retry_at=?5, failure_count=?6, updated_at=?7 WHERE id=?8 AND company_id=?9 AND revision=?10",
             params![serde_json::to_string(recent)?, i64::from(!disable && rule.enabled), if success { Some(now.clone()) } else { rule.last_successful_check_at.clone() }, error, next_retry_at, if success { 0 } else { rule.failure_count + 1 }, now, rule.id, rule.company_id, rule.revision],
@@ -611,7 +612,7 @@ fn retry_after(failure_count: i64, provider: Option<&str>) -> String {
     let now = Utc::now().timestamp_millis();
     match provider {
         Some(value) if millis(value) > now + delay => value.to_owned(),
-        _ => timestamp(DateTime::from_timestamp_millis(now + delay).expect("retry time")),
+        _ => rfc3339_millis(DateTime::from_timestamp_millis(now + delay).expect("retry time")),
     }
 }
 
@@ -705,7 +706,7 @@ pub async fn create<D: Db>(
     })?;
     let (repository_id, repository_name) =
         provider(github, &expected.repository, &config.label).await?;
-    let time = timestamp(Utc::now());
+    let time = now_millis_rfc3339();
     let created = Rule {
         id: format!("github_trigger_{}", uuid::Uuid::new_v4().simple()),
         company_id: company_id.to_owned(),
@@ -812,7 +813,7 @@ pub async fn update<D: Db>(
         || patch.workflow_id.is_some()
         || patch.delivery_target.is_some()
         || patch.protected_paths.is_some();
-    let time = timestamp(Utc::now());
+    let time = now_millis_rfc3339();
     if patch.enabled == Some(false) || patch.archived == Some(true) {
         if configures || patch.archived == Some(false) {
             return Err(public(
@@ -894,7 +895,7 @@ pub async fn update<D: Db>(
         repository_name,
         enabled: patch.enabled.unwrap_or(current.enabled),
         revision: current.revision + 1,
-        updated_at: timestamp(Utc::now()),
+        updated_at: now_millis_rfc3339(),
         ..current.clone()
     };
     write(
@@ -975,7 +976,7 @@ async fn preview<D: Db>(
         return Err(public(CHANGED, 409));
     }
     if binding_id != rule.repository_id || binding_name != rule.repository_name {
-        let retry = timestamp(Utc::now() + chrono::Duration::seconds(60));
+        let retry = rfc3339_millis(Utc::now() + chrono::Duration::seconds(60));
         let recorded = db(database, |database| {
             record(
                 database,
@@ -1193,7 +1194,7 @@ fn record_failure<D: Db>(
     error: &(dyn Error + 'static),
 ) {
     let (text, retry) = message(error);
-    let retry = retry.unwrap_or_else(|| timestamp(Utc::now() + chrono::Duration::seconds(60)));
+    let retry = retry.unwrap_or_else(|| rfc3339_millis(Utc::now() + chrono::Duration::seconds(60)));
     let _ = database.run(|database| {
         record(
             database,
@@ -1243,7 +1244,7 @@ async fn admit<D: Db>(
     }
     let (binding_id, binding_name) = provider(github, &expected.repository, &rule.label).await?;
     if binding_id != rule.repository_id || binding_name != rule.repository_name.to_lowercase() {
-        let retry = timestamp(Utc::now() + chrono::Duration::seconds(60));
+        let retry = rfc3339_millis(Utc::now() + chrono::Duration::seconds(60));
         db(database, |database| {
             record(
                 database,
@@ -1932,7 +1933,7 @@ mod tests {
             .with_database(|database| identity_auth::development_sign_in(database, now))
             .unwrap();
         state.with_database(|database| {
-            let time = timestamp(now);
+            let time = rfc3339_millis(now);
             let connection = database.connection();
             connection.execute("INSERT INTO suplex_companies (id,name,status,created_at) VALUES ('c','C','active',?1)", [&time]).unwrap();
             connection.execute("INSERT INTO suplex_projects (id,company_id,name,repository_path,worktree_root,repository_identity,base_branch,setup_command,verification_command,root_profile_id,worker_profile_id,agent_task_policy_json,created_at,updated_at) VALUES ('p','c','P','/tmp/trigger-repo','/tmp/trigger-worktrees','owner/repo','main','','','profile_native_root','profile_native_worker','{}',?1,?1)", [&time]).unwrap();
@@ -2120,8 +2121,8 @@ mod tests {
             StatusCode::UNAUTHORIZED
         );
         let member = f.state.with_database(|database| {
-            database.connection().execute("INSERT INTO suplex_users (id, display_name, username, role, status, created_at, updated_at, identity_version) VALUES ('member', 'M', 'member', 'member', 'active', ?1, ?1, 1)", [timestamp(Utc::now())]).unwrap();
-            database.connection().execute("INSERT INTO suplex_memberships (company_id, user_id, created_at) VALUES ('c', 'member', ?1)", [timestamp(Utc::now())]).unwrap();
+            database.connection().execute("INSERT INTO suplex_users (id, display_name, username, role, status, created_at, updated_at, identity_version) VALUES ('member', 'M', 'member', 'member', 'active', ?1, ?1, 1)", [now_millis_rfc3339()]).unwrap();
+            database.connection().execute("INSERT INTO suplex_memberships (company_id, user_id, created_at) VALUES ('c', 'member', ?1)", [now_millis_rfc3339()]).unwrap();
             identity_auth::create_session(database, "member", Utc::now()).unwrap()
         });
         let (status, _, body) = call(
@@ -2418,7 +2419,7 @@ mod tests {
         );
         // The task host admits only enabled rules; the linked dispatch appears in activity.
         f.state.with_database(|database| {
-            let time = timestamp(Utc::now());
+            let time = now_millis_rfc3339();
             database.connection().execute("INSERT INTO suplex_tasks (id,company_id,project_id,title,description,configuration_json,idempotency_key,request_hash,creator_user_id,created_at,updated_at) VALUES ('task_x','c','p','T','','{}','k','h',?1,?2,?2)", params![f.admin, time]).unwrap();
             database.connection().execute("INSERT INTO suplex_task_controls (task_id,objective,delivery_target,delivery_intent_json,status,root_profile_json,worker_profile_json,workflow,advisor_profiles_json,workflow_state_json,status_changed_at,created_at,updated_at) VALUES ('task_x','T','pull_request_draft','{}','backlog','{}','{}','standard','{}','{}',?1,?1,?1)", [&time]).unwrap();
             database.connection().execute("UPDATE suplex_github_trigger_dispatches SET task_id = 'task_x' WHERE id = ?1", [&first.id]).unwrap();

@@ -374,7 +374,7 @@ mod tests {
     async fn seeded_list_applies_archive_filter_after_query_validation_and_session() {
         let path = std::env::temp_dir().join(format!(
             "{}.sqlite",
-            identity_auth::random_hex_id("suplex_workflow_list").unwrap()
+            crate::shared::ids::random_hex_id("suplex_workflow_list").unwrap()
         ));
         let mut database = SuplexDatabase::open(&path, OpenMode::Migrate).unwrap();
         let signed_in = identity_auth::development_sign_in(&mut database, Utc::now()).unwrap();

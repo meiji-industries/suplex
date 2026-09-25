@@ -2,7 +2,7 @@
 
 use std::{collections::HashMap, error::Error, path::Path};
 
-use chrono::{DateTime, SecondsFormat, Utc};
+use chrono::{DateTime, Utc};
 use rusqlite::OptionalExtension;
 use serde::{Deserialize, Serialize};
 
@@ -192,9 +192,10 @@ pub fn read_saved(
 }
 
 fn timestamp(millis: i64) -> Result<String, Box<dyn Error>> {
-    Ok(DateTime::<Utc>::from_timestamp_millis(millis)
-        .ok_or("Native usage timestamp is out of range")?
-        .to_rfc3339_opts(SecondsFormat::Millis, true))
+    Ok(crate::shared::time::rfc3339_millis(
+        DateTime::<Utc>::from_timestamp_millis(millis)
+            .ok_or("Native usage timestamp is out of range")?,
+    ))
 }
 
 fn role_label(kind: &str, advisor_role: Option<&str>) -> &'static str {

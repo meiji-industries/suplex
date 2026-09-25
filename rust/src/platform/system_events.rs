@@ -3,6 +3,7 @@
 //! The writer rotates like `platform/system-events.ts`: by segment bytes, total
 //! bytes, seven-day retention, and UTC day, into `system-<iso>-<uuid>.log`.
 
+use crate::shared::time::rfc3339_millis;
 use std::{
     fs,
     io::{Read, Seek, SeekFrom, Write},
@@ -12,7 +13,7 @@ use std::{
     time::{Instant, UNIX_EPOCH},
 };
 
-use chrono::{DateTime, SecondsFormat, Utc};
+use chrono::{DateTime, Utc};
 use regex::Regex;
 use serde_json::{Map, Value, json};
 
@@ -145,7 +146,7 @@ impl Writer {
         self.sequence += 1;
         let mut record = json!({
             "schemaVersion": 1,
-            "time": iso(time),
+            "time": rfc3339_millis(time),
             "eventId": event_id,
             "bootId": self.boot_id,
             "sequence": self.sequence,
@@ -196,7 +197,7 @@ impl Writer {
                 &current,
                 self.directory.join(format!(
                     "system-{}-{}.log",
-                    iso(time).replace(':', "-"),
+                    rfc3339_millis(time).replace(':', "-"),
                     uuid::Uuid::new_v4()
                 )),
             )?;
@@ -272,10 +273,6 @@ impl Writer {
         }
         Ok(())
     }
-}
-
-fn iso(time: DateTime<Utc>) -> String {
-    time.to_rfc3339_opts(SecondsFormat::Millis, true)
 }
 
 #[cfg(test)]

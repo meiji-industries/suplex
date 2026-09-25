@@ -2,6 +2,7 @@
 //! directories outside the Git worktree:
 //! `<root>/<taskId>/<evidence-id>/{manifest.json,patch.diff,verification.json,attachments/}`.
 
+use crate::shared::time::now_millis_rfc3339;
 use std::{
     error::Error,
     fs,
@@ -193,7 +194,7 @@ pub fn write_task_evidence(
         let manifest = EvidenceManifest {
             version: 1,
             task_id,
-            created_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+            created_at: now_millis_rfc3339(),
             base_sha: &range.base_sha,
             head_sha: &range.head_sha,
             files: &range.files,

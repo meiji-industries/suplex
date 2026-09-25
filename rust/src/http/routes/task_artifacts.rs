@@ -1,5 +1,6 @@
 //! Authenticated bytes for task-owned artifacts, including image previews.
 
+use crate::shared::hash::sha256_hex;
 use std::error::Error;
 
 use axum::{
@@ -13,7 +14,6 @@ use axum::{
 use chrono::Utc;
 use rusqlite::OptionalExtension;
 use serde_json::json;
-use sha2::{Digest, Sha256};
 
 use crate::{
     coordination::root_session_store::{self, TaskArtifact},
@@ -184,7 +184,7 @@ async fn read(
     if let Err(error) = reauthorize(&state, &user.id, &task_id) {
         return with_cookies(service_error(error), cookies);
     }
-    if format!("{:x}", Sha256::digest(&bytes)) != artifact.sha256 {
+    if sha256_hex(&bytes) != artifact.sha256 {
         return with_cookies(
             auth::error(
                 StatusCode::CONFLICT,

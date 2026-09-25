@@ -2,9 +2,10 @@
 //! Ports `integrations/github/{delivery,failure,issues,pull-request-states}.ts`.
 //! GitHub is observed through `octocrab`; Git through `git2`.
 
+use crate::shared::time::rfc3339_millis;
 use std::{error::Error, fmt, path::Path, sync::LazyLock, time::Duration};
 
-use chrono::{DateTime, SecondsFormat, Utc};
+use chrono::{DateTime, Utc};
 use git2::{PushOptions, Repository};
 use regex::Regex;
 use serde::Serialize;
@@ -290,10 +291,7 @@ fn check_timestamp(value: &Value) -> Value {
         .and_then(|text| DateTime::parse_from_rfc3339(text).ok())
         .filter(|time| time.timestamp_millis() > 0)
         .map_or(Value::Null, |time| {
-            json!(
-                time.with_timezone(&Utc)
-                    .to_rfc3339_opts(SecondsFormat::Millis, true)
-            )
+            json!(rfc3339_millis(time.with_timezone(&Utc)))
         })
 }
 
@@ -684,7 +682,7 @@ impl Github {
                 .reset
                 .and_then(|reset| DateTime::from_timestamp(reset, 0))
                 .filter(|time| *time > Utc::now())
-                .map(|time| time.to_rfc3339_opts(SecondsFormat::Millis, true));
+                .map(rfc3339_millis);
             return Err(GithubFailure {
                 code: "provider-rate-limited",
                 summary: or("GitHub limited requests".into()),

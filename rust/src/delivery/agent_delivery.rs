@@ -3,12 +3,13 @@
 //! before it decides and records an audit event. The agent API routes (W8)
 //! resolve the principal and call these functions.
 
+use crate::shared::hash::sha256_hex;
+use crate::shared::time::{now_millis_rfc3339, rfc3339_millis};
 use std::path::Path;
 
-use chrono::{Duration, SecondsFormat, Utc};
+use chrono::{Duration, Utc};
 use rusqlite::{OptionalExtension, params};
 use serde_json::{Value, json};
-use sha2::{Digest, Sha256};
 
 use super::{inspection::ReviewRange, operations::DeliveryOperations};
 use crate::{
@@ -34,10 +35,6 @@ fn failure(message: impl Into<String>, status_code: u16) -> Box<dyn std::error::
         status_code,
         code: "task_failure",
     })
-}
-
-fn now() -> String {
-    Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true)
 }
 
 /// TypeScript `mergeBlocker`: the single reason this pull request cannot merge now.
@@ -98,7 +95,7 @@ pub fn needs_reconciliation(observed: Option<&Observation>) -> bool {
 }
 
 fn receipt_hash(receipt: &str) -> String {
-    format!("{:x}", Sha256::digest(receipt.as_bytes()))
+    sha256_hex(receipt.as_bytes())
 }
 
 fn reconciliation_prompt(base_branch: &str, observed: &Observation) -> String {
@@ -235,7 +232,7 @@ impl AgentDelivery {
         }
         self.open(OpenMode::ReadWrite)?.connection().execute(
             "INSERT INTO suplex_audit_events (id, actor_user_id, actor_agent_id, action, target_user_id, company_id, metadata_json, created_at) VALUES (?1, NULL, ?2, ?3, NULL, ?4, ?5, ?6)",
-            params![format!("audit_{}", uuid::Uuid::new_v4().simple()), principal.agent_id, action, company_id, crate::shared::js_json::stringify(&metadata), now()],
+            params![format!("audit_{}", uuid::Uuid::new_v4().simple()), principal.agent_id, action, company_id, crate::shared::js_json::stringify(&metadata), now_millis_rfc3339()],
         )?;
         Ok(())
     }
@@ -267,7 +264,7 @@ impl AgentDelivery {
         self.open(OpenMode::ReadWrite)?.connection().execute(
             "INSERT INTO suplex_delivery_provenance (id, task_id, attempt_id, agent_id, kind, pull_request_number, original_head_sha, head_sha, base_sha, checks_json, merge_json, recorded_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
             params![id, task_id, attempt_id, agent_id, kind, number.map(|n| n as i64), original, head, base,
-                checks.map(|checks| crate::shared::js_json::stringify(&checks)), merge.map(crate::shared::js_json::stringify), now()],
+                checks.map(|checks| crate::shared::js_json::stringify(&checks)), merge.map(crate::shared::js_json::stringify), now_millis_rfc3339()],
         )?;
         Ok(())
     }
@@ -281,10 +278,10 @@ impl AgentDelivery {
                 [task_id], |row| Ok((row.get(0)?, row.get(1)?)),
             ).optional()?;
             let (root_id, generation) = root.ok_or_else(|| failure("Coordinator is not ready. Retry the request.", 409))?;
-            let time = now();
+            let time = now_millis_rfc3339();
             database.connection().execute(
                 "INSERT INTO suplex_task_turns (id, task_id, session_id, generation, prompt_hash, prompt_text, status, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'pending_prompt', ?7, ?7)",
-                params![turn_id, task_id, root_id, generation, format!("{:x}", Sha256::digest(prompt.as_bytes())), prompt, time],
+                params![turn_id, task_id, root_id, generation, sha256_hex(prompt.as_bytes()), prompt, time],
             )?;
             Ok(())
         })
@@ -568,13 +565,12 @@ impl AgentDelivery {
             base64::Engine::encode(&base64::engine::general_purpose::URL_SAFE_NO_PAD, bytes)
         );
         let created = Utc::now();
-        let expires = (created + Duration::minutes(APPROVAL_TTL_MINUTES))
-            .to_rfc3339_opts(SecondsFormat::Millis, true);
+        let expires = rfc3339_millis(created + Duration::minutes(APPROVAL_TTL_MINUTES));
         let mut database = self.open(OpenMode::ReadWrite)?;
         database.transaction(false, |database| {
             database.connection().execute(
                 "INSERT INTO suplex_merge_approvals (id, task_id, agent_id, pull_request_number, head_sha, base_sha, receipt_hash, created_at, expires_at, consumed_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, NULL)",
-                params![format!("mar_{}", uuid::Uuid::new_v4().simple()), task_id, principal.agent_id, number as i64, observed.head_sha, observed.base_sha, receipt_hash(&receipt), created.to_rfc3339_opts(SecondsFormat::Millis, true), expires],
+                params![format!("mar_{}", uuid::Uuid::new_v4().simple()), task_id, principal.agent_id, number as i64, observed.head_sha, observed.base_sha, receipt_hash(&receipt), rfc3339_millis(created), expires],
             )?;
             Ok(())
         })?;
@@ -610,7 +606,7 @@ impl AgentDelivery {
         let observation = self
             .require_eligible(task_id, number, expected_head_sha)
             .await?;
-        let time = now();
+        let time = now_millis_rfc3339();
         let consumed = self.open(OpenMode::ReadWrite)?.connection().execute(
             "UPDATE suplex_merge_approvals SET consumed_at = ?1 WHERE receipt_hash = ?2 AND task_id = ?3 AND agent_id = ?4 AND pull_request_number = ?5 AND head_sha = ?6 AND consumed_at IS NULL AND expires_at > ?1",
             params![time, receipt_hash(approval_receipt), task_id, principal.agent_id, number as i64, expected_head_sha],

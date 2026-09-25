@@ -1,15 +1,16 @@
 //! Project task templates: saved task configurations, per project.
 
+use crate::shared::ids::random_hex_id;
+use crate::shared::time::now_millis_rfc3339;
 use std::error::Error;
 
-use chrono::{SecondsFormat, Utc};
 use rusqlite::{OptionalExtension, params};
 use serde_json::{Map, Value, json};
 
 use crate::{
     coordination::workflow_records::normalize_workflow_input,
     http::contracts::typed::task_templates::{self, TemplateConfiguration, TemplateResponse},
-    identity::{auth, companies},
+    identity::companies,
     platform::database::SuplexDatabase,
 };
 
@@ -93,10 +94,6 @@ fn normalized(mut input: Map<String, Value>) -> Result<TemplateConfiguration, Bo
     )
 }
 
-fn now() -> String {
-    Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true)
-}
-
 fn assert_name(
     database: &SuplexDatabase,
     project_id: &str,
@@ -122,8 +119,8 @@ pub fn create(
 ) -> Result<TemplateResponse, Box<dyn Error>> {
     require_project(database, user_id, project_id)?;
     let configuration = normalized(input)?;
-    let id = auth::random_hex_id("template")?;
-    let stamp = now();
+    let id = random_hex_id("template")?;
+    let stamp = now_millis_rfc3339();
     let configuration_json = serde_json::to_string(&configuration)?;
     database.transaction(false, |database| {
         assert_name(database, project_id, &configuration.name, "")?;
@@ -235,7 +232,7 @@ pub fn update(
         }
     }
     let configuration = normalized(values)?;
-    let updated_at = now();
+    let updated_at = now_millis_rfc3339();
     let configuration_json = serde_json::to_string(&configuration)?;
     database.transaction(false, |database| {
         assert_name(

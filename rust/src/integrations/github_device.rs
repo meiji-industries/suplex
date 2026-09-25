@@ -1,9 +1,10 @@
 //! GitHub OAuth App device authorization. Device codes stay in process memory;
 //! only the user code and verification URL cross the HTTP boundary.
 
+use crate::shared::time::rfc3339_millis;
 use std::{collections::HashMap, error::Error, future::Future, io, sync::Arc, time::Duration};
 
-use chrono::{DateTime, SecondsFormat, Utc};
+use chrono::{DateTime, Utc};
 use reqwest::{Client, Url};
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
@@ -91,10 +92,6 @@ pub struct Granted {
     pub login: String,
 }
 
-fn public_time(value: DateTime<Utc>) -> String {
-    value.to_rfc3339_opts(SecondsFormat::Millis, true)
-}
-
 impl DeviceAuth {
     pub fn new() -> DeviceResult<Self> {
         Self::for_endpoints("https://github.com/", "https://api.github.com")
@@ -162,7 +159,7 @@ impl DeviceAuth {
             flow_id,
             user_code: code.user_code,
             verification_uri: code.verification_uri,
-            expires_at: public_time(expires_at),
+            expires_at: rfc3339_millis(expires_at),
             interval_seconds: code.interval,
         })
     }
@@ -189,7 +186,7 @@ impl DeviceAuth {
             }
             if now < flow.next_poll_at {
                 return Ok(Poll::Pending {
-                    next_poll_at: public_time(flow.next_poll_at),
+                    next_poll_at: rfc3339_millis(flow.next_poll_at),
                 });
             }
             flow.next_poll_at = now + chrono::Duration::from_std(flow.interval)?;
@@ -217,7 +214,7 @@ impl DeviceAuth {
             match token.error.as_deref() {
                 Some("authorization_pending") => {
                     return Ok(Poll::Pending {
-                        next_poll_at: public_time(flow.next_poll_at),
+                        next_poll_at: rfc3339_millis(flow.next_poll_at),
                     });
                 }
                 Some("slow_down") => {
@@ -229,7 +226,7 @@ impl DeviceAuth {
                     );
                     flow.next_poll_at = Utc::now() + chrono::Duration::from_std(flow.interval)?;
                     return Ok(Poll::Pending {
-                        next_poll_at: public_time(flow.next_poll_at),
+                        next_poll_at: rfc3339_millis(flow.next_poll_at),
                     });
                 }
                 Some("expired_token") => {

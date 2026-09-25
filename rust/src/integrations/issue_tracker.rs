@@ -2,13 +2,13 @@
 //! Cloud through its REST API. The connection comes from task or project
 //! configuration; issue identities outside it are refused.
 
+use crate::shared::hash::sha256_hex;
+use crate::shared::time::now_millis_rfc3339;
 use std::{error::Error, fmt, sync::LazyLock};
 
 use base64::{Engine, engine::general_purpose::STANDARD};
-use chrono::{SecondsFormat, Utc};
 use regex::Regex;
 use serde_json::{Value, json};
-use sha2::{Digest, Sha256};
 
 use super::github_delivery::Github;
 use crate::tasks::images::MAX_TASK_IMAGE_BYTES;
@@ -532,7 +532,7 @@ impl IssueTracker {
         };
         Ok(json!({
             "issue": current, "text": text,
-            "capturedAt": Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true),
+            "capturedAt": now_millis_rfc3339(),
         }))
     }
 
@@ -751,7 +751,7 @@ impl IssueTracker {
         before_write: BeforeWrite<'_>,
     ) -> TrackerResult<String> {
         self.check(issue)?;
-        let hash = format!("{:x}", Sha256::digest(bytes));
+        let hash = sha256_hex(bytes);
         let valid_name = filename
             .strip_prefix("suplex-")
             .and_then(|rest| rest.rsplit_once('.'))
@@ -844,7 +844,7 @@ impl IssueTracker {
                 MAX_TASK_IMAGE_BYTES,
             )
             .await?;
-        if format!("{:x}", Sha256::digest(&uploaded)) != hash {
+        if sha256_hex(&uploaded) != hash {
             return Err(fail("The Jira attachment does not match the task evidence"));
         }
         let encoded = url::form_urlencoded::byte_serialize(filename.as_bytes()).collect::<String>();

@@ -1,6 +1,7 @@
 //! Opens a task worktree in a desktop application on the Suplex host. A remote
 //! browser can copy the path but can never cause a local desktop launch.
 
+use crate::shared::time::now_millis_rfc3339;
 use std::{error::Error, net::SocketAddr};
 
 use axum::{
@@ -11,7 +12,6 @@ use axum::{
     response::{IntoResponse, Response},
     routing::{get, post},
 };
-use chrono::{SecondsFormat, Utc};
 use rusqlite::{OptionalExtension, params};
 use serde_json::{Value, json};
 
@@ -277,7 +277,7 @@ pub(crate) async fn open_with(
                         user_id,
                         company_id,
                         json!({"taskId": task_id, "app": launcher.id}).to_string(),
-                        Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true),
+                        now_millis_rfc3339(),
                     ],
                 )
             });

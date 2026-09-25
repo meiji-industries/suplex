@@ -1,9 +1,10 @@
+use crate::shared::fs::read_optional;
 use std::{
     collections::HashMap,
     error::Error,
     fs,
-    io::{self, Write},
-    os::unix::fs::{DirBuilderExt, OpenOptionsExt, PermissionsExt},
+    io::{self},
+    os::unix::fs::{DirBuilderExt, PermissionsExt},
     path::{Path, PathBuf},
 };
 
@@ -132,15 +133,10 @@ fn read_export_session_id(path: &Path) -> io::Result<Option<String>> {
 }
 
 fn persist_session_id(runtime_directory: &Path, session_id: &str) -> io::Result<()> {
-    let path = runtime_directory.join("session.json");
-    let pending = runtime_directory.join(format!("session.json.{}.pending", uuid::Uuid::new_v4()));
-    fs::OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(0o600)
-        .open(&pending)?
-        .write_all(json!({ "sessionId": session_id }).to_string().as_bytes())?;
-    fs::rename(pending, path)
+    crate::shared::fs::write_private(
+        &runtime_directory.join("session.json"),
+        json!({ "sessionId": session_id }).to_string().as_bytes(),
+    )
 }
 
 fn recover_session_id(runtime_directory: &Path) -> io::Result<Option<String>> {
@@ -295,14 +291,6 @@ fn observation(
         process_running: state == PromptState::Running,
         // TypeScript marks only an output log without its dispatch record as uncertain.
         execution_uncertain: reason == "dispatch_identity_missing",
-    }
-}
-
-fn read_optional(path: &Path) -> io::Result<Option<String>> {
-    match fs::read_to_string(path) {
-        Ok(text) => Ok(Some(text)),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
-        Err(error) => Err(error),
     }
 }
 
@@ -1027,7 +1015,7 @@ pub(super) mod tests {
                 "verificationSummary":"Focused tests passed","summary":"Ready"}),
         )
         .unwrap();
-        bridge_auth::atomic_write_private(&result_path, report.to_string().as_bytes()).unwrap();
+        crate::shared::fs::write_private(&result_path, report.to_string().as_bytes()).unwrap();
         assert_eq!(
             result_text(&directory, "msg_rate").unwrap(),
             "Reviewed the change."

@@ -1,3 +1,6 @@
+use crate::shared::hash::sha256_hex;
+use crate::shared::ids::random_hex_id;
+use crate::shared::time::rfc3339_millis;
 use chrono::{DateTime, Duration, Utc};
 use rusqlite::{OptionalExtension, params};
 use serde::Serialize;
@@ -29,10 +32,6 @@ struct Invitation {
     display_name: String,
     user_id: Option<String>,
     metadata_json: String,
-}
-
-fn timestamp(now: DateTime<Utc>) -> String {
-    now.to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
 }
 
 fn invitation_failure() -> Box<dyn std::error::Error> {
@@ -75,7 +74,7 @@ fn valid_invitation(
     }
     let row = database.connection().query_row(
         "SELECT id, display_name, user_id, metadata_json, expires_at FROM suplex_invitations WHERE token_hash = ?1 AND kind = ?2 AND consumed_at IS NULL AND replaced_at IS NULL",
-        params![auth::hash_secret(token), kind],
+        params![sha256_hex(token), kind],
         |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, Option<String>>(2)?, row.get::<_, String>(3)?, row.get::<_, String>(4)?)),
     ).optional()?;
     let Some((id, display_name, user_id, metadata_json, expires_at)) = row else {
@@ -166,7 +165,7 @@ pub fn begin_registration(
     let user_id = invitation
         .user_id
         .clone()
-        .unwrap_or(auth::random_hex_id("pending")?);
+        .unwrap_or(random_hex_id("pending")?);
     let username = format!("user_v1_{user_id}");
     let exclude = match &invitation.user_id {
         Some(id) => credentials_for_user(database, id)?,
@@ -186,12 +185,12 @@ pub fn begin_registration(
     .map_err(|_| passkey_failure())?;
     let challenge = started.state;
     let options = started.options;
-    let challenge_id = auth::random_hex_id("challenge")?;
+    let challenge_id = random_hex_id("challenge")?;
     database.transaction(false, |database| {
         let current = valid_invitation(database, token, kind, now)?.ok_or_else(invitation_failure)?;
         database.connection().execute(
             "INSERT INTO suplex_challenges (id, challenge, kind, invitation_id, user_id, expires_at, consumed_at, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, NULL, ?7)",
-            params![challenge_id, challenge, format!("registration:{kind}"), current.id, current.user_id, timestamp(now + Duration::minutes(5)), timestamp(now)],
+            params![challenge_id, challenge, format!("registration:{kind}"), current.id, current.user_id, rfc3339_millis(now + Duration::minutes(5)), rfc3339_millis(now)],
         )?;
         Ok(())
     })?;
@@ -291,7 +290,7 @@ pub fn consume_registration_challenge(
         ).optional()?;
         let Some((challenge, invitation_id, expires_at, consumed_at)) = challenge_row else { return Err(invitation_failure()); };
         if invitation_id.as_deref() != Some(&invitation.id) || consumed_at.is_some() || DateTime::parse_from_rfc3339(&expires_at).is_ok_and(|expires| expires.timestamp_millis() <= now.timestamp_millis()) { return Err(invitation_failure()); }
-        let updated = database.connection().execute("UPDATE suplex_challenges SET consumed_at = ?2 WHERE id = ?1 AND consumed_at IS NULL", params![challenge_id, timestamp(now)])?;
+        let updated = database.connection().execute("UPDATE suplex_challenges SET consumed_at = ?2 WHERE id = ?1 AND consumed_at IS NULL", params![challenge_id, rfc3339_millis(now)])?;
         if updated != 1 { return Err(invitation_failure()); }
         Ok(challenge)
     })
@@ -306,7 +305,7 @@ pub fn finish_registration(
 ) -> DatabaseResult<AuthResult> {
     database.transaction(false, |database| {
         let invitation = valid_invitation(database, token, kind, now)?.ok_or_else(invitation_failure)?;
-        let now_iso = timestamp(now);
+        let now_iso = rfc3339_millis(now);
         let user_id = if kind == "user" {
             let id = invitation.user_id.ok_or_else(invitation_failure)?;
             let updated = database.connection().execute("UPDATE suplex_users SET status = 'active', updated_at = ?2 WHERE id = ?1 AND status = 'pending'", params![id, now_iso])?;
@@ -319,12 +318,12 @@ pub fn finish_registration(
                 database.connection().execute("UPDATE suplex_sessions SET revoked_at = ?1 WHERE user_id IN (SELECT id FROM suplex_users WHERE role = 'admin' AND status = 'active') AND revoked_at IS NULL", [now_iso.clone()])?;
                 database.connection().execute("UPDATE suplex_users SET status = 'revoked', updated_at = ?1 WHERE role = 'admin' AND status = 'active'", [now_iso.clone()])?;
             }
-            let id = auth::random_hex_id("user")?;
+            let id = random_hex_id("user")?;
             let username = format!("user_v1_{id}");
             database.connection().execute("INSERT INTO suplex_users (id, display_name, username, avatar_seed, role, status, created_at, updated_at, identity_version) VALUES (?1, ?2, ?3, ?3, 'admin', 'active', ?4, ?4, 1)", params![id, invitation.display_name, username, now_iso])?;
             id
         };
-        let credential_id = auth::random_hex_id("credential")?;
+        let credential_id = random_hex_id("credential")?;
         if let Err(error) = database.connection().execute("INSERT INTO suplex_credentials (id, user_id, credential_id, public_key, counter, transports, created_at, revoked_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, NULL)", params![credential_id, user_id, verified.id, verified.public_key, verified.counter, serde_json::to_string(&verified.transports)?, now_iso]) {
             if matches!(&error, rusqlite::Error::SqliteFailure(_, Some(message)) if message.contains("UNIQUE constraint failed: suplex_credentials.credential_id")) {
                 return Err(Box::new(AuthFailure::new("Credential is already registered", 409, "credential_duplicate")));
@@ -337,7 +336,7 @@ pub fn finish_registration(
         let metadata = if kind == "recovery" {
             auth::metadata_with_string(&invitation.metadata_json, "invitationId", &invitation.id)
         } else { "{}".to_owned() };
-        database.connection().execute("INSERT INTO suplex_audit_events (id, actor_user_id, actor_agent_id, action, target_user_id, company_id, metadata_json, created_at) VALUES (?1, NULL, NULL, ?2, ?3, NULL, ?4, ?5)", params![auth::random_hex_id("audit")?, action, user_id, metadata, now_iso])?;
+        database.connection().execute("INSERT INTO suplex_audit_events (id, actor_user_id, actor_agent_id, action, target_user_id, company_id, metadata_json, created_at) VALUES (?1, NULL, NULL, ?2, ?3, NULL, ?4, ?5)", params![random_hex_id("audit")?, action, user_id, metadata, now_iso])?;
         let user = auth::public_user(database, &user_id)?.ok_or_else(passkey_failure)?;
         if user.status != "active" { return Err(passkey_failure()); }
         let session_token = auth::create_session(database, &user_id, now)?;
@@ -381,8 +380,8 @@ pub fn begin_authentication(
         })?;
     let challenge = started.state;
     let options = started.options;
-    let challenge_id = auth::random_hex_id("challenge")?;
-    database.connection().execute("INSERT INTO suplex_challenges (id, challenge, kind, invitation_id, user_id, expires_at, consumed_at, created_at) VALUES (?1, ?2, 'authentication', NULL, NULL, ?3, NULL, ?4)", params![challenge_id, challenge, timestamp(now + Duration::minutes(5)), timestamp(now)])?;
+    let challenge_id = random_hex_id("challenge")?;
+    database.connection().execute("INSERT INTO suplex_challenges (id, challenge, kind, invitation_id, user_id, expires_at, consumed_at, created_at) VALUES (?1, ?2, 'authentication', NULL, NULL, ?3, NULL, ?4)", params![challenge_id, challenge, rfc3339_millis(now + Duration::minutes(5)), rfc3339_millis(now)])?;
     Ok(AuthOptions {
         challenge_id,
         options,
@@ -419,7 +418,7 @@ pub fn complete_authentication_prepared(
         let row = database.connection().query_row("SELECT challenge, expires_at, consumed_at FROM suplex_challenges WHERE id = ?1 AND kind = 'authentication'", [challenge_id], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, Option<String>>(2)?))).optional()?;
         let Some((challenge, expires_at, consumed_at)) = row else { return Err(passkey_failure()); };
         if consumed_at.is_some() || DateTime::parse_from_rfc3339(&expires_at).is_ok_and(|expires| expires.timestamp_millis() <= now.timestamp_millis()) { return Err(passkey_failure()); }
-        let updated = database.connection().execute("UPDATE suplex_challenges SET consumed_at = ?2 WHERE id = ?1 AND consumed_at IS NULL", params![challenge_id, timestamp(now)])?;
+        let updated = database.connection().execute("UPDATE suplex_challenges SET consumed_at = ?2 WHERE id = ?1 AND consumed_at IS NULL", params![challenge_id, rfc3339_millis(now)])?;
         if updated != 1 { return Err(passkey_failure()); }
         Ok(challenge)
     })?;
@@ -464,13 +463,13 @@ mod tests {
     fn setup() -> (SuplexDatabase, std::path::PathBuf, String, DateTime<Utc>) {
         let path = std::env::temp_dir().join(format!(
             "{}.sqlite",
-            auth::random_hex_id("suplex_highlevel_ceremony").unwrap()
+            random_hex_id("suplex_highlevel_ceremony").unwrap()
         ));
         let database = SuplexDatabase::open(&path, OpenMode::Migrate).unwrap();
         let token = format!("invite_v1_user_{}", "A".repeat(43));
         let now = Utc::now();
-        database.connection().execute("INSERT INTO suplex_users (id, display_name, username, avatar_seed, role, status, created_at, updated_at, identity_version) VALUES ('user_existing', 'Fixture member', 'user_v1_user_existing', 'user_v1_user_existing', 'member', 'pending', ?1, ?1, 1)", [timestamp(now)]).unwrap();
-        database.connection().execute("INSERT INTO suplex_invitations (id, token_hash, kind, display_name, user_id, expires_at, created_at, metadata_json) VALUES ('invitation_new', ?1, 'user', 'Fixture member', 'user_existing', ?2, ?3, '{}')", params![auth::hash_secret(&token), timestamp(now + Duration::days(1)), timestamp(now)]).unwrap();
+        database.connection().execute("INSERT INTO suplex_users (id, display_name, username, avatar_seed, role, status, created_at, updated_at, identity_version) VALUES ('user_existing', 'Fixture member', 'user_v1_user_existing', 'user_v1_user_existing', 'member', 'pending', ?1, ?1, 1)", [rfc3339_millis(now)]).unwrap();
+        database.connection().execute("INSERT INTO suplex_invitations (id, token_hash, kind, display_name, user_id, expires_at, created_at, metadata_json) VALUES ('invitation_new', ?1, 'user', 'Fixture member', 'user_existing', ?2, ?3, '{}')", params![sha256_hex(&token), rfc3339_millis(now + Duration::days(1)), rfc3339_millis(now)]).unwrap();
         (database, path, token, now)
     }
 
@@ -545,7 +544,7 @@ mod tests {
             .unwrap();
         assert!(serde_json::from_slice::<Passkey>(&stored).is_ok());
         assert_eq!(counter, 0);
-        database.connection().execute("INSERT INTO suplex_credentials (id, user_id, credential_id, public_key, counter, transports, created_at, revoked_at) VALUES ('old_credential_row', 'user_existing', 'old_raw_credential', X'010203', 0, '[]', ?1, NULL)", [timestamp(now)]).unwrap();
+        database.connection().execute("INSERT INTO suplex_credentials (id, user_id, credential_id, public_key, counter, transports, created_at, revoked_at) VALUES ('old_credential_row', 'user_existing', 'old_raw_credential', X'010203', 0, '[]', ?1, NULL)", [rfc3339_millis(now)]).unwrap();
         drop(database);
 
         let mut database = SuplexDatabase::open(&path, OpenMode::ReadWrite).unwrap();

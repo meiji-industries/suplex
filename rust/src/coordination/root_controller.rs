@@ -1,10 +1,10 @@
 //! TypeScript `RootController`: Root operations for every workflow.
 
+use crate::shared::hash::sha256_hex;
 use std::path::Path;
 
 use base64::{Engine, engine::general_purpose::STANDARD};
 use serde_json::{Map, Value, json};
-use sha2::{Digest, Sha256};
 
 use crate::{
     delivery::operations::DeliveryOperations,
@@ -236,7 +236,7 @@ pub fn read_image(
         &root.session_id,
         root.generation,
     )?;
-    if format!("{:x}", Sha256::digest(&bytes)) != artifact.sha256 {
+    if sha256_hex(&bytes) != artifact.sha256 {
         return Err(invalid("The task image changed in storage"));
     }
     Ok(

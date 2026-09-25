@@ -3,12 +3,12 @@
 //! configuration record, and a hashed manifest. Archives stay interchangeable
 //! with the TypeScript backend.
 
+use crate::shared::time::rfc3339_millis;
 use std::{
     collections::HashSet,
     error::Error,
     fmt, fs,
-    io::Write,
-    os::unix::fs::{DirBuilderExt, OpenOptionsExt},
+    os::unix::fs::DirBuilderExt,
     path::{Path, PathBuf},
     process::{Command, Stdio},
     sync::{LazyLock, mpsc},
@@ -21,7 +21,6 @@ use regex::Regex;
 use rusqlite::{Connection, OpenFlags, params};
 use serde::Serialize;
 use serde_json::{Map, Value, json};
-use sha2::{Digest, Sha256};
 
 use super::database::{OpenMode, SuplexDatabase};
 
@@ -90,32 +89,10 @@ pub struct BackupService {
     pub configuration: Map<String, Value>,
 }
 
-fn iso(time: DateTime<Utc>) -> String {
-    time.to_rfc3339_opts(SecondsFormat::Millis, true)
-}
-
-fn sha256(bytes: &[u8]) -> String {
-    Sha256::digest(bytes)
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect()
-}
-
 fn staging(prefix: &str) -> BackupResult<PathBuf> {
     let path = std::env::temp_dir().join(format!("{prefix}{}", uuid::Uuid::new_v4().simple()));
     fs::DirBuilder::new().mode(0o700).create(&path)?;
     Ok(path)
-}
-
-fn write_private(path: &Path, contents: &str) -> BackupResult<()> {
-    fs::OpenOptions::new()
-        .write(true)
-        .create(true)
-        .truncate(true)
-        .mode(0o600)
-        .open(path)?
-        .write_all(contents.as_bytes())?;
-    Ok(())
 }
 
 fn tar(args: &[&std::ffi::OsStr], seconds: u64) -> BackupResult<String> {
@@ -165,7 +142,7 @@ fn files_under(root: &Path, prefix: &str) -> BackupResult<Vec<Value>> {
             entries.extend(files_under(&entry.path(), &relative)?);
         } else if kind.is_file() {
             let bytes = fs::read(entry.path())?;
-            entries.push(json!({"path": relative, "bytes": bytes.len(), "sha256": sha256(&bytes)}));
+            entries.push(json!({"path": relative, "bytes": bytes.len(), "sha256": crate::shared::hash::sha256_hex(&bytes)}));
         } else {
             return Err(BackupFailure::Unsafe.into());
         }
@@ -260,7 +237,7 @@ fn remove_authentication_state(snapshot: &Path) -> BackupResult<()> {
 }
 
 fn modified_iso(time: SystemTime) -> String {
-    iso(DateTime::<Utc>::from(time))
+    rfc3339_millis(DateTime::<Utc>::from(time))
 }
 
 impl BackupService {
@@ -314,7 +291,7 @@ impl BackupService {
         Ok(BackupEntry {
             name,
             bytes: created.archive_bytes,
-            created_at: iso(now),
+            created_at: rfc3339_millis(now),
         })
     }
 
@@ -340,9 +317,9 @@ impl BackupService {
                 .backup(rusqlite::MAIN_DB, &snapshot, None)?;
             remove_authentication_state(&snapshot)?;
             copy_tree(&self.artifact_root, &root.join("app/artifacts"), false)?;
-            write_private(
+            crate::shared::fs::write_private(
                 &root.join("config/config.json"),
-                &serde_json::to_string_pretty(&json!({
+                &serde_json::to_vec_pretty(&json!({
                     "version": BACKUP_VERSION,
                     "config": self.configuration,
                     "requiresReauthentication": true,
@@ -351,7 +328,7 @@ impl BackupService {
             let entries = files_under(&root, "")?;
             let manifest = json!({
                 "version": BACKUP_VERSION,
-                "createdAt": iso(Utc::now()),
+                "createdAt": crate::shared::time::now_millis_rfc3339(),
                 "components": {
                     "application": component(&entries, "app/"),
                     "artifacts": component(&entries, "app/artifacts/"),
@@ -362,9 +339,9 @@ impl BackupService {
                 "secretsExcluded": ["credential registrations", "passkeys", "sessions", "challenges", "invitation tokens", "external agent credentials", "OAuth tokens and authorization codes", "OAuth pending authorizations", "OAuth cursor keys", "provider API keys", "external agent pairing codes", "cookies", "private keys", "provider tokens", "Engine API keys", "generated environment files"],
                 "requiredConfiguration": ["accessMode", "reachableAddress", "databasePath", "artifactRoot", "installationId"],
             });
-            write_private(
+            crate::shared::fs::write_private(
                 &root.join("manifest.json"),
-                &serde_json::to_string_pretty(&manifest)?,
+                &serde_json::to_vec_pretty(&manifest)?,
             )?;
             tar(
                 &[
@@ -402,13 +379,13 @@ impl BackupService {
             archive_path: archive,
             manifest,
             errors,
-            verified_at: iso(Utc::now()),
+            verified_at: crate::shared::time::now_millis_rfc3339(),
             duration_ms: started.elapsed().as_millis(),
         };
         fs::create_dir_all(&self.data_root)?;
-        write_private(
+        crate::shared::fs::write_private(
             &self.data_root.join("backup-status.json"),
-            &serde_json::to_string_pretty(&json!({
+            &serde_json::to_vec_pretty(&json!({
                 "verifiedAt": verification.verified_at,
                 "valid": verification.valid,
                 "archivePath": verification.archive_path,
@@ -501,7 +478,7 @@ impl BackupService {
             match fs::read(root.join(&path)) {
                 Ok(bytes)
                     if Some(bytes.len() as u64) == entry["bytes"].as_u64()
-                        && entry["sha256"] == sha256(&bytes) => {}
+                        && entry["sha256"] == crate::shared::hash::sha256_hex(&bytes) => {}
                 Ok(_) => errors.push(format!("hash mismatch: {path}")),
                 Err(_) => errors.push(format!("missing entry: {path}")),
             }
@@ -556,7 +533,9 @@ impl BackupService {
                 continue;
             }
             match fs::read(root.join(&relative)) {
-                Ok(bytes) if bytes.len() as i64 == byte_size && sha256(&bytes) == digest => {}
+                Ok(bytes)
+                    if bytes.len() as i64 == byte_size
+                        && crate::shared::hash::sha256_hex(&bytes) == digest => {}
                 Ok(_) => errors.push(format!("artifact hash mismatch: {storage_path}")),
                 Err(_) => errors.push(format!("missing artifact: {storage_path}")),
             }

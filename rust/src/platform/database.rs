@@ -1,3 +1,4 @@
+use crate::shared::hash::sha256_hex;
 use std::{
     collections::{HashMap, HashSet},
     error::Error,
@@ -9,7 +10,6 @@ use std::{
 
 use chrono::NaiveDateTime;
 use rusqlite::{Connection, OpenFlags, params};
-use sha2::{Digest, Sha256};
 
 use super::embedded::{EmbeddedFile, MIGRATIONS};
 
@@ -439,7 +439,7 @@ fn read_migrations(files: &[EmbeddedFile]) -> DatabaseResult<Vec<Migration>> {
         }
         migrations.push(Migration {
             tag: tag.to_owned(),
-            hash: format!("{:x}", Sha256::digest(file.bytes)),
+            hash: sha256_hex(file.bytes),
             created_at,
         });
     }

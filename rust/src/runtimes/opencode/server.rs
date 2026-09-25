@@ -20,7 +20,7 @@ use super::{
     session::{BoxError, open_code_model},
 };
 use crate::{
-    coordination::bridge_auth::{atomic_write_private, prepare_runtime_directory},
+    coordination::bridge_auth::prepare_runtime_directory,
     profiles::agent_profiles::{executable as is_executable, home_directory},
     runtimes::{
         headless::{self, HeadlessTurnRecord, RecordedProcessIdentity},
@@ -397,7 +397,7 @@ pub async fn ensure_server(input: EnsureInput<'_>) -> Result<ServerReference, Bo
             owner_uid: inspection.owner_uid.unwrap_or_default(),
         },
     };
-    atomic_write_private(
+    crate::shared::fs::write_private(
         &input.runtime_directory.join("server.json"),
         &serde_json::to_vec(&reference)?,
     )?;
@@ -443,7 +443,7 @@ pub fn attach_command(
         return Err(io::Error::other("Invalid OpenCode session identity"));
     }
     let env_file = runtime_directory.join("attach.env");
-    atomic_write_private(
+    crate::shared::fs::write_private(
         &env_file,
         format!(
             "export OPENCODE_SERVER_PASSWORD={}\n",

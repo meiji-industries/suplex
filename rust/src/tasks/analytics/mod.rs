@@ -2,9 +2,10 @@
 
 pub mod collector;
 
+use crate::shared::time::rfc3339_millis;
 use std::collections::{BTreeMap, HashSet};
 
-use chrono::{DateTime, SecondsFormat, Utc};
+use chrono::{DateTime, Utc};
 use rusqlite::{OptionalExtension, params};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
@@ -75,10 +76,6 @@ pub struct AnalyticsData {
     pub usage: Vec<TaskUsage>,
     pub sessions: Vec<AnalyticsSession>,
     pub events: Vec<AnalyticsEvent>,
-}
-
-pub fn timestamp(now: DateTime<Utc>) -> String {
-    now.to_rfc3339_opts(SecondsFormat::Millis, true)
 }
 
 fn millis(value: &str) -> f64 {
@@ -192,7 +189,7 @@ pub fn observe_lifecycle(database: &SuplexDatabase, task_id: &str) -> DatabaseRe
         task_id,
         &status,
         question.as_deref().filter(|id| !id.is_empty()),
-        &timestamp(Utc::now()),
+        &crate::shared::time::now_millis_rfc3339(),
     )
 }
 
@@ -495,7 +492,7 @@ pub fn analytics(
             now.timestamp_millis() as f64,
         ));
     }
-    Ok(json!({"generatedAt": timestamp(now), "tasks": tasks}))
+    Ok(json!({"generatedAt": rfc3339_millis(now), "tasks": tasks}))
 }
 
 /// The task-costs projection of `analytics`.

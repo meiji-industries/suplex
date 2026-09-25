@@ -134,14 +134,13 @@ pub struct LocalProjectInput<'a> {
 
 #[derive(Clone, Debug)]
 pub struct PreparedLocalProject {
-    pub name: String,
-    pub repository_path: PathBuf,
-    pub worktree_root: PathBuf,
-    pub repository: String,
-    pub base_branch: String,
-    pub setup_command: String,
-    pub verification_command: String,
-    pub base_sha: String,
+    pub(super) name: String,
+    pub(super) repository_path: PathBuf,
+    pub(super) worktree_root: PathBuf,
+    pub(super) repository: String,
+    pub(super) base_branch: String,
+    pub(super) setup_command: String,
+    pub(super) verification_command: String,
 }
 
 fn valid_name(name: &str) -> bool {
@@ -297,7 +296,6 @@ pub async fn prepare_local_project(
         base_branch: base_branch.to_owned(),
         setup_command: crate::identity::auth::js_trim(input.setup_command).to_owned(),
         verification_command: crate::identity::auth::js_trim(input.verification_command).to_owned(),
-        base_sha: inspection.base_sha,
     })
 }
 
@@ -834,7 +832,39 @@ mod tests {
         assert_eq!(prepared.name, "Local project");
         assert_eq!(prepared.repository, "acme/repo");
         assert_eq!(prepared.setup_command, "pnpm install");
-        assert_eq!(prepared.base_sha, inspected.base_sha);
+        assert_eq!(inspected.base_sha.len(), 40);
+        let mut database = crate::platform::database::SuplexDatabase::open(
+            &root.join("service.sqlite"),
+            crate::platform::database::OpenMode::Migrate,
+        )
+        .unwrap();
+        let now = chrono::Utc::now();
+        let admin = crate::identity::auth::development_sign_in(&mut database, now)
+            .unwrap()
+            .user;
+        let company = crate::identity::companies::create_company(
+            &mut database,
+            &admin.id,
+            "Repository integration",
+            now,
+        )
+        .unwrap();
+        let created = crate::projects::service::create_local_default(
+            &mut database,
+            &admin.id,
+            &company.id,
+            &prepared,
+            "profile_native_root",
+            "profile_native_worker",
+            now,
+        )
+        .unwrap();
+        assert_eq!(created.repository.as_deref(), Some("acme/repo"));
+        assert_eq!(
+            Path::new(&created.repository_path),
+            fs::canonicalize(&local).unwrap()
+        );
+        drop(database);
         let mismatch = LocalProjectInput {
             repository: "other/repository",
             ..input

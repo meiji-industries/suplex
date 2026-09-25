@@ -157,7 +157,7 @@ The table lists all 238 backend TypeScript modules present at the baseline, incl
 | [projects/contracts.ts](../src/projects/contracts.ts) | not started | |
 | [projects/execution-configuration.ts](../src/projects/execution-configuration.ts) | not started | |
 | [projects/integration-configuration.ts](../src/projects/integration-configuration.ts) | not started | |
-| [projects/projects.ts](../src/projects/projects.ts) | not started | Local GitHub save-time preflight ported and tested; project persistence and HTTP operations remain incomplete |
+| [projects/projects.ts](../src/projects/projects.ts) | not started | Default local GitHub preflight/create/get/list implemented with live membership, profile eligibility, duplicate rollback, audit, and lossless normalization of all four stored JSON columns. Independent Rust project checks7/7 and TypeScript reference23/23 pass; isolated staged full Rust checks pass. Optional writes, remote/new repositories, Bitbucket, updates, and HTTP composition remain incomplete |
 | [projects/provider-policy.ts](../src/projects/provider-policy.ts) | not started | |
 | [projects/repository-commands.ts](../src/projects/repository-commands.ts) | not started | |
 | [projects/repository-coordinate.ts](../src/projects/repository-coordinate.ts) | not started | GitHub coordinate/remote parsing covered by repository tests; full provider coverage remains incomplete |

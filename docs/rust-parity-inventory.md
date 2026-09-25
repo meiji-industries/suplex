@@ -6,7 +6,7 @@ States: `not started` means no complete Rust equivalent; `ported` means implemen
 
 The table lists all 238 backend TypeScript modules present at the baseline, including contracts, routes, and each provider adapter. Contract extractions already committed during M0 are tracked with their source rows; no further extraction is required. Shared SQL migrations remain unchanged. Inventory introduced in `ea44af63`.
 
-Current sequence: complete one Codex Standard task through the UI with cancellation and restart recovery. High-level WebAuthn and the Serde/Garde conversion of live auth/project requests are implemented. The UTF-16 document model, special schema interpreters, raw-JSON fixtures and response-schema fixtures are removed; the hash serializer remains. The typed cleanup removes a net 3,132 Rust source lines. Other API breadth is deferred. Git2 and GitHub API/keychain integration follow their M2/M3 delivery seams.
+Current sequence: complete one Codex Standard task through the UI with cancellation and restart recovery. High-level WebAuthn and the Serde/Garde conversion of live auth/project requests are implemented. The UTF-16 document model, special schema interpreters, raw-JSON fixtures and response-schema fixtures are removed; the hash serializer remains. The typed cleanup in `b43d8fa3` removes a net 3,132 Rust source lines. Other API breadth is deferred. Git2 and GitHub API/keychain integration follow their M2/M3 delivery seams.
 
 Request corpus: 1,140 fixtures across 95 request exports plus 23 stored-project cases across three exports. The typed cleanup passes 522 cases across 43 implemented request schemas, all stored-project cases, and seven hash fixtures. Its actual index export passes 58 unit tests and three integration tests, plus both signed passkey tests run explicitly. Locked formatting, all-target Clippy, generator, TypeScript typecheck, targeted ESLint and workflow tests 2/2 pass. Unused request validators are deferred until their routes need them; the corpus retains their fixtures. The TypeScript full suite baseline is 1,613/1,623: seven failures reproduce at pre-port `a57a47f5`, and three Devin failures pass focused reruns. Hosted CI, packages, full task execution, switching, and the eight-hour run remain unverified. Final snapshots use separate Cargo targets after an earlier shared-target collision.
 
@@ -139,7 +139,7 @@ Request corpus: 1,140 fixtures across 95 request exports plus 23 stored-project 
 | [platform/install/stages.ts](../src/platform/install/stages.ts) | not started | |
 | [platform/log-viewer.ts](../src/platform/log-viewer.ts) | not started | |
 | [platform/logging.ts](../src/platform/logging.ts) | not started | |
-| [platform/process-manager.ts](../src/platform/process-manager.ts) | not started | |
+| [platform/process-manager.ts](../src/platform/process-manager.ts) | not started | `rust/src/runtimes/process.rs` inspects live PID/start/argv/UID before each signal and stops proven groups. Ownership, reused/unsafe PID and missing-turn-record cases pass. Full process-manager integration remains pending. |
 | [platform/runtime.ts](../src/platform/runtime.ts) | not started | |
 | [platform/schemas.ts](../src/platform/schemas.ts) | not started | |
 | [platform/setup.ts](../src/platform/setup.ts) | not started | |
@@ -174,9 +174,9 @@ Request corpus: 1,140 fixtures across 95 request exports plus 23 stored-project 
 | [runtimes/claude-code/task-runtime.ts](../src/runtimes/claude-code/task-runtime.ts) | not started | |
 | [runtimes/claude-code/transcript.ts](../src/runtimes/claude-code/transcript.ts) | not started | |
 | [runtimes/codex/display.ts](../src/runtimes/codex/display.ts) | not started | |
-| [runtimes/codex/session-reader.ts](../src/runtimes/codex/session-reader.ts) | not started | |
-| [runtimes/codex/task-runtime.ts](../src/runtimes/codex/task-runtime.ts) | not started | |
-| [runtimes/codex/transcript.ts](../src/runtimes/codex/transcript.ts) | not started | |
+| [runtimes/codex/session-reader.ts](../src/runtimes/codex/session-reader.ts) | not started | `rust/src/runtimes/codex/session_reader.rs` and thread recovery pass focused runtime checks. Real Codex and the complete NativeSessionReader remain pending. |
+| [runtimes/codex/task-runtime.ts](../src/runtimes/codex/task-runtime.ts) | not started | `rust/src/runtimes/codex` invocation, dispatch, observation and recovery helpers pass the runtime unit's 17 focused checks. Its isolated staged export passes 75 library tests, three integration tests, locked fmt and all-target Clippy. Full TaskHarness, durable store binding, real Codex, bridges and UI remain pending. |
+| [runtimes/codex/transcript.ts](../src/runtimes/codex/transcript.ts) | not started | `rust/src/runtimes/codex/transcript.rs` parsing, result text and completion evidence pass focused runtime checks. Real-provider verification remains pending. |
 | [runtimes/devin/advisor-evidence.ts](../src/runtimes/devin/advisor-evidence.ts) | not started | |
 | [runtimes/devin/display.ts](../src/runtimes/devin/display.ts) | not started | |
 | [runtimes/devin/mcp-config.ts](../src/runtimes/devin/mcp-config.ts) | not started | |
@@ -184,7 +184,7 @@ Request corpus: 1,140 fixtures across 95 request exports plus 23 stored-project 
 | [runtimes/devin/task-runtime.ts](../src/runtimes/devin/task-runtime.ts) | not started | |
 | [runtimes/devin/transcript.ts](../src/runtimes/devin/transcript.ts) | not started | |
 | [runtimes/harness-kind.ts](../src/runtimes/harness-kind.ts) | not started | |
-| [runtimes/headless/turn-process.ts](../src/runtimes/headless/turn-process.ts) | not started | |
+| [runtimes/headless/turn-process.ts](../src/runtimes/headless/turn-process.ts) | not started | `rust/src/runtimes/headless.rs` detached claim-before-launch, source-shaped dispatch/exit records, process-group stop and missing-turn recovery pass with real short-lived children. Environment-only rediscovery after loss of all records is unproved on this Mac; the same-host TS scanner also missed the tagged child. No new record gate added. Durable store and real Codex integration remain pending. |
 | [runtimes/opencode/client.ts](../src/runtimes/opencode/client.ts) | not started | |
 | [runtimes/opencode/contracts.ts](../src/runtimes/opencode/contracts.ts) | not started | |
 | [runtimes/opencode/providers.ts](../src/runtimes/opencode/providers.ts) | not started | |

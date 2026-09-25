@@ -1,0 +1,330 @@
+use nix::errno::Errno;
+use nix::sys::signal::kill;
+use nix::unistd::Pid;
+use std::collections::HashMap;
+use std::error::Error;
+use std::fs;
+use std::io;
+use std::path::Path;
+
+use super::invocation::{self, BridgeServer, Role};
+use super::thread;
+use super::transcript;
+use crate::runtimes::headless::{self, DispatchInput, HeadlessTurnRecord};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DispatchState {
+    NotSubmitted,
+    Ambiguous,
+    Rejected,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PromptState {
+    Unknown,
+    Running,
+    Completed,
+    Error,
+    Interrupted,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PromptObservation {
+    pub state: PromptState,
+    pub admission_observed: bool,
+    pub retry_allowed: bool,
+    pub reason: &'static str,
+    pub unsettled_tool_ids: Vec<String>,
+    pub native_final_observed: bool,
+    pub process_running: bool,
+}
+
+fn observation(
+    state: PromptState,
+    admission_observed: bool,
+    retry_allowed: bool,
+    reason: &'static str,
+) -> PromptObservation {
+    PromptObservation {
+        state,
+        admission_observed,
+        retry_allowed,
+        reason,
+        unsettled_tool_ids: Vec::new(),
+        native_final_observed: false,
+        process_running: false,
+    }
+}
+
+fn read_optional(path: &Path) -> io::Result<Option<String>> {
+    match fs::read_to_string(path) {
+        Ok(content) => Ok(Some(content)),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error),
+    }
+}
+
+fn admitted_record(
+    directory: &Path,
+    turn_id: &str,
+    generation: Option<&str>,
+) -> io::Result<Option<HeadlessTurnRecord>> {
+    let fenced = generation
+        .map(|generation| directory.join(format!("dispatch-{generation}.json")))
+        .map(|path| headless::read_record(&path))
+        .transpose()?
+        .flatten();
+    let record = match fenced {
+        Some(record) => Some(record),
+        None => headless::read_record(&directory.join("turn.json"))?,
+    };
+    Ok(record.filter(|record| record.turn_id == turn_id))
+}
+
+pub fn observe(
+    directory: &Path,
+    session_id: &str,
+    turn_id: &str,
+    dispatch: DispatchState,
+    generation: Option<&str>,
+) -> io::Result<PromptObservation> {
+    let record = admitted_record(directory, turn_id, generation)?;
+    let log = read_optional(&headless::turn_file(directory, turn_id, "jsonl"))?;
+    let Some(record) = record else {
+        let replayable = matches!(
+            dispatch,
+            DispatchState::NotSubmitted | DispatchState::Rejected
+        );
+        return Ok(if log.is_none() {
+            observation(
+                PromptState::Unknown,
+                false,
+                replayable,
+                if replayable {
+                    "message_not_observed"
+                } else {
+                    "admission_ambiguous"
+                },
+            )
+        } else {
+            observation(
+                PromptState::Unknown,
+                false,
+                false,
+                "dispatch_identity_missing",
+            )
+        });
+    };
+    if record.session_id != session_id {
+        return Ok(observation(
+            PromptState::Unknown,
+            false,
+            false,
+            "session_identity_conflict",
+        ));
+    }
+    let events = transcript::parse_events(log.as_deref().unwrap_or_default());
+    if let Some(thread_id) = transcript::thread_id(&events) {
+        thread::persist_observed_thread(directory, thread_id)?;
+    }
+    let unsettled = transcript::unsettled_tool_ids(&events);
+    let completed = transcript::completed(&events);
+    let mut result = observation(
+        PromptState::Running,
+        true,
+        false,
+        "dispatch_process_running",
+    );
+    result.unsettled_tool_ids = unsettled.into_iter().take(32).map(str::to_owned).collect();
+    result.native_final_observed = completed;
+    if headless::running(&record)? {
+        result.process_running = true;
+        return Ok(result);
+    }
+    let exit = read_optional(&headless::turn_file(directory, turn_id, "exit"))?;
+    if !result.unsettled_tool_ids.is_empty() {
+        if exit.is_none() {
+            let pid = i32::try_from(record.pid).map_err(io::Error::other)?;
+            match kill(Pid::from_raw(pid), None) {
+                Ok(()) | Err(Errno::EPERM) => {
+                    return Err(io::Error::other("Codex process liveness is uncertain"));
+                }
+                Err(Errno::ESRCH) => {}
+                Err(error) => return Err(io::Error::other(error)),
+            }
+        }
+        headless::stop_execution(directory, &record.generation)?;
+        result.state = PromptState::Interrupted;
+        result.reason = "tool_execution_after_process_stopped";
+    } else if completed {
+        result.state = PromptState::Completed;
+        result.reason = "native_turn_completed";
+    } else if transcript::failure(&events).is_some() {
+        result.state = PromptState::Error;
+        result.reason = "native_error";
+    } else if exit.is_none() {
+        result.state = PromptState::Interrupted;
+        result.reason = "dispatch_process_stopped";
+    } else if transcript::thread_id(&events).is_none() {
+        result.state = PromptState::Error;
+        result.reason = "native_startup_failed";
+    } else {
+        result.state = PromptState::Interrupted;
+        result.reason = "dispatch_process_stopped";
+    }
+    Ok(result)
+}
+
+pub struct CodexDispatch<'a> {
+    pub directory: &'a Path,
+    pub worktree: &'a Path,
+    pub executable: &'a Path,
+    pub session_id: &'a str,
+    pub turn_id: &'a str,
+    pub prompt: &'a str,
+    pub model: &'a str,
+    pub reasoning_effort: &'a str,
+    pub role: Role,
+    pub bridge: Option<&'a BridgeServer<'a>>,
+    pub environment: &'a HashMap<String, String>,
+}
+
+pub fn dispatch<F>(input: CodexDispatch<'_>, claim: F) -> Result<PromptObservation, Box<dyn Error>>
+where
+    F: FnOnce(&str) -> Result<bool, Box<dyn Error>>,
+{
+    let before = observe(
+        input.directory,
+        input.session_id,
+        input.turn_id,
+        DispatchState::NotSubmitted,
+        None,
+    )?;
+    if !before.retry_allowed {
+        return Err(
+            io::Error::other("Codex prompt was not proven absent; replay is blocked").into(),
+        );
+    }
+    let resume = thread::recover_thread_id(input.directory)?;
+    let args = invocation::codex_arguments(
+        input.model,
+        input.reasoning_effort,
+        input.role,
+        resume.as_deref(),
+        input.bridge,
+    );
+    let record = headless::dispatch(
+        DispatchInput {
+            directory: input.directory,
+            worktree: input.worktree,
+            session_id: input.session_id,
+            turn_id: input.turn_id,
+            executable: input.executable,
+            args: &args,
+            prompt: input.prompt,
+            environment: input.environment,
+        },
+        claim,
+    )?;
+    Ok(observe(
+        input.directory,
+        input.session_id,
+        input.turn_id,
+        DispatchState::Ambiguous,
+        Some(&record.generation),
+    )?)
+}
+
+pub fn result_text(directory: &Path, turn_id: &str) -> io::Result<String> {
+    let events = transcript::parse_events(
+        &read_optional(&headless::turn_file(directory, turn_id, "jsonl"))?.unwrap_or_default(),
+    );
+    let result = transcript::result_text(&events);
+    if !result.is_empty() {
+        return Ok(result.to_owned());
+    }
+    let stderr =
+        read_optional(&headless::turn_file(directory, turn_id, "stderr.log"))?.unwrap_or_default();
+    Ok(stderr
+        .trim()
+        .chars()
+        .rev()
+        .take(2_000)
+        .collect::<String>()
+        .chars()
+        .rev()
+        .collect())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::runtimes::headless::RecordedProcessIdentity;
+
+    #[test]
+    fn native_log_and_record_determine_completion_without_replay_receipt() {
+        let mut suffix = [0_u8; 8];
+        getrandom::fill(&mut suffix).unwrap();
+        let directory = std::env::temp_dir().join(format!(
+            "suplex-codex-observe-{}",
+            u64::from_ne_bytes(suffix)
+        ));
+        fs::create_dir(&directory).unwrap();
+        let before = observe(
+            &directory,
+            "session-1",
+            "msg_1",
+            DispatchState::NotSubmitted,
+            None,
+        )
+        .unwrap();
+        assert!(before.retry_allowed);
+        fs::write(headless::turn_file(&directory, "msg_1", "jsonl"), "{\"type\":\"thread.started\",\"thread_id\":\"thread-1\"}\n{\"type\":\"item.completed\",\"item\":{\"id\":\"item_0\",\"type\":\"agent_message\",\"text\":\"Done\"}}\n{\"type\":\"turn.completed\"}\n").unwrap();
+        let missing_record = observe(
+            &directory,
+            "session-1",
+            "msg_1",
+            DispatchState::NotSubmitted,
+            None,
+        )
+        .unwrap();
+        assert_eq!(missing_record.state, PromptState::Unknown);
+        assert!(!missing_record.retry_allowed);
+        let record = HeadlessTurnRecord {
+            generation: "generation-1".into(),
+            turn_id: "msg_1".into(),
+            session_id: "session-1".into(),
+            pid: 999_999,
+            process_identity: RecordedProcessIdentity {
+                command: "/bin/sh".into(),
+                executable: "/bin/sh".into(),
+                argv: vec!["/bin/sh".into()],
+                process_group: 999_999,
+                start_time: "gone".into(),
+                owner_uid: 501,
+            },
+            dispatch_arguments: vec!["codex".into(), "exec".into()],
+        };
+        fs::write(
+            directory.join("turn.json"),
+            serde_json::to_vec(&record).unwrap(),
+        )
+        .unwrap();
+        let finished = observe(
+            &directory,
+            "session-1",
+            "msg_1",
+            DispatchState::Ambiguous,
+            None,
+        )
+        .unwrap();
+        assert_eq!(finished.state, PromptState::Completed);
+        assert!(finished.native_final_observed);
+        assert_eq!(
+            thread::read_thread_id(&directory).unwrap().as_deref(),
+            Some("thread-1")
+        );
+        assert_eq!(result_text(&directory, "msg_1").unwrap(), "Done");
+        fs::remove_dir_all(directory).unwrap();
+    }
+}

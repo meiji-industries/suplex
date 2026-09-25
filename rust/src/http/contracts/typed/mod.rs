@@ -8,6 +8,7 @@ pub mod system;
 pub mod task_answers;
 pub mod task_templates;
 pub mod tasks;
+pub mod workflows;
 
 #[derive(Debug)]
 pub enum ContractFailure {
@@ -143,6 +144,203 @@ pub(crate) fn serialized<T: Serialize>(result: ContractResult<T>) -> ContractRes
     result.and_then(|value| {
         serde_json::to_value(value).map_err(|error| ContractFailure::Internal(error.to_string()))
     })
+}
+
+/// One field of a Zod object schema, checked in shape order.
+#[derive(Clone, Copy)]
+pub(crate) enum Rule {
+    /// `z.string()`, optionally trimmed, with UTF-16 length bounds.
+    Text {
+        trim: bool,
+        min: usize,
+        max: Option<usize>,
+    },
+    Choice(&'static [&'static str]),
+    Flag,
+    /// `AdvisorProfileIdsSchema`: strict, each role an optional 1..256 id.
+    Advisors,
+    /// A nested schema; its findings move under the field path.
+    Nested(fn(Option<&Value>) -> ContractResult<Value>),
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct Field {
+    pub name: &'static str,
+    pub rule: Rule,
+    pub required: bool,
+    pub nullable: bool,
+    /// JSON text of the Zod default applied when the field is absent.
+    pub default: Option<&'static str>,
+}
+
+pub(crate) const fn optional(name: &'static str, rule: Rule) -> Field {
+    Field {
+        name,
+        rule,
+        required: false,
+        nullable: false,
+        default: None,
+    }
+}
+
+pub(crate) const TRIMMED_NAME: Rule = Rule::Text {
+    trim: true,
+    min: 1,
+    max: None,
+};
+pub(crate) const ID: Rule = Rule::Text {
+    trim: false,
+    min: 1,
+    max: Some(256),
+};
+pub(crate) const DELIVERY_TARGETS: Rule = Rule::Choice(&[
+    "local_worktree",
+    "remote_branch",
+    "pull_request_draft",
+    "pull_request_ready",
+    "merged",
+]);
+pub(crate) const VISUAL_EVIDENCE: Rule = Rule::Choice(&["off", "capture", "required"]);
+pub(crate) const WORKFLOW_IDS: Rule = Rule::Choice(&[
+    "standard",
+    "direct_build",
+    "independent_review",
+    "competing_plans",
+    "refine_pull_request",
+]);
+
+fn public_issue(code: &str, field: &str) -> Value {
+    json!({"code":format!("invalid-{code}"),"field":field,"message":"Request value is invalid"})
+}
+
+/// Parse a Zod object: findings follow shape order, then unrecognized keys.
+/// A strict object rejects unknown keys; otherwise they are stripped.
+pub(crate) fn parse_object(
+    input: Option<&Value>,
+    fields: &[Field],
+    strict: bool,
+) -> ContractResult<Map<String, Value>> {
+    let object = object(input)?;
+    let mut errors = Vec::new();
+    let mut output = Map::new();
+    for field in fields {
+        let path = format!(".{}", field.name);
+        let value = match object.get(field.name) {
+            None if field.required => {
+                let code = if matches!(field.rule, Rule::Choice(_)) {
+                    "invalid_value"
+                } else {
+                    "invalid_type"
+                };
+                errors.push(public_issue(code, &path));
+                None
+            }
+            None => field
+                .default
+                .map(|default| serde_json::from_str(default).expect("default JSON")),
+            Some(Value::Null) if field.nullable => Some(Value::Null),
+            Some(value) => rule_value(value, field.rule, &path, &mut errors)?,
+        };
+        if let Some(value) = value {
+            output.insert(field.name.to_owned(), value);
+        }
+    }
+    if strict
+        && object
+            .keys()
+            .any(|key| !fields.iter().any(|field| field.name == key))
+    {
+        errors.push(public_issue("unrecognized_keys", "."));
+    }
+    if errors.is_empty() {
+        Ok(output)
+    } else {
+        Err(ContractFailure::Issues(errors))
+    }
+}
+
+fn rule_value(
+    value: &Value,
+    rule: Rule,
+    path: &str,
+    errors: &mut Vec<Value>,
+) -> ContractResult<Option<Value>> {
+    let before = errors.len();
+    let output = match rule {
+        Rule::Text { trim, min, max } => {
+            // Zod still applies length checks to an array after its type issue.
+            let (text, length) = match value {
+                Value::String(text) => {
+                    let text = if trim {
+                        crate::identity::auth::js_trim(text)
+                    } else {
+                        text
+                    };
+                    (Some(text.to_owned()), text.encode_utf16().count())
+                }
+                Value::Array(items) => {
+                    errors.push(public_issue("invalid_type", path));
+                    (None, items.len())
+                }
+                _ => {
+                    errors.push(public_issue("invalid_type", path));
+                    return Ok(None);
+                }
+            };
+            if length < min {
+                errors.push(public_issue("too_small", path));
+            }
+            if max.is_some_and(|max| length > max) {
+                errors.push(public_issue("too_big", path));
+            }
+            text.map(Value::String)
+        }
+        Rule::Choice(options) => {
+            if !value.as_str().is_some_and(|value| options.contains(&value)) {
+                errors.push(public_issue("invalid_value", path));
+            }
+            Some(value.clone())
+        }
+        Rule::Flag => {
+            if !value.is_boolean() {
+                errors.push(public_issue("invalid_type", path));
+            }
+            Some(value.clone())
+        }
+        Rule::Advisors => {
+            let Some(roles) = value.as_object() else {
+                errors.push(public_issue("invalid_type", path));
+                return Ok(None);
+            };
+            const ROLES: [&str; 4] = ["reviewer", "planner_a", "planner_b", "rater"];
+            for role in ROLES {
+                if let Some(id) = roles.get(role) {
+                    rule_value(id, ID, &format!("{path}.{role}"), errors)?;
+                }
+            }
+            if roles.keys().any(|key| !ROLES.contains(&key.as_str())) {
+                errors.push(public_issue("unrecognized_keys", path));
+            }
+            Some(value.clone())
+        }
+        Rule::Nested(parse) => match parse(Some(value)) {
+            Ok(value) => Some(value),
+            Err(ContractFailure::Issues(findings)) => {
+                errors.extend(findings.into_iter().map(|mut finding| {
+                    let field = finding["field"].as_str().unwrap_or(".").to_owned();
+                    finding["field"] = if field == "." {
+                        json!(path)
+                    } else {
+                        json!(format!("{path}{field}"))
+                    };
+                    finding
+                }));
+                None
+            }
+            Err(failure) => return Err(failure),
+        },
+    };
+    Ok(if errors.len() == before { output } else { None })
 }
 
 #[cfg(test)]

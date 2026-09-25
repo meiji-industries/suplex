@@ -20,17 +20,6 @@ use Access::{Administrator, Authenticated};
 const ROUTES: &[(Method, &str, Access)] = &[
     (Method::GET, "/api/admin/providers", Administrator),
     (Method::GET, "/api/admin/models", Authenticated),
-    (Method::POST, "/api/admin/workflows", Authenticated),
-    (
-        Method::PATCH,
-        "/api/admin/workflows/{workflow_id}",
-        Authenticated,
-    ),
-    (
-        Method::POST,
-        "/api/admin/workflows/{workflow_id}/duplicate",
-        Authenticated,
-    ),
     (Method::GET, "/api/avatars", Authenticated),
     (Method::GET, "/api/avatars/{owner_id}", Authenticated),
     (Method::PUT, "/api/avatars/{owner_id}", Authenticated),
@@ -88,21 +77,6 @@ const ROUTES: &[(Method, &str, Access)] = &[
     (
         Method::POST,
         "/api/oauth/consent/{request_id}/deny",
-        Authenticated,
-    ),
-    (
-        Method::PATCH,
-        "/api/task-templates/{template_id}",
-        Authenticated,
-    ),
-    (
-        Method::DELETE,
-        "/api/task-templates/{template_id}",
-        Authenticated,
-    ),
-    (
-        Method::POST,
-        "/api/tasks/{task_id}/save-as-template",
         Authenticated,
     ),
 ];

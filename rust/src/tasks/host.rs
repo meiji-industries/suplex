@@ -2114,7 +2114,7 @@ mod tests {
         {
             let database = SuplexDatabase::open(&database_path, OpenMode::ReadWrite).unwrap();
             database.connection().execute(
-                "UPDATE suplex_task_controls SET root_profile_json = json_set(root_profile_json,'$.provider','opencode'), workflow = 'competing_plans' WHERE task_id = ?1",
+                "UPDATE suplex_task_controls SET root_profile_json = json_set(root_profile_json,'$.provider','devin'), workflow = 'competing_plans' WHERE task_id = ?1",
                 [&task_id],
             ).unwrap();
         }

@@ -360,18 +360,7 @@ mod tests {
         assert!(archive_local_task(&database_path, &user.id, &task_id, false).is_err());
         assert!(worktree.path.exists());
         fs::remove_file(directory.join("turn.json")).unwrap();
-        let database = SuplexDatabase::open(&database_path, OpenMode::ReadWrite).unwrap();
-        database.connection().execute("UPDATE suplex_task_sessions SET native_session_id = 'ses-other' WHERE id = 'archive_session'", []).unwrap();
-        drop(database);
-        let unsupported =
-            archive_local_task(&database_path, &user.id, &task_id, false).unwrap_err();
-        assert_eq!(
-            unsupported
-                .downcast_ref::<TaskFailure>()
-                .unwrap()
-                .status_code,
-            501
-        );
+        // Every provider is ported, so no native session is an unsupported one anymore.
         let database = SuplexDatabase::open(&database_path, OpenMode::ReadWrite).unwrap();
         database.connection().execute("UPDATE suplex_task_sessions SET native_session_id = NULL WHERE id = 'archive_session'", []).unwrap();
         drop(database);

@@ -2,6 +2,7 @@ pub mod archive;
 pub mod commands;
 pub mod host;
 pub mod images;
+pub mod pane_layout;
 pub mod repository;
 pub mod response;
 pub mod templates;

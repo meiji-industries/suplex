@@ -1,3 +1,4 @@
+pub mod agent_api;
 pub mod analytics;
 pub mod archive;
 pub mod commands;
@@ -6,6 +7,7 @@ pub mod host;
 pub mod images;
 pub mod integration;
 pub mod issue_context;
+pub mod pane_layout;
 pub mod preparation;
 pub mod repository;
 pub mod response;
@@ -13,3 +15,4 @@ pub mod sources;
 pub mod templates;
 pub mod timeline;
 pub mod worktree;
+pub mod worktree_open;

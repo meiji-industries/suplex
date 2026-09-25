@@ -17,6 +17,7 @@ use crate::{
     platform::database::{DatabaseResult, OpenMode, SuplexDatabase},
     runtimes::{codex::session_reader, process::inspect_process, task_harness_registry},
     tasks::{
+        archive::displays,
         commands::TaskFailure,
         repository::{self, TaskRecord},
         worktree::{self, TaskWorktreeIntent, WorktreeCleanup},
@@ -93,14 +94,25 @@ fn required_path(configuration: &Value, field: &str) -> DatabaseResult<PathBuf> 
     Ok(PathBuf::from(value))
 }
 
+/// Live authority over one task: a board user's company access or a paired agent's grant.
+pub type Authority<'a> = &'a (dyn Fn(&SuplexDatabase, &TaskRecord) -> DatabaseResult<()> + Sync);
+
+fn user_authority(
+    actor_user_id: &str,
+) -> impl Fn(&SuplexDatabase, &TaskRecord) -> DatabaseResult<()> + Sync + '_ {
+    move |database, task| {
+        companies::require_company_access(database, actor_user_id, &task.company_id).map(|_| ())
+    }
+}
+
 fn task_scope(
     database: &SuplexDatabase,
-    actor_user_id: &str,
+    authority: Authority<'_>,
     task_id: &str,
 ) -> DatabaseResult<(TaskRecord, Value)> {
     let task =
         repository::task_by_id(database, task_id)?.ok_or_else(|| failure("Not found", 404))?;
-    companies::require_company_access(database, actor_user_id, &task.company_id)?;
+    authority(database, &task)?;
     let configuration: String = database.connection().query_row(
         "SELECT configuration_json FROM suplex_tasks WHERE id = ?1",
         [task_id],
@@ -109,9 +121,13 @@ fn task_scope(
     Ok((task, serde_json::from_str(&configuration)?))
 }
 
-fn reauthorize(database_path: &Path, actor_user_id: &str, task_id: &str) -> DatabaseResult<()> {
+fn reauthorize(
+    database_path: &Path,
+    authority: Authority<'_>,
+    task_id: &str,
+) -> DatabaseResult<()> {
     let database = SuplexDatabase::open(database_path, OpenMode::ReadOnly)?;
-    task_scope(&database, actor_user_id, task_id)?;
+    task_scope(&database, authority, task_id)?;
     Ok(())
 }
 
@@ -178,8 +194,16 @@ pub fn unarchive_local_task(
     actor_user_id: &str,
     task_id: &str,
 ) -> DatabaseResult<TaskRecord> {
+    unarchive_task(database, &user_authority(actor_user_id), task_id)
+}
+
+pub fn unarchive_task(
+    database: &mut SuplexDatabase,
+    authority: Authority<'_>,
+    task_id: &str,
+) -> DatabaseResult<TaskRecord> {
     database.transaction(true, |database| {
-        let (task, _) = task_scope(database, actor_user_id, task_id)?;
+        let (task, _) = task_scope(database, authority, task_id)?;
         if in_progress(task_id) {
             return Err(failure("Archive cleanup is in progress", 409));
         }
@@ -203,8 +227,22 @@ pub fn archive_local_task(
     task_id: &str,
     confirm_discard_dirty: bool,
 ) -> DatabaseResult<ArchiveOutcome> {
+    archive_task(
+        database_path,
+        &user_authority(actor_user_id),
+        task_id,
+        confirm_discard_dirty,
+    )
+}
+
+pub fn archive_task(
+    database_path: &Path,
+    authority: Authority<'_>,
+    task_id: &str,
+    confirm_discard_dirty: bool,
+) -> DatabaseResult<ArchiveOutcome> {
     let database = SuplexDatabase::open(database_path, OpenMode::ReadOnly)?;
-    let (task, configuration) = task_scope(&database, actor_user_id, task_id)?;
+    let (task, configuration) = task_scope(&database, authority, task_id)?;
     if in_progress(task_id) {
         return Err(failure("Archive cleanup is in progress", 409));
     }
@@ -213,8 +251,9 @@ pub fn archive_local_task(
     }
     let _guard = ArchiveGuard::acquire(task_id)?;
     archive_sessions_idle(&database, database_path, task_id).map_err(cleanup_error)?;
+    let displays = displays::prepare_task_displays(&database, task_id).map_err(cleanup_error)?;
     drop(database);
-    reauthorize(database_path, actor_user_id, task_id)?;
+    reauthorize(database_path, authority, task_id)?;
 
     let intent = TaskWorktreeIntent {
         task_id: task_id.to_owned(),
@@ -230,16 +269,17 @@ pub fn archive_local_task(
             .to_owned(),
     };
     let cleanup = worktree::remove_local_task_worktree(&intent, confirm_discard_dirty, || {
-        reauthorize(database_path, actor_user_id, task_id)
+        reauthorize(database_path, authority, task_id)
     })
     .map_err(cleanup_error)?;
     if let WorktreeCleanup::ConfirmationRequired { dirty_file_paths } = cleanup {
         return Ok(ArchiveOutcome::ConfirmationRequired(dirty_file_paths));
     }
-    reauthorize(database_path, actor_user_id, task_id)?;
+    reauthorize(database_path, authority, task_id)?;
+    displays.close().map_err(cleanup_error)?;
     let mut database = SuplexDatabase::open(database_path, OpenMode::ReadWrite)?;
     database.transaction(true, |database| {
-        let (current, _) = task_scope(database, actor_user_id, task_id)?;
+        let (current, _) = task_scope(database, authority, task_id)?;
         if !["backlog", "queued", "cancelled", "delivered"].contains(&current.status.as_str()) {
             return Err(failure_code("The task changed while its worktree was removed", 409, "illegal_command"));
         }
@@ -360,18 +400,7 @@ mod tests {
         assert!(archive_local_task(&database_path, &user.id, &task_id, false).is_err());
         assert!(worktree.path.exists());
         fs::remove_file(directory.join("turn.json")).unwrap();
-        let database = SuplexDatabase::open(&database_path, OpenMode::ReadWrite).unwrap();
-        database.connection().execute("UPDATE suplex_task_sessions SET native_session_id = 'ses-other' WHERE id = 'archive_session'", []).unwrap();
-        drop(database);
-        let unsupported =
-            archive_local_task(&database_path, &user.id, &task_id, false).unwrap_err();
-        assert_eq!(
-            unsupported
-                .downcast_ref::<TaskFailure>()
-                .unwrap()
-                .status_code,
-            501
-        );
+        // Every provider is ported, so no native session is an unsupported one anymore.
         let database = SuplexDatabase::open(&database_path, OpenMode::ReadWrite).unwrap();
         database.connection().execute("UPDATE suplex_task_sessions SET native_session_id = NULL WHERE id = 'archive_session'", []).unwrap();
         drop(database);

@@ -3,7 +3,7 @@
 
 use super::{
     claude_code::task_runtime::ClaudeCodeTaskRuntime, codex::harness::CodexTaskRuntime,
-    task_harness::TaskHarness,
+    opencode::task_runtime::OpenCodeTaskRuntime, task_harness::TaskHarness,
 };
 
 /// The harness for one harness kind, when its runtime is ported.
@@ -12,6 +12,7 @@ pub fn harness(kind: &str) -> Option<&'static dyn TaskHarness> {
         "codex" => Some(&CodexTaskRuntime),
         "claude-code" => Some(&ClaudeCodeTaskRuntime),
         "devin" => Some(&super::devin::harness::DevinTaskRuntime),
+        "opencode" => Some(&OpenCodeTaskRuntime),
         _ => None,
     }
 }
@@ -91,6 +92,7 @@ mod tests {
         assert!(for_session(Some("codex-1")).is_some());
         let claude = for_profile("claude-code").unwrap();
         assert_eq!(session_harness(&claude.new_session_id()), "claude-code");
-        assert!(for_session(Some("ses_abc")).is_none());
+        assert!(for_session(Some("ses_abc")).is_some());
+        assert!(for_session(None).is_some());
     }
 }

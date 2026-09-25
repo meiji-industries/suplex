@@ -11,31 +11,42 @@ use axum::{
 };
 use tokio_util::sync::CancellationToken;
 
-use crate::integrations::github_device::DeviceAuth;
+use crate::integrations::{github_device::DeviceAuth, herdr::Herdr};
 use crate::platform::{database::SuplexDatabase, embedded};
+use crate::profiles::provider_login::ProviderLogins;
 use crate::projects::repository::Commands;
 use crate::tasks::host::TaskHostHandle;
 
+pub mod agent_api_runtime;
 pub mod contracts;
 pub mod routes {
     pub mod admin_identity;
     pub mod admin_platform;
+    pub mod agent_api;
+    pub mod agent_pairing;
     pub mod analytics;
     pub mod auth;
     pub mod avatars;
     pub mod companies;
+    pub mod discovery;
+    pub mod external_agent_administration;
     pub mod github_auth;
     pub mod github_triggers;
     pub mod health;
+    pub mod mcp;
+    pub mod oauth;
     pub mod pages;
     pub mod profiles;
     pub mod projects;
+    pub mod provider_login;
     pub mod task_agents;
     pub mod task_artifacts;
     pub mod task_history;
+    pub mod task_pane;
     pub mod task_reads;
     pub mod task_templates;
     pub mod task_timeline;
+    pub mod task_worktree;
     pub mod tasks;
     pub mod unported;
     pub mod update;
@@ -60,8 +71,15 @@ pub struct AppState {
     pub task_host: Option<TaskHostHandle>,
     pub history_shutdown: CancellationToken,
     pub github_device: Arc<DeviceAuth>,
+    pub herdr: Herdr,
+    pub provider_logins: Arc<ProviderLogins>,
     dev_assets_dir: Option<PathBuf>,
+    /// Dynamic client registrations per source address in the last hour.
+    pub oauth_registrations: OAuthRegistrations,
 }
+
+pub type OAuthRegistrations =
+    Arc<Mutex<std::collections::HashMap<String, Vec<std::time::Instant>>>>;
 
 impl AppState {
     pub fn new(database: SuplexDatabase, session_config: session::SessionConfig) -> Self {
@@ -74,7 +92,10 @@ impl AppState {
             task_host: None,
             history_shutdown: CancellationToken::new(),
             github_device: Arc::new(DeviceAuth::new().expect("GitHub device endpoints are valid")),
+            herdr: Herdr::default(),
+            provider_logins: Arc::default(),
             dev_assets_dir: None,
+            oauth_registrations: OAuthRegistrations::default(),
         }
     }
 
@@ -129,10 +150,16 @@ impl AppState {
 pub fn router(state: AppState) -> Router {
     Router::new()
         .merge(routes::admin_identity::router())
+        .merge(routes::agent_pairing::router())
+        .merge(routes::external_agent_administration::router())
         .merge(routes::admin_platform::router())
         .merge(routes::analytics::router())
         .merge(routes::auth::router())
         .merge(routes::avatars::router())
+        .merge(routes::mcp::router())
+        .merge(routes::oauth::router())
+        .merge(routes::discovery::router())
+        .merge(routes::agent_api::router())
         .merge(routes::companies::router())
         .merge(routes::github_auth::router())
         .merge(routes::github_triggers::router())
@@ -140,11 +167,14 @@ pub fn router(state: AppState) -> Router {
         .merge(routes::pages::router())
         .merge(routes::profiles::router())
         .merge(routes::projects::router())
+        .merge(routes::provider_login::router())
         .merge(routes::task_agents::router())
         .merge(routes::task_artifacts::router())
         .merge(routes::task_reads::router())
         .merge(routes::task_timeline::router())
         .merge(routes::task_history::router())
+        .merge(routes::task_pane::router())
+        .merge(routes::task_worktree::router())
         .merge(routes::task_templates::router())
         .merge(routes::tasks::router())
         .merge(routes::workflows::router())
@@ -278,7 +308,10 @@ mod tests {
             task_host: None,
             history_shutdown: CancellationToken::new(),
             github_device: Arc::new(DeviceAuth::new().unwrap()),
+            herdr: Herdr::default(),
+            provider_logins: Arc::default(),
             dev_assets_dir: None,
+            oauth_registrations: OAuthRegistrations::default(),
         };
         let observed = Arc::new(AtomicBool::new(false));
         let callback_state = state.clone();

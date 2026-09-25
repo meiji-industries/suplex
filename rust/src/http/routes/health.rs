@@ -527,13 +527,7 @@ pub async fn snapshot(
         artifact,
         disk,
         git_check(),
-        check(
-            "herdr-readiness",
-            "Herdr",
-            "warning",
-            "Herdr health is not available in this build",
-            json!({}),
-        ),
+        crate::integrations::herdr_readiness::check_herdr_readiness(&state.herdr).await,
         github,
     ];
     if state.session_config.tailscale_exposure == "serve" {
@@ -543,12 +537,7 @@ pub async fn snapshot(
         checks.push(backup::health_check(&data_root, Utc::now()));
     }
     for provider in providers {
-        let label = match provider.as_str() {
-            "opencode" => "OpenCode",
-            "claude-code" => "Claude Code",
-            _ => "Codex CLI",
-        };
-        checks.push(json!({"id":format!("provider:{provider}"),"label":label,"provider":provider,"status":"warning","summary":"Provider health is not available in this build","details":{}}));
+        checks.push(crate::profiles::provider_readiness::check(&provider, None, false).await);
     }
     let ready = checks
         .iter()
@@ -723,7 +712,8 @@ mod tests {
                 .unwrap()
                 .starts_with("libgit2 ")
         );
-        assert_eq!(body["checks"][4]["status"], "warning");
+        // Unit tests use a Herdr binary that is never installed.
+        assert_eq!(body["checks"][4]["summary"], "Herdr is not installed");
         assert_eq!(body["checks"][5]["details"]["method"], "device");
         state.with_database(|database| {
             database.connection().execute("UPDATE suplex_environment_settings SET min_free_disk_gb = 1024 WHERE id = 'host'", []).unwrap();

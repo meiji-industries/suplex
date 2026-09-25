@@ -43,7 +43,7 @@ pub fn router() -> Router<AppState> {
             "/api/companies/{company_id}/repository-owners/{owner}/repositories",
             get(owner_repositories),
         )
-        .route("/api/projects/{project_id}", get(get_one))
+        .route("/api/projects/{project_id}", get(get_one).patch(update))
         .route(
             "/api/projects/{project_id}/repository-defaults",
             get(repository_defaults),
@@ -579,6 +579,172 @@ async fn get_one(
             Err(source) => service_error(source),
         };
     with_cookies(response, cookies)
+}
+
+fn invalid(findings: Vec<repository::Finding>) -> Response {
+    service_error(Box::new(ProjectFailure {
+        message: "Project configuration is invalid",
+        status_code: 422,
+        findings,
+    }))
+}
+
+/// A full project body replaces the configuration; any other body patches the
+/// fields it names.
+async fn update(
+    State(state): State<AppState>,
+    Path(project_id): Path<String>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    if let Err(response) = validated_path("common.ProjectIdParamsSchema", "projectId", &project_id)
+    {
+        return *response;
+    }
+    let parsed = match auth::parsed_body(&headers, &body) {
+        Ok(value) => value,
+        Err(response) => return *response,
+    };
+    let patch = match project_contracts::parse_patch(parsed.as_ref()) {
+        Ok(value) => value,
+        Err(contracts::typed::ContractFailure::Issues(findings)) => {
+            return crate::http::validation::validation_error_public(findings);
+        }
+        Err(_) => return auth::error(StatusCode::INTERNAL_SERVER_ERROR, "Internal server error"),
+    };
+    if !session::csrf_allowed(&state.session_config, &headers, "PATCH", false) {
+        return auth::error(StatusCode::FORBIDDEN, "request_origin_invalid");
+    }
+    let (user_id, cookies) = match authorize(&state, &headers) {
+        Ok(value) => value,
+        Err(response) => return *response,
+    };
+    let Some(roots) = state.project_roots.clone() else {
+        return with_cookies(
+            auth::error(StatusCode::INTERNAL_SERVER_ERROR, "Internal server error"),
+            cookies,
+        );
+    };
+    let existing = match state.with_database(|database| {
+        let existing = service::get(database, &user_id, &project_id)?;
+        let company = crate::identity::companies::require_company_access(
+            database,
+            &user_id,
+            &existing.company_id,
+        )?;
+        Ok::<_, Box<dyn Error>>((existing, company.status == "active"))
+    }) {
+        Ok((existing, true)) => existing,
+        Ok((_, false)) => {
+            return with_cookies(
+                service_error(Box::new(ProjectFailure {
+                    message: "Company is not active",
+                    status_code: 409,
+                    findings: vec![repository::Finding {
+                        code: "company-inactive".to_owned(),
+                        field: "companyId".to_owned(),
+                        message: "Project configuration requires an active company".to_owned(),
+                    }],
+                })),
+                cookies,
+            );
+        }
+        Err(source) => return with_cookies(service_error(source), cookies),
+    };
+    let response = if let Ok(full) = project_contracts::parse_body(parsed.as_ref()) {
+        replace_project(&state, &roots, &user_id, &existing, &full).await
+    } else {
+        patch_project(&state, &roots, &user_id, &existing, &patch).await
+    };
+    with_cookies(response, cookies)
+}
+
+async fn replace_project(
+    state: &AppState,
+    roots: &crate::http::ProjectRoots,
+    user_id: &str,
+    existing: &service::Project,
+    body: &project_contracts::LocalProjectCreate,
+) -> Response {
+    let integration = body.integration.as_ref().or(existing.integration.as_ref());
+    if matches!(
+        integration.map(|value| &value.repository),
+        Some(RepositoryConnection::Bitbucket { .. })
+    ) {
+        return auth::not_ported();
+    }
+    let input = repository::LocalProjectInput {
+        name: &body.name,
+        repository_path: &body.repository_path,
+        worktree_root: &body.worktree_root,
+        repository: &body.repository,
+        base_branch: &body.base_branch,
+        setup_command: &body.setup_command,
+        verification_command: &body.verification_command,
+    };
+    let prepared = match repository::prepare_local_project(
+        &state.project_commands,
+        &roots.repositories,
+        &roots.worktrees,
+        &input,
+    )
+    .await
+    {
+        Ok(prepared) => prepared,
+        Err(findings) => return invalid(findings),
+    };
+    match state.with_database(|database| {
+        service::update_local(database, user_id, existing, &prepared, body, Utc::now())
+    }) {
+        Ok(project) => axum::Json(service::response_project(&project)).into_response(),
+        Err(source) => service_error(source),
+    }
+}
+
+async fn patch_project(
+    state: &AppState,
+    roots: &crate::http::ProjectRoots,
+    user_id: &str,
+    existing: &service::Project,
+    patch: &project_contracts::ProjectPatch,
+) -> Response {
+    let plan = service::plan_patch(existing, patch);
+    let mut findings = plan.findings;
+    let mut paths = (
+        plan.candidate.repository_path.clone(),
+        plan.candidate.worktree_root.clone(),
+    );
+    if plan.repository_changed {
+        let Some((repository_path, worktree_root, errors)) = service::validate_patched_repository(
+            &state.project_commands,
+            (&roots.repositories, &roots.worktrees),
+            &plan.candidate,
+            patch.worktree_root.is_some(),
+            plan.remote_changed,
+        )
+        .await
+        else {
+            return auth::not_ported();
+        };
+        paths = (repository_path, worktree_root);
+        findings.extend(errors);
+    }
+    if !findings.is_empty() {
+        return invalid(findings);
+    }
+    match state.with_database(|database| {
+        service::apply_patch(
+            database,
+            user_id,
+            existing,
+            patch,
+            (&paths.0, &paths.1),
+            Utc::now(),
+        )
+    }) {
+        Ok(project) => axum::Json(service::response_project(&project)).into_response(),
+        Err(source) => service_error(source),
+    }
 }
 
 async fn repository_defaults(
@@ -1298,5 +1464,246 @@ mod tests {
         assert_eq!(anonymous.status(), StatusCode::UNAUTHORIZED);
         drop(state);
         let _ = fs::remove_file(path);
+    }
+
+    #[tokio::test]
+    async fn project_patch_replaces_or_patches_and_checks_git_only_for_repository_changes() {
+        let root = std::env::temp_dir()
+            .join(identity_auth::random_hex_id("suplex_project_patch").unwrap());
+        let repositories = root.join("repositories");
+        let worktrees = root.join("worktrees");
+        let repository = repositories.join("owner/repo");
+        let worktree = worktrees.join("owner/repo");
+        let bare = root.join("bare.git");
+        fs::create_dir_all(&repository).unwrap();
+        fs::create_dir_all(&worktree).unwrap();
+        git(
+            &[
+                "init",
+                "--quiet",
+                "--bare",
+                "--initial-branch=main",
+                bare.to_str().unwrap(),
+            ],
+            &root,
+        );
+        git(&["init", "--quiet", "--initial-branch=main"], &repository);
+        git(
+            &[
+                "-c",
+                "user.name=Test",
+                "-c",
+                "user.email=test@example.invalid",
+                "commit",
+                "--quiet",
+                "--allow-empty",
+                "-m",
+                "initial",
+            ],
+            &repository,
+        );
+        git(
+            &["remote", "add", "origin", bare.to_str().unwrap()],
+            &repository,
+        );
+        git(&["push", "--quiet", "origin", "main"], &repository);
+        git(
+            &[
+                "remote",
+                "set-url",
+                "origin",
+                "https://github.com/owner/repo.git",
+            ],
+            &repository,
+        );
+        git(
+            &[
+                "config",
+                "--local",
+                &format!("url.file://{}.insteadOf", bare.display()),
+                "https://github.com/owner/repo.git",
+            ],
+            &repository,
+        );
+        let gh_command = root.join("gh-fixture");
+        fs::write(
+            &gh_command,
+            "#!/bin/sh\nif [ \"$1\" = auth ]; then exit 0; fi\nif [ \"$1\" = repo ] && [ \"$2\" = view ]; then printf '{\"nameWithOwner\":\"%s\",\"url\":\"https://github.com/%s\"}' \"$3\" \"$3\"; exit 0; fi\nexit 1\n",
+        )
+        .unwrap();
+        let mut permissions = fs::metadata(&gh_command).unwrap().permissions();
+        permissions.set_mode(0o700);
+        fs::set_permissions(&gh_command, permissions).unwrap();
+        let repository = fs::canonicalize(&repository).unwrap();
+        let worktree = fs::canonicalize(&worktree).unwrap();
+        let mut database =
+            SuplexDatabase::open(&root.join("test.sqlite"), OpenMode::Migrate).unwrap();
+        let now = Utc::now();
+        let admin = identity_auth::development_sign_in(&mut database, now).unwrap();
+        let company =
+            companies::create_company(&mut database, &admin.user.id, "Patch", now).unwrap();
+        // The stored paths do not exist: a patch that leaves the repository alone must not read Git.
+        database.connection().execute(
+            "INSERT INTO suplex_projects (id, company_id, name, repository_path, worktree_root, repository_identity, base_branch, setup_command, verification_command, root_profile_id, worker_profile_id, agent_task_policy_json, created_at, updated_at) VALUES ('project_patch', ?1, 'Project', '/tmp/suplex-missing-repository', '/tmp/suplex-missing-worktrees', 'owner/repo', 'main', 'pnpm install', 'pnpm test', 'profile_native_root', 'profile_native_worker', '{}', ?2, ?2)",
+            rusqlite::params![company.id, now.to_rfc3339()],
+        ).unwrap();
+        database.connection().execute(
+            "INSERT INTO suplex_provider_instances (id, provider, label, home_directory, created_at, updated_at) VALUES ('instance_patch', 'claude-code', 'patch', '/private/patch', ?1, ?1)",
+            [now.to_rfc3339()],
+        ).unwrap();
+        let provider: String = database
+            .connection()
+            .query_row(
+                "SELECT provider FROM suplex_profiles WHERE id = 'profile_native_root'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let state = AppState::new(
+            database,
+            session::SessionConfig {
+                port: 4113,
+                reachable_address: "http://127.0.0.1:4113".to_owned(),
+                tailscale_exposure: "off".to_owned(),
+            },
+        )
+        .with_project_roots(repositories, worktrees)
+        .with_project_commands(repository::Commands {
+            git: "git".into(),
+            gh: gh_command,
+        });
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            header::CONTENT_TYPE,
+            HeaderValue::from_static("application/json"),
+        );
+        headers.insert("origin", HeaderValue::from_static("http://127.0.0.1:4113"));
+        headers.insert(
+            "cookie",
+            HeaderValue::from_str(&format!("sid_v1={}", admin.session_token)).unwrap(),
+        );
+        let patch = |body: serde_json::Value, headers: HeaderMap| {
+            update(
+                State(state.clone()),
+                Path("project_patch".to_owned()),
+                headers,
+                Bytes::from(serde_json::to_vec(&body).unwrap()),
+            )
+        };
+        let read = |response: Response| async move {
+            let status = response.status();
+            let body = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
+            (
+                status,
+                serde_json::from_slice::<serde_json::Value>(&body).unwrap(),
+            )
+        };
+        let (status, renamed) =
+            read(patch(json!({"name": " Renamed again "}), headers.clone()).await).await;
+        assert_eq!(status, StatusCode::OK, "{renamed}");
+        assert_eq!(renamed["name"], "Renamed again");
+        assert_eq!(renamed["repositoryPath"], "/tmp/suplex-missing-repository");
+        let (status, empty) = read(patch(json!({}), headers.clone()).await).await;
+        assert_eq!(status, StatusCode::BAD_REQUEST);
+        assert_eq!(empty["findings"][0]["code"], "invalid-custom");
+        let mut foreign = headers.clone();
+        foreign.insert(
+            "origin",
+            HeaderValue::from_static("https://foreign.example"),
+        );
+        let (status, invalid) = read(patch(json!({"name": ""}), foreign.clone()).await).await;
+        assert_eq!(
+            status,
+            StatusCode::BAD_REQUEST,
+            "validation precedes the origin check"
+        );
+        assert_eq!(invalid["findings"][0]["field"], ".name");
+        let (status, _) = read(patch(json!({"name": "Other"}), foreign).await).await;
+        assert_eq!(status, StatusCode::FORBIDDEN);
+        let (status, policy) = read(
+            patch(
+                json!({"providerPolicy": {"allowedProviders": [provider, "claude-code"], "allowedInstanceIds": ["instance_patch"]}}),
+                headers.clone(),
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{policy}");
+        assert_eq!(
+            policy["providerPolicy"]["allowedInstanceIds"],
+            json!(["instance_patch"])
+        );
+        let (status, missing) = read(
+            patch(
+                json!({"providerPolicy": {"allowedProviders": [], "allowedInstanceIds": ["instance_missing"]}}),
+                headers.clone(),
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(missing["findings"][0]["code"], "instance-ineligible");
+        let (status, execution) = read(
+            patch(
+                json!({"execution": {"instructions": "Build carefully"}}),
+                headers.clone(),
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(
+            execution["execution"],
+            json!({"instructions":"Build carefully","skillDirectories":[],"environment":{},"mcp":[]})
+        );
+        // A repository change reads Git and the repository host again.
+        let (status, moved) = read(
+            patch(
+                json!({"repositoryPath": repository, "worktreeRoot": worktree}),
+                headers.clone(),
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{moved}");
+        assert_eq!(moved["repositoryPath"], json!(repository));
+        let (status, branch) =
+            read(patch(json!({"baseBranch": "missing"}), headers.clone()).await).await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(branch["findings"][0]["code"], "repository-unavailable");
+        let full = json!({
+            "name": "Replaced", "repositoryPath": repository, "worktreeRoot": worktree,
+            "repository": "owner/repo", "baseBranch": "main", "setupCommand": "pnpm install",
+            "verificationCommand": "pnpm test", "rootProfileId": "profile_native_root",
+            "workerProfileId": "profile_native_worker"
+        });
+        let (status, replaced) = read(patch(full.clone(), headers.clone()).await).await;
+        assert_eq!(status, StatusCode::OK, "{replaced}");
+        assert_eq!(replaced["name"], "Replaced");
+        assert_eq!(
+            replaced["execution"]["instructions"], "Build carefully",
+            "a full body without execution keeps the stored execution"
+        );
+        let mut ineligible = full;
+        ineligible["rootProfileId"] = json!("profile_native_worker");
+        let (status, ineligible) = read(patch(ineligible, headers.clone()).await).await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(ineligible["findings"][0]["field"], "rootProfileId");
+        let stored = state
+            .with_database(|database| service::get(database, &admin.user.id, "project_patch"))
+            .unwrap();
+        assert_eq!(stored.name, "Replaced");
+        let audits: i64 = state
+            .with_database(|database| {
+                database.connection().query_row(
+                    "SELECT COUNT(*) FROM suplex_audit_events WHERE action = 'project_updated'",
+                    [],
+                    |row| row.get(0),
+                )
+            })
+            .unwrap();
+        assert_eq!(audits, 5);
+        drop(state);
+        let _ = fs::remove_dir_all(root);
     }
 }

@@ -1,24 +1,202 @@
-//! Project template list for task creation.
+//! Project task templates: list, create, save from a task, edit, and delete.
+
+use std::error::Error;
 
 use axum::{
     Json, Router,
+    body::Bytes,
     extract::{Path, State},
-    http::{HeaderMap, StatusCode},
+    http::{HeaderMap, Method, StatusCode},
     response::{IntoResponse, Response},
-    routing::get,
+    routing::{get, patch, post},
 };
 use chrono::Utc;
-use serde_json::json;
+use serde_json::{Map, Value, json};
 
 use crate::{
-    http::{AppState, contracts::typed::finding, session, validation},
+    coordination::workflow_records::normalize_workflow_input,
+    http::{
+        AppState,
+        contracts::typed::{ContractResult, finding, task_templates as contracts},
+        session, validation,
+    },
+    platform::database::SuplexDatabase,
     tasks::{commands::TaskFailure, templates},
 };
 
 use super::auth;
 
 pub fn router() -> Router<AppState> {
-    Router::new().route("/api/projects/{project_id}/task-templates", get(list))
+    Router::new()
+        .route(
+            "/api/projects/{project_id}/task-templates",
+            get(list).post(create),
+        )
+        .route(
+            "/api/tasks/{task_id}/save-as-template",
+            post(save_from_task),
+        )
+        .route(
+            "/api/task-templates/{template_id}",
+            patch(update).delete(delete),
+        )
+}
+
+fn failure_response(error: Box<dyn Error>) -> Response {
+    match error.downcast::<TaskFailure>() {
+        Ok(failure) => auth::error(
+            StatusCode::from_u16(failure.status_code).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
+            &failure.public_message,
+        ),
+        Err(error) => auth::service_error(error),
+    }
+}
+
+type Parser<T> = fn(Option<&Value>) -> ContractResult<T>;
+
+/// Parse the body, then check the request origin and the session, in the
+/// TypeScript hook order.
+fn admitted<T>(
+    state: &AppState,
+    headers: &HeaderMap,
+    method: &Method,
+    body: Option<(&Bytes, Parser<T>)>,
+) -> Result<(Option<T>, String, Vec<String>), Box<Response>> {
+    let parsed = match body {
+        Some((body, parse)) => Some(auth::validated_typed_body(headers, body, parse)?),
+        None => None,
+    };
+    if !session::csrf_allowed(&state.session_config, headers, method.as_str(), false) {
+        return Err(Box::new(auth::error(
+            StatusCode::FORBIDDEN,
+            "request_origin_invalid",
+        )));
+    }
+    let session = state
+        .with_database(|database| {
+            session::session_user(database, headers, Some(&state.session_config), Utc::now())
+        })
+        .map_err(|error| Box::new(auth::service_error(error)))?;
+    match session.user {
+        Some(user) => Ok((parsed, user.id, session.set_cookies)),
+        None => {
+            let mut response = auth::error(StatusCode::UNAUTHORIZED, "Authentication required");
+            auth::append_cookies(&mut response, session.set_cookies);
+            Err(Box::new(response))
+        }
+    }
+}
+
+fn respond<T: serde::Serialize>(
+    state: &AppState,
+    status: StatusCode,
+    cookies: Vec<String>,
+    operation: impl FnOnce(&mut SuplexDatabase) -> Result<T, Box<dyn Error>>,
+) -> Response {
+    let mut response = match state.with_database(operation) {
+        Ok(_) if status == StatusCode::NO_CONTENT => status.into_response(),
+        Ok(value) => (status, Json(value)).into_response(),
+        Err(error) => failure_response(error),
+    };
+    auth::append_cookies(&mut response, cookies);
+    response
+}
+
+fn object_body(input: Option<&Value>) -> ContractResult<Map<String, Value>> {
+    contracts::parse_create(input).and_then(|configuration| {
+        match serde_json::to_value(configuration) {
+            Ok(Value::Object(value)) => Ok(value),
+            _ => Err(crate::http::contracts::typed::ContractFailure::Unhandled),
+        }
+    })
+}
+
+async fn create(
+    State(state): State<AppState>,
+    Path(project_id): Path<String>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    // The TypeScript preValidation hook applies workflow defaults to the raw body.
+    let mut raw = match auth::parsed_body(&headers, &body) {
+        Ok(value) => value,
+        Err(response) => return *response,
+    };
+    if let Some(Value::Object(fields)) = raw.as_mut()
+        && let Err(message) = normalize_workflow_input(fields, false)
+    {
+        return auth::error(StatusCode::UNPROCESSABLE_ENTITY, &message);
+    }
+    let input = match object_body(raw.as_ref()) {
+        Ok(value) => value,
+        Err(crate::http::contracts::typed::ContractFailure::Issues(findings)) => {
+            return validation::validation_error_public(findings);
+        }
+        Err(_) => return auth::error(StatusCode::INTERNAL_SERVER_ERROR, "Internal server error"),
+    };
+    let (_, user_id, cookies) = match admitted::<()>(&state, &headers, &Method::POST, None) {
+        Ok(value) => value,
+        Err(response) => return *response,
+    };
+    respond(&state, StatusCode::CREATED, cookies, |database| {
+        templates::create(database, &user_id, &project_id, input)
+    })
+}
+
+async fn save_from_task(
+    State(state): State<AppState>,
+    Path(task_id): Path<String>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    let (name, user_id, cookies) = match admitted(
+        &state,
+        &headers,
+        &Method::POST,
+        Some((&body, contracts::parse_save)),
+    ) {
+        Ok(value) => value,
+        Err(response) => return *response,
+    };
+    let name = name.unwrap_or_default();
+    respond(&state, StatusCode::CREATED, cookies, |database| {
+        templates::create_from_task(database, &user_id, &task_id, &name)
+    })
+}
+
+async fn update(
+    State(state): State<AppState>,
+    Path(template_id): Path<String>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    let (changes, user_id, cookies) = match admitted(
+        &state,
+        &headers,
+        &Method::PATCH,
+        Some((&body, contracts::parse_update)),
+    ) {
+        Ok(value) => value,
+        Err(response) => return *response,
+    };
+    let changes = changes.unwrap_or_default();
+    respond(&state, StatusCode::OK, cookies, |database| {
+        templates::update(database, &user_id, &template_id, changes)
+    })
+}
+
+async fn delete(
+    State(state): State<AppState>,
+    Path(template_id): Path<String>,
+    headers: HeaderMap,
+) -> Response {
+    let (_, user_id, cookies) = match admitted::<()>(&state, &headers, &Method::DELETE, None) {
+        Ok(value) => value,
+        Err(response) => return *response,
+    };
+    respond(&state, StatusCode::NO_CONTENT, cookies, |database| {
+        templates::delete(database, &user_id, &template_id)
+    })
 }
 
 async fn list(
@@ -68,6 +246,197 @@ mod tests {
         io::{BufRead, BufReader, Write},
         process::{Command, Stdio},
     };
+
+    #[tokio::test]
+    async fn templates_use_profile_defaults_support_reset_and_delete() {
+        let (state, filename) = super::super::auth::tests::state();
+        let now = Utc::now();
+        let (admin, project) = state.with_database(|database| {
+            let admin = crate::identity::auth::development_sign_in(database, now).unwrap();
+            let company =
+                crate::identity::companies::create_company(database, &admin.user.id, "Templates", now)
+                    .unwrap();
+            database.connection().execute(
+                "INSERT INTO suplex_projects (id, company_id, name, repository_path, worktree_root, repository_identity, base_branch, setup_command, verification_command, root_profile_id, worker_profile_id, agent_task_policy_json, created_at, updated_at) VALUES ('project_templates', ?1, 'Templates', '/tmp/templates', '/tmp/templates-worktrees', 'owner/repo', 'main', '', '', 'profile_native_root', 'profile_native_worker', '{}', ?2, ?2)",
+                rusqlite::params![company.id, now.to_rfc3339()],
+            ).unwrap();
+            let project =
+                crate::projects::service::get(database, &admin.user.id, "project_templates").unwrap();
+            (admin, project)
+        });
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let server =
+            tokio::spawn(axum::serve(listener, crate::http::router(state.clone())).into_future());
+        let client = reqwest::Client::new();
+        let cookie = format!("sid_v1={}", admin.session_token);
+        let send = |method: reqwest::Method, path: &str, body: Option<Value>| {
+            let request = client
+                .request(method, format!("http://{address}{path}"))
+                .header("origin", "https://suplex.example.test:4111")
+                .header("cookie", &cookie);
+            match body {
+                Some(body) => request.json(&body),
+                None => request,
+            }
+            .send()
+        };
+        let url = "/api/projects/project_templates/task-templates";
+        let payload = json!({"name":"Review a change","description":"Check the result","rootProfileId":"profile_native_root","workerProfileId":"profile_native_worker","deliveryTarget":"pull_request_draft","runProjectTests":true,"visualEvidence":"off"});
+        let created = send(reqwest::Method::POST, url, Some(payload.clone()))
+            .await
+            .unwrap();
+        assert_eq!(created.status(), StatusCode::CREATED);
+        let created: Value = created.json().await.unwrap();
+        assert_eq!(created["projectId"], "project_templates");
+        assert_eq!(created["workflow"], "standard");
+        let duplicate = send(reqwest::Method::POST, url, Some(payload.clone()))
+            .await
+            .unwrap();
+        assert_eq!(duplicate.status(), StatusCode::CONFLICT);
+        assert_eq!(
+            duplicate.json::<Value>().await.unwrap(),
+            json!({"error":"This template name is already in use"})
+        );
+        let id = created["id"].as_str().unwrap();
+        let updated = send(
+            reqwest::Method::PATCH,
+            &format!("/api/task-templates/{id}"),
+            Some(json!({"rootProfileId":null})),
+        )
+        .await
+        .unwrap();
+        assert_eq!(updated.status(), StatusCode::OK);
+        let updated: Value = updated.json().await.unwrap();
+        assert!(updated.get("rootProfileId").is_none());
+        assert_eq!(updated["workerProfileId"], "profile_native_worker");
+        let mut unknown = payload.clone();
+        unknown["roleAgents"] = json!({});
+        assert_eq!(
+            send(reqwest::Method::POST, url, Some(unknown))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::BAD_REQUEST
+        );
+        let mismatch = send(
+            reqwest::Method::POST,
+            url,
+            Some(json!({"name":"Other","workflow":"direct_build","advisorProfileIds":{"reviewer":"profile_native_root"}})),
+        )
+        .await
+        .unwrap();
+        assert_eq!(mismatch.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(
+            mismatch.json::<Value>().await.unwrap(),
+            json!({"error":"The Direct build workflow has no Reviewer Advisor"})
+        );
+        // Switching to repair replaces the inherited delivery settings.
+        let repair = send(
+            reqwest::Method::PATCH,
+            &format!("/api/task-templates/{id}"),
+            Some(json!({"workflow":"refine_pull_request"})),
+        )
+        .await
+        .unwrap();
+        let repair: Value = repair.json().await.unwrap();
+        assert_eq!(repair["deliveryTarget"], "merged");
+        assert_eq!(repair["runProjectTests"], true);
+        let contradiction = send(
+            reqwest::Method::PATCH,
+            &format!("/api/task-templates/{id}"),
+            Some(json!({"deliveryTarget":"local_worktree"})),
+        )
+        .await
+        .unwrap();
+        assert_eq!(contradiction.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        let foreign = client
+            .delete(format!("http://{address}/api/task-templates/{id}"))
+            .header("origin", "https://foreign.example")
+            .header("cookie", &cookie)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(foreign.status(), StatusCode::FORBIDDEN);
+        let deleted = send(
+            reqwest::Method::DELETE,
+            &format!("/api/task-templates/{id}"),
+            None,
+        )
+        .await
+        .unwrap();
+        assert_eq!(deleted.status(), StatusCode::NO_CONTENT);
+        assert!(deleted.bytes().await.unwrap().is_empty());
+        let listed = send(reqwest::Method::GET, url, None).await.unwrap();
+        assert_eq!(
+            listed.json::<Value>().await.unwrap(),
+            json!({"templates":[]})
+        );
+
+        let task_id = crate::tasks::repository::new_task_id();
+        state.with_database(|database| {
+            let prepared = crate::tasks::repository::PreparedTask {
+                id: task_id.clone(),
+                company_id: project.company_id.clone(),
+                project_id: project.id.clone(),
+                title: "Saved task".into(),
+                description: "Saved description".into(),
+                configuration: json!({"repository":"owner/repo","branch":"task-saved","baseBranch":"main","baselineSha":"head","runProjectTests":false,"visualEvidence":"capture"}),
+                idempotency_key: "saved-task-key".into(),
+                request_hash: "saved-task-hash".into(),
+                creator: crate::tasks::repository::TaskCreator::User(admin.user.id.clone()),
+                delivery_target: "local_worktree".into(),
+                delivery_intent: json!({"repository":"owner/repo","headBranch":"task-saved","baseBranch":"main","baselineSha":"head","pullRequestNumber":null}),
+                root_profile: json!({"profileId":"profile_native_root","provider":"codex","model":"gpt-6-sol","reasoningLevel":"medium","serviceTier":"default"}),
+                worker_profile: json!({"profileId":"profile_native_worker","provider":"codex","model":"gpt-6-sol","reasoningLevel":"medium","serviceTier":"default"}),
+                advisor_profiles: json!({}),
+                issue: None,
+                start_queued: false,
+                copied_from_task_id: None,
+                depends_on: vec![],
+            };
+            crate::tasks::commands::create_user_task(
+                database,
+                &admin.user.id,
+                &project,
+                &prepared,
+                now,
+                |_| {},
+            )
+            .unwrap();
+        });
+        let saved = send(
+            reqwest::Method::POST,
+            &format!("/api/tasks/{task_id}/save-as-template"),
+            Some(json!({"name":"  From task  "})),
+        )
+        .await
+        .unwrap();
+        assert_eq!(saved.status(), StatusCode::CREATED);
+        let saved: Value = saved.json().await.unwrap();
+        assert_eq!(saved["name"], "From task");
+        assert_eq!(saved["description"], "Saved description");
+        assert_eq!(saved["rootProfileId"], "profile_native_root");
+        assert_eq!(saved["deliveryTarget"], "local_worktree");
+        assert_eq!(saved["runProjectTests"], false);
+        assert_eq!(saved["visualEvidence"], "capture");
+        assert_eq!(
+            send(
+                reqwest::Method::POST,
+                "/api/tasks/task_missing/save-as-template",
+                Some(json!({"name":"Missing"})),
+            )
+            .await
+            .unwrap()
+            .status(),
+            StatusCode::NOT_FOUND
+        );
+        server.abort();
+        drop(state);
+        let _ = std::fs::remove_file(&filename);
+        let _ = std::fs::remove_file(filename.with_extension("sqlite-wal"));
+        let _ = std::fs::remove_file(filename.with_extension("sqlite-shm"));
+    }
 
     #[test]
     fn stored_configuration_defaults_and_rejects_extra_keys() {

@@ -8,8 +8,8 @@ use serde_json::{Value, json};
 
 use crate::{
     http::contracts::typed::projects::{
-        self as project_contracts, ProjectAgentTaskPolicy, ProjectCreateBody, ProjectExecution,
-        ProjectIntegration, ProjectProviderPolicy, ProjectResponse,
+        self as project_contracts, LocalProjectCreate, ProjectAgentTaskPolicy, ProjectCreateBody,
+        ProjectExecution, ProjectIntegration, ProjectPatch, ProjectProviderPolicy, ProjectResponse,
     },
     identity::{auth, companies},
     platform::database::{DatabaseResult, SuplexDatabase},
@@ -680,6 +680,565 @@ pub fn create_local(
         return Err(error);
     }
     get(database, actor_user_id, &id)
+}
+
+fn already_assigned(error: Box<dyn Error>) -> Box<dyn Error> {
+    let message = error.to_string();
+    let field = if message.contains("suplex_projects.repository_path") {
+        "repositoryPath"
+    } else if message.contains("suplex_projects.worktree_root") {
+        "worktreeRoot"
+    } else if message.contains("suplex_projects.repository_identity") {
+        "repository"
+    } else if message.contains("suplex_projects.company_id")
+        && message.contains("suplex_projects.name")
+    {
+        "name"
+    } else {
+        return error;
+    };
+    failure(
+        "Project configuration is invalid",
+        409,
+        vec![finding(
+            "already-assigned",
+            field,
+            "This coordinate is already assigned to another project",
+        )],
+    )
+}
+
+fn stored_row(
+    database: &SuplexDatabase,
+    project_id: &str,
+) -> DatabaseResult<Option<StoredProject>> {
+    Ok(database
+        .connection()
+        .query_row(
+            &format!("{SELECTION} WHERE p.id = ?1"),
+            [project_id],
+            stored,
+        )
+        .optional()?)
+}
+
+/// The stored agent policy; the legacy `{}` means the default for these agents.
+fn stored_policy(raw: &str, root: &str, worker: &str) -> DatabaseResult<ProjectAgentTaskPolicy> {
+    if raw == "{}" {
+        return Ok(serde_json::from_value(default_policy(root, worker))?);
+    }
+    stored_contract(raw, project_contracts::parse_agent_policy).map_err(|_| {
+        failure(
+            "Project agent policy is invalid",
+            422,
+            vec![finding(
+                "agent-task-policy-invalid",
+                "agentTaskPolicy",
+                "Project agent task policy must be repaired before it can be used",
+            )],
+        ) as Box<dyn Error>
+    })
+}
+
+/// Without an explicit policy the stored allowlists still admit the project's own defaults.
+fn admitted_policy(
+    mut policy: ProjectAgentTaskPolicy,
+    root: &str,
+    worker: &str,
+) -> ProjectAgentTaskPolicy {
+    for (ids, profile_id) in [
+        (&mut policy.root_profile_ids, root),
+        (&mut policy.worker_profile_ids, worker),
+    ] {
+        if !ids.iter().any(|id| id == profile_id) {
+            ids.push(profile_id.to_owned());
+        }
+    }
+    policy
+}
+
+fn require_profile(database: &SuplexDatabase, role: &str, profile_id: &str) -> DatabaseResult<()> {
+    if profile_provider(database, profile_id, role)?.is_none() {
+        return Err(failure(
+            "Project configuration is invalid",
+            422,
+            vec![finding(
+                "profile-ineligible",
+                &format!("{role}ProfileId"),
+                "Select an active profile with the matching role",
+            )],
+        ));
+    }
+    Ok(())
+}
+
+fn audit_update(
+    database: &SuplexDatabase,
+    actor_user_id: &str,
+    company_id: &str,
+    project_id: &str,
+    stamp: &str,
+) -> DatabaseResult<()> {
+    database.connection().execute(
+        "INSERT INTO suplex_audit_events (id, actor_user_id, actor_agent_id, action, target_user_id, company_id, metadata_json, created_at) VALUES (?1, ?2, NULL, 'project_updated', NULL, ?3, ?4, ?5)",
+        params![auth::random_hex_id("audit")?, actor_user_id, company_id, crate::shared::js_json::stringify(&json!({"projectId": project_id})), stamp],
+    )?;
+    Ok(())
+}
+
+fn require_active_company(
+    database: &SuplexDatabase,
+    actor_user_id: &str,
+    company_id: &str,
+) -> DatabaseResult<()> {
+    if companies::require_company_access(database, actor_user_id, company_id)?.status != "active" {
+        return Err(failure("Company is not active", 409, vec![]));
+    }
+    Ok(())
+}
+
+/// TypeScript `updateProject`: a full configuration replaces the project. The
+/// caller has already checked the paths, Git, and the repository host.
+pub fn update_local(
+    database: &mut SuplexDatabase,
+    actor_user_id: &str,
+    existing: &Project,
+    prepared: &PreparedLocalProject,
+    body: &LocalProjectCreate,
+    now: DateTime<Utc>,
+) -> DatabaseResult<Project> {
+    let root = auth::js_trim(&body.root_profile_id);
+    let worker = auth::js_trim(&body.worker_profile_id);
+    let stamp = now.to_rfc3339_opts(SecondsFormat::Millis, true);
+    let company_id = existing.company_id.as_str();
+    let project_id = existing.id.as_str();
+    database
+        .transaction(false, |database| {
+            require_active_company(database, actor_user_id, company_id)?;
+            require_profile(database, "root", root)?;
+            require_profile(database, "worker", worker)?;
+            let stored = stored_row(database, project_id)?;
+            let provider_policy_json = match &body.provider_policy {
+                None => stored.as_ref().and_then(|row| row.provider_policy_json.clone()),
+                Some(None) => None,
+                Some(Some(policy)) => Some(json_text(policy)?),
+            };
+            if let Some(policy) = &provider_policy_json {
+                let policy = stored_contract(policy, project_contracts::parse_provider_policy)?;
+                for instance_id in &policy.allowed_instance_ids {
+                    let exists: bool = database.connection().query_row(
+                        "SELECT EXISTS(SELECT 1 FROM suplex_provider_instances WHERE id = ?1)",
+                        [instance_id],
+                        |row| row.get(0),
+                    )?;
+                    if !exists {
+                        return Err(failure(
+                            "Project configuration is invalid",
+                            422,
+                            vec![finding(
+                                "instance-ineligible",
+                                "providerPolicy",
+                                "Select an existing provider login",
+                            )],
+                        ));
+                    }
+                }
+            }
+            let policy = match (&body.agent_task_policy, &stored) {
+                (Some(policy), _) => {
+                    validate_agent_policy(database, policy, project_id)?;
+                    policy.clone()
+                }
+                (None, Some(row)) => admitted_policy(
+                    stored_policy(&row.agent_task_policy_json, root, worker)?,
+                    root,
+                    worker,
+                ),
+                (None, None) => serde_json::from_value(default_policy(root, worker))?,
+            };
+            let Some(stored) = stored.filter(|row| row.company_id == company_id) else {
+                return Err(failure("Not found", 404, vec![]));
+            };
+            database.connection().execute(
+                "UPDATE suplex_projects SET name = ?1, repository_path = ?2, worktree_root = ?3, repository_identity = ?4, base_branch = ?5, setup_command = ?6, verification_command = ?7, root_profile_id = ?8, worker_profile_id = ?9, agent_task_policy_json = ?10, updated_at = ?11 WHERE id = ?12",
+                params![prepared.name, prepared.repository_path.to_string_lossy(), prepared.worktree_root.to_string_lossy(), prepared.repository, prepared.base_branch, prepared.setup_command, prepared.verification_command, root, worker, json_text(&policy)?, stamp, project_id],
+            )?;
+            let integration_json = match &body.integration {
+                Some(integration) => Some(json_text(integration)?),
+                None => stored.integration_json,
+            };
+            let execution_json = match &body.execution {
+                Some(execution) => Some(json_text(execution)?),
+                None => stored.execution_json,
+            };
+            database.connection().execute(
+                "UPDATE suplex_projects SET integration_json = ?1, execution_json = ?2 WHERE id = ?3",
+                params![integration_json, execution_json, project_id],
+            )?;
+            audit_update(database, actor_user_id, company_id, project_id, &stamp)?;
+            database.connection().execute(
+                "UPDATE suplex_projects SET provider_policy_json = ?1 WHERE id = ?2",
+                params![provider_policy_json, project_id],
+            )?;
+            Ok(())
+        })
+        .map_err(already_assigned)?;
+    get(database, actor_user_id, project_id)
+}
+
+/// A patch merged over the stored project, before any repository check.
+pub struct PatchPlan {
+    pub candidate: Project,
+    pub findings: Vec<Finding>,
+    pub repository_changed: bool,
+    pub remote_changed: bool,
+}
+
+pub fn plan_patch(existing: &Project, patch: &ProjectPatch) -> PatchPlan {
+    let mut candidate = existing.clone();
+    for (field, value) in [
+        (&mut candidate.repository_path, &patch.repository_path),
+        (&mut candidate.worktree_root, &patch.worktree_root),
+        (&mut candidate.base_branch, &patch.base_branch),
+    ] {
+        if let Some(value) = value {
+            field.clone_from(value);
+        }
+    }
+    if patch.repository.is_some() {
+        candidate.repository.clone_from(&patch.repository);
+    }
+    if patch.integration.is_some() {
+        candidate.integration.clone_from(&patch.integration);
+    }
+    let mut findings = Vec::new();
+    if patch
+        .name
+        .as_deref()
+        .is_some_and(|name| !super::repository::valid_name(auth::js_trim(name)))
+    {
+        findings.push(finding("invalid-name", "name", "Project name is invalid"));
+    }
+    for (field, command) in [
+        ("setupCommand", &patch.setup_command),
+        ("verificationCommand", &patch.verification_command),
+    ] {
+        if command
+            .as_deref()
+            .is_some_and(|command| !super::repository::valid_command(command))
+        {
+            findings.push(finding(
+                "unapproved-command",
+                field,
+                "Command must be a single non-empty line without secrets",
+            ));
+        }
+    }
+    let connection = |integration: Option<&ProjectIntegration>| {
+        integration.map_or_else(
+            || json!({"kind": "github"}),
+            |integration| serde_json::to_value(&integration.repository).unwrap_or_default(),
+        )
+    };
+    let connection_changed = patch.integration.is_some()
+        && connection(patch.integration.as_ref()) != connection(existing.integration.as_ref());
+    let path_changed = patch
+        .repository_path
+        .as_ref()
+        .is_some_and(|path| *path != existing.repository_path);
+    let identity_changed = patch.repository.as_deref().is_some_and(|repository| {
+        Some(auth::js_trim(repository).to_lowercase()) != existing.repository
+    });
+    let repository_changed = path_changed
+        || patch
+            .worktree_root
+            .as_ref()
+            .is_some_and(|root| *root != existing.worktree_root)
+        || identity_changed
+        || patch
+            .base_branch
+            .as_deref()
+            .is_some_and(|branch| auth::js_trim(branch) != existing.base_branch)
+        || connection_changed;
+    PatchPlan {
+        candidate,
+        findings,
+        repository_changed,
+        remote_changed: path_changed || identity_changed || connection_changed,
+    }
+}
+
+/// TypeScript `validatePatchedRepository`. `None` means the repository host
+/// needs a Bitbucket check that the Rust backend has not ported.
+pub async fn validate_patched_repository(
+    commands: &super::repository::Commands,
+    roots: (&std::path::Path, &std::path::Path),
+    candidate: &Project,
+    validate_worktree_write: bool,
+    validate_remote: bool,
+) -> Option<(String, String, Vec<Finding>)> {
+    use super::repository as checks;
+    let repository =
+        checks::canonical_directory(&candidate.repository_path, roots.0, "repositoryPath");
+    let worktree = checks::canonical_directory(&candidate.worktree_root, roots.1, "worktreeRoot");
+    let mut findings = Vec::new();
+    for result in [&repository, &worktree] {
+        if let Err(errors) = result {
+            findings.extend(errors.iter().cloned());
+        }
+    }
+    if let (Ok(repository), Ok(worktree)) = (&repository, &worktree)
+        && (checks::within_root(repository, worktree) || checks::within_root(worktree, repository))
+    {
+        findings.push(finding(
+            "worktree-separation",
+            "worktreeRoot",
+            "Worktree root must be separate from the repository",
+        ));
+    }
+    let identity = candidate
+        .repository
+        .as_deref()
+        .map(|repository| auth::js_trim(repository).to_lowercase())
+        .unwrap_or_default();
+    let base_branch = auth::js_trim(&candidate.base_branch);
+    if !checks::valid_repository(&identity) {
+        findings.push(finding(
+            "repository-identity",
+            "repository",
+            "Repository must use owner/name identity without credentials",
+        ));
+    }
+    if !checks::valid_branch(base_branch) {
+        findings.push(finding(
+            "unsafe-branch",
+            "baseBranch",
+            "Base branch is unsafe",
+        ));
+    }
+    if checks::secret_shaped(&identity) || checks::secret_shaped(&candidate.base_branch) {
+        findings.push(finding(
+            "secret-shaped-value",
+            "configuration",
+            "Secret-shaped configuration values are not accepted",
+        ));
+    }
+    if validate_worktree_write
+        && let Ok(worktree) = &worktree
+        && !checks::writable(worktree)
+    {
+        findings.push(finding(
+            "worktree-unwritable",
+            "worktreeRoot",
+            "Worktree root must be writable",
+        ));
+    }
+    let absolute = |raw: &str| std::path::absolute(raw).unwrap_or_else(|_| raw.into());
+    let repository_path = repository.unwrap_or_else(|_| absolute(&candidate.repository_path));
+    let worktree_root = worktree.unwrap_or_else(|_| absolute(&candidate.worktree_root));
+    let bitbucket = matches!(
+        candidate
+            .integration
+            .as_ref()
+            .map(|integration| &integration.repository),
+        Some(project_contracts::RepositoryConnection::Bitbucket { .. })
+    );
+    if findings.is_empty() {
+        let host = if bitbucket { "bitbucket" } else { "github" };
+        match checks::inspect(commands, &repository_path, base_branch, host).await {
+            Err(errors) => findings.extend(errors),
+            Ok(inspection) => {
+                if inspection.canonical_path != repository_path {
+                    findings.push(finding(
+                        "repository-path-mismatch",
+                        "repositoryPath",
+                        "Repository path is not canonical",
+                    ));
+                }
+                if inspection.base_sha.is_empty() {
+                    findings.push(finding(
+                        "branch-unavailable",
+                        "baseBranch",
+                        "Configured branches must resolve to commits",
+                    ));
+                }
+                if inspection.remote_repository != identity {
+                    findings.push(finding(
+                        "repository-mismatch",
+                        "repository",
+                        "Local origin does not match configured repository identity",
+                    ));
+                }
+            }
+        }
+    }
+    if validate_remote && findings.is_empty() {
+        if bitbucket {
+            return None;
+        }
+        if let Err(error) = checks::verify_github(commands, &repository_path, &identity).await {
+            findings.push(error);
+        }
+    }
+    Some((
+        repository_path.to_string_lossy().into_owned(),
+        worktree_root.to_string_lossy().into_owned(),
+        findings,
+    ))
+}
+
+/// TypeScript `patchProject` after its repository checks: write only the
+/// fields the caller sent.
+pub fn apply_patch(
+    database: &mut SuplexDatabase,
+    actor_user_id: &str,
+    existing: &Project,
+    patch: &ProjectPatch,
+    (repository_path, worktree_root): (&str, &str),
+    now: DateTime<Utc>,
+) -> DatabaseResult<Project> {
+    let stamp = now.to_rfc3339_opts(SecondsFormat::Millis, true);
+    let company_id = existing.company_id.as_str();
+    let project_id = existing.id.as_str();
+    database
+        .transaction(false, |database| {
+            require_active_company(database, actor_user_id, company_id)?;
+            let Some(stored) =
+                stored_row(database, project_id)?.filter(|row| row.company_id == company_id)
+            else {
+                return Err(failure("Not found", 404, vec![]));
+            };
+            let update = |column: &str, value: Option<String>| -> DatabaseResult<()> {
+                database.connection().execute(
+                    &format!("UPDATE suplex_projects SET {column} = ?1 WHERE id = ?2"),
+                    params![value, project_id],
+                )?;
+                Ok(())
+            };
+            let trimmed = |value: &Option<String>| {
+                value
+                    .as_deref()
+                    .map(|value| auth::js_trim(value).to_owned())
+            };
+            if patch.name.is_some() {
+                update("name", trimmed(&patch.name))?;
+            }
+            if patch.repository_path.is_some() {
+                update("repository_path", Some(repository_path.to_owned()))?;
+            }
+            if patch.worktree_root.is_some() {
+                update("worktree_root", Some(worktree_root.to_owned()))?;
+            }
+            if patch.repository.is_some() {
+                update(
+                    "repository_identity",
+                    trimmed(&patch.repository).map(|value| value.to_lowercase()),
+                )?;
+            }
+            if patch.base_branch.is_some() {
+                update("base_branch", trimmed(&patch.base_branch))?;
+            }
+            if patch.setup_command.is_some() {
+                update("setup_command", trimmed(&patch.setup_command))?;
+            }
+            if patch.verification_command.is_some() {
+                update("verification_command", trimmed(&patch.verification_command))?;
+            }
+            if let Some(integration) = &patch.integration {
+                update("integration_json", Some(json_text(integration)?))?;
+            }
+            if let Some(changes) = &patch.execution {
+                let mut execution = match &stored.execution_json {
+                    Some(raw) if !raw.is_empty() => serde_json::from_str(raw)?,
+                    _ => serde_json::Map::new(),
+                };
+                execution.extend(changes.clone());
+                let execution = project_contracts::parse_execution(Some(&Value::Object(execution)))
+                    .map_err(|error| format!("Project execution is invalid: {error:?}"))?;
+                update("execution_json", Some(json_text(&execution)?))?;
+            }
+            if patch.root_profile_id.is_some()
+                || patch.worker_profile_id.is_some()
+                || patch.agent_task_policy.is_some()
+                || patch.provider_policy.is_some()
+            {
+                patch_agent_configuration(database, &stored, patch)?;
+            }
+            update("updated_at", Some(stamp.clone()))?;
+            audit_update(database, actor_user_id, company_id, project_id, &stamp)
+        })
+        .map_err(already_assigned)?;
+    get(database, actor_user_id, project_id)
+}
+
+fn patch_agent_configuration(
+    database: &SuplexDatabase,
+    stored: &StoredProject,
+    patch: &ProjectPatch,
+) -> DatabaseResult<()> {
+    let root = patch
+        .root_profile_id
+        .as_deref()
+        .map_or(stored.root_profile_id.as_str(), auth::js_trim);
+    let worker = patch
+        .worker_profile_id
+        .as_deref()
+        .map_or(stored.worker_profile_id.as_str(), auth::js_trim);
+    require_profile(database, "root", root)?;
+    require_profile(database, "worker", worker)?;
+    let provider_policy = match &patch.provider_policy {
+        Some(policy) => policy.clone(),
+        None => parse_optional(
+            stored.provider_policy_json.clone(),
+            project_contracts::parse_provider_policy,
+        )?,
+    };
+    if let Some(policy) = &provider_policy {
+        validate_provider_policy(database, policy, root, worker)?;
+    }
+    let policy = match &patch.agent_task_policy {
+        Some(policy) => {
+            validate_agent_policy(database, policy, &stored.id)?;
+            policy.clone()
+        }
+        None => admitted_policy(
+            stored_policy(&stored.agent_task_policy_json, root, worker)?,
+            root,
+            worker,
+        ),
+    };
+    let connection = database.connection();
+    if patch.root_profile_id.is_some() {
+        connection.execute(
+            "UPDATE suplex_projects SET root_profile_id = ?1 WHERE id = ?2",
+            params![root, stored.id],
+        )?;
+    }
+    if patch.worker_profile_id.is_some() {
+        connection.execute(
+            "UPDATE suplex_projects SET worker_profile_id = ?1 WHERE id = ?2",
+            params![worker, stored.id],
+        )?;
+    }
+    if patch.agent_task_policy.is_some()
+        || patch.root_profile_id.is_some()
+        || patch.worker_profile_id.is_some()
+    {
+        connection.execute(
+            "UPDATE suplex_projects SET agent_task_policy_json = ?1 WHERE id = ?2",
+            params![json_text(&policy)?, stored.id],
+        )?;
+    }
+    if patch.provider_policy.is_some() {
+        connection.execute(
+            "UPDATE suplex_projects SET provider_policy_json = ?1 WHERE id = ?2",
+            params![
+                provider_policy.as_ref().map(json_text).transpose()?,
+                stored.id
+            ],
+        )?;
+    }
+    Ok(())
 }
 
 #[cfg(test)]

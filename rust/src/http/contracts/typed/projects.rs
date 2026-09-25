@@ -4,8 +4,9 @@ use serde_json::Value;
 
 pub use super::ContractResult;
 use super::{
-    ContractFailure, delivery_target as valid_delivery_target, finding, garde_findings,
-    id_1_256 as profile_id, object, serialized, visual_evidence as valid_visual_evidence,
+    ContractFailure, Field, Rule, delivery_target as valid_delivery_target, finding,
+    garde_findings, id_1_256 as profile_id, object, optional, parse_object, serialized,
+    visual_evidence as valid_visual_evidence,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -882,8 +883,130 @@ pub fn parse_provider_policy(input: Option<&Value>) -> ContractResult<ProjectPro
     checked(&Value::Object(fields.clone()), errors)
 }
 
+/// `ProjectPatchBodySchema` output: only the fields the caller sent.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectPatch {
+    pub integration: Option<ProjectIntegration>,
+    /// Present execution fields without defaults; the service merges them.
+    pub execution: Option<serde_json::Map<String, Value>>,
+    pub name: Option<String>,
+    pub repository_path: Option<String>,
+    pub worktree_root: Option<String>,
+    pub repository: Option<String>,
+    pub base_branch: Option<String>,
+    pub setup_command: Option<String>,
+    pub verification_command: Option<String>,
+    pub root_profile_id: Option<String>,
+    pub worker_profile_id: Option<String>,
+    pub agent_task_policy: Option<ProjectAgentTaskPolicy>,
+    #[serde(default, deserialize_with = "present_nullable")]
+    pub provider_policy: Option<Option<ProjectProviderPolicy>>,
+}
+
+fn nested_integration(input: Option<&Value>) -> ContractResult<Value> {
+    serialized(parse_integration(input))
+}
+fn nested_execution(input: Option<&Value>) -> ContractResult<Value> {
+    serialized(parse_execution(input))
+}
+/// The patch execution schema has no defaults: keep only the sent fields.
+fn nested_execution_patch(input: Option<&Value>) -> ContractResult<Value> {
+    let Value::Object(mut parsed) = nested_execution(input)? else {
+        return Err(ContractFailure::Unhandled);
+    };
+    let sent = input.and_then(Value::as_object);
+    parsed.retain(|name, _| sent.is_some_and(|sent| sent.contains_key(name)));
+    Ok(Value::Object(parsed))
+}
+fn nested_agent_policy(input: Option<&Value>) -> ContractResult<Value> {
+    serialized(parse_agent_policy(input))
+}
+/// Garde reports the policy fields out of shape order; Zod reports providers first.
+fn nested_provider_policy(input: Option<&Value>) -> ContractResult<Value> {
+    serialized(parse_provider_policy(input)).map_err(|failure| match failure {
+        ContractFailure::Issues(mut findings) => {
+            findings.sort_by_key(|finding| {
+                finding["field"]
+                    .as_str()
+                    .is_some_and(|field| field.starts_with(".allowedInstanceIds"))
+            });
+            ContractFailure::Issues(findings)
+        }
+        other => other,
+    })
+}
+
+const REQUIRED_TEXT: Rule = Rule::Text {
+    trim: false,
+    min: 1,
+    max: None,
+};
+const COMMAND: Rule = Rule::Text {
+    trim: false,
+    min: 0,
+    max: None,
+};
+
+const fn text(name: &'static str, rule: Rule, required: bool) -> Field {
+    Field {
+        required,
+        ..optional(name, rule)
+    }
+}
+
+const fn project_fields(execution: Rule, required: bool) -> [Field; 13] {
+    [
+        optional("integration", Rule::Nested(nested_integration)),
+        optional("execution", execution),
+        text("name", REQUIRED_TEXT, required),
+        text("repositoryPath", REQUIRED_TEXT, required),
+        text("worktreeRoot", REQUIRED_TEXT, required),
+        text("repository", REQUIRED_TEXT, required),
+        text("baseBranch", REQUIRED_TEXT, required),
+        text("setupCommand", COMMAND, required),
+        text("verificationCommand", COMMAND, required),
+        text("rootProfileId", REQUIRED_TEXT, required),
+        text("workerProfileId", REQUIRED_TEXT, required),
+        optional("agentTaskPolicy", Rule::Nested(nested_agent_policy)),
+        Field {
+            nullable: true,
+            ..optional("providerPolicy", Rule::Nested(nested_provider_policy))
+        },
+    ]
+}
+const BODY: [Field; 13] = project_fields(Rule::Nested(nested_execution), true);
+const PATCH: [Field; 13] = project_fields(Rule::Nested(nested_execution_patch), false);
+
+fn patch_value(input: Option<&Value>) -> ContractResult<serde_json::Map<String, Value>> {
+    let value = parse_object(input, &PATCH, true)?;
+    if value.is_empty() {
+        return Err(ContractFailure::Issues(vec![issue("custom", ".")]));
+    }
+    Ok(value)
+}
+
+fn typed<T: serde::de::DeserializeOwned>(
+    value: serde_json::Map<String, Value>,
+) -> ContractResult<T> {
+    serde_json::from_value(Value::Object(value))
+        .map_err(|error| ContractFailure::Internal(error.to_string()))
+}
+
+/// `ProjectBodySchema`: the full project configuration.
+pub fn parse_body(input: Option<&Value>) -> ContractResult<LocalProjectCreate> {
+    typed(parse_object(input, &BODY, true)?)
+}
+
+/// `ProjectPatchBodySchema`: at least one project field.
+pub fn parse_patch(input: Option<&Value>) -> ContractResult<ProjectPatch> {
+    typed(patch_value(input)?)
+}
+
 pub fn validate(contract: &str, input: Option<&Value>) -> Option<ContractResult<Value>> {
     Some(match contract {
+        "projects.ProjectBodySchema" => parse_object(input, &BODY, true).map(Value::Object),
+        "projects.ProjectPatchBodySchema" => patch_value(input).map(Value::Object),
         "projects.ProjectCreateBodySchema" => serialized(parse_create(input)),
         "projects.ProjectIntegrationSchema" => serialized(parse_integration(input)),
         "projects.ProjectExecutionSchema" => serialized(parse_execution(input)),

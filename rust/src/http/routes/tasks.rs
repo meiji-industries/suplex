@@ -575,10 +575,7 @@ async fn create(
             cookies,
         );
     };
-    if !request.blocked_by_pull_requests.is_empty() {
-        return with_cookies(auth::not_ported(), cookies);
-    }
-    if project.repository.is_none() {
+    let Some(repository) = project.repository.clone() else {
         return with_cookies(
             auth::error(
                 StatusCode::UNPROCESSABLE_ENTITY,
@@ -586,7 +583,22 @@ async fn create(
             ),
             cookies,
         );
-    }
+    };
+    let numbers = request
+        .blocked_by_pull_requests
+        .iter()
+        .map(|dependency| dependency.number)
+        .collect::<Vec<_>>();
+    let pull_requests =
+        match crate::tasks::pull_request_dependencies::observe(&repository, &numbers).await {
+            Ok(pull_requests) => pull_requests,
+            Err(rejection) => {
+                return with_cookies(
+                    service_error(Box::new(commands::pull_request_rejection(rejection))),
+                    cookies,
+                );
+            }
+        };
     let profiles = {
         let selected = state.with_database(|database| {
             commands::select_local_profiles(database, &project, &request)
@@ -615,6 +627,7 @@ async fn create(
             request,
             profiles,
             decoded_images,
+            pull_requests,
         },
     ));
     match operation.await {
@@ -633,6 +646,7 @@ struct AdmittedCreate {
     request: task_contracts::TaskCreateBody,
     profiles: commands::LocalProfiles,
     decoded_images: Vec<DecodedTaskImage>,
+    pull_requests: Vec<Value>,
 }
 
 async fn finish_admitted_create(state: AppState, admitted: AdmittedCreate) -> Response {
@@ -644,6 +658,7 @@ async fn finish_admitted_create(state: AppState, admitted: AdmittedCreate) -> Re
         request,
         profiles,
         decoded_images,
+        pull_requests,
     } = admitted;
     let source = request
         .source
@@ -711,6 +726,7 @@ async fn finish_admitted_create(state: AppState, admitted: AdmittedCreate) -> Re
             now,
         )?;
         crate::tasks::sources::apply(&mut prepared, pinned);
+        prepared.pull_request_dependencies = pull_requests;
         let artifact_root = state
             .artifact_root
             .as_deref()
@@ -1066,9 +1082,48 @@ async fn set_dependencies(
         Ok(value) => value,
         Err(response) => return *response,
     };
+    // TypeScript `applyDependencies`: GitHub observes each pull request prerequisite before any write.
+    let repository = {
+        let repository = state.with_database(|database| -> Result<String, Box<dyn Error>> {
+            for dependency in &request.depends_on {
+                commands::user_task_configuration(database, &user_id, dependency)?;
+            }
+            let configuration = commands::user_task_configuration(database, &user_id, &id)?;
+            Ok(configuration["repository"]
+                .as_str()
+                .unwrap_or("")
+                .to_owned())
+        });
+        match repository {
+            Ok(repository) => repository,
+            Err(error) => return with_cookies(service_error(error), cookies),
+        }
+    };
+    let numbers = request
+        .blocked_by_pull_requests
+        .iter()
+        .map(|dependency| dependency.number)
+        .collect::<Vec<_>>();
+    let pull_requests =
+        match crate::tasks::pull_request_dependencies::observe(&repository, &numbers).await {
+            Ok(pull_requests) => pull_requests,
+            Err(rejection) => {
+                return with_cookies(
+                    service_error(Box::new(commands::pull_request_rejection(rejection))),
+                    cookies,
+                );
+            }
+        };
     let result = state.with_database(
         |database| -> Result<task_response::TaskResponse, Box<dyn Error>> {
-            commands::set_user_task_dependencies(database, &user_id, &id, &request, Utc::now())?;
+            commands::set_user_task_dependencies(
+                database,
+                &user_id,
+                &id,
+                &request,
+                &pull_requests,
+                Utc::now(),
+            )?;
             task_response::get(database, &id)?.ok_or_else(|| "blocked task disappeared".into())
         },
     );

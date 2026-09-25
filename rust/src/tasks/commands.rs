@@ -29,6 +29,7 @@ use crate::{
 
 use super::archive::operations as archive;
 use super::images::DecodedTaskImage;
+use super::pull_request_dependencies;
 use super::repository::{self, PreparedTask, TaskCreator, TaskDetailsWrite, TaskRecord, TaskWrite};
 
 #[derive(Debug)]
@@ -435,6 +436,7 @@ pub fn prepare_local_user_task(
         start_queued: input.start_immediately,
         copied_from_task_id: None,
         depends_on: input.depends_on.clone(),
+        pull_request_dependencies: vec![],
     })
 }
 
@@ -1030,23 +1032,34 @@ pub fn select_user_task_agent(
     require_user_task(database, actor_user_id, task_id)
 }
 
+/// TypeScript `observePullRequestDependencies` failures for a user command.
+pub fn pull_request_rejection(rejection: pull_request_dependencies::Rejection) -> TaskFailure {
+    match rejection {
+        pull_request_dependencies::Rejection::Unobservable(number) => TaskFailure::new(
+            format!(
+                "Suplex cannot observe pull request #{number}. Try again when GitHub is available."
+            ),
+            422,
+        ),
+        pull_request_dependencies::Rejection::NotFound(number) => {
+            TaskFailure::new(format!("Pull request #{number} was not found"), 422)
+        }
+    }
+}
+
 /// Replace a task's prerequisites, then admit or wake it if none still blocks it.
-/// Pull request prerequisites need a GitHub observation, which is not ported.
+/// `pull_requests` are the GitHub observations of `blockedByPullRequests`.
 pub fn set_user_task_dependencies(
     database: &mut SuplexDatabase,
     actor_user_id: &str,
     task_id: &str,
     request: &TaskDependenciesBody,
+    pull_requests: &[Value],
     now: DateTime<Utc>,
 ) -> DatabaseResult<TaskRecord> {
     let task = require_user_task(database, actor_user_id, task_id)?;
     for dependency in &request.depends_on {
         require_user_task(database, actor_user_id, dependency)?;
-    }
-    if !request.blocked_by_pull_requests.is_empty() {
-        return Err(Box::new(TaskFailure::not_ported(
-            "Pull request prerequisites are not ported",
-        )));
     }
     let mut depends_on = request.depends_on.clone();
     depends_on.sort();
@@ -1109,10 +1122,7 @@ pub fn set_user_task_dependencies(
     })?;
     // Replace every prerequisite before a queued task is considered for admission.
     database.transaction(true, |database| {
-        database.connection().execute(
-            "DELETE FROM suplex_task_pull_request_dependencies WHERE task_id = ?1",
-            [task_id],
-        )?;
+        pull_request_dependencies::replace(database, task_id, pull_requests)?;
         repository::reconcile_dependency_release(database, task_id, now)
     })?;
     let task = repository::task_by_id(database, task_id)?.unwrap_or(task);
@@ -1669,6 +1679,7 @@ mod tests {
             start_queued: false,
             copied_from_task_id: None,
             depends_on: vec![],
+            pull_request_dependencies: vec![],
         };
         (filename, database, user.id, prepared)
     }
@@ -1697,6 +1708,7 @@ mod tests {
         let queued_input = PreparedTask {
             start_queued: true,
             depends_on: vec![blocker.id.clone()],
+            pull_request_dependencies: vec![],
             ..another(&prepared, "command-queued")
         };
         let queued = repository::create(&mut database, &queued_input, now)
@@ -1894,6 +1906,7 @@ mod tests {
         let second_input = PreparedTask {
             start_queued: true,
             depends_on: vec![first.id.clone()],
+            pull_request_dependencies: vec![],
             ..another(&prepared, "command-second")
         };
         let second = repository::create(&mut database, &second_input, now)
@@ -1913,6 +1926,7 @@ mod tests {
                     &user,
                     &first.id,
                     &body(vec![second.id.clone()], json!([])),
+                    &[],
                     now
                 )
                 .unwrap_err()
@@ -1926,25 +1940,40 @@ mod tests {
                     &user,
                     &first.id,
                     &body(vec![first.id.clone()], json!([])),
+                    &[],
                     now
                 )
                 .unwrap_err()
             ),
             (422, "A task cannot depend on itself".into())
         );
+        // An observed open pull request keeps the queued task waiting until GitHub reports its merge.
+        let open = json!({"number": 7, "state": "open", "title": "Blocker", "url": "https://github.com/owner/repo/pull/7", "observedAt": "2026-09-25T00:00:00.000Z"});
+        let blocked = set_user_task_dependencies(
+            &mut database,
+            &user,
+            &second.id,
+            &body(vec![], json!([{"number": 7}])),
+            std::slice::from_ref(&open),
+            now,
+        )
+        .unwrap();
+        assert_eq!(blocked.status, "queued");
         assert_eq!(
-            failure(
-                set_user_task_dependencies(
-                    &mut database,
-                    &user,
-                    &second.id,
-                    &body(vec![], json!([{"number": 7}])),
-                    now
+            database
+                .connection()
+                .query_row(
+                    "SELECT title FROM suplex_task_pull_request_dependencies WHERE task_id = ?1 AND pull_request_number = 7",
+                    [&second.id],
+                    |row| row.get::<_, String>(0),
                 )
-                .unwrap_err()
-            )
-            .0,
-            501
+                .unwrap(),
+            "Blocker"
+        );
+        assert_eq!(
+            pull_request_rejection(pull_request_dependencies::Rejection::NotFound(7))
+                .public_message,
+            "Pull request #7 was not found"
         );
         assert!(
             set_user_task_dependencies(
@@ -1952,6 +1981,7 @@ mod tests {
                 &user,
                 &second.id,
                 &body(vec!["missing".into()], json!([])),
+                &[],
                 now
             )
             .is_err()
@@ -1961,6 +1991,7 @@ mod tests {
             &user,
             &second.id,
             &body(vec![], json!([])),
+            &[],
             now,
         )
         .unwrap();
@@ -1973,7 +2004,11 @@ mod tests {
                 |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .unwrap();
-        assert_eq!((edges, audits), (0, 1));
+        assert_eq!(
+            (edges, audits),
+            (0, 2),
+            "the pull request and the release replacement each audit"
+        );
         drop(database);
         let _ = std::fs::remove_file(&filename);
     }
@@ -2190,6 +2225,7 @@ mod tests {
             start_queued: false,
             copied_from_task_id: None,
             depends_on: vec![],
+            pull_request_dependencies: vec![],
         };
         let artifact_root = filename.with_extension("artifacts");
         let image = DecodedTaskImage {

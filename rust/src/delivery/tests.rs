@@ -296,6 +296,7 @@ fn fixture(target: &str) -> Fixture {
         start_queued: true,
         copied_from_task_id: None,
         depends_on: vec![],
+        pull_request_dependencies: vec![],
     };
     let task_id = repository::create(&mut database, &prepared, now)
         .unwrap()

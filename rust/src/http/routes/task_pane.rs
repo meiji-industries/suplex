@@ -419,6 +419,7 @@ pub(crate) mod tests {
                 start_queued: true,
                 copied_from_task_id: None,
                 depends_on: vec![],
+                pull_request_dependencies: vec![],
             },
             now,
         )

@@ -154,6 +154,8 @@ pub struct Observation {
     pub deletions: Option<u64>,
     pub auto_merge_enabled: Option<bool>,
     pub review_decision: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
 }
 
 impl Observation {
@@ -442,6 +444,7 @@ pub fn map_observation(value: &Value) -> GithubResult<Observation> {
         deletions: Some(count("deletions").ok_or_else(malformed)?),
         auto_merge_enabled: Some(!value["autoMergeRequest"].is_null()),
         review_decision: nullable_string("reviewDecision").ok_or_else(malformed)?,
+        title: string(value, "title"),
     })
 }
 

@@ -2544,6 +2544,7 @@ mod tests {
             start_queued: true,
             copied_from_task_id: None,
             depends_on: vec![],
+            pull_request_dependencies: vec![],
         };
         let task = repository::create(&mut database, &prepared, now)
             .unwrap()
@@ -2847,6 +2848,7 @@ mod tests {
             start_queued: true,
             copied_from_task_id: None,
             depends_on: vec![],
+            pull_request_dependencies: vec![],
         };
         let a = repository::create(&mut database, &first, now)
             .unwrap()
@@ -2858,6 +2860,7 @@ mod tests {
             request_hash: "event-second-hash".into(),
             start_queued: false,
             depends_on: vec![a.clone()],
+            pull_request_dependencies: vec![],
             ..first.clone()
         };
         let b = repository::create(&mut database, &second, now)
@@ -2939,6 +2942,7 @@ mod tests {
             start_queued: true,
             copied_from_task_id: None,
             depends_on: vec![],
+            pull_request_dependencies: vec![],
         };
         let task = repository::create(&mut database, &prepared, now)
             .unwrap()
@@ -3051,6 +3055,7 @@ mod tests {
             start_queued: true,
             copied_from_task_id: None,
             depends_on: vec![],
+            pull_request_dependencies: vec![],
         };
         let created = repository::create(&mut database, &prepared, now).unwrap();
         assert!(created.created);
@@ -3064,6 +3069,7 @@ mod tests {
             idempotency_key: "dependent-key".into(),
             request_hash: "dependent-request".into(),
             depends_on: vec![created.task.id.clone()],
+            pull_request_dependencies: vec![],
             ..prepared.clone()
         };
         let blocked = repository::create(&mut database, &blocked_input, now).unwrap();
@@ -3412,6 +3418,7 @@ mod tests {
             idempotency_key: "delivery-dependent-key".into(),
             request_hash: "delivery-dependent-request".into(),
             depends_on: vec![created.task.id.clone()],
+            pull_request_dependencies: vec![],
             ..prepared.clone()
         };
         let waiting = repository::create(&mut database, &waiting_input, now).unwrap();

@@ -1252,6 +1252,24 @@ pub fn spawn_task_host(database_path: PathBuf, artifact_root: PathBuf) -> TaskHo
         move |id| poller_host.wake(id),
         shutdown_rx.clone(),
     );
+    // TypeScript `refreshPullRequestPrerequisites`: GitHub is re-read every minute; the next queue sweep admits.
+    let (prerequisites_path, mut prerequisites_shutdown) =
+        (database_path.clone(), shutdown_rx.clone());
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
+        loop {
+            tokio::select! {
+                result = prerequisites_shutdown.changed() => {
+                    if result.is_err() || *prerequisites_shutdown.borrow() { break; }
+                },
+                _ = interval.tick() => {
+                    if let Err(error) = crate::tasks::pull_request_dependencies::refresh(&prerequisites_path).await {
+                        eprintln!("Pull request prerequisite refresh will be retried: {error}");
+                    }
+                },
+            }
+        }
+    });
     tokio::spawn(async move {
         let environment = std::env::vars().collect::<HashMap<_, _>>();
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(1));
@@ -1744,6 +1762,7 @@ mod tests {
                 start_queued: true,
                 copied_from_task_id: None,
                 depends_on: vec![],
+                pull_request_dependencies: vec![],
             };
             repository::create(&mut database, &prepared, now)
                 .unwrap()
@@ -1829,6 +1848,7 @@ mod tests {
                 start_queued: false,
                 copied_from_task_id: None,
                 depends_on: vec![],
+                pull_request_dependencies: vec![],
             };
             let waiting = repository::create(&mut database, &prepared, Utc::now())
                 .unwrap()
@@ -2369,6 +2389,7 @@ mod tests {
                 start_queued: true,
                 copied_from_task_id: None,
                 depends_on: vec![],
+                pull_request_dependencies: vec![],
             };
             let task = repository::create(&mut database, &prepared, now)
                 .unwrap()
@@ -2857,6 +2878,7 @@ mod tests {
                 start_queued: true,
                 copied_from_task_id: None,
                 depends_on: vec![],
+                pull_request_dependencies: vec![],
             };
             repository::create(&mut database, &prepared, Utc::now())
                 .unwrap()
@@ -2979,6 +3001,7 @@ mod tests {
                 start_queued: true,
                 copied_from_task_id: None,
                 depends_on: vec![],
+                pull_request_dependencies: vec![],
             };
             let task = repository::create(&mut database, &prepared, Utc::now())
                 .unwrap()

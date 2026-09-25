@@ -353,7 +353,7 @@ mod tests {
             title: "Archive task".into(), description: "".into(),
             configuration: json!({"repositoryPath":repository_path,"worktreeRoot":worktree_root,"branch":"task-archive","startingSha":sha}),
             idempotency_key: "archive-key".into(), request_hash: "archive-hash".into(), creator: TaskCreator::User(user.id.clone()),
-            delivery_target: "pull_request_draft".into(), delivery_intent: json!({}), root_profile: json!({}), worker_profile: json!({}), advisor_profiles: json!({}), issue: None, start_queued: false, copied_from_task_id: None, depends_on: vec![],
+            delivery_target: "pull_request_draft".into(), delivery_intent: json!({}), root_profile: json!({}), worker_profile: json!({}), advisor_profiles: json!({}), issue: None, start_queued: false, copied_from_task_id: None, depends_on: vec![], pull_request_dependencies: vec![],
         }, now).unwrap().task;
         database
             .connection()

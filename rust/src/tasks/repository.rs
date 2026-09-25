@@ -62,6 +62,8 @@ pub struct PreparedTask {
     pub start_queued: bool,
     pub copied_from_task_id: Option<String>,
     pub depends_on: Vec<String>,
+    /// Observed `blockedByPullRequests`, written before a queued task is admitted.
+    pub pull_request_dependencies: Vec<Value>,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -319,6 +321,10 @@ fn create_inner(
                 "INSERT INTO suplex_task_dependencies (task_id, depends_on_task_id, created_at) VALUES (?1, ?2, ?3)",
                 params![id, dependency, time],
             )?;
+        }
+        // The prerequisites are written first, so a queued task starts now only when every one is already complete.
+        if !input.pull_request_dependencies.is_empty() {
+            super::pull_request_dependencies::replace(database, id, &input.pull_request_dependencies)?;
         }
         root_session_store::observe_lifecycle(database, id)?;
         if input.start_queued && admit_queued(database, id, now)? {

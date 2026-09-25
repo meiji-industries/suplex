@@ -393,7 +393,7 @@ mod tests {
                 issue: None,
                 start_queued: false,
                 copied_from_task_id: None,
-                depends_on: vec![],
+                depends_on: vec![], pull_request_dependencies: vec![],
             };
             crate::tasks::commands::create_user_task(
                 database,

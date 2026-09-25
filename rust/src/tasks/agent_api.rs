@@ -43,7 +43,7 @@ use crate::{
 use super::{
     archive::operations as archive,
     commands::{self, TaskFailure},
-    images, integration,
+    images, integration, pull_request_dependencies,
     repository::{self, TaskCreator},
     response, sources,
 };
@@ -1624,6 +1624,8 @@ struct Pending {
     project: Project,
     hash: String,
     images: Vec<images::DecodedTaskImage>,
+    /// The GitHub observations of `blockedByPullRequests`.
+    pull_requests: Vec<Value>,
 }
 
 /// Everything before the live Git capture: authority, idempotency, policy, and local-engine support.
@@ -1743,10 +1745,8 @@ fn admit(
             .map_err(|_| dependency_unavailable(dependency))?;
     }
     // The same engine limits as board creation in `routes/tasks.rs`.
-    if request.workflow != "standard" || !request.blocked_by_pull_requests.is_empty() {
-        return Err(not_ported(
-            "Only Standard tasks without pull request prerequisites are ported",
-        ));
+    if request.workflow != "standard" {
+        return Err(not_ported("Only Standard tasks are ported"));
     }
     let images = request
         .images
@@ -1759,6 +1759,7 @@ fn admit(
         project,
         hash,
         images,
+        pull_requests: Vec::new(),
     })))
 }
 
@@ -1791,6 +1792,7 @@ fn write(
     };
     sources::apply(&mut prepared, source);
     prepared.creator = TaskCreator::Agent(principal.agent_id.clone());
+    prepared.pull_request_dependencies = pending.pull_requests.clone();
     prepared.request_hash = pending.hash.clone();
     prepared.copied_from_task_id = copied_from.map(str::to_owned);
     if let Some(configuration) = prepared.configuration.as_object_mut() {
@@ -1871,10 +1873,21 @@ pub async fn create(
     raw: &TaskCreateBody,
     copied_from: Option<&str>,
 ) -> DatabaseResult<Creation> {
-    let pending = match state.with_database(|database| admit(database, principal, raw))? {
+    let mut pending = match state.with_database(|database| admit(database, principal, raw))? {
         Admission::Done(creation) => return Ok(creation),
         Admission::Capture(pending) => pending,
     };
+    let numbers = pending
+        .resolved
+        .request
+        .blocked_by_pull_requests
+        .iter()
+        .map(|dependency| dependency.number)
+        .collect::<Vec<_>>();
+    let repository = pending.project.repository.clone().unwrap_or_default();
+    pending.pull_requests = pull_request_dependencies::observe(&repository, &numbers)
+        .await
+        .map_err(pull_request_unavailable)?;
     let request = &pending.resolved.request;
     let selector = request
         .source
@@ -2097,12 +2110,47 @@ pub fn set_dependencies_array(
     set_dependency_ids(database, principal, task_id, depends_on, Utc::now())
 }
 
+/// TypeScript `observePullRequestDependencies` for an agent: every rejection names the pull request.
+pub fn pull_request_unavailable(rejection: pull_request_dependencies::Rejection) -> Box<dyn Error> {
+    let (pull_request_dependencies::Rejection::Unobservable(number)
+    | pull_request_dependencies::Rejection::NotFound(number)) = rejection;
+    let reason = "The pull request is not available.";
+    fail_with(
+        reason,
+        422,
+        "dependency_not_found",
+        json!({"field": "blockedByPullRequests", "value": number.to_string(), "reason": reason}),
+    )
+}
+
+/// The authority and task prerequisite checks before GitHub observes the pull
+/// request prerequisites; returns the task repository.
+pub fn dependency_repository(
+    database: &SuplexDatabase,
+    principal: &Principal,
+    task_id: &str,
+    body: &TaskDependenciesBody,
+) -> DatabaseResult<String> {
+    require_owned(database, principal, task_id)?;
+    for dependency in &body.depends_on {
+        task_row(database, dependency)?.ok_or_else(|| dependency_unavailable(dependency))?;
+        require_readable(database, principal, dependency)
+            .map_err(|_| dependency_unavailable(dependency))?;
+    }
+    Ok(task_json(database, task_id)?["configuration"]["repository"]
+        .as_str()
+        .unwrap_or("")
+        .to_owned())
+}
+
 /// The HTTP body form: pull request prerequisites are replaced with the task prerequisites.
+/// `pull_requests` are the GitHub observations of `blockedByPullRequests`.
 pub fn set_dependencies(
     database: &mut SuplexDatabase,
     principal: &Principal,
     task_id: &str,
     body: &TaskDependenciesBody,
+    pull_requests: &[Value],
 ) -> DatabaseResult<Value> {
     let now = Utc::now();
     let row = require_owned(database, principal, task_id)?;
@@ -2110,9 +2158,6 @@ pub fn set_dependencies(
         task_row(database, dependency)?.ok_or_else(|| dependency_unavailable(dependency))?;
         require_readable(database, principal, dependency)
             .map_err(|_| dependency_unavailable(dependency))?;
-    }
-    if !body.blocked_by_pull_requests.is_empty() {
-        return Err(not_ported("Pull request prerequisites are not ported"));
     }
     replace_dependencies(
         database,
@@ -2124,10 +2169,7 @@ pub fn set_dependencies(
     )?;
     // Replace every prerequisite before a queued task is considered for admission.
     database.transaction(true, |database| {
-        database.connection().execute(
-            "DELETE FROM suplex_task_pull_request_dependencies WHERE task_id = ?1",
-            [task_id],
-        )?;
+        pull_request_dependencies::replace(database, task_id, pull_requests)?;
         repository::reconcile_dependency_release(database, task_id, now).map(|_| ())
     })?;
     audit(

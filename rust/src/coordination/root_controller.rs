@@ -1127,7 +1127,7 @@ mod tests {
             root_profile: json!({"profileId":"profile_root","provider":"codex","model":"gpt-6-sol","reasoningLevel":"medium","serviceTier":"default"}),
             worker_profile: json!({"profileId":"profile_worker","provider":"codex","model":"gpt-6-sol","reasoningLevel":"medium","serviceTier":"default"}),
             advisor_profiles: json!({}), issue: None, start_queued: true,
-            copied_from_task_id: None, depends_on: vec![],
+            copied_from_task_id: None, depends_on: vec![], pull_request_dependencies: vec![],
         }, now).unwrap().task;
         let root = root_session_store::reserve_root(&mut database, &task.id, now).unwrap();
         let worker = root_session_store::launch_standard_worker(

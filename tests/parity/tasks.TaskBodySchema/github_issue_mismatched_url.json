@@ -1,0 +1,31 @@
+{
+  "contract": "tasks.TaskBodySchema",
+  "case": "github_issue_mismatched_url",
+  "input": {
+    "projectId": "project",
+    "title": "  Build  ",
+    "idempotencyKey": "task-0001",
+    "issue": {
+      "kind": "github",
+      "repository": "team/repo",
+      "number": 12,
+      "id": "123",
+      "key": "GH-12",
+      "title": "Issue",
+      "url": "https://github.com/team/repo/issues/13"
+    }
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "custom",
+        "message": "Issue URL must match its tracker identity",
+        "path": [
+          "issue",
+          "url"
+        ]
+      }
+    ]
+  }
+}

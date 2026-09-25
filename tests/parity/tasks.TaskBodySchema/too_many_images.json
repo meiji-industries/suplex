@@ -1,0 +1,71 @@
+{
+  "contract": "tasks.TaskBodySchema",
+  "case": "too_many_images",
+  "input": {
+    "projectId": "project",
+    "title": "  Build  ",
+    "idempotencyKey": "task-0001",
+    "images": [
+      {
+        "filename": "x",
+        "mimeType": "image/png",
+        "base64": "x"
+      },
+      {
+        "filename": "x",
+        "mimeType": "image/png",
+        "base64": "x"
+      },
+      {
+        "filename": "x",
+        "mimeType": "image/png",
+        "base64": "x"
+      },
+      {
+        "filename": "x",
+        "mimeType": "image/png",
+        "base64": "x"
+      },
+      {
+        "filename": "x",
+        "mimeType": "image/png",
+        "base64": "x"
+      },
+      {
+        "filename": "x",
+        "mimeType": "image/png",
+        "base64": "x"
+      },
+      {
+        "filename": "x",
+        "mimeType": "image/png",
+        "base64": "x"
+      },
+      {
+        "filename": "x",
+        "mimeType": "image/png",
+        "base64": "x"
+      },
+      {
+        "filename": "x",
+        "mimeType": "image/png",
+        "base64": "x"
+      }
+    ]
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "origin": "array",
+        "code": "too_big",
+        "maximum": 8,
+        "inclusive": true,
+        "path": [
+          "images"
+        ],
+        "message": "Too big: expected array to have <=8 items"
+      }
+    ]
+  }
+}

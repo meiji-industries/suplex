@@ -1,0 +1,32 @@
+{
+  "contract": "tasks.TaskBodySchema",
+  "case": "issue_wrong_kind",
+  "input": {
+    "projectId": "project",
+    "title": "  Build  ",
+    "idempotencyKey": "task-0001",
+    "issue": {
+      "kind": "other"
+    }
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid_union",
+        "errors": [],
+        "note": "No matching discriminator",
+        "discriminator": "kind",
+        "options": [
+          "github",
+          "jira"
+        ],
+        "path": [
+          "issue",
+          "kind"
+        ],
+        "message": "Invalid discriminator value. Expected 'github' | 'jira'"
+      }
+    ]
+  }
+}

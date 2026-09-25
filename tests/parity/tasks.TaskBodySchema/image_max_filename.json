@@ -1,0 +1,40 @@
+{
+  "contract": "tasks.TaskBodySchema",
+  "case": "image_max_filename",
+  "input": {
+    "projectId": "project",
+    "title": "  Build  ",
+    "idempotencyKey": "task-0001",
+    "images": [
+      {
+        "filename": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+        "mimeType": "image/png",
+        "base64": "x"
+      }
+    ]
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "projectId": "project",
+      "title": "Build",
+      "description": "",
+      "idempotencyKey": "task-0001",
+      "images": [
+        {
+          "filename": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+          "mimeType": "image/png",
+          "base64": "x"
+        }
+      ],
+      "startImmediately": false,
+      "deliveryTarget": "pull_request_draft",
+      "runProjectTests": true,
+      "visualEvidence": "off",
+      "workflow": "standard",
+      "advisorProfileIds": {},
+      "dependsOn": [],
+      "blockedByPullRequests": []
+    }
+  }
+}

@@ -1,0 +1,82 @@
+{
+  "contract": "tasks.TaskBodySchema",
+  "case": "invalid_advisor_and_dependencies",
+  "input": {
+    "projectId": "project",
+    "title": "  Build  ",
+    "idempotencyKey": "task-0001",
+    "advisorProfileIds": {
+      "reviewer": "",
+      "extra": true
+    },
+    "dependsOn": [
+      ""
+    ],
+    "blockedByPullRequests": [
+      {
+        "number": -1,
+        "extra": true
+      }
+    ]
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "origin": "string",
+        "code": "too_small",
+        "minimum": 1,
+        "inclusive": true,
+        "path": [
+          "advisorProfileIds",
+          "reviewer"
+        ],
+        "message": "Too small: expected string to have >=1 characters"
+      },
+      {
+        "code": "unrecognized_keys",
+        "keys": [
+          "extra"
+        ],
+        "path": [
+          "advisorProfileIds"
+        ],
+        "message": "Unrecognized key: \"extra\""
+      },
+      {
+        "origin": "string",
+        "code": "too_small",
+        "minimum": 1,
+        "inclusive": true,
+        "path": [
+          "dependsOn",
+          0
+        ],
+        "message": "Too small: expected string to have >=1 characters"
+      },
+      {
+        "origin": "number",
+        "code": "too_small",
+        "minimum": 0,
+        "inclusive": false,
+        "path": [
+          "blockedByPullRequests",
+          0,
+          "number"
+        ],
+        "message": "Too small: expected number to be >0"
+      },
+      {
+        "code": "unrecognized_keys",
+        "keys": [
+          "extra"
+        ],
+        "path": [
+          "blockedByPullRequests",
+          0
+        ],
+        "message": "Unrecognized key: \"extra\""
+      }
+    ]
+  }
+}

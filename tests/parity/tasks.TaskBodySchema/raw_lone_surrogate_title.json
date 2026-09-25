@@ -1,0 +1,10 @@
+{
+  "contract": "tasks.TaskBodySchema",
+  "case": "raw_lone_surrogate_title",
+  "encoding": "raw-json",
+  "input": "{\"projectId\":\"project\",\"title\":\"\\ud800\",\"idempotencyKey\":\"task-0001\"}",
+  "expected": {
+    "accepted": true,
+    "value": "{\"projectId\":\"project\",\"title\":\"\\ud800\",\"description\":\"\",\"idempotencyKey\":\"task-0001\",\"images\":[],\"startImmediately\":false,\"deliveryTarget\":\"pull_request_draft\",\"runProjectTests\":true,\"visualEvidence\":\"off\",\"workflow\":\"standard\",\"advisorProfileIds\":{},\"dependsOn\":[],\"blockedByPullRequests\":[]}"
+  }
+}

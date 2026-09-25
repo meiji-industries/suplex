@@ -2,7 +2,9 @@ use serde_json::{Value, json};
 
 use crate::shared::js_json::{JsDocument, JsNode};
 
-use super::js_issues::{IssueList, JsIssueContext, issue_document};
+use super::js_issues::{
+    IssueList, JsIssueContext, advisor_profile_ids, issue_document, object_node,
+};
 use super::{DetailedJsParseResult, JsContractFailure};
 
 type NodeResult = Result<usize, IssueList>;
@@ -91,12 +93,7 @@ impl Parser<'_> {
         self.source.get(object, name)
     }
     fn object_node(&mut self, fields: Vec<(&str, usize)>) -> usize {
-        self.output.append_node(JsNode::Object(
-            fields
-                .into_iter()
-                .map(|(name, value)| (name.encode_utf16().collect(), value))
-                .collect(),
-        ))
+        object_node(&mut self.output, fields)
     }
     fn string(
         &self,
@@ -114,54 +111,13 @@ impl Parser<'_> {
         min: usize,
         max: Option<usize>,
     ) -> NodeResult {
-        if !node.is_some_and(|index| matches!(self.source.node(index), JsNode::String(_))) {
-            return self.string(node, path, min, max);
-        }
-        let index = self.string(node, path, 0, None)?;
-        let JsNode::String(raw) = self.source.node(index) else {
-            unreachable!()
-        };
-        let start = raw
-            .iter()
-            .position(|unit| !js_space(*unit))
-            .unwrap_or(raw.len());
-        let end = raw
-            .iter()
-            .rposition(|unit| !js_space(*unit))
-            .map_or(start, |index| index + 1);
-        let value = raw[start..end].to_vec();
-        let mut issues = IssueList::new();
-        if value.len() < min {
-            issues.push(json!({"origin":"string", "code":"too_small", "minimum":min, "inclusive":true, "path":path, "message":format!("Too small: expected string to have >={min} characters")}));
-        }
-        if let Some(max) = max
-            && value.len() > max
-        {
-            issues.push(json!({"origin":"string", "code":"too_big", "maximum":max, "inclusive":true, "path":path, "message":format!("Too big: expected string to have <={max} characters")}));
-        }
-        if issues.is_empty() {
-            Ok(self.output.append_node(JsNode::String(value)))
-        } else {
-            Err(issues)
-        }
+        JsIssueContext::new(self.source).trimmed_string(&mut self.output, node, path, min, max)
     }
     fn enumeration(&self, node: Option<usize>, path: &[Value], options: &[&str]) -> NodeResult {
-        if let Some(index) = node
-            && let JsNode::String(value) = self.source.node(index)
-            && options
-                .iter()
-                .any(|option| value.iter().copied().eq(option.encode_utf16()))
-        {
-            return Ok(index);
-        }
-        Err(vec![json!({"code":"invalid_value", "values":options, "path":path,
-            "message":format!("Invalid option: expected one of {}", options.iter().map(|option| format!("\"{option}\"")).collect::<Vec<_>>().join("|"))})].into())
+        self.core().enumeration(node, path, options)
     }
     fn boolean(&self, node: Option<usize>, path: &[Value]) -> NodeResult {
-        match node {
-            Some(index) if matches!(self.source.node(index), JsNode::Bool(_)) => Ok(index),
-            _ => Err(vec![self.core().invalid_type("boolean", node, path)].into()),
-        }
+        self.core().boolean(node, path)
     }
     fn nullable(
         &self,
@@ -178,27 +134,7 @@ impl Parser<'_> {
         }
     }
     fn advisors(&mut self, node: usize, path: &[Value]) -> NodeResult {
-        let object = self.core().object(Some(node), path)?;
-        let mut fields = Vec::new();
-        let mut issues = IssueList::new();
-        for name in ["reviewer", "planner_a", "planner_b", "rater"] {
-            if let Some(value) = self.field(object, name) {
-                match self.string(Some(value), &child(path, name), 1, Some(256)) {
-                    Ok(value) => fields.push((name, value)),
-                    Err(error) => issues.extend(error),
-                }
-            }
-        }
-        issues.extend(self.core().strict(
-            object,
-            path,
-            &["reviewer", "planner_a", "planner_b", "rater"],
-        ));
-        if issues.is_empty() {
-            Ok(self.object_node(fields))
-        } else {
-            Err(issues)
-        }
+        advisor_profile_ids(self.source, &mut self.output, node, path)
     }
     fn record(&mut self, node: usize, path: &[Value], mode: Mode) -> NodeResult {
         let object = self.core().object(Some(node), path)?;
@@ -437,9 +373,4 @@ fn child(path: &[Value], name: &str) -> Path {
     let mut output = path.to_vec();
     output.push(json!(name));
     output
-}
-
-fn js_space(unit: u16) -> bool {
-    unit == 0xfeff
-        || (char::from_u32(u32::from(unit)).is_some_and(char::is_whitespace) && unit != 0x85)
 }

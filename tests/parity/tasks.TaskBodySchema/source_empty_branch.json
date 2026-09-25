@@ -1,0 +1,29 @@
+{
+  "contract": "tasks.TaskBodySchema",
+  "case": "source_empty_branch",
+  "input": {
+    "projectId": "project",
+    "title": "  Build  ",
+    "idempotencyKey": "task-0001",
+    "source": {
+      "kind": "branch",
+      "branch": ""
+    }
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "origin": "string",
+        "code": "too_small",
+        "minimum": 1,
+        "inclusive": true,
+        "path": [
+          "source",
+          "branch"
+        ],
+        "message": "Too small: expected string to have >=1 characters"
+      }
+    ]
+  }
+}

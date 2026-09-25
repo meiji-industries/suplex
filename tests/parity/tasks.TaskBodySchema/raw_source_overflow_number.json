@@ -1,0 +1,10 @@
+{
+  "contract": "tasks.TaskBodySchema",
+  "case": "raw_source_overflow_number",
+  "encoding": "raw-json",
+  "input": "{\"projectId\":\"project\",\"title\":\"Build\",\"idempotencyKey\":\"task-0001\",\"source\":{\"kind\":\"issue\",\"number\":1e400}}",
+  "expected": {
+    "accepted": false,
+    "error": "[{\"expected\":\"number\",\"code\":\"invalid_type\",\"received\":\"Infinity\",\"path\":[\"source\",\"number\"],\"message\":\"Invalid input: expected number, received number\"}]"
+  }
+}

@@ -1,0 +1,32 @@
+{
+  "contract": "tasks.TaskBodySchema",
+  "case": "invalid_booleans",
+  "input": {
+    "projectId": "project",
+    "title": "  Build  ",
+    "idempotencyKey": "task-0001",
+    "startImmediately": "yes",
+    "runProjectTests": 1
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "expected": "boolean",
+        "code": "invalid_type",
+        "path": [
+          "startImmediately"
+        ],
+        "message": "Invalid input: expected boolean, received string"
+      },
+      {
+        "expected": "boolean",
+        "code": "invalid_type",
+        "path": [
+          "runProjectTests"
+        ],
+        "message": "Invalid input: expected boolean, received number"
+      }
+    ]
+  }
+}

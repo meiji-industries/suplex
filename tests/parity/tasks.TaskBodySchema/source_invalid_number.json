@@ -1,0 +1,40 @@
+{
+  "contract": "tasks.TaskBodySchema",
+  "case": "source_invalid_number",
+  "input": {
+    "projectId": "project",
+    "title": "  Build  ",
+    "idempotencyKey": "task-0001",
+    "source": {
+      "kind": "issue",
+      "number": 0,
+      "extra": true
+    }
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "origin": "number",
+        "code": "too_small",
+        "minimum": 0,
+        "inclusive": false,
+        "path": [
+          "source",
+          "number"
+        ],
+        "message": "Too small: expected number to be >0"
+      },
+      {
+        "code": "unrecognized_keys",
+        "keys": [
+          "extra"
+        ],
+        "path": [
+          "source"
+        ],
+        "message": "Unrecognized key: \"extra\""
+      }
+    ]
+  }
+}

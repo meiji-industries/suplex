@@ -1,0 +1,10 @@
+{
+  "contract": "tasks.TaskBodySchema",
+  "case": "raw_issue_invalid_surrogate_url",
+  "encoding": "raw-json",
+  "input": "{\"projectId\":\"project\",\"title\":\"Build\",\"idempotencyKey\":\"task-0001\",\"issue\":{\"kind\":\"github\",\"repository\":\"team/repo\",\"number\":12,\"id\":\"123\",\"key\":\"GH-12\",\"title\":\"Issue\",\"url\":\"\\ud800\"}}",
+  "expected": {
+    "accepted": false,
+    "error": "{\"kind\":\"thrown\",\"name\":\"TypeError\",\"code\":\"ERR_INVALID_URL\",\"message\":\"Invalid URL\",\"input\":\"�\"}"
+  }
+}

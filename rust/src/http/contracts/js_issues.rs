@@ -102,6 +102,117 @@ impl<'a> JsIssueContext<'a> {
             "message":format!("Unrecognized key{}: {quoted}", if unknown.len() == 1 { "" } else { "s" })}), raw);
         issues
     }
+
+    pub(super) fn enumeration(
+        &self,
+        node: Option<usize>,
+        path: &[Value],
+        options: &[&str],
+    ) -> Result<usize, IssueList> {
+        if let Some(index) = node
+            && let JsNode::String(value) = self.source.node(index)
+            && options
+                .iter()
+                .any(|option| value.iter().copied().eq(option.encode_utf16()))
+        {
+            return Ok(index);
+        }
+        Err(vec![json!({"code":"invalid_value", "values":options, "path":path,
+            "message":format!("Invalid option: expected one of {}", options.iter().map(|option| format!("\"{option}\"")).collect::<Vec<_>>().join("|"))})].into())
+    }
+
+    pub(super) fn boolean(&self, node: Option<usize>, path: &[Value]) -> Result<usize, IssueList> {
+        match node {
+            Some(index) if matches!(self.source.node(index), JsNode::Bool(_)) => Ok(index),
+            _ => Err(vec![self.invalid_type("boolean", node, path)].into()),
+        }
+    }
+
+    pub(super) fn trimmed_string(
+        &self,
+        output: &mut JsDocument,
+        node: Option<usize>,
+        path: &[Value],
+        min: usize,
+        max: Option<usize>,
+    ) -> Result<usize, IssueList> {
+        if !node.is_some_and(|index| matches!(self.source.node(index), JsNode::String(_))) {
+            return self.string(node, path, min, max);
+        }
+        let index = self.string(node, path, 0, None)?;
+        let JsNode::String(raw) = self.source.node(index) else {
+            unreachable!()
+        };
+        let start = raw
+            .iter()
+            .position(|unit| !js_space(*unit))
+            .unwrap_or(raw.len());
+        let end = raw
+            .iter()
+            .rposition(|unit| !js_space(*unit))
+            .map_or(start, |index| index + 1);
+        let value = raw[start..end].to_vec();
+        let mut issues = IssueList::new();
+        if value.len() < min {
+            issues.push(json!({"origin":"string", "code":"too_small", "minimum":min, "inclusive":true, "path":path, "message":format!("Too small: expected string to have >={min} characters")}));
+        }
+        if let Some(max) = max
+            && value.len() > max
+        {
+            issues.push(json!({"origin":"string", "code":"too_big", "maximum":max, "inclusive":true, "path":path, "message":format!("Too big: expected string to have <={max} characters")}));
+        }
+        if issues.is_empty() {
+            Ok(output.append_node(JsNode::String(value)))
+        } else {
+            Err(issues)
+        }
+    }
+}
+
+pub(super) fn object_node(output: &mut JsDocument, fields: Vec<(&str, usize)>) -> usize {
+    output.append_node(JsNode::Object(
+        fields
+            .into_iter()
+            .map(|(name, value)| (name.encode_utf16().collect(), value))
+            .collect(),
+    ))
+}
+
+pub(super) fn advisor_profile_ids(
+    source: &JsDocument,
+    output: &mut JsDocument,
+    node: usize,
+    path: &[Value],
+) -> Result<usize, IssueList> {
+    let core = JsIssueContext::new(source);
+    let object = core.object(Some(node), path)?;
+    let mut fields = Vec::new();
+    let mut issues = IssueList::new();
+    for name in ["reviewer", "planner_a", "planner_b", "rater"] {
+        if let Some(value) = source.get(object, name) {
+            let mut field_path = path.to_vec();
+            field_path.push(json!(name));
+            match core.string(Some(value), &field_path, 1, Some(256)) {
+                Ok(value) => fields.push((name, value)),
+                Err(error) => issues.extend(error),
+            }
+        }
+    }
+    issues.extend(core.strict(
+        object,
+        path,
+        &["reviewer", "planner_a", "planner_b", "rater"],
+    ));
+    if issues.is_empty() {
+        Ok(object_node(output, fields))
+    } else {
+        Err(issues)
+    }
+}
+
+fn js_space(unit: u16) -> bool {
+    unit == 0xfeff
+        || (char::from_u32(u32::from(unit)).is_some_and(char::is_whitespace) && unit != 0x85)
 }
 
 #[derive(Default)]

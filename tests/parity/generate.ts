@@ -25,7 +25,62 @@ const mcpServer = {
   grants: { root: ["query_docs"], advisor: [], worker: ["query_docs"] },
 };
 const workflowRecord = { name: "  Build  ", engine: "standard", id: "workflow", archivedAt: null, createdAt: "now", updatedAt: "now" };
+const taskBody = { projectId: "project", title: "  Build  ", idempotencyKey: "task-0001" };
+const githubIssue = { kind: "github", repository: "team/repo", number: 12, id: "123", key: "GH-12", title: "Issue", url: "https://github.com/team/repo/issues/12" };
+const jiraIssue = { kind: "jira", site: "https://team.atlassian.net", id: "123", key: "APP-12", title: "Issue", url: "https://team.atlassian.net/browse/APP-12" };
 const semanticInputs: Record<string, Record<string, unknown>> = {
+  "tasks.TaskBodySchema": {
+    defaults_trim: taskBody,
+    all_fields: { ...taskBody, description: "  Description  ", images: [{ filename: "screen.png", mimeType: "image/png", base64: "eA==" }], rootProfileId: "root", workerProfileId: "worker", startImmediately: true, deliveryTarget: "merged", runProjectTests: false, visualEvidence: "capture", source: { kind: "branch", branch: "feature/x" }, issue: githubIssue, workflow: "direct_build", advisorProfileIds: { reviewer: "reviewer" }, dependsOn: ["task-1"], blockedByPullRequests: [{ number: 12 }] },
+    jira_issue: { ...taskBody, issue: jiraIssue },
+    null_issue: { ...taskBody, issue: null },
+    issue_source: { ...taskBody, source: { kind: "issue", number: 1 } },
+    pull_request_source: { ...taskBody, source: { kind: "pull_request", number: 1 } },
+    blank_title: { ...taskBody, title: " \t " },
+    invalid_idempotency: { ...taskBody, idempotencyKey: "bad key" },
+    short_idempotency: { ...taskBody, idempotencyKey: "short" },
+    astral_project_overlong: { ...taskBody, projectId: "😀".repeat(129) },
+    image_bad_filename: { ...taskBody, images: [{ filename: "../secret", mimeType: "image/png", base64: "eA==" }] },
+    image_slash_filename: { ...taskBody, images: [{ filename: "a/b", mimeType: "image/png", base64: "eA==" }] },
+    image_backslash_filename: { ...taskBody, images: [{ filename: "a\\b", mimeType: "image/png", base64: "eA==" }] },
+    image_max_filename: { ...taskBody, images: [{ filename: "x".repeat(255), mimeType: "image/png", base64: "x" }] },
+    image_overlong_filename: { ...taskBody, images: [{ filename: "x".repeat(256), mimeType: "image/png", base64: "x" }] },
+    image_overlong_slash_filename: { ...taskBody, images: [{ filename: `${"x".repeat(255)}/`, mimeType: "image/png", base64: "x" }] },
+    image_empty_base64: { ...taskBody, images: [{ filename: "x", mimeType: "image/png", base64: "" }] },
+    image_base64_max: { ...taskBody, images: [{ filename: "x", mimeType: "image/png", base64: "x".repeat(11_184_812) }] },
+    image_base64_over_max: { ...taskBody, images: [{ filename: "x", mimeType: "image/png", base64: "x".repeat(11_184_813) }] },
+    image_wrong_mime_unknown: { ...taskBody, images: [{ filename: "x", mimeType: "text/plain", base64: "x", extra: true }] },
+    image_missing_fields: { ...taskBody, images: [{}] },
+    too_many_images: { ...taskBody, images: Array.from({ length: 9 }, () => ({ filename: "x", mimeType: "image/png", base64: "x" })) },
+    source_wrong_kind: { ...taskBody, source: { kind: "other", number: 1 } },
+    source_invalid_number: { ...taskBody, source: { kind: "issue", number: 0, extra: true } },
+    source_fractional_number: { ...taskBody, source: { kind: "pull_request", number: 1.5 } },
+    source_max_safe_number: { ...taskBody, source: { kind: "issue", number: Number.MAX_SAFE_INTEGER } },
+    source_unsafe_number: { ...taskBody, source: { kind: "issue", number: Number.MAX_SAFE_INTEGER + 1 } },
+    source_empty_branch: { ...taskBody, source: { kind: "branch", branch: "" } },
+    github_issue_mismatched_url: { ...taskBody, issue: { ...githubIssue, url: "https://github.com/team/repo/issues/13" } },
+    github_issue_wrong_origin: { ...taskBody, issue: { ...githubIssue, url: "https://example.com/team/repo/issues/12" } },
+    github_issue_invalid_url_throws: { ...taskBody, issue: { ...githubIssue, url: "x" } },
+    github_issue_bad_repo: { ...taskBody, issue: { ...githubIssue, repository: "bad" } },
+    github_issue_unicode_repo: { ...taskBody, issue: { ...githubIssue, repository: "tëam/repo" } },
+    github_issue_case_insensitive_url: { ...taskBody, issue: { ...githubIssue, url: "https://github.com/TEAM/REPO/issues/12" } },
+    github_issue_wrong_number: { ...taskBody, issue: { ...githubIssue, number: 0 } },
+    jira_issue_bad_site: { ...taskBody, issue: { ...jiraIssue, site: "https://jira.example.com" } },
+    jira_issue_invalid_site: { ...taskBody, issue: { ...jiraIssue, site: "x" } },
+    jira_issue_wrong_url: { ...taskBody, issue: { ...jiraIssue, url: "https://team.atlassian.net/browse/APP-13" } },
+    jira_issue_bad_key: { ...taskBody, issue: { ...jiraIssue, key: "bad" } },
+    jira_issue_unicode_digit: { ...taskBody, issue: { ...jiraIssue, id: "١٢" } },
+    jira_issue_case_sensitive_url: { ...taskBody, issue: { ...jiraIssue, url: "https://team.atlassian.net/browse/app-12" } },
+    issue_unknown: { ...taskBody, issue: { ...githubIssue, extra: true } },
+    issue_wrong_kind: { ...taskBody, issue: { kind: "other" } },
+    invalid_advisor_and_dependencies: { ...taskBody, advisorProfileIds: { reviewer: "", extra: true }, dependsOn: [""], blockedByPullRequests: [{ number: -1, extra: true }] },
+    too_many_dependencies: { ...taskBody, dependsOn: Array.from({ length: 51 }, (_, index) => `task-${index}`) },
+    max_dependencies: { ...taskBody, dependsOn: Array.from({ length: 50 }, (_, index) => `task-${index}`) },
+    too_many_blocked_prs: { ...taskBody, blockedByPullRequests: Array.from({ length: 51 }, (_, index) => ({ number: index + 1 })) },
+    max_blocked_prs: { ...taskBody, blockedByPullRequests: Array.from({ length: 50 }, (_, index) => ({ number: index + 1 })) },
+    invalid_enums: { ...taskBody, deliveryTarget: "publish", visualEvidence: "screen", workflow: "unknown" },
+    invalid_booleans: { ...taskBody, startImmediately: "yes", runProjectTests: 1 },
+  },
   "workflows.WorkflowRecordInputSchema": {
     trimmed_defaults: { name: "  Build  ", engine: "standard" },
     optional_fields: { name: "Build", description: "  A description  ", engine: "direct_build", rootProfileId: "root", workerProfileId: "worker", advisorProfileIds: { reviewer: "reviewer" }, deliveryTarget: "merged", runProjectTests: false, visualEvidence: "capture" },
@@ -415,6 +470,15 @@ const semanticInputs: Record<string, Record<string, unknown>> = {
 
 type Fixture = { contract: string; case: string; input?: unknown; expected: { accepted: true; value: unknown } | { accepted: false; error: unknown } };
 const rawInputs: Record<string, Record<string, string>> = {
+  "tasks.TaskBodySchema": {
+    lone_surrogate_title: String.raw`{"projectId":"project","title":"\ud800","idempotencyKey":"task-0001"}`,
+    strict_surrogate_key: String.raw`{"projectId":"project","title":"Build","idempotencyKey":"task-0001","\ud800":1}`,
+    issue_lone_surrogate_title: String.raw`{"projectId":"project","title":"Build","idempotencyKey":"task-0001","issue":{"kind":"github","repository":"team/repo","number":12,"id":"123","key":"GH-12","title":"\ud800","url":"https://github.com/team/repo/issues/12"}}`,
+    issue_strict_surrogate_key: String.raw`{"projectId":"project","title":"Build","idempotencyKey":"task-0001","issue":{"kind":"github","repository":"team/repo","number":12,"id":"123","key":"GH-12","title":"Issue","url":"https://github.com/team/repo/issues/12","\ud800":1}}`,
+    issue_invalid_surrogate_url: String.raw`{"projectId":"project","title":"Build","idempotencyKey":"task-0001","issue":{"kind":"github","repository":"team/repo","number":12,"id":"123","key":"GH-12","title":"Issue","url":"\ud800"}}`,
+    issue_overflow_number: String.raw`{"projectId":"project","title":"Build","idempotencyKey":"task-0001","issue":{"kind":"github","repository":"team/repo","number":1e400,"id":"123","key":"GH-12","title":"Issue","url":"https://github.com/team/repo/issues/12"}}`,
+    source_overflow_number: String.raw`{"projectId":"project","title":"Build","idempotencyKey":"task-0001","source":{"kind":"issue","number":1e400}}`,
+  },
   "workflows.WorkflowRecordInputSchema": {
     lone_surrogate_description: String.raw`{"name":"Build","engine":"standard","description":"\ud800"}`,
     strict_surrogate_key: String.raw`{"name":"Build","engine":"standard","\ud800":1}`,

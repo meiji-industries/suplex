@@ -1,0 +1,41 @@
+{
+  "contract": "tasks.TaskBodySchema",
+  "case": "jira_issue_bad_key",
+  "input": {
+    "projectId": "project",
+    "title": "  Build  ",
+    "idempotencyKey": "task-0001",
+    "issue": {
+      "kind": "jira",
+      "site": "https://team.atlassian.net",
+      "id": "123",
+      "key": "bad",
+      "title": "Issue",
+      "url": "https://team.atlassian.net/browse/APP-12"
+    }
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "origin": "string",
+        "code": "invalid_format",
+        "format": "regex",
+        "pattern": "/^[A-Z][A-Z0-9_]*-\\d+$/",
+        "path": [
+          "issue",
+          "key"
+        ],
+        "message": "Invalid string: must match pattern /^[A-Z][A-Z0-9_]*-\\d+$/"
+      },
+      {
+        "code": "custom",
+        "message": "Issue URL must match its tracker identity",
+        "path": [
+          "issue",
+          "url"
+        ]
+      }
+    ]
+  }
+}

@@ -1,0 +1,42 @@
+{
+  "contract": "tasks.TaskBodySchema",
+  "case": "image_overlong_slash_filename",
+  "input": {
+    "projectId": "project",
+    "title": "  Build  ",
+    "idempotencyKey": "task-0001",
+    "images": [
+      {
+        "filename": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx/",
+        "mimeType": "image/png",
+        "base64": "x"
+      }
+    ]
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "origin": "string",
+        "code": "too_big",
+        "maximum": 255,
+        "inclusive": true,
+        "path": [
+          "images",
+          0,
+          "filename"
+        ],
+        "message": "Too big: expected string to have <=255 characters"
+      },
+      {
+        "code": "custom",
+        "path": [
+          "images",
+          0,
+          "filename"
+        ],
+        "message": "Invalid input"
+      }
+    ]
+  }
+}

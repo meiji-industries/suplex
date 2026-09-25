@@ -1,0 +1,48 @@
+{
+  "contract": "tasks.TaskBodySchema",
+  "case": "image_wrong_mime_unknown",
+  "input": {
+    "projectId": "project",
+    "title": "  Build  ",
+    "idempotencyKey": "task-0001",
+    "images": [
+      {
+        "filename": "x",
+        "mimeType": "text/plain",
+        "base64": "x",
+        "extra": true
+      }
+    ]
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid_value",
+        "values": [
+          "image/png",
+          "image/jpeg",
+          "image/webp",
+          "image/gif"
+        ],
+        "path": [
+          "images",
+          0,
+          "mimeType"
+        ],
+        "message": "Invalid option: expected one of \"image/png\"|\"image/jpeg\"|\"image/webp\"|\"image/gif\""
+      },
+      {
+        "code": "unrecognized_keys",
+        "keys": [
+          "extra"
+        ],
+        "path": [
+          "images",
+          0
+        ],
+        "message": "Unrecognized key: \"extra\""
+      }
+    ]
+  }
+}

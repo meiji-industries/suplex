@@ -11,6 +11,7 @@ mod project_aux;
 mod project_creation_js;
 mod providers;
 mod task_aux;
+mod task_create_js;
 mod workflow_records_js;
 
 pub type ParseResult = Result<Value, Vec<Value>>;
@@ -75,6 +76,9 @@ pub fn validate_js_detailed(
     if let Some(result) = workflow_records_js::validate_detailed(contract, input) {
         return Some(result);
     }
+    if let Some(result) = task_create_js::validate_detailed(contract, input) {
+        return Some(result);
+    }
     auth_js::validate(contract, input).map(|result| {
         result.map_err(|issues| {
             JsContractFailure::Issues(
@@ -105,6 +109,7 @@ pub fn validate(contract: &str, input: Option<&Value>) -> Option<ParseResult> {
     if contract.starts_with("auth.")
         || contract.starts_with("common.")
         || contract.starts_with("projects.")
+        || contract.starts_with("tasks.")
         || contract.starts_with("workflows.")
     {
         let document = input.map(|value| {

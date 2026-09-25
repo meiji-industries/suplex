@@ -1,0 +1,28 @@
+{
+  "contract": "tasks.TaskBodySchema",
+  "case": "source_fractional_number",
+  "input": {
+    "projectId": "project",
+    "title": "  Build  ",
+    "idempotencyKey": "task-0001",
+    "source": {
+      "kind": "pull_request",
+      "number": 1.5
+    }
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "expected": "int",
+        "format": "safeint",
+        "code": "invalid_type",
+        "path": [
+          "source",
+          "number"
+        ],
+        "message": "Invalid input: expected int, received number"
+      }
+    ]
+  }
+}

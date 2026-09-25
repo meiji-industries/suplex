@@ -1,0 +1,33 @@
+{
+  "contract": "tasks.TaskBodySchema",
+  "case": "jira_issue_unicode_digit",
+  "input": {
+    "projectId": "project",
+    "title": "  Build  ",
+    "idempotencyKey": "task-0001",
+    "issue": {
+      "kind": "jira",
+      "site": "https://team.atlassian.net",
+      "id": "١٢",
+      "key": "APP-12",
+      "title": "Issue",
+      "url": "https://team.atlassian.net/browse/APP-12"
+    }
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "origin": "string",
+        "code": "invalid_format",
+        "format": "regex",
+        "pattern": "/^\\d+$/",
+        "path": [
+          "issue",
+          "id"
+        ],
+        "message": "Invalid string: must match pattern /^\\d+$/"
+      }
+    ]
+  }
+}

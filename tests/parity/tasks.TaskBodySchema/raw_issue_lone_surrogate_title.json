@@ -1,0 +1,10 @@
+{
+  "contract": "tasks.TaskBodySchema",
+  "case": "raw_issue_lone_surrogate_title",
+  "encoding": "raw-json",
+  "input": "{\"projectId\":\"project\",\"title\":\"Build\",\"idempotencyKey\":\"task-0001\",\"issue\":{\"kind\":\"github\",\"repository\":\"team/repo\",\"number\":12,\"id\":\"123\",\"key\":\"GH-12\",\"title\":\"\\ud800\",\"url\":\"https://github.com/team/repo/issues/12\"}}",
+  "expected": {
+    "accepted": true,
+    "value": "{\"projectId\":\"project\",\"title\":\"Build\",\"description\":\"\",\"idempotencyKey\":\"task-0001\",\"images\":[],\"startImmediately\":false,\"deliveryTarget\":\"pull_request_draft\",\"runProjectTests\":true,\"visualEvidence\":\"off\",\"issue\":{\"kind\":\"github\",\"repository\":\"team/repo\",\"number\":12,\"id\":\"123\",\"key\":\"GH-12\",\"title\":\"\\ud800\",\"url\":\"https://github.com/team/repo/issues/12\"},\"workflow\":\"standard\",\"advisorProfileIds\":{},\"dependsOn\":[],\"blockedByPullRequests\":[]}"
+  }
+}

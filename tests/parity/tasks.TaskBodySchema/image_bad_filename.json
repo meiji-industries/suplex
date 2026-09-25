@@ -1,0 +1,30 @@
+{
+  "contract": "tasks.TaskBodySchema",
+  "case": "image_bad_filename",
+  "input": {
+    "projectId": "project",
+    "title": "  Build  ",
+    "idempotencyKey": "task-0001",
+    "images": [
+      {
+        "filename": "../secret",
+        "mimeType": "image/png",
+        "base64": "eA=="
+      }
+    ]
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "custom",
+        "path": [
+          "images",
+          0,
+          "filename"
+        ],
+        "message": "Invalid input"
+      }
+    ]
+  }
+}

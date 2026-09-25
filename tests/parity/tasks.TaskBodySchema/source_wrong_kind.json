@@ -1,0 +1,34 @@
+{
+  "contract": "tasks.TaskBodySchema",
+  "case": "source_wrong_kind",
+  "input": {
+    "projectId": "project",
+    "title": "  Build  ",
+    "idempotencyKey": "task-0001",
+    "source": {
+      "kind": "other",
+      "number": 1
+    }
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid_union",
+        "errors": [],
+        "note": "No matching discriminator",
+        "discriminator": "kind",
+        "options": [
+          "issue",
+          "branch",
+          "pull_request"
+        ],
+        "path": [
+          "source",
+          "kind"
+        ],
+        "message": "Invalid discriminator value. Expected 'issue' | 'branch' | 'pull_request'"
+      }
+    ]
+  }
+}

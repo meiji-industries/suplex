@@ -1,0 +1,38 @@
+{
+  "contract": "tasks.TaskBodySchema",
+  "case": "jira_issue_bad_site",
+  "input": {
+    "projectId": "project",
+    "title": "  Build  ",
+    "idempotencyKey": "task-0001",
+    "issue": {
+      "kind": "jira",
+      "site": "https://jira.example.com",
+      "id": "123",
+      "key": "APP-12",
+      "title": "Issue",
+      "url": "https://team.atlassian.net/browse/APP-12"
+    }
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "custom",
+        "message": "Issue URL must match its tracker identity",
+        "path": [
+          "issue",
+          "url"
+        ]
+      },
+      {
+        "code": "custom",
+        "message": "Use a Jira Cloud site",
+        "path": [
+          "issue",
+          "site"
+        ]
+      }
+    ]
+  }
+}

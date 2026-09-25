@@ -45,6 +45,7 @@ exec node src/platform/updates/supervisor.ts --watch
 description = "Build the frontend and run the isolated experimental Rust backend"
 run = '''
 pnpm exec vite build
+export SUPLEX_RUST_ASSETS_DIR="$PWD/dist/web"
 exec cargo +1.93.1 run --manifest-path rust/Cargo.toml --bin suplex
 '''
 

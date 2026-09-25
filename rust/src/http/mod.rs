@@ -1,4 +1,5 @@
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use axum::{
@@ -23,6 +24,7 @@ pub mod session;
 pub struct AppState {
     database: Arc<Mutex<SuplexDatabase>>,
     pub session_config: session::SessionConfig,
+    dev_assets_dir: Option<PathBuf>,
 }
 
 impl AppState {
@@ -30,7 +32,13 @@ impl AppState {
         Self {
             database: Arc::new(Mutex::new(database)),
             session_config,
+            dev_assets_dir: None,
         }
+    }
+
+    pub fn with_dev_assets_dir(mut self, directory: PathBuf) -> Self {
+        self.dev_assets_dir = Some(directory);
+        self
     }
 
     pub fn with_database<T>(&self, operation: impl FnOnce(&mut SuplexDatabase) -> T) -> T {
@@ -68,7 +76,7 @@ async fn auth_page() -> impl IntoResponse {
     )
 }
 
-async fn asset(Path(filename): Path<String>) -> Response {
+async fn asset(State(state): State<AppState>, Path(filename): Path<String>) -> Response {
     if !filename
         .bytes()
         .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'-'))
@@ -76,9 +84,10 @@ async fn asset(Path(filename): Path<String>) -> Response {
     {
         return (StatusCode::NOT_FOUND, "Not found").into_response();
     }
-    let Some(body) = embedded::frontend_asset(&filename) else {
-        return (StatusCode::NOT_FOUND, "Suplex UI asset is not built").into_response();
-    };
+    let disk_body = state
+        .dev_assets_dir
+        .as_ref()
+        .and_then(|directory| std::fs::read(directory.join(&filename)).ok());
     let content_type = if filename.ends_with(".js") {
         "text/javascript; charset=utf-8"
     } else if filename.ends_with(".woff2") {
@@ -88,7 +97,13 @@ async fn asset(Path(filename): Path<String>) -> Response {
     } else {
         "application/octet-stream"
     };
-    ([(header::CONTENT_TYPE, content_type)], body).into_response()
+    if let Some(body) = disk_body {
+        return ([(header::CONTENT_TYPE, content_type)], body).into_response();
+    }
+    match embedded::frontend_asset(&filename) {
+        Some(body) => ([(header::CONTENT_TYPE, content_type)], body).into_response(),
+        None => (StatusCode::NOT_FOUND, "Suplex UI asset is not built").into_response(),
+    }
 }
 
 async fn not_found(State(_state): State<AppState>, uri: axum::http::Uri) -> Response {
@@ -114,6 +129,43 @@ mod tests {
 
     use super::*;
     use crate::platform::database::OpenMode;
+    use axum::body::to_bytes;
+
+    #[tokio::test]
+    async fn development_assets_refresh_without_restarting_the_server() {
+        static NEXT_DIRECTORY: AtomicU64 = AtomicU64::new(0);
+        let directory = std::env::temp_dir().join(format!(
+            "suplex-rust-assets-{}-{}",
+            std::process::id(),
+            NEXT_DIRECTORY.fetch_add(1, Ordering::Relaxed)
+        ));
+        std::fs::create_dir_all(&directory).unwrap();
+        let database =
+            SuplexDatabase::open(&directory.join("test.sqlite"), OpenMode::Migrate).unwrap();
+        let state = AppState::new(
+            database,
+            session::SessionConfig {
+                port: 4113,
+                reachable_address: "http://127.0.0.1:4113".to_owned(),
+                tailscale_exposure: "off".to_owned(),
+            },
+        )
+        .with_dev_assets_dir(directory.clone());
+        let filename = "suplex-ui.js".to_owned();
+        std::fs::write(directory.join(&filename), b"first build").unwrap();
+        let first = asset(State(state.clone()), Path(filename.clone())).await;
+        assert_eq!(
+            to_bytes(first.into_body(), 1024).await.unwrap(),
+            "first build"
+        );
+        std::fs::write(directory.join(&filename), b"second build").unwrap();
+        let second = asset(State(state), Path(filename.clone())).await;
+        assert_eq!(
+            to_bytes(second.into_body(), 1024).await.unwrap(),
+            "second build"
+        );
+        let _ = std::fs::remove_dir_all(directory);
+    }
 
     #[test]
     fn committed_callback_can_reenter_shared_database() {
@@ -132,6 +184,7 @@ mod tests {
                 reachable_address: "http://127.0.0.1:4113".to_owned(),
                 tailscale_exposure: "off".to_owned(),
             },
+            dev_assets_dir: None,
         };
         let observed = Arc::new(AtomicBool::new(false));
         let callback_state = state.clone();

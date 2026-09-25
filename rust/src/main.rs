@@ -29,6 +29,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             tailscale_exposure: "off".to_owned(),
         },
     );
+    #[cfg(debug_assertions)]
+    let state = match std::env::var_os("SUPLEX_RUST_ASSETS_DIR") {
+        Some(directory) => state.with_dev_assets_dir(directory.into()),
+        None => state,
+    };
     println!("Experimental API routes are still being ported.");
     axum::serve(listener, http::router(state)).await?;
     Ok(())

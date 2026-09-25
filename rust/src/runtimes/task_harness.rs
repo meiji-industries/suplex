@@ -9,6 +9,8 @@ use crate::coordination::bridge_auth::{
     ADVISOR_BINDING_ENV, ADVISOR_RESULT_ENV, ADVISOR_TOKEN_ENV, ROOT_BINDING_ENV, ROOT_TOKEN_ENV,
 };
 use crate::coordination::root_bridge::RootIdentity;
+use crate::profiles::model_pricing::ModelPricingCatalog;
+use crate::runtimes::codex::{tool_evidence::NativeTool, usage::UsageTokens};
 use crate::runtimes::headless;
 
 // The prompt observation vocabulary is shared by every harness; each native
@@ -54,9 +56,67 @@ impl TaskScope<'_> {
 
 pub type DispatchClaim<'a> = &'a mut dyn FnMut(&str) -> Result<bool, Box<dyn Error>>;
 
+/// The native session a reader observes.
+pub struct ReaderSession<'a> {
+    pub database_path: &'a Path,
+    pub session_id: &'a str,
+    pub native_session_id: &'a str,
+    /// TypeScript `session.profile?.instanceHomeDirectory`.
+    pub instance_home_directory: Option<&'a Path>,
+}
+
+impl ReaderSession<'_> {
+    pub fn runtime_directory(&self) -> io::Result<PathBuf> {
+        task_session_runtime_directory(self.database_path, self.session_id)
+    }
+}
+
+/// One native usage record (TypeScript `TaskUsage` without its task role).
+#[derive(Clone, Debug, PartialEq)]
+pub struct UsageEntry {
+    pub message_id: String,
+    pub turn_id: String,
+    pub provider: &'static str,
+    pub model: String,
+    pub started_at_ms: i64,
+    pub completed_at_ms: Option<i64>,
+    pub failed: bool,
+    pub tokens: UsageTokens,
+    pub cost_usd: f64,
+}
+
+/// TypeScript `NativeSessionReader.timeline`.
+#[derive(Debug, Default, PartialEq)]
+pub struct NativeTimeline {
+    pub usage: Vec<UsageEntry>,
+    pub live_message_id: Option<String>,
+}
+
+/// TypeScript `NativeSessionReader`: read-only observation of a native
+/// session for the UI, analytics, limits, and Archive.
+pub trait NativeSessionReader {
+    /// The authoritative native conversation snapshot.
+    fn history(&self, session: &ReaderSession<'_>) -> io::Result<Vec<Value>>;
+    /// Native tools and the current plan.
+    fn execution(&self, session: &ReaderSession<'_>) -> io::Result<(Vec<NativeTool>, Value)>;
+    /// One admitted native turn; `None` when its log is missing.
+    fn turn_evidence(
+        &self,
+        session: &ReaderSession<'_>,
+        turn_id: &str,
+    ) -> io::Result<Option<Vec<NativeTool>>>;
+    fn timeline(
+        &self,
+        session: &ReaderSession<'_>,
+        pricing: Option<&ModelPricingCatalog>,
+    ) -> io::Result<NativeTimeline>;
+    fn busy(&self, session: &ReaderSession<'_>) -> io::Result<bool>;
+}
+
 /// TypeScript `TaskHarness`. The registry selects one implementation by the
-/// profile provider or the native session identity.
-pub trait TaskHarness: Sync {
+/// profile provider or the native session identity; the same runtime reads
+/// its native sessions.
+pub trait TaskHarness: NativeSessionReader + Sync {
     /// Reserve a new native session identity.
     fn new_session_id(&self) -> String;
     fn observe(

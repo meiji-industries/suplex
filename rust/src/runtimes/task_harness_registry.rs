@@ -51,6 +51,11 @@ pub fn for_profile(provider: &str) -> Option<&'static dyn TaskHarness> {
     harness(profile_harness(provider))
 }
 
+/// TypeScript `nativeSessionReader`: the runtime that owns a native session.
+pub fn native_session_reader(native_session_id: &str) -> Option<&'static dyn TaskHarness> {
+    harness(session_harness(native_session_id))
+}
+
 /// TypeScript `HarnessRouter.stop`: an unbound session belongs to OpenCode.
 pub fn for_session(native_session_id: Option<&str>) -> Option<&'static dyn TaskHarness> {
     harness(native_session_id.map_or("opencode", session_harness))

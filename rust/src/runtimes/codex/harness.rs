@@ -1,20 +1,115 @@
 //! TypeScript `CodexTaskRuntime` behind the shared task harness seam.
 
-use std::{error::Error, io, path::Path};
+use std::{error::Error, io, path::Path, time::UNIX_EPOCH};
+
+use serde_json::{Value, json};
 
 use super::{
-    runtime,
+    runtime, session_reader,
     task_runtime::{self, RootCodexLaunch, WorkerCodexLaunch},
+    tool_evidence::{NativeTool, codex_tools},
+    transcript, usage,
 };
-use crate::runtimes::{
-    headless,
-    task_harness::{
-        DispatchClaim, DispatchState, PromptObservation, TaskHarness, TaskRole, TaskScope,
-        recover_headless_dispatch,
+use crate::{
+    profiles::model_pricing::ModelPricingCatalog,
+    runtimes::{
+        headless,
+        task_harness::{
+            DispatchClaim, DispatchState, NativeSessionReader, NativeTimeline, PromptObservation,
+            ReaderSession, TaskHarness, TaskRole, TaskScope, UsageEntry, recover_headless_dispatch,
+        },
     },
 };
 
 pub struct CodexTaskRuntime;
+
+/// TypeScript `CodexSessionReader`: every turn log in the session runtime.
+impl NativeSessionReader for CodexTaskRuntime {
+    fn history(&self, session: &ReaderSession<'_>) -> io::Result<Vec<Value>> {
+        let turns = session_reader::turns(&session.runtime_directory()?)?;
+        Ok(turns
+            .into_iter()
+            .filter_map(|turn| {
+                let text = transcript::result_text(&turn.events);
+                if text.is_empty() {
+                    return None;
+                }
+                let created_at: i64 = turn
+                    .updated_at
+                    .duration_since(UNIX_EPOCH)
+                    .ok()?
+                    .as_millis()
+                    .try_into()
+                    .ok()?;
+                Some(json!({
+                    "id":turn.id,"role":"assistant","createdAt":created_at,
+                    "content":[{"id":format!("{}:text",turn.id),"type":"text","text":text}],
+                }))
+            })
+            .collect())
+    }
+
+    fn execution(&self, session: &ReaderSession<'_>) -> io::Result<(Vec<NativeTool>, Value)> {
+        let turns = session_reader::turns(&session.runtime_directory()?)?;
+        let tools = turns
+            .iter()
+            .flat_map(|turn| {
+                codex_tools(&turn.events).into_iter().map(move |mut tool| {
+                    tool.id = format!("{}:{}", turn.id, tool.id);
+                    tool
+                })
+            })
+            .collect();
+        Ok((tools, Value::Null))
+    }
+
+    fn turn_evidence(
+        &self,
+        session: &ReaderSession<'_>,
+        turn_id: &str,
+    ) -> io::Result<Option<Vec<NativeTool>>> {
+        Ok(
+            session_reader::turn_evidence(&session.runtime_directory()?, turn_id)?
+                .map(|events| codex_tools(&events)),
+        )
+    }
+
+    fn timeline(
+        &self,
+        session: &ReaderSession<'_>,
+        pricing: Option<&ModelPricingCatalog>,
+    ) -> io::Result<NativeTimeline> {
+        let observed = usage::observe_session(
+            &session.runtime_directory()?,
+            session.native_session_id,
+            pricing,
+        )?;
+        let live = observed.live_turn_id;
+        Ok(NativeTimeline {
+            usage: observed
+                .turns
+                .into_iter()
+                .map(|turn| UsageEntry {
+                    completed_at_ms: (live.as_deref() != Some(turn.turn_id.as_str()))
+                        .then_some(turn.updated_at_ms),
+                    message_id: turn.turn_id.clone(),
+                    turn_id: turn.turn_id,
+                    provider: "openai",
+                    model: turn.model,
+                    started_at_ms: turn.updated_at_ms,
+                    failed: turn.failed,
+                    tokens: turn.tokens,
+                    cost_usd: turn.cost_usd,
+                })
+                .collect(),
+            live_message_id: live,
+        })
+    }
+
+    fn busy(&self, session: &ReaderSession<'_>) -> io::Result<bool> {
+        session_reader::busy(&session.runtime_directory()?)
+    }
+}
 
 impl TaskHarness for CodexTaskRuntime {
     // Suplex reserves the prefix because a Codex thread id is itself a UUID.

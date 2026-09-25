@@ -26,11 +26,11 @@ use crate::{
     platform::database::{DatabaseResult, OpenMode, SuplexDatabase},
     profiles::model_pricing::ModelsDevCatalogReader,
     runtimes::{
-        codex::{session_reader, usage},
+        codex::session_reader,
         process::{ProcessOwnerObservation, inspect_process, observe_process_owner},
         task_harness::{
-            DispatchState, PromptObservation, PromptState, TaskHarness, TaskRole, TaskScope,
-            WorkerPurpose, task_context_prompt,
+            DispatchState, NativeTimeline, PromptObservation, PromptState, ReaderSession,
+            TaskHarness, TaskRole, TaskScope, UsageEntry, WorkerPurpose, task_context_prompt,
         },
         task_harness_registry,
     },
@@ -576,7 +576,7 @@ async fn observed_usage(
             |row| row.get(0),
         )?;
         let mut statement = database.connection().prepare(
-            "SELECT DISTINCT s.id,s.native_session_id,s.kind FROM suplex_task_sessions s JOIN suplex_task_turns t ON t.session_id = s.id WHERE s.task_id = ?1 AND s.native_session_id IS NOT NULL AND (t.prompted_at IS NOT NULL OR t.status = 'unknown') ORDER BY s.created_at,s.id",
+            "SELECT DISTINCT s.id,s.native_session_id,s.kind,json_extract(s.profile_json,'$.instanceHomeDirectory') FROM suplex_task_sessions s JOIN suplex_task_turns t ON t.session_id = s.id WHERE s.task_id = ?1 AND s.native_session_id IS NOT NULL AND (t.prompted_at IS NOT NULL OR t.status = 'unknown') ORDER BY s.created_at,s.id",
         )?;
         let sessions = statement
             .query_map([task_id], |row| {
@@ -584,6 +584,7 @@ async fn observed_usage(
                     row.get::<_, String>(0)?,
                     row.get::<_, String>(1)?,
                     row.get::<_, String>(2)?,
+                    row.get::<_, Option<String>>(3)?,
                 ))
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -606,15 +607,22 @@ async fn observed_usage(
     }
     let native_database_path = database_path.to_path_buf();
     let observed = tokio::task::spawn_blocking(
-        move || -> Result<Vec<(String, String, String, usage::CodexUsageObservation)>, String> {
+        move || -> Result<Vec<(String, String, NativeTimeline)>, String> {
             let mut observed = Vec::new();
-            for (session_id, native_id, role) in sessions {
-                let directory =
-                    session_reader::session_directory(&native_database_path, &session_id)
-                        .map_err(|error| error.to_string())?;
-                let snapshot = usage::observe_session(&directory, &native_id, None)
+            for (session_id, native_id, role, instance) in sessions {
+                let reader = task_harness_registry::native_session_reader(&native_id).ok_or(
+                    "Native task usage is not available. Suplex will retry the observation.",
+                )?;
+                let session = ReaderSession {
+                    database_path: &native_database_path,
+                    session_id: &session_id,
+                    native_session_id: &native_id,
+                    instance_home_directory: instance.as_deref().map(Path::new),
+                };
+                let timeline = reader
+                    .timeline(&session, None)
                     .map_err(|error| error.to_string())?;
-                observed.push((session_id, native_id, role, snapshot));
+                observed.push((native_id, role, timeline));
             }
             Ok(observed)
         },
@@ -624,18 +632,10 @@ async fn observed_usage(
     // TypeScript `observeTaskLimitUsage`: a session without usage leaves the
     // observation incomplete; dispatch continues with the partial cost.
     static PRICING: OnceLock<Result<ModelsDevCatalogReader, String>> = OnceLock::new();
-    let unpriced = observed.iter().any(|(_, _, _, session)| {
-        session.turns.iter().any(|turn| {
-            !turn.priced
-                && turn.tokens.input
-                    + turn.tokens.output
-                    + turn.tokens.reasoning
-                    + turn.tokens.cache_read
-                    + turn.tokens.cache_write
-                    > 0.0
-        })
-    });
-    let pricing = if unpriced {
+    let pricing = if observed
+        .iter()
+        .any(|(_, _, timeline)| timeline.usage.iter().any(unpriced))
+    {
         let reader = PRICING
             .get_or_init(|| ModelsDevCatalogReader::new().map_err(|error| error.to_string()));
         match reader {
@@ -645,21 +645,21 @@ async fn observed_usage(
     } else {
         None
     };
+    let observed = observed
+        .into_iter()
+        .map(|(native_id, role, mut timeline)| {
+            if let Some(pricing) = pricing.as_deref() {
+                estimate_unpriced_usage(&mut timeline.usage, pricing);
+            }
+            (native_id, role, timeline)
+        })
+        .collect::<Vec<_>>();
     if require_complete
-        && observed.iter().any(|(_, _, _, session)| {
-            session.turns.is_empty()
-                || session.live_turn_id.is_some()
-                || session.turns.iter().any(|turn| {
-                    let cost = pricing
-                        .as_deref()
-                        .and_then(|catalog| catalog.get(&format!("openai/{}", turn.model)))
-                        .map_or(turn.cost_usd, |price| price.estimate(turn.tokens));
-                    let tokens = turn.tokens.input
-                        + turn.tokens.output
-                        + turn.tokens.reasoning
-                        + turn.tokens.cache_read
-                        + turn.tokens.cache_write;
-                    turn.model == "unknown" || (cost == 0.0 && tokens > 0.0)
+        && observed.iter().any(|(_, _, timeline)| {
+            timeline.usage.is_empty()
+                || timeline.live_message_id.is_some()
+                || timeline.usage.iter().any(|entry| {
+                    entry.completed_at_ms.is_none() || entry.model == "unknown" || unpriced(entry)
                 })
         })
     {
@@ -667,39 +667,63 @@ async fn observed_usage(
             estimated_cost_usd: None,
         });
     }
-    let cost = replace_observed_usage(database_path, task_id, observed, pricing.as_deref())?;
+    let cost = replace_observed_usage(database_path, task_id, observed)?;
     Ok(TaskLimitUsage {
         estimated_cost_usd: Some(cost),
     })
 }
 
+/// TypeScript `usageIsUnpriced`.
+fn unpriced(entry: &UsageEntry) -> bool {
+    let tokens = entry.tokens;
+    entry.cost_usd == 0.0
+        && tokens.input + tokens.output + tokens.reasoning + tokens.cache_read + tokens.cache_write
+            > 0.0
+}
+
+/// TypeScript `estimateUnpricedUsage`: listed prices estimate unpriced usage.
+fn estimate_unpriced_usage(
+    usage: &mut [UsageEntry],
+    pricing: &crate::profiles::model_pricing::ModelPricingCatalog,
+) {
+    for entry in usage.iter_mut().filter(|entry| unpriced(entry)) {
+        if let Some(price) = pricing.get(&format!("{}/{}", entry.provider, entry.model)) {
+            entry.cost_usd = price.estimate(entry.tokens);
+        }
+    }
+}
+
+/// TypeScript `replaceNativeUsage`, keyed by native session and message.
 fn replace_observed_usage(
     database_path: &Path,
     task_id: &str,
-    observed: Vec<(String, String, String, usage::CodexUsageObservation)>,
-    pricing: Option<&crate::profiles::model_pricing::ModelPricingCatalog>,
+    observed: Vec<(String, String, NativeTimeline)>,
 ) -> DatabaseResult<f64> {
-    let mut snapshots = Vec::new();
-    let mut cost = 0.0;
-    for (_, native_id, role, session) in observed {
-        let live_turn_id = session.live_turn_id.clone();
-        for turn in session.turns {
-            let listed = pricing.and_then(|catalog| catalog.get(&format!("openai/{}", turn.model)));
-            let turn_cost = listed.map_or(turn.cost_usd, |price| price.estimate(turn.tokens));
-            cost += turn_cost;
-            snapshots.push((native_id.clone(), serde_json::json!({
-                "sessionId":native_id,"messageId":turn.turn_id,"turnId":turn.turn_id,
-                "role":role,"provider":"openai","model":turn.model,
-                "startedAt":turn.updated_at_ms,
-                "completedAt":(live_turn_id.as_deref() != Some(turn.turn_id.as_str())).then_some(turn.updated_at_ms),
-                "failed":turn.failed,"summary":false,"steps":1,"cost":turn_cost,
-                "subsidized":turn_cost > 0.0,
-                "tokens":{"input":turn.tokens.input,"output":turn.tokens.output,
-                    "reasoning":turn.tokens.reasoning,"cache":{"read":turn.tokens.cache_read,
-                        "write":turn.tokens.cache_write}},"source":"message",
-            })));
+    let mut snapshots: Vec<(String, serde_json::Value)> = Vec::new();
+    for (native_id, role, timeline) in observed {
+        for entry in timeline.usage {
+            snapshots.retain(|(session, snapshot)| {
+                session != &native_id || snapshot["messageId"] != entry.message_id.as_str()
+            });
+            snapshots.push((
+                native_id.clone(),
+                serde_json::json!({
+                    "sessionId":native_id,"messageId":entry.message_id,"turnId":entry.turn_id,
+                    "role":role,"provider":entry.provider,"model":entry.model,
+                    "startedAt":entry.started_at_ms,"completedAt":entry.completed_at_ms,
+                    "failed":entry.failed,"summary":false,"steps":1,"cost":entry.cost_usd,
+                    "subsidized":entry.cost_usd > 0.0,
+                    "tokens":{"input":entry.tokens.input,"output":entry.tokens.output,
+                        "reasoning":entry.tokens.reasoning,"cache":{"read":entry.tokens.cache_read,
+                            "write":entry.tokens.cache_write}},"source":"message",
+                }),
+            ));
         }
     }
+    let cost = snapshots
+        .iter()
+        .map(|(_, snapshot)| snapshot["cost"].as_f64().unwrap_or_default())
+        .sum();
     let mut database = SuplexDatabase::open(database_path, OpenMode::ReadWrite)?;
     database.transaction(false, |database| {
         for (session_id, _) in &snapshots {
@@ -1447,7 +1471,7 @@ mod tests {
         delivery::operations,
         identity::auth,
         profiles::model_pricing::ModelPricing,
-        runtimes::codex::usage::{CodexTurnUsage, CodexUsageObservation, UsageTokens},
+        runtimes::codex::usage::{self, UsageTokens},
         tasks::{
             commands,
             repository::{self, PreparedTask, TaskCreator},
@@ -2444,25 +2468,14 @@ mod tests {
                 "INSERT INTO suplex_task_usage (task_id,session_id,message_id,snapshot,observed_at) VALUES (?1,?2,'prior-native','{}',?3)",
                 rusqlite::params![task_id, native_id, Utc::now().to_rfc3339()],
             ).unwrap();
-            let no_usage_event = usage::CodexUsageObservation {
-                turns: vec![],
-                live_turn_id: None,
-                complete: false,
-                estimated_cost_usd: 0.0,
-            };
+            let no_usage_event = NativeTimeline::default();
             // TypeScript `replaceNativeUsage` replaces the task usage with the
             // partial observation; missing native usage never blocks dispatch.
             assert_eq!(
                 replace_observed_usage(
                     &database_path,
                     &task_id,
-                    vec![(
-                        root.id.clone(),
-                        native_id.to_owned(),
-                        "root".into(),
-                        no_usage_event
-                    )],
-                    None
+                    vec![(native_id.to_owned(), "root".into(), no_usage_event)],
                 )
                 .unwrap(),
                 0.0
@@ -2623,14 +2636,16 @@ mod tests {
             &database_path,
             &task_id,
             vec![(
-                root.id.clone(),
                 root.native_session_id.clone().unwrap(),
                 "root".into(),
-                CodexUsageObservation {
-                    turns: vec![CodexTurnUsage {
+                NativeTimeline {
+                    usage: vec![UsageEntry {
+                        message_id: "msg-usage".into(),
                         turn_id: "msg-usage".into(),
+                        provider: "openai",
                         model: "gpt-6-sol".into(),
-                        updated_at_ms: 1_234_567,
+                        started_at_ms: 1_234_567,
+                        completed_at_ms: None,
                         failed: false,
                         tokens: UsageTokens {
                             input: 1_000_000.0,
@@ -2640,14 +2655,10 @@ mod tests {
                             cache_write: 0.0,
                         },
                         cost_usd: 0.0,
-                        priced: false,
                     }],
-                    live_turn_id: Some("msg-usage".into()),
-                    complete: false,
-                    estimated_cost_usd: 0.0,
+                    live_message_id: Some("msg-usage".into()),
                 },
             )],
-            None,
         )
         .unwrap();
         assert_eq!(unpriced, 0.0);
@@ -2662,15 +2673,15 @@ mod tests {
         let cost = replace_observed_usage(
             &database_path,
             &task_id,
-            vec![(
-                root.id.clone(),
-                root.native_session_id.clone().unwrap(),
-                "root".into(),
-                CodexUsageObservation {
-                    turns: vec![CodexTurnUsage {
+            vec![(root.native_session_id.clone().unwrap(), "root".into(), {
+                let mut timeline = NativeTimeline {
+                    usage: vec![UsageEntry {
+                        message_id: "msg-usage".into(),
                         turn_id: "msg-usage".into(),
+                        provider: "openai",
                         model: "gpt-6-sol".into(),
-                        updated_at_ms: 1_234_567,
+                        started_at_ms: 1_234_567,
+                        completed_at_ms: Some(1_234_567),
                         failed: false,
                         tokens: UsageTokens {
                             input: 1_000_000.0,
@@ -2680,14 +2691,12 @@ mod tests {
                             cache_write: 0.0,
                         },
                         cost_usd: 0.0,
-                        priced: false,
                     }],
-                    live_turn_id: None,
-                    complete: true,
-                    estimated_cost_usd: 0.0,
-                },
-            )],
-            Some(&pricing),
+                    live_message_id: None,
+                };
+                estimate_unpriced_usage(&mut timeline.usage, &pricing);
+                timeline
+            })],
         )
         .unwrap();
         assert_eq!(cost, 1.0);

@@ -12,7 +12,7 @@ use crate::{
         artifacts,
         database::{DatabaseResult, OpenMode, SuplexDatabase},
     },
-    runtimes::codex::{session_reader, tool_evidence},
+    runtimes::{task_harness::ReaderSession, task_harness_registry},
     tasks::{commands::TaskFailure, worktree},
 };
 
@@ -275,10 +275,31 @@ pub fn read_worker_evidence(
     let session_id = session["id"]
         .as_str()
         .ok_or_else(|| invalid("Worker session id is missing"))?;
-    let directory = session_reader::session_directory(database_path, session_id)?;
-    let evidence = session_reader::turn_evidence(&directory, &request.turn_id)?;
+    let native_session_id = session["nativeSessionId"].as_str().unwrap_or_default();
+    // An unbound session is read by its profile provider.
+    let provider = session["profile"]["provider"].as_str();
+    let reader = task_harness_registry::native_session_reader(native_session_id).or_else(|| {
+        task_harness_registry::for_profile(
+            provider
+                .or(rows.control["workerProfile"]["provider"].as_str())
+                .unwrap_or_default(),
+        )
+    });
+    let evidence = reader
+        .ok_or_else(|| invalid("The native provider is unavailable"))?
+        .turn_evidence(
+            &ReaderSession {
+                database_path,
+                session_id,
+                native_session_id,
+                instance_home_directory: session["profile"]["instanceHomeDirectory"]
+                    .as_str()
+                    .map(Path::new),
+            },
+            &request.turn_id,
+        )?;
     let (tools, limitation) = match evidence {
-        Some(events) => (tool_evidence::codex_tools(&events), Value::Null),
+        Some(tools) => (tools, Value::Null),
         None => (Vec::new(), json!("The native turn log is missing")),
     };
     let result = worker_evidence::read(&tools, &request.query).map_err(std::io::Error::other)?;
@@ -509,9 +530,11 @@ mod tests {
             .find(|value| value["sessionId"] == worker["id"])
             .unwrap();
         let turn_id = turn["id"].as_str().unwrap().to_owned();
-        let native_directory =
-            session_reader::session_directory(&database_path, worker["id"].as_str().unwrap())
-                .unwrap();
+        let native_directory = crate::runtimes::task_harness::task_session_runtime_directory(
+            &database_path,
+            worker["id"].as_str().unwrap(),
+        )
+        .unwrap();
         fs::create_dir_all(&native_directory).unwrap();
         fs::write(native_directory.join(format!("turn-{turn_id}.jsonl")), concat!(
             "{\"type\":\"item.started\",\"item\":{\"id\":\"item_0\",\"type\":\"command_execution\",\"command\":\"pnpm test\",\"status\":\"in_progress\"}}\n",

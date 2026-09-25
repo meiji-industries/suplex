@@ -209,7 +209,7 @@ pub struct PreparedLocalProject {
     pub(super) verification_command: String,
 }
 
-fn valid_name(name: &str) -> bool {
+pub(crate) fn valid_name(name: &str) -> bool {
     static NAME: LazyLock<Regex> = LazyLock::new(|| {
         Regex::new(r"^[\p{L}\p{N}](?:[\p{L}\p{N} ._'-]{0,78}[\p{L}\p{N}])?$")
             .expect("project name pattern")
@@ -217,7 +217,7 @@ fn valid_name(name: &str) -> bool {
     NAME.is_match(name)
 }
 
-fn valid_repository(repository: &str) -> bool {
+pub(crate) fn valid_repository(repository: &str) -> bool {
     static REPOSITORY: LazyLock<Regex> = LazyLock::new(|| {
         Regex::new(r"^[A-Za-z0-9][A-Za-z0-9_.-]{0,99}/[A-Za-z0-9][A-Za-z0-9_.-]{0,99}$")
             .expect("project repository pattern")
@@ -237,7 +237,7 @@ pub(crate) fn valid_branch(branch: &str) -> bool {
             .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'/' | b'-'))
 }
 
-fn valid_command(command: &str) -> bool {
+pub(crate) fn valid_command(command: &str) -> bool {
     let trimmed = crate::identity::auth::js_trim(command);
     !trimmed.is_empty()
         && trimmed.encode_utf16().count() <= 500
@@ -373,7 +373,7 @@ pub struct Coordinate {
     pub clone_url: String,
 }
 
-fn secret_shaped(value: &str) -> bool {
+pub(crate) fn secret_shaped(value: &str) -> bool {
     static SECRET: LazyLock<Regex> = LazyLock::new(|| {
         Regex::new(r"(?i)(?:gh[pousr]_|github_pat_|token\s*=|password\s*=|secret\s*=|BEGIN [A-Z ]+ PRIVATE KEY|sk-[A-Za-z0-9])")
             .expect("project secret pattern")

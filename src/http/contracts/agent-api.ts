@@ -1,8 +1,8 @@
 import { z } from "zod";
-import { AdvisorProfileIdsSchema } from "../../coordination/workflows.js";
+import { AdvisorProfileIdsSchema } from "../../coordination/workflow-contracts.js";
 import { DeliveryTargetSchema, TaskImageInputSchema, TaskQueueSchema, TaskSourceInputSchema, VisualEvidenceSchema } from "../../tasks/contracts.js";
 import { MAX_TASK_IMAGES } from "../../tasks/limits/attachment-limits.js";
-import { TaskControlStatusSchema } from "../../tasks/control.js";
+import { TaskControlStatusSchema } from "../../tasks/control-contracts.js";
 
 export const AgentApiAdminAgentSchema = z.object({
   id: z.string(),

@@ -5,8 +5,9 @@ import { z } from "zod";
 import { IssueAssociationSchema } from "../../tasks/issue-association.js";
 import { HarnessKindSchema } from "../../runtimes/harness-kind.js";
 import { DeliveryTargetSchema as DeliveryTarget, TaskInputSchema, TaskSchema, VisualEvidenceSchema as VisualEvidence } from "../../tasks/contracts.js";
-import { TaskSessionKindSchema, TaskTurnStatusSchema } from "../../tasks/control.js";
-import { AdvisorProfileIdsSchema, AdvisorRoleSchema, WorkflowIdSchema } from "../../coordination/workflows.js";
+import { TaskSessionKindSchema, TaskTurnStatusSchema } from "../../tasks/control-contracts.js";
+import { AdvisorProfileIdsSchema, WorkflowIdSchema } from "../../coordination/workflow-contracts.js";
+import { AdvisorRoleSchema } from "../../coordination/advisor-report-contracts.js";
 import { TaskLimitDecisionSchema } from "../../tasks/limits/contracts.js";
 export { SessionHistoryPageSchema } from "../../tasks/history/contracts.js";
 

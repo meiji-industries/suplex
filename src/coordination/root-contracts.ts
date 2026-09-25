@@ -1,7 +1,7 @@
 import { WorkerReplacementRequestSchema } from "./worker-replacement-contracts.js";
 import { z } from "zod";
 import { RecommendedQuestionOptionsSchema } from "./human-question.js";
-import { AdvisorRoleSchema } from "./workflows.js";
+import { AdvisorRoleSchema } from "./advisor-report-contracts.js";
 
 const opaqueId = z.string().min(1).max(256).regex(/^[A-Za-z0-9][A-Za-z0-9._:-]*$/);
 

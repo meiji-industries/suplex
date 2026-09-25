@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { TaskProfileFieldsSchema, TaskSessionKindSchema } from "../tasks/control.js";
+import { TaskProfileFieldsSchema, TaskSessionKindSchema } from "../tasks/control-contracts.js";
 
 export const AgentProfileInputSchema = TaskProfileFieldsSchema.omit({ profileId: true, instanceHomeDirectory: true }).extend({
   name: z.string().trim().min(1),

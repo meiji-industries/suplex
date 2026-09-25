@@ -1,0 +1,14 @@
+{
+  "contract": "workflows.WorkflowRecordParamsSchema",
+  "case": "valid_strips_unknown",
+  "input": {
+    "workflowId": "flow",
+    "extra": true
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "workflowId": "flow"
+    }
+  }
+}

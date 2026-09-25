@@ -1,0 +1,10 @@
+{
+  "contract": "workflows.WorkflowListResponseSchema",
+  "case": "raw_stripped_overflow",
+  "encoding": "raw-json",
+  "input": "{\"workflows\":[{\"name\":\"Build\",\"engine\":\"standard\",\"id\":\"flow\",\"archivedAt\":null,\"createdAt\":\"now\",\"updatedAt\":\"now\",\"extra\":1e400}],\"extra\":1e400}",
+  "expected": {
+    "accepted": false,
+    "error": "[{\"code\":\"unrecognized_keys\",\"keys\":[\"extra\"],\"path\":[\"workflows\",0],\"message\":\"Unrecognized key: \\\"extra\\\"\"}]"
+  }
+}

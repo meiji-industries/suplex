@@ -43,6 +43,12 @@ fn ported_contracts_match_zod_fixtures() {
         "projects.ProjectCreateBodySchema",
         "projects.ProjectResponseSchema",
         "projects.ProjectListResponseSchema",
+        "workflows.WorkflowRecordInputSchema",
+        "workflows.WorkflowRecordPatchSchema",
+        "workflows.WorkflowRecordSchema",
+        "workflows.WorkflowRecordParamsSchema",
+        "workflows.WorkflowListQuerySchema",
+        "workflows.WorkflowListResponseSchema",
     ];
     let directory = concat!(env!("CARGO_MANIFEST_DIR"), "/../tests/parity");
     let mut verified = 0;
@@ -130,7 +136,7 @@ fn ported_contracts_match_zod_fixtures() {
             }
         }
     }
-    assert_eq!(schemas.len(), 68, "sixty-eight explicitly ported schemas");
+    assert_eq!(schemas.len(), 74, "seventy-four explicitly ported schemas");
     assert!(
         verified >= 140,
         "every ported schema has multiple Zod cases"

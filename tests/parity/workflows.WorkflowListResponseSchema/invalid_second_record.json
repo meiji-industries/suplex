@@ -1,0 +1,45 @@
+{
+  "contract": "workflows.WorkflowListResponseSchema",
+  "case": "invalid_second_record",
+  "input": {
+    "workflows": [
+      {
+        "name": "  Build  ",
+        "engine": "standard",
+        "id": "workflow",
+        "archivedAt": null,
+        "createdAt": "now",
+        "updatedAt": "now"
+      },
+      {
+        "name": "  Build  ",
+        "engine": "other",
+        "id": "workflow",
+        "archivedAt": null,
+        "createdAt": "now",
+        "updatedAt": "now"
+      }
+    ]
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid_value",
+        "values": [
+          "standard",
+          "direct_build",
+          "independent_review",
+          "competing_plans",
+          "refine_pull_request"
+        ],
+        "path": [
+          "workflows",
+          1,
+          "engine"
+        ],
+        "message": "Invalid option: expected one of \"standard\"|\"direct_build\"|\"independent_review\"|\"competing_plans\"|\"refine_pull_request\""
+      }
+    ]
+  }
+}

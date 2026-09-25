@@ -1,0 +1,23 @@
+{
+  "contract": "workflows.WorkflowRecordInputSchema",
+  "case": "blank_name",
+  "input": {
+    "name": " \t ",
+    "engine": "standard"
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "origin": "string",
+        "code": "too_small",
+        "minimum": 1,
+        "inclusive": true,
+        "path": [
+          "name"
+        ],
+        "message": "Too small: expected string to have >=1 characters"
+      }
+    ]
+  }
+}

@@ -24,7 +24,41 @@ const mcpServer = {
   name: "context7", transport: { type: "http", url: "https://example.test/mcp", headers: { Authorization: "CONTEXT7_TOKEN" } },
   grants: { root: ["query_docs"], advisor: [], worker: ["query_docs"] },
 };
+const workflowRecord = { name: "  Build  ", engine: "standard", id: "workflow", archivedAt: null, createdAt: "now", updatedAt: "now" };
 const semanticInputs: Record<string, Record<string, unknown>> = {
+  "workflows.WorkflowRecordInputSchema": {
+    trimmed_defaults: { name: "  Build  ", engine: "standard" },
+    optional_fields: { name: "Build", description: "  A description  ", engine: "direct_build", rootProfileId: "root", workerProfileId: "worker", advisorProfileIds: { reviewer: "reviewer" }, deliveryTarget: "merged", runProjectTests: false, visualEvidence: "capture" },
+    blank_name: { name: " \t ", engine: "standard" },
+    empty_array_name: { name: [], engine: "standard" },
+    bom_trim: { name: "\ufeffBuild\ufeff", description: "\ufeff Note \ufeff", engine: "standard" },
+    overlong_astral_name: { name: "😀".repeat(41), engine: "standard" },
+    invalid_advisor_and_unknown: { name: "Build", engine: "standard", advisorProfileIds: { reviewer: "", extra: true }, extra: true },
+    invalid_engine: { name: "Build", engine: "other" },
+  },
+  "workflows.WorkflowRecordPatchSchema": {
+    nullable_settings: { rootProfileId: null, workerProfileId: null, deliveryTarget: null, runProjectTests: null, visualEvidence: null },
+    trim_present_fields: { name: "  Build  ", description: "  Description  ", archived: true },
+    invalid_and_unknown: { name: " ", engine: "other", advisorProfileIds: { rater: "", extra: true }, extra: true },
+    null_description: { description: null },
+    empty_array_name: { name: [] },
+  },
+  "workflows.WorkflowRecordSchema": {
+    response_defaults_and_strip: { ...workflowRecord, extra: true },
+    invalid_response_fields: { ...workflowRecord, archivedAt: 1, updatedAt: null },
+  },
+  "workflows.WorkflowRecordParamsSchema": {
+    valid_strips_unknown: { workflowId: "flow", extra: true },
+    empty_workflow_id: { workflowId: "" },
+  },
+  "workflows.WorkflowListQuerySchema": {
+    include_archived: { includeArchived: "true" },
+    invalid_literal_and_unknown: { includeArchived: "false", extra: true },
+  },
+  "workflows.WorkflowListResponseSchema": {
+    one_stripped_record: { workflows: [{ ...workflowRecord, extra: true }], extra: true },
+    invalid_second_record: { workflows: [workflowRecord, { ...workflowRecord, engine: "other" }] },
+  },
   "common.IdSchema": {
     empty_string: "",
     max_length: "x".repeat(256),
@@ -381,6 +415,13 @@ const semanticInputs: Record<string, Record<string, unknown>> = {
 
 type Fixture = { contract: string; case: string; input?: unknown; expected: { accepted: true; value: unknown } | { accepted: false; error: unknown } };
 const rawInputs: Record<string, Record<string, string>> = {
+  "workflows.WorkflowRecordInputSchema": {
+    lone_surrogate_description: String.raw`{"name":"Build","engine":"standard","description":"\ud800"}`,
+    strict_surrogate_key: String.raw`{"name":"Build","engine":"standard","\ud800":1}`,
+  },
+  "workflows.WorkflowListResponseSchema": {
+    stripped_overflow: String.raw`{"workflows":[{"name":"Build","engine":"standard","id":"flow","archivedAt":null,"createdAt":"now","updatedAt":"now","extra":1e400}],"extra":1e400}`,
+  },
   "common.EmptyBodySchema": {
     surrogate_and_overflow: String.raw`{"x":"\ud800","count":1e400}`,
     deep_passthrough: `{"nested":${"[".repeat(20_000)}0${"]".repeat(20_000)}}`,

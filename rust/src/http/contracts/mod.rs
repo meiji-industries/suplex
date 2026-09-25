@@ -5,12 +5,13 @@ use crate::shared::js_json::{self, JsDocument, JsNode};
 mod auth_js;
 mod common;
 mod common_commands;
+mod js_issues;
 mod profile;
 mod project_aux;
 mod project_creation_js;
-mod project_policy;
 mod providers;
 mod task_aux;
+mod workflow_records_js;
 
 pub type ParseResult = Result<Value, Vec<Value>>;
 pub type JsParseResult = Result<JsDocument, Vec<Value>>;
@@ -71,6 +72,9 @@ pub fn validate_js_detailed(
     if let Some(result) = project_creation_js::validate_detailed(contract, input) {
         return Some(result);
     }
+    if let Some(result) = workflow_records_js::validate_detailed(contract, input) {
+        return Some(result);
+    }
     auth_js::validate(contract, input).map(|result| {
         result.map_err(|issues| {
             JsContractFailure::Issues(
@@ -101,6 +105,7 @@ pub fn validate(contract: &str, input: Option<&Value>) -> Option<ParseResult> {
     if contract.starts_with("auth.")
         || contract.starts_with("common.")
         || contract.starts_with("projects.")
+        || contract.starts_with("workflows.")
     {
         let document = input.map(|value| {
             JsDocument::parse(&js_json::stringify(value)).expect("serde JSON value is valid JSON")
@@ -125,9 +130,6 @@ pub fn validate(contract: &str, input: Option<&Value>) -> Option<ParseResult> {
         return Some(result);
     }
     if let Some(result) = project_aux::validate(contract, input) {
-        return Some(result);
-    }
-    if let Some(result) = project_policy::validate(contract, input) {
         return Some(result);
     }
     if let Some(result) = task_aux::validate(contract, input) {

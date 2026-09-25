@@ -1,0 +1,17 @@
+{
+  "contract": "workflows.WorkflowRecordInputSchema",
+  "case": "trimmed_defaults",
+  "input": {
+    "name": "  Build  ",
+    "engine": "standard"
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "name": "Build",
+      "description": "",
+      "engine": "standard",
+      "advisorProfileIds": {}
+    }
+  }
+}

@@ -1,0 +1,31 @@
+{
+  "contract": "workflows.WorkflowListQuerySchema",
+  "case": "invalid_literal_and_unknown",
+  "input": {
+    "includeArchived": "false",
+    "extra": true
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid_value",
+        "values": [
+          "true"
+        ],
+        "path": [
+          "includeArchived"
+        ],
+        "message": "Invalid input: expected \"true\""
+      },
+      {
+        "code": "unrecognized_keys",
+        "keys": [
+          "extra"
+        ],
+        "path": [],
+        "message": "Unrecognized key: \"extra\""
+      }
+    ]
+  }
+}

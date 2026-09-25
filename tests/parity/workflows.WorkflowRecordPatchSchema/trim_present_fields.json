@@ -1,0 +1,17 @@
+{
+  "contract": "workflows.WorkflowRecordPatchSchema",
+  "case": "trim_present_fields",
+  "input": {
+    "name": "  Build  ",
+    "description": "  Description  ",
+    "archived": true
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "name": "Build",
+      "description": "Description",
+      "archived": true
+    }
+  }
+}

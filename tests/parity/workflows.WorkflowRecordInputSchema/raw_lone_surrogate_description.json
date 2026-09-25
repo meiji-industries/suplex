@@ -1,0 +1,10 @@
+{
+  "contract": "workflows.WorkflowRecordInputSchema",
+  "case": "raw_lone_surrogate_description",
+  "encoding": "raw-json",
+  "input": "{\"name\":\"Build\",\"engine\":\"standard\",\"description\":\"\\ud800\"}",
+  "expected": {
+    "accepted": true,
+    "value": "{\"name\":\"Build\",\"description\":\"\\ud800\",\"engine\":\"standard\",\"advisorProfileIds\":{}}"
+  }
+}

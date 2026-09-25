@@ -58,7 +58,7 @@ The table lists all 238 backend TypeScript modules present at the baseline, incl
 | [http/contracts/task-templates.ts](../src/http/contracts/task-templates.ts) | not started | |
 | [http/contracts/tasks.ts](../src/http/contracts/tasks.ts) | not started | Auxiliary schemas, task-agent batch query, and task-details response independently checked; combined parity passes 714 ordinary / 13 raw cases across 61 schemas. Remaining task schemas, lossless migration, and runtime routes are incomplete |
 | [http/contracts/update.ts](../src/http/contracts/update.ts) | not started | |
-| [http/contracts/workflows.ts](../src/http/contracts/workflows.ts) | not started | |
+| [http/contracts/workflows.ts](../src/http/contracts/workflows.ts) | ported | All six record/input/patch/params/list-query/list-response schemas implemented with lossless rules. Independent ordinary/raw parity and isolated Rust checks pass; combined coverage893 ordinary/29 raw across74 HTTP schemas. Workflow route integration and raw responses remain pending |
 | [http/errors.ts](../src/http/errors.ts) | not started | |
 | [http/oauth-runtime.ts](../src/http/oauth-runtime.ts) | not started | |
 | [http/routes/administration.ts](../src/http/routes/administration.ts) | not started | Profile CRUD and identity invitation/list/revocation/audit routes ported with validation/auth/live checks. Other administration services and full raw HTTP parity remain pending |

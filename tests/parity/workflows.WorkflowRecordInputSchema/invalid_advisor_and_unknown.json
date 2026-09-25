@@ -1,0 +1,47 @@
+{
+  "contract": "workflows.WorkflowRecordInputSchema",
+  "case": "invalid_advisor_and_unknown",
+  "input": {
+    "name": "Build",
+    "engine": "standard",
+    "advisorProfileIds": {
+      "reviewer": "",
+      "extra": true
+    },
+    "extra": true
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "origin": "string",
+        "code": "too_small",
+        "minimum": 1,
+        "inclusive": true,
+        "path": [
+          "advisorProfileIds",
+          "reviewer"
+        ],
+        "message": "Too small: expected string to have >=1 characters"
+      },
+      {
+        "code": "unrecognized_keys",
+        "keys": [
+          "extra"
+        ],
+        "path": [
+          "advisorProfileIds"
+        ],
+        "message": "Unrecognized key: \"extra\""
+      },
+      {
+        "code": "unrecognized_keys",
+        "keys": [
+          "extra"
+        ],
+        "path": [],
+        "message": "Unrecognized key: \"extra\""
+      }
+    ]
+  }
+}

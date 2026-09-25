@@ -2,7 +2,6 @@
 //! the pure delivery policy over Suplex-owned review records. Sessions, turns,
 //! and review records use their persisted JSON shapes.
 
-use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 pub const REPAIR_RATING_TARGET: i64 = 9;
@@ -65,56 +64,12 @@ pub fn role_label(kind: &str, advisor_role: Option<&str>) -> &'static str {
     advisor_role.map_or("Worker", advisor_label)
 }
 
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct ReviewRange {
-    pub base_sha: String,
-    pub head_sha: String,
-    pub files: Vec<String>,
-    pub commits: Vec<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub patch_digest: Option<String>,
-}
+pub use crate::delivery::inspection::{ReviewRange, range_differences, same_range};
 
 impl ReviewRange {
     pub fn from_value(value: &Value) -> Option<Self> {
         serde_json::from_value(value.clone()).ok()
     }
-}
-
-fn same_set(left: &[String], right: &[String]) -> bool {
-    let mut left = left.to_vec();
-    let mut right = right.to_vec();
-    left.sort();
-    right.sort();
-    left == right
-}
-
-/// Two ranges are review-equivalent when head, commit set, and file set are
-/// identical and either the base is identical or the complete patch digests are.
-pub fn range_differences(review: &ReviewRange, actual: &ReviewRange) -> Vec<&'static str> {
-    let mut differences = Vec::new();
-    if review.head_sha != actual.head_sha {
-        differences.push("head");
-    }
-    if !same_set(&review.commits, &actual.commits) {
-        differences.push("commits");
-    }
-    if !same_set(&review.files, &actual.files) {
-        differences.push("files");
-    }
-    if review.base_sha != actual.base_sha
-        && (review.patch_digest.as_deref().is_none_or(str::is_empty)
-            || actual.patch_digest.as_deref().is_none_or(str::is_empty)
-            || review.patch_digest != actual.patch_digest)
-    {
-        differences.push("patch content");
-    }
-    differences
-}
-
-pub fn same_range(review: &ReviewRange, actual: &ReviewRange) -> bool {
-    range_differences(review, actual).is_empty()
 }
 
 fn short(sha: &str) -> &str {

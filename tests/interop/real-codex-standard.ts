@@ -3,12 +3,13 @@
 // The default run checks the form only. Set SUPLEX_REAL_CODEX_RUN=1 to execute one real task;
 // SUPLEX_REAL_CODEX_MODEL selects an explicitly authorized test model. Set
 // SUPLEX_DETERMINISTIC_CODEX_RUN=1 for the same journey with a test-only Codex process stand-in.
+// The deterministic phase deliver_claude runs the deliver journey with Claude Code profiles and its stand-in.
 import { deepStrictEqual, equal, notEqual, ok } from "node:assert/strict";
 import { rmSync } from "node:fs";
 import { access, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
-import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { setTimeout } from "node:timers/promises";
+import { createServer, type Server } from "node:http";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { nativeBrowser } from "../helpers/native-browser.js";
@@ -23,7 +24,14 @@ const phase = deterministic ? process.env.SUPLEX_DETERMINISTIC_PHASE ?? "deliver
 // Workflow phases run one non-Standard workflow to local delivery; their Advisors use the stand-in's report bridge calls.
 const workflowNames: Record<string, string> = { direct_build: "Direct build", independent_review: "Second opinion", competing_plans: "Combined planning" };
 const workflowPhase = phase in workflowNames;
-if (!["deliver", "answer", "restart", "cancel"].includes(phase) && !workflowPhase) throw new Error("Unknown deterministic phase");
+if (!["deliver", "deliver_pr", "answer", "restart", "cancel", "deliver_claude"].includes(phase) && !workflowPhase) throw new Error("Unknown deterministic phase");
+const claude = phase === "deliver_claude";
+const claudeConfig = claude ? await mkdtemp(join(tmpdir(), "suplex-claude-config-")) : null;
+if (claudeConfig) {
+  process.on("exit", () => rmSync(claudeConfig, { recursive: true, force: true }));
+  process.env.SUPLEX_CLAUDE_COMMAND = fileURLToPath(new URL("../fixtures/claude-code-standard-cli.mjs", import.meta.url));
+  process.env.CLAUDE_CONFIG_DIR = claudeConfig;
+}
 const timeoutMs = Number(process.env.SUPLEX_JOURNEY_TIMEOUT_MS ?? 300_000);
 let lastStep = "script started";
 const progress = (step: string) => {
@@ -56,21 +64,62 @@ if (deterministic) {
   }
 }
 progress(`fixture ready: origin ${origin}`);
-// Workflow delegation pins the published-base-to-head range, so workflow phases answer the
-// GitHub branch read from the seeded origin over loopback (Rust build feature github-test-endpoint).
-const publishedApi = workflowPhase ? createServer((request, response) => {
-  void git("-C", origin, "rev-parse", "HEAD").then(head => {
-    const found = /^\/repos\/[^/]+\/[^/]+\/branches\/main$/.test(request.url ?? "");
-    response.writeHead(found ? 200 : 404, { "content-type": "application/json" });
-    response.end(JSON.stringify(found ? { name: "main", commit: { sha: head.stdout.trim() } } : { message: "Not Found" }));
+// deliver_pr and workflow phases: a loopback GitHub API that reads branch heads from the seeded origin and records pull requests.
+const pulls: Array<{ number: number; repository: string; head: string; headSha: string; base: string; baseSha: string; title: string; body: string; draft: boolean }> = [];
+let githubApi: Server | null = null;
+if (phase === "deliver_pr" || workflowPhase) {
+  const branchHead = async (branch: string) => {
+    const result = await runCommand({ taskId: null, stepId: null, command: "git", args: ["--git-dir", origin, "rev-parse", "--verify", "--quiet", `refs/heads/${branch}^{commit}`], expectNonZero: true });
+    return result.exitCode === 0 ? result.stdout.trim() : null;
+  };
+  const rest = (pull: typeof pulls[number]) => {
+    const side = (ref: string, sha: string) => ({ ref, sha, repo: { full_name: pull.repository } });
+    return { number: pull.number, html_url: `https://github.com/${pull.repository}/pull/${pull.number}`, node_id: `PR_${pull.number}`, state: "open", draft: pull.draft, merged_at: null, auto_merge: null, head: side(pull.head, pull.headSha), base: side(pull.base, pull.baseSha), title: pull.title, body: pull.body, user: { login: "suplex" }, updated_at: "2026-09-25T00:00:00Z" };
+  };
+  githubApi = createServer((request, response) => {
+    let raw = "";
+    request.on("data", chunk => { raw += String(chunk); });
+    request.on("end", () => void (async () => {
+      const send = (status: number, value: unknown) => { response.writeHead(status, { "content-type": "application/json" }); response.end(JSON.stringify(value)); };
+      const url = new URL(request.url ?? "/", "http://127.0.0.1");
+      const body = raw ? JSON.parse(raw) as Record<string, any> : {};
+      const branch = /^\/repos\/([^/]+\/[^/]+)\/branches\/(.+)$/.exec(url.pathname);
+      if (request.method === "GET" && branch) {
+        const sha = await branchHead(decodeURIComponent(branch[2]!));
+        return sha ? send(200, { commit: { sha } }) : send(404, { message: "Branch not found" });
+      }
+      const create = /^\/repos\/([^/]+\/[^/]+)\/pulls$/.exec(url.pathname);
+      if (request.method === "POST" && create) {
+        const headSha = await branchHead(body.head);
+        const baseSha = await branchHead(body.base);
+        if (!headSha || !baseSha) return send(404, { message: "Not Found" });
+        const pull = { number: pulls.length + 1, repository: create[1]!.toLowerCase(), head: body.head, headSha, base: body.base, baseSha, title: body.title, body: body.body, draft: body.draft === true };
+        pulls.push(pull);
+        return send(201, rest(pull));
+      }
+      const read = /^\/repos\/([^/]+\/[^/]+)\/pulls\/(\d+)$/.exec(url.pathname);
+      if (request.method === "GET" && read) {
+        const pull = pulls[Number(read[2]) - 1];
+        return pull ? send(200, rest(pull)) : send(404, { message: "Not Found" });
+      }
+      if (request.method === "POST" && url.pathname === "/graphql") {
+        const query = String(body.query);
+        if (query.includes("pullRequests(")) {
+          const nodes = pulls.filter(pull => pull.head === body.variables?.head).map(pull => ({ number: pull.number, url: `https://github.com/${pull.repository}/pull/${pull.number}`, isDraft: pull.draft, state: "OPEN", headRefName: pull.head, headRefOid: pull.headSha, baseRefName: pull.base, baseRefOid: pull.baseSha, title: pull.title, body: pull.body, author: { login: "suplex" }, updatedAt: "2026-09-25T00:00:00Z", isCrossRepository: false }));
+          return send(200, { data: { repository: { pullRequests: { nodes } } } });
+        }
+        const pull = pulls[Number(body.variables?.number) - 1];
+        if (!pull) return send(200, { data: { repository: { pullRequest: null } } });
+        return send(200, { data: { repository: { pullRequest: { number: pull.number, url: `https://github.com/${pull.repository}/pull/${pull.number}`, state: "OPEN", isDraft: pull.draft, headRefOid: pull.headSha, baseRefOid: pull.baseSha, mergeable: "MERGEABLE", mergeStateStatus: "CLEAN", autoMergeRequest: null, reviewDecision: null, author: { login: "suplex", avatarUrl: "https://avatars.githubusercontent.com/suplex" }, changedFiles: 1, additions: 1, deletions: 0, title: pull.title, commits: { nodes: [{ commit: { statusCheckRollup: null } }] } } } } });
+      }
+      send(404, { message: "Not Found" });
+    })().catch(error => { response.writeHead(500); response.end(String(error)); }));
   });
-}) : null;
-if (publishedApi) {
-  await new Promise<void>(ready => publishedApi.listen(0, "127.0.0.1", ready));
-  const address = publishedApi.address();
-  if (!address || typeof address === "string") throw new Error("The loopback GitHub API did not bind a TCP port");
+  await new Promise<void>(accept => githubApi!.listen(0, "127.0.0.1", accept));
+  const address = githubApi.address();
+  if (!address || typeof address === "string") throw new Error("The loopback GitHub API did not bind");
   process.env.SUPLEX_RUST_TEST_GITHUB_API = `http://127.0.0.1:${address.port}`;
-  publishedApi.unref();
+  progress(`loopback GitHub API on ${address.port}`);
 }
 const controlDirectory = deterministic && ["restart", "cancel"].includes(phase) ? await mkdtemp(join(tmpdir(), "suplex-codex-control-")) : null;
 if (controlDirectory) {
@@ -122,9 +171,11 @@ try {
   await git("-C", fixture.project.repositoryPath, "config", "--local", `url.${pathToFileURL(origin).href}.insteadOf`, canonicalOrigin);
   const revision = (await git("-C", fixture.project.repositoryPath, "rev-parse", "HEAD")).stdout.trim();
   for (const id of ["profile_native_root", "profile_native_worker"]) {
-    const profile = fixture.profiles.update(fixture.userId, id, { provider: "codex", model, reasoningLevel: "medium", serviceTier: "default" });
-    equal(profile.provider, "codex");
-    equal(profile.model, model);
+    const provider = claude ? "claude-code" : "codex";
+    const profileModel = claude ? "haiku" : model;
+    const profile = fixture.profiles.update(fixture.userId, id, { provider, model: profileModel, reasoningLevel: "medium", serviceTier: "default" });
+    equal(profile.provider, provider);
+    equal(profile.model, profileModel);
     equal(profile.reasoningLevel, "medium");
   }
   const response = await fixture.page.goto(`${fixture.base}/tasks?company=${fixture.company.id}`);
@@ -141,7 +192,7 @@ try {
     await fixture.page.getByRole("menuitem", { name: workflowName }).click();
     await dialog.getByRole("button", { name: "Workflow", exact: true }).filter({ hasText: workflowName }).waitFor();
   }
-  await dialog.getByRole("radio", { name: "Keep in worktree" }).check();
+  await dialog.getByRole("radio", { name: phase === "deliver_pr" ? "Draft pull request" : "Keep in worktree" }).check();
   await dialog.getByRole("checkbox", { name: "Start immediately", exact: true }).uncheck();
   equal(await dialog.getByRole("button", { name: "New task", exact: true }).isEnabled(), true);
   equal(fixture.errors.length, 0, fixture.errors.join("; "));
@@ -149,7 +200,7 @@ try {
     console.log(JSON.stringify({ backend: fixture.backend, taskPage: response?.status(), dialog: "ready", project: fixture.project.id, revision }));
   } else {
     preserveData = true;
-    const proof = resolve(deterministic ? phase === "deliver" ? ".context/deterministic-codex-standard" : `.context/deterministic-codex-${phase}` : ".context/real-codex-standard");
+    const proof = resolve(deterministic ? phase === "deliver" ? ".context/deterministic-codex-standard" : claude ? ".context/deterministic-claude-standard" : `.context/deterministic-codex-${phase}` : ".context/real-codex-standard");
     await mkdir(proof, { recursive: true });
     await fixture.page.screenshot({ path: `${proof}/new-task.png`, fullPage: true });
     const createdResponse = fixture.page.waitForResponse(candidate => candidate.request().method() === "POST" && candidate.url().endsWith(`/api/companies/${fixture.company.id}/tasks`));
@@ -158,7 +209,7 @@ try {
     equal(created.status(), 201, await created.text());
     const task = TaskSchema.parse(await created.json());
     equal(task.status, "backlog");
-    equal(task.deliveryTarget, "local_worktree");
+    equal(task.deliveryTarget, phase === "deliver_pr" ? "pull_request_draft" : "local_worktree");
     if (workflowPhase) equal(task.workflow, phase);
     progress(`task created ${task.id}`);
     await fixture.page.getByRole("heading", { name: task.title, level: 2, exact: true }).waitFor();
@@ -251,6 +302,15 @@ try {
       notEqual(head, revision);
       await runCommand({ taskId: null, stepId: null, command: "pnpm", args: ["test"], cwd: worktree });
     }
+    if (phase === "deliver_pr") {
+      equal(pulls.length, 1, "Suplex created one pull request");
+      equal(pulls[0]!.draft, true);
+      equal(pulls[0]!.headSha, head, "The pull request is at the reviewed worktree head");
+      equal(pulls[0]!.title, "Append a verified README line");
+      equal(pulls[0]!.head, delivered.configuration.branch);
+      equal(delivered.pullRequest?.number, 1);
+      progress("draft pull request created at the reviewed head");
+    }
     const sessions = fixture.database.authQuery(db => db.prepare("SELECT id,kind,lifecycle,stopped_at AS stoppedAt,native_session_id AS nativeSessionId FROM suplex_task_sessions WHERE task_id = ? ORDER BY kind,id").all(task.id)) as Array<{ id: string; kind: string; lifecycle: string; stoppedAt: string | null; nativeSessionId: string | null }>;
     ok(sessions.some(session => session.kind === "root" && session.nativeSessionId));
     ok(sessions.some(session => session.kind === "worker" && session.nativeSessionId));
@@ -288,6 +348,7 @@ try {
   }
 } finally {
   globalThis.clearTimeout(journeyDeadline);
+  githubApi?.close();
   await fixture.close({ preserveData });
   if (controlDirectory && !preserveData) await rm(controlDirectory, { recursive: true, force: true });
   if (preserveData) console.error(`Fixture data preserved for native recovery: ${fixture.directory}`);

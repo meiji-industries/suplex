@@ -9,7 +9,7 @@ use serde_json::{Value, json};
 
 use crate::{
     platform::database::{DatabaseResult, OpenMode, SuplexDatabase},
-    runtimes::codex::{session_reader, tool_evidence},
+    runtimes::{task_harness::ReaderSession, task_harness_registry},
 };
 
 use super::{
@@ -34,17 +34,30 @@ pub struct TerminalDelegateTurn<'a> {
     pub base: Value,
 }
 
-/// TypeScript `harness.turnEvidence` for the Codex turn log.
+/// TypeScript `harness.turnEvidence` through the session's native reader.
 pub fn native_tools(
     database_path: &Path,
-    session_id: &str,
+    session: &Value,
     turn_id: &str,
 ) -> Result<Vec<Value>, String> {
     let read = || -> Result<Vec<Value>, Box<dyn std::error::Error>> {
-        let directory = session_reader::session_directory(database_path, session_id)?;
-        let events = session_reader::turn_evidence(&directory, turn_id)?
+        let native_session_id = session["nativeSessionId"].as_str().unwrap_or_default();
+        let reader = task_harness_registry::for_session(Some(native_session_id))
+            .ok_or("No native reader for this session")?;
+        let tools = reader
+            .turn_evidence(
+                &ReaderSession {
+                    database_path,
+                    session_id: session["id"].as_str().unwrap_or_default(),
+                    native_session_id,
+                    instance_home_directory: session["profile"]["instanceHomeDirectory"]
+                        .as_str()
+                        .map(Path::new),
+                },
+                turn_id,
+            )?
             .ok_or("The native turn log is missing")?;
-        Ok(tool_evidence::codex_tools(&events)
+        Ok(tools
             .into_iter()
             .map(serde_json::to_value)
             .collect::<Result<_, _>>()?)
@@ -183,7 +196,7 @@ pub fn finish_delegate_turn(
         let outcome = if state == "completed" {
             advisor_bridge::advisor_report_from_turn(
                 assigned,
-                &native_tools(database_path, &session.id, &turn.id).unwrap_or_default(),
+                &native_tools(database_path, &session_row, &turn.id).unwrap_or_default(),
                 text,
             )
         } else {
@@ -238,7 +251,7 @@ pub fn finish_delegate_turn(
         );
     }
     if workflow != "standard" {
-        match native_tools(database_path, &session.id, &turn.id) {
+        match native_tools(database_path, &session_row, &turn.id) {
             Ok(tools) => {
                 base["tools"] = json!(tools);
                 base["toolsLimit"] = Value::Null;
@@ -312,7 +325,7 @@ pub async fn reconcile_completed_advisor_report(
         return Ok(Err("The retained Advisor observation is invalid".into()));
     };
     let session_id = session["id"].as_str().unwrap_or_default();
-    let tools = native_tools(database_path, session_id, turn_id).unwrap_or_default();
+    let tools = native_tools(database_path, session, turn_id).unwrap_or_default();
     let assigned = advisor_bridge::advisor_role(role).ok_or("Advisor role is invalid")?;
     let outcome = advisor_bridge::advisor_report_from_turn(
         assigned,

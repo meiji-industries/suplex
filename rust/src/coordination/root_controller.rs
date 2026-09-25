@@ -7,13 +7,14 @@ use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
 
 use crate::{
+    delivery::operations::DeliveryOperations,
     http::contracts::typed::tasks::TaskWorkerReplacementBody,
     platform::{
         artifacts,
         database::{DatabaseResult, OpenMode, SuplexDatabase},
     },
-    runtimes::codex::{session_reader, tool_evidence},
-    tasks::{commands::TaskFailure, worktree},
+    runtimes::{task_harness::ReaderSession, task_harness_registry},
+    tasks::worktree,
 };
 
 use super::{
@@ -59,10 +60,6 @@ pub fn prepare_root(database_path: &Path, task_id: &str) -> DatabaseResult<RootS
 
 fn invalid(message: &'static str) -> Box<dyn std::error::Error> {
     std::io::Error::other(message).into()
-}
-
-fn not_ported(message: &'static str) -> Box<dyn std::error::Error> {
-    Box::new(TaskFailure::not_ported(message))
 }
 
 fn completed_worker_turn<'a>(turns: &'a [Value], session_id: &str) -> Option<&'a Value> {
@@ -192,7 +189,8 @@ pub fn observe(database_path: &Path, root: &RootIdentity) -> DatabaseResult<Valu
         )?;
         root_session_store::root_observation_rows(&database, &root.task_id)?
     };
-    let pull_request = crate::delivery::operations::observe(&rows.control)?;
+    let (pull_request, github) =
+        crate::delivery::operations::observe_for_root(database_path, &rows.control)?;
     let worktree = match rows.control["worktree"]["path"].as_str() {
         Some(path) => match worktree::observe_worktree(Path::new(path)) {
             Ok(observed) => json!({"headSha":observed.head_sha,"dirty":observed.dirty}),
@@ -200,7 +198,9 @@ pub fn observe(database_path: &Path, root: &RootIdentity) -> DatabaseResult<Valu
         },
         None => Value::Null,
     };
-    assemble_observation(rows, worktree, pull_request)
+    let mut observation = assemble_observation(rows, worktree, pull_request)?;
+    observation["github"] = github;
+    Ok(observation)
 }
 
 /// Return task-owned image bytes to the Root MCP tool after a fresh Root check.
@@ -280,10 +280,31 @@ pub fn read_worker_evidence(
     let session_id = session["id"]
         .as_str()
         .ok_or_else(|| invalid("Worker session id is missing"))?;
-    let directory = session_reader::session_directory(database_path, session_id)?;
-    let evidence = session_reader::turn_evidence(&directory, &request.turn_id)?;
+    let native_session_id = session["nativeSessionId"].as_str().unwrap_or_default();
+    // An unbound session is read by its profile provider.
+    let provider = session["profile"]["provider"].as_str();
+    let reader = task_harness_registry::native_session_reader(native_session_id).or_else(|| {
+        task_harness_registry::for_profile(
+            provider
+                .or(rows.control["workerProfile"]["provider"].as_str())
+                .unwrap_or_default(),
+        )
+    });
+    let evidence = reader
+        .ok_or_else(|| invalid("The native provider is unavailable"))?
+        .turn_evidence(
+            &ReaderSession {
+                database_path,
+                session_id,
+                native_session_id,
+                instance_home_directory: session["profile"]["instanceHomeDirectory"]
+                    .as_str()
+                    .map(Path::new),
+            },
+            &request.turn_id,
+        )?;
     let (tools, limitation) = match evidence {
-        Some(events) => (tool_evidence::codex_tools(&events), Value::Null),
+        Some(tools) => (tools, Value::Null),
         None => (Vec::new(), json!("The native turn log is missing")),
     };
     let result = worker_evidence::read(&tools, &request.query).map_err(std::io::Error::other)?;
@@ -322,7 +343,10 @@ fn recheck(
 }
 
 fn delivery_failure(code: &'static str, message: &'static str) -> Box<dyn std::error::Error> {
-    Box::new(crate::delivery::operations::DeliveryOperationFailure { code, message })
+    Box::new(crate::delivery::operations::DeliveryOperationFailure {
+        code,
+        message: message.to_owned(),
+    })
 }
 
 pub struct ObservedRange {
@@ -334,67 +358,19 @@ pub struct ObservedRange {
 /// TypeScript `currentRange`: the published-base-to-local-head range with the
 /// tree state. Delegation pins Advisor and Worker inputs to it.
 pub async fn current_range(database_path: &Path, task_id: &str) -> DatabaseResult<ObservedRange> {
-    let control = {
-        let database = SuplexDatabase::open(database_path, OpenMode::ReadOnly)?;
-        root_session_store::root_observation_rows(&database, task_id)?.control
-    };
-    let diff = delivery_diff(&control).await?;
+    // The range read uses Git and GitHub only; it reads no stored artifacts.
+    let observed = DeliveryOperations::new(database_path, Path::new(""))
+        .current_range(task_id)
+        .await?;
     Ok(ObservedRange {
-        range: ReviewRange {
-            base_sha: diff.base_sha,
-            head_sha: diff.head_sha,
-            files: diff.files,
-            commits: diff.commits,
-            patch_digest: Some(diff.patch_digest),
-        },
-        base_branch: diff.base_branch,
-        clean: diff_clean(&control)?,
+        range: ReviewRange::from_value(&observed)
+            .ok_or_else(|| invalid("The delivery range observation is invalid"))?,
+        base_branch: observed["baseBranch"]
+            .as_str()
+            .unwrap_or_default()
+            .to_owned(),
+        clean: observed["clean"] == true,
     })
-}
-
-fn diff_clean(control: &Value) -> DatabaseResult<bool> {
-    let path = control["worktree"]["path"]
-        .as_str()
-        .ok_or_else(|| delivery_failure("worktree_missing", "The task has no worktree"))?;
-    Ok(worktree::observe_local_revision(Path::new(path))?.clean)
-}
-
-/// TypeScript `deliveryDiff` for the local head against the published base.
-async fn delivery_diff(
-    control: &Value,
-) -> DatabaseResult<crate::delivery::inspection::DeliveryDiff> {
-    let path = control["worktree"]["path"]
-        .as_str()
-        .ok_or_else(|| delivery_failure("worktree_missing", "The task has no worktree"))?;
-    let intent = &control["deliveryIntent"];
-    if !intent["pullRequestNumber"].is_null() {
-        // ponytail: a pinned pull request's base branch comes from GitHub delivery's pull request read.
-        return Err(not_ported(
-            "Pinned pull request base resolution is not ported",
-        ));
-    }
-    let repository = intent["repository"]
-        .as_str()
-        .ok_or_else(|| invalid("Task delivery repository is missing"))?;
-    let branch = intent["baseBranch"]
-        .as_str()
-        .ok_or_else(|| invalid("Task delivery base branch is missing"))?;
-    let local = worktree::observe_local_revision(Path::new(path))?;
-    let head = git2::Oid::from_str(&local.head_sha)?;
-    let access = crate::integrations::github::Access::load()
-        .await
-        .map_err(|error| std::io::Error::other(error.to_string()))?;
-    let published = access
-        .published_branch_sha(repository, branch)
-        .await
-        .map_err(|_| std::io::Error::other(format!("GitHub did not return the head of {branch}. Suplex cannot compute the delivery range until that observation is available; no source change is needed.")))?;
-    crate::delivery::inspection::inspect_git_range(
-        Path::new(path),
-        head,
-        published,
-        access.token(),
-        branch,
-    )
 }
 
 /// Compares the live committed source with a pinned range; any observation
@@ -989,17 +965,27 @@ pub async fn complete_workflow_local_work(
 /// the reviewed range also gets a pinned evidence directory.
 pub async fn inspect_workflow_delivery_diff(
     database_path: &Path,
+    artifact_root: &Path,
     root: &RootIdentity,
+    owner_token: &str,
 ) -> DatabaseResult<Value> {
+    let mut result = DeliveryOperations::new(database_path, artifact_root)
+        .execute(
+            root,
+            Some(owner_token),
+            "inspect_delivery_diff",
+            None,
+            None,
+            None,
+            None,
+        )
+        .await?;
     let (_, rows) = open_root(database_path, root)?;
-    let diff = delivery_diff(&rows.control).await?;
-    let range = ReviewRange {
-        base_sha: diff.base_sha.clone(),
-        head_sha: diff.head_sha.clone(),
-        files: diff.files.clone(),
-        commits: diff.commits.clone(),
-        patch_digest: Some(diff.patch_digest.clone()),
-    };
+    let range = ReviewRange::from_value(&json!({
+        "baseSha": result["baseSha"], "headSha": result["headSha"], "files": result["files"],
+        "commits": result["commits"], "patchDigest": result["patchDigest"],
+    }))
+    .ok_or_else(|| invalid("The delivery range observation is invalid"))?;
     let worktree = rows.control["worktree"]["path"]
         .as_str()
         .ok_or_else(|| invalid("The task has no worktree"))?;
@@ -1011,7 +997,6 @@ pub async fn inspect_workflow_delivery_diff(
         vec![],
         &json!({"note":"Coordinator inspection; Worker evidence is attached to Advisor requests."}),
     )?;
-    let mut result = serde_json::to_value(diff)?;
     result["evidenceDirectory"] = json!(evidence.directory);
     Ok(result)
 }
@@ -1096,7 +1081,10 @@ mod tests {
             sessions: vec![],
             turns: vec![],
         };
-        let pull_request = crate::delivery::operations::observe(&rows.control).unwrap();
+        let pull_request =
+            crate::delivery::operations::observe_for_root(Path::new(""), &rows.control)
+                .unwrap()
+                .0;
         assert_eq!(pull_request, Value::Null);
         let result = assemble_observation(
             rows,
@@ -1155,9 +1143,11 @@ mod tests {
             .find(|value| value["sessionId"] == worker["id"])
             .unwrap();
         let turn_id = turn["id"].as_str().unwrap().to_owned();
-        let native_directory =
-            session_reader::session_directory(&database_path, worker["id"].as_str().unwrap())
-                .unwrap();
+        let native_directory = crate::runtimes::task_harness::task_session_runtime_directory(
+            &database_path,
+            worker["id"].as_str().unwrap(),
+        )
+        .unwrap();
         fs::create_dir_all(&native_directory).unwrap();
         fs::write(native_directory.join(format!("turn-{turn_id}.jsonl")), concat!(
             "{\"type\":\"item.started\",\"item\":{\"id\":\"item_0\",\"type\":\"command_execution\",\"command\":\"pnpm test\",\"status\":\"in_progress\"}}\n",

@@ -147,37 +147,36 @@ pub fn finish_authentication(
 
 #[cfg(test)]
 pub(crate) mod test_support {
-    use std::{
-        io::Write,
-        process::{Command, Stdio},
-    };
+    use base64::{Engine, engine::general_purpose::STANDARD};
+    use serde_json::{Value, json};
+    use webauthn_authenticator_rs::{AuthenticatorBackend, softtoken::SoftToken};
+    use webauthn_rs::prelude::Url;
 
-    use serde_json::Value;
-
+    /// Signs a ceremony in-process with a software authenticator.
+    /// `register` returns the response, the credential ID, and the token state;
+    /// `authenticate` restores that token state, so every assertion from it
+    /// carries counter 1 (registration always carries counter 0).
     pub fn synthetic(input: &Value) -> Value {
-        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .unwrap();
-        let mut child = Command::new("node")
-            .current_dir(root)
-            .arg("tests/support/webauthn-synthetic.mjs")
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .expect("start synthetic authenticator");
-        child
-            .stdin
-            .take()
-            .unwrap()
-            .write_all(serde_json::to_string(input).unwrap().as_bytes())
-            .unwrap();
-        let output = child.wait_with_output().unwrap();
-        assert!(
-            output.status.success(),
-            "{}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        serde_json::from_slice(&output.stdout).unwrap()
+        let origin = Url::parse(input["origin"].as_str().unwrap()).unwrap();
+        let options = input["options"].clone();
+        if input["mode"] == "register" {
+            // SoftToken cannot perform user verification; `true` reports it as performed.
+            let (mut token, _) = SoftToken::new(true).unwrap();
+            let response = token
+                .perform_register(origin, serde_json::from_value(options).unwrap(), 60_000)
+                .unwrap();
+            json!({
+                "response": response,
+                "credentialId": response.id,
+                "token": STANDARD.encode(token.to_cbor().unwrap()),
+            })
+        } else {
+            let token = STANDARD.decode(input["token"].as_str().unwrap()).unwrap();
+            let response = SoftToken::from_cbor(&token)
+                .unwrap()
+                .perform_auth(origin, serde_json::from_value(options).unwrap(), 60_000)
+                .unwrap();
+            json!({ "response": response })
+        }
     }
 }

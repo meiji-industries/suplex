@@ -670,7 +670,6 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "requires Node for an ephemeral signed authenticator response"]
     async fn signed_fresh_passkey_over_isolated_tcp_listener() {
         use chrono::Duration;
         use rusqlite::params;
@@ -746,7 +745,7 @@ pub(crate) mod tests {
             "mode":"authenticate", "options":authentication["options"],
             "origin":"https://suplex.example.test:4111",
             "credentialId":signed["credentialId"],
-            "privateKeyPem":signed["privateKeyPem"], "counter":1
+            "token":signed["token"]
         }));
         let signed_in = post(
             address,

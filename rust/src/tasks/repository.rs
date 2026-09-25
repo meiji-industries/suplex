@@ -166,7 +166,7 @@ pub(crate) fn prerequisites_complete(
     Ok(!waiting)
 }
 
-fn assert_pull_request_available(
+pub(crate) fn assert_pull_request_available(
     database: &SuplexDatabase,
     task_id: &str,
     repository: &str,

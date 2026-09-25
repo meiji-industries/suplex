@@ -180,13 +180,12 @@ async fn update_environment(
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
-    let patch = match auth::parsed_body(&headers, &body)
-        .map(|value| environment_patch(value.as_ref()))
-    {
-        Ok(Ok(patch)) => patch,
-        Ok(Err(findings)) => return validation::validation_error_public(findings),
-        Err(response) => return *response,
-    };
+    let patch =
+        match auth::parsed_body(&headers, &body).map(|value| environment_patch(value.as_ref())) {
+            Ok(Ok(patch)) => patch,
+            Ok(Err(findings)) => return validation::validation_error_public(findings),
+            Err(response) => return *response,
+        };
     let (user, cookies) = match administrator(&state, &headers, &Method::PATCH, ADMIN_REQUIRED) {
         Ok(value) => value,
         Err(response) => return *response,
@@ -200,7 +199,9 @@ async fn update_environment(
                 default_budget_usd: patch
                     .default_budget_usd
                     .unwrap_or(previous.default_budget_usd),
-                default_max_turns: patch.default_max_turns.unwrap_or(previous.default_max_turns),
+                default_max_turns: patch
+                    .default_max_turns
+                    .unwrap_or(previous.default_max_turns),
             },
         )?;
         record_audit(
@@ -229,7 +230,11 @@ async fn update_environment(
 /// `SuplexConfig`, so the configuration record comes from its live paths.
 fn backups(state: &AppState) -> Option<BackupService> {
     let database_path = state.with_database(|database| {
-        database.connection().path().filter(|path| !path.is_empty()).map(PathBuf::from)
+        database
+            .connection()
+            .path()
+            .filter(|path| !path.is_empty())
+            .map(PathBuf::from)
     })?;
     let data_root = database_path.parent()?.to_path_buf();
     let artifact_root = state.artifact_root.clone()?;
@@ -419,9 +424,10 @@ async fn reset(State(state): State<AppState>, headers: HeaderMap) -> Response {
     });
     let response = match result {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
-        Err(error) if error.downcast_ref::<LiveSessionsBlockReset>().is_some() => {
-            auth::error(StatusCode::CONFLICT, factory_reset::LIVE_SESSIONS_BLOCK_RESET)
-        }
+        Err(error) if error.downcast_ref::<LiveSessionsBlockReset>().is_some() => auth::error(
+            StatusCode::CONFLICT,
+            factory_reset::LIVE_SESSIONS_BLOCK_RESET,
+        ),
         Err(_) => internal(),
     };
     finish(response, cookies)
@@ -451,10 +457,12 @@ mod tests {
     }
 
     async fn fixture() -> Fixture {
-        let root = std::env::temp_dir().join(format!("suplex-admin-platform-{}", uuid::Uuid::new_v4()));
+        let root =
+            std::env::temp_dir().join(format!("suplex-admin-platform-{}", uuid::Uuid::new_v4()));
         let data = root.join("data");
         std::fs::create_dir_all(&data).unwrap();
-        let database = SuplexDatabase::open(&data.join("suplex.sqlite"), OpenMode::Migrate).unwrap();
+        let database =
+            SuplexDatabase::open(&data.join("suplex.sqlite"), OpenMode::Migrate).unwrap();
         let state = AppState::new(
             database,
             SessionConfig {
@@ -471,7 +479,13 @@ mod tests {
         let server = tokio::spawn(async move {
             let _ = axum::serve(listener, router).await;
         });
-        Fixture { root, state, address, server, cookie: Default::default() }
+        Fixture {
+            root,
+            state,
+            address,
+            server,
+            cookie: Default::default(),
+        }
     }
 
     impl Fixture {
@@ -486,7 +500,10 @@ mod tests {
                 .redirect(reqwest::redirect::Policy::none())
                 .build()
                 .unwrap()
-                .request(method.parse().unwrap(), format!("http://{}{uri}", self.address))
+                .request(
+                    method.parse().unwrap(),
+                    format!("http://{}{uri}", self.address),
+                )
                 .header(header::HOST, "127.0.0.1:4113")
                 .header(header::ORIGIN, "http://127.0.0.1:4113")
                 .body(body);
@@ -498,7 +515,16 @@ mod tests {
                 request = request.header(header::COOKIE, cookie);
             }
             let response = request.send().await.unwrap();
-            if let Some(session) = response.headers().get_all(header::SET_COOKIE).iter().find_map(|value| value.to_str().ok().filter(|value| value.starts_with("sid_v1=")))
+            if let Some(session) = response
+                .headers()
+                .get_all(header::SET_COOKIE)
+                .iter()
+                .find_map(|value| {
+                    value
+                        .to_str()
+                        .ok()
+                        .filter(|value| value.starts_with("sid_v1="))
+                })
             {
                 *self.cookie.lock().unwrap() = session.split(';').next().map(str::to_owned);
             }
@@ -516,48 +542,178 @@ mod tests {
     async fn environment_settings_default_and_persist_partial_administrator_updates() {
         let fixture = fixture().await;
         let state = &fixture.state;
-        let (status, headers, body) = fixture.call("GET", "/api/admin/environment", None, vec![]).await;
+        let (status, headers, body) = fixture
+            .call("GET", "/api/admin/environment", None, vec![])
+            .await;
         assert_eq!(status, StatusCode::OK);
         assert_eq!(headers[header::CACHE_CONTROL], "private, no-store");
-        assert_eq!(json_body(&body), json!({"minFreeDiskGb":5,"defaultBudgetUsd":15,"defaultMaxTurns":40}));
-        let patch = |body: &str| fixture.call("PATCH", "/api/admin/environment", Some("application/json"), body.as_bytes().to_vec());
-        assert_eq!(json_body(&patch(r#"{"minFreeDiskGb":7.5}"#).await.2), json!({"minFreeDiskGb":7.5,"defaultBudgetUsd":15,"defaultMaxTurns":40}));
-        assert_eq!(json_body(&patch(r#"{"defaultBudgetUsd":20,"defaultMaxTurns":30}"#).await.2), json!({"minFreeDiskGb":7.5,"defaultBudgetUsd":20,"defaultMaxTurns":30}));
-        assert_eq!(json_body(&fixture.call("GET", "/api/admin/environment", None, vec![]).await.2), json!({"minFreeDiskGb":7.5,"defaultBudgetUsd":20,"defaultMaxTurns":30}));
-        for invalid in [r#"{"defaultBudgetUsd":-1}"#, r#"{}"#, r#"{"other":1}"#, r#"{"defaultMaxTurns":1.5}"#, r#"{"minFreeDiskGb":2000}"#] {
+        assert_eq!(
+            json_body(&body),
+            json!({"minFreeDiskGb":5,"defaultBudgetUsd":15,"defaultMaxTurns":40})
+        );
+        let patch = |body: &str| {
+            fixture.call(
+                "PATCH",
+                "/api/admin/environment",
+                Some("application/json"),
+                body.as_bytes().to_vec(),
+            )
+        };
+        assert_eq!(
+            json_body(&patch(r#"{"minFreeDiskGb":7.5}"#).await.2),
+            json!({"minFreeDiskGb":7.5,"defaultBudgetUsd":15,"defaultMaxTurns":40})
+        );
+        assert_eq!(
+            json_body(
+                &patch(r#"{"defaultBudgetUsd":20,"defaultMaxTurns":30}"#)
+                    .await
+                    .2
+            ),
+            json!({"minFreeDiskGb":7.5,"defaultBudgetUsd":20,"defaultMaxTurns":30})
+        );
+        assert_eq!(
+            json_body(
+                &fixture
+                    .call("GET", "/api/admin/environment", None, vec![])
+                    .await
+                    .2
+            ),
+            json!({"minFreeDiskGb":7.5,"defaultBudgetUsd":20,"defaultMaxTurns":30})
+        );
+        for invalid in [
+            r#"{"defaultBudgetUsd":-1}"#,
+            r#"{}"#,
+            r#"{"other":1}"#,
+            r#"{"defaultMaxTurns":1.5}"#,
+            r#"{"minFreeDiskGb":2000}"#,
+        ] {
             assert_eq!(patch(invalid).await.0, StatusCode::BAD_REQUEST, "{invalid}");
         }
         let audit: String = state.with_database(|database| database.connection().query_row("SELECT metadata_json FROM suplex_audit_events WHERE action = 'environment_settings_updated' ORDER BY created_at LIMIT 1", [], |row| row.get(0))).unwrap();
         assert_eq!(json_body(audit.as_bytes())["minFreeDiskGb"], "7.5");
-        state.with_database(|database| database.connection().execute("UPDATE suplex_users SET role = 'member'", []).unwrap());
-        assert_eq!(fixture.call("GET", "/api/admin/environment", None, vec![]).await.0, StatusCode::FORBIDDEN);
+        state.with_database(|database| {
+            database
+                .connection()
+                .execute("UPDATE suplex_users SET role = 'member'", [])
+                .unwrap()
+        });
+        assert_eq!(
+            fixture
+                .call("GET", "/api/admin/environment", None, vec![])
+                .await
+                .0,
+            StatusCode::FORBIDDEN
+        );
     }
 
     #[tokio::test]
     async fn administrators_create_list_download_and_restore_backups() {
         let fixture = fixture().await;
-        assert_eq!(json_body(&fixture.call("GET", "/api/admin/backups", None, vec![]).await.2), json!({"backups":[]}));
-        let (status, _, body) = fixture.call("POST", "/api/admin/backups", None, vec![]).await;
+        assert_eq!(
+            json_body(
+                &fixture
+                    .call("GET", "/api/admin/backups", None, vec![])
+                    .await
+                    .2
+            ),
+            json!({"backups":[]})
+        );
+        let (status, _, body) = fixture
+            .call("POST", "/api/admin/backups", None, vec![])
+            .await;
         assert_eq!(status, StatusCode::OK, "{}", String::from_utf8_lossy(&body));
         let name = json_body(&body)["name"].as_str().unwrap().to_owned();
-        assert!(regex::Regex::new(r"^suplex-backup-\d{4}-\d\d-\d\dT\d\d-\d\d-\d\dZ\.tar\.gz$").unwrap().is_match(&name));
-        let listed = json_body(&fixture.call("GET", "/api/admin/backups", None, vec![]).await.2);
+        assert!(
+            regex::Regex::new(r"^suplex-backup-\d{4}-\d\d-\d\dT\d\d-\d\d-\d\dZ\.tar\.gz$")
+                .unwrap()
+                .is_match(&name)
+        );
+        let listed = json_body(
+            &fixture
+                .call("GET", "/api/admin/backups", None, vec![])
+                .await
+                .2,
+        );
         assert_eq!(listed["backups"][0]["name"], name.as_str());
-        let (status, headers, archive) = fixture.call("GET", &format!("/api/admin/backups/{name}"), None, vec![]).await;
+        let (status, headers, archive) = fixture
+            .call("GET", &format!("/api/admin/backups/{name}"), None, vec![])
+            .await;
         assert_eq!(status, StatusCode::OK);
-        assert_eq!(headers[header::CONTENT_DISPOSITION], format!("attachment; filename=\"{name}\"").as_str());
+        assert_eq!(
+            headers[header::CONTENT_DISPOSITION],
+            format!("attachment; filename=\"{name}\"").as_str()
+        );
 
-        let before = json_body(&fixture.call("GET", "/api/admin/environment", None, vec![]).await.2);
-        fixture.call("PATCH", "/api/admin/environment", Some("application/json"), br#"{"defaultMaxTurns":47}"#.to_vec()).await;
-        let (status, _, body) = fixture.call("POST", "/api/admin/backups/restore", Some("application/gzip"), archive).await;
-        assert_eq!(status, StatusCode::NO_CONTENT, "{}", String::from_utf8_lossy(&body));
+        let before = json_body(
+            &fixture
+                .call("GET", "/api/admin/environment", None, vec![])
+                .await
+                .2,
+        );
+        fixture
+            .call(
+                "PATCH",
+                "/api/admin/environment",
+                Some("application/json"),
+                br#"{"defaultMaxTurns":47}"#.to_vec(),
+            )
+            .await;
+        let (status, _, body) = fixture
+            .call(
+                "POST",
+                "/api/admin/backups/restore",
+                Some("application/gzip"),
+                archive,
+            )
+            .await;
+        assert_eq!(
+            status,
+            StatusCode::NO_CONTENT,
+            "{}",
+            String::from_utf8_lossy(&body)
+        );
         // The same session still works, and the live connection reads the restored data.
-        assert_eq!(json_body(&fixture.call("GET", "/api/admin/environment", None, vec![]).await.2), before);
-        let (status, _, body) = fixture.call("POST", "/api/admin/backups/restore", Some("application/gzip"), b"not a backup".to_vec()).await;
+        assert_eq!(
+            json_body(
+                &fixture
+                    .call("GET", "/api/admin/environment", None, vec![])
+                    .await
+                    .2
+            ),
+            before
+        );
+        let (status, _, body) = fixture
+            .call(
+                "POST",
+                "/api/admin/backups/restore",
+                Some("application/gzip"),
+                b"not a backup".to_vec(),
+            )
+            .await;
         assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
-        assert_eq!(json_body(&body), json!({"error":"The file is not a valid Suplex backup."}));
-        assert_eq!(fixture.call("GET", "/api/admin/backups/..%2Fsuplex.sqlite", None, vec![]).await.0, StatusCode::NOT_FOUND);
-        assert_eq!(fixture.call("GET", "/api/admin/backups/suplex-backup-2000-01-01T00-00-00Z.tar.gz", None, vec![]).await.0, StatusCode::NOT_FOUND);
+        assert_eq!(
+            json_body(&body),
+            json!({"error":"The file is not a valid Suplex backup."})
+        );
+        assert_eq!(
+            fixture
+                .call("GET", "/api/admin/backups/..%2Fsuplex.sqlite", None, vec![])
+                .await
+                .0,
+            StatusCode::NOT_FOUND
+        );
+        assert_eq!(
+            fixture
+                .call(
+                    "GET",
+                    "/api/admin/backups/suplex-backup-2000-01-01T00-00-00Z.tar.gz",
+                    None,
+                    vec![]
+                )
+                .await
+                .0,
+            StatusCode::NOT_FOUND
+        );
     }
 
     #[tokio::test]
@@ -565,7 +721,9 @@ mod tests {
         let fixture = fixture().await;
         let state = &fixture.state;
         // A signed-in request creates the Operator; the task below keeps a session live.
-        fixture.call("GET", "/api/admin/environment", None, vec![]).await;
+        fixture
+            .call("GET", "/api/admin/environment", None, vec![])
+            .await;
         state.with_database(|database| {
             development::seed_development_data(database, Utc::now()).unwrap();
             let connection = database.connection();
@@ -577,10 +735,20 @@ mod tests {
             connection.execute(&format!("INSERT INTO suplex_task_controls (task_id, status{}) VALUES ('task_live', 'active'{})", required.iter().map(|name| format!(", {name}")).collect::<String>(), ", '{}'".repeat(required.len())), []).unwrap();
             connection.execute_batch("PRAGMA foreign_keys = ON; PRAGMA ignore_check_constraints = OFF").unwrap();
         });
-        let (status, _, body) = fixture.call("POST", "/api/admin/factory-reset", None, vec![]).await;
+        let (status, _, body) = fixture
+            .call("POST", "/api/admin/factory-reset", None, vec![])
+            .await;
         assert_eq!(status, StatusCode::CONFLICT);
-        assert_eq!(json_body(&body)["error"], factory_reset::LIVE_SESSIONS_BLOCK_RESET);
-        state.with_database(|database| database.connection().execute("UPDATE suplex_task_controls SET status = 'cancelled'", []).unwrap());
+        assert_eq!(
+            json_body(&body)["error"],
+            factory_reset::LIVE_SESSIONS_BLOCK_RESET
+        );
+        state.with_database(|database| {
+            database
+                .connection()
+                .execute("UPDATE suplex_task_controls SET status = 'cancelled'", [])
+                .unwrap()
+        });
         let artifacts = fixture.root.join("data/artifacts/company");
         std::fs::create_dir_all(&artifacts).unwrap();
         std::fs::write(artifacts.join("attachment.png"), "artifact").unwrap();
@@ -588,20 +756,47 @@ mod tests {
         let worktree = fixture.root.join("worktrees/external-work");
         std::fs::create_dir_all(&worktree).unwrap();
         std::fs::write(worktree.join("keep.txt"), "uncommitted work").unwrap();
-        let (status, _, body) = fixture.call("POST", "/api/admin/factory-reset", None, vec![]).await;
-        assert_eq!(status, StatusCode::NO_CONTENT, "{}", String::from_utf8_lossy(&body));
+        let (status, _, body) = fixture
+            .call("POST", "/api/admin/factory-reset", None, vec![])
+            .await;
+        assert_eq!(
+            status,
+            StatusCode::NO_CONTENT,
+            "{}",
+            String::from_utf8_lossy(&body)
+        );
         state.with_database(|database| {
             // Local mode seeds the Operator and a first company again, so only their rows remain.
             for table in ["suplex_tasks", "suplex_projects", "suplex_sessions"] {
-                let count: i64 = database.connection().query_row(&format!("SELECT count(*) FROM {table}"), [], |row| row.get(0)).unwrap();
+                let count: i64 = database
+                    .connection()
+                    .query_row(&format!("SELECT count(*) FROM {table}"), [], |row| {
+                        row.get(0)
+                    })
+                    .unwrap();
                 assert_eq!(count, 0, "{table}");
             }
-            let companies: Vec<String> = database.connection().prepare("SELECT name FROM suplex_companies").unwrap().query_map([], |row| row.get(0)).unwrap().map(Result::unwrap).collect();
+            let companies: Vec<String> = database
+                .connection()
+                .prepare("SELECT name FROM suplex_companies")
+                .unwrap()
+                .query_map([], |row| row.get(0))
+                .unwrap()
+                .map(Result::unwrap)
+                .collect();
             assert_eq!(companies, ["My Company"]);
         });
-        assert_eq!(std::fs::read_dir(fixture.root.join("data/artifacts")).unwrap().count(), 0);
+        assert_eq!(
+            std::fs::read_dir(fixture.root.join("data/artifacts"))
+                .unwrap()
+                .count(),
+            0
+        );
         assert!(!fixture.root.join("data/provider-instances").exists());
-        assert_eq!(std::fs::read_to_string(worktree.join("keep.txt")).unwrap(), "uncommitted work");
+        assert_eq!(
+            std::fs::read_to_string(worktree.join("keep.txt")).unwrap(),
+            "uncommitted work"
+        );
         let (status, headers, _) = fixture.call("GET", "/", None, vec![]).await;
         assert_eq!(status, StatusCode::FOUND);
         assert_eq!(headers[header::LOCATION], "/onboarding");

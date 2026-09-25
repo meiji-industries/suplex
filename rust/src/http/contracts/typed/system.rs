@@ -108,7 +108,10 @@ pub fn parse_update_query(input: Option<&Value>) -> ContractResult<UpdateQuery> 
         return Err(ContractFailure::Issues(issues));
     }
     Ok(UpdateQuery {
-        check: fields.get("check").and_then(Value::as_str).map(str::to_owned),
+        check: fields
+            .get("check")
+            .and_then(Value::as_str)
+            .map(str::to_owned),
     })
 }
 
@@ -133,16 +136,24 @@ mod tests {
             "system-events.ClientLifecycleSchema",
             "update.UpdateQuerySchema",
         ] {
-            let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../tests/parity").join(contract);
+            let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../tests/parity")
+                .join(contract);
             for entry in fs::read_dir(root).unwrap() {
                 let fixture: Value =
                     serde_json::from_slice(&fs::read(entry.unwrap().path()).unwrap()).unwrap();
                 let actual = match validate(contract, fixture.get("input")).unwrap() {
                     Ok(value) => json!({"accepted": true, "value": value}),
-                    Err(ContractFailure::Issues(error)) => json!({"accepted": false, "error": error}),
+                    Err(ContractFailure::Issues(error)) => {
+                        json!({"accepted": false, "error": error})
+                    }
                     Err(other) => panic!("unexpected parser failure: {other:?}"),
                 };
-                assert_eq!(actual, fixture["expected"], "{contract} {}", fixture["case"]);
+                assert_eq!(
+                    actual, fixture["expected"],
+                    "{contract} {}",
+                    fixture["case"]
+                );
                 count += 1;
             }
         }
@@ -155,6 +166,12 @@ mod tests {
         let Err(ContractFailure::Issues(issues)) = parse_client_lifecycle(Some(&body)) else {
             panic!("malformed lifecycle accepted");
         };
-        assert_eq!(issues, [finding("invalid_format", &[json!("tabId")]), finding("invalid_format", &[json!("clientTime")])]);
+        assert_eq!(
+            issues,
+            [
+                finding("invalid_format", &[json!("tabId")]),
+                finding("invalid_format", &[json!("clientTime")])
+            ]
+        );
     }
 }

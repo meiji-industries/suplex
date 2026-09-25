@@ -23,7 +23,8 @@ use crate::{
 
 pub type CliResult = Result<i32, Box<dyn std::error::Error>>;
 
-const USAGE: &str = "Usage: suplex <serve|migrate|doctor|task|backup|verify-backup|restore|logs|mcp> [options]\n";
+const USAGE: &str =
+    "Usage: suplex <serve|migrate|doctor|task|backup|verify-backup|restore|logs|mcp> [options]\n";
 
 /// Runs a command other than `serve` and `mcp`. Returns the exit code.
 pub async fn run(command: &str, arguments: &[String]) -> CliResult {
@@ -45,7 +46,10 @@ fn state_label(state: SchemaState) -> String {
     format!("{state:?}").to_lowercase()
 }
 
-fn open_diagnostic_database(installation: &Installation, verbose: bool) -> io::Result<SuplexDatabase> {
+fn open_diagnostic_database(
+    installation: &Installation,
+    verbose: bool,
+) -> io::Result<SuplexDatabase> {
     let database = SuplexDatabase::open(&installation.database, OpenMode::ReadOnly)
         .map_err(|error| io::Error::other(error.to_string()))?;
     let status = database
@@ -90,7 +94,10 @@ fn logs(arguments: &[String]) -> CliResult {
         }
         index += 1;
     }
-    drop(open_diagnostic_database(&installation, arguments.iter().any(|value| value == "--verbose"))?);
+    drop(open_diagnostic_database(
+        &installation,
+        arguments.iter().any(|value| value == "--verbose"),
+    )?);
     log_viewer::run(&options, &mut io::stdout().lock())?;
     Ok(0)
 }
@@ -99,7 +106,9 @@ fn migrate() -> CliResult {
     let installation = Installation::load()?;
     let database = SuplexDatabase::open(&installation.database, OpenMode::Migrate)
         .map_err(|error| error.to_string())?;
-    let status = database.schema_status().map_err(|error| error.to_string())?;
+    let status = database
+        .schema_status()
+        .map_err(|error| error.to_string())?;
     if status.state != SchemaState::Current {
         return Err(format!(
             "Database schema is {} after migration ({}/{} migrations applied)",
@@ -134,7 +143,9 @@ pub fn format_doctor(checks: &[DoctorCheck]) -> String {
 /// every provider, and each unarchived task that waits for a person.
 pub async fn run_doctor(state: &AppState) -> Result<Vec<DoctorCheck>, Box<dyn std::error::Error>> {
     let (schema, references) = state.with_database(|database| {
-        let schema = database.schema_status().map_err(|error| error.to_string())?;
+        let schema = database
+            .schema_status()
+            .map_err(|error| error.to_string())?;
         let references = if schema.state == SchemaState::Current {
             database
                 .connection()
@@ -147,7 +158,11 @@ pub async fn run_doctor(state: &AppState) -> Result<Vec<DoctorCheck>, Box<dyn st
         Ok::<_, Box<dyn std::error::Error>>((schema, references))
     })?;
     let mut checks = vec![DoctorCheck {
-        status: if schema.state == SchemaState::Current { "PASS" } else { "FAIL" },
+        status: if schema.state == SchemaState::Current {
+            "PASS"
+        } else {
+            "FAIL"
+        },
         name: "database schema".into(),
         detail: format!(
             "{} ({}/{} migrations)",
@@ -164,7 +179,9 @@ pub async fn run_doctor(state: &AppState) -> Result<Vec<DoctorCheck>, Box<dyn st
         name: "database references".into(),
         detail: format!("{references} invalid references"),
     });
-    let providers = ["opencode", "claude-code", "codex"].map(str::to_owned).to_vec();
+    let providers = ["opencode", "claude-code", "codex"]
+        .map(str::to_owned)
+        .to_vec();
     let snapshot = health::snapshot(state, providers, None).await;
     for check in snapshot["checks"].as_array().into_iter().flatten() {
         let id = check["id"].as_str().unwrap_or_default();
@@ -237,15 +254,26 @@ async fn doctor(arguments: &[String]) -> CliResult {
         return Err("doctor is read-only. Restart Suplex to apply pending migrations.".into());
     }
     let installation = Installation::load()?;
-    let database = open_diagnostic_database(&installation, arguments.iter().any(|value| value == "--verbose"))?;
+    let database = open_diagnostic_database(
+        &installation,
+        arguments.iter().any(|value| value == "--verbose"),
+    )?;
     let checks = run_doctor(&diagnostic_state(&installation, database)).await?;
     print!("{}", format_doctor(&checks));
-    Ok(if checks.iter().any(|check| check.status == "FAIL") { 1 } else { 0 })
+    Ok(if checks.iter().any(|check| check.status == "FAIL") {
+        1
+    } else {
+        0
+    })
 }
 
 /// `platform/diagnostics/task.ts` without native observation: the durable
 /// control, sessions and turns of one task.
-pub fn inspect_task(database: &SuplexDatabase, task_id: &str, all_history: bool) -> Result<Value, Box<dyn std::error::Error>> {
+pub fn inspect_task(
+    database: &SuplexDatabase,
+    task_id: &str,
+    all_history: bool,
+) -> Result<Value, Box<dyn std::error::Error>> {
     let rows = |sql: &str| -> rusqlite::Result<Vec<Value>> {
         let mut statement = database.connection().prepare(sql)?;
         let names = statement
@@ -261,7 +289,9 @@ pub fn inspect_task(database: &SuplexDatabase, task_id: &str, all_history: bool)
                         rusqlite::types::ValueRef::Null => Value::Null,
                         rusqlite::types::ValueRef::Integer(value) => json!(value),
                         rusqlite::types::ValueRef::Real(value) => json!(value),
-                        rusqlite::types::ValueRef::Text(value) => json!(String::from_utf8_lossy(value)),
+                        rusqlite::types::ValueRef::Text(value) => {
+                            json!(String::from_utf8_lossy(value))
+                        }
                         rusqlite::types::ValueRef::Blob(_) => Value::Null,
                     };
                     object.insert(name.clone(), value);
@@ -277,9 +307,14 @@ pub fn inspect_task(database: &SuplexDatabase, task_id: &str, all_history: bool)
     let control = rows("SELECT * FROM suplex_task_controls WHERE task_id = ?1")?
         .pop()
         .ok_or("Task control is not available")?;
-    let sessions = rows("SELECT * FROM suplex_task_sessions WHERE task_id = ?1 ORDER BY kind, generation")?;
+    let sessions =
+        rows("SELECT * FROM suplex_task_sessions WHERE task_id = ?1 ORDER BY kind, generation")?;
     let turns = rows("SELECT * FROM suplex_task_turns WHERE task_id = ?1 ORDER BY created_at, id")?;
-    let skip = if all_history { 0 } else { turns.len().saturating_sub(30) };
+    let skip = if all_history {
+        0
+    } else {
+        turns.len().saturating_sub(30)
+    };
     Ok(json!({
         "taskId": task_id,
         "title": title,
@@ -297,9 +332,16 @@ pub fn format_task(value: &Value) -> String {
         .and_then(|worktree| worktree["path"].as_str().map(str::to_owned))
         .unwrap_or_else(|| "none".into());
     let mut lines = vec![
-        format!("TASK {}: {}", text(&value["taskId"], ""), text(&value["title"], "")),
+        format!(
+            "TASK {}: {}",
+            text(&value["taskId"], ""),
+            text(&value["title"], "")
+        ),
         format!("status      {}", text(&value["control"]["status"], "")),
-        format!("question    {}", text(&value["control"]["human_question"], "none")),
+        format!(
+            "question    {}",
+            text(&value["control"]["human_question"], "none")
+        ),
         format!("worktree    {worktree}"),
     ];
     for session in value["sessions"].as_array().into_iter().flatten() {
@@ -330,7 +372,13 @@ fn task(arguments: &[String]) -> CliResult {
         std::fs::create_dir_all(&directory)?;
         let safe = task_id
             .chars()
-            .map(|c| if c.is_ascii_alphanumeric() || c == '_' || c == '-' { c } else { '_' })
+            .map(|c| {
+                if c.is_ascii_alphanumeric() || c == '_' || c == '-' {
+                    c
+                } else {
+                    '_'
+                }
+            })
             .collect::<String>();
         let path = directory.join(format!("{safe}-{}.json", Utc::now().timestamp_millis()));
         let mut file = std::fs::OpenOptions::new()
@@ -354,7 +402,10 @@ fn backup_service(installation: &Installation) -> BackupService {
         ("accessMode", json!("local")),
         ("tailscaleExposure", json!("off")),
         ("bindAddress", json!("127.0.0.1")),
-        ("reachableAddress", json!(format!("http://127.0.0.1:{}", installation.port))),
+        (
+            "reachableAddress",
+            json!(format!("http://127.0.0.1:{}", installation.port)),
+        ),
         ("port", json!(installation.port)),
         ("dataRoot", json!(installation.data)),
         ("databasePath", json!(installation.database)),
@@ -362,7 +413,10 @@ fn backup_service(installation: &Installation) -> BackupService {
         ("runtimeRoot", json!(installation.runtime)),
         ("repositoryRoot", json!(installation.repositories)),
         ("worktreeRoot", json!(installation.worktrees)),
-        ("installationId", json!(installation_id(&installation.database))),
+        (
+            "installationId",
+            json!(installation_id(&installation.database)),
+        ),
     ] {
         configuration.insert(key.into(), value);
     }
@@ -381,7 +435,10 @@ pub fn installation_id(database_path: &Path) -> String {
     let digest = sha2::Sha256::digest(database_path.as_os_str().as_encoded_bytes());
     format!(
         "rust-{}",
-        digest[..6].iter().map(|byte| format!("{byte:02x}")).collect::<String>()
+        digest[..6]
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect::<String>()
     )
 }
 
@@ -392,7 +449,9 @@ fn backup(command: &str, arguments: &[String]) -> CliResult {
     match command {
         "backup" => {
             let archive = archive.ok_or("backup requires an archive path")?;
-            let created = service.create(&archive).map_err(|error| error.to_string())?;
+            let created = service
+                .create(&archive)
+                .map_err(|error| error.to_string())?;
             println!(
                 "Backup created at {} ({} files, {} bytes, {}ms)",
                 created.archive_path.display(),
@@ -404,7 +463,9 @@ fn backup(command: &str, arguments: &[String]) -> CliResult {
         }
         "verify-backup" => {
             let archive = archive.ok_or("verify-backup requires an archive path")?;
-            let result = service.verify(&archive).map_err(|error| error.to_string())?;
+            let result = service
+                .verify(&archive)
+                .map_err(|error| error.to_string())?;
             println!(
                 "Backup verification {} ({}ms){}",
                 if result.valid { "passed" } else { "failed" },
@@ -418,14 +479,18 @@ fn backup(command: &str, arguments: &[String]) -> CliResult {
             Ok(if result.valid { 0 } else { 1 })
         }
         _ => {
-            let (Some(archive), Some(destination)) = (archive, arguments.get(1).map(PathBuf::from)) else {
+            let (Some(archive), Some(destination)) = (archive, arguments.get(1).map(PathBuf::from))
+            else {
                 return Err("restore requires an archive path and separate destination".into());
             };
             let (verification, restore_ms) = service
                 .restore(&archive, &destination)
                 .map_err(|error| error.to_string())?;
             let restored = destination.join("suplex-backup/app/suplex.sqlite");
-            drop(SuplexDatabase::open(&restored, OpenMode::Migrate).map_err(|error| error.to_string())?);
+            drop(
+                SuplexDatabase::open(&restored, OpenMode::Migrate)
+                    .map_err(|error| error.to_string())?,
+            );
             let handoff = json!({
                 "version": 1,
                 "restoredAt": Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
@@ -438,12 +503,19 @@ fn backup(command: &str, arguments: &[String]) -> CliResult {
                 "nextSteps": ["Restore repository and worktree paths before starting Suplex", "Sign in to OpenCode and GitHub on the restored host", "Preserve OpenCode session storage to continue existing tasks", "Start Suplex and review any specific recovery question"],
             });
             let path = destination.join("suplex-backup/restore-handoff.json");
-            std::fs::write(&path, format!("{}\n", serde_json::to_string_pretty(&handoff)?))?;
+            std::fs::write(
+                &path,
+                format!("{}\n", serde_json::to_string_pretty(&handoff)?),
+            )?;
             std::fs::set_permissions(&path, std::os::unix::fs::PermissionsExt::from_mode(0o600))?;
             println!(
                 "backup restored to {}; verification {} ({restore_ms}ms); see suplex-backup/restore-handoff.json",
                 destination.display(),
-                if verification.valid { "passed" } else { "failed" }
+                if verification.valid {
+                    "passed"
+                } else {
+                    "failed"
+                }
             );
             Ok(0)
         }
@@ -458,7 +530,8 @@ mod tests {
     async fn doctor_reports_schema_references_health_and_waiting_tasks() {
         let root = std::env::temp_dir().join(format!("suplex-doctor-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir_all(root.join("worktrees")).unwrap();
-        let database = SuplexDatabase::open(&root.join("suplex.sqlite"), OpenMode::Migrate).unwrap();
+        let database =
+            SuplexDatabase::open(&root.join("suplex.sqlite"), OpenMode::Migrate).unwrap();
         let state = AppState::new(
             database,
             SessionConfig {
@@ -475,7 +548,11 @@ mod tests {
         assert!(text.contains("PASS database references: 0 invalid references\n"));
         assert!(text.contains("PASS SQLite database: Schema is current and WAL is enabled\n"));
         assert!(text.contains(" Backup verification: No backup has been made yet (Create a backup in Settings → Backups)\n"));
-        assert!(checks.iter().any(|check| check.name == "Codex CLI" && check.status == "WARN"));
+        assert!(
+            checks
+                .iter()
+                .any(|check| check.name == "Codex CLI" && check.status == "WARN")
+        );
         drop(state);
         std::fs::remove_dir_all(root).unwrap();
     }

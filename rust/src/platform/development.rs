@@ -9,7 +9,10 @@ use crate::identity::{
     companies,
 };
 
-pub fn seed_development_data(database: &mut SuplexDatabase, now: DateTime<Utc>) -> DatabaseResult<()> {
+pub fn seed_development_data(
+    database: &mut SuplexDatabase,
+    now: DateTime<Utc>,
+) -> DatabaseResult<()> {
     let user_id = ensure_development_user(database, now)?;
     if companies::list_visible_companies(database, &user_id)?.is_empty() {
         companies::create_company(database, &user_id, "My Company", now)?;
@@ -17,7 +20,10 @@ pub fn seed_development_data(database: &mut SuplexDatabase, now: DateTime<Utc>) 
     Ok(())
 }
 
-fn ensure_development_user(database: &mut SuplexDatabase, now: DateTime<Utc>) -> DatabaseResult<String> {
+fn ensure_development_user(
+    database: &mut SuplexDatabase,
+    now: DateTime<Utc>,
+) -> DatabaseResult<String> {
     database.transaction(false, |database| {
         database.connection().execute(
             "INSERT OR IGNORE INTO suplex_users (id, display_name, username, avatar_seed, role, status, created_at, updated_at, identity_version) VALUES ('user_development', 'Operator', 'operator@suplex.local', 'operator@suplex.local', 'admin', 'active', ?1, ?1, 1)",
@@ -42,7 +48,8 @@ mod tests {
 
     #[test]
     fn seeding_creates_one_company_for_the_operator_and_is_idempotent() {
-        let path = std::env::temp_dir().join(format!("suplex-seed-{}.sqlite", uuid::Uuid::new_v4()));
+        let path =
+            std::env::temp_dir().join(format!("suplex-seed-{}.sqlite", uuid::Uuid::new_v4()));
         let mut database = SuplexDatabase::open(&path, OpenMode::Migrate).unwrap();
         seed_development_data(&mut database, Utc::now()).unwrap();
         seed_development_data(&mut database, Utc::now()).unwrap();

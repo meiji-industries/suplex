@@ -209,7 +209,11 @@ fn safe_manifest_path(path: &str) -> bool {
 fn component(entries: &[Value], prefix: &str) -> Value {
     let selected = entries
         .iter()
-        .filter(|entry| entry["path"].as_str().is_some_and(|path| path.starts_with(prefix)))
+        .filter(|entry| {
+            entry["path"]
+                .as_str()
+                .is_some_and(|path| path.starts_with(prefix))
+        })
         .collect::<Vec<_>>();
     json!({
         "path": prefix.trim_end_matches('/'),
@@ -530,7 +534,8 @@ impl BackupService {
             root.join(database_path),
             OpenFlags::SQLITE_OPEN_READ_ONLY,
         )?;
-        let integrity: String = database.query_row("PRAGMA integrity_check", [], |row| row.get(0))?;
+        let integrity: String =
+            database.query_row("PRAGMA integrity_check", [], |row| row.get(0))?;
         if integrity != "ok" {
             errors.push("database integrity check failed".into());
         }
@@ -559,7 +564,11 @@ impl BackupService {
         Ok(())
     }
 
-    pub fn restore(&self, archive_path: &Path, destination: &Path) -> BackupResult<(Verification, u128)> {
+    pub fn restore(
+        &self,
+        archive_path: &Path,
+        destination: &Path,
+    ) -> BackupResult<(Verification, u128)> {
         let started = Instant::now();
         let target = std::path::absolute(destination)?;
         if fs::read_dir(&target).is_ok_and(|mut entries| entries.next().is_some()) {
@@ -665,14 +674,20 @@ pub fn health_check(data_root: &Path, now: DateTime<Utc>) -> Value {
     let verified_at = status["verifiedAt"].as_str().unwrap_or_default();
     let parsed = DateTime::parse_from_rfc3339(verified_at).ok();
     let valid = status["valid"] == true && parsed.is_some();
-    let age = parsed.map_or(-1, |time| (now.timestamp_millis() - time.timestamp_millis()).max(0));
+    let age = parsed.map_or(-1, |time| {
+        (now.timestamp_millis() - time.timestamp_millis()).max(0)
+    });
     let fresh = valid && age <= HEALTH_MAX_AGE_MS;
     let errors = status["errors"]
         .as_array()
         .map(|errors| {
             errors
                 .iter()
-                .map(|error| error.as_str().map_or_else(|| error.to_string(), str::to_owned))
+                .map(|error| {
+                    error
+                        .as_str()
+                        .map_or_else(|| error.to_string(), str::to_owned)
+                })
                 .collect::<Vec<_>>()
                 .join(", ")
         })
@@ -728,26 +743,37 @@ mod tests {
         assert!(created.archive_bytes > 0);
         assert_eq!(created.manifest["components"]["artifacts"]["count"], 1);
         assert!(matches!(
-            backups.create(&archive).unwrap_err().downcast_ref::<BackupFailure>(),
+            backups
+                .create(&archive)
+                .unwrap_err()
+                .downcast_ref::<BackupFailure>(),
             Some(BackupFailure::Exists)
         ));
         let verification = backups.verify(&archive).unwrap();
         assert!(verification.valid, "{:?}", verification.errors);
-        assert_eq!(health_check(&backups.data_root, Utc::now())["status"], "healthy");
+        assert_eq!(
+            health_check(&backups.data_root, Utc::now())["status"],
+            "healthy"
+        );
 
         let destination = root.join("restored");
         backups.restore(&archive, &destination).unwrap();
-        let restored = Connection::open(destination.join("suplex-backup/app/suplex.sqlite")).unwrap();
+        let restored =
+            Connection::open(destination.join("suplex-backup/app/suplex.sqlite")).unwrap();
         let sessions: i64 = restored
             .query_row("SELECT count(*) FROM suplex_sessions", [], |row| row.get(0))
             .unwrap();
         assert_eq!(sessions, 0);
         assert_eq!(
-            fs::read_to_string(destination.join("suplex-backup/app/artifacts/company/image.png")).unwrap(),
+            fs::read_to_string(destination.join("suplex-backup/app/artifacts/company/image.png"))
+                .unwrap(),
             "artifact"
         );
         assert!(matches!(
-            backups.restore(&archive, &destination).unwrap_err().downcast_ref::<BackupFailure>(),
+            backups
+                .restore(&archive, &destination)
+                .unwrap_err()
+                .downcast_ref::<BackupFailure>(),
             Some(BackupFailure::Exists)
         ));
         fs::remove_dir_all(root).unwrap();
@@ -761,35 +787,88 @@ mod tests {
         backups.create(&archive).unwrap();
         let unpacked = root.join("unpacked");
         fs::create_dir_all(&unpacked).unwrap();
-        tar(&["-xzf".as_ref(), archive.as_os_str(), "-C".as_ref(), unpacked.as_os_str()], 30).unwrap();
-        fs::write(unpacked.join("suplex-backup/config/config.json"), "{\"version\":1,\"config\":{},\"requiresReauthentication\":true}").unwrap();
+        tar(
+            &[
+                "-xzf".as_ref(),
+                archive.as_os_str(),
+                "-C".as_ref(),
+                unpacked.as_os_str(),
+            ],
+            30,
+        )
+        .unwrap();
+        fs::write(
+            unpacked.join("suplex-backup/config/config.json"),
+            "{\"version\":1,\"config\":{},\"requiresReauthentication\":true}",
+        )
+        .unwrap();
         let tampered = root.join("tampered.tar.gz");
-        tar(&["-czf".as_ref(), tampered.as_os_str(), "-C".as_ref(), unpacked.as_os_str(), BACKUP_ROOT.as_ref()], 30).unwrap();
+        tar(
+            &[
+                "-czf".as_ref(),
+                tampered.as_os_str(),
+                "-C".as_ref(),
+                unpacked.as_os_str(),
+                BACKUP_ROOT.as_ref(),
+            ],
+            30,
+        )
+        .unwrap();
         let verification = backups.verify(&tampered).unwrap();
         assert!(!verification.valid);
-        assert!(verification.errors.contains(&"hash mismatch: config/config.json".to_owned()));
-        assert!(verification.errors.contains(&"missing configuration: installationId".to_owned()));
+        assert!(
+            verification
+                .errors
+                .contains(&"hash mismatch: config/config.json".to_owned())
+        );
+        assert!(
+            verification
+                .errors
+                .contains(&"missing configuration: installationId".to_owned())
+        );
 
         let outside = root.join("outside");
         fs::create_dir_all(outside.join("elsewhere")).unwrap();
         fs::write(outside.join("elsewhere/file"), "x").unwrap();
         let unsafe_archive = root.join("unsafe.tar.gz");
-        tar(&["-czf".as_ref(), unsafe_archive.as_os_str(), "-C".as_ref(), outside.as_os_str(), "elsewhere".as_ref()], 30).unwrap();
+        tar(
+            &[
+                "-czf".as_ref(),
+                unsafe_archive.as_os_str(),
+                "-C".as_ref(),
+                outside.as_os_str(),
+                "elsewhere".as_ref(),
+            ],
+            30,
+        )
+        .unwrap();
         let verification = backups.verify(&unsafe_archive).unwrap();
         assert_eq!(
             verification.errors,
             ["archive contains an unsafe path", "Suplex backup unsafe"]
         );
-        assert_eq!(health_check(&backups.data_root, Utc::now())["status"], "unhealthy");
+        assert_eq!(
+            health_check(&backups.data_root, Utc::now())["status"],
+            "unhealthy"
+        );
         fs::remove_dir_all(root).unwrap();
     }
 
     #[test]
     fn backup_health_reports_missing_and_stale_verification() {
         let root = root();
-        assert_eq!(health_check(&root, Utc::now())["summary"], "No backup has been made yet");
-        fs::write(root.join("backup-status.json"), r#"{"valid":true,"verifiedAt":"2026-09-01T00:00:00.000Z","errors":[]}"#).unwrap();
-        let later = DateTime::parse_from_rfc3339("2026-09-03T00:00:00Z").unwrap().with_timezone(&Utc);
+        assert_eq!(
+            health_check(&root, Utc::now())["summary"],
+            "No backup has been made yet"
+        );
+        fs::write(
+            root.join("backup-status.json"),
+            r#"{"valid":true,"verifiedAt":"2026-09-01T00:00:00.000Z","errors":[]}"#,
+        )
+        .unwrap();
+        let later = DateTime::parse_from_rfc3339("2026-09-03T00:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
         assert_eq!(health_check(&root, later)["status"], "warning");
         fs::remove_dir_all(root).unwrap();
     }

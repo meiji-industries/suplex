@@ -39,8 +39,10 @@ pub fn factory_reset(
     if live.is_some() {
         return Err(Box::new(LiveSessionsBlockReset));
     }
-    let staging =
-        std::env::temp_dir().join(format!("suplex-factory-reset-{}", uuid::Uuid::new_v4().simple()));
+    let staging = std::env::temp_dir().join(format!(
+        "suplex-factory-reset-{}",
+        uuid::Uuid::new_v4().simple()
+    ));
     fs::create_dir_all(&staging)?;
     let result = (|| -> DatabaseResult<()> {
         let path = staging.join("suplex.sqlite");

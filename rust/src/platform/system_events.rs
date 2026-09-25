@@ -59,10 +59,7 @@ pub fn emit(event: Value) {
 
 pub fn emit_with_context(event: Value, context: Map<String, Value>) -> Option<String> {
     match SINK.get()? {
-        Sink::File(writer) => writer
-            .lock()
-            .ok()?
-            .write(event, context, None, Utc::now()),
+        Sink::File(writer) => writer.lock().ok()?.write(event, context, None, Utc::now()),
         Sink::Socket(producer) => producer.send(event, &context),
     }
 }
@@ -129,7 +126,9 @@ impl Writer {
         forwarded: Option<Forwarded>,
         time: DateTime<Utc>,
     ) -> Option<String> {
-        self.try_write(event, context, forwarded, time).ok().flatten()
+        self.try_write(event, context, forwarded, time)
+            .ok()
+            .flatten()
     }
 
     fn try_write(
@@ -261,7 +260,8 @@ impl Writer {
             files.push((entry.path(), metadata.len(), modified));
         }
         files.sort_by_key(|(_, _, modified)| *modified);
-        let current = fs::metadata(self.directory.join("system.log")).map_or(0, |value| value.len());
+        let current =
+            fs::metadata(self.directory.join("system.log")).map_or(0, |value| value.len());
         let mut bytes = current + files.iter().map(|(_, size, _)| size).sum::<u64>();
         for (path, size, modified) in files {
             if now - modified <= self.retention_ms && bytes <= self.total_bytes {
@@ -283,13 +283,16 @@ mod tests {
     use super::*;
 
     fn directory() -> PathBuf {
-        let path = std::env::temp_dir().join(format!("suplex-system-events-{}", uuid::Uuid::new_v4()));
+        let path =
+            std::env::temp_dir().join(format!("suplex-system-events-{}", uuid::Uuid::new_v4()));
         fs::create_dir_all(&path).unwrap();
         path
     }
 
     fn at(value: &str) -> DateTime<Utc> {
-        DateTime::parse_from_rfc3339(value).unwrap().with_timezone(&Utc)
+        DateTime::parse_from_rfc3339(value)
+            .unwrap()
+            .with_timezone(&Utc)
     }
 
     fn names(path: &Path) -> Vec<String> {
@@ -309,7 +312,12 @@ mod tests {
         let event = json!({"type":"recovery","taskId":"task-1","state":"requested","producer":"host","result":"Bearer secret-value"});
         assert!(
             writer
-                .write(event, context.as_object().unwrap().clone(), None, Utc::now())
+                .write(
+                    event,
+                    context.as_object().unwrap().clone(),
+                    None,
+                    Utc::now()
+                )
                 .is_some()
         );
         let file = path.join("system.log");
@@ -426,7 +434,11 @@ mod tests {
     #[test]
     fn a_corrupt_current_segment_is_preserved_and_logging_resumes_in_a_clean_file() {
         let path = directory();
-        fs::write(path.join("system.log"), r#"{"time":"2026-09-01T00:00:00.000Z""#).unwrap();
+        fs::write(
+            path.join("system.log"),
+            r#"{"time":"2026-09-01T00:00:00.000Z""#,
+        )
+        .unwrap();
         let mut writer = Writer::new(path.clone());
         assert!(
             writer

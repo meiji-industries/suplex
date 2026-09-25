@@ -88,7 +88,14 @@ pub fn format(record: &Value) -> String {
     let line_start = line.trim_end().len();
     line.truncate(line_start);
     let fields = [
-        "taskId", "sessionId", "turnId", "action", "status", "tool", "result", "reason",
+        "taskId",
+        "sessionId",
+        "turnId",
+        "action",
+        "status",
+        "tool",
+        "result",
+        "reason",
     ]
     .iter()
     .filter_map(|name| text(name).map(|value| format!("{name}={value}")))
@@ -121,7 +128,12 @@ fn segments(directory: &Path) -> Vec<PathBuf> {
 /// Prints the last 200 matching records. With follow enabled, polls the
 /// current segment for new records until the process stops.
 pub fn run(options: &Options, output: &mut impl Write) -> io::Result<()> {
-    let since = options.since.as_deref().map(parse_since).transpose().map_err(io::Error::other)?;
+    let since = options
+        .since
+        .as_deref()
+        .map(parse_since)
+        .transpose()
+        .map_err(io::Error::other)?;
     let now = Utc::now().timestamp_millis();
     let mut entries = Vec::new();
     for path in segments(&options.directory) {
@@ -209,7 +221,11 @@ mod tests {
     fn validates_since_durations() {
         assert_eq!(parse_since("10m"), Ok(600_000));
         assert_eq!(parse_since("2H"), Ok(7_200_000));
-        assert!(parse_since("soon").unwrap_err().starts_with("Invalid --since value"));
+        assert!(
+            parse_since("soon")
+                .unwrap_err()
+                .starts_with("Invalid --since value")
+        );
         assert!(parse_since("m").is_err());
     }
 }

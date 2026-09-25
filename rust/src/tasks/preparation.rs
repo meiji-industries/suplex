@@ -22,12 +22,12 @@ use crate::{
     platform::database::{DatabaseResult, OpenMode, SuplexDatabase},
 };
 
-const SHARED_RESOURCE_COMMAND: &str =
-    include_str!("../../../scripts/shared-resource-command.py");
+const SHARED_RESOURCE_COMMAND: &str = include_str!("../../../scripts/shared-resource-command.py");
 const SETUP_TIMEOUT: Duration = Duration::from_secs(30 * 60);
 
 static SECRET_KEY: LazyLock<Regex> = LazyLock::new(|| {
-    Regex::new(r"(?i)(?:TOKEN|SECRET|PASSWORD|API_KEY|CREDENTIAL|AUTH)").expect("secret key pattern")
+    Regex::new(r"(?i)(?:TOKEN|SECRET|PASSWORD|API_KEY|CREDENTIAL|AUTH)")
+        .expect("secret key pattern")
 });
 static PROVIDER_KEY: LazyLock<Regex> = LazyLock::new(|| {
     Regex::new(r"^(?:CLAUDE|ANTHROPIC|AWS|GOOGLE|AZURE|SUPLEX)_").expect("provider key pattern")
@@ -192,7 +192,9 @@ async fn run_setup(input: &Preparation<'_>, log: &Path) -> io::Result<Outcome> {
 
 fn tail(text: &str, count: usize) -> String {
     let characters = text.chars().count();
-    text.chars().skip(characters.saturating_sub(count)).collect()
+    text.chars()
+        .skip(characters.saturating_sub(count))
+        .collect()
 }
 
 pub async fn prepare_project_workspace(input: Preparation<'_>) -> io::Result<()> {
@@ -277,7 +279,8 @@ pub async fn prepare_before_native_work(database_path: &Path, task_id: &str) -> 
             started,
         )
     };
-    let scope = super::host::project_launch_scope(&configuration, &issue_context, database_path, task_id);
+    let scope =
+        super::host::project_launch_scope(&configuration, &issue_context, database_path, task_id);
     let Some(worktree) = worktree.filter(|_| !started && scope.context_path.is_some()) else {
         return Ok(());
     };
@@ -309,7 +312,8 @@ mod tests {
 
     #[tokio::test]
     async fn project_setup_runs_once_in_the_prepared_worktree_before_the_root_starts() {
-        let root = std::env::temp_dir().join(format!("suplex-host-preparation-{}", uuid::Uuid::new_v4()));
+        let root =
+            std::env::temp_dir().join(format!("suplex-host-preparation-{}", uuid::Uuid::new_v4()));
         let worktree = root.join("worktree");
         std::fs::create_dir_all(&worktree).unwrap();
         let database_path = root.join("data/suplex.sqlite");
@@ -341,26 +345,44 @@ mod tests {
                 copied_from_task_id: None,
                 depends_on: vec![],
             };
-            let task = repository::create(&mut database, &prepared, now).unwrap().task;
+            let task = repository::create(&mut database, &prepared, now)
+                .unwrap()
+                .task;
             database.connection().execute("UPDATE suplex_task_controls SET worktree_json = ?1 WHERE task_id = ?2", rusqlite::params![json!({"path":worktree,"branch":"task-prep","baseSha":"head","headSha":"head","dirty":false}).to_string(), task.id]).unwrap();
             task.id
         };
-        prepare_before_native_work(&database_path, &task_id).await.unwrap();
-        assert_eq!(std::fs::read_to_string(worktree.join("setup-runs")).unwrap(), "x");
-        let context = std::fs::read_to_string(task_preparation_directory(&database_path, &task_id).unwrap().join("context.md")).unwrap();
+        prepare_before_native_work(&database_path, &task_id)
+            .await
+            .unwrap();
+        assert_eq!(
+            std::fs::read_to_string(worktree.join("setup-runs")).unwrap(),
+            "x"
+        );
+        let context = std::fs::read_to_string(
+            task_preparation_directory(&database_path, &task_id)
+                .unwrap()
+                .join("context.md"),
+        )
+        .unwrap();
         assert!(context.contains("Use the fixture"));
         assert!(context.contains("Configured setup exited 0"));
         // Once the Root has a native session, recovery does not rerun setup.
         crate::coordination::root_controller::prepare_root(&database_path, &task_id).unwrap();
         SuplexDatabase::open(&database_path, OpenMode::ReadWrite).unwrap().connection().execute("UPDATE suplex_task_sessions SET native_session_id = 'native-root' WHERE task_id = ?1", [&task_id]).unwrap();
-        prepare_before_native_work(&database_path, &task_id).await.unwrap();
-        assert_eq!(std::fs::read_to_string(worktree.join("setup-runs")).unwrap(), "x");
+        prepare_before_native_work(&database_path, &task_id)
+            .await
+            .unwrap();
+        assert_eq!(
+            std::fs::read_to_string(worktree.join("setup-runs")).unwrap(),
+            "x"
+        );
         std::fs::remove_dir_all(root).unwrap();
     }
 
     #[tokio::test]
     async fn preparation_preserves_worktree_files_copies_skills_and_reruns_idempotent_setup() {
-        let root = std::env::temp_dir().join(format!("suplex-preparation-{}", uuid::Uuid::new_v4()));
+        let root =
+            std::env::temp_dir().join(format!("suplex-preparation-{}", uuid::Uuid::new_v4()));
         let worktree = root.join("worktree");
         let skills = root.join("skills");
         std::fs::create_dir_all(&worktree).unwrap();
@@ -377,19 +399,34 @@ mod tests {
             setup_command,
             excluded_environment_keys: &[],
         };
-        let setup = r#"test "$PREPARATION_SENTINEL" = ok && (test -f prepared || printf ready > prepared)"#;
+        let setup =
+            r#"test "$PREPARATION_SENTINEL" = ok && (test -f prepared || printf ready > prepared)"#;
         prepare_project_workspace(input(setup)).await.unwrap();
-        let context_path = task_preparation_directory(&database_path, "task").unwrap().join("context.md");
-        assert!(std::fs::read_to_string(&context_path).unwrap().contains("Configured setup exited 0"));
+        let context_path = task_preparation_directory(&database_path, "task")
+            .unwrap()
+            .join("context.md");
+        assert!(
+            std::fs::read_to_string(&context_path)
+                .unwrap()
+                .contains("Configured setup exited 0")
+        );
         std::fs::remove_file(&context_path).unwrap();
         prepare_project_workspace(input(setup)).await.unwrap();
         let context = std::fs::read_to_string(&context_path).unwrap();
         assert!(context.contains("Keep draft delivery"));
         assert!(context.contains("delivery-evidence.json"));
         assert!(context.contains("/runtime/task-preparation/task/skills/"));
-        assert_eq!(std::fs::read_to_string(worktree.join("CLAUDE.md")).unwrap(), "user-owned");
-        assert_eq!(std::fs::read_to_string(worktree.join("prepared")).unwrap(), "ready");
-        prepare_project_workspace(input("printf fixture-failure; exit 7")).await.unwrap();
+        assert_eq!(
+            std::fs::read_to_string(worktree.join("CLAUDE.md")).unwrap(),
+            "user-owned"
+        );
+        assert_eq!(
+            std::fs::read_to_string(worktree.join("prepared")).unwrap(),
+            "ready"
+        );
+        prepare_project_workspace(input("printf fixture-failure; exit 7"))
+            .await
+            .unwrap();
         let context = std::fs::read_to_string(&context_path).unwrap();
         assert!(context.contains("Configured setup exited 7"));
         assert!(context.contains("Delegate a bounded repair"));

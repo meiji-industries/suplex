@@ -201,16 +201,39 @@ mod tests {
             }
         };
         assert_eq!(get("/api/update", None).send().await.unwrap().status(), 401);
-        let response = get("/api/update?check=1", Some("127.0.0.1:4111")).send().await.unwrap();
+        let response = get("/api/update?check=1", Some("127.0.0.1:4111"))
+            .send()
+            .await
+            .unwrap();
         assert_eq!(response.status(), 200);
         assert_eq!(response.headers()["cache-control"], "private, no-store");
-        let cookie = response.headers()["set-cookie"].to_str().unwrap().split(';').next().unwrap().to_owned();
+        let cookie = response.headers()["set-cookie"]
+            .to_str()
+            .unwrap()
+            .split(';')
+            .next()
+            .unwrap()
+            .to_owned();
         let body: Value = response.json().await.unwrap();
         assert_eq!(body["status"], json!({"kind":"current"}));
         assert_eq!(body["canRestart"], false);
         assert_eq!(body["instanceId"], INSTANCE_ID.as_str());
-        assert_eq!(get("/api/update?check=2", Some("127.0.0.1:4111")).send().await.unwrap().status(), 400);
-        assert_eq!(get("/api/update?other=1", Some("127.0.0.1:4111")).send().await.unwrap().status(), 400);
+        assert_eq!(
+            get("/api/update?check=2", Some("127.0.0.1:4111"))
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            400
+        );
+        assert_eq!(
+            get("/api/update?other=1", Some("127.0.0.1:4111"))
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            400
+        );
         let restart = |cookie: &str| {
             client
                 .post(format!("http://{address}/api/update/restart"))
@@ -218,14 +241,30 @@ mod tests {
                 .header("origin", "http://127.0.0.1:4111")
                 .header("cookie", cookie.to_owned())
         };
-        state.with_database(|database| database.connection().execute("UPDATE suplex_users SET role = 'member'", []).unwrap());
+        state.with_database(|database| {
+            database
+                .connection()
+                .execute("UPDATE suplex_users SET role = 'member'", [])
+                .unwrap()
+        });
         let member = restart(&cookie).send().await.unwrap();
         assert_eq!(member.status(), 403);
-        assert_eq!(member.json::<Value>().await.unwrap(), json!({"error":"Administrator access necessary"}));
-        state.with_database(|database| database.connection().execute("UPDATE suplex_users SET role = 'admin'", []).unwrap());
+        assert_eq!(
+            member.json::<Value>().await.unwrap(),
+            json!({"error":"Administrator access necessary"})
+        );
+        state.with_database(|database| {
+            database
+                .connection()
+                .execute("UPDATE suplex_users SET role = 'admin'", [])
+                .unwrap()
+        });
         let admin = restart(&cookie).send().await.unwrap();
         assert_eq!(admin.status(), 503);
-        assert_eq!(admin.json::<Value>().await.unwrap(), json!({"error":"Suplex update control is not available."}));
+        assert_eq!(
+            admin.json::<Value>().await.unwrap(),
+            json!({"error":"Suplex update control is not available."})
+        );
         server.abort();
         let _ = std::fs::remove_file(filename);
     }
@@ -251,8 +290,22 @@ mod tests {
         assert_eq!(post(&body, None).send().await.unwrap().status(), 401);
         let mut extra = body.clone();
         extra["url"] = json!("https://private.example/secret");
-        assert_eq!(post(&extra, Some("127.0.0.1:4111")).send().await.unwrap().status(), 400);
-        assert_eq!(post(&body, Some("127.0.0.1:4111")).send().await.unwrap().status(), 204);
+        assert_eq!(
+            post(&extra, Some("127.0.0.1:4111"))
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            400
+        );
+        assert_eq!(
+            post(&body, Some("127.0.0.1:4111"))
+                .send()
+                .await
+                .unwrap()
+                .status(),
+            204
+        );
         let log = std::fs::read_to_string(logs.join("system.log")).unwrap();
         let record: Value = log
             .lines()

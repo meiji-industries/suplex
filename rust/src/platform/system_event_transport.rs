@@ -229,9 +229,17 @@ const WAIT_REASONS: &[&str] = &[
 /// Field rules for each bridge event; a trailing `?` marks an optional field.
 fn event_fields(kind: &str) -> Option<&'static [(&'static str, Kind)]> {
     Some(match kind {
-        "task_status" => &[("taskId", Id), ("status", Text(32)), ("previousStatus?", Text(32))],
+        "task_status" => &[
+            ("taskId", Id),
+            ("status", Text(32)),
+            ("previousStatus?", Text(32)),
+        ],
         "queue_wait" => &[("taskId", Id), ("waits", Waits)],
-        "task_admitted" => &[("taskId", Id), ("trigger", Text(120)), ("prerequisiteTaskId?", Id)],
+        "task_admitted" => &[
+            ("taskId", Id),
+            ("trigger", Text(120)),
+            ("prerequisiteTaskId?", Id),
+        ],
         "task_action" => &[("taskId", Id), ("action", Text(80))],
         "bridge_tool" => &[
             ("taskId", Id),
@@ -241,7 +249,10 @@ fn event_fields(kind: &str) -> Option<&'static [(&'static str, Kind)]> {
         ],
         "recovery" => &[
             ("taskId", Id),
-            ("state", OneOf(&["requested", "started", "finished", "error"])),
+            (
+                "state",
+                OneOf(&["requested", "started", "finished", "error"]),
+            ),
             ("producer", OneOf(&["host"])),
             ("durationMs?", NonNegative),
             ("result?", SHORT),
@@ -279,7 +290,16 @@ fn event_fields(kind: &str) -> Option<&'static [(&'static str, Kind)]> {
             ("result?", SHORT),
         ],
         "native_turn" => &[
-            ("state", OneOf(&["observed", "dispatched", "finished", "snapshot", "agent_final"])),
+            (
+                "state",
+                OneOf(&[
+                    "observed",
+                    "dispatched",
+                    "finished",
+                    "snapshot",
+                    "agent_final",
+                ]),
+            ),
             ("taskId", Id),
             ("sessionId", Id),
             ("turnId", Id),
@@ -317,9 +337,9 @@ fn valid(value: &Value, kind: Kind) -> bool {
             .is_some_and(|text| uuid::Uuid::parse_str(text).is_ok() && text.len() == 36),
         Waits => value.as_array().is_some_and(|waits| {
             waits.len() <= 64
-                && waits.iter().all(|wait| {
-                    strict(wait, &[("id", Id), ("reason", OneOf(WAIT_REASONS))])
-                })
+                && waits
+                    .iter()
+                    .all(|wait| strict(wait, &[("id", Id), ("reason", OneOf(WAIT_REASONS))]))
         }),
         Ids(max) => value
             .as_array()
@@ -431,7 +451,9 @@ mod tests {
     #[tokio::test]
     async fn bridge_events_cross_the_socket_with_producer_identity_after_restart() {
         let (directory, database) = database();
-        let received = Arc::new(Mutex::new(Vec::<(Value, Map<String, Value>, Forwarded)>::new()));
+        let received = Arc::new(Mutex::new(
+            Vec::<(Value, Map<String, Value>, Forwarded)>::new(),
+        ));
         let sink = {
             let received = received.clone();
             move |event, context, meta| received.lock().unwrap().push((event, context, meta))

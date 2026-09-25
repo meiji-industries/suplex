@@ -53,11 +53,9 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
     std::fs::create_dir_all(&installation.artifacts)?;
     std::fs::create_dir_all(&installation.worktrees)?;
     std::fs::create_dir_all(&installation.runtime)?;
-    let _receiver = system_event_transport::start_receiver(
-        &installation.database,
-        |event, context, forwarded| system_events::forward(event, context, forwarded),
-    )
-    .await;
+    let _receiver =
+        system_event_transport::start_receiver(&installation.database, system_events::forward)
+            .await;
     server_event("starting", json!({}));
     let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, installation.port)).await?;
     let task_host = suplex::tasks::host::spawn_task_host(
@@ -104,7 +102,8 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
             let monotonic = std::time::Instant::now();
             let wall_elapsed = (wall - last_wall).num_milliseconds();
             let monotonic_elapsed = monotonic.duration_since(last_monotonic).as_millis() as i64;
-            let elapsed = json!({"wallElapsedMs": wall_elapsed, "monotonicElapsedMs": monotonic_elapsed});
+            let elapsed =
+                json!({"wallElapsedMs": wall_elapsed, "monotonicElapsedMs": monotonic_elapsed});
             if wall_elapsed > 90_000
                 || monotonic_elapsed > 90_000
                 || (wall_elapsed - monotonic_elapsed).abs() > 30_000

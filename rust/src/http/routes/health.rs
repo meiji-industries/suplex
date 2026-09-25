@@ -176,7 +176,9 @@ fn database_check(health: DatabaseHealth) -> Value {
     let summary = match status {
         "healthy" => "Schema is current and WAL is enabled".to_owned(),
         "warning" => {
-            let unknown = health.applied_migrations.saturating_sub(health.expected_migrations);
+            let unknown = health
+                .applied_migrations
+                .saturating_sub(health.expected_migrations);
             format!(
                 "Database has {unknown} migration{} this build does not know about — pull/restart",
                 if unknown == 1 { "" } else { "s" }
@@ -295,11 +297,14 @@ fn disk_check(worktree: Option<&Path>, artifact: Option<&Path>, minimum_gb: Opti
     };
     let minimum = minimum_gb * (1024_u64.pow(3) as f64);
     let gb = |bytes: f64| format!("{:.2} GB", bytes / 1024_f64.powi(3));
-    let low = [("Worktree root", worktree_free), ("Artifact root", artifact_free)]
-        .into_iter()
-        .filter(|(_, free)| minimum > 0.0 && (*free as f64) < minimum)
-        .map(|(label, free)| format!("{label}: {} free", gb(free as f64)))
-        .collect::<Vec<_>>();
+    let low = [
+        ("Worktree root", worktree_free),
+        ("Artifact root", artifact_free),
+    ]
+    .into_iter()
+    .filter(|(_, free)| minimum > 0.0 && (*free as f64) < minimum)
+    .map(|(label, free)| format!("{label}: {} free", gb(free as f64)))
+    .collect::<Vec<_>>();
     check(
         "disk-space",
         "Disk space",
@@ -320,7 +325,8 @@ fn disk_check(worktree: Option<&Path>, artifact: Option<&Path>, minimum_gb: Opti
 /// `checkTailscale` from `platform/host-health.ts`, reported only when the
 /// installation exposes itself through Tailscale Serve.
 async fn tailscale_check() -> Value {
-    let command = std::env::var_os("SUPLEX_TAILSCALE_COMMAND").unwrap_or_else(|| "tailscale".into());
+    let command =
+        std::env::var_os("SUPLEX_TAILSCALE_COMMAND").unwrap_or_else(|| "tailscale".into());
     let output = tokio::time::timeout(
         std::time::Duration::from_secs(5),
         tokio::process::Command::new(command)
@@ -445,7 +451,8 @@ async fn health_with_github(
     let Some(user) = session.user else {
         return auth::error(StatusCode::UNAUTHORIZED, "Authentication required");
     };
-    let providers = match state.with_database(|database| provider_context(database, &user, &query)) {
+    let providers = match state.with_database(|database| provider_context(database, &user, &query))
+    {
         Ok(providers) => providers,
         Err(mut response) => {
             auth::append_cookies(&mut response, session.set_cookies);
@@ -736,14 +743,20 @@ mod tests {
                 .unwrap()
                 .is_match(low["checks"][2]["summary"].as_str().unwrap())
         );
-        assert_eq!(low["checks"][2]["details"]["minFreeBytes"], 1_099_511_627_776_u64);
+        assert_eq!(
+            low["checks"][2]["details"]["minFreeBytes"],
+            1_099_511_627_776_u64
+        );
         assert_eq!(low["checks"][6]["id"], "backup");
         assert_eq!(low["checks"][6]["summary"], "No backup has been made yet");
         assert_eq!(
             tailscale_hostname(br#"{"Self":{"DNSName":"host.tailnet.ts.net."}}"#).as_deref(),
             Some("host.tailnet.ts.net")
         );
-        assert_eq!(tailscale_hostname(br#"{"Self":{"DNSName":"host.local."}}"#), None);
+        assert_eq!(
+            tailscale_hostname(br#"{"Self":{"DNSName":"host.local."}}"#),
+            None
+        );
         let unknown = health_with_github(
             state.clone(),
             Some("profileIds=missing".into()),

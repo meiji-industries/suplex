@@ -1714,7 +1714,15 @@ mod tests {
             })
             .map(|mut event| {
                 let fields = event.as_object_mut().unwrap();
-                for key in ["schemaVersion", "time", "eventId", "bootId", "sequence", "pid", "bootElapsedMs"] {
+                for key in [
+                    "schemaVersion",
+                    "time",
+                    "eventId",
+                    "bootId",
+                    "sequence",
+                    "pid",
+                    "bootElapsedMs",
+                ] {
                     assert!(fields.remove(key).is_some());
                 }
                 event

@@ -93,6 +93,6 @@ export async function nativeApp(fixtureOptions: { githubTrigger?: GithubTriggerP
   await mkdir(worktreeRoot, { recursive: true });
   const project = await projects.createProject(userId, company.id, { name: "Repository", repositoryPath, worktreeRoot, repository: "owner/repo", baseBranch: "main", setupCommand: "pnpm install", verificationCommand: "pnpm test", rootProfileId: "profile_native_root", workerProfileId: "profile_native_worker" });
   return { directory, config, database, auth, profiles, projects, tasks, templates, workflows, githubTriggers, externalAgent, oauth, app, headers, userId, company, project, wakes,
-    async close() { await app.close(); database.close(); await rm(directory, { recursive: true, force: true }); },
+    async close(options: { preserveData?: boolean } = {}) { await app.close(); database.close(); if (!options.preserveData) await rm(directory, { recursive: true, force: true }); },
   };
 }

@@ -92,7 +92,7 @@ export async function nativeBrowser(width = 1280, host = "127.0.0.1", reachableA
     page.on("pageerror", error => errors.push(error.message));
     const openedBrowser = browser;
     return { ...value, browser, page, base, errors, backend: rust ? "rust" as const : "typescript" as const,
-      async close() { try { await openedBrowser.close(); } finally { try { await stopRust?.(); } finally { await value.close(); } } },
+      async close(options: { preserveData?: boolean } = {}) { try { await openedBrowser.close(); } finally { try { await stopRust?.(); } finally { await value.close(options); } } },
     };
   } catch (error) {
     try { await browser?.close(); } finally { try { await stopRust?.(); } finally { await value.close(); } }

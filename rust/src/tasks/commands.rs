@@ -11,8 +11,9 @@ use uuid::Uuid;
 use crate::{
     coordination::root_session_store,
     http::contracts::typed::{
+        projects::ProjectProviderPolicy,
         task_answers::{AnswerBody, LimitDecisionBody, TaskLimitDecision},
-        tasks::TaskCreateBody,
+        tasks::{TaskCreateBody, TaskDetailsBody, TaskRenameBody},
     },
     identity::companies,
     platform::{
@@ -24,7 +25,7 @@ use crate::{
 
 use super::archive::operations as archive;
 use super::images::DecodedTaskImage;
-use super::repository::{self, PreparedTask, TaskCreator, TaskRecord, TaskWrite};
+use super::repository::{self, PreparedTask, TaskCreator, TaskDetailsWrite, TaskRecord, TaskWrite};
 
 #[derive(Debug)]
 pub struct TaskFailure {
@@ -164,11 +165,15 @@ pub fn existing_user_task(
     repository::task_by_id(database, &task_id)
 }
 
-fn allowed_profile(project: &Project, value: &Value) -> bool {
-    let Some(policy) = &project.provider_policy else {
+fn allowed_profile(policy: Option<&ProjectProviderPolicy>, value: &Value) -> bool {
+    let Some(policy) = policy else {
         return true;
     };
-    if let Some(instance) = value.get("providerInstanceId").and_then(Value::as_str) {
+    if let Some(instance) = value
+        .get("providerInstanceId")
+        .and_then(Value::as_str)
+        .filter(|id| !id.is_empty())
+    {
         policy.allowed_instance_ids.iter().any(|id| id == instance)
     } else {
         value
@@ -183,6 +188,15 @@ fn allowed_profile(project: &Project, value: &Value) -> bool {
     }
 }
 
+fn read_profile(database: &SuplexDatabase, id: &str, role: &str) -> DatabaseResult<Option<Value>> {
+    let profile = database.connection().query_row(
+            "SELECT p.id, p.provider, p.model, p.reasoning_level, p.service_tier, p.provider_instance_id, i.home_directory FROM suplex_profiles p LEFT JOIN suplex_provider_instances i ON i.id = p.provider_instance_id WHERE p.id = ?1 AND p.role = ?2 AND p.archived_at IS NULL",
+            params![id, role],
+            |row| Ok(json!({"profileId": row.get::<_, String>(0)?, "provider": row.get::<_, String>(1)?, "model": row.get::<_, String>(2)?, "reasoningLevel": row.get::<_, String>(3)?, "serviceTier": row.get::<_, String>(4)?, "providerInstanceId": row.get::<_, Option<String>>(5)?, "instanceHomeDirectory": row.get::<_, Option<String>>(6)?})),
+        ).optional()?;
+    Ok(profile)
+}
+
 fn selected_profile(
     database: &SuplexDatabase,
     project: &Project,
@@ -190,22 +204,14 @@ fn selected_profile(
     default_id: &str,
     role: &str,
 ) -> DatabaseResult<Value> {
-    let read = |id: &str| -> DatabaseResult<Option<Value>> {
-        let profile = database.connection().query_row(
-            "SELECT p.id, p.provider, p.model, p.reasoning_level, p.service_tier, p.provider_instance_id, i.home_directory FROM suplex_profiles p LEFT JOIN suplex_provider_instances i ON i.id = p.provider_instance_id WHERE p.id = ?1 AND p.role = ?2 AND p.archived_at IS NULL",
-            params![id, role],
-            |row| Ok(json!({"profileId": row.get::<_, String>(0)?, "provider": row.get::<_, String>(1)?, "model": row.get::<_, String>(2)?, "reasoningLevel": row.get::<_, String>(3)?, "serviceTier": row.get::<_, String>(4)?, "providerInstanceId": row.get::<_, Option<String>>(5)?, "instanceHomeDirectory": row.get::<_, Option<String>>(6)?})),
-        ).optional()?;
-        Ok(profile)
-    };
     let id = selected.unwrap_or(default_id);
-    let profile = read(id)?.ok_or_else(|| {
+    let profile = read_profile(database, id, role)?.ok_or_else(|| {
         Box::new(TaskFailure::new(
             "The selected agent profile does not exist",
             422,
         )) as Box<dyn Error>
     })?;
-    if allowed_profile(project, &profile) {
+    if allowed_profile(project.provider_policy.as_ref(), &profile) {
         return Ok(profile);
     }
     if selected.is_some() {
@@ -221,8 +227,8 @@ fn selected_profile(
         .query_map([role], |row| row.get::<_, String>(0))?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     for id in ids {
-        if let Some(candidate) = read(&id)?
-            && allowed_profile(project, &candidate)
+        if let Some(candidate) = read_profile(database, &id, role)?
+            && allowed_profile(project.provider_policy.as_ref(), &candidate)
         {
             return Ok(candidate);
         }
@@ -711,6 +717,192 @@ pub fn answer_user_task_limit(
         let id = task_id.to_owned();
         database.after_commit(move || wake(id));
         Ok(answered)
+    })
+}
+
+fn edit_profile(
+    database: &SuplexDatabase,
+    id: &str,
+    current: &Value,
+    role: &str,
+) -> DatabaseResult<Value> {
+    if current.get("profileId").and_then(Value::as_str) == Some(id) {
+        return Ok(current.clone());
+    }
+    read_profile(database, id, role)?.ok_or_else(|| {
+        Box::new(TaskFailure::new(
+            "The selected agent profile does not exist",
+            422,
+        )) as Box<dyn Error>
+    })
+}
+
+/// The UI edit resolves a full settings snapshot against the stored task.
+pub fn update_user_task_details(
+    database: &mut SuplexDatabase,
+    actor_user_id: &str,
+    task_id: &str,
+    input: &TaskDetailsBody,
+    now: DateTime<Utc>,
+) -> DatabaseResult<TaskRecord> {
+    if input.title.is_none()
+        && input.description.is_none()
+        && input.root_profile_id.is_none()
+        && input.worker_profile_id.is_none()
+        && input.delivery_target.is_none()
+        && input.run_project_tests.is_none()
+        && input.visual_evidence.is_none()
+        && input.workflow.is_none()
+        && input.advisor_profile_ids.is_none()
+    {
+        // The HTTP schema accepts {}, but the TypeScript service refinement throws.
+        return Err(std::io::Error::other("Internal server error").into());
+    }
+    database.transaction(true, |database| {
+        let scope = repository::task_by_id(database, task_id)?
+            .ok_or_else(|| Box::new(TaskFailure::new("Not found", 404)) as Box<dyn Error>)?;
+        companies::require_company_access(database, actor_user_id, &scope.company_id)?;
+        let current = repository::edit_snapshot(database, task_id)?
+            .ok_or_else(|| Box::new(TaskFailure::new("Not found", 404)) as Box<dyn Error>)?;
+        let workflow = input.workflow.as_deref().unwrap_or(&current.workflow);
+        if workflow == "standard" {
+            if let Some(advisors) = &input.advisor_profile_ids {
+                let names = [
+                    (advisors.reviewer.as_ref(), "Reviewer"),
+                    (advisors.planner_a.as_ref(), "Plan A"),
+                    (advisors.planner_b.as_ref(), "Plan B"),
+                    (advisors.rater.as_ref(), "Rater"),
+                ]
+                .into_iter()
+                .filter_map(|(value, label)| value.map(|_| label))
+                .collect::<Vec<_>>();
+                if !names.is_empty() {
+                    return Err(Box::new(TaskFailure::new(
+                        format!("The Standard workflow has no {} Advisor", names.join(", ")),
+                        422,
+                    )));
+                }
+            }
+        } else {
+            return Err(Box::new(TaskFailure {
+                public_message: "Experimental Rust backend has not ported this route".into(),
+                status_code: 501,
+                code: "experimental_not_ported",
+            }));
+        }
+        let root_id = input
+            .root_profile_id
+            .as_deref()
+            .or_else(|| {
+                current
+                    .root_profile
+                    .get("profileId")
+                    .and_then(Value::as_str)
+            })
+            .ok_or("Stored Root profile is missing")?;
+        let worker_id = input
+            .worker_profile_id
+            .as_deref()
+            .or_else(|| {
+                current
+                    .worker_profile
+                    .get("profileId")
+                    .and_then(Value::as_str)
+            })
+            .ok_or("Stored Worker profile is missing")?;
+        let root_profile = edit_profile(database, root_id, &current.root_profile, "root")?;
+        let worker_profile = edit_profile(database, worker_id, &current.worker_profile, "worker")?;
+        let policy: Option<ProjectProviderPolicy> = current
+            .configuration
+            .get("providerPolicy")
+            .filter(|value| !value.is_null())
+            .cloned()
+            .map(serde_json::from_value)
+            .transpose()?;
+        if !allowed_profile(policy.as_ref(), &root_profile)
+            || !allowed_profile(policy.as_ref(), &worker_profile)
+        {
+            return Err(Box::new(TaskFailure::new(
+                "Select agents with providers and logins allowed by this project",
+                422,
+            )));
+        }
+        let delivery_target = input
+            .delivery_target
+            .as_deref()
+            .unwrap_or(&current.delivery_target);
+        if current
+            .configuration
+            .pointer("/integration/repository/kind")
+            .and_then(Value::as_str)
+            == Some("bitbucket")
+            && ["pull_request_ready", "merged"].contains(&delivery_target)
+        {
+            return Err(Box::new(TaskFailure::new(
+                "Bitbucket supports draft pull requests. Select a supported delivery target.",
+                422,
+            )));
+        }
+        let stored_tests = current
+            .configuration
+            .get("runProjectTests")
+            .and_then(Value::as_bool)
+            .ok_or("Stored task test choice is missing")?;
+        let stored_visual = current
+            .configuration
+            .get("visualEvidence")
+            .and_then(Value::as_str)
+            .ok_or("Stored task visual evidence choice is missing")?;
+        let details = TaskDetailsWrite {
+            title: input
+                .title
+                .clone()
+                .unwrap_or_else(|| current.task.title.clone()),
+            description: input
+                .description
+                .clone()
+                .unwrap_or_else(|| current.task.description.clone()),
+            delivery_target: delivery_target.to_owned(),
+            workflow: workflow.to_owned(),
+            run_project_tests: input.run_project_tests.unwrap_or(stored_tests),
+            visual_evidence: input
+                .visual_evidence
+                .clone()
+                .unwrap_or_else(|| stored_visual.to_owned()),
+            root_profile,
+            worker_profile,
+            advisor_profiles: json!({}),
+        };
+        if !repository::update_details(database, task_id, &details, now)? {
+            return Err(Box::new(TaskFailure::new(
+                "Only tasks in the backlog can be edited. Open archived tasks before editing them.",
+                409,
+            )));
+        }
+        repository::task_by_id(database, task_id)?
+            .ok_or_else(|| Box::new(TaskFailure::new("Not found", 404)) as Box<dyn Error>)
+    })
+}
+
+pub fn rename_user_task(
+    database: &mut SuplexDatabase,
+    actor_user_id: &str,
+    task_id: &str,
+    input: &TaskRenameBody,
+    now: DateTime<Utc>,
+) -> DatabaseResult<TaskRecord> {
+    database.transaction(true, |database| {
+        let current = repository::task_by_id(database, task_id)?
+            .ok_or_else(|| Box::new(TaskFailure::new("Not found", 404)) as Box<dyn Error>)?;
+        companies::require_company_access(database, actor_user_id, &current.company_id)?;
+        if !repository::rename(database, task_id, &input.title, now)? {
+            return Err(Box::new(TaskFailure::new(
+                "Open archived tasks before renaming them.",
+                409,
+            )));
+        }
+        repository::task_by_id(database, task_id)?
+            .ok_or_else(|| Box::new(TaskFailure::new("Not found", 404)) as Box<dyn Error>)
     })
 }
 

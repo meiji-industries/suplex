@@ -74,6 +74,29 @@ pub struct TaskRecord {
     pub created_at: String,
 }
 
+#[derive(Debug)]
+pub struct TaskEditSnapshot {
+    pub task: TaskRecord,
+    pub delivery_target: String,
+    pub workflow: String,
+    pub root_profile: Value,
+    pub worker_profile: Value,
+    pub advisor_profiles: Value,
+    pub configuration: Value,
+}
+
+pub struct TaskDetailsWrite {
+    pub title: String,
+    pub description: String,
+    pub delivery_target: String,
+    pub workflow: String,
+    pub run_project_tests: bool,
+    pub visual_evidence: String,
+    pub root_profile: Value,
+    pub worker_profile: Value,
+    pub advisor_profiles: Value,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TaskWrite {
     pub task: TaskRecord,
@@ -310,6 +333,77 @@ fn create_inner(
         }
     }
     result
+}
+
+pub fn edit_snapshot(
+    database: &SuplexDatabase,
+    task_id: &str,
+) -> DatabaseResult<Option<TaskEditSnapshot>> {
+    let row = database.connection().query_row(
+        "SELECT t.id,t.company_id,t.project_id,t.title,t.description,c.status,t.created_at,c.delivery_target,c.workflow,c.root_profile_json,c.worker_profile_json,c.advisor_profiles_json,t.configuration_json FROM suplex_tasks t JOIN suplex_task_controls c ON c.task_id = t.id WHERE t.id = ?1",
+        [task_id],
+        |row| Ok((
+            TaskRecord { id: row.get(0)?, company_id: row.get(1)?, project_id: row.get(2)?, title: row.get(3)?, description: row.get(4)?, status: row.get(5)?, created_at: row.get(6)? },
+            row.get::<_, String>(7)?, row.get::<_, String>(8)?, row.get::<_, String>(9)?, row.get::<_, String>(10)?, row.get::<_, String>(11)?, row.get::<_, String>(12)?,
+        )),
+    ).optional()?;
+    row.map(
+        |(task, delivery_target, workflow, root, worker, advisors, configuration)| {
+            Ok(TaskEditSnapshot {
+                task,
+                delivery_target,
+                workflow,
+                root_profile: serde_json::from_str(&root)?,
+                worker_profile: serde_json::from_str(&worker)?,
+                advisor_profiles: serde_json::from_str(&advisors)?,
+                configuration: serde_json::from_str(&configuration)?,
+            })
+        },
+    )
+    .transpose()
+}
+
+/// The service resolves every field before this guarded, atomic snapshot write.
+pub fn update_details(
+    database: &mut SuplexDatabase,
+    task_id: &str,
+    details: &TaskDetailsWrite,
+    now: DateTime<Utc>,
+) -> DatabaseResult<bool> {
+    database.transaction(true, |database| {
+        let time = timestamp(now);
+        let changed = database.connection().execute(
+            "UPDATE suplex_tasks SET title = ?1, description = ?2, configuration_json = json_set(configuration_json, '$.runProjectTests', json(?3), '$.visualEvidence', ?4), updated_at = ?5 WHERE id = ?6 AND archived_at IS NULL AND EXISTS (SELECT 1 FROM suplex_task_controls WHERE task_id = suplex_tasks.id AND status IN ('backlog', 'queued'))",
+            params![details.title, details.description, if details.run_project_tests { "true" } else { "false" }, details.visual_evidence, time, task_id],
+        )?;
+        if changed != 1 { return Ok(false); }
+        database.connection().execute(
+            "UPDATE suplex_task_controls SET objective = (SELECT CASE WHEN description = '' THEN title ELSE title || char(10) || char(10) || description END FROM suplex_tasks WHERE id = ?1), delivery_target = ?2, workflow = ?3, root_profile_json = ?4, worker_profile_json = ?5, advisor_profiles_json = ?6, updated_at = ?7 WHERE task_id = ?1",
+            params![task_id, details.delivery_target, details.workflow, details.root_profile.to_string(), details.worker_profile.to_string(), details.advisor_profiles.to_string(), time],
+        )?;
+        Ok(true)
+    })
+}
+
+pub fn rename(
+    database: &mut SuplexDatabase,
+    task_id: &str,
+    title: &str,
+    now: DateTime<Utc>,
+) -> DatabaseResult<bool> {
+    database.transaction(true, |database| {
+        let time = timestamp(now);
+        let changed = database.connection().execute(
+            "UPDATE suplex_tasks SET title = ?1, updated_at = ?2 WHERE id = ?3 AND archived_at IS NULL",
+            params![title, time, task_id],
+        )?;
+        if changed != 1 { return Ok(false); }
+        database.connection().execute(
+            "UPDATE suplex_task_controls SET objective = (SELECT CASE WHEN description = '' THEN title ELSE title || char(10) || char(10) || description END FROM suplex_tasks WHERE id = ?1), updated_at = ?2 WHERE task_id = ?1 AND status IN ('backlog', 'queued')",
+            params![task_id, time],
+        )?;
+        Ok(true)
+    })
 }
 
 /// Start records intent as queued; admission rechecks prerequisites in this transaction.

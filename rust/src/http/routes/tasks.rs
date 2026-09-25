@@ -50,7 +50,8 @@ pub fn router() -> Router<AppState> {
                 .post(create)
                 .layer(DefaultBodyLimit::max(images::MAX_TASK_REQUEST_BYTES)),
         )
-        .route("/api/tasks/{task_id}", get(get_one))
+        .route("/api/tasks/{task_id}", get(get_one).patch(update_details))
+        .route("/api/tasks/{task_id}/rename", axum::routing::post(rename))
         .route(
             "/api/tasks/{task_id}/start",
             axum::routing::post(start_pending),
@@ -776,6 +777,72 @@ async fn get_one(
     with_cookies(response, cookies)
 }
 
+async fn update_details(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    if let Err(response) = validated_task_id(&id) {
+        return *response;
+    }
+    let request =
+        match auth::validated_typed_body(&headers, &body, task_contracts::parse_task_details) {
+            Ok(value) => value,
+            Err(response) => return *response,
+        };
+    if !session::csrf_allowed(&state.session_config, &headers, "PATCH", false) {
+        return auth::error(StatusCode::FORBIDDEN, "request_origin_invalid");
+    }
+    let (user_id, cookies) = match authorize(&state, &headers) {
+        Ok(value) => value,
+        Err(response) => return *response,
+    };
+    let result = state.with_database(
+        |database| -> Result<task_response::TaskResponse, Box<dyn Error>> {
+            commands::update_user_task_details(database, &user_id, &id, &request, Utc::now())?;
+            task_response::get(database, &id)?.ok_or_else(|| "edited task disappeared".into())
+        },
+    );
+    match result {
+        Ok(task) => with_cookies(Json(task).into_response(), cookies),
+        Err(error) => with_cookies(service_error(error), cookies),
+    }
+}
+
+async fn rename(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    if let Err(response) = validated_task_id(&id) {
+        return *response;
+    }
+    let request =
+        match auth::validated_typed_body(&headers, &body, task_contracts::parse_task_rename) {
+            Ok(value) => value,
+            Err(response) => return *response,
+        };
+    if !session::csrf_allowed(&state.session_config, &headers, "POST", false) {
+        return auth::error(StatusCode::FORBIDDEN, "request_origin_invalid");
+    }
+    let (user_id, cookies) = match authorize(&state, &headers) {
+        Ok(value) => value,
+        Err(response) => return *response,
+    };
+    let result = state.with_database(
+        |database| -> Result<task_response::TaskResponse, Box<dyn Error>> {
+            commands::rename_user_task(database, &user_id, &id, &request, Utc::now())?;
+            task_response::get(database, &id)?.ok_or_else(|| "renamed task disappeared".into())
+        },
+    );
+    match result {
+        Ok(task) => with_cookies(Json(task).into_response(), cookies),
+        Err(error) => with_cookies(service_error(error), cookies),
+    }
+}
+
 async fn start_pending(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -1325,6 +1392,132 @@ mod tests {
             listed.as_ref(),
             format!("{{\"tasks\":[{}]}}", std::str::from_utf8(&raw).unwrap()).as_bytes()
         );
+        let empty_edit = update_details(
+            State(state.clone()),
+            Path(task_id.clone()),
+            headers.clone(),
+            Bytes::from_static(b"{}"),
+        )
+        .await;
+        assert_eq!(empty_edit.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        assert_eq!(
+            to_bytes(empty_edit.into_body(), 1024)
+                .await
+                .unwrap()
+                .as_ref(),
+            br#"{"error":"Internal server error"}"#
+        );
+        state.with_database(|database| database.connection().execute(
+            "UPDATE suplex_profiles SET archived_at = ?1 WHERE id IN ('profile_native_root','profile_native_worker')",
+            [Utc::now().to_rfc3339()],
+        )).unwrap();
+        let edited = update_details(
+            State(state.clone()), Path(task_id.clone()), headers.clone(),
+            Bytes::from(json!({"title":"  Edited objective  ","description":"  Check the edit  ","runProjectTests":false,"visualEvidence":"capture"}).to_string()),
+        ).await;
+        assert_eq!(edited.status(), StatusCode::OK);
+        let edited_raw = to_bytes(edited.into_body(), 128 * 1024).await.unwrap();
+        assert_typescript_task_body(&db_path, &root.join("artifacts"), &edited_raw);
+        let edited_value: Value = serde_json::from_slice(&edited_raw).unwrap();
+        assert_eq!(edited_value["title"], "Edited objective");
+        assert_eq!(
+            edited_value["rootProfile"]["profileId"],
+            "profile_native_root"
+        );
+        assert_eq!(edited_value["configuration"]["runProjectTests"], false);
+        let backlog_renamed = rename(
+            State(state.clone()),
+            Path(task_id.clone()),
+            headers.clone(),
+            Bytes::from_static(br#"{"title":"Backlog name"}"#),
+        )
+        .await;
+        assert_eq!(backlog_renamed.status(), StatusCode::OK);
+        let backlog_raw = to_bytes(backlog_renamed.into_body(), 128 * 1024)
+            .await
+            .unwrap();
+        assert_typescript_task_body(&db_path, &root.join("artifacts"), &backlog_raw);
+        let objective: String = state
+            .with_database(|database| {
+                database.connection().query_row(
+                    "SELECT objective FROM suplex_task_controls WHERE task_id = ?1",
+                    [&task_id],
+                    |row| row.get(0),
+                )
+            })
+            .unwrap();
+        assert_eq!(objective, "Backlog name\n\nCheck the edit");
+        state
+            .with_database(|database| {
+                database.connection().execute(
+                    "UPDATE suplex_task_controls SET status = 'active' WHERE task_id = ?1",
+                    [&task_id],
+                )
+            })
+            .unwrap();
+        let active_renamed = rename(
+            State(state.clone()),
+            Path(task_id.clone()),
+            headers.clone(),
+            Bytes::from_static(br#"{"title":"Active name"}"#),
+        )
+        .await;
+        assert_eq!(active_renamed.status(), StatusCode::OK);
+        let active_raw = to_bytes(active_renamed.into_body(), 128 * 1024)
+            .await
+            .unwrap();
+        assert_typescript_task_body(&db_path, &root.join("artifacts"), &active_raw);
+        assert_eq!(
+            serde_json::from_slice::<Value>(&active_raw).unwrap()["title"],
+            "Active name"
+        );
+        let objective_after: String = state
+            .with_database(|database| {
+                database.connection().query_row(
+                    "SELECT objective FROM suplex_task_controls WHERE task_id = ?1",
+                    [&task_id],
+                    |row| row.get(0),
+                )
+            })
+            .unwrap();
+        assert_eq!(objective_after, objective);
+        let active_edit = update_details(
+            State(state.clone()),
+            Path(task_id.clone()),
+            headers.clone(),
+            Bytes::from_static(br#"{"title":"Too late"}"#),
+        )
+        .await;
+        assert_eq!(active_edit.status(), StatusCode::CONFLICT);
+        state
+            .with_database(|database| {
+                database.connection().execute(
+                    "UPDATE suplex_tasks SET archived_at = ?1 WHERE id = ?2",
+                    rusqlite::params![Utc::now().to_rfc3339(), task_id],
+                )
+            })
+            .unwrap();
+        let archived_rename = rename(
+            State(state.clone()),
+            Path(task_id.clone()),
+            headers.clone(),
+            Bytes::from_static(br#"{"title":"Archived name"}"#),
+        )
+        .await;
+        assert_eq!(archived_rename.status(), StatusCode::CONFLICT);
+        state.with_database(|database| {
+            database.connection().execute(
+                "UPDATE suplex_tasks SET archived_at = NULL WHERE id = ?1",
+                [&task_id],
+            ).unwrap();
+            database.connection().execute(
+                "UPDATE suplex_task_controls SET status = 'backlog', objective = (SELECT CASE WHEN description = '' THEN title ELSE title || char(10) || char(10) || description END FROM suplex_tasks WHERE id = ?1) WHERE task_id = ?1",
+                [&task_id],
+            )
+        }).unwrap();
+        state.with_database(|database| database.connection().execute(
+            "UPDATE suplex_profiles SET archived_at = NULL WHERE id IN ('profile_native_root','profile_native_worker')", [],
+        )).unwrap();
         let immediate_body = Bytes::from(
             json!({
                 "projectId":"task_http_project", "title":"Start on creation",

@@ -202,6 +202,89 @@ pub struct TaskIdParams {
     pub task_id: String,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Validate)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TaskDetailsBody {
+    #[serde(
+        default,
+        deserialize_with = "optional_trimmed",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[garde(inner(length(utf16, min = 1)))]
+    pub title: Option<String>,
+    #[serde(
+        default,
+        deserialize_with = "optional_trimmed",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[garde(skip)]
+    pub description: Option<String>,
+    #[serde(
+        default,
+        deserialize_with = "optional_nonnull",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[garde(inner(custom(check_task_id)))]
+    pub root_profile_id: Option<String>,
+    #[serde(
+        default,
+        deserialize_with = "optional_nonnull",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[garde(inner(custom(check_task_id)))]
+    pub worker_profile_id: Option<String>,
+    #[serde(
+        default,
+        deserialize_with = "optional_nonnull",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[garde(inner(custom(check_delivery_target)))]
+    pub delivery_target: Option<String>,
+    #[serde(
+        default,
+        deserialize_with = "optional_nonnull",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[garde(skip)]
+    pub run_project_tests: Option<bool>,
+    #[serde(
+        default,
+        deserialize_with = "optional_nonnull",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[garde(inner(custom(check_visual_evidence)))]
+    pub visual_evidence: Option<String>,
+    #[serde(
+        default,
+        deserialize_with = "optional_nonnull",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[garde(inner(custom(check_workflow)))]
+    pub workflow: Option<String>,
+    #[serde(
+        default,
+        deserialize_with = "optional_nonnull",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[garde(dive)]
+    pub advisor_profile_ids: Option<AdvisorProfileIds>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Validate)]
+#[serde(deny_unknown_fields)]
+pub struct TaskRenameBody {
+    #[serde(deserialize_with = "trimmed")]
+    #[garde(length(utf16, min = 1))]
+    pub title: String,
+}
+
+fn optional_trimmed<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    trimmed(deserializer).map(Some)
+}
+
 pub(crate) fn optional_nonnull<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
 where
     D: Deserializer<'de>,
@@ -694,6 +777,136 @@ pub fn parse_task_id_params(input: Option<&Value>) -> ContractResult<TaskIdParam
     Ok(parsed)
 }
 
+fn edit_shape_findings(fields: &Map<String, Value>) -> Vec<Value> {
+    let mut issues = Vec::new();
+    for name in [
+        "title",
+        "description",
+        "rootProfileId",
+        "workerProfileId",
+        "deliveryTarget",
+    ] {
+        if let Some(value) = fields.get(name).filter(|value| !value.is_string()) {
+            issues.push(issue("invalid_type", &format!(".{name}")));
+            if matches!(name, "rootProfileId" | "workerProfileId")
+                && value.as_array().is_some_and(Vec::is_empty)
+            {
+                issues.push(issue("too_small", &format!(".{name}")));
+            }
+        }
+    }
+    if fields
+        .get("runProjectTests")
+        .is_some_and(|value| !value.is_boolean())
+    {
+        issues.push(issue("invalid_type", ".runProjectTests"));
+    }
+    for name in ["visualEvidence", "workflow"] {
+        if fields.get(name).is_some_and(|value| !value.is_string()) {
+            issues.push(issue("invalid_type", &format!(".{name}")));
+        }
+    }
+    if let Some(advisors) = fields.get("advisorProfileIds") {
+        if let Some(advisors) = advisors.as_object() {
+            for role in ["reviewer", "planner_a", "planner_b", "rater"] {
+                if let Some(value) = advisors.get(role) {
+                    if let Some(value) = value.as_str() {
+                        match value.encode_utf16().count() {
+                            0 => issues
+                                .push(issue("too_small", &format!(".advisorProfileIds.{role}"))),
+                            257.. => {
+                                issues.push(issue("too_big", &format!(".advisorProfileIds.{role}")))
+                            }
+                            _ => {}
+                        }
+                    } else {
+                        issues.push(issue("invalid_type", &format!(".advisorProfileIds.{role}")));
+                    }
+                }
+            }
+            if advisors.keys().any(|name| {
+                !["reviewer", "planner_a", "planner_b", "rater"].contains(&name.as_str())
+            }) {
+                issues.push(issue("unrecognized_keys", ".advisorProfileIds"));
+            }
+        } else {
+            issues.push(issue("invalid_type", ".advisorProfileIds"));
+        }
+    }
+    if fields.keys().any(|name| {
+        ![
+            "title",
+            "description",
+            "rootProfileId",
+            "workerProfileId",
+            "deliveryTarget",
+            "runProjectTests",
+            "visualEvidence",
+            "workflow",
+            "advisorProfileIds",
+        ]
+        .contains(&name.as_str())
+    }) {
+        issues.push(issue("unrecognized_keys", "."));
+    }
+    issues
+}
+
+pub fn parse_task_details(input: Option<&Value>) -> ContractResult<TaskDetailsBody> {
+    let fields = object(input)?;
+    let shape = edit_shape_findings(fields);
+    if !shape.is_empty() {
+        return Err(ContractFailure::Issues(shape));
+    }
+    let parsed: TaskDetailsBody = serde_path_to_error::deserialize(Value::Object(fields.clone()))
+        .map_err(|error| {
+        ContractFailure::Issues(vec![finding(
+            "invalid_type",
+            &[Value::String(error.path().to_string())],
+        )])
+    })?;
+    parsed.validate().map_err(|report| {
+        let mut findings = garde_findings(&report);
+        for finding in &mut findings {
+            if let Some(field) = finding
+                .get("field")
+                .and_then(Value::as_str)
+                .map(str::to_owned)
+                && let Some(field) = field.strip_suffix('.')
+            {
+                finding["field"] = Value::String(field.to_owned());
+            }
+        }
+        ContractFailure::Issues(findings)
+    })?;
+    Ok(parsed)
+}
+
+pub fn parse_task_rename(input: Option<&Value>) -> ContractResult<TaskRenameBody> {
+    let fields = object(input)?;
+    let mut issues = Vec::new();
+    if let Some(title) = fields.get("title").filter(|value| !value.is_string()) {
+        issues.push(issue("invalid_type", ".title"));
+        if title.as_array().is_some_and(Vec::is_empty) {
+            issues.push(issue("too_small", ".title"));
+        }
+    } else if !fields.contains_key("title") {
+        issues.push(issue("invalid_type", ".title"));
+    }
+    if fields.keys().any(|name| name != "title") {
+        issues.push(issue("unrecognized_keys", "."));
+    }
+    if !issues.is_empty() {
+        return Err(ContractFailure::Issues(issues));
+    }
+    let parsed: TaskRenameBody = serde_json::from_value(Value::Object(fields.clone()))
+        .map_err(|_| ContractFailure::Unhandled)?;
+    parsed
+        .validate()
+        .map_err(|report| ContractFailure::Issues(garde_findings(&report)))?;
+    Ok(parsed)
+}
+
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub struct TaskArchiveBody {
     pub confirm_discard_dirty: bool,
@@ -734,6 +947,45 @@ pub fn parse_task_archive(input: Option<&Value>) -> ContractResult<TaskArchiveBo
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn assert_request_fixtures<T: Serialize>(
+        name: &str,
+        count: usize,
+        parse: fn(Option<&Value>) -> ContractResult<T>,
+    ) {
+        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .unwrap()
+            .join("tests/parity")
+            .join(name);
+        let mut tested = 0;
+        for entry in std::fs::read_dir(root).unwrap() {
+            let path = entry.unwrap().path();
+            if path.extension().is_none_or(|extension| extension != "json") {
+                continue;
+            }
+            let fixture: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+            let actual = match parse(fixture.get("input")) {
+                Ok(value) => serde_json::json!({"accepted":true,"value":value}),
+                Err(ContractFailure::Issues(issues)) => {
+                    serde_json::json!({"accepted":false,"error":issues})
+                }
+                Err(ContractFailure::Unhandled) => {
+                    serde_json::json!({"accepted":false,"error":{"kind":"thrown"}})
+                }
+                Err(ContractFailure::Internal(error)) => panic!("{}: {error}", path.display()),
+            };
+            assert_eq!(actual, fixture["expected"], "{}", path.display());
+            tested += 1;
+        }
+        assert_eq!(tested, count);
+    }
+
+    #[test]
+    fn task_edit_request_fixtures_match_public_zod_contracts() {
+        assert_request_fixtures("tasks.TaskDetailsBodySchema", 16, parse_task_details);
+        assert_request_fixtures("tasks.TaskRenameBodySchema", 13, parse_task_rename);
+    }
 
     #[test]
     fn optional_archive_body_is_strict_and_preserves_public_findings() {

@@ -3,7 +3,7 @@
 
 use std::{collections::HashMap, error::Error, future::Future, io, sync::Arc, time::Duration};
 
-use chrono::{DateTime, SecondsFormat, Utc};
+use chrono::{DateTime, SecondsFormat, Timelike, Utc};
 use reqwest::{Client, Url};
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
@@ -95,6 +95,14 @@ fn public_time(value: DateTime<Utc>) -> String {
     value.to_rfc3339_opts(SecondsFormat::Millis, true)
 }
 
+/// The published time has millisecond precision; keep the stored time equal to
+/// it so a client polling at exactly that time is not early.
+fn at_millis(value: DateTime<Utc>) -> DateTime<Utc> {
+    value
+        .with_nanosecond(value.timestamp_subsec_millis() * 1_000_000)
+        .unwrap_or(value)
+}
+
 impl DeviceAuth {
     pub fn new() -> DeviceResult<Self> {
         Self::for_endpoints("https://github.com/", "https://api.github.com")
@@ -145,7 +153,7 @@ impl DeviceAuth {
         let flow_id = Uuid::new_v4();
         let expires_at = now + chrono::Duration::seconds(code.expires_in);
         let interval = Duration::from_secs(code.interval);
-        let next_poll_at = now + chrono::Duration::seconds(code.interval as i64);
+        let next_poll_at = at_millis(now + chrono::Duration::seconds(code.interval as i64));
         let mut pending = self.pending.lock().await;
         pending.retain(|_, flow| flow.try_lock().map_or(true, |flow| flow.expires_at > now));
         pending.insert(
@@ -192,7 +200,7 @@ impl DeviceAuth {
                     next_poll_at: public_time(flow.next_poll_at),
                 });
             }
-            flow.next_poll_at = now + chrono::Duration::from_std(flow.interval)?;
+            flow.next_poll_at = at_millis(now + chrono::Duration::from_std(flow.interval)?);
             let device_code = flow.device_code.clone();
             let response = self
                 .client
@@ -227,7 +235,8 @@ impl DeviceAuth {
                             .unwrap_or(0)
                             .max(flow.interval.as_secs().saturating_add(5)),
                     );
-                    flow.next_poll_at = Utc::now() + chrono::Duration::from_std(flow.interval)?;
+                    flow.next_poll_at =
+                        at_millis(Utc::now() + chrono::Duration::from_std(flow.interval)?);
                     return Ok(Poll::Pending {
                         next_poll_at: public_time(flow.next_poll_at),
                     });

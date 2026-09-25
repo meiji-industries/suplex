@@ -52,6 +52,47 @@ test("copies the complete code before showing the GitHub link and allows a faile
 });
 
 
+test("keeps polling when the server repeats the same next poll time", async () => {
+  vi.useFakeTimers();
+  const container = document.createElement("div");
+  document.body.append(container);
+  const root = createRoot(container);
+  const connected = vi.fn().mockResolvedValue(undefined);
+  const api = vi.mocked(readJson);
+  api.mockReset();
+  // A client that polls a moment early gets the identical time back; it must not stop polling.
+  const repeated = new Date(Date.now() + 5000).toISOString();
+  api.mockResolvedValueOnce({
+    flowId: "00000000-0000-4000-8000-000000000001", userCode: "ABCD-1234",
+    verificationUri: "https://github.com/login/device", expiresAt: "2099-01-01T00:00:00Z", intervalSeconds: 5,
+  }).mockResolvedValueOnce({ status: "pending", nextPollAt: repeated })
+    .mockResolvedValueOnce({ status: "pending", nextPollAt: repeated })
+    .mockResolvedValueOnce({ status: "connected", login: "fixture" });
+  vi.spyOn(navigator.clipboard, "writeText").mockResolvedValue(undefined);
+  const click = async (label: string): Promise<void> => {
+    const button = Array.from(document.querySelectorAll("button")).find(element => element.textContent === label);
+    expect(button).toBeDefined();
+    await act(async () => button?.click());
+  };
+  try {
+    await act(async () => root.render(<GithubDeviceSignIn onConnected={connected} />));
+    await click("Sign in to GitHub");
+    await click("Copy the code");
+    await act(async () => document.querySelector<HTMLAnchorElement>('a[href="https://github.com/login/device"]')?.click());
+    await act(async () => vi.advanceTimersByTimeAsync(5000));
+    expect(document.body.textContent).toContain("Testing connection");
+    await act(async () => vi.advanceTimersByTimeAsync(1000));
+    await act(async () => vi.advanceTimersByTimeAsync(1000));
+    expect(connected).toHaveBeenCalledTimes(1);
+    expect(document.body.textContent).toContain("GitHub is connected as fixture.");
+    expect(api).toHaveBeenCalledTimes(4);
+  } finally {
+    await act(async () => root.unmount());
+    container.remove();
+    vi.useRealTimers();
+  }
+});
+
 test("retries a failed poll automatically and refreshes after connection", async () => {
   vi.useFakeTimers();
   const container = document.createElement("div");

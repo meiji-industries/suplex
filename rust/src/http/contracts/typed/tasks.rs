@@ -202,7 +202,7 @@ pub struct TaskIdParams {
     pub task_id: String,
 }
 
-fn optional_nonnull<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+pub(crate) fn optional_nonnull<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
 where
     D: Deserializer<'de>,
     T: Deserialize<'de>,
@@ -240,7 +240,7 @@ where
         .ok_or_else(|| serde::de::Error::custom("expected positive safe integer"))
 }
 
-fn trimmed<'de, D>(deserializer: D) -> Result<String, D::Error>
+pub(crate) fn trimmed<'de, D>(deserializer: D) -> Result<String, D::Error>
 where
     D: Deserializer<'de>,
 {
@@ -283,7 +283,7 @@ fn positive_safe_integer(value: &u64, _: &()) -> garde::Result {
         Err(garde::Error::new("invalid_number"))
     }
 }
-fn check_workflow(value: &str, _: &()) -> garde::Result {
+pub(crate) fn check_workflow(value: &str, _: &()) -> garde::Result {
     if [
         "standard",
         "direct_build",
@@ -298,16 +298,16 @@ fn check_workflow(value: &str, _: &()) -> garde::Result {
         Err(garde::Error::new("invalid_value"))
     }
 }
-fn default_delivery_target() -> String {
+pub(crate) fn default_delivery_target() -> String {
     "pull_request_draft".into()
 }
-fn default_run_project_tests() -> bool {
+pub(crate) fn default_run_project_tests() -> bool {
     true
 }
-fn default_visual_evidence() -> String {
+pub(crate) fn default_visual_evidence() -> String {
     "off".into()
 }
-fn default_workflow() -> String {
+pub(crate) fn default_workflow() -> String {
     "standard".into()
 }
 

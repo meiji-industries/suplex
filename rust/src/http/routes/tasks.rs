@@ -593,8 +593,22 @@ async fn start_pending(
         companies::require_company_access(database, &user_id, &company)?;
         Ok(())
     });
-    match access {
-        Ok(()) => with_cookies(auth::not_ported(), cookies),
+    if let Err(error) = access {
+        return with_cookies(service_error(error), cookies);
+    }
+    let Some(host) = state.task_host.clone() else {
+        return with_cookies(auth::not_ported(), cookies);
+    };
+    let started = state.with_database(
+        |database| -> Result<task_response::TaskResponse, Box<dyn Error>> {
+            commands::start_user_task(database, &user_id, &id, Utc::now(), move |id| {
+                host.wake(id)
+            })?;
+            task_response::get(database, &id)?.ok_or_else(|| "started task disappeared".into())
+        },
+    );
+    match started {
+        Ok(task) => with_cookies(Json(task).into_response(), cookies),
         Err(error) => with_cookies(service_error(error), cookies),
     }
 }

@@ -1,4 +1,5 @@
 pub mod coordination;
+pub mod delivery;
 pub mod http;
 pub mod identity;
 pub mod platform;

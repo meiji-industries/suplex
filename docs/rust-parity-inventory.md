@@ -6,15 +6,17 @@ States: `not started` means no complete Rust equivalent; `ported` means implemen
 
 The table lists all 238 backend TypeScript modules present at the baseline, including contracts, routes, and each provider adapter. Contract extractions already committed during M0 are tracked with their source rows; no further extraction is required. Shared SQL migrations remain unchanged. Inventory introduced in `ea44af63`.
 
-Current sequence: complete one Codex Standard task through the UI with cancellation and restart recovery. High-level WebAuthn, typed live auth/project requests, detached process helpers, local Git2 worktrees and initial Root MCP operations are implemented. Host execution and Worker completion remain pending. The special JSON validators and raw-JSON/response-schema fixtures are removed; the hash serializer remains. Other API breadth and GitHub sign-in follow the first local task.
+Current sequence: complete one Codex Standard task through the UI with cancellation and restart recovery. High-level WebAuthn, typed live auth/project requests, detached process helpers, local Git2 worktrees and initial Root MCP operations are implemented. HTTP start, host scheduling, Worker completion and Standard local delivery now pass the integrated fake-Codex/real-Git check; actual Codex UI execution remains pending. The special JSON validators and raw-JSON/response-schema fixtures are removed; the hash serializer remains. Other API breadth and GitHub sign-in follow the first local task.
 
 Request corpus: 1,141 fixtures across 95 request exports plus 23 stored-project cases across three exports. Implemented checks cover 522 cases across 43 schemas, all stored-project cases, seven hash fixtures, and separate task DTO checks for 60 TaskBody and nine TaskIdParams cases. Unused validators remain deferred with their routes. Unit evidence is recorded below; final commit snapshots use separate Cargo targets. The TypeScript full suite baseline is 1,613/1,623: seven failures reproduce at pre-port `a57a47f5`, and three Devin failures pass focused reruns. Hosted CI, packages, full task execution, switching, and the eight-hour run remain unverified.
 
-The [browser helper](../tests/helpers/native-browser.ts) supports `SUPLEX_BROWSER_BACKEND=rust` with an isolated listener, database and browser context; TypeScript remains the default. The UI build, typecheck, targeted lint and all 11 default browser tests across seven files pass. A Rust binary built from integration work in progress serves an authenticated task page and task list without page errors. This proves basic boot only; Rust task journeys and native-process cleanup remain pending.
+`f59366a5`: the [browser helper](../tests/helpers/native-browser.ts) supports `SUPLEX_BROWSER_BACKEND=rust` with an isolated listener, database and browser context; TypeScript remains the default. The UI build, typecheck, targeted lint and all 11 default browser tests across seven files pass. A Rust binary built from integration work in progress serves an authenticated task page and task list without page errors. This proves basic boot only; Rust task journeys and native-process cleanup remain pending.
+
+Host/evidence/read unit: exact source tree `b4acd01aaa32f9f4e666e1472dd4788ba3836e8a` passes 120 library tests, three integration tests, fmt and all-target Clippy. Four Node-backed tests are ignored by the default run; the two task-read/template oracles pass explicitly. The real MCP Worker-evidence/local-delivery comparison also passes. These compare complete parsed JSON with TypeScript on shared fixtures, not response-schema output. The native Codex UI journey, cancellation and full restart recovery remain separate pending checks.
 
 | TypeScript source | Status | Rust equivalent and evidence |
 |---|---|---|
-| [app.ts](../src/app.ts) | not started | `924c9efe`, `92f290e3`: Cargo/toolchain/CI, isolated startup, SQLite and sign-in assets tested locally; task host and full route wiring remain pending. |
+| [app.ts](../src/app.ts) | not started | `924c9efe`, `92f290e3`: Cargo/toolchain/CI, isolated startup, SQLite and sign-in assets tested locally. The host unit starts recovery after listener bind and drains in-flight work on shutdown while retaining admitted native sessions. Full route wiring remains pending. |
 | [cli.ts](../src/cli.ts) | not started | Real `mcp advisor` and `mcp root` dispatch run before installation/database/listener startup and pass staged-binary stdio probes. Other operational commands remain pending. |
 | [coordination/advisor-evidence.ts](../src/coordination/advisor-evidence.ts) | not started | |
 | [coordination/advisor-report-bridge.ts](../src/coordination/advisor-report-bridge.ts) | ported | `31ce45ae`: `rust/src/coordination/advisor_bridge.rs` passes 86 library tests, three integration tests, fmt and all-target Clippy; focused Advisor 4/4 and TS report 10/10 pass. Actual stdio checks cover token denial, initialize/list, invalid report without capture, exact valid result and 0600 file. Role/schema, JS trimming, numeric output and binding writer match source. Native Advisor launch composition remains pending. |
@@ -28,24 +30,24 @@ The [browser helper](../tests/helpers/native-browser.ts) supports `SUPLEX_BROWSE
 | [coordination/persistence/session-operations.ts](../src/coordination/persistence/session-operations.ts) | not started | |
 | [coordination/root-bridge.ts](../src/coordination/root-bridge.ts) | ported | `993e8dc`: actual staged binary opens the same SQLite controller directly and passes token denial, initialize/list, delegate, conflicting delegate, observe and ask-human checks. Detached handler cancellation cannot strand the tool-owner claim. Final unit passes 98 library tests, three integration tests, fmt, all-target Clippy and six focused Root tests; two Node signer tests remain explicitly ignored in this run. |
 | [coordination/root-contracts.ts](../src/coordination/root-contracts.ts) | not started | Named Serde operation DTOs cover observe, Standard planned delegation and ask-human, including valid optional Advisor/candidate references. The advertised schema remains flat as in TS. Remaining operations follow their implementations. |
-| [coordination/root-controller.ts](../src/coordination/root-controller.ts) | not started | Initial observe is deep-equal to the complete pinned TS result on the same fixture database. Standard planned delegation persists assignments atomically; ask-human persists waiting state and releases its claim. Worker evidence, delivery, terminal-result routing and lifecycle events remain pending. |
-| [coordination/root-session-store.ts](../src/coordination/root-session-store.ts) | not started | `76ff7e2b`: atomic Root/prompt admission passes detached launch, duplicate, reopen and prerequisite checks. The Root MCP unit adds full observation rows, current-owner CAS, planned Worker admission and ask-human persistence. Turn IDs use the source `msg_` format. Final isolated unit passes 98 library tests and three integration tests. Full controller recovery and real Codex remain pending. |
-| [coordination/session-recovery.ts](../src/coordination/session-recovery.ts) | not started | |
+| [coordination/root-controller.ts](../src/coordination/root-controller.ts) | not started | Initial observe is deep-equal to the complete pinned TS result on the same database. Standard planned delegation, Worker evidence and local completion pass actual MCP checks; owner claims survive dropped handler futures. Lifecycle events and remaining workflows/operations are pending. |
+| [coordination/root-session-store.ts](../src/coordination/root-session-store.ts) | not started | `76ff7e2b`: atomic Root/prompt admission passes detached launch, duplicate, reopen and prerequisite checks. Host integration adds terminal persistence, one Worker-result wake, Root failure questions and fenced requeue after authoritative recovery of an unknown dispatch. Turn IDs retain the source `msg_` format; broader recovery remains pending. |
+| [coordination/session-recovery.ts](../src/coordination/session-recovery.ts) | not started | The host unit covers Standard Root/Worker admission, native terminal results, pending stops, idle wake and the source 30-second unknown-dispatch fence. Missing native usage preserves saved spend. Focused host checks pass 5/5; real restart and cancellation remain pending. |
 | [coordination/task-agent-selection-contracts.ts](../src/coordination/task-agent-selection-contracts.ts) | not started | |
 | [coordination/task-agent-selection.ts](../src/coordination/task-agent-selection.ts) | not started | |
 | [coordination/worker-environment.ts](../src/coordination/worker-environment.ts) | not started | `51331fec`: `rust/src/runtimes/git_guard.rs` preserves guarded Git/GitHub commands, configured Git lookup, private executable files and cleanup. Real Git permits status and denies reset/branch deletion; a fake gh permits PR reads and denies mutation. The isolated staged unit passes 93 library tests, three integration tests, fmt and all-target Clippy. Full native launch composition remains pending. |
 | [coordination/worker-replacement-contracts.ts](../src/coordination/worker-replacement-contracts.ts) | not started | |
 | [coordination/worker-replacement.ts](../src/coordination/worker-replacement.ts) | not started | |
-| [coordination/worker-turn-evidence.ts](../src/coordination/worker-turn-evidence.ts) | not started | |
+| [coordination/worker-turn-evidence.ts](../src/coordination/worker-turn-evidence.ts) | not started | `rust/src/coordination/worker_evidence.rs`: index, tail, head and cursor reads through actual MCP match complete TS results on the same database/native log. UTF-16 offsets are preserved; a slice splitting a surrogate pair uses replacement text under the documented lone-surrogate exception. |
 | [coordination/workflow-evidence.ts](../src/coordination/workflow-evidence.ts) | not started | |
-| [coordination/workflow-prompts.ts](../src/coordination/workflow-prompts.ts) | not started | Standard initial and planned Worker prompt output matches generated TS fixtures byte-for-byte. Other workflows remain pending. |
+| [coordination/workflow-prompts.ts](../src/coordination/workflow-prompts.ts) | not started | Standard initial, planned Worker and Worker-result wake prompts match pinned TS bytes. Other workflows remain pending. |
 | [coordination/workflow-records.ts](../src/coordination/workflow-records.ts) | not started | Seeded workflow listing and typed advisor serialization pass the cleanup's isolated Cargo and raw HTTP checks. CRUD remains deferred. |
 | [coordination/workflows.ts](../src/coordination/workflows.ts) | not started | `1c24c183`: existing schemas extracted with compatible exports and passing TypeScript checks; next Rust work is limited to the Standard task slice |
 | [delivery/agent-delivery.ts](../src/delivery/agent-delivery.ts) | not started | |
 | [delivery/completed-pull-requests.ts](../src/delivery/completed-pull-requests.ts) | not started | |
 | [delivery/failure.ts](../src/delivery/failure.ts) | not started | |
 | [delivery/issue-evidence.ts](../src/delivery/issue-evidence.ts) | not started | |
-| [delivery/operations.ts](../src/delivery/operations.ts) | not started | |
+| [delivery/operations.ts](../src/delivery/operations.ts) | not started | Standard `complete_local_work` observes actual Git branch/HEAD/dirty state, rechecks the tool owner and persists delivery through the store. Real Git/MCP checks reject the wrong expected HEAD and accept dirty local completion as TS does. GitHub and other delivery operations remain pending. |
 | [delivery/publication.ts](../src/delivery/publication.ts) | not started | |
 | [delivery/pull-reference.ts](../src/delivery/pull-reference.ts) | not started | |
 | [delivery/pull-request-ownership.ts](../src/delivery/pull-request-ownership.ts) | not started | |
@@ -61,7 +63,7 @@ The [browser helper](../tests/helpers/native-browser.ts) supports `SUPLEX_BROWSE
 | [http/contracts/projects.ts](../src/http/contracts/projects.ts) | not started | Typed project creation and nested configurations pass public findings and HTTP checks, including optional/null distinctions, source bounds, ASCII patterns and field ordering. Unused PATCH validation is deferred with its route. |
 | [http/contracts/providers.ts](../src/http/contracts/providers.ts) | ported | `88bb9b9d`: nine validators pass the ordinary corpus; provider runtime/HTTP integration remains unverified. |
 | [http/contracts/system-events.ts](../src/http/contracts/system-events.ts) | not started | |
-| [http/contracts/task-templates.ts](../src/http/contracts/task-templates.ts) | not started | `a974de91` is historic evidence only. Special JSON validators are removed; typed contracts return with template routes needed by M2. |
+| [http/contracts/task-templates.ts](../src/http/contracts/task-templates.ts) | not started | Named stored-template DTO normalization preserves source strictness, defaults, trimming and optional fields. The same-DB GET oracle and strict unknown/null checks pass. Mutation contracts remain pending. |
 | [http/contracts/tasks.ts](../src/http/contracts/tasks.ts) | not started | `112a64e6`: named create and task-ID DTOs pass all 60 TaskBody and nine TaskIdParams fixtures, including public findings, IssueAssociation rules, UTF-16 bounds and integral numbers. Create/list/detail now return a named response with full raw-body TS equality on a shared fixture database. Other commands remain pending. |
 | [http/contracts/update.ts](../src/http/contracts/update.ts) | not started | |
 | [http/contracts/workflows.ts](../src/http/contracts/workflows.ts) | not started | List query preserves literal/strict rules and passes corpus/HTTP checks. Special JSON validators for other operations are removed and deferred with their routes. |
@@ -85,9 +87,9 @@ The [browser helper](../tests/helpers/native-browser.ts) supports `SUPLEX_BROWSE
 | [http/routes/projects.ts](../src/http/routes/projects.ts) | not started | `1e2b2f0c`: reads/defaults/provider instances, GitHub pickers and local/existing/new GitHub creation tested. Typed creation passes isolated checks and preserves raw response order/nullability. Bitbucket/PATCH/ancillary routes remain deferred. |
 | [http/routes/provider-login.ts](../src/http/routes/provider-login.ts) | not started | |
 | [http/routes/task-pane.ts](../src/http/routes/task-pane.ts) | not started | |
-| [http/routes/task-templates.ts](../src/http/routes/task-templates.ts) | not started | |
+| [http/routes/task-templates.ts](../src/http/routes/task-templates.ts) | not started | GET returns source-ordered, normalized stored templates and matches complete TS JSON/status on the same database. Invalid strict stored configuration returns the source 500. CRUD remains pending. |
 | [http/routes/task-worktree.ts](../src/http/routes/task-worktree.ts) | not started | |
-| [http/routes/tasks.ts](../src/http/routes/tasks.ts) | not started | `bf426610`: local backlog create/list/detail passes 91 library tests, three integration tests, fmt and all-target Clippy; focused task checks pass 7/7. Actual TCP create returns the same complete bytes as pinned TS reading that database, with no ID/time normalization. Replay, live project scope and completion after a dropped handler waiter pass. Start remains authorized 501 until a real host wake exists. |
+| [http/routes/tasks.ts](../src/http/routes/tasks.ts) | not started | `bf426610`: local create/list/detail raw TCP bodies match pinned TS on the same database, without ID/time normalization. The host unit wires authorized start and adds activity/execution/no-worktree diff summary with complete JSON/status/header oracles and live-scope checks. GitHub-backed diff summary, cancellation and other commands remain pending. |
 | [http/routes/update.ts](../src/http/routes/update.ts) | not started | |
 | [http/routes/workflows.ts](../src/http/routes/workflows.ts) | not started | GET listing passes query findings, session authority and ordered raw response checks in the isolated cleanup export. CRUD remains 501. TS tests2/2 pass with an added seeded raw-body assertion; no contract or existing expectation changed. |
 | [http/session.ts](../src/http/session.ts) | not started | `92f290e3`, `0856b0d4`: session lookup, trusted sign-in, legacy rollover, cookies and CSRF tested; full route integration pending. |
@@ -153,7 +155,7 @@ The [browser helper](../tests/helpers/native-browser.ts) supports `SUPLEX_BROWSE
 | [platform/updates/update-client.ts](../src/platform/updates/update-client.ts) | not started | |
 | [profiles/agent-profile-contracts.ts](../src/profiles/agent-profile-contracts.ts) | not started | |
 | [profiles/agent-profiles.ts](../src/profiles/agent-profiles.ts) | ported | `f23bab60`: CRUD/duplicate/defaults, references, policy pruning/rollback, audit and CLI discovery tested. Typed stored-policy conversion passes isolated cleanup checks. |
-| [profiles/model-pricing.ts](../src/profiles/model-pricing.ts) | ported | `rust/src/profiles/model_pricing.rs` preserves token/cache pricing and invalid-value handling. Formula and Codex cumulative-usage checks pass; task spend persistence remains in host integration. |
+| [profiles/model-pricing.ts](../src/profiles/model-pricing.ts) | ported | `rust/src/profiles/model_pricing.rs` preserves token/cache pricing and invalid-value handling. Formula and cumulative-usage checks pass. Host integration persists native usage: a priced million-token fixture records $1 with source fields; missing native logs cannot erase saved snapshots. |
 | [profiles/models-dev-catalog.ts](../src/profiles/models-dev-catalog.ts) | ported | The models.dev reader uses JSON, a five-second timeout and no redirects. Local HTTP checks cover shared requests, successful caching and retry after failure. Parser checks preserve provider/model keys and optional cache rates. |
 | [profiles/provider-catalog.ts](../src/profiles/provider-catalog.ts) | not started | |
 | [profiles/provider-connection.ts](../src/profiles/provider-connection.ts) | not started | |
@@ -178,7 +180,7 @@ The [browser helper](../tests/helpers/native-browser.ts) supports `SUPLEX_BROWSE
 | [runtimes/codex/display.ts](../src/runtimes/codex/display.ts) | not started | |
 | [runtimes/codex/session-reader.ts](../src/runtimes/codex/session-reader.ts) | not started | Session/thread recovery and cumulative usage pass focused checks. Model lookup retains the legacy dispatch-record argv fallback; missing prices use the source fallback. History/execution views and real Codex remain pending. |
 | [runtimes/codex/task-runtime.ts](../src/runtimes/codex/task-runtime.ts) | not started | `d00a50ca`: Root and planned Worker adapters compose executable lookup, prompts, guards, bindings and durable claim-before-spawn. Fake CLI checks cover launch refusal, child capabilities and separate persisted/native/thread identities. Final isolated unit passes 106 library tests, three integration tests, fmt and all-target Clippy; two Node signer tests are ignored in this run. Full host, real Codex and UI remain pending. |
-| [runtimes/codex/transcript.ts](../src/runtimes/codex/transcript.ts) | not started | Parsing, result text, completion and cumulative per-thread usage pass focused checks, including dispatch-model pricing and decreasing-counter rejection. Tool projection and real-provider verification remain pending. |
+| [runtimes/codex/transcript.ts](../src/runtimes/codex/transcript.ts) | not started | Parsing, result text, completion, cumulative usage and native tool projection pass focused checks. The Worker-evidence MCP oracle matches TS on the same transcript, including stripped file-change extras and source web-search status handling. Real-provider verification remains pending. |
 | [runtimes/devin/advisor-evidence.ts](../src/runtimes/devin/advisor-evidence.ts) | not started | |
 | [runtimes/devin/display.ts](../src/runtimes/devin/display.ts) | not started | |
 | [runtimes/devin/mcp-config.ts](../src/runtimes/devin/mcp-config.ts) | not started | |
@@ -206,7 +208,7 @@ The [browser helper](../tests/helpers/native-browser.ts) supports `SUPLEX_BROWSE
 | [shared/canonical-json.ts](../src/shared/canonical-json.ts) | not started | |
 | [shared/entrypoint.ts](../src/shared/entrypoint.ts) | not started | |
 | [shared/ids.ts](../src/shared/ids.ts) | not started | |
-| [shared/json.ts](../src/shared/json.ts) | not started | `40eac0e1`: [hash bytes spike](spikes/rust-json-hash-bytes.md). Only Value-based stringify/ryu-js remains; seven hash fixtures pass, including finite large-number rounding. Document tree and raw-JSON machinery are removed. Four task hash call sites remain pending. |
+| [shared/json.ts](../src/shared/json.ts) | not started | `40eac0e1`: [hash bytes spike](spikes/rust-json-hash-bytes.md). Only Value-based stringify/ryu-js remains; seven hash fixtures pass. Document tree and raw-JSON machinery are removed. The task-create hash is connected; the remaining three task hash sites await their commands. |
 | [shared/mcp-stdio.ts](../src/shared/mcp-stdio.ts) | not started | |
 | [tasks/agent-status.ts](../src/tasks/agent-status.ts) | not started | |
 | [tasks/analytics/analytics.ts](../src/tasks/analytics/analytics.ts) | not started | |
@@ -230,14 +232,14 @@ The [browser helper](../tests/helpers/native-browser.ts) supports `SUPLEX_BROWSE
 | [tasks/history/history.ts](../src/tasks/history/history.ts) | not started | |
 | [tasks/history/live.ts](../src/tasks/history/live.ts) | not started | |
 | [tasks/history/read.ts](../src/tasks/history/read.ts) | not started | |
-| [tasks/host.ts](../src/tasks/host.ts) | not started | |
+| [tasks/host.ts](../src/tasks/host.ts) | not started | `rust/src/tasks/host.rs`: source one-second due scan, targeted/coalesced wakes, four concurrent recoveries, 15-second follow-up, pending stops and graceful shutdown. Integrated fake-Codex/real-Git check covers admission, reopen, Worker return, one Root wake and local delivery; focused host 5/5 passes. Real task/restart/cancellation remain pending. |
 | [tasks/images.ts](../src/tasks/images.ts) | not started | |
 | [tasks/inspection.ts](../src/tasks/inspection.ts) | not started | |
 | [tasks/integration.ts](../src/tasks/integration.ts) | not started | |
 | [tasks/issue-association.ts](../src/tasks/issue-association.ts) | not started | |
 | [tasks/issue-context.ts](../src/tasks/issue-context.ts) | not started | |
 | [tasks/limits/attachment-limits.ts](../src/tasks/limits/attachment-limits.ts) | not started | |
-| [tasks/limits/limit-observer.ts](../src/tasks/limits/limit-observer.ts) | not started | |
+| [tasks/limits/limit-observer.ts](../src/tasks/limits/limit-observer.ts) | not started | Host admission observes and prices native Codex usage, honors max-turn/budget short circuits and atomically replaces usage snapshots. Missing native logs leave saved usage intact and prevent treating unknown spend as zero, matching source behavior. Other providers remain pending. |
 | [tasks/limits/limit-store.ts](../src/tasks/limits/limit-store.ts) | not started | |
 | [tasks/limits/limits.ts](../src/tasks/limits/limits.ts) | not started | |
 | [tasks/preparation.ts](../src/tasks/preparation.ts) | not started | |
@@ -245,8 +247,8 @@ The [browser helper](../tests/helpers/native-browser.ts) supports `SUPLEX_BROWSE
 | [tasks/queue.ts](../src/tasks/queue.ts) | not started | Task repository tests cover queued prerequisite admission and backlog start. Queue host/controller integration remains pending. |
 | [tasks/repository.ts](../src/tasks/repository.ts) | not started | Atomic task/control/dependency/audit creation and replay are connected to local create/read HTTP. Prepared task IDs also determine the branch suffix. The first persisted request hash uses JS-compatible stringify and source field order; seven pinned TS hash cases pass. Wider metadata operations and the remaining three hash sites remain pending. |
 | [tasks/sources.ts](../src/tasks/sources.ts) | not started | |
-| [tasks/tasks.ts](../src/tasks/tasks.ts) | not started | `rust/src/tasks/commands.rs` preserves local creation profile selection, authorization, source transaction checks and after-commit callbacks. Seven focused checks cover full HTTP responses, live scope before replay and durable insertion after a dropped waiter. Internal start exists; HTTP start, host and other commands remain pending. |
-| [tasks/templates.ts](../src/tasks/templates.ts) | not started | |
+| [tasks/tasks.ts](../src/tasks/tasks.ts) | not started | `rust/src/tasks/commands.rs` preserves local creation/profile selection/authorization and after-commit callbacks. Create/read HTTP checks cover replay, live scope and completion after a dropped waiter. HTTP start now wakes the host after commit; cancellation and other commands remain pending. |
+| [tasks/templates.ts](../src/tasks/templates.ts) | not started | GET reads and normalizes stored configurations with named DTOs; ordered/default/trim/optional-field behavior matches TS on a shared database. Mutations remain pending. |
 | [tasks/timeline/contracts.ts](../src/tasks/timeline/contracts.ts) | not started | |
 | [tasks/timeline/timeline.ts](../src/tasks/timeline/timeline.ts) | not started | |
 | [tasks/usage.ts](../src/tasks/usage.ts) | not started | |

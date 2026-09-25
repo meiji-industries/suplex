@@ -8,6 +8,17 @@ use uuid::Uuid;
 #[derive(Debug)]
 pub struct TaskConflict;
 
+#[derive(Debug)]
+pub struct PullRequestOwned;
+
+impl std::fmt::Display for PullRequestOwned {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("A task already uses this pull request.")
+    }
+}
+
+impl std::error::Error for PullRequestOwned {}
+
 impl std::fmt::Display for TaskConflict {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         formatter.write_str("This idempotency key belongs to a different request")
@@ -133,7 +144,7 @@ fn assert_pull_request_available(
         params![task_id, repository, number], |row| row.get(0),
     )?;
     if owned {
-        return Err(std::io::Error::other("A task already uses this pull request.").into());
+        return Err(Box::new(PullRequestOwned));
     }
     Ok(())
 }
@@ -185,7 +196,7 @@ fn assert_task_pull_requests_available(
     Ok(())
 }
 
-fn admit_queued(
+pub(crate) fn admit_queued(
     database: &mut SuplexDatabase,
     task_id: &str,
     now: DateTime<Utc>,

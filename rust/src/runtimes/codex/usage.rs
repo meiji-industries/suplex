@@ -2,6 +2,7 @@ use std::{
     collections::{HashMap, HashSet},
     fs, io,
     path::Path,
+    time::UNIX_EPOCH,
 };
 
 use super::{session_reader, transcript};
@@ -83,6 +84,8 @@ impl From<NativeCounts> for UsageTokens {
 pub struct CodexTurnUsage {
     pub turn_id: String,
     pub model: String,
+    pub updated_at_ms: i64,
+    pub failed: bool,
     pub tokens: UsageTokens,
     pub cost_usd: f64,
     pub priced: bool,
@@ -196,6 +199,14 @@ pub fn observe_session(
         turns.push(CodexTurnUsage {
             turn_id: turn.id.clone(),
             model,
+            updated_at_ms: turn
+                .updated_at
+                .duration_since(UNIX_EPOCH)
+                .map_err(io::Error::other)?
+                .as_millis()
+                .try_into()
+                .map_err(io::Error::other)?,
+            failed: transcript::failure(&turn.events).is_some(),
             tokens,
             cost_usd,
             priced: price.is_some(),
@@ -257,7 +268,8 @@ mod tests {
         )).unwrap();
         fs::write(directory.join("turn-msg_002.jsonl"), concat!(
             "{\"type\":\"thread.started\",\"thread_id\":\"thread-1\"}\n",
-            "{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":180,\"cached_input_tokens\":30,\"output_tokens\":90,\"reasoning_output_tokens\":30}}\n"
+            "{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":180,\"cached_input_tokens\":30,\"output_tokens\":90,\"reasoning_output_tokens\":30}}\n",
+            "{\"type\":\"error\",\"message\":\"Native turn failed\"}\n"
         )).unwrap();
         let pricing = ModelPricingCatalog::from([(
             "openai/gpt-6-sol".into(),
@@ -271,6 +283,9 @@ mod tests {
         let observed = observe_session(&directory, "codex-native-1", Some(&pricing)).unwrap();
         assert!(observed.complete);
         assert_eq!(observed.turns.len(), 2);
+        assert!(observed.turns[0].updated_at_ms > 0);
+        assert!(!observed.turns[0].failed);
+        assert!(observed.turns[1].failed);
         assert_eq!(observed.turns[1].tokens.input, 70.0);
         assert_eq!(observed.turns[1].tokens.output, 20.0);
         assert_eq!(observed.turns[1].tokens.reasoning, 20.0);

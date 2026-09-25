@@ -6,6 +6,7 @@ use serde_json::{Map, Value, json};
 
 use crate::{
     platform::database::{DatabaseResult, OpenMode, SuplexDatabase},
+    runtimes::codex::{session_reader, tool_evidence},
     tasks::worktree,
 };
 
@@ -13,6 +14,7 @@ use super::{
     root_bridge::RootIdentity,
     root_prompts::{self, WorkerAssignmentText},
     root_session_store::{self, RootObservationRows, RootSession},
+    worker_evidence::{self, EvidenceQuery},
 };
 
 pub struct StandardWorkerAssignment {
@@ -180,6 +182,67 @@ pub fn observe(database_path: &Path, root: &RootIdentity) -> DatabaseResult<Valu
     assemble_observation(rows, worktree)
 }
 
+pub struct WorkerEvidenceRequest {
+    pub turn_id: String,
+    pub query: EvidenceQuery,
+}
+
+/// Read an admitted Worker's native turn log. The log is the evidence source;
+/// persisted completion metadata only identifies and describes that turn.
+pub fn read_worker_evidence(
+    database_path: &Path,
+    root: &RootIdentity,
+    request: &WorkerEvidenceRequest,
+) -> DatabaseResult<Value> {
+    let rows = {
+        let database = SuplexDatabase::open(database_path, OpenMode::ReadOnly)?;
+        root_session_store::assert_current_root(
+            &database,
+            &root.task_id,
+            &root.session_id,
+            root.generation,
+        )?;
+        root_session_store::root_observation_rows(&database, &root.task_id)?
+    };
+    let turn = rows
+        .turns
+        .iter()
+        .find(|turn| turn["id"] == request.turn_id)
+        .ok_or_else(|| invalid("Worker turn does not belong to this task"))?;
+    let session = rows
+        .sessions
+        .iter()
+        .find(|session| session["id"] == turn["sessionId"])
+        .filter(|session| session["kind"] == "worker" && session["advisorRole"].is_null())
+        .ok_or_else(|| invalid("Worker turn does not belong to this task"))?;
+    let session_id = session["id"]
+        .as_str()
+        .ok_or_else(|| invalid("Worker session id is missing"))?;
+    let directory = session_reader::session_directory(database_path, session_id)?;
+    let evidence = session_reader::turn_evidence(&directory, &request.turn_id)?;
+    let (tools, limitation) = match evidence {
+        Some(events) => (tool_evidence::codex_tools(&events), Value::Null),
+        None => (Vec::new(), json!("The native turn log is missing")),
+    };
+    let result = worker_evidence::read(&tools, &request.query).map_err(std::io::Error::other)?;
+    let mut output = result
+        .as_object()
+        .cloned()
+        .ok_or_else(|| invalid("Worker evidence result is invalid"))?;
+    output.insert("turnId".into(), json!(request.turn_id));
+    output.insert("sessionId".into(), json!(session_id));
+    output.insert(
+        "localObservation".into(),
+        json!({
+            "status":turn["status"],
+            "terminalObservationAvailable":!turn["terminalObservation"].is_null(),
+            "nativeTurnIdAvailable":!turn["nativeTurnId"].is_null(),
+        }),
+    );
+    output.insert("limitation".into(), limitation);
+    Ok(Value::Object(output))
+}
+
 pub fn delegate_worker(
     database_path: &Path,
     root: &RootIdentity,
@@ -284,6 +347,12 @@ pub fn ask_human(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{
+        identity::auth,
+        tasks::repository::{self, PreparedTask, TaskCreator},
+    };
+    use chrono::Utc;
+    use std::fs;
 
     #[test]
     fn absent_worktree_evidence_does_not_remove_task_context() {
@@ -307,5 +376,89 @@ mod tests {
                 .is_none()
         );
         assert_eq!(result["context"]["configuration"]["visualEvidence"], "off");
+    }
+
+    #[test]
+    fn worker_evidence_reads_only_the_admitted_native_turn() {
+        let directory =
+            std::env::temp_dir().join(format!("suplex-worker-evidence-{}", uuid::Uuid::new_v4()));
+        fs::create_dir(&directory).unwrap();
+        let database_path = directory.join("suplex.sqlite");
+        let mut database = SuplexDatabase::open(&database_path, OpenMode::Migrate).unwrap();
+        let now = Utc::now();
+        let user = auth::development_sign_in(&mut database, now).unwrap().user;
+        let stamp = now.to_rfc3339();
+        database.connection().execute("INSERT INTO suplex_companies (id,name,status,created_at) VALUES ('company_evidence','Evidence','active',?1)", [&stamp]).unwrap();
+        database.connection().execute("INSERT INTO suplex_projects (id,company_id,name,repository_path,worktree_root,repository_identity,base_branch,setup_command,verification_command,root_profile_id,worker_profile_id,agent_task_policy_json,created_at,updated_at) VALUES ('project_evidence','company_evidence','Evidence','/tmp/repo','/tmp/worktrees',NULL,'main','','','profile_root','profile_worker','{}',?1,?1)", [&stamp]).unwrap();
+        let task = repository::create(&mut database, &PreparedTask {
+            id: repository::new_task_id(), company_id: "company_evidence".into(), project_id: "project_evidence".into(),
+            title: "Inspect the test result".into(), description: "Review Worker evidence".into(),
+            configuration: json!({"branch":"task-evidence","baseBranch":"main"}),
+            idempotency_key: "evidence-1".into(), request_hash: "evidence-hash".into(),
+            creator: TaskCreator::User(user.id), delivery_target: "local_worktree".into(),
+            delivery_intent: json!({"headBranch":"task-evidence","baseBranch":"main"}),
+            root_profile: json!({"profileId":"profile_root","provider":"codex","model":"gpt-6-sol","reasoningLevel":"medium","serviceTier":"default"}),
+            worker_profile: json!({"profileId":"profile_worker","provider":"codex","model":"gpt-6-sol","reasoningLevel":"medium","serviceTier":"default"}),
+            advisor_profiles: json!({}), issue: None, start_queued: true,
+            copied_from_task_id: None, depends_on: vec![],
+        }, now).unwrap().task;
+        let root = root_session_store::reserve_root(&mut database, &task.id, now).unwrap();
+        let worker = root_session_store::launch_standard_worker(
+            &mut database,
+            &root,
+            "Inspect",
+            "Run test",
+            None,
+            now,
+        )
+        .unwrap();
+        let turn = root_session_store::root_observation_rows(&database, &task.id)
+            .unwrap()
+            .turns
+            .into_iter()
+            .find(|value| value["sessionId"] == worker["id"])
+            .unwrap();
+        let turn_id = turn["id"].as_str().unwrap().to_owned();
+        let native_directory =
+            session_reader::session_directory(&database_path, worker["id"].as_str().unwrap())
+                .unwrap();
+        fs::create_dir_all(&native_directory).unwrap();
+        fs::write(native_directory.join(format!("turn-{turn_id}.jsonl")), concat!(
+            "{\"type\":\"item.started\",\"item\":{\"id\":\"item_0\",\"type\":\"command_execution\",\"command\":\"pnpm test\",\"status\":\"in_progress\"}}\n",
+            "{\"type\":\"item.completed\",\"item\":{\"id\":\"item_0\",\"type\":\"command_execution\",\"command\":\"pnpm test\",\"aggregated_output\":\"2 passed\",\"exit_code\":0,\"status\":\"completed\"}}\n",
+        )).unwrap();
+        drop(database);
+        let identity = RootIdentity {
+            task_id: task.id,
+            session_id: root.id,
+            generation: root.generation,
+        };
+        let request = WorkerEvidenceRequest {
+            turn_id: turn_id.clone(),
+            query: EvidenceQuery {
+                tool_id: Some("item_0".into()),
+                field: None,
+                position: None,
+                cursor: None,
+                max_characters: 1000,
+            },
+        };
+        let result = read_worker_evidence(&database_path, &identity, &request).unwrap();
+        assert_eq!(result["turnId"], turn_id);
+        assert_eq!(result["tool"]["status"], "completed");
+        assert_eq!(result["evidence"]["text"], "2 passed");
+        assert_eq!(result["limitation"], Value::Null);
+        assert!(
+            read_worker_evidence(
+                &database_path,
+                &RootIdentity {
+                    generation: identity.generation + 1,
+                    ..identity.clone()
+                },
+                &request
+            )
+            .is_err()
+        );
+        fs::remove_dir_all(directory).unwrap();
     }
 }

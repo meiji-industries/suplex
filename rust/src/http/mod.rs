@@ -12,6 +12,7 @@ use axum::{
 
 use crate::platform::{database::SuplexDatabase, embedded};
 use crate::projects::repository::Commands;
+use crate::tasks::host::TaskHostHandle;
 
 pub mod contracts;
 pub mod routes {
@@ -21,6 +22,8 @@ pub mod routes {
     pub mod pages;
     pub mod profiles;
     pub mod projects;
+    pub mod task_reads;
+    pub mod task_templates;
     pub mod tasks;
     pub mod unported;
     pub mod workflows;
@@ -40,6 +43,7 @@ pub struct AppState {
     pub session_config: session::SessionConfig,
     pub project_roots: Option<ProjectRoots>,
     pub project_commands: Commands,
+    pub task_host: Option<TaskHostHandle>,
     dev_assets_dir: Option<PathBuf>,
 }
 
@@ -50,6 +54,7 @@ impl AppState {
             session_config,
             project_roots: None,
             project_commands: Commands::default(),
+            task_host: None,
             dev_assets_dir: None,
         }
     }
@@ -64,6 +69,11 @@ impl AppState {
 
     pub fn with_project_commands(mut self, commands: Commands) -> Self {
         self.project_commands = commands;
+        self
+    }
+
+    pub fn with_task_host(mut self, task_host: TaskHostHandle) -> Self {
+        self.task_host = Some(task_host);
         self
     }
 
@@ -96,6 +106,8 @@ pub fn router(state: AppState) -> Router {
         .merge(routes::pages::router())
         .merge(routes::profiles::router())
         .merge(routes::projects::router())
+        .merge(routes::task_reads::router())
+        .merge(routes::task_templates::router())
         .merge(routes::tasks::router())
         .merge(routes::workflows::router())
         .merge(routes::unported::router())
@@ -223,6 +235,7 @@ mod tests {
             },
             project_roots: None,
             project_commands: Commands::default(),
+            task_host: None,
             dev_assets_dir: None,
         };
         let observed = Arc::new(AtomicBool::new(false));

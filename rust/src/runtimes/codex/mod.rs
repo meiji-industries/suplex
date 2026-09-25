@@ -5,5 +5,6 @@ pub mod runtime;
 pub mod session_reader;
 pub mod task_runtime;
 pub mod thread;
+pub mod tool_evidence;
 pub mod transcript;
 pub mod usage;

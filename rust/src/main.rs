@@ -21,6 +21,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let database = SuplexDatabase::open(&installation.database, OpenMode::Migrate)?;
     suplex::identity::auth::normalize_legacy_users(&database)?;
     let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, installation.port)).await?;
+    let task_host = suplex::tasks::host::spawn_task_host(
+        installation.database.clone(),
+        installation.artifacts.clone(),
+    );
     println!("Suplex Rust revision: {}", env!("SUPLEX_RUST_REVISION"));
     println!("URL: http://127.0.0.1:{}", installation.port);
     println!("Installation: {}", installation.root.display());
@@ -40,13 +44,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     .with_project_roots(
         installation.repositories.clone(),
         installation.worktrees.clone(),
-    );
+    )
+    .with_task_host(task_host.clone());
     #[cfg(debug_assertions)]
     let state = match std::env::var_os("SUPLEX_RUST_ASSETS_DIR") {
         Some(directory) => state.with_dev_assets_dir(directory.into()),
         None => state,
     };
     println!("Experimental API routes are still being ported.");
-    axum::serve(listener, http::router(state)).await?;
+    let result = axum::serve(listener, http::router(state))
+        .with_graceful_shutdown(async {
+            let _ = tokio::signal::ctrl_c().await;
+        })
+        .await;
+    task_host.stop().await;
+    result?;
     Ok(())
 }

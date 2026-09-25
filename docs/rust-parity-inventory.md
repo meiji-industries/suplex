@@ -157,11 +157,11 @@ The table lists all 238 backend TypeScript modules present at the baseline, incl
 | [projects/contracts.ts](../src/projects/contracts.ts) | not started | |
 | [projects/execution-configuration.ts](../src/projects/execution-configuration.ts) | not started | |
 | [projects/integration-configuration.ts](../src/projects/integration-configuration.ts) | not started | |
-| [projects/projects.ts](../src/projects/projects.ts) | not started | |
+| [projects/projects.ts](../src/projects/projects.ts) | not started | Local GitHub save-time preflight ported and tested; project persistence and HTTP operations remain incomplete |
 | [projects/provider-policy.ts](../src/projects/provider-policy.ts) | not started | |
 | [projects/repository-commands.ts](../src/projects/repository-commands.ts) | not started | |
-| [projects/repository-coordinate.ts](../src/projects/repository-coordinate.ts) | not started | |
-| [projects/repository-inspection.ts](../src/projects/repository-inspection.ts) | not started | |
+| [projects/repository-coordinate.ts](../src/projects/repository-coordinate.ts) | not started | GitHub coordinate/remote parsing covered by repository tests; full provider coverage remains incomplete |
+| [projects/repository-inspection.ts](../src/projects/repository-inspection.ts) | not started | Existing local GitHub repo inspection, real Git fetch, fake-gh observations, path checks, buffer limits/timeouts tested; Bitbucket and live GitHub-account proof remain incomplete |
 | [projects/repository-provisioning.ts](../src/projects/repository-provisioning.ts) | not started | |
 | [runtimes/claude-code/display.ts](../src/runtimes/claude-code/display.ts) | not started | |
 | [runtimes/claude-code/environment.ts](../src/runtimes/claude-code/environment.ts) | not started | |

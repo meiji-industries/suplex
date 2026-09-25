@@ -1,0 +1,22 @@
+{
+  "contract": "common.HttpPlanBlockerResponseBodySchema",
+  "case": "wrong_revision_type",
+  "input": {
+    "expectedWorkflowRevision": "1",
+    "answer": "Yes",
+    "idempotencyKey": "abcdefghi"
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "expected": "number",
+        "code": "invalid_type",
+        "path": [
+          "expectedWorkflowRevision"
+        ],
+        "message": "Invalid input: expected number, received string"
+      }
+    ]
+  }
+}

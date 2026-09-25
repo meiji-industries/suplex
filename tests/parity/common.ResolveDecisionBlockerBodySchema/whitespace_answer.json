@@ -1,0 +1,15 @@
+{
+  "contract": "common.ResolveDecisionBlockerBodySchema",
+  "case": "whitespace_answer",
+  "input": {
+    "expectedRevision": 1,
+    "answer": "  "
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "expectedRevision": 1,
+      "answer": "  "
+    }
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "contract": "common.HttpPlanDecisionBodySchema",
+  "case": "long_key",
+  "input": {
+    "note": "Yes",
+    "idempotencyKey": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "origin": "string",
+        "code": "too_big",
+        "maximum": 128,
+        "inclusive": true,
+        "path": [
+          "idempotencyKey"
+        ],
+        "message": "Too big: expected string to have <=128 characters"
+      }
+    ]
+  }
+}

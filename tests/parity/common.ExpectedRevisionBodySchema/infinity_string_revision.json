@@ -1,0 +1,21 @@
+{
+  "contract": "common.ExpectedRevisionBodySchema",
+  "case": "infinity_string_revision",
+  "input": {
+    "expectedRevision": "Infinity"
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "expected": "number",
+        "code": "invalid_type",
+        "received": "Infinity",
+        "path": [
+          "expectedRevision"
+        ],
+        "message": "Invalid input: expected number, received number"
+      }
+    ]
+  }
+}

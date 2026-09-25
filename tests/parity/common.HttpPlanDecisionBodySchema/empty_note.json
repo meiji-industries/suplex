@@ -1,0 +1,23 @@
+{
+  "contract": "common.HttpPlanDecisionBodySchema",
+  "case": "empty_note",
+  "input": {
+    "note": "  ",
+    "idempotencyKey": "abcdefghi"
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "origin": "string",
+        "code": "too_small",
+        "minimum": 1,
+        "inclusive": true,
+        "path": [
+          "note"
+        ],
+        "message": "Too small: expected string to have >=1 characters"
+      }
+    ]
+  }
+}

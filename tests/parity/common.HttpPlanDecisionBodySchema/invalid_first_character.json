@@ -1,0 +1,23 @@
+{
+  "contract": "common.HttpPlanDecisionBodySchema",
+  "case": "invalid_first_character",
+  "input": {
+    "note": "Yes",
+    "idempotencyKey": "_abcdefg"
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "origin": "string",
+        "code": "invalid_format",
+        "format": "regex",
+        "pattern": "/^[A-Za-z0-9][A-Za-z0-9._:-]*$/",
+        "path": [
+          "idempotencyKey"
+        ],
+        "message": "Invalid string: must match pattern /^[A-Za-z0-9][A-Za-z0-9._:-]*$/"
+      }
+    ]
+  }
+}

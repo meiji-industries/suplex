@@ -1,0 +1,24 @@
+{
+  "contract": "common.ExpectedRevisionBodySchema",
+  "case": "multi_array_revision",
+  "input": {
+    "expectedRevision": [
+      1,
+      2
+    ]
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "expected": "number",
+        "code": "invalid_type",
+        "received": "NaN",
+        "path": [
+          "expectedRevision"
+        ],
+        "message": "Invalid input: expected number, received NaN"
+      }
+    ]
+  }
+}

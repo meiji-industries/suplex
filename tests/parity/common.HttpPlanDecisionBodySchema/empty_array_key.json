@@ -1,0 +1,31 @@
+{
+  "contract": "common.HttpPlanDecisionBodySchema",
+  "case": "empty_array_key",
+  "input": {
+    "note": "Yes",
+    "idempotencyKey": []
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "expected": "string",
+        "code": "invalid_type",
+        "path": [
+          "idempotencyKey"
+        ],
+        "message": "Invalid input: expected string, received array"
+      },
+      {
+        "origin": "array",
+        "code": "too_small",
+        "minimum": 8,
+        "inclusive": true,
+        "path": [
+          "idempotencyKey"
+        ],
+        "message": "Too small: expected array to have >=8 items"
+      }
+    ]
+  }
+}

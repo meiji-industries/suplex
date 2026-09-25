@@ -1,0 +1,21 @@
+{
+  "contract": "common.ExpectedRevisionBodySchema",
+  "case": "fractional_revision",
+  "input": {
+    "expectedRevision": 1.5
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "expected": "int",
+        "format": "safeint",
+        "code": "invalid_type",
+        "path": [
+          "expectedRevision"
+        ],
+        "message": "Invalid input: expected int, received number"
+      }
+    ]
+  }
+}

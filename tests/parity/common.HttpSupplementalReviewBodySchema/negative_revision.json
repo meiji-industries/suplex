@@ -1,0 +1,23 @@
+{
+  "contract": "common.HttpSupplementalReviewBodySchema",
+  "case": "negative_revision",
+  "input": {
+    "expectedRevision": -1,
+    "idempotencyKey": "abcdefghi"
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "origin": "number",
+        "code": "too_small",
+        "minimum": 0,
+        "inclusive": true,
+        "path": [
+          "expectedRevision"
+        ],
+        "message": "Too small: expected number to be >=0"
+      }
+    ]
+  }
+}

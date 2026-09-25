@@ -1,0 +1,21 @@
+{
+  "contract": "common.ExpectedRevisionNoteBodySchema",
+  "case": "invalid_note",
+  "input": {
+    "expectedRevision": 1,
+    "note": null
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "expected": "string",
+        "code": "invalid_type",
+        "path": [
+          "note"
+        ],
+        "message": "Invalid input: expected string, received null"
+      }
+    ]
+  }
+}

@@ -1,0 +1,31 @@
+{
+  "contract": "common.RequiredRevisionNoteBodySchema",
+  "case": "wrong_note_type",
+  "input": {
+    "expectedRevision": 1,
+    "note": []
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "expected": "string",
+        "code": "invalid_type",
+        "path": [
+          "note"
+        ],
+        "message": "Invalid input: expected string, received array"
+      },
+      {
+        "origin": "array",
+        "code": "too_small",
+        "minimum": 1,
+        "inclusive": true,
+        "path": [
+          "note"
+        ],
+        "message": "Too small: expected array to have >=1 items"
+      }
+    ]
+  }
+}

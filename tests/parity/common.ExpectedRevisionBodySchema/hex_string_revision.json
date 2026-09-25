@@ -1,0 +1,13 @@
+{
+  "contract": "common.ExpectedRevisionBodySchema",
+  "case": "hex_string_revision",
+  "input": {
+    "expectedRevision": "0x10"
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "expectedRevision": 16
+    }
+  }
+}

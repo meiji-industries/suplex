@@ -1,0 +1,24 @@
+{
+  "contract": "common.HttpPlanBlockerResponseBodySchema",
+  "case": "negative_revision",
+  "input": {
+    "expectedWorkflowRevision": -1,
+    "answer": "Yes",
+    "idempotencyKey": "abcdefghi"
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "origin": "number",
+        "code": "too_small",
+        "minimum": 0,
+        "inclusive": true,
+        "path": [
+          "expectedWorkflowRevision"
+        ],
+        "message": "Too small: expected number to be >=0"
+      }
+    ]
+  }
+}

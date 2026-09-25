@@ -1,0 +1,33 @@
+{
+  "contract": "common.ExpectedRevisionBodySchema",
+  "case": "unsafe_revision",
+  "input": {
+    "expectedRevision": 9007199254740992
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "too_big",
+        "maximum": 9007199254740991,
+        "note": "Integers must be within the safe integer range.",
+        "origin": "int",
+        "inclusive": true,
+        "path": [
+          "expectedRevision"
+        ],
+        "message": "Too big: expected int to be <=9007199254740991"
+      },
+      {
+        "origin": "number",
+        "code": "too_big",
+        "maximum": 9007199254740991,
+        "inclusive": true,
+        "path": [
+          "expectedRevision"
+        ],
+        "message": "Too big: expected number to be <=9007199254740991"
+      }
+    ]
+  }
+}

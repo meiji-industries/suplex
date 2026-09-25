@@ -49,7 +49,7 @@ The table lists all 238 backend TypeScript modules present at the baseline, incl
 | [http/contracts/agent-api.ts](../src/http/contracts/agent-api.ts) | not started | |
 | [http/contracts/auth.ts](../src/http/contracts/auth.ts) | not started | Five validators pass 39 [Zod fixture comparisons](../rust/tests/contract_parity.rs); full module/HTTP parity remains incomplete. [Corpus scope](spikes/rust-json-hash-bytes.md) |
 | [http/contracts/avatars.ts](../src/http/contracts/avatars.ts) | not started | |
-| [http/contracts/common.ts](../src/http/contracts/common.ts) | not started | 14 common validators implemented; combined [parity test](../rust/tests/contract_parity.rs) passes 177 fixtures / 19 total schemas. Full common-contract and HTTP coverage remain pending |
+| [http/contracts/common.ts](../src/http/contracts/common.ts) | not started | 21 common validators implemented; combined [parity test](../rust/tests/contract_parity.rs) passes 395 fixtures / 35 total schemas. Full common-contract and HTTP coverage remain pending |
 | [http/contracts/github-triggers.ts](../src/http/contracts/github-triggers.ts) | not started | |
 | [http/contracts/oauth.ts](../src/http/contracts/oauth.ts) | not started | |
 | [http/contracts/projects.ts](../src/http/contracts/projects.ts) | not started | |

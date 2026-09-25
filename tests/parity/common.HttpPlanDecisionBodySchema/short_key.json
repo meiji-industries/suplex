@@ -1,0 +1,23 @@
+{
+  "contract": "common.HttpPlanDecisionBodySchema",
+  "case": "short_key",
+  "input": {
+    "note": "Yes",
+    "idempotencyKey": "short"
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "origin": "string",
+        "code": "too_small",
+        "minimum": 8,
+        "inclusive": true,
+        "path": [
+          "idempotencyKey"
+        ],
+        "message": "Too small: expected string to have >=8 characters"
+      }
+    ]
+  }
+}

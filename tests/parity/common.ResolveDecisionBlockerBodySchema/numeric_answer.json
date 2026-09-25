@@ -1,0 +1,21 @@
+{
+  "contract": "common.ResolveDecisionBlockerBodySchema",
+  "case": "numeric_answer",
+  "input": {
+    "expectedRevision": 1,
+    "answer": 1
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "expected": "string",
+        "code": "invalid_type",
+        "path": [
+          "answer"
+        ],
+        "message": "Invalid input: expected string, received number"
+      }
+    ]
+  }
+}

@@ -361,7 +361,7 @@ mod tests {
         assert!(worktree.path.exists());
         fs::remove_file(directory.join("turn.json")).unwrap();
         let database = SuplexDatabase::open(&database_path, OpenMode::ReadWrite).unwrap();
-        database.connection().execute("UPDATE suplex_task_sessions SET native_session_id = 'ses-other' WHERE id = 'archive_session'", []).unwrap();
+        database.connection().execute("UPDATE suplex_task_sessions SET native_session_id = 'devin-other' WHERE id = 'archive_session'", []).unwrap();
         drop(database);
         let unsupported =
             archive_local_task(&database_path, &user.id, &task_id, false).unwrap_err();

@@ -278,13 +278,16 @@ pub fn read_worker_evidence(
     let native_session_id = session["nativeSessionId"].as_str().unwrap_or_default();
     // An unbound session is read by its profile provider.
     let provider = session["profile"]["provider"].as_str();
-    let reader = task_harness_registry::native_session_reader(native_session_id).or_else(|| {
-        task_harness_registry::for_profile(
-            provider
-                .or(rows.control["workerProfile"]["provider"].as_str())
-                .unwrap_or_default(),
-        )
-    });
+    let reader = Some(native_session_id)
+        .filter(|id| !id.is_empty())
+        .and_then(task_harness_registry::native_session_reader)
+        .or_else(|| {
+            task_harness_registry::for_profile(
+                provider
+                    .or(rows.control["workerProfile"]["provider"].as_str())
+                    .unwrap_or_default(),
+            )
+        });
     let evidence = reader
         .ok_or_else(|| invalid("The native provider is unavailable"))?
         .turn_evidence(

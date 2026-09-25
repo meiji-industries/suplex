@@ -25,7 +25,7 @@ pub enum AdvisorRole {
 }
 
 impl AdvisorRole {
-    fn label(self) -> &'static str {
+    pub fn label(self) -> &'static str {
         match self {
             Self::Reviewer => "reviewer",
             Self::PlannerA => "planner_a",
@@ -263,10 +263,21 @@ fn flatten_finding(value: &Value) -> Option<String> {
 }
 
 pub fn validate_submission(role: AdvisorRole, raw: Value) -> Result<Value, String> {
+    validate_report(role, raw, true)
+}
+
+/// TypeScript `validateAdvisorSubmission`. Field issues are reported together,
+/// in schema order, before the approval and rating rules.
+pub fn validate_report(
+    role: AdvisorRole,
+    raw: Value,
+    reject_mismatched_role: bool,
+) -> Result<Value, String> {
     let Value::Object(mut fields) = raw else {
         return Err("The report is not an object".into());
     };
-    if let Some(submitted) = fields.get("role")
+    if reject_mismatched_role
+        && let Some(submitted) = fields.get("role")
         && submitted.as_str() != Some(role.label())
     {
         let submitted_text = submitted
@@ -298,71 +309,195 @@ pub fn validate_submission(role: AdvisorRole, raw: Value) -> Result<Value, Strin
         ],
         AdvisorRole::PlannerA | AdvisorRole::PlannerB => &["summary", "role"],
     };
+    let mut issues = Vec::new();
+    let (mut verified, mut empty, mut approved, mut rating) = (false, false, false, 0);
+    if role == AdvisorRole::Reviewer {
+        match fields.get("approved").and_then(Value::as_bool) {
+            Some(value) => approved = value,
+            None => issues.push("approved: expected boolean".to_owned()),
+        }
+    }
+    if role == AdvisorRole::Rater {
+        match fields
+            .get("rating")
+            .and_then(Value::as_f64)
+            .filter(|number| number.fract() == 0.0 && (1.0..=10.0).contains(number))
+        {
+            Some(value) => {
+                rating = value as u64;
+                fields.insert("rating".into(), json!(rating));
+            }
+            None => issues.push("rating: expected 1 through 10".to_owned()),
+        }
+    }
+    if matches!(role, AdvisorRole::Reviewer | AdvisorRole::Rater) {
+        let flattened = fields
+            .get("blockingFindings")
+            .map(|value| value.as_array().map(|findings| findings.iter().map(flatten_finding).collect::<Option<Vec<_>>>()));
+        match flattened {
+            Some(Some(Some(flattened))) => {
+                empty = flattened.is_empty();
+                fields.insert(
+                    "blockingFindings".into(),
+                    serde_json::to_value(flattened).expect("strings serialize"),
+                );
+            }
+            Some(Some(None)) => issues.push("blockingFindings: expected text".to_owned()),
+            _ => issues.push("blockingFindings: expected array".to_owned()),
+        }
+        match fields.get("verification").and_then(Value::as_str) {
+            None => issues.push("verification: expected value".to_owned()),
+            Some(value) if !["passed", "not_applicable", "missing", "failed"].contains(&value) => {
+                issues.push("verification: invalid value".to_owned());
+            }
+            Some(value) => verified = ["passed", "not_applicable"].contains(&value),
+        }
+        match text_field(&fields, "verificationSummary").map(str::to_owned) {
+            Ok(text) => {
+                fields.insert("verificationSummary".into(), Value::String(text));
+            }
+            Err(issue) => issues.push(issue),
+        }
+    }
+    match text_field(&fields, "summary").map(str::to_owned) {
+        Ok(text) => {
+            fields.insert("summary".into(), Value::String(text));
+        }
+        Err(issue) => issues.push(issue),
+    }
     if fields
         .keys()
         .any(|field| !allowed.contains(&field.as_str()))
     {
-        return Err("report: unrecognized field".into());
+        issues.push("report: unrecognized field".to_owned());
     }
-    fields.insert(
-        "summary".into(),
-        Value::String(text_field(&fields, "summary")?.to_owned()),
-    );
-    if matches!(role, AdvisorRole::Reviewer | AdvisorRole::Rater) {
-        fields.insert(
-            "verificationSummary".into(),
-            Value::String(text_field(&fields, "verificationSummary")?.to_owned()),
+    if !issues.is_empty() {
+        return Err(issues.join("; "));
+    }
+    if approved && (!empty || !verified) {
+        return Err("An approval cannot carry blocking findings or missing verification".into());
+    }
+    if rating >= 9 && (!empty || !verified) {
+        return Err(
+            "A rating of 9 or more cannot carry blocking findings or missing verification".into(),
         );
-        let verification = fields
-            .get("verification")
-            .and_then(Value::as_str)
-            .ok_or("verification: expected value")?;
-        if !["passed", "not_applicable", "missing", "failed"].contains(&verification) {
-            return Err("verification: invalid value".into());
-        }
-        let verified = ["passed", "not_applicable"].contains(&verification);
-        let Some(findings) = fields.get("blockingFindings").and_then(Value::as_array) else {
-            return Err("blockingFindings: expected array".into());
-        };
-        let flattened = findings
-            .iter()
-            .map(flatten_finding)
-            .collect::<Option<Vec<_>>>()
-            .ok_or("blockingFindings: expected text")?;
-        fields.insert(
-            "blockingFindings".into(),
-            serde_json::to_value(flattened).expect("strings serialize"),
-        );
-        let empty = fields["blockingFindings"]
-            .as_array()
-            .is_some_and(Vec::is_empty);
-        match role {
-            AdvisorRole::Reviewer => {
-                let approved = fields
-                    .get("approved")
-                    .and_then(Value::as_bool)
-                    .ok_or("approved: expected boolean")?;
-                if approved && (!empty || !verified) {
-                    return Err(
-                        "An approval cannot carry blocking findings or missing verification".into(),
-                    );
-                }
-            }
-            AdvisorRole::Rater => {
-                let rating = fields
-                    .get("rating")
-                    .and_then(Value::as_f64)
-                    .filter(|number| number.fract() == 0.0 && (1.0..=10.0).contains(number))
-                    .ok_or("rating: expected 1 through 10")? as u64;
-                if rating >= 9 && (!empty || !verified) {
-                    return Err("A rating of 9 or more cannot carry blocking findings or missing verification".into());
-                }
-                fields.insert("rating".into(), json!(rating));
-            }
-            _ => unreachable!(),
-        }
     }
     Ok(Value::Object(fields))
+}
+
+pub type AdvisorReportOutcome = Result<Value, String>;
+
+const SUBMIT_REPORT_TOOL_NAMES: [&str; 3] = [
+    "submit_report",
+    "suplex_advisor_submit_report",
+    "mcp__suplex_advisor__submit_report",
+];
+
+fn fenced_json_values(report: &str) -> Vec<String> {
+    let mut values = Vec::new();
+    let mut current: Option<Vec<&str>> = None;
+    for line in report.split('\n') {
+        match current.as_mut() {
+            None if js_trim(line) == "```json" => current = Some(Vec::new()),
+            None => {}
+            Some(lines) if js_trim(line) == "```" => {
+                values.push(lines.join("\n"));
+                current = None;
+            }
+            Some(lines) => lines.push(line),
+        }
+    }
+    if let Some(lines) = current {
+        values.push(lines.join("\n"));
+    }
+    values
+}
+
+/// TypeScript `parseAdvisorReport`: the last fenced json block, else raw JSON.
+pub fn parse_advisor_report(role: AdvisorRole, report: &str) -> AdvisorReportOutcome {
+    let fenced = fenced_json_values(report);
+    let candidate = fenced
+        .last()
+        .cloned()
+        .unwrap_or_else(|| js_trim(report).to_owned());
+    if candidate.is_empty() {
+        return Err("The report has no JSON object".into());
+    }
+    match serde_json::from_str::<Value>(&candidate) {
+        Ok(value) => validate_report(role, value, false),
+        Err(error) => Err(format!(
+            "{}: {error}",
+            if fenced.is_empty() {
+                "The report has no fenced json block or valid raw JSON object"
+            } else {
+                "The report JSON is not valid JSON"
+            }
+        )),
+    }
+}
+
+/// `None` is an MCP error envelope, which is never a submission.
+fn tool_output_value(output: &str) -> Option<Value> {
+    let Ok(parsed) = serde_json::from_str::<Value>(output) else {
+        return Some(Value::Null);
+    };
+    let Some(envelope) = parsed.as_object() else {
+        return Some(parsed);
+    };
+    if envelope.get("isError") == Some(&Value::Bool(true)) {
+        return None;
+    }
+    if let Some(structured) = envelope.get("structuredContent") {
+        return Some(structured.clone());
+    }
+    if let Some([item]) = envelope
+        .get("content")
+        .and_then(Value::as_array)
+        .map(Vec::as_slice)
+        && item["type"] == "text"
+        && let Some(Ok(nested)) = item["text"].as_str().map(serde_json::from_str::<Value>)
+    {
+        return Some(nested);
+    }
+    Some(parsed)
+}
+
+/// TypeScript `advisorReportFromTurn`: the latest valid completed submission
+/// wins; report prose is used only when no submission completed.
+pub fn advisor_report_from_turn(
+    role: AdvisorRole,
+    tools: &[Value],
+    report: &str,
+) -> AdvisorReportOutcome {
+    let submissions = tools
+        .iter()
+        .filter(|tool| {
+            tool["name"]
+                .as_str()
+                .is_some_and(|name| SUBMIT_REPORT_TOOL_NAMES.contains(&name))
+                && tool["status"] == "completed"
+        })
+        .filter_map(|tool| tool["output"].as_str())
+        .collect::<Vec<_>>();
+    if submissions.is_empty() {
+        return parse_advisor_report(role, report);
+    }
+    let (mut valid, mut invalid) = (None, None);
+    for value in submissions.into_iter().filter_map(tool_output_value) {
+        match validate_report(role, value, true) {
+            Ok(result) => valid = Some(result),
+            Err(reason) => invalid = Some(reason),
+        }
+    }
+    match (valid, invalid) {
+        (Some(result), _) => Ok(result),
+        (None, Some(reason)) => Err(reason),
+        (None, None) => parse_advisor_report(role, report),
+    }
+}
+
+pub fn advisor_role(role: &str) -> Option<AdvisorRole> {
+    serde_json::from_value(Value::String(role.to_owned())).ok()
 }
 
 fn capture(path: &std::path::Path, report: &Value) -> io::Result<()> {
@@ -581,5 +716,83 @@ mod tests {
         drop(writer);
         drop(reader);
         task.await.unwrap();
+    }
+
+    fn report() -> Value {
+        json!({"rating":9,"blockingFindings":[],"verification":"passed","verificationSummary":"Focused tests passed","summary":"Ready"})
+    }
+
+    fn tool(value: &Value, name: &str, status: &str) -> Value {
+        json!({"name":name,"status":status,"output":value.to_string()})
+    }
+
+    #[test]
+    fn advisor_reports_accept_raw_json_and_an_unclosed_fence_but_not_truncated_json() {
+        let rater = AdvisorRole::Rater;
+        assert_eq!(parse_advisor_report(rater, &report().to_string()).unwrap()["rating"], 9);
+        let unclosed = format!("Assessment complete.\n\n```json\n{}\n", report());
+        assert_eq!(parse_advisor_report(rater, &unclosed).unwrap()["role"], "rater");
+        let text = report().to_string();
+        let truncated = format!("```json\n{}", &text[..text.len() - 2]);
+        assert!(parse_advisor_report(rater, &truncated).unwrap_err().contains("not valid"));
+        assert!(parse_advisor_report(rater, r#"{"rating":9}"#).unwrap_err().contains("blockingFindings"));
+        let two = format!("```json\n{}\n```\n```json\n{}\n```", report(), json!({"rating":10,"blockingFindings":[],"verification":"passed","verificationSummary":"ok","summary":"ok"}));
+        assert_eq!(parse_advisor_report(rater, &two).unwrap()["rating"], 10);
+        let broken_last = format!("```json\n{}\n```\n```json\n{}", report(), &text[..text.len() - 2]);
+        assert!(parse_advisor_report(rater, &broken_last).unwrap_err().contains("not valid"));
+    }
+
+    #[test]
+    fn advisor_reports_parse_the_last_block_and_reject_a_pass_with_blockers_or_missing_checks() {
+        let block = |json: &str| format!("Assessment prose.\n```json\n{{\"draft\":true}}\n```\nFinal:\n```json\n{json}\n```\n");
+        let rater = AdvisorRole::Rater;
+        assert_eq!(parse_advisor_report(rater, &block(r#"{"rating":7,"blockingFindings":["src/a.ts: null deref"],"verification":"passed","verificationSummary":"pnpm test passed","summary":"Needs repair"}"#)).unwrap()["rating"], 7);
+        for invalid in [
+            r#"{"rating":9,"blockingFindings":["src/a.ts: null deref"],"verification":"passed","verificationSummary":"ok","summary":"ok"}"#,
+            r#"{"rating":9,"blockingFindings":[],"verification":"missing","verificationSummary":"no checks ran","summary":"ok"}"#,
+            r#"{"rating":9.5,"blockingFindings":[],"verification":"passed","verificationSummary":"ok","summary":"ok"}"#,
+            r#"{"rating":11,"blockingFindings":[],"verification":"passed","verificationSummary":"ok","summary":"ok"}"#,
+        ] {
+            assert!(parse_advisor_report(rater, &block(invalid)).is_err(), "{invalid}");
+        }
+        assert_eq!(parse_advisor_report(rater, &block(r#"{"rating":9,"role":"reviewer","blockingFindings":[],"verification":"passed","verificationSummary":"ok","summary":"ok"}"#)).unwrap()["role"], "rater");
+        let flattened = parse_advisor_report(rater, &block(r#"{"rating":8,"blockingFindings":[{"id":"B1","description":"routes/plans.py rejects saved owners"},{"file":"tests/test_plans.py","defect":"no coverage"}],"verification":"missing","verificationSummary":"no local checks","summary":"repair"}"#)).unwrap();
+        assert_eq!(flattened["blockingFindings"], json!(["B1: routes/plans.py rejects saved owners", "tests/test_plans.py: no coverage"]));
+        let reviewer = AdvisorRole::Reviewer;
+        assert!(parse_advisor_report(reviewer, &block(r#"{"approved":false,"blockingFindings":[{"note":42}],"verification":"failed","verificationSummary":"x","summary":"y"}"#)).is_err());
+        assert!(parse_advisor_report(reviewer, &block(r#"{"approved":true,"blockingFindings":["src/a.ts: bug"],"verification":"passed","verificationSummary":"ok","summary":"ok"}"#)).is_err());
+        assert_eq!(parse_advisor_report(reviewer, &block(r#"{"approved":false,"blockingFindings":["src/a.ts: bug"],"verification":"failed","verificationSummary":"tests fail","summary":"reject"}"#)).unwrap()["approved"], false);
+        assert_eq!(parse_advisor_report(AdvisorRole::PlannerA, &block(r#"{"summary":"Add a helper"}"#)).unwrap(), json!({"summary":"Add a helper","role":"planner_a"}));
+        assert!(parse_advisor_report(AdvisorRole::PlannerB, "No json here").unwrap_err().contains("no fenced json"));
+        assert!(parse_advisor_report(rater, &block("{not json")).unwrap_err().contains("not valid JSON"));
+    }
+
+    #[test]
+    fn structured_submissions_outrank_prose_and_error_envelopes() {
+        let rater = AdvisorRole::Rater;
+        let mut submitted = report();
+        submitted["role"] = json!("rater");
+        let mut prose = report();
+        prose["rating"] = json!(2);
+        let tools = [
+            json!({"name":"suplex_advisor_submit_report","status":"error","output":null}),
+            tool(&submitted, "mcp__suplex_advisor__submit_report", "completed"),
+        ];
+        assert_eq!(advisor_report_from_turn(rater, &tools, &prose.to_string()).unwrap()["rating"], 9);
+        let mut ten = submitted.clone();
+        ten["rating"] = json!(10);
+        let latest = [tool(&submitted, "suplex_advisor_submit_report", "completed"), tool(&ten, "suplex_advisor_submit_report", "completed")];
+        assert_eq!(advisor_report_from_turn(rater, &latest, "No JSON here").unwrap()["rating"], 10);
+        let error = json!({"isError":true,"structuredContent":ten});
+        let success = json!({"isError":false,"structuredContent":submitted});
+        let enveloped = [tool(&error, "suplex_advisor_submit_report", "completed"), tool(&success, "suplex_advisor_submit_report", "completed")];
+        assert_eq!(advisor_report_from_turn(rater, &enveloped, "No JSON here").unwrap()["rating"], 9);
+        let reversed = [tool(&submitted, "suplex_advisor_submit_report", "completed"), tool(&error, "suplex_advisor_submit_report", "completed")];
+        assert_eq!(advisor_report_from_turn(rater, &reversed, "No JSON here").unwrap()["rating"], 9);
+        assert_eq!(advisor_report_from_turn(rater, &[tool(&report(), "submit_other", "completed")], &report().to_string()).unwrap()["rating"], 9);
+        assert!(advisor_report_from_turn(AdvisorRole::Reviewer, &[tool(&submitted, "suplex_advisor_submit_report", "completed")], "Approval prose").is_err());
+        let reviewer_prose = json!({"approved":false,"blockingFindings":["src/a.ts: defect"],"verification":"failed","verificationSummary":"Failed","summary":"Repair"});
+        assert!(advisor_report_from_turn(AdvisorRole::Reviewer, &[tool(&submitted, "suplex_advisor_submit_report", "completed")], &reviewer_prose.to_string()).unwrap_err().contains("role"));
+        assert!(advisor_report_from_turn(AdvisorRole::PlannerA, &[tool(&json!({"role":"planner_b","summary":"Alternate plan"}), "suplex_advisor_submit_report", "completed")], r#"{"summary":"Legacy plan"}"#).unwrap_err().contains("role"));
     }
 }

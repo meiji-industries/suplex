@@ -6,4 +6,6 @@ pub mod root_prompts;
 pub mod root_session_store;
 pub mod root_stdio;
 pub mod worker_evidence;
+pub mod workflow_evidence;
 pub mod workflow_records;
+pub mod workflows;

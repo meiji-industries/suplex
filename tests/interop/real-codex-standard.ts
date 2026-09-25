@@ -136,9 +136,10 @@ try {
   await dialog.getByLabel("Task title", { exact: true }).fill("Append one verified README line");
   await dialog.getByLabel("Task description", { exact: true }).fill("Append `Verified by Suplex Standard task.` to README.md, run pnpm test, commit the change, and deliver the local worktree.");
   if (workflowPhase) {
+    const workflowName = workflowNames[phase] ?? phase;
     await dialog.getByRole("button", { name: "Workflow", exact: true }).click();
-    await fixture.page.getByRole("menuitem", { name: workflowNames[phase] }).click();
-    await dialog.getByRole("button", { name: "Workflow", exact: true }).filter({ hasText: workflowNames[phase] }).waitFor();
+    await fixture.page.getByRole("menuitem", { name: workflowName }).click();
+    await dialog.getByRole("button", { name: "Workflow", exact: true }).filter({ hasText: workflowName }).waitFor();
   }
   await dialog.getByRole("radio", { name: "Keep in worktree" }).check();
   await dialog.getByRole("checkbox", { name: "Start immediately", exact: true }).uncheck();

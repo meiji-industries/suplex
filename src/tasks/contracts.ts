@@ -1,13 +1,13 @@
 import { z } from "zod";
-import { ProjectProviderPolicySchema } from "../projects/provider-policy.js";
-import { ProjectIntegrationSchema } from "../projects/integration-configuration.js";
-import { ProjectExecutionSchema } from "../projects/execution-configuration.js";
+import { ProjectProviderPolicySchema } from "../projects/provider-policy-contracts.js";
+import { ProjectIntegrationSchema } from "../projects/integration-contracts.js";
+import { ProjectExecutionSchema } from "../projects/execution-contracts.js";
 import { IssueAssociationSchema } from "./issue-association.js";
 import { HumanQuestionOptionsSchema } from "../coordination/human-question.js";
 import { TaskControlStatusSchema, TaskProfileFieldsSchema, WorktreeReferenceSchema, PullRequestReferenceSchema } from "./control.js";
 import { MAX_TASK_IMAGES, MAX_TASK_IMAGE_BASE64_LENGTH } from "./limits/attachment-limits.js";
 import { AdvisorProfileIdsSchema, AdvisorRoleSchema, PublicWorkflowStateSchema, WorkflowIdSchema } from "../coordination/workflows.js";
-import { TaskLimitPauseSchema, TaskLimitsSchema } from "./limits/limits.js";
+import { TaskLimitPauseSchema, TaskLimitsSchema } from "./limits/contracts.js";
 
 const id = z.string().min(1).max(256);
 /** bound: dependency fan-out per task */

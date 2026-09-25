@@ -7,7 +7,7 @@ import { HarnessKindSchema } from "../../runtimes/harness-kind.js";
 import { DeliveryTargetSchema as DeliveryTarget, TaskInputSchema, TaskSchema, VisualEvidenceSchema as VisualEvidence } from "../../tasks/contracts.js";
 import { TaskSessionKindSchema, TaskTurnStatusSchema } from "../../tasks/control.js";
 import { AdvisorProfileIdsSchema, AdvisorRoleSchema, WorkflowIdSchema } from "../../coordination/workflows.js";
-import { TaskLimitDecisionSchema } from "../../tasks/limits/limits.js";
+import { TaskLimitDecisionSchema } from "../../tasks/limits/contracts.js";
 export { SessionHistoryPageSchema } from "../../tasks/history/contracts.js";
 
 export { DeliveryTargetSchema, VisualEvidenceSchema } from "../../tasks/contracts.js";

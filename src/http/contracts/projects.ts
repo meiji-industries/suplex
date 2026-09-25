@@ -1,7 +1,7 @@
 import { z } from "zod";
-import { ProjectIntegrationSchema } from "../../projects/integration-configuration.js";
-import { ProjectExecutionSchema } from "../../projects/execution-configuration.js";
-import { ProjectProviderPolicySchema } from "../../projects/provider-policy.js";
+import { ProjectIntegrationSchema } from "../../projects/integration-contracts.js";
+import { ProjectExecutionSchema } from "../../projects/execution-contracts.js";
+import { ProjectProviderPolicySchema } from "../../projects/provider-policy-contracts.js";
 import { HarnessKindSchema } from "../../runtimes/harness-kind.js";
 import { AgentProfileInputSchema, AgentProfilePatchSchema, AgentProfileSchema } from "../../profiles/agent-profile-contracts.js";
 import { ProviderInstanceSchema, ProviderSummarySchema } from "./providers.js";

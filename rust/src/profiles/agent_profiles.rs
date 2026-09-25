@@ -570,7 +570,7 @@ pub fn choose_defaults(
 }
 
 #[cfg(unix)]
-fn executable(path: &std::path::Path) -> bool {
+pub(crate) fn executable(path: &std::path::Path) -> bool {
     use std::{ffi::CString, os::unix::ffi::OsStrExt};
     let Ok(path_bytes) = CString::new(path.as_os_str().as_bytes()) else {
         return false;
@@ -580,12 +580,12 @@ fn executable(path: &std::path::Path) -> bool {
 }
 
 #[cfg(not(unix))]
-fn executable(path: &std::path::Path) -> bool {
+pub(crate) fn executable(path: &std::path::Path) -> bool {
     path.is_file()
 }
 
 #[cfg(unix)]
-fn home_directory() -> Option<std::path::PathBuf> {
+pub(crate) fn home_directory() -> Option<std::path::PathBuf> {
     use std::{ffi::CStr, os::unix::ffi::OsStringExt};
     if let Some(home) = std::env::var_os("HOME") {
         return Some(home.into());
@@ -610,7 +610,7 @@ fn home_directory() -> Option<std::path::PathBuf> {
 }
 
 #[cfg(not(unix))]
-fn home_directory() -> Option<std::path::PathBuf> {
+pub(crate) fn home_directory() -> Option<std::path::PathBuf> {
     std::env::var_os("USERPROFILE").map(Into::into)
 }
 

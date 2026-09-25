@@ -5,6 +5,10 @@ use std::collections::HashSet;
 pub struct CodexEvent(Value);
 
 impl CodexEvent {
+    pub(crate) fn value(&self) -> &Value {
+        &self.0
+    }
+
     pub fn kind(&self) -> &str {
         self.0["type"].as_str().unwrap_or("")
     }

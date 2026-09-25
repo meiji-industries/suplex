@@ -102,6 +102,17 @@ pub fn dispatch<F>(input: DispatchInput<'_>, claim: F) -> Result<HeadlessTurnRec
 where
     F: FnOnce(&str) -> Result<bool, Box<dyn Error>>,
 {
+    dispatch_with_exclusions(input, &[], claim)
+}
+
+pub fn dispatch_with_exclusions<F>(
+    input: DispatchInput<'_>,
+    excluded_environment_keys: &[String],
+    claim: F,
+) -> Result<HeadlessTurnRecord, Box<dyn Error>>
+where
+    F: FnOnce(&str) -> Result<bool, Box<dyn Error>>,
+{
     fs::create_dir_all(input.directory)?;
     fs::set_permissions(input.directory, fs::Permissions::from_mode(0o700))?;
     let generation = Uuid::new_v4().to_string();
@@ -146,6 +157,9 @@ where
         .stdout(Stdio::from(log_file))
         .stderr(Stdio::from(stderr_file))
         .process_group(0);
+    for key in excluded_environment_keys {
+        command.env_remove(key);
+    }
     let mut child = command.spawn()?;
     let pid = child.id();
     let mut inspection = None;

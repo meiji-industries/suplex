@@ -34,6 +34,39 @@ pub struct WorktreeObservation {
     pub dirty: bool,
 }
 
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct LocalRevisionObservation {
+    pub branch: String,
+    pub head_sha: String,
+    pub tree_sha: String,
+    pub clean: bool,
+}
+
+/// Read delivery-time Git facts, including the actual branch. A detached HEAD
+/// is unavailable for branch-bound local completion.
+pub fn observe_local_revision(path: &Path) -> WorktreeResult<LocalRevisionObservation> {
+    let repository = Repository::open(path)?;
+    let head = repository.head()?;
+    if !head.is_branch() {
+        return Err(invalid("Local Git revision has no branch"));
+    }
+    let branch = head.shorthand()?;
+    if branch.is_empty() {
+        return Err(invalid("Local Git revision has no branch"));
+    }
+    let branch = branch.to_owned();
+    let commit = head.peel_to_commit()?;
+    let mut options = StatusOptions::new();
+    options.include_untracked(true).recurse_untracked_dirs(true);
+    let clean = repository.statuses(Some(&mut options))?.is_empty();
+    Ok(LocalRevisionObservation {
+        branch,
+        head_sha: commit.id().to_string(),
+        tree_sha: commit.tree_id().to_string(),
+        clean,
+    })
+}
+
 /// Read current Git facts without comparing them to a task's saved intent.
 /// Callers can report an unavailable observation without blocking the task.
 pub fn observe_worktree(path: &Path) -> WorktreeResult<WorktreeObservation> {
@@ -219,6 +252,11 @@ mod tests {
         );
         assert_eq!(created.head_sha, commit.to_string());
         assert!(!created.dirty);
+        let revision = observe_local_revision(&created.path).unwrap();
+        assert_eq!(revision.branch, "task-one");
+        assert_eq!(revision.head_sha, commit.to_string());
+        assert_eq!(revision.tree_sha, tree.id().to_string());
+        assert!(revision.clean);
         let listed = Command::new("git")
             .args([
                 "-C",
@@ -238,6 +276,7 @@ mod tests {
                 .any(|window| window == created.path.as_os_str().as_encoded_bytes())
         );
         fs::write(created.path.join("new.txt"), "untracked\n").unwrap();
+        assert!(!observe_local_revision(&created.path).unwrap().clean);
         assert!(prepare_local_task_worktree(&intent).unwrap().dirty);
         assert_eq!(
             observe_worktree(&created.path).unwrap(),
@@ -257,6 +296,10 @@ mod tests {
             .output()
             .unwrap();
         assert!(switched.status.success());
+        assert_eq!(
+            observe_local_revision(&created.path).unwrap().branch,
+            "wrong-branch"
+        );
         let changed = prepare_local_task_worktree(&intent).unwrap();
         assert_eq!(changed.branch, intent.branch);
         assert_eq!(changed.head_sha, commit.to_string());

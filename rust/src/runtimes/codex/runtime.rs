@@ -187,6 +187,7 @@ pub struct CodexDispatch<'a> {
     pub role: Role,
     pub bridge: Option<&'a BridgeServer<'a>>,
     pub environment: &'a HashMap<String, String>,
+    pub excluded_environment_keys: &'a [String],
 }
 
 pub fn dispatch<F>(input: CodexDispatch<'_>, claim: F) -> Result<PromptObservation, Box<dyn Error>>
@@ -213,7 +214,7 @@ where
         resume.as_deref(),
         input.bridge,
     );
-    let record = headless::dispatch(
+    let record = headless::dispatch_with_exclusions(
         DispatchInput {
             directory: input.directory,
             worktree: input.worktree,
@@ -224,6 +225,7 @@ where
             prompt: input.prompt,
             environment: input.environment,
         },
+        input.excluded_environment_keys,
         claim,
     )?;
     Ok(observe(

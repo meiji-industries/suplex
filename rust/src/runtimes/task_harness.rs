@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::path::Path;
 
 use crate::coordination::bridge_auth::{
     ADVISOR_BINDING_ENV, ADVISOR_RESULT_ENV, ADVISOR_TOKEN_ENV, ROOT_BINDING_ENV, ROOT_TOKEN_ENV,
@@ -36,6 +37,44 @@ pub fn task_bridge_environment(
             .map(|(name, value)| (name.clone(), value.clone())),
     );
     clean
+}
+
+pub fn task_scope_environment(
+    mut environment: HashMap<String, String>,
+    worktree: &Path,
+    project_environment: &HashMap<String, String>,
+) -> HashMap<String, String> {
+    let worktree = worktree.to_string_lossy();
+    let trusted = match environment.get("MISE_TRUSTED_CONFIG_PATHS") {
+        Some(existing) if !existing.is_empty() => format!("{existing}:{}", worktree),
+        _ => worktree.into_owned(),
+    };
+    environment.insert("MISE_TRUSTED_CONFIG_PATHS".into(), trusted);
+    environment.extend(project_environment.clone());
+    environment
+}
+
+pub fn task_context_prompt(
+    prompt: &str,
+    project_context: Option<&str>,
+    project_context_path: Option<&Path>,
+) -> String {
+    let prepared = project_context_path.map(|path| {
+        std::fs::read_to_string(path).unwrap_or_else(|_| {
+            "Prepared project context is unavailable. Inspect the actual worktree and configured skill sources before continuing.".into()
+        })
+    });
+    let context = [project_context, prepared.as_deref()]
+        .into_iter()
+        .flatten()
+        .filter(|text| !text.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n\n");
+    if context.is_empty() {
+        prompt.to_owned()
+    } else {
+        format!("{context}\n\n{prompt}")
+    }
 }
 
 #[cfg(test)]

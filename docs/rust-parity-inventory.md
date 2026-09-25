@@ -24,7 +24,7 @@ Request corpus: 1,141 fixtures across 95 request exports plus 23 stored-project 
 | [coordination/human-question.ts](../src/coordination/human-question.ts) | not started | |
 | [coordination/persistence/row-values.ts](../src/coordination/persistence/row-values.ts) | not started | |
 | [coordination/persistence/session-operations.ts](../src/coordination/persistence/session-operations.ts) | not started | |
-| [coordination/root-bridge.ts](../src/coordination/root-bridge.ts) | ported | Actual staged binary opens the same SQLite controller directly and passes token denial, initialize/list, delegate, conflicting delegate, observe and ask-human checks. Detached handler cancellation cannot strand the tool-owner claim. Final unit passes 98 library tests, three integration tests, fmt, all-target Clippy and six focused Root tests; two Node signer tests remain explicitly ignored in this run. |
+| [coordination/root-bridge.ts](../src/coordination/root-bridge.ts) | ported | `993e8dc`: actual staged binary opens the same SQLite controller directly and passes token denial, initialize/list, delegate, conflicting delegate, observe and ask-human checks. Detached handler cancellation cannot strand the tool-owner claim. Final unit passes 98 library tests, three integration tests, fmt, all-target Clippy and six focused Root tests; two Node signer tests remain explicitly ignored in this run. |
 | [coordination/root-contracts.ts](../src/coordination/root-contracts.ts) | not started | Named Serde operation DTOs cover observe, Standard planned delegation and ask-human, including valid optional Advisor/candidate references. The advertised schema remains flat as in TS. Remaining operations follow their implementations. |
 | [coordination/root-controller.ts](../src/coordination/root-controller.ts) | not started | Initial observe is deep-equal to the complete pinned TS result on the same fixture database. Standard planned delegation persists assignments atomically; ask-human persists waiting state and releases its claim. Worker evidence, delivery, terminal-result routing and lifecycle events remain pending. |
 | [coordination/root-session-store.ts](../src/coordination/root-session-store.ts) | not started | `76ff7e2b`: atomic Root/prompt admission passes detached launch, duplicate, reopen and prerequisite checks. The Root MCP unit adds full observation rows, current-owner CAS, planned Worker admission and ask-human persistence. Turn IDs use the source `msg_` format. Final isolated unit passes 98 library tests and three integration tests. Full controller recovery and real Codex remain pending. |
@@ -129,7 +129,7 @@ Request corpus: 1,141 fixtures across 95 request exports plus 23 stored-project 
 | [platform/diagnostics/doctor.ts](../src/platform/diagnostics/doctor.ts) | not started | |
 | [platform/diagnostics/task.ts](../src/platform/diagnostics/task.ts) | not started | |
 | [platform/environment-settings.ts](../src/platform/environment-settings.ts) | not started | |
-| [platform/executable-resolver.ts](../src/platform/executable-resolver.ts) | not started | |
+| [platform/executable-resolver.ts](../src/platform/executable-resolver.ts) | not started | Codex lookup reuses configured executable discovery and passes focused path/override checks. Other executable resolvers remain pending. |
 | [platform/factory-reset.ts](../src/platform/factory-reset.ts) | not started | |
 | [platform/frontend-development.ts](../src/platform/frontend-development.ts) | not started | `e555e83b`: built-asset watch/refresh and release embedding checks pass; no frontend helper rewrite. |
 | [platform/health-contract.ts](../src/platform/health-contract.ts) | not started | |
@@ -151,8 +151,8 @@ Request corpus: 1,141 fixtures across 95 request exports plus 23 stored-project 
 | [platform/updates/update-client.ts](../src/platform/updates/update-client.ts) | not started | |
 | [profiles/agent-profile-contracts.ts](../src/profiles/agent-profile-contracts.ts) | not started | |
 | [profiles/agent-profiles.ts](../src/profiles/agent-profiles.ts) | ported | `f23bab60`: CRUD/duplicate/defaults, references, policy pruning/rollback, audit and CLI discovery tested. Typed stored-policy conversion passes isolated cleanup checks. |
-| [profiles/model-pricing.ts](../src/profiles/model-pricing.ts) | not started | |
-| [profiles/models-dev-catalog.ts](../src/profiles/models-dev-catalog.ts) | not started | |
+| [profiles/model-pricing.ts](../src/profiles/model-pricing.ts) | ported | `rust/src/profiles/model_pricing.rs` preserves token/cache pricing and invalid-value handling. Formula and Codex cumulative-usage checks pass; task spend persistence remains in host integration. |
+| [profiles/models-dev-catalog.ts](../src/profiles/models-dev-catalog.ts) | ported | The models.dev reader uses JSON, a five-second timeout and no redirects. Local HTTP checks cover shared requests, successful caching and retry after failure. Parser checks preserve provider/model keys and optional cache rates. |
 | [profiles/provider-catalog.ts](../src/profiles/provider-catalog.ts) | not started | |
 | [profiles/provider-connection.ts](../src/profiles/provider-connection.ts) | not started | |
 | [profiles/provider-instances.ts](../src/profiles/provider-instances.ts) | not started | |
@@ -174,9 +174,9 @@ Request corpus: 1,141 fixtures across 95 request exports plus 23 stored-project 
 | [runtimes/claude-code/task-runtime.ts](../src/runtimes/claude-code/task-runtime.ts) | not started | |
 | [runtimes/claude-code/transcript.ts](../src/runtimes/claude-code/transcript.ts) | not started | |
 | [runtimes/codex/display.ts](../src/runtimes/codex/display.ts) | not started | |
-| [runtimes/codex/session-reader.ts](../src/runtimes/codex/session-reader.ts) | not started | `rust/src/runtimes/codex/session_reader.rs` and thread recovery pass focused runtime checks. Real Codex and the complete NativeSessionReader remain pending. |
-| [runtimes/codex/task-runtime.ts](../src/runtimes/codex/task-runtime.ts) | not started | `ce20b01e`: `rust/src/runtimes/codex` invocation, dispatch, observation and recovery helpers pass 17 focused checks. Its isolated staged export passes 75 library tests, three integration tests, locked fmt and all-target Clippy. Full TaskHarness, durable store binding, real Codex, bridges and UI remain pending. |
-| [runtimes/codex/transcript.ts](../src/runtimes/codex/transcript.ts) | not started | `rust/src/runtimes/codex/transcript.rs` parsing, result text and completion evidence pass focused runtime checks. Real-provider verification remains pending. |
+| [runtimes/codex/session-reader.ts](../src/runtimes/codex/session-reader.ts) | not started | Session/thread recovery and cumulative usage pass focused checks. Model lookup retains the legacy dispatch-record argv fallback; missing prices use the source fallback. History/execution views and real Codex remain pending. |
+| [runtimes/codex/task-runtime.ts](../src/runtimes/codex/task-runtime.ts) | not started | Root and planned Worker adapters compose executable lookup, prompts, guards, bindings and durable claim-before-spawn. Fake CLI checks cover launch refusal, child capabilities and separate persisted/native/thread identities. Final isolated unit passes 106 library tests, three integration tests, fmt and all-target Clippy; two Node signer tests are ignored in this run. Full host, real Codex and UI remain pending. |
+| [runtimes/codex/transcript.ts](../src/runtimes/codex/transcript.ts) | not started | Parsing, result text, completion and cumulative per-thread usage pass focused checks, including dispatch-model pricing and decreasing-counter rejection. Tool projection and real-provider verification remain pending. |
 | [runtimes/devin/advisor-evidence.ts](../src/runtimes/devin/advisor-evidence.ts) | not started | |
 | [runtimes/devin/display.ts](../src/runtimes/devin/display.ts) | not started | |
 | [runtimes/devin/mcp-config.ts](../src/runtimes/devin/mcp-config.ts) | not started | |
@@ -184,7 +184,7 @@ Request corpus: 1,141 fixtures across 95 request exports plus 23 stored-project 
 | [runtimes/devin/task-runtime.ts](../src/runtimes/devin/task-runtime.ts) | not started | |
 | [runtimes/devin/transcript.ts](../src/runtimes/devin/transcript.ts) | not started | |
 | [runtimes/harness-kind.ts](../src/runtimes/harness-kind.ts) | not started | |
-| [runtimes/headless/turn-process.ts](../src/runtimes/headless/turn-process.ts) | not started | `rust/src/runtimes/headless.rs` detached claim-before-launch, dispatch/exit records, group stop and missing-turn recovery pass with real children. Child environment now replaces inherited variables as TS does; an actual child excludes a stale Root token and receives its explicit Advisor token. Environment-only rediscovery after loss of all records is unproved on this Mac; the same-host TS scanner also missed the tagged child. Real Codex/controller integration remains pending. |
+| [runtimes/headless/turn-process.ts](../src/runtimes/headless/turn-process.ts) | not started | Detached claim-before-launch, dispatch/exit records, group stop and missing-turn recovery pass with real children. Child environment replacement, project settings, Mise trust and final credential exclusions follow source order. Environment-only rediscovery after loss of all records is unproved on this Mac; the same-host TS scanner also missed the tagged child. Real Codex/controller integration remains pending. |
 | [runtimes/opencode/client.ts](../src/runtimes/opencode/client.ts) | not started | |
 | [runtimes/opencode/contracts.ts](../src/runtimes/opencode/contracts.ts) | not started | |
 | [runtimes/opencode/providers.ts](../src/runtimes/opencode/providers.ts) | not started | |
@@ -197,7 +197,7 @@ Request corpus: 1,141 fixtures across 95 request exports plus 23 stored-project 
 | [runtimes/project-mcp.ts](../src/runtimes/project-mcp.ts) | not started | |
 | [runtimes/task-display.ts](../src/runtimes/task-display.ts) | not started | |
 | [runtimes/task-harness-registry.ts](../src/runtimes/task-harness-registry.ts) | not started | |
-| [runtimes/task-harness.ts](../src/runtimes/task-harness.ts) | not started | `e38b0718`: `rust/src/runtimes/task_harness.rs` removes the five source bridge-capability variables before applying current bindings and additions. Precedence and actual detached-child isolation pass without global test-environment mutation. Isolated staged export passes 88 library tests, three integration tests, locked fmt and all-target Clippy. Full TaskHarness and controller integration remain pending. |
+| [runtimes/task-harness.ts](../src/runtimes/task-harness.ts) | not started | `e38b0718`: removal of stale bridge capabilities and actual child isolation pass. Native adapters now compose configured project context, prepared context and the source missing-file fallback. Full provider routing and controller integration remain pending. |
 | [server.ts](../src/server.ts) | not started | |
 | [shared/abort-signal.ts](../src/shared/abort-signal.ts) | not started | |
 | [shared/assert-never.ts](../src/shared/assert-never.ts) | not started | |
@@ -223,7 +223,7 @@ Request corpus: 1,141 fixtures across 95 request exports plus 23 stored-project 
 | [tasks/execution/contracts.ts](../src/tasks/execution/contracts.ts) | not started | |
 | [tasks/execution/execution.ts](../src/tasks/execution/execution.ts) | not started | |
 | [tasks/execution/pane-layout.ts](../src/tasks/execution/pane-layout.ts) | not started | |
-| [tasks/execution/role-prompt.ts](../src/tasks/execution/role-prompt.ts) | not started | |
+| [tasks/execution/role-prompt.ts](../src/tasks/execution/role-prompt.ts) | not started | Native Standard Root and planned implementation/verification Worker prompts use source text. Direct-build and other workflow roles remain pending. |
 | [tasks/history/contracts.ts](../src/tasks/history/contracts.ts) | not started | |
 | [tasks/history/history.ts](../src/tasks/history/history.ts) | not started | |
 | [tasks/history/live.ts](../src/tasks/history/live.ts) | not started | |
@@ -249,4 +249,4 @@ Request corpus: 1,141 fixtures across 95 request exports plus 23 stored-project 
 | [tasks/timeline/timeline.ts](../src/tasks/timeline/timeline.ts) | not started | |
 | [tasks/usage.ts](../src/tasks/usage.ts) | not started | |
 | [tasks/worktree-open.ts](../src/tasks/worktree-open.ts) | not started | |
-| [tasks/worktree.ts](../src/tasks/worktree.ts) | not started | `7986a84f`: `rust/src/tasks/worktree.rs` prepares local worktrees with Git2. Real Git create/dirty/reopen/stale-registration/symlink checks pass; existing-path branch intent stays source-compatible without a new mismatch rejection. Isolated staged export passes 81 library tests, three integration tests, locked fmt and all-target Clippy. Remote missing-commit fetch, credentials, removal, controller/delivery and real Codex remain pending. Git2/libssh2 and WebAuthn still bring native OpenSSL dependencies. |
+| [tasks/worktree.ts](../src/tasks/worktree.ts) | not started | `7986a84f`: Git2 create/dirty/reopen/stale-registration/symlink checks pass without a new existing-path branch gate. Delivery now reads actual branch, HEAD, tree and dirty state; the real Git check passes. Remote missing-commit fetch, credentials, removal and full controller/delivery remain pending. Git2/libssh2 and WebAuthn still bring native OpenSSL dependencies. |

@@ -17,6 +17,7 @@ use crate::{
     platform::database::{DatabaseResult, OpenMode, SuplexDatabase},
     runtimes::{codex::session_reader, process::inspect_process},
     tasks::{
+        archive::displays,
         commands::TaskFailure,
         repository::{self, TaskRecord},
         worktree::{self, TaskWorktreeIntent, WorktreeCleanup},
@@ -212,6 +213,7 @@ pub fn archive_local_task(
     }
     let _guard = ArchiveGuard::acquire(task_id)?;
     archive_sessions_idle(&database, database_path, task_id).map_err(cleanup_error)?;
+    let displays = displays::prepare_task_displays(&database, task_id).map_err(cleanup_error)?;
     drop(database);
     reauthorize(database_path, actor_user_id, task_id)?;
 
@@ -236,6 +238,7 @@ pub fn archive_local_task(
         return Ok(ArchiveOutcome::ConfirmationRequired(dirty_file_paths));
     }
     reauthorize(database_path, actor_user_id, task_id)?;
+    displays.close().map_err(cleanup_error)?;
     let mut database = SuplexDatabase::open(database_path, OpenMode::ReadWrite)?;
     database.transaction(true, |database| {
         let (current, _) = task_scope(database, actor_user_id, task_id)?;

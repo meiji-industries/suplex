@@ -21,7 +21,7 @@ use crate::platform::system_events;
 use crate::runtimes::process::inspect_process;
 use crate::shared::js_json;
 use crate::tasks::commands::{allowed_profile, read_profile};
-use crate::tasks::repository;
+use crate::tasks::repository::{self, PullRequestOwned};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RootSession {

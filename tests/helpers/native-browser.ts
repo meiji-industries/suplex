@@ -92,6 +92,11 @@ export async function nativeBrowser(width = 1280, host = "127.0.0.1", reachableA
     page.on("pageerror", error => errors.push(error.message));
     const openedBrowser = browser;
     return { ...value, browser, page, base, errors, backend: rust ? "rust" as const : "typescript" as const,
+      async restartRust() {
+        if (!rust || !stopRust) throw new Error("A Rust browser listener is not running");
+        await stopRust();
+        stopRust = await startRustServer(value.directory, port!);
+      },
       async close(options: { preserveData?: boolean } = {}) { try { await openedBrowser.close(); } finally { try { await stopRust?.(); } finally { await value.close(options); } } },
     };
   } catch (error) {

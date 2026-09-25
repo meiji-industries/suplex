@@ -2,8 +2,9 @@
 // The default run checks the form only. Set SUPLEX_REAL_CODEX_RUN=1 to execute one real task;
 // SUPLEX_REAL_CODEX_MODEL selects an explicitly authorized test model. Set
 // SUPLEX_DETERMINISTIC_CODEX_RUN=1 for the same journey with a test-only Codex process stand-in.
-import { equal, notEqual, ok } from "node:assert/strict";
-import { mkdir, readFile, readdir } from "node:fs/promises";
+import { deepStrictEqual, equal, notEqual, ok } from "node:assert/strict";
+import { access, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
 import { setTimeout } from "node:timers/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -17,6 +18,21 @@ const model = process.env.SUPLEX_REAL_CODEX_MODEL ?? "gpt-6-sol";
 const deterministic = process.env.SUPLEX_DETERMINISTIC_CODEX_RUN === "1";
 if (deterministic && process.env.SUPLEX_REAL_CODEX_RUN === "1") throw new Error("Choose one Codex run mode");
 if (deterministic) process.env.SUPLEX_CODEX_COMMAND = fileURLToPath(new URL("../fixtures/codex-standard-cli.mjs", import.meta.url));
+const phase = deterministic ? process.env.SUPLEX_DETERMINISTIC_PHASE ?? "deliver" : "deliver";
+if (!["deliver", "answer", "restart", "cancel"].includes(phase)) throw new Error("Unknown deterministic phase");
+const controlDirectory = deterministic && ["restart", "cancel"].includes(phase) ? await mkdtemp(join(tmpdir(), "suplex-codex-control-")) : null;
+if (controlDirectory) {
+  process.env.SUPLEX_DETERMINISTIC_PHASE = phase;
+  process.env.SUPLEX_DETERMINISTIC_CONTROL_DIR = controlDirectory;
+} else if (deterministic) process.env.SUPLEX_DETERMINISTIC_PHASE = phase;
+
+async function waitForFile(path: string): Promise<void> {
+  for (let attempt = 0; attempt < 300; attempt += 1) {
+    if (await access(path).then(() => true, () => false)) return;
+    await setTimeout(100);
+  }
+  throw new Error("A deterministic native phase did not start");
+}
 
 async function nativeGroupsAbsent(databasePath: string, sessionIds: string[]): Promise<boolean> {
   for (const sessionId of sessionIds) {
@@ -37,7 +53,10 @@ async function nativeGroupsAbsent(databasePath: string, sessionIds: string[]): P
   return true;
 }
 
-const fixture = await nativeBrowser();
+const fixture = await nativeBrowser().catch(async error => {
+  if (controlDirectory) await rm(controlDirectory, { recursive: true, force: true });
+  throw error;
+});
 let preserveData = false;
 try {
   const git = async (...args: string[]) => runCommand({ taskId: null, stepId: null, command: "git", args });
@@ -68,7 +87,7 @@ try {
     console.log(JSON.stringify({ backend: fixture.backend, taskPage: response?.status(), dialog: "ready", project: fixture.project.id, revision }));
   } else {
     preserveData = true;
-    const proof = resolve(deterministic ? ".context/deterministic-codex-standard" : ".context/real-codex-standard");
+    const proof = resolve(deterministic ? phase === "deliver" ? ".context/deterministic-codex-standard" : `.context/deterministic-codex-${phase}` : ".context/real-codex-standard");
     await mkdir(proof, { recursive: true });
     await fixture.page.screenshot({ path: `${proof}/new-task.png`, fullPage: true });
     const createdResponse = fixture.page.waitForResponse(candidate => candidate.request().method() === "POST" && candidate.url().endsWith(`/api/companies/${fixture.company.id}/tasks`));
@@ -84,6 +103,54 @@ try {
     await fixture.page.getByRole("button", { name: "Start task", exact: true }).click();
     equal((await startResponse).status(), 200);
     await fixture.page.screenshot({ path: `${proof}/started.png`, fullPage: true });
+    let pausedWorker: { sessionId: string; turnId: string; pid: number; startTime: string; dispatches: number } | null = null;
+    if (phase === "answer") {
+      let waiting = task;
+      for (let attempt = 0; attempt < 30; attempt += 1) {
+        const response = await fixture.page.request.get(`${fixture.base}/api/tasks/${task.id}`);
+        equal(response.status(), 200);
+        waiting = TaskSchema.parse(await response.json());
+        if (waiting.status === "waiting_human") break;
+        await setTimeout(1_000);
+      }
+      equal(waiting.status, "waiting_human", "The Root did not ask its fixture question");
+      await fixture.page.reload();
+      const question = fixture.page.locator('[aria-label="Question"]');
+      await question.waitFor();
+      await question.locator('[data-slot="questionnaire-choice"]').filter({ hasText: "Proceed" }).click();
+      const answerResponse = fixture.page.waitForResponse(candidate => candidate.url().endsWith(`/api/tasks/${task.id}/answer`));
+      await question.getByRole("button", { name: "Answer and continue" }).click();
+      equal((await answerResponse).status(), 200);
+      await fixture.page.screenshot({ path: `${proof}/answered.png`, fullPage: true });
+    }
+    if (controlDirectory) {
+      await waitForFile(join(controlDirectory, "paused"));
+      const snapshot = async () => {
+        const row = fixture.database.authQuery(db => db.prepare("SELECT s.id AS sessionId,t.id AS turnId FROM suplex_task_sessions s JOIN suplex_task_turns t ON t.session_id = s.id AND t.generation = s.generation WHERE s.task_id = ? AND s.kind = 'worker' AND s.is_current = 1 ORDER BY t.created_at DESC LIMIT 1").get(task.id)) as { sessionId: string; turnId: string } | undefined;
+        ok(row, "The paused Worker has a durable turn");
+        const directory = join(dirname(fixture.config.databasePath), "runtime", "task-sessions", row.sessionId);
+        const record = JSON.parse(await readFile(join(directory, "turn.json"), "utf8")) as { pid?: number; processIdentity?: { startTime?: string } };
+        ok(record.pid && record.processIdentity?.startTime, "The paused Worker has a native process identity");
+        const dispatches = (await readdir(directory)).filter(name => /^dispatch-.*\.json$/.test(name)).length;
+        return { sessionId: row.sessionId, turnId: row.turnId, pid: record.pid!, startTime: record.processIdentity.startTime!, dispatches };
+      };
+      const before = await snapshot();
+      process.kill(-before.pid!, 0);
+      if (phase === "restart") {
+        pausedWorker = before;
+        await fixture.restartRust();
+        const after = await snapshot();
+        deepStrictEqual(after, before, "The backend restarted without replacing or replaying the admitted Worker");
+        process.kill(-after.pid!, 0);
+        await writeFile(join(controlDirectory, "release"), "continue\n");
+      }
+      if (phase === "cancel") {
+        await fixture.page.getByRole("button", { name: "Task options" }).click();
+        const cancelResponse = fixture.page.waitForResponse(candidate => candidate.url().endsWith(`/api/tasks/${task.id}/cancel`));
+        await fixture.page.getByRole("menuitem", { name: "Cancel task" }).click();
+        equal((await cancelResponse).status(), 200);
+      }
+    }
     const deadline = Date.now() + 12 * 60_000;
     let delivered = task;
     while (Date.now() < deadline) {
@@ -92,22 +159,27 @@ try {
       });
       equal(current.status(), 200, await current.text());
       delivered = TaskSchema.parse(await current.json());
-      if (delivered.status === "delivered") break;
-      if (delivered.status === "waiting_human" || delivered.status === "cancelled") throw new Error(`Task ${task.id} entered ${delivered.status}; preserving fixture data`);
+      if (delivered.status === (phase === "cancel" ? "cancelled" : "delivered")) break;
+      if (delivered.status === "waiting_human" || (phase !== "cancel" && delivered.status === "cancelled")) throw new Error(`Task ${task.id} entered ${delivered.status}; preserving fixture data`);
       await setTimeout(2_000);
     }
-    equal(delivered.status, "delivered", `Task ${task.id} did not deliver before timeout`);
+    equal(delivered.status, phase === "cancel" ? "cancelled" : "delivered", `Task ${task.id} did not settle before timeout`);
     const worktree = delivered.worktree?.path;
-    ok(worktree, "Delivered task has a worktree path");
+    ok(worktree, "The task has a worktree path");
     const readme = await readFile(`${worktree}/README.md`, "utf8");
-    ok(readme.includes("Verified by Suplex Standard task."));
     const head = (await git("-C", worktree, "rev-parse", "HEAD")).stdout.trim();
-    notEqual(head, revision);
-    await runCommand({ taskId: null, stepId: null, command: "pnpm", args: ["test"], cwd: worktree });
+    if (phase === "cancel") {
+      equal(readme.includes("Verified by Suplex Standard task."), false, "The paused Worker made no edit");
+      equal(head, revision, "Cancellation left the original Git head intact");
+    } else {
+      ok(readme.includes("Verified by Suplex Standard task."));
+      notEqual(head, revision);
+      await runCommand({ taskId: null, stepId: null, command: "pnpm", args: ["test"], cwd: worktree });
+    }
     const sessions = fixture.database.authQuery(db => db.prepare("SELECT id,kind,lifecycle,stopped_at AS stoppedAt,native_session_id AS nativeSessionId FROM suplex_task_sessions WHERE task_id = ? ORDER BY kind,id").all(task.id)) as Array<{ id: string; kind: string; lifecycle: string; stoppedAt: string | null; nativeSessionId: string | null }>;
     ok(sessions.some(session => session.kind === "root" && session.nativeSessionId));
     ok(sessions.some(session => session.kind === "worker" && session.nativeSessionId));
-    // The host may stop delivered sessions on a later sweep. Wait before fixture deletion.
+    // The host may stop terminal sessions on a later sweep. Wait before fixture deletion.
     const stopDeadline = Date.now() + 30_000;
     while (Date.now() < stopDeadline && sessions.some(session => !session.stoppedAt)) {
       await setTimeout(1_000);
@@ -115,13 +187,24 @@ try {
     }
     ok(sessions.every(session => session.stoppedAt), "Host has not confirmed native session stop; preserving fixture data");
     ok(await nativeGroupsAbsent(fixture.config.databasePath, sessions.map(session => session.id)), "A native process group is active or cannot be identified; preserving fixture data");
+    if (phase === "restart") {
+      ok(pausedWorker);
+      const after = fixture.database.authQuery(db => db.prepare("SELECT s.id AS sessionId,t.id AS turnId FROM suplex_task_sessions s JOIN suplex_task_turns t ON t.session_id = s.id AND t.generation = s.generation WHERE s.task_id = ? AND s.kind = 'worker' ORDER BY t.created_at DESC LIMIT 1").get(task.id)) as { sessionId: string; turnId: string } | undefined;
+      ok(after);
+      const directory = join(dirname(fixture.config.databasePath), "runtime", "task-sessions", after.sessionId);
+      const record = JSON.parse(await readFile(join(directory, "turn.json"), "utf8")) as { pid?: number; processIdentity?: { startTime?: string } };
+      const dispatches = (await readdir(directory)).filter(name => /^dispatch-.*\.json$/.test(name)).length;
+      deepStrictEqual({ ...after, pid: record.pid, startTime: record.processIdentity?.startTime, dispatches }, pausedWorker, "The settled Worker kept its original turn and native admission");
+    }
     await fixture.page.reload();
-    await fixture.page.screenshot({ path: `${proof}/delivered.png`, fullPage: true });
+    if (deterministic && phase !== "cancel") await fixture.page.locator('[aria-label="Conversation"]').getByText("README line committed after pnpm test passed.").waitFor({ timeout: 15_000 });
+    await fixture.page.screenshot({ path: `${proof}/${phase === "cancel" ? "cancelled" : "delivered"}.png`, fullPage: true });
     equal(fixture.errors.length, 0, fixture.errors.join("; "));
-    console.log(JSON.stringify({ mode: deterministic ? "deterministic_process_mcp_ui" : "real_codex", taskId: task.id, status: delivered.status, head, sessions: sessions.map(({ kind, lifecycle }) => ({ kind, lifecycle })), proof }));
+    console.log(JSON.stringify({ mode: deterministic ? `deterministic_process_mcp_ui_${phase}` : "real_codex", taskId: task.id, status: delivered.status, head, sessions: sessions.map(({ kind, lifecycle }) => ({ kind, lifecycle })), proof }));
     preserveData = false;
   }
 } finally {
   await fixture.close({ preserveData });
+  if (controlDirectory && !preserveData) await rm(controlDirectory, { recursive: true, force: true });
   if (preserveData) console.error(`Fixture data preserved for native recovery: ${fixture.directory}`);
 }

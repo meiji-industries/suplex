@@ -2,9 +2,31 @@
 // Deterministic Codex process stand-in for the isolated Standard browser journey.
 // It exercises the real Root MCP and Worker Git path without contacting a model.
 import { spawn } from "node:child_process";
-import { readFile, writeFile } from "node:fs/promises";
+import { access, readFile, writeFile } from "node:fs/promises";
+import { join } from "node:path";
+import { setTimeout } from "node:timers/promises";
 
 const line = value => process.stdout.write(`${JSON.stringify(value)}\n`);
+const phase = process.env.SUPLEX_DETERMINISTIC_PHASE ?? "deliver";
+
+async function inputPrompt() {
+  let prompt = "";
+  for await (const chunk of process.stdin) prompt += chunk;
+  return prompt;
+}
+
+async function pauseWorker() {
+  if (phase !== "restart" && phase !== "cancel") return;
+  const directory = process.env.SUPLEX_DETERMINISTIC_CONTROL_DIR;
+  if (!directory) throw new Error("Deterministic control directory is missing");
+  await writeFile(join(directory, "paused"), "worker\n");
+  const release = join(directory, "release");
+  for (let attempt = 0; attempt < 1_200; attempt += 1) {
+    if (await access(release).then(() => true, () => false)) return;
+    await setTimeout(100);
+  }
+  throw new Error("Deterministic Worker pause timed out");
+}
 
 async function command(executable, args, options = {}) {
   const child = spawn(executable, args, { ...options, stdio: ["ignore", "pipe", "pipe"] });
@@ -43,11 +65,20 @@ async function rootTool(binding, kind, fields = {}) {
   return call.result.structuredContent;
 }
 
-async function root() {
+async function root(prompt) {
   const binding = JSON.parse(await readFile(process.env.SUPLEX_ROOT_BINDING, "utf8"));
   line({ type: "thread.started", thread_id: `fixture-root-${binding.root.sessionId}` });
   const observed = await rootTool(binding, "observe");
-  if (!observed.workerResult) {
+  if (phase === "answer" && !observed.workerResult && !prompt.includes("Proceed: Make the local change")) {
+    await rootTool(binding, "ask_human", {
+      question: "May I continue this local fixture?",
+      options: [
+        { label: "Proceed", description: "Make the local change", recommended: true },
+        { label: "Stop", description: "Leave the task unchanged", recommended: false },
+      ],
+    });
+    line({ type: "item.completed", item: { id: "root_question", type: "agent_message", text: "Asked for the specific task decision." } });
+  } else if (!observed.workerResult) {
     await rootTool(binding, "delegate_worker", {
       plan: "Append the requested README line, run the project test, and commit it locally.",
       acceptanceCriteria: ["README contains the requested line", "Project test passes", "Change is committed"],
@@ -66,6 +97,7 @@ async function root() {
 
 async function worker() {
   line({ type: "thread.started", thread_id: `fixture-worker-${process.pid}` });
+  await pauseWorker();
   const readme = await readFile("README.md", "utf8");
   const addition = "Verified by Suplex Standard task.";
   if (!readme.includes(addition)) await writeFile("README.md", `${readme.replace(/\n?$/, "\n")}${addition}\n`);
@@ -85,8 +117,9 @@ async function worker() {
 }
 
 try {
+  const prompt = await inputPrompt();
   // The Rust harness passes Root capability only to Root, including on resume.
-  if (process.env.SUPLEX_ROOT_BINDING && process.env.SUPLEX_ROOT_TOKEN) await root();
+  if (process.env.SUPLEX_ROOT_BINDING && process.env.SUPLEX_ROOT_TOKEN) await root(prompt);
   else await worker();
 } catch (error) {
   const message = error instanceof Error ? error.message : String(error);

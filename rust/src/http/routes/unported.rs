@@ -18,7 +18,6 @@ use Access::{Administrator, Authenticated};
 // WebSocket routes are plain GET handlers here: they answer 501 before any
 // upgrade. `scripts/rust-route-coverage.ts` checks this list stays complete.
 const ROUTES: &[(Method, &str, Access)] = &[
-    (Method::GET, "/api/admin/providers", Administrator),
     (Method::GET, "/api/admin/provider-instances", Administrator),
     (Method::POST, "/api/admin/provider-instances", Administrator),
     (
@@ -26,7 +25,6 @@ const ROUTES: &[(Method, &str, Access)] = &[
         "/api/admin/provider-instances/{instance_id}",
         Administrator,
     ),
-    (Method::GET, "/api/admin/models", Authenticated),
     (
         Method::POST,
         "/api/admin/provider-instances/{instance_id}/login",
@@ -58,7 +56,6 @@ const ROUTES: &[(Method, &str, Access)] = &[
         "/api/admin/workflows/{workflow_id}/duplicate",
         Authenticated,
     ),
-    (Method::GET, "/api/models", Authenticated),
     (
         Method::GET,
         "/api/oauth/consent/{request_id}",

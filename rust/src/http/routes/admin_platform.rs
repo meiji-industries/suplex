@@ -38,6 +38,50 @@ pub fn router() -> Router<AppState> {
         .route("/api/admin/backups/restore", post(restore_backup))
         .route("/api/admin/backups/{name}", get(download_backup))
         .route("/api/admin/factory-reset", post(reset))
+        .route("/api/admin/providers", get(providers))
+        .route("/api/admin/models", get(models))
+        .route("/api/models", get(models))
+}
+
+/// `GET /api/admin/providers`: one row per agent tool on this host.
+async fn providers(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    let (_, cookies) = match administrator(&state, &headers, &Method::GET, ADMIN_REQUIRED) {
+        Ok(value) => value,
+        Err(response) => return *response,
+    };
+    let directory = std::env::current_dir().unwrap_or_default();
+    let observed = tokio::task::spawn_blocking(move || {
+        crate::profiles::provider_catalog::read_providers(&directory.to_string_lossy())
+    })
+    .await;
+    let response = match observed {
+        Ok(value) => Json(value).into_response(),
+        Err(_) => auth::error(
+            StatusCode::SERVICE_UNAVAILABLE,
+            "Provider configuration is not available. Check OpenCode or Claude Code on the Suplex host.",
+        ),
+    };
+    finish(private(response), cookies)
+}
+
+/// `GET /api/admin/models` and `GET /api/models`: provider models for any signed-in user.
+async fn models(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    let (_, cookies) = match super::profiles::authorize(&state, &headers, "GET", false) {
+        Ok(value) => value,
+        Err(response) => return *response,
+    };
+    let directory = std::env::current_dir().unwrap_or_default();
+    let response = match tokio::task::spawn_blocking(move || {
+        crate::profiles::provider_catalog::read_providers(&directory.to_string_lossy())
+    })
+    .await
+    {
+        Ok(providers) => {
+            Json(crate::profiles::provider_catalog::list_models(&providers)).into_response()
+        }
+        Err(_) => internal(),
+    };
+    finish(response, cookies)
 }
 
 type Rejection = Box<Response>;

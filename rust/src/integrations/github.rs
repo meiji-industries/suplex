@@ -100,7 +100,7 @@ fn keychain_password(service: &str, account: &str) -> AccessResult<Option<String
     }
 }
 
-fn installed_token() -> AccessResult<Option<String>> {
+pub fn installed_token() -> AccessResult<Option<String>> {
     if let Ok(Some(token)) = keychain_password(SUPLEX_SERVICE, SUPLEX_ACCOUNT) {
         return Ok(Some(token));
     }

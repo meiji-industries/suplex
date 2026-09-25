@@ -282,8 +282,7 @@ fn observe(
     })
 }
 
-/// Prepare the local commit already present in Git. A later remote-source unit
-/// will fetch a missing commit before calling this function.
+/// Prepare the task worktree, fetching a missing starting commit from origin.
 pub fn prepare_local_task_worktree(
     intent: &TaskWorktreeIntent,
 ) -> WorktreeResult<WorktreeReference> {
@@ -360,6 +359,22 @@ pub fn prepare_local_task_worktree(
         Ok(branch) => branch,
         Err(error) if error.code() == git2::ErrorCode::NotFound => {
             let oid = git2::Oid::from_str(&intent.starting_sha)?;
+            if repository.find_commit(oid).is_err() {
+                // A pull request source pins a commit that GitHub metadata alone does not make local.
+                let token = repository
+                    .find_remote("origin")
+                    .ok()
+                    .and_then(|origin| origin.url().ok().map(token_audience_matches))
+                    .unwrap_or(false)
+                    .then(|| {
+                        crate::integrations::github::disable_keychain_interaction()
+                            .and_then(|()| crate::integrations::github::installed_token())
+                            .ok()
+                            .flatten()
+                    })
+                    .flatten();
+                let _ = published_base_commit(&repository, oid, token.as_deref());
+            }
             let commit = repository.find_commit(oid)?;
             repository.branch(&intent.branch, &commit, false)?
         }
@@ -770,6 +785,71 @@ mod tests {
         );
         drop(tree);
         drop(repository);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn fetches_a_missing_starting_commit_from_origin() {
+        let root = std::env::temp_dir().join(format!("suplex-worktree-{}", uuid::Uuid::new_v4()));
+        let origin_path = root.join("origin");
+        let repository_path = root.join("repo");
+        let run = |cwd: &Path, args: &[&str]| {
+            let output = Command::new("git")
+                .arg("-C")
+                .arg(cwd)
+                .args(args)
+                .output()
+                .unwrap();
+            assert!(output.status.success(), "{output:?}");
+            String::from_utf8(output.stdout).unwrap().trim().to_owned()
+        };
+        let commit = [
+            "-c",
+            "user.name=t",
+            "-c",
+            "user.email=t@example.test",
+            "commit",
+        ];
+        fs::create_dir_all(&origin_path).unwrap();
+        run(&origin_path, &["init", "-q"]);
+        run(
+            &origin_path,
+            &[&commit[..], &["-q", "--allow-empty", "-m", "one"]].concat(),
+        );
+        run(
+            &root,
+            &["clone", "-q", origin_path.to_str().unwrap(), "repo"],
+        );
+        run(
+            &origin_path,
+            &[&commit[..], &["-q", "--allow-empty", "-m", "two"]].concat(),
+        );
+        let pinned = run(&origin_path, &["rev-parse", "HEAD"]);
+        let local = Repository::open(&repository_path).unwrap();
+        assert!(
+            local
+                .find_commit(git2::Oid::from_str(&pinned).unwrap())
+                .is_err()
+        );
+        let intent = TaskWorktreeIntent {
+            task_id: "task_pinned".into(),
+            repository_path: repository_path.clone(),
+            worktree_root: root.join("worktrees"),
+            branch: "task-pinned".into(),
+            starting_sha: pinned.clone(),
+        };
+        assert_eq!(
+            prepare_local_task_worktree(&intent).unwrap().head_sha,
+            pinned
+        );
+        let absent = TaskWorktreeIntent {
+            task_id: "task_absent".into(),
+            branch: "task-absent".into(),
+            starting_sha: "0123456789abcdef0123456789abcdef01234567".into(),
+            ..intent.clone()
+        };
+        assert!(prepare_local_task_worktree(&absent).is_err());
+        drop(local);
         fs::remove_dir_all(root).unwrap();
     }
 }

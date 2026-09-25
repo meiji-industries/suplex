@@ -37,6 +37,7 @@ enum RootCall {
     ReadImage(String),
     ReadWorkerEvidence(WorkerEvidenceRequest),
     DelegateWorker(StandardWorkerAssignment),
+    InspectDeliveryDiff,
     RequestDelivery { expected_head: Option<String> },
     AskHuman { question: String, options: Value },
 }
@@ -116,6 +117,7 @@ struct DeliveryInput {
 #[derive(Deserialize)]
 #[serde(rename_all = "snake_case")]
 enum LocalDeliveryOperation {
+    InspectDeliveryDiff,
     CompleteLocalWork,
 }
 
@@ -277,10 +279,12 @@ fn parse_call(mut input: Map<String, Value>) -> Result<RootCall, String> {
         }
         WireCall::RequestDelivery(input) => {
             validate_delivery_extras(&input)?;
-            let LocalDeliveryOperation::CompleteLocalWork = input.operation;
-            Ok(RootCall::RequestDelivery {
-                expected_head: input.expected_head,
-            })
+            match input.operation {
+                LocalDeliveryOperation::InspectDeliveryDiff => Ok(RootCall::InspectDeliveryDiff),
+                LocalDeliveryOperation::CompleteLocalWork => Ok(RootCall::RequestDelivery {
+                    expected_head: input.expected_head,
+                }),
+            }
         }
         WireCall::DelegateWorker(input) => {
             let WorkerInput {
@@ -379,13 +383,13 @@ fn parse_call(mut input: Map<String, Value>) -> Result<RootCall, String> {
 fn tool() -> Tool {
     Tool::new(
         "suplex_root",
-        "Observe this task, read an image or native Worker evidence, delegate a Standard Worker, complete local work, or ask a specific human question.",
+        "Observe this task, read an image or native Worker evidence, delegate a Standard Worker, inspect the delivery diff, complete local work, or ask a specific human question.",
         serde_json::from_value::<Map<String, Value>>(json!({
             "type":"object",
             "properties":{
-                "kind":{"type":"string","enum":["observe","read_image","read_worker_evidence","delegate_worker","request_delivery","ask_human"],"description":"Fields per kind. observe: no other fields. read_image: required artifactId. read_worker_evidence: required turnId; optional toolId, field (input/output/error), position (head/tail), cursor, maxCharacters (1000..20000). delegate_worker: required plan, acceptanceCriteria, instruction; optional mode (planned), purpose (implementation), Advisor references (unused in Standard). request_delivery: required operation (complete_local_work); optional expectedHead and source review fields. ask_human: required question, options."},
+                "kind":{"type":"string","enum":["observe","read_image","read_worker_evidence","delegate_worker","request_delivery","ask_human"],"description":"Fields per kind. observe: no other fields. read_image: required artifactId. read_worker_evidence: required turnId; optional toolId, field (input/output/error), position (head/tail), cursor, maxCharacters (1000..20000). delegate_worker: required plan, acceptanceCriteria, instruction; optional mode (planned), purpose (implementation), Advisor references (unused in Standard). request_delivery: required operation (inspect_delivery_diff or complete_local_work); optional expectedHead and source review fields. ask_human: required question, options."},
                 "artifactId":{"type":"string","minLength":1,"maxLength":256,"pattern":"^[A-Za-z0-9][A-Za-z0-9._:-]*$"},
-                "operation":{"type":"string","enum":["complete_local_work"],"description":"Complete reviewed Standard local work after confirming the current Git head."},
+                "operation":{"type":"string","enum":["inspect_delivery_diff","complete_local_work"],"description":"Inspect the published-base-to-head patch or complete reviewed Standard local work."},
                 "expectedHead":{"type":"string","minLength":1},
                 "review":{"type":"object","description":"Optional source review metadata; ignored for Standard local completion."},
                 "pullRequestTitle":{"type":"string","description":"Optional pull request title; ignored for Standard local completion."},
@@ -444,6 +448,11 @@ impl RootBridgeServer {
                     root_controller::delegate_worker(&database_path, &root, &token, &assignment)
                         .map_err(|error| error.to_string())
                 }
+                RootCall::InspectDeliveryDiff => delivery::inspection::inspect_standard_delivery_diff(
+                    &database_path,
+                    &root,
+                )
+                .map_err(|error| error.to_string()),
                 RootCall::RequestDelivery { expected_head } => runtime
                     .block_on(delivery::operations::complete_local_work(
                         &database_path,
@@ -593,6 +602,15 @@ mod tests {
         );
         assert!(parse_call(json!({"kind":"read_worker_evidence","turnId":"msg_1","toolId":"item_1","field":"output","position":"head","maxCharacters":1000.0}).as_object().unwrap().clone()).is_ok());
         assert!(parse_call(json!({"kind":"request_delivery","operation":"complete_local_work","expectedHead":"abc"}).as_object().unwrap().clone()).is_ok());
+        assert!(matches!(
+            parse_call(
+                json!({"kind":"request_delivery","operation":"inspect_delivery_diff"})
+                    .as_object()
+                    .unwrap()
+                    .clone()
+            ),
+            Ok(RootCall::InspectDeliveryDiff)
+        ));
         assert!(
             parse_call(
                 json!({"kind":"request_delivery","operation":"merge_pull_request"})

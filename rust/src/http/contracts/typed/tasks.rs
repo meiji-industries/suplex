@@ -1090,6 +1090,34 @@ pub fn parse_task_worker_replacement(
 }
 
 #[derive(Debug, Clone, Serialize)]
+pub struct TaskIssueBody {
+    pub issue: Option<IssueAssociation>,
+}
+
+/// The issue link body is strict; `null` clears the link.
+pub fn parse_task_issue(input: Option<&Value>) -> ContractResult<TaskIssueBody> {
+    let fields = object(input)?;
+    let mut findings = match fields.get("issue") {
+        Some(Value::Null) => Vec::new(),
+        Some(value) => issue_findings(value)?,
+        None => vec![issue("invalid_type", ".issue")],
+    };
+    if fields.keys().any(|key| key != "issue") {
+        findings.push(issue("unrecognized_keys", "."));
+    }
+    if !findings.is_empty() {
+        return Err(ContractFailure::Issues(findings));
+    }
+    let issue = match fields.get("issue") {
+        Some(Value::Null) | None => None,
+        Some(value) => {
+            Some(serde_json::from_value(value.clone()).map_err(|_| ContractFailure::Unhandled)?)
+        }
+    };
+    Ok(TaskIssueBody { issue })
+}
+
+#[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TaskContinueDeliveryBody {
     pub delivery_target: String,
@@ -1222,6 +1250,11 @@ mod tests {
             12,
             parse_task_continue_delivery,
         );
+    }
+
+    #[test]
+    fn task_issue_request_fixtures_match_public_zod_contract() {
+        assert_request_fixtures("tasks.TaskIssueBodySchema", 17, parse_task_issue);
     }
 
     #[test]

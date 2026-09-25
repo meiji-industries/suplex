@@ -53,6 +53,10 @@ pub fn router() -> Router<AppState> {
         .route("/api/tasks/{task_id}", get(get_one).patch(update_details))
         .route("/api/tasks/{task_id}/rename", axum::routing::post(rename))
         .route(
+            "/api/tasks/{task_id}/issue",
+            axum::routing::patch(set_issue),
+        )
+        .route(
             "/api/tasks/{task_id}/start",
             axum::routing::post(start_pending),
         )
@@ -968,6 +972,45 @@ async fn disarm_pending(
         },
     );
     match disarmed {
+        Ok(task) => with_cookies(Json(task).into_response(), cookies),
+        Err(error) => with_cookies(service_error(error), cookies),
+    }
+}
+
+async fn set_issue(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    if let Err(response) = validated_task_id(&id) {
+        return *response;
+    }
+    let request =
+        match auth::validated_typed_body(&headers, &body, task_contracts::parse_task_issue) {
+            Ok(value) => value,
+            Err(response) => return *response,
+        };
+    if !session::csrf_allowed(&state.session_config, &headers, "PATCH", false) {
+        return auth::error(StatusCode::FORBIDDEN, "request_origin_invalid");
+    }
+    let (user_id, cookies) = match authorize(&state, &headers) {
+        Ok(value) => value,
+        Err(response) => return *response,
+    };
+    let result = state.with_database(
+        |database| -> Result<task_response::TaskResponse, Box<dyn Error>> {
+            commands::set_user_task_issue(
+                database,
+                &user_id,
+                &id,
+                request.issue.as_ref(),
+                Utc::now(),
+            )?;
+            task_response::get(database, &id)?.ok_or_else(|| "linked task disappeared".into())
+        },
+    );
+    match result {
         Ok(task) => with_cookies(Json(task).into_response(), cookies),
         Err(error) => with_cookies(service_error(error), cookies),
     }

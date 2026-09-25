@@ -14,8 +14,9 @@ use crate::{
         projects::ProjectProviderPolicy,
         task_answers::{AnswerBody, LimitDecisionBody, TaskLimitDecision},
         tasks::{
-            TaskContinueDeliveryBody, TaskCoordinatorReplacementBody, TaskCreateBody,
-            TaskDetailsBody, TaskNoteBody, TaskRenameBody, TaskWorkerReplacementBody,
+            IssueAssociation, TaskContinueDeliveryBody, TaskCoordinatorReplacementBody,
+            TaskCreateBody, TaskDetailsBody, TaskNoteBody, TaskRenameBody,
+            TaskWorkerReplacementBody,
         },
     },
     identity::companies,
@@ -699,6 +700,42 @@ pub fn continue_user_delivery(
     })
 }
 
+/// Clear the task's issue link. Linking an issue first reads it from the issue
+/// tracker, which is not ported.
+pub fn set_user_task_issue(
+    database: &mut SuplexDatabase,
+    actor_user_id: &str,
+    task_id: &str,
+    issue: Option<&IssueAssociation>,
+    now: DateTime<Utc>,
+) -> DatabaseResult<TaskRecord> {
+    require_user_task(database, actor_user_id, task_id)?;
+    if issue.is_some() {
+        return Err(Box::new(TaskFailure::not_ported(
+            "Issue tracker reads are not ported",
+        )));
+    }
+    database.transaction(true, |database| {
+        let current = require_user_task(database, actor_user_id, task_id)?;
+        database.connection().execute(
+            "UPDATE suplex_tasks SET issue_json = NULL, updated_at = ?1 WHERE id = ?2",
+            params![timestamp(now), task_id],
+        )?;
+        let started: bool = database.connection().query_row(
+            "SELECT EXISTS(SELECT 1 FROM suplex_task_sessions WHERE task_id = ?1 AND native_session_id IS NOT NULL UNION ALL SELECT 1 FROM suplex_task_turns WHERE task_id = ?1 AND status IN ('prompted', 'unknown', 'completed'))",
+            [task_id],
+            |row| row.get(0),
+        )?;
+        if matches!(current.status.as_str(), "backlog" | "queued") && !started {
+            database.connection().execute(
+                "UPDATE suplex_tasks SET issue_context_json = NULL WHERE id = ?1",
+                [task_id],
+            )?;
+        }
+        Ok(current)
+    })
+}
+
 /// Cancel intent before waking the host. A disconnected HTTP waiter cannot
 /// undo the committed stop request or cause the native session to replay.
 pub fn cancel_user_task(
@@ -1339,6 +1376,47 @@ mod tests {
             )
         );
         assert_eq!(wakes.load(Ordering::SeqCst), 1);
+        drop(database);
+        let _ = std::fs::remove_file(&filename);
+    }
+
+    #[test]
+    fn issue_link_clears_locally_and_reports_tracker_reads_as_not_ported() {
+        let (filename, mut database, user, prepared) = command_fixture();
+        let now = Utc::now();
+        let issue = json!({"kind":"github","repository":"owner/repo","number":12,"id":"123","key":"GH-12","title":"Issue","url":"https://github.com/owner/repo/issues/12"});
+        let linked = PreparedTask {
+            issue: Some(issue.clone()),
+            ..prepared.clone()
+        };
+        let task = repository::create(&mut database, &linked, now)
+            .unwrap()
+            .task;
+        database
+            .connection()
+            .execute(
+                "UPDATE suplex_tasks SET issue_context_json = '{}' WHERE id = ?1",
+                [&task.id],
+            )
+            .unwrap();
+        let association: IssueAssociation = serde_json::from_value(issue).unwrap();
+        let not_ported =
+            set_user_task_issue(&mut database, &user, &task.id, Some(&association), now)
+                .unwrap_err()
+                .downcast::<TaskFailure>()
+                .unwrap();
+        assert_eq!(not_ported.code, "experimental_not_ported");
+        assert!(set_user_task_issue(&mut database, "missing-user", &task.id, None, now).is_err());
+        set_user_task_issue(&mut database, &user, &task.id, None, now).unwrap();
+        let (issue_json, context): (Option<String>, Option<String>) = database
+            .connection()
+            .query_row(
+                "SELECT issue_json, issue_context_json FROM suplex_tasks WHERE id = ?1",
+                [&task.id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!((issue_json, context), (None, None));
         drop(database);
         let _ = std::fs::remove_file(&filename);
     }

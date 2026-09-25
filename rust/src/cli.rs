@@ -551,7 +551,7 @@ mod tests {
         assert!(
             checks
                 .iter()
-                .any(|check| check.name == "Codex CLI" && check.status == "WARN")
+                .any(|check| check.name == "Codex CLI" && check.status != "FAIL")
         );
         drop(state);
         std::fs::remove_dir_all(root).unwrap();

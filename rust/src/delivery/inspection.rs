@@ -6,15 +6,7 @@ use git2::{DiffFormat, DiffOptions, Repository, Sort};
 use serde::Serialize;
 use sha2::{Digest, Sha256};
 
-use crate::{
-    coordination::{root_bridge::RootIdentity, root_session_store},
-    integrations::{github::Access, github_delivery::valid_sha},
-    platform::{
-        database::{DatabaseResult, OpenMode, SuplexDatabase},
-        redaction,
-    },
-    tasks::worktree,
-};
+use crate::{integrations::github_delivery::valid_sha, platform::redaction, tasks::worktree};
 
 const PATCH_DISPLAY_UNITS: usize = 64_000;
 
@@ -272,59 +264,6 @@ pub fn inspect_git_range(
         patch_truncated,
         base_branch: base_branch.to_owned(),
     })
-}
-
-/// The MCP transport already holds this call's tool-owner token. The source
-/// inspection itself requires only a current Root assertion before Git reads.
-pub async fn inspect_standard_delivery_diff(
-    database_path: &Path,
-    root: &RootIdentity,
-) -> DatabaseResult<serde_json::Value> {
-    let database = SuplexDatabase::open(database_path, OpenMode::ReadOnly)?;
-    root_session_store::assert_current_root(
-        &database,
-        &root.task_id,
-        &root.session_id,
-        root.generation,
-    )?;
-    let rows = root_session_store::root_observation_rows(&database, &root.task_id)?;
-    let control = rows.control;
-    if control["workflow"] != "standard"
-        || !control["pullRequest"].is_null()
-        || !control["deliveryIntent"]["pullRequestNumber"].is_null()
-        || rows.context["configuration"]["source"]["kind"] == "pull_request"
-        || rows.context["configuration"]["integration"]["repository"]["kind"] == "bitbucket"
-    {
-        return Err(unavailable(
-            "Standard delivery inspection is not available for this task",
-        ));
-    }
-    let path = control["worktree"]["path"]
-        .as_str()
-        .ok_or_else(|| unavailable("The task has no worktree"))?;
-    let repository = control["deliveryIntent"]["repository"]
-        .as_str()
-        .ok_or_else(|| unavailable("Task delivery repository is missing"))?;
-    let branch = control["deliveryIntent"]["baseBranch"]
-        .as_str()
-        .ok_or_else(|| unavailable("Task delivery base branch is missing"))?;
-    let local = worktree::observe_local_revision(Path::new(path))?;
-    let head = git2::Oid::from_str(&local.head_sha)?;
-    let access = Access::load()
-        .await
-        .map_err(|error| std::io::Error::other(error.to_string()))?;
-    let published_base = access
-        .published_branch_sha(repository, branch)
-        .await
-        .map_err(|error| std::io::Error::other(error.to_string()))?;
-    let diff = inspect_git_range(
-        Path::new(path),
-        head,
-        published_base,
-        access.token(),
-        branch,
-    )?;
-    Ok(serde_json::to_value(diff)?)
 }
 
 #[cfg(test)]

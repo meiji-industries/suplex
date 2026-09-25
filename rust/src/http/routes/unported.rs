@@ -167,11 +167,6 @@ const ROUTES: &[(Method, &str, Access)] = &[
     (Method::POST, "/api/tasks/{task_id}/refresh", Authenticated),
     (
         Method::POST,
-        "/api/tasks/{task_id}/replace-coordinator",
-        Authenticated,
-    ),
-    (
-        Method::POST,
         "/api/tasks/{task_id}/save-as-template",
         Authenticated,
     ),

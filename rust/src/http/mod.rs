@@ -23,6 +23,7 @@ pub mod routes {
     pub mod pages;
     pub mod profiles;
     pub mod projects;
+    pub mod task_agents;
     pub mod task_history;
     pub mod task_reads;
     pub mod task_templates;
@@ -114,6 +115,7 @@ pub fn router(state: AppState) -> Router {
         .merge(routes::pages::router())
         .merge(routes::profiles::router())
         .merge(routes::projects::router())
+        .merge(routes::task_agents::router())
         .merge(routes::task_reads::router())
         .merge(routes::task_history::router())
         .merge(routes::task_templates::router())

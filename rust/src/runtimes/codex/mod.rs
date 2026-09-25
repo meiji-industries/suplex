@@ -1,5 +1,6 @@
 pub mod display;
 pub mod executable;
+pub mod harness;
 pub mod invocation;
 pub mod role_prompt;
 pub mod runtime;

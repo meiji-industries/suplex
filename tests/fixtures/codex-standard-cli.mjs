@@ -89,8 +89,20 @@ async function root(prompt) {
     const evidence = await rootTool(binding, "read_worker_evidence", { turnId: observed.workerResult.turnId });
     if (!evidence || !JSON.stringify(evidence).includes("pnpm test")) throw new Error("Worker test evidence is missing");
     const head = (await command("git", ["rev-parse", "HEAD"])).trim();
-    await rootTool(binding, "request_delivery", { operation: "complete_local_work", expectedHead: head });
-    line({ type: "item.completed", item: { id: "root_delivery", type: "agent_message", text: "Reviewed Worker evidence and completed local delivery." } });
+    if (phase === "deliver_pr") {
+      const diff = await rootTool(binding, "request_delivery", { operation: "inspect_delivery_diff" });
+      const review = { baseSha: diff.baseSha, headSha: diff.headSha, files: diff.files, commits: diff.commits, patchDigest: diff.patchDigest };
+      await rootTool(binding, "request_delivery", { operation: "push_branch", expectedHead: head, review });
+      await rootTool(binding, "request_delivery", {
+        operation: "create_or_adopt_pull_request", expectedHead: head, review,
+        pullRequestTitle: "Append a verified README line",
+        pullRequestBody: "## Summary\n- Append one README line\n## Why\nThe task requested it.\n## Validation\n- pnpm test passed\n## Review notes\nOne line changed.",
+      });
+      line({ type: "item.completed", item: { id: "root_delivery", type: "agent_message", text: "Reviewed Worker evidence and opened a draft pull request." } });
+    } else {
+      await rootTool(binding, "request_delivery", { operation: "complete_local_work", expectedHead: head });
+      line({ type: "item.completed", item: { id: "root_delivery", type: "agent_message", text: "Reviewed Worker evidence and completed local delivery." } });
+    }
   }
   line({ type: "turn.completed", usage: { input_tokens: 1, cached_input_tokens: 0, cache_write_input_tokens: 0, output_tokens: 1, reasoning_output_tokens: 0 } });
 }

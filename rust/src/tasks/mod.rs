@@ -1,6 +1,7 @@
 pub mod analytics;
 pub mod archive;
 pub mod commands;
+pub mod duplicate_title;
 pub mod host;
 pub mod images;
 pub mod integration;

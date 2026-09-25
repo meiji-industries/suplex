@@ -694,9 +694,73 @@ pub fn parse_task_id_params(input: Option<&Value>) -> ContractResult<TaskIdParam
     Ok(parsed)
 }
 
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub struct TaskArchiveBody {
+    pub confirm_discard_dirty: bool,
+}
+
+/// The archive body is optional, while a supplied body remains a strict object.
+pub fn parse_task_archive(input: Option<&Value>) -> ContractResult<TaskArchiveBody> {
+    let Some(input) = input else {
+        return Ok(TaskArchiveBody {
+            confirm_discard_dirty: false,
+        });
+    };
+    let fields = object(Some(input))?;
+    let mut issues = Vec::new();
+    let confirm_discard_dirty = match fields.get("confirmDiscardDirty") {
+        Some(Value::Bool(value)) => *value,
+        Some(_) => {
+            issues.push(finding(
+                "invalid_type",
+                &[Value::String("confirmDiscardDirty".into())],
+            ));
+            false
+        }
+        None => false,
+    };
+    if fields.keys().any(|key| key != "confirmDiscardDirty") {
+        issues.push(finding("unrecognized_keys", &[]));
+    }
+    if issues.is_empty() {
+        Ok(TaskArchiveBody {
+            confirm_discard_dirty,
+        })
+    } else {
+        Err(ContractFailure::Issues(issues))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn optional_archive_body_is_strict_and_preserves_public_findings() {
+        assert!(!parse_task_archive(None).unwrap().confirm_discard_dirty);
+        assert!(
+            !parse_task_archive(Some(&serde_json::json!({})))
+                .unwrap()
+                .confirm_discard_dirty
+        );
+        assert!(
+            parse_task_archive(Some(&serde_json::json!({"confirmDiscardDirty":true})))
+                .unwrap()
+                .confirm_discard_dirty
+        );
+        assert!(matches!(
+            parse_task_archive(Some(&Value::Null)),
+            Err(ContractFailure::Issues(issues)) if issues == vec![finding("invalid_type", &[])]
+        ));
+        assert!(matches!(
+            parse_task_archive(Some(&serde_json::json!({"confirmDiscardDirty":"yes"}))),
+            Err(ContractFailure::Issues(issues)) if issues == vec![finding("invalid_type", &[Value::String("confirmDiscardDirty".into())])]
+        ));
+        assert!(matches!(
+            parse_task_archive(Some(&serde_json::json!({"other":true}))),
+            Err(ContractFailure::Issues(issues)) if issues == vec![finding("unrecognized_keys", &[])]
+        ));
+    }
 
     #[test]
     fn task_create_request_fixtures_match_public_zod_contract() {

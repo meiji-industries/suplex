@@ -1,0 +1,447 @@
+//! Archive a task only after native sessions and its live Git worktree are safe.
+//! Saved pane and worktree display fields do not decide whether cleanup may run.
+
+use std::{
+    collections::HashSet,
+    fs, io,
+    path::{Path, PathBuf},
+    sync::{Mutex, OnceLock},
+};
+
+use chrono::{SecondsFormat, Utc};
+use rusqlite::params;
+use serde_json::Value;
+
+use crate::{
+    identity::companies,
+    platform::database::{DatabaseResult, OpenMode, SuplexDatabase},
+    runtimes::{codex::session_reader, process::inspect_process},
+    tasks::{
+        commands::TaskFailure,
+        repository::{self, TaskRecord},
+        worktree::{self, TaskWorktreeIntent, WorktreeCleanup},
+    },
+};
+
+static ARCHIVES_IN_PROGRESS: OnceLock<Mutex<HashSet<String>>> = OnceLock::new();
+
+struct ArchiveGuard(String);
+
+impl ArchiveGuard {
+    fn acquire(task_id: &str) -> DatabaseResult<Self> {
+        let mut active = ARCHIVES_IN_PROGRESS
+            .get_or_init(|| Mutex::new(HashSet::new()))
+            .lock()
+            .map_err(|_| io::Error::other("Archive state is unavailable"))?;
+        if !active.insert(task_id.to_owned()) {
+            return Err(failure("Archive cleanup is in progress", 409));
+        }
+        Ok(Self(task_id.to_owned()))
+    }
+}
+
+impl Drop for ArchiveGuard {
+    fn drop(&mut self) {
+        if let Some(active) = ARCHIVES_IN_PROGRESS.get()
+            && let Ok(mut active) = active.lock()
+        {
+            active.remove(&self.0);
+        }
+    }
+}
+
+pub fn in_progress(task_id: &str) -> bool {
+    ARCHIVES_IN_PROGRESS
+        .get()
+        .and_then(|active| active.lock().ok().map(|active| active.contains(task_id)))
+        .unwrap_or(false)
+}
+
+fn failure(message: &str, status_code: u16) -> Box<dyn std::error::Error> {
+    failure_code(message, status_code, "task_failure")
+}
+
+fn failure_code(message: &str, status_code: u16, code: &'static str) -> Box<dyn std::error::Error> {
+    Box::new(TaskFailure {
+        public_message: message.to_owned(),
+        status_code,
+        code,
+    })
+}
+
+fn not_ported() -> Box<dyn std::error::Error> {
+    failure_code(
+        "Experimental Rust backend has not ported this route",
+        501,
+        "experimental_not_ported",
+    )
+}
+
+fn cleanup_error(error: Box<dyn std::error::Error>) -> Box<dyn std::error::Error> {
+    if error.is::<TaskFailure>() {
+        error
+    } else {
+        failure(&error.to_string(), 409)
+    }
+}
+
+fn required_path(configuration: &Value, field: &str) -> DatabaseResult<PathBuf> {
+    let value = configuration[field]
+        .as_str()
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| io::Error::other(format!("Task {field} is missing")))?;
+    Ok(PathBuf::from(value))
+}
+
+fn task_scope(
+    database: &SuplexDatabase,
+    actor_user_id: &str,
+    task_id: &str,
+) -> DatabaseResult<(TaskRecord, Value)> {
+    let task =
+        repository::task_by_id(database, task_id)?.ok_or_else(|| failure("Not found", 404))?;
+    companies::require_company_access(database, actor_user_id, &task.company_id)?;
+    let configuration: String = database.connection().query_row(
+        "SELECT configuration_json FROM suplex_tasks WHERE id = ?1",
+        [task_id],
+        |row| row.get(0),
+    )?;
+    Ok((task, serde_json::from_str(&configuration)?))
+}
+
+fn reauthorize(database_path: &Path, actor_user_id: &str, task_id: &str) -> DatabaseResult<()> {
+    let database = SuplexDatabase::open(database_path, OpenMode::ReadOnly)?;
+    task_scope(&database, actor_user_id, task_id)?;
+    Ok(())
+}
+
+fn archive_sessions_idle(
+    database: &SuplexDatabase,
+    database_path: &Path,
+    task_id: &str,
+) -> DatabaseResult<()> {
+    let mut statement = database.connection().prepare(
+        "SELECT id, launch_owner_pid, launch_owner_start_time, native_session_id FROM suplex_task_sessions WHERE task_id = ?1",
+    )?;
+    let sessions = statement
+        .query_map([task_id], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, Option<u32>>(1)?,
+                row.get::<_, Option<String>>(2)?,
+                row.get::<_, Option<String>>(3)?,
+            ))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    for (session_id, owner_pid, owner_start_time, native_session_id) in sessions {
+        if let (Some(pid), Some(start_time)) = (owner_pid, owner_start_time)
+            && inspect_process(pid)
+                .as_ref()
+                .is_some_and(|owner| owner.start_time == start_time)
+        {
+            return Err(failure(
+                "A task session operation is still active. Retry after it stops.",
+                409,
+            ));
+        }
+        let directory = session_reader::session_directory(database_path, &session_id)?;
+        match native_session_id.as_deref() {
+            Some(native_id) if native_id.starts_with("codex-") => {}
+            None => match fs::metadata(directory.join("server.json")) {
+                Err(error) if error.kind() == io::ErrorKind::NotFound => {}
+                Ok(_) => return Err(not_ported()),
+                Err(error) => return Err(error.into()),
+            },
+            Some(_) => return Err(not_ported()),
+        }
+        if session_reader::busy(&directory)? {
+            return Err(failure(
+                "An agent is still active. Retry after it stops.",
+                409,
+            ));
+        }
+    }
+    Ok(())
+}
+
+#[derive(Debug)]
+pub enum ArchiveOutcome {
+    Archived(TaskRecord),
+    ConfirmationRequired(Vec<String>),
+}
+
+/// Unarchive the currently authorized Standard/local task. Pull-request
+/// availability needs a separate live GitHub observer, so that valid path is
+/// explicit until it is connected rather than silently bypassed.
+pub fn unarchive_local_task(
+    database: &mut SuplexDatabase,
+    actor_user_id: &str,
+    task_id: &str,
+) -> DatabaseResult<TaskRecord> {
+    database.transaction(true, |database| {
+        let (_, configuration) = task_scope(database, actor_user_id, task_id)?;
+        if in_progress(task_id) {
+            return Err(failure("Archive cleanup is in progress", 409));
+        }
+        let (workflow, target, has_pull_dependencies): (String, String, bool) = database.connection().query_row(
+            "SELECT c.workflow,c.delivery_target,EXISTS(SELECT 1 FROM suplex_task_pull_request_dependencies d WHERE d.task_id = c.task_id) FROM suplex_task_controls c WHERE c.task_id = ?1",
+            [task_id],
+            |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?)),
+        )?;
+        if workflow != "standard"
+            || target != "local_worktree"
+            || has_pull_dependencies
+            || configuration["source"]["kind"] == "pull_request"
+        {
+            return Err(not_ported());
+        }
+        let now = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
+        database.connection().execute(
+            "UPDATE suplex_tasks SET archived_at = NULL, updated_at = ?1 WHERE id = ?2",
+            params![now, task_id],
+        )?;
+        repository::task_by_id(database, task_id)?.ok_or_else(|| failure("Not found", 404))
+    })
+}
+
+/// Synchronous archive operation for a detached blocking caller. The database
+/// is never held locked while native processes or Git are inspected.
+pub fn archive_local_task(
+    database_path: &Path,
+    actor_user_id: &str,
+    task_id: &str,
+    confirm_discard_dirty: bool,
+) -> DatabaseResult<ArchiveOutcome> {
+    let database = SuplexDatabase::open(database_path, OpenMode::ReadOnly)?;
+    let (task, configuration) = task_scope(&database, actor_user_id, task_id)?;
+    if in_progress(task_id) {
+        return Err(failure("Archive cleanup is in progress", 409));
+    }
+    if !["backlog", "queued", "cancelled", "delivered"].contains(&task.status.as_str()) {
+        return Err(failure("Cancel the task before archiving it", 409));
+    }
+    let supported: (String, String) = database.connection().query_row(
+        "SELECT workflow,delivery_target FROM suplex_task_controls WHERE task_id = ?1",
+        [task_id],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )?;
+    if supported.0 != "standard" || supported.1 != "local_worktree" {
+        return Err(not_ported());
+    }
+    let _guard = ArchiveGuard::acquire(task_id)?;
+    archive_sessions_idle(&database, database_path, task_id).map_err(cleanup_error)?;
+    drop(database);
+    reauthorize(database_path, actor_user_id, task_id)?;
+
+    let intent = TaskWorktreeIntent {
+        task_id: task_id.to_owned(),
+        repository_path: required_path(&configuration, "repositoryPath")?,
+        worktree_root: required_path(&configuration, "worktreeRoot")?,
+        branch: configuration["branch"]
+            .as_str()
+            .unwrap_or_default()
+            .to_owned(),
+        starting_sha: configuration["startingSha"]
+            .as_str()
+            .unwrap_or_default()
+            .to_owned(),
+    };
+    let cleanup = worktree::remove_local_task_worktree(&intent, confirm_discard_dirty, || {
+        reauthorize(database_path, actor_user_id, task_id)
+    })
+    .map_err(cleanup_error)?;
+    if let WorktreeCleanup::ConfirmationRequired { dirty_file_paths } = cleanup {
+        return Ok(ArchiveOutcome::ConfirmationRequired(dirty_file_paths));
+    }
+    reauthorize(database_path, actor_user_id, task_id)?;
+    let mut database = SuplexDatabase::open(database_path, OpenMode::ReadWrite)?;
+    database.transaction(true, |database| {
+        let (current, _) = task_scope(database, actor_user_id, task_id)?;
+        if !["backlog", "queued", "cancelled", "delivered"].contains(&current.status.as_str()) {
+            return Err(failure_code("The task changed while its worktree was removed", 409, "illegal_command"));
+        }
+        let now = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
+        database.connection().execute(
+            "UPDATE suplex_task_controls SET worktree_json = NULL WHERE task_id = ?1",
+            [task_id],
+        )?;
+        database.connection().execute(
+            "UPDATE suplex_task_controls SET status = 'backlog', updated_at = ?1 WHERE task_id = ?2 AND status = 'queued'",
+            params![now, task_id],
+        )?;
+        database.connection().execute(
+            "UPDATE suplex_tasks SET archived_at = ?1, updated_at = ?1 WHERE id = ?2",
+            params![now, task_id],
+        )?;
+        let archived = repository::task_by_id(database, task_id)?
+            .ok_or_else(|| failure("Not found", 404))?;
+        Ok(ArchiveOutcome::Archived(archived))
+    })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        identity::auth,
+        runtimes::headless::{HeadlessTurnRecord, RecordedProcessIdentity},
+        tasks::repository::{PreparedTask, TaskCreator},
+    };
+    use git2::{Repository, Signature};
+    use serde_json::json;
+    use std::fs;
+
+    #[test]
+    fn archive_uses_live_native_and_git_facts_then_commits_once() {
+        let base = std::env::temp_dir().join(format!("suplex-archive-{}", uuid::Uuid::new_v4()));
+        let repository_path = base.join("repository");
+        let worktree_root = base.join("worktrees");
+        fs::create_dir_all(&repository_path).unwrap();
+        let repository = Repository::init(&repository_path).unwrap();
+        fs::write(repository_path.join("README.md"), "archive fixture\n").unwrap();
+        let mut index = repository.index().unwrap();
+        index.add_path(Path::new("README.md")).unwrap();
+        let tree = repository.find_tree(index.write_tree().unwrap()).unwrap();
+        let signature = Signature::now("Suplex", "suplex@example.invalid").unwrap();
+        let sha = repository
+            .commit(Some("HEAD"), &signature, &signature, "Initial", &tree, &[])
+            .unwrap()
+            .to_string();
+        drop(tree);
+        drop(repository);
+        let database_path = base.join("suplex.sqlite");
+        let now = Utc::now();
+        let mut database = SuplexDatabase::open(&database_path, OpenMode::Migrate).unwrap();
+        let user = auth::development_sign_in(&mut database, now).unwrap().user;
+        let time = now.to_rfc3339_opts(SecondsFormat::Millis, true);
+        database.connection().execute("INSERT INTO suplex_companies (id,name,status,created_at) VALUES ('archive_company','Archive','active',?1)", [&time]).unwrap();
+        database.connection().execute("INSERT INTO suplex_projects (id,company_id,name,repository_path,worktree_root,repository_identity,base_branch,setup_command,verification_command,root_profile_id,worker_profile_id,agent_task_policy_json,created_at,updated_at) VALUES ('archive_project','archive_company','Project',?1,?2,NULL,'main','','','root_profile','worker_profile','{}',?3,?3)", params![repository_path.to_string_lossy(),worktree_root.to_string_lossy(),time]).unwrap();
+        let task_id = repository::new_task_id();
+        let intent = TaskWorktreeIntent {
+            task_id: task_id.clone(),
+            repository_path: repository_path.clone(),
+            worktree_root: worktree_root.clone(),
+            branch: "task-archive".into(),
+            starting_sha: sha.clone(),
+        };
+        let worktree = worktree::prepare_local_task_worktree(&intent).unwrap();
+        let task = repository::create(&mut database, &PreparedTask {
+            id: task_id.clone(), company_id: "archive_company".into(), project_id: "archive_project".into(),
+            title: "Archive task".into(), description: "".into(),
+            configuration: json!({"repositoryPath":repository_path,"worktreeRoot":worktree_root,"branch":"task-archive","startingSha":sha}),
+            idempotency_key: "archive-key".into(), request_hash: "archive-hash".into(), creator: TaskCreator::User(user.id.clone()),
+            delivery_target: "local_worktree".into(), delivery_intent: json!({}), root_profile: json!({}), worker_profile: json!({}), advisor_profiles: json!({}), issue: None, start_queued: false, copied_from_task_id: None, depends_on: vec![],
+        }, now).unwrap().task;
+        database
+            .connection()
+            .execute(
+                "UPDATE suplex_task_controls SET worktree_json = ?1 WHERE task_id = ?2",
+                params![
+                    json!({"path":"/stale/display/path","branch":"stale"}).to_string(),
+                    task_id
+                ],
+            )
+            .unwrap();
+        database.connection().execute("INSERT INTO suplex_task_sessions (id,task_id,kind,generation,is_current,lifecycle,created_at,updated_at) VALUES ('archive_session',?1,'root',1,1,'reserved',?2,?2)", params![task_id,time]).unwrap();
+        let owner = inspect_process(std::process::id()).unwrap();
+        database.connection().execute("UPDATE suplex_task_sessions SET launch_owner_pid = ?1,launch_owner_start_time = ?2 WHERE id = 'archive_session'", params![owner.pid,owner.start_time]).unwrap();
+        drop(database);
+        assert!(archive_local_task(&database_path, &user.id, &task_id, false).is_err());
+        assert!(worktree.path.exists());
+        let database = SuplexDatabase::open(&database_path, OpenMode::ReadWrite).unwrap();
+        database.connection().execute("UPDATE suplex_task_sessions SET launch_owner_pid = NULL,launch_owner_start_time = NULL,native_session_id = 'codex-native',profile_json = '{\"provider\":\"opencode\"}' WHERE id = 'archive_session'", []).unwrap();
+        drop(database);
+        let directory =
+            session_reader::session_directory(&database_path, "archive_session").unwrap();
+        fs::create_dir_all(&directory).unwrap();
+        let native = HeadlessTurnRecord {
+            generation: "native-generation".into(),
+            turn_id: "native-turn".into(),
+            session_id: "codex-native".into(),
+            pid: owner.pid,
+            process_identity: RecordedProcessIdentity {
+                command: owner.command,
+                executable: owner.executable,
+                argv: owner.argv,
+                process_group: owner.process_group,
+                start_time: owner.start_time,
+                owner_uid: owner.owner_uid.unwrap(),
+            },
+            dispatch_arguments: vec![],
+        };
+        fs::write(
+            directory.join("turn.json"),
+            serde_json::to_vec(&native).unwrap(),
+        )
+        .unwrap();
+        assert!(archive_local_task(&database_path, &user.id, &task_id, false).is_err());
+        assert!(worktree.path.exists());
+        fs::remove_file(directory.join("turn.json")).unwrap();
+        let database = SuplexDatabase::open(&database_path, OpenMode::ReadWrite).unwrap();
+        database.connection().execute("UPDATE suplex_task_sessions SET native_session_id = 'ses-other' WHERE id = 'archive_session'", []).unwrap();
+        drop(database);
+        let unsupported =
+            archive_local_task(&database_path, &user.id, &task_id, false).unwrap_err();
+        assert_eq!(
+            unsupported
+                .downcast_ref::<TaskFailure>()
+                .unwrap()
+                .status_code,
+            501
+        );
+        let database = SuplexDatabase::open(&database_path, OpenMode::ReadWrite).unwrap();
+        database.connection().execute("UPDATE suplex_task_sessions SET native_session_id = NULL WHERE id = 'archive_session'", []).unwrap();
+        drop(database);
+        fs::write(worktree.path.join("dirty.txt"), "keep\n").unwrap();
+        match archive_local_task(&database_path, &user.id, &task_id, false).unwrap() {
+            ArchiveOutcome::ConfirmationRequired(paths) => assert_eq!(paths, ["dirty.txt"]),
+            ArchiveOutcome::Archived(_) => panic!("dirty worktree needs confirmation"),
+        }
+        fs::write(directory.join("server.json"), "{}").unwrap();
+        let unsupported =
+            archive_local_task(&database_path, &user.id, &task_id, false).unwrap_err();
+        assert_eq!(
+            unsupported.downcast_ref::<TaskFailure>().unwrap().code,
+            "experimental_not_ported"
+        );
+        fs::remove_file(directory.join("server.json")).unwrap();
+        let database = SuplexDatabase::open(&database_path, OpenMode::ReadWrite).unwrap();
+        database.connection().execute("UPDATE suplex_task_sessions SET launch_owner_pid = ?1,launch_owner_start_time = 'stale-start',native_session_id = 'codex-native' WHERE id = 'archive_session'", [owner.pid]).unwrap();
+        drop(database);
+        match archive_local_task(&database_path, &user.id, &task_id, false).unwrap() {
+            ArchiveOutcome::ConfirmationRequired(paths) => assert_eq!(paths, ["dirty.txt"]),
+            ArchiveOutcome::Archived(_) => panic!("dirty worktree needs confirmation"),
+        }
+        assert!(worktree.path.exists());
+        #[cfg(target_os = "macos")]
+        let mut native_without_record = std::process::Command::new("/bin/sleep")
+            .arg("30")
+            .current_dir(&worktree.path)
+            .env(
+                "SUPLEX_TASK_PROCESS_OWNER",
+                crate::runtimes::process::owner_marker(&worktree.path),
+            )
+            .spawn()
+            .unwrap();
+        #[cfg(target_os = "macos")]
+        std::thread::sleep(std::time::Duration::from_millis(150));
+        let result = archive_local_task(&database_path, &user.id, &task_id, true);
+        #[cfg(target_os = "macos")]
+        if result.is_err() {
+            let _ = native_without_record.kill();
+        }
+        match result.unwrap() {
+            ArchiveOutcome::Archived(archived) => assert_eq!(archived.id, task.id),
+            ArchiveOutcome::ConfirmationRequired(_) => panic!("confirmed cleanup must archive"),
+        }
+        #[cfg(target_os = "macos")]
+        assert!(native_without_record.wait().unwrap().code().is_none());
+        assert!(!worktree.path.exists());
+        let database = SuplexDatabase::open(&database_path, OpenMode::ReadOnly).unwrap();
+        let (archived, worktree): (bool, Option<String>) = database.connection().query_row("SELECT t.archived_at IS NOT NULL,c.worktree_json FROM suplex_tasks t JOIN suplex_task_controls c ON c.task_id = t.id WHERE t.id = ?1", [&task_id], |row| Ok((row.get(0)?,row.get(1)?))).unwrap();
+        assert!(archived);
+        assert!(worktree.is_none());
+        drop(database);
+        fs::remove_dir_all(base).unwrap();
+    }
+}

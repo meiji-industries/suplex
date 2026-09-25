@@ -12,6 +12,7 @@ use axum::{
 };
 use chrono::Utc;
 use rusqlite::OptionalExtension;
+use serde::Serialize;
 use serde_json::{Value, json};
 
 use crate::{
@@ -29,6 +30,7 @@ use crate::{
         service::{self as projects, ProjectFailure},
     },
     tasks::{
+        archive::operations::{self as archive, ArchiveOutcome},
         commands::{self, TaskFailure},
         repository::TaskConflict,
         response as task_response,
@@ -57,6 +59,136 @@ pub fn router() -> Router<AppState> {
             "/api/tasks/{task_id}/answer",
             axum::routing::post(answer_pending),
         )
+        .route(
+            "/api/tasks/{task_id}/archive",
+            axum::routing::post(archive_pending),
+        )
+        .route(
+            "/api/tasks/{task_id}/unarchive",
+            axum::routing::post(unarchive_pending),
+        )
+}
+
+async fn unarchive_pending(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+) -> Response {
+    if let Err(response) = validated_task_id(&id) {
+        return *response;
+    }
+    if !session::csrf_allowed(&state.session_config, &headers, "POST", false) {
+        return auth::error(StatusCode::FORBIDDEN, "request_origin_invalid");
+    }
+    let (user_id, cookies) = match authorize(&state, &headers) {
+        Ok(value) => value,
+        Err(response) => return *response,
+    };
+    let result = state.with_database(|database| -> Result<_, Box<dyn Error>> {
+        archive::unarchive_local_task(database, &user_id, &id)?;
+        task_response::get(database, &id)?.ok_or_else(|| "unarchived task disappeared".into())
+    });
+    match result {
+        Ok(task) => with_cookies(Json(task).into_response(), cookies),
+        Err(error) => with_cookies(service_error(error), cookies),
+    }
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ArchiveConfirmation {
+    status: &'static str,
+    dirty_file_count: usize,
+    dirty_file_paths: Vec<String>,
+}
+
+fn archive_error(error: &(dyn Error + 'static)) -> (StatusCode, String, bool) {
+    if let Some(failure) = error.downcast_ref::<TaskFailure>() {
+        return (
+            StatusCode::from_u16(failure.status_code).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
+            failure.public_message.clone(),
+            failure.code == "experimental_not_ported",
+        );
+    }
+    if let Some(failure) = error.downcast_ref::<crate::identity::auth::AuthFailure>() {
+        return (
+            StatusCode::from_u16(failure.status_code).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
+            failure.message.to_owned(),
+            false,
+        );
+    }
+    (StatusCode::CONFLICT, error.to_string(), false)
+}
+
+async fn archive_pending(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    if let Err(response) = validated_task_id(&id) {
+        return *response;
+    }
+    let request =
+        match auth::validated_typed_body(&headers, &body, task_contracts::parse_task_archive) {
+            Ok(request) => request,
+            Err(response) => return *response,
+        };
+    if !session::csrf_allowed(&state.session_config, &headers, "POST", false) {
+        return auth::error(StatusCode::FORBIDDEN, "request_origin_invalid");
+    }
+    let (user_id, cookies) = match authorize(&state, &headers) {
+        Ok(value) => value,
+        Err(response) => return *response,
+    };
+    let Some(database_path) =
+        state.with_database(|database| database.connection().path().map(PathBuf::from))
+    else {
+        return with_cookies(
+            auth::error(StatusCode::INTERNAL_SERVER_ERROR, "Internal server error"),
+            cookies,
+        );
+    };
+    let response_user_id = user_id.clone();
+    // Admission owns the blocking operation, including its in-process archive
+    // guard, even if the HTTP waiter disconnects before Git cleanup finishes.
+    let operation = tokio::task::spawn_blocking(move || {
+        archive::archive_local_task(&database_path, &user_id, &id, request.confirm_discard_dirty)
+            .map_err(|error| archive_error(error.as_ref()))
+    });
+    let result = match operation.await {
+        Ok(result) => result,
+        Err(_) => {
+            return with_cookies(
+                auth::error(StatusCode::INTERNAL_SERVER_ERROR, "Internal server error"),
+                cookies,
+            );
+        }
+    };
+    match result {
+        Ok(ArchiveOutcome::ConfirmationRequired(paths)) => with_cookies(
+            Json(ArchiveConfirmation {
+                status: "confirmation_required",
+                dirty_file_count: paths.len(),
+                dirty_file_paths: paths,
+            })
+            .into_response(),
+            cookies,
+        ),
+        Ok(ArchiveOutcome::Archived(task)) => {
+            let result = state.with_database(|database| -> Result<_, Box<dyn Error>> {
+                companies::require_company_access(database, &response_user_id, &task.company_id)?;
+                task_response::get(database, &task.id)?
+                    .ok_or_else(|| "archived task disappeared".into())
+            });
+            match result {
+                Ok(task) => with_cookies(Json(task).into_response(), cookies),
+                Err(error) => with_cookies(service_error(error), cookies),
+            }
+        }
+        Err((_, _, true)) => with_cookies(auth::not_ported(), cookies),
+        Err((status, message, false)) => with_cookies(auth::error(status, &message), cookies),
+    }
 }
 
 fn validated_company_id(id: &str) -> Result<(), Box<Response>> {
@@ -114,6 +246,9 @@ fn with_cookies(mut response: Response, cookies: Vec<String>) -> Response {
 fn service_error(source: Box<dyn Error>) -> Response {
     let source = match source.downcast::<TaskFailure>() {
         Ok(failure) => {
+            if failure.code == "experimental_not_ported" {
+                return auth::not_ported();
+            }
             return auth::error(
                 StatusCode::from_u16(failure.status_code)
                     .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
@@ -1280,8 +1415,12 @@ mod tests {
             .unwrap()["status"],
             "active"
         );
-        let cancelled_without_host =
-            cancel_pending(State(state.clone()), Path(disconnected_id), headers.clone()).await;
+        let cancelled_without_host = cancel_pending(
+            State(state.clone()),
+            Path(disconnected_id.clone()),
+            headers.clone(),
+        )
+        .await;
         assert_eq!(cancelled_without_host.status(), StatusCode::OK);
         assert_eq!(
             serde_json::from_slice::<Value>(
@@ -1292,6 +1431,132 @@ mod tests {
             .unwrap()["status"],
             "cancelled"
         );
+        let intent = crate::tasks::worktree::TaskWorktreeIntent {
+            task_id: task_id.clone(),
+            repository_path: PathBuf::from(
+                value["configuration"]["repositoryPath"].as_str().unwrap(),
+            ),
+            worktree_root: PathBuf::from(value["configuration"]["worktreeRoot"].as_str().unwrap()),
+            branch: value["configuration"]["branch"]
+                .as_str()
+                .unwrap()
+                .to_owned(),
+            starting_sha: value["configuration"]["startingSha"]
+                .as_str()
+                .unwrap()
+                .to_owned(),
+        };
+        let worktree = crate::tasks::worktree::prepare_local_task_worktree(&intent).unwrap();
+        fs::write(
+            worktree.path.join("archive-dirty.txt"),
+            "keep until confirmed\n",
+        )
+        .unwrap();
+        let invalid_archive = archive_pending(
+            State(state.clone()),
+            Path(task_id.clone()),
+            content_headers,
+            Bytes::from(r#"{"confirmDiscardDirty":"yes"}"#),
+        )
+        .await;
+        assert_eq!(invalid_archive.status(), StatusCode::BAD_REQUEST);
+        let confirmation = archive_pending(
+            State(state.clone()),
+            Path(task_id.clone()),
+            headers.clone(),
+            Bytes::new(),
+        )
+        .await;
+        assert_eq!(confirmation.status(), StatusCode::OK);
+        assert_eq!(
+            to_bytes(confirmation.into_body(), 128 * 1024).await.unwrap().as_ref(),
+            br#"{"status":"confirmation_required","dirtyFileCount":1,"dirtyFilePaths":["archive-dirty.txt"]}"#,
+        );
+        assert!(worktree.path.exists());
+        let archived = archive_pending(
+            State(state.clone()),
+            Path(task_id.clone()),
+            headers.clone(),
+            Bytes::from(r#"{"confirmDiscardDirty":true}"#),
+        )
+        .await;
+        assert_eq!(archived.status(), StatusCode::OK);
+        let archived_raw = to_bytes(archived.into_body(), 128 * 1024).await.unwrap();
+        assert_typescript_task_body(&db_path, &root.join("artifacts"), &archived_raw);
+        assert!(serde_json::from_slice::<Value>(&archived_raw).unwrap()["archivedAt"].is_string());
+        assert!(!worktree.path.exists());
+        let unarchived =
+            unarchive_pending(State(state.clone()), Path(task_id.clone()), headers.clone()).await;
+        assert_eq!(unarchived.status(), StatusCode::OK);
+        let unarchived_raw = to_bytes(unarchived.into_body(), 128 * 1024).await.unwrap();
+        assert_typescript_task_body(&db_path, &root.join("artifacts"), &unarchived_raw);
+        assert!(serde_json::from_slice::<Value>(&unarchived_raw).unwrap()["archivedAt"].is_null());
+        let disconnected_configuration: Value = state.with_database(|database| {
+            let configuration: String = database
+                .connection()
+                .query_row(
+                    "SELECT configuration_json FROM suplex_tasks WHERE id = ?1",
+                    [&disconnected_id],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            serde_json::from_str(&configuration).unwrap()
+        });
+        let disconnected_intent = crate::tasks::worktree::TaskWorktreeIntent {
+            task_id: disconnected_id.clone(),
+            repository_path: PathBuf::from(
+                disconnected_configuration["repositoryPath"]
+                    .as_str()
+                    .unwrap(),
+            ),
+            worktree_root: PathBuf::from(
+                disconnected_configuration["worktreeRoot"].as_str().unwrap(),
+            ),
+            branch: disconnected_configuration["branch"]
+                .as_str()
+                .unwrap()
+                .to_owned(),
+            starting_sha: disconnected_configuration["startingSha"]
+                .as_str()
+                .unwrap()
+                .to_owned(),
+        };
+        let disconnected_worktree =
+            crate::tasks::worktree::prepare_local_task_worktree(&disconnected_intent).unwrap();
+        let mut dropped_archive = Box::pin(archive_pending(
+            State(state.clone()),
+            Path(disconnected_id.clone()),
+            headers.clone(),
+            Bytes::new(),
+        ));
+        assert!(matches!(
+            std::future::Future::poll(
+                dropped_archive.as_mut(),
+                &mut Context::from_waker(Waker::noop())
+            ),
+            Poll::Pending
+        ));
+        drop(dropped_archive);
+        tokio::time::timeout(std::time::Duration::from_secs(10), async {
+            loop {
+                let archived: bool = state
+                    .with_database(|database| {
+                        database.connection().query_row(
+                            "SELECT archived_at IS NOT NULL FROM suplex_tasks WHERE id = ?1",
+                            [&disconnected_id],
+                            |row| row.get(0),
+                        )
+                    })
+                    .unwrap();
+                if archived {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+            }
+        })
+        .await
+        .unwrap();
+        assert!(!disconnected_worktree.path.exists());
         state.with_database(|database| -> Result<(), rusqlite::Error> {
             database.connection().execute(
                 "INSERT INTO suplex_companies (id, name, status, created_at) VALUES ('task_other_company', 'Other', 'active', ?1)",

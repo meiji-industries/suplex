@@ -4,9 +4,10 @@
 use std::error::Error;
 use std::fs;
 use std::io;
+use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 
-use git2::{BranchType, Repository, StatusOptions, WorktreeAddOptions};
+use git2::{BranchType, Repository, StatusOptions, WorktreeAddOptions, WorktreePruneOptions};
 
 pub type WorktreeResult<T> = Result<T, Box<dyn Error>>;
 
@@ -40,6 +41,13 @@ pub struct LocalRevisionObservation {
     pub head_sha: String,
     pub tree_sha: String,
     pub clean: bool,
+}
+
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub enum WorktreeCleanup {
+    Cleaned,
+    AlreadyAbsent,
+    ConfirmationRequired { dirty_file_paths: Vec<String> },
 }
 
 /// Read delivery-time Git facts, including the actual branch. A detached HEAD
@@ -216,6 +224,154 @@ pub fn prepare_local_task_worktree(
     observe(&path, &repository, intent)
 }
 
+/// Remove only the Git worktree registered at this task's path.
+/// A saved WorktreeReference is display state; live Git decides ownership.
+pub fn remove_local_task_worktree(
+    intent: &TaskWorktreeIntent,
+    confirm_discard_dirty: bool,
+    authorize: impl Fn() -> WorktreeResult<()>,
+) -> WorktreeResult<WorktreeCleanup> {
+    if !valid_task_id(&intent.task_id)
+        || !intent.repository_path.is_absolute()
+        || !intent.worktree_root.is_absolute()
+    {
+        return Err(invalid("Invalid task worktree identity"));
+    }
+    let root = fs::canonicalize(&intent.worktree_root).or_else(|error| {
+        if error.kind() == io::ErrorKind::NotFound {
+            std::path::absolute(&intent.worktree_root)
+        } else {
+            Err(error)
+        }
+    })?;
+    let repository_path = fs::canonicalize(&intent.repository_path).or_else(|error| {
+        if error.kind() == io::ErrorKind::NotFound {
+            std::path::absolute(&intent.repository_path)
+        } else {
+            Err(error)
+        }
+    })?;
+    if contains(&repository_path, &root) || contains(&root, &repository_path) {
+        return Err(invalid("Task worktree roots overlap"));
+    }
+    let path = root.join(&intent.task_id);
+    let existing = match fs::symlink_metadata(&path) {
+        Ok(metadata) => Some(metadata),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => None,
+        Err(error) => return Err(error.into()),
+    };
+    let repository = match Repository::open(&repository_path) {
+        Ok(repository) => Some(repository),
+        Err(error) if existing.is_none() && !repository_path.exists() => None,
+        Err(error) => return Err(error.into()),
+    };
+    let Some(repository) = repository else {
+        authorize()?;
+        crate::tasks::archive::processes::stop_worktree_processes(&path)?;
+        return Ok(WorktreeCleanup::AlreadyAbsent);
+    };
+    let mut registered = None;
+    for name in repository.worktrees()?.iter().flatten().flatten() {
+        let worktree = repository.find_worktree(name)?;
+        if worktree.path() == path {
+            registered = Some(worktree);
+            break;
+        }
+    }
+    let Some(registered) = registered else {
+        if existing.is_some() {
+            return Err(invalid("Task worktree path has a conflicting owner"));
+        }
+        authorize()?;
+        crate::tasks::archive::processes::stop_worktree_processes(&path)?;
+        return Ok(WorktreeCleanup::AlreadyAbsent);
+    };
+    if existing
+        .as_ref()
+        .is_some_and(|metadata| metadata.file_type().is_symlink() || !metadata.is_dir())
+    {
+        return Err(invalid("Task worktree path has a conflicting owner"));
+    }
+    if existing.is_some() {
+        observe(&path, &repository, intent)?;
+        let dirty_file_paths = dirty_file_paths(&path)?;
+        if !dirty_file_paths.is_empty() && !confirm_discard_dirty {
+            return Ok(WorktreeCleanup::ConfirmationRequired { dirty_file_paths });
+        }
+    }
+    authorize()?;
+    crate::tasks::archive::processes::stop_worktree_processes(&path)?;
+    authorize()?;
+    if existing.is_some() && !confirm_discard_dirty {
+        let dirty_file_paths = dirty_file_paths(&path)?;
+        if !dirty_file_paths.is_empty() {
+            return Ok(WorktreeCleanup::ConfirmationRequired { dirty_file_paths });
+        }
+        if has_populated_submodules(&path)? {
+            return Err(invalid("Task worktree has populated submodules"));
+        }
+    }
+    let mut options = WorktreePruneOptions::new();
+    options.valid(true).working_tree(true);
+    registered.prune(Some(&mut options))?;
+    if fs::symlink_metadata(&path).is_ok()
+        || repository
+            .worktrees()?
+            .iter()
+            .flatten()
+            .flatten()
+            .any(|name| {
+                repository
+                    .find_worktree(name)
+                    .is_ok_and(|worktree| worktree.path() == path)
+            })
+    {
+        return Err(invalid("Git did not remove the task worktree"));
+    }
+    Ok(if existing.is_some() {
+        WorktreeCleanup::Cleaned
+    } else {
+        WorktreeCleanup::AlreadyAbsent
+    })
+}
+
+fn dirty_file_paths(path: &Path) -> WorktreeResult<Vec<String>> {
+    let mut options = StatusOptions::new();
+    options
+        .include_untracked(true)
+        .recurse_untracked_dirs(true)
+        .renames_head_to_index(false)
+        .renames_index_to_workdir(false);
+    let repository = Repository::open(path)?;
+    Ok(repository
+        .statuses(Some(&mut options))?
+        .iter()
+        .map(|entry| entry.path().map(str::to_owned))
+        .collect::<Result<Vec<_>, _>>()?)
+}
+
+fn has_populated_submodules(path: &Path) -> WorktreeResult<bool> {
+    let repository = Repository::open(path)?;
+    for entry in repository
+        .index()?
+        .iter()
+        .filter(|entry| entry.mode == 0o160000)
+    {
+        let submodule_path = std::ffi::OsStr::from_bytes(&entry.path);
+        let submodule_path = path.join(submodule_path);
+        if let Ok(submodule) = Repository::open(&submodule_path)
+            && let Some(workdir) = submodule.workdir()
+            && fs::canonicalize(workdir)
+                .ok()
+                .zip(fs::canonicalize(&submodule_path).ok())
+                .is_some_and(|(actual, expected)| actual == expected)
+        {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -325,6 +481,142 @@ mod tests {
             ..intent.clone()
         };
         assert!(prepare_local_task_worktree(&other).is_err());
+        let switched = Command::new("git")
+            .args([
+                "-C",
+                recovered.path.to_str().unwrap(),
+                "switch",
+                "wrong-branch",
+            ])
+            .output()
+            .unwrap();
+        assert!(switched.status.success());
+        fs::write(recovered.path.join("new.txt"), "keep until confirmed\n").unwrap();
+        assert_eq!(
+            remove_local_task_worktree(&intent, false, || Ok(())).unwrap(),
+            WorktreeCleanup::ConfirmationRequired {
+                dirty_file_paths: vec!["new.txt".into()]
+            }
+        );
+        assert!(recovered.path.exists());
+        assert!(
+            remove_local_task_worktree(&intent, true, || Err(invalid("not authorized"))).is_err()
+        );
+        assert!(recovered.path.exists());
+        assert_eq!(
+            remove_local_task_worktree(&intent, true, || Ok(())).unwrap(),
+            WorktreeCleanup::Cleaned
+        );
+        assert!(!recovered.path.exists());
+        assert!(
+            repository
+                .find_branch("wrong-branch", BranchType::Local)
+                .is_ok()
+        );
+        assert_eq!(
+            remove_local_task_worktree(&intent, false, || Ok(())).unwrap(),
+            WorktreeCleanup::AlreadyAbsent
+        );
+        fs::create_dir_all(&recovered.path).unwrap();
+        let foreign = Repository::init(&recovered.path).unwrap();
+        fs::write(recovered.path.join("keep.txt"), "foreign\n").unwrap();
+        assert!(remove_local_task_worktree(&intent, true, || Ok(())).is_err());
+        assert_eq!(
+            fs::read_to_string(recovered.path.join("keep.txt")).unwrap(),
+            "foreign\n"
+        );
+        drop(foreign);
+        let clean_intent = TaskWorktreeIntent {
+            task_id: "task_clean".into(),
+            branch: "task-clean".into(),
+            ..intent.clone()
+        };
+        let clean = prepare_local_task_worktree(&clean_intent).unwrap();
+        let clean_repository = Repository::open(&clean.path).unwrap();
+        fs::create_dir(clean_repository.path().join("modules")).unwrap();
+        assert!(!has_populated_submodules(&clean.path).unwrap());
+        drop(clean_repository);
+        assert_eq!(
+            remove_local_task_worktree(&clean_intent, false, || Ok(())).unwrap(),
+            WorktreeCleanup::Cleaned
+        );
+        assert!(!clean.path.exists());
+        let submodule_intent = TaskWorktreeIntent {
+            task_id: "task_submodule".into(),
+            branch: "task-submodule".into(),
+            ..intent.clone()
+        };
+        let submodule_worktree = prepare_local_task_worktree(&submodule_intent).unwrap();
+        let nested_path = submodule_worktree.path.join("nested");
+        let nested = Repository::init(&nested_path).unwrap();
+        fs::write(nested_path.join("README.md"), "nested\n").unwrap();
+        let mut nested_index = nested.index().unwrap();
+        nested_index.add_path(Path::new("README.md")).unwrap();
+        nested_index.write().unwrap();
+        let nested_tree = nested
+            .find_tree(nested_index.write_tree().unwrap())
+            .unwrap();
+        let nested_head = nested
+            .commit(
+                Some("HEAD"),
+                &signature,
+                &signature,
+                "Nested",
+                &nested_tree,
+                &[],
+            )
+            .unwrap();
+        drop(nested_tree);
+        drop(nested);
+        let gitlink = format!("160000,{nested_head},nested");
+        let indexed = Command::new("git")
+            .arg("-C")
+            .arg(&submodule_worktree.path)
+            .args(["update-index", "--add", "--cacheinfo", &gitlink])
+            .output()
+            .unwrap();
+        assert!(indexed.status.success());
+        let linked_repository = Repository::open(&submodule_worktree.path).unwrap();
+        fs::write(
+            submodule_worktree.path.join(".gitmodules"),
+            format!(
+                "[submodule \"nested\"]\n\tpath = nested\n\turl = {}\n",
+                nested_path.display()
+            ),
+        )
+        .unwrap();
+        let mut linked_index = linked_repository.index().unwrap();
+        linked_index.add_path(Path::new(".gitmodules")).unwrap();
+        linked_index.write().unwrap();
+        let linked_tree = linked_repository
+            .find_tree(linked_index.write_tree().unwrap())
+            .unwrap();
+        let parent = linked_repository.head().unwrap().peel_to_commit().unwrap();
+        linked_repository
+            .commit(
+                Some("HEAD"),
+                &signature,
+                &signature,
+                "Add gitlink",
+                &linked_tree,
+                &[&parent],
+            )
+            .unwrap();
+        drop(parent);
+        drop(linked_tree);
+        drop(linked_repository);
+        assert_eq!(
+            dirty_file_paths(&submodule_worktree.path).unwrap(),
+            Vec::<String>::new()
+        );
+        assert!(remove_local_task_worktree(&submodule_intent, false, || Ok(())).is_err());
+        assert!(nested_path.join("README.md").exists());
+        fs::rename(nested_path.join(".git"), nested_path.join(".git-stale")).unwrap();
+        assert!(!has_populated_submodules(&submodule_worktree.path).unwrap());
+        assert_eq!(
+            remove_local_task_worktree(&submodule_intent, true, || Ok(())).unwrap(),
+            WorktreeCleanup::Cleaned
+        );
         drop(tree);
         drop(repository);
         fs::remove_dir_all(root).unwrap();

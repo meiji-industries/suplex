@@ -19,6 +19,7 @@ use crate::{
     projects::service::{self, Project},
 };
 
+use super::archive::operations as archive;
 use super::repository::{self, PreparedTask, TaskCreator, TaskRecord, TaskWrite};
 
 #[derive(Debug)]
@@ -478,6 +479,12 @@ pub fn start_user_task(
             .optional()?
             .ok_or_else(|| Box::new(TaskFailure::new("Not found", 404)) as Box<dyn Error>)?;
         companies::require_company_access(database, actor_user_id, &scope.0)?;
+        if archive::in_progress(task_id) {
+            return Err(Box::new(TaskFailure::new(
+                "Archive cleanup is in progress",
+                409,
+            )));
+        }
         if scope.1.is_some() {
             return Err(Box::new(TaskFailure::new(
                 "This task cannot be started",

@@ -137,7 +137,6 @@ const ROUTES: &[(Method, &str, Access)] = &[
         "/api/task-templates/{template_id}",
         Authenticated,
     ),
-    (Method::POST, "/api/system/client-lifecycle", Authenticated),
     (Method::GET, "/api/tasks/{task_id}/checks", Authenticated),
     (
         Method::GET,
@@ -160,8 +159,6 @@ const ROUTES: &[(Method, &str, Access)] = &[
         "/api/tasks/{task_id}/worktree/open",
         Authenticated,
     ),
-    (Method::GET, "/api/update", Authenticated),
-    (Method::POST, "/api/update/restart", Administrator),
 ];
 
 pub fn router() -> Router<AppState> {

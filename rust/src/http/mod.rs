@@ -35,6 +35,7 @@ pub mod routes {
     pub mod task_timeline;
     pub mod tasks;
     pub mod unported;
+    pub mod update;
     pub mod workflows;
 }
 pub mod session;
@@ -141,6 +142,7 @@ pub fn router(state: AppState) -> Router {
         .merge(routes::task_templates::router())
         .merge(routes::tasks::router())
         .merge(routes::workflows::router())
+        .merge(routes::update::router())
         .merge(routes::unported::router())
         .route("/auth", get(auth_page))
         .route("/assets/{filename}", get(asset))

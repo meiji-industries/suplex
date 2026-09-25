@@ -2,7 +2,6 @@
 
 use std::{
     error::Error,
-    io,
     path::{Path, PathBuf},
     sync::Arc,
     time::Duration,
@@ -17,8 +16,24 @@ use super::{
 use crate::{
     platform::database::{DatabaseResult, OpenMode, SuplexDatabase},
     profiles::model_pricing::{ModelPricingCatalog, ModelsDevCatalogReader},
-    runtimes::codex::{session_reader, usage},
+    runtimes::{task_harness::ReaderSession, task_harness_registry},
 };
+
+/// The provider instance home of the session profile, when it has one.
+fn instance_home(database_path: &Path, session_id: &str) -> Option<PathBuf> {
+    let database = SuplexDatabase::open(database_path, OpenMode::ReadOnly).ok()?;
+    let profile: String = database
+        .connection()
+        .query_row(
+            "SELECT profile_json FROM suplex_task_sessions WHERE id = ?1",
+            [session_id],
+            |row| row.get(0),
+        )
+        .ok()?;
+    serde_json::from_str::<serde_json::Value>(&profile).ok()?["instanceHomeDirectory"]
+        .as_str()
+        .map(PathBuf::from)
+}
 
 pub struct Session {
     pub id: String,
@@ -26,58 +41,59 @@ pub struct Session {
     pub kind: String,
 }
 
-/// TypeScript `sessionHarness`.
-pub fn session_harness(native_session_id: &str) -> &'static str {
-    if native_session_id.starts_with("devin-") {
-        return "devin";
-    }
-    if native_session_id.starts_with("codex-") {
-        return "codex";
-    }
-    let uuid = native_session_id.len() == 36
-        && native_session_id.char_indices().all(|(index, character)| {
-            if matches!(index, 8 | 13 | 18 | 23) {
-                character == '-'
-            } else {
-                character.is_ascii_hexdigit()
-            }
-        });
-    if uuid { "claude-code" } else { "opencode" }
-}
-
-/// `CodexSessionReader.timeline(...).usage` from the session runtime directory.
-pub fn read_codex_usage(
+/// `AnalyticsHistoryReader.read`: the native usage of one session, read by the
+/// runtime that owns it.
+pub fn read_native_usage(
     database_path: &Path,
     session: &Session,
+    instance_home: Option<&Path>,
     pricing: Option<&ModelPricingCatalog>,
-) -> io::Result<Vec<TaskUsage>> {
-    let directory = session_reader::session_directory(database_path, &session.id)?;
-    let observed = usage::observe_session(&directory, &session.native_session_id, pricing)?;
+) -> Result<Vec<TaskUsage>, Box<dyn Error>> {
+    let native = session.native_session_id.as_str();
+    let reader = task_harness_registry::native_session_reader(native)
+        .ok_or("Native timeline reader is not available")?;
+    let observed = reader.timeline(
+        &ReaderSession {
+            database_path,
+            session_id: &session.id,
+            native_session_id: native,
+            instance_home_directory: instance_home,
+        },
+        pricing,
+    )?;
+    let opencode = task_harness_registry::session_harness(native) == "opencode";
     Ok(observed
-        .turns
+        .usage
         .into_iter()
-        .map(|turn| TaskUsage {
-            session_id: session.native_session_id.clone(),
-            message_id: turn.turn_id.clone(),
-            completed_at: (observed.live_turn_id.as_deref() != Some(turn.turn_id.as_str()))
-                .then_some(turn.updated_at_ms as f64),
-            turn_id: turn.turn_id,
+        .map(|entry| TaskUsage {
+            session_id: native.to_owned(),
+            completed_at: entry
+                .completed_at_ms
+                .filter(|_| observed.live_message_id.as_deref() != Some(entry.message_id.as_str()))
+                .map(|value| value as f64),
+            steps: if entry.completed_at_ms.is_some() || !opencode {
+                1.0
+            } else {
+                0.0
+            },
+            message_id: entry.message_id,
+            turn_id: entry.turn_id,
             role: session.kind.clone(),
-            provider: "openai".into(),
-            model: turn.model,
-            started_at: turn.updated_at_ms as f64,
-            failed: turn.failed,
+            provider: entry.provider.to_owned(),
+            model: entry.model,
+            started_at: entry.started_at_ms as f64,
+            failed: entry.failed,
             summary: false,
-            steps: 1.0,
-            cost: turn.cost_usd,
-            subsidized: turn.cost_usd > 0.0,
+            cost: entry.cost_usd,
+            // ponytail: the shared usage entry has no estimate flag; OpenCode's native cost is billed, the other runtimes estimate from listed prices.
+            subsidized: !opencode && entry.cost_usd > 0.0,
             tokens: Tokens {
-                input: turn.tokens.input,
-                output: turn.tokens.output,
-                reasoning: turn.tokens.reasoning,
+                input: entry.tokens.input,
+                output: entry.tokens.output,
+                reasoning: entry.tokens.reasoning,
                 cache: CacheTokens {
-                    read: turn.tokens.cache_read,
-                    write: turn.tokens.cache_write,
+                    read: entry.tokens.cache_read,
+                    write: entry.tokens.cache_write,
                 },
             },
             source: "message".into(),
@@ -138,11 +154,7 @@ pub fn collect(
                     .collect::<rusqlite::Result<Vec<_>>>()?
             };
             for session in sessions {
-                let harness = session_harness(&session.native_session_id);
-                // ponytail: Codex is the only native usage reader in Rust; each runtime adds its own here.
-                if harness != "codex" {
-                    continue;
-                }
+                let harness = task_harness_registry::session_harness(&session.native_session_id);
                 let previous = observations
                     .iter()
                     .find(|value| value.session_id == session.id);
@@ -206,7 +218,8 @@ pub fn spawn(database_path: PathBuf, mut shutdown: watch::Receiver<bool>) {
                             .as_ref()
                             .and_then(|reader| handle.block_on(reader.read()))
                     });
-                    Ok(read_codex_usage(&path, session, catalog.as_deref())?)
+                    let home = instance_home(&path, &session.id);
+                    read_native_usage(&path, session, home.as_deref(), catalog.as_deref())
                 };
                 let mut report = |error: Box<dyn Error>| {
                     eprintln!("Analytics observation failed: {error}");
@@ -246,8 +259,11 @@ mod tests {
 
     fn runtime(root: &Path) -> (PathBuf, PathBuf) {
         let database_path = root.join("suplex.sqlite");
-        let directory =
-            session_reader::session_directory(&database_path, "suplex-session").unwrap();
+        let directory = crate::runtimes::codex::session_reader::session_directory(
+            &database_path,
+            "suplex-session",
+        )
+        .unwrap();
         fs::create_dir_all(&directory).unwrap();
         (database_path, directory)
     }
@@ -296,7 +312,7 @@ mod tests {
             ("openai/gpt-6-astra".to_owned(), price),
         ]);
         let session = session(native, "worker");
-        let usage = read_codex_usage(&database_path, &session, Some(&pricing)).unwrap();
+        let usage = read_native_usage(&database_path, &session, None, Some(&pricing)).unwrap();
         assert_eq!(usage.len(), 1);
         let first = &usage[0];
         assert_eq!(
@@ -334,7 +350,7 @@ mod tests {
             second(2_000, 1_200, 200, 100, 40),
         )
         .unwrap();
-        let resumed = read_codex_usage(&database_path, &session, Some(&pricing)).unwrap();
+        let resumed = read_native_usage(&database_path, &session, None, Some(&pricing)).unwrap();
         assert_eq!(
             resumed
                 .iter()
@@ -348,7 +364,7 @@ mod tests {
             second(3_000, 1_800, 300, 150, 60),
         )
         .unwrap();
-        let refreshed = read_codex_usage(&database_path, &session, Some(&pricing)).unwrap();
+        let refreshed = read_native_usage(&database_path, &session, None, Some(&pricing)).unwrap();
         assert!((refreshed[1].cost - 2.0 * first.cost).abs() < 1e-10);
         fs::remove_dir_all(root).unwrap();
     }
@@ -358,7 +374,12 @@ mod tests {
         let root =
             std::env::temp_dir().join(format!("suplex-codex-analytics-{}", uuid::Uuid::new_v4()));
         let (database_path, directory) = runtime(&root);
-        let missing = read_codex_usage(&database_path, &session("codex-missing", "worker"), None);
+        let missing = read_native_usage(
+            &database_path,
+            &session("codex-missing", "worker"),
+            None,
+            None,
+        );
         assert_eq!(
             missing.unwrap_err().to_string(),
             "Codex turn logs are missing"
@@ -370,8 +391,13 @@ mod tests {
             ]),
         )
         .unwrap();
-        let usage =
-            read_codex_usage(&database_path, &session("codex-unpriced", "root"), None).unwrap();
+        let usage = read_native_usage(
+            &database_path,
+            &session("codex-unpriced", "root"),
+            None,
+            None,
+        )
+        .unwrap();
         assert_eq!(
             (usage[0].model.as_str(), usage[0].cost, usage[0].subsidized),
             ("unknown", 0.0, false)
@@ -394,7 +420,13 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            read_codex_usage(&database_path, &session("codex-incomplete", "worker"), None).unwrap(),
+            read_native_usage(
+                &database_path,
+                &session("codex-incomplete", "worker"),
+                None,
+                None
+            )
+            .unwrap(),
             vec![]
         );
         fs::remove_dir_all(root).unwrap();
@@ -593,16 +625,5 @@ mod tests {
         );
         assert_eq!(saved(&database), expected);
         let _ = fs::remove_file(path);
-    }
-
-    #[test]
-    fn session_harness_matches_native_id_prefixes() {
-        assert_eq!(session_harness("codex-x"), "codex");
-        assert_eq!(session_harness("devin-x"), "devin");
-        assert_eq!(
-            session_harness("11111111-2222-4333-8444-555555555555"),
-            "claude-code"
-        );
-        assert_eq!(session_harness("ses_abc"), "opencode");
     }
 }

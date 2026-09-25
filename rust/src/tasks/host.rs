@@ -1309,6 +1309,7 @@ pub async fn sweep_task(
     }
     stop_retired_sessions(database_path, task_id).await?;
     reconcile_limit_pause(database_path, task_id).await?;
+    crate::delivery::operations::host_observation(database_path, artifact_root, task_id).await;
     let (active, needs_worktree) = {
         let database = SuplexDatabase::open(database_path, OpenMode::ReadOnly)?;
         let rows = root_session_store::root_observation_rows(&database, task_id)?;
@@ -1328,6 +1329,9 @@ pub async fn sweep_task(
         });
         let mut database = SuplexDatabase::open(database_path, OpenMode::ReadWrite)?;
         root_session_store::set_worktree(&mut database, task_id, &worktree, Utc::now())?;
+    }
+    if !super::issue_context::prepare_for_host(database_path, artifact_root, task_id).await? {
+        return Ok(());
     }
     crate::coordination::root_controller::prepare_root(database_path, task_id)?;
     recover_prepared_worker(

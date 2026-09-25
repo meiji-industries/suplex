@@ -1114,6 +1114,40 @@ fn valid_body(body: &str) -> bool {
     true
 }
 
+/// TypeScript `TaskHost.recoverOne` delivery observation: a delivered task
+/// refreshes its pull request, a waiting task re-observes its wait, and an
+/// active task adopts out-of-band GitHub progress. Failures never stop recovery.
+pub async fn host_observation(database_path: &Path, artifact_root: &Path, task_id: &str) {
+    let (database_path, artifact_root, task_id) = (
+        database_path.to_owned(),
+        artifact_root.to_owned(),
+        task_id.to_owned(),
+    );
+    let observed = tokio::task::spawn_blocking(move || {
+        block_on(|| async {
+            let operations = DeliveryOperations::new(&database_path, &artifact_root);
+            let control = operations
+                .get(&task_id)
+                .map_err(|error| format!("{task_id}: {error}"))?;
+            match control["status"].as_str() {
+                Some("delivered") => {
+                    super::completed_pull_requests::refresh(&database_path, None).await
+                }
+                Some("active") if !control["workflowState"]["deliveryWait"].is_null() => {
+                    operations.observe_delivery_wait(&task_id).await.map(|_| ())
+                }
+                Some("active" | "waiting_human") => operations.observe(&task_id).await.map(|_| ()),
+                _ => Ok(()),
+            }
+            .map_err(|error| format!("{task_id}: {error}"))
+        })
+    })
+    .await;
+    if let Ok(Err(error)) = observed {
+        eprintln!("Delivery observation will be retried for {error}");
+    }
+}
+
 /// TypeScript `RootController.observe` delivery part: the observed pull
 /// request and the GitHub availability the Root sees.
 pub fn observe_for_root(database_path: &Path, control: &Value) -> DatabaseResult<(Value, Value)> {

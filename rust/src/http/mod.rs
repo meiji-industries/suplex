@@ -19,6 +19,7 @@ use crate::tasks::host::TaskHostHandle;
 pub mod contracts;
 pub mod routes {
     pub mod admin_identity;
+    pub mod admin_platform;
     pub mod auth;
     pub mod companies;
     pub mod github_auth;
@@ -124,6 +125,7 @@ impl AppState {
 pub fn router(state: AppState) -> Router {
     Router::new()
         .merge(routes::admin_identity::router())
+        .merge(routes::admin_platform::router())
         .merge(routes::auth::router())
         .merge(routes::companies::router())
         .merge(routes::github_auth::router())

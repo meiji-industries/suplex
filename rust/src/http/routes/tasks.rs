@@ -60,6 +60,10 @@ pub fn router() -> Router<AppState> {
             "/api/tasks/{task_id}/cancel",
             axum::routing::post(cancel_pending),
         )
+        .route(
+            "/api/tasks/{task_id}/disarm",
+            axum::routing::post(disarm_pending),
+        )
         .route("/api/tasks/{task_id}/note", axum::routing::post(send_note))
         .route(
             "/api/tasks/{task_id}/replace-worker",
@@ -933,6 +937,33 @@ async fn cancel_pending(
         },
     );
     match cancelled {
+        Ok(task) => with_cookies(Json(task).into_response(), cookies),
+        Err(error) => with_cookies(service_error(error), cookies),
+    }
+}
+
+async fn disarm_pending(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+) -> Response {
+    if let Err(response) = validated_task_id(&id) {
+        return *response;
+    }
+    if !session::csrf_allowed(&state.session_config, &headers, "POST", false) {
+        return auth::error(StatusCode::FORBIDDEN, "request_origin_invalid");
+    }
+    let (user_id, cookies) = match authorize(&state, &headers) {
+        Ok(value) => value,
+        Err(response) => return *response,
+    };
+    let disarmed = state.with_database(
+        |database| -> Result<task_response::TaskResponse, Box<dyn Error>> {
+            commands::disarm_user_task(database, &user_id, &id, Utc::now())?;
+            task_response::get(database, &id)?.ok_or_else(|| "disarmed task disappeared".into())
+        },
+    );
+    match disarmed {
         Ok(task) => with_cookies(Json(task).into_response(), cookies),
         Err(error) => with_cookies(service_error(error), cookies),
     }

@@ -157,7 +157,6 @@ const ROUTES: &[(Method, &str, Access)] = &[
         "/api/tasks/{task_id}/dependencies",
         Authenticated,
     ),
-    (Method::POST, "/api/tasks/{task_id}/disarm", Authenticated),
     (Method::PATCH, "/api/tasks/{task_id}/issue", Authenticated),
     (
         Method::GET,

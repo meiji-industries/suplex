@@ -411,6 +411,34 @@ pub fn rename(
     })
 }
 
+/// Return a queued task to the manual backlog. A manual backlog task is a no-op.
+pub fn disarm(
+    database: &mut SuplexDatabase,
+    task_id: &str,
+    now: DateTime<Utc>,
+) -> DatabaseResult<bool> {
+    let changed = database.transaction(true, |database| {
+        let status: Option<String> = database.connection().query_row(
+            "SELECT status FROM suplex_task_controls WHERE task_id = ?1", [task_id], |row| row.get(0),
+        ).optional()?;
+        match status.as_deref() {
+            Some("backlog") => Ok(Some(false)),
+            Some("queued") => {
+                database.connection().execute(
+                    "UPDATE suplex_task_controls SET status = 'backlog', updated_at = ?1 WHERE task_id = ?2 AND status = 'queued'",
+                    params![timestamp(now), task_id],
+                )?;
+                Ok(Some(true))
+            }
+            _ => Ok(None),
+        }
+    })?;
+    if changed == Some(true) {
+        root_session_store::observe_lifecycle(database, task_id)?;
+    }
+    Ok(changed.is_some())
+}
+
 /// Start records intent as queued; admission rechecks prerequisites in this transaction.
 pub fn start(
     database: &mut SuplexDatabase,

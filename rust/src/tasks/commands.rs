@@ -594,6 +594,42 @@ pub fn start_user_task(
     Ok(task)
 }
 
+/// TypeScript `getTask`: the task exists and the live user can read its company.
+fn require_user_task(
+    database: &SuplexDatabase,
+    actor_user_id: &str,
+    task_id: &str,
+) -> DatabaseResult<TaskRecord> {
+    let task = repository::task_by_id(database, task_id)?
+        .ok_or_else(|| Box::new(TaskFailure::new("Not found", 404)) as Box<dyn Error>)?;
+    companies::require_company_access(database, actor_user_id, &task.company_id)?;
+    Ok(task)
+}
+
+/// Return a queued task to the manual backlog. The same people who can start a task can disarm it.
+pub fn disarm_user_task(
+    database: &mut SuplexDatabase,
+    actor_user_id: &str,
+    task_id: &str,
+    now: DateTime<Utc>,
+) -> DatabaseResult<TaskRecord> {
+    let task = require_user_task(database, actor_user_id, task_id)?;
+    let archived: bool = database.connection().query_row(
+        "SELECT archived_at IS NOT NULL FROM suplex_tasks WHERE id = ?1",
+        [task_id],
+        |row| row.get(0),
+    )?;
+    if archived || !repository::disarm(database, task_id, now)? {
+        return Err(Box::new(TaskFailure::new(
+            "Only a task in the backlog can be disarmed",
+            409,
+        )));
+    }
+    let task = repository::task_by_id(database, task_id)?.unwrap_or(task);
+    audit(database, actor_user_id, "task_disarmed", &task, now)?;
+    Ok(task)
+}
+
 /// Cancel intent before waking the host. A disconnected HTTP waiter cannot
 /// undo the committed stop request or cause the native session to replay.
 pub fn cancel_user_task(
@@ -1057,6 +1093,105 @@ mod tests {
         Arc,
         atomic::{AtomicUsize, Ordering},
     };
+
+    /// A migrated database with one signed-in user, company, and project.
+    fn command_fixture() -> (std::path::PathBuf, SuplexDatabase, String, PreparedTask) {
+        let filename =
+            std::env::temp_dir().join(format!("suplex_task_command_{}.sqlite", Uuid::new_v4()));
+        let now = Utc::now();
+        let mut database = SuplexDatabase::open(&filename, OpenMode::Migrate).unwrap();
+        let user = auth::development_sign_in(&mut database, now).unwrap().user;
+        database.connection().execute(
+            "INSERT INTO suplex_companies (id, name, status, created_at) VALUES ('command_company', 'Command company', 'active', ?1)",
+            [timestamp(now)],
+        ).unwrap();
+        database.connection().execute(
+            "INSERT INTO suplex_projects (id, company_id, name, repository_path, worktree_root, repository_identity, base_branch, setup_command, verification_command, root_profile_id, worker_profile_id, agent_task_policy_json, created_at, updated_at) VALUES ('command_project', 'command_company', 'Command project', '/tmp/suplex-command-project', '/tmp/suplex-command-worktrees', 'owner/repo', 'main', '', '', 'profile_native_root', 'profile_native_worker', '{}', ?1, ?1)",
+            [timestamp(now)],
+        ).unwrap();
+        let prepared = PreparedTask {
+            id: repository::new_task_id(),
+            company_id: "command_company".into(),
+            project_id: "command_project".into(),
+            title: "Command task".into(),
+            description: "".into(),
+            configuration: json!({"repository":"owner/repo","branch":"task-command","baseBranch":"main","baselineSha":"head"}),
+            idempotency_key: "command-key".into(),
+            request_hash: "command-hash".into(),
+            creator: TaskCreator::User(user.id.clone()),
+            delivery_target: "local_worktree".into(),
+            delivery_intent: json!({"repository":"owner/repo","headBranch":"task-command","baseBranch":"main","baselineSha":"head","pullRequestNumber":null}),
+            root_profile: json!({"profileId":"profile_native_root","provider":"codex","model":"test","reasoningLevel":"medium","serviceTier":"default"}),
+            worker_profile: json!({"profileId":"profile_native_worker","provider":"codex","model":"test","reasoningLevel":"medium","serviceTier":"default"}),
+            advisor_profiles: json!({}),
+            issue: None,
+            start_queued: false,
+            copied_from_task_id: None,
+            depends_on: vec![],
+        };
+        (filename, database, user.id, prepared)
+    }
+
+    fn another(prepared: &PreparedTask, key: &str) -> PreparedTask {
+        PreparedTask {
+            id: repository::new_task_id(),
+            idempotency_key: key.into(),
+            request_hash: format!("{key}-hash"),
+            ..prepared.clone()
+        }
+    }
+
+    fn failure(error: Box<dyn Error>) -> (u16, String) {
+        let failure = error.downcast::<TaskFailure>().unwrap();
+        (failure.status_code, failure.public_message)
+    }
+
+    #[test]
+    fn disarm_returns_only_a_queued_task_to_the_backlog() {
+        let (filename, mut database, user, prepared) = command_fixture();
+        let now = Utc::now();
+        let blocker = repository::create(&mut database, &prepared, now)
+            .unwrap()
+            .task;
+        let queued_input = PreparedTask {
+            start_queued: true,
+            depends_on: vec![blocker.id.clone()],
+            ..another(&prepared, "command-queued")
+        };
+        let queued = repository::create(&mut database, &queued_input, now)
+            .unwrap()
+            .task;
+        assert_eq!(queued.status, "queued");
+        assert!(disarm_user_task(&mut database, "missing-user", &queued.id, now).is_err());
+        assert_eq!(
+            disarm_user_task(&mut database, &user, &queued.id, now)
+                .unwrap()
+                .status,
+            "backlog"
+        );
+        assert_eq!(
+            disarm_user_task(&mut database, &user, &queued.id, now)
+                .unwrap()
+                .status,
+            "backlog"
+        );
+        let audits: i64 = database
+            .connection()
+            .query_row(
+                "SELECT COUNT(*) FROM suplex_audit_events WHERE action = 'task_disarmed'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(audits, 2);
+        start_user_task(&mut database, &user, &blocker.id, now, |_| {}).unwrap();
+        assert_eq!(
+            failure(disarm_user_task(&mut database, &user, &blocker.id, now).unwrap_err()),
+            (409, "Only a task in the backlog can be disarmed".into())
+        );
+        drop(database);
+        let _ = std::fs::remove_file(&filename);
+    }
 
     #[test]
     fn standard_request_hash_matches_typescript_parsed_request() {

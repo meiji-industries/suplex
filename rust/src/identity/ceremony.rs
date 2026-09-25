@@ -517,12 +517,11 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires Node and @simplewebauthn/server for ephemeral signed authenticator responses"]
     fn signed_fresh_passkey_survives_reopen_and_updates_counter() {
         let (mut database, path, token, now) = setup();
         let offered = begin_registration(&mut database, "user", &token, site(), now).unwrap();
         let signed = synthetic(&json!({
-            "mode":"register", "options":offered.options, "origin":site().origin, "counter":7
+            "mode":"register", "options":offered.options, "origin":site().origin
         }));
         let enrolled = complete_registration(
             &mut database,
@@ -545,7 +544,7 @@ mod tests {
             )
             .unwrap();
         assert!(serde_json::from_slice::<Passkey>(&stored).is_ok());
-        assert_eq!(counter, 7);
+        assert_eq!(counter, 0);
         database.connection().execute("INSERT INTO suplex_credentials (id, user_id, credential_id, public_key, counter, transports, created_at, revoked_at) VALUES ('old_credential_row', 'user_existing', 'old_raw_credential', X'010203', 0, '[]', ?1, NULL)", [timestamp(now)]).unwrap();
         drop(database);
 
@@ -562,7 +561,7 @@ mod tests {
         let assertion = synthetic(&json!({
             "mode":"authenticate", "options":offered_auth.options,
             "origin":site().origin, "credentialId":credential_id,
-            "privateKeyPem":signed["privateKeyPem"], "counter":8
+            "token":signed["token"]
         }));
         let logged_in = complete_authentication(
             &mut database,
@@ -587,7 +586,7 @@ mod tests {
             )
             .unwrap();
         assert_ne!(updated, stored);
-        assert_eq!(counter, 8);
+        assert_eq!(counter, 1);
         let old_bytes: Vec<u8> = database.connection().query_row(
             "SELECT public_key FROM suplex_credentials WHERE credential_id = 'old_raw_credential'",
             [], |row| row.get(0)
@@ -597,7 +596,7 @@ mod tests {
         let stale_assertion = synthetic(&json!({
             "mode":"authenticate", "options":stale_challenge.options,
             "origin":site().origin, "credentialId":credential_id,
-            "privateKeyPem":signed["privateKeyPem"], "counter":8
+            "token":signed["token"]
         }));
         assert!(
             complete_authentication(

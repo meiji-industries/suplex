@@ -19,6 +19,7 @@ use crate::tasks::host::TaskHostHandle;
 pub mod contracts;
 pub mod routes {
     pub mod admin_identity;
+    pub mod admin_platform;
     pub mod auth;
     pub mod companies;
     pub mod github_auth;
@@ -34,6 +35,7 @@ pub mod routes {
     pub mod task_timeline;
     pub mod tasks;
     pub mod unported;
+    pub mod update;
     pub mod workflows;
 }
 pub mod session;
@@ -124,6 +126,7 @@ impl AppState {
 pub fn router(state: AppState) -> Router {
     Router::new()
         .merge(routes::admin_identity::router())
+        .merge(routes::admin_platform::router())
         .merge(routes::auth::router())
         .merge(routes::companies::router())
         .merge(routes::github_auth::router())
@@ -139,6 +142,7 @@ pub fn router(state: AppState) -> Router {
         .merge(routes::task_templates::router())
         .merge(routes::tasks::router())
         .merge(routes::workflows::router())
+        .merge(routes::update::router())
         .merge(routes::unported::router())
         .route("/auth", get(auth_page))
         .route("/assets/{filename}", get(asset))

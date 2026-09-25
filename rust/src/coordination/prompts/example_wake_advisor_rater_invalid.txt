@@ -1,0 +1,3 @@
+Rater result r2. The Rater report was not accepted: bad json. Diagnose the report input or evidence, then request a fresh Rater.
+
+{}

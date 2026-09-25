@@ -1,4 +1,4 @@
-//! Root operations for the Standard local-worktree flow.
+//! TypeScript `RootController`: Root operations for every workflow.
 
 use std::path::Path;
 
@@ -17,17 +17,28 @@ use crate::{
 };
 
 use super::{
+    advisor_evidence,
     root_bridge::RootIdentity,
     root_prompts::{self, WorkerAssignmentText},
     root_session_store::{self, RootObservationRows, RootSession},
     worker_evidence::{self, EvidenceQuery},
+    workflows::{
+        ReviewRange, advisor_label, latest_review, same_range, turn_outcome,
+        turn_workflow_input, workflow_definition,
+    },
 };
 
-pub struct StandardWorkerAssignment {
-    pub plan: String,
+/// TypeScript `WorkerAssignment` after the Root tool contract validated it.
+pub struct WorkerAssignment {
+    pub plan: Option<String>,
     pub acceptance_criteria: Vec<String>,
     pub instruction: String,
+    pub mode: String,
     pub purpose: String,
+    pub advisor_turn_id: Option<String>,
+    pub advisor_session_id: Option<String>,
+    pub candidate_turn_ids: Option<[String; 2]>,
+    pub candidate_session_ids: Option<[String; 2]>,
 }
 
 const DELEGATED_NEXT: &str = "End this Coordinator turn now. Suplex will send the Worker's native result as a new turn on this same session. Do not poll or wait inside this turn.";
@@ -181,12 +192,6 @@ pub fn observe(database_path: &Path, root: &RootIdentity) -> DatabaseResult<Valu
         )?;
         root_session_store::root_observation_rows(&database, &root.task_id)?
     };
-    if rows.control["workflow"] != "standard" || rows.control["deliveryTarget"] != "local_worktree"
-    {
-        return Err(not_ported(
-            "Only Standard local-worktree Root observation is ported",
-        ));
-    }
     let pull_request = crate::delivery::operations::observe(&rows.control)?;
     let worktree = match rows.control["worktree"]["path"].as_str() {
         Some(path) => match worktree::observe_worktree(Path::new(path)) {
@@ -300,74 +305,431 @@ pub fn read_worker_evidence(
     Ok(Value::Object(output))
 }
 
-/// TypeScript `delegateWorker` (Standard path) checks no tool owner.
-pub fn delegate_worker(
-    database_path: &Path,
-    root: &RootIdentity,
-    assignment: &StandardWorkerAssignment,
-) -> DatabaseResult<Value> {
-    if assignment.purpose != "implementation" {
-        return Err(not_ported(
-            "Only Standard implementation Worker delegation is ported",
-        ));
-    }
-    if assignment.plan.is_empty()
-        || assignment.acceptance_criteria.is_empty()
-        || assignment.instruction.is_empty()
-    {
-        return Err(invalid(
-            "A planned Worker assignment requires a plan, acceptance criteria, and instruction",
-        ));
-    }
-    let mut database = SuplexDatabase::open(database_path, OpenMode::ReadWrite)?;
-    root_session_store::assert_current_root(
-        &database,
-        &root.task_id,
-        &root.session_id,
-        root.generation,
-    )?;
-    let before = root_session_store::root_observation_rows(&database, &root.task_id)?;
-    if before.control["workflow"] != "standard"
-        || before.control["deliveryTarget"] != "local_worktree"
-    {
-        return Err(not_ported(
-            "Only Standard local-worktree Worker delegation is ported",
-        ));
-    }
-    let visual_evidence = before.context["configuration"]["visualEvidence"]
-        .as_str()
-        .unwrap_or("required");
-    let assignment_text = root_prompts::compose_worker_assignment(&WorkerAssignmentText {
-        mode: "planned",
-        purpose: &assignment.purpose,
-        plan: Some(&assignment.plan),
-        acceptance_criteria: &assignment.acceptance_criteria,
-        instruction: &assignment.instruction,
-        visual_evidence,
-        verification_range: None,
+/// Before an external mutation: the Root is still current and this bridge
+/// still owns the task's tool token.
+fn recheck(database: &SuplexDatabase, root: &RootIdentity, owner_token: &str) -> DatabaseResult<()> {
+    root_session_store::assert_current_root(database, &root.task_id, &root.session_id, root.generation)?;
+    root_session_store::assert_tool_owner(database, &root.task_id, owner_token)
+}
+
+fn delivery_failure(code: &'static str, message: &'static str) -> Box<dyn std::error::Error> {
+    Box::new(crate::delivery::operations::DeliveryOperationFailure { code, message })
+}
+
+pub struct ObservedRange {
+    pub range: ReviewRange,
+    pub base_branch: String,
+    pub clean: bool,
+}
+
+/// TypeScript `currentRange`: the published-base-to-local-head range with the
+/// tree state. Delegation pins Advisor and Worker inputs to it.
+pub async fn current_range(database_path: &Path, task_id: &str) -> DatabaseResult<ObservedRange> {
+    let control = {
+        let database = SuplexDatabase::open(database_path, OpenMode::ReadOnly)?;
+        root_session_store::root_observation_rows(&database, task_id)?.control
+    };
+    let diff = delivery_diff(&control).await?;
+    Ok(ObservedRange {
+        range: ReviewRange {
+            base_sha: diff.base_sha,
+            head_sha: diff.head_sha,
+            files: diff.files,
+            commits: diff.commits,
+            patch_digest: Some(diff.patch_digest),
+        },
+        base_branch: diff.base_branch,
+        clean: diff_clean(&control)?,
     })
-    .map_err(std::io::Error::other)?;
-    let prompt_text = root_prompts::standard_worker_prompt(&assignment_text, &assignment.purpose)
-        .map_err(std::io::Error::other)?;
-    root_session_store::assert_current_root(
-        &database,
-        &root.task_id,
-        &root.session_id,
-        root.generation,
-    )?;
-    let current_root = root_session_store::current_root(&database, &root.task_id)?
-        .ok_or_else(|| invalid("current Root session is missing"))?;
-    let worker = root_session_store::launch_standard_worker(
-        &mut database,
-        &current_root,
-        &assignment_text,
-        &prompt_text,
-        None,
-        chrono::Utc::now(),
-    )?;
-    let after = root_session_store::root_observation_rows(&database, &root.task_id)?;
+}
+
+fn diff_clean(control: &Value) -> DatabaseResult<bool> {
+    let path = control["worktree"]["path"].as_str().ok_or_else(|| delivery_failure("worktree_missing", "The task has no worktree"))?;
+    Ok(worktree::observe_local_revision(Path::new(path))?.clean)
+}
+
+/// TypeScript `deliveryDiff` for the local head against the published base.
+async fn delivery_diff(control: &Value) -> DatabaseResult<crate::delivery::inspection::DeliveryDiff> {
+    let path = control["worktree"]["path"]
+        .as_str()
+        .ok_or_else(|| delivery_failure("worktree_missing", "The task has no worktree"))?;
+    let intent = &control["deliveryIntent"];
+    if !intent["pullRequestNumber"].is_null() {
+        // ponytail: a pinned pull request's base branch comes from GitHub delivery's pull request read.
+        return Err(not_ported("Pinned pull request base resolution is not ported"));
+    }
+    let repository = intent["repository"].as_str().ok_or_else(|| invalid("Task delivery repository is missing"))?;
+    let branch = intent["baseBranch"].as_str().ok_or_else(|| invalid("Task delivery base branch is missing"))?;
+    let local = worktree::observe_local_revision(Path::new(path))?;
+    let head = git2::Oid::from_str(&local.head_sha)?;
+    let access = crate::integrations::github::Access::load()
+        .await
+        .map_err(|error| std::io::Error::other(error.to_string()))?;
+    let published = access
+        .published_branch_sha(repository, branch)
+        .await
+        .map_err(|_| std::io::Error::other(format!("GitHub did not return the head of {branch}. Suplex cannot compute the delivery range until that observation is available; no source change is needed.")))?;
+    crate::delivery::inspection::inspect_git_range(Path::new(path), head, published, access.token(), branch)
+}
+
+/// Compares the live committed source with a pinned range; any observation
+/// failure is a concrete reason, never an approval.
+pub async fn source_still_matches(
+    database_path: &Path,
+    task_id: &str,
+    pinned: &ReviewRange,
+    activity: &str,
+) -> Result<ReviewRange, (String, Option<ReviewRange>, Option<bool>)> {
+    let observed = match current_range(database_path, task_id).await {
+        Ok(observed) => observed,
+        Err(error) => {
+            return Err((format!("The source could not be observed after the {activity}: {error}"), None, None));
+        }
+    };
+    let short = |sha: &str| sha[..sha.len().min(12)].to_owned();
+    if !observed.clean {
+        return Err((
+            format!("The worktree has uncommitted changes after the {activity}; the pinned range {}..{} cannot be confirmed", short(&pinned.base_sha), short(&pinned.head_sha)),
+            Some(observed.range),
+            Some(false),
+        ));
+    }
+    if !same_range(&observed.range, pinned) {
+        return Err((
+            format!(
+                "The source range changed during the {activity}: pinned base {} head {} ({} files), observed base {} head {} ({} files)",
+                short(&pinned.base_sha), short(&pinned.head_sha), pinned.files.len(),
+                short(&observed.range.base_sha), short(&observed.range.head_sha), observed.range.files.len()
+            ),
+            Some(observed.range),
+            Some(true),
+        ));
+    }
+    Ok(observed.range)
+}
+
+fn open_root(database_path: &Path, root: &RootIdentity) -> DatabaseResult<(SuplexDatabase, RootObservationRows)> {
+    let database = SuplexDatabase::open(database_path, OpenMode::ReadWrite)?;
+    root_session_store::assert_current_root(&database, &root.task_id, &root.session_id, root.generation)?;
+    let rows = root_session_store::root_observation_rows(&database, &root.task_id)?;
+    Ok((database, rows))
+}
+
+fn launched_worker(database: &SuplexDatabase, task_id: &str, worker: Value) -> DatabaseResult<Value> {
+    let after = root_session_store::root_observation_rows(database, task_id)?;
     let accepted = accepted_assignment(&after.turns, &worker).unwrap_or(Value::Null);
     Ok(json!({"worker":worker,"acceptedAssignment":accepted,"next":DELEGATED_NEXT}))
+}
+
+/// TypeScript `findAdvisorReport`: the named report turn, or the latest valid
+/// report turn of the named session.
+fn find_advisor_report<'a>(rows: &'a RootObservationRows, turn_id: Option<&str>, session_id: Option<&str>) -> Option<(&'a Value, &'a Value, &'a Value)> {
+    let candidates: Vec<&Value> = match turn_id {
+        Some(id) => rows.turns.iter().filter(|turn| turn["id"] == id).collect(),
+        None => rows.turns.iter().rev().filter(|turn| Some(turn["sessionId"].as_str().unwrap_or_default()) == session_id).collect(),
+    };
+    candidates.into_iter().find_map(|turn| {
+        let session = rows.sessions.iter().find(|session| session["id"] == turn["sessionId"])?;
+        let role = session["advisorRole"].as_str()?;
+        let input = turn_workflow_input(&rows.sessions, turn)?;
+        let outcome = turn_outcome(turn["terminalObservation"].as_str()).advisor?;
+        (turn["status"] == "completed" && input["kind"] == "advisor" && !outcome["result"].is_null() && outcome["role"] == role)
+            .then_some((session, turn, input))
+    })
+}
+
+/// TypeScript `delegateWorker`. Standard implementation keeps its unpinned
+/// assignment; every other assignment is pinned to the committed live range.
+pub async fn delegate_worker(
+    database_path: &Path,
+    root: &RootIdentity,
+    owner_token: &str,
+    assignment: &WorkerAssignment,
+) -> DatabaseResult<Value> {
+    let (_, rows) = open_root(database_path, root)?;
+    let workflow = rows.control["workflow"].as_str().unwrap_or("standard").to_owned();
+    let (mode, purpose) = (assignment.mode.as_str(), assignment.purpose.as_str());
+    if mode == "direct" && workflow != "direct_build" {
+        return Err(invalid("Direct mode is legal only for the Direct build workflow. Supply a plan in planned mode."));
+    }
+    if mode == "planned" && assignment.plan.as_deref().is_none_or(str::is_empty) {
+        return Err(invalid("A planned assignment requires the Coordinator's plan."));
+    }
+    let visual_evidence = rows.context["configuration"]["visualEvidence"].as_str().unwrap_or("required").to_owned();
+    let compose = |range: Option<&ReviewRange>, advisor_report: Option<(&str, &str)>| {
+        root_prompts::compose_worker_assignment(&WorkerAssignmentText {
+            mode,
+            purpose,
+            plan: assignment.plan.as_deref(),
+            acceptance_criteria: &assignment.acceptance_criteria,
+            instruction: &assignment.instruction,
+            visual_evidence: &visual_evidence,
+            verification_range: range.map(|range| (range.base_sha.as_str(), range.head_sha.as_str())),
+            advisor_report,
+        })
+        .map_err(std::io::Error::other)
+    };
+    let input = |range: &ReviewRange, advisor_report: Value, candidate_reports: Value| {
+        json!({"kind":"worker","version":2,"mode":mode,"purpose":purpose,"range":range,"plan":assignment.plan,
+            "acceptanceCriteria":assignment.acceptance_criteria,"instruction":assignment.instruction,
+            "advisorReport":advisor_report,"candidateReports":candidate_reports})
+    };
+    let launch = |text: &str, workflow_input: Option<&Value>| -> DatabaseResult<Value> {
+        let prompt = root_prompts::worker_prompt(mode, purpose, text).map_err(std::io::Error::other)?;
+        let mut database = SuplexDatabase::open(database_path, OpenMode::ReadWrite)?;
+        let current_root = root_session_store::current_root(&database, &root.task_id)?
+            .ok_or_else(|| invalid("root_identity_mismatch"))?;
+        let worker = root_session_store::launch_standard_worker(&mut database, &current_root, text, &prompt, workflow_input, chrono::Utc::now())?;
+        launched_worker(&database, &root.task_id, worker)
+    };
+    if workflow == "standard" {
+        if purpose != "verification" {
+            return launch(&compose(None, None)?, None);
+        }
+        recheck(&SuplexDatabase::open(database_path, OpenMode::ReadOnly)?, root, owner_token)?;
+        let observed = current_range(database_path, &root.task_id).await?;
+        if !observed.clean {
+            return Err(delivery_failure("worktree_dirty", "The worktree has uncommitted changes. A check-only assignment needs a committed source; commit or discard the changes first."));
+        }
+        let workflow_input = input(&observed.range, Value::Null, Value::Null);
+        return launch(&compose(Some(&observed.range), None)?, Some(&workflow_input));
+    }
+    recheck(&SuplexDatabase::open(database_path, OpenMode::ReadOnly)?, root, owner_token)?;
+    let observed = current_range(database_path, &root.task_id).await?;
+    if purpose == "verification" && !observed.clean {
+        return Err(delivery_failure("worktree_dirty", "The worktree has uncommitted changes. A check-only assignment needs a committed source; commit or discard the changes first."));
+    }
+    let range = observed.range;
+    let rows = {
+        let database = SuplexDatabase::open(database_path, OpenMode::ReadOnly)?;
+        root_session_store::root_observation_rows(&database, &root.task_id)?
+    };
+    let mut candidate_reports = Value::Null;
+    if workflow == "competing_plans" && purpose == "implementation" {
+        let built = rows.turns.iter().any(|turn| {
+            let session = rows.sessions.iter().find(|session| session["id"] == turn["sessionId"]);
+            let input = turn_workflow_input(&rows.sessions, turn);
+            session.is_some_and(|session| session["kind"] == "worker" && session["advisorRole"].is_null())
+                && input.is_some_and(|input| input["kind"] == "worker" && input["purpose"] == "implementation")
+                && turn["status"] == "completed"
+                && turn_outcome(turn["terminalObservation"].as_str()).state.as_deref() == Some("completed")
+        });
+        if !built {
+            let by_turn = assignment.candidate_turn_ids.is_some();
+            let Some([a, b]) = assignment.candidate_turn_ids.as_ref().or(assignment.candidate_session_ids.as_ref()) else {
+                return Err(invalid("Combined planning requires candidateSessionIds or candidateTurnIds [Plan A, Plan B] for the first implementation."));
+            };
+            if a == b {
+                return Err(invalid("candidateSessionIds must name two distinct Advisor sessions."));
+            }
+            let mut reports = Vec::new();
+            for (id, role) in [(a, "planner_a"), (b, "planner_b")] {
+                let label = advisor_label(role);
+                let report = if by_turn { find_advisor_report(&rows, Some(id), None) } else { find_advisor_report(&rows, None, Some(id)) }
+                    .filter(|(session, _, input)| session["advisorRole"] == role && input["role"] == role)
+                    .ok_or_else(|| std::io::Error::other(format!("{label} session {id} is not a completed valid {label} report for this task.")))?;
+                let planned = ReviewRange::from_value(&report.2["range"]).unwrap_or_default();
+                if !same_range(&planned, &range) {
+                    return Err(std::io::Error::other(format!("{label} planned against a different source range. Request new plans for the current range.")).into());
+                }
+                reports.push(json!({"sessionId":report.0["id"],"turnId":report.1["id"]}));
+            }
+            candidate_reports = Value::Array(reports);
+        }
+    }
+    if (assignment.candidate_turn_ids.is_some() || assignment.candidate_session_ids.is_some()) && workflow != "competing_plans" {
+        return Err(invalid("candidateTurnIds apply only to Combined planning."));
+    }
+    let mut advisor_report = None;
+    let mut advisor_reference = Value::Null;
+    if workflow == "refine_pull_request" && purpose == "implementation" {
+        let requested = assignment.advisor_turn_id.as_deref().or(assignment.advisor_session_id.as_deref())
+            .ok_or_else(|| invalid("Pull request repair implementation requires advisorSessionId or advisorTurnId for the latest valid Rater report."))?;
+        let reviews = rows.control["workflowState"]["reviews"].as_array().map(Vec::as_slice).unwrap_or_default();
+        let latest = latest_review(reviews, "rater")
+            .filter(|latest| {
+                let field = if assignment.advisor_turn_id.is_some() { "turnId" } else { "sessionId" };
+                latest[field] == requested && !latest["result"].is_null()
+            })
+            .ok_or_else(|| invalid("advisorTurnId must be the latest valid Rater report for this task."))?;
+        let report = rows.turns.iter()
+            .find(|turn| turn["id"] == latest["turnId"] && turn["sessionId"] == latest["sessionId"] && turn["status"] == "completed")
+            .ok_or_else(|| invalid("The latest Rater report turn is missing."))?;
+        advisor_report = Some(turn_outcome(report["terminalObservation"].as_str()).text.unwrap_or_default());
+        advisor_reference = json!({"sessionId":latest["sessionId"],"turnId":latest["turnId"]});
+    } else if assignment.advisor_turn_id.is_some() || assignment.advisor_session_id.is_some() {
+        let report = find_advisor_report(&rows, assignment.advisor_turn_id.as_deref(), assignment.advisor_session_id.as_deref())
+            .ok_or_else(|| invalid("The Advisor reference does not name a completed report for this task."))?;
+        advisor_reference = json!({"sessionId":report.0["id"],"turnId":report.1["id"]});
+    }
+    let text = compose(Some(&range), advisor_report.as_deref().map(|text| ("Rater", text)))?;
+    let workflow_input = input(&range, advisor_reference, candidate_reports);
+    launch(&text, Some(&workflow_input))
+}
+
+const ADVISOR_NEXT: &str = "End this Coordinator turn now. Suplex will send the Advisor's native report as a new turn on this same session. Do not poll or wait inside this turn.";
+
+/// Observe the committed live range for an Advisor request and pin its evidence.
+async fn advisor_source(
+    database_path: &Path,
+    artifact_root: &Path,
+    root: &RootIdentity,
+    owner_token: &str,
+    dirty: &'static str,
+) -> DatabaseResult<(ObservedRange, RootObservationRows, advisor_evidence::AdvisorEvidence)> {
+    let (database, rows) = open_root(database_path, root)?;
+    if rows.control["worktree"]["path"].as_str().is_none() {
+        return Err(invalid("The task has no worktree"));
+    }
+    recheck(&database, root, owner_token)?;
+    drop(database);
+    let observed = current_range(database_path, &root.task_id).await?;
+    if !observed.clean {
+        return Err(delivery_failure("worktree_dirty", dirty));
+    }
+    let database = SuplexDatabase::open(database_path, OpenMode::ReadOnly)?;
+    let rows = root_session_store::root_observation_rows(&database, &root.task_id)?;
+    let evidence = advisor_evidence::prepare_advisor_evidence(&database, database_path, artifact_root, &rows, &observed.range)?;
+    Ok((observed, rows, evidence))
+}
+
+fn advisor_prompt(
+    rows: &RootObservationRows,
+    role: &str,
+    observed: &ObservedRange,
+    evidence: &advisor_evidence::AdvisorEvidence,
+    brief: Option<&str>,
+    prior_findings: Option<&[String]>,
+    repair_evidence: Option<&[String]>,
+) -> String {
+    let intent = &rows.control["deliveryIntent"];
+    let configuration = &rows.context["configuration"];
+    root_prompts::compose_advisor_assignment(&root_prompts::AdvisorAssignment {
+        role,
+        objective: rows.control["objective"].as_str().unwrap_or_default(),
+        configuration,
+        visual_evidence: configuration["visualEvidence"].as_str().unwrap_or("required"),
+        repository: intent["repository"].as_str().unwrap_or_default(),
+        head_branch: intent["headBranch"].as_str().unwrap_or_default(),
+        base_branch: &observed.base_branch,
+        pull_request_number: intent["pullRequestNumber"].as_i64(),
+        range: &observed.range,
+        evidence_directory: &evidence.evidence.directory.to_string_lossy(),
+        attachments: &evidence.evidence.attachments,
+        brief,
+        prior_findings,
+        repair_evidence,
+    })
+}
+
+fn advisor_input(role: &str, observed: &ObservedRange, evidence: &advisor_evidence::AdvisorEvidence, pair_id: Option<&str>) -> Value {
+    let mut input = json!({"kind":"advisor","role":role,"range":observed.range,
+        "evidenceDirectory":evidence.evidence.directory.to_string_lossy(),"evidenceSha256":evidence.evidence.sha256,
+        "verificationTurnIds":evidence.worker_turn_ids});
+    if let Some(pair_id) = pair_id {
+        input["plannerPairId"] = json!(pair_id);
+    }
+    input
+}
+
+/// TypeScript `delegateAdvisor`: Suplex composes the Advisor input from the
+/// committed live range, pinned evidence, and the latest same-role review.
+pub async fn delegate_advisor(
+    database_path: &Path,
+    artifact_root: &Path,
+    root: &RootIdentity,
+    owner_token: &str,
+    role: &str,
+    brief: Option<&str>,
+) -> DatabaseResult<Value> {
+    let (_, rows) = open_root(database_path, root)?;
+    let workflow = rows.control["workflow"].as_str().unwrap_or("standard");
+    let definition = workflow_definition(workflow).ok_or_else(|| invalid("The task workflow is invalid"))?;
+    let label = advisor_label(role);
+    if !definition.advisor_roles.contains(&role) {
+        return Err(std::io::Error::other(format!("The {} workflow has no {label} Advisor.", definition.name)).into());
+    }
+    if brief.is_some() && role != "reviewer" {
+        return Err(std::io::Error::other(format!("Suplex composes the {label} input; a brief is accepted only for Reviewer.")).into());
+    }
+    if role == "reviewer" && brief.is_none() {
+        return Err(invalid("Reviewer requires a brief with your plan and acceptance criteria."));
+    }
+    let (observed, rows, evidence) = advisor_source(database_path, artifact_root, root, owner_token, "The worktree has uncommitted changes. Commit or discard them before requesting an Advisor; Advisors review committed source only.").await?;
+    let reviews = rows.control["workflowState"]["reviews"].as_array().map(Vec::as_slice).unwrap_or_default();
+    let previous = (role == "rater").then(|| latest_review(reviews, "rater")).flatten();
+    let prior_findings = previous.and_then(|previous| previous["result"]["blockingFindings"].as_array()).map(|findings| {
+        findings.iter().filter_map(Value::as_str).map(str::to_owned).collect::<Vec<_>>()
+    });
+    let repair_evidence = previous.map(|previous| {
+        let index = rows.turns.iter().position(|turn| turn["id"] == previous["turnId"]);
+        advisor_evidence::completed_worker_turns(&rows)
+            .into_iter()
+            .filter(|(turn, _)| {
+                let position = rows.turns.iter().position(|candidate| candidate["id"] == turn["id"]);
+                index.is_none_or(|index| position.is_some_and(|position| position > index))
+            })
+            .map(|(turn, parsed)| format!("Turn {}: {}", turn["id"].as_str().unwrap_or_default(), parsed["text"].as_str().unwrap_or("(no text)")))
+            .collect::<Vec<_>>()
+    });
+    let prompt = advisor_prompt(&rows, role, &observed, &evidence, brief, prior_findings.as_deref(), repair_evidence.as_deref());
+    let input = advisor_input(role, &observed, &evidence, None);
+    let mut database = SuplexDatabase::open(database_path, OpenMode::ReadWrite)?;
+    let current_root = root_session_store::current_root(&database, &root.task_id)?
+        .ok_or_else(|| invalid("root_identity_mismatch"))?;
+    let advisor = root_session_store::launch_advisor(&mut database, &current_root, role, &prompt, &input, chrono::Utc::now())?;
+    Ok(json!({"advisor":advisor,"evidenceDirectory":evidence.evidence.directory,"next":ADVISOR_NEXT}))
+}
+
+/// TypeScript `delegatePlanners`: Plan A and Plan B are reserved together on
+/// the same pinned input. The task host dispatches both.
+pub async fn delegate_planners(
+    database_path: &Path,
+    artifact_root: &Path,
+    root: &RootIdentity,
+    owner_token: &str,
+) -> DatabaseResult<Value> {
+    let (_, rows) = open_root(database_path, root)?;
+    if rows.control["workflow"] != "competing_plans" {
+        return Err(invalid("delegate_planners is legal only for Combined planning."));
+    }
+    let (observed, rows, evidence) = advisor_source(database_path, artifact_root, root, owner_token, "The worktree has uncommitted changes. Commit or discard them before requesting planners; planners inspect committed source only.").await?;
+    let pair_id = uuid::Uuid::new_v4().to_string();
+    let prompt = advisor_prompt(&rows, "planner_a", &observed, &evidence, None, None, None);
+    let prompt_b = advisor_prompt(&rows, "planner_b", &observed, &evidence, None, None, None);
+    let input_a = advisor_input("planner_a", &observed, &evidence, Some(&pair_id));
+    let input_b = advisor_input("planner_b", &observed, &evidence, Some(&pair_id));
+    let mut database = SuplexDatabase::open(database_path, OpenMode::ReadWrite)?;
+    let current_root = root_session_store::current_root(&database, &root.task_id)?
+        .ok_or_else(|| invalid("root_identity_mismatch"))?;
+    let planners = root_session_store::launch_planner_pair(&mut database, &current_root, &pair_id, [(&prompt, &input_a), (&prompt_b, &input_b)], chrono::Utc::now())?;
+    Ok(json!({"planners":planners,"evidenceDirectory":evidence.evidence.directory,"next":"End this Coordinator turn now. Suplex will send one combined planning result after both Plan A and Plan B have terminal reports. Do not poll or wait inside this turn."}))
+}
+
+/// TypeScript `requestDelivery` for `inspect_delivery_diff` outside Standard:
+/// the reviewed range also gets a pinned evidence directory.
+pub async fn inspect_workflow_delivery_diff(database_path: &Path, root: &RootIdentity) -> DatabaseResult<Value> {
+    let (_, rows) = open_root(database_path, root)?;
+    let diff = delivery_diff(&rows.control).await?;
+    let range = ReviewRange {
+        base_sha: diff.base_sha.clone(),
+        head_sha: diff.head_sha.clone(),
+        files: diff.files.clone(),
+        commits: diff.commits.clone(),
+        patch_digest: Some(diff.patch_digest.clone()),
+    };
+    let worktree = rows.control["worktree"]["path"].as_str().ok_or_else(|| invalid("The task has no worktree"))?;
+    let evidence = crate::coordination::workflow_evidence::write_task_evidence(
+        &crate::coordination::workflow_evidence::task_evidence_root(database_path),
+        &root.task_id,
+        Path::new(worktree),
+        &range,
+        vec![],
+        &json!({"note":"Coordinator inspection; Worker evidence is attached to Advisor requests."}),
+    )?;
+    let mut result = serde_json::to_value(diff)?;
+    result["evidenceDirectory"] = json!(evidence.directory);
+    Ok(result)
 }
 
 pub fn replace_worker(

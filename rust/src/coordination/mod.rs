@@ -1,10 +1,12 @@
 pub mod advisor_bridge;
+pub mod advisor_evidence;
 pub mod bridge_auth;
 pub mod root_bridge;
 pub mod root_controller;
 pub mod root_prompts;
 pub mod root_session_store;
 pub mod root_stdio;
+pub mod session_recovery;
 pub mod worker_evidence;
 pub mod workflow_evidence;
 pub mod workflow_records;

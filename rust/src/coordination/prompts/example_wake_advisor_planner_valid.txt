@@ -1,0 +1,3 @@
+Plan B result r2. Plan This individual planner result is available for a retry or historical session. When a Combined pair settles, read both complete plan reports and relevant source, write one combined plan, and delegate Worker with both candidateTurnIds.
+
+{}

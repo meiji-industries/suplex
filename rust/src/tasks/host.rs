@@ -1989,6 +1989,90 @@ mod tests {
         result.unwrap();
     }
 
+    /// TypeScript `RootController.recordWorkerResult` recovers Root inline.
+    /// One Rust sweep records the Worker result and dispatches the Root wake.
+    #[tokio::test]
+    async fn sweep_dispatches_the_root_wake_from_a_worker_result() {
+        let (base, database_path, task_id) = fixture_task();
+        let worktree = base.join("worktree");
+        fs::create_dir(&worktree).unwrap();
+        let repository = git2::Repository::init(&worktree).unwrap();
+        let tree = repository
+            .find_tree(repository.index().unwrap().write_tree().unwrap())
+            .unwrap();
+        let signature = git2::Signature::now("Suplex fixture", "fixture@example.invalid").unwrap();
+        let head = repository
+            .commit(Some("HEAD"), &signature, &signature, "fixture", &tree, &[])
+            .unwrap()
+            .to_string();
+        let codex = base.join("codex");
+        fs::write(&codex, "#!/bin/sh\ncat >/dev/null\nprintf '%s\\n' '{\"type\":\"thread.started\",\"thread_id\":\"inline-thread\"}' '{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":0,\"cached_input_tokens\":0,\"cache_write_input_tokens\":0,\"output_tokens\":0,\"reasoning_output_tokens\":0}}'\n").unwrap();
+        fs::set_permissions(&codex, fs::Permissions::from_mode(0o700)).unwrap();
+        let root = root_controller::prepare_root(&database_path, &task_id).unwrap();
+        let worker_turn = {
+            let mut database = SuplexDatabase::open(&database_path, OpenMode::ReadWrite).unwrap();
+            database.connection().execute(
+                "UPDATE suplex_task_controls SET worktree_json = ?1 WHERE task_id = ?2",
+                rusqlite::params![serde_json::json!({"path":worktree,"branch":"task-usage","baseSha":head,"headSha":head,"dirty":false}).to_string(), task_id],
+            ).unwrap();
+            database
+                .connection()
+                .execute(
+                    "UPDATE suplex_task_turns SET status = 'completed' WHERE session_id = ?1",
+                    [&root.id],
+                )
+                .unwrap();
+            root_session_store::launch_standard_worker(
+                &mut database,
+                &root,
+                "Implement the fixture",
+                "Worker prompt",
+                Some(&serde_json::json!({"kind":"worker","purpose":"implementation"})),
+                Utc::now(),
+            )
+            .unwrap();
+            let worker = root_session_store::current_worker(&database, &task_id)
+                .unwrap()
+                .unwrap();
+            root_session_store::pending_turns(&database, &worker.id)
+                .unwrap()
+                .remove(0)
+        };
+        let environment = HashMap::from([("PATH".into(), "/usr/bin:/bin".into())]);
+        let launched =
+            recover_prepared_worker(&database_path, &task_id, Some(&codex), &environment)
+                .await
+                .unwrap()
+                .unwrap();
+        assert!(launched.admission_observed);
+        let directory =
+            session_reader::session_directory(&database_path, &worker_turn.session_id).unwrap();
+        let exit = crate::runtimes::headless::turn_file(&directory, &worker_turn.id, "exit");
+        // Poll for up to 20 s. A loaded full-suite run starts processes slowly.
+        for _ in 0..400 {
+            if exit.exists() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        assert!(exit.exists());
+        sweep_task(&database_path, &base, &task_id, Some(&codex), &environment)
+            .await
+            .unwrap();
+        let database = SuplexDatabase::open(&database_path, OpenMode::ReadOnly).unwrap();
+        let (worker_status, wake_attempt): (String, Option<String>) = database
+            .connection()
+            .query_row(
+                "SELECT (SELECT status FROM suplex_task_turns WHERE id = ?1), (SELECT dispatch_attempt_json FROM suplex_task_turns WHERE session_id = ?2 AND prompt_text LIKE 'Worker result %')",
+                rusqlite::params![worker_turn.id, root.id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(worker_status, "completed");
+        assert!(wake_attempt.is_some());
+        fs::remove_dir_all(base).unwrap();
+    }
+
     #[tokio::test]
     async fn root_dispatch_claim_survives_reopen_without_replaying_child() {
         let base = std::env::temp_dir().join(format!("suplex-root-host-{}", Uuid::new_v4()));

@@ -5,7 +5,7 @@
 use std::{collections::BTreeMap, fmt, io, process::Command, sync::Arc};
 
 use serde::Deserialize;
-use serde_json::{Map, Value};
+use serde_json::Value;
 
 #[cfg(not(test))]
 const DEFAULT_BINARY: &str = "herdr";
@@ -626,6 +626,8 @@ impl Herdr {
 #[cfg(test)]
 pub mod fake {
     use std::sync::{Arc, Mutex};
+
+    use serde_json::Map;
 
     use super::*;
 

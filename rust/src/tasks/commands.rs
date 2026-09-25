@@ -47,15 +47,6 @@ impl TaskFailure {
             code: "task_failure",
         }
     }
-
-    /// HTTP 501 for behavior the Rust engine knows exists but has not ported.
-    pub fn not_ported(public_message: impl Into<String>) -> Self {
-        Self {
-            public_message: public_message.into(),
-            status_code: 501,
-            code: "experimental_not_ported",
-        }
-    }
 }
 
 impl fmt::Display for TaskFailure {

@@ -1158,6 +1158,19 @@ pub fn spawn_task_host(database_path: PathBuf, artifact_root: PathBuf) -> TaskHo
 fn scheduled_task_ids(database_path: &Path) -> DatabaseResult<Vec<String>> {
     {
         let mut database = SuplexDatabase::open(database_path, OpenMode::ReadWrite)?;
+        // A diagnostic read never changes queue admission.
+        let queued = database
+            .connection()
+            .prepare("SELECT task_id FROM suplex_task_controls WHERE status = 'queued'")
+            .and_then(|mut statement| {
+                statement
+                    .query_map([], |row| row.get::<_, String>(0))?
+                    .collect::<rusqlite::Result<Vec<_>>>()
+            })
+            .unwrap_or_default();
+        for task_id in queued {
+            root_session_store::observe_queue_wait(&mut database, &task_id);
+        }
         root_session_store::admit_queued(&mut database, Utc::now())?;
     }
     due_task_ids(database_path)
@@ -1636,6 +1649,83 @@ mod tests {
                 .contains(&task_id)
         );
         assert_eq!(status(), "active");
+        fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
+    fn scheduler_tick_reports_admission_and_queue_wait() {
+        let logs = crate::platform::system_events::install_for_test();
+        let (base, database_path, admitted) = fixture_task();
+        let waiting = {
+            let mut database = SuplexDatabase::open(&database_path, OpenMode::ReadWrite).unwrap();
+            let user = auth::development_sign_in(&mut database, Utc::now())
+                .unwrap()
+                .user;
+            let prepared = PreparedTask {
+                id: repository::new_task_id(),
+                company_id: "usage_company".into(),
+                project_id: "usage_project".into(),
+                title: "Waiting task".into(),
+                description: "".into(),
+                configuration: serde_json::json!({"repository":"owner/repo","branch":"task-waiting","baseBranch":"main"}),
+                idempotency_key: "waiting-key".into(),
+                request_hash: "waiting-request".into(),
+                creator: TaskCreator::User(user.id),
+                delivery_target: "local_worktree".into(),
+                delivery_intent: serde_json::json!({"repository":"owner/repo","headBranch":"task-waiting","baseBranch":"main"}),
+                root_profile: serde_json::json!({"profileId":"root_profile","provider":"codex","model":"gpt-6-sol","reasoningLevel":"medium","serviceTier":"default"}),
+                worker_profile: serde_json::json!({"profileId":"worker_profile","provider":"codex","model":"gpt-6-sol","reasoningLevel":"medium","serviceTier":"default"}),
+                advisor_profiles: serde_json::json!({}),
+                issue: None,
+                start_queued: false,
+                copied_from_task_id: None,
+                depends_on: vec![],
+            };
+            let waiting = repository::create(&mut database, &prepared, Utc::now())
+                .unwrap()
+                .task
+                .id;
+            database.connection().execute(
+                "UPDATE suplex_task_controls SET status = 'queued', wake_at = NULL WHERE task_id IN (?1, ?2)",
+                [&admitted, &waiting],
+            ).unwrap();
+            database.connection().execute(
+                "INSERT INTO suplex_task_pull_request_dependencies (task_id,pull_request_number,state,title,url,observed_at) VALUES (?1,7,'open','Blocker','https://github.com/owner/repo/pull/7',?2)",
+                rusqlite::params![waiting, Utc::now().to_rfc3339()],
+            ).unwrap();
+            waiting
+        };
+        let log = logs.join("system.log");
+        let before = fs::read_to_string(&log).map_or(0, |log| log.len());
+        assert!(
+            scheduled_task_ids(&database_path)
+                .unwrap()
+                .contains(&admitted)
+        );
+        let events = fs::read_to_string(&log).unwrap()[before..]
+            .lines()
+            .map(|line| serde_json::from_str::<serde_json::Value>(line).unwrap())
+            .filter(|event| {
+                (event["taskId"] == admitted.as_str() || event["taskId"] == waiting.as_str())
+                    && (event["type"] == "task_admitted" || event["type"] == "queue_wait")
+            })
+            .map(|mut event| {
+                let fields = event.as_object_mut().unwrap();
+                for key in ["schemaVersion", "time", "eventId", "pid"] {
+                    assert!(fields.remove(key).is_some());
+                }
+                event
+            })
+            .collect::<Vec<_>>();
+        // TypeScript `tick` observes queue waits before it admits.
+        assert_eq!(
+            events,
+            vec![
+                serde_json::json!({"type":"queue_wait","taskId":admitted,"waits":[]}),
+                serde_json::json!({"type":"queue_wait","taskId":waiting,"waits":[{"id":"pull_request:7","reason":"prerequisite_pull_request_open"}]}),
+                serde_json::json!({"type":"task_admitted","taskId":admitted,"trigger":"scheduler sweep"}),
+            ]
+        );
         fs::remove_dir_all(base).unwrap();
     }
 

@@ -18,6 +18,16 @@ pub fn install(directory: PathBuf) {
     let _ = DIRECTORY.set(directory);
 }
 
+/// Tests share one process-wide log directory because the sink installs once.
+#[cfg(test)]
+pub fn install_for_test() -> PathBuf {
+    DIRECTORY
+        .get_or_init(|| {
+            std::env::temp_dir().join(format!("suplex-test-logs-{}", std::process::id()))
+        })
+        .clone()
+}
+
 pub fn enabled() -> bool {
     DIRECTORY.get().is_some()
 }

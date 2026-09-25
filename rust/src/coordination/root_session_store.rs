@@ -1844,7 +1844,7 @@ pub fn admit_queued(
     if ready_queued_task_ids(database)?.is_empty() {
         return Ok(Vec::new());
     }
-    database.transaction(true, |database| {
+    let admitted = database.transaction(true, |database| {
         let mut admitted = Vec::new();
         for task_id in ready_queued_task_ids(database)? {
             match repository::admit_queued(database, &task_id, now) {
@@ -1855,7 +1855,12 @@ pub fn admit_queued(
             }
         }
         Ok(admitted)
-    })
+    })?;
+    for id in &admitted {
+        observe_lifecycle(database, id)?;
+        observe_admission(database, id, "scheduler sweep", None);
+    }
+    Ok(admitted)
 }
 
 /// TypeScript `readyQueuedTaskIds` without a prerequisite filter.
@@ -2358,8 +2363,7 @@ mod tests {
     fn lifecycle_events_follow_start_queue_wait_and_prerequisite_release() {
         let filename =
             std::env::temp_dir().join(format!("suplex_events_{}.sqlite", Uuid::new_v4()));
-        let logs = filename.with_extension("logs");
-        crate::platform::system_events::install(logs.clone());
+        let logs = crate::platform::system_events::install_for_test();
         let now = DateTime::parse_from_rfc3339("2026-09-25T12:00:00Z")
             .unwrap()
             .with_timezone(&Utc);

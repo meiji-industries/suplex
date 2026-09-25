@@ -352,7 +352,7 @@ fn stop_dispatch_records(directory: &Path, native_session_id: Option<&str>) -> i
     Ok(())
 }
 
-fn discovered_process_ids(key: &str, directory: &Path) -> io::Result<Vec<u32>> {
+pub(crate) fn discovered_process_ids(key: &str, directory: &Path) -> io::Result<Vec<u32>> {
     let marker = format!("{key}={}", owner_marker(directory));
     #[cfg(target_os = "linux")]
     {

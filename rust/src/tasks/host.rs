@@ -9,7 +9,6 @@ use std::{
 };
 
 use chrono::{DateTime, SecondsFormat, Utc};
-use nix::{errno::Errno, sys::signal::kill, unistd::Pid};
 use serde::Serialize;
 use tokio::{
     sync::{mpsc, watch},
@@ -35,7 +34,10 @@ use crate::{
         process::inspect_process,
     },
     shared::js_json,
-    tasks::worktree::{self, TaskWorktreeIntent, WorktreeReference},
+    tasks::{
+        archive::processes,
+        worktree::{self, TaskWorktreeIntent, WorktreeReference},
+    },
 };
 
 struct ProjectLaunchScope {
@@ -175,10 +177,9 @@ fn current_owner_still_running(session: &RootSession) -> bool {
     else {
         return false;
     };
-    if let Some(observed) = inspect_process(pid) {
-        return session.launch_owner_start_time.as_deref() == Some(observed.start_time.as_str());
-    }
-    kill(Pid::from_raw(pid as i32), None) != Err(Errno::ESRCH)
+    inspect_process(pid).is_some_and(|observed| {
+        session.launch_owner_start_time.as_deref() == Some(observed.start_time.as_str())
+    })
 }
 
 fn dispatch_state(turn: &RootTurn) -> DispatchState {
@@ -1100,31 +1101,57 @@ async fn stop_retired_sessions(database_path: &Path, task_id: &str) -> DatabaseR
             })?
             .collect::<rusqlite::Result<Vec<_>>>()?
     };
+    let outstanding_count = sessions.len();
+    let mut stopped = Vec::new();
+    let mut failures = Vec::new();
     for (session_id, native_id, owner_pid, owner_start) in sessions {
-        if let Some(pid) = owner_pid.and_then(|pid| u32::try_from(pid).ok()) {
-            match inspect_process(pid) {
-                Some(observed)
-                    if owner_start
-                        .as_deref()
-                        .is_none_or(|start| start == observed.start_time) =>
-                {
-                    continue;
-                }
-                None if kill(Pid::from_raw(pid as i32), None) != Err(Errno::ESRCH) => continue,
-                _ => {}
-            }
+        if let Some(pid) = owner_pid.and_then(|pid| u32::try_from(pid).ok())
+            && owner_start.as_deref().is_some_and(|start| {
+                inspect_process(pid).is_some_and(|observed| start == observed.start_time)
+            })
+        {
+            continue;
         }
         let directory = session_reader::session_directory(database_path, &session_id)?;
-        tokio::task::spawn_blocking(move || {
+        match tokio::task::spawn_blocking(move || {
             crate::runtimes::headless::stop_session(&directory, native_id.as_deref())
         })
-        .await??;
+        .await?
+        {
+            Ok(()) => stopped.push(session_id),
+            Err(error) => failures.push(error.to_string()),
+        }
+    }
+    let (status, worktree): (String, Option<String>) = {
+        let database = SuplexDatabase::open(database_path, OpenMode::ReadOnly)?;
+        database.connection().query_row(
+            "SELECT status,json_extract(worktree_json,'$.path') FROM suplex_task_controls WHERE task_id = ?1",
+            [task_id], |row| Ok((row.get(0)?,row.get(1)?)),
+        )?
+    };
+    if failures.is_empty()
+        && status == "cancelled"
+        && !stopped.is_empty()
+        && outstanding_count == stopped.len()
+        && let Some(path) = worktree
+    {
+        tokio::task::spawn_blocking(move || processes::stop_worktree_processes(Path::new(&path)))
+            .await??;
+    }
+    for session_id in stopped {
         let database = SuplexDatabase::open(database_path, OpenMode::ReadWrite)?;
         let time = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
         database.connection().execute(
             "UPDATE suplex_task_sessions SET stopped_at = ?1, launch_owner = NULL, launch_owner_pid = NULL, launch_owner_start_time = NULL, launch_claimed_at = NULL, updated_at = ?1 WHERE id = ?2 AND stop_requested_at IS NOT NULL AND stopped_at IS NULL",
             rusqlite::params![time, session_id],
         )?;
+    }
+    if !failures.is_empty() && ["cancelled", "delivered"].contains(&status.as_str()) {
+        return Err(io::Error::other(format!(
+            "Some agent sessions could not be stopped: {}",
+            failures.join("; ")
+        ))
+        .into());
     }
     Ok(())
 }
@@ -1227,7 +1254,10 @@ mod tests {
         identity::auth,
         profiles::model_pricing::ModelPricing,
         runtimes::codex::usage::{CodexTurnUsage, CodexUsageObservation, UsageTokens},
-        tasks::repository::{self, PreparedTask, TaskCreator},
+        tasks::{
+            commands,
+            repository::{self, PreparedTask, TaskCreator},
+        },
     };
 
     #[test]
@@ -1753,6 +1783,13 @@ mod tests {
             delivered,
             serde_json::json!({"kind":"local_work_completed","headSha":head})
         );
+        // A lost MCP reply cannot perform a second delivery after the durable
+        // status transition; recovery reads the delivered control instead.
+        assert!(
+            operations::complete_local_work(&database_path, &identity, &token, Some(&head))
+                .await
+                .is_err()
+        );
         let database = SuplexDatabase::open(&database_path, OpenMode::ReadOnly).unwrap();
         let control = root_session_store::root_observation_rows(&database, &task_id)
             .unwrap()
@@ -1760,11 +1797,30 @@ mod tests {
         assert_eq!(control["status"], "delivered");
         assert_eq!(control["worktree"]["dirty"], true);
         drop(database);
+        {
+            let database = SuplexDatabase::open(&database_path, OpenMode::ReadWrite).unwrap();
+            database.connection().execute(
+                "UPDATE suplex_task_sessions SET launch_owner_pid = ?1, launch_owner_start_time = NULL WHERE id = ?2",
+                rusqlite::params![i64::from(std::process::id()), identity.session_id],
+            ).unwrap();
+            database.connection().execute(
+                "UPDATE suplex_task_sessions SET launch_owner_pid = ?1, launch_owner_start_time = 'stale-owner' WHERE id = ?2",
+                rusqlite::params![i64::from(std::process::id()), worker.id],
+            ).unwrap();
+        }
         assert!(due_task_ids(&database_path).unwrap().contains(&task_id));
         sweep_task(&database_path, &base, &task_id, Some(&codex), &environment)
             .await
             .unwrap();
         assert!(!due_task_ids(&database_path).unwrap().contains(&task_id));
+        {
+            let database = SuplexDatabase::open(&database_path, OpenMode::ReadOnly).unwrap();
+            let outstanding: i64 = database.connection().query_row(
+                "SELECT COUNT(*) FROM suplex_task_sessions WHERE task_id = ?1 AND stop_requested_at IS NOT NULL AND stopped_at IS NULL",
+                [&task_id], |row| row.get(0),
+            ).unwrap();
+            assert_eq!(outstanding, 0);
+        }
         let failing_task = {
             let mut database = SuplexDatabase::open(&database_path, OpenMode::ReadWrite).unwrap();
             let user = auth::development_sign_in(&mut database, Utc::now())
@@ -1828,6 +1884,59 @@ mod tests {
             "The agent stopped the Coordinator turn (error). native_startup_failed Can you resolve the failure and continue?"
         );
         drop(database);
+        let mut worktree_child = std::process::Command::new("/bin/sleep")
+            .arg("30")
+            .current_dir(&worktree)
+            .spawn()
+            .unwrap();
+        {
+            let mut database = SuplexDatabase::open(&database_path, OpenMode::ReadWrite).unwrap();
+            database.connection().execute(
+                "UPDATE suplex_task_controls SET worktree_json = ?1 WHERE task_id = ?2",
+                rusqlite::params![serde_json::json!({"path":worktree,"branch":"task-two","baseSha":head,"headSha":head,"dirty":false}).to_string(), failing_task],
+            ).unwrap();
+            database.connection().execute(
+                "UPDATE suplex_task_sessions SET launch_owner_pid = ?1, launch_owner_start_time = NULL WHERE id = ?2",
+                rusqlite::params![i64::from(std::process::id()), failing_root.id],
+            ).unwrap();
+            let actor = auth::development_sign_in(&mut database, Utc::now())
+                .unwrap()
+                .user;
+            let cancelled = commands::cancel_user_task(
+                &mut database,
+                &actor.id,
+                &failing_task,
+                Utc::now(),
+                |_| {},
+            )
+            .unwrap();
+            assert_eq!(cancelled.status, "cancelled");
+            let pending: i64 = database.connection().query_row(
+                "SELECT COUNT(*) FROM suplex_task_turns WHERE task_id = ?1 AND status IN ('pending_prompt','prompted','unknown')",
+                [&failing_task], |row| row.get(0),
+            ).unwrap();
+            assert_eq!(pending, 0);
+        }
+        assert!(
+            due_task_ids(&database_path)
+                .unwrap()
+                .contains(&failing_task)
+        );
+        sweep_task(
+            &database_path,
+            &base,
+            &failing_task,
+            Some(&codex),
+            &environment,
+        )
+        .await
+        .unwrap();
+        assert!(
+            !due_task_ids(&database_path)
+                .unwrap()
+                .contains(&failing_task)
+        );
+        assert!(worktree_child.wait().unwrap().code().is_none());
         fs::remove_dir_all(base).unwrap();
     }
 }

@@ -468,6 +468,34 @@ pub fn ask_human_for_root(
     })
 }
 
+/// Cancel durable task intent and request native cleanup in one transaction.
+/// Display metadata is not consulted; the host rediscovers owned processes.
+pub fn cancel_task(
+    database: &mut SuplexDatabase,
+    task_id: &str,
+    now: DateTime<Utc>,
+) -> DatabaseResult<bool> {
+    database.transaction(true, |database| {
+        let time = timestamp(now);
+        let changed = database.connection().execute(
+            "UPDATE suplex_task_controls SET status = 'cancelled', wake_at = NULL, human_question = NULL, human_question_id = NULL, limit_pause_json = NULL, workflow_state_json = json_set(workflow_state_json, '$.deliveryWait', json('null')), updated_at = ?1 WHERE task_id = ?2 AND status <> 'delivered'",
+            params![time, task_id],
+        )?;
+        if changed != 1 {
+            return Ok(false);
+        }
+        database.connection().execute(
+            "UPDATE suplex_task_sessions SET is_current = 0, lifecycle = 'cancelled', stop_requested_at = COALESCE(stop_requested_at, ?1), updated_at = ?1 WHERE task_id = ?2 AND stopped_at IS NULL",
+            params![time, task_id],
+        )?;
+        database.connection().execute(
+            "UPDATE suplex_task_turns SET status = 'cancelled', updated_at = ?1 WHERE task_id = ?2 AND status IN ('pending_prompt','prompted','unknown')",
+            params![time, task_id],
+        )?;
+        Ok(true)
+    })
+}
+
 /// Reserve the next Standard Worker turn atomically with Root identity and
 /// serial-delegate checks. Native dispatch is a separate after-commit step.
 pub fn launch_standard_worker(

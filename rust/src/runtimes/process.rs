@@ -93,13 +93,8 @@ pub fn inspect_process(pid: u32) -> Option<ProcessIdentity> {
 }
 
 pub fn owner_marker(directory: &Path) -> String {
-    let canonical = directory.canonicalize().unwrap_or_else(|_| {
-        directory
-            .parent()
-            .and_then(|parent| parent.canonicalize().ok())
-            .and_then(|parent| directory.file_name().map(|name| parent.join(name)))
-            .unwrap_or_else(|| directory.to_path_buf())
-    });
+    let absolute = std::path::absolute(directory).unwrap_or_else(|_| directory.to_path_buf());
+    let canonical = absolute.canonicalize().unwrap_or(absolute);
     format!(
         "{:x}",
         Sha256::digest(canonical.to_string_lossy().as_bytes())

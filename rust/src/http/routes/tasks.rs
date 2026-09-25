@@ -49,6 +49,10 @@ pub fn router() -> Router<AppState> {
             "/api/tasks/{task_id}/start",
             axum::routing::post(start_pending),
         )
+        .route(
+            "/api/tasks/{task_id}/cancel",
+            axum::routing::post(cancel_pending),
+        )
 }
 
 fn validated_company_id(id: &str) -> Result<(), Box<Response>> {
@@ -596,18 +600,50 @@ async fn start_pending(
     if let Err(error) = access {
         return with_cookies(service_error(error), cookies);
     }
-    let Some(host) = state.task_host.clone() else {
-        return with_cookies(auth::not_ported(), cookies);
-    };
+    let host = state.task_host.clone();
     let started = state.with_database(
         |database| -> Result<task_response::TaskResponse, Box<dyn Error>> {
             commands::start_user_task(database, &user_id, &id, Utc::now(), move |id| {
-                host.wake(id)
+                if let Some(host) = host {
+                    host.wake(id);
+                }
             })?;
             task_response::get(database, &id)?.ok_or_else(|| "started task disappeared".into())
         },
     );
     match started {
+        Ok(task) => with_cookies(Json(task).into_response(), cookies),
+        Err(error) => with_cookies(service_error(error), cookies),
+    }
+}
+
+async fn cancel_pending(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+) -> Response {
+    if let Err(response) = validated_task_id(&id) {
+        return *response;
+    }
+    if !session::csrf_allowed(&state.session_config, &headers, "POST", false) {
+        return auth::error(StatusCode::FORBIDDEN, "request_origin_invalid");
+    }
+    let (user_id, cookies) = match authorize(&state, &headers) {
+        Ok(value) => value,
+        Err(response) => return *response,
+    };
+    let host = state.task_host.clone();
+    let cancelled = state.with_database(
+        |database| -> Result<task_response::TaskResponse, Box<dyn Error>> {
+            commands::cancel_user_task(database, &user_id, &id, Utc::now(), move |id| {
+                if let Some(host) = host {
+                    host.wake(id);
+                }
+            })?;
+            task_response::get(database, &id)?.ok_or_else(|| "cancelled task disappeared".into())
+        },
+    );
+    match cancelled {
         Ok(task) => with_cookies(Json(task).into_response(), cookies),
         Err(error) => with_cookies(service_error(error), cookies),
     }
@@ -892,13 +928,6 @@ mod tests {
         let detail = get_one(State(state.clone()), Path(task_id.clone()), headers.clone()).await;
         assert_eq!(detail.status(), StatusCode::OK);
         assert_eq!(to_bytes(detail.into_body(), 128 * 1024).await.unwrap(), raw);
-        let start = start_pending(State(state.clone()), Path(task_id), headers.clone()).await;
-        assert_eq!(start.status(), StatusCode::NOT_IMPLEMENTED);
-        let start_body = to_bytes(start.into_body(), 1024).await.unwrap();
-        assert_eq!(
-            start_body.as_ref(),
-            br#"{"error":"Experimental Rust backend has not ported this route","code":"experimental_not_ported"}"#
-        );
         let listed = list_company(
             State(state.clone()),
             Path("task_http_company".into()),
@@ -933,7 +962,7 @@ mod tests {
         let mut dropped_waiter = Box::pin(create(
             State(state.clone()),
             Path("task_http_company".into()),
-            headers,
+            headers.clone(),
             Bytes::from(disconnected_body),
         ));
         assert!(matches!(
@@ -959,6 +988,59 @@ mod tests {
                 tokio::time::sleep(std::time::Duration::from_millis(20)).await;
             }
         }).await.unwrap();
+        let host = crate::tasks::host::spawn_task_host(db_path.clone(), root.clone());
+        let host_state = state.clone().with_task_host(host.clone());
+        let cancelled = cancel_pending(
+            State(host_state.clone()),
+            Path(task_id.clone()),
+            headers.clone(),
+        )
+        .await;
+        assert_eq!(cancelled.status(), StatusCode::OK);
+        let cancelled_body = to_bytes(cancelled.into_body(), 128 * 1024).await.unwrap();
+        assert_eq!(
+            serde_json::from_slice::<Value>(&cancelled_body).unwrap()["status"],
+            "cancelled"
+        );
+        let cancelled_again =
+            cancel_pending(State(host_state), Path(task_id.clone()), headers.clone()).await;
+        assert_eq!(cancelled_again.status(), StatusCode::OK);
+        host.stop().await;
+        let disconnected_id: String = state
+            .with_database(|database| {
+                database.connection().query_row(
+                    "SELECT id FROM suplex_tasks WHERE idempotency_key = 'task-disconnected-key'",
+                    [],
+                    |row| row.get(0),
+                )
+            })
+            .unwrap();
+        let started = start_pending(
+            State(state.clone()),
+            Path(disconnected_id.clone()),
+            headers.clone(),
+        )
+        .await;
+        assert_eq!(started.status(), StatusCode::OK);
+        assert_eq!(
+            serde_json::from_slice::<Value>(
+                &to_bytes(started.into_body(), 128 * 1024).await.unwrap()
+            )
+            .unwrap()["status"],
+            "active"
+        );
+        let cancelled_without_host =
+            cancel_pending(State(state.clone()), Path(disconnected_id), headers.clone()).await;
+        assert_eq!(cancelled_without_host.status(), StatusCode::OK);
+        assert_eq!(
+            serde_json::from_slice::<Value>(
+                &to_bytes(cancelled_without_host.into_body(), 128 * 1024)
+                    .await
+                    .unwrap()
+            )
+            .unwrap()["status"],
+            "cancelled"
+        );
         state.with_database(|database| -> Result<(), rusqlite::Error> {
             database.connection().execute(
                 "INSERT INTO suplex_companies (id, name, status, created_at) VALUES ('task_other_company', 'Other', 'active', ?1)",

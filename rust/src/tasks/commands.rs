@@ -9,6 +9,7 @@ use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use crate::{
+    coordination::root_session_store,
     http::contracts::typed::tasks::TaskCreateBody,
     identity::companies,
     platform::database::{DatabaseResult, SuplexDatabase},
@@ -489,6 +490,40 @@ pub fn start_user_task(
             database.after_commit(move || wake(id));
         }
         Ok(task)
+    })
+}
+
+/// Cancel intent before waking the host. A disconnected HTTP waiter cannot
+/// undo the committed stop request or cause the native session to replay.
+pub fn cancel_user_task(
+    database: &mut SuplexDatabase,
+    actor_user_id: &str,
+    task_id: &str,
+    now: DateTime<Utc>,
+    wake: impl FnOnce(String) + Send + 'static,
+) -> DatabaseResult<TaskRecord> {
+    database.transaction(true, |database| {
+        let task = repository::task_by_id(database, task_id)?
+            .ok_or_else(|| Box::new(TaskFailure::new("Not found", 404)) as Box<dyn Error>)?;
+        companies::require_company_access(database, actor_user_id, &task.company_id)?;
+        if task.status == "delivered" {
+            return Err(Box::new(TaskFailure::new(
+                "Delivered tasks cannot be cancelled",
+                409,
+            )));
+        }
+        if !root_session_store::cancel_task(database, task_id, now)? {
+            return Err(Box::new(TaskFailure::new(
+                "This task cannot be cancelled",
+                409,
+            )));
+        }
+        let cancelled = repository::task_by_id(database, task_id)?
+            .ok_or_else(|| Box::new(TaskFailure::new("Not found", 404)) as Box<dyn Error>)?;
+        audit(database, actor_user_id, "task_cancelled", &cancelled, now)?;
+        let id = task_id.to_owned();
+        database.after_commit(move || wake(id));
+        Ok(cancelled)
     })
 }
 

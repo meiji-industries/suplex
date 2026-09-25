@@ -407,7 +407,11 @@ async fn read_diff(
             base_branch,
         } => (path, repository, base_branch),
     };
-    let access = match access_override.map(Ok).unwrap_or_else(Access::load) {
+    let access_result = match access_override {
+        Some(access) => Ok(access),
+        None => Access::load().await,
+    };
+    let access = match access_result {
         Ok(access) => access,
         Err(error) => return respond(Err(error), cookies),
     };

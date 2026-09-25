@@ -11,6 +11,7 @@ use axum::{
 };
 use tokio_util::sync::CancellationToken;
 
+use crate::integrations::github_device::DeviceAuth;
 use crate::platform::{database::SuplexDatabase, embedded};
 use crate::projects::repository::Commands;
 use crate::tasks::host::TaskHostHandle;
@@ -20,6 +21,8 @@ pub mod routes {
     pub mod admin_identity;
     pub mod auth;
     pub mod companies;
+    pub mod github_auth;
+    pub mod health;
     pub mod pages;
     pub mod profiles;
     pub mod projects;
@@ -51,6 +54,7 @@ pub struct AppState {
     pub project_commands: Commands,
     pub task_host: Option<TaskHostHandle>,
     pub history_shutdown: CancellationToken,
+    pub github_device: Arc<DeviceAuth>,
     dev_assets_dir: Option<PathBuf>,
 }
 
@@ -64,6 +68,7 @@ impl AppState {
             project_commands: Commands::default(),
             task_host: None,
             history_shutdown: CancellationToken::new(),
+            github_device: Arc::new(DeviceAuth::new().expect("GitHub device endpoints are valid")),
             dev_assets_dir: None,
         }
     }
@@ -121,6 +126,8 @@ pub fn router(state: AppState) -> Router {
         .merge(routes::admin_identity::router())
         .merge(routes::auth::router())
         .merge(routes::companies::router())
+        .merge(routes::github_auth::router())
+        .merge(routes::health::router())
         .merge(routes::pages::router())
         .merge(routes::profiles::router())
         .merge(routes::projects::router())
@@ -260,6 +267,7 @@ mod tests {
             project_commands: Commands::default(),
             task_host: None,
             history_shutdown: CancellationToken::new(),
+            github_device: Arc::new(DeviceAuth::new().unwrap()),
             dev_assets_dir: None,
         };
         let observed = Arc::new(AtomicBool::new(false));

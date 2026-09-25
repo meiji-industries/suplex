@@ -48,7 +48,7 @@ pub fn router() -> Router<AppState> {
         .route("/analytics", get(analytics))
         .route("/setup", get(setup))
         .route("/onboarding", get(onboarding))
-        .route("/health", get(health_pending))
+        .route("/health", get(health))
 }
 
 fn redirect(location: &str) -> Response {
@@ -205,13 +205,7 @@ page_handler!(timeline, "timeline");
 page_handler!(analytics, "analytics");
 page_handler!(setup, "setup");
 page_handler!(onboarding, "onboarding");
-
-async fn health_pending(State(state): State<AppState>, headers: HeaderMap) -> Response {
-    match page_user(&state, &headers) {
-        Ok((_, cookies)) => with_cookies(auth::not_ported(), cookies),
-        Err(response) => *response,
-    }
-}
+page_handler!(health, "health");
 
 #[cfg(test)]
 mod tests {
@@ -336,7 +330,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn denied_company_page_and_pending_health_keep_session_cookies() {
+    async fn denied_company_page_and_health_keep_session_cookies() {
         let (state, path) = test_state();
         let mut loopback = HeaderMap::new();
         loopback.insert(header::HOST, "127.0.0.1:4113".parse().unwrap());
@@ -352,17 +346,14 @@ mod tests {
             2
         );
 
-        let pending = health_pending(State(state), loopback).await;
-        assert_eq!(pending.status(), StatusCode::NOT_IMPLEMENTED);
-        assert_eq!(
-            pending.headers().get_all(header::SET_COOKIE).iter().count(),
-            2
-        );
-        let body = to_bytes(pending.into_body(), 1024).await.unwrap();
+        let page = health(State(state), loopback).await;
+        assert_eq!(page.status(), StatusCode::OK);
+        assert_eq!(page.headers().get_all(header::SET_COOKIE).iter().count(), 2);
+        let body = to_bytes(page.into_body(), 32 * 1024).await.unwrap();
         assert!(
             String::from_utf8(body.to_vec())
                 .unwrap()
-                .contains("experimental_not_ported")
+                .contains("Suplex · Host health")
         );
         let _ = std::fs::remove_file(path);
     }

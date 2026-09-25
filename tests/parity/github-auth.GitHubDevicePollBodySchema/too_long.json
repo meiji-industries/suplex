@@ -1,0 +1,17 @@
+{
+  "contract": "github-auth.GitHubDevicePollBodySchema",
+  "case": "too_long",
+  "input": {
+    "flowId": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-too_big",
+        "field": ".flowId",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

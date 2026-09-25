@@ -170,30 +170,20 @@ pub enum ArchiveOutcome {
     ConfirmationRequired(Vec<String>),
 }
 
-/// Unarchive the currently authorized Standard/local task. Pull-request
-/// availability needs a separate live GitHub observer, so that valid path is
-/// explicit until it is connected rather than silently bypassed.
+/// Reopen an authorized task, checking current pull-request ownership for
+/// statuses that can resume work.
 pub fn unarchive_local_task(
     database: &mut SuplexDatabase,
     actor_user_id: &str,
     task_id: &str,
 ) -> DatabaseResult<TaskRecord> {
     database.transaction(true, |database| {
-        let (_, configuration) = task_scope(database, actor_user_id, task_id)?;
+        let (task, _) = task_scope(database, actor_user_id, task_id)?;
         if in_progress(task_id) {
             return Err(failure("Archive cleanup is in progress", 409));
         }
-        let (workflow, target, has_pull_dependencies): (String, String, bool) = database.connection().query_row(
-            "SELECT c.workflow,c.delivery_target,EXISTS(SELECT 1 FROM suplex_task_pull_request_dependencies d WHERE d.task_id = c.task_id) FROM suplex_task_controls c WHERE c.task_id = ?1",
-            [task_id],
-            |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?)),
-        )?;
-        if workflow != "standard"
-            || target != "local_worktree"
-            || has_pull_dependencies
-            || configuration["source"]["kind"] == "pull_request"
-        {
-            return Err(not_ported());
+        if ["backlog", "queued", "active", "waiting_human"].contains(&task.status.as_str()) {
+            repository::assert_task_pull_requests_available(database, task_id)?;
         }
         let now = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
         database.connection().execute(
@@ -219,14 +209,6 @@ pub fn archive_local_task(
     }
     if !["backlog", "queued", "cancelled", "delivered"].contains(&task.status.as_str()) {
         return Err(failure("Cancel the task before archiving it", 409));
-    }
-    let supported: (String, String) = database.connection().query_row(
-        "SELECT workflow,delivery_target FROM suplex_task_controls WHERE task_id = ?1",
-        [task_id],
-        |row| Ok((row.get(0)?, row.get(1)?)),
-    )?;
-    if supported.0 != "standard" || supported.1 != "local_worktree" {
-        return Err(not_ported());
     }
     let _guard = ArchiveGuard::acquire(task_id)?;
     archive_sessions_idle(&database, database_path, task_id).map_err(cleanup_error)?;
@@ -397,6 +379,13 @@ mod tests {
             ArchiveOutcome::ConfirmationRequired(paths) => assert_eq!(paths, ["dirty.txt"]),
             ArchiveOutcome::Archived(_) => panic!("dirty worktree needs confirmation"),
         }
+        let database = SuplexDatabase::open(&database_path, OpenMode::ReadWrite).unwrap();
+        database.connection().execute("UPDATE suplex_task_controls SET delivery_target = 'pull_request_draft' WHERE task_id = ?1", [&task_id]).unwrap();
+        drop(database);
+        match archive_local_task(&database_path, &user.id, &task_id, false).unwrap() {
+            ArchiveOutcome::ConfirmationRequired(paths) => assert_eq!(paths, ["dirty.txt"]),
+            ArchiveOutcome::Archived(_) => panic!("dirty pull-request task needs confirmation"),
+        }
         fs::write(directory.join("server.json"), "{}").unwrap();
         let unsupported =
             archive_local_task(&database_path, &user.id, &task_id, false).unwrap_err();
@@ -441,6 +430,23 @@ mod tests {
         let (archived, worktree): (bool, Option<String>) = database.connection().query_row("SELECT t.archived_at IS NOT NULL,c.worktree_json FROM suplex_tasks t JOIN suplex_task_controls c ON c.task_id = t.id WHERE t.id = ?1", [&task_id], |row| Ok((row.get(0)?,row.get(1)?))).unwrap();
         assert!(archived);
         assert!(worktree.is_none());
+        drop(database);
+        let mut database = SuplexDatabase::open(&database_path, OpenMode::ReadWrite).unwrap();
+        assert_eq!(
+            unarchive_local_task(&mut database, &user.id, &task_id)
+                .unwrap()
+                .id,
+            task_id
+        );
+        let reopened: bool = database
+            .connection()
+            .query_row(
+                "SELECT archived_at IS NULL FROM suplex_tasks WHERE id = ?1",
+                [&task_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(reopened);
         drop(database);
         fs::remove_dir_all(base).unwrap();
     }

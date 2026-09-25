@@ -150,8 +150,13 @@ pub async fn inspect_standard_delivery_diff(
         .ok_or_else(|| unavailable("Task delivery base branch is missing"))?;
     let local = worktree::observe_local_revision(Path::new(path))?;
     let head = git2::Oid::from_str(&local.head_sha)?;
-    let access = Access::load()?;
-    let published_base = access.published_branch_sha(repository, branch).await?;
+    let access = Access::load()
+        .await
+        .map_err(|error| std::io::Error::other(error.to_string()))?;
+    let published_base = access
+        .published_branch_sha(repository, branch)
+        .await
+        .map_err(|error| std::io::Error::other(error.to_string()))?;
     let diff = inspect_git_range(
         Path::new(path),
         head,

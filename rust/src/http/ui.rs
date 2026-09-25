@@ -33,6 +33,7 @@ pub fn application_page(view: &str) -> String {
         "profile" => "Profile",
         "setup" => "Set up",
         "onboarding" => "Onboarding",
+        "health" => "Host health",
         _ => "Company settings",
     };
     auth_page()

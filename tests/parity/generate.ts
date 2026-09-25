@@ -5,7 +5,7 @@ import type { z } from "zod";
 import { validationFindings } from "../../src/http/errors.js";
 
 const root = fileURLToPath(new URL(".", import.meta.url));
-const modules = ["agent-api", "auth", "avatars", "common", "github-triggers", "oauth", "projects", "providers", "system-events", "task-templates", "tasks", "update", "workflows"] as const;
+const modules = ["agent-api", "auth", "avatars", "common", "github-auth", "github-triggers", "oauth", "projects", "providers", "system-events", "task-templates", "tasks", "update", "workflows"] as const;
 const responseOnlySchemas = new Set([
   "agent-api.AgentApiActionReasonCodeSchema", "agent-api.AgentApiActionRequiredSchema", "agent-api.AgentApiAdminAgentSchema",
   "agent-api.AgentApiCapabilitiesSchema", "agent-api.AgentApiIdentityProjectSchema", "agent-api.AgentApiIntegrationSchema",
@@ -46,6 +46,13 @@ const jiraIssue = { kind: "jira", site: "https://team.atlassian.net", id: "123",
 const taskTemplate = { name: "  Build  " };
 const taskTemplateResponse = { name: "Build", description: "", deliveryTarget: "pull_request_draft", runProjectTests: true, visualEvidence: "off", workflow: "standard", advisorProfileIds: {}, id: "template", projectId: "project", createdAt: "now", updatedAt: "now" };
 const semanticInputs: Record<string, Record<string, unknown>> = {
+  "github-auth.GitHubDevicePollBodySchema": {
+    valid: { flowId: "flow" },
+    empty: { flowId: "" },
+    wrong_type: { flowId: 1 },
+    too_long: { flowId: "x".repeat(257) },
+    invalid_and_unknown: { flowId: "", extra: true },
+  },
   "task-templates.TaskTemplateParamsSchema": { valid_strip: { templateId: "template", extra: true }, empty_id: { templateId: "" }, astral_id: { templateId: "😀" } },
   "task-templates.ProjectTaskTemplatesParamsSchema": { valid_strip: { projectId: "project", extra: true }, empty_id: { projectId: "" } },
   "task-templates.SaveTaskAsTemplateParamsSchema": { valid_strip: { taskId: "task", extra: true }, empty_id: { taskId: "" } },

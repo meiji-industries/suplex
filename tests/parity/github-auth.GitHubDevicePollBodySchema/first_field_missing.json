@@ -1,0 +1,15 @@
+{
+  "contract": "github-auth.GitHubDevicePollBodySchema",
+  "case": "first_field_missing",
+  "input": {},
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-invalid_type",
+        "field": ".flowId",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

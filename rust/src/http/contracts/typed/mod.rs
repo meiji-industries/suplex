@@ -2,6 +2,7 @@ use serde::{Serialize, de::DeserializeOwned};
 use serde_json::{Map, Value, json};
 
 pub mod auth;
+pub mod github_auth;
 pub mod projects;
 pub mod task_answers;
 pub mod task_templates;
@@ -97,6 +98,7 @@ pub(crate) fn garde_findings(report: &garde::Report) -> Vec<Value> {
                 "worker_profile_id" => "workerProfileId",
                 "skill_directories" => "skillDirectories",
                 "idempotency_key" => "idempotencyKey",
+                "flow_id" => "flowId",
                 "mime_type" => "mimeType",
                 "start_immediately" => "startImmediately",
                 "depends_on" => "dependsOn",

@@ -552,14 +552,6 @@ async fn observed_usage(database_path: &Path, task_id: &str) -> DatabaseResult<T
     )
     .await?
     .map_err(io::Error::other)?;
-    if observed
-        .iter()
-        .any(|(_, _, _, session)| session.turns.is_empty())
-    {
-        return Err(
-            io::Error::other("Codex turn usage is not available; observation will retry").into(),
-        );
-    }
     static PRICING: OnceLock<Result<ModelsDevCatalogReader, String>> = OnceLock::new();
     let unpriced = observed.iter().any(|(_, _, _, session)| {
         session.turns.iter().any(|turn| {
@@ -584,7 +576,7 @@ async fn observed_usage(database_path: &Path, task_id: &str) -> DatabaseResult<T
     };
     let cost = replace_observed_usage(database_path, task_id, observed, pricing.as_deref())?;
     Ok(TaskLimitUsage {
-        estimated_cost_usd: Some(cost),
+        estimated_cost_usd: cost,
     })
 }
 
@@ -593,23 +585,23 @@ fn replace_observed_usage(
     task_id: &str,
     observed: Vec<(String, String, String, usage::CodexUsageObservation)>,
     pricing: Option<&crate::profiles::model_pricing::ModelPricingCatalog>,
-) -> DatabaseResult<f64> {
-    if observed
-        .iter()
-        .any(|(_, _, _, session)| session.turns.is_empty())
-    {
-        return Err(
-            io::Error::other("Codex turn usage is not available; observation will retry").into(),
-        );
-    }
+) -> DatabaseResult<Option<f64>> {
     let mut snapshots = Vec::new();
     let mut cost = 0.0;
+    let mut unpriced = false;
     for (_, native_id, role, session) in observed {
         let live_turn_id = session.live_turn_id.clone();
         for turn in session.turns {
             let listed = pricing.and_then(|catalog| catalog.get(&format!("openai/{}", turn.model)));
             let turn_cost = listed.map_or(turn.cost_usd, |price| price.estimate(turn.tokens));
             cost += turn_cost;
+            unpriced |= turn_cost == 0.0
+                && turn.tokens.input
+                    + turn.tokens.output
+                    + turn.tokens.reasoning
+                    + turn.tokens.cache_read
+                    + turn.tokens.cache_write
+                    > 0.0;
             snapshots.push((native_id.clone(), serde_json::json!({
                 "sessionId":native_id,"messageId":turn.turn_id,"turnId":turn.turn_id,
                 "role":role,"provider":"openai","model":turn.model,
@@ -642,7 +634,7 @@ fn replace_observed_usage(
         }
         Ok(())
     })?;
-    Ok(cost)
+    Ok((!snapshots.is_empty() && (cost > 0.0 || !unpriced)).then_some(cost))
 }
 
 fn needs_admission_usage(database_path: &Path, task_id: &str, kind: &str) -> DatabaseResult<bool> {
@@ -1673,13 +1665,13 @@ mod tests {
                 "INSERT INTO suplex_task_usage (task_id,session_id,message_id,snapshot,observed_at) VALUES (?1,?2,'prior-native','{}',?3)",
                 rusqlite::params![task_id, native_id, Utc::now().to_rfc3339()],
             ).unwrap();
-            let missing = usage::CodexUsageObservation {
+            let no_usage_event = usage::CodexUsageObservation {
                 turns: vec![],
                 live_turn_id: None,
                 complete: false,
                 estimated_cost_usd: 0.0,
             };
-            assert!(
+            assert_eq!(
                 replace_observed_usage(
                     &database_path,
                     &task_id,
@@ -1687,17 +1679,18 @@ mod tests {
                         root.id.clone(),
                         native_id.to_owned(),
                         "root".into(),
-                        missing
+                        no_usage_event
                     )],
                     None
                 )
-                .is_err()
+                .unwrap(),
+                None
             );
             let retained: i64 = database.connection().query_row(
                 "SELECT COUNT(*) FROM suplex_task_usage WHERE task_id = ?1 AND message_id = 'prior-native'",
                 [&task_id], |row| row.get(0),
             ).unwrap();
-            assert_eq!(retained, 1);
+            assert_eq!(retained, 0);
         }
         let mut database = SuplexDatabase::open(&database_path, OpenMode::ReadWrite).unwrap();
         root_session_store::launch_standard_worker(
@@ -1845,6 +1838,46 @@ mod tests {
                 cache_write: 0.5,
             },
         )]);
+        let unpriced = replace_observed_usage(
+            &database_path,
+            &task_id,
+            vec![(
+                root.id.clone(),
+                root.native_session_id.clone().unwrap(),
+                "root".into(),
+                CodexUsageObservation {
+                    turns: vec![CodexTurnUsage {
+                        turn_id: "msg-usage".into(),
+                        model: "gpt-6-sol".into(),
+                        updated_at_ms: 1_234_567,
+                        failed: false,
+                        tokens: UsageTokens {
+                            input: 1_000_000.0,
+                            output: 0.0,
+                            reasoning: 0.0,
+                            cache_read: 0.0,
+                            cache_write: 0.0,
+                        },
+                        cost_usd: 0.0,
+                        priced: false,
+                    }],
+                    live_turn_id: Some("msg-usage".into()),
+                    complete: false,
+                    estimated_cost_usd: 0.0,
+                },
+            )],
+            None,
+        )
+        .unwrap();
+        assert_eq!(unpriced, None);
+        let database = SuplexDatabase::open(&database_path, OpenMode::ReadOnly).unwrap();
+        let snapshot: String = database.connection().query_row(
+            "SELECT snapshot FROM suplex_task_usage WHERE task_id = ?1 AND message_id = 'msg-usage'",
+            [&task_id], |row| row.get(0),
+        ).unwrap();
+        let snapshot: serde_json::Value = serde_json::from_str(&snapshot).unwrap();
+        assert!(snapshot["completedAt"].is_null());
+        drop(database);
         let cost = replace_observed_usage(
             &database_path,
             &task_id,
@@ -1876,7 +1909,7 @@ mod tests {
             Some(&pricing),
         )
         .unwrap();
-        assert_eq!(cost, 1.0);
+        assert_eq!(cost, Some(1.0));
         let database = SuplexDatabase::open(&database_path, OpenMode::ReadOnly).unwrap();
         let snapshot: String = database.connection().query_row(
             "SELECT snapshot FROM suplex_task_usage WHERE task_id = ?1 AND message_id = 'msg-usage'",

@@ -46,7 +46,7 @@ fn response_with_cookies(response: Response, cookies: Vec<String>) -> Response {
     response
 }
 
-fn authorize(
+pub(crate) fn authorize(
     state: &AppState,
     headers: &HeaderMap,
     method: &str,

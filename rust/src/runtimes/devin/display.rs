@@ -33,8 +33,8 @@ fn shell_quote(value: &str) -> String {
 pub fn display_command(runtime_directory: &Path) -> io::Result<DisplayCommand> {
     let executable = std::env::current_exe()?.to_string_lossy().into_owned();
     let args = vec![
-        "devin".to_owned(),
         "display".to_owned(),
+        "devin".to_owned(),
         runtime_directory.to_string_lossy().into_owned(),
     ];
     let clear = [
@@ -201,7 +201,7 @@ pub fn run(
     Ok(())
 }
 
-/// `suplex devin display <runtime directory>`. SIGINT and SIGTERM end the
+/// `suplex display devin <runtime directory>`. SIGINT and SIGTERM end the
 /// process through their default action.
 pub fn main(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
     let directory = args.first().map(PathBuf::from);

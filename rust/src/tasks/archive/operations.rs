@@ -15,7 +15,7 @@ use serde_json::Value;
 use crate::{
     identity::companies,
     platform::database::{DatabaseResult, OpenMode, SuplexDatabase},
-    runtimes::{codex::session_reader, process::inspect_process},
+    runtimes::{codex::session_reader, process::inspect_process, task_harness_registry},
     tasks::{
         commands::TaskFailure,
         repository::{self, TaskRecord},
@@ -146,7 +146,8 @@ fn archive_sessions_idle(
         }
         let directory = session_reader::session_directory(database_path, &session_id)?;
         match native_session_id.as_deref() {
-            Some(native_id) if native_id.starts_with("codex-") => {}
+            Some(native_id)
+                if task_harness_registry::native_session_reader(native_id).is_some() => {}
             None => match fs::metadata(directory.join("server.json")) {
                 Err(error) if error.kind() == io::ErrorKind::NotFound => {}
                 Ok(_) => return Err(not_ported()),

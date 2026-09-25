@@ -205,7 +205,7 @@ pub fn published_base_commit(
     Ok(published_sha)
 }
 
-fn token_audience_matches(raw: &str) -> bool {
+pub(crate) fn token_audience_matches(raw: &str) -> bool {
     url::Url::parse(raw).is_ok_and(|url| {
         url.scheme() == "https"
             && url.host_str() == Some("github.com")

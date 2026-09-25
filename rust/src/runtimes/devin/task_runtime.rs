@@ -19,7 +19,7 @@ use crate::{
         },
         root_bridge::{self, RootIdentity},
     },
-    profiles::agent_profiles::{executable, home_directory},
+    profiles::agent_profiles::home_directory,
     runtimes::{
         codex::{
             runtime::{DispatchState, PromptObservation, PromptState},
@@ -28,7 +28,7 @@ use crate::{
         },
         headless::{self, DispatchInput, HeadlessTurnRecord},
         process::{IdentityMatch, compare_identity, inspect_process},
-        task_harness,
+        task_harness::{self, ExecutableSpec, GH_EXECUTABLE, resolve_executable},
     },
 };
 
@@ -60,62 +60,34 @@ impl DevinScope<'_> {
     }
 }
 
-fn resolve_executable(
-    label: &str,
-    binary: &str,
-    variable: &str,
-    configured: Option<&Path>,
-    fallback: &[&str],
-    home_paths: &[&str],
-) -> io::Result<PathBuf> {
-    let from_environment = std::env::var_os(variable).map(PathBuf::from);
-    if let Some(path) = configured.map(Path::to_owned).or(from_environment) {
-        if !path.is_absolute() {
-            return Err(io::Error::other(format!(
-                "{label} executable must be an absolute path. Check {variable}."
-            )));
-        }
-        if !executable(&path) {
-            return Err(io::Error::other(format!(
-                "{label} executable cannot be executed. Check {variable}."
-            )));
-        }
-        return Ok(path);
-    }
-    let home = home_directory().unwrap_or_default();
-    std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
-        .filter(|directory| directory.is_absolute())
-        .map(|directory| directory.join(binary))
-        .chain(fallback.iter().map(PathBuf::from))
-        .chain(home_paths.iter().map(|relative| home.join(relative)))
-        .find(|candidate| executable(candidate))
-        .ok_or_else(|| {
-            io::Error::other(format!(
-                "Install {label} or set {variable} to its absolute executable path."
-            ))
-        })
+pub const DEVIN_EXECUTABLE: ExecutableSpec = ExecutableSpec {
+    label: "Devin CLI",
+    binary: "devin",
+    env_var: "SUPLEX_DEVIN_COMMAND",
+    home_paths: &[".local/bin/devin", ".devin/bin/devin"],
+    fallback_paths: &[],
+};
+
+fn process_environment() -> HashMap<String, String> {
+    std::env::vars().collect()
 }
 
 pub fn resolve_devin_executable(configured: Option<&Path>) -> io::Result<PathBuf> {
     resolve_executable(
-        "Devin CLI",
-        "devin",
-        "SUPLEX_DEVIN_COMMAND",
+        &DEVIN_EXECUTABLE,
         configured,
-        &[],
-        &[".local/bin/devin", ".devin/bin/devin"],
+        &process_environment(),
+        home_directory().as_deref(),
     )
 }
 
 /// The GitHub CLI is optional for task bridges; an unresolved CLI is omitted.
 fn resolved_gh_command() -> Option<String> {
     resolve_executable(
-        "GitHub CLI",
-        "gh",
-        "SUPLEX_GH_COMMAND",
+        &GH_EXECUTABLE,
         None,
-        &["/opt/homebrew/bin/gh", "/usr/local/bin/gh"],
-        &[],
+        &process_environment(),
+        home_directory().as_deref(),
     )
     .ok()
     .map(|path| path.to_string_lossy().into_owned())
@@ -321,6 +293,8 @@ fn observation(
         unsettled_tool_ids: Vec::new(),
         native_final_observed: state == PromptState::Completed,
         process_running: state == PromptState::Running,
+        // TypeScript marks only an output log without its dispatch record as uncertain.
+        execution_uncertain: reason == "dispatch_identity_missing",
     }
 }
 
@@ -502,12 +476,7 @@ pub fn recover_dispatch(
     turn_id: &str,
     generation: &str,
 ) -> io::Result<PromptObservation> {
-    let record =
-        headless::read_record(&runtime_directory.join(format!("dispatch-{generation}.json")))?;
-    if let Some(record) = record.filter(turn_running) {
-        headless::stop_owned(&record)?;
-    }
-    headless::stop_execution(runtime_directory, generation)?;
+    task_harness::recover_headless_dispatch(runtime_directory, generation)?;
     observe(
         runtime_directory,
         native_session_id,
@@ -842,6 +811,7 @@ pub(super) mod tests {
         let missing = observe_x(DispatchState::NotSubmitted);
         assert!(!missing.retry_allowed);
         assert_eq!(missing.reason, "dispatch_identity_missing");
+        assert!(missing.execution_uncertain && !absent.execution_uncertain);
         dispatch_turn(&f.worker(), SESSION, "msg_y", "Implement the change");
         assert_eq!(
             observe(

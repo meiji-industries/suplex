@@ -458,6 +458,10 @@ impl Access {
         self.token.as_deref()
     }
 
+    pub(crate) fn client(&self) -> &Octocrab {
+        &self.client
+    }
+
     pub fn source(&self) -> CredentialSource {
         self.source
     }

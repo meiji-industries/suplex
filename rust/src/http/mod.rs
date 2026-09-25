@@ -23,6 +23,8 @@ pub mod routes {
     pub mod agent_pairing;
     pub mod admin_platform;
     pub mod auth;
+    pub mod discovery;
+    pub mod agent_api;
     pub mod companies;
     pub mod external_agent_administration;
     pub mod github_auth;
@@ -133,6 +135,8 @@ pub fn router(state: AppState) -> Router {
         .merge(routes::external_agent_administration::router())
         .merge(routes::admin_platform::router())
         .merge(routes::auth::router())
+        .merge(routes::discovery::router())
+        .merge(routes::agent_api::router())
         .merge(routes::companies::router())
         .merge(routes::github_auth::router())
         .merge(routes::health::router())

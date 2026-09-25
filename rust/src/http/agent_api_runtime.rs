@@ -5,7 +5,6 @@
 use std::error::Error;
 
 use axum::{
-    Json,
     http::StatusCode,
     response::{IntoResponse, Response},
 };

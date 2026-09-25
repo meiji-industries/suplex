@@ -1,5 +1,6 @@
 // eslint-disable-next-line no-restricted-imports -- The isolated Rust API is a long-running test process; runCommand waits for exit.
 import { spawn } from "node:child_process";
+import { appendFileSync } from "node:fs";
 import { stat } from "node:fs/promises";
 import { createServer } from "node:net";
 import { resolve } from "node:path";
@@ -32,7 +33,9 @@ async function startRustServer(root: string, port: number): Promise<() => Promis
   let output = "";
   let failure: Error | undefined;
   child.once("error", error => { failure = error; });
-  for (const stream of [child.stdout, child.stderr]) stream.on("data", chunk => { output = (output + String(chunk)).slice(-8_000); });
+  // Real-environment runs keep the full Rust output to search it for Keychain prompts.
+  const outputFile = process.env.SUPLEX_RUST_OUTPUT_FILE;
+  for (const stream of [child.stdout, child.stderr]) stream.on("data", chunk => { output = (output + String(chunk)).slice(-8_000); if (outputFile) appendFileSync(outputFile, chunk); });
   const exited = new Promise<void>(accept => child.once("close", () => accept()));
   let stopped = false;
   const stop = async () => {

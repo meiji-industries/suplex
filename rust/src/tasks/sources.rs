@@ -18,8 +18,7 @@ use crate::{
     tasks::{issue_context, repository::PreparedTask, worktree},
 };
 
-static BRANCH: LazyLock<Regex> =
-    LazyLock::new(|| Regex::new(r"^[A-Za-z0-9._/-]{1,240}$").unwrap());
+static BRANCH: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^[A-Za-z0-9._/-]{1,240}$").unwrap());
 
 /// TypeScript `branchPattern` (the lookaheads are checked separately).
 fn branch_pattern(branch: &str) -> bool {
@@ -87,7 +86,12 @@ fn safe_branch(project: &Project, branch: &str) -> Result<(), Box<dyn Error>> {
 }
 
 /// Fetch origin refs with the same credential audience as other Git reads.
-fn fetch(repository: &Repository, refspecs: &[&str], prune: bool, token: Option<&str>) -> Result<(), git2::Error> {
+fn fetch(
+    repository: &Repository,
+    refspecs: &[&str],
+    prune: bool,
+    token: Option<&str>,
+) -> Result<(), git2::Error> {
     let mut origin = repository.find_remote("origin")?;
     let mut callbacks = RemoteCallbacks::new();
     callbacks.credentials(|url, username, allowed| {
@@ -125,20 +129,35 @@ fn iso_strict(time: git2::Time) -> String {
 }
 
 /// `git for-each-ref --sort=-committerdate --count=200 refs/remotes/origin`.
-fn remote_branches(path: &Path, base_branch: &str, token: Option<&str>) -> Result<Vec<Value>, Box<dyn Error>> {
+fn remote_branches(
+    path: &Path,
+    base_branch: &str,
+    token: Option<&str>,
+) -> Result<Vec<Value>, Box<dyn Error>> {
     let repository = Repository::open(path).map_err(|_| unavailable())?;
-    fetch(&repository, &["+refs/heads/*:refs/remotes/origin/*"], true, token)
-        .map_err(|_| unavailable())?;
+    fetch(
+        &repository,
+        &["+refs/heads/*:refs/remotes/origin/*"],
+        true,
+        token,
+    )
+    .map_err(|_| unavailable())?;
     let mut rows = Vec::new();
     for reference in repository
         .references_glob("refs/remotes/origin/*")
         .map_err(|_| unavailable())?
         .flatten()
     {
-        let Some(name) = reference.name().ok().and_then(|name| name.strip_prefix("refs/remotes/origin/")) else {
+        let Some(name) = reference
+            .name()
+            .ok()
+            .and_then(|name| name.strip_prefix("refs/remotes/origin/"))
+        else {
             continue;
         };
-        let Ok(commit) = reference.peel_to_commit() else { continue };
+        let Ok(commit) = reference.peel_to_commit() else {
+            continue;
+        };
         rows.push((
             commit.committer().when().seconds(),
             name.to_owned(),
@@ -160,15 +179,12 @@ fn remote_branches(path: &Path, base_branch: &str, token: Option<&str>) -> Resul
 }
 
 fn bitbucket(project: &Project) -> bool {
-    project
-        .integration
-        .as_ref()
-        .is_some_and(|integration| {
-            matches!(
-                integration.repository,
-                crate::http::contracts::typed::projects::RepositoryConnection::Bitbucket { .. }
-            )
-        })
+    project.integration.as_ref().is_some_and(|integration| {
+        matches!(
+            integration.repository,
+            crate::http::contracts::typed::projects::RepositoryConnection::Bitbucket { .. }
+        )
+    })
 }
 
 /// TypeScript `ProjectService.discoverTaskSources` and `TaskSourceService.discover`.
@@ -184,7 +200,9 @@ pub async fn discover(project: &Project, kind: &str) -> Result<Value, Box<dyn Er
             || tracker["repository"].as_str().map(str::to_lowercase)
                 != project.repository.as_deref().map(str::to_lowercase))
     {
-        return Ok(json!({"available": false, "reason": "The source issue does not match the configured tracker.", "sources": []}));
+        return Ok(
+            json!({"available": false, "reason": "The source issue does not match the configured tracker.", "sources": []}),
+        );
     }
     if bitbucket(project) {
         return Err(Box::new(crate::tasks::commands::TaskFailure::not_ported(
@@ -198,19 +216,26 @@ pub async fn discover(project: &Project, kind: &str) -> Result<Value, Box<dyn Er
                 return Ok(json!({"available": false, "sources": []}));
             };
             match github.list_open_issues(repository, 100).await {
-                Ok(issues) => Ok(json!({"available": true, "sources": issues.iter().filter(|issue| issue["state"] == "OPEN").map(|issue| json!({
+                Ok(issues) => Ok(
+                    json!({"available": true, "sources": issues.iter().filter(|issue| issue["state"] == "OPEN").map(|issue| json!({
                     "kind": "issue", "number": issue["number"], "url": issue["url"], "title": issue["title"],
                     "body": issue["body"], "author": issue["author"]["login"].as_str().unwrap_or(""), "updatedAt": issue["updatedAt"],
-                })).collect::<Vec<_>>()})),
-                Err(_) => Ok(json!({"available": false, "reason": "Issues are not available.", "sources": []})),
+                })).collect::<Vec<_>>()}),
+                ),
+                Err(_) => Ok(
+                    json!({"available": false, "reason": "Issues are not available.", "sources": []}),
+                ),
             }
         }
         "pull_request" => {
             let (Some(repository), Some(github)) = (&project.repository, &github) else {
-                return Ok(json!({"available": false, "reason": "Pull request provider unavailable", "sources": []}));
+                return Ok(
+                    json!({"available": false, "reason": "Pull request provider unavailable", "sources": []}),
+                );
             };
             match github.list_open_pull_requests(repository, 100).await {
-                Ok(pulls) => Ok(json!({"available": true, "sources": pulls.iter().filter(|pull| pull.is_cross_repository != Some(true) && pull.state == "open" && pull.head_branch != project.base_branch).map(|pull| {
+                Ok(pulls) => Ok(
+                    json!({"available": true, "sources": pulls.iter().filter(|pull| pull.is_cross_repository != Some(true) && pull.state == "open" && pull.head_branch != project.base_branch).map(|pull| {
                     let mut source = json!({
                         "kind": "pull_request", "number": pull.number, "url": pull.url,
                         "title": pull.title.clone().unwrap_or_else(|| format!("Pull request #{}", pull.number)),
@@ -220,16 +245,22 @@ pub async fn discover(project: &Project, kind: &str) -> Result<Value, Box<dyn Er
                     if let Some(updated) = &pull.updated_at { source["updatedAt"] = json!(updated); }
                     source["isDraft"] = json!(pull.is_draft);
                     source
-                }).collect::<Vec<_>>()})),
-                Err(_) => Ok(json!({"available": false, "reason": "Pull requests are temporarily unavailable", "sources": []})),
+                }).collect::<Vec<_>>()}),
+                ),
+                Err(_) => Ok(
+                    json!({"available": false, "reason": "Pull requests are temporarily unavailable", "sources": []}),
+                ),
             }
         }
         _ => {
             let path = project.repository_path.clone();
             let base = project.base_branch.clone();
-            let token = github.as_ref().and_then(|github| github.token().map(str::to_owned));
+            let token = github
+                .as_ref()
+                .and_then(|github| github.token().map(str::to_owned));
             let sources = tokio::task::spawn_blocking(move || {
-                remote_branches(Path::new(&path), &base, token.as_deref()).map_err(|error| error.to_string())
+                remote_branches(Path::new(&path), &base, token.as_deref())
+                    .map_err(|error| error.to_string())
             })
             .await?
             .map_err(|_| unavailable())?;
@@ -264,41 +295,86 @@ pub async fn resolve(project: &Project, selector: &Value) -> Result<Value, Box<d
     match selector["kind"].as_str() {
         Some("issue") => {
             let (Some(repository), Ok(github)) = (&project.repository, Github::load().await) else {
-                return Err(failure("source-provider-unavailable", "Issues are not available.", 503));
+                return Err(failure(
+                    "source-provider-unavailable",
+                    "Issues are not available.",
+                    503,
+                ));
             };
-            let issue = github
-                .get_issue(repository, number)
-                .await
-                .map_err(|_| failure("source-provider-unavailable", "The issue could not be read.", 503))?;
+            let issue = github.get_issue(repository, number).await.map_err(|_| {
+                failure(
+                    "source-provider-unavailable",
+                    "The issue could not be read.",
+                    503,
+                )
+            })?;
             Ok(json!({"kind": "issue", "context": github_delivery::issue_context(&issue)}))
         }
         Some("pull_request") => {
             let Some(repository) = &project.repository else {
-                return Err(failure("source-provider-unavailable", "Pull requests are unavailable", 503));
+                return Err(failure(
+                    "source-provider-unavailable",
+                    "Pull requests are unavailable",
+                    503,
+                ));
             };
-            let provider = || failure("source-provider-unavailable", "The pull request provider is temporarily unavailable", 503);
+            let provider = || {
+                failure(
+                    "source-provider-unavailable",
+                    "The pull request provider is temporarily unavailable",
+                    503,
+                )
+            };
             let github = Github::load().await.map_err(|_| provider())?;
-            let pull = github.get_pull_request(repository, number).await.map_err(|_| provider())?;
+            let pull = github
+                .get_pull_request(repository, number)
+                .await
+                .map_err(|_| provider())?;
             if pull.state != "open" {
-                return Err(failure("source-pull-request-closed", "The pull request is not open", 422));
+                return Err(failure(
+                    "source-pull-request-closed",
+                    "The pull request is not open",
+                    422,
+                ));
             }
-            if pull.is_cross_repository == Some(true) || pull.repository != repository.to_lowercase() {
-                return Err(failure("source-unsupported-fork", "Fork pull requests cannot be used as task sources", 422));
+            if pull.is_cross_repository == Some(true)
+                || pull.repository != repository.to_lowercase()
+            {
+                return Err(failure(
+                    "source-unsupported-fork",
+                    "Fork pull requests cannot be used as task sources",
+                    422,
+                ));
             }
             safe_branch(project, &pull.head_branch)?;
             safe_ref(&pull.base_branch)?;
-            Ok(json!({"kind": "pull_request", "number": pull.number, "url": pull.url, "headBranch": pull.head_branch, "baseBranch": pull.base_branch, "headSha": pull.head_sha, "baseSha": pull.base_sha}))
+            Ok(
+                json!({"kind": "pull_request", "number": pull.number, "url": pull.url, "headBranch": pull.head_branch, "baseBranch": pull.base_branch, "headSha": pull.head_sha, "baseSha": pull.base_sha}),
+            )
         }
         _ => {
             let branch = selector["branch"].as_str().unwrap_or("").to_owned();
             safe_branch(project, &branch)?;
-            let token = Github::load().await.ok().and_then(|github| github.token().map(str::to_owned));
+            let token = Github::load()
+                .await
+                .ok()
+                .and_then(|github| github.token().map(str::to_owned));
             let path = project.repository_path.clone();
             let fetched = branch.clone();
             let head = tokio::task::spawn_blocking(move || -> Result<String, git2::Error> {
                 let repository = Repository::open(&path)?;
-                fetch(&repository, &[&format!("refs/heads/{fetched}:refs/remotes/origin/{fetched}")], false, token.as_deref())?;
-                Ok(repository.revparse_single(&format!("refs/remotes/origin/{fetched}^{{commit}}"))?.id().to_string())
+                fetch(
+                    &repository,
+                    &[&format!(
+                        "refs/heads/{fetched}:refs/remotes/origin/{fetched}"
+                    )],
+                    false,
+                    token.as_deref(),
+                )?;
+                Ok(repository
+                    .revparse_single(&format!("refs/remotes/origin/{fetched}^{{commit}}"))?
+                    .id()
+                    .to_string())
             })
             .await?
             .map_err(|_| unavailable())?;
@@ -337,22 +413,39 @@ pub async fn creation_source(
             let tracker = IssueTracker::new(&issue_context::task_tracker(&configuration)?)
                 .await
                 .map_err(|error| error.to_string())?;
-            Some(tracker.read(issue).await.map_err(|error| error.to_string())?["issue"].clone())
+            Some(
+                tracker
+                    .read(issue)
+                    .await
+                    .map_err(|error| error.to_string())?["issue"]
+                    .clone(),
+            )
         }
         None if source.is_some_and(|source| source["kind"] == "issue") => {
             let number = &source.expect("issue source")["number"];
-            Some(json!({"kind": "github", "repository": repository, "number": number, "id": number.to_string(), "key": format!("#{number}"), "title": title, "url": format!("https://github.com/{repository}/issues/{number}")}))
+            Some(
+                json!({"kind": "github", "repository": repository, "number": number, "id": number.to_string(), "key": format!("#{number}"), "title": title, "url": format!("https://github.com/{repository}/issues/{number}")}),
+            )
         }
         _ => None,
     };
     let description = match (&pinned, issue) {
         (Some(pinned), None) if pinned["kind"] == "issue" => {
             let context = pinned["context"].as_str().unwrap_or("");
-            Some(if description.is_empty() { context.to_owned() } else { format!("{description}\n\n{context}") })
+            Some(if description.is_empty() {
+                context.to_owned()
+            } else {
+                format!("{description}\n\n{context}")
+            })
         }
         _ => None,
     };
-    Ok(CreationSource { pinned, selector: source.cloned(), issue: resolved_issue, description })
+    Ok(CreationSource {
+        pinned,
+        selector: source.cloned(),
+        issue: resolved_issue,
+        description,
+    })
 }
 
 /// Apply a resolved source to the prepared task configuration and delivery intent.
@@ -394,7 +487,9 @@ mod tests {
         for safe in ["feature/x", "a.b-c_d", "v1"] {
             assert!(branch_pattern(safe), "{safe}");
         }
-        for unsafe_branch in ["-x", ".x", "a..b", "a b", "a~1", "a^", "a:b", "a?", "a*", "a[", "a@{1}", "a\\b"] {
+        for unsafe_branch in [
+            "-x", ".x", "a..b", "a b", "a~1", "a^", "a:b", "a?", "a*", "a[", "a@{1}", "a\\b",
+        ] {
             assert!(!branch_pattern(unsafe_branch), "{unsafe_branch}");
         }
     }
@@ -408,9 +503,27 @@ mod tests {
         let upstream = Repository::init(&origin).unwrap();
         let tree = upstream.treebuilder(None).unwrap().write().unwrap();
         let tree = upstream.find_tree(tree).unwrap();
-        let main = upstream.commit(Some("refs/heads/main"), &signature, &signature, "Seed", &tree, &[]).unwrap();
+        let main = upstream
+            .commit(
+                Some("refs/heads/main"),
+                &signature,
+                &signature,
+                "Seed",
+                &tree,
+                &[],
+            )
+            .unwrap();
         let main = upstream.find_commit(main).unwrap();
-        upstream.commit(Some("refs/heads/feature/one"), &signature, &signature, "Feature subject\n\nBody", &tree, &[&main]).unwrap();
+        upstream
+            .commit(
+                Some("refs/heads/feature/one"),
+                &signature,
+                &signature,
+                "Feature subject\n\nBody",
+                &tree,
+                &[&main],
+            )
+            .unwrap();
         let clone = Repository::clone(origin.to_str().unwrap(), &work).unwrap();
         let head = clone.head().unwrap().name().map(str::to_owned);
         let rows = remote_branches(&work, "main", None).unwrap();

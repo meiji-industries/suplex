@@ -46,7 +46,10 @@ enum RootCall {
         pull_request_title: Option<String>,
         pull_request_body: Option<String>,
     },
-    AskHuman { question: String, options: Value },
+    AskHuman {
+        question: String,
+        options: Value,
+    },
 }
 
 #[derive(Deserialize)]

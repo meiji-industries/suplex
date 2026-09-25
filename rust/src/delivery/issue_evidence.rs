@@ -193,7 +193,9 @@ fn read_generated(database_path: &Path, task_id: &str, name: &str) -> Result<Vec
         return Err("Evidence must be a regular file of at most 8 MiB".into());
     }
     let mut bytes = Vec::new();
-    file.by_ref().take(metadata.len() + 1).read_to_end(&mut bytes)?;
+    file.by_ref()
+        .take(metadata.len() + 1)
+        .read_to_end(&mut bytes)?;
     if bytes.len() as u64 != metadata.len() {
         return Err("Evidence changed while Suplex read it".into());
     }
@@ -267,20 +269,34 @@ fn retain(
 }
 
 fn retained_bytes(operations: &DeliveryOperations, item: &Retained) -> Result<Vec<u8>, Failure> {
-    let bytes = artifacts::read(operations.artifact_root(), &item.company_id, &item.storage_path)
-        .map_err(|error| error.to_string())?;
+    let bytes = artifacts::read(
+        operations.artifact_root(),
+        &item.company_id,
+        &item.storage_path,
+    )
+    .map_err(|error| error.to_string())?;
     if hash(&bytes) != item.sha256 {
         return Err("Stored delivery evidence is corrupt".into());
     }
     Ok(bytes)
 }
 
-fn manifest(operations: &DeliveryOperations, task_id: &str, head_sha: &str) -> Result<Value, Failure> {
+fn manifest(
+    operations: &DeliveryOperations,
+    task_id: &str,
+    head_sha: &str,
+) -> Result<Value, Failure> {
     let name = format!("{head_sha}-delivery-evidence.json");
-    let bytes = match read_generated(operations.database_path(), task_id, "delivery-evidence.json") {
+    let bytes = match read_generated(
+        operations.database_path(),
+        task_id,
+        "delivery-evidence.json",
+    ) {
         Ok(bytes) => bytes,
         Err(error) => {
-            for item in retained(operations.database_path(), task_id, &name).map_err(|e| e.to_string())? {
+            for item in
+                retained(operations.database_path(), task_id, &name).map_err(|e| e.to_string())?
+            {
                 let parsed = parse_evidence(&retained_bytes(operations, &item)?)?;
                 if parsed["headSha"] == head_sha {
                     return Ok(parsed);
@@ -293,7 +309,8 @@ fn manifest(operations: &DeliveryOperations, task_id: &str, head_sha: &str) -> R
     if value["headSha"] != head_sha {
         return Err("Delivery evidence is not for the reviewed source".into());
     }
-    retain(operations, task_id, &name, "application/json", &bytes).map_err(|error| error.to_string())?;
+    retain(operations, task_id, &name, "application/json", &bytes)
+        .map_err(|error| error.to_string())?;
     Ok(value)
 }
 
@@ -384,7 +401,10 @@ async fn publish(
             "Review the current source before publishing issue evidence.",
         ));
     }
-    let repository = configuration["repository"].as_str().unwrap_or("").to_owned();
+    let repository = configuration["repository"]
+        .as_str()
+        .unwrap_or("")
+        .to_owned();
     let github = operations.github(task_id).await?;
     let text = |error: Box<dyn Error>| error.to_string();
     let inspect_before_write = || async {
@@ -436,22 +456,29 @@ async fn publish(
                         "png" => "image/png",
                         "jpg" | "jpeg" => "image/jpeg",
                         "webp" => "image/webp",
-                        _ => return Err::<(), Failure>("Evidence screenshots must be PNG, JPEG or WebP".into()),
+                        _ => {
+                            return Err::<(), Failure>(
+                                "Evidence screenshots must be PNG, JPEG or WebP".into(),
+                            );
+                        }
                     };
                     let retained_name = format!("{head_sha}-{filename}");
-                    let bytes = match read_generated(operations.database_path(), task_id, filename) {
+                    let bytes = match read_generated(operations.database_path(), task_id, filename)
+                    {
                         Ok(bytes) => bytes,
                         Err(error) => {
-                            let item = retained(operations.database_path(), task_id, &retained_name)
-                                .map_err(|error| error.to_string())?
-                                .into_iter()
-                                .next()
-                                .ok_or(error)?;
+                            let item =
+                                retained(operations.database_path(), task_id, &retained_name)
+                                    .map_err(|error| error.to_string())?
+                                    .into_iter()
+                                    .next()
+                                    .ok_or(error)?;
                             retained_bytes(operations, &item)
                                 .map_err(|_| "Stored screenshot is corrupt")?
                         }
                     };
-                    retain(operations, task_id, &retained_name, mime, &bytes).map_err(|error| error.to_string())?;
+                    retain(operations, task_id, &retained_name, mime, &bytes)
+                        .map_err(|error| error.to_string())?;
                     let name = format!("suplex-{task_id}-{}.{extension}", hash(&bytes));
                     recheck_now().map_err(|error| error.to_string())?;
                     if configuration["integration"]["repository"]["kind"] == "bitbucket" {
@@ -460,7 +487,10 @@ async fn publish(
                     let url = tracker
                         .upload(&publication["issue"], &name, &bytes, mime, &before_write)
                         .await?;
-                    links.push(format!("[{}: {filename}]({url})", screenshot["phase"].as_str().unwrap_or("")));
+                    links.push(format!(
+                        "[{}: {filename}]({url})",
+                        screenshot["phase"].as_str().unwrap_or("")
+                    ));
                 }
                 render_delivery_evidence(&evidence, &links)
             }
@@ -488,7 +518,9 @@ async fn publish(
             None => format!("{}\n\n{block}", crate::identity::auth::js_trim(existing)),
         };
         if *existing != body {
-            github.update_draft_pull_request(&repository, number, title, &body).await?;
+            github
+                .update_draft_pull_request(&repository, number, title, &body)
+                .await?;
         }
         let observed = github.get_pull_request(&repository, number).await?;
         if observed.head_sha != head_sha || observed.body.as_deref() != Some(body.as_str()) {

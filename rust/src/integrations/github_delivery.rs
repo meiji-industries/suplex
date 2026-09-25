@@ -75,9 +75,7 @@ fn normalize_repository(value: &str) -> GithubResult<String> {
 /// Percent-encode each segment as a GitHub REST path.
 fn route(segments: &[&str]) -> String {
     let mut url = url::Url::parse("https://api.github.com").expect("static URL");
-    url.path_segments_mut()
-        .expect("base URL")
-        .extend(segments);
+    url.path_segments_mut().expect("base URL").extend(segments);
     url.path().to_owned()
 }
 
@@ -170,9 +168,14 @@ impl Observation {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum MergeResult {
-    Merged { sha: String },
+    Merged {
+        sha: String,
+    },
     NotMerged,
-    Disposition { disposition: &'static str, message: String },
+    Disposition {
+        disposition: &'static str,
+        message: String,
+    },
 }
 
 fn string(value: &Value, key: &str) -> Option<String> {
@@ -498,9 +501,7 @@ fn flatten_rollup(pull: &mut Value) {
     let rollup = contexts.map(|rows| {
         rows.into_iter()
             .map(|mut row| {
-                if let Some(name) =
-                    row["checkSuite"]["workflowRun"]["workflow"]["name"].as_str()
-                {
+                if let Some(name) = row["checkSuite"]["workflowRun"]["workflow"]["name"].as_str() {
                     row["workflowName"] = json!(name);
                 }
                 if let Some(object) = row.as_object_mut() {
@@ -725,8 +726,12 @@ impl Github {
     /// POST one GraphQL document. A response with errors and no data fails.
     async fn graphql(&self, query: &str, variables: Value, operation: &str) -> GithubResult<Value> {
         let body = json!({"query": query, "variables": variables});
-        let value = self.value("POST", "/graphql", Some(&body), operation).await?;
-        let errors = value["errors"].as_array().filter(|errors| !errors.is_empty());
+        let value = self
+            .value("POST", "/graphql", Some(&body), operation)
+            .await?;
+        let errors = value["errors"]
+            .as_array()
+            .filter(|errors| !errors.is_empty());
         if let Some(errors) = errors
             && value["data"].is_null()
         {
@@ -779,7 +784,11 @@ impl Github {
         }
     }
 
-    pub async fn get_pull_request(&self, repository: &str, number: u64) -> GithubResult<PullRequest> {
+    pub async fn get_pull_request(
+        &self,
+        repository: &str,
+        number: u64,
+    ) -> GithubResult<PullRequest> {
         let path = repo_route(repository, &["pulls", &number.to_string()]);
         normalize_pull(
             &self
@@ -796,8 +805,7 @@ impl Github {
         title: &str,
         body: &str,
     ) -> GithubResult<PullRequest> {
-        let request =
-            json!({"title": title, "head": head_branch, "base": base_branch, "body": body, "draft": true});
+        let request = json!({"title": title, "head": head_branch, "base": base_branch, "body": body, "draft": true});
         let summary = format!("Branch {head_branch} is not on GitHub yet");
         match self
             .api(
@@ -865,9 +873,7 @@ impl Github {
         let mut variables = variables;
         variables["owner"] = json!(owner);
         variables["name"] = json!(name);
-        let value = self
-            .graphql(&query, variables, "pull request list")
-            .await?;
+        let value = self.graphql(&query, variables, "pull request list").await?;
         let rows = value["data"]["repository"]["pullRequests"]["nodes"]
             .as_array()
             .ok_or_else(|| {
@@ -1201,7 +1207,10 @@ impl Github {
                     .filter(|rules| rules.iter().all(|rule| rule["type"].is_string()))
                     .cloned()
                     .ok_or_else(|| {
-                        failure("invalid-provider-response", "GitHub branch rules are malformed")
+                        failure(
+                            "invalid-provider-response",
+                            "GitHub branch rules are malformed",
+                        )
                     })
             })
             .await?;
@@ -1279,7 +1288,12 @@ impl Github {
                 .join(" ");
             let body = json!({"query": format!("query {{ {fields} }}")});
             let reply = self
-                .send("POST", "/graphql", Some(&body), "pull request batch observation")
+                .send(
+                    "POST",
+                    "/graphql",
+                    Some(&body),
+                    "pull request batch observation",
+                )
                 .await?;
             let value = parse_json(&reply.body)?;
             // A partial GraphQL error keeps every available observation.
@@ -1340,14 +1354,22 @@ impl Github {
             .await?;
         value["data"]["repository"]["issues"]["nodes"]
             .as_array()
-            .ok_or_else(|| failure("invalid-provider-response", "GitHub issue list is malformed"))?
+            .ok_or_else(|| {
+                failure(
+                    "invalid-provider-response",
+                    "GitHub issue list is malformed",
+                )
+            })?
             .iter()
             .map(|node| {
                 let mut issue = node.clone();
                 issue["labels"] = node["labels"]["nodes"].clone();
                 issue["assignees"] = node["assignees"]["nodes"].clone();
                 valid_issue(&issue).then_some(issue).ok_or_else(|| {
-                    failure("invalid-provider-response", "GitHub issue list is malformed")
+                    failure(
+                        "invalid-provider-response",
+                        "GitHub issue list is malformed",
+                    )
                 })
             })
             .collect()
@@ -1389,7 +1411,10 @@ impl Github {
                     })
                 })
                 .ok_or_else(|| {
-                    failure("invalid-provider-response", "GitHub issue comments are malformed")
+                    failure(
+                        "invalid-provider-response",
+                        "GitHub issue comments are malformed",
+                    )
                 })?;
             comments.extend(rows.iter().map(|row| {
                 json!({"html_url": row["html_url"], "body": row["body"], "user": if row["user"].is_null() { Value::Null } else { json!({"login": row["user"]["login"]}) }, "created_at": row["created_at"]})
@@ -1422,12 +1447,7 @@ fn valid_issue(issue: &Value) -> bool {
 
 /// TypeScript `issueContext`: the Markdown snapshot of one GitHub issue.
 pub fn issue_context(issue: &Value) -> String {
-    let login = |value: &Value| {
-        value["login"]
-            .as_str()
-            .unwrap_or("deleted user")
-            .to_owned()
-    };
+    let login = |value: &Value| value["login"].as_str().unwrap_or("deleted user").to_owned();
     let list = |key: &str, field: &str| {
         let items = issue[key]
             .as_array()
@@ -1436,7 +1456,11 @@ pub fn issue_context(issue: &Value) -> String {
             .filter_map(|item| item[field].as_str())
             .collect::<Vec<_>>()
             .join(", ");
-        if items.is_empty() { "None".into() } else { items }
+        if items.is_empty() {
+            "None".into()
+        } else {
+            items
+        }
     };
     let mut parts = vec![
         format!(
@@ -1477,7 +1501,9 @@ pub fn remote_repository(cwd: &Path) -> GithubResult<String> {
     let wrong = || failure("wrong-remote", "Git origin could not be inspected");
     let repository = Repository::open(cwd).map_err(|_| wrong())?;
     let config = repository.config().map_err(|_| wrong())?;
-    let remote = config.get_string("remote.origin.url").map_err(|_| wrong())?;
+    let remote = config
+        .get_string("remote.origin.url")
+        .map_err(|_| wrong())?;
     let remote = remote.trim();
     let remote = remote.strip_suffix(".git").unwrap_or(remote);
     let lower = remote.to_ascii_lowercase();
@@ -1485,8 +1511,9 @@ pub fn remote_repository(cwd: &Path) -> GithubResult<String> {
         .iter()
         .find_map(|prefix| lower.starts_with(prefix).then(|| &remote[prefix.len()..]))
         .filter(|path| {
-            path.split_once('/')
-                .is_some_and(|(owner, name)| !owner.is_empty() && !name.is_empty() && !name.contains('/'))
+            path.split_once('/').is_some_and(|(owner, name)| {
+                !owner.is_empty() && !name.is_empty() && !name.contains('/')
+            })
         })
         .ok_or_else(|| failure("wrong-remote", "Git origin is not a GitHub repository"))?;
     normalize_repository(path)
@@ -1546,7 +1573,10 @@ pub fn push_normal(
     let mut options = PushOptions::new();
     options.remote_callbacks(callbacks);
     origin
-        .push(&[format!("{head_sha}:refs/heads/{branch}")], Some(&mut options))
+        .push(
+            &[format!("{head_sha}:refs/heads/{branch}")],
+            Some(&mut options),
+        )
         .map_err(unavailable)?;
     drop(options);
     if let Some(status) = rejected.into_inner() {

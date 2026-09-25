@@ -16,8 +16,8 @@ use crate::tasks::images::MAX_TASK_IMAGE_BYTES;
 pub type TrackerResult<T> = Result<T, Box<dyn Error + Send + Sync>>;
 
 /// The caller's final check before each tracker write.
-pub type BeforeWrite<'a> = &'a (dyn Fn() -> std::pin::Pin<Box<dyn Future<Output = TrackerResult<()>> + Send + 'a>>
-         + Sync);
+pub type BeforeWrite<'a> =
+    &'a (dyn Fn() -> std::pin::Pin<Box<dyn Future<Output = TrackerResult<()>> + Send + 'a>> + Sync);
 
 /// TypeScript `ProviderHttpFailure`: the provider refused with this status.
 #[derive(Debug)]
@@ -347,7 +347,9 @@ impl IssueTracker {
         let same_github = issue["kind"] == "github"
             && self.connection["kind"] == "github"
             && issue["repository"].as_str().map(str::to_lowercase)
-                == self.connection["repository"].as_str().map(str::to_lowercase);
+                == self.connection["repository"]
+                    .as_str()
+                    .map(str::to_lowercase);
         let same_jira = issue["kind"] == "jira"
             && self.jira()
             && origin(issue["site"].as_str().unwrap_or("")).ok()
@@ -573,8 +575,11 @@ impl IssueTracker {
             detail += &format!("\n\nAttachment: {name} ({size} bytes)");
             let mime = file["mimeType"].as_str().unwrap_or("");
             if size > 256 * 1024 || !(mime.starts_with("text/") || mime == "application/json") {
-                let encoded = url::form_urlencoded::byte_serialize(name.as_bytes()).collect::<String>();
-                detail += &format!("\nContent not loaded: binary or larger than 256 KiB. Review through {site}/secure/attachment/{id}/{encoded}.");
+                let encoded =
+                    url::form_urlencoded::byte_serialize(name.as_bytes()).collect::<String>();
+                detail += &format!(
+                    "\nContent not loaded: binary or larger than 256 KiB. Review through {site}/secure/attachment/{id}/{encoded}."
+                );
                 continue;
             }
             match self
@@ -602,8 +607,13 @@ impl IssueTracker {
             .into_iter()
             .flatten()
             .filter_map(|link| {
-                let other = link.get("inwardIssue").or_else(|| link.get("outwardIssue"))?;
-                Some((other["id"].as_str()?.to_owned(), other["key"].as_str()?.to_owned()))
+                let other = link
+                    .get("inwardIssue")
+                    .or_else(|| link.get("outwardIssue"))?;
+                Some((
+                    other["id"].as_str()?.to_owned(),
+                    other["key"].as_str()?.to_owned(),
+                ))
             })
             .collect::<Vec<_>>();
         for (id, key) in linked.iter().take(5) {
@@ -628,9 +638,11 @@ impl IssueTracker {
                         detail += "\nLinked description limited to 20000 characters.";
                     }
                 }
-                Err(_) => detail += &format!(
-                    "\nLinked issue {key} could not be read with this tracker connection."
-                ),
+                Err(_) => {
+                    detail += &format!(
+                        "\nLinked issue {key} could not be read with this tracker connection."
+                    )
+                }
             }
         }
         if linked.len() > 5 {
@@ -668,7 +680,10 @@ impl IssueTracker {
             .unwrap_or_default();
         for file in rows.iter().take(10) {
             let mime = file["mimeType"].as_str().unwrap_or("");
-            if !matches!(mime, "image/png" | "image/jpeg" | "image/webp" | "image/gif") {
+            if !matches!(
+                mime,
+                "image/png" | "image/jpeg" | "image/webp" | "image/gif"
+            ) {
                 continue;
             }
             let name = file["filename"].as_str().unwrap_or("");
@@ -711,9 +726,9 @@ impl IssueTracker {
                     };
                     result.images.push((filename, mime.to_owned(), bytes));
                 }
-                None => result
-                    .notes
-                    .push(format!("Image {name} could not be loaded. Review it in Jira.")),
+                None => result.notes.push(format!(
+                    "Image {name} could not be loaded. Review it in Jira."
+                )),
             }
         }
         if rows.len() > 10 {
@@ -759,17 +774,17 @@ impl IssueTracker {
             // A response lost after an earlier upload is recovered from the
             // owned marker comment. A new GitHub media upload needs the CLI.
             let marker = format!("[Suplex attachment {filename}]");
-            let existing = self.comments(issue).await?.into_iter().find(|row| {
-                Self::owned(row, &actor) && issue_text(&row["body"]).contains(&marker)
-            });
+            let existing =
+                self.comments(issue).await?.into_iter().find(|row| {
+                    Self::owned(row, &actor) && issue_text(&row["body"]).contains(&marker)
+                });
             let Some(existing) = existing else {
                 return Err(fail(
                     "Update GitHub CLI to a version supporting issue comment --attach",
                 ));
             };
-            return github_image_reference(&issue_text(&existing["body"])).ok_or_else(|| {
-                fail("GitHub has not confirmed the uploaded evidence reference")
-            });
+            return github_image_reference(&issue_text(&existing["body"]))
+                .ok_or_else(|| fail("GitHub has not confirmed the uploaded evidence reference"));
         }
         let (site, _) = self.jira_credentials()?;
         let attachments_path = format!(
@@ -909,12 +924,18 @@ impl IssueTracker {
                 ),
             };
             self.before_mutation(issue, before_write).await?;
-            id_text(&self.github_json(&path, Some((method, &json!({"body": text})))).await?)
+            id_text(
+                &self
+                    .github_json(&path, Some((method, &json!({"body": text}))))
+                    .await?,
+            )
         } else {
             let path = format!(
                 "/rest/api/3/issue/{}/comment{}",
                 issue["id"].as_str().unwrap_or(""),
-                existing.map(|row| format!("/{}", id_text(row))).unwrap_or_default()
+                existing
+                    .map(|row| format!("/{}", id_text(row)))
+                    .unwrap_or_default()
             );
             self.before_mutation(issue, before_write).await?;
             let method = if existing.is_some() { "PUT" } else { "POST" };
@@ -991,10 +1012,8 @@ mod tests {
 
     #[test]
     fn scope_check_refuses_issues_from_another_repository() {
-        let tracker = IssueTracker::with_github(
-            &json!({"kind":"github","repository":"Owner/Repo"}),
-            None,
-        );
+        let tracker =
+            IssueTracker::with_github(&json!({"kind":"github","repository":"Owner/Repo"}), None);
         assert!(
             tracker
                 .check(&json!({"kind":"github","repository":"owner/repo"}))

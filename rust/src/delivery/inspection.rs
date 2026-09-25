@@ -110,7 +110,11 @@ pub fn review_equivalence(
     base_sha: &str,
     github_token: Option<&str>,
 ) -> Result<ReviewRange, String> {
-    let shas = [accepted.base_sha.as_str(), base_sha, accepted.head_sha.as_str()];
+    let shas = [
+        accepted.base_sha.as_str(),
+        base_sha,
+        accepted.head_sha.as_str(),
+    ];
     if !shas.iter().all(|sha| valid_sha(sha)) {
         return Err("Git delivery revisions are not valid".into());
     }

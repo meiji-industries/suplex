@@ -20,8 +20,7 @@ use crate::{
 
 const APPROVAL_TTL_MINUTES: i64 = 15;
 
-pub const HEAD_NOT_ACCEPTED: &str =
-    "Suplex has not accepted this pull request head. The Coordinator must review and publish it first.";
+pub const HEAD_NOT_ACCEPTED: &str = "Suplex has not accepted this pull request head. The Coordinator must review and publish it first.";
 
 /// The authenticated external agent.
 pub struct AgentPrincipal {
@@ -50,14 +49,19 @@ pub fn merge_blocker(
     if let Some(dependency) = blocking_dependency {
         return Some(format!("Task {dependency} is not delivered."));
     }
-    let Some(observed) = observation.filter(|observed| observed.exists && observed.number.is_some())
+    let Some(observed) =
+        observation.filter(|observed| observed.exists && observed.number.is_some())
     else {
         return Some("The task has no pull request.".into());
     };
     let reason = match observed.state.as_deref() {
         Some("merged") => "GitHub merged the pull request.",
         Some("open") if observed.is_draft == Some(true) => "The pull request is a draft.",
-        Some("open") if accepted_head_sha.is_none() || accepted_head_sha != observed.head_sha.as_deref() => HEAD_NOT_ACCEPTED,
+        Some("open")
+            if accepted_head_sha.is_none() || accepted_head_sha != observed.head_sha.as_deref() =>
+        {
+            HEAD_NOT_ACCEPTED
+        }
         Some("open") if observed.checks.failing > 0 => "A necessary check failed.",
         Some("open") if observed.checks.pending > 0 => "GitHub still runs the checks.",
         Some("open")
@@ -80,12 +84,17 @@ pub fn merge_blocker(
 
 /// TypeScript `needsReconciliation`.
 pub fn needs_reconciliation(observed: Option<&Observation>) -> bool {
-    let Some(observed) = observed.filter(|observed| observed.exists && observed.state.as_deref() == Some("open")) else {
+    let Some(observed) =
+        observed.filter(|observed| observed.exists && observed.state.as_deref() == Some("open"))
+    else {
         return false;
     };
     observed.checks.failing > 0
         || observed.mergeable.as_deref() == Some("CONFLICTING")
-        || matches!(observed.merge_state_status.as_deref(), Some("DIRTY" | "BEHIND" | "BLOCKED"))
+        || matches!(
+            observed.merge_state_status.as_deref(),
+            Some("DIRTY" | "BEHIND" | "BLOCKED")
+        )
 }
 
 fn receipt_hash(receipt: &str) -> String {
@@ -125,14 +134,27 @@ pub fn topological_order(entries: Vec<(String, Vec<String>)>) -> Vec<(String, Ve
     let mut emitted = std::collections::HashSet::new();
     let mut ordered = Vec::new();
     while !remaining.is_empty() {
-        let ids = remaining.iter().map(|(id, _)| id.clone()).collect::<std::collections::HashSet<_>>();
+        let ids = remaining
+            .iter()
+            .map(|(id, _)| id.clone())
+            .collect::<std::collections::HashSet<_>>();
         let ready = remaining
             .iter()
-            .filter(|(_, depends)| depends.iter().all(|id| !ids.contains(id) || emitted.contains(id)))
+            .filter(|(_, depends)| {
+                depends
+                    .iter()
+                    .all(|id| !ids.contains(id) || emitted.contains(id))
+            })
             .map(|(id, _)| id.clone())
             .collect::<Vec<_>>();
-        let batch = if ready.is_empty() { ids.into_iter().collect() } else { ready };
-        let (now, later): (Vec<_>, Vec<_>) = remaining.into_iter().partition(|(id, _)| batch.contains(id));
+        let batch = if ready.is_empty() {
+            ids.into_iter().collect()
+        } else {
+            ready
+        };
+        let (now, later): (Vec<_>, Vec<_>) = remaining
+            .into_iter()
+            .partition(|(id, _)| batch.contains(id));
         for entry in now {
             emitted.insert(entry.0.clone());
             ordered.push(entry);
@@ -148,7 +170,9 @@ pub struct AgentDelivery {
 
 impl AgentDelivery {
     pub fn new(database_path: &Path, artifact_root: &Path) -> Self {
-        Self { operations: DeliveryOperations::new(database_path, artifact_root) }
+        Self {
+            operations: DeliveryOperations::new(database_path, artifact_root),
+        }
     }
 
     fn open(&self, mode: OpenMode) -> DatabaseResult<SuplexDatabase> {
@@ -166,7 +190,13 @@ impl AgentDelivery {
     }
 
     fn control(&self, task_id: &str) -> DatabaseResult<Value> {
-        Ok(crate::coordination::root_session_store::root_observation_rows(&self.open(OpenMode::ReadOnly)?, task_id)?.control)
+        Ok(
+            crate::coordination::root_session_store::root_observation_rows(
+                &self.open(OpenMode::ReadOnly)?,
+                task_id,
+            )?
+            .control,
+        )
     }
 
     fn blocking_dependencies(&self, task_id: &str) -> DatabaseResult<Vec<String>> {
@@ -174,16 +204,29 @@ impl AgentDelivery {
         let mut statement = database.connection().prepare(
             "SELECT d.depends_on_task_id FROM suplex_task_dependencies d LEFT JOIN suplex_task_controls c ON c.task_id = d.depends_on_task_id WHERE d.task_id = ?1 AND COALESCE(c.status, 'backlog') <> 'delivered' ORDER BY d.depends_on_task_id",
         )?;
-        let rows = statement.query_map([task_id], |row| row.get(0))?.collect::<rusqlite::Result<Vec<String>>>()?;
+        let rows = statement
+            .query_map([task_id], |row| row.get(0))?
+            .collect::<rusqlite::Result<Vec<String>>>()?;
         Ok(rows)
     }
 
     fn accepted(&self, task_id: &str) -> DatabaseResult<Option<ReviewRange>> {
         let accepted = self.control(task_id)?["workflowState"]["acceptedDelivery"].clone();
-        Ok(if accepted.is_null() { None } else { Some(serde_json::from_value(accepted)?) })
+        Ok(if accepted.is_null() {
+            None
+        } else {
+            Some(serde_json::from_value(accepted)?)
+        })
     }
 
-    fn audit(&self, principal: &AgentPrincipal, company_id: &str, task_id: Option<&str>, action: &str, mut metadata: Value) -> DatabaseResult<()> {
+    fn audit(
+        &self,
+        principal: &AgentPrincipal,
+        company_id: &str,
+        task_id: Option<&str>,
+        action: &str,
+        mut metadata: Value,
+    ) -> DatabaseResult<()> {
         if let Some(task_id) = task_id {
             let mut ordered = serde_json::Map::new();
             ordered.insert("taskId".into(), json!(task_id));
@@ -206,9 +249,21 @@ impl AgentDelivery {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn insert_provenance(&self, id: Option<&str>, task_id: &str, attempt_id: Option<&str>, agent_id: &str, kind: &str, observed: (Option<u64>, Option<&str>, Option<&str>, Option<&str>), checks: Option<Value>, merge: Option<&Value>) -> DatabaseResult<()> {
+    fn insert_provenance(
+        &self,
+        id: Option<&str>,
+        task_id: &str,
+        attempt_id: Option<&str>,
+        agent_id: &str,
+        kind: &str,
+        observed: (Option<u64>, Option<&str>, Option<&str>, Option<&str>),
+        checks: Option<Value>,
+        merge: Option<&Value>,
+    ) -> DatabaseResult<()> {
         let (number, original, head, base) = observed;
-        let id = id.map(str::to_owned).unwrap_or_else(|| format!("dpv_{}", uuid::Uuid::new_v4().simple()));
+        let id = id
+            .map(str::to_owned)
+            .unwrap_or_else(|| format!("dpv_{}", uuid::Uuid::new_v4().simple()));
         self.open(OpenMode::ReadWrite)?.connection().execute(
             "INSERT INTO suplex_delivery_provenance (id, task_id, attempt_id, agent_id, kind, pull_request_number, original_head_sha, head_sha, base_sha, checks_json, merge_json, recorded_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
             params![id, task_id, attempt_id, agent_id, kind, number.map(|n| n as i64), original, head, base,
@@ -236,14 +291,32 @@ impl AgentDelivery {
     }
 
     /// Re-observe the pull request and its checks; append to an open repair attempt.
-    pub async fn refresh(&self, principal: &AgentPrincipal, task_id: &str) -> DatabaseResult<Value> {
+    pub async fn refresh(
+        &self,
+        principal: &AgentPrincipal,
+        task_id: &str,
+    ) -> DatabaseResult<Value> {
         let (company, _) = self.task(principal, task_id)?;
         let pull_request = self.operations.observe(task_id).await?;
         let observation = self.operations.checks_observation(task_id).await?;
-        if let (Some((attempt, original)), Some(observed)) = (self.open_attempt(task_id)?, &observation) {
-            self.insert_provenance(None, task_id, Some(&attempt), &principal.agent_id, "observation",
-                (observed.number, original.as_deref(), observed.head_sha.as_deref(), observed.base_sha.as_deref()),
-                Some(serde_json::to_value(&observed.checks)?), None)?;
+        if let (Some((attempt, original)), Some(observed)) =
+            (self.open_attempt(task_id)?, &observation)
+        {
+            self.insert_provenance(
+                None,
+                task_id,
+                Some(&attempt),
+                &principal.agent_id,
+                "observation",
+                (
+                    observed.number,
+                    original.as_deref(),
+                    observed.head_sha.as_deref(),
+                    observed.base_sha.as_deref(),
+                ),
+                Some(serde_json::to_value(&observed.checks)?),
+                None,
+            )?;
         }
         let observed = observation.as_ref();
         self.audit(principal, &company, Some(task_id), "agent_api_delivery_observed", json!({
@@ -251,31 +324,68 @@ impl AgentDelivery {
             "headSha": observed.and_then(|o| o.head_sha.clone()).unwrap_or_default(),
             "baseSha": observed.and_then(|o| o.base_sha.clone()).unwrap_or_default(),
         }))?;
-        Ok(json!({"taskId": task_id, "pullRequest": pull_request, "observation": observation.map(|o| o.to_value())}))
+        Ok(
+            json!({"taskId": task_id, "pullRequest": pull_request, "observation": observation.map(|o| o.to_value())}),
+        )
     }
 
     /// Wake the Coordinator with a repair instruction and open a provenance attempt.
-    pub async fn request_reconciliation(&self, principal: &AgentPrincipal, task_id: &str) -> DatabaseResult<Value> {
+    pub async fn request_reconciliation(
+        &self,
+        principal: &AgentPrincipal,
+        task_id: &str,
+    ) -> DatabaseResult<Value> {
         let (company, _) = self.task(principal, task_id)?;
         let control = self.control(task_id)?;
         if control["status"] != "active" {
-            return Err(failure("Start the task before you request delivery repair.", 409));
+            return Err(failure(
+                "Start the task before you request delivery repair.",
+                409,
+            ));
         }
         if let Some(blocking) = self.blocking_dependencies(task_id)?.first() {
-            return Err(failure(format!("Task {blocking} is not delivered. Wait for its delivery instead of a delivery repair."), 409));
+            return Err(failure(
+                format!(
+                    "Task {blocking} is not delivered. Wait for its delivery instead of a delivery repair."
+                ),
+                409,
+            ));
         }
         let observation = self.operations.checks_observation(task_id).await?;
         let Some(observed) = observation.filter(|o| o.exists && o.number.is_some()) else {
             return Err(failure("The task has no pull request.", 409));
         };
         if !needs_reconciliation(Some(&observed)) {
-            return Err(failure("GitHub reports no delivery problem for this pull request.", 409));
+            return Err(failure(
+                "GitHub reports no delivery problem for this pull request.",
+                409,
+            ));
         }
         let attempt = format!("dpr_{}", uuid::Uuid::new_v4().simple());
-        self.wake_root(task_id, &reconciliation_prompt(control["deliveryIntent"]["baseBranch"].as_str().unwrap_or(""), &observed))?;
-        self.insert_provenance(Some(&attempt), task_id, Some(&attempt), &principal.agent_id, "reconciliation",
-            (observed.number, observed.head_sha.as_deref(), observed.head_sha.as_deref(), observed.base_sha.as_deref()),
-            Some(serde_json::to_value(&observed.checks)?), None)?;
+        self.wake_root(
+            task_id,
+            &reconciliation_prompt(
+                control["deliveryIntent"]["baseBranch"]
+                    .as_str()
+                    .unwrap_or(""),
+                &observed,
+            ),
+        )?;
+        self.insert_provenance(
+            Some(&attempt),
+            task_id,
+            Some(&attempt),
+            &principal.agent_id,
+            "reconciliation",
+            (
+                observed.number,
+                observed.head_sha.as_deref(),
+                observed.head_sha.as_deref(),
+                observed.base_sha.as_deref(),
+            ),
+            Some(serde_json::to_value(&observed.checks)?),
+            None,
+        )?;
         self.audit(principal, &company, Some(task_id), "agent_api_delivery_repair_requested", json!({
             "attemptId": attempt, "pullRequestNumber": observed.number.unwrap_or(0).to_string(),
             "headSha": observed.head_sha.clone().unwrap_or_default(), "baseSha": observed.base_sha.clone().unwrap_or_default(),
@@ -284,46 +394,96 @@ impl AgentDelivery {
     }
 
     /// Accept a wait only while a dependency blocks, and a resume only when none does.
-    pub fn decide(&self, principal: &AgentPrincipal, task_id: &str, decision: &str) -> DatabaseResult<Value> {
+    pub fn decide(
+        &self,
+        principal: &AgentPrincipal,
+        task_id: &str,
+        decision: &str,
+    ) -> DatabaseResult<Value> {
         let (company, _) = self.task(principal, task_id)?;
         let blocking = self.blocking_dependencies(task_id)?;
         if decision == "wait_for_dependency" && blocking.is_empty() {
-            return Err(failure("Every dependency of this task is delivered. Resume the task.", 409));
+            return Err(failure(
+                "Every dependency of this task is delivered. Resume the task.",
+                409,
+            ));
         }
         if decision == "resume" {
             if let Some(first) = blocking.first() {
-                return Err(failure(format!("Task {first} is not delivered. Wait for its delivery."), 409));
+                return Err(failure(
+                    format!("Task {first} is not delivered. Wait for its delivery."),
+                    409,
+                ));
             }
             let control = self.control(task_id)?;
             if control["status"] != "active" {
                 return Err(failure("Start the task before you resume it.", 409));
             }
-            self.wake_root(task_id, &resume_prompt(control["deliveryIntent"]["baseBranch"].as_str().unwrap_or("")))?;
+            self.wake_root(
+                task_id,
+                &resume_prompt(
+                    control["deliveryIntent"]["baseBranch"]
+                        .as_str()
+                        .unwrap_or(""),
+                ),
+            )?;
         }
-        self.audit(principal, &company, Some(task_id), if decision == "resume" { "agent_api_delivery_resumed" } else { "agent_api_delivery_wait_accepted" },
-            json!({"blockingTaskId": blocking.first().cloned().unwrap_or_default()}))?;
+        self.audit(
+            principal,
+            &company,
+            Some(task_id),
+            if decision == "resume" {
+                "agent_api_delivery_resumed"
+            } else {
+                "agent_api_delivery_wait_accepted"
+            },
+            json!({"blockingTaskId": blocking.first().cloned().unwrap_or_default()}),
+        )?;
         Ok(json!({"taskId": task_id, "decision": decision, "blockingTaskIds": blocking}))
     }
 
     /// The agent's pull requests in dependency-first order with live GitHub facts.
-    pub async fn merge_train(&self, principal: &AgentPrincipal, project_id: Option<&str>) -> DatabaseResult<Value> {
+    pub async fn merge_train(
+        &self,
+        principal: &AgentPrincipal,
+        project_id: Option<&str>,
+    ) -> DatabaseResult<Value> {
         let rows = {
             let database = self.open(OpenMode::ReadOnly)?;
             let mut statement = database.connection().prepare(
                 "SELECT t.id, t.title, t.project_id FROM suplex_tasks t WHERE t.company_id = ?1 AND t.creator_agent_id = ?2 AND t.archived_at IS NULL ORDER BY t.created_at, t.id",
             )?;
-            let rows = statement.query_map(params![principal.company_id, principal.agent_id], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?)))?
+            let rows = statement
+                .query_map(params![principal.company_id, principal.agent_id], |row| {
+                    Ok((
+                        row.get::<_, String>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                    ))
+                })?
                 .collect::<rusqlite::Result<Vec<_>>>()?;
             let mut entries = Vec::new();
-            for (id, title, _) in rows.into_iter().filter(|row| project_id.is_none_or(|wanted| wanted == row.2)) {
+            for (id, title, _) in rows
+                .into_iter()
+                .filter(|row| project_id.is_none_or(|wanted| wanted == row.2))
+            {
                 let mut edges = database.connection().prepare("SELECT depends_on_task_id FROM suplex_task_dependencies WHERE task_id = ?1 ORDER BY depends_on_task_id")?;
-                let depends = edges.query_map([&id], |row| row.get(0))?.collect::<rusqlite::Result<Vec<String>>>()?;
+                let depends = edges
+                    .query_map([&id], |row| row.get(0))?
+                    .collect::<rusqlite::Result<Vec<String>>>()?;
                 entries.push((id, title, depends));
             }
             entries
         };
-        let titles = rows.iter().map(|(id, title, _)| (id.clone(), title.clone())).collect::<std::collections::HashMap<_, _>>();
-        let ordered = topological_order(rows.into_iter().map(|(id, _, depends)| (id, depends)).collect());
+        let titles = rows
+            .iter()
+            .map(|(id, title, _)| (id.clone(), title.clone()))
+            .collect::<std::collections::HashMap<_, _>>();
+        let ordered = topological_order(
+            rows.into_iter()
+                .map(|(id, _, depends)| (id, depends))
+                .collect(),
+        );
         let mut entries = Vec::new();
         for (id, depends) in ordered {
             let observation = self.operations.checks_observation(&id).await?;
@@ -339,36 +499,81 @@ impl AgentDelivery {
                 "blocker": merge_blocker(observed, blocking.first().map(String::as_str), accepted.as_ref().map(|a| a.head_sha.as_str())),
             }));
         }
-        self.audit(principal, &principal.company_id, None, "agent_api_merge_train_observed", json!({"projectId": project_id.unwrap_or(""), "entries": entries.len().to_string()}))?;
+        self.audit(
+            principal,
+            &principal.company_id,
+            None,
+            "agent_api_merge_train_observed",
+            json!({"projectId": project_id.unwrap_or(""), "entries": entries.len().to_string()}),
+        )?;
         Ok(json!({"entries": entries}))
     }
 
-    async fn require_eligible(&self, task_id: &str, number: u64, head_sha: &str, base_sha: &str) -> DatabaseResult<Observation> {
-        let observation = self.operations.checks_observation(task_id).await?
-            .ok_or_else(|| failure("GitHub did not return the pull request. Retry the request.", 409))?;
+    async fn require_eligible(
+        &self,
+        task_id: &str,
+        number: u64,
+        head_sha: &str,
+        base_sha: &str,
+    ) -> DatabaseResult<Observation> {
+        let observation = self
+            .operations
+            .checks_observation(task_id)
+            .await?
+            .ok_or_else(|| {
+                failure(
+                    "GitHub did not return the pull request. Retry the request.",
+                    409,
+                )
+            })?;
         if observation.number != Some(number) {
-            return Err(failure("The pull request number does not match this task.", 422));
+            return Err(failure(
+                "The pull request number does not match this task.",
+                422,
+            ));
         }
         let blocking = self.blocking_dependencies(task_id)?;
         let accepted = self.accepted(task_id)?;
-        if let Some(blocker) = merge_blocker(Some(&observation), blocking.first().map(String::as_str), accepted.as_ref().map(|a| a.head_sha.as_str())) {
+        if let Some(blocker) = merge_blocker(
+            Some(&observation),
+            blocking.first().map(String::as_str),
+            accepted.as_ref().map(|a| a.head_sha.as_str()),
+        ) {
             return Err(failure(blocker, 409));
         }
-        if observation.head_sha.as_deref() != Some(head_sha) || observation.base_sha.as_deref() != Some(base_sha) {
-            return Err(failure("GitHub reports a different head or base. Refresh the observation before you merge.", 409));
+        if observation.head_sha.as_deref() != Some(head_sha)
+            || observation.base_sha.as_deref() != Some(base_sha)
+        {
+            return Err(failure(
+                "GitHub reports a different head or base. Refresh the observation before you merge.",
+                409,
+            ));
         }
         Ok(observation)
     }
 
     /// Issue a single-use receipt bound to the observed pull request, head, and base.
-    pub async fn issue_approval(&self, principal: &AgentPrincipal, task_id: &str, number: u64, head_sha: &str, base_sha: &str) -> DatabaseResult<Value> {
+    pub async fn issue_approval(
+        &self,
+        principal: &AgentPrincipal,
+        task_id: &str,
+        number: u64,
+        head_sha: &str,
+        base_sha: &str,
+    ) -> DatabaseResult<Value> {
         let (company, _) = self.task(principal, task_id)?;
-        let observed = self.require_eligible(task_id, number, head_sha, base_sha).await?;
+        let observed = self
+            .require_eligible(task_id, number, head_sha, base_sha)
+            .await?;
         let mut bytes = [0_u8; 32];
         getrandom::fill(&mut bytes).map_err(|error| std::io::Error::other(error.to_string()))?;
-        let receipt = format!("fma_{}", base64::Engine::encode(&base64::engine::general_purpose::URL_SAFE_NO_PAD, bytes));
+        let receipt = format!(
+            "fma_{}",
+            base64::Engine::encode(&base64::engine::general_purpose::URL_SAFE_NO_PAD, bytes)
+        );
         let created = Utc::now();
-        let expires = (created + Duration::minutes(APPROVAL_TTL_MINUTES)).to_rfc3339_opts(SecondsFormat::Millis, true);
+        let expires = (created + Duration::minutes(APPROVAL_TTL_MINUTES))
+            .to_rfc3339_opts(SecondsFormat::Millis, true);
         let mut database = self.open(OpenMode::ReadWrite)?;
         database.transaction(false, |database| {
             database.connection().execute(
@@ -378,20 +583,37 @@ impl AgentDelivery {
             Ok(())
         })?;
         self.audit(principal, &company, Some(task_id), "agent_api_merge_approval_issued", json!({"pullRequestNumber": number.to_string(), "headSha": observed.head_sha.clone().unwrap_or_default(), "baseSha": observed.base_sha.clone().unwrap_or_default()}))?;
-        Ok(json!({"taskId": task_id, "receipt": receipt, "expiresAt": expires, "pullRequestNumber": number, "headSha": observed.head_sha, "baseSha": observed.base_sha}))
+        Ok(
+            json!({"taskId": task_id, "receipt": receipt, "expiresAt": expires, "pullRequestNumber": number, "headSha": observed.head_sha, "baseSha": observed.base_sha}),
+        )
     }
 
     /// Merge one pull request of the train after consuming its receipt exactly once.
-    pub async fn merge(&self, principal: &AgentPrincipal, task_id: &str, number: u64, expected_head_sha: &str, expected_base_sha: &str, approval_receipt: &str) -> DatabaseResult<Value> {
+    pub async fn merge(
+        &self,
+        principal: &AgentPrincipal,
+        task_id: &str,
+        number: u64,
+        expected_head_sha: &str,
+        expected_base_sha: &str,
+        approval_receipt: &str,
+    ) -> DatabaseResult<Value> {
         let (company, _) = self.task(principal, task_id)?;
-        let valid_receipt = approval_receipt.strip_prefix("fma_").is_some_and(|rest| rest.len() == 43 && rest.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-'));
+        let valid_receipt = approval_receipt.strip_prefix("fma_").is_some_and(|rest| {
+            rest.len() == 43
+                && rest
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+        });
         if !valid_receipt {
             return Err(failure("The approval receipt is not valid.", 403));
         }
         if self.control(task_id)?["status"] != "active" {
             return Err(failure("The task is not active.", 409));
         }
-        let observation = self.require_eligible(task_id, number, expected_head_sha, expected_base_sha).await?;
+        let observation = self
+            .require_eligible(task_id, number, expected_head_sha, expected_base_sha)
+            .await?;
         let time = now();
         let consumed = self.open(OpenMode::ReadWrite)?.connection().execute(
             "UPDATE suplex_merge_approvals SET consumed_at = ?1 WHERE receipt_hash = ?2 AND task_id = ?3 AND agent_id = ?4 AND pull_request_number = ?5 AND head_sha = ?6 AND base_sha = ?7 AND consumed_at IS NULL AND expires_at > ?1",
@@ -406,30 +628,81 @@ impl AgentDelivery {
             "SELECT id, generation FROM suplex_task_sessions WHERE task_id = ?1 AND kind = 'root' AND is_current = 1",
             [task_id], |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
         ).optional()?.filter(|(id, _)| root_id.as_deref().is_none_or(|root| root == id));
-        let (session_id, generation) = root.ok_or_else(|| failure("Coordinator is not ready. Retry the request.", 409))?;
+        let (session_id, generation) =
+            root.ok_or_else(|| failure("Coordinator is not ready. Retry the request.", 409))?;
         // The accepted range is the Coordinator's own review. Suplex never rebuilds it for the agent.
-        let accepted = self.accepted(task_id)?.filter(|accepted| Some(accepted.head_sha.as_str()) == observation.head_sha.as_deref())
+        let accepted = self
+            .accepted(task_id)?
+            .filter(|accepted| Some(accepted.head_sha.as_str()) == observation.head_sha.as_deref())
             .ok_or_else(|| failure(HEAD_NOT_ACCEPTED, 409))?;
-        let identity = RootIdentity { task_id: task_id.to_owned(), session_id, generation };
-        let result = self.operations.execute(&identity, None, "merge_pull_request", Some(&accepted.head_sha), Some(&accepted), None, None).await?;
+        let identity = RootIdentity {
+            task_id: task_id.to_owned(),
+            session_id,
+            generation,
+        };
+        let result = self
+            .operations
+            .execute(
+                &identity,
+                None,
+                "merge_pull_request",
+                Some(&accepted.head_sha),
+                Some(&accepted),
+                None,
+                None,
+            )
+            .await?;
         let merged = self.operations.checks_observation(task_id).await?;
         let attempt = self.open_attempt(task_id)?.map(|(id, _)| id);
-        self.insert_provenance(None, task_id, attempt.as_deref(), &principal.agent_id, "merge",
-            (Some(number), Some(expected_head_sha), Some(merged.as_ref().and_then(|m| m.head_sha.as_deref()).unwrap_or(expected_head_sha)), Some(merged.as_ref().and_then(|m| m.base_sha.as_deref()).unwrap_or(expected_base_sha))),
-            merged.as_ref().map(|m| serde_json::to_value(&m.checks)).transpose()?, Some(&result))?;
+        self.insert_provenance(
+            None,
+            task_id,
+            attempt.as_deref(),
+            &principal.agent_id,
+            "merge",
+            (
+                Some(number),
+                Some(expected_head_sha),
+                Some(
+                    merged
+                        .as_ref()
+                        .and_then(|m| m.head_sha.as_deref())
+                        .unwrap_or(expected_head_sha),
+                ),
+                Some(
+                    merged
+                        .as_ref()
+                        .and_then(|m| m.base_sha.as_deref())
+                        .unwrap_or(expected_base_sha),
+                ),
+            ),
+            merged
+                .as_ref()
+                .map(|m| serde_json::to_value(&m.checks))
+                .transpose()?,
+            Some(&result),
+        )?;
         self.audit(principal, &company, Some(task_id), "agent_api_pull_request_merged", json!({"pullRequestNumber": number.to_string(), "headSha": expected_head_sha, "baseSha": expected_base_sha}))?;
         Ok(json!({"taskId": task_id, "pullRequestNumber": number, "result": result}))
     }
 
     /// The append-only provenance trail of one task.
-    pub fn provenance(&self, principal: &AgentPrincipal, task_id: &str) -> DatabaseResult<Vec<Value>> {
+    pub fn provenance(
+        &self,
+        principal: &AgentPrincipal,
+        task_id: &str,
+    ) -> DatabaseResult<Vec<Value>> {
         self.task(principal, task_id)?;
         let database = self.open(OpenMode::ReadOnly)?;
         let mut statement = database.connection().prepare(
             "SELECT json_object('id',id,'task_id',task_id,'attempt_id',attempt_id,'agent_id',agent_id,'kind',kind,'pull_request_number',pull_request_number,'original_head_sha',original_head_sha,'head_sha',head_sha,'base_sha',base_sha,'checks_json',checks_json,'merge_json',merge_json,'recorded_at',recorded_at) FROM suplex_delivery_provenance WHERE task_id = ?1 ORDER BY recorded_at, id",
         )?;
-        let rows = statement.query_map([task_id], |row| row.get::<_, String>(0))?.collect::<rusqlite::Result<Vec<_>>>()?;
-        rows.iter().map(|row| serde_json::from_str(row).map_err(Into::into)).collect()
+        let rows = statement
+            .query_map([task_id], |row| row.get::<_, String>(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        rows.iter()
+            .map(|row| serde_json::from_str(row).map_err(Into::into))
+            .collect()
     }
 }
 
@@ -438,32 +711,64 @@ mod tests {
     use super::*;
 
     fn open_pull() -> Observation {
-        Observation { exists: true, number: Some(7), state: Some("open".into()), is_draft: Some(false), head_sha: Some("a".repeat(40)), review_decision: Some("APPROVED".into()), ..Observation::default() }
+        Observation {
+            exists: true,
+            number: Some(7),
+            state: Some("open".into()),
+            is_draft: Some(false),
+            head_sha: Some("a".repeat(40)),
+            review_decision: Some("APPROVED".into()),
+            ..Observation::default()
+        }
     }
 
     #[test]
     fn merge_blocker_reports_reasons_in_source_order() {
         let head = "a".repeat(40);
-        assert_eq!(merge_blocker(None, Some("t0"), None).unwrap(), "Task t0 is not delivered.");
-        assert_eq!(merge_blocker(None, None, None).unwrap(), "The task has no pull request.");
+        assert_eq!(
+            merge_blocker(None, Some("t0"), None).unwrap(),
+            "Task t0 is not delivered."
+        );
+        assert_eq!(
+            merge_blocker(None, None, None).unwrap(),
+            "The task has no pull request."
+        );
         let mut observed = open_pull();
-        assert_eq!(merge_blocker(Some(&observed), None, None).unwrap(), HEAD_NOT_ACCEPTED);
+        assert_eq!(
+            merge_blocker(Some(&observed), None, None).unwrap(),
+            HEAD_NOT_ACCEPTED
+        );
         assert_eq!(merge_blocker(Some(&observed), None, Some(&head)), None);
         observed.is_draft = Some(true);
-        assert_eq!(merge_blocker(Some(&observed), None, Some(&head)).unwrap(), "The pull request is a draft.");
+        assert_eq!(
+            merge_blocker(Some(&observed), None, Some(&head)).unwrap(),
+            "The pull request is a draft."
+        );
         observed.is_draft = Some(false);
         observed.checks.failing = 1;
-        assert_eq!(merge_blocker(Some(&observed), None, Some(&head)).unwrap(), "A necessary check failed.");
+        assert_eq!(
+            merge_blocker(Some(&observed), None, Some(&head)).unwrap(),
+            "A necessary check failed."
+        );
         assert!(needs_reconciliation(Some(&observed)));
         observed.checks.failing = 0;
         observed.merge_state_status = Some("BEHIND".into());
-        assert_eq!(merge_blocker(Some(&observed), None, Some(&head)).unwrap(), "The pull request is behind the base branch.");
+        assert_eq!(
+            merge_blocker(Some(&observed), None, Some(&head)).unwrap(),
+            "The pull request is behind the base branch."
+        );
         observed.merge_state_status = None;
         observed.review_decision = None;
-        assert_eq!(merge_blocker(Some(&observed), None, Some(&head)).unwrap(), "GitHub does not report an approved review.");
+        assert_eq!(
+            merge_blocker(Some(&observed), None, Some(&head)).unwrap(),
+            "GitHub does not report an approved review."
+        );
         assert!(!needs_reconciliation(Some(&observed)));
         observed.state = Some("merged".into());
-        assert_eq!(merge_blocker(Some(&observed), None, Some(&head)).unwrap(), "GitHub merged the pull request.");
+        assert_eq!(
+            merge_blocker(Some(&observed), None, Some(&head)).unwrap(),
+            "GitHub merged the pull request."
+        );
     }
 
     #[test]
@@ -474,6 +779,12 @@ mod tests {
             ("a".into(), vec![]),
             ("x".into(), vec!["outside".into()]),
         ]);
-        assert_eq!(ordered.iter().map(|(id, _)| id.as_str()).collect::<Vec<_>>(), ["a", "x", "b", "c"]);
+        assert_eq!(
+            ordered
+                .iter()
+                .map(|(id, _)| id.as_str())
+                .collect::<Vec<_>>(),
+            ["a", "x", "b", "c"]
+        );
     }
 }

@@ -54,14 +54,19 @@ async fn checks(
     let intent = state.with_database(|database| -> Result<_, Box<dyn Error>> {
         let (rows, _) = read_task(database, &user_id, &task_id)?;
         let configuration = &rows.context["configuration"];
-        Ok(rows.control["pullRequest"]["number"].as_u64().map(|number| {
-            (
-                number,
-                configuration["repository"].as_str().unwrap_or("").to_owned(),
-                configuration["branch"].as_str().unwrap_or("").to_owned(),
-                configuration["integration"]["repository"]["kind"] == "bitbucket",
-            )
-        }))
+        Ok(rows.control["pullRequest"]["number"]
+            .as_u64()
+            .map(|number| {
+                (
+                    number,
+                    configuration["repository"]
+                        .as_str()
+                        .unwrap_or("")
+                        .to_owned(),
+                    configuration["branch"].as_str().unwrap_or("").to_owned(),
+                    configuration["integration"]["repository"]["kind"] == "bitbucket",
+                )
+            }))
     });
     let intent = intent.map_err(|error| error.to_string());
     let (number, repository, branch, bitbucket) = match intent {

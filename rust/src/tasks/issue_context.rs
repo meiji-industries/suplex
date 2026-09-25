@@ -183,7 +183,12 @@ pub async fn prepare_for_host(
         eprintln!("Issue context intake will be retried for {task_id}: {error}");
         database.connection().execute(
             "UPDATE suplex_task_controls SET wake_at = ?1, updated_at = ?2 WHERE task_id = ?3",
-            params![(now + chrono::Duration::seconds(15)).to_rfc3339_opts(chrono::SecondsFormat::Millis, true), time, task_id],
+            params![
+                (now + chrono::Duration::seconds(15))
+                    .to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+                time,
+                task_id
+            ],
         )?;
     }
     Ok(false)

@@ -1,0 +1,36 @@
+{
+  "contract": "projects.ProfileBodySchema",
+  "case": "model_array",
+  "input": {
+    "provider": "codex",
+    "model": [],
+    "reasoningLevel": "high",
+    "serviceTier": "priority",
+    "name": "Profile",
+    "role": "worker",
+    "avatarSeed": "0123456789abcdef0123456789abcdef"
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "expected": "string",
+        "code": "invalid_type",
+        "path": [
+          "model"
+        ],
+        "message": "Invalid input: expected string, received array"
+      },
+      {
+        "origin": "array",
+        "code": "too_small",
+        "minimum": 1,
+        "inclusive": true,
+        "path": [
+          "model"
+        ],
+        "message": "Too small: expected array to have >=1 items"
+      }
+    ]
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "contract": "projects.ProfileListQuerySchema",
+  "case": "false_string",
+  "input": {
+    "includeArchived": "false"
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid_value",
+        "values": [
+          "true"
+        ],
+        "path": [
+          "includeArchived"
+        ],
+        "message": "Invalid input: expected \"true\""
+      }
+    ]
+  }
+}

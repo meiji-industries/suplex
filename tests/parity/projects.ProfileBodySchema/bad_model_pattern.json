@@ -1,0 +1,28 @@
+{
+  "contract": "projects.ProfileBodySchema",
+  "case": "bad_model_pattern",
+  "input": {
+    "provider": "codex",
+    "model": "bad model",
+    "reasoningLevel": "high",
+    "serviceTier": "priority",
+    "name": "Profile",
+    "role": "worker",
+    "avatarSeed": "0123456789abcdef0123456789abcdef"
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "origin": "string",
+        "code": "invalid_format",
+        "format": "regex",
+        "pattern": "/^[a-zA-Z0-9][a-zA-Z0-9._:/-]*$/",
+        "path": [
+          "model"
+        ],
+        "message": "Invalid string: must match pattern /^[a-zA-Z0-9][a-zA-Z0-9._:/-]*$/"
+      }
+    ]
+  }
+}

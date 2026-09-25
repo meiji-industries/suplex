@@ -1,0 +1,20 @@
+{
+  "contract": "projects.ProfilePatchBodySchema",
+  "case": "invalid_archived",
+  "input": {
+    "archived": "true"
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "expected": "boolean",
+        "code": "invalid_type",
+        "path": [
+          "archived"
+        ],
+        "message": "Invalid input: expected boolean, received string"
+      }
+    ]
+  }
+}

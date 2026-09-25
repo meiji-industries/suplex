@@ -1,0 +1,28 @@
+{
+  "contract": "projects.ProfileBodySchema",
+  "case": "bad_avatar_pattern",
+  "input": {
+    "provider": "codex",
+    "model": "gpt-6",
+    "reasoningLevel": "high",
+    "serviceTier": "priority",
+    "name": "Profile",
+    "role": "worker",
+    "avatarSeed": "ABCDEF"
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "origin": "string",
+        "code": "invalid_format",
+        "format": "regex",
+        "pattern": "/^[a-f0-9]{32}$/",
+        "path": [
+          "avatarSeed"
+        ],
+        "message": "Invalid string: must match pattern /^[a-f0-9]{32}$/"
+      }
+    ]
+  }
+}

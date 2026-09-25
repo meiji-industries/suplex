@@ -1,0 +1,13 @@
+{
+  "contract": "projects.ProfilePatchBodySchema",
+  "case": "null_provider_id",
+  "input": {
+    "providerInstanceId": null
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "providerInstanceId": null
+    }
+  }
+}

@@ -1,0 +1,40 @@
+{
+  "contract": "projects.ProfileBodySchema",
+  "case": "invalid_and_unknown",
+  "input": {
+    "provider": "bad",
+    "model": "gpt-6",
+    "reasoningLevel": "high",
+    "serviceTier": "priority",
+    "name": "Profile",
+    "role": "worker",
+    "avatarSeed": "0123456789abcdef0123456789abcdef",
+    "extra": true
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid_value",
+        "values": [
+          "opencode",
+          "claude-code",
+          "devin",
+          "codex"
+        ],
+        "path": [
+          "provider"
+        ],
+        "message": "Invalid option: expected one of \"opencode\"|\"claude-code\"|\"devin\"|\"codex\""
+      },
+      {
+        "code": "unrecognized_keys",
+        "keys": [
+          "extra"
+        ],
+        "path": [],
+        "message": "Unrecognized key: \"extra\""
+      }
+    ]
+  }
+}

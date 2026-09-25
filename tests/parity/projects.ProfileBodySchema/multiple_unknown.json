@@ -1,0 +1,29 @@
+{
+  "contract": "projects.ProfileBodySchema",
+  "case": "multiple_unknown",
+  "input": {
+    "provider": "codex",
+    "model": "gpt-6",
+    "reasoningLevel": "high",
+    "serviceTier": "priority",
+    "name": "Profile",
+    "role": "worker",
+    "avatarSeed": "0123456789abcdef0123456789abcdef",
+    "extraA": true,
+    "extraB": 1
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "unrecognized_keys",
+        "keys": [
+          "extraA",
+          "extraB"
+        ],
+        "path": [],
+        "message": "Unrecognized keys: \"extraA\", \"extraB\""
+      }
+    ]
+  }
+}

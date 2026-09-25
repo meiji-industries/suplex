@@ -1,0 +1,29 @@
+{
+  "contract": "projects.ProfilePatchBodySchema",
+  "case": "invalid_and_unknown",
+  "input": {
+    "archived": null,
+    "extra": true
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "expected": "boolean",
+        "code": "invalid_type",
+        "path": [
+          "archived"
+        ],
+        "message": "Invalid input: expected boolean, received null"
+      },
+      {
+        "code": "unrecognized_keys",
+        "keys": [
+          "extra"
+        ],
+        "path": [],
+        "message": "Unrecognized key: \"extra\""
+      }
+    ]
+  }
+}

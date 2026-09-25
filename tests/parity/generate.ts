@@ -154,6 +154,45 @@ const semanticInputs: Record<string, Record<string, unknown>> = {
   "providers.ProviderLoginResponseSchema": {
     invalid_pane: { paneId: 1 },
   },
+  "projects.ProfileBodySchema": {
+    trimmed_fields: { provider: "codex", model: "  codex/gpt-6  ", reasoningLevel: "high", serviceTier: "priority", name: "  Profile  ", role: "worker", avatarSeed: "0123456789abcdef0123456789abcdef", providerInstanceId: null },
+    bad_model_pattern: { provider: "codex", model: "bad model", reasoningLevel: "high", serviceTier: "priority", name: "Profile", role: "worker", avatarSeed: "0123456789abcdef0123456789abcdef" },
+    bad_avatar_pattern: { provider: "codex", model: "gpt-6", reasoningLevel: "high", serviceTier: "priority", name: "Profile", role: "worker", avatarSeed: "ABCDEF" },
+    empty_name: { provider: "codex", model: "gpt-6", reasoningLevel: "high", serviceTier: "priority", name: "  ", role: "worker", avatarSeed: "0123456789abcdef0123456789abcdef" },
+    empty_model: { provider: "codex", model: "  ", reasoningLevel: "high", serviceTier: "priority", name: "Profile", role: "worker", avatarSeed: "0123456789abcdef0123456789abcdef" },
+    overlong_model: { provider: "codex", model: "x".repeat(257), reasoningLevel: "high", serviceTier: "priority", name: "Profile", role: "worker", avatarSeed: "0123456789abcdef0123456789abcdef" },
+    wrong_nullable_id: { provider: "codex", model: "gpt-6", reasoningLevel: "high", serviceTier: "priority", name: "Profile", role: "worker", avatarSeed: "0123456789abcdef0123456789abcdef", providerInstanceId: "" },
+    multiple_unknown: { provider: "codex", model: "gpt-6", reasoningLevel: "high", serviceTier: "priority", name: "Profile", role: "worker", avatarSeed: "0123456789abcdef0123456789abcdef", extraA: true, extraB: 1 },
+    invalid_and_unknown: { provider: "bad", model: "gpt-6", reasoningLevel: "high", serviceTier: "priority", name: "Profile", role: "worker", avatarSeed: "0123456789abcdef0123456789abcdef", extra: true },
+    model_array: { provider: "codex", model: [], reasoningLevel: "high", serviceTier: "priority", name: "Profile", role: "worker", avatarSeed: "0123456789abcdef0123456789abcdef" },
+    astral_model: { provider: "codex", model: "😀".repeat(129), reasoningLevel: "high", serviceTier: "priority", name: "Profile", role: "worker", avatarSeed: "0123456789abcdef0123456789abcdef" },
+    byte_order_mark_name: { provider: "codex", model: "gpt-6", reasoningLevel: "high", serviceTier: "priority", name: "\ufeffProfile\ufeff", role: "worker", avatarSeed: "0123456789abcdef0123456789abcdef" },
+  },
+  "projects.ProfilePatchBodySchema": {
+    empty_patch: {},
+    partial_name: { name: "  New  " },
+    archived_only: { archived: true },
+    invalid_archived: { archived: "true" },
+    null_provider_id: { providerInstanceId: null },
+    bad_partial_model: { model: "/bad" },
+    unknown_patch: { extra: true },
+    invalid_and_unknown: { archived: null, extra: true },
+  },
+  "projects.ProfileResponseSchema": {
+    stripped_unknown: { provider: "codex", model: "gpt-6", reasoningLevel: "high", serviceTier: "priority", name: "Profile", role: "worker", avatarSeed: "0123456789abcdef0123456789abcdef", id: "profile", archivedAt: null, createdAt: "now", updatedAt: "now", extra: true },
+    invalid_archived_at: { provider: "codex", model: "gpt-6", reasoningLevel: "high", serviceTier: "priority", name: "Profile", role: "worker", avatarSeed: "0123456789abcdef0123456789abcdef", id: "profile", archivedAt: false, createdAt: "now", updatedAt: "now" },
+  },
+  "projects.ProfileListQuerySchema": {
+    included: { includeArchived: "true" },
+    false_string: { includeArchived: "false" },
+    boolean_true: { includeArchived: true },
+    unknown_query: { extra: "x" },
+    invalid_and_unknown: { includeArchived: "false", extra: "x" },
+  },
+  "projects.ProfileListResponseSchema": {
+    nested_profile_error: { profiles: [{ provider: "codex", model: "gpt-6", reasoningLevel: "high", serviceTier: "priority", name: "Profile", role: "worker", avatarSeed: "bad", id: "profile", archivedAt: null, createdAt: "now", updatedAt: "now" }] },
+    nested_profile_strip: { profiles: [{ provider: "codex", model: "gpt-6", reasoningLevel: "high", serviceTier: "priority", name: "Profile", role: "worker", avatarSeed: "0123456789abcdef0123456789abcdef", id: "profile", archivedAt: null, createdAt: "now", updatedAt: "now", extra: true }] },
+  },
 };
 
 type Fixture = { contract: string; case: string; input?: unknown; expected: { accepted: true; value: unknown } | { accepted: false; error: z.core.$ZodIssue[] } };

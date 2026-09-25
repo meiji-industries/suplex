@@ -1,0 +1,29 @@
+{
+  "contract": "projects.ProfileBodySchema",
+  "case": "wrong_nullable_id",
+  "input": {
+    "provider": "codex",
+    "model": "gpt-6",
+    "reasoningLevel": "high",
+    "serviceTier": "priority",
+    "name": "Profile",
+    "role": "worker",
+    "avatarSeed": "0123456789abcdef0123456789abcdef",
+    "providerInstanceId": ""
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "origin": "string",
+        "code": "too_small",
+        "minimum": 1,
+        "inclusive": true,
+        "path": [
+          "providerInstanceId"
+        ],
+        "message": "Too small: expected string to have >=1 characters"
+      }
+    ]
+  }
+}

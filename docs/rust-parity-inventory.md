@@ -52,7 +52,7 @@ The table lists all 238 backend TypeScript modules present at the baseline, incl
 | [http/contracts/common.ts](../src/http/contracts/common.ts) | not started | 21 common validators implemented; combined [parity test](../rust/tests/contract_parity.rs) passes 395 fixtures / 35 total schemas. Full common-contract and HTTP coverage remain pending |
 | [http/contracts/github-triggers.ts](../src/http/contracts/github-triggers.ts) | not started | |
 | [http/contracts/oauth.ts](../src/http/contracts/oauth.ts) | not started | |
-| [http/contracts/projects.ts](../src/http/contracts/projects.ts) | not started | |
+| [http/contracts/projects.ts](../src/http/contracts/projects.ts) | not started | Five profile schemas ported and independently checked, including strict/partial/nullable/response behavior; combined parity test passes 465 cases / 40 schemas. Project schemas and full HTTP coverage remain incomplete |
 | [http/contracts/providers.ts](../src/http/contracts/providers.ts) | ported | All nine validators implemented in [providers.rs](../rust/src/http/contracts/providers.rs); combined corpus passes 284 cases / 28 schemas. Raw HTTP JSON representation and endpoint integration remain unverified |
 | [http/contracts/system-events.ts](../src/http/contracts/system-events.ts) | not started | |
 | [http/contracts/task-templates.ts](../src/http/contracts/task-templates.ts) | not started | |

@@ -1,0 +1,38 @@
+{
+  "contract": "projects.ProfileBodySchema",
+  "case": "empty_model",
+  "input": {
+    "provider": "codex",
+    "model": "  ",
+    "reasoningLevel": "high",
+    "serviceTier": "priority",
+    "name": "Profile",
+    "role": "worker",
+    "avatarSeed": "0123456789abcdef0123456789abcdef"
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "origin": "string",
+        "code": "too_small",
+        "minimum": 1,
+        "inclusive": true,
+        "path": [
+          "model"
+        ],
+        "message": "Too small: expected string to have >=1 characters"
+      },
+      {
+        "origin": "string",
+        "code": "invalid_format",
+        "format": "regex",
+        "pattern": "/^[a-zA-Z0-9][a-zA-Z0-9._:/-]*$/",
+        "path": [
+          "model"
+        ],
+        "message": "Invalid string: must match pattern /^[a-zA-Z0-9][a-zA-Z0-9._:/-]*$/"
+      }
+    ]
+  }
+}

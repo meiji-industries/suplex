@@ -2,6 +2,7 @@ use serde_json::{Map, Value, json};
 
 mod common;
 mod common_commands;
+mod profile;
 mod providers;
 
 pub type ParseResult = Result<Value, Vec<Value>>;
@@ -16,6 +17,9 @@ pub fn validate(contract: &str, input: Option<&Value>) -> Option<ParseResult> {
         return Some(result);
     }
     if let Some(result) = providers::validate(contract, input) {
+        return Some(result);
+    }
+    if let Some(result) = profile::validate(contract, input) {
         return Some(result);
     }
     match contract {

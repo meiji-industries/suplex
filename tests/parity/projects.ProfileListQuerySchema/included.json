@@ -1,0 +1,13 @@
+{
+  "contract": "projects.ProfileListQuerySchema",
+  "case": "included",
+  "input": {
+    "includeArchived": "true"
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "includeArchived": "true"
+    }
+  }
+}

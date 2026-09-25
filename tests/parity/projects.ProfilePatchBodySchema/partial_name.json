@@ -1,0 +1,13 @@
+{
+  "contract": "projects.ProfilePatchBodySchema",
+  "case": "partial_name",
+  "input": {
+    "name": "  New  "
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "name": "New"
+    }
+  }
+}

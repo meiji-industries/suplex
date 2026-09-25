@@ -1,0 +1,20 @@
+{
+  "contract": "projects.ProfileListQuerySchema",
+  "case": "unknown_query",
+  "input": {
+    "extra": "x"
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "unrecognized_keys",
+        "keys": [
+          "extra"
+        ],
+        "path": [],
+        "message": "Unrecognized key: \"extra\""
+      }
+    ]
+  }
+}

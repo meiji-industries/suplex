@@ -1,0 +1,22 @@
+{
+  "contract": "projects.ProfilePatchBodySchema",
+  "case": "bad_partial_model",
+  "input": {
+    "model": "/bad"
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "origin": "string",
+        "code": "invalid_format",
+        "format": "regex",
+        "pattern": "/^[a-zA-Z0-9][a-zA-Z0-9._:/-]*$/",
+        "path": [
+          "model"
+        ],
+        "message": "Invalid string: must match pattern /^[a-zA-Z0-9][a-zA-Z0-9._:/-]*$/"
+      }
+    ]
+  }
+}

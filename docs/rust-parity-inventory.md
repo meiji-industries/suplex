@@ -89,7 +89,7 @@ The table lists all 238 backend TypeScript modules present at the baseline, incl
 | [identity/auth-identifiers.ts](../src/identity/auth-identifiers.ts) | not started | |
 | [identity/auth-repository.ts](../src/identity/auth-repository.ts) | not started | |
 | [identity/auth-schema.ts](../src/identity/auth-schema.ts) | not started | |
-| [identity/auth-webauthn.ts](../src/identity/auth-webauthn.ts) | not started | |
+| [identity/auth-webauthn.ts](../src/identity/auth-webauthn.ts) | not started | Partial adapter and [10-algorithm spike evidence](rust-spikes/webauthn.md); non-`none` registration attestation and full ceremony/HTTP integration remain incomplete |
 | [identity/auth.ts](../src/identity/auth.ts) | not started | |
 | [identity/avatar-kinds.ts](../src/identity/avatar-kinds.ts) | not started | |
 | [identity/avatars.ts](../src/identity/avatars.ts) | not started | |
@@ -119,8 +119,8 @@ The table lists all 238 backend TypeScript modules present at the baseline, incl
 | [platform/artifacts.ts](../src/platform/artifacts.ts) | not started | |
 | [platform/backup.ts](../src/platform/backup.ts) | not started | |
 | [platform/command-runner.ts](../src/platform/command-runner.ts) | not started | |
-| [platform/config.ts](../src/platform/config.ts) | not started | |
-| [platform/database.ts](../src/platform/database.ts) | not started | |
+| [platform/config.ts](../src/platform/config.ts) | not started | Partial foundation in [config.rs](../rust/src/platform/config.rs), commit `924c9efe`: isolated defaults and port only; full configuration remains pending |
+| [platform/database.ts](../src/platform/database.ts) | not started | All 149 SQL migrations embedded by [build.rs](../rust/build.rs); database behavior remains pending |
 | [platform/development.ts](../src/platform/development.ts) | not started | |
 | [platform/diagnostics/doctor.ts](../src/platform/diagnostics/doctor.ts) | not started | |
 | [platform/diagnostics/task.ts](../src/platform/diagnostics/task.ts) | not started | |
@@ -142,7 +142,7 @@ The table lists all 238 backend TypeScript modules present at the baseline, incl
 | [platform/system-event-transport.ts](../src/platform/system-event-transport.ts) | not started | |
 | [platform/system-events.ts](../src/platform/system-events.ts) | not started | |
 | [platform/tailscale.ts](../src/platform/tailscale.ts) | not started | |
-| [platform/ui.ts](../src/platform/ui.ts) | not started | |
+| [platform/ui.ts](../src/platform/ui.ts) | not started | Asset embedding tested in [embedded.rs](../rust/src/platform/embedded.rs), commit `924c9efe`; serving and UI behavior remain pending |
 | [platform/updates/supervisor.ts](../src/platform/updates/supervisor.ts) | not started | |
 | [platform/updates/update-client.ts](../src/platform/updates/update-client.ts) | not started | |
 | [profiles/agent-profile-contracts.ts](../src/profiles/agent-profile-contracts.ts) | not started | |

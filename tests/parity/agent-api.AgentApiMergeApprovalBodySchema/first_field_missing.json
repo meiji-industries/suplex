@@ -9,12 +9,9 @@
     "accepted": false,
     "error": [
       {
-        "expected": "number",
-        "code": "invalid_type",
-        "path": [
-          "pullRequestNumber"
-        ],
-        "message": "Invalid input: expected number, received undefined"
+        "code": "invalid-invalid_type",
+        "field": ".pullRequestNumber",
+        "message": "Request value is invalid"
       }
     ]
   }

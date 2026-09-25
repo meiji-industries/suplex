@@ -13,19 +13,9 @@
     "accepted": false,
     "error": [
       {
-        "code": "invalid_union",
-        "errors": [],
-        "note": "No matching discriminator",
-        "discriminator": "kind",
-        "options": [
-          "github",
-          "jira"
-        ],
-        "path": [
-          "issue",
-          "kind"
-        ],
-        "message": "Invalid discriminator value. Expected 'github' | 'jira'"
+        "code": "invalid-invalid_union",
+        "field": ".issue.kind",
+        "message": "Request value is invalid"
       }
     ]
   }

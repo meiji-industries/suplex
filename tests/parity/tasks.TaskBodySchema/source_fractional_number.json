@@ -14,14 +14,9 @@
     "accepted": false,
     "error": [
       {
-        "expected": "int",
-        "format": "safeint",
-        "code": "invalid_type",
-        "path": [
-          "source",
-          "number"
-        ],
-        "message": "Invalid input: expected int, received number"
+        "code": "invalid-invalid_type",
+        "field": ".source.number",
+        "message": "Request value is invalid"
       }
     ]
   }

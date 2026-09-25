@@ -12,14 +12,9 @@
     "accepted": false,
     "error": [
       {
-        "code": "unrecognized_keys",
-        "keys": [
-          "extra"
-        ],
-        "path": [
-          "repository"
-        ],
-        "message": "Unrecognized key: \"extra\""
+        "code": "invalid-unrecognized_keys",
+        "field": ".repository",
+        "message": "Request value is invalid"
       }
     ]
   }

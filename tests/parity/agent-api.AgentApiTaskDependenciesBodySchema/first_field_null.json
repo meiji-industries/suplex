@@ -8,12 +8,9 @@
     "accepted": false,
     "error": [
       {
-        "expected": "array",
-        "code": "invalid_type",
-        "path": [
-          "dependsOn"
-        ],
-        "message": "Invalid input: expected array, received null"
+        "code": "invalid-invalid_type",
+        "field": ".dependsOn",
+        "message": "Request value is invalid"
       }
     ]
   }

@@ -10,13 +10,9 @@
     "accepted": false,
     "error": [
       {
-        "expected": "string",
-        "code": "invalid_type",
-        "path": [
-          "environment",
-          "KEY"
-        ],
-        "message": "Invalid input: expected string, received number"
+        "code": "invalid-invalid_type",
+        "field": ".environment.KEY",
+        "message": "Request value is invalid"
       }
     ]
   }

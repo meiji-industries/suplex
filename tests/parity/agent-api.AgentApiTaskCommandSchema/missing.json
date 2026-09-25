@@ -5,19 +5,9 @@
     "accepted": false,
     "error": [
       {
-        "code": "invalid_value",
-        "values": [
-          "start_task",
-          "disarm_task",
-          "cancel_task",
-          "archive_task",
-          "unarchive_task",
-          "duplicate_task",
-          "send_task_note",
-          "recheck_delivery_wait"
-        ],
-        "path": [],
-        "message": "Invalid option: expected one of \"start_task\"|\"disarm_task\"|\"cancel_task\"|\"archive_task\"|\"unarchive_task\"|\"duplicate_task\"|\"send_task_note\"|\"recheck_delivery_wait\""
+        "code": "invalid-invalid_value",
+        "field": ".",
+        "message": "Request value is invalid"
       }
     ]
   }

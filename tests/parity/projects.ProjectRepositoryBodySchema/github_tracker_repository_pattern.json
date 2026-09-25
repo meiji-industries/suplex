@@ -14,16 +14,9 @@
     "accepted": false,
     "error": [
       {
-        "origin": "string",
-        "code": "invalid_format",
-        "format": "regex",
-        "pattern": "/^[\\w.-]+\\/[\\w.-]+$/",
-        "path": [
-          "integration",
-          "tracker",
-          "repository"
-        ],
-        "message": "Invalid string: must match pattern /^[\\w.-]+\\/[\\w.-]+$/"
+        "code": "invalid-invalid_format",
+        "field": ".integration.tracker.repository",
+        "message": "Request value is invalid"
       }
     ]
   }

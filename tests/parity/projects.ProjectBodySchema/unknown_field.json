@@ -8,84 +8,54 @@
     "accepted": false,
     "error": [
       {
-        "expected": "string",
-        "code": "invalid_type",
-        "path": [
-          "name"
-        ],
-        "message": "Invalid input: expected string, received undefined"
+        "code": "invalid-invalid_type",
+        "field": ".name",
+        "message": "Request value is invalid"
       },
       {
-        "expected": "string",
-        "code": "invalid_type",
-        "path": [
-          "repositoryPath"
-        ],
-        "message": "Invalid input: expected string, received undefined"
+        "code": "invalid-invalid_type",
+        "field": ".repositoryPath",
+        "message": "Request value is invalid"
       },
       {
-        "expected": "string",
-        "code": "invalid_type",
-        "path": [
-          "worktreeRoot"
-        ],
-        "message": "Invalid input: expected string, received undefined"
+        "code": "invalid-invalid_type",
+        "field": ".worktreeRoot",
+        "message": "Request value is invalid"
       },
       {
-        "expected": "string",
-        "code": "invalid_type",
-        "path": [
-          "repository"
-        ],
-        "message": "Invalid input: expected string, received undefined"
+        "code": "invalid-invalid_type",
+        "field": ".repository",
+        "message": "Request value is invalid"
       },
       {
-        "expected": "string",
-        "code": "invalid_type",
-        "path": [
-          "baseBranch"
-        ],
-        "message": "Invalid input: expected string, received undefined"
+        "code": "invalid-invalid_type",
+        "field": ".baseBranch",
+        "message": "Request value is invalid"
       },
       {
-        "expected": "string",
-        "code": "invalid_type",
-        "path": [
-          "setupCommand"
-        ],
-        "message": "Invalid input: expected string, received undefined"
+        "code": "invalid-invalid_type",
+        "field": ".setupCommand",
+        "message": "Request value is invalid"
       },
       {
-        "expected": "string",
-        "code": "invalid_type",
-        "path": [
-          "verificationCommand"
-        ],
-        "message": "Invalid input: expected string, received undefined"
+        "code": "invalid-invalid_type",
+        "field": ".verificationCommand",
+        "message": "Request value is invalid"
       },
       {
-        "expected": "string",
-        "code": "invalid_type",
-        "path": [
-          "rootProfileId"
-        ],
-        "message": "Invalid input: expected string, received undefined"
+        "code": "invalid-invalid_type",
+        "field": ".rootProfileId",
+        "message": "Request value is invalid"
       },
       {
-        "expected": "string",
-        "code": "invalid_type",
-        "path": [
-          "workerProfileId"
-        ],
-        "message": "Invalid input: expected string, received undefined"
+        "code": "invalid-invalid_type",
+        "field": ".workerProfileId",
+        "message": "Request value is invalid"
       },
       {
-        "code": "unrecognized_keys",
-        "keys": [
-          "unexpected"
-        ],
-        "path": [],
-        "message": "Unrecognized key: \"unexpected\""
+        "code": "invalid-unrecognized_keys",
+        "field": ".",
+        "message": "Request value is invalid"
       }
     ]
   }

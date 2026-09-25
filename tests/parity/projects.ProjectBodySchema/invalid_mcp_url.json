@@ -36,16 +36,9 @@
     "accepted": false,
     "error": [
       {
-        "code": "invalid_format",
-        "format": "url",
-        "path": [
-          "execution",
-          "mcp",
-          0,
-          "transport",
-          "url"
-        ],
-        "message": "Invalid URL"
+        "code": "invalid-invalid_format",
+        "field": ".execution.mcp.0.transport.url",
+        "message": "Request value is invalid"
       }
     ]
   }

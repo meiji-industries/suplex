@@ -9,12 +9,9 @@
     "accepted": false,
     "error": [
       {
-        "code": "unrecognized_keys",
-        "keys": [
-          "extra"
-        ],
-        "path": [],
-        "message": "Unrecognized key: \"extra\""
+        "code": "invalid-unrecognized_keys",
+        "field": ".",
+        "message": "Request value is invalid"
       }
     ]
   }

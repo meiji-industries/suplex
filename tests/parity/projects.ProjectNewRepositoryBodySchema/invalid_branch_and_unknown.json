@@ -10,22 +10,14 @@
     "accepted": false,
     "error": [
       {
-        "origin": "string",
-        "code": "too_small",
-        "minimum": 1,
-        "inclusive": true,
-        "path": [
-          "baseBranch"
-        ],
-        "message": "Too small: expected string to have >=1 characters"
+        "code": "invalid-too_small",
+        "field": ".baseBranch",
+        "message": "Request value is invalid"
       },
       {
-        "code": "unrecognized_keys",
-        "keys": [
-          "extra"
-        ],
-        "path": [],
-        "message": "Unrecognized key: \"extra\""
+        "code": "invalid-unrecognized_keys",
+        "field": ".",
+        "message": "Request value is invalid"
       }
     ]
   }

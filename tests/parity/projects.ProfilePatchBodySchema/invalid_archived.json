@@ -8,12 +8,9 @@
     "accepted": false,
     "error": [
       {
-        "expected": "boolean",
-        "code": "invalid_type",
-        "path": [
-          "archived"
-        ],
-        "message": "Invalid input: expected boolean, received string"
+        "code": "invalid-invalid_type",
+        "field": ".archived",
+        "message": "Request value is invalid"
       }
     ]
   }

@@ -14,12 +14,9 @@
     "accepted": false,
     "error": [
       {
-        "code": "unrecognized_keys",
-        "keys": [
-          "__parityUnknown"
-        ],
-        "path": [],
-        "message": "Unrecognized key: \"__parityUnknown\""
+        "code": "invalid-unrecognized_keys",
+        "field": ".",
+        "message": "Request value is invalid"
       }
     ]
   }

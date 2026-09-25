@@ -10,24 +10,14 @@
     "accepted": false,
     "error": [
       {
-        "origin": "string",
-        "code": "too_small",
-        "minimum": 1,
-        "inclusive": true,
-        "path": [
-          "rootProfileId"
-        ],
-        "message": "Too small: expected string to have >=1 characters"
+        "code": "invalid-too_small",
+        "field": ".rootProfileId",
+        "message": "Request value is invalid"
       },
       {
-        "origin": "string",
-        "code": "too_big",
-        "maximum": 256,
-        "inclusive": true,
-        "path": [
-          "workerProfileId"
-        ],
-        "message": "Too big: expected string to have <=256 characters"
+        "code": "invalid-too_big",
+        "field": ".workerProfileId",
+        "message": "Request value is invalid"
       }
     ]
   }

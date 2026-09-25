@@ -8,14 +8,9 @@
     "accepted": false,
     "error": [
       {
-        "origin": "string",
-        "code": "too_big",
-        "maximum": 256,
-        "inclusive": true,
-        "path": [
-          "companyId"
-        ],
-        "message": "Too big: expected string to have <=256 characters"
+        "code": "invalid-too_big",
+        "field": ".companyId",
+        "message": "Request value is invalid"
       }
     ]
   }

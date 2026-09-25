@@ -6,12 +6,9 @@
     "accepted": false,
     "error": [
       {
-        "expected": "array",
-        "code": "invalid_type",
-        "path": [
-          "projectIds"
-        ],
-        "message": "Invalid input: expected array, received undefined"
+        "code": "invalid-invalid_type",
+        "field": ".projectIds",
+        "message": "Request value is invalid"
       }
     ]
   }

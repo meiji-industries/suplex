@@ -9,14 +9,9 @@
     "accepted": false,
     "error": [
       {
-        "origin": "string",
-        "code": "too_big",
-        "maximum": 80,
-        "inclusive": true,
-        "path": [
-          "name"
-        ],
-        "message": "Too big: expected string to have <=80 characters"
+        "code": "invalid-too_big",
+        "field": ".name",
+        "message": "Request value is invalid"
       }
     ]
   }

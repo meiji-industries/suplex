@@ -6,12 +6,9 @@
     "accepted": false,
     "error": [
       {
-        "expected": "string",
-        "code": "invalid_type",
-        "path": [
-          "issueCode"
-        ],
-        "message": "Invalid input: expected string, received undefined"
+        "code": "invalid-invalid_type",
+        "field": ".issueCode",
+        "message": "Request value is invalid"
       }
     ]
   }

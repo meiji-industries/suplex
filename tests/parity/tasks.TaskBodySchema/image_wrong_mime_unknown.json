@@ -18,30 +18,14 @@
     "accepted": false,
     "error": [
       {
-        "code": "invalid_value",
-        "values": [
-          "image/png",
-          "image/jpeg",
-          "image/webp",
-          "image/gif"
-        ],
-        "path": [
-          "images",
-          0,
-          "mimeType"
-        ],
-        "message": "Invalid option: expected one of \"image/png\"|\"image/jpeg\"|\"image/webp\"|\"image/gif\""
+        "code": "invalid-invalid_value",
+        "field": ".images.0.mimeType",
+        "message": "Request value is invalid"
       },
       {
-        "code": "unrecognized_keys",
-        "keys": [
-          "extra"
-        ],
-        "path": [
-          "images",
-          0
-        ],
-        "message": "Unrecognized key: \"extra\""
+        "code": "invalid-unrecognized_keys",
+        "field": ".images.0",
+        "message": "Request value is invalid"
       }
     ]
   }

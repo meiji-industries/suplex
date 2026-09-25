@@ -10,40 +10,9 @@
     "accepted": false,
     "error": [
       {
-        "code": "invalid_union",
-        "errors": [
-          [
-            {
-              "expected": "boolean",
-              "code": "invalid_type",
-              "path": [
-                "confirmCommandsStopped"
-              ],
-              "message": "Invalid input: expected boolean, received number"
-            }
-          ],
-          [
-            {
-              "code": "invalid_type",
-              "expected": "object",
-              "path": [
-                "limitDecision"
-              ],
-              "message": "Invalid input: expected object, received undefined"
-            },
-            {
-              "code": "unrecognized_keys",
-              "keys": [
-                "answer",
-                "confirmCommandsStopped"
-              ],
-              "path": [],
-              "message": "Unrecognized keys: \"answer\", \"confirmCommandsStopped\""
-            }
-          ]
-        ],
-        "path": [],
-        "message": "Invalid input"
+        "code": "invalid-invalid_union",
+        "field": ".",
+        "message": "Request value is invalid"
       }
     ]
   }

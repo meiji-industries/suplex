@@ -8,13 +8,9 @@
     "accepted": false,
     "error": [
       {
-        "expected": "int",
-        "format": "safeint",
-        "code": "invalid_type",
-        "path": [
-          "expectedRevision"
-        ],
-        "message": "Invalid input: expected int, received number"
+        "code": "invalid-invalid_type",
+        "field": ".expectedRevision",
+        "message": "Request value is invalid"
       }
     ]
   }

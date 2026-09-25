@@ -57,14 +57,9 @@
     "accepted": false,
     "error": [
       {
-        "origin": "array",
-        "code": "too_big",
-        "maximum": 8,
-        "inclusive": true,
-        "path": [
-          "images"
-        ],
-        "message": "Too big: expected array to have <=8 items"
+        "code": "invalid-too_big",
+        "field": ".images",
+        "message": "Request value is invalid"
       }
     ]
   }

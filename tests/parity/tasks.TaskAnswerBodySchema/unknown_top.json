@@ -10,40 +10,9 @@
     "accepted": false,
     "error": [
       {
-        "code": "invalid_union",
-        "errors": [
-          [
-            {
-              "code": "unrecognized_keys",
-              "keys": [
-                "extra"
-              ],
-              "path": [],
-              "message": "Unrecognized key: \"extra\""
-            }
-          ],
-          [
-            {
-              "code": "invalid_type",
-              "expected": "object",
-              "path": [
-                "limitDecision"
-              ],
-              "message": "Invalid input: expected object, received undefined"
-            },
-            {
-              "code": "unrecognized_keys",
-              "keys": [
-                "answer",
-                "extra"
-              ],
-              "path": [],
-              "message": "Unrecognized keys: \"answer\", \"extra\""
-            }
-          ]
-        ],
-        "path": [],
-        "message": "Invalid input"
+        "code": "invalid-invalid_union",
+        "field": ".",
+        "message": "Request value is invalid"
       }
     ]
   }

@@ -139,22 +139,14 @@
     "accepted": false,
     "error": [
       {
-        "expected": "string",
-        "code": "invalid_type",
-        "path": [
-          "label"
-        ],
-        "message": "Invalid input: expected string, received array"
+        "code": "invalid-invalid_type",
+        "field": ".label",
+        "message": "Request value is invalid"
       },
       {
-        "origin": "array",
-        "code": "too_big",
-        "maximum": 128,
-        "inclusive": true,
-        "path": [
-          "label"
-        ],
-        "message": "Too big: expected array to have <=128 items"
+        "code": "invalid-too_big",
+        "field": ".label",
+        "message": "Request value is invalid"
       }
     ]
   }

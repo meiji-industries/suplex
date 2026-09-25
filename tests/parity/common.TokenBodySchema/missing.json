@@ -5,10 +5,9 @@
     "accepted": false,
     "error": [
       {
-        "expected": "object",
-        "code": "invalid_type",
-        "path": [],
-        "message": "Invalid input: expected object, received undefined"
+        "code": "invalid-invalid_type",
+        "field": ".",
+        "message": "Request value is invalid"
       }
     ]
   }

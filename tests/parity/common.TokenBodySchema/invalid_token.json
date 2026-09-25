@@ -8,12 +8,9 @@
     "accepted": false,
     "error": [
       {
-        "expected": "string",
-        "code": "invalid_type",
-        "path": [
-          "token"
-        ],
-        "message": "Invalid input: expected string, received null"
+        "code": "invalid-invalid_type",
+        "field": ".token",
+        "message": "Request value is invalid"
       }
     ]
   }

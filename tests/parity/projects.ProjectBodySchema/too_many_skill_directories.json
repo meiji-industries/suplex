@@ -71,15 +71,9 @@
     "accepted": false,
     "error": [
       {
-        "origin": "array",
-        "code": "too_big",
-        "maximum": 50,
-        "inclusive": true,
-        "path": [
-          "execution",
-          "skillDirectories"
-        ],
-        "message": "Too big: expected array to have <=50 items"
+        "code": "invalid-too_big",
+        "field": ".execution.skillDirectories",
+        "message": "Request value is invalid"
       }
     ]
   }

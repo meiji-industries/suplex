@@ -8,12 +8,9 @@
     "accepted": false,
     "error": [
       {
-        "expected": "string",
-        "code": "invalid_type",
-        "path": [
-          "userId"
-        ],
-        "message": "Invalid input: expected string, received null"
+        "code": "invalid-invalid_type",
+        "field": ".userId",
+        "message": "Request value is invalid"
       }
     ]
   }

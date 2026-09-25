@@ -10,12 +10,9 @@
     "accepted": false,
     "error": [
       {
-        "expected": "string",
-        "code": "invalid_type",
-        "path": [
-          "displayName"
-        ],
-        "message": "Invalid input: expected string, received null"
+        "code": "invalid-invalid_type",
+        "field": ".displayName",
+        "message": "Request value is invalid"
       }
     ]
   }

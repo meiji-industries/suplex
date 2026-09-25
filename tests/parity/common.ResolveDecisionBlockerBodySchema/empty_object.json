@@ -6,21 +6,14 @@
     "accepted": false,
     "error": [
       {
-        "expected": "number",
-        "code": "invalid_type",
-        "received": "NaN",
-        "path": [
-          "expectedRevision"
-        ],
-        "message": "Invalid input: expected number, received NaN"
+        "code": "invalid-invalid_type",
+        "field": ".expectedRevision",
+        "message": "Request value is invalid"
       },
       {
-        "expected": "string",
-        "code": "invalid_type",
-        "path": [
-          "answer"
-        ],
-        "message": "Invalid input: expected string, received undefined"
+        "code": "invalid-invalid_type",
+        "field": ".answer",
+        "message": "Request value is invalid"
       }
     ]
   }

@@ -10,14 +10,9 @@
     "accepted": false,
     "error": [
       {
-        "origin": "string",
-        "code": "invalid_format",
-        "format": "regex",
-        "pattern": "/^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/",
-        "path": [
-          "idempotencyKey"
-        ],
-        "message": "Invalid string: must match pattern /^[A-Za-z0-9][A-Za-z0-9._:-]{7,127}$/"
+        "code": "invalid-invalid_format",
+        "field": ".idempotencyKey",
+        "message": "Request value is invalid"
       }
     ]
   }

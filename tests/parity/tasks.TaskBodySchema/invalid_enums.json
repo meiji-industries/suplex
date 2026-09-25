@@ -13,44 +13,19 @@
     "accepted": false,
     "error": [
       {
-        "code": "invalid_value",
-        "values": [
-          "local_worktree",
-          "remote_branch",
-          "pull_request_draft",
-          "pull_request_ready",
-          "merged"
-        ],
-        "path": [
-          "deliveryTarget"
-        ],
-        "message": "Invalid option: expected one of \"local_worktree\"|\"remote_branch\"|\"pull_request_draft\"|\"pull_request_ready\"|\"merged\""
+        "code": "invalid-invalid_value",
+        "field": ".deliveryTarget",
+        "message": "Request value is invalid"
       },
       {
-        "code": "invalid_value",
-        "values": [
-          "off",
-          "capture",
-          "required"
-        ],
-        "path": [
-          "visualEvidence"
-        ],
-        "message": "Invalid option: expected one of \"off\"|\"capture\"|\"required\""
+        "code": "invalid-invalid_value",
+        "field": ".visualEvidence",
+        "message": "Request value is invalid"
       },
       {
-        "code": "invalid_value",
-        "values": [
-          "standard",
-          "direct_build",
-          "independent_review",
-          "competing_plans",
-          "refine_pull_request"
-        ],
-        "path": [
-          "workflow"
-        ],
-        "message": "Invalid option: expected one of \"standard\"|\"direct_build\"|\"independent_review\"|\"competing_plans\"|\"refine_pull_request\""
+        "code": "invalid-invalid_value",
+        "field": ".workflow",
+        "message": "Request value is invalid"
       }
     ]
   }

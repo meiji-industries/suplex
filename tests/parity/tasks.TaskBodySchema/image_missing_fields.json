@@ -13,39 +13,19 @@
     "accepted": false,
     "error": [
       {
-        "expected": "string",
-        "code": "invalid_type",
-        "path": [
-          "images",
-          0,
-          "filename"
-        ],
-        "message": "Invalid input: expected string, received undefined"
+        "code": "invalid-invalid_type",
+        "field": ".images.0.filename",
+        "message": "Request value is invalid"
       },
       {
-        "code": "invalid_value",
-        "values": [
-          "image/png",
-          "image/jpeg",
-          "image/webp",
-          "image/gif"
-        ],
-        "path": [
-          "images",
-          0,
-          "mimeType"
-        ],
-        "message": "Invalid option: expected one of \"image/png\"|\"image/jpeg\"|\"image/webp\"|\"image/gif\""
+        "code": "invalid-invalid_value",
+        "field": ".images.0.mimeType",
+        "message": "Request value is invalid"
       },
       {
-        "expected": "string",
-        "code": "invalid_type",
-        "path": [
-          "images",
-          0,
-          "base64"
-        ],
-        "message": "Invalid input: expected string, received undefined"
+        "code": "invalid-invalid_type",
+        "field": ".images.0.base64",
+        "message": "Request value is invalid"
       }
     ]
   }

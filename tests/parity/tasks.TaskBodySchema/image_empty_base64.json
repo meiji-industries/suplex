@@ -17,16 +17,9 @@
     "accepted": false,
     "error": [
       {
-        "origin": "string",
-        "code": "too_small",
-        "minimum": 1,
-        "inclusive": true,
-        "path": [
-          "images",
-          0,
-          "base64"
-        ],
-        "message": "Too small: expected string to have >=1 characters"
+        "code": "invalid-too_small",
+        "field": ".images.0.base64",
+        "message": "Request value is invalid"
       }
     ]
   }

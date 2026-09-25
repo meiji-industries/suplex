@@ -8,18 +8,9 @@
     "accepted": false,
     "error": [
       {
-        "code": "invalid_union",
-        "errors": [],
-        "note": "No matching discriminator",
-        "discriminator": "resume",
-        "options": [
-          false,
-          true
-        ],
-        "path": [
-          "resume"
-        ],
-        "message": "Invalid discriminator value. Expected 'false' | 'true'"
+        "code": "invalid-invalid_union",
+        "field": ".resume",
+        "message": "Request value is invalid"
       }
     ]
   }

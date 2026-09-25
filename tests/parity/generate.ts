@@ -2,9 +2,24 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import type { z } from "zod";
+import { validationFindings } from "../../src/http/errors.js";
 
 const root = fileURLToPath(new URL(".", import.meta.url));
 const modules = ["agent-api", "auth", "avatars", "common", "github-triggers", "oauth", "projects", "providers", "system-events", "task-templates", "tasks", "update", "workflows"] as const;
+const responseOnlySchemas = new Set([
+  "agent-api.AgentApiActionReasonCodeSchema", "agent-api.AgentApiActionRequiredSchema", "agent-api.AgentApiAdminAgentSchema",
+  "agent-api.AgentApiCapabilitiesSchema", "agent-api.AgentApiIdentityProjectSchema", "agent-api.AgentApiIntegrationSchema",
+  "agent-api.AgentApiProjectSchema", "agent-api.AgentApiPublicAgentSchema", "agent-api.AgentApiPullRequestObservationSchema",
+  "agent-api.AgentApiRuntimeErrorSchema", "agent-api.AgentApiSafeTaskProjectionSchema", "agent-api.AgentApiTaskDeliverySchema",
+  "agent-api.AgentApiTaskReadProjectionSchema", "agent-api.AgentApiTaskSummaryProjectionSchema",
+  "agent-api.AgentApiTemplateDiscoverySchema", "agent-api.AgentApiWorkflowDiscoverySchema",
+  "avatars.AvatarRecordSchema", "common.AuthEnvelopeSchema", "common.FindingSchema",
+  "github-triggers.GithubTriggerActivitySchema", "github-triggers.GithubTriggerListSchema", "github-triggers.GithubTriggerRuleSchema",
+  "projects.ProjectProviderInstanceSchema", "providers.NativeProviderSummarySchema", "providers.ProviderConnectionSchema",
+  "providers.ProviderInstanceReadinessSchema", "providers.ProviderInstanceSchema", "providers.ProviderSummarySchema",
+  "tasks.SessionHistoryPageSchema", "tasks.TaskAgentStatusSchema", "tasks.TaskHarnessKindSchema",
+  "update.UpdateStatusSchema", "workflows.WorkflowRecordSchema",
+]);
 const inputs = {
   missing: undefined,
   null: null,
@@ -570,116 +585,12 @@ const semanticInputs: Record<string, Record<string, unknown>> = {
 };
 
 type Fixture = { contract: string; case: string; input?: unknown; expected: { accepted: true; value: unknown } | { accepted: false; error: unknown } };
-const rawInputs: Record<string, Record<string, string>> = {
-  "task-templates.TaskTemplateParamsSchema": { surrogate_id: String.raw`{"templateId":"\ud800"}` },
-  "task-templates.ProjectTaskTemplatesParamsSchema": { surrogate_id: String.raw`{"projectId":"\ud800"}` },
-  "task-templates.SaveTaskAsTemplateParamsSchema": { surrogate_id: String.raw`{"taskId":"\ud800"}` },
-  "task-templates.SaveTaskAsTemplateBodySchema": { surrogate_name: String.raw`{"name":"\ud800"}`, strict_surrogate: String.raw`{"name":"Build","\ud800":1}` },
-  "task-templates.CreateTaskTemplateBodySchema": { surrogate_name: String.raw`{"name":"\ud800"}`, surrogate_advisor: String.raw`{"name":"Build","advisorProfileIds":{"reviewer":"\ud800"}}`, strict_surrogate: String.raw`{"name":"Build","\ud800":1}` },
-  "task-templates.UpdateTaskTemplateBodySchema": { surrogate_description: String.raw`{"description":"\ud800"}`, strict_surrogate: String.raw`{"\ud800":1}` },
-  "task-templates.TaskTemplateResponseSchema": { surrogate_metadata: String.raw`{"name":"Build","id":"\ud800","projectId":"project","createdAt":"now","updatedAt":"now"}`, strict_surrogate: String.raw`{"name":"Build","id":"id","projectId":"project","createdAt":"now","updatedAt":"now","\ud800":1}` },
-  "task-templates.TaskTemplateListResponseSchema": { surrogate_nested: String.raw`{"templates":[{"name":"Build","id":"\ud800","projectId":"project","createdAt":"now","updatedAt":"now"}]}` },
-  "tasks.TaskAnswerBodySchema": {
-    lone_surrogate_answer: String.raw`{"questionId":"question","answer":"\ud800"}`,
-    strict_surrogate_key: String.raw`{"questionId":"question","answer":"yes","\ud800":1}`,
-    overflow_budget: String.raw`{"questionId":"question","limitDecision":{"kind":"change_limits","limits":{"budgetUsd":1e400,"maxTurns":1}}}`,
-    nested_strict_surrogate: String.raw`{"questionId":"question","limitDecision":{"kind":"change_limits","limits":{"budgetUsd":1,"maxTurns":2,"\ud800":1}}}`,
-  },
-  "tasks.TaskWorkerReplacementBodySchema": {
-    surrogate_reason: String.raw`{"sessionId":"session","reason":"\ud800"}`,
-    strict_surrogate_key: String.raw`{"sessionId":"session","reason":"reason","\ud800":1}`,
-  },
-  "tasks.TaskCoordinatorReplacementBodySchema": {
-    surrogate_handoff: String.raw`{"sessionId":"session","rootProfileId":"root","handoff":"\ud800","resume":false}`,
-    strict_surrogate_key: String.raw`{"sessionId":"session","rootProfileId":"root","resume":false,"\ud800":1}`,
-  },
-  "tasks.TaskAgentSelectionBodySchema": {
-    surrogate_direction: String.raw`{"role":"root","expectedProfileId":"old","expectedSessionId":null,"profileId":"new","direction":"\ud800","resume":false}`,
-    strict_surrogate_key: String.raw`{"role":"root","expectedProfileId":"old","expectedSessionId":null,"profileId":"new","direction":"go","resume":false,"\ud800":1}`,
-  },
-  "tasks.TaskIssueBodySchema": {
-    lone_surrogate_title: String.raw`{"issue":{"kind":"github","repository":"team/repo","number":12,"id":"123","key":"GH-12","title":"\ud800","url":"https://github.com/team/repo/issues/12"}}`,
-    lone_surrogate_url_throw: String.raw`{"issue":{"kind":"github","repository":"team/repo","number":12,"id":"123","key":"GH-12","title":"Issue","url":"\ud800"}}`,
-    nested_strict_surrogate: String.raw`{"issue":{"kind":"github","repository":"team/repo","number":12,"id":"123","key":"GH-12","title":"Issue","url":"https://github.com/team/repo/issues/12","\ud800":1}}`,
-  },
-  "tasks.TaskDependenciesBodySchema": {
-    surrogate_task_id: String.raw`{"dependsOn":["\ud800"],"blockedByPullRequests":[]}`,
-    overflow_pr_number: String.raw`{"blockedByPullRequests":[{"number":1e400}]}`,
-    strict_surrogate: String.raw`{"\ud800":1}`,
-  },
-  "tasks.TaskBodySchema": {
-    lone_surrogate_title: String.raw`{"projectId":"project","title":"\ud800","idempotencyKey":"task-0001"}`,
-    strict_surrogate_key: String.raw`{"projectId":"project","title":"Build","idempotencyKey":"task-0001","\ud800":1}`,
-    issue_lone_surrogate_title: String.raw`{"projectId":"project","title":"Build","idempotencyKey":"task-0001","issue":{"kind":"github","repository":"team/repo","number":12,"id":"123","key":"GH-12","title":"\ud800","url":"https://github.com/team/repo/issues/12"}}`,
-    issue_strict_surrogate_key: String.raw`{"projectId":"project","title":"Build","idempotencyKey":"task-0001","issue":{"kind":"github","repository":"team/repo","number":12,"id":"123","key":"GH-12","title":"Issue","url":"https://github.com/team/repo/issues/12","\ud800":1}}`,
-    issue_invalid_surrogate_url: String.raw`{"projectId":"project","title":"Build","idempotencyKey":"task-0001","issue":{"kind":"github","repository":"team/repo","number":12,"id":"123","key":"GH-12","title":"Issue","url":"\ud800"}}`,
-    issue_overflow_number: String.raw`{"projectId":"project","title":"Build","idempotencyKey":"task-0001","issue":{"kind":"github","repository":"team/repo","number":1e400,"id":"123","key":"GH-12","title":"Issue","url":"https://github.com/team/repo/issues/12"}}`,
-    source_overflow_number: String.raw`{"projectId":"project","title":"Build","idempotencyKey":"task-0001","source":{"kind":"issue","number":1e400}}`,
-  },
-  "workflows.WorkflowRecordInputSchema": {
-    lone_surrogate_description: String.raw`{"name":"Build","engine":"standard","description":"\ud800"}`,
-    strict_surrogate_key: String.raw`{"name":"Build","engine":"standard","\ud800":1}`,
-  },
-  "workflows.WorkflowListResponseSchema": {
-    stripped_overflow: String.raw`{"workflows":[{"name":"Build","engine":"standard","id":"flow","archivedAt":null,"createdAt":"now","updatedAt":"now","extra":1e400}],"extra":1e400}`,
-  },
-  "common.EmptyBodySchema": {
-    surrogate_and_overflow: String.raw`{"x":"\ud800","count":1e400}`,
-    deep_passthrough: `{"nested":${"[".repeat(20_000)}0${"]".repeat(20_000)}}`,
-  },
-  "common.TokenBodySchema": {
-    lone_surrogate: String.raw`{"token":"\ud800"}`,
-  },
-  "common.RegistrationVerificationBodySchema": {
-    response_special_values: String.raw`{"response":{"surrogate":"\ud800","count":1e400}}`,
-  },
-  "common.AuthenticationVerificationBodySchema": {
-    response_special_values: String.raw`{"response":{"surrogate":"\udfff","count":1e400}}`,
-  },
-  "auth.CompanyNameBodySchema": {
-    lone_surrogate: String.raw`{"name":"\ud800"}`,
-    overflow_name: String.raw`{"name":1e400}`,
-  },
-  "auth.DisplayNameBodySchema": {
-    lone_surrogate: String.raw`{"displayName":"\udfff"}`,
-  },
-  "auth.MembershipBodySchema": {
-    lone_surrogate: String.raw`{"userId":"\ud800"}`,
-  },
-  "auth.CompanyIssueCodeBodySchema": {
-    lone_surrogate: String.raw`{"issueCode":"\ud800"}`,
-    overflow_issue_code: String.raw`{"issueCode":1e400}`,
-  },
-  "auth.ProfileBodySchema": {
-    surrogate_and_overflow_unknown: String.raw`{"displayName":"\ud800","unknown":1e400}`,
-    deep_unknown: `{"displayName":"Deep","unknown":${"[".repeat(20_000)}0${"]".repeat(20_000)}}`,
-  },
-  "projects.ProjectRepositoryBodySchema": {
-    strict_surrogate_key: String.raw`{"repositoryUrl":"repo","\ud800":1}`,
-    malformed_jira_url: String.raw`{"repositoryUrl":"repo","integration":{"tracker":{"kind":"jira","site":"x","project":"APP","emailEnvironment":"JIRA_EMAIL","tokenEnvironment":"JIRA_TOKEN"}}}`,
-  },
-  "projects.ProjectAgentTaskPolicySchema": {
-    lone_surrogate_profile: String.raw`{"workflowIds":["flow"],"defaultWorkflowId":"flow","rootProfileIds":["\ud800"],"workerProfileIds":["worker"]}`,
-  },
-  "projects.ProjectBodySchema": {
-    strict_surrogate_key: `${JSON.stringify(projectBody).slice(0, -1)}${String.raw`,"\ud800":1}`}`,
-    nested_strict_surrogate_key: `${JSON.stringify(projectBody).slice(0, -1)}${String.raw`,"integration":{"repository":{"kind":"github","\ud800":1}}}`}`,
-    environment_surrogate_key_issue: `${JSON.stringify(projectBody).slice(0, -1)}${String.raw`,"execution":{"environment":{"\ud800":"x"}}}`}`,
-    environment_colliding_surrogate_keys: `${JSON.stringify(projectBody).slice(0, -1)}${String.raw`,"execution":{"environment":{"\ud800":"x","\udfff":"y"}}}`}`,
-    environment_surrogate_value_issue: `${JSON.stringify(projectBody).slice(0, -1)}${String.raw`,"execution":{"environment":{"\ud800":1}}}`}`,
-    stripped_nested_overflow: `${JSON.stringify(projectBody).slice(0, -1)}${String.raw`,"execution":{"unknown":1e400}}`}`,
-  },
-  "projects.ProjectCreateBodySchema": {
-    malformed_jira_url: String.raw`{"repositoryUrl":"repo","integration":{"tracker":{"kind":"jira","site":"x","project":"APP","emailEnvironment":"JIRA_EMAIL","tokenEnvironment":"JIRA_TOKEN"}}}`,
-    strict_surrogate_key_union: String.raw`{"repositoryUrl":"repo","\ud800":1}`,
-    environment_colliding_surrogate_keys_union: `${JSON.stringify(projectBody).slice(0, -1)}${String.raw`,"execution":{"environment":{"\ud800":"x","\udfff":"y"}}}`}`,
-  },
-  "projects.ProjectResponseSchema": {
-    stripped_surrogate_unknown: `${JSON.stringify({ ...projectBody, id: "project", companyId: "company", createdAt: "now", updatedAt: "now" }).slice(0, -1)}${String.raw`,"\ud800":1}`}`,
-  },
-};
 type Definition = { type: string; innerType?: z.ZodType; element?: z.ZodType; shape?: Record<string, z.ZodType>; options?: z.ZodType[]; entries?: Record<string, string>; values?: unknown[]; keyType?: z.ZodType; valueType?: z.ZodType; items?: z.ZodType[]; in?: z.ZodType; checks?: Array<{ _zod: { def: { check?: string; minimum?: number; value?: number; inclusive?: boolean } } }> };
 const definition = (schema: z.ZodType): Definition => schema._zod.def as Definition;
+const findings = (issues: z.core.$ZodIssue[]) => validationFindings({ validation: issues.map(issue => ({
+  instancePath: `/${issue.path.join("/")}`, keyword: issue.code, message: issue.message,
+})) });
+
 const accepted = (schema: z.ZodType, input: unknown): boolean => schema.safeParse(input).success;
 
 function representative(schema: z.ZodType, includeOptional = false): unknown {
@@ -737,6 +648,7 @@ for (const moduleName of modules) {
   const exports = await import(`../../src/http/contracts/${moduleName}.js`) as Record<string, unknown>;
   for (const [name, candidate] of Object.entries(exports).sort(([left], [right]) => left.localeCompare(right))) {
     if (!name.endsWith("Schema") || !candidate || typeof candidate !== "object" || !("safeParse" in candidate) || typeof candidate.safeParse !== "function") continue;
+    if (name.includes("ResponseSchema") || responseOnlySchemas.has(`${moduleName}.${name}`)) continue;
     const schema = candidate as z.ZodType;
     const contract = `${moduleName}.${name}`;
     const directory = join(root, contract);
@@ -744,7 +656,7 @@ for (const moduleName of modules) {
     schemas++;
     for (const [caseName, input] of Object.entries(inputs)) {
       const parsed = schema.safeParse(input);
-      const fixture: Fixture = { contract, case: caseName, ...(caseName === "missing" ? {} : { input }), expected: parsed.success ? { accepted: true, value: parsed.data } : { accepted: false, error: parsed.error.issues } };
+      const fixture: Fixture = { contract, case: caseName, ...(caseName === "missing" ? {} : { input }), expected: parsed.success ? { accepted: true, value: parsed.data } : { accepted: false, error: findings(parsed.error.issues) } };
       const path = join(directory, `${caseName}.json`);
       const content = `${JSON.stringify(fixture, null, 2)}\n`;
       if (check) {
@@ -756,41 +668,13 @@ for (const moduleName of modules) {
       let expected: Fixture["expected"];
       try {
         const parsed = schema.safeParse(input);
-        expected = parsed.success ? { accepted: true, value: parsed.data } : { accepted: false, error: parsed.error.issues };
+        expected = parsed.success ? { accepted: true, value: parsed.data } : { accepted: false, error: findings(parsed.error.issues) };
       } catch (reason) {
         if (!(reason instanceof Error)) throw reason;
-        const thrown = reason as Error & { code?: string; input?: string };
-        expected = { accepted: false, error: { kind: "thrown", name: thrown.name, code: thrown.code, message: thrown.message, input: thrown.input } };
+        expected = { accepted: false, error: { kind: "thrown" } };
       }
       const fixture: Fixture = { contract, case: caseName, input, expected };
       const path = join(directory, `${caseName}.json`);
-      const content = `${JSON.stringify(fixture, null, 2)}\n`;
-      if (check) {
-        if (await readFile(path, "utf8") !== content) throw new Error(`Stale parity fixture: ${path}`);
-      } else await writeFile(path, content);
-      fixtures++;
-    }
-    for (const [caseName, inputJson] of Object.entries(rawInputs[contract] ?? {})) {
-      const rawInput = JSON.parse(inputJson);
-      let expected: { accepted: boolean; value?: string; error?: string };
-      try {
-        const parsed = schema.safeParse(rawInput);
-        expected = parsed.success
-          ? { accepted: true, value: JSON.stringify(parsed.data) }
-          : { accepted: false, error: JSON.stringify(parsed.error.issues) };
-      } catch (reason) {
-        if (!(reason instanceof Error)) throw reason;
-        const thrown = reason as Error & { code?: string; input?: string };
-        expected = { accepted: false, error: JSON.stringify({ kind: "thrown", name: thrown.name, code: thrown.code, message: thrown.message, input: thrown.input }) };
-      }
-      const fixture = {
-        contract,
-        case: `raw_${caseName}`,
-        encoding: "raw-json",
-        input: inputJson,
-        expected,
-      };
-      const path = join(directory, `raw_${caseName}.json`);
       const content = `${JSON.stringify(fixture, null, 2)}\n`;
       if (check) {
         if (await readFile(path, "utf8") !== content) throw new Error(`Stale parity fixture: ${path}`);
@@ -821,7 +705,7 @@ for (const moduleName of modules) {
       }
       for (const [caseName, candidate] of Object.entries(additions)) {
         const result = schema.safeParse(candidate);
-        const fixture: Fixture = { contract, case: caseName, input: candidate, expected: result.success ? { accepted: true, value: result.data } : { accepted: false, error: result.error.issues } };
+        const fixture: Fixture = { contract, case: caseName, input: candidate, expected: result.success ? { accepted: true, value: result.data } : { accepted: false, error: findings(result.error.issues) } };
         const path = join(directory, `${caseName}.json`);
         const content = `${JSON.stringify(fixture, null, 2)}\n`;
         if (check) {
@@ -877,7 +761,7 @@ for (const [contract, { schema, cases }] of Object.entries(projectDependencies))
   if (!check) await mkdir(directory, { recursive: true });
   for (const [caseName, input] of Object.entries(cases)) {
     const parsed = schema.safeParse(input);
-    const fixture = { contract, case: caseName, input, expected: parsed.success ? { accepted: true, value: parsed.data } : { accepted: false, error: parsed.error.issues } };
+    const fixture = { contract, case: caseName, input, expected: parsed.success ? { accepted: true, value: parsed.data } : { accepted: false, error: findings(parsed.error.issues) } };
     const path = join(directory, `${caseName}.json`);
     const content = `${JSON.stringify(fixture, null, 2)}\n`;
     if (check) {

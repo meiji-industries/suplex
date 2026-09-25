@@ -15,25 +15,14 @@
     "accepted": false,
     "error": [
       {
-        "code": "invalid_value",
-        "values": [
-          "opencode",
-          "claude-code",
-          "devin",
-          "codex"
-        ],
-        "path": [
-          "provider"
-        ],
-        "message": "Invalid option: expected one of \"opencode\"|\"claude-code\"|\"devin\"|\"codex\""
+        "code": "invalid-invalid_value",
+        "field": ".provider",
+        "message": "Request value is invalid"
       },
       {
-        "code": "unrecognized_keys",
-        "keys": [
-          "extra"
-        ],
-        "path": [],
-        "message": "Unrecognized key: \"extra\""
+        "code": "invalid-unrecognized_keys",
+        "field": ".",
+        "message": "Request value is invalid"
       }
     ]
   }

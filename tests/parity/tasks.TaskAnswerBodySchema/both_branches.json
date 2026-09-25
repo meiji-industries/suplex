@@ -12,31 +12,9 @@
     "accepted": false,
     "error": [
       {
-        "code": "invalid_union",
-        "errors": [
-          [
-            {
-              "code": "unrecognized_keys",
-              "keys": [
-                "limitDecision"
-              ],
-              "path": [],
-              "message": "Unrecognized key: \"limitDecision\""
-            }
-          ],
-          [
-            {
-              "code": "unrecognized_keys",
-              "keys": [
-                "answer"
-              ],
-              "path": [],
-              "message": "Unrecognized key: \"answer\""
-            }
-          ]
-        ],
-        "path": [],
-        "message": "Invalid input"
+        "code": "invalid-invalid_union",
+        "field": ".",
+        "message": "Request value is invalid"
       }
     ]
   }

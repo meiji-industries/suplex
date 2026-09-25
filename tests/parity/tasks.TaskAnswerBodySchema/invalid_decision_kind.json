@@ -11,47 +11,9 @@
     "accepted": false,
     "error": [
       {
-        "code": "invalid_union",
-        "errors": [
-          [
-            {
-              "expected": "string",
-              "code": "invalid_type",
-              "path": [
-                "answer"
-              ],
-              "message": "Invalid input: expected string, received undefined"
-            },
-            {
-              "code": "unrecognized_keys",
-              "keys": [
-                "limitDecision"
-              ],
-              "path": [],
-              "message": "Unrecognized key: \"limitDecision\""
-            }
-          ],
-          [
-            {
-              "code": "invalid_union",
-              "errors": [],
-              "note": "No matching discriminator",
-              "discriminator": "kind",
-              "options": [
-                "add_allowance",
-                "change_limits",
-                "cancel_task"
-              ],
-              "path": [
-                "limitDecision",
-                "kind"
-              ],
-              "message": "Invalid discriminator value. Expected 'add_allowance' | 'change_limits' | 'cancel_task'"
-            }
-          ]
-        ],
-        "path": [],
-        "message": "Invalid input"
+        "code": "invalid-invalid_union",
+        "field": ".",
+        "message": "Request value is invalid"
       }
     ]
   }

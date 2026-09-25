@@ -8,12 +8,9 @@
     "accepted": false,
     "error": [
       {
-        "expected": "boolean",
-        "code": "invalid_type",
-        "path": [
-          "confirmDiscardDirty"
-        ],
-        "message": "Invalid input: expected boolean, received null"
+        "code": "invalid-invalid_type",
+        "field": ".confirmDiscardDirty",
+        "message": "Request value is invalid"
       }
     ]
   }

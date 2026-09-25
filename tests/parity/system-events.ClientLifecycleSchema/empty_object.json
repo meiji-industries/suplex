@@ -6,62 +6,34 @@
     "accepted": false,
     "error": [
       {
-        "code": "invalid_value",
-        "values": [
-          "startup",
-          "resumed",
-          "api_activity",
-          "pageshow",
-          "pagehide",
-          "visible",
-          "hidden",
-          "online",
-          "offline"
-        ],
-        "path": [
-          "state"
-        ],
-        "message": "Invalid option: expected one of \"startup\"|\"resumed\"|\"api_activity\"|\"pageshow\"|\"pagehide\"|\"visible\"|\"hidden\"|\"online\"|\"offline\""
+        "code": "invalid-invalid_value",
+        "field": ".state",
+        "message": "Request value is invalid"
       },
       {
-        "expected": "string",
-        "code": "invalid_type",
-        "path": [
-          "tabId"
-        ],
-        "message": "Invalid input: expected string, received undefined"
+        "code": "invalid-invalid_type",
+        "field": ".tabId",
+        "message": "Request value is invalid"
       },
       {
-        "expected": "string",
-        "code": "invalid_type",
-        "path": [
-          "documentId"
-        ],
-        "message": "Invalid input: expected string, received undefined"
+        "code": "invalid-invalid_type",
+        "field": ".documentId",
+        "message": "Request value is invalid"
       },
       {
-        "expected": "string",
-        "code": "invalid_type",
-        "path": [
-          "clientTime"
-        ],
-        "message": "Invalid input: expected string, received undefined"
+        "code": "invalid-invalid_type",
+        "field": ".clientTime",
+        "message": "Request value is invalid"
       },
       {
-        "expected": "boolean",
-        "code": "invalid_type",
-        "path": [
-          "visible"
-        ],
-        "message": "Invalid input: expected boolean, received undefined"
+        "code": "invalid-invalid_type",
+        "field": ".visible",
+        "message": "Request value is invalid"
       },
       {
-        "expected": "boolean",
-        "code": "invalid_type",
-        "path": [
-          "online"
-        ],
-        "message": "Invalid input: expected boolean, received undefined"
+        "code": "invalid-invalid_type",
+        "field": ".online",
+        "message": "Request value is invalid"
       }
     ]
   }

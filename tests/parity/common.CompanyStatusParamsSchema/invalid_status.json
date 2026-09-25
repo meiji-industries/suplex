@@ -9,16 +9,9 @@
     "accepted": false,
     "error": [
       {
-        "code": "invalid_value",
-        "values": [
-          "active",
-          "paused",
-          "archived"
-        ],
-        "path": [
-          "status"
-        ],
-        "message": "Invalid option: expected one of \"active\"|\"paused\"|\"archived\""
+        "code": "invalid-invalid_value",
+        "field": ".status",
+        "message": "Request value is invalid"
       }
     ]
   }

@@ -36,12 +36,9 @@
     "accepted": false,
     "error": [
       {
-        "expected": "object",
-        "code": "invalid_type",
-        "path": [
-          "integration"
-        ],
-        "message": "Invalid input: expected object, received null"
+        "code": "invalid-invalid_type",
+        "field": ".integration",
+        "message": "Request value is invalid"
       }
     ]
   }

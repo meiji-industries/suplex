@@ -8,14 +8,9 @@
     "accepted": false,
     "error": [
       {
-        "code": "invalid_value",
-        "values": [
-          "true"
-        ],
-        "path": [
-          "includeArchived"
-        ],
-        "message": "Invalid input: expected \"true\""
+        "code": "invalid-invalid_value",
+        "field": ".includeArchived",
+        "message": "Request value is invalid"
       }
     ]
   }

@@ -15,17 +15,9 @@
     "accepted": false,
     "error": [
       {
-        "code": "too_big",
-        "maximum": 9007199254740991,
-        "note": "Integers must be within the safe integer range.",
-        "origin": "int",
-        "inclusive": true,
-        "path": [
-          "limitDecision",
-          "limits",
-          "maxTurns"
-        ],
-        "message": "Too big: expected int to be <=9007199254740991"
+        "code": "invalid-too_big",
+        "field": ".limitDecision.limits.maxTurns",
+        "message": "Request value is invalid"
       }
     ]
   }

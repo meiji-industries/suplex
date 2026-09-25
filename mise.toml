@@ -74,7 +74,7 @@ pnpm exec tsx tests/parity/generate.ts
 pnpm exec tsx tests/parity/hash-bytes/generate.ts
 cd rust
 unset RUSTUP_TOOLCHAIN
-cargo test --test contract_parity --test hash_bytes --test raw_contract_parity
+cargo test --test contract_parity --test hash_bytes
 cargo test --lib signed_typescript_and_rust_services_share_credentials_and_sessions_both_directions -- --ignored --nocapture
 '''
 

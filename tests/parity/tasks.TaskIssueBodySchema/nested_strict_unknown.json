@@ -17,14 +17,9 @@
     "accepted": false,
     "error": [
       {
-        "code": "unrecognized_keys",
-        "keys": [
-          "extra"
-        ],
-        "path": [
-          "issue"
-        ],
-        "message": "Unrecognized key: \"extra\""
+        "code": "invalid-unrecognized_keys",
+        "field": ".issue",
+        "message": "Request value is invalid"
       }
     ]
   }

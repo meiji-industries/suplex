@@ -6,15 +6,9 @@
     "accepted": false,
     "error": [
       {
-        "code": "invalid_value",
-        "values": [
-          "pull_request_ready",
-          "merged"
-        ],
-        "path": [
-          "deliveryTarget"
-        ],
-        "message": "Invalid option: expected one of \"pull_request_ready\"|\"merged\""
+        "code": "invalid-invalid_value",
+        "field": ".deliveryTarget",
+        "message": "Request value is invalid"
       }
     ]
   }

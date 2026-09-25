@@ -12,19 +12,9 @@
     "accepted": false,
     "error": [
       {
-        "code": "invalid_value",
-        "values": [
-          "root",
-          "worker",
-          "reviewer",
-          "planner_a",
-          "planner_b",
-          "rater"
-        ],
-        "path": [
-          "role"
-        ],
-        "message": "Invalid option: expected one of \"root\"|\"worker\"|\"reviewer\"|\"planner_a\"|\"planner_b\"|\"rater\""
+        "code": "invalid-invalid_value",
+        "field": ".role",
+        "message": "Request value is invalid"
       }
     ]
   }

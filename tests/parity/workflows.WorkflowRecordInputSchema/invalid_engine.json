@@ -9,18 +9,9 @@
     "accepted": false,
     "error": [
       {
-        "code": "invalid_value",
-        "values": [
-          "standard",
-          "direct_build",
-          "independent_review",
-          "competing_plans",
-          "refine_pull_request"
-        ],
-        "path": [
-          "engine"
-        ],
-        "message": "Invalid option: expected one of \"standard\"|\"direct_build\"|\"independent_review\"|\"competing_plans\"|\"refine_pull_request\""
+        "code": "invalid-invalid_value",
+        "field": ".engine",
+        "message": "Request value is invalid"
       }
     ]
   }

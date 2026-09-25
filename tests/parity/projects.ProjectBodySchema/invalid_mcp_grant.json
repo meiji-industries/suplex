@@ -37,19 +37,9 @@
     "accepted": false,
     "error": [
       {
-        "origin": "string",
-        "code": "invalid_format",
-        "format": "regex",
-        "pattern": "/^[A-Za-z0-9_-]+$/",
-        "path": [
-          "execution",
-          "mcp",
-          0,
-          "grants",
-          "root",
-          0
-        ],
-        "message": "Invalid string: must match pattern /^[A-Za-z0-9_-]+$/"
+        "code": "invalid-invalid_format",
+        "field": ".execution.mcp.0.grants.root.0",
+        "message": "Request value is invalid"
       }
     ]
   }

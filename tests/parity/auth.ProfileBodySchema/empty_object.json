@@ -6,9 +6,9 @@
     "accepted": false,
     "error": [
       {
-        "code": "custom",
-        "path": [],
-        "message": "Invalid input"
+        "code": "invalid-custom",
+        "field": ".",
+        "message": "Request value is invalid"
       }
     ]
   }

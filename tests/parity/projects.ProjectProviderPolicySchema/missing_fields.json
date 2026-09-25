@@ -6,20 +6,14 @@
     "accepted": false,
     "error": [
       {
-        "expected": "array",
-        "code": "invalid_type",
-        "path": [
-          "allowedProviders"
-        ],
-        "message": "Invalid input: expected array, received undefined"
+        "code": "invalid-invalid_type",
+        "field": ".allowedProviders",
+        "message": "Request value is invalid"
       },
       {
-        "expected": "array",
-        "code": "invalid_type",
-        "path": [
-          "allowedInstanceIds"
-        ],
-        "message": "Invalid input: expected array, received undefined"
+        "code": "invalid-invalid_type",
+        "field": ".allowedInstanceIds",
+        "message": "Request value is invalid"
       }
     ]
   }

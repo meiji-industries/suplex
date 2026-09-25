@@ -8,15 +8,9 @@
     "accepted": false,
     "error": [
       {
-        "code": "invalid_value",
-        "values": [
-          "wait_for_dependency",
-          "resume"
-        ],
-        "path": [
-          "decision"
-        ],
-        "message": "Invalid option: expected one of \"wait_for_dependency\"|\"resume\""
+        "code": "invalid-invalid_value",
+        "field": ".decision",
+        "message": "Request value is invalid"
       }
     ]
   }

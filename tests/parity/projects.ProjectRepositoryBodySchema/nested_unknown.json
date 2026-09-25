@@ -15,25 +15,14 @@
     "accepted": false,
     "error": [
       {
-        "code": "unrecognized_keys",
-        "keys": [
-          "extra"
-        ],
-        "path": [
-          "integration",
-          "repository"
-        ],
-        "message": "Unrecognized key: \"extra\""
+        "code": "invalid-unrecognized_keys",
+        "field": ".integration.repository",
+        "message": "Request value is invalid"
       },
       {
-        "code": "unrecognized_keys",
-        "keys": [
-          "extra"
-        ],
-        "path": [
-          "integration"
-        ],
-        "message": "Unrecognized key: \"extra\""
+        "code": "invalid-unrecognized_keys",
+        "field": ".integration",
+        "message": "Request value is invalid"
       }
     ]
   }

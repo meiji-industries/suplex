@@ -17,47 +17,24 @@
     "accepted": false,
     "error": [
       {
-        "origin": "string",
-        "code": "too_small",
-        "minimum": 1,
-        "inclusive": true,
-        "path": [
-          "dependsOn",
-          0
-        ],
-        "message": "Too small: expected string to have >=1 characters"
+        "code": "invalid-too_small",
+        "field": ".dependsOn.0",
+        "message": "Request value is invalid"
       },
       {
-        "expected": "string",
-        "code": "invalid_type",
-        "path": [
-          "dependsOn",
-          1
-        ],
-        "message": "Invalid input: expected string, received null"
+        "code": "invalid-invalid_type",
+        "field": ".dependsOn.1",
+        "message": "Request value is invalid"
       },
       {
-        "origin": "number",
-        "code": "too_small",
-        "minimum": 0,
-        "inclusive": false,
-        "path": [
-          "blockedByPullRequests",
-          0,
-          "number"
-        ],
-        "message": "Too small: expected number to be >0"
+        "code": "invalid-too_small",
+        "field": ".blockedByPullRequests.0.number",
+        "message": "Request value is invalid"
       },
       {
-        "code": "unrecognized_keys",
-        "keys": [
-          "extra"
-        ],
-        "path": [
-          "blockedByPullRequests",
-          0
-        ],
-        "message": "Unrecognized key: \"extra\""
+        "code": "invalid-unrecognized_keys",
+        "field": ".blockedByPullRequests.0",
+        "message": "Request value is invalid"
       }
     ]
   }

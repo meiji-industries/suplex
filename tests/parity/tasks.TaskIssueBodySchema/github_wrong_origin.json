@@ -16,20 +16,14 @@
     "accepted": false,
     "error": [
       {
-        "code": "custom",
-        "path": [
-          "issue",
-          "url"
-        ],
-        "message": "Invalid input"
+        "code": "invalid-custom",
+        "field": ".issue.url",
+        "message": "Request value is invalid"
       },
       {
-        "code": "custom",
-        "message": "Issue URL must match its tracker identity",
-        "path": [
-          "issue",
-          "url"
-        ]
+        "code": "invalid-custom",
+        "field": ".issue.url",
+        "message": "Request value is invalid"
       }
     ]
   }

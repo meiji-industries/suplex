@@ -8,13 +8,9 @@
     "accepted": false,
     "error": [
       {
-        "expected": "number",
-        "code": "invalid_type",
-        "received": "Infinity",
-        "path": [
-          "expectedRevision"
-        ],
-        "message": "Invalid input: expected number, received number"
+        "code": "invalid-invalid_type",
+        "field": ".expectedRevision",
+        "message": "Request value is invalid"
       }
     ]
   }

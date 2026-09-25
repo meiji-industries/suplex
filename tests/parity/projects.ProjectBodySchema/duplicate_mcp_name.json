@@ -58,12 +58,9 @@
     "accepted": false,
     "error": [
       {
-        "code": "custom",
-        "path": [
-          "execution",
-          "mcp"
-        ],
-        "message": "MCP server names must be unique"
+        "code": "invalid-custom",
+        "field": ".execution.mcp",
+        "message": "Request value is invalid"
       }
     ]
   }

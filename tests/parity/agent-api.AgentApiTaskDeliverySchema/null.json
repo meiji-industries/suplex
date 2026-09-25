@@ -1,9 +1,0 @@
-{
-  "contract": "agent-api.AgentApiTaskDeliverySchema",
-  "case": "null",
-  "input": null,
-  "expected": {
-    "accepted": true,
-    "value": null
-  }
-}

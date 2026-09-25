@@ -1,9 +1,0 @@
-{
-  "contract": "tasks.TaskAgentStatusSchema",
-  "case": "known_status",
-  "input": "waiting_human",
-  "expected": {
-    "accepted": true,
-    "value": "waiting_human"
-  }
-}

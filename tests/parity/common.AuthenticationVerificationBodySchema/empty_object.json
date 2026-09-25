@@ -6,12 +6,9 @@
     "accepted": false,
     "error": [
       {
-        "code": "invalid_type",
-        "expected": "nonoptional",
-        "path": [
-          "response"
-        ],
-        "message": "Invalid input: expected nonoptional, received undefined"
+        "code": "invalid-invalid_type",
+        "field": ".response",
+        "message": "Request value is invalid"
       }
     ]
   }

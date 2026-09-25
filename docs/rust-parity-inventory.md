@@ -8,7 +8,7 @@ The table lists all 238 backend TypeScript modules present at the baseline, incl
 
 Current sequence: use Serde/Garde requests and public validation findings, Serialize responses with raw HTTP checks, and library WebAuthn verification; then complete one Codex Standard task through the UI with cancellation and restart recovery. Other API breadth is deferred. Remove the UTF-16 document model, raw-JSON fixtures and response-schema fixtures; retain the hash serializer. Git2 and GitHub API/keychain integration follow their M2/M3 delivery seams. Historic checks below do not verify their replacements.
 
-Validation baseline: before this cleanup, the latest isolated Rust snapshot passed 63 unit tests and six integration cases; 89 HTTP schemas had ordinary corpus coverage. The TypeScript full suite passed 1,613/1,623 tests: seven failures reproduce at pre-port `a57a47f5`, and three Devin failures pass focused reruns. Hosted CI, both macOS packages, full provider/task execution, switching, and the eight-hour run remain unverified. Final snapshots use separate Cargo target directories after an earlier shared-target collision made staged-artifact evidence unreliable.
+Request corpus: 1,139 fixtures across 95 request exports plus 18 stored-project cases. The public-findings pivot passes 876 comparisons across 63 implemented request schemas and three hash tests in a private staged export; generator, typecheck, ESLint, formatting and Clippy pass. This does not verify the pending typed-DTO replacement. The TypeScript full suite baseline is 1,613/1,623: seven failures reproduce at pre-port `a57a47f5`, and three Devin failures pass focused reruns. Hosted CI, packages, full task execution, switching, and the eight-hour run remain unverified. Final snapshots use separate Cargo targets after an earlier shared-target collision.
 
 | TypeScript source | Status | Rust equivalent and evidence |
 |---|---|---|
@@ -63,7 +63,7 @@ Validation baseline: before this cleanup, the latest isolated Rust snapshot pass
 | [http/contracts/tasks.ts](../src/http/contracts/tasks.ts) | not started | `7b49a179`, `f3f65930`, `65612746`, `a7eb5238`, `2b8ba630`, `e15a46b5`: task parameters, commands, body and control requests tested; next contract work is limited to M2 requests/responses. |
 | [http/contracts/update.ts](../src/http/contracts/update.ts) | not started | |
 | [http/contracts/workflows.ts](../src/http/contracts/workflows.ts) | ported | `09e3ded3`: six record/input/patch/list schemas passed corpus checks; replacing special JSON rules with typed requests as routes need them. |
-| [http/errors.ts](../src/http/errors.ts) | not started | `c9295428`: shared validation error mapping tested; special UTF-16 issue machinery is being replaced by small ordinary JSON helpers. |
+| [http/errors.ts](../src/http/errors.ts) | not started | Tested corpus pivot pending commit: existing validationFindings exported unchanged; request fixtures compare public findings. Removed100 response-only groups and65 raw fixtures; independent review and private corpus/hash/TS/lint checks pass. Production DTO mapper remains in progress |
 | [http/oauth-runtime.ts](../src/http/oauth-runtime.ts) | not started | |
 | [http/routes/administration.ts](../src/http/routes/administration.ts) | not started | `e49977ee`, `99c6e5f8`, `f23bab60`: known-route registration and identity/profile administration tested; wider administration deferred. |
 | [http/routes/agent-api.ts](../src/http/routes/agent-api.ts) | not started | |
@@ -123,7 +123,7 @@ Validation baseline: before this cleanup, the latest isolated Rust snapshot pass
 | [platform/artifacts.ts](../src/platform/artifacts.ts) | not started | |
 | [platform/backup.ts](../src/platform/backup.ts) | not started | |
 | [platform/command-runner.ts](../src/platform/command-runner.ts) | not started | |
-| [platform/config.ts](../src/platform/config.ts) | not started | `924c9efe`: isolated defaults/port; tested task correction pending commit: plain cargo selects nested toolchain, config2/2 and isolated root/listener checks pass, Clippy passes. Full configuration pending |
+| [platform/config.ts](../src/platform/config.ts) | not started | `924c9efe`: isolated defaults/port; `cd7c1f93`: plain cargo selects nested toolchain, config2/2 and isolated root/listener checks pass, Clippy passes. Full configuration pending |
 | [platform/database.ts](../src/platform/database.ts) | verified | `0555c057`: all149 migrations,155 schema rows, transactions/savepoints/callbacks/rollback/read-only/rebuild and TS↔Rust reopening pass; callers must preserve each source transaction boundary. |
 | [platform/development.ts](../src/platform/development.ts) | not started | |
 | [platform/diagnostics/doctor.ts](../src/platform/diagnostics/doctor.ts) | not started | |

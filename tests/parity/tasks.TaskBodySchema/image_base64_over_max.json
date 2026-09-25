@@ -17,16 +17,9 @@
     "accepted": false,
     "error": [
       {
-        "origin": "string",
-        "code": "too_big",
-        "maximum": 11184812,
-        "inclusive": true,
-        "path": [
-          "images",
-          0,
-          "base64"
-        ],
-        "message": "Too big: expected string to have <=11184812 characters"
+        "code": "invalid-too_big",
+        "field": ".images.0.base64",
+        "message": "Request value is invalid"
       }
     ]
   }

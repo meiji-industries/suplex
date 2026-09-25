@@ -15,25 +15,14 @@
     "accepted": false,
     "error": [
       {
-        "origin": "number",
-        "code": "too_small",
-        "minimum": 0,
-        "inclusive": false,
-        "path": [
-          "source",
-          "number"
-        ],
-        "message": "Too small: expected number to be >0"
+        "code": "invalid-too_small",
+        "field": ".source.number",
+        "message": "Request value is invalid"
       },
       {
-        "code": "unrecognized_keys",
-        "keys": [
-          "extra"
-        ],
-        "path": [
-          "source"
-        ],
-        "message": "Unrecognized key: \"extra\""
+        "code": "invalid-unrecognized_keys",
+        "field": ".source",
+        "message": "Request value is invalid"
       }
     ]
   }

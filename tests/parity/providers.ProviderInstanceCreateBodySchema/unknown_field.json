@@ -8,25 +8,14 @@
     "accepted": false,
     "error": [
       {
-        "code": "invalid_value",
-        "values": [
-          "opencode",
-          "claude-code",
-          "devin",
-          "codex"
-        ],
-        "path": [
-          "provider"
-        ],
-        "message": "Invalid option: expected one of \"opencode\"|\"claude-code\"|\"devin\"|\"codex\""
+        "code": "invalid-invalid_value",
+        "field": ".provider",
+        "message": "Request value is invalid"
       },
       {
-        "expected": "string",
-        "code": "invalid_type",
-        "path": [
-          "label"
-        ],
-        "message": "Invalid input: expected string, received undefined"
+        "code": "invalid-invalid_type",
+        "field": ".label",
+        "message": "Request value is invalid"
       }
     ]
   }

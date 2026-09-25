@@ -8,29 +8,9 @@
     "accepted": false,
     "error": [
       {
-        "code": "invalid_union",
-        "errors": [
-          [
-            {
-              "expected": "string",
-              "code": "invalid_type",
-              "path": [],
-              "message": "Invalid input: expected string, received null"
-            }
-          ],
-          [
-            {
-              "expected": "array",
-              "code": "invalid_type",
-              "path": [],
-              "message": "Invalid input: expected array, received null"
-            }
-          ]
-        ],
-        "path": [
-          "taskId"
-        ],
-        "message": "Invalid input"
+        "code": "invalid-invalid_union",
+        "field": ".taskId",
+        "message": "Request value is invalid"
       }
     ]
   }

@@ -15,58 +15,34 @@
     "accepted": false,
     "error": [
       {
-        "origin": "string",
-        "code": "too_small",
-        "minimum": 1,
-        "inclusive": true,
-        "path": [
-          "expectedProfileId"
-        ],
-        "message": "Too small: expected string to have >=1 characters"
+        "code": "invalid-too_small",
+        "field": ".expectedProfileId",
+        "message": "Request value is invalid"
       },
       {
-        "origin": "string",
-        "code": "too_small",
-        "minimum": 1,
-        "inclusive": true,
-        "path": [
-          "expectedSessionId"
-        ],
-        "message": "Too small: expected string to have >=1 characters"
+        "code": "invalid-too_small",
+        "field": ".expectedSessionId",
+        "message": "Request value is invalid"
       },
       {
-        "expected": "string",
-        "code": "invalid_type",
-        "path": [
-          "profileId"
-        ],
-        "message": "Invalid input: expected string, received null"
+        "code": "invalid-invalid_type",
+        "field": ".profileId",
+        "message": "Request value is invalid"
       },
       {
-        "expected": "string",
-        "code": "invalid_type",
-        "path": [
-          "direction"
-        ],
-        "message": "Invalid input: expected string, received number"
+        "code": "invalid-invalid_type",
+        "field": ".direction",
+        "message": "Request value is invalid"
       },
       {
-        "origin": "string",
-        "code": "too_small",
-        "minimum": 1,
-        "inclusive": true,
-        "path": [
-          "questionId"
-        ],
-        "message": "Too small: expected string to have >=1 characters"
+        "code": "invalid-too_small",
+        "field": ".questionId",
+        "message": "Request value is invalid"
       },
       {
-        "code": "unrecognized_keys",
-        "keys": [
-          "extra"
-        ],
-        "path": [],
-        "message": "Unrecognized key: \"extra\""
+        "code": "invalid-unrecognized_keys",
+        "field": ".",
+        "message": "Request value is invalid"
       }
     ]
   }

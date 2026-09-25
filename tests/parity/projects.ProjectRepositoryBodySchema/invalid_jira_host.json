@@ -17,13 +17,9 @@
     "accepted": false,
     "error": [
       {
-        "code": "custom",
-        "path": [
-          "integration",
-          "tracker",
-          "site"
-        ],
-        "message": "Invalid input"
+        "code": "invalid-custom",
+        "field": ".integration.tracker.site",
+        "message": "Request value is invalid"
       }
     ]
   }

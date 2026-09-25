@@ -6,18 +6,14 @@
     "accepted": false,
     "error": [
       {
-        "expected": "string",
-        "code": "invalid_type",
-        "path": [],
-        "message": "Invalid input: expected string, received array"
+        "code": "invalid-invalid_type",
+        "field": ".",
+        "message": "Request value is invalid"
       },
       {
-        "origin": "array",
-        "code": "too_small",
-        "minimum": 1,
-        "inclusive": true,
-        "path": [],
-        "message": "Too small: expected array to have >=1 items"
+        "code": "invalid-too_small",
+        "field": ".",
+        "message": "Request value is invalid"
       }
     ]
   }

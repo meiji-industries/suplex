@@ -17,13 +17,9 @@
     "accepted": false,
     "error": [
       {
-        "code": "custom",
-        "path": [
-          "images",
-          0,
-          "filename"
-        ],
-        "message": "Invalid input"
+        "code": "invalid-custom",
+        "field": ".images.0.filename",
+        "message": "Request value is invalid"
       }
     ]
   }

@@ -22,14 +22,9 @@
     "accepted": false,
     "error": [
       {
-        "expected": "string",
-        "code": "invalid_type",
-        "path": [
-          "advisorProfileIds",
-          "reviewer",
-          0
-        ],
-        "message": "Invalid input: expected string, received null"
+        "code": "invalid-invalid_type",
+        "field": ".advisorProfileIds.reviewer.0",
+        "message": "Request value is invalid"
       }
     ]
   }

@@ -11,31 +11,9 @@
     "accepted": false,
     "error": [
       {
-        "code": "invalid_union",
-        "errors": [
-          [
-            {
-              "expected": "string",
-              "code": "invalid_type",
-              "path": [],
-              "message": "Invalid input: expected string, received array"
-            }
-          ],
-          [
-            {
-              "expected": "string",
-              "code": "invalid_type",
-              "path": [
-                1
-              ],
-              "message": "Invalid input: expected string, received null"
-            }
-          ]
-        ],
-        "path": [
-          "taskId"
-        ],
-        "message": "Invalid input"
+        "code": "invalid-invalid_union",
+        "field": ".taskId",
+        "message": "Request value is invalid"
       }
     ]
   }

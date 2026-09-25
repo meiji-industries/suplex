@@ -8,85 +8,44 @@
     "accepted": false,
     "error": [
       {
-        "code": "invalid_value",
-        "values": [
-          "opencode",
-          "claude-code",
-          "devin",
-          "codex"
-        ],
-        "path": [
-          "provider"
-        ],
-        "message": "Invalid option: expected one of \"opencode\"|\"claude-code\"|\"devin\"|\"codex\""
+        "code": "invalid-invalid_value",
+        "field": ".provider",
+        "message": "Request value is invalid"
       },
       {
-        "expected": "string",
-        "code": "invalid_type",
-        "path": [
-          "model"
-        ],
-        "message": "Invalid input: expected string, received undefined"
+        "code": "invalid-invalid_type",
+        "field": ".model",
+        "message": "Request value is invalid"
       },
       {
-        "code": "invalid_value",
-        "values": [
-          "low",
-          "medium",
-          "high",
-          "xhigh",
-          "max"
-        ],
-        "path": [
-          "reasoningLevel"
-        ],
-        "message": "Invalid option: expected one of \"low\"|\"medium\"|\"high\"|\"xhigh\"|\"max\""
+        "code": "invalid-invalid_value",
+        "field": ".reasoningLevel",
+        "message": "Request value is invalid"
       },
       {
-        "code": "invalid_value",
-        "values": [
-          "default",
-          "priority"
-        ],
-        "path": [
-          "serviceTier"
-        ],
-        "message": "Invalid option: expected one of \"default\"|\"priority\""
+        "code": "invalid-invalid_value",
+        "field": ".serviceTier",
+        "message": "Request value is invalid"
       },
       {
-        "expected": "string",
-        "code": "invalid_type",
-        "path": [
-          "name"
-        ],
-        "message": "Invalid input: expected string, received undefined"
+        "code": "invalid-invalid_type",
+        "field": ".name",
+        "message": "Request value is invalid"
       },
       {
-        "code": "invalid_value",
-        "values": [
-          "root",
-          "worker"
-        ],
-        "path": [
-          "role"
-        ],
-        "message": "Invalid option: expected one of \"root\"|\"worker\""
+        "code": "invalid-invalid_value",
+        "field": ".role",
+        "message": "Request value is invalid"
       },
       {
-        "expected": "string",
-        "code": "invalid_type",
-        "path": [
-          "avatarSeed"
-        ],
-        "message": "Invalid input: expected string, received undefined"
+        "code": "invalid-invalid_type",
+        "field": ".avatarSeed",
+        "message": "Request value is invalid"
       },
       {
-        "code": "unrecognized_keys",
-        "keys": [
-          "unexpected"
-        ],
-        "path": [],
-        "message": "Unrecognized key: \"unexpected\""
+        "code": "invalid-unrecognized_keys",
+        "field": ".",
+        "message": "Request value is invalid"
       }
     ]
   }

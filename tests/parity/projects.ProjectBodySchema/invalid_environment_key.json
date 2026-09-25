@@ -21,21 +21,9 @@
     "accepted": false,
     "error": [
       {
-        "code": "invalid_key",
-        "origin": "record",
-        "issues": [
-          {
-            "code": "custom",
-            "path": [],
-            "message": "Provider routing variables are not project environment values"
-          }
-        ],
-        "path": [
-          "execution",
-          "environment",
-          "HOME"
-        ],
-        "message": "Invalid key in record"
+        "code": "invalid-invalid_key",
+        "field": ".execution.environment.HOME",
+        "message": "Request value is invalid"
       }
     ]
   }

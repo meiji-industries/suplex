@@ -8,14 +8,9 @@
     "accepted": false,
     "error": [
       {
-        "origin": "number",
-        "code": "too_small",
-        "minimum": 0,
-        "inclusive": true,
-        "path": [
-          "expectedRevision"
-        ],
-        "message": "Too small: expected number to be >=0"
+        "code": "invalid-too_small",
+        "field": ".expectedRevision",
+        "message": "Request value is invalid"
       }
     ]
   }

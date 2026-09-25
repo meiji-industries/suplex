@@ -11,15 +11,9 @@
     "accepted": false,
     "error": [
       {
-        "origin": "string",
-        "code": "invalid_format",
-        "format": "regex",
-        "pattern": "/^[A-Z][A-Z0-9_]{0,127}$/",
-        "path": [
-          "repository",
-          "tokenEnvironment"
-        ],
-        "message": "Invalid string: must match pattern /^[A-Z][A-Z0-9_]{0,127}$/"
+        "code": "invalid-invalid_format",
+        "field": ".repository.tokenEnvironment",
+        "message": "Request value is invalid"
       }
     ]
   }

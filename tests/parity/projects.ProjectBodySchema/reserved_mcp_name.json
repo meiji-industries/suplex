@@ -39,14 +39,9 @@
     "accepted": false,
     "error": [
       {
-        "code": "custom",
-        "path": [
-          "execution",
-          "mcp",
-          0,
-          "name"
-        ],
-        "message": "Suplex server names are reserved"
+        "code": "invalid-custom",
+        "field": ".execution.mcp.0.name",
+        "message": "Request value is invalid"
       }
     ]
   }

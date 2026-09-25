@@ -8,14 +8,9 @@
     "accepted": false,
     "error": [
       {
-        "origin": "string",
-        "code": "too_big",
-        "maximum": 512,
-        "inclusive": true,
-        "path": [
-          "before"
-        ],
-        "message": "Too big: expected string to have <=512 characters"
+        "code": "invalid-too_big",
+        "field": ".before",
+        "message": "Request value is invalid"
       }
     ]
   }

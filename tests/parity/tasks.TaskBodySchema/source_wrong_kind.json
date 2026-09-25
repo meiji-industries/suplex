@@ -14,20 +14,9 @@
     "accepted": false,
     "error": [
       {
-        "code": "invalid_union",
-        "errors": [],
-        "note": "No matching discriminator",
-        "discriminator": "kind",
-        "options": [
-          "issue",
-          "branch",
-          "pull_request"
-        ],
-        "path": [
-          "source",
-          "kind"
-        ],
-        "message": "Invalid discriminator value. Expected 'issue' | 'branch' | 'pull_request'"
+        "code": "invalid-invalid_union",
+        "field": ".source.kind",
+        "message": "Request value is invalid"
       }
     ]
   }

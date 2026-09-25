@@ -17,16 +17,9 @@
     "accepted": false,
     "error": [
       {
-        "origin": "string",
-        "code": "too_big",
-        "maximum": 255,
-        "inclusive": true,
-        "path": [
-          "images",
-          0,
-          "filename"
-        ],
-        "message": "Too big: expected string to have <=255 characters"
+        "code": "invalid-too_big",
+        "field": ".images.0.filename",
+        "message": "Request value is invalid"
       }
     ]
   }

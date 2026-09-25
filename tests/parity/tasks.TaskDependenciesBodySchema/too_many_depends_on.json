@@ -60,14 +60,9 @@
     "accepted": false,
     "error": [
       {
-        "origin": "array",
-        "code": "too_big",
-        "maximum": 50,
-        "inclusive": true,
-        "path": [
-          "dependsOn"
-        ],
-        "message": "Too big: expected array to have <=50 items"
+        "code": "invalid-too_big",
+        "field": ".dependsOn",
+        "message": "Request value is invalid"
       }
     ]
   }

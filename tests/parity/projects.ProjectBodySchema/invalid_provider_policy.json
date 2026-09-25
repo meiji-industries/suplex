@@ -24,31 +24,14 @@
     "accepted": false,
     "error": [
       {
-        "code": "invalid_value",
-        "values": [
-          "opencode",
-          "claude-code",
-          "devin",
-          "codex"
-        ],
-        "path": [
-          "providerPolicy",
-          "allowedProviders",
-          0
-        ],
-        "message": "Invalid option: expected one of \"opencode\"|\"claude-code\"|\"devin\"|\"codex\""
+        "code": "invalid-invalid_value",
+        "field": ".providerPolicy.allowedProviders.0",
+        "message": "Request value is invalid"
       },
       {
-        "origin": "string",
-        "code": "too_small",
-        "minimum": 1,
-        "inclusive": true,
-        "path": [
-          "providerPolicy",
-          "allowedInstanceIds",
-          0
-        ],
-        "message": "Too small: expected string to have >=1 characters"
+        "code": "invalid-too_small",
+        "field": ".providerPolicy.allowedInstanceIds.0",
+        "message": "Request value is invalid"
       }
     ]
   }

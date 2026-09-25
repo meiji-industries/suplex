@@ -5,13 +5,9 @@
     "accepted": false,
     "error": [
       {
-        "code": "invalid_value",
-        "values": [
-          "square",
-          "circle"
-        ],
-        "path": [],
-        "message": "Invalid option: expected one of \"square\"|\"circle\""
+        "code": "invalid-invalid_value",
+        "field": ".",
+        "message": "Request value is invalid"
       }
     ]
   }

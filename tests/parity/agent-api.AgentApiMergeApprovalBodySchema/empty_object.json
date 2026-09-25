@@ -6,28 +6,19 @@
     "accepted": false,
     "error": [
       {
-        "expected": "number",
-        "code": "invalid_type",
-        "path": [
-          "pullRequestNumber"
-        ],
-        "message": "Invalid input: expected number, received undefined"
+        "code": "invalid-invalid_type",
+        "field": ".pullRequestNumber",
+        "message": "Request value is invalid"
       },
       {
-        "expected": "string",
-        "code": "invalid_type",
-        "path": [
-          "headSha"
-        ],
-        "message": "Invalid input: expected string, received undefined"
+        "code": "invalid-invalid_type",
+        "field": ".headSha",
+        "message": "Request value is invalid"
       },
       {
-        "expected": "string",
-        "code": "invalid_type",
-        "path": [
-          "baseSha"
-        ],
-        "message": "Invalid input: expected string, received undefined"
+        "code": "invalid-invalid_type",
+        "field": ".baseSha",
+        "message": "Request value is invalid"
       }
     ]
   }

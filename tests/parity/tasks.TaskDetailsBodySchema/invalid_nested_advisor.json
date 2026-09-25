@@ -12,36 +12,19 @@
     "accepted": false,
     "error": [
       {
-        "origin": "string",
-        "code": "too_small",
-        "minimum": 1,
-        "inclusive": true,
-        "path": [
-          "advisorProfileIds",
-          "reviewer"
-        ],
-        "message": "Too small: expected string to have >=1 characters"
+        "code": "invalid-too_small",
+        "field": ".advisorProfileIds.reviewer",
+        "message": "Request value is invalid"
       },
       {
-        "origin": "string",
-        "code": "too_big",
-        "maximum": 256,
-        "inclusive": true,
-        "path": [
-          "advisorProfileIds",
-          "planner_a"
-        ],
-        "message": "Too big: expected string to have <=256 characters"
+        "code": "invalid-too_big",
+        "field": ".advisorProfileIds.planner_a",
+        "message": "Request value is invalid"
       },
       {
-        "code": "unrecognized_keys",
-        "keys": [
-          "extra"
-        ],
-        "path": [
-          "advisorProfileIds"
-        ],
-        "message": "Unrecognized key: \"extra\""
+        "code": "invalid-unrecognized_keys",
+        "field": ".advisorProfileIds",
+        "message": "Request value is invalid"
       }
     ]
   }

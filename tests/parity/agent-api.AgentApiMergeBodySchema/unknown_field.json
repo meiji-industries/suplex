@@ -8,44 +8,29 @@
     "accepted": false,
     "error": [
       {
-        "expected": "number",
-        "code": "invalid_type",
-        "path": [
-          "pullRequestNumber"
-        ],
-        "message": "Invalid input: expected number, received undefined"
+        "code": "invalid-invalid_type",
+        "field": ".pullRequestNumber",
+        "message": "Request value is invalid"
       },
       {
-        "expected": "string",
-        "code": "invalid_type",
-        "path": [
-          "expectedHeadSha"
-        ],
-        "message": "Invalid input: expected string, received undefined"
+        "code": "invalid-invalid_type",
+        "field": ".expectedHeadSha",
+        "message": "Request value is invalid"
       },
       {
-        "expected": "string",
-        "code": "invalid_type",
-        "path": [
-          "expectedBaseSha"
-        ],
-        "message": "Invalid input: expected string, received undefined"
+        "code": "invalid-invalid_type",
+        "field": ".expectedBaseSha",
+        "message": "Request value is invalid"
       },
       {
-        "expected": "string",
-        "code": "invalid_type",
-        "path": [
-          "approvalReceipt"
-        ],
-        "message": "Invalid input: expected string, received undefined"
+        "code": "invalid-invalid_type",
+        "field": ".approvalReceipt",
+        "message": "Request value is invalid"
       },
       {
-        "code": "unrecognized_keys",
-        "keys": [
-          "unexpected"
-        ],
-        "path": [],
-        "message": "Unrecognized key: \"unexpected\""
+        "code": "invalid-unrecognized_keys",
+        "field": ".",
+        "message": "Request value is invalid"
       }
     ]
   }

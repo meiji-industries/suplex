@@ -10,40 +10,9 @@
     "accepted": false,
     "error": [
       {
-        "code": "invalid_union",
-        "errors": [
-          [
-            {
-              "code": "unrecognized_keys",
-              "keys": [
-                "__parityUnknown"
-              ],
-              "path": [],
-              "message": "Unrecognized key: \"__parityUnknown\""
-            }
-          ],
-          [
-            {
-              "code": "invalid_type",
-              "expected": "object",
-              "path": [
-                "limitDecision"
-              ],
-              "message": "Invalid input: expected object, received undefined"
-            },
-            {
-              "code": "unrecognized_keys",
-              "keys": [
-                "answer",
-                "__parityUnknown"
-              ],
-              "path": [],
-              "message": "Unrecognized keys: \"answer\", \"__parityUnknown\""
-            }
-          ]
-        ],
-        "path": [],
-        "message": "Invalid input"
+        "code": "invalid-invalid_union",
+        "field": ".",
+        "message": "Request value is invalid"
       }
     ]
   }

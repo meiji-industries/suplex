@@ -8,14 +8,9 @@
     "accepted": false,
     "error": [
       {
-        "code": "invalid_value",
-        "values": [
-          "off",
-          "capture",
-          "required"
-        ],
-        "path": [],
-        "message": "Invalid option: expected one of \"off\"|\"capture\"|\"required\""
+        "code": "invalid-invalid_value",
+        "field": ".",
+        "message": "Request value is invalid"
       }
     ]
   }

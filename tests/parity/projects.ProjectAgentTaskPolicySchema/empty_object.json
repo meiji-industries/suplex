@@ -6,36 +6,24 @@
     "accepted": false,
     "error": [
       {
-        "expected": "array",
-        "code": "invalid_type",
-        "path": [
-          "workflowIds"
-        ],
-        "message": "Invalid input: expected array, received undefined"
+        "code": "invalid-invalid_type",
+        "field": ".workflowIds",
+        "message": "Request value is invalid"
       },
       {
-        "expected": "string",
-        "code": "invalid_type",
-        "path": [
-          "defaultWorkflowId"
-        ],
-        "message": "Invalid input: expected string, received undefined"
+        "code": "invalid-invalid_type",
+        "field": ".defaultWorkflowId",
+        "message": "Request value is invalid"
       },
       {
-        "expected": "array",
-        "code": "invalid_type",
-        "path": [
-          "rootProfileIds"
-        ],
-        "message": "Invalid input: expected array, received undefined"
+        "code": "invalid-invalid_type",
+        "field": ".rootProfileIds",
+        "message": "Request value is invalid"
       },
       {
-        "expected": "array",
-        "code": "invalid_type",
-        "path": [
-          "workerProfileIds"
-        ],
-        "message": "Invalid input: expected array, received undefined"
+        "code": "invalid-invalid_type",
+        "field": ".workerProfileIds",
+        "message": "Request value is invalid"
       }
     ]
   }

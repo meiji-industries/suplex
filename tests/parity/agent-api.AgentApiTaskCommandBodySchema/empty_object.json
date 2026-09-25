@@ -6,37 +6,19 @@
     "accepted": false,
     "error": [
       {
-        "code": "invalid_value",
-        "values": [
-          "start_task",
-          "disarm_task",
-          "cancel_task",
-          "archive_task",
-          "unarchive_task",
-          "duplicate_task",
-          "send_task_note",
-          "recheck_delivery_wait"
-        ],
-        "path": [
-          "command"
-        ],
-        "message": "Invalid option: expected one of \"start_task\"|\"disarm_task\"|\"cancel_task\"|\"archive_task\"|\"unarchive_task\"|\"duplicate_task\"|\"send_task_note\"|\"recheck_delivery_wait\""
+        "code": "invalid-invalid_value",
+        "field": ".command",
+        "message": "Request value is invalid"
       },
       {
-        "expected": "string",
-        "code": "invalid_type",
-        "path": [
-          "revision"
-        ],
-        "message": "Invalid input: expected string, received undefined"
+        "code": "invalid-invalid_type",
+        "field": ".revision",
+        "message": "Request value is invalid"
       },
       {
-        "expected": "string",
-        "code": "invalid_type",
-        "path": [
-          "idempotencyKey"
-        ],
-        "message": "Invalid input: expected string, received undefined"
+        "code": "invalid-invalid_type",
+        "field": ".idempotencyKey",
+        "message": "Request value is invalid"
       }
     ]
   }

@@ -8,66 +8,39 @@
     "accepted": false,
     "error": [
       {
-        "expected": "string",
-        "code": "invalid_type",
-        "path": [
-          "projectId"
-        ],
-        "message": "Invalid input: expected string, received undefined"
+        "code": "invalid-invalid_type",
+        "field": ".projectId",
+        "message": "Request value is invalid"
       },
       {
-        "expected": "string",
-        "code": "invalid_type",
-        "path": [
-          "name"
-        ],
-        "message": "Invalid input: expected string, received undefined"
+        "code": "invalid-invalid_type",
+        "field": ".name",
+        "message": "Request value is invalid"
       },
       {
-        "expected": "string",
-        "code": "invalid_type",
-        "path": [
-          "label"
-        ],
-        "message": "Invalid input: expected string, received undefined"
+        "code": "invalid-invalid_type",
+        "field": ".label",
+        "message": "Request value is invalid"
       },
       {
-        "expected": "string",
-        "code": "invalid_type",
-        "path": [
-          "workflowId"
-        ],
-        "message": "Invalid input: expected string, received undefined"
+        "code": "invalid-invalid_type",
+        "field": ".workflowId",
+        "message": "Request value is invalid"
       },
       {
-        "code": "invalid_value",
-        "values": [
-          "local_worktree",
-          "remote_branch",
-          "pull_request_draft",
-          "pull_request_ready",
-          "merged"
-        ],
-        "path": [
-          "deliveryTarget"
-        ],
-        "message": "Invalid option: expected one of \"local_worktree\"|\"remote_branch\"|\"pull_request_draft\"|\"pull_request_ready\"|\"merged\""
+        "code": "invalid-invalid_value",
+        "field": ".deliveryTarget",
+        "message": "Request value is invalid"
       },
       {
-        "expected": "array",
-        "code": "invalid_type",
-        "path": [
-          "protectedPaths"
-        ],
-        "message": "Invalid input: expected array, received undefined"
+        "code": "invalid-invalid_type",
+        "field": ".protectedPaths",
+        "message": "Request value is invalid"
       },
       {
-        "code": "unrecognized_keys",
-        "keys": [
-          "unexpected"
-        ],
-        "path": [],
-        "message": "Unrecognized key: \"unexpected\""
+        "code": "invalid-unrecognized_keys",
+        "field": ".",
+        "message": "Request value is invalid"
       }
     ]
   }

@@ -6,28 +6,19 @@
     "accepted": false,
     "error": [
       {
-        "expected": "string",
-        "code": "invalid_type",
-        "path": [
-          "name"
-        ],
-        "message": "Invalid input: expected string, received undefined"
+        "code": "invalid-invalid_type",
+        "field": ".name",
+        "message": "Request value is invalid"
       },
       {
-        "expected": "string",
-        "code": "invalid_type",
-        "path": [
-          "companyId"
-        ],
-        "message": "Invalid input: expected string, received undefined"
+        "code": "invalid-invalid_type",
+        "field": ".companyId",
+        "message": "Request value is invalid"
       },
       {
-        "expected": "array",
-        "code": "invalid_type",
-        "path": [
-          "projectIds"
-        ],
-        "message": "Invalid input: expected array, received undefined"
+        "code": "invalid-invalid_type",
+        "field": ".projectIds",
+        "message": "Request value is invalid"
       }
     ]
   }

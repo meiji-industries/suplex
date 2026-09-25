@@ -1,9 +1,0 @@
-{
-  "contract": "tasks.TaskHarnessKindSchema",
-  "case": "known_kind",
-  "input": "codex",
-  "expected": {
-    "accepted": true,
-    "value": "codex"
-  }
-}

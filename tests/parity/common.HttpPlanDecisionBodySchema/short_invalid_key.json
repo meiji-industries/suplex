@@ -9,24 +9,14 @@
     "accepted": false,
     "error": [
       {
-        "origin": "string",
-        "code": "too_small",
-        "minimum": 8,
-        "inclusive": true,
-        "path": [
-          "idempotencyKey"
-        ],
-        "message": "Too small: expected string to have >=8 characters"
+        "code": "invalid-too_small",
+        "field": ".idempotencyKey",
+        "message": "Request value is invalid"
       },
       {
-        "origin": "string",
-        "code": "invalid_format",
-        "format": "regex",
-        "pattern": "/^[A-Za-z0-9][A-Za-z0-9._:-]*$/",
-        "path": [
-          "idempotencyKey"
-        ],
-        "message": "Invalid string: must match pattern /^[A-Za-z0-9][A-Za-z0-9._:-]*$/"
+        "code": "invalid-invalid_format",
+        "field": ".idempotencyKey",
+        "message": "Request value is invalid"
       }
     ]
   }

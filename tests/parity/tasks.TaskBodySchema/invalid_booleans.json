@@ -12,20 +12,14 @@
     "accepted": false,
     "error": [
       {
-        "expected": "boolean",
-        "code": "invalid_type",
-        "path": [
-          "startImmediately"
-        ],
-        "message": "Invalid input: expected boolean, received string"
+        "code": "invalid-invalid_type",
+        "field": ".startImmediately",
+        "message": "Request value is invalid"
       },
       {
-        "expected": "boolean",
-        "code": "invalid_type",
-        "path": [
-          "runProjectTests"
-        ],
-        "message": "Invalid input: expected boolean, received number"
+        "code": "invalid-invalid_type",
+        "field": ".runProjectTests",
+        "message": "Request value is invalid"
       }
     ]
   }

@@ -21,14 +21,9 @@
     "accepted": false,
     "error": [
       {
-        "expected": "string",
-        "code": "invalid_type",
-        "path": [
-          "execution",
-          "environment",
-          "CUSTOM"
-        ],
-        "message": "Invalid input: expected string, received number"
+        "code": "invalid-invalid_type",
+        "field": ".execution.environment.CUSTOM",
+        "message": "Request value is invalid"
       }
     ]
   }

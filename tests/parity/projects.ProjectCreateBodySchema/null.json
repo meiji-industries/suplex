@@ -6,35 +6,9 @@
     "accepted": false,
     "error": [
       {
-        "code": "invalid_union",
-        "errors": [
-          [
-            {
-              "expected": "object",
-              "code": "invalid_type",
-              "path": [],
-              "message": "Invalid input: expected object, received null"
-            }
-          ],
-          [
-            {
-              "expected": "object",
-              "code": "invalid_type",
-              "path": [],
-              "message": "Invalid input: expected object, received null"
-            }
-          ],
-          [
-            {
-              "expected": "object",
-              "code": "invalid_type",
-              "path": [],
-              "message": "Invalid input: expected object, received null"
-            }
-          ]
-        ],
-        "path": [],
-        "message": "Invalid input"
+        "code": "invalid-invalid_union",
+        "field": ".",
+        "message": "Request value is invalid"
       }
     ]
   }

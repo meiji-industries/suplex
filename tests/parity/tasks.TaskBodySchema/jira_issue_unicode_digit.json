@@ -18,15 +18,9 @@
     "accepted": false,
     "error": [
       {
-        "origin": "string",
-        "code": "invalid_format",
-        "format": "regex",
-        "pattern": "/^\\d+$/",
-        "path": [
-          "issue",
-          "id"
-        ],
-        "message": "Invalid string: must match pattern /^\\d+$/"
+        "code": "invalid-invalid_format",
+        "field": ".issue.id",
+        "message": "Request value is invalid"
       }
     ]
   }

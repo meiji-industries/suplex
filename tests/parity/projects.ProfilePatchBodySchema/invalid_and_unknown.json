@@ -9,20 +9,14 @@
     "accepted": false,
     "error": [
       {
-        "expected": "boolean",
-        "code": "invalid_type",
-        "path": [
-          "archived"
-        ],
-        "message": "Invalid input: expected boolean, received null"
+        "code": "invalid-invalid_type",
+        "field": ".archived",
+        "message": "Request value is invalid"
       },
       {
-        "code": "unrecognized_keys",
-        "keys": [
-          "extra"
-        ],
-        "path": [],
-        "message": "Unrecognized key: \"extra\""
+        "code": "invalid-unrecognized_keys",
+        "field": ".",
+        "message": "Request value is invalid"
       }
     ]
   }

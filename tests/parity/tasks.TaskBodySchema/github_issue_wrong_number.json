@@ -19,23 +19,14 @@
     "accepted": false,
     "error": [
       {
-        "origin": "number",
-        "code": "too_small",
-        "minimum": 0,
-        "inclusive": false,
-        "path": [
-          "issue",
-          "number"
-        ],
-        "message": "Too small: expected number to be >0"
+        "code": "invalid-too_small",
+        "field": ".issue.number",
+        "message": "Request value is invalid"
       },
       {
-        "code": "custom",
-        "message": "Issue URL must match its tracker identity",
-        "path": [
-          "issue",
-          "url"
-        ]
+        "code": "invalid-custom",
+        "field": ".issue.url",
+        "message": "Request value is invalid"
       }
     ]
   }

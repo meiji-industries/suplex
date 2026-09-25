@@ -14,13 +14,9 @@
     "accepted": false,
     "error": [
       {
-        "expected": "string",
-        "code": "invalid_type",
-        "path": [
-          "tracker",
-          "site"
-        ],
-        "message": "Invalid input: expected string, received number"
+        "code": "invalid-invalid_type",
+        "field": ".tracker.site",
+        "message": "Request value is invalid"
       }
     ]
   }

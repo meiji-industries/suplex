@@ -8,20 +8,14 @@
     "accepted": false,
     "error": [
       {
-        "expected": "number",
-        "code": "invalid_type",
-        "path": [
-          "expectedRevision"
-        ],
-        "message": "Invalid input: expected number, received undefined"
+        "code": "invalid-invalid_type",
+        "field": ".expectedRevision",
+        "message": "Request value is invalid"
       },
       {
-        "code": "unrecognized_keys",
-        "keys": [
-          "unexpected"
-        ],
-        "path": [],
-        "message": "Unrecognized key: \"unexpected\""
+        "code": "invalid-unrecognized_keys",
+        "field": ".",
+        "message": "Request value is invalid"
       }
     ]
   }

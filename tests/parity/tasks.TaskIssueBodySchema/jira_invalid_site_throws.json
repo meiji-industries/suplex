@@ -14,11 +14,7 @@
   "expected": {
     "accepted": false,
     "error": {
-      "kind": "thrown",
-      "name": "TypeError",
-      "code": "ERR_INVALID_URL",
-      "message": "Invalid URL",
-      "input": "x"
+      "kind": "thrown"
     }
   }
 }

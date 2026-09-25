@@ -6,17 +6,9 @@
     "accepted": false,
     "error": [
       {
-        "code": "invalid_value",
-        "values": [
-          "stale_delivery",
-          "conflicting_pull_request",
-          "failed_checks",
-          "pending_review",
-          "blocked_by_dependency",
-          "not_integrated"
-        ],
-        "path": [],
-        "message": "Invalid option: expected one of \"stale_delivery\"|\"conflicting_pull_request\"|\"failed_checks\"|\"pending_review\"|\"blocked_by_dependency\"|\"not_integrated\""
+        "code": "invalid-invalid_value",
+        "field": ".",
+        "message": "Request value is invalid"
       }
     ]
   }

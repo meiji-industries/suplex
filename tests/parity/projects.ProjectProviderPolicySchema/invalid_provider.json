@@ -11,18 +11,9 @@
     "accepted": false,
     "error": [
       {
-        "code": "invalid_value",
-        "values": [
-          "opencode",
-          "claude-code",
-          "devin",
-          "codex"
-        ],
-        "path": [
-          "allowedProviders",
-          0
-        ],
-        "message": "Invalid option: expected one of \"opencode\"|\"claude-code\"|\"devin\"|\"codex\""
+        "code": "invalid-invalid_value",
+        "field": ".allowedProviders.0",
+        "message": "Request value is invalid"
       }
     ]
   }

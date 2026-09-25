@@ -20,51 +20,24 @@ struct Expected {
     error: Option<Value>,
 }
 
+fn public_findings(issues: Value) -> Value {
+    let Some(issues) = issues.as_array() else {
+        return serde_json::json!({"kind":"thrown"});
+    };
+    Value::Array(issues.iter().map(|issue| {
+        let field = issue.get("path").and_then(Value::as_array).map_or_else(String::new, |path| {
+            path.iter().map(|part| part.as_str().map(str::to_owned).unwrap_or_else(|| part.to_string())).collect::<Vec<_>>().join(".")
+        });
+        serde_json::json!({
+            "code": format!("invalid-{}", issue.get("code").and_then(Value::as_str).unwrap_or("request")),
+            "field": format!(".{field}"),
+            "message": "Request value is invalid"
+        })
+    }).collect())
+}
+
 #[test]
 fn ported_contracts_match_zod_fixtures() {
-    let lossless_schemas = [
-        "auth.CompanyNameBodySchema",
-        "auth.DisplayNameBodySchema",
-        "auth.MembershipBodySchema",
-        "auth.CompanyIssueCodeBodySchema",
-        "auth.ProfileBodySchema",
-        "common.EmptyBodySchema",
-        "common.TokenBodySchema",
-        "common.RegistrationVerificationBodySchema",
-        "common.AuthenticationVerificationBodySchema",
-        "projects.ProjectAgentTaskPolicySchema",
-        "projects.ProjectRepositoryBodySchema",
-        "projects.ProjectIntegrationSchema",
-        "projects.ProjectExecutionSchema",
-        "projects.ProjectProviderPolicySchema",
-        "projects.ProjectNewRepositoryBodySchema",
-        "projects.ProjectBodySchema",
-        "projects.ProjectPatchBodySchema",
-        "projects.ProjectCreateBodySchema",
-        "projects.ProjectResponseSchema",
-        "projects.ProjectListResponseSchema",
-        "tasks.TaskBodySchema",
-        "tasks.TaskIssueBodySchema",
-        "tasks.TaskDependenciesBodySchema",
-        "tasks.TaskWorkerReplacementBodySchema",
-        "tasks.TaskCoordinatorReplacementBodySchema",
-        "tasks.TaskAgentSelectionBodySchema",
-        "tasks.TaskAnswerBodySchema",
-        "task-templates.TaskTemplateParamsSchema",
-        "task-templates.ProjectTaskTemplatesParamsSchema",
-        "task-templates.SaveTaskAsTemplateParamsSchema",
-        "task-templates.SaveTaskAsTemplateBodySchema",
-        "task-templates.CreateTaskTemplateBodySchema",
-        "task-templates.UpdateTaskTemplateBodySchema",
-        "task-templates.TaskTemplateResponseSchema",
-        "task-templates.TaskTemplateListResponseSchema",
-        "workflows.WorkflowRecordInputSchema",
-        "workflows.WorkflowRecordPatchSchema",
-        "workflows.WorkflowRecordSchema",
-        "workflows.WorkflowRecordParamsSchema",
-        "workflows.WorkflowListQuerySchema",
-        "workflows.WorkflowListResponseSchema",
-    ];
     let directory = concat!(env!("CARGO_MANIFEST_DIR"), "/../tests/parity");
     let mut verified = 0;
     let mut schemas = std::collections::BTreeSet::new();
@@ -89,9 +62,6 @@ fn ported_contracts_match_zod_fixtures() {
             if fixture_path
                 .extension()
                 .is_none_or(|extension| extension != "json")
-                || fixture_path
-                    .file_stem()
-                    .is_some_and(|stem| stem.to_string_lossy().starts_with("raw_"))
             {
                 continue;
             }
@@ -101,29 +71,21 @@ fn ported_contracts_match_zod_fixtures() {
                 JsDocument::parse(&js_json::stringify(value)).expect("ordinary fixture is JSON")
             });
             let detailed = contracts::validate_js_detailed(&fixture.contract, input.as_ref());
-            if lossless_schemas.contains(&fixture.contract.as_str()) {
-                assert!(
-                    detailed.is_some(),
-                    "lossless schema was skipped: {}",
-                    fixture_path.display()
-                );
-            }
             let actual = if let Some(result) = detailed {
                 Some(match result {
                     Ok(value) => Ok(value
                         .to_serde_if_representable()
                         .expect("ordinary output is representable")),
-                    Err(JsContractFailure::Issues(issues)) => Err(issues
-                        .to_serde_if_representable()
-                        .expect("ordinary issues are representable")),
-                    Err(JsContractFailure::Thrown(thrown)) => Err(thrown
-                        .as_document()
-                        .to_serde_if_representable()
-                        .expect("ordinary thrown metadata is representable")),
+                    Err(JsContractFailure::Issues(issues)) => Err(public_findings(
+                        issues
+                            .to_serde_if_representable()
+                            .expect("ordinary issues are representable"),
+                    )),
+                    Err(JsContractFailure::Thrown(_)) => Err(serde_json::json!({"kind":"thrown"})),
                 })
             } else {
                 contracts::validate(&fixture.contract, fixture.fields.get("input"))
-                    .map(|result| result.map_err(Value::Array))
+                    .map(|result| result.map_err(|issues| public_findings(Value::Array(issues))))
             };
             if let Some(actual) = actual {
                 schemas.insert(fixture.contract.clone());
@@ -151,7 +113,11 @@ fn ported_contracts_match_zod_fixtures() {
             }
         }
     }
-    assert_eq!(schemas.len(), 89, "eighty-nine explicitly ported schemas");
+    assert_eq!(
+        schemas.len(),
+        63,
+        "sixty-three explicitly ported request schemas"
+    );
     assert!(
         verified >= 140,
         "every ported schema has multiple Zod cases"

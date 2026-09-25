@@ -13,20 +13,9 @@
     "accepted": false,
     "error": [
       {
-        "code": "invalid_union",
-        "errors": [],
-        "note": "No matching discriminator",
-        "discriminator": "kind",
-        "options": [
-          "github",
-          "bitbucket"
-        ],
-        "path": [
-          "integration",
-          "repository",
-          "kind"
-        ],
-        "message": "Invalid discriminator value. Expected 'github' | 'bitbucket'"
+        "code": "invalid-invalid_union",
+        "field": ".integration.repository.kind",
+        "message": "Request value is invalid"
       }
     ]
   }

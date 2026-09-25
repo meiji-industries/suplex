@@ -3,15 +3,16 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use git2::{
+    FetchOptions, PushOptions, Repository, RepositoryInitOptions, Signature, build::RepoBuilder,
+};
 use serde::Serialize;
+use serde_json::{Value, json};
 
 use super::{
-    repository::{self, Commands, Finding},
+    repository::{self, Finding, Github, remote_callbacks},
     service::ProjectFailure,
 };
-
-const GIT_BUFFER: usize = 64 * 1024;
-const GH_BUFFER: usize = 1024 * 1024;
 
 fn finding(code: &str, field: &str, message: impl Into<String>) -> Finding {
     Finding {
@@ -29,6 +30,7 @@ fn failure(message: &'static str, status_code: u16, finding: Finding) -> Project
     }
 }
 
+/// The last line of the reason, so the person sees why the host refused.
 fn command_failure(message: &str) -> String {
     message
         .trim()
@@ -36,6 +38,20 @@ fn command_failure(message: &str) -> String {
         .last()
         .unwrap_or("The command failed")
         .to_owned()
+}
+
+/// GitHub's own explanation of a failed request when it gave one.
+fn github_reason(error: &(dyn std::error::Error + 'static)) -> String {
+    match error.downcast_ref::<octocrab::Error>() {
+        Some(octocrab::Error::GitHub { source, .. }) => source
+            .errors
+            .iter()
+            .flatten()
+            .find_map(|error| error["message"].as_str())
+            .unwrap_or(&source.message)
+            .to_owned(),
+        _ => error.to_string(),
+    }
 }
 
 fn temporary_path(parent: &Path, prefix: &str) -> std::io::Result<PathBuf> {
@@ -54,29 +70,8 @@ fn temporary_path(parent: &Path, prefix: &str) -> std::io::Result<PathBuf> {
     ))
 }
 
-pub fn clone_url(raw: &str, coordinate: &repository::Coordinate) -> String {
-    let host = if coordinate.host == "bitbucket" {
-        "bitbucket.org"
-    } else {
-        "github.com"
-    };
-    if raw.trim().starts_with("git@") {
-        format!("git@{host}:{}.git", coordinate.repository)
-    } else {
-        format!("https://{host}/{}.git", coordinate.repository)
-    }
-}
-
-pub async fn github_owners(commands: &Commands, cwd: &Path) -> Result<Vec<String>, ProjectFailure> {
-    let user = repository::run(
-        &commands.gh,
-        &["api", "user", "--jq", ".login"],
-        cwd,
-        30,
-        GH_BUFFER,
-    )
-    .await
-    .map_err(|error| {
+pub async fn github_owners(github: &Github) -> Result<Vec<String>, ProjectFailure> {
+    let unavailable = |reason: String| {
         failure(
             "Repository provisioning failed",
             422,
@@ -85,26 +80,41 @@ pub async fn github_owners(commands: &Commands, cwd: &Path) -> Result<Vec<String
                 "repositoryName",
                 format!(
                     "GitHub CLI could not read the signed-in user: {}",
-                    command_failure(&error)
+                    command_failure(&reason)
                 ),
             ),
         )
-    })?;
-    let organizations = repository::run(
-        &commands.gh,
-        &["api", "user/orgs", "--paginate", "--jq", ".[].login"],
-        cwd,
-        30,
-        GH_BUFFER,
-    )
-    .await
-    .unwrap_or_default();
-    Ok(format!("{user}\n{organizations}")
-        .lines()
-        .map(str::trim)
-        .filter(|line| !line.is_empty())
-        .map(str::to_owned)
-        .collect())
+    };
+    let access = github
+        .access()
+        .await
+        .map_err(|error| unavailable(github_reason(&*error)))?;
+    let login = access
+        .current_user_login()
+        .await
+        .map_err(|error| unavailable(github_reason(&*error)))?;
+    let mut owners = vec![login];
+    // Organizations need the read:org scope; without it the personal account still works.
+    let mut organizations = Vec::new();
+    for page in 1.. {
+        let Ok(rows) = access
+            .client()
+            .get::<Vec<Value>, _, _>("/user/orgs", Some(&json!({"per_page": 100, "page": page})))
+            .await
+        else {
+            organizations.clear();
+            break;
+        };
+        organizations.extend(
+            rows.iter()
+                .filter_map(|row| row["login"].as_str().map(str::to_owned)),
+        );
+        if rows.len() < 100 {
+            break;
+        }
+    }
+    owners.extend(organizations);
+    Ok(owners)
 }
 
 #[derive(Serialize)]
@@ -114,63 +124,63 @@ pub struct GithubRepository {
     pub default_branch: String,
 }
 
+/// The unarchived repositories `owner` owns, as `gh repo list` reads them.
+const OWNER_REPOSITORIES: &str = "query($login: String!, $after: String) { repositoryOwner(login: $login) { repositories(first: 100, after: $after, isArchived: false, ownerAffiliations: [OWNER]) { nodes { name defaultBranchRef { name } } pageInfo { hasNextPage endCursor } } } }";
+const REPOSITORY_LIMIT: usize = 1000;
+
 pub async fn github_repositories(
-    commands: &Commands,
+    github: &Github,
     owner: &str,
-    cwd: &Path,
 ) -> Result<Vec<GithubRepository>, ProjectFailure> {
-    let output = repository::run(
-        &commands.gh,
-        &[
-            "repo",
-            "list",
-            owner,
-            "--no-archived",
-            "--limit",
-            "1000",
-            "--json",
-            "name,defaultBranchRef",
-        ],
-        cwd,
-        30,
-        16 * 1024 * 1024,
-    )
-    .await;
-    let parse = || -> Result<Vec<GithubRepository>, String> {
-        let output = output?;
-        let value: serde_json::Value =
-            serde_json::from_str(&output).map_err(|error| error.to_string())?;
-        let rows = value
-            .as_array()
-            .ok_or("GitHub returned an invalid repository list")?;
-        let mut repositories = rows
-            .iter()
-            .map(|row| {
-                let name = row
-                    .get("name")
-                    .and_then(serde_json::Value::as_str)
+    let list = async {
+        let access = github
+            .access()
+            .await
+            .map_err(|error| github_reason(&*error))?;
+        let mut repositories = Vec::new();
+        let mut after = Value::Null;
+        while repositories.len() < REPOSITORY_LIMIT {
+            let body =
+                json!({"query": OWNER_REPOSITORIES, "variables": {"login": owner, "after": after}});
+            let reply: Value = access
+                .client()
+                .post("/graphql", Some(&body))
+                .await
+                .map_err(|error| github_reason(&error))?;
+            let page = &reply["data"]["repositoryOwner"]["repositories"];
+            let nodes = page["nodes"].as_array().ok_or_else(|| {
+                reply["errors"][0]["message"]
+                    .as_str()
+                    .unwrap_or("GitHub returned an invalid repository list")
+                    .to_owned()
+            })?;
+            for node in nodes {
+                let name = node["name"]
+                    .as_str()
                     .ok_or("GitHub returned a repository without a name")?;
-                let default_branch = row
-                    .get("defaultBranchRef")
-                    .and_then(|branch| branch.get("name"))
-                    .and_then(serde_json::Value::as_str)
+                let default_branch = node["defaultBranchRef"]["name"]
+                    .as_str()
                     .filter(|branch| !branch.is_empty())
                     .unwrap_or("main");
-                Ok(GithubRepository {
+                repositories.push(GithubRepository {
                     name: name.to_owned(),
                     default_branch: default_branch.to_owned(),
-                })
-            })
-            .collect::<Result<Vec<_>, &str>>()
-            .map_err(str::to_owned)?;
+                });
+            }
+            if page["pageInfo"]["hasNextPage"] != true {
+                break;
+            }
+            after = page["pageInfo"]["endCursor"].clone();
+        }
+        repositories.truncate(REPOSITORY_LIMIT);
         repositories.sort_by(|left, right| {
             left.name
                 .to_ascii_lowercase()
                 .cmp(&right.name.to_ascii_lowercase())
         });
-        Ok(repositories)
+        Ok::<_, String>(repositories)
     };
-    parse().map_err(|error| {
+    list.await.map_err(|error| {
         failure(
             "Repository listing failed",
             422,
@@ -186,8 +196,26 @@ pub async fn github_repositories(
     })
 }
 
+fn clone(
+    github: &Github,
+    url: &str,
+    target: &Path,
+    token: Option<&str>,
+) -> Result<(), git2::Error> {
+    let mut options = FetchOptions::new();
+    options.remote_callbacks(remote_callbacks(token));
+    RepoBuilder::new()
+        .fetch_options(options)
+        .remote_create(|repository, name, url| {
+            github.route_git(repository)?;
+            repository.remote(name, url)
+        })
+        .clone(url, target)?;
+    Ok(())
+}
+
 pub async fn ensure(
-    commands: &Commands,
+    github: &Github,
     clone_url: &str,
     repository: &str,
     repository_path: &Path,
@@ -204,14 +232,9 @@ pub async fn ensure(
         )
     })?;
     if repository_path.is_dir() {
-        let remote = repository::run(
-            &commands.git,
-            &["remote", "get-url", "origin"],
-            repository_path,
-            120,
-            GIT_BUFFER,
-        )
-        .await;
+        // The configured origin, not a URL rewritten by `insteadOf`.
+        let remote = Repository::open(repository_path)
+            .and_then(|checkout| checkout.config()?.get_string("remote.origin.url"));
         let expected = repository::repository_coordinate(clone_url);
         if !remote
             .ok()
@@ -239,19 +262,14 @@ pub async fn ensure(
                 finding("repository-unavailable", "repositoryUrl", error.to_string()),
             )
         })?;
-        let target = temporary.to_string_lossy().into_owned();
-        let clone = repository::run(
-            &commands.git,
-            &["clone", "--origin", "origin", "--", clone_url, &target],
-            parent,
-            120,
-            GIT_BUFFER,
-        )
-        .await;
-        let result = clone.and_then(|_| {
-            fs::rename(&temporary, repository_path).map_err(|error| error.to_string())
-        });
-        if result.is_err() {
+        let token = github.token().await;
+        let (github, url, target) = (github.clone(), clone_url.to_owned(), temporary.clone());
+        let cloned =
+            tokio::task::spawn_blocking(move || clone(&github, &url, &target, token.as_deref()))
+                .await;
+        let renamed =
+            matches!(cloned, Ok(Ok(()))) && fs::rename(&temporary, repository_path).is_ok();
+        if !renamed {
             let _ = fs::remove_dir_all(&temporary);
             return Err(failure(
                 "Repository provisioning failed",
@@ -274,8 +292,60 @@ pub async fn ensure(
     Ok(())
 }
 
+/// `git init` on `branch` and an empty "Initial commit".
+fn initial_commit(path: &Path, branch: &str) -> Result<(), git2::Error> {
+    let mut options = RepositoryInitOptions::new();
+    options.initial_head(branch);
+    let repository = Repository::init_opts(path, &options)?;
+    // Without a configured Git identity, commit as Suplex rather than fail.
+    let signature = repository
+        .signature()
+        .or_else(|_| Signature::now("Suplex", "suplex@localhost"))?;
+    let tree = repository.find_tree(repository.index()?.write_tree()?)?;
+    repository.commit(
+        Some("HEAD"),
+        &signature,
+        &signature,
+        "Initial commit",
+        &tree,
+        &[],
+    )?;
+    Ok(())
+}
+
+/// Add `url` as origin, push `branch`, and track it, as `gh repo create --push` does.
+fn publish(
+    github: &Github,
+    path: &Path,
+    url: &str,
+    branch: &str,
+    token: Option<&str>,
+) -> Result<(), git2::Error> {
+    let repository = Repository::open(path)?;
+    github.route_git(&repository)?;
+    let mut origin = repository.remote("origin", url)?;
+    let mut callbacks = remote_callbacks(token);
+    callbacks.push_update_reference(|_, status| match status {
+        Some(status) => Err(git2::Error::from_str(status)),
+        None => Ok(()),
+    });
+    let mut options = PushOptions::new();
+    options.remote_callbacks(callbacks);
+    origin.push(
+        &[format!("refs/heads/{branch}:refs/heads/{branch}")],
+        Some(&mut options),
+    )?;
+    let mut config = repository.config()?;
+    config.set_str(&format!("branch.{branch}.remote"), "origin")?;
+    config.set_str(
+        &format!("branch.{branch}.merge"),
+        &format!("refs/heads/{branch}"),
+    )?;
+    Ok(())
+}
+
 pub async fn create(
-    commands: &Commands,
+    github: &Github,
     coordinate: &repository::Coordinate,
     clone_url: &str,
     repository_path: &Path,
@@ -318,44 +388,49 @@ pub async fn create(
         )
     })?;
     let result = async {
-        repository::run(
-            &commands.git,
-            &["init", "--initial-branch", base_branch],
-            &temporary,
-            120,
-            GIT_BUFFER,
-        )
-        .await?;
-        repository::run(
-            &commands.git,
-            &["commit", "--allow-empty", "--message", "Initial commit"],
-            &temporary,
-            120,
-            GIT_BUFFER,
-        )
-        .await?;
-        if coordinate.host == "github" {
-            repository::run(
-                &commands.gh,
-                &[
-                    "repo",
-                    "create",
-                    &coordinate.repository,
-                    "--private",
-                    "--source",
-                    temporary.to_str().unwrap(),
-                    "--remote",
-                    "origin",
-                    "--push",
-                ],
-                &temporary,
-                120,
-                GH_BUFFER,
-            )
-            .await?;
-        } else {
+        let (target, branch) = (temporary.clone(), base_branch.to_owned());
+        tokio::task::spawn_blocking(move || initial_commit(&target, &branch))
+            .await
+            .map_err(|error| error.to_string())?
+            .map_err(|error| error.message().to_owned())?;
+        if coordinate.host != "github" {
             return Err("Bitbucket repository creation is not yet connected".to_owned());
         }
+        let access = github
+            .access()
+            .await
+            .map_err(|error| github_reason(&*error))?;
+        let login = access
+            .current_user_login()
+            .await
+            .map_err(|error| github_reason(&*error))?;
+        let (owner, name) = coordinate
+            .repository
+            .split_once('/')
+            .expect("validated coordinate");
+        let route = if owner.eq_ignore_ascii_case(&login) {
+            "/user/repos".to_owned()
+        } else {
+            format!("/orgs/{owner}/repos")
+        };
+        access
+            .client()
+            .post::<_, Value>(route, Some(&json!({"name": name, "private": true})))
+            .await
+            .map_err(|error| github_reason(&error))?;
+        let token = access.token().map(str::to_owned);
+        let (github, target, url, branch) = (
+            github.clone(),
+            temporary.clone(),
+            clone_url.to_owned(),
+            base_branch.to_owned(),
+        );
+        tokio::task::spawn_blocking(move || {
+            publish(&github, &target, &url, &branch, token.as_deref())
+        })
+        .await
+        .map_err(|error| error.to_string())?
+        .map_err(|error| error.message().to_owned())?;
         fs::rename(&temporary, repository_path).map_err(|error| error.to_string())?;
         Ok::<(), String>(())
     }
@@ -372,7 +447,6 @@ pub async fn create(
             ),
         ));
     }
-    let _ = clone_url;
     Ok(())
 }
 
@@ -499,7 +573,206 @@ pub fn infer_commands(repository_path: &Path) -> (String, String) {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use axum::{Json, Router, routing::post};
+
+    use super::{super::repository::fixtures::*, *};
+
+    #[test]
+    fn package_checks_use_the_locked_package_manager() {
+        for (lockfile, verification) in [
+            ("pnpm-lock.yaml", "pnpm check"),
+            ("package-lock.json", "npm run check"),
+            ("yarn.lock", "yarn check"),
+            ("bun.lock", "bun check"),
+        ] {
+            let root = temporary("suplex-infer");
+            fs::write(
+                root.join("package.json"),
+                r#"{"scripts":{"check":"lint && test","test":"test"}}"#,
+            )
+            .unwrap();
+            fs::write(root.join(lockfile), "").unwrap();
+            assert_eq!(infer_commands(&root).1, verification, "{lockfile}");
+            fs::remove_dir_all(root).unwrap();
+        }
+        let root = temporary("suplex-infer-checks");
+        fs::write(
+            root.join("mise.toml"),
+            "[tasks.check]\nrun = \"test && lint\"\n[tasks.test]\nrun = \"test\"\n",
+        )
+        .unwrap();
+        assert_eq!(infer_commands(&root).1, "mise run check");
+        fs::remove_file(root.join("mise.toml")).unwrap();
+        fs::write(root.join("Makefile"), "check:\n\ttrue\n\ntest:\n\ttrue\n").unwrap();
+        assert_eq!(infer_commands(&root).1, "make check");
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn ensure_clones_through_git_and_create_publishes_through_the_github_api() {
+        let root = temporary("suplex-provision");
+        init(&root.join("acme/repo.git"), true);
+        let source = init(&root.join("source"), false);
+        commit(&source, "initial");
+        push_main(&source, &root.join("acme/repo.git"));
+        init(&root.join("acme/fresh.git"), true);
+        let created = std::sync::Arc::new(std::sync::Mutex::new(Vec::<(String, Value)>::new()));
+        let recorded = created.clone();
+        let api = github_api(
+            Router::new()
+                .route(
+                    "/user",
+                    axum::routing::get(|| async { Json(json!({"login": "Acme"})) }),
+                )
+                .route(
+                    "/user/repos",
+                    post({
+                        let recorded = recorded.clone();
+                        move |Json(body): Json<Value>| async move {
+                            recorded.lock().unwrap().push(("/user/repos".into(), body));
+                            Json(json!({}))
+                        }
+                    }),
+                )
+                .route(
+                    "/orgs/{owner}/repos",
+                    post(|| async {
+                        (
+                            axum::http::StatusCode::UNPROCESSABLE_ENTITY,
+                            Json(json!({"message": "Repository creation failed.", "errors": [{"message": "name already exists on this account"}]})),
+                        )
+                    }),
+                ),
+        )
+        .await;
+        let github = Github {
+            api: Some((api, "fixture-token".to_owned())),
+            git: Some(format!("file://{}/", root.display())),
+        };
+        let repositories = root.join("repositories");
+
+        let clone_path = repositories.join("acme/repo");
+        let worktrees = root.join("worktrees/acme/repo");
+        ensure(
+            &github,
+            "https://github.com/acme/repo.git",
+            "acme/repo",
+            &clone_path,
+            &worktrees,
+        )
+        .await
+        .unwrap();
+        let checkout = Repository::open(&clone_path).unwrap();
+        assert_eq!(
+            checkout
+                .config()
+                .unwrap()
+                .get_string("remote.origin.url")
+                .unwrap(),
+            "https://github.com/acme/repo.git"
+        );
+        assert!(checkout.find_reference("refs/remotes/origin/main").is_ok());
+        assert!(worktrees.is_dir());
+        assert_eq!(
+            repository::inspect(&clone_path, "main", "github", None)
+                .unwrap()
+                .remote_repository,
+            "acme/repo"
+        );
+        ensure(
+            &github,
+            "https://github.com/acme/repo.git",
+            "acme/repo",
+            &clone_path,
+            &worktrees,
+        )
+        .await
+        .unwrap();
+        let conflict = ensure(
+            &github,
+            "https://github.com/acme/other.git",
+            "acme/other",
+            &clone_path,
+            &worktrees,
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(
+            (conflict.status_code, conflict.findings[0].code.as_str()),
+            (409, "repository-conflict")
+        );
+        let missing = ensure(
+            &github,
+            "https://github.com/acme/missing.git",
+            "acme/missing",
+            &repositories.join("acme/missing"),
+            &worktrees,
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(missing.findings[0].code, "repository-unavailable");
+        assert_eq!(
+            fs::read_dir(repositories.join("acme")).unwrap().count(),
+            1,
+            "a failed clone leaves no directory"
+        );
+
+        let fresh = repository::repository_coordinate("https://github.com/acme/fresh").unwrap();
+        let fresh_path = repositories.join("acme/fresh");
+        create(&github, &fresh, &fresh.clone_url, &fresh_path, "trunk")
+            .await
+            .unwrap();
+        assert_eq!(
+            created.lock().unwrap().as_slice(),
+            &[(
+                "/user/repos".to_owned(),
+                json!({"name": "fresh", "private": true})
+            )]
+        );
+        let published = Repository::open(root.join("acme/fresh.git")).unwrap();
+        let head = published.find_reference("refs/heads/trunk").unwrap();
+        assert_eq!(
+            head.peel_to_commit().unwrap().message_bytes(),
+            b"Initial commit"
+        );
+        let fresh_checkout = Repository::open(&fresh_path).unwrap();
+        let config = fresh_checkout.config().unwrap();
+        assert_eq!(config.get_string("branch.trunk.remote").unwrap(), "origin");
+        assert_eq!(
+            config.get_string("remote.origin.url").unwrap(),
+            "https://github.com/acme/fresh.git"
+        );
+        let exists = create(&github, &fresh, &fresh.clone_url, &fresh_path, "trunk")
+            .await
+            .unwrap_err();
+        assert_eq!(
+            (exists.status_code, exists.findings[0].code.as_str()),
+            (409, "repository-conflict")
+        );
+        let organization =
+            repository::repository_coordinate("https://github.com/meiji/fresh").unwrap();
+        let refused = create(
+            &github,
+            &organization,
+            &organization.clone_url,
+            &repositories.join("meiji/fresh"),
+            "main",
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(
+            (
+                refused.findings[0].code.as_str(),
+                refused.findings[0].message.as_str()
+            ),
+            (
+                "repository-create-failed",
+                "name already exists on this account"
+            )
+        );
+        assert_eq!(fs::read_dir(repositories.join("meiji")).unwrap().count(), 0);
+        fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn repository_commands_follow_mise_then_cargo_and_make_selection_order() {

@@ -971,7 +971,7 @@ pub fn plan_patch(existing: &Project, patch: &ProjectPatch) -> PatchPlan {
 /// TypeScript `validatePatchedRepository`. `None` means the repository host
 /// needs a Bitbucket check that the Rust backend has not ported.
 pub async fn validate_patched_repository(
-    commands: &super::repository::Commands,
+    github: &super::repository::Github,
     roots: (&std::path::Path, &std::path::Path),
     candidate: &Project,
     validate_worktree_write: bool,
@@ -1043,9 +1043,11 @@ pub async fn validate_patched_repository(
             .map(|integration| &integration.repository),
         Some(project_contracts::RepositoryConnection::Bitbucket { .. })
     );
+    let mut access = None;
     if findings.is_empty() {
         let host = if bitbucket { "bitbucket" } else { "github" };
-        match checks::inspect(commands, &repository_path, base_branch, host).await {
+        access = github.access().await.ok();
+        match checks::inspect_with(access.as_ref(), &repository_path, base_branch, host).await {
             Err(errors) => findings.extend(errors),
             Ok(inspection) => {
                 if inspection.canonical_path != repository_path {
@@ -1076,7 +1078,7 @@ pub async fn validate_patched_repository(
         if bitbucket {
             return None;
         }
-        if let Err(error) = checks::verify_github(commands, &repository_path, &identity).await {
+        if let Err(error) = checks::verify_github(access.as_ref(), &identity).await {
             findings.push(error);
         }
     }

@@ -21,7 +21,7 @@ use crate::platform::system_events;
 use crate::runtimes::process::inspect_process;
 use crate::shared::js_json;
 use crate::tasks::commands::{allowed_profile, read_profile};
-use crate::tasks::repository::{self, PullRequestOwned};
+use crate::tasks::repository;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RootSession {
@@ -1776,21 +1776,9 @@ pub fn mark_delivered(
                 )?;
                 if !queued { continue; }
             }
-            let blocked: bool = database.connection().query_row(
-                "SELECT EXISTS(SELECT 1 FROM suplex_task_dependencies d LEFT JOIN suplex_task_controls c ON c.task_id = d.depends_on_task_id WHERE d.task_id = ?1 AND COALESCE(c.status,'backlog') <> 'delivered')",
-                [&dependent], |row| row.get(0),
-            )?;
-            if blocked { continue; }
-            match repository::admit_queued(database, &dependent, now) {
-                Ok(true) => { admitted.push(dependent); continue; }
-                Ok(false) => {}
-                Err(error) if error.is::<PullRequestOwned>() => continue,
-                Err(error) => return Err(error),
+            if repository::reconcile_dependency_release(database, &dependent, now)? {
+                admitted.push(dependent);
             }
-            database.connection().execute(
-                "UPDATE suplex_task_controls SET wake_at = ?1, updated_at = ?1 WHERE task_id = ?2 AND status = 'active'",
-                params![time, dependent],
-            )?;
         }
         Ok(admitted)
     })?;

@@ -15,7 +15,7 @@ use crate::{
         task_answers::{AnswerBody, LimitDecisionBody, TaskLimitDecision},
         tasks::{
             IssueAssociation, TaskContinueDeliveryBody, TaskCoordinatorReplacementBody,
-            TaskCreateBody, TaskDetailsBody, TaskNoteBody, TaskRenameBody,
+            TaskCreateBody, TaskDependenciesBody, TaskDetailsBody, TaskNoteBody, TaskRenameBody,
             TaskWorkerReplacementBody,
         },
     },
@@ -698,6 +698,102 @@ pub fn continue_user_delivery(
             "Continuing pull request delivery is not ported",
         )))
     })
+}
+
+/// Replace a task's prerequisites, then admit or wake it if none still blocks it.
+/// Pull request prerequisites need a GitHub observation, which is not ported.
+pub fn set_user_task_dependencies(
+    database: &mut SuplexDatabase,
+    actor_user_id: &str,
+    task_id: &str,
+    request: &TaskDependenciesBody,
+    now: DateTime<Utc>,
+) -> DatabaseResult<TaskRecord> {
+    let task = require_user_task(database, actor_user_id, task_id)?;
+    for dependency in &request.depends_on {
+        require_user_task(database, actor_user_id, dependency)?;
+    }
+    if !request.blocked_by_pull_requests.is_empty() {
+        return Err(Box::new(TaskFailure::not_ported(
+            "Pull request prerequisites are not ported",
+        )));
+    }
+    let mut depends_on = request.depends_on.clone();
+    depends_on.sort();
+    depends_on.dedup();
+    if depends_on.iter().any(|dependency| dependency == task_id) {
+        return Err(Box::new(TaskFailure::new(
+            "A task cannot depend on itself",
+            422,
+        )));
+    }
+    let time = timestamp(now);
+    database.transaction(true, |database| {
+        for dependency in &depends_on {
+            let company: Option<String> = database
+                .connection()
+                .query_row(
+                    "SELECT company_id FROM suplex_tasks WHERE id = ?1",
+                    [dependency],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            if company.as_deref() != Some(task.company_id.as_str()) {
+                return Err(Box::new(TaskFailure::new(
+                    "A dependency task is not available",
+                    404,
+                )));
+            }
+        }
+        database.connection().execute(
+            "DELETE FROM suplex_task_dependencies WHERE task_id = ?1",
+            [task_id],
+        )?;
+        for dependency in &depends_on {
+            database.connection().execute(
+                "INSERT INTO suplex_task_dependencies (task_id, depends_on_task_id, created_at) VALUES (?1, ?2, ?3)",
+                params![task_id, dependency, time],
+            )?;
+        }
+        // Walking the edges from this task back to itself proves a cycle.
+        let mut seen = std::collections::HashSet::new();
+        let mut queue = depends_on.clone();
+        while let Some(next) = queue.pop() {
+            if next == task_id {
+                return Err(Box::new(TaskFailure::new(
+                    "The dependency creates a cycle",
+                    422,
+                )));
+            }
+            if !seen.insert(next.clone()) {
+                continue;
+            }
+            let mut statement = database.connection().prepare(
+                "SELECT depends_on_task_id FROM suplex_task_dependencies WHERE task_id = ?1",
+            )?;
+            for edge in statement.query_map([&next], |row| row.get::<_, String>(0))? {
+                queue.push(edge?);
+            }
+        }
+        Ok(())
+    })?;
+    // Replace every prerequisite before a queued task is considered for admission.
+    database.transaction(true, |database| {
+        database.connection().execute(
+            "DELETE FROM suplex_task_pull_request_dependencies WHERE task_id = ?1",
+            [task_id],
+        )?;
+        repository::reconcile_dependency_release(database, task_id, now)
+    })?;
+    let task = repository::task_by_id(database, task_id)?.unwrap_or(task);
+    audit(
+        database,
+        actor_user_id,
+        "task_dependencies_updated",
+        &task,
+        now,
+    )?;
+    Ok(task)
 }
 
 /// Clear the task's issue link. Linking an issue first reads it from the issue
@@ -1417,6 +1513,100 @@ mod tests {
             )
             .unwrap();
         assert_eq!((issue_json, context), (None, None));
+        drop(database);
+        let _ = std::fs::remove_file(&filename);
+    }
+
+    #[test]
+    fn dependency_replacement_rejects_cycles_and_admits_a_released_queued_task() {
+        let (filename, mut database, user, prepared) = command_fixture();
+        let now = Utc::now();
+        let first = repository::create(&mut database, &prepared, now)
+            .unwrap()
+            .task;
+        let second_input = PreparedTask {
+            start_queued: true,
+            depends_on: vec![first.id.clone()],
+            ..another(&prepared, "command-second")
+        };
+        let second = repository::create(&mut database, &second_input, now)
+            .unwrap()
+            .task;
+        assert_eq!(second.status, "queued");
+        let body = |depends_on: Vec<String>, pull_requests: Value| {
+            tasks::parse_task_dependencies(Some(
+                &json!({"dependsOn": depends_on, "blockedByPullRequests": pull_requests}),
+            ))
+            .unwrap()
+        };
+        assert_eq!(
+            failure(
+                set_user_task_dependencies(
+                    &mut database,
+                    &user,
+                    &first.id,
+                    &body(vec![second.id.clone()], json!([])),
+                    now
+                )
+                .unwrap_err()
+            ),
+            (422, "The dependency creates a cycle".into())
+        );
+        assert_eq!(
+            failure(
+                set_user_task_dependencies(
+                    &mut database,
+                    &user,
+                    &first.id,
+                    &body(vec![first.id.clone()], json!([])),
+                    now
+                )
+                .unwrap_err()
+            ),
+            (422, "A task cannot depend on itself".into())
+        );
+        assert_eq!(
+            failure(
+                set_user_task_dependencies(
+                    &mut database,
+                    &user,
+                    &second.id,
+                    &body(vec![], json!([{"number": 7}])),
+                    now
+                )
+                .unwrap_err()
+            )
+            .0,
+            501
+        );
+        assert!(
+            set_user_task_dependencies(
+                &mut database,
+                &user,
+                &second.id,
+                &body(vec!["missing".into()], json!([])),
+                now
+            )
+            .is_err()
+        );
+        let released = set_user_task_dependencies(
+            &mut database,
+            &user,
+            &second.id,
+            &body(vec![], json!([])),
+            now,
+        )
+        .unwrap();
+        assert_eq!(released.status, "active");
+        let (edges, audits): (i64, i64) = database
+            .connection()
+            .query_row(
+                "SELECT (SELECT COUNT(*) FROM suplex_task_dependencies WHERE task_id = ?1), (SELECT COUNT(*) FROM suplex_audit_events WHERE action = 'task_dependencies_updated')",
+                [&second.id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!((edges, audits), (0, 1));
         drop(database);
         let _ = std::fs::remove_file(&filename);
     }

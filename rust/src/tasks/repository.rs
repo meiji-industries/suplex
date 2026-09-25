@@ -411,6 +411,33 @@ pub fn rename(
     })
 }
 
+/// Call when a task may have lost its last blocker. A queued task is admitted;
+/// an active task receives an earlier wake. Returns whether it was admitted.
+pub(crate) fn reconcile_dependency_release(
+    database: &mut SuplexDatabase,
+    task_id: &str,
+    now: DateTime<Utc>,
+) -> DatabaseResult<bool> {
+    let blocked: bool = database.connection().query_row(
+        "SELECT EXISTS(SELECT 1 FROM suplex_task_dependencies d LEFT JOIN suplex_task_controls c ON c.task_id = d.depends_on_task_id WHERE d.task_id = ?1 AND COALESCE(c.status,'backlog') <> 'delivered')",
+        [task_id], |row| row.get(0),
+    )?;
+    if blocked {
+        return Ok(false);
+    }
+    match admit_queued(database, task_id, now) {
+        Ok(true) => return Ok(true),
+        Ok(false) => {}
+        Err(error) if error.is::<PullRequestOwned>() => return Ok(false),
+        Err(error) => return Err(error),
+    }
+    database.connection().execute(
+        "UPDATE suplex_task_controls SET wake_at = ?1, updated_at = ?1 WHERE task_id = ?2 AND status = 'active'",
+        params![timestamp(now), task_id],
+    )?;
+    Ok(false)
+}
+
 /// Return a queued task to the manual backlog. A manual backlog task is a no-op.
 pub fn disarm(
     database: &mut SuplexDatabase,

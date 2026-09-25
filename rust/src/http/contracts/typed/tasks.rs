@@ -531,6 +531,35 @@ fn task_shape_findings(fields: &Map<String, Value>) -> ContractResult<Vec<Value>
             errors.push(issue("invalid_type", ".advisorProfileIds"));
         }
     }
+    dependency_findings(fields, &mut errors);
+    if fields.keys().any(|name| {
+        ![
+            "projectId",
+            "title",
+            "description",
+            "idempotencyKey",
+            "images",
+            "rootProfileId",
+            "workerProfileId",
+            "startImmediately",
+            "deliveryTarget",
+            "runProjectTests",
+            "visualEvidence",
+            "source",
+            "issue",
+            "workflow",
+            "advisorProfileIds",
+            "dependsOn",
+            "blockedByPullRequests",
+        ]
+        .contains(&name.as_str())
+    }) {
+        errors.push(issue("unrecognized_keys", "."));
+    }
+    Ok(errors)
+}
+
+fn dependency_findings(fields: &Map<String, Value>, errors: &mut Vec<Value>) {
     if let Some(dependencies) = fields.get("dependsOn") {
         if let Some(dependencies) = dependencies.as_array() {
             for (index, dependency) in dependencies.iter().enumerate() {
@@ -571,31 +600,6 @@ fn task_shape_findings(fields: &Map<String, Value>) -> ContractResult<Vec<Value>
             errors.push(issue("invalid_type", ".blockedByPullRequests"));
         }
     }
-    if fields.keys().any(|name| {
-        ![
-            "projectId",
-            "title",
-            "description",
-            "idempotencyKey",
-            "images",
-            "rootProfileId",
-            "workerProfileId",
-            "startImmediately",
-            "deliveryTarget",
-            "runProjectTests",
-            "visualEvidence",
-            "source",
-            "issue",
-            "workflow",
-            "advisorProfileIds",
-            "dependsOn",
-            "blockedByPullRequests",
-        ]
-        .contains(&name.as_str())
-    }) {
-        errors.push(issue("unrecognized_keys", "."));
-    }
-    Ok(errors)
 }
 
 fn source_findings(source: &Value) -> Vec<Value> {
@@ -1089,6 +1093,39 @@ pub fn parse_task_worker_replacement(
     Ok(parsed)
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Validate)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TaskDependenciesBody {
+    #[serde(default)]
+    #[garde(length(max = MAX_TASK_DEPENDENCIES), inner(custom(check_task_id)))]
+    pub depends_on: Vec<String>,
+    #[serde(default)]
+    #[garde(length(max = MAX_TASK_DEPENDENCIES), dive)]
+    pub blocked_by_pull_requests: Vec<PullRequestDependency>,
+}
+
+/// Both prerequisite lists default to empty; a supplied list replaces the old one.
+pub fn parse_task_dependencies(input: Option<&Value>) -> ContractResult<TaskDependenciesBody> {
+    let fields = object(input)?;
+    let mut findings = Vec::new();
+    dependency_findings(fields, &mut findings);
+    if fields
+        .keys()
+        .any(|key| key != "dependsOn" && key != "blockedByPullRequests")
+    {
+        findings.push(issue("unrecognized_keys", "."));
+    }
+    if !findings.is_empty() {
+        return Err(ContractFailure::Issues(findings));
+    }
+    let parsed: TaskDependenciesBody = serde_json::from_value(Value::Object(fields.clone()))
+        .map_err(|_| ContractFailure::Unhandled)?;
+    parsed
+        .validate()
+        .map_err(|report| ContractFailure::Issues(garde_findings(&report)))?;
+    Ok(parsed)
+}
+
 #[derive(Debug, Clone, Serialize)]
 pub struct TaskIssueBody {
     pub issue: Option<IssueAssociation>,
@@ -1249,6 +1286,15 @@ mod tests {
             "tasks.TaskContinueDeliveryBodySchema",
             12,
             parse_task_continue_delivery,
+        );
+    }
+
+    #[test]
+    fn task_dependencies_request_fixtures_match_public_zod_contract() {
+        assert_request_fixtures(
+            "tasks.TaskDependenciesBodySchema",
+            14,
+            parse_task_dependencies,
         );
     }
 

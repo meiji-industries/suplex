@@ -2,5 +2,6 @@ pub mod codex;
 pub mod git_guard;
 pub mod headless;
 pub mod process;
+pub mod project_mcp;
 pub mod task_harness;
 pub mod task_harness_registry;

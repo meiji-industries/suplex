@@ -146,25 +146,10 @@ const ROUTES: &[(Method, &str, Access)] = &[
         Authenticated,
     ),
     (Method::GET, "/api/tasks/{task_id}/checks", Authenticated),
-    (
-        Method::GET,
-        "/api/tasks/{task_id}/pane/{role}/terminal",
-        Authenticated,
-    ),
     (Method::POST, "/api/tasks/{task_id}/refresh", Authenticated),
     (
         Method::POST,
         "/api/tasks/{task_id}/save-as-template",
-        Authenticated,
-    ),
-    (
-        Method::GET,
-        "/api/tasks/{task_id}/worktree/apps",
-        Authenticated,
-    ),
-    (
-        Method::POST,
-        "/api/tasks/{task_id}/worktree/open",
         Authenticated,
     ),
     (Method::GET, "/api/update", Authenticated),

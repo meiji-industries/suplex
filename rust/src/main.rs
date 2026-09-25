@@ -17,6 +17,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if command == ["mcp", "root"] {
         return suplex::coordination::root_stdio::serve_from_environment().await;
     }
+    if command.starts_with(&["devin".to_owned(), "display".to_owned()]) {
+        return suplex::runtimes::devin::display::main(&command[2..]);
+    }
     let installation = Installation::load()?;
     suplex::platform::system_events::install(installation.logs.clone());
     let database = SuplexDatabase::open(&installation.database, OpenMode::Migrate)?;

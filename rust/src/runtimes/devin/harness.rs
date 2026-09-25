@@ -168,6 +168,7 @@ mod tests {
             project_mcp: None,
             project_context_path: None,
             project_environment: &HashMap::new(),
+            workflow: crate::runtimes::task_harness::WorkflowLaunch::default(),
             excluded_environment_keys: &[],
             executable: Some(&f.executable),
             inherited_environment: &f.inherited,

@@ -50,18 +50,9 @@ async fn providers(State(state): State<AppState>, headers: HeaderMap) -> Respons
         Err(response) => return *response,
     };
     let directory = std::env::current_dir().unwrap_or_default();
-    let observed = tokio::task::spawn_blocking(move || {
-        crate::profiles::provider_catalog::read_providers(&directory.to_string_lossy())
-    })
-    .await;
-    let response = match observed {
-        Ok(value) => Json(value).into_response(),
-        Err(_) => auth::error(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "Provider configuration is not available. Check OpenCode or Claude Code on the Suplex host.",
-        ),
-    };
-    finish(private(response), cookies)
+    let observed =
+        crate::profiles::provider_catalog::read_providers(&directory.to_string_lossy(), true).await;
+    finish(private(Json(observed).into_response()), cookies)
 }
 
 /// `GET /api/admin/models` and `GET /api/models`: provider models for any signed-in user.
@@ -71,16 +62,10 @@ async fn models(State(state): State<AppState>, headers: HeaderMap) -> Response {
         Err(response) => return *response,
     };
     let directory = std::env::current_dir().unwrap_or_default();
-    let response = match tokio::task::spawn_blocking(move || {
-        crate::profiles::provider_catalog::read_providers(&directory.to_string_lossy())
-    })
-    .await
-    {
-        Ok(providers) => {
-            Json(crate::profiles::provider_catalog::list_models(&providers)).into_response()
-        }
-        Err(_) => internal(),
-    };
+    let providers =
+        crate::profiles::provider_catalog::read_providers(&directory.to_string_lossy(), false)
+            .await;
+    let response = Json(crate::profiles::provider_catalog::list_models(&providers)).into_response();
     finish(response, cookies)
 }
 

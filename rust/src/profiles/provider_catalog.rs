@@ -109,8 +109,26 @@ pub fn read_codex_models(codex_home: &Path) -> Vec<Value> {
 }
 
 /// `readProviders`. OpenCode's own vendors fold into its row as vendor-qualified
-/// model ids; neither observation sends a model request.
-pub fn read_providers(directory: &str) -> Value {
+/// model ids; neither observation sends a model request. `probe` checks each sign-in.
+pub async fn read_providers(directory: &str, probe: bool) -> Value {
+    let native = crate::runtimes::opencode::providers::read_providers(Path::new(directory), None)
+        .await
+        .unwrap_or_else(|_| {
+            json!({"directory": directory, "observedAt": crate::tasks::analytics::timestamp(Utc::now()), "providers": []})
+        });
+    let open_code_models = native["providers"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .flat_map(|vendor| {
+            vendor["models"].as_array().into_iter().flatten().map(move |model| {
+                json!({
+                    "id": format!("{}/{}", vendor["id"].as_str().unwrap_or_default(), model["id"].as_str().unwrap_or_default()),
+                    "label": format!("{} ({})", model["label"].as_str().unwrap_or_default(), vendor["label"].as_str().unwrap_or_default()),
+                })
+            })
+        })
+        .collect::<Vec<_>>();
     let environment = std::env::vars().collect::<HashMap<_, _>>();
     let home = crate::profiles::agent_profiles::home_directory();
     let codex_home = environment
@@ -119,30 +137,27 @@ pub fn read_providers(directory: &str) -> Value {
         .or_else(|| home.as_ref().map(|home| home.join(".codex")))
         .unwrap_or_default();
     let rows = [
-        // ponytail: OpenCode vendors (`vendor/model` ids) and the sign-in probe come from
-        // their runtimes; until they land OpenCode lists no models and sign-in stays unknown.
-        (&OPENCODE, "opencode", Vec::new()),
+        (&OPENCODE, "opencode", open_code_models),
         (&CLAUDE, "claude-code", models(CLAUDE_CODE_MODELS)),
         (&DEVIN, "devin", models(DEVIN_MODELS)),
         (&CODEX, "codex", read_codex_models(&codex_home)),
     ];
-    let mut providers = rows
-        .into_iter()
-        .map(|(spec, id, models)| {
-            let installed = resolve_executable(spec, None, &environment, home.as_deref()).is_ok();
-            json!({
-                "id": id, "label": spec.label, "modelCount": models.len(), "models": models,
-                "status": if installed { "configured" } else { "missing" },
-                "connection": {"status": "unknown", "summary": "Suplex did not check the sign-in."},
-            })
-        })
-        .collect::<Vec<_>>();
+    let mut providers = Vec::new();
+    for (spec, id, models) in rows {
+        let installed = resolve_executable(spec, None, &environment, home.as_deref()).is_ok();
+        let connection = if probe {
+            crate::profiles::provider_connection::provider_connection(id).await
+        } else {
+            json!({"status": "unknown", "summary": "Suplex did not check the sign-in."})
+        };
+        providers.push(json!({
+            "id": id, "label": spec.label, "modelCount": models.len(), "models": models,
+            "status": if installed { "configured" } else { "missing" },
+            "connection": connection,
+        }));
+    }
     providers.sort_by(|left, right| left["label"].as_str().cmp(&right["label"].as_str()));
-    json!({
-        "directory": directory,
-        "observedAt": crate::tasks::analytics::timestamp(Utc::now()),
-        "providers": providers,
-    })
+    json!({"directory": native["directory"], "observedAt": native["observedAt"], "providers": providers})
 }
 
 /// `ProjectService.listModels`: every provider model as a selectable option.
@@ -228,9 +243,9 @@ mod tests {
         let _ = fs::remove_file(filename);
     }
 
-    #[test]
-    fn providers_list_one_sorted_row_per_tool_and_models_flatten_them() {
-        let providers = read_providers("/work");
+    #[tokio::test]
+    async fn providers_list_one_sorted_row_per_tool_and_models_flatten_them() {
+        let providers = read_providers("/work", false).await;
         let labels = providers["providers"]
             .as_array()
             .unwrap()

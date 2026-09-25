@@ -2273,7 +2273,7 @@ pub fn observe_for_root(database_path: &Path, control: &Value) -> DatabaseResult
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use serde_json::json;
 
     use super::*;
@@ -2368,7 +2368,7 @@ mod tests {
     }
 
     /// One active task in `workflow` whose worktree is a real repository on its task branch.
-    fn workflow_task(workflow: &str) -> (PathBuf, DeliveryOperations, String, String) {
+    pub(crate) fn workflow_task(workflow: &str) -> (PathBuf, DeliveryOperations, String, String) {
         use crate::tasks::repository::{PreparedTask, TaskCreator};
         let directory =
             std::env::temp_dir().join(format!("suplex-delivery-{}", uuid::Uuid::new_v4()));
@@ -2496,7 +2496,7 @@ mod tests {
     }
 
     /// A loopback GitHub REST API answering each path and query from `replies`.
-    async fn loopback_github(replies: Vec<(&'static str, Value)>) -> Github {
+    pub(crate) async fn loopback_github(replies: Vec<(&'static str, Value)>) -> Github {
         use axum::{Json, Router, extract::OriginalUri, http::StatusCode, response::IntoResponse};
         let replies = std::sync::Arc::new(replies);
         let app = Router::new().fallback(move |OriginalUri(uri): OriginalUri| {

@@ -598,7 +598,6 @@ async fn delivery_approval(
                 &id,
                 request.pull_request_number,
                 &request.head_sha,
-                &request.base_sha,
             )
             .await,
         StatusCode::CREATED,

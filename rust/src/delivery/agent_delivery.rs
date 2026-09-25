@@ -514,7 +514,6 @@ impl AgentDelivery {
         task_id: &str,
         number: u64,
         head_sha: &str,
-        base_sha: &str,
     ) -> DatabaseResult<Observation> {
         let observation = self
             .operations
@@ -541,30 +540,27 @@ impl AgentDelivery {
         ) {
             return Err(failure(blocker, 409));
         }
-        if observation.head_sha.as_deref() != Some(head_sha)
-            || observation.base_sha.as_deref() != Some(base_sha)
-        {
+        // A moved base is not an authorization failure: `execute` checks the
+        // review against the current base.
+        if observation.head_sha.as_deref() != Some(head_sha) {
             return Err(failure(
-                "GitHub reports a different head or base. Refresh the observation before you merge.",
+                "GitHub reports a different head. Refresh the observation before you merge.",
                 409,
             ));
         }
         Ok(observation)
     }
 
-    /// Issue a single-use receipt bound to the observed pull request, head, and base.
+    /// Issue a single-use receipt bound to the observed pull request and head.
     pub async fn issue_approval(
         &self,
         principal: &AgentPrincipal,
         task_id: &str,
         number: u64,
         head_sha: &str,
-        base_sha: &str,
     ) -> DatabaseResult<Value> {
         let (company, _) = self.task(principal, task_id)?;
-        let observed = self
-            .require_eligible(task_id, number, head_sha, base_sha)
-            .await?;
+        let observed = self.require_eligible(task_id, number, head_sha).await?;
         let mut bytes = [0_u8; 32];
         getrandom::fill(&mut bytes).map_err(|error| std::io::Error::other(error.to_string()))?;
         let receipt = format!(
@@ -612,12 +608,12 @@ impl AgentDelivery {
             return Err(failure("The task is not active.", 409));
         }
         let observation = self
-            .require_eligible(task_id, number, expected_head_sha, expected_base_sha)
+            .require_eligible(task_id, number, expected_head_sha)
             .await?;
         let time = now();
         let consumed = self.open(OpenMode::ReadWrite)?.connection().execute(
-            "UPDATE suplex_merge_approvals SET consumed_at = ?1 WHERE receipt_hash = ?2 AND task_id = ?3 AND agent_id = ?4 AND pull_request_number = ?5 AND head_sha = ?6 AND base_sha = ?7 AND consumed_at IS NULL AND expires_at > ?1",
-            params![time, receipt_hash(approval_receipt), task_id, principal.agent_id, number as i64, expected_head_sha, expected_base_sha],
+            "UPDATE suplex_merge_approvals SET consumed_at = ?1 WHERE receipt_hash = ?2 AND task_id = ?3 AND agent_id = ?4 AND pull_request_number = ?5 AND head_sha = ?6 AND consumed_at IS NULL AND expires_at > ?1",
+            params![time, receipt_hash(approval_receipt), task_id, principal.agent_id, number as i64, expected_head_sha],
         )?;
         if consumed != 1 {
             return Err(failure("The approval receipt is not valid.", 403));
@@ -786,5 +782,90 @@ mod tests {
                 .collect::<Vec<_>>(),
             ["a", "x", "b", "c"]
         );
+    }
+
+    #[tokio::test]
+    async fn a_merge_after_the_base_advanced_reaches_the_delivery_operation() {
+        use crate::delivery::operations::tests::{loopback_github, workflow_task};
+        let (directory, operations, task_id, head) = workflow_task("standard");
+        let stale_base = "a".repeat(40);
+        let range = ReviewRange {
+            base_sha: stale_base.clone(),
+            head_sha: head.clone(),
+            files: vec!["a.txt".into()],
+            commits: vec![head.clone()],
+            patch_digest: None,
+        };
+        {
+            let database =
+                SuplexDatabase::open(operations.database_path(), OpenMode::ReadWrite).unwrap();
+            database
+                .connection()
+                .execute_batch(
+                    "INSERT INTO suplex_agents (id, kind, name, avatar_seed, created_at, updated_at) VALUES ('agent_1', 'external', 'Agent', 'seed', 'now', 'now');
+                     INSERT INTO suplex_external_agents (id, company_id, status, paired_at, created_at, updated_at) VALUES ('agent_1', 'company_flow', 'paired', 'now', 'now', 'now');",
+                )
+                .unwrap();
+            database
+                .connection()
+                .execute(
+                    "UPDATE suplex_tasks SET creator_user_id = NULL, creator_agent_id = 'agent_1' WHERE id = ?1",
+                    [&task_id],
+                )
+                .unwrap();
+            database.connection().execute(
+                "UPDATE suplex_task_controls SET status = 'active', delivery_intent_json = json_set(delivery_intent_json, '$.pullRequestNumber', 7), workflow_state_json = json_set(workflow_state_json, '$.acceptedDelivery', json(?1)) WHERE task_id = ?2",
+                params![serde_json::to_string(&range).unwrap(), task_id],
+            ).unwrap();
+        }
+        crate::coordination::root_controller::prepare_root(operations.database_path(), &task_id)
+            .unwrap();
+        // GitHub reports the accepted head on a base that moved after the review.
+        let github = loopback_github(vec![(
+            "/graphql",
+            json!({"data":{"repository":{"pullRequest":{
+                "number":7,"url":"https://github.com/owner/repo/pull/7","state":"OPEN","isDraft":false,
+                "headRefOid":head,"baseRefOid":"b".repeat(40),"mergeable":"MERGEABLE","mergeStateStatus":"CLEAN",
+                "autoMergeRequest":null,"reviewDecision":"APPROVED","author":null,"changedFiles":1,"additions":1,
+                "deletions":0,"title":"Task","commits":{"nodes":[]}}}}}),
+        )])
+        .await;
+        let delivery = AgentDelivery {
+            operations: DeliveryOperations::with_github(
+                operations.database_path(),
+                &directory.join("artifacts"),
+                github,
+            ),
+        };
+        let principal = AgentPrincipal {
+            agent_id: "agent_1".into(),
+            company_id: "company_flow".into(),
+        };
+        let receipt = delivery
+            .issue_approval(&principal, &task_id, 7, &head)
+            .await
+            .unwrap()["receipt"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let error = delivery
+            .merge(&principal, &task_id, 7, &head, &stale_base, &receipt)
+            .await
+            .unwrap_err();
+        // Eligibility, the receipt, and the Coordinator checks fail with a
+        // TaskFailure. This one passed them; the delivery operation decides.
+        assert!(!error.is::<TaskFailure>(), "{error}");
+        let consumed: Option<String> = delivery
+            .open(OpenMode::ReadOnly)
+            .unwrap()
+            .connection()
+            .query_row(
+                "SELECT consumed_at FROM suplex_merge_approvals WHERE task_id = ?1",
+                [&task_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(consumed.is_some());
+        std::fs::remove_dir_all(directory).unwrap();
     }
 }

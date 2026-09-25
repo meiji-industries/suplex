@@ -29,6 +29,23 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
+  rust:
+    name: Rust fmt, clippy, and tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.93.1
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust
+      - run: cargo fmt --manifest-path rust/Cargo.toml --check
+      - run: cargo clippy --manifest-path rust/Cargo.toml --all-targets -- -D warnings
+      - run: cargo test --manifest-path rust/Cargo.toml
+
   test:
     name: Test suite
     runs-on: ${{ inputs.runner || 'blacksmith-8vcpu-ubuntu-2404' }}

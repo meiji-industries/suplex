@@ -41,6 +41,29 @@ export SUPLEX_PORT=${CONDUCTOR_PORT:-4111}
 exec node src/platform/updates/supervisor.ts --watch
 '''
 
+[tasks."dev:rust"]
+description = "Build the frontend and run the isolated experimental Rust backend"
+run = '''
+pnpm exec vite build
+exec cargo +1.93.1 run --manifest-path rust/Cargo.toml --bin suplex
+'''
+
+[tasks."build:rust"]
+description = "Build the experimental Rust binary with frontend assets and migrations"
+run = '''
+pnpm exec vite build
+cargo +1.93.1 build --release --manifest-path rust/Cargo.toml --bin suplex
+'''
+
+[tasks."test:rust"]
+run = "cargo +1.93.1 test --manifest-path rust/Cargo.toml"
+
+[tasks."test:parity"]
+run = '''
+pnpm exec vitest run --project unit tests/parity
+cargo +1.93.1 test --manifest-path rust/Cargo.toml parity
+'''
+
 [tasks.down]
 description = "Stop this checkout's dev stack"
 run = '''

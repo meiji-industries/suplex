@@ -2,6 +2,8 @@ node_modules/
 dist/
 .suplex
 .suplex/
+.suplex-rust/
+rust/target/
 .scratch/
 .audit/
 logs/

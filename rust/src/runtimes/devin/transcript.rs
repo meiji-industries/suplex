@@ -1,5 +1,7 @@
 use serde_json::{Value, json};
 
+use crate::runtimes::{codex::usage::UsageTokens, task_harness::UsageEntry};
+
 // `devin --print` emits presentation text, not a documented event stream. Turn
 // logs are therefore authoritative only for final text; tool and token detail is unavailable.
 pub fn result_text(log: &str) -> &str {
@@ -30,19 +32,19 @@ pub fn history(turns: &[DevinTurn]) -> Vec<Value> {
         .collect()
 }
 
-pub fn usage(turns: &[DevinTurn], session_id: &str, role: &str) -> Vec<Value> {
+pub fn usage(turns: &[DevinTurn]) -> Vec<UsageEntry> {
     turns
         .iter()
-        .map(|turn| {
-            json!({
-                "sessionId": session_id, "messageId": turn.id, "turnId": turn.id, "role": role,
-                "provider": "devin", "model": "unknown", "startedAt": turn.started_at,
-                "completedAt": turn.completed_at, "failed": turn.failed, "summary": false,
-                "steps": if turn.completed_at.is_none() { 0 } else { 1 }, "cost": 0,
-                "subsidized": false,
-                "tokens": {"input": 0, "output": 0, "reasoning": 0, "cache": {"read": 0, "write": 0}},
-                "source": "message",
-            })
+        .map(|turn| UsageEntry {
+            message_id: turn.id.clone(),
+            turn_id: turn.id.clone(),
+            provider: "devin",
+            model: "unknown".into(),
+            started_at_ms: turn.started_at,
+            completed_at_ms: turn.completed_at,
+            failed: turn.failed,
+            tokens: UsageTokens::default(),
+            cost_usd: 0.0,
         })
         .collect()
 }
@@ -75,11 +77,11 @@ mod tests {
             vec![json!({"id":"a","role":"assistant","createdAt":20,
                 "content":[{"id":"a:text","type":"text","text":"Done"}]})]
         );
-        let usage = usage(&turns, "devin-session", "worker");
+        let usage = usage(&turns);
         assert_eq!(usage.len(), 2);
-        assert_eq!(usage[0]["steps"], 1);
-        assert_eq!(usage[0]["provider"], "devin");
-        assert_eq!(usage[1]["steps"], 0);
-        assert_eq!(usage[1]["completedAt"], Value::Null);
+        assert_eq!(usage[0].provider, "devin");
+        assert_eq!(usage[0].model, "unknown");
+        assert_eq!(usage[0].completed_at_ms, Some(30));
+        assert_eq!(usage[1].completed_at_ms, None);
     }
 }

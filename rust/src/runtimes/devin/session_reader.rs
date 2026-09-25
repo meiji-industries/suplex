@@ -12,7 +12,10 @@ use super::{
     task_runtime::{session_busy, turn_running},
     transcript::{self, DevinTurn},
 };
-use crate::runtimes::headless::{self, HeadlessTurnRecord};
+use crate::runtimes::{
+    headless::{self, HeadlessTurnRecord},
+    task_harness::{NativeTimeline, UsageEntry},
+};
 
 fn file_stat(path: &Path) -> io::Result<Option<fs::Metadata>> {
     match fs::metadata(path) {
@@ -174,22 +177,16 @@ pub fn status(runtime_directory: &Path) -> io::Result<(&'static str, i64)> {
     Ok((status, updated_at))
 }
 
-pub struct Timeline {
-    pub usage: Vec<Value>,
-    pub live_message_id: Option<String>,
-}
-
 pub fn timeline(
     runtime_directory: &Path,
     native_session_id: Option<&str>,
-    role: &str,
-) -> io::Result<Timeline> {
+) -> io::Result<NativeTimeline> {
     let Some(native_session_id) = native_session_id else {
         return Err(io::Error::other("Session is not available"));
     };
     let turns = turns(runtime_directory, Some(native_session_id))?;
-    Ok(Timeline {
-        usage: transcript::usage(&turns, native_session_id, role),
+    Ok(NativeTimeline {
+        usage: transcript::usage(&turns),
         live_message_id: turns
             .iter()
             .find(|turn| turn.running)
@@ -226,11 +223,11 @@ mod tests {
             .path()
     }
 
-    fn usage_for<'a>(timeline: &'a Timeline, turn: &str) -> &'a Value {
+    fn usage_for<'a>(timeline: &'a NativeTimeline, turn: &str) -> &'a UsageEntry {
         timeline
             .usage
             .iter()
-            .find(|usage| usage["messageId"] == turn)
+            .find(|usage| usage.message_id == turn)
             .unwrap()
     }
 
@@ -244,13 +241,10 @@ mod tests {
             PromptState::Completed
         );
         let file = |suffix| headless::turn_file(&directory, "msg_1", suffix);
-        let first = timeline(&directory, Some(SESSION), "worker").unwrap().usage[0].clone();
-        assert!(
-            first["startedAt"].as_i64().unwrap()
-                <= modified_at(&fs::metadata(file("prompt")).unwrap())
-        );
+        let first = timeline(&directory, Some(SESSION)).unwrap().usage[0].clone();
+        assert!(first.started_at_ms <= modified_at(&fs::metadata(file("prompt")).unwrap()));
         assert_eq!(
-            first["completedAt"].as_i64().unwrap(),
+            first.completed_at_ms.unwrap(),
             modified_at(&fs::metadata(file("exit")).unwrap())
         );
         File::options()
@@ -259,14 +253,14 @@ mod tests {
             .unwrap()
             .set_modified(SystemTime::now() + Duration::from_secs(60))
             .unwrap();
-        let after = timeline(&directory, Some(SESSION), "worker").unwrap().usage[0].clone();
-        assert_eq!(after["startedAt"], first["startedAt"]);
-        assert_eq!(after["completedAt"], first["completedAt"]);
-        assert_eq!(after["failed"], false);
+        let after = timeline(&directory, Some(SESSION)).unwrap().usage[0].clone();
+        assert_eq!(after.started_at_ms, first.started_at_ms);
+        assert_eq!(after.completed_at_ms, first.completed_at_ms);
+        assert!(!after.failed);
         fs::remove_file(file("prompt")).unwrap();
         let record = fs::metadata(dispatch_record(&directory)).unwrap();
         assert_eq!(
-            timeline(&directory, Some(SESSION), "worker").unwrap().usage[0]["startedAt"],
+            timeline(&directory, Some(SESSION)).unwrap().usage[0].started_at_ms,
             created_at(&record)
         );
         assert_eq!(
@@ -294,28 +288,28 @@ mod tests {
         fs::write(headless::turn_file(&directory, completed, "exit"), "0\n").unwrap();
         dispatch_turn(&f.worker(), SESSION, "msg_live", "Implement the change");
         fs::write(headless::turn_file(&directory, "msg_live", "exit"), "0\n").unwrap();
-        let first = timeline(&directory, Some(SESSION), "worker").unwrap();
+        let first = timeline(&directory, Some(SESSION)).unwrap();
         assert_eq!(first.live_message_id.as_deref(), Some("msg_live"));
-        assert!(usage_for(&first, completed)["completedAt"].is_number());
-        assert_eq!(usage_for(&first, completed)["failed"], false);
-        assert!(usage_for(&first, "msg_live")["completedAt"].is_null());
-        assert_eq!(usage_for(&first, "msg_live")["failed"], false);
-        let started_at = usage_for(&first, "msg_live")["startedAt"].clone();
+        assert!(usage_for(&first, completed).completed_at_ms.is_some());
+        assert!(!usage_for(&first, completed).failed);
+        assert!(usage_for(&first, "msg_live").completed_at_ms.is_none());
+        assert!(!usage_for(&first, "msg_live").failed);
+        let started_at = usage_for(&first, "msg_live").started_at_ms;
         fs::write(
             headless::turn_file(&directory, "msg_live", "jsonl"),
             "New output",
         )
         .unwrap();
         fs::remove_file(directory.join("turn.json")).unwrap();
-        let after_missing = timeline(&directory, Some(SESSION), "worker").unwrap();
+        let after_missing = timeline(&directory, Some(SESSION)).unwrap();
         assert_eq!(after_missing.live_message_id.as_deref(), Some("msg_live"));
         assert_eq!(
-            usage_for(&after_missing, "msg_live")["startedAt"],
+            usage_for(&after_missing, "msg_live").started_at_ms,
             started_at
         );
         fs::copy(dispatch_record(&directory), directory.join("turn.json")).unwrap();
         assert_eq!(
-            timeline(&directory, Some(SESSION), "worker")
+            timeline(&directory, Some(SESSION))
                 .unwrap()
                 .live_message_id
                 .as_deref(),
@@ -333,14 +327,14 @@ mod tests {
             eventually(&directory, SESSION, "msg_crash").state,
             PromptState::Error
         );
-        let failed = timeline(&directory, Some(SESSION), "worker").unwrap().usage;
+        let failed = timeline(&directory, Some(SESSION)).unwrap().usage;
         assert_eq!(failed.len(), 1);
-        assert_eq!(failed[0]["failed"], true);
-        assert!(failed[0]["completedAt"].is_number());
+        assert!(failed[0].failed);
+        assert!(failed[0].completed_at_ms.is_some());
         fs::remove_file(headless::turn_file(&directory, "msg_crash", "exit")).unwrap();
-        let incomplete = timeline(&directory, Some(SESSION), "worker").unwrap().usage;
-        assert_eq!(incomplete[0]["failed"], false);
-        assert!(incomplete[0]["completedAt"].is_null());
+        let incomplete = timeline(&directory, Some(SESSION)).unwrap().usage;
+        assert!(!incomplete[0].failed);
+        assert!(incomplete[0].completed_at_ms.is_none());
         assert_eq!(status(&directory).unwrap().0, "idle");
     }
 
@@ -354,13 +348,10 @@ mod tests {
             "Reviewed the change.\n",
         )
         .unwrap();
-        let usage = timeline(&directory, Some("devin-reserved"), "worker")
-            .unwrap()
-            .usage;
+        let usage = timeline(&directory, Some("devin-reserved")).unwrap().usage;
         assert_eq!(usage.len(), 1);
-        assert_eq!(usage[0]["sessionId"], "devin-reserved");
-        assert_eq!(usage[0]["messageId"], "turn-1");
-        assert_eq!(usage[0]["provider"], "devin");
-        assert!(timeline(&directory, None, "worker").is_err());
+        assert_eq!(usage[0].message_id, "turn-1");
+        assert_eq!(usage[0].provider, "devin");
+        assert!(timeline(&directory, None).is_err());
     }
 }

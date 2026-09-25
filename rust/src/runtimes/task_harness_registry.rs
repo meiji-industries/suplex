@@ -11,6 +11,7 @@ pub fn harness(kind: &str) -> Option<&'static dyn TaskHarness> {
     match kind {
         "codex" => Some(&CodexTaskRuntime),
         "claude-code" => Some(&ClaudeCodeTaskRuntime),
+        "devin" => Some(&super::devin::harness::DevinTaskRuntime),
         _ => None,
     }
 }

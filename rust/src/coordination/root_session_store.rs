@@ -744,7 +744,9 @@ pub fn launch_standard_worker(
             |row| row.get(0),
         )?;
         if workflow != "standard" {
-            return Err(std::io::Error::other("standard_worker_requires_standard_workflow").into());
+            return Err(Box::new(crate::tasks::commands::TaskFailure::not_ported(
+                "Only Standard workflow Worker launch is ported",
+            )));
         }
         let active_turn: bool = database.connection().query_row(
             "SELECT EXISTS(SELECT 1 FROM suplex_task_sessions s JOIN suplex_task_turns t ON t.session_id = s.id AND t.generation = s.generation WHERE s.task_id = ?1 AND s.kind = 'worker' AND s.is_current = 1 AND t.status IN ('pending_prompt','prompted','unknown'))",

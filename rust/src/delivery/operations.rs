@@ -14,7 +14,10 @@ use serde_json::{Value, json};
 use crate::{
     coordination::{root_bridge::RootIdentity, root_session_store},
     platform::database::{DatabaseResult, OpenMode, SuplexDatabase},
-    tasks::worktree::{self, LocalRevisionObservation},
+    tasks::{
+        commands::TaskFailure,
+        worktree::{self, LocalRevisionObservation},
+    },
 };
 
 #[derive(Debug, Eq, PartialEq)]
@@ -30,6 +33,20 @@ impl fmt::Display for DeliveryOperationFailure {
 }
 
 impl Error for DeliveryOperationFailure {}
+
+/// TypeScript `DeliveryOperations.observe`: a finished task keeps its recorded
+/// pull request, and a local-worktree task has no pull request to observe.
+pub fn observe(control: &Value) -> DatabaseResult<Value> {
+    if matches!(control["status"].as_str(), Some("cancelled" | "delivered")) {
+        return Ok(control["pullRequest"].clone());
+    }
+    if control["deliveryTarget"] == "local_worktree" {
+        return Ok(Value::Null);
+    }
+    Err(Box::new(TaskFailure::not_ported(
+        "GitHub pull request observation is not ported",
+    )))
+}
 
 /// Check source control state before waiting for a Git observation.
 pub fn standard_local_worktree_path(control: &Value) -> Result<&str, DeliveryOperationFailure> {
@@ -77,9 +94,9 @@ pub async fn complete_local_work(
     let initial = SuplexDatabase::open(database_path, OpenMode::ReadOnly)?;
     let control = root_session_store::root_observation_rows(&initial, &root.task_id)?.control;
     if control["workflow"] != "standard" {
-        return Err(
-            io::Error::other("Standard local completion requires Standard workflow").into(),
-        );
+        return Err(Box::new(TaskFailure::not_ported(
+            "Only Standard workflow local completion is ported",
+        )));
     }
     let path = PathBuf::from(standard_local_worktree_path(&control)?);
     drop(initial);
@@ -112,6 +129,22 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+
+    #[test]
+    fn delivery_observation_matches_typescript_observe() {
+        let local =
+            json!({"status":"active","deliveryTarget":"local_worktree","pullRequest":{"number":7}});
+        assert_eq!(observe(&local).unwrap(), Value::Null);
+        let delivered = json!({"status":"delivered","deliveryTarget":"pull_request","pullRequest":{"number":7}});
+        assert_eq!(observe(&delivered).unwrap(), json!({"number":7}));
+        let github = json!({"status":"active","deliveryTarget":"pull_request","pullRequest":null});
+        let failure = observe(&github).unwrap_err();
+        let failure = failure.downcast_ref::<TaskFailure>().unwrap();
+        assert_eq!(
+            (failure.status_code, failure.code),
+            (501, "experimental_not_ported")
+        );
+    }
 
     #[test]
     fn standard_completion_uses_actual_branch_and_head_without_a_clean_tree_gate() {

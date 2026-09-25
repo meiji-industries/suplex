@@ -2,10 +2,10 @@
 //! and the outer task wake loop call this after durable task/root setup.
 
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{BTreeSet, HashMap, HashSet},
     io,
     path::{Path, PathBuf},
-    sync::OnceLock,
+    sync::{Mutex, OnceLock, PoisonError},
 };
 
 use chrono::{DateTime, SecondsFormat, Utc};
@@ -37,6 +37,7 @@ use crate::{
     shared::js_json,
     tasks::{
         archive::processes,
+        commands::TaskFailure,
         worktree::{self, TaskWorktreeIntent, WorktreeReference},
     },
 };
@@ -202,6 +203,26 @@ fn retired_owner_can_stop(saved_start: Option<&str>, observed: ProcessOwnerObser
         }
         ProcessOwnerObservation::Unknown => false,
     }
+}
+
+/// Sessions whose unported provider was already reported. The sweep skips
+/// them before any claim, so it does not fail the task every second.
+// ponytail: process-local; a restart reports each unported session once more.
+static UNPORTED_SESSIONS: Mutex<BTreeSet<String>> = Mutex::new(BTreeSet::new());
+
+fn skip_unported(session_id: &str, message: &str) -> Option<PromptObservation> {
+    let failure = TaskFailure::not_ported(message);
+    if UNPORTED_SESSIONS
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .insert(session_id.to_owned())
+    {
+        eprintln!(
+            "warning: session {session_id} is skipped: {failure} ({})",
+            failure.code
+        );
+    }
+    None
 }
 
 fn dispatch_state(turn: &RootTurn) -> DispatchState {
@@ -552,14 +573,8 @@ async fn observed_usage(database_path: &Path, task_id: &str) -> DatabaseResult<T
     )
     .await?
     .map_err(io::Error::other)?;
-    if observed
-        .iter()
-        .any(|(_, _, _, session)| session.turns.is_empty())
-    {
-        return Err(
-            io::Error::other("Codex turn usage is not available; observation will retry").into(),
-        );
-    }
+    // TypeScript `observeTaskLimitUsage`: a session without usage leaves the
+    // observation incomplete; dispatch continues with the partial cost.
     static PRICING: OnceLock<Result<ModelsDevCatalogReader, String>> = OnceLock::new();
     let unpriced = observed.iter().any(|(_, _, _, session)| {
         session.turns.iter().any(|turn| {
@@ -594,14 +609,6 @@ fn replace_observed_usage(
     observed: Vec<(String, String, String, usage::CodexUsageObservation)>,
     pricing: Option<&crate::profiles::model_pricing::ModelPricingCatalog>,
 ) -> DatabaseResult<f64> {
-    if observed
-        .iter()
-        .any(|(_, _, _, session)| session.turns.is_empty())
-    {
-        return Err(
-            io::Error::other("Codex turn usage is not available; observation will retry").into(),
-        );
-    }
     let mut snapshots = Vec::new();
     let mut cost = 0.0;
     for (_, native_id, role, session) in observed {
@@ -675,6 +682,13 @@ fn recover_prepared_root_blocking(
     else {
         return Ok(None);
     };
+    let rows = root_session_store::root_observation_rows(&database, task_id)?;
+    if rows.control["rootProfile"]["provider"] != "codex" {
+        return Ok(skip_unported(
+            &session.id,
+            "Only Codex Standard Root execution is ported",
+        ));
+    }
     if current_owner_still_running(&session) {
         return Ok(None);
     }
@@ -718,15 +732,9 @@ fn recover_prepared_root_blocking(
             complete_root_if_terminal(&mut database, database_path, &session, &turn, &before)?;
             return Ok(before);
         }
-        let rows = root_session_store::root_observation_rows(&database, task_id)?;
         let worktree = rows.control["worktree"]["path"]
             .as_str()
             .ok_or_else(|| io::Error::other("Task worktree is not prepared"))?;
-        if rows.control["rootProfile"]["provider"] != "codex" {
-            return Err(
-                io::Error::other("Only Codex Standard Root execution is implemented").into(),
-            );
-        }
         let model = rows.control["rootProfile"]["model"]
             .as_str()
             .ok_or_else(|| io::Error::other("Root model is missing"))?;
@@ -835,6 +843,13 @@ fn recover_prepared_worker_blocking(
     if !root_session_store::worker_replacement_ready(&database, &session.id)? {
         return Ok(None);
     }
+    let rows = root_session_store::root_observation_rows(&database, task_id)?;
+    if rows.control["workerProfile"]["provider"] != "codex" {
+        return Ok(skip_unported(
+            &session.id,
+            "Only Codex Standard Worker execution is ported",
+        ));
+    }
     if current_owner_still_running(&session) {
         return Ok(None);
     }
@@ -865,7 +880,6 @@ fn recover_prepared_worker_blocking(
         )? {
             return Err(io::Error::other("Native Worker session changed before dispatch").into());
         }
-        let rows = root_session_store::root_observation_rows(&database, task_id)?;
         let worker = rows
             .worker
             .as_ref()
@@ -900,11 +914,6 @@ fn recover_prepared_worker_blocking(
             .as_str()
             .ok_or_else(|| io::Error::other("Task worktree is not prepared"))?;
         let profile = &rows.control["workerProfile"];
-        if profile["provider"] != "codex" {
-            return Err(
-                io::Error::other("Only Codex Standard Worker execution is implemented").into(),
-            );
-        }
         let model = profile["model"]
             .as_str()
             .ok_or_else(|| io::Error::other("Worker model is missing"))?;
@@ -1469,6 +1478,213 @@ mod tests {
         );
     }
 
+    /// A queued Standard local-worktree task with Codex profiles.
+    fn fixture_task() -> (PathBuf, PathBuf, String) {
+        let base = std::env::temp_dir().join(format!("suplex-usage-{}", Uuid::new_v4()));
+        fs::create_dir_all(&base).unwrap();
+        let database_path = base.join("suplex.sqlite");
+        let now = Utc::now();
+        let task_id = {
+            let mut database = SuplexDatabase::open(&database_path, OpenMode::Migrate).unwrap();
+            let user = auth::development_sign_in(&mut database, now).unwrap().user;
+            let time = now.to_rfc3339();
+            database.connection().execute("INSERT INTO suplex_companies (id,name,status,created_at) VALUES ('usage_company','Usage','active',?1)", [&time]).unwrap();
+            database.connection().execute("INSERT INTO suplex_projects (id,company_id,name,repository_path,worktree_root,repository_identity,base_branch,setup_command,verification_command,root_profile_id,worker_profile_id,agent_task_policy_json,created_at,updated_at) VALUES ('usage_project','usage_company','Project','/tmp/repo','/tmp/worktrees',NULL,'main','','','root_profile','worker_profile','{}',?1,?1)", [&time]).unwrap();
+            let prepared = PreparedTask {
+                id: repository::new_task_id(),
+                company_id: "usage_company".into(),
+                project_id: "usage_project".into(),
+                title: "Usage task".into(),
+                description: "Observe usage".into(),
+                configuration: serde_json::json!({"repository":"owner/repo","branch":"task-usage","baseBranch":"main"}),
+                idempotency_key: "usage-key".into(),
+                request_hash: "usage-request".into(),
+                creator: TaskCreator::User(user.id),
+                delivery_target: "local_worktree".into(),
+                delivery_intent: serde_json::json!({"repository":"owner/repo","headBranch":"task-usage","baseBranch":"main"}),
+                root_profile: serde_json::json!({"profileId":"root_profile","provider":"codex","model":"gpt-6-sol","reasoningLevel":"medium","serviceTier":"default"}),
+                worker_profile: serde_json::json!({"profileId":"worker_profile","provider":"codex","model":"gpt-6-sol","reasoningLevel":"medium","serviceTier":"default"}),
+                advisor_profiles: serde_json::json!({}),
+                issue: None,
+                start_queued: true,
+                copied_from_task_id: None,
+                depends_on: vec![],
+            };
+            repository::create(&mut database, &prepared, now)
+                .unwrap()
+                .task
+                .id
+        };
+        (base, database_path, task_id)
+    }
+
+    #[tokio::test]
+    async fn empty_native_usage_is_incomplete_and_does_not_block_dispatch() {
+        let (base, database_path, task_id) = fixture_task();
+        let now = Utc::now();
+        let root = root_controller::prepare_root(&database_path, &task_id).unwrap();
+        let turn_id = {
+            let mut database = SuplexDatabase::open(&database_path, OpenMode::ReadWrite).unwrap();
+            assert!(
+                root_session_store::bind_native_session(&mut database, &root, "codex-usage", now)
+                    .unwrap()
+            );
+            let turn = root_session_store::pending_turns(&database, &root.id)
+                .unwrap()
+                .remove(0);
+            database
+                .connection()
+                .execute(
+                    "UPDATE suplex_task_turns SET status = 'prompted', prompted_at = ?1 WHERE id = ?2",
+                    rusqlite::params![now.to_rfc3339(), turn.id],
+                )
+                .unwrap();
+            turn.id
+        };
+        let directory = session_reader::session_directory(&database_path, &root.id).unwrap();
+        fs::create_dir_all(&directory).unwrap();
+        fs::write(
+            directory.join(format!("turn-{turn_id}.jsonl")),
+            "{\"type\":\"thread.started\",\"thread_id\":\"codex-usage\"}\n",
+        )
+        .unwrap();
+        assert!(
+            !usage::observe_session(&directory, "codex-usage", None)
+                .unwrap()
+                .complete
+        );
+        let observed = observed_usage(&database_path, &task_id).await.unwrap();
+        assert_eq!(observed.estimated_cost_usd, Some(0.0));
+        fs::remove_dir_all(base).unwrap();
+    }
+
+    #[tokio::test]
+    async fn unported_workflows_report_501_and_the_sweep_skips_them() {
+        let (base, database_path, task_id) = fixture_task();
+        let root = root_controller::prepare_root(&database_path, &task_id).unwrap();
+        let identity = RootIdentity {
+            task_id: task_id.clone(),
+            session_id: root.id.clone(),
+            generation: root.generation,
+        };
+        {
+            let database = SuplexDatabase::open(&database_path, OpenMode::ReadWrite).unwrap();
+            database.connection().execute(
+                "UPDATE suplex_task_controls SET root_profile_json = json_set(root_profile_json,'$.provider','opencode'), workflow = 'competing_plans' WHERE task_id = ?1",
+                [&task_id],
+            ).unwrap();
+        }
+        let failure = root_controller::observe(&database_path, &identity).unwrap_err();
+        let failure = failure.downcast_ref::<TaskFailure>().unwrap();
+        assert_eq!(
+            (failure.status_code, failure.code),
+            (501, "experimental_not_ported")
+        );
+        let environment = HashMap::new();
+        for _ in 0..2 {
+            assert!(
+                recover_prepared_root(&database_path, &base, &task_id, None, &environment)
+                    .await
+                    .unwrap()
+                    .is_none()
+            );
+        }
+        let database = SuplexDatabase::open(&database_path, OpenMode::ReadOnly).unwrap();
+        let root = root_session_store::current_root(&database, &task_id)
+            .unwrap()
+            .unwrap();
+        assert!(root.native_session_id.is_none() && root.launch_owner.is_none());
+        assert!(UNPORTED_SESSIONS.lock().unwrap().contains(&root.id));
+        fs::remove_dir_all(base).unwrap();
+    }
+
+    fn tagged_sleep(markers: &[(&str, &Path)]) -> std::process::Child {
+        use std::os::unix::process::CommandExt;
+        let mut command = std::process::Command::new("/usr/bin/python3");
+        command
+            .args(["-c", "import time; time.sleep(300)"])
+            .env_clear()
+            .process_group(0);
+        for (key, directory) in markers {
+            command.env(key, crate::runtimes::process::owner_marker(directory));
+        }
+        command.spawn().unwrap()
+    }
+
+    fn visible(key: &str, directory: &Path, child: &std::process::Child) -> bool {
+        (0..40).any(|_| {
+            let found = crate::runtimes::headless::discovered_process_ids(key, directory)
+                .is_ok_and(|pids| pids.contains(&child.id()));
+            if !found {
+                std::thread::sleep(Duration::from_millis(100));
+            }
+            found
+        })
+    }
+
+    #[test]
+    fn retired_session_cleanup_preserves_another_session_in_the_same_worktree() {
+        let base = std::env::temp_dir().join(format!("suplex-retired-{}", Uuid::new_v4()));
+        let worktree = base.join("worktree");
+        let retired_directory = base.join("retired-session");
+        let current_directory = base.join("current-session");
+        fs::create_dir_all(&worktree).unwrap();
+        let mut retired = tagged_sleep(&[
+            ("SUPLEX_TASK_PROCESS_OWNER", &worktree),
+            ("SUPLEX_SESSION_PROCESS_OWNER", &retired_directory),
+        ]);
+        let mut current = tagged_sleep(&[
+            ("SUPLEX_TASK_PROCESS_OWNER", &worktree),
+            ("SUPLEX_SESSION_PROCESS_OWNER", &current_directory),
+        ]);
+        let result = (|| {
+            assert!(visible(
+                "SUPLEX_SESSION_PROCESS_OWNER",
+                &retired_directory,
+                &retired
+            ));
+            crate::runtimes::headless::stop_session(&retired_directory, None)?;
+            retired.wait()?;
+            assert!(current.try_wait()?.is_none());
+            io::Result::Ok(())
+        })();
+        let _ = retired.kill();
+        let _ = retired.wait();
+        let _ = current.kill();
+        let _ = current.wait();
+        fs::remove_dir_all(base).unwrap();
+        result.unwrap();
+    }
+
+    #[test]
+    fn dispatch_recovery_stops_the_old_execution_without_stopping_its_replacement() {
+        let runtime = std::env::temp_dir().join(format!("suplex-execution-{}", Uuid::new_v4()));
+        let launch = |generation: &str| {
+            tagged_sleep(&[
+                ("SUPLEX_SESSION_PROCESS_OWNER", &runtime),
+                ("SUPLEX_EXECUTION_PROCESS_OWNER", &runtime.join(generation)),
+            ])
+        };
+        let mut old = launch("old");
+        let mut replacement = launch("replacement");
+        let result = (|| {
+            assert!(visible(
+                "SUPLEX_EXECUTION_PROCESS_OWNER",
+                &runtime.join("old"),
+                &old
+            ));
+            crate::runtimes::headless::stop_execution(&runtime, "old")?;
+            old.wait()?;
+            assert!(replacement.try_wait()?.is_none());
+            io::Result::Ok(())
+        })();
+        let _ = old.kill();
+        let _ = old.wait();
+        let _ = replacement.kill();
+        let _ = replacement.wait();
+        result.unwrap();
+    }
+
     #[tokio::test]
     async fn root_dispatch_claim_survives_reopen_without_replaying_child() {
         let base = std::env::temp_dir().join(format!("suplex-root-host-{}", Uuid::new_v4()));
@@ -1679,7 +1895,9 @@ mod tests {
                 complete: false,
                 estimated_cost_usd: 0.0,
             };
-            assert!(
+            // TypeScript `replaceNativeUsage` replaces the task usage with the
+            // partial observation; missing native usage never blocks dispatch.
+            assert_eq!(
                 replace_observed_usage(
                     &database_path,
                     &task_id,
@@ -1691,13 +1909,14 @@ mod tests {
                     )],
                     None
                 )
-                .is_err()
+                .unwrap(),
+                0.0
             );
             let retained: i64 = database.connection().query_row(
                 "SELECT COUNT(*) FROM suplex_task_usage WHERE task_id = ?1 AND message_id = 'prior-native'",
                 [&task_id], |row| row.get(0),
             ).unwrap();
-            assert_eq!(retained, 1);
+            assert_eq!(retained, 0);
         }
         let mut database = SuplexDatabase::open(&database_path, OpenMode::ReadWrite).unwrap();
         root_session_store::launch_standard_worker(

@@ -20,7 +20,7 @@ use sha2::{Digest, Sha256};
 
 use super::operations::{DeliveryOperations, Recheck, delivery_failure};
 use crate::{
-    integrations::{github_delivery, issue_tracker::IssueTracker},
+    integrations::{bitbucket::ReleasePort, github_delivery, issue_tracker::IssueTracker},
     platform::{
         artifacts::{self, ArtifactInput},
         database::{DatabaseResult, OpenMode, SuplexDatabase},
@@ -405,7 +405,7 @@ async fn publish(
         .as_str()
         .unwrap_or("")
         .to_owned();
-    let github = operations.github(task_id).await?;
+    let github = operations.for_task(task_id).await?;
     let text = |error: Box<dyn Error>| error.to_string();
     let inspect_before_write = || async {
         let control = control_now(operations, task_id).map_err(text)?;
@@ -481,16 +481,28 @@ async fn publish(
                         .map_err(|error| error.to_string())?;
                     let name = format!("suplex-{task_id}-{}.{extension}", hash(&bytes));
                     recheck_now().map_err(|error| error.to_string())?;
-                    if configuration["integration"]["repository"]["kind"] == "bitbucket" {
-                        return Err("Bitbucket evidence upload is not ported".into());
+                    let phase = screenshot["phase"].as_str().unwrap_or("");
+                    let connection = &configuration["integration"]["repository"];
+                    let url = match ReleasePort::bitbucket(connection) {
+                        Some(client) => {
+                            client
+                                .upload(&repository, &name, &bytes, mime, &before_write)
+                                .await?
+                        }
+                        None => {
+                            tracker
+                                .upload(&publication["issue"], &name, &bytes, mime, &before_write)
+                                .await?
+                        }
+                    };
+                    links.push(format!("[{phase}: {filename}]({url})"));
+                    if connection["kind"] == "bitbucket" && publication["issue"]["kind"] == "jira" {
+                        recheck_now().map_err(|error| error.to_string())?;
+                        let issue_url = tracker
+                            .upload(&publication["issue"], &name, &bytes, mime, &before_write)
+                            .await?;
+                        links.push(format!("[{phase}: {filename} (Jira)]({issue_url})"));
                     }
-                    let url = tracker
-                        .upload(&publication["issue"], &name, &bytes, mime, &before_write)
-                        .await?;
-                    links.push(format!(
-                        "[{}: {filename}]({url})",
-                        screenshot["phase"].as_str().unwrap_or("")
-                    ));
                 }
                 render_delivery_evidence(&evidence, &links)
             }
@@ -520,9 +532,13 @@ async fn publish(
         if *existing != body {
             github
                 .update_draft_pull_request(&repository, number, title, &body)
-                .await?;
+                .await
+                .map_err(|error| error.to_string())?;
         }
-        let observed = github.get_pull_request(&repository, number).await?;
+        let observed = github
+            .get_pull_request(&repository, number)
+            .await
+            .map_err(|error| error.to_string())?;
         if observed.head_sha != head_sha || observed.body.as_deref() != Some(body.as_str()) {
             return Err("The repository has not confirmed the evidence and reviewed source".into());
         }

@@ -2,8 +2,8 @@
 //! deterministic delivery operation. The durable task control is rechecked
 //! after each provider await and before each mutation.
 //! Non-Standard workflows apply `workflows::delivery_decision` to the reviewed
-//! range and fresh local facts. Bitbucket delivery is not ported here; it
-//! returns 501 at the one seam that needs it.
+//! range and fresh local facts. Bitbucket repositories deliver through the
+//! Bitbucket release port.
 
 use std::{
     error::Error,
@@ -27,13 +27,13 @@ use crate::{
         workflows::{self, DeliveryRefusal, LocalSourceFacts},
     },
     integrations::{
+        bitbucket::ReleasePort,
         github_delivery::{self, Github, GithubFailure, MergeResult, Observation, PullRequest},
         github_triggers_dispatches::{self, DeliveryPolicy},
         github_triggers_inspection::{self, PullRequestInspection},
     },
     platform::database::{DatabaseResult, OpenMode, SuplexDatabase},
     tasks::{
-        commands::TaskFailure,
         repository,
         worktree::{self, LocalRevisionObservation},
     },
@@ -61,10 +61,6 @@ pub fn delivery_failure(code: &'static str, message: impl Into<String>) -> Box<d
         code,
         message: message.into(),
     })
-}
-
-fn not_ported(message: &str) -> Box<dyn Error> {
-    Box::new(TaskFailure::not_ported(message))
 }
 
 fn timestamp(time: chrono::DateTime<Utc>) -> String {
@@ -491,17 +487,19 @@ impl DeliveryOperations {
     }
 
     /// TypeScript `forTask`: Bitbucket repositories use their own provider.
-    pub async fn github(&self, task_id: &str) -> DatabaseResult<&Github> {
-        if self.context(task_id)?["configuration"]["integration"]["repository"]["kind"]
-            == "bitbucket"
+    pub async fn for_task(&self, task_id: &str) -> DatabaseResult<ReleasePort<'_>> {
+        let context = self.context(task_id)?;
+        if let Some(client) =
+            ReleasePort::bitbucket(&context["configuration"]["integration"]["repository"])
         {
-            return Err(not_ported("Bitbucket delivery is not ported"));
+            return Ok(ReleasePort::Bitbucket(client));
         }
-        Ok(self
-            .github
-            .get_or_try_init(Github::load)
-            .await
-            .map_err(Box::new)?)
+        Ok(ReleasePort::Github(
+            self.github
+                .get_or_try_init(Github::load)
+                .await
+                .map_err(Box::new)?,
+        ))
     }
 
     pub fn recheck(&self, recheck: &Recheck<'_>) -> DatabaseResult<()> {
@@ -721,7 +719,7 @@ impl DeliveryOperations {
             .as_str()
             .unwrap_or("")
             .to_owned();
-        let github = self.github(task_id).await?;
+        let github = self.for_task(task_id).await?;
         let number = control["pullRequest"]["number"]
             .as_u64()
             .or_else(|| control["deliveryIntent"]["pullRequestNumber"].as_u64());
@@ -736,11 +734,16 @@ impl DeliveryOperations {
             .await
         {
             Ok(observed) => observed,
-            Err(error) if error.code == "authentication-required" => {
-                let asked = self.fail_delivery_wait(task_id, &wait, &format!("GitHub could not access this pull request. Restore the GitHub CLI login or repository permission, then continue. {}", error.summary))?;
+            Err(error) => {
+                let Some(denied) = error
+                    .downcast_ref::<GithubFailure>()
+                    .filter(|failure| failure.code == "authentication-required")
+                else {
+                    return Err(error);
+                };
+                let asked = self.fail_delivery_wait(task_id, &wait, &format!("GitHub could not access this pull request. Restore the GitHub CLI login or repository permission, then continue. {}", denied.summary))?;
                 return Ok(if asked { "changed" } else { "none" });
             }
-            Err(error) => return Err(Box::new(error)),
         };
         if observed.state.as_deref() == Some("merged")
             && let Some(number) = observed.number
@@ -796,7 +799,7 @@ impl DeliveryOperations {
         else {
             return Ok(None);
         };
-        let Ok(github) = self.github(task_id).await else {
+        let Ok(github) = self.for_task(task_id).await else {
             return Ok(None);
         };
         Ok(github
@@ -835,7 +838,7 @@ impl DeliveryOperations {
         let repository = control["deliveryIntent"]["repository"]
             .as_str()
             .unwrap_or("");
-        let github = self.github(task_id).await?;
+        let github = self.for_task(task_id).await?;
         let mut branch = control["deliveryIntent"]["baseBranch"]
             .as_str()
             .unwrap_or("")
@@ -866,7 +869,7 @@ impl DeliveryOperations {
         };
         let path = PathBuf::from(control["worktree"]["path"].as_str().unwrap_or(""));
         let token = self
-            .github(control["taskId"].as_str().unwrap_or(""))
+            .for_task(control["taskId"].as_str().unwrap_or(""))
             .await?
             .token()
             .map(str::to_owned);
@@ -974,7 +977,7 @@ impl DeliveryOperations {
             PathBuf::from(path),
             review.clone(),
             base_sha.to_owned(),
-            self.github(task_id).await?.token().map(str::to_owned),
+            self.for_task(task_id).await?.token().map(str::to_owned),
         );
         Ok(tokio::task::spawn_blocking(move || {
             inspection::review_equivalence(&path, &review, &base, token.as_deref())
@@ -1235,8 +1238,8 @@ impl DeliveryOperations {
             .as_str()
             .unwrap_or("")
             .to_owned();
-        let github = self.github(task_id).await?;
-        let remote = github_delivery::remote_repository(&path).map_err(Box::new)?;
+        let github = self.for_task(task_id).await?;
+        let remote = github.remote_repository(&path).map_err(Box::new)?;
         if remote != repository {
             return Err(delivery_failure(
                 "head_diverged",
@@ -1393,7 +1396,7 @@ impl DeliveryOperations {
         let repository = control["deliveryIntent"]["repository"]
             .as_str()
             .unwrap_or("");
-        let github = self.github(task_id).await?;
+        let github = self.for_task(task_id).await?;
         if let Some(number) = control["deliveryIntent"]["pullRequestNumber"].as_u64() {
             let pull = github.get_pull_request(repository, number).await?;
             return self.adopt_known_pull(control, &pull, options).await;
@@ -1402,6 +1405,9 @@ impl DeliveryOperations {
             .list_pull_requests(
                 repository,
                 control["deliveryIntent"]["headBranch"]
+                    .as_str()
+                    .unwrap_or(""),
+                control["deliveryIntent"]["baseBranch"]
                     .as_str()
                     .unwrap_or(""),
             )
@@ -1454,7 +1460,7 @@ impl DeliveryOperations {
         };
         let task_id = control["taskId"].as_str().unwrap_or("");
         let observed = self
-            .github(task_id)
+            .for_task(task_id)
             .await?
             .observe_pull_request(repository, branch, Some(number))
             .await?;
@@ -1612,7 +1618,7 @@ impl DeliveryOperations {
     ) -> DatabaseResult<Value> {
         let task_id = control["taskId"].as_str().unwrap_or("");
         let trigger = self.inspect_trigger_policy(control, None, false).await?;
-        let github = self.github(task_id).await?;
+        let github = self.for_task(task_id).await?;
         let remote_head = github.get_branch_head(repository, &local.branch).await?;
         self.final_recheck(control, actual, recheck, false).await?;
         if remote_head.as_deref() == Some(local.head_sha.as_str()) {
@@ -1672,7 +1678,7 @@ impl DeliveryOperations {
         body: Option<&str>,
     ) -> DatabaseResult<Value> {
         let task_id = control["taskId"].as_str().unwrap_or("");
-        let github = self.github(task_id).await?;
+        let github = self.for_task(task_id).await?;
         let adopt = Adoption {
             publication: true,
             explicit: true,
@@ -1712,7 +1718,15 @@ impl DeliveryOperations {
         }
         let candidate = select_discovered_pull(
             control,
-            github.list_pull_requests(repository, &local.branch).await?,
+            github
+                .list_pull_requests(
+                    repository,
+                    &local.branch,
+                    control["deliveryIntent"]["baseBranch"]
+                        .as_str()
+                        .unwrap_or(""),
+                )
+                .await?,
         )?;
         if let Some(candidate) = &candidate {
             if candidate.state == "closed" {
@@ -1772,7 +1786,7 @@ impl DeliveryOperations {
             ));
         };
         let observed = self
-            .github(control["taskId"].as_str().unwrap_or(""))
+            .for_task(control["taskId"].as_str().unwrap_or(""))
             .await?
             .observe_pull_request(repository, branch, Some(number))
             .await?;
@@ -1862,7 +1876,7 @@ impl DeliveryOperations {
             ));
         };
         self.final_recheck(control, actual, recheck, true).await?;
-        let github = self.github(task_id).await?;
+        let github = self.for_task(task_id).await?;
         github.mark_ready_for_review(repository, number).await?;
         let last = github.get_pull_request(repository, number).await?;
         if Some(last.head_sha.as_str()) != expected_head {
@@ -1897,7 +1911,7 @@ impl DeliveryOperations {
         actual: &ReviewRange,
     ) -> DatabaseResult<Value> {
         let task_id = control["taskId"].as_str().unwrap_or("");
-        let github = self.github(task_id).await?;
+        let github = self.for_task(task_id).await?;
         let observed = self.checks(control, repository, branch).await?;
         if observed.state.as_deref() == Some("merged")
             && let Some(number) = observed.number
@@ -2114,9 +2128,9 @@ impl DeliveryOperations {
                 "GitHub trigger delivery policy could not be inspected",
             )
         };
-        let github = self.github(task_id).await.map_err(|_| uninspectable())?;
+        let port = self.for_task(task_id).await.map_err(|_| uninspectable())?;
         let pull = github_triggers_inspection::inspect_pull_request(
-            github,
+            port.github().ok_or_else(uninspectable)?,
             &policy.repository_name,
             policy.pull_request_number,
         )

@@ -1,12 +1,13 @@
 //! Read-only GitHub access using Suplex or the active gh keychain account.
 
-#[cfg(target_os = "macos")]
-use std::sync::OnceLock;
 use std::{
     env,
     error::Error,
     fs, io,
+    io::Write,
+    os::unix::fs::OpenOptionsExt,
     path::{Path, PathBuf},
+    sync::OnceLock,
 };
 
 use chrono::Utc;
@@ -121,12 +122,36 @@ fn valid_expiry_pair(
     }
 }
 
+static CREDENTIAL_FILE: OnceLock<PathBuf> = OnceLock::new();
+
+/// Name the installation whose `credentials/github-hosts.yml` holds Suplex's
+/// credential when the Keychain refuses this build. Every Suplex process that
+/// reads GitHub knows the database, `<installation>/data/suplex.sqlite`.
+pub fn use_installation(database_path: &Path) {
+    let root = database_path
+        .parent()
+        .and_then(Path::parent)
+        .unwrap_or(Path::new("."));
+    let _ = CREDENTIAL_FILE.set(root.join("credentials/github-hosts.yml"));
+}
+
 fn read_own_credential() -> AccessResult<Option<StoredCredential>> {
-    let raw = match keychain_password(SUPLEX_SERVICE, SUPLEX_ACCOUNT) {
-        Ok(raw) => raw,
-        Err(_) => return Ok(None),
+    read_credential(
+        keychain_password(SUPLEX_SERVICE, SUPLEX_ACCOUNT),
+        CREDENTIAL_FILE.get().map(PathBuf::as_path),
+    )
+}
+
+/// The Keychain value, else the installation file. An ad-hoc signed build has
+/// a new code identity on every rebuild, so the Keychain can refuse the item a
+/// previous build saved; like the GitHub CLI, Suplex then uses its file.
+fn read_credential(
+    keychain: AccessResult<Option<String>>,
+    file: Option<&Path>,
+) -> AccessResult<Option<StoredCredential>> {
+    let Some(raw) = keychain.ok().flatten() else {
+        return Ok(file.map(read_credential_file).transpose()?.flatten());
     };
-    let Some(raw) = raw else { return Ok(None) };
     if raw.starts_with('{') {
         return Ok(serde_json::from_str(&raw).ok());
     }
@@ -140,9 +165,75 @@ fn read_own_credential() -> AccessResult<Option<StoredCredential>> {
 }
 
 fn write_own_credential(stored: &StoredCredential) -> AccessResult<()> {
-    let entry = keyring::Entry::new(SUPLEX_SERVICE, SUPLEX_ACCOUNT)?;
-    entry.set_password(&serde_json::to_string(stored)?)?;
+    write_credential(
+        stored,
+        |value| keyring::Entry::new(SUPLEX_SERVICE, SUPLEX_ACCOUNT)?.set_password(value),
+        CREDENTIAL_FILE.get().map(PathBuf::as_path),
+    )
+}
+
+/// Save in the Keychain, or in the installation file when the Keychain refuses
+/// the write. A Keychain save removes the file so a stale token cannot return.
+fn write_credential(
+    stored: &StoredCredential,
+    keychain: impl FnOnce(&str) -> keyring::Result<()>,
+    file: Option<&Path>,
+) -> AccessResult<()> {
+    match (keychain(&serde_json::to_string(stored)?), file) {
+        (Ok(()), Some(file)) => match fs::remove_file(file) {
+            Err(error) if error.kind() != io::ErrorKind::NotFound => Err(error.into()),
+            _ => Ok(()),
+        },
+        (Ok(()), None) => Ok(()),
+        (Err(error), None) => Err(error.into()),
+        (Err(_), Some(file)) => write_credential_file(file, stored),
+    }
+}
+
+/// The GitHub CLI `hosts.yml` shape, plus the refresh fields Suplex needs.
+fn write_credential_file(path: &Path, stored: &StoredCredential) -> AccessResult<()> {
+    let quoted = serde_json::to_string;
+    let mut yaml = format!(
+        "{HOST}:\n    user: {}\n    oauth_token: {}\n",
+        quoted(&stored.login)?,
+        quoted(&stored.access_token)?
+    );
+    if let Some(token) = &stored.refresh_token {
+        yaml.push_str(&format!("    refresh_token: {}\n", quoted(token)?));
+    }
+    for (key, value) in [
+        ("access_expires_at", stored.access_expires_at),
+        ("refresh_expires_at", stored.refresh_expires_at),
+    ] {
+        if let Some(value) = value {
+            yaml.push_str(&format!("    {key}: {value}\n"));
+        }
+    }
+    let directory = path.parent().ok_or("Credential path has no directory")?;
+    fs::create_dir_all(directory)?;
+    let temporary = directory.join(format!(".github-hosts-{}.yml", uuid::Uuid::new_v4()));
+    let mut file = fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .mode(0o600)
+        .open(&temporary)?;
+    file.write_all(yaml.as_bytes())?;
+    file.sync_all()?;
+    fs::rename(&temporary, path)?;
     Ok(())
+}
+
+fn read_credential_file(path: &Path) -> AccessResult<Option<StoredCredential>> {
+    let Some(host) = read_hosts(path)? else {
+        return Ok(None);
+    };
+    Ok(host.oauth_token.map(|access_token| StoredCredential {
+        access_token,
+        refresh_token: host.refresh_token,
+        access_expires_at: host.access_expires_at,
+        refresh_expires_at: host.refresh_expires_at,
+        login: host.user.unwrap_or_default(),
+    }))
 }
 
 fn usable(stored: &StoredCredential, now: i64) -> bool {
@@ -284,6 +375,10 @@ struct GhHosts {
 struct GhHost {
     user: Option<String>,
     oauth_token: Option<String>,
+    // Only Suplex's own credential file carries these.
+    refresh_token: Option<String>,
+    access_expires_at: Option<i64>,
+    refresh_expires_at: Option<i64>,
 }
 
 #[derive(Deserialize)]
@@ -312,9 +407,13 @@ fn gh_config_path() -> Option<PathBuf> {
 }
 
 fn gh_host() -> AccessResult<Option<GhHost>> {
-    let Some(path) = gh_config_path() else {
-        return Ok(None);
-    };
+    match gh_config_path() {
+        Some(path) => read_hosts(&path),
+        None => Ok(None),
+    }
+}
+
+fn read_hosts(path: &Path) -> AccessResult<Option<GhHost>> {
     let content = match fs::read_to_string(path) {
         Ok(content) => content,
         Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
@@ -911,6 +1010,42 @@ mod tests {
                 .is_err()
         );
         assert!(!server.await.unwrap());
+    }
+
+    #[test]
+    fn a_refused_keychain_keeps_the_signed_in_credential_in_the_installation_file() {
+        let root = env::temp_dir().join(format!("suplex-credential-{}", uuid::Uuid::new_v4()));
+        let file = root.join("credentials/github-hosts.yml");
+        let refused = || keyring::Error::NoStorageAccess(Box::new(io::Error::other("denied")));
+        let stored = StoredCredential {
+            access_token: "ghu_access".into(),
+            refresh_token: Some("ghr_refresh".into()),
+            access_expires_at: Some(1_900_000_000),
+            refresh_expires_at: Some(1_950_000_000),
+            login: "octocat".into(),
+        };
+        // Device sign-in saves while the Keychain refuses this build.
+        write_credential(&stored, |_| Err(refused()), Some(&file)).unwrap();
+        use std::os::unix::fs::PermissionsExt;
+        assert_eq!(
+            fs::metadata(&file).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        // After a restart, the next build is refused as well and reads the file.
+        let read = read_credential(Err(refused().into()), Some(&file))
+            .unwrap()
+            .unwrap();
+        assert_eq!(read.access_token, "ghu_access");
+        assert_eq!(read.refresh_token.as_deref(), Some("ghr_refresh"));
+        assert_eq!(read.access_expires_at, Some(1_900_000_000));
+        assert_eq!(read.refresh_expires_at, Some(1_950_000_000));
+        assert_eq!(read.login, "octocat");
+        // A Keychain without the item still finds the file.
+        assert!(read_credential(Ok(None), Some(&file)).unwrap().is_some());
+        // A later Keychain save wins and removes the stale file.
+        write_credential(&stored, |_| Ok(()), Some(&file)).unwrap();
+        assert!(!file.exists());
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

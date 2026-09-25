@@ -18,9 +18,11 @@ pub mod routes {
     pub mod admin_identity;
     pub mod auth;
     pub mod companies;
+    pub mod pages;
     pub mod profiles;
     pub mod projects;
     pub mod unported;
+    pub mod workflows;
 }
 pub mod session;
 pub mod validation;
@@ -90,8 +92,10 @@ pub fn router(state: AppState) -> Router {
         .merge(routes::admin_identity::router())
         .merge(routes::auth::router())
         .merge(routes::companies::router())
+        .merge(routes::pages::router())
         .merge(routes::profiles::router())
         .merge(routes::projects::router())
+        .merge(routes::workflows::router())
         .merge(routes::unported::router())
         .route("/auth", get(auth_page))
         .route("/assets/{filename}", get(asset))

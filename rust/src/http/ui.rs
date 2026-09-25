@@ -18,3 +18,32 @@ pub fn auth_page() -> &'static str {
   </body>
 </html>"##
 }
+
+pub fn application_page(view: &str) -> String {
+    let title = match view {
+        "auth" => "Sign in",
+        "oauth-consent" => "Approve connection",
+        "admin" => "Administration",
+        "projects" => "Projects",
+        "project-prompts" => "Project prompts",
+        "project-templates" => "Project templates",
+        "tasks" => "Tasks",
+        "board" => "Board",
+        "timeline" => "Timeline",
+        "profile" => "Profile",
+        "setup" => "Set up",
+        "onboarding" => "Onboarding",
+        _ => "Company settings",
+    };
+    auth_page()
+        .replacen(
+            "<title>Suplex · Sign in</title>",
+            &format!("<title>Suplex · {title}</title>"),
+            1,
+        )
+        .replacen(
+            "window.__SUPLEX_VIEW__ = \"auth\";",
+            &format!("window.__SUPLEX_VIEW__ = \"{view}\";"),
+            1,
+        )
+}

@@ -63,7 +63,7 @@ Request corpus: 1,139 fixtures across 95 request exports plus 18 stored-project 
 | [http/contracts/tasks.ts](../src/http/contracts/tasks.ts) | not started | `7b49a179`, `f3f65930`, `65612746`, `a7eb5238`, `2b8ba630`, `e15a46b5`: task parameters, commands, body and control requests tested; next contract work is limited to M2 requests/responses. |
 | [http/contracts/update.ts](../src/http/contracts/update.ts) | not started | |
 | [http/contracts/workflows.ts](../src/http/contracts/workflows.ts) | ported | `09e3ded3`: six record/input/patch/list schemas passed corpus checks; replacing special JSON rules with typed requests as routes need them. |
-| [http/errors.ts](../src/http/errors.ts) | not started | `b369604d`: validationFindings exported unchanged; request fixtures compare public findings. Removed100 response-only groups and65 raw fixtures; independent review and private corpus/hash/TS/lint checks pass. Production DTO mapper remains in progress |
+| [http/errors.ts](../src/http/errors.ts) | not started | `b369604d`: validationFindings exported unchanged; request fixtures compare public findings. Removed100 response-only groups and65 raw fixtures. `f90fb3df` corrects the stored-project runner; private ordinary876/63, stored18/3 and hash3 pass together. Production DTO mapper remains in progress. |
 | [http/oauth-runtime.ts](../src/http/oauth-runtime.ts) | not started | |
 | [http/routes/administration.ts](../src/http/routes/administration.ts) | not started | `e49977ee`, `99c6e5f8`, `f23bab60`: known-route registration and identity/profile administration tested; wider administration deferred. |
 | [http/routes/agent-api.ts](../src/http/routes/agent-api.ts) | not started | |
@@ -79,7 +79,7 @@ Request corpus: 1,139 fixtures across 95 request exports plus 18 stored-project 
 | [http/routes/health.ts](../src/http/routes/health.ts) | not started | |
 | [http/routes/mcp.ts](../src/http/routes/mcp.ts) | not started | |
 | [http/routes/oauth.ts](../src/http/routes/oauth.ts) | not started | |
-| [http/routes/pages.ts](../src/http/routes/pages.ts) | not started | Uncommitted page/session/redirect port: five focused checks and desktop/narrow React boot inspected; cookie/error corrections reviewed. Health and final staged check remain pending. |
+| [http/routes/pages.ts](../src/http/routes/pages.ts) | verified | Page/session/redirect port: five focused checks, live redirect/HTML/OAuth policy checks and desktop/narrow React boot inspected. Cookie/error corrections reviewed. Isolated staged fmt, all-target Clippy, 68 library tests and all five integration tests pass; one separate Node test remains ignored in this run. Health stays an authenticated 501 in its own pending route; page boot does not verify task execution. |
 | [http/routes/projects.ts](../src/http/routes/projects.ts) | not started | `1e2b2f0c`: reads/defaults/provider instances, GitHub pickers and local/existing/new GitHub creation tested; typed requests next, Bitbucket/PATCH/ancillary routes deferred. |
 | [http/routes/provider-login.ts](../src/http/routes/provider-login.ts) | not started | |
 | [http/routes/task-pane.ts](../src/http/routes/task-pane.ts) | not started | |

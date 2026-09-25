@@ -6,6 +6,7 @@ use crate::shared::js_json;
 
 const STANDARD_INITIAL_PROMPT: &str = include_str!("root_standard_initial_prompt.txt");
 const CAPTURED_CONTEXT_SUFFIX: &str = include_str!("root_standard_context_suffix.txt");
+pub const STANDARD_WORKER_RESULT_WAKE: &str = "You own independent review. Read the changed source yourself, compare it with acceptedAssignment and the acceptance criteria, and assess the native command evidence. A completed turn or tool call is not proof that the assignment or check passed. Worker summary text is routing context, not a gate. If work remains, diagnose the assignment, scope, or fixture and delegate one coherent repair. Observe current state and decide the next action. If repeated continuations do not advance the accepted behavior, inspect why execution stopped and change strategy. Use replace_worker for a fresh session; it keeps the task's configured Worker profile. Supply the remaining work and verification evidence in the handoff. Do not repeat an ineffective assignment merely because the previous turn ended. This is a judgment about progress, not a fixed retry count.";
 
 fn string_field<'a>(value: &'a Value, name: &str) -> Result<&'a str, String> {
     value

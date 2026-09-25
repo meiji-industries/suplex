@@ -3,6 +3,7 @@ use serde_json::{Map, Value, json};
 
 pub mod auth;
 pub mod projects;
+pub mod task_answers;
 pub mod task_templates;
 pub mod tasks;
 

@@ -19,7 +19,7 @@ use crate::{
         AppState,
         contracts::{
             self,
-            typed::{self, tasks as task_contracts},
+            typed::{self, task_answers, tasks as task_contracts},
         },
         session, validation,
     },
@@ -52,6 +52,10 @@ pub fn router() -> Router<AppState> {
         .route(
             "/api/tasks/{task_id}/cancel",
             axum::routing::post(cancel_pending),
+        )
+        .route(
+            "/api/tasks/{task_id}/answer",
+            axum::routing::post(answer_pending),
         )
 }
 
@@ -324,10 +328,12 @@ async fn create(
             )? {
                 return Ok((
                     None,
-                    Some(
+                    Some((
+                        existing.status,
+                        existing.id.clone(),
                         task_response::get(database, &existing.id)?
                             .ok_or("existing task disappeared")?,
-                    ),
+                    )),
                 ));
             }
             Ok((Some(project), None))
@@ -337,7 +343,12 @@ async fn create(
             Err(error) => return with_cookies(service_error(error), cookies),
         }
     };
-    if let Some(snapshot) = existing {
+    if let Some((status, id, snapshot)) = existing {
+        if status == "active"
+            && let Some(host) = &state.task_host
+        {
+            host.wake(id);
+        }
         return with_cookies(Json(snapshot).into_response(), cookies);
     }
     let Some(project) = project else {
@@ -352,7 +363,6 @@ async fn create(
         || !request.images.is_empty()
         || !request.blocked_by_pull_requests.is_empty()
         || request.delivery_target != "local_worktree"
-        || request.start_immediately
     {
         return with_cookies(auth::not_ported(), cookies);
     }
@@ -420,6 +430,7 @@ async fn finish_admitted_create(
         Err(_) => return with_cookies(auth::error(StatusCode::INTERNAL_SERVER_ERROR, "Internal server error"), cookies),
     };
     let now = Utc::now();
+    let host = state.task_host.clone();
     let written = state.with_database(|database| -> Result<_, Box<dyn Error>> {
         let prepared = commands::prepare_local_user_task(
             &company_id,
@@ -431,7 +442,11 @@ async fn finish_admitted_create(
             now,
         )?;
         let result =
-            commands::create_user_task(database, &user_id, &project, &prepared, now, |_| {})?;
+            commands::create_user_task(database, &user_id, &project, &prepared, now, move |id| {
+                if let Some(host) = host {
+                    host.wake(id);
+                }
+            })?;
         let snapshot =
             task_response::get(database, &result.task.id)?.ok_or("created task disappeared")?;
         Ok((result.created, snapshot))
@@ -649,6 +664,72 @@ async fn cancel_pending(
     }
 }
 
+async fn answer_pending(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    if let Err(response) = validated_task_id(&id) {
+        return *response;
+    }
+    let request = match auth::validated_typed_body(&headers, &body, task_answers::parse_task_answer)
+    {
+        Ok(request) => request,
+        Err(response) => return *response,
+    };
+    if !session::csrf_allowed(&state.session_config, &headers, "POST", false) {
+        return auth::error(StatusCode::FORBIDDEN, "request_origin_invalid");
+    }
+    let (user_id, cookies) = match authorize(&state, &headers) {
+        Ok(value) => value,
+        Err(response) => return *response,
+    };
+    let task_answers::TaskAnswerBody::Answer(answer) = request else {
+        let access = state.with_database(|database| -> Result<(), Box<dyn Error>> {
+            let company: String = database
+                .connection()
+                .query_row(
+                    "SELECT company_id FROM suplex_tasks WHERE id = ?1",
+                    [&id],
+                    |row| row.get(0),
+                )
+                .optional()?
+                .ok_or_else(|| {
+                    Box::new(TaskFailure {
+                        public_message: "Not found".into(),
+                        status_code: 404,
+                        code: "task_failure",
+                    }) as Box<dyn Error>
+                })?;
+            companies::require_company_access(database, &user_id, &company)?;
+            Ok(())
+        });
+        return with_cookies(
+            match access {
+                Ok(()) => auth::not_ported(),
+                Err(error) => service_error(error),
+            },
+            cookies,
+        );
+    };
+    let host = state.task_host.clone();
+    let answered = state.with_database(
+        |database| -> Result<task_response::TaskResponse, Box<dyn Error>> {
+            commands::answer_user_task(database, &user_id, &id, &answer, Utc::now(), move |id| {
+                if let Some(host) = host {
+                    host.wake(id);
+                }
+            })?;
+            task_response::get(database, &id)?.ok_or_else(|| "answered task disappeared".into())
+        },
+    );
+    match answered {
+        Ok(task) => with_cookies(Json(task).into_response(), cookies),
+        Err(error) => with_cookies(service_error(error), cookies),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -677,6 +758,56 @@ mod tests {
             args,
             String::from_utf8_lossy(&output.stderr)
         );
+    }
+
+    fn assert_typescript_task_body(
+        database: &std::path::Path,
+        artifacts: &std::path::Path,
+        raw: &[u8],
+    ) {
+        if std::env::var_os("SUPLEX_TASK_RESPONSE_TS_ORACLE").is_none() {
+            return;
+        }
+        let script = r#"import {SuplexDatabase} from "./src/platform/database.ts"; import {ArtifactStore} from "./src/platform/artifacts.ts"; import {TaskRepository} from "./src/tasks/repository.ts"; const db = new SuplexDatabase(process.env.SUPLEX_ORACLE_DB!, {readOnly:true,migrate:false}); const repository = new TaskRepository(db, new ArtifactStore(process.env.SUPLEX_ORACLE_ARTIFACTS!)); const row = repository.row(process.env.SUPLEX_ORACLE_TASK!); if (!row) throw new Error("task missing"); process.stdout.write(JSON.stringify(repository.task(row))); db.close();"#;
+        let output = Command::new("node")
+            .args(["node_modules/tsx/dist/cli.mjs", "-e", script])
+            .current_dir(
+                std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                    .parent()
+                    .unwrap(),
+            )
+            .env("SUPLEX_ORACLE_DB", database)
+            .env("SUPLEX_ORACLE_ARTIFACTS", artifacts)
+            .env(
+                "SUPLEX_ORACLE_TASK",
+                serde_json::from_slice::<Value>(raw).unwrap()["id"]
+                    .as_str()
+                    .unwrap(),
+            )
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let rust = std::str::from_utf8(raw).unwrap();
+        let typescript = std::str::from_utf8(&output.stdout).unwrap();
+        if rust != typescript {
+            let offset = rust
+                .bytes()
+                .zip(typescript.bytes())
+                .position(|(left, right)| left != right)
+                .unwrap_or(rust.len().min(typescript.len()));
+            panic!(
+                "full raw TaskResponse differs from TypeScript at byte {offset}\nRust: {}\nTS: {}",
+                &rust[offset.saturating_sub(80)..rust.len().min(offset + 240)],
+                &typescript[offset.saturating_sub(80)..typescript.len().min(offset + 240)],
+            );
+        }
     }
 
     #[tokio::test]
@@ -851,49 +982,7 @@ mod tests {
         let (head, wire_body) = wire.split_once("\r\n\r\n").unwrap();
         assert!(head.starts_with("HTTP/1.1 201"), "{head}\n{wire_body}");
         let raw = Bytes::copy_from_slice(wire_body.as_bytes());
-        if std::env::var_os("SUPLEX_TASK_RESPONSE_TS_ORACLE").is_some() {
-            let script = r#"import {SuplexDatabase} from "./src/platform/database.ts"; import {ArtifactStore} from "./src/platform/artifacts.ts"; import {TaskRepository} from "./src/tasks/repository.ts"; const db = new SuplexDatabase(process.env.SUPLEX_ORACLE_DB!, {readOnly:true,migrate:false}); const repository = new TaskRepository(db, new ArtifactStore(process.env.SUPLEX_ORACLE_ARTIFACTS!)); const row = repository.row(process.env.SUPLEX_ORACLE_TASK!); if (!row) throw new Error("task missing"); process.stdout.write(JSON.stringify(repository.task(row))); db.close();"#;
-            let child = Command::new("node")
-                .args(["node_modules/tsx/dist/cli.mjs", "-e", script])
-                .current_dir(
-                    std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                        .parent()
-                        .unwrap(),
-                )
-                .env("SUPLEX_ORACLE_DB", &db_path)
-                .env("SUPLEX_ORACLE_ARTIFACTS", root.join("artifacts"))
-                .env(
-                    "SUPLEX_ORACLE_TASK",
-                    serde_json::from_slice::<Value>(&raw).unwrap()["id"]
-                        .as_str()
-                        .unwrap(),
-                )
-                .stdin(Stdio::null())
-                .stdout(Stdio::piped())
-                .stderr(Stdio::piped())
-                .spawn()
-                .unwrap();
-            let output = child.wait_with_output().unwrap();
-            assert!(
-                output.status.success(),
-                "{}",
-                String::from_utf8_lossy(&output.stderr)
-            );
-            let rust = std::str::from_utf8(&raw).unwrap();
-            let typescript = std::str::from_utf8(&output.stdout).unwrap();
-            if rust != typescript {
-                let offset = rust
-                    .bytes()
-                    .zip(typescript.bytes())
-                    .position(|(left, right)| left != right)
-                    .unwrap_or(rust.len().min(typescript.len()));
-                panic!(
-                    "full raw TaskResponse differs from pinned TS response schema at byte {offset}\nRust: {}\nTS: {}",
-                    &rust[offset.saturating_sub(80)..rust.len().min(offset + 240)],
-                    &typescript[offset.saturating_sub(80)..typescript.len().min(offset + 240)],
-                );
-            }
-        }
+        assert_typescript_task_body(&db_path, &root.join("artifacts"), &raw);
         let value: Value = serde_json::from_slice(&raw).unwrap();
         assert_eq!(value["status"], "backlog");
         assert_eq!(value["workflow"], "standard");
@@ -952,6 +1041,129 @@ mod tests {
             listed.as_ref(),
             format!("{{\"tasks\":[{}]}}", std::str::from_utf8(&raw).unwrap()).as_bytes()
         );
+        let immediate_body = Bytes::from(
+            json!({
+                "projectId":"task_http_project", "title":"Start on creation",
+                "idempotencyKey":"task-immediate-key", "deliveryTarget":"local_worktree",
+                "startImmediately":true
+            })
+            .to_string(),
+        );
+        let immediate = create(
+            State(state.clone()),
+            Path("task_http_company".into()),
+            headers.clone(),
+            immediate_body.clone(),
+        )
+        .await;
+        assert_eq!(immediate.status(), StatusCode::CREATED);
+        let immediate_raw = to_bytes(immediate.into_body(), 128 * 1024).await.unwrap();
+        assert_typescript_task_body(&db_path, &root.join("artifacts"), &immediate_raw);
+        assert_eq!(
+            serde_json::from_slice::<Value>(&immediate_raw).unwrap()["status"],
+            "active"
+        );
+        let immediate_replay = create(
+            State(state.clone()),
+            Path("task_http_company".into()),
+            headers.clone(),
+            immediate_body,
+        )
+        .await;
+        assert_eq!(immediate_replay.status(), StatusCode::OK);
+        assert_eq!(
+            to_bytes(immediate_replay.into_body(), 128 * 1024)
+                .await
+                .unwrap(),
+            immediate_raw
+        );
+        let immediate_id = serde_json::from_slice::<Value>(&immediate_raw).unwrap()["id"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let (root_session, question_id) = state.with_database(|database| {
+            let root = crate::coordination::root_session_store::reserve_root(
+                database,
+                &immediate_id,
+                Utc::now(),
+            )
+            .unwrap();
+            assert!(
+                crate::coordination::root_session_store::ask_human_for_root(
+                    database,
+                    &immediate_id,
+                    &root.id,
+                    root.generation,
+                    "Use main?",
+                    &json!([]),
+                    Utc::now(),
+                )
+                .unwrap()
+            );
+            let question_id: String = database
+                .connection()
+                .query_row(
+                    "SELECT human_question_id FROM suplex_task_controls WHERE task_id = ?1",
+                    [&immediate_id],
+                    |row| row.get(0),
+                )
+                .unwrap();
+            (root.id, question_id)
+        });
+        assert!(!root_session.is_empty());
+        let bad_answer = answer_pending(
+            State(state.clone()),
+            Path(immediate_id.clone()),
+            content_headers.clone(),
+            Bytes::from_static(br#"{"questionId":"","answer":""}"#),
+        )
+        .await;
+        assert_eq!(bad_answer.status(), StatusCode::BAD_REQUEST);
+        let limit_answer = answer_pending(
+            State(state.clone()),
+            Path(immediate_id.clone()),
+            headers.clone(),
+            Bytes::from(
+                json!({"questionId":question_id,"limitDecision":{"kind":"cancel_task"}})
+                    .to_string(),
+            ),
+        )
+        .await;
+        assert_eq!(limit_answer.status(), StatusCode::NOT_IMPLEMENTED);
+        let missing_limit_answer = answer_pending(
+            State(state.clone()),
+            Path("task_missing".into()),
+            headers.clone(),
+            Bytes::from(
+                json!({"questionId":question_id,"limitDecision":{"kind":"cancel_task"}})
+                    .to_string(),
+            ),
+        )
+        .await;
+        assert_eq!(missing_limit_answer.status(), StatusCode::NOT_FOUND);
+        let answer_body =
+            Bytes::from(json!({"questionId":question_id,"answer":"  Proceed  "}).to_string());
+        let answered = answer_pending(
+            State(state.clone()),
+            Path(immediate_id.clone()),
+            headers.clone(),
+            answer_body.clone(),
+        )
+        .await;
+        assert_eq!(answered.status(), StatusCode::OK);
+        let answered_raw = to_bytes(answered.into_body(), 128 * 1024).await.unwrap();
+        assert_typescript_task_body(&db_path, &root.join("artifacts"), &answered_raw);
+        let answered_value: Value = serde_json::from_slice(&answered_raw).unwrap();
+        assert_eq!(answered_value["status"], "active");
+        assert!(answered_value["humanQuestion"].is_null());
+        let stale_answer = answer_pending(
+            State(state.clone()),
+            Path(immediate_id),
+            headers.clone(),
+            answer_body,
+        )
+        .await;
+        assert_eq!(stale_answer.status(), StatusCode::CONFLICT);
         let disconnected_body = json!({
             "projectId":"task_http_project",
             "title":"Continue after disconnect",

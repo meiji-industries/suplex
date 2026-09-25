@@ -8,8 +8,10 @@ use sha2::{Digest, Sha256};
 use std::sync::Mutex;
 use uuid::Uuid;
 
+use crate::coordination::root_prompts::STANDARD_WORKER_RESULT_WAKE;
 use crate::platform::database::{DatabaseResult, SuplexDatabase};
 use crate::runtimes::process::inspect_process;
+use crate::shared::js_json;
 use crate::tasks::repository::{self, PullRequestOwned};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -493,6 +495,96 @@ pub fn cancel_task(
             params![time, task_id],
         )?;
         Ok(true)
+    })
+}
+
+/// Answer only the current human question. Confirmed interrupted native work
+/// is recorded before the answer prompt, all in the same durable transaction.
+pub fn answer_human(
+    database: &mut SuplexDatabase,
+    task_id: &str,
+    question_id: &str,
+    answer: &str,
+    confirm_commands_stopped: bool,
+    now: DateTime<Utc>,
+) -> DatabaseResult<()> {
+    let answer =
+        answer.trim_matches(|character: char| character.is_whitespace() || character == '\u{feff}');
+    if answer.is_empty() {
+        return Err(std::io::Error::other("answer_is_empty").into());
+    }
+    database.transaction(true, |database| {
+        let control: Option<(Option<String>, Option<String>, Option<String>)> = database
+            .connection()
+            .query_row(
+                "SELECT human_question,limit_pause_json,recovery_turn_id FROM suplex_task_controls WHERE task_id = ?1 AND status = 'waiting_human' AND human_question_id = ?2",
+                params![task_id, question_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .optional()?;
+        let Some((question, limit_pause, recovery_turn_id)) = control else {
+            return Err(std::io::Error::other("question_identity_mismatch").into());
+        };
+        if limit_pause.is_some() {
+            return Err(std::io::Error::other("task_limit_decision_required").into());
+        }
+        let root = database
+            .connection()
+            .query_row(
+                "SELECT * FROM suplex_task_sessions WHERE task_id = ?1 AND kind = 'root' AND is_current = 1 AND lifecycle <> 'cancelled'",
+                [task_id],
+                session,
+            )
+            .optional()?
+            .ok_or_else(|| std::io::Error::other("root_notification_unavailable"))?;
+        if recovery_turn_id.is_some() && !confirm_commands_stopped {
+            return Err(std::io::Error::other("command_cleanup_confirmation_required").into());
+        }
+        if let Some(recovery_turn_id) = recovery_turn_id {
+            let recovered: (String, i64, String) = database.connection().query_row(
+                "SELECT t.session_id,t.generation,s.kind FROM suplex_task_turns t JOIN suplex_task_sessions s ON s.id = t.session_id WHERE t.id = ?1 AND t.task_id = ?2",
+                params![recovery_turn_id, task_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )?;
+            let evidence = js_json::stringify(&serde_json::json!({
+                "state":"interrupted", "reason":"operator_confirmed_commands_stopped",
+                "questionId":question_id, "answer":answer, "turnId":recovery_turn_id
+            }));
+            if recovered.2 == "worker" {
+                let receipt = format!("cleanup:{question_id}");
+                let wake_prompt = format!(
+                    "Worker result receipt {receipt}. {STANDARD_WORKER_RESULT_WAKE}\n\n{evidence}"
+                );
+                record_standard_worker_result_and_wake(
+                    database,
+                    &StandardWorkerResult {
+                        task_id,
+                        session_id: &recovered.0,
+                        generation: recovered.1,
+                        receipt_id: &receipt,
+                        observation: &evidence,
+                        native_turn_id: None,
+                        wake_prompt: &wake_prompt,
+                    },
+                    now,
+                )?;
+            } else {
+                complete_root_turn(database, &recovery_turn_id, &evidence, None, now)?;
+            }
+        }
+        let prompt = js_json::stringify(&serde_json::json!({"question":question,"answer":answer}));
+        let id = new_turn_id(now)?;
+        let hash = format!("{:x}", Sha256::digest(prompt.as_bytes()));
+        let time = timestamp(now);
+        database.connection().execute(
+            "INSERT INTO suplex_task_turns (id,task_id,session_id,generation,prompt_hash,prompt_text,status,created_at,updated_at) VALUES (?1,?2,?3,?4,?5,?6,'pending_prompt',?7,?7)",
+            params![id, task_id, root.id, root.generation, hash, prompt, time],
+        )?;
+        database.connection().execute(
+            "UPDATE suplex_task_controls SET status = 'active', human_question = NULL, human_question_id = NULL, recovery_turn_id = NULL, wake_at = ?1, updated_at = ?1 WHERE task_id = ?2",
+            params![time, task_id],
+        )?;
+        Ok(())
     })
 }
 
@@ -1504,6 +1596,169 @@ mod tests {
                 .unwrap()
                 .control["status"],
             "delivered"
+        );
+        let answer_input = PreparedTask {
+            id: repository::new_task_id(),
+            title: "Human answer".into(),
+            idempotency_key: "answer-key".into(),
+            request_hash: "answer-request".into(),
+            ..prepared.clone()
+        };
+        let answer_task = repository::create(&mut database, &answer_input, now)
+            .unwrap()
+            .task;
+        let answer_root = reserve_root(&mut database, &answer_task.id, now).unwrap();
+        database.connection().execute(
+            "UPDATE suplex_task_controls SET status = 'waiting_human', human_question = 'Use main?', human_question_id = 'question-normal' WHERE task_id = ?1",
+            [&answer_task.id],
+        ).unwrap();
+        assert!(
+            answer_human(
+                &mut database,
+                &answer_task.id,
+                "stale",
+                "Proceed",
+                false,
+                now
+            )
+            .is_err()
+        );
+        database
+            .connection()
+            .execute(
+                "UPDATE suplex_task_sessions SET lifecycle = 'cancelled' WHERE id = ?1",
+                [&answer_root.id],
+            )
+            .unwrap();
+        assert!(
+            answer_human(
+                &mut database,
+                &answer_task.id,
+                "question-normal",
+                "Proceed",
+                false,
+                now
+            )
+            .is_err()
+        );
+        database
+            .connection()
+            .execute(
+                "UPDATE suplex_task_sessions SET lifecycle = 'reserved' WHERE id = ?1",
+                [&answer_root.id],
+            )
+            .unwrap();
+        answer_human(
+            &mut database,
+            &answer_task.id,
+            "question-normal",
+            "  Proceed 🌍  ",
+            false,
+            now,
+        )
+        .unwrap();
+        let first_answer: (String, String) = database.connection().query_row(
+            "SELECT prompt_text,prompt_hash FROM suplex_task_turns WHERE task_id = ?1 ORDER BY rowid DESC LIMIT 1",
+            [&answer_task.id], |row| Ok((row.get(0)?,row.get(1)?)),
+        ).unwrap();
+        assert_eq!(
+            first_answer.0,
+            "{\"question\":\"Use main?\",\"answer\":\"Proceed 🌍\"}"
+        );
+        assert_eq!(
+            first_answer.1,
+            "348686453066142f49a913b2c8803025cc80ee4fbabcc7dd4914317df08b3181"
+        );
+        assert!(
+            answer_human(
+                &mut database,
+                &answer_task.id,
+                "question-normal",
+                "Again",
+                false,
+                now
+            )
+            .is_err()
+        );
+        let interrupted = launch_standard_worker(
+            &mut database,
+            &answer_root,
+            "Implement",
+            "Worker assignment: Implement",
+            None,
+            now,
+        )
+        .unwrap();
+        let worker_turn_id: String = database.connection().query_row(
+            "SELECT id FROM suplex_task_turns WHERE session_id = ?1 ORDER BY rowid DESC LIMIT 1",
+            [interrupted["id"].as_str().unwrap()], |row| row.get(0),
+        ).unwrap();
+        database
+            .connection()
+            .execute(
+                "UPDATE suplex_task_turns SET status = 'prompted' WHERE id = ?1",
+                [&worker_turn_id],
+            )
+            .unwrap();
+        database.connection().execute(
+            "UPDATE suplex_task_controls SET status = 'waiting_human', human_question = 'Commands interrupted?', human_question_id = 'question-worker', recovery_turn_id = ?1 WHERE task_id = ?2",
+            params![worker_turn_id, answer_task.id],
+        ).unwrap();
+        assert!(
+            answer_human(
+                &mut database,
+                &answer_task.id,
+                "question-worker",
+                "I stopped commands.",
+                false,
+                now
+            )
+            .is_err()
+        );
+        answer_human(
+            &mut database,
+            &answer_task.id,
+            "question-worker",
+            "I stopped commands.",
+            true,
+            now,
+        )
+        .unwrap();
+        let recovered: (String, String, String) = database.connection().query_row(
+            "SELECT status,result_receipt_id,terminal_observation FROM suplex_task_turns WHERE id = ?1",
+            [&worker_turn_id], |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?)),
+        ).unwrap();
+        assert_eq!(recovered.0, "completed");
+        assert_eq!(recovered.1, "cleanup:question-worker");
+        assert_eq!(
+            recovered.2,
+            format!(
+                "{{\"state\":\"interrupted\",\"reason\":\"operator_confirmed_commands_stopped\",\"questionId\":\"question-worker\",\"answer\":\"I stopped commands.\",\"turnId\":\"{worker_turn_id}\"}}"
+            )
+        );
+        let answer_turns = pending_turns(&database, &answer_root.id).unwrap();
+        assert!(answer_turns.iter().any(|turn| {
+            turn.prompt_text
+                .starts_with("Worker result receipt cleanup:question-worker.")
+        }));
+        let last_answer: (String, String) = database.connection().query_row(
+            "SELECT prompt_text,prompt_hash FROM suplex_task_turns WHERE task_id = ?1 ORDER BY rowid DESC LIMIT 1",
+            [&answer_task.id], |row| Ok((row.get(0)?,row.get(1)?)),
+        ).unwrap();
+        assert_eq!(
+            last_answer.0,
+            "{\"question\":\"Commands interrupted?\",\"answer\":\"I stopped commands.\"}"
+        );
+        assert_eq!(
+            last_answer.1,
+            "02c119667a01036370d700c8a8600a2e588b12556bb4c5b27eece15ad330a9b3"
+        );
+        assert_eq!(
+            repository::task_by_id(&database, &answer_task.id)
+                .unwrap()
+                .unwrap()
+                .status,
+            "active"
         );
         drop(database);
         let _ = std::fs::remove_file(&filename);

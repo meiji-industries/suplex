@@ -10,7 +10,7 @@ use uuid::Uuid;
 
 use crate::{
     coordination::root_session_store,
-    http::contracts::typed::tasks::TaskCreateBody,
+    http::contracts::typed::{task_answers::AnswerBody, tasks::TaskCreateBody},
     identity::companies,
     platform::database::{DatabaseResult, SuplexDatabase},
     projects::service::{self, Project},
@@ -527,6 +527,64 @@ pub fn cancel_user_task(
     })
 }
 
+/// Answer the current question and wake only after the durable answer commit.
+pub fn answer_user_task(
+    database: &mut SuplexDatabase,
+    actor_user_id: &str,
+    task_id: &str,
+    answer: &AnswerBody,
+    now: DateTime<Utc>,
+    wake: impl FnOnce(String) + Send + 'static,
+) -> DatabaseResult<TaskRecord> {
+    database.transaction(true, |database| {
+        let task = repository::task_by_id(database, task_id)?
+            .ok_or_else(|| Box::new(TaskFailure::new("Not found", 404)) as Box<dyn Error>)?;
+        companies::require_company_access(database, actor_user_id, &task.company_id)?;
+        let (archived, question, limit_pause, recovery_turn): (bool, Option<String>, bool, bool) = database
+            .connection()
+            .query_row(
+                "SELECT t.archived_at IS NOT NULL,c.human_question_id,c.limit_pause_json IS NOT NULL,c.recovery_turn_id IS NOT NULL FROM suplex_tasks t JOIN suplex_task_controls c ON c.task_id = t.id WHERE t.id = ?1",
+                [task_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )?;
+        if archived
+            || question.as_deref() != Some(answer.question_id.as_str())
+            || answer.answer.trim().is_empty()
+        {
+            return Err(Box::new(TaskFailure::new(
+                "The question changed. Read the current question before answering",
+                409,
+            )));
+        }
+        if limit_pause {
+            return Err(Box::new(TaskFailure::new(
+                "Select a task limit action before you continue",
+                409,
+            )));
+        }
+        if recovery_turn && !answer.confirm_commands_stopped.unwrap_or(false) {
+            return Err(Box::new(TaskFailure::new(
+                "Confirm that the commands have stopped before you continue",
+                409,
+            )));
+        }
+        root_session_store::answer_human(
+            database,
+            task_id,
+            &answer.question_id,
+            &answer.answer,
+            answer.confirm_commands_stopped.unwrap_or(false),
+            now,
+        )?;
+        let answered = repository::task_by_id(database, task_id)?
+            .ok_or_else(|| Box::new(TaskFailure::new("Not found", 404)) as Box<dyn Error>)?;
+        audit(database, actor_user_id, "task_answered", &answered, now)?;
+        let id = task_id.to_owned();
+        database.after_commit(move || wake(id));
+        Ok(answered)
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -559,6 +617,16 @@ mod tests {
         assert_eq!(
             task_request_hash(&local, "u").unwrap(),
             "b10d948006f8f7e077804b2e76b52bcca01f0d38f8ca749e12935f7eb41210b5"
+        );
+        let immediate = json!({
+            "projectId":"task_http_project", "title":"Start on creation",
+            "idempotencyKey":"task-immediate-key", "deliveryTarget":"local_worktree",
+            "startImmediately":true
+        });
+        let immediate = tasks::parse_task_create(Some(&immediate)).unwrap();
+        assert_eq!(
+            task_request_hash(&immediate, "u").unwrap(),
+            "a4e5c026d27619def492a2b36d8f674cb7a7a27a077b69e6bb6c913997326c85"
         );
         for (name, typescript_hash) in [
             (
@@ -692,6 +760,79 @@ mod tests {
         .unwrap();
         assert!(!repeated.created);
         assert_eq!(wakes.load(Ordering::SeqCst), 2);
+        let root = root_session_store::reserve_root(&mut database, &created.task.id, now).unwrap();
+        assert!(
+            root_session_store::ask_human_for_root(
+                &mut database,
+                &created.task.id,
+                &root.id,
+                root.generation,
+                "Use main?",
+                &json!([]),
+                now,
+            )
+            .unwrap()
+        );
+        let question_id: String = database
+            .connection()
+            .query_row(
+                "SELECT human_question_id FROM suplex_task_controls WHERE task_id = ?1",
+                [&created.task.id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        let answer = AnswerBody {
+            question_id: question_id.clone(),
+            answer: "Proceed".into(),
+            confirm_commands_stopped: None,
+        };
+        let count = Arc::clone(&wakes);
+        assert!(
+            answer_user_task(
+                &mut database,
+                "missing-user",
+                &created.task.id,
+                &answer,
+                now,
+                move |_| {
+                    count.fetch_add(1, Ordering::SeqCst);
+                }
+            )
+            .is_err()
+        );
+        assert_eq!(wakes.load(Ordering::SeqCst), 2);
+        let count = Arc::clone(&wakes);
+        assert_eq!(
+            answer_user_task(
+                &mut database,
+                &user.id,
+                &created.task.id,
+                &answer,
+                now,
+                move |_| {
+                    count.fetch_add(1, Ordering::SeqCst);
+                }
+            )
+            .unwrap()
+            .status,
+            "active"
+        );
+        assert_eq!(wakes.load(Ordering::SeqCst), 3);
+        let count = Arc::clone(&wakes);
+        assert!(
+            answer_user_task(
+                &mut database,
+                &user.id,
+                &created.task.id,
+                &answer,
+                now,
+                move |_| {
+                    count.fetch_add(1, Ordering::SeqCst);
+                }
+            )
+            .is_err()
+        );
+        assert_eq!(wakes.load(Ordering::SeqCst), 3);
         drop(database);
         let _ = std::fs::remove_file(&filename);
         let _ = std::fs::remove_file(filename.with_extension("sqlite-wal"));

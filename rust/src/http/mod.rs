@@ -28,6 +28,7 @@ pub mod routes {
     pub mod task_history;
     pub mod task_reads;
     pub mod task_templates;
+    pub mod task_timeline;
     pub mod tasks;
     pub mod unported;
     pub mod workflows;
@@ -126,6 +127,7 @@ pub fn router(state: AppState) -> Router {
         .merge(routes::task_agents::router())
         .merge(routes::task_artifacts::router())
         .merge(routes::task_reads::router())
+        .merge(routes::task_timeline::router())
         .merge(routes::task_history::router())
         .merge(routes::task_templates::router())
         .merge(routes::tasks::router())

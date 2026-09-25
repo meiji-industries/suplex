@@ -67,11 +67,6 @@ const ROUTES: &[(Method, &str, Access)] = &[
     ),
     (
         Method::GET,
-        "/api/companies/{company_id}/analytics",
-        Authenticated,
-    ),
-    (
-        Method::GET,
         "/api/companies/{company_id}/github-triggers",
         Authenticated,
     ),
@@ -93,16 +88,6 @@ const ROUTES: &[(Method, &str, Access)] = &[
     (
         Method::POST,
         "/api/companies/{company_id}/github-triggers/{rule_id}/check",
-        Authenticated,
-    ),
-    (
-        Method::GET,
-        "/api/companies/{company_id}/task-costs",
-        Authenticated,
-    ),
-    (
-        Method::GET,
-        "/api/companies/{company_id}/timeline",
         Authenticated,
     ),
     (Method::GET, "/api/models", Authenticated),

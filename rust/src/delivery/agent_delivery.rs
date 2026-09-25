@@ -5,6 +5,7 @@
 
 use crate::shared::hash::sha256_hex;
 use crate::shared::time::{now_millis_rfc3339, rfc3339_millis};
+use crate::tasks::TaskError;
 use std::path::Path;
 
 use chrono::{Duration, Utc};
@@ -16,7 +17,6 @@ use crate::{
     coordination::root_bridge::RootIdentity,
     integrations::github_delivery::Observation,
     platform::database::{DatabaseResult, OpenMode, SuplexDatabase},
-    tasks::commands::TaskFailure,
 };
 
 const APPROVAL_TTL_MINUTES: i64 = 15;
@@ -30,11 +30,7 @@ pub struct AgentPrincipal {
 }
 
 fn failure(message: impl Into<String>, status_code: u16) -> Box<dyn std::error::Error> {
-    Box::new(TaskFailure {
-        public_message: message.into(),
-        status_code,
-        code: "task_failure",
-    })
+    TaskError::new(message, status_code).into()
 }
 
 /// TypeScript `mergeBlocker`: the single reason this pull request cannot merge now.
@@ -849,8 +845,8 @@ mod tests {
             .await
             .unwrap_err();
         // Eligibility, the receipt, and the Coordinator checks fail with a
-        // TaskFailure. This one passed them; the delivery operation decides.
-        assert!(!error.is::<TaskFailure>(), "{error}");
+        // TaskError. This one passed them; the delivery operation decides.
+        assert!(!error.is::<TaskError>(), "{error}");
         let consumed: Option<String> = delivery
             .open(OpenMode::ReadOnly)
             .unwrap()

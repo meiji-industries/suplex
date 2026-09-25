@@ -346,10 +346,7 @@ fn recheck(
 }
 
 fn delivery_failure(code: &'static str, message: &'static str) -> Box<dyn std::error::Error> {
-    Box::new(crate::delivery::operations::DeliveryOperationFailure {
-        code,
-        message: message.to_owned(),
-    })
+    crate::delivery::DeliveryError::operation(code, message).into()
 }
 
 pub struct ObservedRange {

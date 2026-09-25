@@ -19,11 +19,12 @@ use crate::{
     http::{AppState, contracts::typed::finding, session, validation},
     identity::auth::AuthUser,
     platform::{
+        PlatformError,
         backup::{BackupFailure, BackupService},
         database::SuplexDatabase,
         development,
         environment_settings::{self, EnvironmentSettings, MAX_MIN_FREE_DISK_GB, js_number},
-        factory_reset::{self, LiveSessionsBlockReset},
+        factory_reset,
     },
 };
 
@@ -454,10 +455,17 @@ async fn reset(State(state): State<AppState>, headers: HeaderMap) -> Response {
     });
     let response = match result {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
-        Err(error) if error.downcast_ref::<LiveSessionsBlockReset>().is_some() => auth::error(
-            StatusCode::CONFLICT,
-            factory_reset::LIVE_SESSIONS_BLOCK_RESET,
-        ),
+        Err(error)
+            if matches!(
+                error.downcast_ref(),
+                Some(PlatformError::LiveSessionsBlockReset)
+            ) =>
+        {
+            auth::error(
+                StatusCode::CONFLICT,
+                factory_reset::LIVE_SESSIONS_BLOCK_RESET,
+            )
+        }
         Err(_) => internal(),
     };
     finish(response, cookies)

@@ -21,7 +21,7 @@ use crate::{
         session, validation,
     },
     platform::database::SuplexDatabase,
-    tasks::{commands::TaskFailure, templates},
+    tasks::templates,
 };
 
 use super::auth;
@@ -40,16 +40,6 @@ pub fn router() -> Router<AppState> {
             "/api/task-templates/{template_id}",
             patch(update).delete(delete),
         )
-}
-
-fn failure_response(error: Box<dyn Error>) -> Response {
-    match error.downcast::<TaskFailure>() {
-        Ok(failure) => auth::error(
-            StatusCode::from_u16(failure.status_code).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
-            &failure.public_message,
-        ),
-        Err(error) => auth::service_error(error),
-    }
 }
 
 type Parser<T> = fn(Option<&Value>) -> ContractResult<T>;
@@ -96,7 +86,7 @@ fn respond<T: serde::Serialize>(
     let mut response = match state.with_database(operation) {
         Ok(_) if status == StatusCode::NO_CONTENT => status.into_response(),
         Ok(value) => (status, Json(value)).into_response(),
-        Err(error) => failure_response(error),
+        Err(error) => auth::service_error(error),
     };
     auth::append_cookies(&mut response, cookies);
     response
@@ -220,14 +210,7 @@ async fn list(
         Some(user) => {
             match state.with_database(|database| templates::list(database, &user.id, &project_id)) {
                 Ok(templates) => Json(json!({"templates":templates})).into_response(),
-                Err(error) => match error.downcast::<TaskFailure>() {
-                    Ok(failure) => auth::error(
-                        StatusCode::from_u16(failure.status_code)
-                            .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
-                        &failure.public_message,
-                    ),
-                    Err(error) => auth::service_error(error),
-                },
+                Err(error) => auth::service_error(error),
             }
         }
         None => auth::error(StatusCode::UNAUTHORIZED, "Authentication required"),

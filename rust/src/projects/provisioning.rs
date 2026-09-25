@@ -1,3 +1,4 @@
+use crate::projects::ProjectError;
 use crate::shared::ids::random_hex_id;
 use std::{
     fs,
@@ -10,10 +11,7 @@ use git2::{
 use serde::Serialize;
 use serde_json::{Value, json};
 
-use super::{
-    repository::{self, Finding, Github, remote_callbacks},
-    service::ProjectFailure,
-};
+use super::repository::{self, Finding, Github, remote_callbacks};
 
 fn finding(code: &str, field: &str, message: impl Into<String>) -> Finding {
     Finding {
@@ -23,12 +21,8 @@ fn finding(code: &str, field: &str, message: impl Into<String>) -> Finding {
     }
 }
 
-fn failure(message: &'static str, status_code: u16, finding: Finding) -> ProjectFailure {
-    ProjectFailure {
-        message,
-        status_code,
-        findings: vec![finding],
-    }
+fn failure(message: &'static str, status: u16, finding: Finding) -> ProjectError {
+    ProjectError::new(message, status, vec![finding])
 }
 
 /// The last line of the reason, so the person sees why the host refused.
@@ -71,7 +65,7 @@ fn temporary_path(parent: &Path, prefix: &str) -> std::io::Result<PathBuf> {
     ))
 }
 
-pub async fn github_owners(github: &Github) -> Result<Vec<String>, ProjectFailure> {
+pub async fn github_owners(github: &Github) -> Result<Vec<String>, ProjectError> {
     let unavailable = |reason: String| {
         failure(
             "Repository provisioning failed",
@@ -132,7 +126,7 @@ const REPOSITORY_LIMIT: usize = 1000;
 pub async fn github_repositories(
     github: &Github,
     owner: &str,
-) -> Result<Vec<GithubRepository>, ProjectFailure> {
+) -> Result<Vec<GithubRepository>, ProjectError> {
     let list = async {
         let access = github
             .access()
@@ -223,7 +217,7 @@ pub async fn ensure(
     repository: &str,
     repository_path: &Path,
     worktree_root: &Path,
-) -> Result<(), ProjectFailure> {
+) -> Result<(), ProjectError> {
     let parent = repository_path
         .parent()
         .expect("repository path has parent");
@@ -354,7 +348,7 @@ pub async fn create(
     clone_url: &str,
     repository_path: &Path,
     base_branch: &str,
-) -> Result<(), ProjectFailure> {
+) -> Result<(), ProjectError> {
     let parent = repository_path
         .parent()
         .expect("repository path has parent");
@@ -740,7 +734,7 @@ mod tests {
         .await
         .unwrap_err();
         assert_eq!(
-            (conflict.status_code, conflict.findings[0].code.as_str()),
+            (conflict.status(), conflict.findings()[0].code.as_str()),
             (409, "repository-conflict")
         );
         let missing = ensure(
@@ -752,7 +746,7 @@ mod tests {
         )
         .await
         .unwrap_err();
-        assert_eq!(missing.findings[0].code, "repository-unavailable");
+        assert_eq!(missing.findings()[0].code, "repository-unavailable");
         assert_eq!(
             fs::read_dir(repositories.join("acme")).unwrap().count(),
             1,
@@ -788,7 +782,7 @@ mod tests {
             .await
             .unwrap_err();
         assert_eq!(
-            (exists.status_code, exists.findings[0].code.as_str()),
+            (exists.status(), exists.findings()[0].code.as_str()),
             (409, "repository-conflict")
         );
         let organization =
@@ -804,8 +798,8 @@ mod tests {
         .unwrap_err();
         assert_eq!(
             (
-                refused.findings[0].code.as_str(),
-                refused.findings[0].message.as_str()
+                refused.findings()[0].code.as_str(),
+                refused.findings()[0].message.as_str()
             ),
             (
                 "repository-create-failed",

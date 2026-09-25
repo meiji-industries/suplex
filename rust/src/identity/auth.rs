@@ -1,7 +1,7 @@
+use crate::identity::IdentityError;
 use crate::shared::hash::sha256_hex;
 use crate::shared::ids::random_hex_id;
 use crate::shared::time::rfc3339_millis;
-use std::{error::Error, fmt};
 
 use chrono::{DateTime, Duration, Utc};
 use rusqlite::{OptionalExtension, params};
@@ -61,31 +61,6 @@ pub struct ProfileUpdate {
     pub username: Option<String>,
     pub avatar_seed: Option<String>,
 }
-
-#[derive(Debug)]
-pub struct AuthFailure {
-    pub message: &'static str,
-    pub status_code: u16,
-    pub code: &'static str,
-}
-
-impl AuthFailure {
-    pub(crate) fn new(message: &'static str, status_code: u16, code: &'static str) -> Self {
-        Self {
-            message,
-            status_code,
-            code,
-        }
-    }
-}
-
-impl fmt::Display for AuthFailure {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(self.message)
-    }
-}
-
-impl Error for AuthFailure {}
 
 pub(crate) fn js_trim(value: &str) -> &str {
     value.trim_matches(|character| {
@@ -206,11 +181,11 @@ pub fn development_sign_in(
         )?;
         let user = public_user(database, "user_development")?.ok_or("development user missing")?;
         if user.role != "admin" || user.status != "active" {
-            return Err(Box::new(AuthFailure::new(
+            return Err(IdentityError::auth(
                 "Development user is unavailable",
                 409,
                 "auth_failure",
-            )));
+            ).into());
         }
         let session_token = create_session(database, &user.id, now)?;
         Ok(AuthResult {
@@ -265,11 +240,9 @@ pub fn update_profile(
         .as_ref()
         .is_some_and(|value| value.is_empty() || value.encode_utf16().count() > 120)
     {
-        return Err(Box::new(AuthFailure::new(
-            "Name must be 1–120 characters",
-            400,
-            "auth_failure",
-        )));
+        return Err(
+            IdentityError::auth("Name must be 1–120 characters", 400, "auth_failure").into(),
+        );
     }
     let username = input.username.map(|value| js_trim(&value).to_owned());
     if username.as_ref().is_some_and(|value| {
@@ -280,37 +253,33 @@ pub fn update_profile(
                 byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'@' | b'-')
             })
     }) {
-        return Err(Box::new(AuthFailure::new(
+        return Err(IdentityError::auth(
             "Username must be 2–64 characters and use letters, numbers, dots, hyphens, underscores, or @",
             400,
             "auth_failure",
-        )));
+        ).into());
     }
     let avatar_seed = input.avatar_seed.map(|value| js_trim(&value).to_owned());
     if avatar_seed
         .as_ref()
         .is_some_and(|value| value.is_empty() || value.encode_utf16().count() > 128)
     {
-        return Err(Box::new(AuthFailure::new(
-            "Avatar seed is invalid",
-            400,
-            "auth_failure",
-        )));
+        return Err(IdentityError::auth("Avatar seed is invalid", 400, "auth_failure").into());
     }
     database.transaction(false, |database| {
         let Some(user) = public_user(database, actor_user_id)? else {
-            return Err(Box::new(AuthFailure::new(
+            return Err(IdentityError::auth(
                 "Authentication required",
                 401,
                 "auth_failure",
-            )));
+            ).into());
         };
         if user.status != "active" {
-            return Err(Box::new(AuthFailure::new(
+            return Err(IdentityError::auth(
                 "Authentication required",
                 401,
                 "auth_failure",
-            )));
+            ).into());
         }
         let raw_avatar_seed: String = database.connection().query_row(
             "SELECT avatar_seed FROM suplex_users WHERE id = ?1",
@@ -346,11 +315,11 @@ pub fn update_profile(
                 )
                 .is_err()
         {
-            return Err(Box::new(AuthFailure::new(
+            return Err(IdentityError::auth(
                 "Username is already in use",
                 409,
                 "username_taken",
-            )));
+            ).into());
         }
         for (changed, column, value) in [
             (
@@ -579,7 +548,7 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(
-            failure.downcast_ref::<AuthFailure>().unwrap().code,
+            failure.downcast_ref::<IdentityError>().unwrap().code(),
             "username_taken"
         );
         assert_eq!(

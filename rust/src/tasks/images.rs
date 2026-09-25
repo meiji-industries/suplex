@@ -1,11 +1,12 @@
 //! Decode task image inputs before external source capture or task persistence.
 
+use crate::platform::PlatformError;
 use std::sync::OnceLock;
 
 use base64::{Engine, engine::general_purpose::STANDARD};
 use regex::Regex;
 
-use crate::{http::contracts::typed::tasks::TaskImage, platform::artifacts::ArtifactFailure};
+use crate::http::contracts::typed::tasks::TaskImage;
 
 pub const MAX_TASK_IMAGES: usize = 8;
 pub const MAX_TASK_IMAGE_BYTES: usize = 8 * 1024 * 1024;
@@ -25,8 +26,8 @@ fn data_uri() -> &'static Regex {
     DATA_URI.get_or_init(|| Regex::new(r"^data:([^;,]+);base64,(.+)$").unwrap())
 }
 
-pub fn decode_task_image(image: &TaskImage) -> Result<DecodedTaskImage, ArtifactFailure> {
-    let invalid = ArtifactFailure::invalid_image_data;
+pub fn decode_task_image(image: &TaskImage) -> Result<DecodedTaskImage, PlatformError> {
+    let invalid = PlatformError::invalid_image_data;
     let encoded = match data_uri().captures(&image.base64) {
         Some(captures) => {
             if captures[1] != image.mime_type {

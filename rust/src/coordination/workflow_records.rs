@@ -1,7 +1,9 @@
 //! Workflow records: named, editable presets over one built-in engine.
 
+use crate::identity::IdentityError;
 use crate::shared::ids::random_hex_id;
 use crate::shared::time::now_millis_rfc3339;
+use crate::tasks::TaskError;
 use rusqlite::{OptionalExtension, Row, params};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
@@ -9,9 +11,7 @@ use serde_json::{Map, Value, json};
 use crate::{
     coordination::workflows::{advisor_label, workflow_definition},
     http::contracts::typed::workflows as contracts,
-    identity::auth::AuthFailure,
     platform::database::{DatabaseResult, SuplexDatabase},
-    tasks::commands::TaskFailure,
 };
 
 #[derive(Debug, Default, Deserialize, Serialize)]
@@ -84,11 +84,7 @@ fn record(row: &Row<'_>) -> rusqlite::Result<WorkflowRecord> {
 }
 
 fn failure(message: impl Into<String>, status_code: u16) -> Box<dyn std::error::Error> {
-    Box::new(TaskFailure {
-        public_message: message.into(),
-        status_code,
-        code: "task_failure",
-    })
+    TaskError::new(message, status_code).into()
 }
 
 /// TypeScript `normalizeWorkflowInput`: apply workflow defaults before schema
@@ -175,11 +171,9 @@ fn active_role(database: &SuplexDatabase, user_id: &str) -> DatabaseResult<Optio
 
 fn require_admin(database: &SuplexDatabase, user_id: &str) -> DatabaseResult<()> {
     if active_role(database, user_id)?.as_deref() != Some("admin") {
-        return Err(Box::new(AuthFailure::new(
-            "Administrator access required",
-            403,
-            "auth_failure",
-        )));
+        return Err(
+            IdentityError::auth("Administrator access required", 403, "auth_failure").into(),
+        );
     }
     Ok(())
 }
@@ -191,11 +185,7 @@ pub fn list(
     include_archived: bool,
 ) -> DatabaseResult<Vec<WorkflowRecord>> {
     if active_role(database, user_id)?.is_none() {
-        return Err(Box::new(AuthFailure::new(
-            "Authentication required",
-            401,
-            "auth_failure",
-        )));
+        return Err(IdentityError::auth("Authentication required", 401, "auth_failure").into());
     }
     let sql = if include_archived {
         "SELECT * FROM suplex_workflows ORDER BY name COLLATE NOCASE, id"
@@ -213,10 +203,7 @@ fn read(database: &SuplexDatabase, id: &str) -> DatabaseResult<WorkflowRecord> {
         .connection()
         .query_row("SELECT * FROM suplex_workflows WHERE id = ?1", [id], record)
         .optional()?
-        .ok_or_else(|| {
-            Box::new(AuthFailure::new("Not found", 404, "auth_failure"))
-                as Box<dyn std::error::Error>
-        })
+        .ok_or_else(|| IdentityError::not_found().into())
 }
 
 fn assert_name(database: &SuplexDatabase, name: &str, id: &str) -> DatabaseResult<()> {
@@ -226,11 +213,12 @@ fn assert_name(database: &SuplexDatabase, name: &str, id: &str) -> DatabaseResul
         |row| row.get(0),
     )?;
     if taken {
-        return Err(Box::new(AuthFailure::new(
+        return Err(IdentityError::auth(
             "This workflow name is already in use",
             409,
             "auth_failure",
-        )));
+        )
+        .into());
     }
     Ok(())
 }

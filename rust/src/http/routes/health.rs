@@ -1,6 +1,7 @@
 //! Host health uses the installation's live resources. Contextual provider
 //! selection is authorized even while provider-specific probes are unported.
 
+use crate::projects::ProjectError;
 use crate::shared::time::now_millis_rfc3339;
 use std::{ffi::CString, fs::OpenOptions, os::unix::ffi::OsStrExt, path::Path};
 
@@ -122,11 +123,11 @@ fn provider_context(
         .map_err(Box::new)?;
     let requested = if let Some(project_id) = &query.project_id {
         let project = projects::get(database, &user.id, project_id).map_err(|error| {
-            if let Some(failure) = error.downcast_ref::<projects::ProjectFailure>() {
+            if let Some(failure) = error.downcast_ref::<ProjectError>() {
                 Box::new(auth::error(
-                    StatusCode::from_u16(failure.status_code)
+                    StatusCode::from_u16(failure.status())
                         .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
-                    failure.message,
+                    &failure.to_string(),
                 ))
             } else {
                 Box::new(auth::service_error(error))

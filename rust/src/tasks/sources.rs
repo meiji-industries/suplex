@@ -2,7 +2,8 @@
 //! branch task sources. Git remote refs are read with `git2`; GitHub through
 //! the delivery client.
 
-use std::{error::Error, fmt, path::Path, sync::LazyLock};
+use crate::projects::ProjectError;
+use std::{error::Error, path::Path, sync::LazyLock};
 
 use chrono::{DateTime, FixedOffset, TimeZone};
 use git2::{AutotagOption, FetchOptions, Repository};
@@ -31,28 +32,13 @@ fn branch_pattern(branch: &str) -> bool {
         && !branch.chars().any(char::is_whitespace)
 }
 
-/// TypeScript `TaskSourceFailure`.
-#[derive(Debug)]
-pub struct TaskSourceFailure {
-    pub code: &'static str,
-    pub message: &'static str,
-    pub status_code: u16,
-}
-
-impl fmt::Display for TaskSourceFailure {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(self.message)
-    }
-}
-
-impl Error for TaskSourceFailure {}
-
-fn failure(code: &'static str, message: &'static str, status_code: u16) -> Box<dyn Error> {
-    Box::new(TaskSourceFailure {
+fn failure(code: &'static str, message: &'static str, status: u16) -> Box<dyn Error> {
+    super::TaskError::Source {
+        status,
         code,
         message,
-        status_code,
-    })
+    }
+    .into()
 }
 
 fn unavailable() -> Box<dyn Error> {
@@ -273,11 +259,12 @@ pub async fn resolve(project: &Project, selector: &Value) -> Result<Value, Box<d
             || tracker["repository"].as_str().map(str::to_lowercase)
                 != project.repository.as_deref().map(str::to_lowercase)
         {
-            return Err(Box::new(crate::projects::service::ProjectFailure {
-                message: "The source issue does not match the configured tracker.",
-                status_code: 422,
-                findings: Vec::new(),
-            }));
+            return Err(ProjectError::new(
+                "The source issue does not match the configured tracker.",
+                422,
+                Vec::new(),
+            )
+            .into());
         }
     }
     let bitbucket = bitbucket(project)?;

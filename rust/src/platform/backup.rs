@@ -7,7 +7,7 @@ use crate::shared::time::rfc3339_millis;
 use std::{
     collections::HashSet,
     error::Error,
-    fmt, fs,
+    fs,
     os::unix::fs::DirBuilderExt,
     path::{Path, PathBuf},
     process::{Command, Stdio},
@@ -32,27 +32,17 @@ pub const HEALTH_MAX_AGE_MS: i64 = 24 * 60 * 60 * 1_000;
 pub static BACKUP_NAME: LazyLock<Regex> =
     LazyLock::new(|| Regex::new(r"^suplex-backup-[0-9TZ-]+\.tar\.gz$").expect("backup name"));
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, thiserror::Error)]
 pub enum BackupFailure {
+    #[error("Suplex backup exists")]
     Exists,
+    #[error("Suplex backup invalid")]
     Invalid,
+    #[error("Suplex backup unsafe")]
     Unsafe,
+    #[error("Suplex backup verification")]
     Verification,
 }
-
-impl fmt::Display for BackupFailure {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let code = match self {
-            Self::Exists => "exists",
-            Self::Invalid => "invalid",
-            Self::Unsafe => "unsafe",
-            Self::Verification => "verification",
-        };
-        write!(formatter, "Suplex backup {code}")
-    }
-}
-
-impl Error for BackupFailure {}
 
 #[derive(Debug, Clone, Serialize, PartialEq)]
 #[serde(rename_all = "camelCase")]

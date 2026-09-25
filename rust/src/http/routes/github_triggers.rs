@@ -16,13 +16,10 @@ use crate::{
         contracts::typed::{self, github_triggers as contracts},
         validation,
     },
-    identity::auth::AuthFailure,
     integrations::{
         github_delivery::Github,
-        github_triggers::{self as triggers, Failure, TriggerFailure},
+        github_triggers::{self as triggers, Failure},
     },
-    projects::service::ProjectFailure,
-    tasks::commands::TaskFailure,
 };
 
 use super::{auth, profiles::authorize};
@@ -60,43 +57,6 @@ async fn github() -> Result<Github, Failure> {
     Ok(Github::load().await?)
 }
 
-fn failure_response(error: Failure) -> Response {
-    let error = match error.downcast::<TriggerFailure>() {
-        Ok(failure) => {
-            return auth::error(
-                StatusCode::from_u16(failure.status).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
-                &failure.message,
-            );
-        }
-        Err(error) => error,
-    };
-    let error = match error.downcast::<TaskFailure>() {
-        Ok(failure) => {
-            return auth::error(
-                StatusCode::from_u16(failure.status_code)
-                    .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
-                &failure.public_message,
-            );
-        }
-        Err(error) => error,
-    };
-    let error = match error.downcast::<ProjectFailure>() {
-        Ok(failure) => {
-            return (
-                StatusCode::from_u16(failure.status_code)
-                    .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
-                Json(json!({"error": failure.message, "findings": failure.findings})),
-            )
-                .into_response();
-        }
-        Err(error) => error,
-    };
-    match error.downcast::<AuthFailure>() {
-        Ok(failure) => auth::service_error(failure),
-        Err(_) => auth::error(StatusCode::INTERNAL_SERVER_ERROR, "Internal server error"),
-    }
-}
-
 fn params(company_id: &str, rule_id: Option<&str>) -> Result<(), Box<Response>> {
     let input = match rule_id {
         Some(rule_id) => json!({"companyId": company_id, "ruleId": rule_id}),
@@ -121,7 +81,7 @@ fn params(company_id: &str, rule_id: Option<&str>) -> Result<(), Box<Response>> 
 fn respond(result: Result<Value, Failure>, status: StatusCode, cookies: Vec<String>) -> Response {
     let mut response = match result {
         Ok(value) => (status, Json(value)).into_response(),
-        Err(error) => failure_response(error),
+        Err(error) => auth::service_error(error),
     };
     auth::append_cookies(&mut response, cookies);
     response

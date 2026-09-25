@@ -1,3 +1,4 @@
+use crate::identity::IdentityError;
 use crate::shared::hash::sha256_hex;
 use crate::shared::ids::random_hex_id;
 use crate::shared::time::rfc3339_millis;
@@ -9,7 +10,7 @@ use serde_json::{Value, json};
 use crate::platform::database::{DatabaseResult, SuplexDatabase};
 
 use super::{
-    auth::{self, AuthFailure, AuthResult},
+    auth::{self, AuthResult},
     webauthn::{self, StoredCredential},
 };
 
@@ -35,19 +36,16 @@ struct Invitation {
 }
 
 fn invitation_failure() -> Box<dyn std::error::Error> {
-    Box::new(AuthFailure::new(
+    IdentityError::auth(
         "Invitation is invalid or expired",
         400,
         "invitation_invalid",
-    ))
+    )
+    .into()
 }
 
 fn passkey_failure() -> Box<dyn std::error::Error> {
-    Box::new(AuthFailure::new(
-        "Passkey could not be verified",
-        400,
-        "passkey_invalid",
-    ))
+    IdentityError::auth("Passkey could not be verified", 400, "passkey_invalid").into()
 }
 
 fn valid_token_shape(token: &str, kind: &str) -> bool {
@@ -326,7 +324,7 @@ pub fn finish_registration(
         let credential_id = random_hex_id("credential")?;
         if let Err(error) = database.connection().execute("INSERT INTO suplex_credentials (id, user_id, credential_id, public_key, counter, transports, created_at, revoked_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, NULL)", params![credential_id, user_id, verified.id, verified.public_key, verified.counter, serde_json::to_string(&verified.transports)?, now_iso]) {
             if matches!(&error, rusqlite::Error::SqliteFailure(_, Some(message)) if message.contains("UNIQUE constraint failed: suplex_credentials.credential_id")) {
-                return Err(Box::new(AuthFailure::new("Credential is already registered", 409, "credential_duplicate")));
+                return Err(IdentityError::auth("Credential is already registered", 409, "credential_duplicate").into());
             }
             return Err(passkey_failure());
         }
@@ -370,14 +368,8 @@ pub fn begin_authentication(
             })
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
-    let started =
-        webauthn::start_authentication(site.origin, site.rp_id, &credentials).map_err(|_| {
-            Box::new(AuthFailure::new(
-                "No passkey is enrolled",
-                400,
-                "auth_failure",
-            )) as Box<dyn std::error::Error>
-        })?;
+    let started = webauthn::start_authentication(site.origin, site.rp_id, &credentials)
+        .map_err(|_| IdentityError::auth("No passkey is enrolled", 400, "auth_failure"))?;
     let challenge = started.state;
     let options = started.options;
     let challenge_id = random_hex_id("challenge")?;

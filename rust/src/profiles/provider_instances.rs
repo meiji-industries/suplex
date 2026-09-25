@@ -1,5 +1,6 @@
 //! Local provider instances: a private home directory per Claude Code login.
 
+use crate::identity::IdentityError;
 use crate::shared::time::now_millis_rfc3339;
 use std::{
     error::Error,
@@ -10,18 +11,14 @@ use std::{
 use rusqlite::{OptionalExtension, params};
 use serde_json::{Value, json};
 
-use crate::{identity::auth::AuthFailure, platform::database::SuplexDatabase};
+use crate::platform::database::SuplexDatabase;
 
 type Result<T> = std::result::Result<T, Box<dyn Error>>;
 
 const SELECTION: &str = "SELECT id, provider, label, home_directory, created_at, updated_at FROM suplex_provider_instances";
 
 fn failure(message: &'static str, status_code: u16) -> Box<dyn Error> {
-    Box::new(AuthFailure {
-        message,
-        status_code,
-        code: "auth_failure",
-    })
+    IdentityError::auth(message, status_code, "auth_failure").into()
 }
 
 pub fn provider_instances_directory(database_path: &Path) -> PathBuf {

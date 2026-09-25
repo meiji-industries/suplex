@@ -1,5 +1,3 @@
-use std::error::Error;
-
 use axum::{
     Json, Router,
     body::Bytes,
@@ -13,7 +11,7 @@ use serde_json::{Map, Value, json};
 
 use crate::{
     http::{AppState, contracts, session},
-    profiles::agent_profiles::{self, ProfileFailure, ProfileInput, ProfilePatch},
+    profiles::agent_profiles::{self, ProfileInput, ProfilePatch},
 };
 
 use super::auth;
@@ -28,16 +26,6 @@ pub fn router() -> Router<AppState> {
             axum::routing::patch(update).delete(delete),
         )
         .route("/api/admin/profiles/{agent_id}/duplicate", post(duplicate))
-}
-
-fn service_error(source: Box<dyn Error>) -> Response {
-    match source.downcast::<ProfileFailure>() {
-        Ok(failure) => auth::error(
-            StatusCode::from_u16(failure.status_code).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
-            &failure.message,
-        ),
-        Err(source) => auth::service_error(source),
-    }
 }
 
 fn response_with_cookies(response: Response, cookies: Vec<String>) -> Response {
@@ -62,7 +50,7 @@ pub(crate) fn authorize(
         .with_database(|database| {
             session::session_user(database, headers, Some(&state.session_config), Utc::now())
         })
-        .map_err(service_error)
+        .map_err(auth::service_error)
         .map_err(Box::new)?;
     let Some(user) = session.user else {
         return Err(Box::new(auth::error(
@@ -129,7 +117,7 @@ async fn list(
             json!({ "profiles": profiles }),
             StatusCode::OK,
         ),
-        Err(error) => service_error(error),
+        Err(error) => auth::service_error(error),
     };
     response_with_cookies(response, cookies)
 }
@@ -155,7 +143,7 @@ async fn create(State(state): State<AppState>, headers: HeaderMap, body: Bytes) 
             json!(profile),
             StatusCode::CREATED,
         ),
-        Err(error) => service_error(error),
+        Err(error) => auth::service_error(error),
     };
     response_with_cookies(response, cookies)
 }
@@ -186,7 +174,7 @@ async fn update(
             json!(profile),
             StatusCode::OK,
         ),
-        Err(error) => service_error(error),
+        Err(error) => auth::service_error(error),
     };
     response_with_cookies(response, cookies)
 }
@@ -208,7 +196,7 @@ async fn duplicate(
             json!(profile),
             StatusCode::CREATED,
         ),
-        Err(error) => service_error(error),
+        Err(error) => auth::service_error(error),
     };
     response_with_cookies(response, cookies)
 }
@@ -226,7 +214,7 @@ async fn delete(
         .with_database(|database| agent_profiles::delete(database, &user_id, &agent_id, Utc::now()))
     {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
-        Err(error) => service_error(error),
+        Err(error) => auth::service_error(error),
     };
     response_with_cookies(response, cookies)
 }
@@ -245,7 +233,7 @@ async fn choose_defaults(State(state): State<AppState>, headers: HeaderMap) -> R
         )
     }) {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
-        Err(error) => service_error(error),
+        Err(error) => auth::service_error(error),
     };
     response_with_cookies(response, cookies)
 }

@@ -1,5 +1,8 @@
 //! Task reads and local backlog creation. Native wake is connected separately.
 
+use crate::identity::IdentityError;
+use crate::shared::PublicFailure;
+use crate::tasks::TaskError;
 use std::{error::Error, path::PathBuf};
 
 use axum::{
@@ -25,16 +28,14 @@ use crate::{
         session, validation,
     },
     identity::companies,
-    platform::artifacts::ArtifactFailure,
     projects::{
         repository as git,
-        service::{self as projects, ProjectFailure},
+        service::{self as projects},
     },
     tasks::{
         archive::operations::{self as archive, ArchiveOutcome},
-        commands::{self, TaskFailure},
+        commands,
         images::{self, DecodedTaskImage},
-        repository::TaskConflict,
         response as task_response,
     },
 };
@@ -131,7 +132,7 @@ async fn refresh(
             }
             with_cookies(Json(task).into_response(), cookies)
         }
-        Err(error) => with_cookies(service_error(error), cookies),
+        Err(error) => with_cookies(auth::service_error(error), cookies),
     }
 }
 
@@ -156,7 +157,7 @@ async fn unarchive_pending(
     });
     match result {
         Ok(task) => with_cookies(Json(task).into_response(), cookies),
-        Err(error) => with_cookies(service_error(error), cookies),
+        Err(error) => with_cookies(auth::service_error(error), cookies),
     }
 }
 
@@ -168,22 +169,16 @@ struct ArchiveConfirmation {
     dirty_file_paths: Vec<String>,
 }
 
-fn archive_error(error: &(dyn Error + 'static)) -> (StatusCode, String, bool) {
-    if let Some(failure) = error.downcast_ref::<TaskFailure>() {
-        return (
-            StatusCode::from_u16(failure.status_code).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
-            failure.public_message.clone(),
-            failure.code == "experimental_not_ported",
-        );
-    }
-    if let Some(failure) = error.downcast_ref::<crate::identity::auth::AuthFailure>() {
-        return (
-            StatusCode::from_u16(failure.status_code).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
-            failure.message.to_owned(),
-            false,
-        );
-    }
-    (StatusCode::CONFLICT, error.to_string(), false)
+/// Archive keeps the status of task and access failures; any other failure is a 409.
+fn archive_error(error: &(dyn Error + 'static)) -> PublicFailure {
+    let status = if let Some(TaskError::Failure { status, .. }) = error.downcast_ref() {
+        *status
+    } else if let Some(IdentityError::Auth { status, .. }) = error.downcast_ref() {
+        *status
+    } else {
+        409
+    };
+    PublicFailure::new(status, error.to_string())
 }
 
 async fn archive_pending(
@@ -249,11 +244,10 @@ async fn archive_pending(
             });
             match result {
                 Ok(task) => with_cookies(Json(task).into_response(), cookies),
-                Err(error) => with_cookies(service_error(error), cookies),
+                Err(error) => with_cookies(auth::service_error(error), cookies),
             }
         }
-        Err((_, _, true)) => with_cookies(auth::not_ported(), cookies),
-        Err((status, message, false)) => with_cookies(auth::error(status, &message), cookies),
+        Err(failure) => with_cookies(failure.into_response(), cookies),
     }
 }
 
@@ -307,44 +301,6 @@ fn authorize(
 fn with_cookies(mut response: Response, cookies: Vec<String>) -> Response {
     auth::append_cookies(&mut response, cookies);
     response
-}
-
-fn service_error(source: Box<dyn Error>) -> Response {
-    let source = match source.downcast::<ArtifactFailure>() {
-        Ok(failure) => {
-            return (
-                StatusCode::UNPROCESSABLE_ENTITY,
-                Json(json!({"error": failure.message, "code": failure.code})),
-            )
-                .into_response();
-        }
-        Err(source) => source,
-    };
-    let source = match source.downcast::<TaskFailure>() {
-        Ok(failure) => {
-            if failure.code == "experimental_not_ported" {
-                return auth::not_ported();
-            }
-            return auth::error(
-                StatusCode::from_u16(failure.status_code)
-                    .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
-                &failure.public_message,
-            );
-        }
-        Err(source) => source,
-    };
-    let source = match source.downcast::<TaskConflict>() {
-        Ok(failure) => return auth::error(StatusCode::CONFLICT, &failure.to_string()),
-        Err(source) => source,
-    };
-    match source.downcast::<ProjectFailure>() {
-        Ok(failure) => (
-            StatusCode::from_u16(failure.status_code).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
-            Json(json!({"error":failure.message,"findings":failure.findings})),
-        )
-            .into_response(),
-        Err(source) => auth::service_error(source),
-    }
 }
 
 fn normalize_workflow(value: &mut Value) -> Result<(), Box<Response>> {
@@ -522,19 +478,11 @@ async fn create(
         let admission = state.with_database(|database| -> Result<_, Box<dyn Error>> {
             let company = companies::require_company_access(database, &user_id, &company_id)?;
             if company.status != "active" {
-                return Err(Box::new(TaskFailure {
-                    public_message: "The company is not active".into(),
-                    status_code: 409,
-                    code: "task_failure",
-                }));
+                return Err(TaskError::new("The company is not active", 409).into());
             }
             let project = projects::get(database, &user_id, &request.project_id)?;
             if project.company_id != company_id {
-                return Err(Box::new(TaskFailure {
-                    public_message: "Not found".into(),
-                    status_code: 404,
-                    code: "task_failure",
-                }));
+                return Err(TaskError::not_found().into());
             }
             let hash = commands::task_request_hash(&request, &user_id)?;
             if let Some(existing) = commands::existing_user_task(
@@ -558,7 +506,7 @@ async fn create(
         });
         match admission {
             Ok(value) => value,
-            Err(error) => return with_cookies(service_error(error), cookies),
+            Err(error) => return with_cookies(auth::service_error(error), cookies),
         }
     };
     if let Some((status, id, snapshot)) = existing {
@@ -594,7 +542,7 @@ async fn create(
             Ok(pull_requests) => pull_requests,
             Err(rejection) => {
                 return with_cookies(
-                    service_error(Box::new(commands::pull_request_rejection(rejection))),
+                    auth::service_error(Box::new(commands::pull_request_rejection(rejection))),
                     cookies,
                 );
             }
@@ -605,7 +553,7 @@ async fn create(
         });
         match selected {
             Ok(profiles) => profiles,
-            Err(error) => return with_cookies(service_error(error), cookies),
+            Err(error) => return with_cookies(auth::service_error(error), cookies),
         }
     };
     let decoded_images = match request
@@ -615,7 +563,7 @@ async fn create(
         .collect::<Result<Vec<_>, _>>()
     {
         Ok(images) => images,
-        Err(failure) => return with_cookies(service_error(Box::new(failure)), cookies),
+        Err(failure) => return with_cookies(auth::service_error(Box::new(failure)), cookies),
     };
     let operation = tokio::spawn(finish_admitted_create(
         state,
@@ -686,7 +634,7 @@ async fn finish_admitted_create(state: AppState, admitted: AdmittedCreate) -> Re
     .await
     {
         Ok(pinned) => pinned,
-        Err(error) => return with_cookies(super::projects::source_error(error), cookies),
+        Err(error) => return with_cookies(auth::service_error(error), cookies),
     };
     let repository_path = PathBuf::from(&project.repository_path);
     let base_branch = project.base_branch.clone();
@@ -763,7 +711,7 @@ async fn finish_admitted_create(state: AppState, admitted: AdmittedCreate) -> Re
                 .into_response(),
             cookies,
         ),
-        Err(error) => with_cookies(service_error(error), cookies),
+        Err(error) => with_cookies(auth::service_error(error), cookies),
     }
 }
 
@@ -780,7 +728,7 @@ fn list_for(
     let result = state.with_database(|database| -> Result<_, Box<dyn Error>> {
         let visible = companies::list_visible_companies(database, &user_id)?;
         if company_id.as_deref().is_some_and(|id| !visible.iter().any(|company| company.id == id)) {
-            return Err(Box::new(TaskFailure { public_message: "Not found".into(), status_code: 404, code: "task_failure" }))
+            return Err(TaskError::not_found().into())
         }
         let mut statement = database.connection().prepare(
             "SELECT t.id, t.company_id FROM suplex_tasks t JOIN suplex_task_controls c ON c.task_id = t.id WHERE (t.archived_at IS NOT NULL) = ?1 ORDER BY julianday(CASE WHEN julianday(t.updated_at) >= julianday(c.updated_at) THEN t.updated_at ELSE c.updated_at END) DESC, t.id"
@@ -798,7 +746,7 @@ fn list_for(
     });
     match result {
         Ok(tasks) => with_cookies(Json(json!({"tasks": tasks})).into_response(), cookies),
-        Err(error) => with_cookies(service_error(error), cookies),
+        Err(error) => with_cookies(auth::service_error(error), cookies),
     }
 }
 
@@ -851,25 +799,13 @@ async fn get_one(
                 |row| row.get(0),
             )
             .optional()?;
-        let company = company.ok_or_else(|| {
-            Box::new(TaskFailure {
-                public_message: "Not found".into(),
-                status_code: 404,
-                code: "task_failure",
-            }) as Box<dyn Error>
-        })?;
+        let company = company.ok_or_else(TaskError::not_found)?;
         companies::require_company_access(database, &user_id, &company)?;
-        task_response::get(database, &id)?.ok_or_else(|| {
-            Box::new(TaskFailure {
-                public_message: "Not found".into(),
-                status_code: 404,
-                code: "task_failure",
-            }) as Box<dyn Error>
-        })
+        task_response::get(database, &id)?.ok_or_else(|| TaskError::not_found().into())
     });
     let mut response = match result {
         Ok(task) => Json(task).into_response(),
-        Err(error) => service_error(error),
+        Err(error) => auth::service_error(error),
     };
     response
         .headers_mut()
@@ -906,7 +842,7 @@ async fn update_details(
     );
     match result {
         Ok(task) => with_cookies(Json(task).into_response(), cookies),
-        Err(error) => with_cookies(service_error(error), cookies),
+        Err(error) => with_cookies(auth::service_error(error), cookies),
     }
 }
 
@@ -939,7 +875,7 @@ async fn rename(
     );
     match result {
         Ok(task) => with_cookies(Json(task).into_response(), cookies),
-        Err(error) => with_cookies(service_error(error), cookies),
+        Err(error) => with_cookies(auth::service_error(error), cookies),
     }
 }
 
@@ -967,18 +903,12 @@ async fn start_pending(
                 |row| row.get(0),
             )
             .optional()?;
-        let company = company.ok_or_else(|| {
-            Box::new(TaskFailure {
-                public_message: "Not found".into(),
-                status_code: 404,
-                code: "task_failure",
-            }) as Box<dyn Error>
-        })?;
+        let company = company.ok_or_else(TaskError::not_found)?;
         companies::require_company_access(database, &user_id, &company)?;
         Ok(())
     });
     if let Err(error) = access {
-        return with_cookies(service_error(error), cookies);
+        return with_cookies(auth::service_error(error), cookies);
     }
     let host = state.task_host.clone();
     let started = state.with_database(
@@ -993,7 +923,7 @@ async fn start_pending(
     );
     match started {
         Ok(task) => with_cookies(Json(task).into_response(), cookies),
-        Err(error) => with_cookies(service_error(error), cookies),
+        Err(error) => with_cookies(auth::service_error(error), cookies),
     }
 }
 
@@ -1025,7 +955,7 @@ async fn cancel_pending(
     );
     match cancelled {
         Ok(task) => with_cookies(Json(task).into_response(), cookies),
-        Err(error) => with_cookies(service_error(error), cookies),
+        Err(error) => with_cookies(auth::service_error(error), cookies),
     }
 }
 
@@ -1052,7 +982,7 @@ async fn disarm_pending(
     );
     match disarmed {
         Ok(task) => with_cookies(Json(task).into_response(), cookies),
-        Err(error) => with_cookies(service_error(error), cookies),
+        Err(error) => with_cookies(auth::service_error(error), cookies),
     }
 }
 
@@ -1094,7 +1024,7 @@ async fn set_dependencies(
         });
         match repository {
             Ok(repository) => repository,
-            Err(error) => return with_cookies(service_error(error), cookies),
+            Err(error) => return with_cookies(auth::service_error(error), cookies),
         }
     };
     let numbers = request
@@ -1107,7 +1037,7 @@ async fn set_dependencies(
             Ok(pull_requests) => pull_requests,
             Err(rejection) => {
                 return with_cookies(
-                    service_error(Box::new(commands::pull_request_rejection(rejection))),
+                    auth::service_error(Box::new(commands::pull_request_rejection(rejection))),
                     cookies,
                 );
             }
@@ -1127,7 +1057,7 @@ async fn set_dependencies(
     );
     match result {
         Ok(task) => with_cookies(Json(task).into_response(), cookies),
-        Err(error) => with_cookies(service_error(error), cookies),
+        Err(error) => with_cookies(auth::service_error(error), cookies),
     }
 }
 
@@ -1171,7 +1101,7 @@ async fn set_issue(
             };
             match read.await {
                 Ok(issue) => Some(issue),
-                Err(error) => return with_cookies(service_error(error), cookies),
+                Err(error) => return with_cookies(auth::service_error(error), cookies),
             }
         }
     };
@@ -1183,7 +1113,7 @@ async fn set_issue(
     );
     match result {
         Ok(task) => with_cookies(Json(task).into_response(), cookies),
-        Err(error) => with_cookies(service_error(error), cookies),
+        Err(error) => with_cookies(auth::service_error(error), cookies),
     }
 }
 
@@ -1231,7 +1161,7 @@ async fn select_agent(
     );
     match result {
         Ok(task) => with_cookies(Json(task).into_response(), cookies),
-        Err(error) => with_cookies(service_error(error), cookies),
+        Err(error) => with_cookies(auth::service_error(error), cookies),
     }
 }
 
@@ -1272,7 +1202,7 @@ async fn continue_delivery(
     );
     match result {
         Ok(task) => with_cookies(Json(task).into_response(), cookies),
-        Err(error) => with_cookies(service_error(error), cookies),
+        Err(error) => with_cookies(auth::service_error(error), cookies),
     }
 }
 
@@ -1310,7 +1240,7 @@ async fn send_note(
     );
     match result {
         Ok(task) => with_cookies(Json(task).into_response(), cookies),
-        Err(error) => with_cookies(service_error(error), cookies),
+        Err(error) => with_cookies(auth::service_error(error), cookies),
     }
 }
 
@@ -1363,7 +1293,7 @@ async fn answer_pending(
     );
     match answered {
         Ok(task) => with_cookies(Json(task).into_response(), cookies),
-        Err(error) => with_cookies(service_error(error), cookies),
+        Err(error) => with_cookies(auth::service_error(error), cookies),
     }
 }
 
@@ -1411,7 +1341,7 @@ async fn replace_worker(
     );
     match result {
         Ok(task) => with_cookies(Json(task).into_response(), cookies),
-        Err(error) => with_cookies(service_error(error), cookies),
+        Err(error) => with_cookies(auth::service_error(error), cookies),
     }
 }
 
@@ -1459,7 +1389,7 @@ async fn replace_coordinator(
     );
     match result {
         Ok(task) => with_cookies(Json(task).into_response(), cookies),
-        Err(error) => with_cookies(service_error(error), cookies),
+        Err(error) => with_cookies(auth::service_error(error), cookies),
     }
 }
 

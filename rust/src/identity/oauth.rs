@@ -1,5 +1,6 @@
 //! OAuth 2.1 authorization server for the remote MCP resource.
 
+use crate::identity::IdentityError;
 use crate::shared::hash::sha256_hex;
 use crate::shared::ids::random_hex_id;
 use crate::shared::time::rfc3339_millis;
@@ -18,7 +19,7 @@ use crate::platform::database::{DatabaseResult, SuplexDatabase};
 use super::{
     auth::{self, js_trim},
     companies,
-    external_agents::{self, ExternalAgentFailure, OAuthAgentInput, Principal},
+    external_agents::{self, OAuthAgentInput, Principal},
 };
 
 pub const SCOPE: &str = "suplex:mcp";
@@ -57,12 +58,11 @@ impl OAuthFailure {
         if let Some(failure) = error.downcast_ref::<OAuthFailure>() {
             return failure.clone();
         }
-        if let Some(failure) = error.downcast_ref::<ExternalAgentFailure>() {
-            return Self::new(
-                "access_denied",
-                &failure.public_message,
-                failure.status_code,
-            );
+        if let Some(IdentityError::ExternalAgent {
+            status, message, ..
+        }) = error.downcast_ref()
+        {
+            return Self::new("access_denied", message, *status);
         }
         Self::new("server_error", "OAuth request failed", 500)
     }

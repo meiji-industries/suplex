@@ -1,3 +1,4 @@
+use crate::identity::IdentityError;
 use std::error::Error;
 
 use axum::{
@@ -15,9 +16,15 @@ use serde_json::json;
 use crate::{
     http::contracts::{self, typed},
     identity::{
-        auth::{self, AuthFailure, AuthUser, ProfileUpdate},
+        auth::{self, AuthUser, ProfileUpdate},
         ceremony::{self, PreparedCredential, WebAuthnSite},
     },
+    integrations::github_triggers::TriggerFailure,
+    platform::PlatformError,
+    profiles::agent_profiles::ProfileFailure,
+    projects::ProjectError,
+    shared::PublicFailure,
+    tasks::TaskError,
 };
 
 use super::super::{AppState, session, validation};
@@ -330,23 +337,32 @@ pub(crate) fn not_ported() -> Response {
         .into_response()
 }
 
-pub(crate) fn service_error(source: Box<dyn Error>) -> Response {
-    match source.downcast::<AuthFailure>() {
-        Ok(failure) => {
-            let status = StatusCode::from_u16(failure.status_code)
-                .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR);
-            if failure.code == "auth_failure" {
-                error(status, failure.message)
-            } else {
-                (
-                    status,
-                    Json(json!({ "error": failure.message, "code": failure.code })),
-                )
-                    .into_response()
-            }
-        }
-        Err(_) => error(StatusCode::INTERNAL_SERVER_ERROR, "Internal server error"),
+/// The browser envelope of a service failure, as the TypeScript
+/// `installHttpErrorHandlers`; an unknown error is a server error.
+pub(crate) fn service_error(error: Box<dyn Error>) -> Response {
+    public_failure(error).into_response()
+}
+
+pub(crate) fn public_failure(error: Box<dyn Error>) -> PublicFailure {
+    macro_rules! public {
+        ($error:ident, $($kind:ty),+) => {$(
+            let $error = match $error.downcast::<$kind>() {
+                Ok(failure) => return (*failure).into(),
+                Err(error) => error,
+            };
+        )+};
     }
+    public!(
+        error,
+        TaskError,
+        IdentityError,
+        ProjectError,
+        PlatformError,
+        ProfileFailure,
+        TriggerFailure
+    );
+    drop(error);
+    PublicFailure::internal()
 }
 
 pub(crate) fn append_cookies(response: &mut Response, cookies: Vec<String>) {
@@ -551,6 +567,45 @@ pub(crate) mod tests {
     use std::sync::atomic::{AtomicU64, Ordering};
 
     use super::*;
+
+    #[test]
+    fn service_failures_share_one_browser_envelope() {
+        use crate::{
+            identity::IdentityError, platform::PlatformError, projects::ProjectError,
+            shared::PublicFailure, tasks::TaskError,
+        };
+        let public = |error: Box<dyn Error>| public_failure(error);
+        assert_eq!(
+            public(TaskError::new("Busy", 409).into()),
+            PublicFailure::new(409, "Busy")
+        );
+        assert_eq!(
+            public(TaskError::Conflict.into()),
+            PublicFailure::new(409, "This idempotency key belongs to a different request")
+        );
+        assert_eq!(
+            public(TaskError::Internal("disk".into()).into()),
+            PublicFailure::internal()
+        );
+        assert_eq!(
+            public(IdentityError::not_found().into()),
+            PublicFailure::new(404, "Not found")
+        );
+        assert_eq!(
+            public(IdentityError::auth("Taken", 409, "membership_duplicate").into()),
+            PublicFailure::new(409, "Taken").with_code("membership_duplicate")
+        );
+        assert_eq!(
+            public(ProjectError::new("Not found", 404, Vec::new()).into()),
+            PublicFailure::new(404, "Not found").with_findings(json!([]))
+        );
+        assert_eq!(
+            public(PlatformError::invalid_image_data().into()),
+            PublicFailure::new(422, "Image data is invalid or too large")
+                .with_code("invalid-image-data")
+        );
+        assert_eq!(public("unknown".into()), PublicFailure::internal());
+    }
     use crate::platform::database::{OpenMode, SuplexDatabase};
     use axum::body::to_bytes;
 

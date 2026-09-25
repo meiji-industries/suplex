@@ -1,5 +1,7 @@
 //! `SuplexMcpRuntime`: the OAuth MCP tools run in process with the token's principal.
 
+use crate::identity::IdentityError;
+use crate::tasks::TaskError;
 use rmcp::{
     ErrorData as McpError, RoleServer, ServerHandler,
     model::{
@@ -12,11 +14,8 @@ use serde_json::{Map, Value, json};
 
 use crate::{
     http::{AppState, routes::agent_api as routes},
-    identity::external_agents::{ExternalAgentFailure, Principal},
-    tasks::{
-        agent_api::{self, AgentTaskFailure, Creation},
-        commands::TaskFailure,
-    },
+    identity::external_agents::Principal,
+    tasks::agent_api::{self, Creation},
 };
 
 use super::{InvalidArguments, TOOLS};
@@ -146,14 +145,18 @@ impl SuplexMcpRuntime {
 pub fn failure(error: &(dyn std::error::Error + 'static)) -> (u16, Value) {
     let domain =
         |status: u16, message: &str, code: &str| (status, json!({"error": message, "code": code}));
-    if let Some(failure) = error.downcast_ref::<AgentTaskFailure>() {
-        return domain(failure.status_code, &failure.public_message, failure.code);
+    if let Some(TaskError::Failure { status, code, .. } | TaskError::Agent { status, code, .. }) =
+        error.downcast_ref()
+    {
+        return domain(*status, &error.to_string(), code);
     }
-    if let Some(failure) = error.downcast_ref::<TaskFailure>() {
-        return domain(failure.status_code, &failure.public_message, failure.code);
-    }
-    if let Some(failure) = error.downcast_ref::<ExternalAgentFailure>() {
-        return domain(failure.status_code, &failure.public_message, failure.code);
+    if let Some(IdentityError::ExternalAgent {
+        status,
+        code,
+        message,
+    }) = error.downcast_ref()
+    {
+        return domain(*status, message, code);
     }
     if error.is::<InvalidArguments>() {
         return domain(400, "Invalid request", "request_invalid");

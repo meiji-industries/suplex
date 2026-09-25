@@ -3,8 +3,7 @@
 use crate::shared::hash::sha256_hex;
 use crate::shared::time::rfc3339_millis;
 use std::{
-    error::Error,
-    fmt, fs,
+    fs,
     io::Write,
     os::unix::fs::{DirBuilderExt, OpenOptionsExt},
     path::{Component, Path, PathBuf},
@@ -14,60 +13,49 @@ use chrono::{DateTime, Utc};
 use rusqlite::params;
 use uuid::Uuid;
 
-use super::database::{DatabaseResult, SuplexDatabase};
+use super::{
+    PlatformError,
+    database::{DatabaseResult, SuplexDatabase},
+};
 
 pub const MAX_ARTIFACT_BYTES: usize = 8 * 1024 * 1024;
 
-#[derive(Debug)]
-pub struct ArtifactFailure {
-    pub code: &'static str,
-    pub message: &'static str,
-}
-
-impl ArtifactFailure {
+impl PlatformError {
     pub const fn invalid_image_data() -> Self {
-        Self {
+        Self::Artifact {
             code: "invalid-image-data",
             message: "Image data is invalid or too large",
         }
     }
 
     fn invalid_artifact() -> Self {
-        Self {
+        Self::Artifact {
             code: "invalid-artifact",
             message: "Artifact input is invalid",
         }
     }
 
     fn invalid_company() -> Self {
-        Self {
+        Self::Artifact {
             code: "invalid-company",
             message: "Artifact company is invalid",
         }
     }
 
     fn traversal() -> Self {
-        Self {
+        Self::Artifact {
             code: "artifact-traversal",
             message: "Artifact path is invalid",
         }
     }
 
     fn company_scope() -> Self {
-        Self {
+        Self::Artifact {
             code: "artifact-company-scope",
             message: "Artifact is outside the company root",
         }
     }
 }
-
-impl fmt::Display for ArtifactFailure {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(self.message)
-    }
-}
-
-impl Error for ArtifactFailure {}
 
 #[derive(Debug, Clone)]
 pub struct StoredArtifact {
@@ -97,11 +85,7 @@ fn valid_company_id(company_id: &str) -> bool {
         && !company_id.is_empty()
 }
 
-fn validate(
-    company_id: &str,
-    kind: &str,
-    input: &ArtifactInput<'_>,
-) -> Result<(), ArtifactFailure> {
+fn validate(company_id: &str, kind: &str, input: &ArtifactInput<'_>) -> Result<(), PlatformError> {
     if kind.trim().is_empty()
         || input.mime_type.is_empty()
         || input.mime_type.contains(['\r', '\n'])
@@ -113,15 +97,15 @@ fn validate(
             .and_then(|name| name.to_str())
             != Some(input.filename)
     {
-        return Err(ArtifactFailure::invalid_artifact());
+        return Err(PlatformError::invalid_artifact());
     }
     if !valid_company_id(company_id) {
-        return Err(ArtifactFailure::invalid_company());
+        return Err(PlatformError::invalid_company());
     }
     Ok(())
 }
 
-fn checked(root: &Path, company_id: &str, storage_path: &str) -> Result<PathBuf, ArtifactFailure> {
+fn checked(root: &Path, company_id: &str, storage_path: &str) -> Result<PathBuf, PlatformError> {
     if !valid_company_id(company_id)
         || storage_path.is_empty()
         || storage_path.contains('\\')
@@ -133,11 +117,11 @@ fn checked(root: &Path, company_id: &str, storage_path: &str) -> Result<PathBuf,
             .split('/')
             .any(|part| part.is_empty() || matches!(part, "." | ".."))
     {
-        return Err(ArtifactFailure::traversal());
+        return Err(PlatformError::traversal());
     }
     let target = root.join(storage_path);
     if !target.starts_with(root.join(company_id)) {
-        return Err(ArtifactFailure::company_scope());
+        return Err(PlatformError::company_scope());
     }
     Ok(target)
 }

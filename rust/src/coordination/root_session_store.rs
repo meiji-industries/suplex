@@ -2,6 +2,7 @@
 
 use crate::shared::hash::sha256_hex;
 use crate::shared::time::rfc3339_millis;
+use crate::tasks::TaskError;
 use chrono::{DateTime, Utc};
 use rusqlite::{OptionalExtension, Row, params};
 use serde::{Deserialize, Serialize};
@@ -22,7 +23,7 @@ use crate::platform::system_events;
 use crate::runtimes::process::inspect_process;
 use crate::shared::js_json;
 use crate::tasks::commands::{allowed_profile, read_profile};
-use crate::tasks::repository::{self, PullRequestOwned};
+use crate::tasks::repository;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RootSession {
@@ -2296,7 +2297,7 @@ pub fn admit_queued(
             match repository::admit_queued(database, &task_id, now) {
                 Ok(true) => admitted.push(task_id),
                 Ok(false) => {}
-                Err(error) if error.is::<PullRequestOwned>() => {}
+                Err(error) if TaskError::is_pull_request_owned(&*error) => {}
                 Err(error) => return Err(error),
             }
         }

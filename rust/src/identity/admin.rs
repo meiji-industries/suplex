@@ -1,3 +1,4 @@
+use crate::identity::IdentityError;
 use crate::shared::ids::random_hex_id;
 use crate::shared::time::rfc3339_millis;
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
@@ -10,7 +11,7 @@ use serde_json::Value;
 use crate::platform::database::{DatabaseResult, SuplexDatabase};
 
 use super::{
-    auth::{self, AuthFailure, AuthUser},
+    auth::{self, AuthUser},
     companies,
 };
 
@@ -78,11 +79,7 @@ fn audit(
 fn valid_display_name(raw: &str) -> DatabaseResult<String> {
     let name = auth::js_trim(raw);
     if name.is_empty() || name.encode_utf16().count() > 120 {
-        return Err(Box::new(AuthFailure::new(
-            "Display name is invalid",
-            400,
-            "auth_failure",
-        )));
+        return Err(IdentityError::auth("Display name is invalid", 400, "auth_failure").into());
     }
     Ok(name.to_owned())
 }
@@ -206,10 +203,10 @@ pub fn revoke_credential(
             )
             .optional()?;
         let Some((user_id, None)) = credential else {
-            return Err(Box::new(AuthFailure::new("Not found", 404, "auth_failure")));
+            return Err(IdentityError::not_found().into());
         };
         if user_id == actor_user_id {
-            return Err(Box::new(AuthFailure::new("Not found", 404, "auth_failure")));
+            return Err(IdentityError::not_found().into());
         }
         database.connection().execute(
             "UPDATE suplex_credentials SET revoked_at = ?2 WHERE id = ?1",
@@ -236,7 +233,7 @@ pub fn revoke_user(
         companies::require_admin(database, actor_user_id)?;
         let status: Option<String> = database.connection().query_row("SELECT status FROM suplex_users WHERE id = ?1", [target_user_id], |row| row.get(0)).optional()?;
         if status.is_none() || status.as_deref() == Some("revoked") || target_user_id == actor_user_id {
-            return Err(Box::new(AuthFailure::new("Not found", 404, "auth_failure")));
+            return Err(IdentityError::not_found().into());
         }
         let now_iso = rfc3339_millis(now);
         database.connection().execute("UPDATE suplex_users SET status = 'revoked', updated_at = ?2 WHERE id = ?1", params![target_user_id, now_iso])?;
@@ -308,7 +305,7 @@ mod tests {
         let admin = auth::development_sign_in(&mut database, now).unwrap();
         let invalid = invite_user(&mut database, "missing", "  ", now).unwrap_err();
         assert_eq!(
-            invalid.downcast_ref::<AuthFailure>().unwrap().status_code,
+            invalid.downcast_ref::<IdentityError>().unwrap().status(),
             400
         );
         let issued = invite_user(&mut database, &admin.user.id, "  API member  ", now).unwrap();
@@ -337,9 +334,9 @@ mod tests {
         let member_list = list_users(&database, &issued.user.id).unwrap_err();
         assert_eq!(
             member_list
-                .downcast_ref::<AuthFailure>()
+                .downcast_ref::<IdentityError>()
                 .unwrap()
-                .status_code,
+                .status(),
             404
         );
         database
@@ -376,7 +373,7 @@ mod tests {
         let duplicate =
             revoke_credential(&mut database, &admin.user.id, &credential_id, now).unwrap_err();
         assert_eq!(
-            duplicate.downcast_ref::<AuthFailure>().unwrap().status_code,
+            duplicate.downcast_ref::<IdentityError>().unwrap().status(),
             404
         );
         revoke_user(&mut database, &admin.user.id, &issued.user.id, now).unwrap();
@@ -411,9 +408,9 @@ mod tests {
             revoke_user(&mut database, &admin.user.id, &admin.user.id, now).unwrap_err();
         assert_eq!(
             self_revoke
-                .downcast_ref::<AuthFailure>()
+                .downcast_ref::<IdentityError>()
                 .unwrap()
-                .status_code,
+                .status(),
             404
         );
     }

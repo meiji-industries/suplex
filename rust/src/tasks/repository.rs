@@ -7,28 +7,7 @@ use serde_json::Value;
 use std::path::Path;
 use uuid::Uuid;
 
-#[derive(Debug)]
-pub struct TaskConflict;
-
-#[derive(Debug)]
-pub struct PullRequestOwned;
-
-impl std::fmt::Display for PullRequestOwned {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str("A task already uses this pull request.")
-    }
-}
-
-impl std::error::Error for PullRequestOwned {}
-
-impl std::fmt::Display for TaskConflict {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str("This idempotency key belongs to a different request")
-    }
-}
-
-impl std::error::Error for TaskConflict {}
-
+use super::TaskError;
 use crate::coordination::root_session_store;
 use crate::platform::{
     artifacts::{self, ArtifactInput, StoredArtifact},
@@ -149,7 +128,7 @@ pub(crate) fn existing(
         TaskCreator::Agent(id) => agent_id.as_deref() == Some(id),
     };
     if hash != input.request_hash || !same_creator {
-        return Err(Box::new(TaskConflict));
+        return Err(TaskError::Conflict.into());
     }
     Ok(Some(task))
 }
@@ -176,7 +155,7 @@ pub(crate) fn assert_pull_request_available(
         params![task_id, repository, number], |row| row.get(0),
     )?;
     if owned {
-        return Err(Box::new(PullRequestOwned));
+        return Err(TaskError::PullRequestOwned.into());
     }
     Ok(())
 }
@@ -434,7 +413,7 @@ pub(crate) fn reconcile_dependency_release(
     match admit_queued(database, task_id, now) {
         Ok(true) => return Ok(true),
         Ok(false) => {}
-        Err(error) if error.is::<PullRequestOwned>() => return Ok(false),
+        Err(error) if TaskError::is_pull_request_owned(&*error) => return Ok(false),
         Err(error) => return Err(error),
     }
     database.connection().execute(

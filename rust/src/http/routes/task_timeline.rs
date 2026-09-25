@@ -1,5 +1,6 @@
 //! Task timeline reads saved usage and current native execution evidence.
 
+use crate::tasks::TaskError;
 use std::{error::Error, io, path::PathBuf};
 
 use axum::{
@@ -21,10 +22,7 @@ use crate::{
     },
     identity::companies,
     platform::database::SuplexDatabase,
-    tasks::{
-        commands::TaskFailure,
-        timeline::{self, SavedTimeline, TimelineResponse},
-    },
+    tasks::timeline::{self, SavedTimeline, TimelineResponse},
 };
 
 use super::auth;
@@ -67,11 +65,7 @@ fn authorize(
 }
 
 fn not_found() -> Box<dyn Error> {
-    Box::new(TaskFailure {
-        public_message: "Not found".into(),
-        status_code: 404,
-        code: "task_failure",
-    })
+    TaskError::not_found().into()
 }
 
 fn scoped(
@@ -112,16 +106,6 @@ fn recheck(database: &SuplexDatabase, user_id: &str, task_id: &str) -> Result<()
     Ok(())
 }
 
-fn service_error(error: Box<dyn Error>) -> Response {
-    match error.downcast::<TaskFailure>() {
-        Ok(failure) => auth::error(
-            StatusCode::from_u16(failure.status_code).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
-            &failure.public_message,
-        ),
-        Err(error) => auth::service_error(error),
-    }
-}
-
 fn respond(result: Result<TimelineResponse, Box<dyn Error>>, cookies: Vec<String>) -> Response {
     let mut response = match result {
         Ok(value) => {
@@ -132,7 +116,7 @@ fn respond(result: Result<TimelineResponse, Box<dyn Error>>, cookies: Vec<String
             );
             response
         }
-        Err(error) => service_error(error),
+        Err(error) => auth::service_error(error),
     };
     auth::append_cookies(&mut response, cookies);
     response

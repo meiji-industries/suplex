@@ -1,5 +1,6 @@
+use crate::identity::IdentityError;
 use crate::shared::time::rfc3339_millis;
-use std::{error::Error, fmt};
+use std::error::Error;
 
 use chrono::{DateTime, Utc};
 use getrandom::fill;
@@ -8,7 +9,6 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     http::contracts::typed::projects,
-    identity::auth::AuthFailure,
     platform::database::{DatabaseResult, SuplexDatabase},
 };
 
@@ -65,7 +65,8 @@ fn present_nullable_string<'de, D: serde::Deserializer<'de>>(
     Ok(Some(Option::<String>::deserialize(deserializer)?))
 }
 
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
+#[error("{message}")]
 pub struct ProfileFailure {
     pub message: String,
     pub status_code: u16,
@@ -80,13 +81,11 @@ impl ProfileFailure {
     }
 }
 
-impl fmt::Display for ProfileFailure {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(&self.message)
+impl From<ProfileFailure> for crate::shared::PublicFailure {
+    fn from(failure: ProfileFailure) -> Self {
+        Self::new(failure.status_code, failure.message)
     }
 }
-
-impl Error for ProfileFailure {}
 
 fn profile(row: &Row<'_>) -> rusqlite::Result<AgentProfile> {
     Ok(AgentProfile {
@@ -129,18 +128,12 @@ fn actor(database: &SuplexDatabase, user_id: &str, admin: bool) -> DatabaseResul
         )
         .optional()?;
     let Some(role) = role else {
-        return Err(Box::new(AuthFailure::new(
-            "Authentication required",
-            401,
-            "auth_failure",
-        )));
+        return Err(IdentityError::auth("Authentication required", 401, "auth_failure").into());
     };
     if admin && role != "admin" {
-        return Err(Box::new(AuthFailure::new(
-            "Administrator access required",
-            403,
-            "auth_failure",
-        )));
+        return Err(
+            IdentityError::auth("Administrator access required", 403, "auth_failure").into(),
+        );
     }
     Ok(())
 }
@@ -882,7 +875,7 @@ mod tests {
         assert!(!list(&database, "profile_member", false).unwrap().is_empty());
         let forbidden = create(&mut database, "profile_member", &input, now).unwrap_err();
         assert_eq!(
-            forbidden.downcast_ref::<AuthFailure>().unwrap().status_code,
+            forbidden.downcast_ref::<IdentityError>().unwrap().status(),
             403
         );
         let patch: ProfilePatch =

@@ -2,6 +2,7 @@
 //! browser can copy the path but can never cause a local desktop launch.
 
 use crate::shared::time::now_millis_rfc3339;
+use crate::tasks::TaskError;
 use std::{error::Error, net::SocketAddr};
 
 use axum::{
@@ -23,10 +24,7 @@ use crate::{
     },
     identity::companies,
     platform::database::SuplexDatabase,
-    tasks::{
-        commands::TaskFailure,
-        worktree_open::{self, Launcher, WORKTREE_APP_IDS},
-    },
+    tasks::worktree_open::{self, Launcher, WORKTREE_APP_IDS},
 };
 
 use super::{auth, profiles::authorize};
@@ -47,16 +45,6 @@ pub(crate) fn validated_task_id(id: &str) -> Result<(), Box<Response>> {
             StatusCode::INTERNAL_SERVER_ERROR,
             "Internal server error",
         ))),
-    }
-}
-
-pub(crate) fn task_error(error: Box<dyn Error>) -> Response {
-    match error.downcast::<TaskFailure>() {
-        Ok(failure) => auth::error(
-            StatusCode::from_u16(failure.status_code).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
-            &failure.public_message,
-        ),
-        Err(error) => auth::service_error(error),
     }
 }
 
@@ -93,11 +81,7 @@ pub(crate) fn authorized_company(
             |row| row.get(0),
         )
         .optional()?
-        .ok_or_else(|| TaskFailure {
-            public_message: "Not found".into(),
-            status_code: 404,
-            code: "task_failure",
-        })?;
+        .ok_or_else(TaskError::not_found)?;
     companies::require_company_access(database, user_id, &company_id)?;
     Ok(company_id)
 }
@@ -148,7 +132,7 @@ async fn apps(
     };
     let worktree = state
         .with_database(|database| task_worktree(database, &user_id, &task_id))
-        .map_err(task_error);
+        .map_err(auth::service_error);
     let response = match worktree {
         Err(response) => response,
         Ok((_, None)) => auth::error(StatusCode::NOT_FOUND, "Worktree not found"),
@@ -225,7 +209,7 @@ pub(crate) async fn open_with(
                     cookies,
                 );
             }
-            Err(error) => return with_cookies(task_error(error), cookies),
+            Err(error) => return with_cookies(auth::service_error(error), cookies),
         };
     if !direct_loopback_request(&state, &headers, &extensions) {
         return with_cookies(

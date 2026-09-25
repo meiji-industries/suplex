@@ -1,3 +1,4 @@
+use crate::identity::IdentityError;
 use crate::shared::ids::random_hex_id;
 use crate::shared::time::rfc3339_millis;
 use chrono::{DateTime, Utc};
@@ -6,7 +7,7 @@ use serde::Serialize;
 
 use crate::platform::database::{DatabaseResult, SuplexDatabase};
 
-use super::auth::{self, AuthFailure};
+use super::auth;
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -37,18 +38,12 @@ fn active_role(database: &SuplexDatabase, user_id: &str) -> DatabaseResult<Strin
             |row| row.get(0),
         )
         .optional()?
-        .ok_or_else(|| {
-            Box::new(AuthFailure::new(
-                "Authentication required",
-                401,
-                "auth_failure",
-            )) as Box<dyn std::error::Error>
-        })
+        .ok_or_else(|| IdentityError::auth("Authentication required", 401, "auth_failure").into())
 }
 
 pub fn require_admin(database: &SuplexDatabase, user_id: &str) -> DatabaseResult<()> {
     if active_role(database, user_id)? != "admin" {
-        return Err(Box::new(AuthFailure::new("Not found", 404, "auth_failure")));
+        return Err(IdentityError::not_found().into());
     }
     Ok(())
 }
@@ -81,7 +76,7 @@ pub fn require_company_access(
     company_id: &str,
 ) -> DatabaseResult<Company> {
     if company_id.is_empty() || company_id.encode_utf16().count() > 128 {
-        return Err(Box::new(AuthFailure::new("Not found", 404, "auth_failure")));
+        return Err(IdentityError::not_found().into());
     }
     let role = active_role(database, user_id)?;
     let company = if role == "admin" {
@@ -103,7 +98,7 @@ pub fn require_company_access(
             )
             .optional()?
     };
-    company.ok_or_else(|| Box::new(AuthFailure::new("Not found", 404, "auth_failure")) as _)
+    company.ok_or_else(|| IdentityError::not_found().into())
 }
 
 pub fn require_admin_company(
@@ -128,7 +123,7 @@ pub fn require_membership_target(
         )
         .optional()?;
     if target.as_deref().is_none_or(|status| status == "revoked") {
-        return Err(Box::new(AuthFailure::new("Not found", 404, "auth_failure")));
+        return Err(IdentityError::not_found().into());
     }
     Ok(())
 }
@@ -152,11 +147,7 @@ fn audit(
 fn company_name(raw_name: &str) -> DatabaseResult<String> {
     let name = auth::js_trim(raw_name);
     if name.is_empty() || name.encode_utf16().count() > 120 {
-        return Err(Box::new(AuthFailure::new(
-            "Company name is invalid",
-            400,
-            "auth_failure",
-        )));
+        return Err(IdentityError::auth("Company name is invalid", 400, "auth_failure").into());
     }
     Ok(name.to_owned())
 }
@@ -177,7 +168,7 @@ pub fn create_company(
             "INSERT INTO suplex_companies (id, name, status, issue_code, next_issue_number, created_at) VALUES (?1, ?2, 'active', NULL, 1, ?3)",
             params![company_id, name, created_at],
         ).is_err() {
-            return Err(Box::new(AuthFailure::new("Company name is already in use", 400, "auth_failure")));
+            return Err(IdentityError::auth("Company name is already in use", 400, "auth_failure").into());
         }
         audit(database, actor_user_id, "company_created", None, &company_id, "{}", now)?;
         require_company_access(database, actor_user_id, &company_id)
@@ -194,7 +185,7 @@ pub fn rename_company(
     database.transaction(false, |database| {
         require_admin(database, actor_user_id)?;
         if company_id.is_empty() || company_id.encode_utf16().count() > 128 {
-            return Err(Box::new(AuthFailure::new("Not found", 404, "auth_failure")));
+            return Err(IdentityError::not_found().into());
         }
         let name = company_name(raw_name)?;
         let previous = require_company_access(database, actor_user_id, company_id)?;
@@ -209,11 +200,9 @@ pub fn rename_company(
             )
             .is_err()
         {
-            return Err(Box::new(AuthFailure::new(
-                "Company name is already in use",
-                400,
-                "auth_failure",
-            )));
+            return Err(
+                IdentityError::auth("Company name is already in use", 400, "auth_failure").into(),
+            );
         }
         #[derive(Serialize)]
         #[serde(rename_all = "camelCase")]
@@ -246,7 +235,7 @@ pub fn set_company_issue_code(
     now: DateTime<Utc>,
 ) -> DatabaseResult<Company> {
     if company_id.is_empty() || company_id.encode_utf16().count() > 128 {
-        return Err(Box::new(AuthFailure::new("Not found", 404, "auth_failure")));
+        return Err(IdentityError::not_found().into());
     }
     database.transaction(false, |database| {
         require_admin(database, actor_user_id)?;
@@ -257,11 +246,12 @@ pub fn set_company_issue_code(
                 || !bytes[0].is_ascii_uppercase()
                 || !bytes[1..].iter().all(u8::is_ascii_alphanumeric)
         }) {
-            return Err(Box::new(AuthFailure::new(
+            return Err(IdentityError::auth(
                 "Issue code must be 2–10 letters or numbers and start with a letter",
                 400,
                 "auth_failure",
-            )));
+            )
+            .into());
         }
         let previous = require_company_access(database, actor_user_id, company_id)?;
         if previous.issue_code == issue_code {
@@ -273,11 +263,12 @@ pub fn set_company_issue_code(
             |row| row.get(0),
         )?;
         if previous.issue_code.is_some() && next_issue_number > 1 {
-            return Err(Box::new(AuthFailure::new(
+            return Err(IdentityError::auth(
                 "Issue code cannot be changed after issues have been created",
                 409,
                 "company_issue_code_locked",
-            )));
+            )
+            .into());
         }
         database.connection().execute(
             "UPDATE suplex_companies SET issue_code = ?2 WHERE id = ?1",
@@ -314,14 +305,10 @@ pub fn set_company_status(
     now: DateTime<Utc>,
 ) -> DatabaseResult<Company> {
     if !matches!(status, "active" | "paused" | "archived") {
-        return Err(Box::new(AuthFailure::new(
-            "Company status is invalid",
-            400,
-            "auth_failure",
-        )));
+        return Err(IdentityError::auth("Company status is invalid", 400, "auth_failure").into());
     }
     if company_id.is_empty() || company_id.encode_utf16().count() > 128 {
-        return Err(Box::new(AuthFailure::new("Not found", 404, "auth_failure")));
+        return Err(IdentityError::not_found().into());
     }
     database.transaction(false, |database| {
         require_admin(database, actor_user_id)?;
@@ -359,7 +346,7 @@ pub fn add_membership(
             params![target_user_id, company_id, rfc3339_millis(now)],
         ) {
             if matches!(&error, SqliteError::SqliteFailure(_, Some(message)) if message.contains("UNIQUE constraint failed: suplex_memberships")) {
-                return Err(Box::new(AuthFailure::new("Membership already exists", 409, "membership_duplicate")));
+                return Err(IdentityError::auth("Membership already exists", 409, "membership_duplicate").into());
             }
             return Err(Box::new(error));
         }
@@ -382,7 +369,7 @@ pub fn remove_membership(
             params![target_user_id, company_id],
         )? != 1
         {
-            return Err(Box::new(AuthFailure::new("Not found", 404, "auth_failure")));
+            return Err(IdentityError::not_found().into());
         }
         audit(
             database,
@@ -475,17 +462,17 @@ mod tests {
         assert_eq!(
             create_company(&mut database, "member_company", "   ", now)
                 .unwrap_err()
-                .downcast_ref::<AuthFailure>()
+                .downcast_ref::<IdentityError>()
                 .unwrap()
-                .status_code,
+                .status(),
             400
         );
         assert_eq!(
             create_company(&mut database, "member_company", "Member Company", now)
                 .unwrap_err()
-                .downcast_ref::<AuthFailure>()
+                .downcast_ref::<IdentityError>()
                 .unwrap()
-                .status_code,
+                .status(),
             404
         );
         let created = create_company(
@@ -532,9 +519,9 @@ mod tests {
         assert_eq!(
             set_company_issue_code(&mut database, &admin.id, &created.id, Some("NEXT"), now)
                 .unwrap_err()
-                .downcast_ref::<AuthFailure>()
+                .downcast_ref::<IdentityError>()
                 .unwrap()
-                .code,
+                .code(),
             "company_issue_code_locked"
         );
         assert_eq!(
@@ -547,9 +534,9 @@ mod tests {
         assert_eq!(
             add_membership(&mut database, &admin.id, "member_company", &created.id, now)
                 .unwrap_err()
-                .downcast_ref::<AuthFailure>()
+                .downcast_ref::<IdentityError>()
                 .unwrap()
-                .code,
+                .code(),
             "membership_duplicate"
         );
         assert_eq!(

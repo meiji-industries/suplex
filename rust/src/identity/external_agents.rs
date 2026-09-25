@@ -1,9 +1,10 @@
 //! External agents: administration, pairing, credentials, and OAuth-provisioned identities.
 
+use crate::identity::IdentityError;
 use crate::shared::hash::sha256_hex;
 use crate::shared::ids::{random_hex, random_hex_id, random_secret};
 use crate::shared::time::rfc3339_millis;
-use std::{error::Error, fmt};
+use std::error::Error;
 
 use chrono::{DateTime, Duration, Utc};
 use rusqlite::{OptionalExtension, Row, params, params_from_iter};
@@ -19,53 +20,20 @@ use super::{
 
 const PAIRING_TTL_MINUTES: i64 = 10;
 
-#[derive(Debug, Clone)]
-pub struct ExternalAgentFailure {
-    pub public_message: String,
-    pub status_code: u16,
-    pub code: &'static str,
+fn not_found(code: &'static str) -> Box<dyn Error> {
+    IdentityError::external_agent("Not found", 404, code).into()
 }
-
-impl ExternalAgentFailure {
-    pub fn new(public_message: impl Into<String>, status_code: u16, code: &'static str) -> Self {
-        Self {
-            public_message: public_message.into(),
-            status_code,
-            code,
-        }
-    }
-
-    fn not_found(code: &'static str) -> Box<dyn Error> {
-        Box::new(Self::new("Not found", 404, code))
-    }
-}
-
-impl fmt::Display for ExternalAgentFailure {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(&self.public_message)
-    }
-}
-
-impl Error for ExternalAgentFailure {}
 
 fn pairing_failure() -> Box<dyn Error> {
-    Box::new(ExternalAgentFailure::new(
-        "Pairing failed",
-        401,
-        "pairing_invalid",
-    ))
+    IdentityError::external_agent("Pairing failed", 401, "pairing_invalid").into()
 }
 
 pub fn authentication_failure() -> Box<dyn Error> {
-    Box::new(ExternalAgentFailure::new(
-        "Authentication failed",
-        401,
-        "credential_invalid",
-    ))
+    IdentityError::external_agent("Authentication failed", 401, "credential_invalid").into()
 }
 
 fn invalid_configuration(message: &str, status_code: u16, code: &'static str) -> Box<dyn Error> {
-    Box::new(ExternalAgentFailure::new(message, status_code, code))
+    IdentityError::external_agent(message, status_code, code).into()
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -207,12 +175,13 @@ fn metadata(pairs: &[(&str, &str)]) -> Map<String, Value> {
 pub(crate) fn require_admin(database: &SuplexDatabase, user_id: &str) -> DatabaseResult<()> {
     match auth::public_user(database, user_id)? {
         Some(user) if user.status == "active" && user.role == "admin" => Ok(()),
-        Some(user) if user.status == "active" => Err(ExternalAgentFailure::not_found("not_found")),
-        _ => Err(Box::new(ExternalAgentFailure::new(
+        Some(user) if user.status == "active" => Err(not_found("not_found")),
+        _ => Err(IdentityError::external_agent(
             "Authentication required",
             401,
             "authentication_required",
-        ))),
+        )
+        .into()),
     }
 }
 
@@ -320,7 +289,7 @@ pub fn create(
             )
             .optional()?;
         if company.is_none() || matching_projects(database, company_id, &project_ids)? != project_ids.len() {
-            return Err(ExternalAgentFailure::not_found("scope_not_found"));
+            return Err(not_found("scope_not_found"));
         }
         let taken: bool = database.connection().query_row(
             "SELECT EXISTS(SELECT 1 FROM suplex_agents WHERE name = ?1)",
@@ -357,7 +326,7 @@ pub fn create(
         Ok(())
     });
     if let Err(error) = result {
-        if error.is::<ExternalAgentFailure>() || !is_constraint(error.as_ref()) {
+        if error.is::<IdentityError>() || !is_constraint(error.as_ref()) {
             return Err(error);
         }
         return Err(invalid_configuration(
@@ -443,7 +412,7 @@ pub fn admin_agent(database: &SuplexDatabase, agent_id: &str) -> DatabaseResult<
             admin_row,
         )
         .optional()?
-        .ok_or_else(|| ExternalAgentFailure::not_found("agent_not_found"))?;
+        .ok_or_else(|| not_found("agent_not_found"))?;
     agent.project_ids = grants(database, agent_id)?;
     Ok(agent)
 }
@@ -490,7 +459,7 @@ pub fn replace_projects(
 ) -> DatabaseResult<AdminAgent> {
     require_admin(database, actor_user_id)?;
     if !valid_id(agent_id) {
-        return Err(ExternalAgentFailure::not_found("agent_not_found"));
+        return Err(not_found("agent_not_found"));
     }
     let unique = sorted_unique(project_ids);
     if unique.iter().any(|id| !valid_id(id)) {
@@ -503,14 +472,14 @@ pub fn replace_projects(
     let now_iso = rfc3339_millis(now);
     database.transaction(false, |database| {
         let Some((company_id, status)) = agent_state(database, agent_id)? else {
-            return Err(ExternalAgentFailure::not_found("agent_not_found"));
+            return Err(not_found("agent_not_found"));
         };
         if status == "revoked" {
-            return Err(ExternalAgentFailure::not_found("agent_not_found"));
+            return Err(not_found("agent_not_found"));
         }
         if !unique.is_empty() && matching_projects(database, &company_id, &unique)? != unique.len()
         {
-            return Err(ExternalAgentFailure::not_found("scope_not_found"));
+            return Err(not_found("scope_not_found"));
         }
         let existing = {
             let mut statement = database.connection().prepare(
@@ -565,7 +534,7 @@ fn issue_pairing(
 ) -> DatabaseResult<PairingCode> {
     require_admin(database, actor_user_id)?;
     if !valid_id(agent_id) {
-        return Err(ExternalAgentFailure::not_found("agent_not_found"));
+        return Err(not_found("agent_not_found"));
     }
     let raw_code = random_secret("fhp")?;
     let now_iso = rfc3339_millis(now);
@@ -573,7 +542,7 @@ fn issue_pairing(
     database.transaction(false, |database| {
         let company_id = match agent_state(database, agent_id)? {
             Some((company_id, status)) if status == required_status => company_id,
-            _ => return Err(ExternalAgentFailure::not_found("agent_not_found")),
+            _ => return Err(not_found("agent_not_found")),
         };
         database.connection().execute(
             "UPDATE suplex_external_agent_pairing_codes SET replaced_at = ?1 WHERE agent_id = ?2 AND consumed_at IS NULL AND replaced_at IS NULL",
@@ -679,7 +648,7 @@ pub fn exchange(
     });
     let agent_id = match result {
         Ok(agent_id) => agent_id,
-        Err(error) if error.is::<ExternalAgentFailure>() => return Err(error),
+        Err(error) if error.is::<IdentityError>() => return Err(error),
         Err(_) => return Err(pairing_failure()),
     };
     Ok(Exchanged {
@@ -754,7 +723,7 @@ pub fn provision_oauth_agent(
         ));
     }
     if matching_projects(database, input.company_id, &project_ids)? != project_ids.len() {
-        return Err(ExternalAgentFailure::not_found("scope_not_found"));
+        return Err(not_found("scope_not_found"));
     }
     let now_iso = rfc3339_millis(now);
     let agent_id = random_hex_id("agent")?;
@@ -864,7 +833,7 @@ pub fn revoke(
     database.transaction(false, |database| {
         let company_id = match agent_state(database, agent_id)? {
             Some((company_id, status)) if status != "revoked" => company_id,
-            _ => return Err(ExternalAgentFailure::not_found("agent_not_found")),
+            _ => return Err(not_found("agent_not_found")),
         };
         for sql in [
             "UPDATE suplex_external_agents SET status = 'revoked', revoked_at = ?1, updated_at = ?1 WHERE id = ?2",
@@ -968,16 +937,11 @@ pub(crate) mod tests {
         .unwrap()
     }
 
-    fn failure(error: Box<dyn Error>) -> ExternalAgentFailure {
+    fn failure(error: Box<dyn Error>) -> IdentityError {
         error
-            .downcast_ref::<ExternalAgentFailure>()
+            .downcast_ref::<IdentityError>()
             .cloned()
-            .unwrap_or_else(|| {
-                let auth = error
-                    .downcast_ref::<auth::AuthFailure>()
-                    .expect("domain failure");
-                ExternalAgentFailure::new(auth.message, auth.status_code, auth.code)
-            })
+            .expect("domain failure")
     }
 
     fn count(database: &SuplexDatabase, sql: &str) -> i64 {
@@ -1035,7 +999,7 @@ pub(crate) mod tests {
             )
             .unwrap_err(),
         );
-        assert_eq!((again.status_code, again.code), (401, "pairing_invalid"));
+        assert_eq!((again.status(), again.code()), (401, "pairing_invalid"));
 
         let dump: String = fixture.database.connection().query_row(
             "SELECT json_group_array(x) FROM (SELECT code_hash AS x FROM suplex_external_agent_pairing_codes UNION ALL SELECT credential_hash FROM suplex_external_agent_credentials UNION ALL SELECT metadata_json FROM suplex_audit_events)",
@@ -1078,7 +1042,7 @@ pub(crate) mod tests {
             .unwrap_err(),
         );
         assert_eq!(
-            (duplicate.status_code, duplicate.public_message.as_str()),
+            (duplicate.status(), duplicate.to_string().as_str()),
             (409, "An agent with this name already exists")
         );
         let other = vec!["project_other".to_owned()];
@@ -1096,7 +1060,7 @@ pub(crate) mod tests {
             )
             .unwrap_err(),
         );
-        assert_eq!((cross.status_code, cross.code), (404, "scope_not_found"));
+        assert_eq!((cross.status(), cross.code()), (404, "scope_not_found"));
         assert_eq!(
             count(
                 &fixture.database,
@@ -1109,7 +1073,7 @@ pub(crate) mod tests {
             failure(
                 create(&mut fixture.database, &member, input("Member"), Utc::now()).unwrap_err()
             )
-            .public_message,
+            .to_string(),
             "Not found"
         );
         assert_eq!(
@@ -1122,11 +1086,11 @@ pub(crate) mod tests {
                 )
                 .unwrap_err()
             )
-            .public_message,
+            .to_string(),
             "Authentication required"
         );
         assert_eq!(
-            failure(list(&fixture.database, &member, None).unwrap_err()).public_message,
+            failure(list(&fixture.database, &member, None).unwrap_err()).to_string(),
             "Not found"
         );
         assert_eq!(
@@ -1134,7 +1098,7 @@ pub(crate) mod tests {
                 replace_projects(&mut fixture.database, &member, "any", &projects, Utc::now())
                     .unwrap_err()
             )
-            .public_message,
+            .to_string(),
             "Not found"
         );
         assert_eq!(
@@ -1142,17 +1106,17 @@ pub(crate) mod tests {
                 issue_initial_pairing(&mut fixture.database, &member, "any", Utc::now())
                     .unwrap_err()
             )
-            .public_message,
+            .to_string(),
             "Not found"
         );
         assert_eq!(
             failure(rotate(&mut fixture.database, &member, "any", Utc::now()).unwrap_err())
-                .public_message,
+                .to_string(),
             "Not found"
         );
         assert_eq!(
             failure(revoke(&mut fixture.database, &member, "any", Utc::now()).unwrap_err())
-                .public_message,
+                .to_string(),
             "Not found"
         );
         let issued = issue(&mut fixture, "Constraint", &["project_allowed"]);
@@ -1241,7 +1205,7 @@ pub(crate) mod tests {
                 )
                 .unwrap_err()
             )
-            .code,
+            .code(),
             "scope_not_found"
         );
         assert!(
@@ -1308,7 +1272,7 @@ pub(crate) mod tests {
             failure(
                 authenticate(&mut fixture.database, &original.credential, Utc::now()).unwrap_err()
             )
-            .code,
+            .code(),
             "credential_invalid"
         );
         assert_eq!(
@@ -1354,7 +1318,7 @@ pub(crate) mod tests {
                 exchange(&mut fixture.database, code, Some("profile-expired"), later).unwrap_err(),
             );
             assert_eq!(
-                (error.status_code, error.public_message.as_str(), error.code),
+                (error.status(), error.to_string().as_str(), error.code()),
                 (401, "Pairing failed", "pairing_invalid")
             );
         }
@@ -1394,7 +1358,7 @@ pub(crate) mod tests {
                 std::thread::spawn(move || {
                     barrier.wait();
                     exchange(&mut database, &code, Some("profile-concurrent"), Utc::now())
-                        .map_err(|error| failure(error).code)
+                        .map_err(|error| failure(error).code())
                 })
             })
             .collect::<Vec<_>>()

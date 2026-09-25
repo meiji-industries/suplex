@@ -2,6 +2,7 @@
 //! Saved pane and worktree display fields do not decide whether cleanup may run.
 
 use crate::shared::time::now_millis_rfc3339;
+use crate::tasks::TaskError;
 use std::{
     collections::HashSet,
     io,
@@ -23,7 +24,6 @@ use crate::{
     },
     tasks::{
         archive::displays,
-        commands::TaskFailure,
         repository::{self, TaskRecord},
         worktree::{self, TaskWorktreeIntent, WorktreeCleanup},
     },
@@ -68,15 +68,16 @@ fn failure(message: &str, status_code: u16) -> Box<dyn std::error::Error> {
 }
 
 fn failure_code(message: &str, status_code: u16, code: &'static str) -> Box<dyn std::error::Error> {
-    Box::new(TaskFailure {
-        public_message: message.to_owned(),
-        status_code,
+    TaskError::Failure {
+        message: message.to_owned(),
+        status: status_code,
         code,
-    })
+    }
+    .into()
 }
 
 fn cleanup_error(error: Box<dyn std::error::Error>) -> Box<dyn std::error::Error> {
-    if error.is::<TaskFailure>() {
+    if error.is::<TaskError>() {
         error
     } else {
         failure(&error.to_string(), 409)

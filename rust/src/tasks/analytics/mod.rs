@@ -3,6 +3,7 @@
 pub mod collector;
 
 use crate::shared::time::rfc3339_millis;
+use crate::tasks::TaskError;
 use std::collections::{BTreeMap, HashSet};
 
 use chrono::{DateTime, Utc};
@@ -13,7 +14,7 @@ use serde_json::{Map, Value, json};
 use crate::{
     identity::companies,
     platform::database::{DatabaseResult, SuplexDatabase},
-    tasks::{commands::TaskFailure, response as task_response},
+    tasks::response as task_response,
 };
 
 #[derive(Clone, Copy, Debug, Default, Deserialize, Serialize, PartialEq)]
@@ -448,11 +449,7 @@ pub fn company_task_ids(
 ) -> DatabaseResult<Vec<String>> {
     let visible = companies::list_visible_companies(database, user_id)?;
     if !visible.iter().any(|company| company.id == company_id) {
-        return Err(Box::new(TaskFailure {
-            public_message: "Not found".into(),
-            status_code: 404,
-            code: "task_failure",
-        }));
+        return Err(TaskError::not_found().into());
     }
     let mut statement = database.connection().prepare(
         "SELECT t.id FROM suplex_tasks t JOIN suplex_task_controls c ON c.task_id = t.id WHERE t.company_id = ?1 AND (t.archived_at IS NOT NULL) = ?2 ORDER BY julianday(CASE WHEN julianday(t.updated_at) >= julianday(c.updated_at) THEN t.updated_at ELSE c.updated_at END) DESC, t.id",

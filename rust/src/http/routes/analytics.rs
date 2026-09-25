@@ -1,5 +1,6 @@
 //! Company analytics, task costs, and timeline (`src/http/routes/tasks.ts`).
 
+use crate::tasks::TaskError;
 use std::{error::Error, path::PathBuf};
 
 use axum::{
@@ -17,7 +18,7 @@ use crate::{
     identity::companies,
     platform::database::SuplexDatabase,
     shared::js_json,
-    tasks::{analytics, commands::TaskFailure, timeline},
+    tasks::{analytics, timeline},
 };
 
 use super::{auth, profiles::authorize};
@@ -57,14 +58,7 @@ fn respond(result: Result<Value, Box<dyn Error>>, cookies: Vec<String>) -> Respo
             js_json::stringify(&value),
         )
             .into_response(),
-        Err(error) => match error.downcast::<TaskFailure>() {
-            Ok(failure) => auth::error(
-                StatusCode::from_u16(failure.status_code)
-                    .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
-                &failure.public_message,
-            ),
-            Err(error) => auth::service_error(error),
-        },
+        Err(error) => auth::service_error(error),
     };
     auth::append_cookies(&mut response, cookies);
     response
@@ -118,13 +112,7 @@ fn saved_timelines(
     let mut saved = Vec::new();
     for id in ids {
         companies::require_company_access(database, user_id, company_id)?;
-        saved.push(timeline::read_saved(database, &id)?.ok_or_else(|| {
-            Box::new(TaskFailure {
-                public_message: "Not found".into(),
-                status_code: 404,
-                code: "task_failure",
-            }) as Box<dyn Error>
-        })?);
+        saved.push(timeline::read_saved(database, &id)?.ok_or_else(TaskError::not_found)?);
     }
     let path = database
         .connection()

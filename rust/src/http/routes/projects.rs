@@ -1,3 +1,4 @@
+use crate::projects::ProjectError;
 use std::error::Error;
 
 use axum::{
@@ -20,10 +21,7 @@ use crate::{
         },
         session,
     },
-    projects::{
-        provisioning, repository,
-        service::{self, ProjectFailure},
-    },
+    projects::{provisioning, repository, service},
 };
 
 use super::auth;
@@ -76,7 +74,7 @@ async fn repository_status(
     let project =
         match state.with_database(|database| service::get(database, &user_id, &project_id)) {
             Ok(project) => project,
-            Err(error) => return with_cookies(service_error(error), cookies),
+            Err(error) => return with_cookies(auth::service_error(error), cookies),
         };
     let result = tokio::time::timeout(
         std::time::Duration::from_secs(20),
@@ -91,7 +89,7 @@ async fn repository_status(
     if let Err(error) =
         state.with_database(|database| service::get(database, &user_id, &project_id))
     {
-        return with_cookies(service_error(error), cookies);
+        return with_cookies(auth::service_error(error), cookies);
     }
     let response = match result {
         Ok(result) => axum::Json(result).into_response(),
@@ -112,25 +110,6 @@ fn query_object(uri: &axum::http::Uri) -> serde_json::Value {
             .map(|(key, value)| (key.into_owned(), json!(value.into_owned())))
             .collect(),
     )
-}
-
-pub(super) fn source_error(error: Box<dyn Error>) -> Response {
-    match error.downcast::<crate::tasks::sources::TaskSourceFailure>() {
-        Ok(failure) => (
-            StatusCode::from_u16(failure.status_code).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
-            axum::Json(json!({"error": failure.message, "code": failure.code})),
-        )
-            .into_response(),
-        Err(error) => match error.downcast::<crate::tasks::commands::TaskFailure>() {
-            Ok(failure) if failure.code == "experimental_not_ported" => auth::not_ported(),
-            Ok(failure) => auth::error(
-                StatusCode::from_u16(failure.status_code)
-                    .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
-                &failure.public_message,
-            ),
-            Err(error) => service_error(error),
-        },
-    }
 }
 
 /// TypeScript `searchIssues`: the configured tracker, else the project's GitHub Issues.
@@ -158,7 +137,7 @@ async fn issues(
     let project =
         match state.with_database(|database| service::get(database, &user_id, &project_id)) {
             Ok(project) => project,
-            Err(source) => return with_cookies(service_error(source), cookies),
+            Err(source) => return with_cookies(auth::service_error(source), cookies),
         };
     let tracker = match &project.integration {
         Some(integration) => serde_json::to_value(&integration.tracker).unwrap_or_default(),
@@ -208,11 +187,11 @@ async fn task_sources(
     let project =
         match state.with_database(|database| service::get(database, &user_id, &project_id)) {
             Ok(project) => project,
-            Err(source) => return with_cookies(service_error(source), cookies),
+            Err(source) => return with_cookies(auth::service_error(source), cookies),
         };
     let response = match crate::tasks::sources::discover(&project, &kind).await {
         Ok(sources) => axum::Json(sources).into_response(),
-        Err(error) => source_error(error),
+        Err(error) => auth::service_error(error),
     };
     with_cookies(response, cookies)
 }
@@ -274,15 +253,18 @@ async fn create(
     match admission {
         Ok(company) if company.status != "active" => {
             return with_cookies(
-                service_error(Box::new(ProjectFailure {
-                    message: "Company is not active",
-                    status_code: 409,
-                    findings: vec![repository::Finding {
-                        code: "company-inactive".to_owned(),
-                        field: "companyId".to_owned(),
-                        message: "Project configuration requires an active company".to_owned(),
-                    }],
-                })),
+                auth::service_error(
+                    ProjectError::Rejected {
+                        message: "Company is not active",
+                        status: 409,
+                        findings: vec![repository::Finding {
+                            code: "company-inactive".to_owned(),
+                            field: "companyId".to_owned(),
+                            message: "Project configuration requires an active company".to_owned(),
+                        }],
+                    }
+                    .into(),
+                ),
                 cookies,
             );
         }
@@ -385,13 +367,16 @@ async fn finish_local_project(
                 axum::Json(service::response_project(&project)),
             )
                 .into_response(),
-            Err(source) => service_error(source),
+            Err(source) => auth::service_error(source),
         },
-        Err(findings) => service_error(Box::new(ProjectFailure {
-            message: "Project configuration is invalid",
-            status_code: 422,
-            findings,
-        })),
+        Err(findings) => auth::service_error(
+            ProjectError::Rejected {
+                message: "Project configuration is invalid",
+                status: 422,
+                findings,
+            }
+            .into(),
+        ),
     }
 }
 
@@ -405,18 +390,19 @@ async fn create_from_repository(
     requested_base_branch: Option<&str>,
 ) -> Response {
     let Some(coordinate) = repository::repository_coordinate(raw_url) else {
-        return service_error(Box::new(ProjectFailure {
-            message: "Repository URL is invalid",
-            status_code: 422,
-            findings: Vec::new(),
-        }));
+        return auth::service_error(
+            ProjectError::new("Repository URL is invalid", 422, Vec::new()).into(),
+        );
     };
     if coordinate.host != "github" {
-        return service_error(Box::new(ProjectFailure {
-            message: "Select the repository host and its credentials",
-            status_code: 422,
-            findings: Vec::new(),
-        }));
+        return auth::service_error(
+            ProjectError::new(
+                "Select the repository host and its credentials",
+                422,
+                Vec::new(),
+            )
+            .into(),
+        );
     }
     let base_branch = requested_base_branch.unwrap_or("main").to_owned();
     create_coordinate(
@@ -454,7 +440,7 @@ async fn create_coordinate(
     )
     .await
     {
-        return service_error(Box::new(error));
+        return auth::service_error(Box::new(error));
     }
     let (setup, verification) = provisioning::infer_commands(&repository_path);
     let fields = [
@@ -488,34 +474,40 @@ async fn create_with_new_repository(
     } else {
         match provisioning::github_owners(&state.project_github).await {
             Ok(owners) => owners.into_iter().next().unwrap_or_default(),
-            Err(error) => return service_error(Box::new(error)),
+            Err(error) => return auth::service_error(Box::new(error)),
         }
     };
     if owner.is_empty() {
-        return service_error(Box::new(ProjectFailure {
-            message: "Repository name is invalid",
-            status_code: 422,
-            findings: vec![repository::Finding {
-                code: "repository-name".to_owned(),
-                field: "repositoryName".to_owned(),
-                message: "Use workspace/name for a Bitbucket repository".to_owned(),
-            }],
-        }));
+        return auth::service_error(
+            ProjectError::Rejected {
+                message: "Repository name is invalid",
+                status: 422,
+                findings: vec![repository::Finding {
+                    code: "repository-name".to_owned(),
+                    field: "repositoryName".to_owned(),
+                    message: "Use workspace/name for a Bitbucket repository".to_owned(),
+                }],
+            }
+            .into(),
+        );
     }
     let name = second.unwrap_or(first);
     let coordinate =
         repository::repository_coordinate(&format!("https://github.com/{owner}/{name}"));
     let base_branch = requested_base_branch.unwrap_or("main").to_owned();
     let Some(coordinate) = coordinate.filter(|_| repository::valid_branch(&base_branch)) else {
-        return service_error(Box::new(ProjectFailure {
-            message: "Repository name is invalid",
-            status_code: 422,
-            findings: vec![repository::Finding {
-                code: "repository-name".to_owned(),
-                field: "repositoryName".to_owned(),
-                message: "Use letters, numbers, dots, dashes, and underscores".to_owned(),
-            }],
-        }));
+        return auth::service_error(
+            ProjectError::Rejected {
+                message: "Repository name is invalid",
+                status: 422,
+                findings: vec![repository::Finding {
+                    code: "repository-name".to_owned(),
+                    field: "repositoryName".to_owned(),
+                    message: "Use letters, numbers, dots, dashes, and underscores".to_owned(),
+                }],
+            }
+            .into(),
+        );
     };
     let mut parts = coordinate.repository.split('/');
     let owner = parts.next().expect("validated coordinate owner");
@@ -530,7 +522,7 @@ async fn create_with_new_repository(
     )
     .await
     {
-        return service_error(Box::new(error));
+        return auth::service_error(Box::new(error));
     }
     create_coordinate(
         state,
@@ -542,17 +534,6 @@ async fn create_with_new_repository(
         base_branch,
     )
     .await
-}
-
-fn service_error(source: Box<dyn Error>) -> Response {
-    match source.downcast::<ProjectFailure>() {
-        Ok(failure) => (
-            StatusCode::from_u16(failure.status_code).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
-            axum::Json(json!({"error": failure.message, "findings": failure.findings})),
-        )
-            .into_response(),
-        Err(source) => auth::service_error(source),
-    }
 }
 
 fn authorize(
@@ -588,7 +569,7 @@ fn list_for(state: AppState, headers: HeaderMap, company_id: Option<String>) -> 
         state.with_database(|database| service::list(database, &user_id, company_id.as_deref()));
     let response = match result {
         Ok(projects) => axum::Json(json!({"projects": projects.iter().map(service::response_project).collect::<Vec<_>>() })).into_response(),
-        Err(source) => service_error(source),
+        Err(source) => auth::service_error(source),
     };
     with_cookies(response, cookies)
 }
@@ -625,17 +606,20 @@ async fn get_one(
     let response =
         match state.with_database(|database| service::get(database, &user_id, &project_id)) {
             Ok(project) => axum::Json(service::response_project(&project)).into_response(),
-            Err(source) => service_error(source),
+            Err(source) => auth::service_error(source),
         };
     with_cookies(response, cookies)
 }
 
 fn invalid(findings: Vec<repository::Finding>) -> Response {
-    service_error(Box::new(ProjectFailure {
-        message: "Project configuration is invalid",
-        status_code: 422,
-        findings,
-    }))
+    auth::service_error(
+        ProjectError::Rejected {
+            message: "Project configuration is invalid",
+            status: 422,
+            findings,
+        }
+        .into(),
+    )
 }
 
 /// A full project body replaces the configuration; any other body patches the
@@ -686,19 +670,22 @@ async fn update(
         Ok((existing, true)) => existing,
         Ok((_, false)) => {
             return with_cookies(
-                service_error(Box::new(ProjectFailure {
-                    message: "Company is not active",
-                    status_code: 409,
-                    findings: vec![repository::Finding {
-                        code: "company-inactive".to_owned(),
-                        field: "companyId".to_owned(),
-                        message: "Project configuration requires an active company".to_owned(),
-                    }],
-                })),
+                auth::service_error(
+                    ProjectError::Rejected {
+                        message: "Company is not active",
+                        status: 409,
+                        findings: vec![repository::Finding {
+                            code: "company-inactive".to_owned(),
+                            field: "companyId".to_owned(),
+                            message: "Project configuration requires an active company".to_owned(),
+                        }],
+                    }
+                    .into(),
+                ),
                 cookies,
             );
         }
-        Err(source) => return with_cookies(service_error(source), cookies),
+        Err(source) => return with_cookies(auth::service_error(source), cookies),
     };
     let response = if let Ok(full) = project_contracts::parse_body(parsed.as_ref()) {
         replace_project(&state, &roots, &user_id, &existing, &full).await
@@ -746,7 +733,7 @@ async fn replace_project(
         service::update_local(database, user_id, existing, &prepared, body, Utc::now())
     }) {
         Ok(project) => axum::Json(service::response_project(&project)).into_response(),
-        Err(source) => service_error(source),
+        Err(source) => auth::service_error(source),
     }
 }
 
@@ -792,7 +779,7 @@ async fn patch_project(
         )
     }) {
         Ok(project) => axum::Json(service::response_project(&project)).into_response(),
-        Err(source) => service_error(source),
+        Err(source) => auth::service_error(source),
     }
 }
 
@@ -820,7 +807,7 @@ async fn repository_defaults(
                 }))
                 .into_response()
             }
-            Err(source) => service_error(source),
+            Err(source) => auth::service_error(source),
         };
     with_cookies(response, cookies)
 }
@@ -842,7 +829,7 @@ async fn provider_instances(
         .with_database(|database| service::list_provider_instances(database, &user_id, &project_id))
     {
         Ok(instances) => axum::Json(json!({"instances": instances})).into_response(),
-        Err(source) => service_error(source),
+        Err(source) => auth::service_error(source),
     };
     with_cookies(response, cookies)
 }
@@ -872,7 +859,7 @@ async fn repository_owners(
     let result = provisioning::github_owners(&state.project_github).await;
     let response = match result {
         Ok(owners) => axum::Json(json!({"owners": owners})).into_response(),
-        Err(error) => service_error(Box::new(error)),
+        Err(error) => auth::service_error(Box::new(error)),
     };
     with_cookies(response, cookies)
 }
@@ -925,7 +912,7 @@ async fn owner_repositories(
     let result = provisioning::github_repositories(&state.project_github, &owner).await;
     let response = match result {
         Ok(repositories) => axum::Json(json!({"repositories": repositories})).into_response(),
-        Err(error) => service_error(Box::new(error)),
+        Err(error) => auth::service_error(Box::new(error)),
     };
     with_cookies(response, cookies)
 }

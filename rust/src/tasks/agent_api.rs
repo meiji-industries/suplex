@@ -3,8 +3,10 @@
 //! Reads cover every task in the agent's current project grants. Commands,
 //! dependency writes, and duplicates stay limited to tasks the agent created.
 
+use crate::projects::ProjectError;
 use crate::shared::hash::sha256_hex;
 use crate::shared::time::rfc3339_millis;
+use crate::tasks::TaskError;
 use std::{
     collections::HashSet,
     error::Error,
@@ -38,56 +40,29 @@ use crate::{
     },
     projects::{
         repository as git,
-        service::{self as projects, Project, ProjectFailure},
+        service::{self as projects, Project},
     },
 };
 
 use super::{
     archive::operations as archive,
-    commands::{self, TaskFailure},
-    images, integration, pull_request_dependencies,
+    commands, images, integration, pull_request_dependencies,
     repository::{self, TaskCreator},
     response, sources,
 };
 
-/// A task failure with the runtime detail fields TypeScript spreads into the error body.
-#[derive(Debug, Clone)]
-pub struct AgentTaskFailure {
-    pub public_message: String,
-    pub status_code: u16,
-    pub code: &'static str,
-    pub details: Map<String, Value>,
+fn fail(message: &str, status: u16, code: &'static str) -> Box<dyn Error> {
+    fail_with(message, status, code, Value::Null)
 }
 
-impl fmt::Display for AgentTaskFailure {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(&self.public_message)
-    }
-}
-
-impl Error for AgentTaskFailure {}
-
-fn fail(message: &str, status_code: u16, code: &'static str) -> Box<dyn Error> {
-    Box::new(AgentTaskFailure {
-        public_message: message.to_owned(),
-        status_code,
+fn fail_with(message: &str, status: u16, code: &'static str, details: Value) -> Box<dyn Error> {
+    TaskError::Agent {
+        status,
         code,
-        details: Map::new(),
-    })
-}
-
-fn fail_with(
-    message: &str,
-    status_code: u16,
-    code: &'static str,
-    details: Value,
-) -> Box<dyn Error> {
-    Box::new(AgentTaskFailure {
-        public_message: message.to_owned(),
-        status_code,
-        code,
+        message: message.to_owned(),
         details: details.as_object().cloned().unwrap_or_default(),
-    })
+    }
+    .into()
 }
 
 fn not_found() -> Box<dyn Error> {
@@ -1915,11 +1890,7 @@ pub async fn create(
         git::capture_local_task_heads(&state.project_github, &repository_path, &base_branch, host)
             .await;
     let base_sha = captured.map_err(|findings| {
-        Box::new(ProjectFailure {
-            message: "Project configuration could not be captured",
-            status_code: 422,
-            findings,
-        }) as Box<dyn Error>
+        ProjectError::new("Project configuration could not be captured", 422, findings)
     })?;
     let artifact_root = state.artifact_root.clone();
     state.with_database(|database| {
@@ -1939,10 +1910,13 @@ pub async fn create(
 
 /// A rejected source names its field, value, and reason; provider outages keep their own failure.
 fn source_rejection(error: Box<dyn Error>, selector: Option<&Value>) -> Box<dyn Error> {
-    let reason = if let Some(failure) = error.downcast_ref::<sources::TaskSourceFailure>() {
-        (failure.status_code < 500).then(|| failure.message.to_owned())
-    } else if let Some(failure) = error.downcast_ref::<ProjectFailure>() {
-        (failure.status_code < 500).then(|| failure.message.to_owned())
+    let reason = if let Some(TaskError::Source {
+        status, message, ..
+    }) = error.downcast_ref()
+    {
+        (*status < 500).then(|| (*message).to_owned())
+    } else if let Some(failure) = error.downcast_ref::<ProjectError>() {
+        (failure.status() < 500).then(|| failure.to_string())
     } else {
         None
     };
@@ -1989,11 +1963,7 @@ fn replace_dependencies(
     depends_on.sort();
     depends_on.dedup();
     if depends_on.iter().any(|dependency| dependency == task_id) {
-        return Err(Box::new(TaskFailure {
-            public_message: "A task cannot depend on itself".into(),
-            status_code: 422,
-            code: "task_failure",
-        }));
+        return Err(TaskError::new("A task cannot depend on itself", 422).into());
     }
     let time = rfc3339_millis(now);
     database.transaction(true, |database| {
@@ -2008,7 +1978,7 @@ fn replace_dependencies(
                 .query_row("SELECT company_id FROM suplex_tasks WHERE id = ?1", [dependency], |row| row.get(0))
                 .optional()?;
             if company.as_deref() != Some(company_id) {
-                return Err(Box::new(TaskFailure { public_message: "A dependency task is not available".into(), status_code: 404, code: "task_failure" }));
+                return Err(TaskError::new("A dependency task is not available", 404).into());
             }
         }
         database.connection().execute("DELETE FROM suplex_task_dependencies WHERE task_id = ?1", [task_id])?;
@@ -2022,7 +1992,7 @@ fn replace_dependencies(
         let mut queue = depends_on.clone();
         while let Some(next) = queue.pop() {
             if next == task_id {
-                return Err(Box::new(TaskFailure { public_message: "The dependency creates a cycle".into(), status_code: 422, code: "task_failure" }));
+                return Err(TaskError::new("The dependency creates a cycle", 422).into());
             }
             if !seen.insert(next.clone()) {
                 continue;
@@ -2603,25 +2573,28 @@ pub async fn command(
 
 /// A failure that crosses the blocking-thread boundary keeps its domain type.
 enum Crossed {
-    Task(TaskFailure),
-    Agent(AgentTaskFailure),
+    Task(TaskError),
     Other(String),
 }
 
 fn crossed(error: Box<dyn Error>) -> Crossed {
-    if let Some(failure) = error.downcast_ref::<AgentTaskFailure>() {
-        return Crossed::Agent(failure.clone());
-    }
-    match error.downcast::<TaskFailure>() {
-        Ok(failure) => Crossed::Task(*failure),
+    match error.downcast::<TaskError>() {
+        Ok(failure)
+            if matches!(
+                *failure,
+                TaskError::Failure { .. } | TaskError::Agent { .. }
+            ) =>
+        {
+            Crossed::Task(*failure)
+        }
+        Ok(failure) => Crossed::Other(failure.to_string()),
         Err(error) => Crossed::Other(error.to_string()),
     }
 }
 
 fn uncrossed(error: Crossed) -> Box<dyn Error> {
     match error {
-        Crossed::Task(failure) => Box::new(failure),
-        Crossed::Agent(failure) => Box::new(failure),
+        Crossed::Task(failure) => failure.into(),
         // TypeScript turns any other archive failure into a 409 task failure.
         Crossed::Other(message) => fail(&message, 409, "task_failure"),
     }

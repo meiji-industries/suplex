@@ -2,10 +2,14 @@
 //! (`src/integrations/github/triggers.ts`, `trigger-repository.ts`,
 //! `trigger-poller.ts`, and the trigger admission paths of `tasks/tasks.ts`).
 
+use crate::identity::IdentityError;
+use crate::platform::PlatformError;
+use crate::projects::ProjectError;
 use crate::shared::ids::random_hex_id;
+use crate::tasks::TaskError;
 use std::{
     error::Error,
-    fmt, io,
+    io,
     path::{Path, PathBuf},
     sync::Mutex,
     time::Duration,
@@ -32,39 +36,31 @@ use crate::{
         AppState,
         contracts::typed::github_triggers::{GithubTriggerCreate, GithubTriggerPatch},
     },
-    identity::{auth::AuthFailure, companies},
-    platform::{
-        artifacts::ArtifactFailure,
-        database::{DatabaseResult, OpenMode, SuplexDatabase},
-    },
+    identity::companies,
+    platform::database::{DatabaseResult, OpenMode, SuplexDatabase},
     projects::{
         repository as git,
-        service::{self as projects, Project, ProjectFailure},
+        service::{self as projects, Project},
     },
-    tasks::{
-        commands::{self, TaskFailure},
-        repository::{PullRequestOwned, assert_pull_request_available},
-        sources::{self, TaskSourceFailure},
-    },
+    tasks::{commands, repository::assert_pull_request_available, sources},
 };
 
 pub type Failure = Box<dyn Error + Send + Sync>;
 
-/// A public trigger rejection (`AuthFailure` and `PreviewFailure` in TypeScript).
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// A public trigger rejection (`IdentityError` and `PreviewFailure` in TypeScript).
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("{message}")]
 pub struct TriggerFailure {
     pub message: String,
     pub status: u16,
     pub retry_at: Option<String>,
 }
 
-impl fmt::Display for TriggerFailure {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(&self.message)
+impl From<TriggerFailure> for crate::shared::PublicFailure {
+    fn from(failure: TriggerFailure) -> Self {
+        Self::new(failure.status, failure.message)
     }
 }
-
-impl Error for TriggerFailure {}
 
 fn public(message: impl Into<String>, status: u16) -> Failure {
     Box::new(TriggerFailure {
@@ -75,11 +71,7 @@ fn public(message: impl Into<String>, status: u16) -> Failure {
 }
 
 fn task_failure(message: &str, status: u16) -> Failure {
-    Box::new(TaskFailure {
-        public_message: message.into(),
-        status_code: status,
-        code: "task_failure",
-    })
+    TaskError::new(message, status).into()
 }
 
 const CHANGED: &str = "This GitHub rule changed. Refresh and try again.";
@@ -95,19 +87,17 @@ pub fn send(error: Box<dyn Error>) -> Failure {
             };
         )*};
     }
-    if error.is::<PullRequestOwned>() {
-        return public("A task already uses this pull request.", 409);
-    }
-    keep!(
-        error,
-        TriggerFailure,
-        AuthFailure,
-        TaskFailure,
-        ProjectFailure,
-        GithubFailure,
-        TaskSourceFailure,
-        ArtifactFailure
-    );
+    let error: Box<dyn Error> = match error.downcast::<TaskError>() {
+        Ok(task) if matches!(*task, TaskError::Failure { .. } | TaskError::Source { .. }) => {
+            return task;
+        }
+        Ok(task) if matches!(*task, TaskError::PullRequestOwned) => {
+            return public("A task already uses this pull request.", 409);
+        }
+        Ok(task) => task,
+        Err(error) => error,
+    };
+    keep!(error, TriggerFailure, GithubFailure, PlatformError);
     Box::new(io::Error::other(error.to_string()))
 }
 
@@ -286,7 +276,7 @@ fn owns_pull_request(
 ) -> DatabaseResult<bool> {
     match assert_pull_request_available(database, "", repository, number) {
         Ok(()) => Ok(false),
-        Err(error) if error.is::<PullRequestOwned>() => Ok(true),
+        Err(error) if TaskError::is_pull_request_owned(&*error) => Ok(true),
         Err(error) => Err(error),
     }
 }
@@ -465,11 +455,7 @@ fn local(
     }
     let project = projects::get(database, &config.authority_user_id, &config.project_id)?;
     if project.company_id != company_id {
-        return Err(Box::new(ProjectFailure {
-            message: "Not found",
-            status_code: 404,
-            findings: vec![],
-        }));
+        return Err(ProjectError::new("Not found", 404, vec![]).into());
     }
     let repository = project
         .repository
@@ -587,8 +573,8 @@ fn message(error: &(dyn Error + 'static)) -> (String, Option<String>) {
         };
         return (text.into(), failure.retry_at.clone());
     }
-    if let Some(failure) = error.downcast_ref::<AuthFailure>() {
-        return (failure.message.into(), None);
+    if let Some(IdentityError::Auth { message, .. }) = error.downcast_ref() {
+        return ((*message).into(), None);
     }
     (UNAVAILABLE.into(), None)
 }
@@ -623,13 +609,7 @@ fn task_status<D: Db>(database: &D, user_id: &str, task_id: &str) -> Result<Stri
             [task_id],
             |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
         ).optional()?;
-        let (company, status) = row.ok_or_else(|| {
-            Box::new(TaskFailure {
-                public_message: "Not found".into(),
-                status_code: 404,
-                code: "task_failure",
-            }) as Box<dyn Error>
-        })?;
+        let (company, status) = row.ok_or_else(TaskError::not_found)?;
         companies::require_company_access(database, user_id, &company)?;
         Ok(status)
     })
@@ -1435,13 +1415,8 @@ async fn admit<D: Db>(
 
 /// `requireGithubTriggerAdmission`: live authority, rule, preset, and profiles.
 fn require_admission(database: &SuplexDatabase, dispatch: &Dispatch) -> DatabaseResult<()> {
-    let failure = |message: &str, status: u16| -> Box<dyn Error> {
-        Box::new(TaskFailure {
-            public_message: message.into(),
-            status_code: status,
-            code: "task_failure",
-        })
-    };
+    let failure =
+        |message: &str, status: u16| -> Box<dyn Error> { TaskError::new(message, status).into() };
     if active_role(database, &dispatch.authority_user_id)?.as_deref() != Some("admin") {
         return Err(failure("GitHub trigger authority is not available", 422));
     }
@@ -1538,11 +1513,7 @@ pub async fn create_task_from_trigger<D: Db>(
     let project = db(database, |database| {
         let project = projects::get(database, &authority, &dispatch.project_id)?;
         if project.company_id != dispatch.company_id {
-            return Err(Box::new(ProjectFailure {
-                message: "Not found",
-                status_code: 404,
-                findings: vec![],
-            }) as Box<dyn Error>);
+            return Err(ProjectError::new("Not found", 404, vec![]).into());
         }
         Ok(project)
     })?;
@@ -1575,11 +1546,12 @@ pub async fn create_task_from_trigger<D: Db>(
     )
     .await
     .map_err(|findings| -> Failure {
-        Box::new(ProjectFailure {
+        ProjectError::Rejected {
             message: "Project configuration could not be captured",
-            status_code: 422,
+            status: 422,
             findings,
-        })
+        }
+        .into()
     })?;
     let created = db(database, |database| {
         create_captured(
@@ -1627,11 +1599,7 @@ fn create_captured(
             != Some(dispatch.repository_name.as_str())
         || project.base_branch != policy.base_branch
     {
-        return Err(Box::new(TaskFailure {
-            public_message: "GitHub trigger source changed".into(),
-            status_code: 409,
-            code: "task_failure",
-        }));
+        return Err(TaskError::new("GitHub trigger source changed", 409).into());
     }
     // TypeScript creates the task from the captured profile snapshots.
     prepared.root_profile = dispatch.profiles["root"].clone();
@@ -1743,11 +1711,7 @@ pub async fn start_task_from_trigger<D: Db>(
             let current = dispatches::get(database, dispatch_id)?
                 .filter(|value| value.task_id.is_some())
                 .ok_or_else(|| -> Box<dyn Error> {
-                    Box::new(TaskFailure {
-                        public_message: "GitHub trigger dispatch is not linked to a task".into(),
-                        status_code: 404,
-                        code: "task_failure",
-                    })
+                    TaskError::new("GitHub trigger dispatch is not linked to a task", 404).into()
                 })?;
             let (status, can_start) = startable(database)?;
             if !can_start {
@@ -1772,11 +1736,7 @@ pub async fn start_task_from_trigger<D: Db>(
                 || configuration["source"]["kind"] != "pull_request"
                 || configuration["source"]["number"] != current.pull_request_number
             {
-                return Err(Box::new(TaskFailure {
-                    public_message: "GitHub trigger task source changed".into(),
-                    status_code: 409,
-                    code: "task_failure",
-                }));
+                return Err(TaskError::new("GitHub trigger task source changed", 409).into());
             }
             let task = commands::start_user_task(
                 database,

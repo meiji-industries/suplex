@@ -1,5 +1,6 @@
 //! Native Codex session history with live, read-only observation.
 
+use crate::tasks::TaskError;
 use std::{error::Error, io, path::PathBuf};
 
 use axum::{
@@ -22,7 +23,6 @@ use crate::{
     identity::companies,
     platform::database::SuplexDatabase,
     runtimes::{task_harness::ReaderSession, task_harness_registry},
-    tasks::commands::TaskFailure,
 };
 
 use super::auth;
@@ -104,11 +104,7 @@ fn authorize(
 }
 
 fn not_found() -> Box<dyn Error> {
-    Box::new(TaskFailure {
-        public_message: "Not found".into(),
-        status_code: 404,
-        code: "task_failure",
-    })
+    TaskError::not_found().into()
 }
 
 #[derive(Clone)]
@@ -169,13 +165,6 @@ fn scoped_session(
     })
 }
 
-fn response_error(error: Box<dyn Error>) -> Response {
-    match error.downcast::<TaskFailure>() {
-        Ok(failure) => auth::error(StatusCode::NOT_FOUND, &failure.public_message),
-        Err(error) => auth::service_error(error),
-    }
-}
-
 /// TypeScript `nativeSessionReader(session).history(session)`.
 fn native_history(scoped: &ScopedSession) -> io::Result<Vec<Value>> {
     let Some(native_session_id) = scoped.native_session_id.as_deref() else {
@@ -194,15 +183,15 @@ fn native_history(scoped: &ScopedSession) -> io::Result<Vec<Value>> {
         })
 }
 
-fn page(messages: &[Value], before: Option<&str>) -> Result<Value, TaskFailure> {
+fn page(messages: &[Value], before: Option<&str>) -> Result<Value, TaskError> {
     let end = match before {
         None => messages.len(),
         Some(before) => messages
             .iter()
             .position(|message| message["id"] == before)
-            .ok_or_else(|| TaskFailure {
-                public_message: "The session history cursor is not available".into(),
-                status_code: 400,
+            .ok_or_else(|| TaskError::Failure {
+                message: "The session history cursor is not available".into(),
+                status: 400,
                 code: "cursor_invalid",
             })?,
     };
@@ -235,7 +224,7 @@ async fn history(
     {
         Ok(value) => value,
         Err(error) => {
-            let mut response = response_error(error);
+            let mut response = auth::service_error(error);
             auth::append_cookies(&mut response, cookies);
             return response;
         }
@@ -268,14 +257,7 @@ async fn history(
             );
             response
         }
-        Err(error) => match error.downcast::<TaskFailure>() {
-            Ok(failure) => auth::error(
-                StatusCode::from_u16(failure.status_code)
-                    .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
-                &failure.public_message,
-            ),
-            Err(error) => response_error(error),
-        },
+        Err(error) => auth::service_error(error),
     };
     auth::append_cookies(&mut response, cookies);
     response
@@ -325,7 +307,7 @@ enum LiveFailure {
 }
 
 fn live_scope_error(error: Box<dyn Error>) -> LiveFailure {
-    if error.is::<TaskFailure>() {
+    if matches!(error.downcast_ref(), Some(TaskError::Failure { .. })) {
         LiveFailure::Missing
     } else {
         // The source websocket treats any failed fresh task/session lookup as

@@ -5,11 +5,12 @@
 //! range and fresh local facts. Bitbucket repositories deliver through the
 //! Bitbucket release port.
 
+use super::DeliveryError;
 use crate::shared::hash::sha256_hex;
 use crate::shared::time::{now_millis_rfc3339, rfc3339_millis};
 use std::{
     error::Error,
-    fmt, io,
+    io,
     path::{Path, PathBuf},
 };
 
@@ -44,41 +45,24 @@ use crate::{
 pub const DELIVERY_WAIT_NEXT: &str =
     "End this Coordinator turn. Suplex will resume it when delivery state changes.";
 
-#[derive(Debug, Eq, PartialEq)]
-pub struct DeliveryOperationFailure {
-    pub code: &'static str,
-    pub message: String,
-}
-
-impl fmt::Display for DeliveryOperationFailure {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(&self.message)
-    }
-}
-
-impl Error for DeliveryOperationFailure {}
-
 pub fn delivery_failure(code: &'static str, message: impl Into<String>) -> Box<dyn Error> {
-    Box::new(DeliveryOperationFailure {
-        code,
-        message: message.into(),
-    })
+    DeliveryError::operation(code, message).into()
 }
 
 /// Check source control state before waiting for a Git observation.
-pub fn standard_local_worktree_path(control: &Value) -> Result<&str, DeliveryOperationFailure> {
+pub fn standard_local_worktree_path(control: &Value) -> Result<&str, DeliveryError> {
     if control["deliveryTarget"] != "local_worktree" {
-        return Err(DeliveryOperationFailure {
-            code: "delivery_target_mismatch",
-            message: "This task has a different delivery target".into(),
-        });
+        return Err(DeliveryError::operation(
+            "delivery_target_mismatch",
+            "This task has a different delivery target",
+        ));
     }
     control["worktree"]["path"]
         .as_str()
-        .ok_or(DeliveryOperationFailure {
-            code: "worktree_missing",
-            message: "The task has no worktree".into(),
-        })
+        .ok_or(DeliveryError::operation(
+            "worktree_missing",
+            "The task has no worktree",
+        ))
 }
 
 /// Check only the conditions in the source Standard `completeLocal` path.
@@ -87,15 +71,15 @@ pub fn check_standard_local_completion(
     control: &Value,
     expected_head: Option<&str>,
     local: &LocalRevisionObservation,
-) -> Result<(), DeliveryOperationFailure> {
+) -> Result<(), DeliveryError> {
     standard_local_worktree_path(control)?;
     if expected_head.is_none_or(|head| head != local.head_sha)
         || control["deliveryIntent"]["headBranch"] != local.branch
     {
-        return Err(DeliveryOperationFailure {
-            code: "head_diverged",
-            message: "Review the current worktree before completing the task".into(),
-        });
+        return Err(DeliveryError::operation(
+            "head_diverged",
+            "Review the current worktree before completing the task",
+        ));
     }
     Ok(())
 }
@@ -864,9 +848,7 @@ impl DeliveryOperations {
     }
 
     fn observation_unavailable(error: &(dyn Error + 'static)) -> bool {
-        error
-            .downcast_ref::<DeliveryOperationFailure>()
-            .is_some_and(|failure| failure.code == "observation_unavailable")
+        DeliveryError::code_of(error) == Some("observation_unavailable")
             || error
                 .downcast_ref::<GithubFailure>()
                 .is_some_and(|failure| {
@@ -2236,11 +2218,7 @@ pub fn observe_for_root(database_path: &Path, control: &Value) -> DatabaseResult
             let code = error
                 .downcast_ref::<GithubFailure>()
                 .map(|failure| failure.code)
-                .or_else(|| {
-                    error
-                        .downcast_ref::<DeliveryOperationFailure>()
-                        .map(|failure| failure.code)
-                });
+                .or_else(|| DeliveryError::code_of(error.as_ref()));
             (code, error.to_string())
         })
     });
@@ -2283,38 +2261,38 @@ pub(crate) mod tests {
         assert_eq!(
             check_standard_local_completion(&control, None, &local)
                 .unwrap_err()
-                .code,
-            "head_diverged"
+                .code(),
+            Some("head_diverged")
         );
         assert_eq!(
             check_standard_local_completion(&control, Some("old-head"), &local)
                 .unwrap_err()
-                .code,
-            "head_diverged"
+                .code(),
+            Some("head_diverged")
         );
         let mut wrong_branch = local.clone();
         wrong_branch.branch = "other".into();
         assert_eq!(
             check_standard_local_completion(&control, Some("head-one"), &wrong_branch)
                 .unwrap_err()
-                .code,
-            "head_diverged"
+                .code(),
+            Some("head_diverged")
         );
         let mut wrong_target = control.clone();
         wrong_target["deliveryTarget"] = json!("pull_request");
         assert_eq!(
             check_standard_local_completion(&wrong_target, Some("head-one"), &local)
                 .unwrap_err()
-                .code,
-            "delivery_target_mismatch"
+                .code(),
+            Some("delivery_target_mismatch")
         );
         let mut missing_worktree = control.clone();
         missing_worktree["worktree"] = Value::Null;
         assert_eq!(
             standard_local_worktree_path(&missing_worktree)
                 .unwrap_err()
-                .code,
-            "worktree_missing"
+                .code(),
+            Some("worktree_missing")
         );
     }
 
@@ -2552,8 +2530,7 @@ pub(crate) mod tests {
             .unwrap()
             .expect("the task carries a trigger policy");
         assert_eq!(policy.dispatch_id, "dispatch_1");
-        let code =
-            |error: Box<dyn Error>| error.downcast::<DeliveryOperationFailure>().unwrap().code;
+        let code = |error: Box<dyn Error>| DeliveryError::code_of(error.as_ref()).unwrap();
         let moved = operations
             .inspect_trigger_policy(&control, Some(&"c".repeat(40)), false)
             .await

@@ -1,6 +1,8 @@
 //! One avatar table for users, companies, projects, and agents
 //! (`src/identity/avatars.ts`, `src/identity/avatar-kinds.ts`).
 
+use crate::identity::IdentityError;
+use crate::platform::PlatformError;
 use crate::shared::ids::random_hex_id;
 use crate::shared::time::now_millis_rfc3339;
 use std::fs;
@@ -11,7 +13,6 @@ use serde_json::{Map, Value, json};
 
 use crate::{
     http::contracts::typed::{avatars::AvatarUpdateBody, tasks::TaskImage},
-    identity::auth::AuthFailure,
     platform::database::{DatabaseResult, SuplexDatabase},
     projects::service as projects,
     tasks::images::decode_task_image,
@@ -68,13 +69,7 @@ fn user_role(database: &SuplexDatabase, user_id: &str) -> DatabaseResult<String>
             |row| row.get(0),
         )
         .optional()?
-        .ok_or_else(|| {
-            Box::new(AuthFailure::new(
-                "Authentication required",
-                401,
-                "auth_failure",
-            )) as _
-        })
+        .ok_or_else(|| IdentityError::auth("Authentication required", 401, "auth_failure").into())
 }
 
 pub fn list(database: &SuplexDatabase, user_id: &str) -> DatabaseResult<Map<String, Value>> {
@@ -112,7 +107,7 @@ pub fn owner(
             return Ok((kind, seed));
         }
     }
-    Err(Box::new(AuthFailure::new("Not found", 404, "auth_failure")))
+    Err(IdentityError::not_found().into())
 }
 
 pub fn image(
@@ -157,9 +152,7 @@ pub fn update(
                 base64: image.base64.clone(),
             })?;
             if decoded.bytes.len() > MAX_AVATAR_IMAGE_BYTES {
-                return Err(Box::new(
-                    crate::platform::artifacts::ArtifactFailure::invalid_image_data(),
-                ));
+                return Err(PlatformError::invalid_image_data().into());
             }
             Some(decoded.bytes)
         }
@@ -182,7 +175,7 @@ pub fn update(
                 break;
             }
         }
-        let kind = kind.ok_or_else(|| Box::new(AuthFailure::new("Not found", 404, "auth_failure")) as Box<dyn std::error::Error>)?;
+        let kind = kind.ok_or_else(IdentityError::not_found)?;
         let allowed = role == "admin"
             || (kind == "user" && owner_id == user_id)
             || (kind == "project"
@@ -192,11 +185,11 @@ pub fn update(
                     |row| row.get::<_, bool>(0),
                 )?);
         if !allowed {
-            return Err(Box::new(AuthFailure::new(
+            return Err(IdentityError::auth(
                 "Administrator access required",
                 403,
                 "auth_failure",
-            )));
+            ).into());
         }
         let current = database
             .connection()

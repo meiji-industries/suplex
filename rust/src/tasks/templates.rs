@@ -2,6 +2,7 @@
 
 use crate::shared::ids::random_hex_id;
 use crate::shared::time::now_millis_rfc3339;
+use crate::tasks::TaskError;
 use std::error::Error;
 
 use rusqlite::{OptionalExtension, params};
@@ -14,14 +15,10 @@ use crate::{
     platform::database::SuplexDatabase,
 };
 
-use super::{commands::TaskFailure, response};
+use super::response;
 
 fn failure(message: impl Into<String>, status_code: u16) -> Box<dyn Error> {
-    Box::new(TaskFailure {
-        public_message: message.into(),
-        status_code,
-        code: "task_failure",
-    })
+    TaskError::new(message, status_code).into()
 }
 
 fn require_project(

@@ -1,5 +1,6 @@
 //! Read-only task details backed by saved intent and native observations.
 
+use crate::tasks::TaskError;
 use std::{error::Error, path::PathBuf};
 
 use axum::{
@@ -24,7 +25,7 @@ use crate::{
     integrations::github::Access,
     platform::database::SuplexDatabase,
     runtimes::{task_harness::ReaderSession, task_harness_registry},
-    tasks::{commands::TaskFailure, worktree},
+    tasks::worktree,
 };
 
 use super::auth;
@@ -128,11 +129,7 @@ fn authorize(
 }
 
 fn not_found() -> Box<dyn Error> {
-    Box::new(TaskFailure {
-        public_message: "Not found".into(),
-        status_code: 404,
-        code: "task_failure",
-    })
+    TaskError::not_found().into()
 }
 
 fn read_task(
@@ -160,16 +157,6 @@ fn read_task(
     Ok((rows, database_path))
 }
 
-fn service_error(error: Box<dyn Error>) -> Response {
-    match error.downcast::<TaskFailure>() {
-        Ok(failure) => auth::error(
-            StatusCode::from_u16(failure.status_code).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
-            &failure.public_message,
-        ),
-        Err(error) => auth::service_error(error),
-    }
-}
-
 fn respond(result: Result<Value, Box<dyn Error>>, cookies: Vec<String>) -> Response {
     let mut response = match result {
         Ok(value) => {
@@ -180,7 +167,7 @@ fn respond(result: Result<Value, Box<dyn Error>>, cookies: Vec<String>) -> Respo
             );
             response
         }
-        Err(error) => service_error(error),
+        Err(error) => auth::service_error(error),
     };
     auth::append_cookies(&mut response, cookies);
     response

@@ -18,7 +18,6 @@ use crate::{
         session,
     },
     platform::database::{DatabaseResult, SuplexDatabase},
-    tasks::commands::TaskFailure,
 };
 
 use super::auth;
@@ -75,14 +74,7 @@ fn mutate(
         None => auth::error(StatusCode::UNAUTHORIZED, "Authentication required"),
         Some(user) => match state.with_database(|database| operation(database, &user.id, values)) {
             Ok(record) => (status, Json(record)).into_response(),
-            Err(error) => match error.downcast::<TaskFailure>() {
-                Ok(failure) => auth::error(
-                    StatusCode::from_u16(failure.status_code)
-                        .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
-                    &failure.public_message,
-                ),
-                Err(error) => auth::service_error(error),
-            },
+            Err(error) => auth::service_error(error),
         },
     };
     auth::append_cookies(&mut response, session.set_cookies);

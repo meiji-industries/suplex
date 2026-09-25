@@ -13,11 +13,11 @@ Request corpus: 1,141 fixtures across 95 request exports plus 23 stored-project 
 | TypeScript source | Status | Rust equivalent and evidence |
 |---|---|---|
 | [app.ts](../src/app.ts) | not started | `924c9efe`, `92f290e3`: Cargo/toolchain/CI, isolated startup, SQLite and sign-in assets tested locally; task host and full route wiring remain pending. |
-| [cli.ts](../src/cli.ts) | not started | |
+| [cli.ts](../src/cli.ts) | not started | Real `mcp advisor` dispatch runs before installation/database/listener startup and passes a staged-binary stdio probe. Other operational commands remain pending. |
 | [coordination/advisor-evidence.ts](../src/coordination/advisor-evidence.ts) | not started | |
-| [coordination/advisor-report-bridge.ts](../src/coordination/advisor-report-bridge.ts) | not started | |
+| [coordination/advisor-report-bridge.ts](../src/coordination/advisor-report-bridge.ts) | ported | `rust/src/coordination/advisor_bridge.rs`: final staged export passes 86 library tests, three integration tests, fmt and all-target Clippy; focused Advisor 4/4 and TS report 10/10 pass. Actual stdio checks cover token denial, initialize/list, invalid report without capture, exact valid result and 0600 file. Role/schema, JS trimming, numeric output and binding writer match source. Native Advisor launch composition remains pending. |
 | [coordination/advisor-report.ts](../src/coordination/advisor-report.ts) | not started | `1c24c183`: existing schemas extracted with compatible exports and passing TypeScript checks; Rust service remains pending |
-| [coordination/bridge-auth.ts](../src/coordination/bridge-auth.ts) | not started | |
+| [coordination/bridge-auth.ts](../src/coordination/bridge-auth.ts) | not started | `rust/src/coordination/bridge_auth.rs` validates source UUID grammar and compares original token bytes with `subtle::ConstantTimeEq`; no token values enter errors. Advisor authorization-before-write and wrong-token stdio checks pass. Root bridge integration remains pending. |
 | [coordination/controller-reports.ts](../src/coordination/controller-reports.ts) | not started | |
 | [coordination/coordinator-replacement-contracts.ts](../src/coordination/coordinator-replacement-contracts.ts) | not started | |
 | [coordination/coordinator-replacement.ts](../src/coordination/coordinator-replacement.ts) | not started | |
@@ -249,4 +249,4 @@ Request corpus: 1,141 fixtures across 95 request exports plus 23 stored-project 
 | [tasks/timeline/timeline.ts](../src/tasks/timeline/timeline.ts) | not started | |
 | [tasks/usage.ts](../src/tasks/usage.ts) | not started | |
 | [tasks/worktree-open.ts](../src/tasks/worktree-open.ts) | not started | |
-| [tasks/worktree.ts](../src/tasks/worktree.ts) | not started | `rust/src/tasks/worktree.rs` prepares local worktrees with Git2. Real Git create/dirty/reopen/stale-registration/symlink checks pass; existing-path branch intent stays source-compatible without a new mismatch rejection. Isolated staged export passes 81 library tests, three integration tests, locked fmt and all-target Clippy. Remote missing-commit fetch, credentials, removal, controller/delivery and real Codex remain pending. Git2/libssh2 and WebAuthn still bring native OpenSSL dependencies. |
+| [tasks/worktree.ts](../src/tasks/worktree.ts) | not started | `7986a84f`: `rust/src/tasks/worktree.rs` prepares local worktrees with Git2. Real Git create/dirty/reopen/stale-registration/symlink checks pass; existing-path branch intent stays source-compatible without a new mismatch rejection. Isolated staged export passes 81 library tests, three integration tests, locked fmt and all-target Clippy. Remote missing-commit fetch, credentials, removal, controller/delivery and real Codex remain pending. Git2/libssh2 and WebAuthn still bring native OpenSSL dependencies. |

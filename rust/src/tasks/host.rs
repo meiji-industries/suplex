@@ -172,6 +172,49 @@ pub async fn prepare_task_worktree(
     .map_err(|error| io::Error::other(error).into())
 }
 
+/// TypeScript `observeProcessOwner`: a PID that cannot be inspected is
+/// `Unknown` unless the OS confirms that it is gone.
+enum ProcessOwner {
+    Running(String),
+    Absent,
+    Unknown,
+}
+
+fn observe_owner(pid: u32) -> ProcessOwner {
+    if let Some(observed) = inspect_process(pid) {
+        return ProcessOwner::Running(observed.start_time);
+    }
+    match i32::try_from(pid) {
+        Ok(raw)
+            if nix::sys::signal::kill(nix::unistd::Pid::from_raw(raw), None)
+                == Err(nix::errno::Errno::ESRCH) =>
+        {
+            ProcessOwner::Absent
+        }
+        _ => ProcessOwner::Unknown,
+    }
+}
+
+/// TypeScript `claimSessionOperation`: an unknown owner, or a running owner
+/// without a recorded start time, still owns the session.
+fn owner_blocks_claim(owner: &ProcessOwner, recorded_start: Option<&str>) -> bool {
+    match owner {
+        ProcessOwner::Unknown => true,
+        ProcessOwner::Absent => false,
+        ProcessOwner::Running(start) => recorded_start.is_none_or(|recorded| recorded == start),
+    }
+}
+
+/// TypeScript `pendingStops`: an unknown owner is still running; a running
+/// process defers the stop only when it is the recorded owner.
+fn owner_blocks_stop(owner: &ProcessOwner, recorded_start: Option<&str>) -> bool {
+    match owner {
+        ProcessOwner::Unknown => true,
+        ProcessOwner::Absent => false,
+        ProcessOwner::Running(start) => recorded_start == Some(start.as_str()),
+    }
+}
+
 fn current_owner_still_running(session: &RootSession) -> bool {
     let Some(pid) = session
         .launch_owner_pid
@@ -179,9 +222,10 @@ fn current_owner_still_running(session: &RootSession) -> bool {
     else {
         return false;
     };
-    inspect_process(pid).is_some_and(|observed| {
-        session.launch_owner_start_time.as_deref() == Some(observed.start_time.as_str())
-    })
+    owner_blocks_claim(
+        &observe_owner(pid),
+        session.launch_owner_start_time.as_deref(),
+    )
 }
 
 /// Sessions whose unported provider was already reported. The sweep skips
@@ -1117,9 +1161,7 @@ async fn stop_retired_sessions(database_path: &Path, task_id: &str) -> DatabaseR
     let mut failures = Vec::new();
     for (session_id, native_id, owner_pid, owner_start) in sessions {
         if let Some(pid) = owner_pid.and_then(|pid| u32::try_from(pid).ok())
-            && owner_start.as_deref().is_some_and(|start| {
-                inspect_process(pid).is_some_and(|observed| start == observed.start_time)
-            })
+            && owner_blocks_stop(&observe_owner(pid), owner_start.as_deref())
         {
             continue;
         }
@@ -1529,6 +1571,116 @@ mod tests {
         assert!(root.native_session_id.is_none() && root.launch_owner.is_none());
         assert!(UNPORTED_SESSIONS.lock().unwrap().contains(&root.id));
         fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
+    fn uninspectable_process_owners_are_live() {
+        let running = ProcessOwner::Running("Mon Sep 25 10:00:00 2026".into());
+        let start = Some("Mon Sep 25 10:00:00 2026");
+        let reused = Some("Sun Sep 24 10:00:00 2026");
+        assert!(owner_blocks_claim(&ProcessOwner::Unknown, start));
+        assert!(owner_blocks_claim(&ProcessOwner::Unknown, None));
+        assert!(owner_blocks_claim(&running, start));
+        assert!(owner_blocks_claim(&running, None));
+        assert!(!owner_blocks_claim(&running, reused));
+        assert!(!owner_blocks_claim(&ProcessOwner::Absent, start));
+        assert!(owner_blocks_stop(&ProcessOwner::Unknown, start));
+        assert!(owner_blocks_stop(&ProcessOwner::Unknown, None));
+        assert!(owner_blocks_stop(&running, start));
+        assert!(!owner_blocks_stop(&running, None));
+        assert!(!owner_blocks_stop(&running, reused));
+        assert!(!owner_blocks_stop(&ProcessOwner::Absent, start));
+        assert!(matches!(
+            observe_owner(std::process::id()),
+            ProcessOwner::Running(_)
+        ));
+    }
+
+    fn tagged_sleep(markers: &[(&str, &Path)]) -> std::process::Child {
+        use std::os::unix::process::CommandExt;
+        let mut command = std::process::Command::new("/usr/bin/python3");
+        command
+            .args(["-c", "import time; time.sleep(300)"])
+            .env_clear()
+            .process_group(0);
+        for (key, directory) in markers {
+            command.env(key, crate::runtimes::process::owner_marker(directory));
+        }
+        command.spawn().unwrap()
+    }
+
+    fn visible(key: &str, directory: &Path, child: &std::process::Child) -> bool {
+        (0..40).any(|_| {
+            let found = crate::runtimes::headless::discovered_process_ids(key, directory)
+                .is_ok_and(|pids| pids.contains(&child.id()));
+            if !found {
+                std::thread::sleep(Duration::from_millis(100));
+            }
+            found
+        })
+    }
+
+    #[test]
+    fn retired_session_cleanup_preserves_another_session_in_the_same_worktree() {
+        let base = std::env::temp_dir().join(format!("suplex-retired-{}", Uuid::new_v4()));
+        let worktree = base.join("worktree");
+        let retired_directory = base.join("retired-session");
+        let current_directory = base.join("current-session");
+        fs::create_dir_all(&worktree).unwrap();
+        let mut retired = tagged_sleep(&[
+            ("SUPLEX_TASK_PROCESS_OWNER", &worktree),
+            ("SUPLEX_SESSION_PROCESS_OWNER", &retired_directory),
+        ]);
+        let mut current = tagged_sleep(&[
+            ("SUPLEX_TASK_PROCESS_OWNER", &worktree),
+            ("SUPLEX_SESSION_PROCESS_OWNER", &current_directory),
+        ]);
+        let result = (|| {
+            assert!(visible(
+                "SUPLEX_SESSION_PROCESS_OWNER",
+                &retired_directory,
+                &retired
+            ));
+            crate::runtimes::headless::stop_session(&retired_directory, None)?;
+            retired.wait()?;
+            assert!(current.try_wait()?.is_none());
+            io::Result::Ok(())
+        })();
+        let _ = retired.kill();
+        let _ = retired.wait();
+        let _ = current.kill();
+        let _ = current.wait();
+        fs::remove_dir_all(base).unwrap();
+        result.unwrap();
+    }
+
+    #[test]
+    fn dispatch_recovery_stops_the_old_execution_without_stopping_its_replacement() {
+        let runtime = std::env::temp_dir().join(format!("suplex-execution-{}", Uuid::new_v4()));
+        let launch = |generation: &str| {
+            tagged_sleep(&[
+                ("SUPLEX_SESSION_PROCESS_OWNER", &runtime),
+                ("SUPLEX_EXECUTION_PROCESS_OWNER", &runtime.join(generation)),
+            ])
+        };
+        let mut old = launch("old");
+        let mut replacement = launch("replacement");
+        let result = (|| {
+            assert!(visible(
+                "SUPLEX_EXECUTION_PROCESS_OWNER",
+                &runtime.join("old"),
+                &old
+            ));
+            crate::runtimes::headless::stop_execution(&runtime, "old")?;
+            old.wait()?;
+            assert!(replacement.try_wait()?.is_none());
+            io::Result::Ok(())
+        })();
+        let _ = old.kill();
+        let _ = old.wait();
+        let _ = replacement.kill();
+        let _ = replacement.wait();
+        result.unwrap();
     }
 
     #[tokio::test]

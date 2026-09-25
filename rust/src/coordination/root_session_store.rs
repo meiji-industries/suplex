@@ -1730,6 +1730,49 @@ pub fn wake_idle_root(
     })
 }
 
+// WP3a admission sweep
+
+/// TypeScript `TaskControlStore.admitQueued()` without ids: the sweep over
+/// every ready queued task that runs from host startup on. A task whose pull
+/// request another task owns stays queued and the next sweep retries.
+pub fn admit_queued(
+    database: &mut SuplexDatabase,
+    now: DateTime<Utc>,
+) -> DatabaseResult<Vec<String>> {
+    if ready_queued_task_ids(database)?.is_empty() {
+        return Ok(Vec::new());
+    }
+    database.transaction(true, |database| {
+        let mut admitted = Vec::new();
+        for task_id in ready_queued_task_ids(database)? {
+            match repository::admit_queued(database, &task_id, now) {
+                Ok(true) => admitted.push(task_id),
+                Ok(false) => {}
+                Err(error) if error.is::<PullRequestOwned>() => {}
+                Err(error) => return Err(error),
+            }
+        }
+        Ok(admitted)
+    })
+}
+
+/// TypeScript `readyQueuedTaskIds` without a prerequisite filter.
+fn ready_queued_task_ids(database: &SuplexDatabase) -> DatabaseResult<Vec<String>> {
+    let mut statement = database.connection().prepare(
+        "SELECT t.id FROM suplex_tasks t JOIN suplex_task_controls c ON c.task_id = t.id WHERE c.status = 'queued' AND t.archived_at IS NULL ORDER BY t.created_at, t.id",
+    )?;
+    let ids = statement
+        .query_map([], |row| row.get::<_, String>(0))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    let mut ready = Vec::new();
+    for id in ids {
+        if repository::prerequisites_complete(database, &id)? {
+            ready.push(id);
+        }
+    }
+    Ok(ready)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

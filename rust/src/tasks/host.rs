@@ -1042,7 +1042,7 @@ pub fn spawn_task_host(database_path: PathBuf, artifact_root: PathBuf) -> TaskHo
                     Vec::new()
                 },
                 Some(task_id) = wake_rx.recv() => vec![task_id],
-                _ = interval.tick() => match due_task_ids(&database_path) {
+                _ = interval.tick() => match scheduled_task_ids(&database_path) {
                     Ok(ids) => ids,
                     Err(error) => { eprintln!("Task scheduling will retry: {error}"); Vec::new() },
                 },
@@ -1083,6 +1083,16 @@ pub fn spawn_task_host(database_path: PathBuf, artifact_root: PathBuf) -> TaskHo
     handle
 }
 
+/// TypeScript `TaskHost.tick`: the queue sweep admits every ready queued
+/// task on each tick, starting with the immediate first tick at startup.
+fn scheduled_task_ids(database_path: &Path) -> DatabaseResult<Vec<String>> {
+    {
+        let mut database = SuplexDatabase::open(database_path, OpenMode::ReadWrite)?;
+        root_session_store::admit_queued(&mut database, Utc::now())?;
+    }
+    due_task_ids(database_path)
+}
+
 fn due_task_ids(database_path: &Path) -> DatabaseResult<Vec<String>> {
     let database = SuplexDatabase::open(database_path, OpenMode::ReadOnly)?;
     let mut statement = database.connection().prepare(
@@ -1094,29 +1104,6 @@ fn due_task_ids(database_path: &Path) -> DatabaseResult<Vec<String>> {
             |row| row.get::<_, String>(0),
         )?
         .collect::<rusqlite::Result<Vec<_>>>()?)
-}
-
-pub async fn sweep_active_tasks(
-    database_path: &Path,
-    artifact_root: &Path,
-    codex_executable: Option<&Path>,
-    inherited_environment: &HashMap<String, String>,
-) -> DatabaseResult<()> {
-    let task_ids = due_task_ids(database_path)?;
-    for task_id in task_ids {
-        if let Err(error) = sweep_task(
-            database_path,
-            artifact_root,
-            &task_id,
-            codex_executable,
-            inherited_environment,
-        )
-        .await
-        {
-            eprintln!("Task {task_id} observation will retry: {error}");
-        }
-    }
-    Ok(())
 }
 
 async fn stop_retired_sessions(database_path: &Path, task_id: &str) -> DatabaseResult<()> {
@@ -1516,6 +1503,54 @@ mod tests {
                 .id
         };
         (base, database_path, task_id)
+    }
+
+    #[test]
+    fn scheduler_tick_admits_a_queued_task_whose_blocker_cleared() {
+        let (base, database_path, task_id) = fixture_task();
+        {
+            let database = SuplexDatabase::open(&database_path, OpenMode::ReadWrite).unwrap();
+            database.connection().execute(
+                "UPDATE suplex_task_controls SET status = 'queued', wake_at = NULL WHERE task_id = ?1",
+                [&task_id],
+            ).unwrap();
+            database.connection().execute(
+                "INSERT INTO suplex_task_pull_request_dependencies (task_id,pull_request_number,state,title,url,observed_at) VALUES (?1,7,'open','Blocker','https://github.com/owner/repo/pull/7',?2)",
+                rusqlite::params![task_id, Utc::now().to_rfc3339()],
+            ).unwrap();
+        }
+        let status = || -> String {
+            let database = SuplexDatabase::open(&database_path, OpenMode::ReadOnly).unwrap();
+            database
+                .connection()
+                .query_row(
+                    "SELECT status FROM suplex_task_controls WHERE task_id = ?1",
+                    [&task_id],
+                    |row| row.get(0),
+                )
+                .unwrap()
+        };
+        assert!(
+            !scheduled_task_ids(&database_path)
+                .unwrap()
+                .contains(&task_id)
+        );
+        assert_eq!(status(), "queued");
+        // The blocker merges out of band. No user action follows.
+        {
+            let database = SuplexDatabase::open(&database_path, OpenMode::ReadWrite).unwrap();
+            database.connection().execute(
+                "UPDATE suplex_task_pull_request_dependencies SET state = 'merged' WHERE task_id = ?1",
+                [&task_id],
+            ).unwrap();
+        }
+        assert!(
+            scheduled_task_ids(&database_path)
+                .unwrap()
+                .contains(&task_id)
+        );
+        assert_eq!(status(), "active");
+        fs::remove_dir_all(base).unwrap();
     }
 
     #[tokio::test]

@@ -27,15 +27,15 @@ export function ProjectRepositoryConnection({ projectId }: { projectId: string }
   const connected = result?.status === "connected";
   return <div className="w-full space-y-2 text-xs sm:w-80">
     <div className="flex items-center justify-between gap-3">
-      <span role="status" className="inline-flex items-center gap-2">
-        {state.kind === "checking" ? <><Spinner />Check in progress</> : <><StatusLight level={connected ? "green" : "red"} label={connected ? "Connected" : "Disconnected"} />{connected ? "Connected" : "Disconnected"}</>}
-      </span>
       <div className="flex items-center gap-2">
+        <span role="status" className="inline-flex items-center gap-2">
+          {state.kind === "checking" ? <><Spinner />Check in progress</> : <><StatusLight level={connected ? "green" : "red"} label={connected ? "Connected" : "Disconnected"} />{connected ? "Connected" : "Disconnected"}</>}
+        </span>
         <Button type="button" size="icon-xs" variant="ghost" aria-label="Check again" title="Check again" disabled={state.kind === "checking"} onClick={() => void check()}><RefreshCw /></Button>
-        {state.kind !== "checking" && !connected ? result?.method === "cli"
-          ? <Button type="button" size="xs" onClick={() => void check()}>Connect</Button>
-          : <GithubDeviceSignIn onConnected={check} label="Connect" primary /> : null}
       </div>
+      {state.kind !== "checking" && !connected ? result?.method === "cli"
+        ? <Button type="button" size="xs" onClick={() => void check()}>Connect</Button>
+        : <GithubDeviceSignIn onConnected={check} label="Connect" primary /> : null}
     </div>
     {state.kind === "failed" ? <p role="alert">Repository check is not available.</p> : null}
     {result && (result.status === "needs_repair" || result.status === "unavailable") ? <p>{result.message}</p> : null}

@@ -12,6 +12,13 @@ use tokio::net::TcpListener;
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let command = std::env::args().skip(1).collect::<Vec<_>>();
+    if command == ["github-store-credential"] {
+        if let Err(error) = suplex::integrations::github::store_device_credential_from_stdin() {
+            eprintln!("GitHub credential storage failed: {error}");
+            std::process::exit(1);
+        }
+        return Ok(());
+    }
     if command == ["mcp", "advisor"] {
         return suplex::coordination::advisor_bridge::serve_from_environment().await;
     }

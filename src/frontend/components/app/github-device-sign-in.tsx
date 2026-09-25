@@ -114,7 +114,6 @@ export function GithubDeviceSignIn({ onConnected, label, primary = false }: { on
               ? <Button size="lg" className="rounded-md bg-green-700 text-white hover:bg-green-800" nativeButton={false} render={<a href={flow.verificationUri} target="_blank" rel="noreferrer" />} onClick={() => setWaiting(true)}>Continue to Github</Button>
               : <Button type="button" size="lg" className="rounded-md" onClick={() => void copy()}>Copy the code</Button>}
           </div>
-          <p className="text-muted-foreground">Suplex waits for GitHub. This code expires at {new Date(flow.expiresAt).toLocaleTimeString()}.</p>
           {!nextPollAt ? <Button type="button" size="xs" variant="outline" onClick={() => setNextPollAt(new Date().toISOString())}>Retry</Button> : null}
         </> : busy ? <p role="status">Suplex starts sign-in</p> : <Button type="button" size="xs" variant="outline" onClick={() => void start()}>Retry</Button>}
         {message ? <p role="status" className="text-muted-foreground">{message}</p> : null}

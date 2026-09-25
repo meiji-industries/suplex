@@ -105,24 +105,37 @@ async fn poll(State(state): State<AppState>, headers: HeaderMap, body: Bytes) ->
     // The owned operation keeps polling and storing a granted token even if
     // the HTTP waiter disconnects after admission.
     let result = tokio::spawn(poll_and_store(device, flow_id, |grant| async move {
-        github::save_device_grant(&grant).await.map_err(|_| ())
+        github::save_device_grant(&grant).await.map_err(|error| {
+            eprintln!(
+                "{}",
+                json!({"event": "github.credential.save_failed", "error": error.to_string()})
+            );
+        })
     }))
     .await;
     let response = match result {
         Ok(Ok(result)) => Json(result).into_response(),
+        Ok(Err(error)) if error == "GitHub credential store failed" => auth::error(
+            StatusCode::BAD_GATEWAY,
+            "GitHub authorized sign-in, but Suplex could not save the credential. Allow Suplex access in the macOS Keychain prompt, then try again.",
+        ),
         _ => auth::error(StatusCode::BAD_GATEWAY, "GitHub sign-in is unavailable"),
     };
     no_store(response, cookies)
 }
 
-async fn poll_and_store<F, Fut>(device: Arc<DeviceAuth>, flow_id: Uuid, save: F) -> Result<Poll, ()>
+async fn poll_and_store<F, Fut>(
+    device: Arc<DeviceAuth>,
+    flow_id: Uuid,
+    save: F,
+) -> Result<Poll, String>
 where
     F: FnOnce(Granted) -> Fut,
     Fut: Future<Output = Result<(), ()>>,
 {
     let result = device.poll(flow_id, save).await;
     // A restart or lost response must not hide an already stored, valid grant.
-    if (result.is_err() || matches!(&result, Ok(Poll::Expired)))
+    if matches!(&result, Ok(Poll::Expired))
         && let Ok(access) = github::Access::load().await
         && access.token().is_some()
         && let Ok(login) = access.current_user_login().await
@@ -131,6 +144,7 @@ where
     }
     result.map_err(|error| {
         eprintln!("{}", json!({ "event": "github.device.poll_failed", "flowId": flow_id, "error": error.to_string() }));
+        error.to_string()
     })
 }
 

@@ -3,7 +3,6 @@
 #[cfg(target_os = "macos")]
 use std::sync::OnceLock;
 use std::{
-    env,
     error::Error,
     fs, io,
     path::{Path, PathBuf},
@@ -59,7 +58,7 @@ fn credential_lock_path() -> AccessResult<PathBuf> {
         PathBuf::from(std::ffi::OsStr::from_bytes(bytes))
     };
     #[cfg(not(unix))]
-    let home = PathBuf::from(env::var_os("HOME").ok_or("Home directory is unavailable")?);
+    let home = PathBuf::from(std::env::var_os("HOME").ok_or("Home directory is unavailable")?);
     Ok(home.join("Library/Caches/Suplex/github-credential.lock"))
 }
 
@@ -99,8 +98,41 @@ pub async fn save_device_grant(grant: &super::github_device::Granted) -> AccessR
             .map(|seconds| now.saturating_add(seconds)),
         login: grant.login.clone(),
     };
-    write_own_credential(&stored)?;
+    // Keychain interaction policy is process-wide. Explicit sign-in may prompt,
+    // while automatic reads and refreshes in the server must remain noninteractive.
+    use tokio::io::AsyncWriteExt;
+    let mut child = tokio::process::Command::new(std::env::current_exe()?)
+        .arg("github-store-credential")
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::piped())
+        .kill_on_drop(true)
+        .spawn()?;
+    let mut input = child
+        .stdin
+        .take()
+        .ok_or("Credential input is unavailable")?;
+    input.write_all(&serde_json::to_vec(&stored)?).await?;
+    drop(input);
+    let output = tokio::time::timeout(
+        std::time::Duration::from_secs(120),
+        child.wait_with_output(),
+    )
+    .await??;
+    if !output.status.success() {
+        return Err(
+            io::Error::other(String::from_utf8_lossy(&output.stderr).trim().to_owned()).into(),
+        );
+    }
     Ok(())
+}
+
+/// Internal stdin-only helper: never put credentials in arguments or output.
+pub fn store_device_credential_from_stdin() -> AccessResult<()> {
+    use std::io::Read;
+    let stored: StoredCredential = serde_json::from_reader(std::io::stdin().take(65_536))
+        .map_err(|_| io::Error::other("Invalid credential input"))?;
+    write_own_credential(&stored)
 }
 
 fn valid_expiry_pair(
@@ -122,13 +154,12 @@ fn valid_expiry_pair(
 }
 
 fn read_own_credential() -> AccessResult<Option<StoredCredential>> {
-    let raw = match keychain_password(SUPLEX_SERVICE, SUPLEX_ACCOUNT) {
-        Ok(raw) => raw,
-        Err(_) => return Ok(None),
-    };
+    let raw = keychain_password(SUPLEX_SERVICE, SUPLEX_ACCOUNT)?;
     let Some(raw) = raw else { return Ok(None) };
     if raw.starts_with('{') {
-        return Ok(serde_json::from_str(&raw).ok());
+        return serde_json::from_str(&raw)
+            .map(Some)
+            .map_err(|_| io::Error::other("Stored GitHub credential is invalid").into());
     }
     Ok(Some(StoredCredential {
         access_token: raw,
@@ -275,18 +306,6 @@ impl CredentialSource {
 }
 
 #[derive(Deserialize)]
-struct GhHosts {
-    #[serde(rename = "github.com")]
-    github: Option<GhHost>,
-}
-
-#[derive(Deserialize)]
-struct GhHost {
-    user: Option<String>,
-    oauth_token: Option<String>,
-}
-
-#[derive(Deserialize)]
 struct Branch {
     commit: BranchCommit,
 }
@@ -299,34 +318,6 @@ struct BranchCommit {
 #[derive(Deserialize)]
 struct CurrentUser {
     login: String,
-}
-
-fn gh_config_path() -> Option<PathBuf> {
-    if let Some(directory) = env::var_os("GH_CONFIG_DIR") {
-        return Some(PathBuf::from(directory).join("hosts.yml"));
-    }
-    if let Some(directory) = env::var_os("XDG_CONFIG_HOME") {
-        return Some(PathBuf::from(directory).join("gh/hosts.yml"));
-    }
-    env::var_os("HOME").map(|home| PathBuf::from(home).join(".config/gh/hosts.yml"))
-}
-
-fn gh_host() -> AccessResult<Option<GhHost>> {
-    let Some(path) = gh_config_path() else {
-        return Ok(None);
-    };
-    let content = match fs::read_to_string(path) {
-        Ok(content) => content,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => return Err(error.into()),
-    };
-    let hosts: GhHosts = serde_saphyr::from_str(&content).map_err(|_| {
-        io::Error::new(
-            io::ErrorKind::InvalidData,
-            "GitHub account config is invalid",
-        )
-    })?;
-    Ok(hosts.github)
 }
 
 #[cfg(target_os = "macos")]
@@ -356,17 +347,31 @@ fn keychain_password(service: &str, account: &str) -> AccessResult<Option<String
     }
 }
 
-fn installed_gh_token() -> AccessResult<Option<String>> {
-    let host = gh_host()?;
-    if let Some(token) = host.as_ref().and_then(|host| host.oauth_token.as_ref()) {
-        return Ok(Some(token.clone()));
+async fn installed_gh_token() -> AccessResult<Option<String>> {
+    read_gh_token(tokio::process::Command::new("gh")).await
+}
+
+async fn read_gh_token(mut command: tokio::process::Command) -> AccessResult<Option<String>> {
+    command
+        .args(["auth", "token", "--hostname", HOST])
+        .env_remove("GH_TOKEN")
+        .env_remove("GITHUB_TOKEN")
+        .env("GH_PROMPT_DISABLED", "1")
+        .env("GH_NO_UPDATE_NOTIFIER", "1")
+        .stdin(std::process::Stdio::null())
+        .kill_on_drop(true);
+    let output = tokio::time::timeout(std::time::Duration::from_secs(5), command.output()).await?;
+    let output = match output {
+        Ok(output) => output,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
+        Err(error) => return Err(error.into()),
+    };
+    if !output.status.success() {
+        return Ok(None);
     }
-    if let Some(user) = host.as_ref().and_then(|host| host.user.as_deref())
-        && let Ok(Some(token)) = keychain_password("gh:github.com", user)
-    {
-        return Ok(Some(token));
-    }
-    Ok(keychain_password("gh:github.com", "").ok().flatten())
+    let token = String::from_utf8(output.stdout)
+        .map_err(|_| io::Error::other("GitHub CLI returned an invalid credential"))?;
+    Ok((!token.trim().is_empty()).then(|| token.trim().to_owned()))
 }
 
 impl Access {
@@ -374,7 +379,7 @@ impl Access {
         // The explicit interop build can use an isolated loopback API without
         // consulting a user's keychain.
         #[cfg(feature = "github-test-endpoint")]
-        if let Ok(base_uri) = env::var("SUPLEX_RUST_TEST_GITHUB_API") {
+        if let Ok(base_uri) = std::env::var("SUPLEX_RUST_TEST_GITHUB_API") {
             let parsed = url::Url::parse(&base_uri)?;
             if parsed.scheme() != "http"
                 || !matches!(parsed.host_str(), Some("127.0.0.1" | "localhost" | "[::1]"))
@@ -388,7 +393,10 @@ impl Access {
             return Self::for_api(&base_uri, None);
         }
         disable_keychain_interaction()?;
-        let stored = read_own_credential()?;
+        let (stored, read_error) = match read_own_credential() {
+            Ok(stored) => (stored, None),
+            Err(error) => (None, Some(error)),
+        };
         let (own, refresh_failed) = if let Some(stored) = stored {
             if usable(&stored, Utc::now().timestamp()) {
                 (Some(stored), false)
@@ -418,7 +426,12 @@ impl Access {
         let (token, source) = if let Some(stored) = own {
             (Some(stored.access_token), CredentialSource::Suplex)
         } else {
-            let token = installed_gh_token()?;
+            let token = installed_gh_token().await?;
+            if token.is_none()
+                && let Some(error) = read_error
+            {
+                return Err(error);
+            }
             if refresh_failed && token.is_none() {
                 return Err(io::Error::other("GitHub credential refresh failed").into());
             }
@@ -913,13 +926,19 @@ mod tests {
         assert!(!server.await.unwrap());
     }
 
-    #[test]
-    fn gh_hosts_reads_only_active_user() {
-        let hosts: GhHosts = serde_saphyr::from_str(
-            "github.com:\n  user: active-name\n  users:\n    other-name: {}\n",
-        )
-        .unwrap();
-        assert_eq!(hosts.github.unwrap().user.as_deref(), Some("active-name"));
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn cli_credential_uses_saved_account_and_ignores_failed_output() {
+        let mut command = tokio::process::Command::new("sh");
+        command.args(["-c", "test -z \"$GH_TOKEN$GITHUB_TOKEN\" && test \"$GH_PROMPT_DISABLED\" = 1 && printf 'fixture-token\\n'"])
+            .env("GH_TOKEN", "wrong-account").env("GITHUB_TOKEN", "wrong-account");
+        assert_eq!(
+            read_gh_token(command).await.unwrap().as_deref(),
+            Some("fixture-token")
+        );
+        let mut command = tokio::process::Command::new("sh");
+        command.args(["-c", "printf 'do-not-use'; exit 1"]);
+        assert!(read_gh_token(command).await.unwrap().is_none());
     }
 
     #[cfg(target_os = "macos")]

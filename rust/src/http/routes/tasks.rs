@@ -101,6 +101,38 @@ pub fn router() -> Router<AppState> {
             "/api/tasks/{task_id}/unarchive",
             axum::routing::post(unarchive_pending),
         )
+        .route("/api/tasks/{task_id}/refresh", axum::routing::post(refresh))
+}
+
+/// TypeScript refresh: read the task, then wake the host to observe it again.
+async fn refresh(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+) -> Response {
+    if let Err(response) = validated_task_id(&id) {
+        return *response;
+    }
+    if !session::csrf_allowed(&state.session_config, &headers, "POST", false) {
+        return auth::error(StatusCode::FORBIDDEN, "request_origin_invalid");
+    }
+    let (user_id, cookies) = match authorize(&state, &headers) {
+        Ok(value) => value,
+        Err(response) => return *response,
+    };
+    let result = state.with_database(|database| -> Result<_, Box<dyn Error>> {
+        commands::user_task_configuration(database, &user_id, &id)?;
+        task_response::get(database, &id)?.ok_or_else(|| "refreshed task disappeared".into())
+    });
+    match result {
+        Ok(task) => {
+            if let Some(host) = &state.task_host {
+                host.wake(id);
+            }
+            with_cookies(Json(task).into_response(), cookies)
+        }
+        Err(error) => with_cookies(service_error(error), cookies),
+    }
 }
 
 async fn unarchive_pending(
@@ -543,12 +575,7 @@ async fn create(
             cookies,
         );
     };
-    if request.workflow != "standard"
-        || request.source.is_some()
-        || request.issue.as_ref().is_some_and(|issue| issue.is_some())
-        || !request.blocked_by_pull_requests.is_empty()
-        || request.delivery_target != "local_worktree"
-    {
+    if request.workflow != "standard" || !request.blocked_by_pull_requests.is_empty() {
         return with_cookies(auth::not_ported(), cookies);
     }
     if project.repository.is_none() {
@@ -618,6 +645,15 @@ async fn finish_admitted_create(state: AppState, admitted: AdmittedCreate) -> Re
         profiles,
         decoded_images,
     } = admitted;
+    let source = request.source.as_ref().map(serde_json::to_value).transpose();
+    let issue = request.issue.as_ref().map(|issue| issue.as_ref().map(serde_json::to_value).transpose()).transpose();
+    let (Ok(source), Ok(issue)) = (source, issue) else {
+        return with_cookies(auth::error(StatusCode::INTERNAL_SERVER_ERROR, "Internal server error"), cookies);
+    };
+    let pinned = match crate::tasks::sources::creation_source(&project, &request.title, &request.description, source.as_ref(), issue.as_ref().map(Option::as_ref)).await {
+        Ok(pinned) => pinned,
+        Err(error) => return with_cookies(super::projects::source_error(error), cookies),
+    };
     let repository_path = PathBuf::from(&project.repository_path);
     let base_branch = project.base_branch.clone();
     let host = match project
@@ -646,7 +682,7 @@ async fn finish_admitted_create(state: AppState, admitted: AdmittedCreate) -> Re
     let now = Utc::now();
     let host = state.task_host.clone();
     let written = state.with_database(|database| -> Result<_, Box<dyn Error>> {
-        let prepared = commands::prepare_local_user_task(
+        let mut prepared = commands::prepare_local_user_task(
             &company_id,
             &user_id,
             &project,
@@ -655,6 +691,7 @@ async fn finish_admitted_create(state: AppState, admitted: AdmittedCreate) -> Re
             &base_sha,
             now,
         )?;
+        crate::tasks::sources::apply(&mut prepared, pinned);
         let artifact_root = state
             .artifact_root
             .as_deref()
@@ -1042,15 +1079,32 @@ async fn set_issue(
         Ok(value) => value,
         Err(response) => return *response,
     };
+    let resolved = match &request.issue {
+        None => None,
+        Some(issue) => {
+            let read = async {
+                let configuration = state.with_database(|database| {
+                    commands::user_task_configuration(database, &user_id, &id)
+                })?;
+                let tracker = crate::tasks::issue_context::task_tracker(&configuration)?;
+                let tracker = crate::integrations::issue_tracker::IssueTracker::new(&tracker)
+                    .await
+                    .map_err(|error| error.to_string())?;
+                let context = tracker
+                    .read(&serde_json::to_value(issue)?)
+                    .await
+                    .map_err(|error| error.to_string())?;
+                Ok::<_, Box<dyn Error>>(context["issue"].clone())
+            };
+            match read.await {
+                Ok(issue) => Some(issue),
+                Err(error) => return with_cookies(service_error(error), cookies),
+            }
+        }
+    };
     let result = state.with_database(
         |database| -> Result<task_response::TaskResponse, Box<dyn Error>> {
-            commands::set_user_task_issue(
-                database,
-                &user_id,
-                &id,
-                request.issue.as_ref(),
-                Utc::now(),
-            )?;
+            commands::set_user_task_issue(database, &user_id, &id, resolved.as_ref(), Utc::now())?;
             task_response::get(database, &id)?.ok_or_else(|| "linked task disappeared".into())
         },
     );

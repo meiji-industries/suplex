@@ -14,7 +14,7 @@ use crate::{
         projects::ProjectProviderPolicy,
         task_answers::{AnswerBody, LimitDecisionBody, TaskLimitDecision},
         tasks::{
-            IssueAssociation, TaskAgentSelectionBody, TaskContinueDeliveryBody,
+            TaskAgentSelectionBody, TaskContinueDeliveryBody,
             TaskCoordinatorReplacementBody, TaskCreateBody, TaskDependenciesBody, TaskDetailsBody,
             TaskNoteBody, TaskRenameBody, TaskWorkerReplacementBody,
         },
@@ -694,9 +694,52 @@ pub fn continue_user_delivery(
                 "Only delivered pull request tasks can continue delivery.",
             ));
         }
-        Err(Box::new(TaskFailure::not_ported(
-            "Continuing pull request delivery is not ported",
-        )))
+        repository::assert_task_pull_requests_available(database, task_id)
+            .map_err(|error| conflict(&error.to_string()))?;
+        let time = timestamp(Utc::now());
+        let rows = root_session_store::root_observation_rows(database, task_id)?;
+        let mut state = rows.control["workflowState"].clone();
+        let mut history = state["deliveryHistory"].as_array().cloned().unwrap_or_default();
+        history.push(json!({"resumedAt": time, "acceptedDelivery": state["acceptedDelivery"], "completion": state["completion"]}));
+        state["acceptedDelivery"] = Value::Null;
+        state["completion"] = Value::Null;
+        state["deliveryWait"] = Value::Null;
+        state["followUp"] = json!(true);
+        state["deliveryHistory"] = Value::Array(history);
+        database.connection().execute(
+            "UPDATE suplex_task_controls SET workflow_state_json = ?1, delivery_target = ?2, status = 'active', wake_at = ?3, updated_at = ?3 WHERE task_id = ?4 AND status = 'delivered'",
+            params![crate::shared::js_json::stringify(&state), request.delivery_target, time, task_id],
+        )?;
+        if let Some(root_id) = rows.control["rootSessionId"].as_str() {
+            database.connection().execute(
+                "UPDATE suplex_task_sessions SET is_current = 1, lifecycle = 'reserved', stop_requested_at = NULL, stopped_at = NULL, updated_at = ?1 WHERE id = ?2 AND task_id = ?3 AND kind = 'root'",
+                params![time, root_id, task_id],
+            )?;
+        }
+        let existing = root_session_store::current_root(database, task_id)?;
+        let root = match existing {
+            Some(root) => root,
+            None => {
+                let root = root_session_store::reserve_root(database, task_id, Utc::now())?;
+                let rows = root_session_store::root_observation_rows(database, task_id)?;
+                let initial = root_prompts::initial_coordinator_prompt(&rows.control, &rows.context, &rows.dependencies)
+                    .map_err(|message| Box::new(TaskFailure::new(message, 409)) as Box<dyn Error>)?;
+                root_session_store::ensure_initial_prompt(database, &root, &initial, Utc::now())?;
+                root
+            }
+        };
+        let prompt = crate::shared::js_json::stringify(&json!({
+            "question": format!("The user changed the delivery target from {previous_target} to {}. Continue this task toward the NEW target {}. Preserve the existing branch, pull request, sessions, and useful review evidence. Inspect current Git and GitHub facts, repair conflicts and failing checks, and request delivery explicitly when the new target is satisfied. Earlier completion is history.", request.delivery_target, request.delivery_target),
+            "answer": format!("Continue delivery to {}.", request.delivery_target),
+        }));
+        database.connection().execute(
+            "INSERT INTO suplex_task_turns (id, task_id, session_id, generation, prompt_hash, prompt_text, status, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'pending_prompt', ?7, ?7)",
+            params![root_session_store::new_turn_id(Utc::now())?, task_id, root.id, root.generation, format!("{:x}", Sha256::digest(prompt.as_bytes())), prompt, time],
+        )?;
+        root_session_store::observe_lifecycle(database, task_id)?;
+        let id = task_id.to_owned();
+        database.after_commit(move || wake(id));
+        Ok(repository::task_by_id(database, task_id)?.unwrap_or(task))
     })
 }
 
@@ -1053,26 +1096,35 @@ pub fn set_user_task_dependencies(
     Ok(task)
 }
 
-/// Clear the task's issue link. Linking an issue first reads it from the issue
-/// tracker, which is not ported.
+/// The configuration of a task the user can read, for provider reads outside a transaction.
+pub fn user_task_configuration(
+    database: &SuplexDatabase,
+    actor_user_id: &str,
+    task_id: &str,
+) -> DatabaseResult<Value> {
+    require_user_task(database, actor_user_id, task_id)?;
+    let raw: String = database.connection().query_row(
+        "SELECT configuration_json FROM suplex_tasks WHERE id = ?1",
+        [task_id],
+        |row| row.get(0),
+    )?;
+    Ok(serde_json::from_str(&raw)?)
+}
+
+/// TypeScript `setTaskIssue` after the tracker read: store the tracker's
+/// current issue, and drop captured context while native work has not started.
 pub fn set_user_task_issue(
     database: &mut SuplexDatabase,
     actor_user_id: &str,
     task_id: &str,
-    issue: Option<&IssueAssociation>,
+    resolved: Option<&Value>,
     now: DateTime<Utc>,
 ) -> DatabaseResult<TaskRecord> {
-    require_user_task(database, actor_user_id, task_id)?;
-    if issue.is_some() {
-        return Err(Box::new(TaskFailure::not_ported(
-            "Issue tracker reads are not ported",
-        )));
-    }
     database.transaction(true, |database| {
         let current = require_user_task(database, actor_user_id, task_id)?;
         database.connection().execute(
-            "UPDATE suplex_tasks SET issue_json = NULL, updated_at = ?1 WHERE id = ?2",
-            params![timestamp(now), task_id],
+            "UPDATE suplex_tasks SET issue_json = ?1, updated_at = ?2 WHERE id = ?3",
+            params![resolved.map(crate::shared::js_json::stringify), timestamp(now), task_id],
         )?;
         let started: bool = database.connection().query_row(
             "SELECT EXISTS(SELECT 1 FROM suplex_task_sessions WHERE task_id = ?1 AND native_session_id IS NOT NULL UNION ALL SELECT 1 FROM suplex_task_turns WHERE task_id = ?1 AND status IN ('prompted', 'unknown', 'completed'))",
@@ -1734,7 +1786,7 @@ mod tests {
     }
 
     #[test]
-    fn issue_link_clears_locally_and_reports_tracker_reads_as_not_ported() {
+    fn issue_link_stores_the_tracker_issue_and_clears_unstarted_context() {
         let (filename, mut database, user, prepared) = command_fixture();
         let now = Utc::now();
         let issue = json!({"kind":"github","repository":"owner/repo","number":12,"id":"123","key":"GH-12","title":"Issue","url":"https://github.com/owner/repo/issues/12"});
@@ -1752,13 +1804,14 @@ mod tests {
                 [&task.id],
             )
             .unwrap();
-        let association: IssueAssociation = serde_json::from_value(issue).unwrap();
-        let not_ported =
-            set_user_task_issue(&mut database, &user, &task.id, Some(&association), now)
-                .unwrap_err()
-                .downcast::<TaskFailure>()
-                .unwrap();
-        assert_eq!(not_ported.code, "experimental_not_ported");
+        let mut resolved = issue.clone();
+        resolved["title"] = json!("Current title");
+        set_user_task_issue(&mut database, &user, &task.id, Some(&resolved), now).unwrap();
+        let stored: String = database
+            .connection()
+            .query_row("SELECT issue_json FROM suplex_tasks WHERE id = ?1", [&task.id], |row| row.get(0))
+            .unwrap();
+        assert_eq!(serde_json::from_str::<Value>(&stored).unwrap()["title"], "Current title");
         assert!(set_user_task_issue(&mut database, "missing-user", &task.id, None, now).is_err());
         set_user_task_issue(&mut database, &user, &task.id, None, now).unwrap();
         let (issue_json, context): (Option<String>, Option<String>) = database

@@ -124,16 +124,6 @@ const ROUTES: &[(Method, &str, Access)] = &[
         "/api/oauth/consent/{request_id}/deny",
         Authenticated,
     ),
-    (
-        Method::GET,
-        "/api/projects/{project_id}/issues",
-        Authenticated,
-    ),
-    (
-        Method::GET,
-        "/api/projects/{project_id}/task-sources",
-        Authenticated,
-    ),
     (Method::POST, "/api/system/client-lifecycle", Authenticated),
     (
         Method::PATCH,
@@ -145,13 +135,11 @@ const ROUTES: &[(Method, &str, Access)] = &[
         "/api/task-templates/{template_id}",
         Authenticated,
     ),
-    (Method::GET, "/api/tasks/{task_id}/checks", Authenticated),
     (
         Method::GET,
         "/api/tasks/{task_id}/pane/{role}/terminal",
         Authenticated,
     ),
-    (Method::POST, "/api/tasks/{task_id}/refresh", Authenticated),
     (
         Method::POST,
         "/api/tasks/{task_id}/save-as-template",

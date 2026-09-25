@@ -68,7 +68,7 @@ The table lists all 238 backend TypeScript modules present at the baseline, incl
 | [http/routes/auth.ts](../src/http/routes/auth.ts) | not started | Partial: status/current-user/sign-out/profile PATCH pass live checks; paired raw-response and validation-order tests pass. Full account operations and ceremonies remain incomplete |
 | [http/routes/authenticated.ts](../src/http/routes/authenticated.ts) | not started | |
 | [http/routes/avatars.ts](../src/http/routes/avatars.ts) | not started | |
-| [http/routes/companies.ts](../src/http/routes/companies.ts) | not started | Partial: company list/get and membership visibility pass isolated live checks; protected mutation routes remain 501 |
+| [http/routes/companies.ts](../src/http/routes/companies.ts) | ported | Read/create/rename/issue-code/status/membership operations implemented with authorization and validation-order checks; focused Rust/TS and live raw-response probes pass. Lossless HTTP JSON and shared response-corpus coverage remain incomplete |
 | [http/routes/discovery.ts](../src/http/routes/discovery.ts) | not started | |
 | [http/routes/external-agent-administration.ts](../src/http/routes/external-agent-administration.ts) | not started | |
 | [http/routes/github-triggers.ts](../src/http/routes/github-triggers.ts) | not started | |
@@ -90,7 +90,7 @@ The table lists all 238 backend TypeScript modules present at the baseline, incl
 | [identity/auth-repository.ts](../src/identity/auth-repository.ts) | not started | |
 | [identity/auth-schema.ts](../src/identity/auth-schema.ts) | not started | |
 | [identity/auth-webauthn.ts](../src/identity/auth-webauthn.ts) | not started | Partial adapter and [10-algorithm spike evidence](rust-spikes/webauthn.md), including synthetic packed and FIDO U2F attestation; Apple, Android Key, TPM, SafetyNet, stored-credential roundtrips, and full ceremony/HTTP integration remain incomplete |
-| [identity/auth.ts](../src/identity/auth.ts) | not started | Partial: current/legacy sessions, development administrator, sign-out, rollover, and current-user profile/audit updates; focused identity and paired route tests pass. Full identity operations remain incomplete |
+| [identity/auth.ts](../src/identity/auth.ts) | not started | Partial: sessions, development administrator, current-user profile/audit updates, and company read/mutation/membership operations; focused and live checks pass. Account administration and ceremonies remain incomplete |
 | [identity/avatar-kinds.ts](../src/identity/avatar-kinds.ts) | not started | |
 | [identity/avatars.ts](../src/identity/avatars.ts) | not started | |
 | [identity/external-agents.ts](../src/identity/external-agents.ts) | not started | |

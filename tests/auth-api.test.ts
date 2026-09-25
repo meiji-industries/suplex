@@ -49,6 +49,12 @@ function sessionCookie(response: { headers: OutgoingHttpHeaders }): string {
   return "";
 }
 
+function normalizeCompanyBody(body: string): string {
+  return body
+    .replace(/company_[a-f0-9]{32}/g, "company_ID")
+    .replace(/"createdAt":"[^"]+"/, '"createdAt":"TIMESTAMP"');
+}
+
 test("API enrollment and authorization fail closed before company details are returned", async () => {
   const root = await mkdtemp(join(tmpdir(), "suplex-auth-api-test-"));
   const database = new SuplexDatabase(join(root, "suplex.sqlite"));
@@ -68,6 +74,10 @@ test("API enrollment and authorization fail closed before company details are re
     const textProfile = await app.inject({ method: "PATCH", url: "/api/auth/me", headers: { cookie: "sid_v1=stale", origin: "https://wrong.example", "content-type": "text/plain" }, payload: "hello" });
     expect(textProfile.statusCode).toBe(400);
     expect(textProfile.json()).toEqual({ error: "Invalid request", findings: [{ code: "invalid-invalid_type", field: ".", message: "Request value is invalid" }] });
+    const malformedCompany = await app.inject({ method: "POST", url: "/api/admin/companies", headers: { cookie: "sid_v1=stale", origin: "https://wrong.example" }, payload: { name: 42 } });
+    expect(malformedCompany.statusCode).toBe(400);
+    const validCompanyWrongOrigin = await app.inject({ method: "POST", url: "/api/admin/companies", headers: { cookie: "sid_v1=stale", origin: "https://wrong.example" }, payload: { name: "Company" } });
+    expect(validCompanyWrongOrigin.statusCode).toBe(403);
     const invitation = auth.ensureBootstrapInvitation()!;
     expect((await app.inject({ method: "GET", url: "/api/auth/status" })).json()).toMatchObject({ required: true, authenticated: false });
     const options = await app.inject({ method: "POST", url: "/api/auth/bootstrap/options", payload: { token: invitation.token } });
@@ -84,14 +94,21 @@ test("API enrollment and authorization fail closed before company details are re
     expect((await app.inject({ method: "PATCH", url: "/api/auth/me", headers: { cookie: adminCookie, origin: config.reachableAddress }, payload: { username: "!" } })).json()).toEqual({ error: "Username must be 2–64 characters and use letters, numbers, dots, hyphens, underscores, or @" });
 
     const companyAResponse = await app.inject({ method: "POST", url: "/api/admin/companies", headers: { cookie: adminCookie, origin: config.reachableAddress }, payload: { name: "API A" } });
+    const createdAt = (companyAResponse.json() as { createdAt: string }).createdAt;
+    expect(createdAt).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
+    expect(normalizeCompanyBody(companyAResponse.body)).toBe('{"id":"company_ID","name":"API A","status":"active","issueCode":null,"createdAt":"TIMESTAMP"}');
     const companyA = companyAResponse.json() as { id: string; issueCode: string | null };
     expect(companyA).toMatchObject({ issueCode: null });
     const companyB = (await app.inject({ method: "POST", url: "/api/admin/companies", headers: { cookie: adminCookie, origin: config.reachableAddress }, payload: { name: "API B" } })).json() as { id: string };
     const renamed = await app.inject({ method: "PATCH", url: `/api/admin/companies/${companyA.id}`, headers: { cookie: adminCookie, origin: config.reachableAddress }, payload: { name: "  API A renamed  " } });
     expect(renamed.statusCode).toBe(200);
+    expect((renamed.json() as { createdAt: string }).createdAt).toBe(createdAt);
+    expect(normalizeCompanyBody(renamed.body)).toBe('{"id":"company_ID","name":"API A renamed","status":"active","issueCode":null,"createdAt":"TIMESTAMP"}');
     expect(renamed.json()).toMatchObject({ id: companyA.id, name: "API A renamed", status: "active" });
     const issueCode = await app.inject({ method: "PATCH", url: `/api/admin/companies/${companyA.id}/issue-code`, headers: { cookie: adminCookie, origin: config.reachableAddress }, payload: { issueCode: "  ad4m " } });
     expect(issueCode.statusCode).toBe(200);
+    expect((issueCode.json() as { createdAt: string }).createdAt).toBe(createdAt);
+    expect(normalizeCompanyBody(issueCode.body)).toBe('{"id":"company_ID","name":"API A renamed","status":"active","issueCode":"AD4M","createdAt":"TIMESTAMP"}');
     expect(issueCode.json()).toMatchObject({ id: companyA.id, issueCode: "AD4M" });
     expect((await app.inject({ method: "PATCH", url: `/api/admin/companies/${companyA.id}/issue-code`, headers: { cookie: adminCookie, origin: config.reachableAddress }, payload: { issueCode: "A" } })).statusCode).toBe(400);
     expect((await app.inject({ method: "POST", url: `/api/admin/companies/${companyA.id}/status/paused`, headers: { cookie: adminCookie, origin: config.reachableAddress }, payload: {} })).statusCode).toBe(200);

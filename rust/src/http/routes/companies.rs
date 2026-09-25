@@ -1,19 +1,40 @@
 use axum::{
     Json, Router,
+    body::Bytes,
     extract::{Path, State},
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     routing::{get, post},
 };
 use chrono::Utc;
-use serde_json::json;
+use serde::Serialize;
+use serde_json::{Value, json};
 
-use crate::identity::{auth::AuthUser, companies};
+use crate::{
+    http::contracts,
+    identity::{auth::AuthUser, companies},
+};
 
 use super::{
     super::{AppState, session},
     auth as auth_routes,
 };
+
+#[derive(Serialize)]
+struct CompanyList {
+    companies: Vec<companies::Company>,
+}
+
+fn validated_params(contract: &str, params: Value) -> Result<Value, Box<Response>> {
+    match contracts::validate(contract, Some(&params)) {
+        Some(Ok(value)) => Ok(value),
+        Some(Err(issues)) => Err(Box::new(auth_routes::validation_error(issues))),
+        None => Err(Box::new(auth_routes::error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Internal server error",
+        ))),
+    }
+}
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -80,7 +101,7 @@ async fn list(State(state): State<AppState>, headers: HeaderMap) -> Response {
     let response = match state
         .with_database(|database| companies::list_visible_companies(database, &user.id))
     {
-        Ok(companies) => Json(json!({ "companies": companies })).into_response(),
+        Ok(companies) => Json(CompanyList { companies }).into_response(),
         Err(error) => auth_routes::service_error(error),
     };
     respond_with_cookies(response, cookies)
@@ -91,6 +112,12 @@ async fn get_company(
     headers: HeaderMap,
     Path(company_id): Path<String>,
 ) -> Response {
+    if let Err(response) = validated_params(
+        "common.CompanyIdParamsSchema",
+        json!({ "companyId": company_id }),
+    ) {
+        return *response;
+    }
     let (user, cookies) = match authenticated(&state, &headers) {
         Ok(value) => value,
         Err(error) => return *error,
@@ -98,13 +125,17 @@ async fn get_company(
     let response = match state.with_database(|database| {
         companies::require_company_access(database, &user.id, &company_id)
     }) {
-        Ok(company) => Json(json!(company)).into_response(),
+        Ok(company) => Json(company).into_response(),
         Err(error) => auth_routes::service_error(error),
     };
     respond_with_cookies(response, cookies)
 }
 
-async fn create(State(state): State<AppState>, headers: HeaderMap) -> Response {
+async fn create(State(state): State<AppState>, headers: HeaderMap, body: Bytes) -> Response {
+    let parsed = match auth_routes::validated_body(&headers, &body, "auth.CompanyNameBodySchema") {
+        Ok(value) => value,
+        Err(response) => return *response,
+    };
     if let Some(error) = csrf_failure(&state, &headers, "POST") {
         return error;
     }
@@ -112,31 +143,11 @@ async fn create(State(state): State<AppState>, headers: HeaderMap) -> Response {
         Ok(value) => value,
         Err(error) => return *error,
     };
-    let response =
-        match state.with_database(|database| companies::require_admin(database, &user.id)) {
-            Ok(()) => auth_routes::not_ported(),
-            Err(error) => auth_routes::service_error(error),
-        };
-    respond_with_cookies(response, cookies)
-}
-
-fn admin_company(
-    state: &AppState,
-    headers: &HeaderMap,
-    company_id: &str,
-    method: &str,
-) -> Response {
-    if let Some(error) = csrf_failure(state, headers, method) {
-        return error;
-    }
-    let (user, cookies) = match authenticated(state, headers) {
-        Ok(value) => value,
-        Err(error) => return *error,
-    };
+    let name = parsed["name"].as_str().unwrap_or_default();
     let response = match state
-        .with_database(|database| companies::require_admin_company(database, &user.id, company_id))
+        .with_database(|database| companies::create_company(database, &user.id, name, Utc::now()))
     {
-        Ok(_) => auth_routes::not_ported(),
+        Ok(company) => (StatusCode::CREATED, Json(company)).into_response(),
         Err(error) => auth_routes::service_error(error),
     };
     respond_with_cookies(response, cookies)
@@ -146,40 +157,174 @@ async fn rename(
     State(state): State<AppState>,
     headers: HeaderMap,
     Path(company_id): Path<String>,
+    body: Bytes,
 ) -> Response {
-    admin_company(&state, &headers, &company_id, "PATCH")
+    if let Err(response) = validated_params(
+        "common.CompanyIdParamsSchema",
+        json!({ "companyId": company_id }),
+    ) {
+        return *response;
+    }
+    let parsed = match auth_routes::validated_body(&headers, &body, "auth.CompanyNameBodySchema") {
+        Ok(value) => value,
+        Err(response) => return *response,
+    };
+    if let Some(error) = csrf_failure(&state, &headers, "PATCH") {
+        return error;
+    }
+    let (user, cookies) = match authenticated(&state, &headers) {
+        Ok(value) => value,
+        Err(error) => return *error,
+    };
+    let response = match state.with_database(|database| {
+        companies::rename_company(
+            database,
+            &user.id,
+            &company_id,
+            parsed["name"].as_str().unwrap_or_default(),
+            Utc::now(),
+        )
+    }) {
+        Ok(company) => Json(company).into_response(),
+        Err(error) => auth_routes::service_error(error),
+    };
+    respond_with_cookies(response, cookies)
 }
 
 async fn issue_code(
     State(state): State<AppState>,
     headers: HeaderMap,
     Path(company_id): Path<String>,
+    body: Bytes,
 ) -> Response {
-    admin_company(&state, &headers, &company_id, "PATCH")
+    if let Err(response) = validated_params(
+        "common.CompanyIdParamsSchema",
+        json!({ "companyId": company_id }),
+    ) {
+        return *response;
+    }
+    let parsed =
+        match auth_routes::validated_body(&headers, &body, "auth.CompanyIssueCodeBodySchema") {
+            Ok(value) => value,
+            Err(response) => return *response,
+        };
+    if let Some(error) = csrf_failure(&state, &headers, "PATCH") {
+        return error;
+    }
+    let (user, cookies) = match authenticated(&state, &headers) {
+        Ok(value) => value,
+        Err(error) => return *error,
+    };
+    let response = match state.with_database(|database| {
+        companies::set_company_issue_code(
+            database,
+            &user.id,
+            &company_id,
+            parsed["issueCode"].as_str(),
+            Utc::now(),
+        )
+    }) {
+        Ok(company) => Json(company).into_response(),
+        Err(error) => auth_routes::service_error(error),
+    };
+    respond_with_cookies(response, cookies)
 }
 
 async fn status(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Path((company_id, _status)): Path<(String, String)>,
+    Path((company_id, status)): Path<(String, String)>,
 ) -> Response {
-    admin_company(&state, &headers, &company_id, "POST")
+    if let Err(response) = validated_params(
+        "common.CompanyStatusParamsSchema",
+        json!({ "companyId": company_id, "status": status }),
+    ) {
+        return *response;
+    }
+    if let Some(error) = csrf_failure(&state, &headers, "POST") {
+        return error;
+    }
+    let (user, cookies) = match authenticated(&state, &headers) {
+        Ok(value) => value,
+        Err(error) => return *error,
+    };
+    let response = match state.with_database(|database| {
+        companies::set_company_status(database, &user.id, &company_id, &status, Utc::now())
+    }) {
+        Ok(company) => Json(company).into_response(),
+        Err(error) => auth_routes::service_error(error),
+    };
+    respond_with_cookies(response, cookies)
 }
 
 async fn add_membership(
     State(state): State<AppState>,
     headers: HeaderMap,
     Path(company_id): Path<String>,
+    body: Bytes,
 ) -> Response {
-    admin_company(&state, &headers, &company_id, "POST")
+    if let Err(response) = validated_params(
+        "common.CompanyIdParamsSchema",
+        json!({ "companyId": company_id }),
+    ) {
+        return *response;
+    }
+    let parsed = match auth_routes::validated_body(&headers, &body, "auth.MembershipBodySchema") {
+        Ok(value) => value,
+        Err(response) => return *response,
+    };
+    if let Some(error) = csrf_failure(&state, &headers, "POST") {
+        return error;
+    }
+    let (user, cookies) = match authenticated(&state, &headers) {
+        Ok(value) => value,
+        Err(error) => return *error,
+    };
+    let response = match state.with_database(|database| {
+        companies::add_membership(
+            database,
+            &user.id,
+            parsed["userId"].as_str().unwrap_or_default(),
+            &company_id,
+            Utc::now(),
+        )
+    }) {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(error) => auth_routes::service_error(error),
+    };
+    respond_with_cookies(response, cookies)
 }
 
 async fn remove_membership(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Path((company_id, _user_id)): Path<(String, String)>,
+    Path((company_id, user_id)): Path<(String, String)>,
 ) -> Response {
-    admin_company(&state, &headers, &company_id, "DELETE")
+    if let Err(response) = validated_params(
+        "common.CompanyIdParamsSchema",
+        json!({ "companyId": company_id }),
+    ) {
+        return *response;
+    }
+    if let Err(response) =
+        validated_params("common.UserIdParamsSchema", json!({ "userId": user_id }))
+    {
+        return *response;
+    }
+    if let Some(error) = csrf_failure(&state, &headers, "DELETE") {
+        return error;
+    }
+    let (user, cookies) = match authenticated(&state, &headers) {
+        Ok(value) => value,
+        Err(error) => return *error,
+    };
+    let response = match state.with_database(|database| {
+        companies::remove_membership(database, &user.id, &user_id, &company_id, Utc::now())
+    }) {
+        Ok(()) => StatusCode::NO_CONTENT.into_response(),
+        Err(error) => auth_routes::service_error(error),
+    };
+    respond_with_cookies(response, cookies)
 }
 
 #[cfg(test)]
@@ -193,7 +338,7 @@ mod tests {
     use sha2::{Digest, Sha256};
 
     #[tokio::test]
-    async fn company_routes_apply_live_user_and_membership_scope_before_501() {
+    async fn company_routes_apply_live_user_and_membership_scope() {
         let filename = std::env::temp_dir().join(format!(
             "suplex_company_route_{}_{}.sqlite",
             std::process::id(),
@@ -237,6 +382,7 @@ mod tests {
             "cookie",
             HeaderValue::from_str(&format!("sid_v1={}", admin.session_token)).unwrap(),
         );
+        admin_headers.insert("content-type", HeaderValue::from_static("application/json"));
         let existing = get_company(
             State(state.clone()),
             admin_headers.clone(),
@@ -255,22 +401,45 @@ mod tests {
             StatusCode::NOT_FOUND
         );
         assert_eq!(
-            create(State(state.clone()), admin_headers.clone())
-                .await
-                .status(),
+            create(
+                State(state.clone()),
+                admin_headers.clone(),
+                Bytes::from_static(br#"{"name":"API A"}"#)
+            )
+            .await
+            .status(),
             StatusCode::FORBIDDEN
         );
         admin_headers.insert(
             "origin",
             HeaderValue::from_static("https://suplex.example.test:4111"),
         );
-        let unported = create(State(state.clone()), admin_headers.clone()).await;
-        assert_eq!(unported.status(), StatusCode::NOT_IMPLEMENTED);
-        let body = to_bytes(unported.into_body(), 1024).await.unwrap();
+        let created = create(
+            State(state.clone()),
+            admin_headers.clone(),
+            Bytes::from_static(br#"{"name":"API A"}"#),
+        )
+        .await;
+        assert_eq!(created.status(), StatusCode::CREATED);
+        let created_body =
+            String::from_utf8(to_bytes(created.into_body(), 4096).await.unwrap().to_vec()).unwrap();
+        let created_json: serde_json::Value = serde_json::from_str(&created_body).unwrap();
+        let created_at = created_json["createdAt"].as_str().unwrap();
         assert_eq!(
-            serde_json::from_slice::<serde_json::Value>(&body).unwrap()["code"],
-            "experimental_not_ported"
+            chrono::DateTime::parse_from_rfc3339(created_at)
+                .unwrap()
+                .to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+            created_at
         );
+        assert!(created_at.ends_with('Z'));
+        let normalized = created_body
+            .replace(created_json["id"].as_str().unwrap(), "company_ID")
+            .replace(created_json["createdAt"].as_str().unwrap(), "TIMESTAMP");
+        assert_eq!(
+            normalized,
+            r#"{"id":"company_ID","name":"API A","status":"active","issueCode":null,"createdAt":"TIMESTAMP"}"#
+        );
+        let created_id = created_json["id"].as_str().unwrap().to_owned();
         let mut member_headers = HeaderMap::new();
         member_headers.insert("host", HeaderValue::from_static("suplex.example.test:4111"));
         member_headers.insert(
@@ -281,6 +450,7 @@ mod tests {
             "origin",
             HeaderValue::from_static("https://suplex.example.test:4111"),
         );
+        member_headers.insert("content-type", HeaderValue::from_static("application/json"));
         assert_eq!(
             get_company(
                 State(state.clone()),
@@ -292,14 +462,121 @@ mod tests {
             StatusCode::NOT_FOUND
         );
         assert_eq!(
-            create(State(state.clone()), member_headers.clone())
-                .await
-                .status(),
+            create(
+                State(state.clone()),
+                member_headers.clone(),
+                Bytes::from_static(br#"{"name":"Member New"}"#)
+            )
+            .await
+            .status(),
             StatusCode::NOT_FOUND
         );
         assert_eq!(
-            list(State(state.clone()), member_headers).await.status(),
+            list(State(state.clone()), member_headers.clone())
+                .await
+                .status(),
             StatusCode::OK
+        );
+        let mut invalid_headers = admin_headers.clone();
+        invalid_headers.remove("origin");
+        let invalid_name = rename(
+            State(state.clone()),
+            invalid_headers.clone(),
+            Path(created_id.clone()),
+            Bytes::from_static(br#"{"name":42}"#),
+        )
+        .await;
+        assert_eq!(invalid_name.status(), StatusCode::BAD_REQUEST);
+        assert_eq!(
+            rename(
+                State(state.clone()),
+                invalid_headers,
+                Path(created_id.clone()),
+                Bytes::from_static(br#"{"name":"No origin"}"#),
+            )
+            .await
+            .status(),
+            StatusCode::FORBIDDEN
+        );
+        let renamed = rename(
+            State(state.clone()),
+            admin_headers.clone(),
+            Path(created_id.clone()),
+            Bytes::from_static(br#"{"name":"  API A renamed  "}"#),
+        )
+        .await;
+        assert_eq!(renamed.status(), StatusCode::OK);
+        let renamed_body = to_bytes(renamed.into_body(), 4096).await.unwrap();
+        let renamed_raw = String::from_utf8(renamed_body.to_vec()).unwrap();
+        assert!(renamed_raw.contains(&format!(r#""createdAt":"{created_at}""#)));
+        assert_eq!(
+            renamed_raw
+                .replace(&created_id, "company_ID")
+                .replace(created_json["createdAt"].as_str().unwrap(), "TIMESTAMP"),
+            r#"{"id":"company_ID","name":"API A renamed","status":"active","issueCode":null,"createdAt":"TIMESTAMP"}"#
+        );
+        let code = issue_code(
+            State(state.clone()),
+            admin_headers.clone(),
+            Path(created_id.clone()),
+            Bytes::from_static(br#"{"issueCode":" ad4m "}"#),
+        )
+        .await;
+        assert_eq!(code.status(), StatusCode::OK);
+        let code_body = to_bytes(code.into_body(), 4096).await.unwrap();
+        let code_raw = String::from_utf8(code_body.to_vec()).unwrap();
+        assert!(code_raw.contains(&format!(r#""createdAt":"{created_at}""#)));
+        assert_eq!(
+            code_raw
+                .replace(&created_id, "company_ID")
+                .replace(created_json["createdAt"].as_str().unwrap(), "TIMESTAMP"),
+            r#"{"id":"company_ID","name":"API A renamed","status":"active","issueCode":"AD4M","createdAt":"TIMESTAMP"}"#
+        );
+        let paused = status(
+            State(state.clone()),
+            admin_headers.clone(),
+            Path((created_id.clone(), "paused".to_owned())),
+        )
+        .await;
+        assert_eq!(paused.status(), StatusCode::OK);
+        let joined = add_membership(
+            State(state.clone()),
+            admin_headers.clone(),
+            Path(created_id.clone()),
+            Bytes::from_static(br#"{"userId":"member_route"}"#),
+        )
+        .await;
+        assert_eq!(joined.status(), StatusCode::NO_CONTENT);
+        assert_eq!(
+            get_company(
+                State(state.clone()),
+                member_headers.clone(),
+                Path(created_id.clone())
+            )
+            .await
+            .status(),
+            StatusCode::OK
+        );
+        let duplicate = add_membership(
+            State(state.clone()),
+            admin_headers.clone(),
+            Path(created_id.clone()),
+            Bytes::from_static(br#"{"userId":"member_route"}"#),
+        )
+        .await;
+        assert_eq!(duplicate.status(), StatusCode::CONFLICT);
+        let removed = remove_membership(
+            State(state.clone()),
+            admin_headers,
+            Path((created_id.clone(), "member_route".to_owned())),
+        )
+        .await;
+        assert_eq!(removed.status(), StatusCode::NO_CONTENT);
+        assert_eq!(
+            get_company(State(state.clone()), member_headers, Path(created_id))
+                .await
+                .status(),
+            StatusCode::NOT_FOUND
         );
         drop(state);
         let _ = std::fs::remove_file(&filename);

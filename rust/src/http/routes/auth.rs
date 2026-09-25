@@ -79,7 +79,7 @@ pub(crate) fn append_cookies(response: &mut Response, cookies: Vec<String>) {
     }
 }
 
-fn validation_error(issues: Vec<serde_json::Value>) -> Response {
+pub(crate) fn validation_error(issues: Vec<serde_json::Value>) -> Response {
     let findings = issues
         .into_iter()
         .map(|issue| {
@@ -104,6 +104,43 @@ fn validation_error(issues: Vec<serde_json::Value>) -> Response {
         Json(json!({ "error": "Invalid request", "findings": findings })),
     )
         .into_response()
+}
+
+pub(crate) fn validated_body(
+    headers: &HeaderMap,
+    body: &Bytes,
+    contract: &str,
+) -> Result<serde_json::Value, Box<Response>> {
+    let content_type = headers
+        .get(header::CONTENT_TYPE)
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.split(';').next())
+        .unwrap_or_default();
+    let parsed = if body.is_empty() {
+        None
+    } else if content_type == "text/plain" {
+        Some(serde_json::Value::String(
+            String::from_utf8_lossy(body).into_owned(),
+        ))
+    } else if content_type == "application/json" {
+        match serde_json::from_slice::<serde_json::Value>(body) {
+            Ok(value) => Some(value),
+            Err(_) => return Err(Box::new(error(StatusCode::BAD_REQUEST, "Invalid request"))),
+        }
+    } else {
+        return Err(Box::new(error(
+            StatusCode::UNSUPPORTED_MEDIA_TYPE,
+            "Unsupported media type",
+        )));
+    };
+    match contracts::validate(contract, parsed.as_ref()) {
+        Some(Ok(value)) => Ok(value),
+        Some(Err(issues)) => Err(Box::new(validation_error(issues))),
+        None => Err(Box::new(error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Internal server error",
+        ))),
+    }
 }
 
 async fn status(State(state): State<AppState>, headers: HeaderMap) -> Response {
@@ -145,31 +182,9 @@ async fn me(State(state): State<AppState>, headers: HeaderMap) -> Response {
 }
 
 async fn update_me(State(state): State<AppState>, headers: HeaderMap, body: Bytes) -> Response {
-    let content_type = headers
-        .get(header::CONTENT_TYPE)
-        .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.split(';').next())
-        .unwrap_or_default();
-    let parsed = if body.is_empty() {
-        None
-    } else if content_type == "text/plain" {
-        Some(serde_json::Value::String(
-            String::from_utf8_lossy(&body).into_owned(),
-        ))
-    } else if content_type == "application/json" {
-        match serde_json::from_slice::<serde_json::Value>(&body) {
-            Ok(value) => Some(value),
-            Err(_) => return error(StatusCode::BAD_REQUEST, "Invalid request"),
-        }
-    } else {
-        return error(StatusCode::UNSUPPORTED_MEDIA_TYPE, "Unsupported media type");
-    };
-    let Some(validation) = contracts::validate("auth.ProfileBodySchema", parsed.as_ref()) else {
-        return error(StatusCode::INTERNAL_SERVER_ERROR, "Internal server error");
-    };
-    let parsed = match validation {
-        Ok(value) => value,
-        Err(issues) => return validation_error(issues),
+    let parsed = match validated_body(&headers, &body, "auth.ProfileBodySchema") {
+        Ok(parsed) => parsed,
+        Err(response) => return *response,
     };
     if !session::csrf_allowed(&state.session_config, &headers, "PATCH", false) {
         return error(StatusCode::FORBIDDEN, "request_origin_invalid");

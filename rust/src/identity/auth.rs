@@ -61,7 +61,7 @@ impl fmt::Display for AuthFailure {
 
 impl Error for AuthFailure {}
 
-fn random_hex_id(prefix: &str) -> DatabaseResult<String> {
+pub(crate) fn random_hex_id(prefix: &str) -> DatabaseResult<String> {
     let mut bytes = [0_u8; 16];
     rand_bytes(&mut bytes)?;
     let hex = bytes

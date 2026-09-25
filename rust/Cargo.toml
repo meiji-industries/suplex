@@ -18,6 +18,7 @@ rusqlite = { version = "0.40.2", default-features = false, features = ["bundled"
 serde = { version = "1", features = ["derive"] }
 ryu-js = "1.0.3"
 serde_json = { version = "1", features = ["preserve_order"] }
+serde_path_to_error = "0.1"
 sha2 = "0.10"
 tokio = { version = "1", features = ["io-util", "macros", "net", "process", "rt-multi-thread", "signal", "time"] }
 url = "2"

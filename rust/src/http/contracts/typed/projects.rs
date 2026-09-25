@@ -3,7 +3,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 pub use super::ContractResult;
-use super::{ContractFailure, finding, garde_findings, object, serialized};
+use super::{
+    ContractFailure, delivery_target as valid_delivery_target, finding, garde_findings,
+    id_1_256 as profile_id, object, serialized, visual_evidence as valid_visual_evidence,
+};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
@@ -130,35 +133,6 @@ pub struct ProjectAgentTaskPolicy {
     #[serde(default = "default_visual_evidence")]
     #[garde(custom(valid_visual_evidence))]
     pub visual_evidence: String,
-}
-fn profile_id(value: &str, _: &()) -> garde::Result {
-    match value.encode_utf16().count() {
-        0 => Err(garde::Error::new("too_small")),
-        1..=256 => Ok(()),
-        _ => Err(garde::Error::new("too_big")),
-    }
-}
-fn valid_delivery_target(value: &str, _: &()) -> garde::Result {
-    if [
-        "local_worktree",
-        "remote_branch",
-        "pull_request_draft",
-        "pull_request_ready",
-        "merged",
-    ]
-    .contains(&value)
-    {
-        Ok(())
-    } else {
-        Err(garde::Error::new("invalid_value"))
-    }
-}
-fn valid_visual_evidence(value: &str, _: &()) -> garde::Result {
-    if ["off", "capture", "required"].contains(&value) {
-        Ok(())
-    } else {
-        Err(garde::Error::new("invalid_value"))
-    }
 }
 fn default_delivery_target() -> String {
     "pull_request_draft".into()

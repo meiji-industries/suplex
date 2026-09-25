@@ -160,6 +160,7 @@ const semanticInputs: Record<string, Record<string, unknown>> = {
     image_slash_filename: { ...taskBody, images: [{ filename: "a/b", mimeType: "image/png", base64: "eA==" }] },
     image_backslash_filename: { ...taskBody, images: [{ filename: "a\\b", mimeType: "image/png", base64: "eA==" }] },
     image_max_filename: { ...taskBody, images: [{ filename: "x".repeat(255), mimeType: "image/png", base64: "x" }] },
+    unicode_image_filename: { ...taskBody, images: [{ filename: "😀".repeat(80), mimeType: "image/png", base64: "😀" }] },
     image_overlong_filename: { ...taskBody, images: [{ filename: "x".repeat(256), mimeType: "image/png", base64: "x" }] },
     image_overlong_slash_filename: { ...taskBody, images: [{ filename: `${"x".repeat(255)}/`, mimeType: "image/png", base64: "x" }] },
     image_empty_base64: { ...taskBody, images: [{ filename: "x", mimeType: "image/png", base64: "" }] },

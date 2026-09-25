@@ -3,6 +3,7 @@ use serde_json::{Map, Value, json};
 
 pub mod auth;
 pub mod projects;
+pub mod tasks;
 
 #[derive(Debug)]
 pub enum ContractFailure {
@@ -12,6 +13,38 @@ pub enum ContractFailure {
 }
 
 pub type ContractResult<T> = Result<T, ContractFailure>;
+
+pub(crate) fn id_1_256(value: &str, _: &()) -> garde::Result {
+    match value.encode_utf16().count() {
+        0 => Err(garde::Error::new("too_small")),
+        1..=256 => Ok(()),
+        _ => Err(garde::Error::new("too_big")),
+    }
+}
+
+pub(crate) fn delivery_target(value: &str, _: &()) -> garde::Result {
+    if [
+        "local_worktree",
+        "remote_branch",
+        "pull_request_draft",
+        "pull_request_ready",
+        "merged",
+    ]
+    .contains(&value)
+    {
+        Ok(())
+    } else {
+        Err(garde::Error::new("invalid_value"))
+    }
+}
+
+pub(crate) fn visual_evidence(value: &str, _: &()) -> garde::Result {
+    if ["off", "capture", "required"].contains(&value) {
+        Ok(())
+    } else {
+        Err(garde::Error::new("invalid_value"))
+    }
+}
 
 pub(crate) fn invalid_type(_expected: &str, _value: Option<&Value>, path: &[Value]) -> Value {
     finding("invalid_type", path)
@@ -53,6 +86,7 @@ pub(crate) fn garde_findings(report: &garde::Report) -> Vec<Value> {
                 "allowed_providers" => "allowedProviders",
                 "allowed_instance_ids" => "allowedInstanceIds",
                 "repository_url" => "repositoryUrl",
+                "project_id" => "projectId",
                 "repository_name" => "repositoryName",
                 "base_branch" => "baseBranch",
                 "repository_path" => "repositoryPath",
@@ -60,6 +94,11 @@ pub(crate) fn garde_findings(report: &garde::Report) -> Vec<Value> {
                 "root_profile_id" => "rootProfileId",
                 "worker_profile_id" => "workerProfileId",
                 "skill_directories" => "skillDirectories",
+                "idempotency_key" => "idempotencyKey",
+                "mime_type" => "mimeType",
+                "start_immediately" => "startImmediately",
+                "depends_on" => "dependsOn",
+                "blocked_by_pull_requests" => "blockedByPullRequests",
                 other => other,
             }};
             field.push_str(name);
@@ -69,6 +108,8 @@ pub(crate) fn garde_findings(report: &garde::Report) -> Vec<Value> {
         let code = if message == "too_small" || message.contains("lower than") { "too_small" }
             else if message == "too_big" || message.contains("greater than") { "too_big" }
             else if message == "invalid_value" { "invalid_value" }
+            else if message == "custom" { "custom" }
+            else if message == "invalid_number" { "invalid_type" }
             else { "invalid_format" };
         json!({"code":format!("invalid-{code}"),"field":field,"message":"Request value is invalid"})
     }).collect()

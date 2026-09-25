@@ -5,7 +5,7 @@
 use std::{error::Error, fmt, path::Path, sync::LazyLock, time::Duration};
 
 use chrono::{DateTime, SecondsFormat, Utc};
-use git2::{Cred, CredentialType, PushOptions, RemoteCallbacks, Repository};
+use git2::{PushOptions, Repository};
 use regex::Regex;
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -1554,21 +1554,11 @@ pub fn push_normal(
         )
     };
     let repository = Repository::open(cwd).map_err(unavailable)?;
-    let mut origin = repository.find_remote("origin").map_err(unavailable)?;
+    let mut origin =
+        crate::projects::repository::origin_remote(&repository, git2::Direction::Push, token)
+            .map_err(unavailable)?;
     let rejected = std::cell::RefCell::new(None::<String>);
-    let mut callbacks = RemoteCallbacks::new();
-    callbacks.credentials(|url, username, allowed| {
-        if allowed.contains(CredentialType::USER_PASS_PLAINTEXT)
-            && let Some(token) = token
-            && worktree::token_audience_matches(url)
-        {
-            return Cred::userpass_plaintext("x-access-token", token);
-        }
-        if allowed.contains(CredentialType::SSH_KEY) {
-            return Cred::ssh_key_from_agent(username.unwrap_or("git"));
-        }
-        Err(git2::Error::from_str("No credential for Git remote"))
-    });
+    let mut callbacks = crate::projects::repository::remote_callbacks(token);
     callbacks.push_update_reference(|_reference, status| {
         if let Some(status) = status {
             *rejected.borrow_mut() = Some(status.to_owned());

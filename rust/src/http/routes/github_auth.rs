@@ -120,7 +120,18 @@ where
     F: FnOnce(Granted) -> Fut,
     Fut: Future<Output = Result<(), ()>>,
 {
-    device.poll(flow_id, save).await.map_err(|_| ())
+    let result = device.poll(flow_id, save).await;
+    // A restart or lost response must not hide an already stored, valid grant.
+    if (result.is_err() || matches!(&result, Ok(Poll::Expired)))
+        && let Ok(access) = github::Access::load().await
+        && access.token().is_some()
+        && let Ok(login) = access.current_user_login().await
+    {
+        return Ok(Poll::Connected { login });
+    }
+    result.map_err(|error| {
+        eprintln!("{}", json!({ "event": "github.device.poll_failed", "flowId": flow_id, "error": error.to_string() }));
+    })
 }
 
 #[cfg(test)]

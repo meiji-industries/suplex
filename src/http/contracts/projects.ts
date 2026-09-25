@@ -77,3 +77,11 @@ export type ModelResponse = z.infer<typeof ModelResponseSchema>;
 export type ProjectResponse = z.infer<typeof ProjectResponseSchema>;
 export type ProjectPatchBody = z.infer<typeof ProjectPatchBodySchema>;
 export type ProjectProviderInstance = z.infer<typeof ProjectProviderInstanceSchema>;
+
+export const ProjectRepositoryStatusSchema = z.object({
+  status: z.enum(["connected", "sign_in_required", "needs_repair", "unavailable"]),
+  message: z.string(),
+  method: z.enum(["device", "cli"]),
+  originRepository: z.string().nullable(),
+});
+export type ProjectRepositoryStatus = z.infer<typeof ProjectRepositoryStatusSchema>;

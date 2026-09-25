@@ -347,7 +347,7 @@ mod tests {
             branch: "task-archive".into(),
             starting_sha: sha.clone(),
         };
-        let worktree = worktree::prepare_local_task_worktree(&intent).unwrap();
+        let worktree = worktree::prepare_local_task_worktree(&intent, None).unwrap();
         let task = repository::create(&mut database, &PreparedTask {
             id: task_id.clone(), company_id: "archive_company".into(), project_id: "archive_project".into(),
             title: "Archive task".into(), description: "".into(),

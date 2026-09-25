@@ -5,7 +5,7 @@
 use std::{error::Error, fmt, path::Path, sync::LazyLock};
 
 use chrono::{DateTime, FixedOffset, TimeZone};
-use git2::{AutotagOption, Cred, CredentialType, FetchOptions, RemoteCallbacks, Repository};
+use git2::{AutotagOption, FetchOptions, Repository};
 use regex::Regex;
 use serde_json::{Value, json};
 
@@ -15,7 +15,7 @@ use crate::{
         issue_tracker::IssueTracker,
     },
     projects::service::Project,
-    tasks::{issue_context, repository::PreparedTask, worktree},
+    tasks::{issue_context, repository::PreparedTask},
 };
 
 static BRANCH: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"^[A-Za-z0-9._/-]{1,240}$").unwrap());
@@ -92,20 +92,9 @@ fn fetch(
     prune: bool,
     token: Option<&str>,
 ) -> Result<(), git2::Error> {
-    let mut origin = repository.find_remote("origin")?;
-    let mut callbacks = RemoteCallbacks::new();
-    callbacks.credentials(|url, username, allowed| {
-        if allowed.contains(CredentialType::USER_PASS_PLAINTEXT)
-            && let Some(token) = token
-            && worktree::token_audience_matches(url)
-        {
-            return Cred::userpass_plaintext("x-access-token", token);
-        }
-        if allowed.contains(CredentialType::SSH_KEY) {
-            return Cred::ssh_key_from_agent(username.unwrap_or("git"));
-        }
-        Err(git2::Error::from_str("No credential for Git remote"))
-    });
+    let mut origin =
+        crate::projects::repository::origin_remote(repository, git2::Direction::Fetch, token)?;
+    let callbacks = crate::projects::repository::remote_callbacks(token);
     let mut options = FetchOptions::new();
     options
         .download_tags(AutotagOption::None)
@@ -532,6 +521,21 @@ mod tests {
         assert_eq!(rows[0]["branch"], "feature/one");
         assert_eq!(rows[0]["subject"], "Feature subject");
         assert_eq!(rows[0]["author"], "Fixture");
+        clone
+            .remote_set_url("origin", "git@github.com:acme/repo.git")
+            .unwrap();
+        clone
+            .config()
+            .unwrap()
+            .set_str(
+                &format!("url.file://{}.insteadOf", origin.display()),
+                "https://github.com/acme/repo.git",
+            )
+            .unwrap();
+        assert_eq!(
+            remote_branches(&work, "main", Some("fixture-token")).unwrap(),
+            rows
+        );
         assert_eq!(clone.head().unwrap().name().map(str::to_owned), head);
         std::fs::remove_dir_all(base).unwrap();
     }

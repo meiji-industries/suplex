@@ -686,17 +686,15 @@ async fn finish_admitted_create(state: AppState, admitted: AdmittedCreate) -> Re
         _ => "github",
     }
     .to_owned();
-    let captured = tokio::task::spawn_blocking(move || {
-        git::capture_local_task_heads(&repository_path, &base_branch, &host)
-    })
-    .await;
+    let captured =
+        git::capture_local_task_heads(&state.project_github, &repository_path, &base_branch, &host)
+            .await;
     let base_sha = match captured {
-        Ok(Ok(sha)) => sha,
-        Ok(Err(findings)) => return with_cookies((
+        Ok(sha) => sha,
+        Err(findings) => return with_cookies((
             StatusCode::UNPROCESSABLE_ENTITY,
             Json(json!({"error":"Project configuration could not be captured","findings":findings})),
         ).into_response(), cookies),
-        Err(_) => return with_cookies(auth::error(StatusCode::INTERNAL_SERVER_ERROR, "Internal server error"), cookies),
     };
     let now = Utc::now();
     let host = state.task_host.clone();
@@ -1545,7 +1543,7 @@ mod tests {
                 "remote",
                 "set-url",
                 "origin",
-                "https://github.com/acme/demo.git",
+                "git@github.com:acme/demo.git",
             ],
             &local,
         );
@@ -1559,8 +1557,13 @@ mod tests {
             ],
             &local,
         );
+        let github = git::Github {
+            api: Some(("https://api.github.com".into(), "fixture-token".into())),
+            git: None,
+        };
         assert_eq!(
-            git::capture_local_task_heads(&local, "main", "github")
+            git::capture_local_task_heads(&github, &local, "main", "github")
+                .await
                 .unwrap()
                 .len(),
             40
@@ -1588,7 +1591,8 @@ mod tests {
                 tailscale_exposure: "none".into(),
             },
         )
-        .with_artifact_root(root.join("artifacts"));
+        .with_artifact_root(root.join("artifacts"))
+        .with_project_github(github);
         let app = crate::http::router(state.clone());
         let server = tokio::spawn(async move { axum::serve(listener, app).await });
         let mut headers = HeaderMap::new();
@@ -2532,7 +2536,7 @@ mod tests {
                 .unwrap()
                 .to_owned(),
         };
-        let worktree = crate::tasks::worktree::prepare_local_task_worktree(&intent).unwrap();
+        let worktree = crate::tasks::worktree::prepare_local_task_worktree(&intent, None).unwrap();
         fs::write(
             worktree.path.join("archive-dirty.txt"),
             "keep until confirmed\n",
@@ -2608,7 +2612,8 @@ mod tests {
                 .to_owned(),
         };
         let disconnected_worktree =
-            crate::tasks::worktree::prepare_local_task_worktree(&disconnected_intent).unwrap();
+            crate::tasks::worktree::prepare_local_task_worktree(&disconnected_intent, None)
+                .unwrap();
         let mut dropped_archive = Box::pin(archive_pending(
             State(state.clone()),
             Path(disconnected_id.clone()),

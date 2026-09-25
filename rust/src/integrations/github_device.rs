@@ -21,7 +21,7 @@ pub struct DeviceAuth {
     client: Client,
     oauth_base: Url,
     api_base: String,
-    pending: Arc<Mutex<HashMap<Uuid, Pending>>>,
+    pending: Arc<Mutex<HashMap<Uuid, Arc<Mutex<Pending>>>>>,
 }
 
 struct Pending {
@@ -29,6 +29,14 @@ struct Pending {
     expires_at: DateTime<Utc>,
     interval: Duration,
     next_poll_at: DateTime<Utc>,
+    state: Progress,
+}
+
+enum Progress {
+    Awaiting,
+    Granted(Granted),
+    Saved(String),
+    Complete(Poll),
 }
 
 #[derive(Serialize)]
@@ -41,7 +49,7 @@ pub struct Started {
     pub interval_seconds: u64,
 }
 
-#[derive(Serialize)]
+#[derive(Clone, Serialize)]
 #[serde(tag = "status", rename_all = "snake_case")]
 pub enum Poll {
     Pending {
@@ -74,6 +82,7 @@ struct TokenResponse {
     interval: Option<u64>,
 }
 
+#[derive(Clone)]
 pub struct Granted {
     pub access_token: String,
     pub refresh_token: Option<String>,
@@ -138,15 +147,16 @@ impl DeviceAuth {
         let interval = Duration::from_secs(code.interval);
         let next_poll_at = now + chrono::Duration::seconds(code.interval as i64);
         let mut pending = self.pending.lock().await;
-        pending.retain(|_, flow| flow.expires_at > now);
+        pending.retain(|_, flow| flow.try_lock().map_or(true, |flow| flow.expires_at > now));
         pending.insert(
             flow_id,
-            Pending {
+            Arc::new(Mutex::new(Pending {
                 device_code: code.device_code,
                 expires_at,
                 interval,
                 next_poll_at,
-            },
+                state: Progress::Awaiting,
+            })),
         );
         Ok(Started {
             flow_id,
@@ -162,14 +172,19 @@ impl DeviceAuth {
         F: FnOnce(Granted) -> Fut,
         Fut: Future<Output = Result<(), ()>>,
     {
+        let flow = self.pending.lock().await.get(&flow_id).cloned();
+        let Some(flow) = flow else {
+            return Ok(Poll::Expired);
+        };
+        // Serialize the exchange and storage for this flow, including retries.
+        let mut flow = flow.lock().await;
+        if let Progress::Complete(result) = &flow.state {
+            return Ok(result.clone());
+        }
         let now = Utc::now();
-        let device_code = {
-            let mut pending = self.pending.lock().await;
-            let Some(flow) = pending.get_mut(&flow_id) else {
-                return Ok(Poll::Expired);
-            };
+        if matches!(flow.state, Progress::Awaiting) {
             if now >= flow.expires_at {
-                pending.remove(&flow_id);
+                flow.state = Progress::Complete(Poll::Expired);
                 return Ok(Poll::Expired);
             }
             if now < flow.next_poll_at {
@@ -178,88 +193,89 @@ impl DeviceAuth {
                 });
             }
             flow.next_poll_at = now + chrono::Duration::from_std(flow.interval)?;
-            flow.device_code.clone()
-        };
-        let response = self
-            .client
-            .post(self.oauth_base.join("login/oauth/access_token")?)
-            .header(reqwest::header::ACCEPT, "application/json")
-            .form(&[
-                ("client_id", CLIENT_ID),
-                ("device_code", device_code.as_str()),
-                ("grant_type", "urn:ietf:params:oauth:grant-type:device_code"),
-            ])
-            .send()
-            .await?;
-        if !response.status().is_success() {
-            return Err(io::Error::other("GitHub device token request failed").into());
+            let device_code = flow.device_code.clone();
+            let response = self
+                .client
+                .post(self.oauth_base.join("login/oauth/access_token")?)
+                .header(reqwest::header::ACCEPT, "application/json")
+                .form(&[
+                    ("client_id", CLIENT_ID),
+                    ("device_code", device_code.as_str()),
+                    ("grant_type", "urn:ietf:params:oauth:grant-type:device_code"),
+                ])
+                .send()
+                .await?;
+            if !response.status().is_success() {
+                return Err(io::Error::other("GitHub device token request failed").into());
+            }
+            let token: TokenResponse = response.json().await.map_err(|_| {
+                io::Error::new(
+                    io::ErrorKind::InvalidData,
+                    "GitHub token response is invalid",
+                )
+            })?;
+            match token.error.as_deref() {
+                Some("authorization_pending") => {
+                    return Ok(Poll::Pending {
+                        next_poll_at: public_time(flow.next_poll_at),
+                    });
+                }
+                Some("slow_down") => {
+                    flow.interval = Duration::from_secs(
+                        token
+                            .interval
+                            .unwrap_or(0)
+                            .max(flow.interval.as_secs().saturating_add(5)),
+                    );
+                    flow.next_poll_at = Utc::now() + chrono::Duration::from_std(flow.interval)?;
+                    return Ok(Poll::Pending {
+                        next_poll_at: public_time(flow.next_poll_at),
+                    });
+                }
+                Some("expired_token") => {
+                    flow.state = Progress::Complete(Poll::Expired);
+                    return Ok(Poll::Expired);
+                }
+                Some("access_denied") => {
+                    flow.state = Progress::Complete(Poll::Denied);
+                    return Ok(Poll::Denied);
+                }
+                Some(_) => {
+                    return Err(io::Error::other("GitHub device authorization failed").into());
+                }
+                None => {}
+            }
+            let access_token = token
+                .access_token
+                .filter(|token| !token.is_empty())
+                .ok_or("GitHub token response is invalid")?;
+            flow.state = Progress::Granted(Granted {
+                access_token: access_token.clone(),
+                refresh_token: token.refresh_token,
+                expires_in: token.expires_in,
+                refresh_token_expires_in: token.refresh_token_expires_in,
+                login: String::new(),
+            });
         }
-        let token: TokenResponse = response.json().await.map_err(|_| {
-            io::Error::new(
-                io::ErrorKind::InvalidData,
-                "GitHub token response is invalid",
-            )
-        })?;
-        match token.error.as_deref() {
-            Some("authorization_pending") => {
-                let pending = self.pending.lock().await;
-                let next_poll_at = pending
-                    .get(&flow_id)
-                    .map(|flow| flow.next_poll_at)
-                    .unwrap_or(now);
-                return Ok(Poll::Pending {
-                    next_poll_at: public_time(next_poll_at),
-                });
-            }
-            Some("slow_down") => {
-                let mut pending = self.pending.lock().await;
-                let flow = pending.get_mut(&flow_id).ok_or("Device flow expired")?;
-                flow.interval = Duration::from_secs(
-                    token
-                        .interval
-                        .unwrap_or(0)
-                        .max(flow.interval.as_secs().saturating_add(5)),
-                );
-                flow.next_poll_at = Utc::now() + chrono::Duration::from_std(flow.interval)?;
-                return Ok(Poll::Pending {
-                    next_poll_at: public_time(flow.next_poll_at),
-                });
-            }
-            Some("expired_token") => {
-                self.pending.lock().await.remove(&flow_id);
-                return Ok(Poll::Expired);
-            }
-            Some("access_denied") => {
-                self.pending.lock().await.remove(&flow_id);
-                return Ok(Poll::Denied);
-            }
-            Some(_) => return Err(io::Error::other("GitHub device authorization failed").into()),
-            None => {}
+        // Keep the grant if storage fails. Never exchange a spent code again.
+        if let Progress::Granted(grant) = &flow.state {
+            save(grant.clone())
+                .await
+                .map_err(|_| io::Error::other("GitHub credential store failed"))?;
+            flow.state = Progress::Saved(grant.access_token.clone());
         }
-        let access_token = token
-            .access_token
-            .filter(|token| !token.is_empty())
-            .ok_or("GitHub token response is invalid")?;
-        let granted = Granted {
-            access_token: access_token.clone(),
-            refresh_token: token.refresh_token,
-            expires_in: token.expires_in,
-            refresh_token_expires_in: token.refresh_token_expires_in,
-            login: String::new(),
+        let Progress::Saved(access_token) = &flow.state else {
+            unreachable!()
         };
-        // The device code may be spent after this response. Save the accepted
-        // token before /user so an account-read failure cannot discard it.
-        save(granted)
-            .await
-            .map_err(|_| io::Error::other("GitHub credential store failed"))?;
-        self.pending.lock().await.remove(&flow_id);
         let access = Access::for_api(&self.api_base, Some(access_token.clone()))
             .map_err(|_| io::Error::other("GitHub account validation failed"))?;
         let login = access
             .current_user_login()
             .await
             .map_err(|_| io::Error::other("GitHub account validation failed"))?;
-        Ok(Poll::Connected { login })
+        let result = Poll::Connected { login };
+        flow.state = Progress::Complete(result.clone());
+        Ok(result)
     }
 }
 
@@ -347,17 +363,30 @@ mod tests {
         ));
         assert_eq!(polls.load(Ordering::SeqCst), 1);
         tokio::time::sleep(Duration::from_secs(1)).await;
+        assert!(
+            device
+                .poll(started.flow_id, |_| async { Err(()) })
+                .await
+                .is_err()
+        );
+        assert_eq!(polls.load(Ordering::SeqCst), 2);
         let saved = Arc::new(std::sync::Mutex::new(None));
-        let public = device
-            .poll(started.flow_id, {
+        let (public, repeated) = tokio::join!(
+            device.poll(started.flow_id, {
                 let saved = saved.clone();
                 move |grant| async move {
+                    tokio::time::sleep(Duration::from_millis(50)).await;
                     *saved.lock().unwrap() = Some(grant);
                     Ok(())
                 }
+            }),
+            device.poll(started.flow_id, |_| async {
+                panic!("grant must only be saved once")
             })
-            .await
-            .unwrap();
+        );
+        let public = public.unwrap();
+        assert!(matches!(repeated.unwrap(), Poll::Connected { .. }));
+        assert_eq!(polls.load(Ordering::SeqCst), 2);
         assert!(matches!(&public, Poll::Connected { login } if login == "fixture-account"));
         let grant = saved.lock().unwrap();
         let grant = grant.as_ref().unwrap();
@@ -372,6 +401,7 @@ mod tests {
 
     #[tokio::test]
     async fn accepted_device_token_is_saved_before_failed_user_read() {
+        let reads = Arc::new(AtomicUsize::new(0));
         let app = Router::new()
             .route(
                 "/login/device/code",
@@ -394,7 +424,19 @@ mod tests {
             )
             .route(
                 "/user",
-                axum::routing::get(|| async { StatusCode::BAD_GATEWAY }),
+                axum::routing::get({
+                    let reads = reads.clone();
+                    move || {
+                        let reads = reads.clone();
+                        async move {
+                            if reads.fetch_add(1, Ordering::SeqCst) == 0 {
+                                (StatusCode::BAD_GATEWAY, Json(json!({})))
+                            } else {
+                                (StatusCode::OK, Json(json!({"login":"fixture"})))
+                            }
+                        }
+                    }
+                }),
             );
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let endpoint = format!("http://{}/", listener.local_addr().unwrap());
@@ -413,6 +455,13 @@ mod tests {
             })
             .await;
         assert!(result.is_err());
+        let retried = device
+            .poll(flow.flow_id, |_| async {
+                panic!("saved grant must not be written again")
+            })
+            .await
+            .unwrap();
+        assert!(matches!(retried, Poll::Connected { login } if login == "fixture"));
         let saved = saved.lock().unwrap();
         let saved = saved.as_ref().unwrap();
         assert_eq!(saved.access_token, "fixture-access");

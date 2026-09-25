@@ -1542,10 +1542,13 @@ pub async fn create_task_from_trigger<D: Db>(
         }
         _ => "github",
     };
-    let base_sha = tokio::task::spawn_blocking(move || {
-        git::capture_local_task_heads(&repository_path, &base_branch, host)
-    })
-    .await?
+    let base_sha = git::capture_local_task_heads(
+        &git::Github::default(),
+        &repository_path,
+        &base_branch,
+        host,
+    )
+    .await
     .map_err(|findings| -> Failure {
         Box::new(ProjectFailure {
             message: "Project configuration could not be captured",

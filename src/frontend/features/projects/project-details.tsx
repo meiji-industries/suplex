@@ -17,6 +17,7 @@ import { AvatarEditor, EntityAvatar } from "../../components/app/entity-avatar.j
 import { useCompanyContext } from "../../shell/company-context.js";
 import { ApiError, readJson, withCompany } from "../../lib/api.js";
 import type { ApiProfile, ApiProject } from "../../shell/view-shared.js";
+import { ProjectRepositoryConnection } from "./project-repository-connection.js";
 import { ProjectConnections } from "./project-connections.js";
 import { ProjectDetailsLayout } from "./project-details-layout.js";
 import { SettingRow, SettingsContent, SettingsSection } from "../settings/settings-layout.js";
@@ -168,7 +169,7 @@ export function ProjectDetails({ projectId }: { projectId: string }): ReactEleme
       const result = await patch(body);
       if (token !== saveTokens.current.general || generation !== loadToken.current) return;
       const saved = generalDraft(result);
-      setProject((current) => current ? { ...current, name: result.name, baseBranch: result.baseBranch, updatedAt: result.updatedAt } : current);
+      setProject((current) => current ? { ...current, name: result.name, repository: result.repository, repositoryPath: result.repositoryPath, baseBranch: result.baseBranch, updatedAt: result.updatedAt } : current);
       setGeneral((current) => current ? { saved, draft: same(current.draft, submitted) ? saved : current.draft, status: same(current.draft, submitted) ? { kind: "saved" } : idle } : current);
     } catch (reason) {
       if (token === saveTokens.current.general && generation === loadToken.current) setGeneral((current) => current ? { ...current, status: saveFailure(reason, "Unable to save General") } : current);
@@ -276,8 +277,9 @@ export function ProjectDetails({ projectId }: { projectId: string }): ReactEleme
           <SettingRow label="Avatar" description="Shown with this project."><AvatarEditor kind="project" id={project.id} name={general.draft.name || project.name} /></SettingRow>
         </SettingsSection>
         <SettingsSection title="Repository">
+          {project.integration?.repository.kind !== "bitbucket" ? <SettingRow label="GitHub connection"><ProjectRepositoryConnection key={JSON.stringify([project.id, project.repository, project.repositoryPath, project.baseBranch, project.updatedAt])} projectId={project.id} /></SettingRow> : null}
           <SettingRow label="Base branch" description="Default branch for new tasks." htmlFor="project-base-branch"><div className="w-full sm:w-80"><Input size="sm" id="project-base-branch" disabled={general.status.kind === "saving"} aria-invalid={fieldFindings(general.status, "baseBranch").length > 0} value={general.draft.baseBranch} onChange={(event) => updateGeneral("baseBranch", event.target.value)} /><FieldError errors={fieldFindings(general.status, "baseBranch")} /></div></SettingRow>
-          <SettingRow label="Repository" description="Repository identity."><div className="w-full sm:w-80"><code className="select-all break-all text-xs text-muted-foreground">{project.repository ?? "Not available"}</code></div></SettingRow>
+          <SettingRow label="Repository" description={project.integration?.repository.kind === "bitbucket" ? "Bitbucket workspace/name." : "GitHub owner/name."} htmlFor="project-repository"><div className="w-full sm:w-80"><Input id="project-repository" disabled={general.status.kind === "saving"} value={general.draft.repository} onChange={(event) => updateGeneral("repository", event.target.value)} aria-invalid={fieldFindings(general.status, "repository").length > 0} /><FieldError errors={fieldFindings(general.status, "repository")} /></div></SettingRow>
           <SettingRow label="Repository path" description="Local checkout path. Suplex checks that its origin matches the repository." htmlFor="project-repository-path"><div className="w-full sm:w-80"><Input id="project-repository-path" disabled={general.status.kind === "saving"} aria-invalid={fieldFindings(general.status, "repositoryPath").length > 0} value={general.draft.repositoryPath} onChange={(event) => updateGeneral("repositoryPath", event.target.value)} /><FieldError errors={fieldFindings(general.status, "repositoryPath", "repository")} /></div></SettingRow>
           <SettingRow label="Worktree root" description="Root for task worktrees."><div className="w-full sm:w-80"><code className="select-all break-all text-xs text-muted-foreground">{project.worktreeRoot}</code></div></SettingRow>
         </SettingsSection>

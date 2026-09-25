@@ -1906,10 +1906,9 @@ pub async fn create(
         }) => "bitbucket",
         _ => "github",
     };
-    let captured = tokio::task::spawn_blocking(move || {
-        git::capture_local_task_heads(&repository_path, &base_branch, host)
-    })
-    .await?;
+    let captured =
+        git::capture_local_task_heads(&state.project_github, &repository_path, &base_branch, host)
+            .await;
     let base_sha = captured.map_err(|findings| {
         Box::new(ProjectFailure {
             message: "Project configuration could not be captured",

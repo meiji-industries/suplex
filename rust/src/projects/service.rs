@@ -1064,12 +1064,19 @@ pub async fn validate_patched_repository(
                         "Configured branches must resolve to commits",
                     ));
                 }
-                if inspection.remote_repository != identity {
-                    findings.push(finding(
-                        "repository-mismatch",
-                        "repository",
-                        "Local origin does not match configured repository identity",
-                    ));
+                if bitbucket {
+                    if inspection.remote_repository != identity {
+                        findings.push(finding(
+                            "repository-mismatch",
+                            "repository",
+                            "Local origin does not match configured repository identity",
+                        ));
+                    }
+                } else if let Err(error) =
+                    checks::verify_origin(access.as_ref(), &inspection.remote_repository, &identity)
+                        .await
+                {
+                    findings.push(error);
                 }
             }
         }

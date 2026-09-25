@@ -45,6 +45,10 @@ pub fn router() -> Router<AppState> {
         )
         .route("/api/projects/{project_id}", get(get_one).patch(update))
         .route(
+            "/api/projects/{project_id}/repository-status",
+            get(repository_status),
+        )
+        .route(
             "/api/projects/{project_id}/repository-defaults",
             get(repository_defaults),
         )
@@ -54,6 +58,51 @@ pub fn router() -> Router<AppState> {
         )
         .route("/api/projects/{project_id}/issues", get(issues))
         .route("/api/projects/{project_id}/task-sources", get(task_sources))
+}
+
+async fn repository_status(
+    State(state): State<AppState>,
+    Path(project_id): Path<String>,
+    headers: HeaderMap,
+) -> Response {
+    if let Err(response) = validated_path("common.ProjectIdParamsSchema", "projectId", &project_id)
+    {
+        return *response;
+    }
+    let (user_id, cookies) = match authorize(&state, &headers) {
+        Ok(value) => value,
+        Err(response) => return *response,
+    };
+    let project =
+        match state.with_database(|database| service::get(database, &user_id, &project_id)) {
+            Ok(project) => project,
+            Err(error) => return with_cookies(service_error(error), cookies),
+        };
+    let result = tokio::time::timeout(
+        std::time::Duration::from_secs(20),
+        crate::projects::connection::check(
+            &state.project_github,
+            &project.repository_path,
+            project.repository.as_deref(),
+            &project.base_branch,
+        ),
+    )
+    .await;
+    if let Err(error) =
+        state.with_database(|database| service::get(database, &user_id, &project_id))
+    {
+        return with_cookies(service_error(error), cookies);
+    }
+    let response = match result {
+        Ok(result) => axum::Json(result).into_response(),
+        Err(_) => axum::Json(json!({"status":"unavailable", "message":"Repository check timed out. Try again.", "method":"device", "originRepository":null})).into_response(),
+    };
+    let mut response = with_cookies(response, cookies);
+    response.headers_mut().insert(
+        axum::http::header::CACHE_CONTROL,
+        "no-store".parse().unwrap(),
+    );
+    response
 }
 
 /// Query pairs as a JSON object; a repeated key keeps its last value.

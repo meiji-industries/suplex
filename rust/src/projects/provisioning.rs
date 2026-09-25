@@ -202,6 +202,8 @@ fn clone(
     target: &Path,
     token: Option<&str>,
 ) -> Result<(), git2::Error> {
+    let transport_url = repository::github_transport_url(url, token);
+    let url = transport_url.as_deref().unwrap_or(url);
     let mut options = FetchOptions::new();
     options.remote_callbacks(remote_callbacks(token));
     RepoBuilder::new()
@@ -323,7 +325,8 @@ fn publish(
 ) -> Result<(), git2::Error> {
     let repository = Repository::open(path)?;
     github.route_git(&repository)?;
-    let mut origin = repository.remote("origin", url)?;
+    repository.remote("origin", url)?;
+    let mut origin = repository::origin_remote(&repository, git2::Direction::Push, token)?;
     let mut callbacks = remote_callbacks(token);
     callbacks.push_update_reference(|_, status| match status {
         Some(status) => Err(git2::Error::from_str(status)),
@@ -576,6 +579,44 @@ mod tests {
     use axum::{Json, Router, routing::post};
 
     use super::{super::repository::fixtures::*, *};
+
+    #[test]
+    fn oauth_clones_and_publishes_ssh_github_urls_over_https() {
+        let root = temporary("suplex-oauth-provision");
+        let bare = root.join("acme/repo.git");
+        fs::create_dir_all(bare.parent().unwrap()).unwrap();
+        init(&bare, true);
+        let source = init(&root.join("source"), false);
+        let head = commit(&source, "initial");
+        let github = Github {
+            git: Some(format!("file://{}/", root.display())),
+            ..Github::default()
+        };
+        let url = "git@github.com:acme/repo.git";
+        publish(
+            &github,
+            source.workdir().unwrap(),
+            url,
+            "main",
+            Some("fixture-token"),
+        )
+        .unwrap();
+        let target = root.join("clone");
+        clone(&github, url, &target, Some("fixture-token")).unwrap();
+        assert_eq!(
+            Repository::open(&target).unwrap().head().unwrap().target(),
+            Some(head)
+        );
+        assert_eq!(
+            source
+                .config()
+                .unwrap()
+                .get_string("remote.origin.url")
+                .unwrap(),
+            url
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn package_checks_use_the_locked_package_manager() {

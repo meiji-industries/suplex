@@ -8,9 +8,8 @@ use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 
 use git2::{
-    AutotagOption, BranchType, Cred, CredentialType, Diff, DiffFindOptions, DiffFormat,
-    DiffOptions, FetchOptions, RemoteCallbacks, RemoteRedirect, Repository, StatusOptions,
-    WorktreeAddOptions, WorktreePruneOptions,
+    AutotagOption, BranchType, Diff, DiffFindOptions, DiffFormat, DiffOptions, FetchOptions,
+    RemoteRedirect, Repository, StatusOptions, WorktreeAddOptions, WorktreePruneOptions,
 };
 
 pub type WorktreeResult<T> = Result<T, Box<dyn Error>>;
@@ -176,23 +175,12 @@ pub fn published_base_commit(
     github_token: Option<&str>,
 ) -> WorktreeResult<git2::Oid> {
     if repository.find_commit(published_sha).is_err() {
-        let mut origin = repository.find_remote("origin")?;
-        let mut callbacks = RemoteCallbacks::new();
-        callbacks.credentials(|url, username, allowed| {
-            if allowed.contains(CredentialType::USER_PASS_PLAINTEXT)
-                && github_token.is_some()
-                && token_audience_matches(url)
-            {
-                return Cred::userpass_plaintext(
-                    "x-access-token",
-                    github_token.unwrap_or_default(),
-                );
-            }
-            if allowed.contains(CredentialType::SSH_KEY) {
-                return Cred::ssh_key_from_agent(username.unwrap_or("git"));
-            }
-            Err(git2::Error::from_str("No credential for Git remote"))
-        });
+        let mut origin = crate::projects::repository::origin_remote(
+            repository,
+            git2::Direction::Fetch,
+            github_token,
+        )?;
+        let callbacks = crate::projects::repository::remote_callbacks(github_token);
         let mut options = FetchOptions::new();
         options
             .download_tags(AutotagOption::None)
@@ -285,6 +273,7 @@ fn observe(
 /// Prepare the task worktree, fetching a missing starting commit from origin.
 pub fn prepare_local_task_worktree(
     intent: &TaskWorktreeIntent,
+    github_token: Option<&str>,
 ) -> WorktreeResult<WorktreeReference> {
     if !valid_task_id(&intent.task_id) || !valid_starting_sha(&intent.starting_sha) {
         return Err(invalid("Invalid task worktree identity"));
@@ -361,19 +350,7 @@ pub fn prepare_local_task_worktree(
             let oid = git2::Oid::from_str(&intent.starting_sha)?;
             if repository.find_commit(oid).is_err() {
                 // A pull request source pins a commit that GitHub metadata alone does not make local.
-                let token = repository
-                    .find_remote("origin")
-                    .ok()
-                    .and_then(|origin| origin.url().ok().map(token_audience_matches))
-                    .unwrap_or(false)
-                    .then(|| {
-                        crate::integrations::github::disable_keychain_interaction()
-                            .and_then(|()| crate::integrations::github::installed_token())
-                            .ok()
-                            .flatten()
-                    })
-                    .flatten();
-                let _ = published_base_commit(&repository, oid, token.as_deref());
+                published_base_commit(&repository, oid, github_token)?;
             }
             let commit = repository.find_commit(oid)?;
             repository.branch(&intent.branch, &commit, false)?
@@ -567,7 +544,7 @@ mod tests {
             branch: "task-one".into(),
             starting_sha: commit.to_string(),
         };
-        let created = prepare_local_task_worktree(&intent).unwrap();
+        let created = prepare_local_task_worktree(&intent, None).unwrap();
         assert_eq!(
             created.path,
             fs::canonicalize(&worktree_root).unwrap().join("task_one")
@@ -599,7 +576,7 @@ mod tests {
         );
         fs::write(created.path.join("new.txt"), "untracked\n").unwrap();
         assert!(!observe_local_revision(&created.path).unwrap().clean);
-        assert!(prepare_local_task_worktree(&intent).unwrap().dirty);
+        assert!(prepare_local_task_worktree(&intent, None).unwrap().dirty);
         assert_eq!(
             observe_worktree(&created.path).unwrap(),
             WorktreeObservation {
@@ -622,7 +599,7 @@ mod tests {
             observe_local_revision(&created.path).unwrap().branch,
             "wrong-branch"
         );
-        let changed = prepare_local_task_worktree(&intent).unwrap();
+        let changed = prepare_local_task_worktree(&intent, None).unwrap();
         assert_eq!(changed.branch, intent.branch);
         assert_eq!(changed.head_sha, commit.to_string());
         let restored = Command::new("git")
@@ -632,21 +609,21 @@ mod tests {
         assert!(restored.status.success());
         fs::remove_dir_all(&created.path).unwrap();
         std::os::unix::fs::symlink(&repository_path, &created.path).unwrap();
-        assert!(prepare_local_task_worktree(&intent).is_err());
+        assert!(prepare_local_task_worktree(&intent, None).is_err());
         fs::remove_file(&created.path).unwrap();
         let conflicting = TaskWorktreeIntent {
             branch: "other-branch".into(),
             ..intent.clone()
         };
-        assert!(prepare_local_task_worktree(&conflicting).is_err());
-        let recovered = prepare_local_task_worktree(&intent).unwrap();
+        assert!(prepare_local_task_worktree(&conflicting, None).is_err());
+        let recovered = prepare_local_task_worktree(&intent, None).unwrap();
         assert_eq!(recovered.head_sha, commit.to_string());
         assert!(!recovered.dirty);
         let other = TaskWorktreeIntent {
             task_id: "task_two".into(),
             ..intent.clone()
         };
-        assert!(prepare_local_task_worktree(&other).is_err());
+        assert!(prepare_local_task_worktree(&other, None).is_err());
         let switched = Command::new("git")
             .args([
                 "-C",
@@ -697,7 +674,7 @@ mod tests {
             branch: "task-clean".into(),
             ..intent.clone()
         };
-        let clean = prepare_local_task_worktree(&clean_intent).unwrap();
+        let clean = prepare_local_task_worktree(&clean_intent, None).unwrap();
         let clean_repository = Repository::open(&clean.path).unwrap();
         fs::create_dir(clean_repository.path().join("modules")).unwrap();
         assert!(!has_populated_submodules(&clean.path).unwrap());
@@ -712,7 +689,7 @@ mod tests {
             branch: "task-submodule".into(),
             ..intent.clone()
         };
-        let submodule_worktree = prepare_local_task_worktree(&submodule_intent).unwrap();
+        let submodule_worktree = prepare_local_task_worktree(&submodule_intent, None).unwrap();
         let nested_path = submodule_worktree.path.join("nested");
         let nested = Repository::init(&nested_path).unwrap();
         fs::write(nested_path.join("README.md"), "nested\n").unwrap();
@@ -839,7 +816,7 @@ mod tests {
             starting_sha: pinned.clone(),
         };
         assert_eq!(
-            prepare_local_task_worktree(&intent).unwrap().head_sha,
+            prepare_local_task_worktree(&intent, None).unwrap().head_sha,
             pinned
         );
         let absent = TaskWorktreeIntent {
@@ -848,7 +825,7 @@ mod tests {
             starting_sha: "0123456789abcdef0123456789abcdef01234567".into(),
             ..intent.clone()
         };
-        assert!(prepare_local_task_worktree(&absent).is_err());
+        assert!(prepare_local_task_worktree(&absent, None).is_err());
         drop(local);
         fs::remove_dir_all(root).unwrap();
     }

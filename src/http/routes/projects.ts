@@ -3,9 +3,10 @@ import type { ZodTypeProvider } from "@fastify/type-provider-zod";
 import { z } from "zod";
 import { IssueAssociationSchema } from "../../tasks/issue-association.js";
 
+import { checkRepositoryConnection } from "../../projects/repository-connection.js";
 import type { ProjectService } from "../../projects/projects.js";
 import { CompanyIdParamsSchema, ProjectIdParamsSchema } from "../contracts/common.js";
-import { ModelListResponseSchema, ProjectBodySchema, ProjectCreateBodySchema, ProjectListResponseSchema, ProjectPatchBodySchema, ProjectProviderInstanceListResponseSchema, ProjectRepositoryDefaultsResponseSchema, ProjectResponseSchema, TaskSourceListResponseSchema, TaskSourceQuerySchema } from "../contracts/projects.js";
+import { ProjectRepositoryStatusSchema, ModelListResponseSchema, ProjectBodySchema, ProjectCreateBodySchema, ProjectListResponseSchema, ProjectPatchBodySchema, ProjectProviderInstanceListResponseSchema, ProjectRepositoryDefaultsResponseSchema, ProjectResponseSchema, TaskSourceListResponseSchema, TaskSourceQuerySchema } from "../contracts/projects.js";
 
 export interface ProjectRoutesOptions {
   projects: ProjectService;
@@ -32,6 +33,12 @@ const projects: FastifyPluginAsync<ProjectRoutesOptions> = async (app, options) 
     response: { 200: z.object({ repositories: z.array(z.object({ name: z.string(), defaultBranch: z.string() })) }) },
   } }, async (request, reply) => reply.send({ repositories: await projects.listGithubRepositories(request.suplexUser.id, request.params.companyId, request.params.owner) }));
   typed.get("/api/projects/:projectId", { schema: { params: ProjectIdParamsSchema, response: { 200: ProjectResponseSchema } } }, async (request, reply) => reply.send(projects.getProject(request.suplexUser.id, request.params.projectId)));
+  typed.get("/api/projects/:projectId/repository-status", { schema: { params: ProjectIdParamsSchema, response: { 200: ProjectRepositoryStatusSchema } } }, async (request, reply) => {
+    const project = projects.getProject(request.suplexUser.id, request.params.projectId);
+    const result = await checkRepositoryConnection(project);
+    projects.getProject(request.suplexUser.id, request.params.projectId);
+    return reply.header("Cache-Control", "no-store").send(result);
+  });
   typed.get("/api/projects/:projectId/issues", { schema: {
     params: ProjectIdParamsSchema,
     querystring: z.object({ query: z.string().max(200).default("") }), // bound: provider autocomplete query, not authored task text

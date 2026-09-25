@@ -356,14 +356,6 @@ fn keychain_password(service: &str, account: &str) -> AccessResult<Option<String
     }
 }
 
-/// Suplex's own stored credential first, then the GitHub CLI's.
-pub fn installed_token() -> AccessResult<Option<String>> {
-    if let Some(stored) = read_own_credential()? {
-        return Ok(Some(stored.access_token));
-    }
-    installed_gh_token()
-}
-
 fn installed_gh_token() -> AccessResult<Option<String>> {
     let host = gh_host()?;
     if let Some(token) = host.as_ref().and_then(|host| host.oauth_token.as_ref()) {

@@ -172,8 +172,13 @@ pub async fn prepare_task_worktree(
             .ok_or_else(|| io::Error::other("Task starting SHA is missing"))?
             .to_owned(),
     };
+    let token = crate::integrations::github::Access::load()
+        .await
+        .ok()
+        .and_then(|access| access.token().map(str::to_owned));
     tokio::task::spawn_blocking(move || {
-        worktree::prepare_local_task_worktree(&intent).map_err(|error| error.to_string())
+        worktree::prepare_local_task_worktree(&intent, token.as_deref())
+            .map_err(|error| error.to_string())
     })
     .await?
     .map_err(|error| io::Error::other(error).into())

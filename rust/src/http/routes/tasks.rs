@@ -543,8 +543,7 @@ async fn create(
             cookies,
         );
     };
-    if request.workflow != "standard"
-        || request.source.is_some()
+    if request.source.is_some()
         || request.issue.as_ref().is_some_and(|issue| issue.is_some())
         || !request.blocked_by_pull_requests.is_empty()
         || request.delivery_target != "local_worktree"
@@ -668,6 +667,7 @@ async fn finish_admitted_create(state: AppState, admitted: AdmittedCreate) -> Re
                 root: artifact_root,
                 images: &decoded_images,
             },
+            &request.workflow,
             now,
             move |id| {
                 if let Some(host) = host {
@@ -1746,6 +1746,19 @@ mod tests {
             listed.as_ref(),
             format!("{{\"tasks\":[{}]}}", std::str::from_utf8(&raw).unwrap()).as_bytes()
         );
+        let reviewed = create(
+            State(state.clone()), Path("task_http_company".into()), headers.clone(),
+            Bytes::from(json!({"projectId":"task_http_project","title":"Reviewed","idempotencyKey":"review-1","deliveryTarget":"local_worktree","workflow":"independent_review"}).to_string()),
+        ).await;
+        assert_eq!(reviewed.status(), StatusCode::CREATED);
+        let reviewed: Value = serde_json::from_slice(&to_bytes(reviewed.into_body(), 128 * 1024).await.unwrap()).unwrap();
+        assert_eq!(reviewed["workflow"], "independent_review");
+        assert_eq!(reviewed["advisorProfiles"]["reviewer"]["profileId"], "profile_native_root");
+        let wrong_role = create(
+            State(state.clone()), Path("task_http_company".into()), headers.clone(),
+            Bytes::from(json!({"projectId":"task_http_project","title":"Wrong role","idempotencyKey":"review-2","deliveryTarget":"local_worktree","workflow":"independent_review","advisorProfileIds":{"reviewer":"profile_native_worker"}}).to_string()),
+        ).await;
+        assert_eq!(wrong_role.status(), StatusCode::UNPROCESSABLE_ENTITY);
         let empty_edit = update_details(
             State(state.clone()),
             Path(task_id.clone()),

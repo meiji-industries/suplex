@@ -605,15 +605,29 @@ async fn observed_usage(
     } else {
         None
     };
-    let observed = observed
-        .into_iter()
-        .map(|(native_id, role, mut timeline)| {
-            if let Some(pricing) = pricing.as_deref() {
-                estimate_unpriced_usage(&mut timeline.usage, pricing);
-            }
-            (native_id, role, timeline)
-        })
-        .collect::<Vec<_>>();
+    settle_usage(
+        database_path,
+        task_id,
+        observed,
+        pricing.as_deref(),
+        require_complete,
+    )
+}
+
+/// The rest of TypeScript `observeTaskLimitUsage` once native usage and, when
+/// some of it is unpriced, the pricing catalog have been read.
+fn settle_usage(
+    database_path: &Path,
+    task_id: &str,
+    mut observed: Vec<(String, String, NativeTimeline)>,
+    pricing: Option<&crate::profiles::model_pricing::ModelPricingCatalog>,
+    require_complete: bool,
+) -> DatabaseResult<TaskLimitUsage> {
+    if let Some(pricing) = pricing {
+        for (_, _, timeline) in &mut observed {
+            estimate_unpriced_usage(&mut timeline.usage, pricing);
+        }
+    }
     if require_complete
         && observed.iter().any(|(_, _, timeline)| {
             timeline.usage.is_empty()
@@ -627,9 +641,8 @@ async fn observed_usage(
             estimated_cost_usd: None,
         });
     }
-    let cost = replace_observed_usage(database_path, task_id, observed)?;
     Ok(TaskLimitUsage {
-        estimated_cost_usd: Some(cost),
+        estimated_cost_usd: replace_observed_usage(database_path, task_id, observed)?,
     })
 }
 
@@ -654,19 +667,22 @@ fn estimate_unpriced_usage(
 }
 
 /// TypeScript `replaceNativeUsage`, keyed by native session and message.
+/// Returns TypeScript `usageMetrics(usage).cost`: no cost when there is no
+/// usage, or when all usage is unpriced.
 fn replace_observed_usage(
     database_path: &Path,
     task_id: &str,
     observed: Vec<(String, String, NativeTimeline)>,
-) -> DatabaseResult<f64> {
-    let mut snapshots: Vec<(String, serde_json::Value)> = Vec::new();
+) -> DatabaseResult<Option<f64>> {
+    let mut snapshots: Vec<(String, bool, serde_json::Value)> = Vec::new();
     for (native_id, role, timeline) in observed {
         for entry in timeline.usage {
-            snapshots.retain(|(session, snapshot)| {
+            snapshots.retain(|(session, _, snapshot)| {
                 session != &native_id || snapshot["messageId"] != entry.message_id.as_str()
             });
             snapshots.push((
                 native_id.clone(),
+                unpriced(&entry),
                 serde_json::json!({
                     "sessionId":native_id,"messageId":entry.message_id,"turnId":entry.turn_id,
                     "role":role,"provider":entry.provider,"model":entry.model,
@@ -680,13 +696,14 @@ fn replace_observed_usage(
             ));
         }
     }
-    let cost = snapshots
+    let cost: f64 = snapshots
         .iter()
-        .map(|(_, snapshot)| snapshot["cost"].as_f64().unwrap_or_default())
+        .map(|(_, _, snapshot)| snapshot["cost"].as_f64().unwrap_or_default())
         .sum();
+    let wholly_unpriced = cost <= 0.0 && snapshots.iter().any(|(_, unpriced, _)| *unpriced);
     let mut database = SuplexDatabase::open(database_path, OpenMode::ReadWrite)?;
     database.transaction(false, |database| {
-        for (session_id, _) in &snapshots {
+        for (session_id, _, _) in &snapshots {
             let belongs: bool = database.connection().query_row(
                 "SELECT EXISTS(SELECT 1 FROM suplex_task_sessions WHERE task_id = ?1 AND native_session_id = ?2)",
                 rusqlite::params![task_id, session_id], |row| row.get(0),
@@ -695,7 +712,7 @@ fn replace_observed_usage(
         }
         database.connection().execute("DELETE FROM suplex_task_usage WHERE task_id = ?1", [task_id])?;
         let time = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
-        for (session_id, snapshot) in &snapshots {
+        for (session_id, _, snapshot) in &snapshots {
             database.connection().execute(
                 "INSERT INTO suplex_task_usage (task_id,session_id,message_id,snapshot,observed_at) VALUES (?1,?2,?3,?4,?5)",
                 rusqlite::params![task_id, session_id, snapshot["messageId"].as_str(), snapshot.to_string(), time],
@@ -703,9 +720,7 @@ fn replace_observed_usage(
         }
         Ok(())
     })?;
-    // TypeScript `observeTaskLimitUsage` returns `usageMetrics(usage).cost` here;
-    // `requireCompletePricing` is applied by the caller.
-    Ok(cost)
+    Ok((!snapshots.is_empty() && !wholly_unpriced).then_some(cost))
 }
 
 fn needs_admission_usage(database_path: &Path, task_id: &str, kind: &str) -> DatabaseResult<bool> {
@@ -2095,7 +2110,186 @@ mod tests {
         let observed = observed_usage(&database_path, &task_id, false)
             .await
             .unwrap();
-        assert_eq!(observed.estimated_cost_usd, Some(0.0));
+        assert_eq!(observed.estimated_cost_usd, None);
+        assert_eq!(
+            observed_usage(&database_path, &task_id, true)
+                .await
+                .unwrap()
+                .estimated_cost_usd,
+            None
+        );
+        fs::remove_dir_all(base).unwrap();
+    }
+
+    /// `tests/task-limits.test.ts`: the budget proposed at a budget pause.
+    #[test]
+    fn a_budget_suggestion_rounds_spend_plus_allowance() {
+        for (spend, allowance, expected) in [
+            (15.412846000000002, 15.0, 30.0),
+            (18.0, 15.0, 35.0),
+            (1.0, 1.0, 5.0),
+            (30.0, 1.0, 35.0),
+        ] {
+            assert_eq!(
+                root_session_store::suggested_budget(spend + allowance, spend),
+                expected
+            );
+        }
+    }
+
+    /// TypeScript `observeTaskLimitUsage` cases from
+    /// `tests/root-controller-limits.test.ts`.
+    #[tokio::test]
+    async fn observed_usage_matches_the_typescript_limit_observer() {
+        let (base, database_path, task_id) = fixture_task();
+        let root = root_controller::prepare_root(&database_path, &task_id).unwrap();
+        let cost = |require| {
+            let database_path = database_path.clone();
+            let task_id = task_id.clone();
+            async move {
+                observed_usage(&database_path, &task_id, require)
+                    .await
+                    .unwrap()
+                    .estimated_cost_usd
+            }
+        };
+        // No session has native work yet.
+        assert_eq!(cost(false).await, Some(0.0));
+        assert_eq!(cost(true).await, None);
+        {
+            let mut database = SuplexDatabase::open(&database_path, OpenMode::ReadWrite).unwrap();
+            assert!(
+                root_session_store::bind_native_session(
+                    &mut database,
+                    &root,
+                    "codex-limits",
+                    Utc::now()
+                )
+                .unwrap()
+            );
+            database.connection().execute(
+                "UPDATE suplex_task_turns SET status = 'prompted', prompted_at = ?1 WHERE session_id = ?2",
+                rusqlite::params![Utc::now().to_rfc3339(), root.id],
+            ).unwrap();
+        }
+        let limits = |budget: f64, turns: i64| {
+            SuplexDatabase::open(&database_path, OpenMode::ReadWrite)
+                .unwrap()
+                .connection()
+                .execute(
+                    "UPDATE suplex_task_controls SET budget_usd = ?1, max_turns = ?2 WHERE task_id = ?3",
+                    rusqlite::params![budget, turns, task_id],
+                )
+                .unwrap();
+        };
+        // A known turn cap and a disabled budget report no cost without reading usage.
+        limits(15.0, 1);
+        assert_eq!(cost(false).await, None);
+        limits(0.0, 40);
+        assert_eq!(cost(false).await, None);
+
+        let entry = |message: &str, cost_usd: f64, input: f64| UsageEntry {
+            message_id: message.into(),
+            turn_id: message.into(),
+            provider: "openai",
+            model: "gpt-5.6-luna".into(),
+            started_at_ms: 1,
+            completed_at_ms: Some(2),
+            failed: false,
+            tokens: UsageTokens {
+                input,
+                output: 0.0,
+                reasoning: 0.0,
+                cache_read: 0.0,
+                cache_write: 0.0,
+            },
+            cost_usd,
+        };
+        let settle = |usage: Vec<UsageEntry>, pricing, require| {
+            settle_usage(
+                &database_path,
+                &task_id,
+                vec![(
+                    "codex-limits".to_owned(),
+                    "root".to_owned(),
+                    NativeTimeline {
+                        usage,
+                        live_message_id: None,
+                    },
+                )],
+                pricing,
+                require,
+            )
+            .unwrap()
+            .estimated_cost_usd
+        };
+        let stored = || -> Vec<serde_json::Value> {
+            let database = SuplexDatabase::open(&database_path, OpenMode::ReadOnly).unwrap();
+            let mut statement = database
+                .connection()
+                .prepare(
+                    "SELECT snapshot FROM suplex_task_usage WHERE task_id = ?1 ORDER BY message_id",
+                )
+                .unwrap();
+            statement
+                .query_map([&task_id], |row| row.get::<_, String>(0))
+                .unwrap()
+                .map(|snapshot| serde_json::from_str(&snapshot.unwrap()).unwrap())
+                .collect()
+        };
+        let empty = HashMap::new();
+        let catalog = HashMap::from([(
+            "openai/gpt-5.6-luna".to_owned(),
+            ModelPricing {
+                input: 200_000.0,
+                output: 0.0,
+                cache_read: 0.0,
+                cache_write: 0.0,
+            },
+        )]);
+
+        // Sessions with no usage have no cost.
+        assert_eq!(settle(vec![], None, false), None);
+        assert_eq!(settle(vec![], None, true), None);
+        // Wholly unpriced usage without a listed price: usage is kept, cost is unknown.
+        for pricing in [None, Some(&empty)] {
+            assert_eq!(
+                settle(vec![entry("unpriced", 0.0, 100.0)], pricing, false),
+                None
+            );
+            let snapshots = stored();
+            assert_eq!(snapshots.len(), 1);
+            assert_eq!(snapshots[0]["cost"], 0.0);
+            assert_eq!(snapshots[0]["tokens"]["input"], 100.0);
+            assert_eq!(
+                settle(vec![entry("unpriced", 0.0, 100.0)], pricing, true),
+                None
+            );
+        }
+        // A listed price estimates wholly unpriced usage.
+        assert_eq!(
+            settle(vec![entry("unpriced", 0.0, 100.0)], Some(&catalog), false),
+            Some(20.0)
+        );
+        assert_eq!(stored()[0]["subsidized"], true);
+        assert_eq!(
+            settle(vec![entry("unpriced", 0.0, 100.0)], Some(&catalog), true),
+            Some(20.0)
+        );
+        // Known native cost counts when other usage is unpriced, unless complete pricing is required.
+        let mixed = || vec![entry("usage-15", 15.0, 0.0), entry("unpriced", 0.0, 100.0)];
+        assert_eq!(settle(mixed(), Some(&empty), false), Some(15.0));
+        assert_eq!(settle(mixed(), Some(&empty), true), None);
+        // Native cost does not depend on the price catalog.
+        assert_eq!(
+            settle(vec![entry("usage-20", 20.0, 100.0)], None, true),
+            Some(20.0)
+        );
+        // Unsettled usage counts only when complete pricing is not required.
+        let mut running = entry("usage-5", 5.0, 0.0);
+        running.completed_at_ms = None;
+        assert_eq!(settle(vec![running.clone()], None, false), Some(5.0));
+        assert_eq!(settle(vec![running], None, true), None);
         fs::remove_dir_all(base).unwrap();
     }
 
@@ -2513,7 +2707,7 @@ mod tests {
                     vec![(native_id.to_owned(), "root".into(), no_usage_event)],
                 )
                 .unwrap(),
-                0.0
+                None
             );
             let retained: i64 = database.connection().query_row(
                 "SELECT COUNT(*) FROM suplex_task_usage WHERE task_id = ?1 AND message_id = 'prior-native'",
@@ -2696,7 +2890,7 @@ mod tests {
             )],
         )
         .unwrap();
-        assert_eq!(unpriced, 0.0);
+        assert_eq!(unpriced, None);
         let database = SuplexDatabase::open(&database_path, OpenMode::ReadOnly).unwrap();
         let snapshot: String = database.connection().query_row(
             "SELECT snapshot FROM suplex_task_usage WHERE task_id = ?1 AND message_id = 'msg-usage'",
@@ -2734,7 +2928,7 @@ mod tests {
             })],
         )
         .unwrap();
-        assert_eq!(cost, 1.0);
+        assert_eq!(cost, Some(1.0));
         let database = SuplexDatabase::open(&database_path, OpenMode::ReadOnly).unwrap();
         let snapshot: String = database.connection().query_row(
             "SELECT snapshot FROM suplex_task_usage WHERE task_id = ?1 AND message_id = 'msg-usage'",

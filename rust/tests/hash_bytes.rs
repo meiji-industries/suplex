@@ -62,3 +62,55 @@ fn persisted_hash_bytes_match_json_stringify() {
         assert_eq!(digest, fixture.digest, "{}", path.display());
     }
 }
+
+#[test]
+fn lossless_json_values_convert_only_when_serde_can_represent_them() {
+    let ordinary =
+        js_json::JsDocument::parse(r#"{"2":2,"1":1,"name":"😀","large":9007199254740993}"#)
+            .unwrap();
+    let serde = ordinary.to_serde_if_representable().unwrap();
+    assert_eq!(serde["1"], serde_json::json!(1));
+    assert_eq!(serde["large"], serde_json::json!(9_007_199_254_740_992_u64));
+    assert_eq!(ordinary.stringify(), js_json::stringify(&serde));
+    assert_eq!(
+        ordinary.stringify(),
+        r#"{"1":1,"2":2,"name":"😀","large":9007199254740992}"#
+    );
+
+    let surrogate = js_json::JsDocument::parse(r#"{"name":"\ud800"}"#).unwrap();
+    assert!(surrogate.to_serde_if_representable().is_err());
+    assert_eq!(surrogate.stringify(), r#"{"name":"\ud800"}"#);
+    assert_eq!(
+        surrogate.node(surrogate.get(surrogate.root(), "name").unwrap()),
+        &js_json::JsNode::String(vec![0xd800])
+    );
+
+    let surrogate_key = js_json::JsDocument::parse(r#"{"\ud800":1}"#).unwrap();
+    assert!(surrogate_key.to_serde_if_representable().is_err());
+    assert_eq!(surrogate_key.stringify(), r#"{"\ud800":1}"#);
+
+    let overflow = js_json::JsDocument::parse(r#"{"response":{"count":1e400}}"#).unwrap();
+    assert!(overflow.to_serde_if_representable().is_err());
+    assert_eq!(overflow.stringify(), r#"{"response":{"count":null}}"#);
+}
+
+#[test]
+fn deep_json_parse_stringify_clone_and_drop_are_iterative() {
+    let depth = 20_000;
+    for input in [
+        format!(
+            r#"{{"nested":{}0{}}}"#,
+            "[".repeat(depth),
+            "]".repeat(depth)
+        ),
+        format!(r#"{}0{}"#, r#"{"x":"#.repeat(depth), "}".repeat(depth)),
+    ] {
+        let parsed = js_json::JsDocument::parse(&input).unwrap();
+        assert!(parsed.to_serde_if_representable().is_err());
+        assert_eq!(parsed.stringify(), input);
+        assert_eq!(parsed.clone().stringify(), input);
+    }
+    for invalid in [r#"[1,]"#, r#"{"x":1,}"#, r#"{"x":01}"#] {
+        assert!(js_json::JsDocument::parse(invalid).is_err());
+    }
+}

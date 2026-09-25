@@ -18,6 +18,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         return suplex::coordination::root_stdio::serve_from_environment().await;
     }
     let installation = Installation::load()?;
+    suplex::platform::system_events::install(installation.logs.clone());
     let database = SuplexDatabase::open(&installation.database, OpenMode::Migrate)?;
     suplex::identity::auth::normalize_legacy_users(&database)?;
     let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, installation.port)).await?;

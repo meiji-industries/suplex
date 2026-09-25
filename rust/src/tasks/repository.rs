@@ -28,6 +28,7 @@ impl std::fmt::Display for TaskConflict {
 
 impl std::error::Error for TaskConflict {}
 
+use crate::coordination::root_session_store;
 use crate::platform::{
     artifacts::{self, ArtifactInput, StoredArtifact},
     database::{DatabaseResult, SuplexDatabase},
@@ -316,7 +317,11 @@ fn create_inner(
                 params![id, dependency, time],
             )?;
         }
-        if input.start_queued { let _ = admit_queued(database, id, now)?; }
+        root_session_store::observe_lifecycle(database, id)?;
+        if input.start_queued && admit_queued(database, id, now)? {
+            root_session_store::observe_lifecycle(database, id)?;
+            root_session_store::observe_admission(database, id, "scheduler sweep", None);
+        }
         let created = task_by_id(database, id)?.ok_or_else(|| std::io::Error::other("Task insert did not persist"))?;
         let resulting_state = serde_json::json!({"status": created.status, "archived": false}).to_string();
         database.connection().execute(
@@ -428,7 +433,15 @@ pub fn start(
                 [task_id], |row| row.get(0),
             )?;
             if !queued { return Ok(None); }
-            let _ = admit_queued(database, task_id, now)?;
+            let admitted = admit_queued(database, task_id, now)?;
+            root_session_store::observe_lifecycle(database, task_id)?;
+            if admitted {
+                root_session_store::observe_admission(database, task_id, "start request", None);
+            } else {
+                root_session_store::observe_queue_wait(database, task_id);
+            }
+        } else {
+            root_session_store::observe_lifecycle(database, task_id)?;
         }
         task_by_id(database, task_id)
     })

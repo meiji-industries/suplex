@@ -3,9 +3,10 @@
 use chrono::{DateTime, SecondsFormat, Utc};
 use rusqlite::{OptionalExtension, Row, params};
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
-use std::sync::Mutex;
+use std::collections::HashMap;
+use std::sync::{Mutex, PoisonError};
 use uuid::Uuid;
 
 use crate::coordination::root_prompts::{self, STANDARD_WORKER_RESULT_WAKE};
@@ -16,6 +17,7 @@ use crate::http::contracts::typed::tasks::{
 };
 use crate::identity::auth::js_trim;
 use crate::platform::database::{DatabaseResult, SuplexDatabase};
+use crate::platform::system_events;
 use crate::runtimes::process::inspect_process;
 use crate::shared::js_json;
 use crate::tasks::commands::{allowed_profile, read_profile};
@@ -510,12 +512,110 @@ pub fn ask_human_for_root(
         return Err(std::io::Error::other("question_is_empty").into());
     }
     let options = serde_json::to_string(options)?;
-    database.transaction(true, |database| {
+    let changed = database.transaction(true, |database| {
         Ok(database.connection().execute(
             "UPDATE suplex_task_controls SET status = 'waiting_human', human_question = ?1, human_question_options_json = ?2, human_question_id = ?3, limit_pause_json = NULL, wake_at = NULL, workflow_state_json = json_set(workflow_state_json, '$.deliveryWait', json('null')), updated_at = ?4 WHERE task_id = ?5 AND status = 'active' AND root_session_id = ?6 AND EXISTS (SELECT 1 FROM suplex_task_sessions s WHERE s.id = ?6 AND s.task_id = suplex_task_controls.task_id AND s.kind = 'root' AND s.generation = ?7 AND s.is_current = 1 AND s.lifecycle <> 'cancelled')",
             params![question, options, Uuid::new_v4().to_string(), timestamp(now), task_id, session_id, generation],
         )? == 1)
-    })
+    })?;
+    if changed {
+        observe_lifecycle(database, task_id)?;
+    }
+    Ok(changed)
+}
+
+static OBSERVED_STATUSES: Mutex<Option<HashMap<String, String>>> = Mutex::new(None);
+static OBSERVED_WAITS: Mutex<Option<HashMap<String, String>>> = Mutex::new(None);
+
+/// Report a task status change once the transaction that wrote it commits.
+pub(crate) fn observe_lifecycle(
+    database: &mut SuplexDatabase,
+    task_id: &str,
+) -> DatabaseResult<()> {
+    if !system_events::enabled() {
+        return Ok(());
+    }
+    let status: String = database.connection().query_row(
+        "SELECT status FROM suplex_task_controls WHERE task_id = ?1",
+        [task_id],
+        |row| row.get(0),
+    )?;
+    let observed = OBSERVED_STATUSES
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner);
+    if observed.as_ref().and_then(|map| map.get(task_id)) == Some(&status) {
+        return Ok(());
+    }
+    drop(observed);
+    let task_id = task_id.to_owned();
+    database.after_commit(move || {
+        let mut observed = OBSERVED_STATUSES
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        let previous = observed
+            .get_or_insert_default()
+            .insert(task_id.clone(), status.clone());
+        if previous.as_ref() == Some(&status) {
+            return;
+        }
+        let mut event = json!({"type": "task_status", "taskId": task_id, "status": status});
+        if let Some(previous) = previous {
+            event["previousStatus"] = previous.into();
+        }
+        system_events::emit(event);
+    });
+    Ok(())
+}
+
+pub(crate) fn observe_admission(
+    database: &mut SuplexDatabase,
+    task_id: &str,
+    trigger: &str,
+    prerequisite_task_id: Option<&str>,
+) {
+    let mut event = json!({"type": "task_admitted", "taskId": task_id, "trigger": trigger});
+    if let Some(prerequisite) = prerequisite_task_id {
+        event["prerequisiteTaskId"] = prerequisite.into();
+    }
+    database.after_commit(move || system_events::emit(event));
+}
+
+/// A diagnostic read never changes queue admission.
+pub(crate) fn observe_queue_wait(database: &mut SuplexDatabase, task_id: &str) {
+    if !system_events::enabled() {
+        return;
+    }
+    let Ok((_, _, waiting_on)) = crate::tasks::response::task_dependencies(database, task_id)
+    else {
+        return;
+    };
+    let mut waits = waiting_on
+        .iter()
+        .map(|wait| json!({"id": wait["id"], "reason": wait["reason"]}))
+        .collect::<Vec<_>>();
+    waits.sort_by(|left, right| left["id"].as_str().cmp(&right["id"].as_str()));
+    let signature = Value::from(waits.clone()).to_string();
+    let observed = OBSERVED_WAITS
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner);
+    if observed.as_ref().and_then(|map| map.get(task_id)) == Some(&signature) {
+        return;
+    }
+    drop(observed);
+    let task_id = task_id.to_owned();
+    database.after_commit(move || {
+        let mut observed = OBSERVED_WAITS
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner);
+        if observed
+            .get_or_insert_default()
+            .insert(task_id.clone(), signature.clone())
+            == Some(signature)
+        {
+            return;
+        }
+        system_events::emit(json!({"type": "queue_wait", "taskId": task_id, "waits": waits}));
+    });
 }
 
 /// Cancel durable task intent and request native cleanup in one transaction.
@@ -525,7 +625,7 @@ pub fn cancel_task(
     task_id: &str,
     now: DateTime<Utc>,
 ) -> DatabaseResult<bool> {
-    database.transaction(true, |database| {
+    let cancelled = database.transaction(true, |database| {
         let time = timestamp(now);
         let changed = database.connection().execute(
             "UPDATE suplex_task_controls SET status = 'cancelled', wake_at = NULL, human_question = NULL, human_question_id = NULL, limit_pause_json = NULL, workflow_state_json = json_set(workflow_state_json, '$.deliveryWait', json('null')), updated_at = ?1 WHERE task_id = ?2 AND status <> 'delivered'",
@@ -543,7 +643,11 @@ pub fn cancel_task(
             params![time, task_id],
         )?;
         Ok(true)
-    })
+    })?;
+    if cancelled {
+        observe_lifecycle(database, task_id)?;
+    }
+    Ok(cancelled)
 }
 
 /// Answer only the current human question. Confirmed interrupted native work
@@ -633,7 +737,8 @@ pub fn answer_human(
             params![time, task_id],
         )?;
         Ok(())
-    })
+    })?;
+    observe_lifecycle(database, task_id)
 }
 
 /// Apply the current task-limit decision as one durable control and prompt update.
@@ -716,7 +821,8 @@ pub fn answer_task_limit(
             params![limits.budget_usd, limits.max_turns, time, task_id],
         )?;
         Ok(())
-    })
+    })?;
+    observe_lifecycle(database, task_id)
 }
 
 /// Reserve the next Standard Worker turn atomically with Root identity and
@@ -1268,7 +1374,7 @@ pub fn send_note(
     if note.is_empty() || note.encode_utf16().count() > 20_000 {
         return Err(std::io::Error::other("note_invalid").into());
     }
-    database.transaction(true, |database| {
+    let turn = database.transaction(true, |database| {
         let (status, archived, root_session_id, workflow_state): (String, bool, Option<String>, String) = database.connection().query_row(
             "SELECT c.status,t.archived_at IS NOT NULL,c.root_session_id,c.workflow_state_json FROM suplex_task_controls c JOIN suplex_tasks t ON t.id = c.task_id WHERE c.task_id = ?1",
             [task_id],
@@ -1335,7 +1441,9 @@ pub fn send_note(
             params![id, task_id, root.id, root.generation, hash, prompt, time],
         )?;
         database.connection().query_row("SELECT * FROM suplex_task_turns WHERE id = ?1", [&id], turn).map_err(Into::into)
-    })
+    })?;
+    observe_lifecycle(database, task_id)?;
+    Ok(turn)
 }
 
 pub fn pending_turns(database: &SuplexDatabase, session_id: &str) -> DatabaseResult<Vec<RootTurn>> {
@@ -1641,7 +1749,7 @@ pub fn mark_delivered(
     task_id: &str,
     now: DateTime<Utc>,
 ) -> DatabaseResult<Vec<String>> {
-    database.transaction(false, |database| {
+    let admitted = database.transaction(false, |database| {
         let previous: Option<String> = database.connection().query_row(
             "SELECT status FROM suplex_task_controls WHERE task_id = ?1",
             [task_id], |row| row.get(0),
@@ -1685,7 +1793,13 @@ pub fn mark_delivered(
             )?;
         }
         Ok(admitted)
-    })
+    })?;
+    observe_lifecycle(database, task_id)?;
+    for id in &admitted {
+        observe_lifecycle(database, id)?;
+        observe_admission(database, id, "prerequisite completion", Some(task_id));
+    }
+    Ok(admitted)
 }
 
 pub fn retire_delivered_sessions(
@@ -2036,6 +2150,93 @@ mod tests {
         assert_eq!(
             current_worker(&database, &task.id).unwrap().unwrap().id,
             second["id"].as_str().unwrap()
+        );
+        drop(database);
+        let _ = std::fs::remove_file(&filename);
+        let _ = std::fs::remove_file(filename.with_extension("sqlite-wal"));
+        let _ = std::fs::remove_file(filename.with_extension("sqlite-shm"));
+    }
+
+    #[test]
+    fn lifecycle_events_follow_start_queue_wait_and_prerequisite_release() {
+        let filename =
+            std::env::temp_dir().join(format!("suplex_events_{}.sqlite", Uuid::new_v4()));
+        let logs = filename.with_extension("logs");
+        crate::platform::system_events::install(logs.clone());
+        let now = DateTime::parse_from_rfc3339("2026-09-25T12:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let mut database = SuplexDatabase::open(&filename, OpenMode::Migrate).unwrap();
+        let user = auth::development_sign_in(&mut database, now).unwrap().user;
+        database.connection().execute("INSERT INTO suplex_companies (id,name,status,created_at) VALUES ('event_company','Events','active',?1)", [timestamp(now)]).unwrap();
+        database.connection().execute("INSERT INTO suplex_projects (id,company_id,name,repository_path,worktree_root,repository_identity,base_branch,setup_command,verification_command,root_profile_id,worker_profile_id,agent_task_policy_json,created_at,updated_at) VALUES ('event_project','event_company','Events','/tmp/event-repo','/tmp/event-worktrees',NULL,'main','','','root','worker','{}',?1,?1)", [timestamp(now)]).unwrap();
+        let first = PreparedTask {
+            id: repository::new_task_id(),
+            company_id: "event_company".into(),
+            project_id: "event_project".into(),
+            title: "First".into(),
+            description: "".into(),
+            configuration: serde_json::json!({"repository":"owner/repo","branch":"task-first","baseBranch":"main","baselineSha":"head"}),
+            idempotency_key: "event-first".into(),
+            request_hash: "event-first-hash".into(),
+            creator: TaskCreator::User(user.id),
+            delivery_target: "local_worktree".into(),
+            delivery_intent: serde_json::json!({"repository":"owner/repo","headBranch":"task-first","baseBranch":"main","baselineSha":"head","pullRequestNumber":null}),
+            root_profile: serde_json::json!({"profileId":"root","provider":"codex","model":"test","reasoningLevel":"medium","serviceTier":"default"}),
+            worker_profile: serde_json::json!({"profileId":"worker","provider":"codex","model":"test","reasoningLevel":"medium","serviceTier":"default"}),
+            advisor_profiles: serde_json::json!({}),
+            issue: None,
+            start_queued: true,
+            copied_from_task_id: None,
+            depends_on: vec![],
+        };
+        let a = repository::create(&mut database, &first, now)
+            .unwrap()
+            .task
+            .id;
+        let second = PreparedTask {
+            id: repository::new_task_id(),
+            idempotency_key: "event-second".into(),
+            request_hash: "event-second-hash".into(),
+            start_queued: false,
+            depends_on: vec![a.clone()],
+            ..first.clone()
+        };
+        let b = repository::create(&mut database, &second, now)
+            .unwrap()
+            .task
+            .id;
+        repository::start(&mut database, &b, now).unwrap();
+        assert_eq!(
+            mark_delivered(&mut database, &a, now).unwrap(),
+            vec![b.clone()]
+        );
+        let events = std::fs::read_to_string(logs.join("system.log"))
+            .unwrap()
+            .lines()
+            .map(|line| serde_json::from_str::<Value>(line).unwrap())
+            .filter(|event| event["taskId"] == a.as_str() || event["taskId"] == b.as_str())
+            .map(|mut event| {
+                let fields = event.as_object_mut().unwrap();
+                for key in ["schemaVersion", "time", "eventId", "pid"] {
+                    assert!(fields.remove(key).is_some());
+                }
+                event
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(
+            events,
+            vec![
+                json!({"type":"task_status","taskId":a,"status":"queued"}),
+                json!({"type":"task_status","taskId":a,"status":"active","previousStatus":"queued"}),
+                json!({"type":"task_admitted","taskId":a,"trigger":"scheduler sweep"}),
+                json!({"type":"task_status","taskId":b,"status":"backlog"}),
+                json!({"type":"task_status","taskId":b,"status":"queued","previousStatus":"backlog"}),
+                json!({"type":"queue_wait","taskId":b,"waits":[{"id":a,"reason":"prerequisite_running"}]}),
+                json!({"type":"task_status","taskId":a,"status":"delivered","previousStatus":"active"}),
+                json!({"type":"task_status","taskId":b,"status":"active","previousStatus":"queued"}),
+                json!({"type":"task_admitted","taskId":b,"trigger":"prerequisite completion","prerequisiteTaskId":a}),
+            ]
         );
         drop(database);
         let _ = std::fs::remove_file(&filename);

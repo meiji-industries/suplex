@@ -153,7 +153,7 @@ fn task_question(
     })
 }
 
-fn task_dependencies(
+pub(crate) fn task_dependencies(
     database: &SuplexDatabase,
     task_id: &str,
 ) -> DatabaseResult<(Vec<String>, Vec<Value>, Vec<Value>)> {

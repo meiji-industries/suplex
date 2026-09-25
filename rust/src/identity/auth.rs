@@ -8,8 +8,57 @@ use serde::Serialize;
 use sha2::{Digest, Sha256};
 
 use crate::platform::database::{DatabaseResult, SuplexDatabase};
+use crate::shared::js_json::{JsDocument, JsNode};
 
 const SESSION_TTL_DAYS: i64 = 7;
+
+/// Match AuthService's constructor boundary for databases populated after
+/// migrations ran, including an older database attached before server start.
+pub fn normalize_legacy_users(database: &SuplexDatabase) -> DatabaseResult<usize> {
+    Ok(database.connection().execute(
+        "UPDATE suplex_users SET username = 'user_v1_' || id, identity_version = 1 WHERE identity_version < 1",
+        [],
+    )?)
+}
+
+pub(crate) fn safe_metadata_document(raw: &str) -> JsDocument {
+    let mut document = JsDocument::parse(raw).unwrap_or_else(|_| JsDocument::parse("{}").unwrap());
+    let fields = match document.node(document.root()) {
+        JsNode::Object(fields) => fields
+            .iter()
+            .filter(|(_, value)| matches!(document.node(*value), JsNode::String(_)))
+            .cloned()
+            .collect(),
+        _ => Vec::new(),
+    };
+    let root = document.append_node(JsNode::Object(fields));
+    document.set_root(root);
+    document
+}
+
+pub(crate) fn safe_metadata_json(raw: &str) -> String {
+    safe_metadata_document(raw).stringify()
+}
+
+pub(crate) fn metadata_with_string(raw: &str, name: &str, value: &str) -> String {
+    let mut document = safe_metadata_document(raw);
+    let mut fields = match document.node(document.root()) {
+        JsNode::Object(fields) => fields.clone(),
+        _ => unreachable!("filtered metadata is an object"),
+    };
+    let value_node = document.append_node(JsNode::String(value.encode_utf16().collect()));
+    if let Some((_, existing)) = fields
+        .iter_mut()
+        .find(|(key, _)| key.iter().copied().eq(name.encode_utf16()))
+    {
+        *existing = value_node;
+    } else {
+        fields.push((name.encode_utf16().collect(), value_node));
+    }
+    let root = document.append_node(JsNode::Object(fields));
+    document.set_root(root);
+    document.stringify()
+}
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -388,6 +437,53 @@ pub fn update_profile(
 mod tests {
     use super::*;
     use crate::platform::database::OpenMode;
+
+    #[test]
+    fn legacy_users_attached_after_migration_normalize_at_auth_startup() {
+        let filename =
+            std::env::temp_dir().join(format!("{}.sqlite", random_hex_id("suplex_auth").unwrap()));
+        let database = SuplexDatabase::open(&filename, OpenMode::Migrate).unwrap();
+        database.connection().execute(
+            "INSERT INTO suplex_users (id, display_name, username, avatar_seed, role, status, created_at, updated_at, identity_version) VALUES ('legacy-user', 'Legacy user', 'legacy@suplex.local', 'legacy@suplex.local', 'member', 'active', '2026-09-24T12:00:00.000Z', '2026-09-24T12:00:00.000Z', 0)",
+            [],
+        ).unwrap();
+        drop(database);
+        let database = SuplexDatabase::open(&filename, OpenMode::ReadWrite).unwrap();
+        assert_eq!(normalize_legacy_users(&database).unwrap(), 1);
+        let normalized: (String, i64, String, String) = database.connection().query_row(
+            "SELECT username, identity_version, avatar_seed, updated_at FROM suplex_users WHERE id = 'legacy-user'",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        ).unwrap();
+        assert_eq!(
+            normalized,
+            (
+                "user_v1_legacy-user".into(),
+                1,
+                "legacy@suplex.local".into(),
+                "2026-09-24T12:00:00.000Z".into(),
+            )
+        );
+        assert_eq!(normalize_legacy_users(&database).unwrap(), 0);
+        drop(database);
+        let _ = std::fs::remove_file(&filename);
+        let _ = std::fs::remove_file(filename.with_extension("sqlite-wal"));
+        let _ = std::fs::remove_file(filename.with_extension("sqlite-shm"));
+    }
+
+    #[test]
+    fn metadata_filter_keeps_javascript_key_order_and_utf16_strings() {
+        let raw = r#"{"10":"ten","2":"two","odd":"\ud800","skip":1,"invitationId":"old"}"#;
+        assert_eq!(
+            safe_metadata_json(raw),
+            r#"{"2":"two","10":"ten","odd":"\ud800","invitationId":"old"}"#
+        );
+        assert_eq!(
+            metadata_with_string(raw, "invitationId", "invitation_new"),
+            r#"{"2":"two","10":"ten","odd":"\ud800","invitationId":"invitation_new"}"#
+        );
+        assert_eq!(safe_metadata_json("not json"), "{}");
+    }
 
     #[test]
     fn session_lookup_development_sign_in_sign_out_and_legacy_rollover() {

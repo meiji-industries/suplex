@@ -347,10 +347,7 @@ pub fn finish_registration(
         if consumed != 1 { return Err(invitation_failure()); }
         let action = if kind == "recovery" { "recovery_completed" } else { "user_enrolled" };
         let metadata = if kind == "recovery" {
-            let mut metadata = serde_json::from_str::<Value>(&invitation.metadata_json).ok().and_then(|value| value.as_object().cloned()).unwrap_or_default();
-            metadata.retain(|_, value| value.is_string());
-            metadata.insert("invitationId".into(), json!(invitation.id));
-            Value::Object(metadata).to_string()
+            auth::metadata_with_string(&invitation.metadata_json, "invitationId", &invitation.id)
         } else { "{}".to_owned() };
         database.connection().execute("INSERT INTO suplex_audit_events (id, actor_user_id, actor_agent_id, action, target_user_id, company_id, metadata_json, created_at) VALUES (?1, NULL, NULL, ?2, ?3, NULL, ?4, ?5)", params![auth::random_hex_id("audit")?, action, user_id, metadata, now_iso])?;
         let user = auth::public_user(database, &user_id)?.ok_or_else(passkey_failure)?;

@@ -43,19 +43,50 @@ pub struct CredentialSummary {
     pub revoked_at: Option<String>,
 }
 
-#[derive(Clone, Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Clone, Debug)]
 pub struct AuditEvent {
     pub id: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub actor_user_id: Option<String>,
     pub action: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub target_user_id: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub company_id: Option<String>,
-    pub metadata: serde_json::Map<String, serde_json::Value>,
+    pub metadata_json: String,
     pub created_at: String,
+}
+
+pub fn audit_events_json(events: &[AuditEvent]) -> String {
+    fn quoted(value: &str) -> String {
+        serde_json::to_string(value).expect("stored audit fields are UTF-8")
+    }
+    let mut output = String::from("{\"events\":[");
+    for (position, event) in events.iter().enumerate() {
+        if position > 0 {
+            output.push(',');
+        }
+        output.push_str("{\"id\":");
+        output.push_str(&quoted(&event.id));
+        if let Some(actor) = &event.actor_user_id {
+            output.push_str(",\"actorUserId\":");
+            output.push_str(&quoted(actor));
+        }
+        output.push_str(",\"action\":");
+        output.push_str(&quoted(&event.action));
+        if let Some(target) = &event.target_user_id {
+            output.push_str(",\"targetUserId\":");
+            output.push_str(&quoted(target));
+        }
+        if let Some(company) = &event.company_id {
+            output.push_str(",\"companyId\":");
+            output.push_str(&quoted(company));
+        }
+        output.push_str(",\"metadata\":");
+        output.push_str(&event.metadata_json);
+        output.push_str(",\"createdAt\":");
+        output.push_str(&quoted(&event.created_at));
+        output.push('}');
+    }
+    output.push_str("]}");
+    output
 }
 
 fn timestamp(now: DateTime<Utc>) -> String {
@@ -260,27 +291,13 @@ pub fn list_audit_events(
     Ok(statement
         .query_map([], |row| {
             let raw: String = row.get(5)?;
-            let metadata = serde_json::from_str::<serde_json::Value>(&raw)
-                .ok()
-                .and_then(|value| value.as_object().cloned())
-                .map(|object| {
-                    object
-                        .into_iter()
-                        .filter_map(|(key, value)| {
-                            value
-                                .as_str()
-                                .map(|string| (key, serde_json::Value::String(string.to_owned())))
-                        })
-                        .collect()
-                })
-                .unwrap_or_default();
             Ok(AuditEvent {
                 id: row.get(0)?,
                 actor_user_id: row.get(1)?,
                 action: row.get(2)?,
                 target_user_id: row.get(3)?,
                 company_id: row.get(4)?,
-                metadata,
+                metadata_json: auth::safe_metadata_json(&raw),
                 created_at: row.get(6)?,
             })
         })?
@@ -291,6 +308,32 @@ pub fn list_audit_events(
 mod tests {
     use super::*;
     use crate::platform::database::OpenMode;
+
+    #[test]
+    fn audit_listing_preserves_lossless_metadata_and_response_order() {
+        let path = std::env::temp_dir().join(format!(
+            "{}.sqlite",
+            auth::random_hex_id("suplex_admin").unwrap()
+        ));
+        let mut database = SuplexDatabase::open(&path, OpenMode::Migrate).unwrap();
+        let now = DateTime::parse_from_rfc3339("2026-09-24T12:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let admin = auth::development_sign_in(&mut database, now).unwrap();
+        database.connection().execute(
+            r#"INSERT INTO suplex_audit_events (id, actor_user_id, actor_agent_id, action, target_user_id, company_id, metadata_json, created_at) VALUES ('audit_fixed', 'user_development', NULL, 'fixture', NULL, NULL, '{"10":"ten","2":"two","odd":"\ud800","skip":1}', '2026-09-24T12:00:00.000Z')"#,
+            [],
+        ).unwrap();
+        let events = list_audit_events(&database, &admin.user.id).unwrap();
+        assert_eq!(
+            audit_events_json(&events),
+            r#"{"events":[{"id":"audit_fixed","actorUserId":"user_development","action":"fixture","metadata":{"2":"two","10":"ten","odd":"\ud800"},"createdAt":"2026-09-24T12:00:00.000Z"}]}"#
+        );
+        drop(database);
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(path.with_extension("sqlite-wal"));
+        let _ = std::fs::remove_file(path.with_extension("sqlite-shm"));
+    }
 
     #[test]
     fn invitation_and_revocation_keep_shared_database_lifecycle() {

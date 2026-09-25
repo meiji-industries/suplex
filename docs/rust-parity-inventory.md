@@ -90,7 +90,7 @@ The table lists all 238 backend TypeScript modules present at the baseline, incl
 | [identity/auth-repository.ts](../src/identity/auth-repository.ts) | not started | |
 | [identity/auth-schema.ts](../src/identity/auth-schema.ts) | not started | |
 | [identity/auth-webauthn.ts](../src/identity/auth-webauthn.ts) | ported | [All seven formats and ten algorithms](rust-spikes/webauthn.md) implemented with SDK root/revocation policy and signed positive/negative checks. TypeScript/Rust shared-store and TCP flows pass. Apple positive uses a historical clock; Android Key/SafetyNet positives use test roots, with production-root rejection checked. No physical/default-root positive is claimed for those two formats |
-| [identity/auth.ts](../src/identity/auth.ts) | not started | Sessions, development administrator, profile/company operations, invitations, lists, revocation, and signed ceremonies implemented with focused/live checks. Shared-store interoperability and detached async verification pass. Legacy-user constructor normalization, setup/recovery CLI entrypoints, downstream agent audits, and lossless metadata remain incomplete |
+| [identity/auth.ts](../src/identity/auth.ts) | not started | Sessions, administrator/company/profile/account operations, ceremonies, legacy-user startup normalization, and lossless audit/recovery metadata implemented with independent checks. Shared-store interoperability and detached verification pass. Setup/recovery CLI entrypoints and downstream task/delivery integration remain incomplete |
 | [identity/avatar-kinds.ts](../src/identity/avatar-kinds.ts) | not started | |
 | [identity/avatars.ts](../src/identity/avatars.ts) | not started | |
 | [identity/external-agents.ts](../src/identity/external-agents.ts) | not started | |

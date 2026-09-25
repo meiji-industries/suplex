@@ -228,6 +228,20 @@ test("legacy product-named usernames are normalized before they cross the auth b
   }
 });
 
+test("audit metadata keeps JavaScript key order and lone surrogate strings", async () => {
+  const value = await fixture();
+  try {
+    const invitation = value.auth.ensureBootstrapInvitation()!;
+    const admin = await enrollBootstrap(value.auth, invitation.token);
+    const metadata = String.raw`{"10":"ten","2":"two","odd":"\ud800","skip":1}`;
+    value.database.authQuery((db) => db.prepare("INSERT INTO suplex_audit_events (id, actor_user_id, actor_agent_id, action, target_user_id, company_id, metadata_json, created_at) VALUES ('audit_fixed', NULL, NULL, 'fixture', NULL, NULL, ?, '2026-09-24T12:00:00.000Z')").run(metadata));
+    const events = value.auth.listAuditEvents(admin.user.id).filter((event) => event.id === "audit_fixed");
+    expect(JSON.stringify({ events })).toBe(String.raw`{"events":[{"id":"audit_fixed","action":"fixture","metadata":{"2":"two","10":"ten","odd":"\ud800"},"createdAt":"2026-09-24T12:00:00.000Z"}]}`);
+  } finally {
+    await closeFixture(value);
+  }
+});
+
 test("company renames are admin-only, transactional, and audited", async () => {
   const value = await fixture();
   try {

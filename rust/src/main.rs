@@ -12,6 +12,7 @@ use tokio::net::TcpListener;
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let installation = Installation::load()?;
     let database = SuplexDatabase::open(&installation.database, OpenMode::Migrate)?;
+    suplex::identity::auth::normalize_legacy_users(&database)?;
     let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, installation.port)).await?;
     println!("Suplex Rust revision: {}", env!("SUPLEX_RUST_REVISION"));
     println!("URL: http://127.0.0.1:{}", installation.port);

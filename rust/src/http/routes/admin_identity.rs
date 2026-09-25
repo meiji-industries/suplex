@@ -2,7 +2,7 @@ use axum::{
     Json, Router,
     body::Bytes,
     extract::{Path, State},
-    http::{HeaderMap, StatusCode},
+    http::{HeaderMap, StatusCode, header},
     response::{IntoResponse, Response},
     routing::{get, post},
 };
@@ -29,11 +29,6 @@ struct Users {
 struct Credentials {
     credentials: Vec<admin::CredentialSummary>,
 }
-#[derive(Serialize)]
-struct AuditEvents {
-    events: Vec<admin::AuditEvent>,
-}
-
 fn validation_params(contract: &str, params: Value) -> Result<(), Box<Response>> {
     match contracts::validate(contract, Some(&params)) {
         Some(Ok(_)) => Ok(()),
@@ -205,7 +200,11 @@ async fn list_audit(State(state): State<AppState>, headers: HeaderMap) -> Respon
     };
     let response = match state.with_database(|database| admin::list_audit_events(database, &actor))
     {
-        Ok(events) => Json(AuditEvents { events }).into_response(),
+        Ok(events) => (
+            [(header::CONTENT_TYPE, "application/json; charset=utf-8")],
+            admin::audit_events_json(&events),
+        )
+            .into_response(),
         Err(error) => auth::service_error(error),
     };
     with_cookies(response, cookies)
@@ -219,6 +218,50 @@ mod tests {
         platform::database::{OpenMode, SuplexDatabase},
     };
     use axum::{body::to_bytes, http::HeaderValue};
+
+    #[tokio::test]
+    async fn audit_http_body_preserves_lossless_metadata() {
+        let path = std::env::temp_dir().join(format!(
+            "{}.sqlite",
+            identity_auth::random_hex_id("suplex_admin_route").unwrap()
+        ));
+        let mut database = SuplexDatabase::open(&path, OpenMode::Migrate).unwrap();
+        let signed_in = identity_auth::development_sign_in(&mut database, Utc::now()).unwrap();
+        database.connection().execute(
+            r#"INSERT INTO suplex_audit_events (id, actor_user_id, actor_agent_id, action, target_user_id, company_id, metadata_json, created_at) VALUES ('audit_fixed', NULL, NULL, 'fixture', NULL, NULL, '{"10":"ten","2":"two","odd":"\ud800","skip":1}', '2026-09-24T12:00:00.000Z')"#,
+            [],
+        ).unwrap();
+        let state = AppState::new(
+            database,
+            session::SessionConfig {
+                port: 4111,
+                reachable_address: "https://suplex.example.test:4111".to_owned(),
+                tailscale_exposure: "serve".to_owned(),
+            },
+        );
+        let mut headers = HeaderMap::new();
+        headers.insert("host", HeaderValue::from_static("suplex.example.test:4111"));
+        headers.insert(
+            "cookie",
+            HeaderValue::from_str(&format!("sid_v1={}", signed_in.session_token)).unwrap(),
+        );
+        let response = list_audit(State(state.clone()), headers).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            response.headers().get(header::CONTENT_TYPE).unwrap(),
+            "application/json; charset=utf-8"
+        );
+        let raw = String::from_utf8(to_bytes(response.into_body(), 4096).await.unwrap().to_vec())
+            .unwrap();
+        assert_eq!(
+            raw,
+            r#"{"events":[{"id":"audit_fixed","action":"fixture","metadata":{"2":"two","10":"ten","odd":"\ud800"},"createdAt":"2026-09-24T12:00:00.000Z"}]}"#
+        );
+        drop(state);
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(path.with_extension("sqlite-wal"));
+        let _ = std::fs::remove_file(path.with_extension("sqlite-shm"));
+    }
 
     #[tokio::test]
     async fn invitation_body_validation_precedes_csrf_and_admin_routes_preserve_raw_order() {

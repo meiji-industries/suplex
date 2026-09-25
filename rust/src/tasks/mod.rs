@@ -8,3 +8,4 @@ pub mod response;
 pub mod templates;
 pub mod timeline;
 pub mod worktree;
+pub mod worktree_open;

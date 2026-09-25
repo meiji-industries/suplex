@@ -683,7 +683,7 @@ async fn replace_project(
         verification_command: &body.verification_command,
     };
     let prepared = match repository::prepare_local_project(
-        &state.project_commands,
+        &state.project_github,
         &roots.repositories,
         &roots.worktrees,
         &input,
@@ -716,7 +716,7 @@ async fn patch_project(
     );
     if plan.repository_changed {
         let Some((repository_path, worktree_root, errors)) = service::validate_patched_repository(
-            &state.project_commands,
+            &state.project_github,
             (&roots.repositories, &roots.worktrees),
             &plan.candidate,
             patch.worktree_root.is_some(),
@@ -1525,15 +1525,23 @@ mod tests {
             ],
             &repository,
         );
-        let gh_command = root.join("gh-fixture");
-        fs::write(
-            &gh_command,
-            "#!/bin/sh\nif [ \"$1\" = auth ]; then exit 0; fi\nif [ \"$1\" = repo ] && [ \"$2\" = view ]; then printf '{\"nameWithOwner\":\"%s\",\"url\":\"https://github.com/%s\"}' \"$3\" \"$3\"; exit 0; fi\nexit 1\n",
+        let api_base = crate::projects::repository::fixtures::github_api(
+            axum::Router::new()
+                .route(
+                    "/user",
+                    axum::routing::get(|| async { axum::Json(json!({"login": "owner"})) }),
+                )
+                .route(
+                    "/repos/{owner}/{name}",
+                    axum::routing::get(|Path((owner, name)): Path<(String, String)>| async move {
+                        axum::Json(json!({
+                            "full_name": format!("{owner}/{name}"),
+                            "html_url": format!("https://github.com/{owner}/{name}")
+                        }))
+                    }),
+                ),
         )
-        .unwrap();
-        let mut permissions = fs::metadata(&gh_command).unwrap().permissions();
-        permissions.set_mode(0o700);
-        fs::set_permissions(&gh_command, permissions).unwrap();
+        .await;
         let repository = fs::canonicalize(&repository).unwrap();
         let worktree = fs::canonicalize(&worktree).unwrap();
         let mut database =
@@ -1568,9 +1576,9 @@ mod tests {
             },
         )
         .with_project_roots(repositories, worktrees)
-        .with_project_commands(repository::Commands {
-            git: "git".into(),
-            gh: gh_command,
+        .with_project_github(crate::projects::repository::Github {
+            api: Some((api_base, "fixture-token".to_owned())),
+            git: None,
         });
         let mut headers = HeaderMap::new();
         headers.insert(

@@ -398,14 +398,7 @@ pub async fn prepare_local_project(
     // A failed credential load leaves Git to try the SSH agent; GitHub
     // verification then reports the missing authentication.
     let access = github.access().await.ok();
-    let token = access
-        .as_ref()
-        .and_then(|access| access.token().map(str::to_owned));
-    let (path, branch) = (repository_path.clone(), base_branch.to_owned());
-    let inspection =
-        tokio::task::spawn_blocking(move || inspect(&path, &branch, "github", token.as_deref()))
-            .await
-            .map_err(|_| unavailable())??;
+    let inspection = inspect_with(access.as_ref(), &repository_path, base_branch, "github").await?;
     if inspection.canonical_path != repository_path {
         findings.push(finding(
             "repository-path-mismatch",
@@ -553,6 +546,24 @@ pub fn inspect(
         remote_repository,
         base_sha,
     })
+}
+
+/// `inspect` off the async runtime, fetching with the GitHub token when there is one.
+pub async fn inspect_with(
+    access: Option<&Access>,
+    repository_path: &Path,
+    base_branch: &str,
+    expected_host: &str,
+) -> Result<Inspection, Vec<Finding>> {
+    let token = access.and_then(|access| access.token().map(str::to_owned));
+    let (path, branch, host) = (
+        repository_path.to_owned(),
+        base_branch.to_owned(),
+        expected_host.to_owned(),
+    );
+    tokio::task::spawn_blocking(move || inspect(&path, &branch, &host, token.as_deref()))
+        .await
+        .map_err(|_| unavailable())?
 }
 
 /// GitHub's status for a failed request, when GitHub answered.

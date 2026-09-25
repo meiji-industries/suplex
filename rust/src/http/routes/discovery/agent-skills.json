@@ -1,0 +1,71 @@
+{
+  "authorization": "The remote MCP endpoint uses OAuth 2.1 browser approval. The Agent API uses a paired-agent bearer credential. Both methods bind one external-agent identity to one company and its granted projects.",
+  "skills": [
+    {
+      "name": "suplex",
+      "summary": "Work with Suplex tasks as a paired agent: discover capabilities, projects, workflows, and templates; create backlog tasks idempotently; set their prerequisites; poll them; and send lifecycle commands.",
+      "source": "skills/suplex",
+      "instructions": "skills/suplex/SKILL.md",
+      "install": "docs/agent-skill.md",
+      "clients": [
+        {
+          "transport": "streamable-http",
+          "preferred": true,
+          "endpoint": "/mcp",
+          "authorization": "OAuth 2.1 authorization code with S256 PKCE",
+          "tools": [
+            "suplex_whoami",
+            "suplex_capabilities",
+            "suplex_list_workflows",
+            "suplex_list_templates",
+            "suplex_list_tasks",
+            "suplex_get_task",
+            "suplex_get_task_delivery",
+            "suplex_create_task",
+            "suplex_set_task_dependencies",
+            "suplex_command_task"
+          ],
+          "description": "The remote MCP endpoint uses browser sign-in and explicit project approval.",
+          "documentation": "docs/agent-mcp.md"
+        },
+        {
+          "transport": "mcp-stdio",
+          "preferred": false,
+          "command": "suplex mcp",
+          "server": "suplex-agent-bridge",
+          "tools": [
+            "suplex_whoami",
+            "suplex_capabilities",
+            "suplex_list_workflows",
+            "suplex_list_templates",
+            "suplex_list_tasks",
+            "suplex_get_task",
+            "suplex_get_task_delivery",
+            "suplex_create_task",
+            "suplex_set_task_dependencies",
+            "suplex_command_task"
+          ],
+          "description": "An advanced local bridge that uses a paired-agent credential.",
+          "documentation": "docs/agent-mcp.md"
+        },
+        {
+          "transport": "http-bearer",
+          "preferred": false,
+          "client": "skills/suplex/suplex_client.py",
+          "description": "A standard-library Python client over the same routes. Use it when no MCP bridge is registered.",
+          "documentation": "docs/agent-api.md"
+        }
+      ],
+      "environment": [
+        {
+          "name": "SUPLEX_BASE_URL",
+          "description": "The Suplex origin."
+        },
+        {
+          "name": "SUPLEX_AGENT_CREDENTIAL",
+          "description": "The credential from the pairing exchange. Set it in the client process environment. Never pass it on a command line."
+        }
+      ]
+    }
+  ]
+}

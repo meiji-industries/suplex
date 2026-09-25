@@ -133,10 +133,7 @@ pub enum WorkflowCompletion {
     Completed,
     Already,
     Cancelled,
-    Declined {
-        code: &'static str,
-        reason: String,
-    },
+    Declined { code: &'static str, reason: String },
 }
 
 /// TypeScript `completeWorkflowDelivery`: the completion commit boundary for

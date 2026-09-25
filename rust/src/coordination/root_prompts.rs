@@ -235,11 +235,20 @@ pub fn compose_advisor_assignment(input: &AdvisorAssignment<'_>) -> String {
     };
     let directory = input.evidence_directory;
     let mut sections = vec![
-        format!("Role: {}.\n\n{prompt}", super::workflows::advisor_label(input.role)),
+        format!(
+            "Role: {}.\n\n{prompt}",
+            super::workflows::advisor_label(input.role)
+        ),
         format!("Objective:\n{}", input.objective),
-        format!("Captured task configuration:\n{}", js_json::stringify(input.configuration)),
+        format!(
+            "Captured task configuration:\n{}",
+            js_json::stringify(input.configuration)
+        ),
         format!("Configured project check evidence:\n{CONFIGURED_CHECK_EVIDENCE_POLICY}"),
-        format!("Screenshots:\n{}", visual_evidence_instruction(input.visual_evidence)),
+        format!(
+            "Screenshots:\n{}",
+            visual_evidence_instruction(input.visual_evidence)
+        ),
         format!(
             "{source}\nPinned base {}, head {}.\nChanged files ({}): {}\nCommits ({}): {}",
             input.range.base_sha,
@@ -249,7 +258,9 @@ pub fn compose_advisor_assignment(input: &AdvisorAssignment<'_>) -> String {
             input.range.commits.len(),
             or_none(&input.range.commits),
         ),
-        format!("Evidence directory: {directory}\nRead {directory}/patch.diff with file-read ranges until you have read it completely; it is the entire base-to-head patch. {directory}/manifest.json lists the files, commits, and attachments. {directory}/verification.json contains the actual Worker command inputs, outputs, and errors, the task configuration, and the current pull request check observation. A check-only Worker turn's matching verificationRange.valid is a direct shortcut proving its committed source stayed unchanged. Missing verificationRange is not proof that a check is invalid: checks from implementation or historical turns may establish coverage when actual native command inputs and outputs plus Git source-state evidence establish that the checked source is this pinned range. Do not infer that merely from an implementation turn's final HEAD. Reject successful checks run on older or different source, and account for commits or dirty edits after a check. Request a check-only assignment only when the existing evidence cannot establish that the reviewed range was tested. Binary changes require inspecting the corresponding source and assets; a binary notice is not a reviewed binary.{attachments}"),
+        format!(
+            "Evidence directory: {directory}\nRead {directory}/patch.diff with file-read ranges until you have read it completely; it is the entire base-to-head patch. {directory}/manifest.json lists the files, commits, and attachments. {directory}/verification.json contains the actual Worker command inputs, outputs, and errors, the task configuration, and the current pull request check observation. A check-only Worker turn's matching verificationRange.valid is a direct shortcut proving its committed source stayed unchanged. Missing verificationRange is not proof that a check is invalid: checks from implementation or historical turns may establish coverage when actual native command inputs and outputs plus Git source-state evidence establish that the checked source is this pinned range. Do not infer that merely from an implementation turn's final HEAD. Reject successful checks run on older or different source, and account for commits or dirty edits after a check. Request a check-only assignment only when the existing evidence cannot establish that the reviewed range was tested. Binary changes require inspecting the corresponding source and assets; a binary notice is not a reviewed binary.{attachments}"
+        ),
     ];
     if let Some(brief) = input.brief.filter(|brief| !brief.is_empty()) {
         sections.push(format!(
@@ -265,7 +276,10 @@ pub fn compose_advisor_assignment(input: &AdvisorAssignment<'_>) -> String {
                 .join("\n");
             sections.push(format!("Prior findings from the previous rating (assess the current source first, then check that these were resolved):\n{findings}"));
         }
-        if let Some(evidence) = input.repair_evidence.filter(|evidence| !evidence.is_empty()) {
+        if let Some(evidence) = input
+            .repair_evidence
+            .filter(|evidence| !evidence.is_empty())
+        {
             sections.push(format!(
                 "Worker repair evidence since the previous rating:\n{}",
                 evidence.join("\n\n")
@@ -324,13 +338,23 @@ pub fn worker_result_wake(
         _ => String::new(),
     };
     if workflow == "standard" {
-        return format!("Worker result {receipt_id}. {STANDARD_WORKER_RESULT_WAKE}{range} {access}");
+        return format!(
+            "Worker result {receipt_id}. {STANDARD_WORKER_RESULT_WAKE}{range} {access}"
+        );
     }
     let next = match workflow {
-        "independent_review" => "When the implementation and its checks satisfy you, request Reviewer with delegate_advisor. Reviewer approval for the current range is necessary before delivery.",
-        "refine_pull_request" => "Rater owns quality assessment. Inspect only delivery integrity: objective scope, unrelated or unpublished work, real check evidence, and teammate or base integration. Do not delegate source repairs from your own code-quality opinion. Source repairs require a Rater report and its advisorTurnId. If you suspect Rater missed a serious defect, request a fresh Rater assessment. After a passing rating, delegate Worker only for teammate pushes, base conflicts, or CI failures, then request a fresh Rater assessment for the complete current range. Do not request delivery on an earlier rating.",
-        "competing_plans" => "Compare the result with the accepted combined assignment. Request coherent repairs if necessary, then request the selected delivery target.",
-        _ => "Compare the result with the accepted assignment and acceptance outcomes. Request coherent repairs or missing checks if necessary, then request the selected delivery target.",
+        "independent_review" => {
+            "When the implementation and its checks satisfy you, request Reviewer with delegate_advisor. Reviewer approval for the current range is necessary before delivery."
+        }
+        "refine_pull_request" => {
+            "Rater owns quality assessment. Inspect only delivery integrity: objective scope, unrelated or unpublished work, real check evidence, and teammate or base integration. Do not delegate source repairs from your own code-quality opinion. Source repairs require a Rater report and its advisorTurnId. If you suspect Rater missed a serious defect, request a fresh Rater assessment. After a passing rating, delegate Worker only for teammate pushes, base conflicts, or CI failures, then request a fresh Rater assessment for the complete current range. Do not request delivery on an earlier rating."
+        }
+        "competing_plans" => {
+            "Compare the result with the accepted combined assignment. Request coherent repairs if necessary, then request the selected delivery target."
+        }
+        _ => {
+            "Compare the result with the accepted assignment and acceptance outcomes. Request coherent repairs or missing checks if necessary, then request the selected delivery target."
+        }
     };
     let kind = if purpose == "verification" {
         "Verification result"
@@ -352,7 +376,9 @@ pub fn advisor_result_wake(
 ) -> String {
     let label = super::workflows::advisor_label(role);
     let next = if !valid {
-        format!("The {label} report was not accepted: {summary}. Diagnose the report input or evidence, then request a fresh {label}.")
+        format!(
+            "The {label} report was not accepted: {summary}. Diagnose the report input or evidence, then request a fresh {label}."
+        )
     } else {
         match role {
             "reviewer" => "If Reviewer approved the current range, request delivery. If only current-head CI evidence is missing, inspect and push the branch, collect the checks, and request a fresh Reviewer assessment. Otherwise delegate a coherent Worker repair for every blocking finding, inspect the result, and request a new Reviewer assessment.",
@@ -426,50 +452,167 @@ mod tests {
         );
         let range = range();
         let attachments = [
-            crate::coordination::workflow_evidence::ManifestAttachment { artifact_id: "img_1".into(), path: Some("attachments/img_1.png".into()), error: None },
-            crate::coordination::workflow_evidence::ManifestAttachment { artifact_id: "img_2".into(), path: None, error: Some("gone".into()) },
+            crate::coordination::workflow_evidence::ManifestAttachment {
+                artifact_id: "img_1".into(),
+                path: Some("attachments/img_1.png".into()),
+                error: None,
+            },
+            crate::coordination::workflow_evidence::ManifestAttachment {
+                artifact_id: "img_2".into(),
+                path: None,
+                error: Some("gone".into()),
+            },
         ];
         let findings = ["src/a.ts: bug".to_owned()];
         let repairs = ["Turn t1: fixed".to_owned()];
         let rater = compose_advisor_assignment(&AdvisorAssignment {
-            role: "rater", objective: "Repair it", configuration: &json!({"runProjectTests":true}), visual_evidence: "off",
-            repository: "owner/repo", head_branch: "feature", base_branch: "main", pull_request_number: Some(7), range: &range,
-            evidence_directory: "/tmp/evidence_1", attachments: &attachments, brief: None, prior_findings: Some(&findings), repair_evidence: Some(&repairs),
+            role: "rater",
+            objective: "Repair it",
+            configuration: &json!({"runProjectTests":true}),
+            visual_evidence: "off",
+            repository: "owner/repo",
+            head_branch: "feature",
+            base_branch: "main",
+            pull_request_number: Some(7),
+            range: &range,
+            evidence_directory: "/tmp/evidence_1",
+            attachments: &attachments,
+            brief: None,
+            prior_findings: Some(&findings),
+            repair_evidence: Some(&repairs),
         });
         assert_eq!(rater, include_str!("prompts/example_advisor_rater.txt"));
-        let empty = crate::coordination::workflows::ReviewRange { files: vec![], commits: vec![], ..range.clone() };
+        let empty = crate::coordination::workflows::ReviewRange {
+            files: vec![],
+            commits: vec![],
+            ..range.clone()
+        };
         let reviewer = compose_advisor_assignment(&AdvisorAssignment {
-            role: "reviewer", objective: "Build it", configuration: &json!({}), visual_evidence: "required",
-            repository: "owner/repo", head_branch: "task", base_branch: "main", pull_request_number: None, range: &empty,
-            evidence_directory: "/tmp/evidence_2", attachments: &[], brief: Some("Plan and criteria"), prior_findings: None, repair_evidence: None,
+            role: "reviewer",
+            objective: "Build it",
+            configuration: &json!({}),
+            visual_evidence: "required",
+            repository: "owner/repo",
+            head_branch: "task",
+            base_branch: "main",
+            pull_request_number: None,
+            range: &empty,
+            evidence_directory: "/tmp/evidence_2",
+            attachments: &[],
+            brief: Some("Plan and criteria"),
+            prior_findings: None,
+            repair_evidence: None,
         });
-        assert_eq!(reviewer, include_str!("prompts/example_advisor_reviewer.txt"));
+        assert_eq!(
+            reviewer,
+            include_str!("prompts/example_advisor_reviewer.txt")
+        );
         let criteria = ["One".to_owned(), "Two".to_owned()];
         let repair = compose_worker_assignment(&WorkerAssignmentText {
-            mode: "planned", purpose: "implementation", plan: Some("Fix"), acceptance_criteria: &criteria, instruction: "Do it",
-            visual_evidence: "capture", verification_range: Some((&range.base_sha, &range.head_sha)), advisor_report: Some(("Rater", "Rated 7")),
-        }).unwrap();
-        assert_eq!(repair, include_str!("prompts/example_worker_assignment_rater.txt"));
+            mode: "planned",
+            purpose: "implementation",
+            plan: Some("Fix"),
+            acceptance_criteria: &criteria,
+            instruction: "Do it",
+            visual_evidence: "capture",
+            verification_range: Some((&range.base_sha, &range.head_sha)),
+            advisor_report: Some(("Rater", "Rated 7")),
+        })
+        .unwrap();
+        assert_eq!(
+            repair,
+            include_str!("prompts/example_worker_assignment_rater.txt")
+        );
         let checks = ["Checks pass".to_owned()];
         let direct = compose_worker_assignment(&WorkerAssignmentText {
-            mode: "direct", purpose: "verification", plan: None, acceptance_criteria: &checks, instruction: "Run checks",
-            visual_evidence: "off", verification_range: Some((&range.base_sha, &range.head_sha)), advisor_report: None,
-        }).unwrap();
-        assert_eq!(direct, include_str!("prompts/example_worker_assignment_direct_verification.txt"));
+            mode: "direct",
+            purpose: "verification",
+            plan: None,
+            acceptance_criteria: &checks,
+            instruction: "Run checks",
+            visual_evidence: "off",
+            verification_range: Some((&range.base_sha, &range.head_sha)),
+            advisor_report: None,
+        })
+        .unwrap();
+        assert_eq!(
+            direct,
+            include_str!("prompts/example_worker_assignment_direct_verification.txt")
+        );
     }
 
     #[test]
     fn result_wakes_match_pinned_typescript_bytes() {
-        let result = |state, text, verification_range| WorkerResult { turn_id: "t1", state, text, verification_range };
+        let result = |state, text, verification_range| WorkerResult {
+            turn_id: "t1",
+            state,
+            text,
+            verification_range,
+        };
         let cases = [
-            (worker_result_wake("independent_review", "r1", &result("completed", "  done  ", Some((true, None))), "verification"), include_str!("prompts/example_wake_worker_review_verification_valid.txt")),
-            (worker_result_wake("refine_pull_request", "r1", &result("error", "", Some((false, Some("moved")))), "verification"), include_str!("prompts/example_wake_worker_refine_verification_invalid.txt")),
-            (worker_result_wake("competing_plans", "r1", &result("completed", "built", None), "implementation"), include_str!("prompts/example_wake_worker_plans_implementation.txt")),
-            (worker_result_wake("direct_build", "r1", &result("completed", "checked", None), "verification"), include_str!("prompts/example_wake_worker_direct_verification_missing.txt")),
-            (worker_result_wake("standard", "r1", &result("completed", "checked", Some((true, None))), "verification"), include_str!("prompts/example_wake_worker_standard_verification_valid.txt")),
-            (advisor_result_wake("reviewer", "r2", true, "Approved with 0 blocking finding(s); verification passed.", "{\"state\":\"completed\"}"), include_str!("prompts/example_wake_advisor_reviewer_valid.txt")),
-            (advisor_result_wake("rater", "r2", false, "bad json", "{}"), include_str!("prompts/example_wake_advisor_rater_invalid.txt")),
-            (advisor_result_wake("planner_b", "r2", true, "Plan", "{}"), include_str!("prompts/example_wake_advisor_planner_valid.txt")),
+            (
+                worker_result_wake(
+                    "independent_review",
+                    "r1",
+                    &result("completed", "  done  ", Some((true, None))),
+                    "verification",
+                ),
+                include_str!("prompts/example_wake_worker_review_verification_valid.txt"),
+            ),
+            (
+                worker_result_wake(
+                    "refine_pull_request",
+                    "r1",
+                    &result("error", "", Some((false, Some("moved")))),
+                    "verification",
+                ),
+                include_str!("prompts/example_wake_worker_refine_verification_invalid.txt"),
+            ),
+            (
+                worker_result_wake(
+                    "competing_plans",
+                    "r1",
+                    &result("completed", "built", None),
+                    "implementation",
+                ),
+                include_str!("prompts/example_wake_worker_plans_implementation.txt"),
+            ),
+            (
+                worker_result_wake(
+                    "direct_build",
+                    "r1",
+                    &result("completed", "checked", None),
+                    "verification",
+                ),
+                include_str!("prompts/example_wake_worker_direct_verification_missing.txt"),
+            ),
+            (
+                worker_result_wake(
+                    "standard",
+                    "r1",
+                    &result("completed", "checked", Some((true, None))),
+                    "verification",
+                ),
+                include_str!("prompts/example_wake_worker_standard_verification_valid.txt"),
+            ),
+            (
+                advisor_result_wake(
+                    "reviewer",
+                    "r2",
+                    true,
+                    "Approved with 0 blocking finding(s); verification passed.",
+                    "{\"state\":\"completed\"}",
+                ),
+                include_str!("prompts/example_wake_advisor_reviewer_valid.txt"),
+            ),
+            (
+                advisor_result_wake("rater", "r2", false, "bad json", "{}"),
+                include_str!("prompts/example_wake_advisor_rater_invalid.txt"),
+            ),
+            (
+                advisor_result_wake("planner_b", "r2", true, "Plan", "{}"),
+                include_str!("prompts/example_wake_advisor_planner_valid.txt"),
+            ),
         ];
         for (actual, expected) in cases {
             assert_eq!(actual, expected);

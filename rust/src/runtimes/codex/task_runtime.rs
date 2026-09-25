@@ -4,8 +4,7 @@ use super::{executable, invocation, role_prompt, runtime, session_reader};
 use crate::{
     coordination::{
         advisor_bridge::{self, AdvisorRole},
-        bridge_auth,
-        root_bridge,
+        bridge_auth, root_bridge,
         root_prompts::{ADVISOR_ROLE_PROMPT, ROOT_WORKFLOW_ROLE_PROMPT, WORKER_DIRECT_ROLE_PROMPT},
     },
     runtimes::{git_guard, task_harness},

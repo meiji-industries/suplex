@@ -869,7 +869,11 @@ pub fn launch_advisor(
     launch_delegate(database, root, Some(role), prompt, prompt, Some(input), now)
 }
 
-fn delegate_profile(database: &SuplexDatabase, task_id: &str, role: Option<&str>) -> DatabaseResult<String> {
+fn delegate_profile(
+    database: &SuplexDatabase,
+    task_id: &str,
+    role: Option<&str>,
+) -> DatabaseResult<String> {
     let (root, worker, advisors): (String, String, String) = database.connection().query_row(
         "SELECT root_profile_json,worker_profile_json,advisor_profiles_json FROM suplex_task_controls WHERE task_id = ?1",
         [task_id],
@@ -900,10 +904,9 @@ fn launch_delegate(
     let assignment_hash = format!("{:x}", Sha256::digest(assignment_text.as_bytes()));
     let prompt_hash = format!("{:x}", Sha256::digest(prompt_text.as_bytes()));
     let workflow_json = workflow_input.map(serde_json::to_string).transpose()?;
-    let slot = match advisor_role {
-        Some(role @ ("planner_a" | "planner_b")) => role,
-        _ => "delegate",
-    };
+    let slot = advisor_role
+        .filter(|role| matches!(*role, "planner_a" | "planner_b"))
+        .unwrap_or("delegate");
     let time = timestamp(now);
     database.transaction(true, |database| {
         assert_current_root(database, task_id, root_session_id, root_generation)?;
@@ -1974,16 +1977,15 @@ pub fn reconcile_advisor_result(
     now: DateTime<Utc>,
 ) -> DatabaseResult<()> {
     database.transaction(true, |database| {
-        let row: Option<(Option<String>, Option<String>, Option<String>, Option<String>)> = database.connection().query_row(
-            "SELECT s.advisor_role,s.workflow_input_json,t.workflow_input_json,t.terminal_observation FROM suplex_task_sessions s JOIN suplex_task_turns t ON t.session_id = s.id WHERE s.id = ?1 AND s.task_id = ?2 AND s.kind = 'worker' AND t.id = ?3 AND t.task_id = ?2 AND t.status = 'completed'",
+        let row: Option<(Option<String>, Option<String>, Option<String>)> = database.connection().query_row(
+            "SELECT s.advisor_role,COALESCE(t.workflow_input_json,s.workflow_input_json),t.terminal_observation FROM suplex_task_sessions s JOIN suplex_task_turns t ON t.session_id = s.id WHERE s.id = ?1 AND s.task_id = ?2 AND s.kind = 'worker' AND t.id = ?3 AND t.task_id = ?2 AND t.status = 'completed'",
             params![session_id, task_id, turn_id],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         ).optional()?;
-        let Some((role, session_input, turn_input, observation)) = row else {
+        let Some((role, input, observation)) = row else {
             return Err(std::io::Error::other("advisor_turn_not_found").into());
         };
-        let input = turn_input
-            .or(session_input)
+        let input = input
             .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
             .unwrap_or(Value::Null);
         let Some(role) = role.filter(|role| input["kind"] == "advisor" && input["role"] == role.as_str() && result["role"] == role.as_str()) else {
@@ -2088,7 +2090,11 @@ pub fn resume_delivery_wait(
         )?;
         let root = current_root(database, task_id)?;
         let mut state = workflow_state(database, task_id)?;
-        let Some(root) = root.filter(|root| status == "active" && root.lifecycle != "cancelled" && same_wait(&state["deliveryWait"], expected)) else {
+        let Some(root) = root.filter(|root| {
+            status == "active"
+                && root.lifecycle != "cancelled"
+                && same_wait(&state["deliveryWait"], expected)
+        }) else {
             return Ok(false);
         };
         state["deliveryWait"] = Value::Null;

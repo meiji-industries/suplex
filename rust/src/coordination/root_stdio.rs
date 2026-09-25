@@ -648,7 +648,10 @@ mod tests {
             parse(json!({"kind":"delegate_advisor","role":"reviewer","brief":" Plan "})),
             Ok(RootCall::DelegateAdvisor { role, brief }) if role == "reviewer" && brief.as_deref() == Some("Plan")
         ));
-        assert!(matches!(parse(json!({"kind":"delegate_planners"})), Ok(RootCall::DelegatePlanners)));
+        assert!(matches!(
+            parse(json!({"kind":"delegate_planners"})),
+            Ok(RootCall::DelegatePlanners)
+        ));
         assert!(parse(json!({"kind":"delegate_planners","role":"planner_a"})).is_err());
         assert!(matches!(
             parse(json!({"kind":"delegate_worker","acceptanceCriteria":["Done"],"instruction":"Build","mode":"direct"})),
@@ -679,7 +682,10 @@ mod tests {
                 "ask_human"
             ])
         );
-        assert_eq!(schema["properties"]["role"]["enum"], json!(["reviewer","planner_a","planner_b","rater"]));
+        assert_eq!(
+            schema["properties"]["role"]["enum"],
+            json!(["reviewer", "planner_a", "planner_b", "rater"])
+        );
         assert!(
             parse_call(
                 json!({"kind":"request_delivery"})

@@ -331,9 +331,14 @@ pub fn validate_report(
         }
     }
     if matches!(role, AdvisorRole::Reviewer | AdvisorRole::Rater) {
-        let flattened = fields
-            .get("blockingFindings")
-            .map(|value| value.as_array().map(|findings| findings.iter().map(flatten_finding).collect::<Option<Vec<_>>>()));
+        let flattened = fields.get("blockingFindings").map(|value| {
+            value.as_array().map(|findings| {
+                findings
+                    .iter()
+                    .map(flatten_finding)
+                    .collect::<Option<Vec<_>>>()
+            })
+        });
         match flattened {
             Some(Some(Some(flattened))) => {
                 empty = flattened.is_empty();
@@ -729,22 +734,52 @@ mod tests {
     #[test]
     fn advisor_reports_accept_raw_json_and_an_unclosed_fence_but_not_truncated_json() {
         let rater = AdvisorRole::Rater;
-        assert_eq!(parse_advisor_report(rater, &report().to_string()).unwrap()["rating"], 9);
+        assert_eq!(
+            parse_advisor_report(rater, &report().to_string()).unwrap()["rating"],
+            9
+        );
         let unclosed = format!("Assessment complete.\n\n```json\n{}\n", report());
-        assert_eq!(parse_advisor_report(rater, &unclosed).unwrap()["role"], "rater");
+        assert_eq!(
+            parse_advisor_report(rater, &unclosed).unwrap()["role"],
+            "rater"
+        );
         let text = report().to_string();
         let truncated = format!("```json\n{}", &text[..text.len() - 2]);
-        assert!(parse_advisor_report(rater, &truncated).unwrap_err().contains("not valid"));
-        assert!(parse_advisor_report(rater, r#"{"rating":9}"#).unwrap_err().contains("blockingFindings"));
-        let two = format!("```json\n{}\n```\n```json\n{}\n```", report(), json!({"rating":10,"blockingFindings":[],"verification":"passed","verificationSummary":"ok","summary":"ok"}));
+        assert!(
+            parse_advisor_report(rater, &truncated)
+                .unwrap_err()
+                .contains("not valid")
+        );
+        assert!(
+            parse_advisor_report(rater, r#"{"rating":9}"#)
+                .unwrap_err()
+                .contains("blockingFindings")
+        );
+        let two = format!(
+            "```json\n{}\n```\n```json\n{}\n```",
+            report(),
+            json!({"rating":10,"blockingFindings":[],"verification":"passed","verificationSummary":"ok","summary":"ok"})
+        );
         assert_eq!(parse_advisor_report(rater, &two).unwrap()["rating"], 10);
-        let broken_last = format!("```json\n{}\n```\n```json\n{}", report(), &text[..text.len() - 2]);
-        assert!(parse_advisor_report(rater, &broken_last).unwrap_err().contains("not valid"));
+        let broken_last = format!(
+            "```json\n{}\n```\n```json\n{}",
+            report(),
+            &text[..text.len() - 2]
+        );
+        assert!(
+            parse_advisor_report(rater, &broken_last)
+                .unwrap_err()
+                .contains("not valid")
+        );
     }
 
     #[test]
     fn advisor_reports_parse_the_last_block_and_reject_a_pass_with_blockers_or_missing_checks() {
-        let block = |json: &str| format!("Assessment prose.\n```json\n{{\"draft\":true}}\n```\nFinal:\n```json\n{json}\n```\n");
+        let block = |json: &str| {
+            format!(
+                "Assessment prose.\n```json\n{{\"draft\":true}}\n```\nFinal:\n```json\n{json}\n```\n"
+            )
+        };
         let rater = AdvisorRole::Rater;
         assert_eq!(parse_advisor_report(rater, &block(r#"{"rating":7,"blockingFindings":["src/a.ts: null deref"],"verification":"passed","verificationSummary":"pnpm test passed","summary":"Needs repair"}"#)).unwrap()["rating"], 7);
         for invalid in [
@@ -753,18 +788,42 @@ mod tests {
             r#"{"rating":9.5,"blockingFindings":[],"verification":"passed","verificationSummary":"ok","summary":"ok"}"#,
             r#"{"rating":11,"blockingFindings":[],"verification":"passed","verificationSummary":"ok","summary":"ok"}"#,
         ] {
-            assert!(parse_advisor_report(rater, &block(invalid)).is_err(), "{invalid}");
+            assert!(
+                parse_advisor_report(rater, &block(invalid)).is_err(),
+                "{invalid}"
+            );
         }
         assert_eq!(parse_advisor_report(rater, &block(r#"{"rating":9,"role":"reviewer","blockingFindings":[],"verification":"passed","verificationSummary":"ok","summary":"ok"}"#)).unwrap()["role"], "rater");
         let flattened = parse_advisor_report(rater, &block(r#"{"rating":8,"blockingFindings":[{"id":"B1","description":"routes/plans.py rejects saved owners"},{"file":"tests/test_plans.py","defect":"no coverage"}],"verification":"missing","verificationSummary":"no local checks","summary":"repair"}"#)).unwrap();
-        assert_eq!(flattened["blockingFindings"], json!(["B1: routes/plans.py rejects saved owners", "tests/test_plans.py: no coverage"]));
+        assert_eq!(
+            flattened["blockingFindings"],
+            json!([
+                "B1: routes/plans.py rejects saved owners",
+                "tests/test_plans.py: no coverage"
+            ])
+        );
         let reviewer = AdvisorRole::Reviewer;
         assert!(parse_advisor_report(reviewer, &block(r#"{"approved":false,"blockingFindings":[{"note":42}],"verification":"failed","verificationSummary":"x","summary":"y"}"#)).is_err());
         assert!(parse_advisor_report(reviewer, &block(r#"{"approved":true,"blockingFindings":["src/a.ts: bug"],"verification":"passed","verificationSummary":"ok","summary":"ok"}"#)).is_err());
         assert_eq!(parse_advisor_report(reviewer, &block(r#"{"approved":false,"blockingFindings":["src/a.ts: bug"],"verification":"failed","verificationSummary":"tests fail","summary":"reject"}"#)).unwrap()["approved"], false);
-        assert_eq!(parse_advisor_report(AdvisorRole::PlannerA, &block(r#"{"summary":"Add a helper"}"#)).unwrap(), json!({"summary":"Add a helper","role":"planner_a"}));
-        assert!(parse_advisor_report(AdvisorRole::PlannerB, "No json here").unwrap_err().contains("no fenced json"));
-        assert!(parse_advisor_report(rater, &block("{not json")).unwrap_err().contains("not valid JSON"));
+        assert_eq!(
+            parse_advisor_report(
+                AdvisorRole::PlannerA,
+                &block(r#"{"summary":"Add a helper"}"#)
+            )
+            .unwrap(),
+            json!({"summary":"Add a helper","role":"planner_a"})
+        );
+        assert!(
+            parse_advisor_report(AdvisorRole::PlannerB, "No json here")
+                .unwrap_err()
+                .contains("no fenced json")
+        );
+        assert!(
+            parse_advisor_report(rater, &block("{not json"))
+                .unwrap_err()
+                .contains("not valid JSON")
+        );
     }
 
     #[test]
@@ -776,23 +835,91 @@ mod tests {
         prose["rating"] = json!(2);
         let tools = [
             json!({"name":"suplex_advisor_submit_report","status":"error","output":null}),
-            tool(&submitted, "mcp__suplex_advisor__submit_report", "completed"),
+            tool(
+                &submitted,
+                "mcp__suplex_advisor__submit_report",
+                "completed",
+            ),
         ];
-        assert_eq!(advisor_report_from_turn(rater, &tools, &prose.to_string()).unwrap()["rating"], 9);
+        assert_eq!(
+            advisor_report_from_turn(rater, &tools, &prose.to_string()).unwrap()["rating"],
+            9
+        );
         let mut ten = submitted.clone();
         ten["rating"] = json!(10);
-        let latest = [tool(&submitted, "suplex_advisor_submit_report", "completed"), tool(&ten, "suplex_advisor_submit_report", "completed")];
-        assert_eq!(advisor_report_from_turn(rater, &latest, "No JSON here").unwrap()["rating"], 10);
+        let latest = [
+            tool(&submitted, "suplex_advisor_submit_report", "completed"),
+            tool(&ten, "suplex_advisor_submit_report", "completed"),
+        ];
+        assert_eq!(
+            advisor_report_from_turn(rater, &latest, "No JSON here").unwrap()["rating"],
+            10
+        );
         let error = json!({"isError":true,"structuredContent":ten});
         let success = json!({"isError":false,"structuredContent":submitted});
-        let enveloped = [tool(&error, "suplex_advisor_submit_report", "completed"), tool(&success, "suplex_advisor_submit_report", "completed")];
-        assert_eq!(advisor_report_from_turn(rater, &enveloped, "No JSON here").unwrap()["rating"], 9);
-        let reversed = [tool(&submitted, "suplex_advisor_submit_report", "completed"), tool(&error, "suplex_advisor_submit_report", "completed")];
-        assert_eq!(advisor_report_from_turn(rater, &reversed, "No JSON here").unwrap()["rating"], 9);
-        assert_eq!(advisor_report_from_turn(rater, &[tool(&report(), "submit_other", "completed")], &report().to_string()).unwrap()["rating"], 9);
-        assert!(advisor_report_from_turn(AdvisorRole::Reviewer, &[tool(&submitted, "suplex_advisor_submit_report", "completed")], "Approval prose").is_err());
+        let enveloped = [
+            tool(&error, "suplex_advisor_submit_report", "completed"),
+            tool(&success, "suplex_advisor_submit_report", "completed"),
+        ];
+        assert_eq!(
+            advisor_report_from_turn(rater, &enveloped, "No JSON here").unwrap()["rating"],
+            9
+        );
+        let reversed = [
+            tool(&submitted, "suplex_advisor_submit_report", "completed"),
+            tool(&error, "suplex_advisor_submit_report", "completed"),
+        ];
+        assert_eq!(
+            advisor_report_from_turn(rater, &reversed, "No JSON here").unwrap()["rating"],
+            9
+        );
+        assert_eq!(
+            advisor_report_from_turn(
+                rater,
+                &[tool(&report(), "submit_other", "completed")],
+                &report().to_string()
+            )
+            .unwrap()["rating"],
+            9
+        );
+        assert!(
+            advisor_report_from_turn(
+                AdvisorRole::Reviewer,
+                &[tool(
+                    &submitted,
+                    "suplex_advisor_submit_report",
+                    "completed"
+                )],
+                "Approval prose"
+            )
+            .is_err()
+        );
         let reviewer_prose = json!({"approved":false,"blockingFindings":["src/a.ts: defect"],"verification":"failed","verificationSummary":"Failed","summary":"Repair"});
-        assert!(advisor_report_from_turn(AdvisorRole::Reviewer, &[tool(&submitted, "suplex_advisor_submit_report", "completed")], &reviewer_prose.to_string()).unwrap_err().contains("role"));
-        assert!(advisor_report_from_turn(AdvisorRole::PlannerA, &[tool(&json!({"role":"planner_b","summary":"Alternate plan"}), "suplex_advisor_submit_report", "completed")], r#"{"summary":"Legacy plan"}"#).unwrap_err().contains("role"));
+        assert!(
+            advisor_report_from_turn(
+                AdvisorRole::Reviewer,
+                &[tool(
+                    &submitted,
+                    "suplex_advisor_submit_report",
+                    "completed"
+                )],
+                &reviewer_prose.to_string()
+            )
+            .unwrap_err()
+            .contains("role")
+        );
+        assert!(
+            advisor_report_from_turn(
+                AdvisorRole::PlannerA,
+                &[tool(
+                    &json!({"role":"planner_b","summary":"Alternate plan"}),
+                    "suplex_advisor_submit_report",
+                    "completed"
+                )],
+                r#"{"summary":"Legacy plan"}"#
+            )
+            .unwrap_err()
+            .contains("role")
+        );
     }
 }

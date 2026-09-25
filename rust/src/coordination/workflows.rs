@@ -42,7 +42,9 @@ pub const WORKFLOWS: [WorkflowDefinition; 5] = [
 ];
 
 pub fn workflow_definition(workflow: &str) -> Option<&'static WorkflowDefinition> {
-    WORKFLOWS.iter().find(|definition| definition.id == workflow)
+    WORKFLOWS
+        .iter()
+        .find(|definition| definition.id == workflow)
 }
 
 pub fn advisor_label(role: &str) -> &'static str {
@@ -150,13 +152,10 @@ pub fn turn_outcome(observation: Option<&str>) -> TurnOutcome {
     let advisor = match fields.get("advisor") {
         None => None,
         Some(advisor) => {
-            let valid = advisor["role"]
-                .as_str()
-                .is_some_and(|role| ["reviewer", "planner_a", "planner_b", "rater"].contains(&role))
-                && (advisor["result"].is_null() || advisor["result"].is_object())
-                && advisor
-                    .get("result")
-                    .is_some()
+            let valid = advisor["role"].as_str().is_some_and(|role| {
+                ["reviewer", "planner_a", "planner_b", "rater"].contains(&role)
+            }) && (advisor["result"].is_null() || advisor["result"].is_object())
+                && advisor.get("result").is_some()
                 && (advisor["invalidReason"].is_null() || advisor["invalidReason"].is_string())
                 && advisor.get("invalidReason").is_some();
             if !valid {
@@ -230,9 +229,7 @@ pub fn review_gate(workflow: &str, reviews: &[Value], actual: &ReviewRange) -> R
         .is_some_and(|findings| !findings.is_empty())
         || !verified(&result["verification"])
     {
-        return Err(
-            "The Rater result carries blocking findings or missing verification.".into(),
-        );
+        return Err("The Rater result carries blocking findings or missing verification.".into());
     }
     Ok(())
 }
@@ -252,14 +249,22 @@ pub fn turn_workflow_input<'a>(sessions: &'a [Value], turn: &'a Value) -> Option
 
 fn succeeded(turn: &Value) -> bool {
     turn["status"] == "completed"
-        && turn_outcome(turn["terminalObservation"].as_str()).state.as_deref() == Some("completed")
+        && turn_outcome(turn["terminalObservation"].as_str())
+            .state
+            .as_deref()
+            == Some("completed")
 }
 
 fn plain_worker(session: &Value) -> bool {
     session["kind"] == "worker" && session["advisorRole"].is_null()
 }
 
-pub fn valid_advisor_session(sessions: &[Value], turns: &[Value], session_id: &str, role: &str) -> bool {
+pub fn valid_advisor_session(
+    sessions: &[Value],
+    turns: &[Value],
+    session_id: &str,
+    role: &str,
+) -> bool {
     let Some(session) = sessions.iter().find(|session| session["id"] == session_id) else {
         return false;
     };
@@ -273,7 +278,13 @@ pub fn valid_advisor_session(sessions: &[Value], turns: &[Value], session_id: &s
     })
 }
 
-fn valid_advisor_reference(sessions: &[Value], turns: &[Value], reference: &Value, role: &str, exact: bool) -> bool {
+fn valid_advisor_reference(
+    sessions: &[Value],
+    turns: &[Value],
+    reference: &Value,
+    role: &str,
+    exact: bool,
+) -> bool {
     let Some(session_id) = reference["sessionId"].as_str() else {
         return false;
     };
@@ -354,7 +365,13 @@ pub fn workflow_ready_for_delivery(
                 let exact = input.get("version").is_some();
                 Some(
                     valid_advisor_reference(sessions, turns, &candidates[0], "planner_a", exact)
-                        && valid_advisor_reference(sessions, turns, &candidates[1], "planner_b", exact),
+                        && valid_advisor_reference(
+                            sessions,
+                            turns,
+                            &candidates[1],
+                            "planner_b",
+                            exact,
+                        ),
                 )
             });
             if valid == Some(true) {
@@ -412,7 +429,9 @@ pub fn delivery_decision(
     if workflow == "standard" {
         return Ok(());
     }
-    let head_branch = control["deliveryIntent"]["headBranch"].as_str().unwrap_or_default();
+    let head_branch = control["deliveryIntent"]["headBranch"]
+        .as_str()
+        .unwrap_or_default();
     if let Some(branch) = local.branch
         && branch != head_branch
     {
@@ -443,7 +462,9 @@ pub fn delivery_decision(
     let delegate = sessions.iter().find(|session| {
         session["kind"] == "worker"
             && session["current"] == true
-            && (session["launchOwner"].as_str().is_some_and(|owner| !owner.is_empty())
+            && (session["launchOwner"]
+                .as_str()
+                .is_some_and(|owner| !owner.is_empty())
                 || turns.iter().any(|turn| {
                     turn["sessionId"] == session["id"]
                         && (turn["generation"].is_null()
@@ -460,7 +481,9 @@ pub fn delivery_decision(
             code: "delegate_active",
             reason: format!(
                 "{} is still active. Wait for its result before requesting delivery.",
-                delegate["advisorRole"].as_str().map_or("Worker", advisor_label)
+                delegate["advisorRole"]
+                    .as_str()
+                    .map_or("Worker", advisor_label)
             ),
         });
     }
@@ -522,13 +545,24 @@ pub fn same_delivery_wait_fingerprint(stored: &str, observation: &Value) -> bool
         return true;
     }
     let checks = &observation["checks"];
-    if checks["pending"].as_f64().unwrap_or(0.0) == 0.0 || checks["failing"].as_f64().unwrap_or(0.0) > 0.0 {
+    if checks["pending"].as_f64().unwrap_or(0.0) == 0.0
+        || checks["failing"].as_f64().unwrap_or(0.0) > 0.0
+    {
         return false;
     }
     let Ok(Value::Object(mut legacy)) = serde_json::from_str::<Value>(stored) else {
         return false;
     };
-    let keys = ["number", "head", "draft", "review", "mergeable", "mergeState", "state", "checks"];
+    let keys = [
+        "number",
+        "head",
+        "draft",
+        "review",
+        "mergeable",
+        "mergeState",
+        "state",
+        "checks",
+    ];
     if legacy.len() != keys.len() || !keys.iter().all(|key| legacy.contains_key(*key)) {
         return false;
     }
@@ -577,14 +611,37 @@ mod tests {
     #[test]
     fn the_catalog_has_five_workflows_with_fixed_roles() {
         assert_eq!(
-            WORKFLOWS.iter().map(|definition| definition.id).collect::<Vec<_>>(),
-            ["standard", "direct_build", "independent_review", "competing_plans", "refine_pull_request"]
+            WORKFLOWS
+                .iter()
+                .map(|definition| definition.id)
+                .collect::<Vec<_>>(),
+            [
+                "standard",
+                "direct_build",
+                "independent_review",
+                "competing_plans",
+                "refine_pull_request"
+            ]
         );
         assert_eq!(
-            WORKFLOWS.iter().map(|definition| definition.name).collect::<Vec<_>>(),
-            ["Standard", "Direct build", "Second opinion", "Combined planning", "Pull request repair"]
+            WORKFLOWS
+                .iter()
+                .map(|definition| definition.name)
+                .collect::<Vec<_>>(),
+            [
+                "Standard",
+                "Direct build",
+                "Second opinion",
+                "Combined planning",
+                "Pull request repair"
+            ]
         );
-        assert_eq!(workflow_definition("competing_plans").unwrap().advisor_roles, ["planner_a", "planner_b"]);
+        assert_eq!(
+            workflow_definition("competing_plans")
+                .unwrap()
+                .advisor_roles,
+            ["planner_a", "planner_b"]
+        );
         assert_eq!(role_label("worker", Some("planner_b")), "Plan B");
         assert_eq!(role_label("worker", None), "Worker");
         assert_eq!(role_label("root", None), "Coordinator");
@@ -596,17 +653,71 @@ mod tests {
         let pass = json!({"role":"rater","rating":9,"blockingFindings":[],"verification":"passed","verificationSummary":"ok","summary":"ok"});
         assert_eq!(review_gate("standard", &[], &range), Ok(()));
         assert!(review_gate("refine_pull_request", &[], &range).is_err());
-        assert_eq!(review_gate("refine_pull_request", &[record("rater", pass.clone(), &range)], &range), Ok(()));
-        assert!(review_gate("refine_pull_request", &[record("rater", pass.clone(), &range), record("rater", Value::Null, &range)], &range).unwrap_err().contains("invalid"));
+        assert_eq!(
+            review_gate(
+                "refine_pull_request",
+                &[record("rater", pass.clone(), &range)],
+                &range
+            ),
+            Ok(())
+        );
+        assert!(
+            review_gate(
+                "refine_pull_request",
+                &[
+                    record("rater", pass.clone(), &range),
+                    record("rater", Value::Null, &range)
+                ],
+                &range
+            )
+            .unwrap_err()
+            .contains("invalid")
+        );
         let mut eight = pass.clone();
         eight["rating"] = json!(8);
-        assert!(review_gate("refine_pull_request", &[record("rater", pass.clone(), &range), record("rater", eight, &range)], &range).unwrap_err().contains("8/10"));
-        let moved = ReviewRange { head_sha: sha('c'), ..range.clone() };
-        assert!(review_gate("refine_pull_request", &[record("rater", pass, &moved)], &range).unwrap_err().contains("not the current range"));
+        assert!(
+            review_gate(
+                "refine_pull_request",
+                &[
+                    record("rater", pass.clone(), &range),
+                    record("rater", eight, &range)
+                ],
+                &range
+            )
+            .unwrap_err()
+            .contains("8/10")
+        );
+        let moved = ReviewRange {
+            head_sha: sha('c'),
+            ..range.clone()
+        };
+        assert!(
+            review_gate(
+                "refine_pull_request",
+                &[record("rater", pass, &moved)],
+                &range
+            )
+            .unwrap_err()
+            .contains("not the current range")
+        );
         let approved = json!({"role":"reviewer","approved":true,"blockingFindings":[],"verification":"not_applicable","verificationSummary":"docs only","summary":"ok"});
-        assert_eq!(review_gate("independent_review", &[record("reviewer", approved, &range)], &range), Ok(()));
+        assert_eq!(
+            review_gate(
+                "independent_review",
+                &[record("reviewer", approved, &range)],
+                &range
+            ),
+            Ok(())
+        );
         let rejected = json!({"role":"reviewer","approved":false,"blockingFindings":["x"],"verification":"passed","verificationSummary":"ok","summary":"no"});
-        assert!(review_gate("independent_review", &[record("reviewer", rejected, &range)], &range).is_err());
+        assert!(
+            review_gate(
+                "independent_review",
+                &[record("reviewer", rejected, &range)],
+                &range
+            )
+            .is_err()
+        );
     }
 
     #[test]
@@ -618,12 +729,42 @@ mod tests {
             commits: vec![sha('b')],
             patch_digest: Some("c".repeat(64)),
         };
-        let moved = ReviewRange { base_sha: sha('d'), ..base.clone() };
+        let moved = ReviewRange {
+            base_sha: sha('d'),
+            ..base.clone()
+        };
         assert!(range_differences(&base, &base).is_empty());
         assert!(range_differences(&base, &moved).is_empty());
-        assert_eq!(range_differences(&base, &ReviewRange { patch_digest: Some("e".repeat(64)), ..moved.clone() }), ["patch content"]);
-        assert_eq!(range_differences(&base, &ReviewRange { patch_digest: None, ..moved.clone() }), ["patch content"]);
-        assert_eq!(range_differences(&base, &ReviewRange { head_sha: sha('e'), ..moved.clone() }), ["head"]);
+        assert_eq!(
+            range_differences(
+                &base,
+                &ReviewRange {
+                    patch_digest: Some("e".repeat(64)),
+                    ..moved.clone()
+                }
+            ),
+            ["patch content"]
+        );
+        assert_eq!(
+            range_differences(
+                &base,
+                &ReviewRange {
+                    patch_digest: None,
+                    ..moved.clone()
+                }
+            ),
+            ["patch content"]
+        );
+        assert_eq!(
+            range_differences(
+                &base,
+                &ReviewRange {
+                    head_sha: sha('e'),
+                    ..moved.clone()
+                }
+            ),
+            ["head"]
+        );
         assert!(same_range(&base, &moved));
     }
 
@@ -631,62 +772,237 @@ mod tests {
     fn delivery_decision_names_the_first_unsafe_condition() {
         let range = range();
         let control = json!({"workflow":"independent_review","deliveryIntent":{"headBranch":"task"},"workflowState":{"reviews":[]}});
-        let clean = LocalSourceFacts { branch: Some("task"), head_sha: Some(&range.head_sha), clean: true };
-        assert_eq!(delivery_decision(&json!({"workflow":"standard"}), &[], &[], &range, &LocalSourceFacts { branch: None, head_sha: None, clean: false }, true), Ok(()));
-        assert_eq!(delivery_decision(&control, &[], &[], &range, &LocalSourceFacts { branch: Some("main"), ..clean }, true).unwrap_err().code, "head_diverged");
+        let clean = LocalSourceFacts {
+            branch: Some("task"),
+            head_sha: Some(&range.head_sha),
+            clean: true,
+        };
+        assert_eq!(
+            delivery_decision(
+                &json!({"workflow":"standard"}),
+                &[],
+                &[],
+                &range,
+                &LocalSourceFacts {
+                    branch: None,
+                    head_sha: None,
+                    clean: false
+                },
+                true
+            ),
+            Ok(())
+        );
+        assert_eq!(
+            delivery_decision(
+                &control,
+                &[],
+                &[],
+                &range,
+                &LocalSourceFacts {
+                    branch: Some("main"),
+                    ..clean
+                },
+                true
+            )
+            .unwrap_err()
+            .code,
+            "head_diverged"
+        );
         let other = sha('c');
-        let moved = delivery_decision(&control, &[], &[], &range, &LocalSourceFacts { branch: Some("task"), head_sha: Some(&other), clean: true }, true).unwrap_err();
-        assert!(moved.reason.ends_with("request a new Reviewer assessment."), "{}", moved.reason);
-        assert_eq!(delivery_decision(&control, &[], &[], &range, &LocalSourceFacts { branch: Some("task"), head_sha: Some(&range.head_sha), clean: false }, true).unwrap_err().code, "worktree_dirty");
-        let sessions = [json!({"id":"r1","kind":"worker","current":true,"advisorRole":"reviewer","generation":2,"launchOwner":null})];
+        let moved = delivery_decision(
+            &control,
+            &[],
+            &[],
+            &range,
+            &LocalSourceFacts {
+                branch: Some("task"),
+                head_sha: Some(&other),
+                clean: true,
+            },
+            true,
+        )
+        .unwrap_err();
+        assert!(
+            moved.reason.ends_with("request a new Reviewer assessment."),
+            "{}",
+            moved.reason
+        );
+        assert_eq!(
+            delivery_decision(
+                &control,
+                &[],
+                &[],
+                &range,
+                &LocalSourceFacts {
+                    branch: Some("task"),
+                    head_sha: Some(&range.head_sha),
+                    clean: false
+                },
+                true
+            )
+            .unwrap_err()
+            .code,
+            "worktree_dirty"
+        );
+        let sessions = [
+            json!({"id":"r1","kind":"worker","current":true,"advisorRole":"reviewer","generation":2,"launchOwner":null}),
+        ];
         let turns = [json!({"id":"t1","sessionId":"r1","generation":2,"status":"prompted"})];
-        let busy = delivery_decision(&control, &sessions, &turns, &range, &LocalSourceFacts { branch: Some("task"), head_sha: Some(&range.head_sha), clean: true }, true).unwrap_err();
-        assert_eq!((busy.code, busy.reason.as_str()), ("delegate_active", "Reviewer is still active. Wait for its result before requesting delivery."));
-        let facts = LocalSourceFacts { branch: Some("task"), head_sha: Some(&range.head_sha), clean: true };
-        assert_eq!(delivery_decision(&control, &[], &[], &range, &facts, false), Ok(()));
-        assert_eq!(delivery_decision(&control, &[], &[], &range, &facts, true).unwrap_err().code, "workflow_review_required");
+        let busy = delivery_decision(
+            &control,
+            &sessions,
+            &turns,
+            &range,
+            &LocalSourceFacts {
+                branch: Some("task"),
+                head_sha: Some(&range.head_sha),
+                clean: true,
+            },
+            true,
+        )
+        .unwrap_err();
+        assert_eq!(
+            (busy.code, busy.reason.as_str()),
+            (
+                "delegate_active",
+                "Reviewer is still active. Wait for its result before requesting delivery."
+            )
+        );
+        let facts = LocalSourceFacts {
+            branch: Some("task"),
+            head_sha: Some(&range.head_sha),
+            clean: true,
+        };
+        assert_eq!(
+            delivery_decision(&control, &[], &[], &range, &facts, false),
+            Ok(())
+        );
+        assert_eq!(
+            delivery_decision(&control, &[], &[], &range, &facts, true)
+                .unwrap_err()
+                .code,
+            "workflow_review_required"
+        );
     }
 
     #[test]
     fn direct_and_combined_obligations_follow_worker_turn_inputs() {
         let range = range();
-        let direct_worker = json!({"id":"w","kind":"worker","advisorRole":null,"workflowInput":null});
+        let direct_worker =
+            json!({"id":"w","kind":"worker","advisorRole":null,"workflowInput":null});
         let completed = |id: &str, session: &str, input: Value, observation: Value| json!({"id":id,"sessionId":session,"status":"completed","workflowInput":input,"terminalObservation":observation.to_string()});
-        let direct = completed("t", "w", json!({"kind":"worker","mode":"direct","purpose":"implementation"}), json!({"state":"completed","text":"done"}));
-        assert_eq!(workflow_ready_for_delivery("direct_build", &[], &[direct_worker.clone()], &[direct.clone()], &range), Ok(()));
-        let planned = completed("t", "w", json!({"kind":"worker","mode":"planned","purpose":"implementation"}), json!({"state":"completed"}));
-        assert!(workflow_ready_for_delivery("direct_build", &[], &[direct_worker.clone()], &[planned], &range).is_err());
+        let direct = completed(
+            "t",
+            "w",
+            json!({"kind":"worker","mode":"direct","purpose":"implementation"}),
+            json!({"state":"completed","text":"done"}),
+        );
+        assert_eq!(
+            workflow_ready_for_delivery(
+                "direct_build",
+                &[],
+                std::slice::from_ref(&direct_worker),
+                std::slice::from_ref(&direct),
+                &range
+            ),
+            Ok(())
+        );
+        let planned = completed(
+            "t",
+            "w",
+            json!({"kind":"worker","mode":"planned","purpose":"implementation"}),
+            json!({"state":"completed"}),
+        );
+        assert!(
+            workflow_ready_for_delivery(
+                "direct_build",
+                &[],
+                std::slice::from_ref(&direct_worker),
+                &[planned],
+                &range
+            )
+            .is_err()
+        );
         let plan_a = json!({"id":"a","kind":"worker","advisorRole":"planner_a"});
         let plan_b = json!({"id":"b","kind":"worker","advisorRole":"planner_b"});
         let report = |role: &str| json!({"state":"completed","advisor":{"role":role,"result":{"role":role,"summary":"plan"},"invalidReason":null}});
         let a = completed("ta", "a", Value::Null, report("planner_a"));
         let b = completed("tb", "b", Value::Null, report("planner_b"));
-        let build = completed("tw", "w", json!({"kind":"worker","version":2,"mode":"planned","purpose":"implementation","plan":"Merged","candidateReports":[{"sessionId":"a","turnId":"ta"},{"sessionId":"b","turnId":"tb"}]}), json!({"state":"completed"}));
+        let build = completed(
+            "tw",
+            "w",
+            json!({"kind":"worker","version":2,"mode":"planned","purpose":"implementation","plan":"Merged","candidateReports":[{"sessionId":"a","turnId":"ta"},{"sessionId":"b","turnId":"tb"}]}),
+            json!({"state":"completed"}),
+        );
         let sessions = [direct_worker, plan_a, plan_b];
-        assert_eq!(workflow_ready_for_delivery("competing_plans", &[], &sessions, &[a.clone(), b.clone(), build.clone()], &range), Ok(()));
-        let invalid_b = completed("tb", "b", Value::Null, json!({"state":"completed","advisor":{"role":"planner_b","result":null,"invalidReason":"bad"}}));
-        assert!(workflow_ready_for_delivery("competing_plans", &[], &sessions, &[a, invalid_b, build], &range).is_err());
+        assert_eq!(
+            workflow_ready_for_delivery(
+                "competing_plans",
+                &[],
+                &sessions,
+                &[a.clone(), b.clone(), build.clone()],
+                &range
+            ),
+            Ok(())
+        );
+        let invalid_b = completed(
+            "tb",
+            "b",
+            Value::Null,
+            json!({"state":"completed","advisor":{"role":"planner_b","result":null,"invalidReason":"bad"}}),
+        );
+        assert!(
+            workflow_ready_for_delivery(
+                "competing_plans",
+                &[],
+                &sessions,
+                &[a, invalid_b, build],
+                &range
+            )
+            .is_err()
+        );
     }
 
     #[test]
     fn delivery_wait_fingerprints_ignore_passing_jobs_while_another_is_pending() {
         let observation = |pending: i64, runs: Value| json!({"number":7,"headSha":"h","baseSha":"b","isDraft":false,"reviewDecision":null,"mergeable":"MERGEABLE","mergeStateStatus":"BLOCKED","state":"open","checks":{"pending":pending,"failing":0,"runs":runs}});
-        let first = observation(2, json!([{"name":"lint","status":"pending"},{"name":"test","status":"pending"}]));
-        let later = observation(1, json!([{"name":"lint","status":"passing","conclusion":"success"},{"name":"test","status":"pending"}]));
+        let first = observation(
+            2,
+            json!([{"name":"lint","status":"pending"},{"name":"test","status":"pending"}]),
+        );
+        let later = observation(
+            1,
+            json!([{"name":"lint","status":"passing","conclusion":"success"},{"name":"test","status":"pending"}]),
+        );
         let stored = delivery_wait_fingerprint(&first);
-        assert_eq!(stored, r#"{"number":7,"head":"h","draft":false,"review":null,"mergeable":"MERGEABLE","mergeState":"BLOCKED","state":"open","checks":["pending"]}"#);
+        assert_eq!(
+            stored,
+            r#"{"number":7,"head":"h","draft":false,"review":null,"mergeable":"MERGEABLE","mergeState":"BLOCKED","state":"open","checks":["pending"]}"#
+        );
         assert!(same_delivery_wait_fingerprint(&stored, &later));
         let legacy = r#"{"number":7,"head":"h","draft":false,"review":null,"mergeable":"MERGEABLE","mergeState":"BLOCKED","state":"open","checks":["lint:pending:","test:pending:"]}"#;
         assert!(same_delivery_wait_fingerprint(legacy, &later));
         let failed = json!({"number":7,"headSha":"h","isDraft":false,"reviewDecision":null,"mergeable":"MERGEABLE","mergeStateStatus":"BLOCKED","state":"open","checks":{"pending":0,"failing":1,"runs":[{"name":"test","status":"failing","conclusion":"failure"}]}});
-        assert!(delivery_wait_fingerprint(&failed).contains("\"failed:1\",\"test:failing:failure\""));
+        assert!(
+            delivery_wait_fingerprint(&failed).contains("\"failed:1\",\"test:failing:failure\"")
+        );
         assert!(!same_delivery_wait_fingerprint(&stored, &failed));
     }
 
     #[test]
     fn malformed_turn_outcomes_are_unknown() {
         assert_eq!(turn_outcome(Some(r#"{"state":1}"#)), TurnOutcome::default());
-        assert_eq!(turn_outcome(Some(r#"{"state":"completed","advisor":{"role":"other","result":null,"invalidReason":null}}"#)), TurnOutcome::default());
-        assert_eq!(turn_outcome(Some(r#"{"state":"completed","text":"ok"}"#)).text.as_deref(), Some("ok"));
+        assert_eq!(
+            turn_outcome(Some(
+                r#"{"state":"completed","advisor":{"role":"other","result":null,"invalidReason":null}}"#
+            )),
+            TurnOutcome::default()
+        );
+        assert_eq!(
+            turn_outcome(Some(r#"{"state":"completed","text":"ok"}"#))
+                .text
+                .as_deref(),
+            Some("ok")
+        );
     }
 }

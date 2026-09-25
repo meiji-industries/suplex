@@ -52,7 +52,9 @@ pub struct WrittenEvidence {
 
 fn valid_id(value: &str) -> bool {
     let mut characters = value.chars();
-    characters.next().is_some_and(|ch| ch.is_ascii_alphanumeric())
+    characters
+        .next()
+        .is_some_and(|ch| ch.is_ascii_alphanumeric())
         && characters.all(|ch| ch.is_ascii_alphanumeric() || ch == '_' || ch == '-')
 }
 
@@ -167,14 +169,20 @@ pub fn write_task_evidence(
                 (None, Some("invalid artifact identity".to_owned()))
             } else if let Some(extension) = extension(&attachment.mime_type) {
                 let name = format!("{artifact_id}.{extension}");
-                match attachment.bytes.map_err(io::Error::other).and_then(|bytes| {
-                    write_private(&pending.join("attachments").join(&name), &bytes)
-                }) {
+                match attachment
+                    .bytes
+                    .map_err(io::Error::other)
+                    .and_then(|bytes| {
+                        write_private(&pending.join("attachments").join(&name), &bytes)
+                    }) {
                     Ok(()) => (Some(format!("attachments/{name}")), None),
                     Err(error) => (None, Some(error.to_string())),
                 }
             } else {
-                (None, Some(format!("unsupported type {}", attachment.mime_type)))
+                (
+                    None,
+                    Some(format!("unsupported type {}", attachment.mime_type)),
+                )
             };
             manifest_attachments.push(ManifestAttachment {
                 artifact_id,
@@ -185,8 +193,7 @@ pub fn write_task_evidence(
         let manifest = EvidenceManifest {
             version: 1,
             task_id,
-            created_at: chrono::Utc::now()
-                .to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+            created_at: chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
             base_sha: &range.base_sha,
             head_sha: &range.head_sha,
             files: &range.files,
@@ -245,7 +252,10 @@ mod tests {
         let worktree = base.join("work");
         fs::create_dir_all(&worktree).unwrap();
         git(&worktree, &["init", "-q", "-b", "main"]);
-        for (key, value) in [("user.name", "Evidence"), ("user.email", "evidence@example.invalid")] {
+        for (key, value) in [
+            ("user.name", "Evidence"),
+            ("user.email", "evidence@example.invalid"),
+        ] {
             git(&worktree, &["config", key, value]);
         }
         fs::write(worktree.join("a.txt"), "before\n").unwrap();
@@ -264,23 +274,62 @@ mod tests {
         };
         let root = base.join("evidence");
         let attachments = vec![
-            EvidenceAttachment { artifact_id: "image_1".into(), mime_type: "image/png".into(), bytes: Ok(vec![1, 2, 3]) },
-            EvidenceAttachment { artifact_id: "image_2".into(), mime_type: "image/png".into(), bytes: Err("The task image changed in storage".into()) },
-            EvidenceAttachment { artifact_id: "image_3".into(), mime_type: "text/plain".into(), bytes: Ok(vec![]) },
+            EvidenceAttachment {
+                artifact_id: "image_1".into(),
+                mime_type: "image/png".into(),
+                bytes: Ok(vec![1, 2, 3]),
+            },
+            EvidenceAttachment {
+                artifact_id: "image_2".into(),
+                mime_type: "image/png".into(),
+                bytes: Err("The task image changed in storage".into()),
+            },
+            EvidenceAttachment {
+                artifact_id: "image_3".into(),
+                mime_type: "text/plain".into(),
+                bytes: Ok(vec![]),
+            },
         ];
-        assert!(write_task_evidence(&root, "../escape", &worktree, &range, vec![], &json!({})).is_err());
-        let written = write_task_evidence(&root, "task_1", &worktree, &range, attachments, &json!({"note":"checks"})).unwrap();
+        assert!(
+            write_task_evidence(&root, "../escape", &worktree, &range, vec![], &json!({})).is_err()
+        );
+        let written = write_task_evidence(
+            &root,
+            "task_1",
+            &worktree,
+            &range,
+            attachments,
+            &json!({"note":"checks"}),
+        )
+        .unwrap();
         assert!(written.directory.starts_with(root.join("task_1")));
-        assert_eq!(fs::read_dir(root.join("task_1")).unwrap().count(), 1, "no pending directory remains");
+        assert_eq!(
+            fs::read_dir(root.join("task_1")).unwrap().count(),
+            1,
+            "no pending directory remains"
+        );
         let patch = fs::read_to_string(written.directory.join("patch.diff")).unwrap();
         assert!(patch.contains("-before\n+after\n"), "{patch}");
-        let manifest: Value = serde_json::from_str(&fs::read_to_string(written.directory.join("manifest.json")).unwrap()).unwrap();
-        assert_eq!(manifest["attachments"], json!([
-            {"artifactId":"image_1","path":"attachments/image_1.png","error":null},
-            {"artifactId":"image_2","path":null,"error":"The task image changed in storage"},
-            {"artifactId":"image_3","path":null,"error":"unsupported type text/plain"},
-        ]));
-        assert_eq!(fs::metadata(written.directory.join("patch.diff")).unwrap().permissions().mode() & 0o777, 0o600);
+        let manifest: Value = serde_json::from_str(
+            &fs::read_to_string(written.directory.join("manifest.json")).unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            manifest["attachments"],
+            json!([
+                {"artifactId":"image_1","path":"attachments/image_1.png","error":null},
+                {"artifactId":"image_2","path":null,"error":"The task image changed in storage"},
+                {"artifactId":"image_3","path":null,"error":"unsupported type text/plain"},
+            ])
+        );
+        assert_eq!(
+            fs::metadata(written.directory.join("patch.diff"))
+                .unwrap()
+                .permissions()
+                .mode()
+                & 0o777,
+            0o600
+        );
         assert!(verify_task_evidence(&written.directory, &written.sha256));
         fs::write(written.directory.join("attachments/image_1.png"), [9]).unwrap();
         assert!(!verify_task_evidence(&written.directory, &written.sha256));

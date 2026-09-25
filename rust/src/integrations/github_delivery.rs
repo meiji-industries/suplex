@@ -629,6 +629,11 @@ impl Github {
         Ok((reply.status, reply.body))
     }
 
+    /// One GET with the `api` failure classes, for the trigger inspection port.
+    pub(crate) async fn get_json(&self, path: &str, operation: &str) -> GithubResult<Value> {
+        self.value("GET", path, None, operation).await
+    }
+
     /// TypeScript `api`: one GitHub request with the source's failure classes.
     #[allow(clippy::too_many_arguments)]
     async fn api(

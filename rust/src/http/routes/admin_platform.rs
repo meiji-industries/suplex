@@ -38,6 +38,35 @@ pub fn router() -> Router<AppState> {
         .route("/api/admin/backups/restore", post(restore_backup))
         .route("/api/admin/backups/{name}", get(download_backup))
         .route("/api/admin/factory-reset", post(reset))
+        .route("/api/admin/providers", get(providers))
+        .route("/api/admin/models", get(models))
+        .route("/api/models", get(models))
+}
+
+/// `GET /api/admin/providers`: one row per agent tool on this host.
+async fn providers(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    let (_, cookies) = match administrator(&state, &headers, &Method::GET, ADMIN_REQUIRED) {
+        Ok(value) => value,
+        Err(response) => return *response,
+    };
+    let directory = std::env::current_dir().unwrap_or_default();
+    let observed =
+        crate::profiles::provider_catalog::read_providers(&directory.to_string_lossy(), true).await;
+    finish(private(Json(observed).into_response()), cookies)
+}
+
+/// `GET /api/admin/models` and `GET /api/models`: provider models for any signed-in user.
+async fn models(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    let (_, cookies) = match super::profiles::authorize(&state, &headers, "GET", false) {
+        Ok(value) => value,
+        Err(response) => return *response,
+    };
+    let directory = std::env::current_dir().unwrap_or_default();
+    let providers =
+        crate::profiles::provider_catalog::read_providers(&directory.to_string_lossy(), false)
+            .await;
+    let response = Json(crate::profiles::provider_catalog::list_models(&providers)).into_response();
+    finish(response, cookies)
 }
 
 type Rejection = Box<Response>;

@@ -24,11 +24,14 @@ pub mod routes {
     pub mod admin_platform;
     pub mod agent_api;
     pub mod agent_pairing;
+    pub mod analytics;
     pub mod auth;
+    pub mod avatars;
     pub mod companies;
     pub mod discovery;
     pub mod external_agent_administration;
     pub mod github_auth;
+    pub mod github_triggers;
     pub mod health;
     pub mod mcp;
     pub mod oauth;
@@ -150,13 +153,16 @@ pub fn router(state: AppState) -> Router {
         .merge(routes::agent_pairing::router())
         .merge(routes::external_agent_administration::router())
         .merge(routes::admin_platform::router())
+        .merge(routes::analytics::router())
         .merge(routes::auth::router())
+        .merge(routes::avatars::router())
         .merge(routes::mcp::router())
         .merge(routes::oauth::router())
         .merge(routes::discovery::router())
         .merge(routes::agent_api::router())
         .merge(routes::companies::router())
         .merge(routes::github_auth::router())
+        .merge(routes::github_triggers::router())
         .merge(routes::health::router())
         .merge(routes::pages::router())
         .merge(routes::profiles::router())

@@ -28,6 +28,7 @@ impl std::fmt::Display for TaskConflict {
 
 impl std::error::Error for TaskConflict {}
 
+use crate::coordination::root_session_store;
 use crate::platform::{
     artifacts::{self, ArtifactInput, StoredArtifact},
     database::{DatabaseResult, SuplexDatabase},
@@ -319,7 +320,11 @@ fn create_inner(
                 params![id, dependency, time],
             )?;
         }
-        if input.start_queued { let _ = admit_queued(database, id, now)?; }
+        root_session_store::observe_lifecycle(database, id)?;
+        if input.start_queued && admit_queued(database, id, now)? {
+            root_session_store::observe_lifecycle(database, id)?;
+            root_session_store::observe_admission(database, id, "scheduler sweep", None);
+        }
         let created = task_by_id(database, id)?.ok_or_else(|| std::io::Error::other("Task insert did not persist"))?;
         let resulting_state = serde_json::json!({"status": created.status, "archived": false}).to_string();
         database.connection().execute(
@@ -409,6 +414,61 @@ pub fn rename(
     })
 }
 
+/// Call when a task may have lost its last blocker. A queued task is admitted;
+/// an active task receives an earlier wake. Returns whether it was admitted.
+pub(crate) fn reconcile_dependency_release(
+    database: &mut SuplexDatabase,
+    task_id: &str,
+    now: DateTime<Utc>,
+) -> DatabaseResult<bool> {
+    let blocked: bool = database.connection().query_row(
+        "SELECT EXISTS(SELECT 1 FROM suplex_task_dependencies d LEFT JOIN suplex_task_controls c ON c.task_id = d.depends_on_task_id WHERE d.task_id = ?1 AND COALESCE(c.status,'backlog') <> 'delivered')",
+        [task_id], |row| row.get(0),
+    )?;
+    if blocked {
+        return Ok(false);
+    }
+    match admit_queued(database, task_id, now) {
+        Ok(true) => return Ok(true),
+        Ok(false) => {}
+        Err(error) if error.is::<PullRequestOwned>() => return Ok(false),
+        Err(error) => return Err(error),
+    }
+    database.connection().execute(
+        "UPDATE suplex_task_controls SET wake_at = ?1, updated_at = ?1 WHERE task_id = ?2 AND status = 'active'",
+        params![timestamp(now), task_id],
+    )?;
+    Ok(false)
+}
+
+/// Return a queued task to the manual backlog. A manual backlog task is a no-op.
+pub fn disarm(
+    database: &mut SuplexDatabase,
+    task_id: &str,
+    now: DateTime<Utc>,
+) -> DatabaseResult<bool> {
+    let changed = database.transaction(true, |database| {
+        let status: Option<String> = database.connection().query_row(
+            "SELECT status FROM suplex_task_controls WHERE task_id = ?1", [task_id], |row| row.get(0),
+        ).optional()?;
+        match status.as_deref() {
+            Some("backlog") => Ok(Some(false)),
+            Some("queued") => {
+                database.connection().execute(
+                    "UPDATE suplex_task_controls SET status = 'backlog', updated_at = ?1 WHERE task_id = ?2 AND status = 'queued'",
+                    params![timestamp(now), task_id],
+                )?;
+                Ok(Some(true))
+            }
+            _ => Ok(None),
+        }
+    })?;
+    if changed == Some(true) {
+        root_session_store::observe_lifecycle(database, task_id)?;
+    }
+    Ok(changed.is_some())
+}
+
 /// Start records intent as queued; admission rechecks prerequisites in this transaction.
 pub fn start(
     database: &mut SuplexDatabase,
@@ -431,7 +491,15 @@ pub fn start(
                 [task_id], |row| row.get(0),
             )?;
             if !queued { return Ok(None); }
-            let _ = admit_queued(database, task_id, now)?;
+            let admitted = admit_queued(database, task_id, now)?;
+            root_session_store::observe_lifecycle(database, task_id)?;
+            if admitted {
+                root_session_store::observe_admission(database, task_id, "start request", None);
+            } else {
+                root_session_store::observe_queue_wait(database, task_id);
+            }
+        } else {
+            root_session_store::observe_lifecycle(database, task_id)?;
         }
         task_by_id(database, task_id)
     })

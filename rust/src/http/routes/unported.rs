@@ -148,18 +148,6 @@ const ROUTES: &[(Method, &str, Access)] = &[
     ),
     (Method::GET, "/api/tasks/{task_id}/checks", Authenticated),
     (
-        Method::POST,
-        "/api/tasks/{task_id}/continue-delivery",
-        Authenticated,
-    ),
-    (
-        Method::PUT,
-        "/api/tasks/{task_id}/dependencies",
-        Authenticated,
-    ),
-    (Method::POST, "/api/tasks/{task_id}/disarm", Authenticated),
-    (Method::PATCH, "/api/tasks/{task_id}/issue", Authenticated),
-    (
         Method::GET,
         "/api/tasks/{task_id}/pane/{role}/terminal",
         Authenticated,
@@ -168,11 +156,6 @@ const ROUTES: &[(Method, &str, Access)] = &[
     (
         Method::POST,
         "/api/tasks/{task_id}/save-as-template",
-        Authenticated,
-    ),
-    (
-        Method::POST,
-        "/api/tasks/{task_id}/select-agent",
         Authenticated,
     ),
     (

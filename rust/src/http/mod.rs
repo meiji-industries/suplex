@@ -17,14 +17,21 @@ use crate::profiles::provider_login::ProviderLogins;
 use crate::projects::repository::Commands;
 use crate::tasks::host::TaskHostHandle;
 
+pub mod agent_api_runtime;
 pub mod contracts;
 pub mod routes {
     pub mod admin_identity;
     pub mod admin_platform;
+    pub mod agent_api;
+    pub mod agent_pairing;
     pub mod auth;
     pub mod companies;
+    pub mod discovery;
+    pub mod external_agent_administration;
     pub mod github_auth;
     pub mod health;
+    pub mod mcp;
+    pub mod oauth;
     pub mod pages;
     pub mod profiles;
     pub mod projects;
@@ -64,7 +71,12 @@ pub struct AppState {
     pub herdr: Herdr,
     pub provider_logins: Arc<ProviderLogins>,
     dev_assets_dir: Option<PathBuf>,
+    /// Dynamic client registrations per source address in the last hour.
+    pub oauth_registrations: OAuthRegistrations,
 }
+
+pub type OAuthRegistrations =
+    Arc<Mutex<std::collections::HashMap<String, Vec<std::time::Instant>>>>;
 
 impl AppState {
     pub fn new(database: SuplexDatabase, session_config: session::SessionConfig) -> Self {
@@ -80,6 +92,7 @@ impl AppState {
             herdr: Herdr::default(),
             provider_logins: Arc::default(),
             dev_assets_dir: None,
+            oauth_registrations: OAuthRegistrations::default(),
         }
     }
 
@@ -134,8 +147,14 @@ impl AppState {
 pub fn router(state: AppState) -> Router {
     Router::new()
         .merge(routes::admin_identity::router())
+        .merge(routes::agent_pairing::router())
+        .merge(routes::external_agent_administration::router())
         .merge(routes::admin_platform::router())
         .merge(routes::auth::router())
+        .merge(routes::mcp::router())
+        .merge(routes::oauth::router())
+        .merge(routes::discovery::router())
+        .merge(routes::agent_api::router())
         .merge(routes::companies::router())
         .merge(routes::github_auth::router())
         .merge(routes::health::router())
@@ -286,6 +305,7 @@ mod tests {
             herdr: Herdr::default(),
             provider_logins: Arc::default(),
             dev_assets_dir: None,
+            oauth_registrations: OAuthRegistrations::default(),
         };
         let observed = Arc::new(AtomicBool::new(false));
         let callback_state = state.clone();

@@ -1,0 +1,133 @@
+{
+  "service": "Suplex",
+  "summary": "Suplex runs coordinated coding agents against your repositories. External agents read and create tasks through OAuth MCP or the authenticated Agent API.",
+  "authorization": "The remote MCP endpoint uses OAuth 2.1 browser approval. The Agent API uses a paired-agent bearer credential. Both methods bind one external-agent identity to one company and its granted projects.",
+  "discovery": [
+    {
+      "path": "/llms.txt",
+      "method": "GET",
+      "authentication": "none",
+      "description": "Plain-text overview of this deployment for machine readers."
+    },
+    {
+      "path": "/.well-known/suplex/api-catalog.json",
+      "method": "GET",
+      "authentication": "none",
+      "description": "This catalog."
+    },
+    {
+      "path": "/.well-known/suplex/agent-skills.json",
+      "method": "GET",
+      "authentication": "none",
+      "description": "Agent skill and client discovery index."
+    },
+    {
+      "path": "/.well-known/oauth-protected-resource/mcp",
+      "method": "GET",
+      "authentication": "none",
+      "description": "OAuth metadata for the MCP resource."
+    },
+    {
+      "path": "/.well-known/oauth-protected-resource",
+      "method": "GET",
+      "authentication": "none",
+      "description": "OAuth metadata for clients that use root discovery."
+    },
+    {
+      "path": "/.well-known/oauth-authorization-server",
+      "method": "GET",
+      "authentication": "none",
+      "description": "OAuth authorization server metadata."
+    }
+  ],
+  "pairing": [
+    {
+      "path": "/api/agent/pairing/exchange",
+      "method": "POST",
+      "authentication": "pairing code",
+      "description": "Exchange a one-time pairing code for a scoped agent credential. The code is single use."
+    }
+  ],
+  "runtime": [
+    {
+      "path": "/mcp",
+      "method": "POST",
+      "authentication": "OAuth bearer",
+      "description": "The Streamable HTTP MCP endpoint."
+    },
+    {
+      "path": "/api/agent/openapi.json",
+      "method": "GET",
+      "authentication": "agent credential",
+      "description": "The authoritative OpenAPI 3.0.3 contract for the runtime routes. Read it after pairing."
+    },
+    {
+      "path": "/api/agent/capabilities",
+      "method": "GET",
+      "authentication": "agent credential",
+      "description": "The commands this deployment accepts and the commands it does not."
+    },
+    {
+      "path": "/api/agent/me",
+      "method": "GET",
+      "authentication": "agent credential",
+      "description": "The agent identity and the projects granted to it."
+    },
+    {
+      "path": "/api/agent/workflows",
+      "method": "GET",
+      "authentication": "agent credential",
+      "description": "List workflow records for a granted project and whether task creation permits each one."
+    },
+    {
+      "path": "/api/agent/templates",
+      "method": "GET",
+      "authentication": "agent credential",
+      "description": "List task templates for a granted project and whether task creation permits each one."
+    },
+    {
+      "path": "/api/agent/tasks",
+      "method": "GET",
+      "authentication": "agent credential",
+      "description": "List tasks in the agent's currently granted projects. Filter by pull request number, source branch, or title substring. HTTP defaults to the full view; MCP suplex_list_tasks defaults to summary and accepts view=full."
+    },
+    {
+      "path": "/api/agent/tasks",
+      "method": "POST",
+      "authentication": "agent credential",
+      "description": "Create a backlog task, or a queued task with queue true. dryRun validates without writing state. An idempotency key is necessary unless dryRun is true. A queued task starts by itself only when every prerequisite is complete. Task input errors include project_not_found, dependency_not_found, root_profile_not_found, root_profile_not_permitted, worker_profile_not_found, worker_profile_not_permitted, advisor_profile_not_found, advisor_profile_not_permitted, source_issue_rejected, source_pull_request_rejected, source_branch_rejected, workflow_not_found, workflow_not_permitted, template_not_found, and template_not_permitted. They include field, value, and reason."
+    },
+    {
+      "path": "/api/agent/tasks/{taskId}",
+      "method": "GET",
+      "authentication": "agent credential",
+      "description": "Read one task. Send the ETag in If-None-Match to poll conditionally."
+    },
+    {
+      "path": "/api/agent/tasks/{taskId}/dependencies",
+      "method": "PUT",
+      "authentication": "agent credential",
+      "description": "Replace the prerequisites of a task, shown as Blocked by. Task input errors include project_not_found, dependency_not_found, root_profile_not_found, root_profile_not_permitted, worker_profile_not_found, worker_profile_not_permitted, advisor_profile_not_found, advisor_profile_not_permitted, source_issue_rejected, source_pull_request_rejected, source_branch_rejected, workflow_not_found, workflow_not_permitted, template_not_found, and template_not_permitted. They include field, value, and reason."
+    },
+    {
+      "path": "/api/agent/tasks/{taskId}/commands",
+      "method": "POST",
+      "authentication": "agent credential",
+      "description": "Apply one lifecycle command with the current revision and an idempotency key. start_task queues a task and disarm_task returns it to the manual backlog."
+    }
+  ],
+  "administration": {
+    "description": "OAuth connections, pairing codes, credential rotation, revocation, and project grants appear on the Agents page. An administrator controls them."
+  },
+  "notes": [
+    "Suplex conceals tasks that the caller cannot read. Denied and missing tasks both answer 404 with resource_not_found.",
+    "Human answers remain unavailable to paired agents. The runtime API exposes delivery and merge commands only when capabilities reports them. Suplex can perform delivery for a task's configured target, including a merge after review, without an agent command.",
+    "MCP exposes task lifecycle commands only. It does not expose runtime delivery or merge commands. Human answers remain unavailable to paired agents. Suplex can perform delivery for a task's configured target, including a merge after review, without an agent command."
+  ],
+  "documentation": {
+    "discovery": "docs/agents/machine-discovery.md",
+    "runtimeApi": "docs/agent-api.md",
+    "mcpBridge": "docs/agent-mcp.md",
+    "skill": "docs/agent-skill.md"
+  }
+}

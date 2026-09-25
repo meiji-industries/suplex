@@ -64,21 +64,6 @@ const ROUTES: &[(Method, &str, Access)] = &[
         Authenticated,
     ),
     (Method::GET, "/api/models", Authenticated),
-    (
-        Method::GET,
-        "/api/oauth/consent/{request_id}",
-        Authenticated,
-    ),
-    (
-        Method::POST,
-        "/api/oauth/consent/{request_id}/approve",
-        Authenticated,
-    ),
-    (
-        Method::POST,
-        "/api/oauth/consent/{request_id}/deny",
-        Authenticated,
-    ),
 ];
 
 pub fn router() -> Router<AppState> {

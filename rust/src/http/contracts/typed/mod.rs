@@ -1,8 +1,10 @@
 use serde::{Serialize, de::DeserializeOwned};
 use serde_json::{Map, Value, json};
 
+pub mod agent_api;
 pub mod auth;
 pub mod github_auth;
+pub mod oauth;
 pub mod projects;
 pub mod system;
 pub mod task_answers;

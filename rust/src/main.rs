@@ -27,6 +27,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         return suplex::coordination::root_stdio::serve_from_environment().await;
     }
+    if command == ["mcp"] {
+        return suplex::integrations::suplex::bridge::serve_from_environment().await;
+    }
     if command.starts_with(&["display".to_owned(), "devin".to_owned()]) {
         return suplex::runtimes::devin::display::main(&command[2..]);
     }

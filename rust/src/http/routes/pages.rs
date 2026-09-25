@@ -205,7 +205,22 @@ page_handler!(timeline, "timeline");
 page_handler!(analytics, "analytics");
 page_handler!(setup, "setup");
 page_handler!(onboarding, "onboarding");
-page_handler!(health, "health");
+async fn health(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    let cookies = match page_user(&state, &headers) {
+        Ok((_, cookies)) => cookies,
+        Err(response) => return *response,
+    };
+    let snapshot = super::health::snapshot(&state, Vec::new(), None).await;
+    let response = (
+        [
+            (header::CONTENT_TYPE, "text/html; charset=utf-8"),
+            (header::CACHE_CONTROL, "no-store"),
+        ],
+        super::health::health_page(&snapshot),
+    )
+        .into_response();
+    with_cookies(response, cookies)
+}
 
 #[cfg(test)]
 mod tests {
@@ -350,11 +365,18 @@ mod tests {
         assert_eq!(page.status(), StatusCode::OK);
         assert_eq!(page.headers().get_all(header::SET_COOKIE).iter().count(), 2);
         let body = to_bytes(page.into_body(), 32 * 1024).await.unwrap();
-        assert!(
-            String::from_utf8(body.to_vec())
-                .unwrap()
-                .contains("Suplex · Host health")
-        );
+        let body = String::from_utf8(body.to_vec()).unwrap();
+        assert!(body.contains("Suplex · Host health"));
+        assert!(body.contains("window.__SUPLEX_HEALTH__ = {"));
+        assert!(body.contains(r#"<article class="health-card" data-status="#));
+        assert!(!body.contains("__SUPLEX_VIEW__"));
+        let rendered = super::super::health::health_page(&serde_json::json!({
+            "reachableAddress":"http://127.0.0.1:4113","ready":false,
+            "checks":[{"status":"warning","label":"<Git>","summary":"</script>"}],
+        }));
+        assert!(rendered.contains("<h2>&lt;Git&gt;</h2><p>&lt;/script&gt;</p>"));
+        assert!(rendered.contains("<p>Attention needed</p>"));
+        assert!(rendered.contains(r#""summary":"\u003c/script>""#));
         let _ = std::fs::remove_file(path);
     }
 }

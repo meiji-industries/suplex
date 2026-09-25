@@ -186,7 +186,7 @@ pub struct AssistantMessage {
 #[serde(tag = "role", rename_all = "lowercase")]
 pub enum Message {
     User(UserMessage),
-    Assistant(AssistantMessage),
+    Assistant(Box<AssistantMessage>),
 }
 
 impl Message {

@@ -220,14 +220,6 @@ pub fn archive_local_task(
     if !["backlog", "queued", "cancelled", "delivered"].contains(&task.status.as_str()) {
         return Err(failure("Cancel the task before archiving it", 409));
     }
-    let supported: (String, String) = database.connection().query_row(
-        "SELECT workflow,delivery_target FROM suplex_task_controls WHERE task_id = ?1",
-        [task_id],
-        |row| Ok((row.get(0)?, row.get(1)?)),
-    )?;
-    if supported.0 != "standard" || supported.1 != "local_worktree" {
-        return Err(not_ported());
-    }
     let _guard = ArchiveGuard::acquire(task_id)?;
     archive_sessions_idle(&database, database_path, task_id).map_err(cleanup_error)?;
     drop(database);
@@ -330,7 +322,7 @@ mod tests {
             title: "Archive task".into(), description: "".into(),
             configuration: json!({"repositoryPath":repository_path,"worktreeRoot":worktree_root,"branch":"task-archive","startingSha":sha}),
             idempotency_key: "archive-key".into(), request_hash: "archive-hash".into(), creator: TaskCreator::User(user.id.clone()),
-            delivery_target: "local_worktree".into(), delivery_intent: json!({}), root_profile: json!({}), worker_profile: json!({}), advisor_profiles: json!({}), issue: None, start_queued: false, copied_from_task_id: None, depends_on: vec![],
+            delivery_target: "pull_request_draft".into(), delivery_intent: json!({}), root_profile: json!({}), worker_profile: json!({}), advisor_profiles: json!({}), issue: None, start_queued: false, copied_from_task_id: None, depends_on: vec![],
         }, now).unwrap().task;
         database
             .connection()
@@ -392,9 +384,9 @@ mod tests {
         let database = SuplexDatabase::open(&database_path, OpenMode::ReadWrite).unwrap();
         database.connection().execute("UPDATE suplex_task_sessions SET native_session_id = NULL WHERE id = 'archive_session'", []).unwrap();
         drop(database);
-        fs::write(worktree.path.join("dirty.txt"), "keep\n").unwrap();
+        fs::write(worktree.path.join("draft.txt"), "keep\n").unwrap();
         match archive_local_task(&database_path, &user.id, &task_id, false).unwrap() {
-            ArchiveOutcome::ConfirmationRequired(paths) => assert_eq!(paths, ["dirty.txt"]),
+            ArchiveOutcome::ConfirmationRequired(paths) => assert_eq!(paths, ["draft.txt"]),
             ArchiveOutcome::Archived(_) => panic!("dirty worktree needs confirmation"),
         }
         fs::write(directory.join("server.json"), "{}").unwrap();
@@ -409,7 +401,7 @@ mod tests {
         database.connection().execute("UPDATE suplex_task_sessions SET launch_owner_pid = ?1,launch_owner_start_time = 'stale-start',native_session_id = 'codex-native' WHERE id = 'archive_session'", [owner.pid]).unwrap();
         drop(database);
         match archive_local_task(&database_path, &user.id, &task_id, false).unwrap() {
-            ArchiveOutcome::ConfirmationRequired(paths) => assert_eq!(paths, ["dirty.txt"]),
+            ArchiveOutcome::ConfirmationRequired(paths) => assert_eq!(paths, ["draft.txt"]),
             ArchiveOutcome::Archived(_) => panic!("dirty worktree needs confirmation"),
         }
         assert!(worktree.path.exists());

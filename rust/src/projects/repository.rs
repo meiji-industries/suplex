@@ -9,7 +9,10 @@ use std::{
 use regex::Regex;
 use serde::Serialize;
 
-use git2::{AutotagOption, Cred, CredentialType, FetchOptions, RemoteCallbacks, Repository};
+use git2::{
+    AutotagOption, Cred, CredentialType, Direction, FetchOptions, Remote, RemoteCallbacks,
+    Repository,
+};
 
 use crate::integrations::github::{Access, AccessResult};
 
@@ -66,22 +69,69 @@ impl Github {
     }
 }
 
+/// OAuth authenticates GitHub Git operations over HTTPS, including SSH origins.
+pub(crate) fn github_transport_url(url: &str, token: Option<&str>) -> Option<String> {
+    let coordinate = repository_coordinate(url)?;
+    (token.is_some() && coordinate.host == "github")
+        .then(|| format!("https://github.com/{}.git", coordinate.repository))
+}
+
+pub(crate) fn origin_remote<'repo>(
+    repository: &'repo Repository,
+    direction: Direction,
+    token: Option<&str>,
+) -> Result<Remote<'repo>, git2::Error> {
+    let origin = repository.find_remote("origin")?;
+    let config = repository.config()?;
+    let url = match direction {
+        Direction::Fetch => config.get_string("remote.origin.url")?,
+        Direction::Push => match config.get_string("remote.origin.pushurl") {
+            Ok(url) => url,
+            Err(error) if error.code() == git2::ErrorCode::NotFound => {
+                config.get_string("remote.origin.url")?
+            }
+            Err(error) => return Err(error),
+        },
+    };
+    match github_transport_url(&url, token) {
+        Some(url) => repository.remote_anonymous(&url),
+        None => Ok(origin),
+    }
+}
+
 /// Git credentials: the GitHub token over HTTPS to github.com, else the SSH agent.
-pub(super) fn remote_callbacks(token: Option<&str>) -> RemoteCallbacks<'_> {
+pub(crate) fn remote_callbacks(token: Option<&str>) -> RemoteCallbacks<'_> {
     let mut callbacks = RemoteCallbacks::new();
-    callbacks.credentials(move |url, username, allowed| {
+    callbacks.credentials(remote_credentials(token));
+    callbacks
+}
+
+fn remote_credentials(
+    token: Option<&str>,
+) -> impl FnMut(&str, Option<&str>, CredentialType) -> Result<Cred, git2::Error> + '_ {
+    let mut attempted = false;
+    move |url, username, allowed| {
+        // libgit2 asks again after rejection, including when the SSH agent has no keys.
+        if attempted {
+            return Err(git2::Error::new(
+                git2::ErrorCode::Auth,
+                git2::ErrorClass::Callback,
+                "Git remote authentication failed. Check the repository credentials.",
+            ));
+        }
         if allowed.contains(CredentialType::USER_PASS_PLAINTEXT)
             && let Some(token) = token
             && crate::tasks::worktree::token_audience_matches(url)
         {
+            attempted = true;
             return Cred::userpass_plaintext("x-access-token", token);
         }
         if allowed.contains(CredentialType::SSH_KEY) {
+            attempted = true;
             return Cred::ssh_key_from_agent(username.unwrap_or("git"));
         }
         Err(git2::Error::from_str("No credential for Git remote"))
-    });
-    callbacks
+    }
 }
 
 fn unavailable() -> Vec<Finding> {
@@ -102,9 +152,6 @@ fn fetch_origin_branch(
     expected_host: &str,
     token: Option<&str>,
 ) -> Result<(String, String), Vec<Finding>> {
-    let mut origin = repository
-        .find_remote("origin")
-        .map_err(|_| unavailable())?;
     // The configured value, not a URL rewritten by `insteadOf`.
     let remote_url = repository
         .config()
@@ -130,6 +177,8 @@ fn fetch_origin_branch(
                 "Origin must identify the configured repository host",
             )]
         })?;
+    let mut origin =
+        origin_remote(repository, Direction::Fetch, token).map_err(|_| unavailable())?;
     let mut options = FetchOptions::new();
     options
         .download_tags(AutotagOption::None)
@@ -137,7 +186,17 @@ fn fetch_origin_branch(
     let refspec = format!("refs/heads/{base_branch}:refs/remotes/origin/{base_branch}");
     origin
         .fetch(&[refspec.as_str()], Some(&mut options), None)
-        .map_err(|_| unavailable())?;
+        .map_err(|error| {
+            if error.code() == git2::ErrorCode::Auth {
+                vec![finding(
+                    "repository-authentication",
+                    "repositoryPath",
+                    "Git remote authentication failed. Check the repository credentials.",
+                )]
+            } else {
+                unavailable()
+            }
+        })?;
     let commit = repository
         .find_reference(&format!("refs/remotes/origin/{base_branch}"))
         .and_then(|reference| reference.peel_to_commit())
@@ -147,10 +206,45 @@ fn fetch_origin_branch(
 
 /// Capture the base commit from Git's origin, as task creation does in the
 /// TypeScript service.
-pub fn capture_local_task_heads(
+pub async fn capture_local_task_heads(
+    github: &Github,
     repository_path: &Path,
     base_branch: &str,
     expected_host: &str,
+) -> Result<String, Vec<Finding>> {
+    let token = if expected_host == "github" {
+        github
+            .access()
+            .await
+            .map_err(|_| {
+                vec![finding(
+                    "repository-authentication",
+                    "repositoryPath",
+                    "GitHub authentication is unavailable. Sign in to GitHub again.",
+                )]
+            })?
+            .token()
+            .map(str::to_owned)
+    } else {
+        None
+    };
+    let (path, branch, host) = (
+        repository_path.to_owned(),
+        base_branch.to_owned(),
+        expected_host.to_owned(),
+    );
+    tokio::task::spawn_blocking(move || {
+        capture_task_heads_with_token(&path, &branch, &host, token.as_deref())
+    })
+    .await
+    .map_err(|_| unavailable())?
+}
+
+fn capture_task_heads_with_token(
+    repository_path: &Path,
+    base_branch: &str,
+    expected_host: &str,
+    token: Option<&str>,
 ) -> Result<String, Vec<Finding>> {
     if !repository_path.is_dir() {
         return Err(vec![finding(
@@ -162,7 +256,7 @@ pub fn capture_local_task_heads(
     let repository = Repository::open(repository_path).map_err(|_| unavailable())?;
     repository.workdir().ok_or_else(unavailable)?;
     repository.statuses(None).map_err(|_| unavailable())?;
-    fetch_origin_branch(&repository, base_branch, expected_host, None).map(|(_, sha)| sha)
+    fetch_origin_branch(&repository, base_branch, expected_host, token).map(|(_, sha)| sha)
 }
 
 fn resolve(path: &Path) -> std::io::Result<PathBuf> {
@@ -413,12 +507,10 @@ pub async fn prepare_local_project(
             "Configured branches must resolve to commits",
         ));
     }
-    if inspection.remote_repository != repository {
-        findings.push(finding(
-            "repository-mismatch",
-            "repository",
-            "Local origin does not match configured repository identity",
-        ));
+    if let Err(error) =
+        verify_origin(access.as_ref(), &inspection.remote_repository, &repository).await
+    {
+        findings.push(error);
     }
     if !findings.is_empty() {
         return Err(findings);
@@ -574,6 +666,36 @@ pub(super) fn github_status(error: &octocrab::Error) -> Option<u16> {
     }
 }
 
+pub async fn verify_origin(
+    access: Option<&Access>,
+    origin: &str,
+    repository: &str,
+) -> Result<(), Finding> {
+    if origin == repository {
+        return Ok(());
+    }
+    let access = access.ok_or_else(|| {
+        finding(
+            "github-auth-unavailable",
+            "repository",
+            "Sign in to GitHub to verify the local origin.",
+        )
+    })?;
+    match super::connection::same_repository(access, origin, repository).await {
+        Ok(true) => Ok(()),
+        Ok(false) => Err(finding(
+            "repository-mismatch",
+            "repository",
+            "Local origin does not match configured repository identity",
+        )),
+        Err(_) => Err(finding(
+            "github-repository-unavailable",
+            "repository",
+            "GitHub could not verify the local origin. Check repository access and try again.",
+        )),
+    }
+}
+
 pub async fn verify_github(access: Option<&Access>, repository: &str) -> Result<(), Finding> {
     let failure = |code| {
         finding(
@@ -602,19 +724,8 @@ pub async fn verify_github(access: Option<&Access>, repository: &str) -> Result<
         })?;
     let actual = value["full_name"].as_str().unwrap_or_default();
     let url = value["html_url"].as_str().unwrap_or_default();
-    let normalized_actual = actual.trim();
-    let normalized_actual = normalized_actual
-        .strip_suffix(".git")
-        .unwrap_or(normalized_actual);
-    if normalized_actual.to_ascii_lowercase() != repository {
+    if !valid_repository(actual) {
         return Err(failure("github-repository-unavailable"));
-    }
-    if actual.to_ascii_lowercase() != repository {
-        return Err(finding(
-            "provider-mismatch",
-            "repository",
-            "GitHub repository identity does not match configuration",
-        ));
     }
     let parsed = url::Url::parse(url).ok();
     if parsed
@@ -635,7 +746,7 @@ pub async fn verify_github(access: Option<&Access>, repository: &str) -> Result<
         || parsed.password().is_some()
         || parsed.query().is_some()
         || parsed.fragment().is_some()
-        || provider_path.to_ascii_lowercase() != repository
+        || !provider_path.eq_ignore_ascii_case(actual)
     {
         return Err(finding(
             "provider-path",
@@ -733,12 +844,144 @@ mod tests {
     use super::{fixtures::*, *};
 
     #[test]
+    fn oauth_git_operations_use_https_for_ssh_origins() {
+        let root = temporary("suplex-oauth-git");
+        let bare = root.join("origin.git");
+        let local = root.join("repo");
+        let checkout = github_checkout(&local, &bare, "acme/repo");
+        let ssh = "git@github.com:acme/repo.git";
+        checkout.remote_set_url("origin", ssh).unwrap();
+        let token = Some("fixture-token");
+        let base = capture_task_heads_with_token(&local, "main", "github", token).unwrap();
+        let upstream = Repository::clone(bare.to_str().unwrap(), root.join("upstream")).unwrap();
+        let next = commit(&upstream, "new remote commit");
+        push_main(&upstream, &bare);
+        assert!(checkout.find_commit(next).is_err());
+        let intent = crate::tasks::worktree::TaskWorktreeIntent {
+            task_id: "task_oauth".into(),
+            repository_path: local.clone(),
+            worktree_root: root.join("worktrees"),
+            branch: "feature/oauth".into(),
+            starting_sha: next.to_string(),
+        };
+        let worktree = crate::tasks::worktree::prepare_local_task_worktree(&intent, token).unwrap();
+        assert_eq!(worktree.head_sha, next.to_string());
+        assert_ne!(
+            base,
+            capture_task_heads_with_token(&local, "main", "github", token).unwrap()
+        );
+        crate::integrations::github_delivery::push_normal(
+            &worktree.path,
+            &intent.branch,
+            &worktree.head_sha,
+            token,
+        )
+        .unwrap();
+        let published = Repository::open_bare(&bare).unwrap();
+        assert_eq!(
+            published.refname_to_id("refs/heads/feature/oauth").unwrap(),
+            next
+        );
+        assert_eq!(
+            checkout
+                .config()
+                .unwrap()
+                .get_string("remote.origin.url")
+                .unwrap(),
+            ssh
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn oauth_transport_keeps_remote_authority_and_push_destination() {
+        assert_eq!(
+            github_transport_url("git@github.com:acme/repo.git", Some("fixture")),
+            Some("https://github.com/acme/repo.git".into())
+        );
+        for url in [
+            "git@github.com:acme/repo.git",
+            "https://github.com/acme/repo.git",
+        ] {
+            assert!(github_transport_url(url, None).is_none());
+        }
+        for url in [
+            "git@bitbucket.org:acme/repo.git",
+            "git@github.com.evil.test:acme/repo.git",
+            "https://user:secret@github.com/acme/repo.git",
+            "https://github.com:444/acme/repo.git",
+        ] {
+            assert!(github_transport_url(url, Some("fixture")).is_none());
+        }
+        let root = temporary("suplex-oauth-push-url");
+        let repo = init(&root, false);
+        repo.remote("origin", "git@github.com:acme/read.git")
+            .unwrap();
+        repo.remote_set_pushurl("origin", Some("git@github.com:acme/write.git"))
+            .unwrap();
+        assert_eq!(
+            origin_remote(&repo, Direction::Fetch, Some("fixture"))
+                .unwrap()
+                .url()
+                .unwrap(),
+            "https://github.com/acme/read.git"
+        );
+        assert_eq!(
+            origin_remote(&repo, Direction::Push, Some("fixture"))
+                .unwrap()
+                .url()
+                .unwrap(),
+            "https://github.com/acme/write.git"
+        );
+        assert_eq!(
+            repo.config()
+                .unwrap()
+                .get_string("remote.origin.pushurl")
+                .unwrap(),
+            "git@github.com:acme/write.git"
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn remote_credentials_stop_after_rejection_and_preserve_token_scope() {
+        for (url, kind, token) in [
+            (
+                "git@github.com:acme/repo.git",
+                CredentialType::SSH_KEY,
+                None,
+            ),
+            (
+                "https://github.com/acme/repo.git",
+                CredentialType::USER_PASS_PLAINTEXT,
+                Some("fixture-token"),
+            ),
+        ] {
+            let mut credentials = remote_credentials(token);
+            assert!(credentials(url, Some("git"), kind).is_ok());
+            assert_eq!(
+                credentials(url, Some("git"), kind).err().unwrap().code(),
+                git2::ErrorCode::Auth,
+            );
+            assert!(remote_credentials(token)(url, Some("git"), kind).is_ok());
+        }
+        assert!(
+            remote_credentials(Some("fixture-token"))(
+                "https://example.com/acme/repo.git",
+                None,
+                CredentialType::USER_PASS_PLAINTEXT,
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
     fn task_capture_refreshes_the_origin_branch_before_returning_its_commit() {
         let root = temporary("suplex-task-capture");
         let bare = root.join("origin.git");
         let local = root.join("repo");
         let checkout = github_checkout(&local, &bare, "acme/repo");
-        let first = capture_local_task_heads(&local, "main", "github").unwrap();
+        let first = capture_task_heads_with_token(&local, "main", "github", None).unwrap();
         assert_eq!(first.len(), 40);
 
         let second = commit(&checkout, "two");
@@ -752,15 +995,17 @@ mod tests {
             )
             .unwrap();
         assert_eq!(
-            capture_local_task_heads(&local, "main", "github").unwrap(),
+            capture_task_heads_with_token(&local, "main", "github", None).unwrap(),
             second.to_string()
         );
         assert_eq!(
-            capture_local_task_heads(&local, "main", "bitbucket").unwrap_err()[0].code,
+            capture_task_heads_with_token(&local, "main", "bitbucket", None).unwrap_err()[0].code,
             "repository-identity"
         );
         assert_eq!(
-            capture_local_task_heads(&root.join("missing"), "main", "github").unwrap_err()[0].code,
+            capture_task_heads_with_token(&root.join("missing"), "main", "github", None)
+                .unwrap_err()[0]
+                .code,
             "repository-path-missing"
         );
         fs::remove_dir_all(root).unwrap();
@@ -869,10 +1114,19 @@ mod tests {
                 .route("/user", get(|| async { Json(json!({"login": "acme"})) }))
                 .route(
                     "/repos/{owner}/{name}",
-                    get(move || {
-                        let repository = repository.clone();
-                        async move { Json(repository.lock().unwrap().clone()) }
-                    }),
+                    get(
+                        move |axum::extract::Path((owner, _)): axum::extract::Path<(
+                            String,
+                            String,
+                        )>| {
+                            let repository = repository.clone();
+                            async move {
+                                let mut value = repository.lock().unwrap().clone();
+                                value["id"] = json!(if owner == "other" { 2 } else { 1 });
+                                Json(value)
+                            }
+                        },
+                    ),
                 ),
         )
         .await
@@ -987,21 +1241,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn github_verification_rejects_other_repositories_hosts_and_paths() {
+    async fn github_verification_accepts_renames_and_rejects_invalid_hosts_and_paths() {
         let answer = Arc::new(Mutex::new(Value::Null));
         let base = github_with(answer.clone()).await;
         let access =
             crate::integrations::github::Access::for_api(&base, Some("fixture".into())).unwrap();
         for (full_name, url, code) in [
             (
-                "other/repo",
-                "https://github.com/other/repo",
-                "github-repository-unavailable",
-            ),
-            (
                 "acme/repo.git",
                 "https://github.com/acme/repo",
-                "provider-mismatch",
+                "provider-path",
             ),
             (
                 "acme/repo",
@@ -1024,6 +1273,9 @@ mod tests {
                 "{full_name} {url}"
             );
         }
+        *answer.lock().unwrap() =
+            json!({"full_name": "acme/renamed", "html_url": "https://github.com/acme/renamed"});
+        verify_github(Some(&access), "acme/repo").await.unwrap();
         let missing = github_api(
             Router::new()
                 .route("/user", get(|| async { Json(json!({"login": "acme"})) }))

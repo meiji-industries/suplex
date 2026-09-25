@@ -22,7 +22,7 @@ use crate::{
 
 use super::{
     root_bridge::{self, RootIdentity},
-    root_controller::{self, StandardWorkerAssignment, WorkerEvidenceRequest},
+    root_controller::{self, WorkerAssignment, WorkerEvidenceRequest},
     root_session_store,
     worker_evidence::{EvidenceField, EvidencePosition, EvidenceQuery},
 };
@@ -37,11 +37,24 @@ enum RootCall {
     Observe,
     ReadImage(String),
     ReadWorkerEvidence(WorkerEvidenceRequest),
-    DelegateWorker(StandardWorkerAssignment),
+    DelegateWorker(WorkerAssignment),
+    DelegateAdvisor {
+        role: String,
+        brief: Option<String>,
+    },
+    DelegatePlanners,
     ReplaceWorker(TaskWorkerReplacementBody),
-    InspectDeliveryDiff,
-    RequestDelivery { expected_head: Option<String> },
-    AskHuman { question: String, options: Value },
+    RequestDelivery {
+        operation: &'static str,
+        expected_head: Option<String>,
+        review: Option<delivery::inspection::ReviewRange>,
+        pull_request_title: Option<String>,
+        pull_request_body: Option<String>,
+    },
+    AskHuman {
+        question: String,
+        options: Value,
+    },
 }
 
 #[derive(Deserialize)]
@@ -54,6 +67,12 @@ enum WireCall {
     },
     ReadWorkerEvidence(WorkerEvidenceInput),
     DelegateWorker(Box<WorkerInput>),
+    DelegateAdvisor {
+        role: String,
+        #[serde(default, deserialize_with = "present")]
+        brief: Option<String>,
+    },
+    DelegatePlanners(Empty),
     ReplaceWorker {
         #[serde(rename = "sessionId")]
         session_id: String,
@@ -71,7 +90,8 @@ enum WireCall {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct WorkerInput {
-    plan: String,
+    #[serde(default, deserialize_with = "present")]
+    plan: Option<String>,
     #[serde(rename = "acceptanceCriteria")]
     acceptance_criteria: Vec<String>,
     instruction: String,
@@ -112,7 +132,7 @@ struct WorkerEvidenceInput {
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct DeliveryInput {
-    operation: LocalDeliveryOperation,
+    operation: DeliveryOperation,
     #[serde(default, deserialize_with = "present")]
     expected_head: Option<String>,
     #[serde(default, deserialize_with = "present")]
@@ -125,9 +145,30 @@ struct DeliveryInput {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "snake_case")]
-enum LocalDeliveryOperation {
+enum DeliveryOperation {
     InspectDeliveryDiff,
     CompleteLocalWork,
+    PushBranch,
+    CreateOrAdoptPullRequest,
+    ObservePullRequest,
+    ObserveChecks,
+    RequestReview,
+    MergePullRequest,
+}
+
+impl DeliveryOperation {
+    fn name(&self) -> &'static str {
+        match self {
+            Self::InspectDeliveryDiff => "inspect_delivery_diff",
+            Self::CompleteLocalWork => "complete_local_work",
+            Self::PushBranch => "push_branch",
+            Self::CreateOrAdoptPullRequest => "create_or_adopt_pull_request",
+            Self::ObservePullRequest => "observe_pull_request",
+            Self::ObserveChecks => "observe_checks",
+            Self::RequestReview => "request_review",
+            Self::MergePullRequest => "merge_pull_request",
+        }
+    }
 }
 
 #[derive(Deserialize)]
@@ -304,12 +345,21 @@ fn parse_call(mut input: Map<String, Value>) -> Result<RootCall, String> {
         }
         WireCall::RequestDelivery(input) => {
             validate_delivery_extras(&input)?;
-            match input.operation {
-                LocalDeliveryOperation::InspectDeliveryDiff => Ok(RootCall::InspectDeliveryDiff),
-                LocalDeliveryOperation::CompleteLocalWork => Ok(RootCall::RequestDelivery {
-                    expected_head: input.expected_head,
-                }),
-            }
+            Ok(RootCall::RequestDelivery {
+                operation: input.operation.name(),
+                expected_head: input.expected_head,
+                review: input
+                    .review
+                    .map(|review| delivery::inspection::ReviewRange {
+                        base_sha: review.base_sha,
+                        head_sha: review.head_sha,
+                        files: review.files,
+                        commits: review.commits,
+                        patch_digest: review.patch_digest,
+                    }),
+                pull_request_title: input.pull_request_title,
+                pull_request_body: input.pull_request_body,
+            })
         }
         WireCall::DelegateWorker(input) => {
             let WorkerInput {
@@ -323,11 +373,11 @@ fn parse_call(mut input: Map<String, Value>) -> Result<RootCall, String> {
                 advisor_session_id,
                 candidate_session_ids,
             } = *input;
-            if mode != "planned" {
-                return Err("mode: only planned Standard delegation is implemented".into());
+            if !matches!(mode.as_str(), "planned" | "direct") {
+                return Err("mode: expected planned or direct".into());
             }
-            if purpose != "implementation" {
-                return Err("purpose: only implementation delegation is implemented".into());
+            if !matches!(purpose.as_str(), "implementation" | "verification") {
+                return Err("purpose: expected implementation or verification".into());
             }
             if advisor_turn_id
                 .as_deref()
@@ -344,7 +394,10 @@ fn parse_call(mut input: Map<String, Value>) -> Result<RootCall, String> {
             {
                 return Err("Worker Advisor reference is invalid".into());
             }
-            let plan = js_trim(&plan).to_owned();
+            let plan = plan.map(|plan| js_trim(&plan).to_owned());
+            if plan.as_deref().is_some_and(str::is_empty) {
+                return Err("plan: expected nonempty text".into());
+            }
             let instruction = js_trim(&instruction).to_owned();
             let criteria = acceptance_criteria
                 .into_iter()
@@ -357,19 +410,38 @@ fn parse_call(mut input: Map<String, Value>) -> Result<RootCall, String> {
                     }
                 })
                 .collect::<Result<Vec<_>, _>>()?;
-            if plan.is_empty() || instruction.is_empty() || criteria.is_empty() {
-                return Err(
-                    "A planned assignment requires a plan, acceptance criteria, and instruction"
-                        .into(),
-                );
+            if instruction.is_empty() || criteria.is_empty() {
+                return Err("acceptanceCriteria and instruction are required".into());
             }
-            Ok(RootCall::DelegateWorker(StandardWorkerAssignment {
+            if mode == "planned" && plan.is_none() {
+                return Err("A planned assignment requires the Coordinator's plan".into());
+            }
+            Ok(RootCall::DelegateWorker(WorkerAssignment {
                 plan,
                 acceptance_criteria: criteria,
                 instruction,
-                purpose: "implementation".into(),
+                mode,
+                purpose,
+                advisor_turn_id,
+                advisor_session_id,
+                candidate_turn_ids,
+                candidate_session_ids,
             }))
         }
+        WireCall::DelegateAdvisor { role, brief } => {
+            if !["reviewer", "planner_a", "planner_b", "rater"].contains(&role.as_str()) {
+                return Err("role: expected reviewer, planner_a, planner_b, or rater".into());
+            }
+            let brief = brief.map(|brief| js_trim(&brief).to_owned());
+            if brief
+                .as_deref()
+                .is_some_and(|brief| brief.is_empty() || brief.encode_utf16().count() > 20_000)
+            {
+                return Err("brief: expected 1 to 20000 characters".into());
+            }
+            Ok(RootCall::DelegateAdvisor { role, brief })
+        }
+        WireCall::DelegatePlanners(_) => Ok(RootCall::DelegatePlanners),
         WireCall::AskHuman {
             question,
             mut options,
@@ -408,20 +480,20 @@ fn parse_call(mut input: Map<String, Value>) -> Result<RootCall, String> {
 fn tool() -> Tool {
     Tool::new(
         "suplex_root",
-        "Observe this task, read an image or native Worker evidence, delegate a Standard Worker, inspect the delivery diff, complete local work, or ask a specific human question.",
+        "Observe this task, read an image or native Worker evidence, delegate a Worker or an Advisor, inspect, publish, observe, or complete delivery, or ask a specific human question.",
         serde_json::from_value::<Map<String, Value>>(json!({
             "type":"object",
             "properties":{
-                "kind":{"type":"string","enum":["observe","read_image","read_worker_evidence","delegate_worker","replace_worker","request_delivery","ask_human"],"description":"Fields per kind. observe: no other fields. read_image: required artifactId. read_worker_evidence: required turnId; optional toolId, field (input/output/error), position (head/tail), cursor, maxCharacters (1000..20000). delegate_worker: required plan, acceptanceCriteria, instruction; optional mode (planned), purpose (implementation), Advisor references (unused in Standard). replace_worker: required sessionId and reason; optional handoff. request_delivery: required operation (inspect_delivery_diff or complete_local_work); optional expectedHead and source review fields. ask_human: required question, options."},
+                "kind":{"type":"string","enum":["observe","read_image","read_worker_evidence","delegate_worker","delegate_advisor","delegate_planners","replace_worker","request_delivery","ask_human"],"description":"Fields per kind. observe: no other fields. read_image: required artifactId. read_worker_evidence: required turnId; optional toolId, field (input/output/error), position (head/tail), cursor, maxCharacters (1000..20000). delegate_worker: required acceptanceCriteria, instruction; plan is required when mode is planned or omitted; optional mode (planned or direct; direct only for Direct build), purpose (implementation or verification), advisorTurnId (Pull request repair: the latest valid Rater report turn), candidateTurnIds (Combined planning: the Plan A and Plan B report turns), advisorSessionId and candidateSessionIds (legacy session forms). delegate_advisor: required role (reviewer, planner_a, planner_b, rater); optional brief (Reviewer only: your plan and acceptance criteria). delegate_planners: no other fields; Combined planning reserves Plan A and Plan B together. replace_worker: required sessionId and reason; optional handoff. request_delivery: required operation; expectedHead and review are required for push_branch, create_or_adopt_pull_request, request_review, and merge_pull_request; pullRequestTitle and pullRequestBody create a pull request. ask_human: required question, options."},
                 "sessionId":{"type":"string","minLength":1},
                 "reason":{"type":"string","minLength":1},
                 "handoff":{"type":"string"},
                 "artifactId":{"type":"string","minLength":1,"maxLength":256,"pattern":"^[A-Za-z0-9][A-Za-z0-9._:-]*$"},
-                "operation":{"type":"string","enum":["inspect_delivery_diff","complete_local_work"],"description":"Inspect the published-base-to-head patch or complete reviewed Standard local work."},
+                "operation":{"type":"string","enum":["inspect_delivery_diff","complete_local_work","push_branch","create_or_adopt_pull_request","observe_pull_request","observe_checks","request_review","merge_pull_request"],"description":"Inspect the published-base-to-head patch, complete reviewed local work, or publish and observe the reviewed head."},
                 "expectedHead":{"type":"string","minLength":1},
-                "review":{"type":"object","description":"Optional source review metadata; ignored for Standard local completion."},
-                "pullRequestTitle":{"type":"string","description":"Optional pull request title; ignored for Standard local completion."},
-                "pullRequestBody":{"type":"string","description":"Optional pull request body; ignored for Standard local completion."},
+                "review":{"type":"object","description":"The reviewed range { baseSha, headSha, files, commits, patchDigest } from inspect_delivery_diff."},
+                "pullRequestTitle":{"type":"string","description":"For pull request creation, use concise action-oriented wording based on the final reviewed diff. Do not copy task prose or a commit message."},
+                "pullRequestBody":{"type":"string","description":"For pull request creation, markdown with exactly these headings in order: ## Summary (bullets of what changed), ## Why (the motivation), ## Validation (bullets of checks run and their results), ## Review notes (what a reviewer should look at). Base it on the final reviewed diff; do not copy task prose."},
                 "turnId":{"type":"string","minLength":1,"maxLength":256,"pattern":"^[A-Za-z0-9][A-Za-z0-9._:-]*$"},
                 "toolId":{"type":"string","minLength":1,"maxLength":256,"pattern":"^[A-Za-z0-9][A-Za-z0-9._:-]*$"},
                 "field":{"type":"string","enum":["input","output","error"],"description":"Selected-tool field. Defaults to output. Valid only with toolId."},
@@ -431,8 +503,8 @@ fn tool() -> Tool {
                 "plan":{"type":"string","minLength":1},
                 "acceptanceCriteria":{"type":"array","minItems":1,"items":{"type":"string","minLength":1}},
                 "instruction":{"type":"string","minLength":1},
-                "mode":{"type":"string","enum":["planned"]},
-                "purpose":{"type":"string","enum":["implementation"]},
+                "mode":{"type":"string","enum":["planned","direct"]},
+                "purpose":{"type":"string","enum":["implementation","verification"]},
                 "advisorTurnId":{"type":"string","minLength":1,"maxLength":256,"pattern":"^[A-Za-z0-9][A-Za-z0-9._:-]*$"},
                 "candidateTurnIds":{"type":"array","minItems":2,"maxItems":2,"items":{"type":"string","minLength":1,"maxLength":256,"pattern":"^[A-Za-z0-9][A-Za-z0-9._:-]*$"}},
                 "advisorSessionId":{"type":"string","minLength":1,"maxLength":256,"pattern":"^[A-Za-z0-9][A-Za-z0-9._:-]*$"},
@@ -443,6 +515,14 @@ fn tool() -> Tool {
             "required":["kind"],
             "additionalProperties":false
         }))
+        .map(|mut schema| {
+            // A second literal keeps the schema within the json! recursion limit.
+            if let Some(properties) = schema.get_mut("properties").and_then(Value::as_object_mut) {
+                properties.insert("role".into(), json!({"type":"string","enum":["reviewer","planner_a","planner_b","rater"]}));
+                properties.insert("brief".into(), json!({"type":"string","minLength":1,"maxLength":20000,"description":"Reviewer only: Coordinator's plan and acceptance criteria. Suplex composes every other Advisor input."}));
+            }
+            schema
+        })
         .expect("static Root tool schema"),
     )
 }
@@ -472,25 +552,35 @@ impl RootBridgeServer {
                     root_controller::read_worker_evidence(&database_path, &root, &request)
                         .map_err(|error| error.to_string())
                 }
-                RootCall::DelegateWorker(assignment) => {
-                    root_controller::delegate_worker(&database_path, &root, &assignment)
+                RootCall::DelegateWorker(assignment) => runtime
+                    .block_on(root_controller::delegate_worker(&database_path, &root, &token, &assignment))
+                    .map_err(|error| error.to_string()),
+                RootCall::DelegateAdvisor { role, brief } => runtime
+                    .block_on(root_controller::delegate_advisor(&database_path, &artifact_root, &root, &token, &role, brief.as_deref()))
+                    .map_err(|error| error.to_string()),
+                RootCall::DelegatePlanners => runtime
+                    .block_on(root_controller::delegate_planners(&database_path, &artifact_root, &root, &token))
+                    .map_err(|error| error.to_string()),
+                RootCall::RequestDelivery { operation: "inspect_delivery_diff", .. }
+                    if root_session_store::root_observation_rows(&database, &root.task_id)
+                        .is_ok_and(|rows| rows.control["workflow"] != "standard") =>
+                {
+                    runtime
+                        .block_on(root_controller::inspect_workflow_delivery_diff(&database_path, &artifact_root, &root, &token))
                         .map_err(|error| error.to_string())
                 }
                 RootCall::ReplaceWorker(request) => root_controller::replace_worker(
                     &database_path, &root, &token, &request,
                 ).map_err(|error| error.to_string()),
-                RootCall::InspectDeliveryDiff => runtime
-                    .block_on(delivery::inspection::inspect_standard_delivery_diff(
-                        &database_path,
+                RootCall::RequestDelivery { operation, expected_head, review, pull_request_title, pull_request_body } => runtime
+                    .block_on(delivery::operations::DeliveryOperations::new(&database_path, &artifact_root).execute(
                         &root,
-                    ))
-                    .map_err(|error| error.to_string()),
-                RootCall::RequestDelivery { expected_head } => runtime
-                    .block_on(delivery::operations::complete_local_work(
-                        &database_path,
-                        &root,
-                        &token,
+                        Some(&token),
+                        operation,
                         expected_head.as_deref(),
+                        review.as_ref(),
+                        pull_request_title.as_deref(),
+                        pull_request_body.as_deref(),
                     ))
                     .map_err(|error| error.to_string()),
                 RootCall::AskHuman { question, options } => {
@@ -587,7 +677,34 @@ mod tests {
     use super::*;
 
     #[test]
-    fn advertised_kinds_are_only_the_implemented_standard_operations() {
+    fn advisor_and_planner_requests_follow_the_root_tool_contract() {
+        let parse = |value: Value| parse_call(value.as_object().unwrap().clone());
+        assert!(parse(json!({"kind":"delegate_advisor","role":"editor"})).is_err());
+        assert!(parse(json!({"kind":"delegate_advisor"})).is_err());
+        assert!(parse(json!({"kind":"delegate_advisor","role":"reviewer","brief":"  "})).is_err());
+        assert!(matches!(
+            parse(json!({"kind":"delegate_advisor","role":"reviewer","brief":" Plan "})),
+            Ok(RootCall::DelegateAdvisor { role, brief }) if role == "reviewer" && brief.as_deref() == Some("Plan")
+        ));
+        assert!(matches!(
+            parse(json!({"kind":"delegate_planners"})),
+            Ok(RootCall::DelegatePlanners)
+        ));
+        assert!(parse(json!({"kind":"delegate_planners","role":"planner_a"})).is_err());
+        assert!(matches!(
+            parse(json!({"kind":"delegate_worker","acceptanceCriteria":["Done"],"instruction":"Build","mode":"direct"})),
+            Ok(RootCall::DelegateWorker(assignment)) if assignment.plan.is_none() && assignment.mode == "direct"
+        ));
+        assert!(parse(json!({"kind":"delegate_worker","acceptanceCriteria":["Done"],"instruction":"Build"})).is_err());
+        assert!(matches!(
+            parse(json!({"kind":"delegate_worker","plan":"Check","acceptanceCriteria":["Done"],"instruction":"Run","purpose":"verification","candidateTurnIds":["a","b"]})),
+            Ok(RootCall::DelegateWorker(assignment)) if assignment.purpose == "verification" && assignment.candidate_turn_ids.is_some()
+        ));
+        assert!(parse(json!({"kind":"delegate_worker","plan":"P","acceptanceCriteria":["Done"],"instruction":"Run","mode":"fast"})).is_err());
+    }
+
+    #[test]
+    fn advertised_kinds_match_the_root_tool_contract() {
         let schema = tool().input_schema;
         assert_eq!(
             schema["properties"]["kind"]["enum"],
@@ -596,10 +713,16 @@ mod tests {
                 "read_image",
                 "read_worker_evidence",
                 "delegate_worker",
+                "delegate_advisor",
+                "delegate_planners",
                 "replace_worker",
                 "request_delivery",
                 "ask_human"
             ])
+        );
+        assert_eq!(
+            schema["properties"]["role"]["enum"],
+            json!(["reviewer", "planner_a", "planner_b", "rater"])
         );
         assert!(
             parse_call(
@@ -656,11 +779,26 @@ mod tests {
                     .unwrap()
                     .clone()
             ),
-            Ok(RootCall::InspectDeliveryDiff)
+            Ok(RootCall::RequestDelivery {
+                operation: "inspect_delivery_diff",
+                ..
+            })
+        ));
+        assert!(matches!(
+            parse_call(
+                json!({"kind":"request_delivery","operation":"merge_pull_request"})
+                    .as_object()
+                    .unwrap()
+                    .clone()
+            ),
+            Ok(RootCall::RequestDelivery {
+                operation: "merge_pull_request",
+                ..
+            })
         ));
         assert!(
             parse_call(
-                json!({"kind":"request_delivery","operation":"merge_pull_request"})
+                json!({"kind":"request_delivery","operation":"force_push"})
                     .as_object()
                     .unwrap()
                     .clone()

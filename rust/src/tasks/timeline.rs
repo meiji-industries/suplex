@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 
 use crate::{
     platform::database::{DatabaseResult, SuplexDatabase},
-    runtimes::codex::{session_reader, usage},
+    runtimes::{task_harness::ReaderSession, task_harness_registry},
 };
 
 #[derive(Clone, Debug, Deserialize)]
@@ -310,29 +310,30 @@ fn native_usage(
         .native_session_id
         .as_deref()
         .ok_or("Native session is missing")?;
-    if !native_id.starts_with("codex-") {
-        return Err("Native timeline reader is not available".into());
-    }
-    let directory = session_reader::session_directory(database_path, &session.id)?;
-    let observed = usage::observe_session(&directory, native_id, None)?;
-    let live_id = observed.live_turn_id;
+    let observed = task_harness_registry::native_session_reader(native_id)
+        .ok_or("Native timeline reader is not available")?
+        .timeline(
+            &ReaderSession {
+                database_path,
+                session_id: &session.id,
+                native_session_id: native_id,
+                instance_home_directory: None,
+            },
+            None,
+        )?;
     let usage = observed
-        .turns
+        .usage
         .into_iter()
-        .map(|turn| {
-            let completed_at =
-                (live_id.as_deref() != Some(turn.turn_id.as_str())).then_some(turn.updated_at_ms);
-            TimelineUsage {
-                session_id: native_id.into(),
-                message_id: turn.turn_id.clone(),
-                turn_id: turn.turn_id,
-                started_at: turn.updated_at_ms,
-                completed_at,
-                failed: turn.failed,
-            }
+        .map(|entry| TimelineUsage {
+            session_id: native_id.into(),
+            message_id: entry.message_id,
+            turn_id: entry.turn_id,
+            started_at: entry.started_at_ms,
+            completed_at: entry.completed_at_ms,
+            failed: entry.failed,
         })
         .collect();
-    Ok((usage, live_id))
+    Ok((usage, observed.live_message_id))
 }
 
 pub fn observe(
@@ -492,7 +493,9 @@ mod tests {
         let root =
             std::env::temp_dir().join(format!("suplex-task-timeline-{}", uuid::Uuid::new_v4()));
         let database_path = root.join("suplex.sqlite");
-        let directory = session_reader::session_directory(&database_path, "root").unwrap();
+        let directory =
+            crate::runtimes::task_harness::task_session_runtime_directory(&database_path, "root")
+                .unwrap();
         std::fs::create_dir_all(&directory).unwrap();
         let log = directory.join("turn-msg_native.jsonl");
         std::fs::write(&log, concat!(

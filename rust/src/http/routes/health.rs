@@ -12,7 +12,6 @@ use axum::{
 };
 use chrono::Utc;
 use garde::Validate;
-use rusqlite::OptionalExtension;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
@@ -20,7 +19,11 @@ use crate::{
     http::{AppState, contracts::typed::finding, session, validation},
     identity::auth::AuthUser,
     integrations::github,
-    platform::database::{DatabaseHealth, SchemaState, SuplexDatabase},
+    platform::{
+        backup,
+        database::{DatabaseHealth, SchemaState, SuplexDatabase},
+        environment_settings::{self, js_number},
+    },
     profiles::agent_profiles,
     projects::service as projects,
 };
@@ -172,7 +175,15 @@ fn database_check(health: DatabaseHealth) -> Value {
     };
     let summary = match status {
         "healthy" => "Schema is current and WAL is enabled".to_owned(),
-        "warning" => "The database has migrations this build does not know about".to_owned(),
+        "warning" => {
+            let unknown = health
+                .applied_migrations
+                .saturating_sub(health.expected_migrations);
+            format!(
+                "Database has {unknown} migration{} this build does not know about — pull/restart",
+                if unknown == 1 { "" } else { "s" }
+            )
+        }
         _ if current && !health.wal_mode => "Schema is current but WAL is disabled".to_owned(),
         _ => format!(
             "Schema state is {}",
@@ -280,28 +291,82 @@ fn disk_check(worktree: Option<&Path>, artifact: Option<&Path>, minimum_gb: Opti
             "disk-space",
             "Disk space",
             "warning",
-            "Free disk space was measured, but the minimum could not be read",
-            json!({"freeBytes":worktree_free.min(artifact_free)}),
+            "Free disk space could not be read",
+            json!({}),
         );
     };
     let minimum = minimum_gb * (1024_u64.pow(3) as f64);
-    let low =
-        minimum > 0.0 && ((worktree_free as f64) < minimum || (artifact_free as f64) < minimum);
+    let gb = |bytes: f64| format!("{:.2} GB", bytes / 1024_f64.powi(3));
+    let low = [
+        ("Worktree root", worktree_free),
+        ("Artifact root", artifact_free),
+    ]
+    .into_iter()
+    .filter(|(_, free)| minimum > 0.0 && (*free as f64) < minimum)
+    .map(|(label, free)| format!("{label}: {} free", gb(free as f64)))
+    .collect::<Vec<_>>();
     check(
         "disk-space",
         "Disk space",
-        if low { "warning" } else { "healthy" },
-        if low {
-            "Free disk space is below the configured minimum"
+        if low.is_empty() { "healthy" } else { "warning" },
+        &if low.is_empty() {
+            "Free disk space meets the configured minimum".to_owned()
         } else {
-            "Free disk space meets the configured minimum"
+            format!("{}; minimum is {}", low.join("; "), gb(minimum))
         },
         json!({
-            "freeBytes":worktree_free.min(artifact_free),"minFreeBytes":minimum,
+            "freeBytes":worktree_free.min(artifact_free),"minFreeBytes":js_number(minimum),
             "worktreeRoot":worktree.unwrap().display().to_string(),"worktreeFreeBytes":worktree_free,"worktreeTotalBytes":worktree_total,
             "artifactRoot":artifact.unwrap().display().to_string(),"artifactFreeBytes":artifact_free,"artifactTotalBytes":artifact_total,
         }),
     )
+}
+
+/// `checkTailscale` from `platform/host-health.ts`, reported only when the
+/// installation exposes itself through Tailscale Serve.
+async fn tailscale_check() -> Value {
+    let command =
+        std::env::var_os("SUPLEX_TAILSCALE_COMMAND").unwrap_or_else(|| "tailscale".into());
+    let output = tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        tokio::process::Command::new(command)
+            .args(["status", "--json"])
+            .kill_on_drop(true)
+            .output(),
+    )
+    .await;
+    let failure = match output {
+        Err(_) => "status-timeout",
+        Ok(Err(error)) if error.kind() == std::io::ErrorKind::NotFound => "command-missing",
+        Ok(Err(_)) => "status-failed",
+        Ok(Ok(output)) if !output.status.success() => "status-failed",
+        Ok(Ok(output)) => match tailscale_hostname(&output.stdout) {
+            Some(hostname) => {
+                return check(
+                    "tailscale",
+                    "Tailscale",
+                    "healthy",
+                    "Tailscale is available",
+                    json!({"hostname": hostname}),
+                );
+            }
+            None => "status-format",
+        },
+    };
+    let missing = failure == "command-missing";
+    json!({
+        "id":"tailscale","label":"Tailscale","status":"warning",
+        "summary": if missing { "Tailscale CLI is not installed" } else { "Tailscale is not running" },
+        "remedy": if missing { "brew install --cask tailscale" } else { "Open the Tailscale app and sign in" },
+        "details":{"failure":failure},
+    })
+}
+
+/// `parseTailscaleHostname`: the MagicDNS name without its trailing dot.
+fn tailscale_hostname(raw: &[u8]) -> Option<String> {
+    let status: Value = serde_json::from_slice(raw).ok()?;
+    let hostname = status["Self"]["DNSName"].as_str()?.trim_end_matches('.');
+    hostname.ends_with(".ts.net").then(|| hostname.to_owned())
 }
 
 fn git_check() -> Value {
@@ -386,23 +451,39 @@ async fn health_with_github(
     let Some(user) = session.user else {
         return auth::error(StatusCode::UNAUTHORIZED, "Authentication required");
     };
-    let (providers, database, minimum_gb) =
-        match state.with_database(|database| {
-            provider_context(database, &user, &query).map(|providers| {
-                let minimum_gb = database.connection().query_row(
-                "SELECT min_free_disk_gb FROM suplex_environment_settings WHERE id = 'host'",
-                [],
-                |row| row.get::<_, f64>(0),
-            ).optional().ok().map(|value| value.unwrap_or(5.0));
-                (providers, database.health(), minimum_gb)
-            })
-        }) {
-            Ok(value) => value,
-            Err(mut response) => {
-                auth::append_cookies(&mut response, session.set_cookies);
-                return *response;
-            }
-        };
+    let providers = match state.with_database(|database| provider_context(database, &user, &query))
+    {
+        Ok(providers) => providers,
+        Err(mut response) => {
+            auth::append_cookies(&mut response, session.set_cookies);
+            return *response;
+        }
+    };
+    let mut response = Json(snapshot(&state, providers, github_override).await).into_response();
+    response
+        .headers_mut()
+        .insert(header::CACHE_CONTROL, "private, no-store".parse().unwrap());
+    auth::append_cookies(&mut response, session.set_cookies);
+    response
+}
+
+/// The host health snapshot from `platform/health.ts` `inspectHostHealth`.
+pub async fn snapshot(
+    state: &AppState,
+    providers: Vec<String>,
+    github_override: Option<Value>,
+) -> Value {
+    let (database, minimum_gb, data_root) = state.with_database(|database| {
+        let minimum_gb = environment_settings::read(database)
+            .ok()
+            .map(|settings| settings.min_free_disk_gb);
+        let data_root = database
+            .connection()
+            .path()
+            .filter(|path| !path.is_empty())
+            .and_then(|path| Path::new(path).parent().map(Path::to_path_buf));
+        (database.health(), minimum_gb, data_root)
+    });
     let artifact_root = state.artifact_root.clone();
     let worktree_root = state
         .project_roots
@@ -455,6 +536,12 @@ async fn health_with_github(
         ),
         github,
     ];
+    if state.session_config.tailscale_exposure == "serve" {
+        checks.push(tailscale_check().await);
+    }
+    if let Some(data_root) = data_root {
+        checks.push(backup::health_check(&data_root, Utc::now()));
+    }
     for provider in providers {
         let label = match provider.as_str() {
             "opencode" => "OpenCode",
@@ -467,17 +554,70 @@ async fn health_with_github(
         .iter()
         .filter(|check| check["id"] == "database" || check["id"] == "artifact-root")
         .all(|check| check["status"] != "unhealthy");
-    let mut response = Json(json!({
+    json!({
         "generatedAt":Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
         "reachableAddress":state.session_config.reachable_address,
         "ready":ready,"checks":checks,
-    }))
-    .into_response();
-    response
-        .headers_mut()
-        .insert(header::CACHE_CONTROL, "private, no-store".parse().unwrap());
-    auth::append_cookies(&mut response, session.set_cookies);
-    response
+    })
+}
+
+fn escape_html(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&#39;")
+}
+
+/// `renderHealthPage` from `platform/ui.ts`: the application shell with the
+/// snapshot inlined and a no-script summary.
+pub fn health_page(snapshot: &Value) -> String {
+    let text = |value: &Value| escape_html(value.as_str().unwrap_or_default());
+    let cards = snapshot["checks"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|check| {
+            format!(
+                r#"<article class="health-card" data-status="{}"><h2>{}</h2><p>{}</p></article>"#,
+                text(&check["status"]),
+                text(&check["label"]),
+                text(&check["summary"])
+            )
+        })
+        .collect::<String>();
+    let fallback = format!(
+        r#"<noscript>
+      <main aria-label="Suplex host health">
+        <p>Suplex · Host health</p>
+        <h1>Host health</h1>
+        <p>Reachable at {}</p>
+        <p>{}</p>
+        <section aria-label="Health checks">{cards}</section>
+        <p>Suplex host health requires JavaScript for live refresh.</p>
+      </main>
+    </noscript>
+    <script>window.__SUPLEX_HEALTH__ = {};</script>"#,
+        text(&snapshot["reachableAddress"]),
+        if snapshot["ready"] == true {
+            "Everything is operational"
+        } else {
+            "Attention needed"
+        },
+        snapshot.to_string().replace('<', "\\u003c")
+    );
+    crate::http::ui::application_page("health")
+        .replacen(
+            r#"<div id="suplex-app"><div class="suplex-boot" role="status" aria-label="Suplex loads the app"><span></span></div></div>"#,
+            r#"<div id="suplex-app"></div>"#,
+            1,
+        )
+        .replacen(
+            "<noscript>Suplex requires JavaScript for passkey authentication.</noscript>\n    <script>window.__SUPLEX_VIEW__ = \"health\";</script>",
+            &fallback,
+            1,
+        )
 }
 
 #[cfg(test)]
@@ -598,6 +738,25 @@ mod tests {
         let low: Value =
             serde_json::from_slice(&to_bytes(low.into_body(), 128 * 1024).await.unwrap()).unwrap();
         assert_eq!(low["checks"][2]["status"], "warning");
+        assert!(
+            regex::Regex::new(r"^Worktree root: \d+\.\d\d GB free; Artifact root: \d+\.\d\d GB free; minimum is 1024\.00 GB$")
+                .unwrap()
+                .is_match(low["checks"][2]["summary"].as_str().unwrap())
+        );
+        assert_eq!(
+            low["checks"][2]["details"]["minFreeBytes"],
+            1_099_511_627_776_u64
+        );
+        assert_eq!(low["checks"][6]["id"], "backup");
+        assert_eq!(low["checks"][6]["summary"], "No backup has been made yet");
+        assert_eq!(
+            tailscale_hostname(br#"{"Self":{"DNSName":"host.tailnet.ts.net."}}"#).as_deref(),
+            Some("host.tailnet.ts.net")
+        );
+        assert_eq!(
+            tailscale_hostname(br#"{"Self":{"DNSName":"host.local."}}"#),
+            None
+        );
         let unknown = health_with_github(
             state.clone(),
             Some("profileIds=missing".into()),

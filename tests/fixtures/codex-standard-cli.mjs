@@ -41,11 +41,11 @@ async function command(executable, args, options = {}) {
   return Buffer.concat(output).toString();
 }
 
-async function rootTool(binding, kind, fields = {}) {
+async function mcpCall(binding, name, args) {
   const requests = [
     { jsonrpc: "2.0", id: 1, method: "initialize", params: { protocolVersion: "2025-06-18", capabilities: {}, clientInfo: { name: "deterministic-codex-fixture", version: "1" } } },
     { jsonrpc: "2.0", method: "notifications/initialized" },
-    { jsonrpc: "2.0", id: 2, method: "tools/call", params: { name: "suplex_root", arguments: { kind, ...fields } } },
+    { jsonrpc: "2.0", id: 2, method: "tools/call", params: { name, arguments: args } },
   ];
   const child = spawn(binding.server.command, binding.server.args, { stdio: ["pipe", "pipe", "pipe"] });
   const output = [];
@@ -56,20 +56,26 @@ async function rootTool(binding, kind, fields = {}) {
     child.once("error", reject);
     child.once("close", resolve);
   });
-  if (code !== 0) throw new Error(`Root MCP ${kind} exited ${code}`);
+  if (code !== 0) throw new Error(`MCP ${name} exited ${code}`);
   const responses = Buffer.concat(output).toString().split("\n").filter(Boolean).map(row => JSON.parse(row));
-  const call = responses.find(response => response.id === 2);
-  if (!call || call.result?.isError !== false || !call.result.structuredContent) {
-    throw new Error(`Root MCP ${kind} failed`);
+  return responses.find(response => response.id === 2)?.result;
+}
+
+async function rootTool(binding, kind, fields = {}) {
+  const result = await mcpCall(binding, "suplex_root", { kind, ...fields });
+  if (result?.isError !== false || !result.structuredContent) {
+    throw new Error(`Root MCP ${kind} failed: ${JSON.stringify(result?.content ?? null)}`);
   }
-  return call.result.structuredContent;
+  return result.structuredContent;
 }
 
 async function root(prompt) {
   const binding = JSON.parse(await readFile(process.env.SUPLEX_ROOT_BINDING, "utf8"));
   line({ type: "thread.started", thread_id: `fixture-root-${binding.root.sessionId}` });
   const observed = await rootTool(binding, "observe");
-  if (phase === "answer" && !observed.workerResult && !prompt.includes("Proceed: Make the local change")) {
+  if (observed.control.workflow !== "standard") {
+    await workflowRoot(binding, observed);
+  } else if (phase === "answer" && !observed.workerResult && !prompt.includes("Proceed: Make the local change")) {
     await rootTool(binding, "ask_human", {
       question: "May I continue this local fixture?",
       options: [
@@ -89,9 +95,89 @@ async function root(prompt) {
     const evidence = await rootTool(binding, "read_worker_evidence", { turnId: observed.workerResult.turnId });
     if (!evidence || !JSON.stringify(evidence).includes("pnpm test")) throw new Error("Worker test evidence is missing");
     const head = (await command("git", ["rev-parse", "HEAD"])).trim();
-    await rootTool(binding, "request_delivery", { operation: "complete_local_work", expectedHead: head });
-    line({ type: "item.completed", item: { id: "root_delivery", type: "agent_message", text: "Reviewed Worker evidence and completed local delivery." } });
+    if (phase === "deliver_pr") {
+      const diff = await rootTool(binding, "request_delivery", { operation: "inspect_delivery_diff" });
+      const review = { baseSha: diff.baseSha, headSha: diff.headSha, files: diff.files, commits: diff.commits, patchDigest: diff.patchDigest };
+      await rootTool(binding, "request_delivery", { operation: "push_branch", expectedHead: head, review });
+      await rootTool(binding, "request_delivery", {
+        operation: "create_or_adopt_pull_request", expectedHead: head, review,
+        pullRequestTitle: "Append a verified README line",
+        pullRequestBody: "## Summary\n- Append one README line\n## Why\nThe task requested it.\n## Validation\n- pnpm test passed\n## Review notes\nOne line changed.",
+      });
+      line({ type: "item.completed", item: { id: "root_delivery", type: "agent_message", text: "Reviewed Worker evidence and opened a draft pull request." } });
+    } else {
+      await rootTool(binding, "request_delivery", { operation: "complete_local_work", expectedHead: head });
+      line({ type: "item.completed", item: { id: "root_delivery", type: "agent_message", text: "Reviewed Worker evidence and completed local delivery." } });
+    }
   }
+  line({ type: "turn.completed", usage: { input_tokens: 1, cached_input_tokens: 0, cache_write_input_tokens: 0, output_tokens: 1, reasoning_output_tokens: 0 } });
+}
+
+const assignment = {
+  plan: "Append the requested README line, run the project test, and commit it locally.",
+  acceptanceCriteria: ["README contains the requested line", "Project test passes", "Change is committed"],
+  instruction: "Append `Verified by Suplex Standard task.` to README.md, run pnpm test, and commit the change. Do not deliver; the Root will review and request delivery.",
+};
+
+// One Coordinator step per turn for each non-Standard workflow, decided from observed task state.
+async function workflowRoot(binding, observed) {
+  const say = (id, text) => line({ type: "item.completed", item: { id, type: "agent_message", text } });
+  const deliver = async () => {
+    const diff = await rootTool(binding, "request_delivery", { operation: "inspect_delivery_diff" });
+    if (!diff.evidenceDirectory || !diff.files.includes("README.md")) throw new Error("Workflow delivery inspection is missing its evidence");
+    const head = (await command("git", ["rev-parse", "HEAD"])).trim();
+    await rootTool(binding, "request_delivery", { operation: "complete_local_work", expectedHead: head, review: { baseSha: diff.baseSha, headSha: diff.headSha, files: diff.files, commits: diff.commits } });
+    say("root_delivery", "Reviewed the workflow result and completed local delivery.");
+  };
+  const workers = observed.workers ?? [];
+  const results = observed.results ?? {};
+  const built = workers.some(session => session.advisorRole === null && results[session.id]?.state === "completed");
+  const workflow = observed.control.workflow;
+  if (workflow === "direct_build") {
+    if (built) return deliver();
+    await rootTool(binding, "delegate_worker", { mode: "direct", acceptanceCriteria: assignment.acceptanceCriteria, instruction: assignment.instruction });
+    return say("root_delegate", "Assigned the objective to the Worker in direct mode.");
+  }
+  if (workflow === "independent_review") {
+    if (observed.control.workflowState.reviews.length) return deliver();
+    if (built) {
+      await rootTool(binding, "delegate_advisor", { role: "reviewer", brief: `${assignment.plan}\nAcceptance criteria: ${assignment.acceptanceCriteria.join("; ")}` });
+      return say("root_review", "Requested the Reviewer for the current range.");
+    }
+    await rootTool(binding, "delegate_worker", assignment);
+    return say("root_delegate", "Assigned the planned change to the Worker.");
+  }
+  if (workflow === "competing_plans") {
+    if (built) return deliver();
+    const planners = ["planner_a", "planner_b"].map(role => workers.find(session => session.advisorRole === role));
+    if (planners.every(Boolean)) {
+      const turns = planners.map(session => results[session.id]?.turnId);
+      if (!turns.every(Boolean)) return say("root_wait", "Waiting for both plans.");
+      await rootTool(binding, "delegate_worker", { ...assignment, plan: `Combined plan from Plan A and Plan B: ${assignment.plan}`, candidateTurnIds: turns });
+      return say("root_delegate", "Combined both plans and assigned the Worker.");
+    }
+    await rootTool(binding, "delegate_planners");
+    return say("root_planners", "Requested Plan A and Plan B.");
+  }
+  throw new Error(`The deterministic stand-in has no ${workflow} Coordinator`);
+}
+
+const advisorReports = {
+  reviewer: { approved: true, blockingFindings: [], verification: "passed", verificationSummary: "The Worker ran pnpm test on this head and it passed.", summary: "The README change meets the objective." },
+  planner_a: { summary: "Append the README line, run pnpm test, and commit." },
+  planner_b: { summary: "Add the README line with one commit after pnpm test passes." },
+  rater: { rating: 9, blockingFindings: [], verification: "passed", verificationSummary: "The checks passed on this head.", summary: "Ready to merge." },
+};
+
+// Advisors are read-only: they submit one structured report through the Suplex Advisor bridge.
+async function advisor() {
+  const binding = JSON.parse(await readFile(process.env.SUPLEX_ADVISOR_BINDING, "utf8"));
+  line({ type: "thread.started", thread_id: `fixture-advisor-${binding.role}-${process.pid}` });
+  const report = advisorReports[binding.role];
+  const result = await mcpCall(binding, "submit_report", report);
+  if (result?.isError !== false) throw new Error(`Advisor report was rejected: ${JSON.stringify(result?.content ?? null)}`);
+  line({ type: "item.completed", item: { id: "advisor_report", type: "mcp_tool_call", server: "suplex_advisor", tool: "submit_report", arguments: report, result, status: "completed" } });
+  line({ type: "item.completed", item: { id: "advisor_summary", type: "agent_message", text: report.summary } });
   line({ type: "turn.completed", usage: { input_tokens: 1, cached_input_tokens: 0, cache_write_input_tokens: 0, output_tokens: 1, reasoning_output_tokens: 0 } });
 }
 
@@ -120,6 +206,7 @@ try {
   const prompt = await inputPrompt();
   // The Rust harness passes Root capability only to Root, including on resume.
   if (process.env.SUPLEX_ROOT_BINDING && process.env.SUPLEX_ROOT_TOKEN) await root(prompt);
+  else if (process.env.SUPLEX_ADVISOR_BINDING && process.env.SUPLEX_ADVISOR_TOKEN) await advisor();
   else await worker();
 } catch (error) {
   const message = error instanceof Error ? error.message : String(error);

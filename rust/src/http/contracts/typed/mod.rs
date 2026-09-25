@@ -5,6 +5,7 @@ pub mod auth;
 pub mod avatars;
 pub mod github_auth;
 pub mod projects;
+pub mod system;
 pub mod task_answers;
 pub mod task_templates;
 pub mod tasks;

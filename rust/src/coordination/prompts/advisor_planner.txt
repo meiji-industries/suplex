@@ -1,0 +1,3 @@
+Investigate the original objective and pinned repository input independently. Write an implementation plan containing: approach and design decisions; affected files and their changes; ordered implementation steps; constraints and risks; exact verification commands; acceptance criteria; and any specific unresolved question. Prefer the smallest coherent change. Do not implement anything.
+
+Call submit_report with {"summary":"one sentence"} after writing the plan.

@@ -1,6 +1,6 @@
 //! Native Codex session history with live, read-only observation.
 
-use std::{error::Error, io, path::PathBuf, time::UNIX_EPOCH};
+use std::{error::Error, io, path::PathBuf};
 
 use axum::{
     Json, Router,
@@ -21,7 +21,7 @@ use crate::{
     http::{AppState, contracts::typed::finding, session, validation},
     identity::companies,
     platform::database::SuplexDatabase,
-    runtimes::codex::{session_reader, transcript},
+    runtimes::{task_harness::ReaderSession, task_harness_registry},
     tasks::commands::TaskFailure,
 };
 
@@ -116,7 +116,8 @@ struct ScopedSession {
     database_path: PathBuf,
     session_id: String,
     current: bool,
-    provider: String,
+    native_session_id: Option<String>,
+    instance_home_directory: Option<String>,
 }
 
 fn scoped_session(
@@ -163,7 +164,8 @@ fn scoped_session(
         ),
         session_id: session_id.to_owned(),
         current: session["current"] == true,
-        provider: profile["provider"].as_str().unwrap_or_default().into(),
+        native_session_id: session["nativeSessionId"].as_str().map(str::to_owned),
+        instance_home_directory: profile["instanceHomeDirectory"].as_str().map(str::to_owned),
     })
 }
 
@@ -174,32 +176,22 @@ fn response_error(error: Box<dyn Error>) -> Response {
     }
 }
 
-fn codex_history(scoped: &ScopedSession) -> io::Result<Vec<Value>> {
-    if scoped.provider != "codex" {
-        return Err(io::Error::other("Native session history is not available"));
-    }
-    let directory = session_reader::session_directory(&scoped.database_path, &scoped.session_id)?;
-    let turns = session_reader::turns(&directory)?;
-    Ok(turns
-        .into_iter()
-        .filter_map(|turn| {
-            let text = transcript::result_text(&turn.events);
-            if text.is_empty() {
-                return None;
-            }
-            let created_at: i64 = turn
-                .updated_at
-                .duration_since(UNIX_EPOCH)
-                .ok()?
-                .as_millis()
-                .try_into()
-                .ok()?;
-            Some(json!({
-                "id":turn.id,"role":"assistant","createdAt":created_at,
-                "content":[{"id":format!("{}:text",turn.id),"type":"text","text":text}],
-            }))
+/// TypeScript `nativeSessionReader(session).history(session)`.
+fn native_history(scoped: &ScopedSession) -> io::Result<Vec<Value>> {
+    let Some(native_session_id) = scoped.native_session_id.as_deref() else {
+        return Ok(Vec::new());
+    };
+    task_harness_registry::native_session_reader(native_session_id)
+        .ok_or_else(|| io::Error::other("Native session history is not available"))?
+        .history(&ReaderSession {
+            database_path: &scoped.database_path,
+            session_id: &scoped.session_id,
+            native_session_id,
+            instance_home_directory: scoped
+                .instance_home_directory
+                .as_deref()
+                .map(std::path::Path::new),
         })
-        .collect::<Vec<_>>())
 }
 
 fn page(messages: &[Value], before: Option<&str>) -> Result<Value, TaskFailure> {
@@ -248,7 +240,7 @@ async fn history(
             return response;
         }
     };
-    let observed = tokio::task::spawn_blocking(move || codex_history(&scoped)).await;
+    let observed = tokio::task::spawn_blocking(move || native_history(&scoped)).await;
     let result = match observed {
         Ok(Ok(messages)) => page(&messages, before.as_deref())
             .map_err(|failure| Box::new(failure) as Box<dyn Error>),
@@ -352,7 +344,7 @@ async fn read_live(
         .with_database(|database| scoped_session(database, user_id, task_id, session_id))
         .map_err(live_scope_error)?;
     let reading = scoped.clone();
-    let messages = tokio::task::spawn_blocking(move || codex_history(&reading))
+    let messages = tokio::task::spawn_blocking(move || native_history(&reading))
         .await
         .map_err(|_| LiveFailure::Native)?
         .map_err(|_| LiveFailure::Native)?;

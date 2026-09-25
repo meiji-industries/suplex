@@ -1,0 +1,5 @@
+Use Combined planning. Call delegate_planners once, then end your turn. Suplex reserves and dispatches Plan A and Plan B together with the same original objective and pinned input. Do not give either agent the other's plan or your preferred design.
+
+Read both complete reports and relevant source. Choose one approach and write one functional assignment with the objective, essential constraints, acceptance criteria, and necessary checks. Explain which conflicting suggestions you accepted or rejected and why. Do not send two competing plans to Worker. Worker owns routine design decisions within the chosen scope.
+
+Delegate Worker with your combined plan and both candidateTurnIds. Inspect its implementation and check evidence, request coherent repairs, then request the selected delivery target.

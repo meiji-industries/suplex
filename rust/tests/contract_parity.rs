@@ -77,6 +77,12 @@ fn ported_contracts_match_zod_fixtures() {
                             &fixture.contract,
                             fixture.fields.get("input"),
                         )
+                    })
+                    .or_else(|| {
+                        contracts::typed::system::validate(
+                            &fixture.contract,
+                            fixture.fields.get("input"),
+                        )
                     });
             let actual = if let Some(result) = typed {
                 Some(match result {
@@ -121,7 +127,7 @@ fn ported_contracts_match_zod_fixtures() {
             }
         }
     }
-    assert_eq!(schemas.len(), 47, "forty-seven implemented request schemas");
+    assert_eq!(schemas.len(), 49, "forty-nine implemented request schemas");
     assert!(
         verified >= 140,
         "every ported schema has multiple Zod cases"

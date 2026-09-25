@@ -1,9 +1,253 @@
 use std::collections::HashMap;
-use std::path::Path;
+use std::error::Error;
+use std::io;
+use std::path::{Path, PathBuf};
+
+use serde_json::Value;
 
 use crate::coordination::bridge_auth::{
     ADVISOR_BINDING_ENV, ADVISOR_RESULT_ENV, ADVISOR_TOKEN_ENV, ROOT_BINDING_ENV, ROOT_TOKEN_ENV,
 };
+use crate::coordination::root_bridge::RootIdentity;
+use crate::profiles::model_pricing::ModelPricingCatalog;
+use crate::runtimes::codex::{tool_evidence::NativeTool, usage::UsageTokens};
+use crate::runtimes::headless;
+
+// The prompt observation vocabulary is shared by every harness; each native
+// runtime maps its own evidence onto it.
+pub use crate::runtimes::codex::role_prompt::WorkerPurpose;
+pub use crate::runtimes::codex::runtime::{DispatchState, PromptObservation, PromptState};
+pub use crate::runtimes::codex::session_reader::session_directory as task_session_runtime_directory;
+
+/// The Standard roles the task host runs.
+#[derive(Clone, Copy)]
+pub enum TaskRole<'a> {
+    Root(&'a RootIdentity),
+    Worker(WorkerPurpose),
+}
+
+/// TypeScript `scope.workflow`, `workerMode`, and `advisorRole` for a
+/// non-Standard workflow role. The default is the Standard role.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct WorkflowLaunch {
+    /// A Coordinator of a non-Standard workflow.
+    pub workflow_root: bool,
+    /// A Direct build implementation Worker.
+    pub direct: bool,
+    /// A read-only Advisor that runs in a Worker session.
+    pub advisor: Option<crate::coordination::advisor_bridge::AdvisorRole>,
+}
+
+/// TypeScript `TaskScope`: one native session launch, resolved by the host.
+pub struct TaskScope<'a> {
+    pub workflow: WorkflowLaunch,
+    pub database_path: &'a Path,
+    pub artifact_root: &'a Path,
+    pub task_id: &'a str,
+    pub session_id: &'a str,
+    pub native_session_id: &'a str,
+    pub role: TaskRole<'a>,
+    pub worktree: &'a Path,
+    pub model: &'a str,
+    pub reasoning_effort: &'a str,
+    pub instance_home_directory: Option<&'a Path>,
+    /// Project `execution.mcp`, when the project configures execution.
+    pub project_mcp: Option<&'a Value>,
+    pub project_context_path: Option<&'a Path>,
+    pub project_environment: &'a HashMap<String, String>,
+    pub excluded_environment_keys: &'a [String],
+    /// Test override for the native CLI executable.
+    pub executable: Option<&'a Path>,
+    pub inherited_environment: &'a HashMap<String, String>,
+}
+
+impl TaskScope<'_> {
+    pub fn runtime_directory(&self) -> io::Result<PathBuf> {
+        task_session_runtime_directory(self.database_path, self.session_id)
+    }
+}
+
+pub type DispatchClaim<'a> = &'a mut dyn FnMut(&str) -> Result<bool, Box<dyn Error>>;
+
+/// The native session a reader observes.
+pub struct ReaderSession<'a> {
+    pub database_path: &'a Path,
+    pub session_id: &'a str,
+    pub native_session_id: &'a str,
+    /// TypeScript `session.profile?.instanceHomeDirectory`.
+    pub instance_home_directory: Option<&'a Path>,
+}
+
+impl ReaderSession<'_> {
+    pub fn runtime_directory(&self) -> io::Result<PathBuf> {
+        task_session_runtime_directory(self.database_path, self.session_id)
+    }
+}
+
+/// One native usage record (TypeScript `TaskUsage` without its task role).
+#[derive(Clone, Debug, PartialEq)]
+pub struct UsageEntry {
+    pub message_id: String,
+    pub turn_id: String,
+    pub provider: &'static str,
+    pub model: String,
+    pub started_at_ms: i64,
+    pub completed_at_ms: Option<i64>,
+    pub failed: bool,
+    pub tokens: UsageTokens,
+    pub cost_usd: f64,
+}
+
+/// TypeScript `NativeSessionReader.timeline`.
+#[derive(Debug, Default, PartialEq)]
+pub struct NativeTimeline {
+    pub usage: Vec<UsageEntry>,
+    pub live_message_id: Option<String>,
+}
+
+/// TypeScript `NativeSessionReader`: read-only observation of a native
+/// session for the UI, analytics, limits, and Archive.
+pub trait NativeSessionReader {
+    /// The authoritative native conversation snapshot.
+    fn history(&self, session: &ReaderSession<'_>) -> io::Result<Vec<Value>>;
+    /// Native tools and the current plan.
+    fn execution(&self, session: &ReaderSession<'_>) -> io::Result<(Vec<NativeTool>, Value)>;
+    /// One admitted native turn; `None` when its log is missing.
+    fn turn_evidence(
+        &self,
+        session: &ReaderSession<'_>,
+        turn_id: &str,
+    ) -> io::Result<Option<Vec<NativeTool>>>;
+    fn timeline(
+        &self,
+        session: &ReaderSession<'_>,
+        pricing: Option<&ModelPricingCatalog>,
+    ) -> io::Result<NativeTimeline>;
+    fn busy(&self, session: &ReaderSession<'_>) -> io::Result<bool>;
+}
+
+/// TypeScript `TaskHarness`. The registry selects one implementation by the
+/// profile provider or the native session identity; the same runtime reads
+/// its native sessions.
+pub trait TaskHarness: NativeSessionReader + Sync {
+    /// Reserve a new native session identity.
+    fn new_session_id(&self) -> String;
+    fn observe(
+        &self,
+        directory: &Path,
+        native_session_id: &str,
+        turn_id: &str,
+        dispatch: DispatchState,
+        generation: Option<&str>,
+    ) -> io::Result<PromptObservation>;
+    /// Claim the prompt inside the native dispatch, then start it once.
+    fn dispatch(
+        &self,
+        scope: &TaskScope<'_>,
+        turn_id: &str,
+        prompt: &str,
+        claim: DispatchClaim<'_>,
+    ) -> Result<PromptObservation, Box<dyn Error>>;
+    /// Stop a fenced execution, then observe it as not submitted.
+    fn recover_dispatch(
+        &self,
+        directory: &Path,
+        native_session_id: &str,
+        turn_id: &str,
+        generation: &str,
+    ) -> io::Result<PromptObservation>;
+    fn result_text(&self, directory: &Path, turn_id: &str) -> io::Result<String>;
+    /// TypeScript `observation.native`, completed from native evidence.
+    fn native(&self, _directory: &Path, _turn_id: &str, base: Value) -> io::Result<Value> {
+        Ok(base)
+    }
+    fn stop(&self, directory: &Path, native_session_id: Option<&str>) -> io::Result<()>;
+}
+
+/// TypeScript `recoverHeadlessDispatch`: stop the fenced generation only.
+pub fn recover_headless_dispatch(directory: &Path, generation: &str) -> io::Result<()> {
+    let record_path = directory.join(format!("dispatch-{generation}.json"));
+    if let Some(record) = headless::read_record(&record_path)? {
+        headless::stop_owned(&record)?;
+    }
+    headless::stop_execution(directory, generation)
+}
+
+/// TypeScript `ExecutableSpec`.
+pub struct ExecutableSpec {
+    pub label: &'static str,
+    pub binary: &'static str,
+    pub env_var: &'static str,
+    pub home_paths: &'static [&'static str],
+    pub fallback_paths: &'static [&'static str],
+}
+
+pub const GH_EXECUTABLE: ExecutableSpec = ExecutableSpec {
+    label: "GitHub CLI",
+    binary: "gh",
+    env_var: "SUPLEX_GH_COMMAND",
+    home_paths: &[],
+    fallback_paths: &["/opt/homebrew/bin/gh", "/usr/local/bin/gh"],
+};
+
+fn executable_file(path: &Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::metadata(path)
+        .is_ok_and(|metadata| metadata.is_file() && metadata.permissions().mode() & 0o111 != 0)
+}
+
+/// TypeScript `resolveExecutable`: override or environment variable, then
+/// PATH, fallback paths, and home install locations.
+pub fn resolve_executable(
+    spec: &ExecutableSpec,
+    override_path: Option<&Path>,
+    environment: &HashMap<String, String>,
+    home: Option<&Path>,
+) -> io::Result<PathBuf> {
+    if let Some(path) = override_path.or_else(|| environment.get(spec.env_var).map(Path::new)) {
+        if !path.is_absolute() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!(
+                    "{} executable must be an absolute path. Check {}.",
+                    spec.label, spec.env_var
+                ),
+            ));
+        }
+        if !executable_file(path) {
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                format!(
+                    "{} executable cannot be executed. Check {}.",
+                    spec.label, spec.env_var
+                ),
+            ));
+        }
+        return Ok(path.to_owned());
+    }
+    let search = environment
+        .get("PATH")
+        .map(String::as_str)
+        .unwrap_or_default();
+    std::env::split_paths(search)
+        .filter(|path| path.is_absolute())
+        .map(|directory| directory.join(spec.binary))
+        .chain(spec.fallback_paths.iter().map(PathBuf::from))
+        .chain(
+            home.into_iter()
+                .flat_map(|home| spec.home_paths.iter().map(move |path| home.join(path))),
+        )
+        .find(|candidate| executable_file(candidate))
+        .ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::NotFound,
+                format!(
+                    "Install {} or set {} to its absolute executable path.",
+                    spec.label, spec.env_var
+                ),
+            )
+        })
+}
 
 /// Build one native task process environment. A recovered task must not inherit
 /// another task's bridge capability from the API process environment.

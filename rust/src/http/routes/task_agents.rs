@@ -22,7 +22,7 @@ use crate::{
     },
     identity::companies,
     platform::database::SuplexDatabase,
-    runtimes::codex::session_reader,
+    runtimes::{task_harness::ReaderSession, task_harness_registry},
     tasks::{commands::TaskFailure, repository},
 };
 
@@ -212,15 +212,28 @@ fn label(session: &Value) -> &'static str {
     }
 }
 
-fn native_status(database_path: &std::path::Path, session_id: &str) -> Option<(bool, String)> {
-    let directory = session_reader::session_directory(database_path, session_id).ok()?;
-    let modified = std::fs::metadata(directory.join("turn.json"))
-        .ok()?
-        .modified()
-        .ok()?;
-    let busy = session_reader::busy(&directory).ok()?;
-    let time = DateTime::<Utc>::from(modified).to_rfc3339_opts(SecondsFormat::Millis, true);
-    Some((busy, time))
+/// TypeScript `observeSession`: the runtime that owns the native session reports its status.
+fn native_status(database_path: &std::path::Path, session: &Value) -> Option<(&'static str, f64)> {
+    let native_session_id = session["nativeSessionId"].as_str()?;
+    task_harness_registry::native_session_reader(native_session_id)?
+        .status(&ReaderSession {
+            database_path,
+            session_id: session["id"].as_str()?,
+            native_session_id,
+            instance_home_directory: session["profile"]["instanceHomeDirectory"]
+                .as_str()
+                .map(std::path::Path::new),
+        })
+        .ok()
+}
+
+/// TypeScript `isoTimestamp`: null when the native time is not a valid date.
+fn iso_timestamp(value: f64) -> Value {
+    DateTime::<Utc>::from_timestamp_millis(value as i64)
+        .filter(|_| value.is_finite())
+        .map_or(Value::Null, |time| {
+            json!(time.to_rfc3339_opts(SecondsFormat::Millis, true))
+        })
 }
 
 fn agents(task: &AgentTask, database_path: &std::path::Path) -> Vec<Value> {
@@ -239,25 +252,16 @@ fn agents(task: &AgentTask, database_path: &std::path::Path) -> Vec<Value> {
                     ("stopped", changed)
                 } else if session["nativeSessionId"].is_null() {
                     ("queued", Value::Null)
-                } else if session["nativeSessionId"]
-                    .as_str()
-                    .is_some_and(|id| id.starts_with("codex-"))
-                {
-                    match session["id"]
-                        .as_str()
-                        .and_then(|id| native_status(database_path, id))
-                    {
-                        Some((true, _)) => ("working", Value::Null),
-                        Some((false, _))
-                            if session["kind"] == "root" && task.status == "waiting_human" =>
-                        {
+                } else {
+                    match native_status(database_path, session) {
+                        Some(("busy", _)) => ("working", Value::Null),
+                        Some(("retry", _)) => ("retrying", Value::Null),
+                        Some(_) if session["kind"] == "root" && task.status == "waiting_human" => {
                             ("waiting_human", Value::Null)
                         }
-                        Some((false, time)) => ("idle", json!(time)),
+                        Some((_, time)) => ("idle", iso_timestamp(time)),
                         None => ("unknown", Value::Null),
                     }
-                } else {
-                    ("unknown", Value::Null)
                 };
             json!({
                 "id":session["id"], "role":session["kind"],
@@ -381,6 +385,51 @@ mod tests {
             "body":serde_json::from_slice::<Value>(&body).unwrap(),
             "cacheControl":cache_control,
         })
+    }
+
+    #[tokio::test]
+    async fn an_opencode_session_reports_its_native_busy_status() {
+        let root =
+            std::env::temp_dir().join(format!("suplex-task-agents-{}", uuid::Uuid::new_v4()));
+        let (url, _) = crate::runtimes::opencode::client::fake::serve(|request| {
+            match request.path.as_str() {
+                "/session/ses_live" => (200, json!({"id":"ses_live","projectID":"p","directory":"/repo","title":"t","version":"1","time":{"created":1,"updated":9}}).to_string()),
+                "/session/status" => (200, json!({"ses_live":{"type":"busy"}}).to_string()),
+                _ => (404, "{}".into()),
+            }
+        })
+        .await;
+        let database = root.join("suplex.sqlite");
+        let runtime = crate::runtimes::task_harness::task_session_runtime_directory(
+            &database,
+            "session-opencode",
+        )
+        .unwrap();
+        std::fs::create_dir_all(&runtime).unwrap();
+        let reference = json!({"pid":4321,"baseUrl":url,"password":"a".repeat(64),"directory":"/repo","executable":"/bin/opencode","generation":"b775df17-718a-4cb2-8e23-6912b8aa0d39","configHash":"a".repeat(64),"processIdentity":{"command":"opencode serve","executable":"/bin/opencode","argv":["opencode","serve"],"processGroup":4321,"startTime":"start","ownerUid":501}});
+        std::fs::write(runtime.join("server.json"), reference.to_string()).unwrap();
+        let task = AgentTask {
+            id: "task".into(),
+            status: "running".into(),
+            rows: RootObservationRows {
+                control: Value::Null,
+                context: Value::Null,
+                dependencies: Vec::new(),
+                root: None,
+                worker: None,
+                workers: Vec::new(),
+                sessions: vec![
+                    json!({"id":"session-opencode","kind":"root","current":true,"lifecycle":"live","nativeSessionId":"ses_live","paneId":null,"advisorRole":null}),
+                ],
+                turns: Vec::new(),
+            },
+        };
+        let path = database.clone();
+        let agents = tokio::task::spawn_blocking(move || agents(&task, &path))
+            .await
+            .unwrap();
+        assert_eq!(agents[0]["status"], "working");
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[tokio::test]

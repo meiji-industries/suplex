@@ -379,15 +379,18 @@ impl OpenCodeSessionReader {
         })
     }
 
-    /// Returns `{ status, updatedAt }` from the live server.
-    pub async fn status(&self, session: &ReaderSession<'_>) -> Result<Value, BoxError> {
+    /// Returns `(status, updatedAt)` from the live server.
+    pub async fn status(
+        &self,
+        session: &ReaderSession<'_>,
+    ) -> Result<(&'static str, f64), BoxError> {
         let (server, client, native) = self.connect(session)?;
         let (session_read, statuses) = tokio::join!(
             client.get_session(native, Some(&server.directory)),
             client.get_status(Some(&server.directory))
         );
         let status = statuses?.get(native).map_or("idle", |status| status.kind());
-        Ok(json!({"status":status,"updatedAt":js_number(session_read?.time.updated)}))
+        Ok((status, session_read?.time.updated))
     }
 
     pub async fn timeline(
@@ -628,10 +631,7 @@ mod tests {
             current: true,
             kind: "root",
         };
-        assert_eq!(
-            reader.status(&session).await.unwrap(),
-            json!({"status":"busy","updatedAt":9})
-        );
+        assert_eq!(reader.status(&session).await.unwrap(), ("busy", 9.0));
         let timeline = reader.timeline(&session, None).await.unwrap();
         assert_eq!(timeline.live_message_id.as_deref(), Some("msg_live"));
         assert_eq!(timeline.usage[0]["steps"], 0);

@@ -691,6 +691,17 @@ impl NativeSessionReader for OpenCodeTaskRuntime {
             Ok(statuses.values().any(|status| status.kind() != "idle"))
         })
     }
+
+    fn status(&self, session: &ReaderSession<'_>) -> io::Result<(&'static str, f64)> {
+        let native =
+            resolved(session)?.ok_or_else(|| io::Error::other("Session is not available"))?;
+        let reader = reader(session);
+        run(async {
+            reader
+                .status(&opencode_session(Some(&native), session.session_id, true))
+                .await
+        })
+    }
 }
 
 impl TaskHarness for OpenCodeTaskRuntime {

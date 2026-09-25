@@ -167,6 +167,25 @@ pub trait NativeSessionReader {
         pricing: Option<&ModelPricingCatalog>,
     ) -> io::Result<NativeTimeline>;
     fn busy(&self, session: &ReaderSession<'_>) -> io::Result<bool>;
+    /// TypeScript `status`: `busy`, `retry`, or `idle`, and when the native
+    /// session last changed (Unix ms). Headless runtimes read `turn.json`.
+    fn status(&self, session: &ReaderSession<'_>) -> io::Result<(&'static str, f64)> {
+        let path = session.runtime_directory()?.join("turn.json");
+        Ok((
+            if self.busy(session)? { "busy" } else { "idle" },
+            modified_ms(&path)?,
+        ))
+    }
+}
+
+/// A file's modification time in Unix milliseconds (Node `stat().mtimeMs`).
+pub fn modified_ms(path: &Path) -> io::Result<f64> {
+    let modified = std::fs::metadata(path)?.modified()?;
+    Ok(modified
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_err(io::Error::other)?
+        .as_secs_f64()
+        * 1000.0)
 }
 
 /// TypeScript `TaskHarness`. The registry selects one implementation by the

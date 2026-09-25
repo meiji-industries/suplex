@@ -288,7 +288,8 @@ fn scan(
     Ok(wrote)
 }
 
-/// Follows the runtime directory until `stopped` returns true.
+/// Follows the runtime directory until `stopped` returns true or the
+/// directory is removed.
 pub fn run_display(
     runtime_directory: &Path,
     output: &mut impl Write,
@@ -296,13 +297,14 @@ pub fn run_display(
     stopped: impl Fn() -> bool,
 ) -> io::Result<()> {
     let mut cursors = HashMap::new();
+    let mut seen = false;
     if !scan(runtime_directory, &mut cursors, output)? {
         output.write_all(WAITING_LABEL.as_bytes())?;
         output.flush()?;
     }
     while !stopped() {
         std::thread::sleep(poll_interval);
-        if stopped() {
+        if stopped() || task_display::runtime_removed(runtime_directory, &mut seen) {
             break;
         }
         scan(runtime_directory, &mut cursors, output)?;
@@ -409,6 +411,37 @@ mod tests {
         for (event, expected) in cases {
             assert_eq!(render_event(&event), expected, "{event}");
         }
+    }
+
+    #[test]
+    fn the_display_ends_when_its_runtime_directory_is_removed() {
+        let directory =
+            std::env::temp_dir().join(format!("suplex-codex-display-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&directory).unwrap();
+        let runner = {
+            let directory = directory.clone();
+            std::thread::spawn(move || {
+                run_display(
+                    &directory,
+                    &mut io::sink(),
+                    Duration::from_millis(5),
+                    || false,
+                )
+            })
+        };
+        std::thread::sleep(Duration::from_millis(30));
+        fs::remove_dir_all(&directory).unwrap();
+        for _ in 0..200 {
+            if runner.is_finished() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        assert!(
+            runner.is_finished(),
+            "the display outlived its runtime directory"
+        );
+        runner.join().unwrap().unwrap();
     }
 
     #[test]

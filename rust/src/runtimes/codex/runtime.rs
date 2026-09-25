@@ -67,7 +67,7 @@ fn read_optional(path: &Path) -> io::Result<Option<String>> {
     }
 }
 
-fn admitted_record(
+pub(crate) fn admitted_record(
     directory: &Path,
     turn_id: &str,
     generation: Option<&str>,

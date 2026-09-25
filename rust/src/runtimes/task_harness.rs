@@ -100,6 +100,82 @@ pub fn recover_headless_dispatch(directory: &Path, generation: &str) -> io::Resu
     headless::stop_execution(directory, generation)
 }
 
+/// TypeScript `ExecutableSpec`.
+pub struct ExecutableSpec {
+    pub label: &'static str,
+    pub binary: &'static str,
+    pub env_var: &'static str,
+    pub home_paths: &'static [&'static str],
+    pub fallback_paths: &'static [&'static str],
+}
+
+pub const GH_EXECUTABLE: ExecutableSpec = ExecutableSpec {
+    label: "GitHub CLI",
+    binary: "gh",
+    env_var: "SUPLEX_GH_COMMAND",
+    home_paths: &[],
+    fallback_paths: &["/opt/homebrew/bin/gh", "/usr/local/bin/gh"],
+};
+
+fn executable_file(path: &Path) -> bool {
+    use std::os::unix::fs::PermissionsExt;
+    std::fs::metadata(path)
+        .is_ok_and(|metadata| metadata.is_file() && metadata.permissions().mode() & 0o111 != 0)
+}
+
+/// TypeScript `resolveExecutable`: override or environment variable, then
+/// PATH, fallback paths, and home install locations.
+pub fn resolve_executable(
+    spec: &ExecutableSpec,
+    override_path: Option<&Path>,
+    environment: &HashMap<String, String>,
+    home: Option<&Path>,
+) -> io::Result<PathBuf> {
+    if let Some(path) = override_path.or_else(|| environment.get(spec.env_var).map(Path::new)) {
+        if !path.is_absolute() {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                format!(
+                    "{} executable must be an absolute path. Check {}.",
+                    spec.label, spec.env_var
+                ),
+            ));
+        }
+        if !executable_file(path) {
+            return Err(io::Error::new(
+                io::ErrorKind::NotFound,
+                format!(
+                    "{} executable cannot be executed. Check {}.",
+                    spec.label, spec.env_var
+                ),
+            ));
+        }
+        return Ok(path.to_owned());
+    }
+    let search = environment
+        .get("PATH")
+        .map(String::as_str)
+        .unwrap_or_default();
+    std::env::split_paths(search)
+        .filter(|path| path.is_absolute())
+        .map(|directory| directory.join(spec.binary))
+        .chain(spec.fallback_paths.iter().map(PathBuf::from))
+        .chain(
+            home.into_iter()
+                .flat_map(|home| spec.home_paths.iter().map(move |path| home.join(path))),
+        )
+        .find(|candidate| executable_file(candidate))
+        .ok_or_else(|| {
+            io::Error::new(
+                io::ErrorKind::NotFound,
+                format!(
+                    "Install {} or set {} to its absolute executable path.",
+                    spec.label, spec.env_var
+                ),
+            )
+        })
+}
+
 /// Build one native task process environment. A recovered task must not inherit
 /// another task's bridge capability from the API process environment.
 pub fn task_bridge_environment(

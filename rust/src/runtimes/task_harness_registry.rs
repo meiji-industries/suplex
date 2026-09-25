@@ -1,12 +1,16 @@
 //! TypeScript `task-harness-registry.ts`: one harness per supported agent CLI.
 //! A new runtime adds its module and one line to `harness`.
 
-use super::{codex::harness::CodexTaskRuntime, task_harness::TaskHarness};
+use super::{
+    claude_code::task_runtime::ClaudeCodeTaskRuntime, codex::harness::CodexTaskRuntime,
+    task_harness::TaskHarness,
+};
 
 /// The harness for one harness kind, when its runtime is ported.
 pub fn harness(kind: &str) -> Option<&'static dyn TaskHarness> {
     match kind {
         "codex" => Some(&CodexTaskRuntime),
+        "claude-code" => Some(&ClaudeCodeTaskRuntime),
         _ => None,
     }
 }
@@ -79,5 +83,8 @@ mod tests {
         let codex = for_profile("codex").unwrap();
         assert!(codex.new_session_id().starts_with("codex-"));
         assert!(for_session(Some("codex-1")).is_some());
+        let claude = for_profile("claude-code").unwrap();
+        assert_eq!(session_harness(&claude.new_session_id()), "claude-code");
+        assert!(for_session(Some("ses_abc")).is_none());
     }
 }

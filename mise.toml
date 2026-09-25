@@ -49,7 +49,11 @@ export SUPLEX_RUST_ASSETS_DIR="$PWD/dist/web"
 export SUPLEX_RUST_ROOT="$PWD/.suplex-rust"
 cd rust
 unset RUSTUP_TOOLCHAIN
-exec cargo run --bin suplex
+cargo build --bin suplex
+binary="${CARGO_TARGET_DIR:-$PWD/target}/debug/suplex"
+# A stable signature keeps the Keychain grant across rebuilds.
+[ -z "$SUPLEX_CODESIGN_IDENTITY" ] || codesign --force --sign "$SUPLEX_CODESIGN_IDENTITY" "$binary"
+exec "$binary"
 '''
 
 [tasks."build:rust"]
@@ -59,6 +63,7 @@ pnpm exec vite build
 cd rust
 unset RUSTUP_TOOLCHAIN
 cargo build --release --bin suplex
+[ -z "$SUPLEX_CODESIGN_IDENTITY" ] || codesign --force --sign "$SUPLEX_CODESIGN_IDENTITY" "${CARGO_TARGET_DIR:-$PWD/target}/release/suplex"
 '''
 
 [tasks."test:rust"]

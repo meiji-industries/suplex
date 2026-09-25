@@ -31,6 +31,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         // The Root bridge forwards its events to the server's system log.
         if let Ok(binding) = suplex::coordination::root_bridge::authenticated_binding() {
             system_events::install_producer(&binding.database_path);
+            suplex::integrations::github::use_installation(&binding.database_path);
         }
         return suplex::coordination::root_stdio::serve_from_environment().await;
     }
@@ -72,6 +73,7 @@ fn server_event(state: &str, extra: serde_json::Value) {
 
 async fn serve() -> Result<(), Box<dyn std::error::Error>> {
     let installation = Installation::load()?;
+    suplex::integrations::github::use_installation(&installation.database);
     system_events::install(installation.logs.clone());
     let mut database = SuplexDatabase::open(&installation.database, OpenMode::Migrate)?;
     suplex::identity::auth::normalize_legacy_users(&database)?;

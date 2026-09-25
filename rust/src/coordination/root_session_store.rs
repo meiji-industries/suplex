@@ -1293,6 +1293,8 @@ pub fn replace_coordinator(
             return Err(std::io::Error::other("The Coordinator does not belong to this task.").into());
         };
         let handoff = request.handoff.as_deref().unwrap_or("");
+        // The saved intent keeps a question only when it resumes the task.
+        let question_intent = if request.resume { request.question_id.as_deref() } else { None };
         let existing: Option<(String,String)> = database.connection().query_row(
             "SELECT id,replacement_reason FROM suplex_task_sessions WHERE replaces_session_id = ?1 AND kind = 'root'",
             [&request.session_id], |row| Ok((row.get(0)?,row.get(1)?)),
@@ -1300,7 +1302,7 @@ pub fn replace_coordinator(
         if let Some((id, reason)) = existing {
             let saved: Value = serde_json::from_str(&reason)?;
             if saved["rootProfileId"] != request.root_profile_id || saved["handoff"] != handoff
-                || saved["resume"] != request.resume || saved["questionId"].as_str() != request.question_id.as_deref()
+                || saved["resume"] != request.resume || saved["questionId"].as_str() != question_intent
                 || current_root_id.as_deref() != Some(id.as_str()) {
                 return Err(std::io::Error::other("The Coordinator changed. Read the current Coordinator before selecting another.").into());
             }
@@ -1393,7 +1395,7 @@ pub fn replace_coordinator(
         }
         let reason = js_json::stringify(&serde_json::json!({
             "rootProfileId":request.root_profile_id,"handoff":handoff,"resume":request.resume,
-            "questionId":if request.resume { request.question_id.as_deref() } else { None },
+            "questionId":question_intent,
             "pendingQuestion":current_question.as_ref().map(|(id,text,options)| serde_json::json!({"id":id,"text":text,"options":options})),
         }));
         let pending_question = if unanswered.is_empty() { String::new() } else {
@@ -2778,6 +2780,24 @@ mod tests {
             now,
         )
         .unwrap();
+        // A retry that also names a question without resuming is the same intent.
+        assert_eq!(
+            replace_coordinator(
+                &mut database,
+                &task.id,
+                &TaskCoordinatorReplacementBody {
+                    session_id: first_id.clone(),
+                    root_profile_id: "alternate-root".into(),
+                    handoff: None,
+                    resume: false,
+                    question_id: Some("question-current".into()),
+                },
+                &initial,
+                now,
+            )
+            .unwrap()["id"],
+            second_root["id"]
+        );
         let second_prompt: String = database
             .connection()
             .query_row(

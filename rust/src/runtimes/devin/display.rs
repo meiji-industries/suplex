@@ -187,13 +187,16 @@ pub fn run(
     stop: &AtomicBool,
 ) -> io::Result<()> {
     let mut cursors = HashMap::new();
+    let mut seen = false;
     if !scan(runtime_directory, &mut cursors, output)? {
         output.write_all(WAITING_LABEL.as_bytes())?;
         output.flush()?;
     }
     while !stop.load(Ordering::SeqCst) {
         thread::sleep(poll_interval);
-        if stop.load(Ordering::SeqCst) {
+        if stop.load(Ordering::SeqCst)
+            || crate::runtimes::task_display::runtime_removed(runtime_directory, &mut seen)
+        {
             break;
         }
         scan(runtime_directory, &mut cursors, output)?;

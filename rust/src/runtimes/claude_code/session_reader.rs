@@ -13,7 +13,9 @@ use crate::{
     profiles::model_pricing::ModelPricingCatalog,
     runtimes::{
         codex::{session_reader::busy, tool_evidence::NativeTool},
-        task_harness::{NativeSessionReader, NativeTimeline, ReaderSession, UsageEntry},
+        task_harness::{
+            NativeSessionReader, NativeTimeline, ReaderSession, UsageEntry, modified_ms,
+        },
     },
 };
 
@@ -147,6 +149,18 @@ impl NativeSessionReader for ClaudeCodeTaskRuntime {
 
     fn busy(&self, session: &ReaderSession<'_>) -> io::Result<bool> {
         busy(&session.runtime_directory()?)
+    }
+
+    fn status(&self, session: &ReaderSession<'_>) -> io::Result<(&'static str, f64)> {
+        let path = match transcript_path(session)? {
+            Some(path) => path,
+            None => session.runtime_directory()?.join("turn.json"),
+        };
+        let updated_at = modified_ms(&path)?;
+        Ok((
+            if self.busy(session)? { "busy" } else { "idle" },
+            updated_at,
+        ))
     }
 }
 

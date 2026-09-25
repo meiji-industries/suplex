@@ -326,11 +326,19 @@ pub async fn complete(
     let lock = MUTATIONS
         .lock()
         .expect("evidence locks")
-        .entry(key)
+        .entry(key.clone())
         .or_default()
         .clone();
-    let _guard = lock.lock().await;
-    publish(operations, task_id, number, head_sha, recheck).await
+    let published = {
+        let _guard = lock.lock().await;
+        publish(operations, task_id, number, head_sha, recheck).await
+    };
+    // Clones happen under the map lock, so no other caller waits on this entry.
+    let mut locks = MUTATIONS.lock().expect("evidence locks");
+    if Arc::strong_count(&lock) == 2 {
+        locks.remove(&key);
+    }
+    published
 }
 
 fn save(operations: &DeliveryOperations, task_id: &str, publication: &Value) -> DatabaseResult<()> {
@@ -583,6 +591,24 @@ fn control_now(operations: &DeliveryOperations, task_id: &str) -> DatabaseResult
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn a_finished_publication_releases_its_task_lock() {
+        let directory =
+            std::env::temp_dir().join(format!("suplex-evidence-lock-{}", uuid::Uuid::new_v4()));
+        let operations = DeliveryOperations::new(
+            &directory.join("suplex.sqlite"),
+            &directory.join("artifacts"),
+        );
+        let key = format!("{}:task_lock", operations.database_path().display());
+        // The task does not exist, so the publication fails; its lock goes away all the same.
+        assert!(
+            complete(&operations, "task_lock", 1, &"a".repeat(40), None)
+                .await
+                .is_err()
+        );
+        assert!(!MUTATIONS.lock().unwrap().contains_key(&key));
+    }
 
     #[test]
     fn raw_command_output_cannot_terminate_its_markdown_fence() {

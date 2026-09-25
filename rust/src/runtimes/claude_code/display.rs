@@ -591,7 +591,8 @@ impl ClaudeDisplay {
     }
 }
 
-/// TypeScript `runClaudeDisplay`: follow the runtime directory until killed.
+/// TypeScript `runClaudeDisplay`: follow the runtime directory until killed
+/// or until the directory is removed.
 pub fn run_claude_display(runtime_directory: &Path) -> io::Result<()> {
     if !runtime_directory.is_absolute() {
         return Err(io::Error::other("A private runtime directory is necessary"));
@@ -602,8 +603,12 @@ pub fn run_claude_display(runtime_directory: &Path) -> io::Result<()> {
         output.write_all(WAITING_LABEL.as_bytes())?;
     }
     output.flush()?;
+    let mut seen = false;
     loop {
         std::thread::sleep(Duration::from_millis(250));
+        if crate::runtimes::task_display::runtime_removed(runtime_directory, &mut seen) {
+            return Ok(());
+        }
         display.scan(runtime_directory, &mut output)?;
         output.flush()?;
     }
@@ -613,6 +618,28 @@ pub fn run_claude_display(runtime_directory: &Path) -> io::Result<()> {
 mod tests {
     use super::*;
     use serde_json::json;
+
+    #[test]
+    fn the_display_ends_when_its_runtime_directory_is_removed() {
+        let directory = runtime();
+        let runner = {
+            let directory = directory.clone();
+            std::thread::spawn(move || run_claude_display(&directory))
+        };
+        std::thread::sleep(Duration::from_millis(300));
+        fs::remove_dir_all(&directory).unwrap();
+        for _ in 0..100 {
+            if runner.is_finished() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        assert!(
+            runner.is_finished(),
+            "the display outlived its runtime directory"
+        );
+        runner.join().unwrap().unwrap();
+    }
 
     fn runtime() -> PathBuf {
         let directory =

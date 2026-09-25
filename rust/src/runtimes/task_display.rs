@@ -307,6 +307,15 @@ pub fn attach_task_display(
 }
 
 /// One native session's display, bound in the task database.
+/// A pane display follows one session runtime directory, which may appear
+/// after the display starts. Once the directory has existed and is gone, its
+/// task data was removed, and the display process ends instead of polling it.
+pub fn runtime_removed(runtime_directory: &Path, seen: &mut bool) -> bool {
+    let present = runtime_directory.is_dir();
+    *seen |= present;
+    *seen && !present
+}
+
 pub struct SessionDisplay<'a> {
     pub database_path: &'a Path,
     pub session_id: &'a str,

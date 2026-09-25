@@ -408,6 +408,63 @@ mod tests {
     }
 
     #[test]
+    fn advisor_launch_is_read_only_with_only_the_report_bridge() {
+        let base =
+            std::env::temp_dir().join(format!("suplex-advisor-codex-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&base).unwrap();
+        let database = base.join("installation.sqlite");
+        let worktree = base.join("worktree");
+        fs::create_dir(&worktree).unwrap();
+        let codex = base.join("codex");
+        fs::write(
+            &codex,
+            "#!/bin/sh\ntest -z \"$SUPLEX_ROOT_TOKEN$SUPLEX_ROOT_BINDING\" || exit 21\ntest -n \"$SUPLEX_ADVISOR_TOKEN\" || exit 22\ntest -f \"$SUPLEX_ADVISOR_BINDING\" || exit 23\ncase \"$SUPLEX_ADVISOR_RESULT\" in *turn-msg_advisor.advisor-report.json) ;; *) exit 24 ;; esac\ncase \"$*\" in *'sandbox_mode=\"read-only\"'*'mcp_servers.suplex_advisor='*) ;; *) exit 25 ;; esac\ngrep -q 'read-only Suplex Advisor' || exit 26\nprintf '%s\\n' '{\"type\":\"thread.started\",\"thread_id\":\"advisor-thread\"}'\nsleep 0.3\nprintf '%s\\n' '{\"type\":\"turn.completed\"}'\n",
+        )
+        .unwrap();
+        fs::set_permissions(&codex, fs::Permissions::from_mode(0o700)).unwrap();
+        let inherited = HashMap::from([
+            ("PATH".into(), "/usr/bin:/bin".into()),
+            ("SUPLEX_ROOT_TOKEN".into(), "stale-root".into()),
+        ]);
+        let result = dispatch_codex_worker(
+            WorkerCodexLaunch {
+                database_path: &database,
+                session_id: "advisor_session",
+                native_session_id: "codex-advisor-1",
+                turn_id: "msg_advisor",
+                worktree: &worktree,
+                prompt: "Review the change",
+                project_context: None,
+                project_context_path: None,
+                project_environment: &HashMap::new(),
+                excluded_environment_keys: &[],
+                purpose: role_prompt::WorkerPurpose::Implementation,
+                model: "gpt-6-sol",
+                reasoning_effort: "medium",
+                codex_executable: Some(&codex),
+                inherited_environment: &inherited,
+                direct: false,
+                advisor: Some(AdvisorRole::Reviewer),
+            },
+            |_| Ok(true),
+        )
+        .unwrap();
+        assert!(result.admission_observed);
+        let directory = session_reader::session_directory(&database, "advisor_session").unwrap();
+        let exit = crate::runtimes::headless::turn_file(&directory, "msg_advisor", "exit");
+        for _ in 0..60 {
+            if let Ok(status) = fs::read_to_string(&exit) {
+                assert_eq!(status.trim(), "0");
+                assert_eq!(result.state, runtime::PromptState::Running, "{result:?}");
+                fs::remove_dir_all(base).unwrap();
+                return;
+            }
+            thread::sleep(Duration::from_millis(50));
+        }
+        panic!("fake Advisor Codex did not exit");
+    }
+
+    #[test]
     fn worker_launch_has_write_scope_and_no_bridge_capability() {
         let base =
             std::env::temp_dir().join(format!("suplex-worker-codex-{}", uuid::Uuid::new_v4()));

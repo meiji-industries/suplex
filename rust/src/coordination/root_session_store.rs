@@ -9,6 +9,7 @@ use std::sync::Mutex;
 use uuid::Uuid;
 
 use crate::coordination::root_prompts::STANDARD_WORKER_RESULT_WAKE;
+use crate::http::contracts::typed::task_answers::TaskLimitDecision;
 use crate::platform::database::{DatabaseResult, SuplexDatabase};
 use crate::runtimes::process::inspect_process;
 use crate::shared::js_json;
@@ -182,18 +183,28 @@ pub fn root_observation_rows(
     })
 }
 
-#[derive(Clone, Copy, Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct TaskLimits {
     budget_usd: f64,
     max_turns: i64,
 }
 
-#[derive(Clone, Copy, Debug, Serialize)]
-#[serde(rename_all = "camelCase")]
+#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct PersistedLimitUsage {
     estimated_cost_usd: Option<f64>,
     admitted_turns: i64,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct PersistedLimitPause {
+    kind: String,
+    reason: String,
+    limits: TaskLimits,
+    usage: PersistedLimitUsage,
+    proposed_limits: TaskLimits,
 }
 
 fn suggested_budget(proposed: f64, spent: f64) -> f64 {
@@ -583,6 +594,89 @@ pub fn answer_human(
         database.connection().execute(
             "UPDATE suplex_task_controls SET status = 'active', human_question = NULL, human_question_id = NULL, recovery_turn_id = NULL, wake_at = ?1, updated_at = ?1 WHERE task_id = ?2",
             params![time, task_id],
+        )?;
+        Ok(())
+    })
+}
+
+/// Apply the current task-limit decision as one durable control and prompt update.
+pub fn answer_task_limit(
+    database: &mut SuplexDatabase,
+    task_id: &str,
+    question_id: &str,
+    decision: &TaskLimitDecision,
+    now: DateTime<Utc>,
+) -> DatabaseResult<()> {
+    database.transaction(true, |database| {
+        let row: Option<(String, Option<String>, Option<String>)> = database
+            .connection()
+            .query_row(
+                "SELECT human_question,limit_pause_json,root_session_id FROM suplex_task_controls WHERE task_id = ?1 AND status = 'waiting_human' AND human_question_id = ?2",
+                params![task_id, question_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )
+            .optional()?;
+        let Some((question, Some(raw_pause), root_id)) = row else {
+            return Err(std::io::Error::other("question_identity_mismatch").into());
+        };
+        let pause: PersistedLimitPause = serde_json::from_str(&raw_pause)?;
+        if pause.kind != "task_limit"
+            || !matches!(pause.reason.as_str(), "budget" | "turns" | "budget_and_turns")
+            || !pause.limits.budget_usd.is_finite()
+            || pause.limits.budget_usd < 0.0
+            || pause.limits.max_turns < 0
+            || pause.usage.estimated_cost_usd.is_some_and(|cost| !cost.is_finite() || cost < 0.0)
+            || pause.usage.admitted_turns < 0
+            || !pause.proposed_limits.budget_usd.is_finite()
+            || pause.proposed_limits.budget_usd < 0.0
+            || pause.proposed_limits.max_turns < 0
+        {
+            return Err(std::io::Error::other("invalid_task_limit_pause").into());
+        }
+        let time = timestamp(now);
+        if matches!(decision, TaskLimitDecision::CancelTask) {
+            database.connection().execute(
+                "UPDATE suplex_task_controls SET status = 'cancelled', wake_at = NULL, human_question = NULL, human_question_id = NULL, limit_pause_json = NULL, workflow_state_json = json_set(workflow_state_json, '$.deliveryWait', json('null')), updated_at = ?1 WHERE task_id = ?2",
+                params![time, task_id],
+            )?;
+            database.connection().execute(
+                "UPDATE suplex_task_sessions SET is_current = 0, lifecycle = 'cancelled', stop_requested_at = COALESCE(stop_requested_at, ?1), updated_at = ?1 WHERE task_id = ?2 AND stopped_at IS NULL",
+                params![time, task_id],
+            )?;
+            database.connection().execute(
+                "UPDATE suplex_task_turns SET status = 'cancelled', updated_at = ?1 WHERE task_id = ?2 AND status IN ('pending_prompt','prompted','unknown')",
+                params![time, task_id],
+            )?;
+            return Ok(());
+        }
+        let root_id = root_id.ok_or_else(|| std::io::Error::other("root_notification_unavailable"))?;
+        let root = database
+            .connection()
+            .query_row(
+                "SELECT * FROM suplex_task_sessions WHERE id = ?1 AND task_id = ?2 AND kind = 'root' AND is_current = 1 AND lifecycle <> 'cancelled'",
+                params![root_id, task_id],
+                session,
+            )
+            .optional()?
+            .ok_or_else(|| std::io::Error::other("root_notification_unavailable"))?;
+        let limits = match decision {
+            TaskLimitDecision::AddAllowance => pause.proposed_limits,
+            TaskLimitDecision::ChangeLimits { limits } => TaskLimits {
+                budget_usd: limits.budget_usd,
+                max_turns: limits.max_turns as i64,
+            },
+            TaskLimitDecision::CancelTask => unreachable!(),
+        };
+        let prompt = js_json::stringify(&serde_json::json!({"question": question, "decision": decision}));
+        let id = new_turn_id(now)?;
+        let hash = format!("{:x}", Sha256::digest(prompt.as_bytes()));
+        database.connection().execute(
+            "INSERT INTO suplex_task_turns (id,task_id,session_id,generation,prompt_hash,prompt_text,status,created_at,updated_at) VALUES (?1,?2,?3,?4,?5,?6,'pending_prompt',?7,?7)",
+            params![id, task_id, root.id, root.generation, hash, prompt, time],
+        )?;
+        database.connection().execute(
+            "UPDATE suplex_task_controls SET status = 'active', budget_usd = ?1, max_turns = ?2, limit_pause_json = NULL, human_question = NULL, human_question_id = NULL, human_question_options_json = '[]', wake_at = ?3, updated_at = ?3 WHERE task_id = ?4",
+            params![limits.budget_usd, limits.max_turns, time, task_id],
         )?;
         Ok(())
     })
@@ -1760,6 +1854,101 @@ mod tests {
                 .status,
             "active"
         );
+        let pause = serde_json::json!({
+            "kind":"task_limit", "reason":"budget",
+            "limits":{"budgetUsd":15,"maxTurns":40},
+            "usage":{"estimatedCostUsd":15,"admittedTurns":3},
+            "proposedLimits":{"budgetUsd":25,"maxTurns":40}
+        });
+        database.connection().execute(
+            "UPDATE suplex_task_controls SET status = 'waiting_human', human_question = 'Limit?', human_question_id = 'limit-add', limit_pause_json = ?1 WHERE task_id = ?2",
+            params![pause.to_string(), answer_task.id],
+        ).unwrap();
+        answer_task_limit(
+            &mut database,
+            &answer_task.id,
+            "limit-add",
+            &TaskLimitDecision::AddAllowance,
+            now,
+        )
+        .unwrap();
+        let added: (String, String, f64, i64) = database.connection().query_row(
+            "SELECT t.prompt_text,t.prompt_hash,c.budget_usd,c.max_turns FROM suplex_task_turns t JOIN suplex_task_controls c ON c.task_id = t.task_id WHERE t.task_id = ?1 ORDER BY t.rowid DESC LIMIT 1",
+            [&answer_task.id], |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?)),
+        ).unwrap();
+        assert_eq!(
+            added.0,
+            "{\"question\":\"Limit?\",\"decision\":{\"kind\":\"add_allowance\"}}"
+        );
+        assert_eq!(
+            added.1,
+            "d683387a6c26a52e950010d766bcd7195c6b8324c699b32a20993b71ffef84ff"
+        );
+        assert_eq!((added.2, added.3), (25.0, 40));
+        assert!(
+            answer_task_limit(
+                &mut database,
+                &answer_task.id,
+                "limit-add",
+                &TaskLimitDecision::AddAllowance,
+                now
+            )
+            .is_err()
+        );
+        database.connection().execute(
+            "UPDATE suplex_task_controls SET status = 'waiting_human', human_question = 'Limit again?', human_question_id = 'limit-change', limit_pause_json = ?1 WHERE task_id = ?2",
+            params![pause.to_string(), answer_task.id],
+        ).unwrap();
+        answer_task_limit(
+            &mut database,
+            &answer_task.id,
+            "limit-change",
+            &TaskLimitDecision::ChangeLimits {
+                limits: crate::http::contracts::typed::task_answers::TaskLimits {
+                    budget_usd: 30.0,
+                    max_turns: 60,
+                },
+            },
+            now,
+        )
+        .unwrap();
+        let changed: (String, String, f64, i64) = database.connection().query_row(
+            "SELECT t.prompt_text,t.prompt_hash,c.budget_usd,c.max_turns FROM suplex_task_turns t JOIN suplex_task_controls c ON c.task_id = t.task_id WHERE t.task_id = ?1 ORDER BY t.rowid DESC LIMIT 1",
+            [&answer_task.id], |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?)),
+        ).unwrap();
+        assert_eq!(
+            changed.0,
+            "{\"question\":\"Limit again?\",\"decision\":{\"kind\":\"change_limits\",\"limits\":{\"budgetUsd\":30,\"maxTurns\":60}}}"
+        );
+        assert_eq!(
+            changed.1,
+            "01bccddaaae04b2b221a6ae690313c8054b2d22cddfd8bbcca7ef3a6ac5a5578"
+        );
+        assert_eq!((changed.2, changed.3), (30.0, 60));
+        database.connection().execute(
+            "UPDATE suplex_task_controls SET status = 'waiting_human', human_question = 'Cancel?', human_question_id = 'limit-cancel', limit_pause_json = ?1 WHERE task_id = ?2",
+            params![pause.to_string(), answer_task.id],
+        ).unwrap();
+        answer_task_limit(
+            &mut database,
+            &answer_task.id,
+            "limit-cancel",
+            &TaskLimitDecision::CancelTask,
+            now,
+        )
+        .unwrap();
+        assert_eq!(
+            repository::task_by_id(&database, &answer_task.id)
+                .unwrap()
+                .unwrap()
+                .status,
+            "cancelled"
+        );
+        let outstanding: i64 = database.connection().query_row(
+            "SELECT COUNT(*) FROM suplex_task_turns WHERE task_id = ?1 AND status IN ('pending_prompt','prompted','unknown')",
+            [&answer_task.id], |row| row.get(0),
+        ).unwrap();
+        assert_eq!(outstanding, 0);
         drop(database);
         let _ = std::fs::remove_file(&filename);
         let _ = std::fs::remove_file(filename.with_extension("sqlite-wal"));

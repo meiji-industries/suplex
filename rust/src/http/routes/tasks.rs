@@ -685,42 +685,29 @@ async fn answer_pending(
         Ok(value) => value,
         Err(response) => return *response,
     };
-    let task_answers::TaskAnswerBody::Answer(answer) = request else {
-        let access = state.with_database(|database| -> Result<(), Box<dyn Error>> {
-            let company: String = database
-                .connection()
-                .query_row(
-                    "SELECT company_id FROM suplex_tasks WHERE id = ?1",
-                    [&id],
-                    |row| row.get(0),
-                )
-                .optional()?
-                .ok_or_else(|| {
-                    Box::new(TaskFailure {
-                        public_message: "Not found".into(),
-                        status_code: 404,
-                        code: "task_failure",
-                    }) as Box<dyn Error>
-                })?;
-            companies::require_company_access(database, &user_id, &company)?;
-            Ok(())
-        });
-        return with_cookies(
-            match access {
-                Ok(()) => auth::not_ported(),
-                Err(error) => service_error(error),
-            },
-            cookies,
-        );
-    };
     let host = state.task_host.clone();
     let answered = state.with_database(
         |database| -> Result<task_response::TaskResponse, Box<dyn Error>> {
-            commands::answer_user_task(database, &user_id, &id, &answer, Utc::now(), move |id| {
+            let wake = move |id| {
                 if let Some(host) = host {
                     host.wake(id);
                 }
-            })?;
+            };
+            match request {
+                task_answers::TaskAnswerBody::Answer(answer) => {
+                    commands::answer_user_task(database, &user_id, &id, &answer, Utc::now(), wake)?;
+                }
+                task_answers::TaskAnswerBody::LimitDecision(decision) => {
+                    commands::answer_user_task_limit(
+                        database,
+                        &user_id,
+                        &id,
+                        &decision,
+                        Utc::now(),
+                        wake,
+                    )?;
+                }
+            }
             task_response::get(database, &id)?.ok_or_else(|| "answered task disappeared".into())
         },
     );
@@ -1129,7 +1116,7 @@ mod tests {
             ),
         )
         .await;
-        assert_eq!(limit_answer.status(), StatusCode::NOT_IMPLEMENTED);
+        assert_eq!(limit_answer.status(), StatusCode::CONFLICT);
         let missing_limit_answer = answer_pending(
             State(state.clone()),
             Path("task_missing".into()),
@@ -1158,12 +1145,64 @@ mod tests {
         assert!(answered_value["humanQuestion"].is_null());
         let stale_answer = answer_pending(
             State(state.clone()),
-            Path(immediate_id),
+            Path(immediate_id.clone()),
             headers.clone(),
             answer_body,
         )
         .await;
         assert_eq!(stale_answer.status(), StatusCode::CONFLICT);
+        let pause = json!({
+            "kind":"task_limit", "reason":"budget",
+            "limits":{"budgetUsd":15,"maxTurns":40},
+            "usage":{"estimatedCostUsd":15,"admittedTurns":3},
+            "proposedLimits":{"budgetUsd":25,"maxTurns":40}
+        });
+        state.with_database(|database| {
+            database.connection().execute(
+                "UPDATE suplex_task_controls SET status = 'waiting_human', human_question = 'Raise limit?', human_question_id = 'limit-http', limit_pause_json = ?1 WHERE task_id = ?2",
+                rusqlite::params![pause.to_string(), immediate_id],
+            )
+        }).unwrap();
+        let raised = answer_pending(
+            State(state.clone()),
+            Path(immediate_id.clone()),
+            headers.clone(),
+            Bytes::from(
+                json!({"questionId":"limit-http","limitDecision":{"kind":"add_allowance"}})
+                    .to_string(),
+            ),
+        )
+        .await;
+        assert_eq!(raised.status(), StatusCode::OK);
+        let raised_raw = to_bytes(raised.into_body(), 128 * 1024).await.unwrap();
+        assert_typescript_task_body(&db_path, &root.join("artifacts"), &raised_raw);
+        assert_eq!(
+            serde_json::from_slice::<Value>(&raised_raw).unwrap()["limits"]["budgetUsd"],
+            25
+        );
+        state.with_database(|database| {
+            database.connection().execute(
+                "UPDATE suplex_task_controls SET status = 'waiting_human', human_question = 'Stop for limit?', human_question_id = 'limit-cancel-http', limit_pause_json = ?1 WHERE task_id = ?2",
+                rusqlite::params![pause.to_string(), immediate_id],
+            )
+        }).unwrap();
+        let stopped = answer_pending(
+            State(state.clone()),
+            Path(immediate_id.clone()),
+            headers.clone(),
+            Bytes::from(
+                json!({"questionId":"limit-cancel-http","limitDecision":{"kind":"cancel_task"}})
+                    .to_string(),
+            ),
+        )
+        .await;
+        assert_eq!(stopped.status(), StatusCode::OK);
+        let stopped_raw = to_bytes(stopped.into_body(), 128 * 1024).await.unwrap();
+        assert_typescript_task_body(&db_path, &root.join("artifacts"), &stopped_raw);
+        assert_eq!(
+            serde_json::from_slice::<Value>(&stopped_raw).unwrap()["status"],
+            "cancelled"
+        );
         let disconnected_body = json!({
             "projectId":"task_http_project",
             "title":"Continue after disconnect",

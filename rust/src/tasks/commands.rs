@@ -10,7 +10,10 @@ use uuid::Uuid;
 
 use crate::{
     coordination::root_session_store,
-    http::contracts::typed::{task_answers::AnswerBody, tasks::TaskCreateBody},
+    http::contracts::typed::{
+        task_answers::{AnswerBody, LimitDecisionBody, TaskLimitDecision},
+        tasks::TaskCreateBody,
+    },
     identity::companies,
     platform::database::{DatabaseResult, SuplexDatabase},
     projects::service::{self, Project},
@@ -585,6 +588,57 @@ pub fn answer_user_task(
     })
 }
 
+/// Apply an authenticated limit decision, audit the resulting state, then wake.
+pub fn answer_user_task_limit(
+    database: &mut SuplexDatabase,
+    actor_user_id: &str,
+    task_id: &str,
+    answer: &LimitDecisionBody,
+    now: DateTime<Utc>,
+    wake: impl FnOnce(String) + Send + 'static,
+) -> DatabaseResult<TaskRecord> {
+    database.transaction(true, |database| {
+        let task = repository::task_by_id(database, task_id)?
+            .ok_or_else(|| Box::new(TaskFailure::new("Not found", 404)) as Box<dyn Error>)?;
+        companies::require_company_access(database, actor_user_id, &task.company_id)?;
+        let (archived, status, question, has_limit_pause): (bool, String, Option<String>, bool) = database
+            .connection()
+            .query_row(
+                "SELECT t.archived_at IS NOT NULL,c.status,c.human_question_id,c.limit_pause_json IS NOT NULL FROM suplex_tasks t JOIN suplex_task_controls c ON c.task_id = t.id WHERE t.id = ?1",
+                [task_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+            )?;
+        if archived
+            || status != "waiting_human"
+            || question.as_deref() != Some(answer.question_id.as_str())
+            || !has_limit_pause
+        {
+            return Err(Box::new(TaskFailure::new(
+                "The question changed. Read the current question before answering",
+                409,
+            )));
+        }
+        root_session_store::answer_task_limit(
+            database,
+            task_id,
+            &answer.question_id,
+            &answer.limit_decision,
+            now,
+        )?;
+        let answered = repository::task_by_id(database, task_id)?
+            .ok_or_else(|| Box::new(TaskFailure::new("Not found", 404)) as Box<dyn Error>)?;
+        let action = if matches!(answer.limit_decision, TaskLimitDecision::CancelTask) {
+            "task_cancelled"
+        } else {
+            "task_answered"
+        };
+        audit(database, actor_user_id, action, &answered, now)?;
+        let id = task_id.to_owned();
+        database.after_commit(move || wake(id));
+        Ok(answered)
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -818,6 +872,57 @@ mod tests {
             "active"
         );
         assert_eq!(wakes.load(Ordering::SeqCst), 3);
+        let pause = json!({
+            "kind":"task_limit", "reason":"turns",
+            "limits":{"budgetUsd":15,"maxTurns":40},
+            "usage":{"estimatedCostUsd":null,"admittedTurns":40},
+            "proposedLimits":{"budgetUsd":15,"maxTurns":80}
+        });
+        database.connection().execute(
+            "UPDATE suplex_task_controls SET status = 'waiting_human', human_question = 'More turns?', human_question_id = 'command-limit', limit_pause_json = ?1 WHERE task_id = ?2",
+            params![pause.to_string(), created.task.id],
+        ).unwrap();
+        let limit = LimitDecisionBody {
+            question_id: "command-limit".into(),
+            limit_decision: TaskLimitDecision::CancelTask,
+        };
+        let count = Arc::clone(&wakes);
+        assert!(
+            answer_user_task_limit(
+                &mut database,
+                "missing-user",
+                &created.task.id,
+                &limit,
+                now,
+                move |_| {
+                    count.fetch_add(1, Ordering::SeqCst);
+                },
+            )
+            .is_err()
+        );
+        assert_eq!(wakes.load(Ordering::SeqCst), 3);
+        let count = Arc::clone(&wakes);
+        assert_eq!(
+            answer_user_task_limit(
+                &mut database,
+                &user.id,
+                &created.task.id,
+                &limit,
+                now,
+                move |_| {
+                    count.fetch_add(1, Ordering::SeqCst);
+                },
+            )
+            .unwrap()
+            .status,
+            "cancelled"
+        );
+        assert_eq!(wakes.load(Ordering::SeqCst), 4);
+        let audited: String = database.connection().query_row(
+            "SELECT action FROM suplex_audit_events WHERE company_id = 'command_company' ORDER BY rowid DESC LIMIT 1",
+            [], |row| row.get(0),
+        ).unwrap();
+        assert_eq!(audited, "task_cancelled");
         let count = Arc::clone(&wakes);
         assert!(
             answer_user_task(
@@ -832,7 +937,7 @@ mod tests {
             )
             .is_err()
         );
-        assert_eq!(wakes.load(Ordering::SeqCst), 3);
+        assert_eq!(wakes.load(Ordering::SeqCst), 4);
         drop(database);
         let _ = std::fs::remove_file(&filename);
         let _ = std::fs::remove_file(filename.with_extension("sqlite-wal"));

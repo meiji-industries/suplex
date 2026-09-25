@@ -8,7 +8,7 @@ The table lists all 238 backend TypeScript modules present at the baseline, incl
 
 Current sequence: use Serde/Garde requests and public validation findings, Serialize responses with raw HTTP checks, and library WebAuthn verification; then complete one Codex Standard task through the UI with cancellation and restart recovery. Other API breadth is deferred. Remove the UTF-16 document model, raw-JSON fixtures and response-schema fixtures; retain the hash serializer. Git2 and GitHub API/keychain integration follow their M2/M3 delivery seams. Historic checks below do not verify their replacements.
 
-Request corpus: 1,139 fixtures across 95 request exports plus 18 stored-project cases. The public-findings pivot passes 876 comparisons across 63 implemented request schemas and three hash tests in a private staged export; generator, typecheck, ESLint, formatting and Clippy pass. This does not verify the pending typed-DTO replacement. The TypeScript full suite baseline is 1,613/1,623: seven failures reproduce at pre-port `a57a47f5`, and three Devin failures pass focused reruns. Hosted CI, packages, full task execution, switching, and the eight-hour run remain unverified. Final snapshots use separate Cargo targets after an earlier shared-target collision.
+Request corpus: 1,139 fixtures across 95 request exports plus 18 stored-project cases. The public-findings pivot passes 876 comparisons across 63 implemented request schemas and three hash tests; the corrected stored-project runner also passes all 18 cases across three exports. These checks ran together in an isolated export containing only the runner correction over `b369604d`; generator and formatting pass. Earlier pivot typecheck, ESLint and Clippy pass. This does not verify the pending typed-DTO replacement. The TypeScript full suite baseline is 1,613/1,623: seven failures reproduce at pre-port `a57a47f5`, and three Devin failures pass focused reruns. Hosted CI, packages, full task execution, switching, and the eight-hour run remain unverified. Final snapshots use separate Cargo targets after an earlier shared-target collision.
 
 | TypeScript source | Status | Rust equivalent and evidence |
 |---|---|---|
@@ -63,13 +63,13 @@ Request corpus: 1,139 fixtures across 95 request exports plus 18 stored-project 
 | [http/contracts/tasks.ts](../src/http/contracts/tasks.ts) | not started | `7b49a179`, `f3f65930`, `65612746`, `a7eb5238`, `2b8ba630`, `e15a46b5`: task parameters, commands, body and control requests tested; next contract work is limited to M2 requests/responses. |
 | [http/contracts/update.ts](../src/http/contracts/update.ts) | not started | |
 | [http/contracts/workflows.ts](../src/http/contracts/workflows.ts) | ported | `09e3ded3`: six record/input/patch/list schemas passed corpus checks; replacing special JSON rules with typed requests as routes need them. |
-| [http/errors.ts](../src/http/errors.ts) | not started | Tested corpus pivot pending commit: existing validationFindings exported unchanged; request fixtures compare public findings. Removed100 response-only groups and65 raw fixtures; independent review and private corpus/hash/TS/lint checks pass. Production DTO mapper remains in progress |
+| [http/errors.ts](../src/http/errors.ts) | not started | `b369604d`: validationFindings exported unchanged; request fixtures compare public findings. Removed100 response-only groups and65 raw fixtures; independent review and private corpus/hash/TS/lint checks pass. Production DTO mapper remains in progress |
 | [http/oauth-runtime.ts](../src/http/oauth-runtime.ts) | not started | |
 | [http/routes/administration.ts](../src/http/routes/administration.ts) | not started | `e49977ee`, `99c6e5f8`, `f23bab60`: known-route registration and identity/profile administration tested; wider administration deferred. |
 | [http/routes/agent-api.ts](../src/http/routes/agent-api.ts) | not started | |
 | [http/routes/agent-pairing.ts](../src/http/routes/agent-pairing.ts) | not started | |
 | [http/routes/assets.ts](../src/http/routes/assets.ts) | not started | |
-| [http/routes/auth.ts](../src/http/routes/auth.ts) | ported | `0856b0d4`, `2ef5fab1`: profile editing, signed TCP ceremonies and TS↔Rust stored credentials/sessions tested; typed request/core verifier replacement needs fresh checks. |
+| [http/routes/auth.ts](../src/http/routes/auth.ts) | ported | `0856b0d4`, `2ef5fab1`: profile editing, signed TCP ceremonies and TS↔Rust stored credentials/sessions tested; typed requests and high-level WebAuthn replacement need fresh checks. Passkey reenrollment is explicitly accepted. |
 | [http/routes/authenticated.ts](../src/http/routes/authenticated.ts) | not started | |
 | [http/routes/avatars.ts](../src/http/routes/avatars.ts) | not started | |
 | [http/routes/companies.ts](../src/http/routes/companies.ts) | ported | `f50af424`: company mutations, authority and raw ordinary response checks pass; typed request migration in progress. |
@@ -93,7 +93,7 @@ Request corpus: 1,139 fixtures across 95 request exports plus 18 stored-project 
 | [identity/auth-identifiers.ts](../src/identity/auth-identifiers.ts) | not started | |
 | [identity/auth-repository.ts](../src/identity/auth-repository.ts) | not started | |
 | [identity/auth-schema.ts](../src/identity/auth-schema.ts) | not started | |
-| [identity/auth-webauthn.ts](../src/identity/auth-webauthn.ts) | ported | `936429f6`, `2ef5fab1`, `c9295428`: signed interoperability proved; custom attestation removal in progress. High-level0.5.4 probe accepts ES256/RS256 but rejects Suplex's offered EdDSA, so retain a narrow core adapter. Core still brings OpenSSL transitively |
+| [identity/auth-webauthn.ts](../src/identity/auth-webauthn.ts) | not started | Previous adapter is being replaced with high-level webauthn-rs. User accepts old-passkey reenrollment and library defaults; core compatibility work is dropped. Fresh signed registration/sign-in/restart/counter checks pending. OpenSSL remains transitive |
 | [identity/auth.ts](../src/identity/auth.ts) | not started | `905b7b82`, `99c6e5f8`, `f50af424`: legacy normalization, identity/company administration and metadata tested; typed JSON migration and M2 integration next, operational CLI still pending. |
 | [identity/avatar-kinds.ts](../src/identity/avatar-kinds.ts) | not started | |
 | [identity/avatars.ts](../src/identity/avatars.ts) | not started | |

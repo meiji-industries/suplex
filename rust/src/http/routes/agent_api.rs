@@ -483,6 +483,32 @@ pub(crate) mod tests {
         }
     }
 
+    /// Ports `tests/agent-machine-discovery.integration.test.ts`: the public map, pairing, and the contract agree.
+    #[tokio::test]
+    async fn a_paired_agent_follows_the_public_map_without_the_web_application() {
+        let agent = agent().await;
+        let (_, catalog) = agent.server.send(reqwest::Method::GET, "/.well-known/suplex/api-catalog.json", None, None).await;
+        let admin = agent.server.state.with_database(|database| database.connection().query_row("SELECT id FROM suplex_users WHERE role = 'admin'", [], |row| row.get::<_, String>(0)).unwrap());
+        let projects = vec!["project_api".to_owned()];
+        let issued = agent.server.state.with_database(|database| {
+            external_agents::create(database, &admin, external_agents::CreateInput { name: "Journey agent", company_id: "company_api", project_ids: &projects, avatar_seed: None }, Utc::now())
+        }).unwrap();
+        let (status, paired) = agent.server.send(reqwest::Method::POST, catalog["pairing"][0]["path"].as_str().unwrap(), None, Some(json!({"pairingCode": issued.pairing_code, "profileId": "journey"}))).await;
+        assert_eq!(status, 200);
+        let credential = paired["credential"].as_str().unwrap();
+        let (status, document) = agent.call_as(credential, reqwest::Method::GET, "/api/agent/openapi.json", None).await;
+        assert_eq!(status, 200);
+        for entry in catalog["runtime"].as_array().unwrap().iter().filter(|entry| entry["path"].as_str().unwrap().contains('{')) {
+            assert!(document["paths"][entry["path"].as_str().unwrap()].is_object(), "{entry}");
+        }
+        assert!(document["paths"]["/api/agent/tasks"].is_object());
+        let body = json!({"projectId": "project_api", "title": "Acknowledge the pairing", "idempotencyKey": "journey-ack-001"});
+        let (first, created) = agent.call_as(credential, reqwest::Method::POST, "/api/agent/tasks", Some(body.clone())).await;
+        let (second, replay) = agent.call_as(credential, reqwest::Method::POST, "/api/agent/tasks", Some(body)).await;
+        assert_eq!((first, second, replay["id"].clone(), replay["status"].as_str()), (201, 200, created["id"].clone(), Some("backlog")));
+        assert_eq!(agent.server.request(reqwest::Method::GET, "/api/agent/me", &[], None).await.status(), 401);
+    }
+
     #[tokio::test]
     async fn rejected_credentials_and_board_sessions_cannot_reach_runtime_routes() {
         let agent = agent().await;

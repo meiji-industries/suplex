@@ -2770,6 +2770,17 @@ mod tests {
                 .status,
             "active"
         );
+        // As in TypeScript, the released dependent is woken by its committed
+        // wake_at; the host's scheduled scan admits it without a notification.
+        let due: bool = database
+            .connection()
+            .query_row(
+                "SELECT wake_at <= ?1 FROM suplex_task_controls WHERE task_id = ?2",
+                params![timestamp(now), waiting.task.id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(due);
         assert!(
             mark_delivered(&mut database, &created.task.id, now)
                 .unwrap()

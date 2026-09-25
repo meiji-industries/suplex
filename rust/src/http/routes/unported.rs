@@ -15,7 +15,6 @@ use super::auth;
 // list explicit so an unknown path still receives the normal 404 response.
 pub fn router() -> Router<AppState> {
     Router::new()
-        .route("/api/profiles", get(authenticated))
         .route(
             "/api/admin/environment",
             get(administrator).patch(administrator),
@@ -45,16 +44,6 @@ pub fn router() -> Router<AppState> {
         )
         .route("/api/admin/users/{user_id}/revoke", post(identity_admin))
         .route("/api/admin/audit", get(identity_admin))
-        .route("/api/admin/profiles", post(administrator))
-        .route("/api/admin/profiles/defaults", post(administrator))
-        .route(
-            "/api/admin/profiles/{agent_id}",
-            axum::routing::patch(administrator).delete(administrator),
-        )
-        .route(
-            "/api/admin/profiles/{agent_id}/duplicate",
-            post(administrator),
-        )
         .route("/api/admin/models", get(authenticated))
 }
 

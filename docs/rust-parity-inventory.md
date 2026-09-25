@@ -61,7 +61,7 @@ The table lists all 238 backend TypeScript modules present at the baseline, incl
 | [http/contracts/workflows.ts](../src/http/contracts/workflows.ts) | not started | |
 | [http/errors.ts](../src/http/errors.ts) | not started | |
 | [http/oauth-runtime.ts](../src/http/oauth-runtime.ts) | not started | |
-| [http/routes/administration.ts](../src/http/routes/administration.ts) | not started | Explicit known-route 501 registration with session/CSRF and per-operation member/admin policies passes focused and live checks; service implementations pending |
+| [http/routes/administration.ts](../src/http/routes/administration.ts) | not started | Profile CRUD/duplicate routes ported with validation/auth/live checks. Other known administration routes return 501 with per-operation member/admin policies; their services remain pending |
 | [http/routes/agent-api.ts](../src/http/routes/agent-api.ts) | not started | |
 | [http/routes/agent-pairing.ts](../src/http/routes/agent-pairing.ts) | not started | |
 | [http/routes/assets.ts](../src/http/routes/assets.ts) | not started | |
@@ -76,7 +76,7 @@ The table lists all 238 backend TypeScript modules present at the baseline, incl
 | [http/routes/mcp.ts](../src/http/routes/mcp.ts) | not started | |
 | [http/routes/oauth.ts](../src/http/routes/oauth.ts) | not started | |
 | [http/routes/pages.ts](../src/http/routes/pages.ts) | not started | |
-| [http/routes/projects.ts](../src/http/routes/projects.ts) | not started | |
+| [http/routes/projects.ts](../src/http/routes/projects.ts) | not started | Profile listing ported, including repeated query-key handling and live checks; project operations remain incomplete |
 | [http/routes/provider-login.ts](../src/http/routes/provider-login.ts) | not started | |
 | [http/routes/task-pane.ts](../src/http/routes/task-pane.ts) | not started | |
 | [http/routes/task-templates.ts](../src/http/routes/task-templates.ts) | not started | |
@@ -146,7 +146,7 @@ The table lists all 238 backend TypeScript modules present at the baseline, incl
 | [platform/updates/supervisor.ts](../src/platform/updates/supervisor.ts) | not started | |
 | [platform/updates/update-client.ts](../src/platform/updates/update-client.ts) | not started | |
 | [profiles/agent-profile-contracts.ts](../src/profiles/agent-profile-contracts.ts) | not started | |
-| [profiles/agent-profiles.ts](../src/profiles/agent-profiles.ts) | not started | |
+| [profiles/agent-profiles.ts](../src/profiles/agent-profiles.ts) | ported | CRUD/duplicate/default selection, references, policy pruning/rollback, audit, and OS-based CLI discovery ported; Rust unit/live checks and 13 TS reference tests pass. Full raw HTTP/response-corpus parity remains pending |
 | [profiles/model-pricing.ts](../src/profiles/model-pricing.ts) | not started | |
 | [profiles/models-dev-catalog.ts](../src/profiles/models-dev-catalog.ts) | not started | |
 | [profiles/provider-catalog.ts](../src/profiles/provider-catalog.ts) | not started | |

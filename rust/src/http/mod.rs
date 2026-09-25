@@ -16,6 +16,7 @@ pub mod contracts;
 pub mod routes {
     pub mod auth;
     pub mod companies;
+    pub mod profiles;
     pub mod unported;
 }
 pub mod session;
@@ -61,6 +62,7 @@ pub fn router(state: AppState) -> Router {
     Router::new()
         .merge(routes::auth::router())
         .merge(routes::companies::router())
+        .merge(routes::profiles::router())
         .merge(routes::unported::router())
         .route("/auth", get(auth_page))
         .route("/assets/{filename}", get(asset))

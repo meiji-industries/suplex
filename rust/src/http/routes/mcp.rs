@@ -16,19 +16,29 @@ use rmcp::transport::streamable_http_server::{
 };
 use serde_json::json;
 
-use crate::{http::AppState, identity::oauth::OAuth, integrations::suplex::runtime::SuplexMcpRuntime};
+use crate::{
+    http::AppState, identity::oauth::OAuth, integrations::suplex::runtime::SuplexMcpRuntime,
+};
 
 use super::{agent_api, oauth::challenge};
 
 pub fn router() -> Router<AppState> {
     Router::new().route(
         "/mcp",
-        post(mcp).get(method_not_allowed).delete(method_not_allowed).layer(DefaultBodyLimit::max(2 * 1024 * 1024)),
+        post(mcp)
+            .get(method_not_allowed)
+            .delete(method_not_allowed)
+            .layer(DefaultBodyLimit::max(2 * 1024 * 1024)),
     )
 }
 
 async fn method_not_allowed() -> Response {
-    (StatusCode::METHOD_NOT_ALLOWED, [(header::ALLOW, "POST")], Json(json!({"error": "method_not_allowed"}))).into_response()
+    (
+        StatusCode::METHOD_NOT_ALLOWED,
+        [(header::ALLOW, "POST")],
+        Json(json!({"error": "method_not_allowed"})),
+    )
+        .into_response()
 }
 
 /// The request names this deployment's canonical host, and a browser origin matches it.
@@ -44,20 +54,37 @@ fn authority_allowed(reachable: &str, host: Option<&str>, origin: Option<&str>) 
     if !host.is_some_and(|host| host.eq_ignore_ascii_case(&canonical_host)) {
         return false;
     }
-    origin.is_none_or(|origin| url::Url::parse(origin).is_ok_and(|origin| origin.origin() == canonical.origin()))
+    origin.is_none_or(|origin| {
+        url::Url::parse(origin).is_ok_and(|origin| origin.origin() == canonical.origin())
+    })
 }
 
 async fn mcp(State(state): State<AppState>, request: Request) -> Response {
     let oauth = OAuth::new(&state.session_config.reachable_address);
     let headers = request.headers();
     let text = |name: header::HeaderName| headers.get(name).and_then(|value| value.to_str().ok());
-    if !authority_allowed(&state.session_config.reachable_address, text(header::HOST), text(header::ORIGIN)) {
-        return (StatusCode::FORBIDDEN, Json(json!({"error": "request_origin_invalid"}))).into_response();
+    if !authority_allowed(
+        &state.session_config.reachable_address,
+        text(header::HOST),
+        text(header::ORIGIN),
+    ) {
+        return (
+            StatusCode::FORBIDDEN,
+            Json(json!({"error": "request_origin_invalid"})),
+        )
+            .into_response();
     }
     let unauthorized = || {
-        let mut response = (StatusCode::UNAUTHORIZED, [(header::CACHE_CONTROL, "no-store")], Json(json!({"error": "invalid_token"}))).into_response();
+        let mut response = (
+            StatusCode::UNAUTHORIZED,
+            [(header::CACHE_CONTROL, "no-store")],
+            Json(json!({"error": "invalid_token"})),
+        )
+            .into_response();
         if let Ok(value) = HeaderValue::from_str(&challenge(&oauth)) {
-            response.headers_mut().insert(header::WWW_AUTHENTICATE, value);
+            response
+                .headers_mut()
+                .insert(header::WWW_AUTHENTICATE, value);
         }
         response
     };
@@ -68,13 +95,21 @@ async fn mcp(State(state): State<AppState>, request: Request) -> Response {
     else {
         return unauthorized();
     };
-    let Ok(principal) = state.with_database(|database| oauth.authenticate_access_token(database, &token, Utc::now())) else {
+    let Ok(principal) = state
+        .with_database(|database| oauth.authenticate_access_token(database, &token, Utc::now()))
+    else {
         return unauthorized();
     };
     let agent_delivery = agent_api::delivery(&state).is_some();
     let runtime_state = state.clone();
     let service = StreamableHttpService::new(
-        move || Ok(SuplexMcpRuntime { state: runtime_state.clone(), principal: principal.clone(), agent_delivery }),
+        move || {
+            Ok(SuplexMcpRuntime {
+                state: runtime_state.clone(),
+                principal: principal.clone(),
+                agent_delivery,
+            })
+        },
         Arc::new(NeverSessionManager::default()),
         StreamableHttpServerConfig::default()
             .with_legacy_session_mode(false)
@@ -83,7 +118,11 @@ async fn mcp(State(state): State<AppState>, request: Request) -> Response {
             .with_sse_retry(None)
             .disable_allowed_hosts(),
     );
-    service.handle(request).await.map(axum::body::Body::new).into_response()
+    service
+        .handle(request)
+        .await
+        .map(axum::body::Body::new)
+        .into_response()
 }
 
 #[cfg(test)]
@@ -93,10 +132,22 @@ mod tests {
     #[test]
     fn the_canonical_host_and_origin_decide_request_authority() {
         let reachable = "https://suplex.example.test:4111";
-        assert!(authority_allowed(reachable, Some("SUPLEX.example.test:4111"), None));
-        assert!(authority_allowed(reachable, Some("suplex.example.test:4111"), Some(reachable)));
+        assert!(authority_allowed(
+            reachable,
+            Some("SUPLEX.example.test:4111"),
+            None
+        ));
+        assert!(authority_allowed(
+            reachable,
+            Some("suplex.example.test:4111"),
+            Some(reachable)
+        ));
         assert!(!authority_allowed(reachable, Some("attacker.test"), None));
-        assert!(!authority_allowed(reachable, Some("suplex.example.test:4111"), Some("https://attacker.test")));
+        assert!(!authority_allowed(
+            reachable,
+            Some("suplex.example.test:4111"),
+            Some("https://attacker.test")
+        ));
         assert!(!authority_allowed(reachable, None, None));
     }
 }

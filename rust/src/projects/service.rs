@@ -448,9 +448,16 @@ pub fn get(
 }
 
 /// `getProjectInCompany`: the caller already holds the company authority.
-pub fn get_in_company(database: &SuplexDatabase, company_id: &str, id: &str) -> DatabaseResult<Project> {
+pub fn get_in_company(
+    database: &SuplexDatabase,
+    company_id: &str,
+    id: &str,
+) -> DatabaseResult<Project> {
     let sql = format!("{SELECTION} WHERE p.id = ?1 AND p.company_id = ?2");
-    let row = database.connection().query_row(&sql, params![id, company_id], stored).optional()?;
+    let row = database
+        .connection()
+        .query_row(&sql, params![id, company_id], stored)
+        .optional()?;
     public_project(row.ok_or_else(|| failure("Not found", 404, vec![]) as Box<dyn Error>)?)
 }
 

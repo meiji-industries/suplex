@@ -55,7 +55,11 @@ impl OAuthFailure {
             return failure.clone();
         }
         if let Some(failure) = error.downcast_ref::<ExternalAgentFailure>() {
-            return Self::new("access_denied", &failure.public_message, failure.status_code);
+            return Self::new(
+                "access_denied",
+                &failure.public_message,
+                failure.status_code,
+            );
         }
         Self::new("server_error", "OAuth request failed", 500)
     }
@@ -188,7 +192,10 @@ fn utf16_len(value: &str) -> usize {
 }
 
 fn is_loopback_http(url: &url::Url) -> bool {
-    url.scheme() == "http" && url.host_str().is_some_and(|host| LOOPBACK_HOSTS.contains(&host))
+    url.scheme() == "http"
+        && url
+            .host_str()
+            .is_some_and(|host| LOOPBACK_HOSTS.contains(&host))
 }
 
 fn valid_redirect_uri(value: &str) -> bool {
@@ -313,8 +320,12 @@ impl OAuth {
         let grant_types = metadata
             .grant_types
             .unwrap_or_else(|| vec!["authorization_code".into(), "refresh_token".into()]);
-        let response_types = metadata.response_types.unwrap_or_else(|| vec!["code".into()]);
-        let method = metadata.token_endpoint_auth_method.unwrap_or_else(|| "none".into());
+        let response_types = metadata
+            .response_types
+            .unwrap_or_else(|| vec!["code".into()]);
+        let method = metadata
+            .token_endpoint_auth_method
+            .unwrap_or_else(|| "none".into());
         let redirects = metadata.redirect_uris;
         if name.is_empty()
             || utf16_len(&name) > 120
@@ -374,7 +385,8 @@ impl OAuth {
         now: DateTime<Utc>,
     ) -> DatabaseResult<String> {
         self.require_available()?;
-        let invalid = || OAuthFailure::boxed("invalid_request", "Authorization request is invalid", 400);
+        let invalid =
+            || OAuthFailure::boxed("invalid_request", "Authorization request is invalid", 400);
         if !(1..=128).contains(&utf16_len(input.client_id))
             || !(1..=2_048).contains(&utf16_len(input.redirect_uri))
         {
@@ -389,7 +401,13 @@ impl OAuth {
             )
             .optional()?;
         let client_id = match client {
-            Some((id, redirects)) if string_array(&redirects)?.iter().any(|uri| uri == input.redirect_uri) => id,
+            Some((id, redirects))
+                if string_array(&redirects)?
+                    .iter()
+                    .any(|uri| uri == input.redirect_uri) =>
+            {
+                id
+            }
             _ => {
                 return Err(OAuthFailure::boxed(
                     "invalid_request",
@@ -408,7 +426,11 @@ impl OAuth {
             })
         };
         if input.response_type != "code" {
-            return Err(redirected("unsupported_response_type", "Response type is not supported", 400));
+            return Err(redirected(
+                "unsupported_response_type",
+                "Response type is not supported",
+                400,
+            ));
         }
         let challenge_valid = input.code_challenge.len() == 43
             && input
@@ -421,7 +443,11 @@ impl OAuth {
             || input.code_challenge_method != "S256"
             || !challenge_valid
         {
-            return Err(redirected("invalid_request", "Authorization request is invalid", 400));
+            return Err(redirected(
+                "invalid_request",
+                "Authorization request is invalid",
+                400,
+            ));
         }
         let request_id = random_hex_id("oauth_request")?;
         let now_iso = timestamp(now);
@@ -453,8 +479,16 @@ impl OAuth {
         now: DateTime<Utc>,
     ) -> DatabaseResult<Pending> {
         match read_pending(database, request_id)? {
-            Some(pending) if pending.consumed_at.is_none() && !expired(&pending.expires_at, now) => Ok(pending),
-            _ => Err(OAuthFailure::boxed("invalid_request", "Authorization request expired", 400)),
+            Some(pending)
+                if pending.consumed_at.is_none() && !expired(&pending.expires_at, now) =>
+            {
+                Ok(pending)
+            }
+            _ => Err(OAuthFailure::boxed(
+                "invalid_request",
+                "Authorization request expired",
+                400,
+            )),
         }
     }
 
@@ -466,11 +500,19 @@ impl OAuth {
         now: DateTime<Utc>,
     ) -> DatabaseResult<Consent> {
         if !(1..=128).contains(&utf16_len(request_id)) {
-            return Err(OAuthFailure::boxed("invalid_request", "Authorization request is invalid", 400));
+            return Err(OAuthFailure::boxed(
+                "invalid_request",
+                "Authorization request is invalid",
+                400,
+            ));
         }
         let pending = Self::live_pending(database, request_id, now)?;
-        if !auth::public_user(database, user_id)?.is_some_and(|user| user.status == "active") {
-            return Err(OAuthFailure::boxed("access_denied", "Authentication is necessary", 401));
+        if auth::public_user(database, user_id)?.is_none_or(|user| user.status != "active") {
+            return Err(OAuthFailure::boxed(
+                "access_denied",
+                "Authentication is necessary",
+                401,
+            ));
         }
         let companies = companies::list_visible_companies(database, user_id)?
             .into_iter()
@@ -589,7 +631,7 @@ impl OAuth {
         let now_iso = timestamp(now);
         let pending = database.transaction(true, |database| {
             let pending = Self::live_pending(database, request_id, now)?;
-            if !auth::public_user(database, user_id)?.is_some_and(|user| user.status == "active") {
+            if auth::public_user(database, user_id)?.is_none_or(|user| user.status != "active") {
                 return Err(OAuthFailure::boxed("access_denied", "Authentication is necessary", 401));
             }
             if database.connection().execute(
@@ -610,11 +652,13 @@ impl OAuth {
 
     /// The approving administrator, their company access, and the agent must all still be live.
     fn assert_grant_authority(database: &SuplexDatabase, grant: &Grant) -> DatabaseResult<()> {
-        let inactive = || OAuthFailure::boxed("invalid_grant", "Authorization is no longer active", 400);
+        let inactive =
+            || OAuthFailure::boxed("invalid_grant", "Authorization is no longer active", 400);
         let admin = auth::public_user(database, &grant.user_id)?
             .is_some_and(|user| user.status == "active" && user.role == "admin");
         if !admin
-            || companies::require_company_access(database, &grant.user_id, &grant.company_id).is_err()
+            || companies::require_company_access(database, &grant.user_id, &grant.company_id)
+                .is_err()
             || !external_agents::oauth_agent_active(database, &grant.agent_id).unwrap_or(false)
         {
             return Err(inactive());
@@ -660,10 +704,9 @@ impl OAuth {
     ) -> DatabaseResult<Tokens> {
         let invalid = || OAuthFailure::boxed("invalid_grant", "Authorization code is invalid", 400);
         let verifier_valid = (43..=128).contains(&input.verifier.len())
-            && input
-                .verifier
-                .bytes()
-                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'~' | b'-'));
+            && input.verifier.bytes().all(|byte| {
+                byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b'~' | b'-')
+            });
         if !verifier_valid {
             return Err(invalid());
         }
@@ -717,7 +760,11 @@ impl OAuth {
         now: DateTime<Utc>,
     ) -> DatabaseResult<Tokens> {
         if input.scope.is_some_and(|scope| scope != SCOPE) {
-            return Err(OAuthFailure::boxed("invalid_scope", "Requested scope is not available", 400));
+            return Err(OAuthFailure::boxed(
+                "invalid_scope",
+                "Requested scope is not available",
+                400,
+            ));
         }
         let access_token = raw_secret("foa")?;
         let refresh_token = raw_secret("for")?;
@@ -767,7 +814,11 @@ impl OAuth {
             Ok(true)
         })?;
         if !issued {
-            return Err(OAuthFailure::boxed("invalid_grant", "Refresh token is invalid", 400));
+            return Err(OAuthFailure::boxed(
+                "invalid_grant",
+                "Refresh token is invalid",
+                400,
+            ));
         }
         Ok(Self::tokens(access_token, refresh_token))
     }

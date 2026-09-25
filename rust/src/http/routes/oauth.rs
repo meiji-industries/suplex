@@ -46,11 +46,19 @@ pub fn router() -> Router<AppState> {
 
 /// `WWW-Authenticate` for the MCP resource.
 pub(crate) fn challenge(oauth: &OAuth) -> String {
-    format!("Bearer resource_metadata=\"{}/.well-known/oauth-protected-resource/mcp\", scope=\"suplex:mcp\"", oauth.issuer)
+    format!(
+        "Bearer resource_metadata=\"{}/.well-known/oauth-protected-resource/mcp\", scope=\"suplex:mcp\"",
+        oauth.issuer
+    )
 }
 
 fn json_body(status: StatusCode, body: &Value) -> Response {
-    (status, [(header::CONTENT_TYPE, "application/json")], js_json::stringify(body)).into_response()
+    (
+        status,
+        [(header::CONTENT_TYPE, "application/json")],
+        js_json::stringify(body),
+    )
+        .into_response()
 }
 
 fn redirect(location: &str) -> Response {
@@ -65,7 +73,11 @@ fn redirect(location: &str) -> Response {
 fn oauth_error(error: &(dyn std::error::Error + 'static), oauth: &OAuth) -> Response {
     let failure = OAuthFailure::from_error(error);
     if let Some(target) = &failure.redirect_uri {
-        let mut values = vec![("error", failure.error), ("error_description", failure.public_message.as_str()), ("iss", oauth.issuer.as_str())];
+        let mut values = vec![
+            ("error", failure.error),
+            ("error_description", failure.public_message.as_str()),
+            ("iss", oauth.issuer.as_str()),
+        ];
         if let Some(state) = &failure.state {
             values.push(("state", state));
         }
@@ -100,14 +112,24 @@ fn content_type(headers: &HeaderMap) -> String {
 }
 
 /// `parseForm`: an urlencoded body with every field exactly once.
-fn form(headers: &HeaderMap, body: &Bytes) -> Result<HashMap<String, String>, Box<dyn std::error::Error>> {
+fn form(
+    headers: &HeaderMap,
+    body: &Bytes,
+) -> Result<HashMap<String, String>, Box<dyn std::error::Error>> {
     if content_type(headers) != "application/x-www-form-urlencoded" || body.len() > 16 * 1024 {
         return Err(failure("invalid_request", "Form body is invalid", 400));
     }
     let mut values = HashMap::new();
     for (name, value) in url::form_urlencoded::parse(body) {
-        if values.insert(name.into_owned(), value.into_owned()).is_some() {
-            return Err(failure("invalid_request", "Form body contains duplicate fields", 400));
+        if values
+            .insert(name.into_owned(), value.into_owned())
+            .is_some()
+        {
+            return Err(failure(
+                "invalid_request",
+                "Form body contains duplicate fields",
+                400,
+            ));
         }
     }
     Ok(values)
@@ -122,20 +144,36 @@ fn source_address(request: &Request) -> String {
 
 /// Twenty registrations per source address per hour, across at most a thousand sources.
 fn throttle(state: &AppState, source: &str) -> Result<(), Box<dyn std::error::Error>> {
-    let limited = || failure("temporarily_unavailable", "Client registration limit reached", 429);
+    let limited = || {
+        failure(
+            "temporarily_unavailable",
+            "Client registration limit reached",
+            429,
+        )
+    };
     let mut registrations = state.oauth_registrations.lock().map_err(|_| limited())?;
     let now = Instant::now();
     let cutoff = now.checked_sub(Duration::from_secs(60 * 60));
-    let recent = |times: &Vec<Instant>| times.iter().copied().filter(|time| cutoff.is_none_or(|cutoff| *time >= cutoff)).collect::<Vec<_>>();
+    let recent = |times: &Vec<Instant>| {
+        times
+            .iter()
+            .copied()
+            .filter(|time| cutoff.is_none_or(|cutoff| *time >= cutoff))
+            .collect::<Vec<_>>()
+    };
     registrations.retain(|_, times| {
         *times = recent(times);
         !times.is_empty()
     });
     let current = registrations.get(source).cloned().unwrap_or_default();
-    if current.len() >= 20 || (!registrations.contains_key(source) && registrations.len() >= 1_000) {
+    if current.len() >= 20 || (!registrations.contains_key(source) && registrations.len() >= 1_000)
+    {
         return Err(limited());
     }
-    registrations.entry(source.to_owned()).or_default().push(now);
+    registrations
+        .entry(source.to_owned())
+        .or_default()
+        .push(now);
     Ok(())
 }
 
@@ -143,7 +181,9 @@ async fn register(State(state): State<AppState>, request: Request) -> Response {
     let oauth = OAuth::new(&state.session_config.reachable_address);
     let source = source_address(&request);
     let (parts, body) = request.into_parts();
-    let body = axum::body::to_bytes(body, 1024 * 1024).await.unwrap_or_default();
+    let body = axum::body::to_bytes(body, 1024 * 1024)
+        .await
+        .unwrap_or_default();
     let result = (|| {
         throttle(&state, &source)?;
         let value = if content_type(&parts.headers) == "application/json" {
@@ -171,15 +211,22 @@ async fn register(State(state): State<AppState>, request: Request) -> Response {
     match result {
         Ok(client) => {
             let mut response = json_body(StatusCode::CREATED, &client);
-            response.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+            response
+                .headers_mut()
+                .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
             response
         }
         Err(error) => oauth_error(error.as_ref(), &oauth),
     }
 }
 
-fn session_user(state: &AppState, headers: &HeaderMap) -> Result<(Option<String>, Vec<String>), Box<dyn std::error::Error>> {
-    let session = state.with_database(|database| session::session_user(database, headers, Some(&state.session_config), Utc::now()))?;
+fn session_user(
+    state: &AppState,
+    headers: &HeaderMap,
+) -> Result<(Option<String>, Vec<String>), Box<dyn std::error::Error>> {
+    let session = state.with_database(|database| {
+        session::session_user(database, headers, Some(&state.session_config), Utc::now())
+    })?;
     Ok((session.user.map(|user| user.id), session.set_cookies))
 }
 
@@ -188,15 +235,31 @@ fn with_cookies(mut response: Response, cookies: Vec<String>) -> Response {
     response
 }
 
-async fn authorize(State(state): State<AppState>, headers: HeaderMap, RawQuery(query): RawQuery) -> Response {
+async fn authorize(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    RawQuery(query): RawQuery,
+) -> Response {
     let oauth = OAuth::new(&state.session_config.reachable_address);
     let query = typed::agent_api::query_object(query.as_deref());
     let text = |name: &str| query.get(name).and_then(Value::as_str);
-    let required = ["client_id", "redirect_uri", "response_type", "resource", "code_challenge", "code_challenge_method"];
+    let required = [
+        "client_id",
+        "redirect_uri",
+        "response_type",
+        "resource",
+        "code_challenge",
+        "code_challenge_method",
+    ];
     let valid = required.iter().all(|name| text(name).is_some())
-        && ["state", "scope"].iter().all(|name| query.get(*name).is_none_or(Value::is_string));
+        && ["state", "scope"]
+            .iter()
+            .all(|name| query.get(*name).is_none_or(Value::is_string));
     if !valid {
-        return oauth_error(failure("invalid_request", "Authorization request is invalid", 400).as_ref(), &oauth);
+        return oauth_error(
+            failure("invalid_request", "Authorization request is invalid", 400).as_ref(),
+            &oauth,
+        );
     }
     let started = state.with_database(|database| {
         oauth.begin_authorization(
@@ -218,7 +281,10 @@ async fn authorize(State(state): State<AppState>, headers: HeaderMap, RawQuery(q
         Ok(request_id) => request_id,
         Err(error) => return oauth_error(error.as_ref(), &oauth),
     };
-    let consent = format!("/oauth/consent?request={}", url::form_urlencoded::byte_serialize(request_id.as_bytes()).collect::<String>());
+    let consent = format!(
+        "/oauth/consent?request={}",
+        url::form_urlencoded::byte_serialize(request_id.as_bytes()).collect::<String>()
+    );
     match session_user(&state, &headers) {
         Ok((Some(_), cookies)) => with_cookies(redirect(&consent), cookies),
         Ok((None, cookies)) => {
@@ -244,18 +310,30 @@ fn js_encode_uri_component(value: &str) -> String {
 }
 
 fn request_id(id: &str) -> Result<String, Box<Response>> {
-    validated(contracts::parse_consent_params(Some(&json!({"requestId": id})))).map(|params| params.request_id)
+    validated(contracts::parse_consent_params(Some(
+        &json!({"requestId": id}),
+    )))
+    .map(|params| params.request_id)
 }
 
 fn validated<T>(result: ContractResult<T>) -> Result<T, Box<Response>> {
     match result {
         Ok(value) => Ok(value),
-        Err(typed::ContractFailure::Issues(findings)) => Err(Box::new(agent_api_runtime::validation(findings, false))),
-        Err(_) => Err(Box::new(auth::error(StatusCode::INTERNAL_SERVER_ERROR, "Internal server error"))),
+        Err(typed::ContractFailure::Issues(findings)) => {
+            Err(Box::new(agent_api_runtime::validation(findings, false)))
+        }
+        Err(_) => Err(Box::new(auth::error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Internal server error",
+        ))),
     }
 }
 
-async fn consent(State(state): State<AppState>, Path(id): Path<String>, headers: HeaderMap) -> Response {
+async fn consent(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+) -> Response {
     let oauth = OAuth::new(&state.session_config.reachable_address);
     let id = match request_id(&id) {
         Ok(id) => id,
@@ -266,7 +344,13 @@ async fn consent(State(state): State<AppState>, Path(id): Path<String>, headers:
         Err(error) => return oauth_error(error.as_ref(), &oauth),
     };
     let Some(user) = user else {
-        return with_cookies(json_body(StatusCode::UNAUTHORIZED, &json!({"error": "Authentication is necessary"})), cookies);
+        return with_cookies(
+            json_body(
+                StatusCode::UNAUTHORIZED,
+                &json!({"error": "Authentication is necessary"}),
+            ),
+            cookies,
+        );
     };
     let result = state.with_database(|database| {
         let consent = oauth.read_consent(database, &user, &id, Utc::now())?;
@@ -281,8 +365,13 @@ async fn consent(State(state): State<AppState>, Path(id): Path<String>, headers:
     let response = match result {
         Ok(body) => {
             let mut response = json_body(StatusCode::OK, &body);
-            response.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
-            response.headers_mut().insert(header::REFERRER_POLICY, HeaderValue::from_static("no-referrer"));
+            response
+                .headers_mut()
+                .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+            response.headers_mut().insert(
+                header::REFERRER_POLICY,
+                HeaderValue::from_static("no-referrer"),
+            );
             response
         }
         Err(error) => oauth_error(error.as_ref(), &oauth),
@@ -316,16 +405,26 @@ async fn decide(state: AppState, id: String, headers: HeaderMap, decision: Decis
         require_csrf(&headers)?;
         let (user, set_cookies) = session_user(&state, &headers)?;
         cookies = set_cookies;
-        let user = user.ok_or_else(|| failure("access_denied", "Authentication is necessary", 401))?;
+        let user =
+            user.ok_or_else(|| failure("access_denied", "Authentication is necessary", 401))?;
         state.with_database(|database| match &decision {
-            Decision::Approve(approval) => oauth.approve(database, &user, &id, &approval.company_id, &approval.project_ids, Utc::now()),
+            Decision::Approve(approval) => oauth.approve(
+                database,
+                &user,
+                &id,
+                &approval.company_id,
+                &approval.project_ids,
+                Utc::now(),
+            ),
             Decision::Deny => oauth.deny(database, &user, &id, Utc::now()),
         })
     })();
     let response = match result {
         Ok(target) => {
             let mut response = json_body(StatusCode::OK, &json!({"redirectTo": target}));
-            response.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+            response
+                .headers_mut()
+                .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
             response
         }
         Err(error) => oauth_error(error.as_ref(), &oauth),
@@ -333,19 +432,31 @@ async fn decide(state: AppState, id: String, headers: HeaderMap, decision: Decis
     with_cookies(response, cookies)
 }
 
-async fn approve(State(state): State<AppState>, Path(id): Path<String>, headers: HeaderMap, body: Bytes) -> Response {
+async fn approve(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
     let id = match request_id(&id) {
         Ok(id) => id,
         Err(response) => return *response,
     };
-    let approval = match auth::parsed_body(&headers, &body).and_then(|value| validated(contracts::parse_consent_approval(value.as_ref()))) {
+    let approval = match auth::parsed_body(&headers, &body)
+        .and_then(|value| validated(contracts::parse_consent_approval(value.as_ref())))
+    {
         Ok(approval) => approval,
         Err(response) => return *response,
     };
     decide(state, id, headers, Decision::Approve(approval)).await
 }
 
-async fn deny(State(state): State<AppState>, Path(id): Path<String>, headers: HeaderMap, body: Bytes) -> Response {
+async fn deny(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
     let id = match request_id(&id) {
         Ok(id) => id,
         Err(response) => return *response,
@@ -364,21 +475,54 @@ async fn token(State(state): State<AppState>, headers: HeaderMap, body: Bytes) -
         let invalid = || failure("invalid_request", "Form body is invalid", 400);
         let tokens = match get("grant_type") {
             Some("authorization_code") => {
-                let [Some(code), Some(client_id), Some(redirect_uri), Some(resource), Some(verifier)] =
-                    ["code", "client_id", "redirect_uri", "resource", "code_verifier"].map(get)
+                let [
+                    Some(code),
+                    Some(client_id),
+                    Some(redirect_uri),
+                    Some(resource),
+                    Some(verifier),
+                ] = [
+                    "code",
+                    "client_id",
+                    "redirect_uri",
+                    "resource",
+                    "code_verifier",
+                ]
+                .map(get)
                 else {
                     return Err(invalid());
                 };
                 state.with_database(|database| {
-                    oauth.exchange_code(database, oauth::CodeExchange { code, client_id, redirect_uri, resource, verifier }, Utc::now())
+                    oauth.exchange_code(
+                        database,
+                        oauth::CodeExchange {
+                            code,
+                            client_id,
+                            redirect_uri,
+                            resource,
+                            verifier,
+                        },
+                        Utc::now(),
+                    )
                 })?
             }
             Some("refresh_token") => {
-                let [Some(refresh_token), Some(client_id), Some(resource)] = ["refresh_token", "client_id", "resource"].map(get) else {
+                let [Some(refresh_token), Some(client_id), Some(resource)] =
+                    ["refresh_token", "client_id", "resource"].map(get)
+                else {
                     return Err(invalid());
                 };
                 state.with_database(|database| {
-                    oauth.refresh(database, oauth::Refresh { refresh_token, client_id, resource, scope: get("scope") }, Utc::now())
+                    oauth.refresh(
+                        database,
+                        oauth::Refresh {
+                            refresh_token,
+                            client_id,
+                            resource,
+                            scope: get("scope"),
+                        },
+                        Utc::now(),
+                    )
                 })?
             }
             _ => return Err(invalid()),
@@ -388,8 +532,12 @@ async fn token(State(state): State<AppState>, headers: HeaderMap, body: Bytes) -
     match result {
         Ok(tokens) => {
             let mut response = json_body(StatusCode::OK, &tokens);
-            response.headers_mut().insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
-            response.headers_mut().insert(header::PRAGMA, HeaderValue::from_static("no-cache"));
+            response
+                .headers_mut()
+                .insert(header::CACHE_CONTROL, HeaderValue::from_static("no-store"));
+            response
+                .headers_mut()
+                .insert(header::PRAGMA, HeaderValue::from_static("no-cache"));
             response
         }
         Err(error) => oauth_error(error.as_ref(), &oauth),
@@ -399,8 +547,17 @@ async fn token(State(state): State<AppState>, headers: HeaderMap, body: Bytes) -
 async fn revoke(State(state): State<AppState>, headers: HeaderMap, body: Bytes) -> Response {
     let oauth = OAuth::new(&state.session_config.reachable_address);
     let result = form(&headers, &body).and_then(|fields| {
-        let token = fields.get("token").ok_or_else(|| failure("invalid_request", "Form body is invalid", 400))?;
-        state.with_database(|database| oauth.revoke(database, token, fields.get("client_id").map(String::as_str), Utc::now()))
+        let token = fields
+            .get("token")
+            .ok_or_else(|| failure("invalid_request", "Form body is invalid", 400))?;
+        state.with_database(|database| {
+            oauth.revoke(
+                database,
+                token,
+                fields.get("client_id").map(String::as_str),
+                Utc::now(),
+            )
+        })
     });
     match result {
         Ok(()) => (StatusCode::OK, [(header::CACHE_CONTROL, "no-store")]).into_response(),
@@ -425,8 +582,13 @@ pub(crate) mod tests {
     }
 
     fn query_value(url: &str, name: &str) -> Option<String> {
-        let parsed = url::Url::parse(url).or_else(|_| url::Url::parse(&format!("https://base{url}"))).unwrap();
-        parsed.query_pairs().find(|(key, _)| key == name).map(|(_, value)| value.into_owned())
+        let parsed = url::Url::parse(url)
+            .or_else(|_| url::Url::parse(&format!("https://base{url}")))
+            .unwrap();
+        parsed
+            .query_pairs()
+            .find(|(key, _)| key == name)
+            .map(|(_, value)| value.into_owned())
     }
 
     pub(crate) async fn register(server: &Server, name: &str) -> String {
@@ -439,7 +601,16 @@ pub(crate) mod tests {
 
     fn authorize_path(client_id: &str, verifier: &str, state: &str) -> String {
         let mut serializer = url::form_urlencoded::Serializer::new(String::new());
-        for (name, value) in [("client_id", client_id), ("redirect_uri", REDIRECT), ("response_type", "code"), ("state", state), ("scope", "suplex:mcp"), ("resource", RESOURCE), ("code_challenge", &challenge(verifier)), ("code_challenge_method", "S256")] {
+        for (name, value) in [
+            ("client_id", client_id),
+            ("redirect_uri", REDIRECT),
+            ("response_type", "code"),
+            ("state", state),
+            ("scope", "suplex:mcp"),
+            ("resource", RESOURCE),
+            ("code_challenge", &challenge(verifier)),
+            ("code_challenge_method", "S256"),
+        ] {
             serializer.append_pair(name, value);
         }
         format!("/oauth/authorize?{}", serializer.finish())
@@ -451,31 +622,69 @@ pub(crate) mod tests {
 
     async fn start(server: &Server, client_id: &str, verifier: &str, state: &str) -> String {
         let cookie = session(server);
-        let started = server.request(reqwest::Method::GET, &authorize_path(client_id, verifier, state), &[("cookie", &cookie)], None).await;
+        let started = server
+            .request(
+                reqwest::Method::GET,
+                &authorize_path(client_id, verifier, state),
+                &[("cookie", &cookie)],
+                None,
+            )
+            .await;
         assert_eq!(started.status(), 302);
         query_value(started.headers()["location"].to_str().unwrap(), "request").unwrap()
     }
 
-    pub(crate) async fn authorize(server: &Server, client_id: &str, verifier: &str, state: &str) -> String {
+    pub(crate) async fn authorize(
+        server: &Server,
+        client_id: &str,
+        verifier: &str,
+        state: &str,
+    ) -> String {
         let request = start(server, client_id, verifier, state).await;
         let cookie = session(server);
-        let consent = server.request(reqwest::Method::GET, &format!("/api/oauth/consent/{request}"), &[("cookie", &cookie)], None).await;
+        let consent = server
+            .request(
+                reqwest::Method::GET,
+                &format!("/api/oauth/consent/{request}"),
+                &[("cookie", &cookie)],
+                None,
+            )
+            .await;
         assert_eq!(consent.status(), 200);
         assert_eq!(consent.headers()["referrer-policy"], "no-referrer");
         let consent = consent.json::<Value>().await.unwrap();
-        assert_eq!((consent["redirectOrigin"].as_str(), consent["scope"].as_str()), (Some("http://127.0.0.1:9317"), Some("suplex:mcp")));
+        assert_eq!(
+            (
+                consent["redirectOrigin"].as_str(),
+                consent["scope"].as_str()
+            ),
+            (Some("http://127.0.0.1:9317"), Some("suplex:mcp"))
+        );
         let approval = server
-            .request(reqwest::Method::POST, &format!("/api/oauth/consent/{request}/approve"), &[("cookie", &cookie), ("origin", ORIGIN), ("x-csrf-v1", CSRF)], Some(json!({"companyId": "company_api", "projectIds": ["project_api"]})))
+            .request(
+                reqwest::Method::POST,
+                &format!("/api/oauth/consent/{request}/approve"),
+                &[("cookie", &cookie), ("origin", ORIGIN), ("x-csrf-v1", CSRF)],
+                Some(json!({"companyId": "company_api", "projectIds": ["project_api"]})),
+            )
             .await;
         assert_eq!(approval.status(), 200);
-        let target = approval.json::<Value>().await.unwrap()["redirectTo"].as_str().unwrap().to_owned();
+        let target = approval.json::<Value>().await.unwrap()["redirectTo"]
+            .as_str()
+            .unwrap()
+            .to_owned();
         assert_eq!(query_value(&target, "state").as_deref(), Some(state));
-        assert_eq!(query_value(&target, "iss").as_deref(), Some("https://suplex.example.test:4111"));
+        assert_eq!(
+            query_value(&target, "iss").as_deref(),
+            Some("https://suplex.example.test:4111")
+        );
         query_value(&target, "code").unwrap()
     }
 
     pub(crate) async fn form(server: &Server, path: &str, fields: &[(&str, &str)]) -> (u16, Value) {
-        let body = url::form_urlencoded::Serializer::new(String::new()).extend_pairs(fields).finish();
+        let body = url::form_urlencoded::Serializer::new(String::new())
+            .extend_pairs(fields)
+            .finish();
         let response = server
             .client
             .post(format!("{}{path}", server.base))
@@ -486,67 +695,223 @@ pub(crate) mod tests {
             .await
             .unwrap();
         let status = response.status().as_u16();
-        (status, response.json::<Value>().await.unwrap_or(Value::Null))
+        (
+            status,
+            response.json::<Value>().await.unwrap_or(Value::Null),
+        )
     }
 
-    pub(crate) async fn exchange(server: &Server, client_id: &str, code: &str, verifier: &str) -> (u16, Value) {
-        form(server, "/oauth/token", &[("grant_type", "authorization_code"), ("code", code), ("client_id", client_id), ("redirect_uri", REDIRECT), ("resource", RESOURCE), ("code_verifier", verifier)]).await
+    pub(crate) async fn exchange(
+        server: &Server,
+        client_id: &str,
+        code: &str,
+        verifier: &str,
+    ) -> (u16, Value) {
+        form(
+            server,
+            "/oauth/token",
+            &[
+                ("grant_type", "authorization_code"),
+                ("code", code),
+                ("client_id", client_id),
+                ("redirect_uri", REDIRECT),
+                ("resource", RESOURCE),
+                ("code_verifier", verifier),
+            ],
+        )
+        .await
     }
 
     async fn mcp_status(server: &Server, token: &str) -> u16 {
         let bearer = format!("Bearer {token}");
         let initialize = json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {"protocolVersion": "2025-06-18", "capabilities": {}, "clientInfo": {"name": "test", "version": "1"}}});
-        server.request(reqwest::Method::POST, "/mcp", &[("authorization", bearer.as_str()), ("accept", "application/json, text/event-stream")], Some(initialize)).await.status().as_u16()
+        server
+            .request(
+                reqwest::Method::POST,
+                "/mcp",
+                &[
+                    ("authorization", bearer.as_str()),
+                    ("accept", "application/json, text/event-stream"),
+                ],
+                Some(initialize),
+            )
+            .await
+            .status()
+            .as_u16()
     }
 
     fn agent_of(server: &Server, client_id: &str) -> String {
-        server.state.with_database(|database| database.connection().query_row("SELECT agent_id FROM suplex_oauth_grants WHERE client_id = ?1", [client_id], |row| row.get(0)).unwrap())
+        server.state.with_database(|database| {
+            database
+                .connection()
+                .query_row(
+                    "SELECT agent_id FROM suplex_oauth_grants WHERE client_id = ?1",
+                    [client_id],
+                    |row| row.get(0),
+                )
+                .unwrap()
+        })
     }
 
     fn revoke_agent(server: &Server, agent_id: &str) {
-        let admin = server.state.with_database(|database| database.connection().query_row("SELECT id FROM suplex_users WHERE role = 'admin'", [], |row| row.get::<_, String>(0)).unwrap());
-        server.state.with_database(|database| crate::identity::external_agents::revoke(database, &admin, agent_id, chrono::Utc::now())).unwrap();
+        let admin = server.state.with_database(|database| {
+            database
+                .connection()
+                .query_row(
+                    "SELECT id FROM suplex_users WHERE role = 'admin'",
+                    [],
+                    |row| row.get::<_, String>(0),
+                )
+                .unwrap()
+        });
+        server
+            .state
+            .with_database(|database| {
+                crate::identity::external_agents::revoke(
+                    database,
+                    &admin,
+                    agent_id,
+                    chrono::Utc::now(),
+                )
+            })
+            .unwrap();
     }
 
     #[tokio::test]
     async fn discovery_registration_consent_pkce_rotation_replay_revocation_and_reapproval() {
         let server = server(None).await;
-        let (status, metadata) = server.send(reqwest::Method::GET, "/.well-known/oauth-protected-resource/mcp", None, None).await;
-        assert_eq!((status, metadata["resource"].as_str()), (200, Some(RESOURCE)));
-        let anonymous = server.request(reqwest::Method::POST, "/mcp", &[], Some(json!({}))).await;
+        let (status, metadata) = server
+            .send(
+                reqwest::Method::GET,
+                "/.well-known/oauth-protected-resource/mcp",
+                None,
+                None,
+            )
+            .await;
+        assert_eq!(
+            (status, metadata["resource"].as_str()),
+            (200, Some(RESOURCE))
+        );
+        let anonymous = server
+            .request(reqwest::Method::POST, "/mcp", &[], Some(json!({})))
+            .await;
         assert_eq!(anonymous.status(), 401);
-        assert!(anonymous.headers()["www-authenticate"].to_str().unwrap().contains("oauth-protected-resource/mcp"));
+        assert!(
+            anonymous.headers()["www-authenticate"]
+                .to_str()
+                .unwrap()
+                .contains("oauth-protected-resource/mcp")
+        );
 
         let client = register(&server, "Claude").await;
         let verifier = "v".repeat(43);
         let code = authorize(&server, &client, &verifier, "opaque-state").await;
         let (status, wrong) = exchange(&server, &client, &code, &"w".repeat(43)).await;
-        assert_eq!((status, wrong["error"].as_str()), (400, Some("invalid_grant")));
-        assert_eq!(exchange(&server, "oauth_client_wrong", &code, &verifier).await.0, 400);
+        assert_eq!(
+            (status, wrong["error"].as_str()),
+            (400, Some("invalid_grant"))
+        );
+        assert_eq!(
+            exchange(&server, "oauth_client_wrong", &code, &verifier)
+                .await
+                .0,
+            400
+        );
         let (status, tokens) = exchange(&server, &client, &code, &verifier).await;
-        assert_eq!((status, tokens["token_type"].as_str(), tokens["expires_in"].as_i64()), (200, Some("Bearer"), Some(3600)), "{tokens}");
+        assert_eq!(
+            (
+                status,
+                tokens["token_type"].as_str(),
+                tokens["expires_in"].as_i64()
+            ),
+            (200, Some("Bearer"), Some(3600)),
+            "{tokens}"
+        );
         assert_eq!(exchange(&server, &client, &code, &verifier).await.0, 400);
         let first_refresh = tokens["refresh_token"].as_str().unwrap().to_owned();
 
-        let (status, expanded) = form(&server, "/oauth/token", &[("grant_type", "refresh_token"), ("refresh_token", &first_refresh), ("client_id", &client), ("resource", RESOURCE), ("scope", "suplex:mcp suplex:admin")]).await;
-        assert_eq!((status, expanded["error"].as_str()), (400, Some("invalid_scope")));
-        let (status, rotated) = form(&server, "/oauth/token", &[("grant_type", "refresh_token"), ("refresh_token", &first_refresh), ("client_id", &client), ("resource", RESOURCE), ("scope", "suplex:mcp"), ("extension", "ignored")]).await;
+        let (status, expanded) = form(
+            &server,
+            "/oauth/token",
+            &[
+                ("grant_type", "refresh_token"),
+                ("refresh_token", &first_refresh),
+                ("client_id", &client),
+                ("resource", RESOURCE),
+                ("scope", "suplex:mcp suplex:admin"),
+            ],
+        )
+        .await;
+        assert_eq!(
+            (status, expanded["error"].as_str()),
+            (400, Some("invalid_scope"))
+        );
+        let (status, rotated) = form(
+            &server,
+            "/oauth/token",
+            &[
+                ("grant_type", "refresh_token"),
+                ("refresh_token", &first_refresh),
+                ("client_id", &client),
+                ("resource", RESOURCE),
+                ("scope", "suplex:mcp"),
+                ("extension", "ignored"),
+            ],
+        )
+        .await;
         assert_eq!(status, 200, "{rotated}");
-        assert_eq!(form(&server, "/oauth/token", &[("grant_type", "refresh_token"), ("refresh_token", &first_refresh), ("client_id", &client), ("resource", RESOURCE)]).await.0, 400);
-        assert_eq!(mcp_status(&server, rotated["access_token"].as_str().unwrap()).await, 401);
+        assert_eq!(
+            form(
+                &server,
+                "/oauth/token",
+                &[
+                    ("grant_type", "refresh_token"),
+                    ("refresh_token", &first_refresh),
+                    ("client_id", &client),
+                    ("resource", RESOURCE)
+                ]
+            )
+            .await
+            .0,
+            400
+        );
+        assert_eq!(
+            mcp_status(&server, rotated["access_token"].as_str().unwrap()).await,
+            401
+        );
 
         let agent = agent_of(&server, &client);
         let active = authorize(&server, &client, &verifier, "active-before-revoke").await;
         let (_, active_tokens) = exchange(&server, &client, &active, &verifier).await;
         revoke_agent(&server, &agent);
-        assert_eq!(form(&server, "/oauth/token", &[("grant_type", "refresh_token"), ("refresh_token", active_tokens["refresh_token"].as_str().unwrap()), ("client_id", &client), ("resource", RESOURCE)]).await.0, 400);
+        assert_eq!(
+            form(
+                &server,
+                "/oauth/token",
+                &[
+                    ("grant_type", "refresh_token"),
+                    (
+                        "refresh_token",
+                        active_tokens["refresh_token"].as_str().unwrap()
+                    ),
+                    ("client_id", &client),
+                    ("resource", RESOURCE)
+                ]
+            )
+            .await
+            .0,
+            400
+        );
         let again = authorize(&server, &client, &verifier, "reapprove").await;
         assert_eq!(exchange(&server, &client, &again, &verifier).await.0, 200);
         assert_eq!(agent_of(&server, &client), agent);
         let outstanding = authorize(&server, &client, &verifier, "outstanding").await;
         revoke_agent(&server, &agent);
         let fresh = authorize(&server, &client, &verifier, "fresh").await;
-        assert_eq!(exchange(&server, &client, &outstanding, &verifier).await.0, 400);
+        assert_eq!(
+            exchange(&server, &client, &outstanding, &verifier).await.0,
+            400
+        );
         assert_eq!(exchange(&server, &client, &fresh, &verifier).await.0, 200);
     }
 
@@ -556,23 +921,73 @@ pub(crate) mod tests {
         let client = register(&server, "Claude").await;
         let verifier = "v".repeat(43);
         let request = start(&server, &client, &verifier, "deny-state").await;
-        let page = server.request(reqwest::Method::GET, &format!("/oauth/consent?request={request}"), &[], None).await;
+        let page = server
+            .request(
+                reqwest::Method::GET,
+                &format!("/oauth/consent?request={request}"),
+                &[],
+                None,
+            )
+            .await;
         assert_eq!(page.status(), 302);
-        assert_eq!(page.headers()["location"], format!("/auth?returnTo=%2Foauth%2Fconsent%3Frequest%3D{request}").as_str());
+        assert_eq!(
+            page.headers()["location"],
+            format!("/auth?returnTo=%2Foauth%2Fconsent%3Frequest%3D{request}").as_str()
+        );
         let cookie = session(&server);
-        let no_csrf = server.request(reqwest::Method::POST, &format!("/api/oauth/consent/{request}/approve"), &[("cookie", &cookie), ("origin", ORIGIN)], Some(json!({"companyId": "company_api", "projectIds": ["project_api"]}))).await;
+        let no_csrf = server
+            .request(
+                reqwest::Method::POST,
+                &format!("/api/oauth/consent/{request}/approve"),
+                &[("cookie", &cookie), ("origin", ORIGIN)],
+                Some(json!({"companyId": "company_api", "projectIds": ["project_api"]})),
+            )
+            .await;
         assert_eq!(no_csrf.status(), 403);
         let member = format!("{}; csrf_v1={CSRF}", server.member_cookie);
-        let non_admin = server.request(reqwest::Method::POST, &format!("/api/oauth/consent/{request}/approve"), &[("cookie", &member), ("origin", ORIGIN), ("x-csrf-v1", CSRF)], Some(json!({"companyId": "company_api", "projectIds": ["project_api"]}))).await;
+        let non_admin = server
+            .request(
+                reqwest::Method::POST,
+                &format!("/api/oauth/consent/{request}/approve"),
+                &[("cookie", &member), ("origin", ORIGIN), ("x-csrf-v1", CSRF)],
+                Some(json!({"companyId": "company_api", "projectIds": ["project_api"]})),
+            )
+            .await;
         assert_eq!(non_admin.status(), 403);
-        let grants: i64 = server.state.with_database(|database| database.connection().query_row("SELECT COUNT(*) FROM suplex_oauth_grants", [], |row| row.get(0)).unwrap());
+        let grants: i64 = server.state.with_database(|database| {
+            database
+                .connection()
+                .query_row("SELECT COUNT(*) FROM suplex_oauth_grants", [], |row| {
+                    row.get(0)
+                })
+                .unwrap()
+        });
         assert_eq!(grants, 0);
-        let denied = server.request(reqwest::Method::POST, &format!("/api/oauth/consent/{request}/deny"), &[("cookie", &cookie), ("origin", ORIGIN), ("x-csrf-v1", CSRF)], Some(json!({}))).await;
-        let target = denied.json::<Value>().await.unwrap()["redirectTo"].as_str().unwrap().to_owned();
-        assert_eq!((query_value(&target, "error").as_deref(), query_value(&target, "state").as_deref()), (Some("access_denied"), Some("deny-state")));
+        let denied = server
+            .request(
+                reqwest::Method::POST,
+                &format!("/api/oauth/consent/{request}/deny"),
+                &[("cookie", &cookie), ("origin", ORIGIN), ("x-csrf-v1", CSRF)],
+                Some(json!({})),
+            )
+            .await;
+        let target = denied.json::<Value>().await.unwrap()["redirectTo"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        assert_eq!(
+            (
+                query_value(&target, "error").as_deref(),
+                query_value(&target, "state").as_deref()
+            ),
+            (Some("access_denied"), Some("deny-state"))
+        );
         let invalid = server.request(reqwest::Method::GET, "/oauth/authorize?client_id=missing&redirect_uri=x&response_type=code&resource=r&code_challenge=c&code_challenge_method=S256", &[], None).await;
         assert_eq!(invalid.status(), 400);
-        assert_eq!(invalid.json::<Value>().await.unwrap(), json!({"error": "invalid_request", "error_description": "Client or redirect URI is invalid"}));
+        assert_eq!(
+            invalid.json::<Value>().await.unwrap(),
+            json!({"error": "invalid_request", "error_description": "Client or redirect URI is invalid"})
+        );
     }
 
     #[tokio::test]
@@ -581,32 +996,133 @@ pub(crate) mod tests {
         let client = register(&server, "Claude").await;
         let verifier = "p".repeat(43);
         let code = authorize(&server, &client, &verifier, "state").await;
-        let token = exchange(&server, &client, &code, &verifier).await.1["access_token"].as_str().unwrap().to_owned();
+        let token = exchange(&server, &client, &code, &verifier).await.1["access_token"]
+            .as_str()
+            .unwrap()
+            .to_owned();
         let bearer = format!("Bearer {token}");
-        let wrong_host = server.client.post(format!("{}/mcp", server.base)).header("host", "attacker.test").header("authorization", &bearer).json(&json!({})).send().await.unwrap();
+        let wrong_host = server
+            .client
+            .post(format!("{}/mcp", server.base))
+            .header("host", "attacker.test")
+            .header("authorization", &bearer)
+            .json(&json!({}))
+            .send()
+            .await
+            .unwrap();
         assert_eq!(wrong_host.status(), 403);
-        let wrong_origin = server.request(reqwest::Method::POST, "/mcp", &[("origin", "https://attacker.test"), ("authorization", &bearer)], Some(json!({}))).await;
+        let wrong_origin = server
+            .request(
+                reqwest::Method::POST,
+                "/mcp",
+                &[
+                    ("origin", "https://attacker.test"),
+                    ("authorization", &bearer),
+                ],
+                Some(json!({})),
+            )
+            .await;
         assert_eq!(wrong_origin.status(), 403);
-        let malformed = server.request(reqwest::Method::POST, "/mcp", &[("authorization", "Bearer wrong")], Some(json!({}))).await;
+        let malformed = server
+            .request(
+                reqwest::Method::POST,
+                "/mcp",
+                &[("authorization", "Bearer wrong")],
+                Some(json!({})),
+            )
+            .await;
         assert_eq!(malformed.status(), 401);
-        assert!(malformed.headers()["www-authenticate"].to_str().unwrap().contains("resource_metadata"));
+        assert!(
+            malformed.headers()["www-authenticate"]
+                .to_str()
+                .unwrap()
+                .contains("resource_metadata")
+        );
         assert_eq!(mcp_status(&server, &token).await, 200);
-        let oauth = crate::identity::oauth::OAuth::new(&server.state.session_config.reachable_address);
+        let oauth =
+            crate::identity::oauth::OAuth::new(&server.state.session_config.reachable_address);
         let agent = agent_of(&server, &client);
         server.state.with_database(|database| database.connection().execute("UPDATE suplex_external_agents SET client_profile_id = 'missing-profile' WHERE id = ?1", [&agent]).unwrap());
-        let principal = server.state.with_database(|database| oauth.authenticate_access_token(database, &token, chrono::Utc::now())).unwrap();
-        assert_eq!((principal.agent_id.as_str(), principal.profile_id.as_deref(), principal.project_ids.as_slice()), (agent.as_str(), Some("missing-profile"), ["project_api".to_owned()].as_slice()));
-        server.state.with_database(|database| database.connection().execute("UPDATE suplex_users SET role = 'member' WHERE role = 'admin'", []).unwrap());
-        assert!(server.state.with_database(|database| oauth.authenticate_access_token(database, &token, chrono::Utc::now())).is_err());
-        server.state.with_database(|database| database.connection().execute("UPDATE suplex_users SET role = 'admin' WHERE id <> 'member_user'", []).unwrap());
+        let principal = server
+            .state
+            .with_database(|database| {
+                oauth.authenticate_access_token(database, &token, chrono::Utc::now())
+            })
+            .unwrap();
+        assert_eq!(
+            (
+                principal.agent_id.as_str(),
+                principal.profile_id.as_deref(),
+                principal.project_ids.as_slice()
+            ),
+            (
+                agent.as_str(),
+                Some("missing-profile"),
+                ["project_api".to_owned()].as_slice()
+            )
+        );
+        server.state.with_database(|database| {
+            database
+                .connection()
+                .execute(
+                    "UPDATE suplex_users SET role = 'member' WHERE role = 'admin'",
+                    [],
+                )
+                .unwrap()
+        });
+        assert!(
+            server
+                .state
+                .with_database(|database| oauth.authenticate_access_token(
+                    database,
+                    &token,
+                    chrono::Utc::now()
+                ))
+                .is_err()
+        );
+        server.state.with_database(|database| {
+            database
+                .connection()
+                .execute(
+                    "UPDATE suplex_users SET role = 'admin' WHERE id <> 'member_user'",
+                    [],
+                )
+                .unwrap()
+        });
         assert_eq!(mcp_status(&server, &token).await, 200);
-        server.state.with_database(|database| database.connection().execute("UPDATE suplex_oauth_access_tokens SET expires_at = '1970-01-01T00:00:00.000Z'", []).unwrap());
+        server.state.with_database(|database| {
+            database
+                .connection()
+                .execute(
+                    "UPDATE suplex_oauth_access_tokens SET expires_at = '1970-01-01T00:00:00.000Z'",
+                    [],
+                )
+                .unwrap()
+        });
         assert_eq!(mcp_status(&server, &token).await, 401);
         let fresh = authorize(&server, &client, &verifier, "revoke-endpoint").await;
-        let fresh_token = exchange(&server, &client, &fresh, &verifier).await.1["access_token"].as_str().unwrap().to_owned();
-        assert_eq!(form(&server, "/oauth/revoke", &[("token", &fresh_token), ("client_id", &client)]).await.0, 200);
+        let fresh_token = exchange(&server, &client, &fresh, &verifier).await.1["access_token"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        assert_eq!(
+            form(
+                &server,
+                "/oauth/revoke",
+                &[("token", &fresh_token), ("client_id", &client)]
+            )
+            .await
+            .0,
+            200
+        );
         assert_eq!(mcp_status(&server, &fresh_token).await, 401);
-        assert_eq!(server.request(reqwest::Method::GET, "/mcp", &[], None).await.status(), 405);
+        assert_eq!(
+            server
+                .request(reqwest::Method::GET, "/mcp", &[], None)
+                .await
+                .status(),
+            405
+        );
     }
 
     #[tokio::test]
@@ -628,9 +1144,24 @@ pub(crate) mod tests {
         for _ in 2..20 {
             register(&server, "Rate test").await;
         }
-        let (status, limited) = server.send(reqwest::Method::POST, "/oauth/register", None, Some(json!({"client_name": "Rate test", "redirect_uris": [REDIRECT]}))).await;
-        assert_eq!((status, limited["error"].as_str()), (429, Some("temporarily_unavailable")));
-        server.state.oauth_registrations.lock().unwrap().insert("192.0.2.2".into(), Vec::new());
+        let (status, limited) = server
+            .send(
+                reqwest::Method::POST,
+                "/oauth/register",
+                None,
+                Some(json!({"client_name": "Rate test", "redirect_uris": [REDIRECT]})),
+            )
+            .await;
+        assert_eq!(
+            (status, limited["error"].as_str()),
+            (429, Some("temporarily_unavailable"))
+        );
+        server
+            .state
+            .oauth_registrations
+            .lock()
+            .unwrap()
+            .insert("192.0.2.2".into(), Vec::new());
         assert!(super::throttle(&server.state, "192.0.2.2").is_ok());
     }
 }

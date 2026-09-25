@@ -21,40 +21,78 @@ fn compact(raw: &str) -> String {
     js_json::stringify(&serde_json::from_str::<Value>(raw).expect("generated artifact is JSON"))
 }
 
-static CATALOG: LazyLock<String> = LazyLock::new(|| compact(include_str!("discovery/api-catalog.json")));
-static SKILLS: LazyLock<String> = LazyLock::new(|| compact(include_str!("discovery/agent-skills.json")));
+static CATALOG: LazyLock<String> =
+    LazyLock::new(|| compact(include_str!("discovery/api-catalog.json")));
+static SKILLS: LazyLock<String> =
+    LazyLock::new(|| compact(include_str!("discovery/agent-skills.json")));
 
 pub fn router() -> Router<AppState> {
     Router::new()
         .route("/llms.txt", get(llms))
         .route("/.well-known/suplex/api-catalog.json", get(catalog))
         .route("/.well-known/suplex/agent-skills.json", get(skills))
-        .route("/.well-known/oauth-protected-resource/mcp", get(protected_resource))
-        .route("/.well-known/oauth-protected-resource", get(protected_resource))
-        .route("/.well-known/oauth-authorization-server", get(authorization_server))
+        .route(
+            "/.well-known/oauth-protected-resource/mcp",
+            get(protected_resource),
+        )
+        .route(
+            "/.well-known/oauth-protected-resource",
+            get(protected_resource),
+        )
+        .route(
+            "/.well-known/oauth-authorization-server",
+            get(authorization_server),
+        )
 }
 
 const PUBLIC: (header::HeaderName, &str) = (header::CACHE_CONTROL, "public, max-age=300");
 
 async fn llms() -> Response {
-    ([(header::CONTENT_TYPE, "text/plain; charset=utf-8"), PUBLIC], LLMS).into_response()
+    (
+        [(header::CONTENT_TYPE, "text/plain; charset=utf-8"), PUBLIC],
+        LLMS,
+    )
+        .into_response()
 }
 
 async fn catalog() -> Response {
-    ([(header::CONTENT_TYPE, "application/json; charset=utf-8"), PUBLIC], CATALOG.as_str()).into_response()
+    (
+        [
+            (header::CONTENT_TYPE, "application/json; charset=utf-8"),
+            PUBLIC,
+        ],
+        CATALOG.as_str(),
+    )
+        .into_response()
 }
 
 async fn skills() -> Response {
-    ([(header::CONTENT_TYPE, "application/json; charset=utf-8"), PUBLIC], SKILLS.as_str()).into_response()
+    (
+        [
+            (header::CONTENT_TYPE, "application/json; charset=utf-8"),
+            PUBLIC,
+        ],
+        SKILLS.as_str(),
+    )
+        .into_response()
 }
 
 fn metadata(value: Value) -> Response {
-    ([(header::CONTENT_TYPE, "application/json; charset=utf-8"), PUBLIC], js_json::stringify(&value)).into_response()
+    (
+        [
+            (header::CONTENT_TYPE, "application/json; charset=utf-8"),
+            PUBLIC,
+        ],
+        js_json::stringify(&value),
+    )
+        .into_response()
 }
 
 async fn protected_resource(State(state): State<AppState>) -> Response {
     let oauth = OAuth::new(&state.session_config.reachable_address);
-    metadata(json!({"resource": oauth.resource, "authorization_servers": [oauth.issuer], "scopes_supported": ["suplex:mcp"], "bearer_methods_supported": ["header"]}))
+    metadata(
+        json!({"resource": oauth.resource, "authorization_servers": [oauth.issuer], "scopes_supported": ["suplex:mcp"], "bearer_methods_supported": ["header"]}),
+    )
 }
 
 async fn authorization_server(State(state): State<AppState>) -> Response {
@@ -100,15 +138,44 @@ mod tests {
                 assert!(!body.contains(secret), "{path} contains {secret}");
             }
         }
-        let text = server.request(reqwest::Method::GET, "/llms.txt", &[], None).await.text().await.unwrap();
-        assert!(text.starts_with("# Suplex\n") && text.contains("Read /api/agent/openapi.json after pairing"));
-        let (_, catalog) = server.send(reqwest::Method::GET, "/.well-known/suplex/api-catalog.json", None, None).await;
+        let text = server
+            .request(reqwest::Method::GET, "/llms.txt", &[], None)
+            .await
+            .text()
+            .await
+            .unwrap();
+        assert!(
+            text.starts_with("# Suplex\n")
+                && text.contains("Read /api/agent/openapi.json after pairing")
+        );
+        let (_, catalog) = server
+            .send(
+                reqwest::Method::GET,
+                "/.well-known/suplex/api-catalog.json",
+                None,
+                None,
+            )
+            .await;
         assert_eq!(catalog["pairing"][0]["path"], "/api/agent/pairing/exchange");
-        let (_, resource) = server.send(reqwest::Method::GET, "/.well-known/oauth-protected-resource/mcp", None, None).await;
-        assert_eq!(resource, json!({"resource": "https://suplex.example.test:4111/mcp", "authorization_servers": ["https://suplex.example.test:4111"], "scopes_supported": ["suplex:mcp"], "bearer_methods_supported": ["header"]}));
+        let (_, resource) = server
+            .send(
+                reqwest::Method::GET,
+                "/.well-known/oauth-protected-resource/mcp",
+                None,
+                None,
+            )
+            .await;
+        assert_eq!(
+            resource,
+            json!({"resource": "https://suplex.example.test:4111/mcp", "authorization_servers": ["https://suplex.example.test:4111"], "scopes_supported": ["suplex:mcp"], "bearer_methods_supported": ["header"]})
+        );
         for entry in catalog["runtime"].as_array().unwrap() {
-            let path = entry["path"].as_str().unwrap().replace("{taskId}", "task_missing");
-            let method = reqwest::Method::from_bytes(entry["method"].as_str().unwrap().as_bytes()).unwrap();
+            let path = entry["path"]
+                .as_str()
+                .unwrap()
+                .replace("{taskId}", "task_missing");
+            let method =
+                reqwest::Method::from_bytes(entry["method"].as_str().unwrap().as_bytes()).unwrap();
             let body = (method != reqwest::Method::GET).then(|| json!({}));
             let (status, _) = server.send(method.clone(), &path, None, body).await;
             assert_eq!(status, 401, "{method} {path}");

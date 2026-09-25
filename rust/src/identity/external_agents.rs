@@ -175,8 +175,11 @@ fn valid_id(value: &str) -> bool {
 fn valid_profile_id(value: &str) -> bool {
     let mut bytes = value.bytes();
     value.encode_utf16().count() <= 128
-        && bytes.next().is_some_and(|byte| byte.is_ascii_alphanumeric())
-        && bytes.all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b':' | b'-'))
+        && bytes
+            .next()
+            .is_some_and(|byte| byte.is_ascii_alphanumeric())
+        && bytes
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'_' | b':' | b'-'))
 }
 
 fn sorted_unique(ids: &[String]) -> Vec<String> {
@@ -306,7 +309,11 @@ pub fn create(
     let now_iso = timestamp(now);
     let expires_at = timestamp(now + Duration::minutes(PAIRING_TTL_MINUTES));
     let agent_id = random_hex_id("agent")?;
-    let avatar_seed = match input.avatar_seed.map(js_trim).filter(|seed| !seed.is_empty()) {
+    let avatar_seed = match input
+        .avatar_seed
+        .map(js_trim)
+        .filter(|seed| !seed.is_empty())
+    {
         Some(seed) => seed.to_owned(),
         None => random_hex(16)?,
     };
@@ -420,13 +427,21 @@ pub fn list(
         companies::require_company_access(database, actor_user_id, company_id)?;
     }
     let company_id = company_id.filter(|id| !id.is_empty());
-    let condition = if company_id.is_some() { " WHERE e.company_id = ?1" } else { "" };
-    let mut statement = database
-        .connection()
-        .prepare(&format!("{ADMIN_COLUMNS}{condition} ORDER BY e.created_at DESC, e.id"))?;
+    let condition = if company_id.is_some() {
+        " WHERE e.company_id = ?1"
+    } else {
+        ""
+    };
+    let mut statement = database.connection().prepare(&format!(
+        "{ADMIN_COLUMNS}{condition} ORDER BY e.created_at DESC, e.id"
+    ))?;
     let mut agents = match company_id {
-        Some(company_id) => statement.query_map([company_id], admin_row)?.collect::<rusqlite::Result<Vec<_>>>()?,
-        None => statement.query_map([], admin_row)?.collect::<rusqlite::Result<Vec<_>>>()?,
+        Some(company_id) => statement
+            .query_map([company_id], admin_row)?
+            .collect::<rusqlite::Result<Vec<_>>>()?,
+        None => statement
+            .query_map([], admin_row)?
+            .collect::<rusqlite::Result<Vec<_>>>()?,
     };
     for agent in &mut agents {
         agent.project_ids = grants(database, &agent.id)?;
@@ -437,7 +452,11 @@ pub fn list(
 pub fn admin_agent(database: &SuplexDatabase, agent_id: &str) -> DatabaseResult<AdminAgent> {
     let mut agent = database
         .connection()
-        .query_row(&format!("{ADMIN_COLUMNS} WHERE e.id = ?1"), [agent_id], admin_row)
+        .query_row(
+            &format!("{ADMIN_COLUMNS} WHERE e.id = ?1"),
+            [agent_id],
+            admin_row,
+        )
         .optional()?
         .ok_or_else(|| ExternalAgentFailure::not_found("agent_not_found"))?;
     agent.project_ids = grants(database, agent_id)?;
@@ -463,7 +482,10 @@ pub fn public_agent(database: &SuplexDatabase, agent_id: &str) -> DatabaseResult
     })
 }
 
-fn agent_state(database: &SuplexDatabase, agent_id: &str) -> DatabaseResult<Option<(String, String)>> {
+fn agent_state(
+    database: &SuplexDatabase,
+    agent_id: &str,
+) -> DatabaseResult<Option<(String, String)>> {
     Ok(database
         .connection()
         .query_row(
@@ -487,7 +509,11 @@ pub fn replace_projects(
     }
     let unique = sorted_unique(project_ids);
     if unique.iter().any(|id| !valid_id(id)) {
-        return Err(invalid_configuration("Project list is invalid", 400, "configuration_invalid"));
+        return Err(invalid_configuration(
+            "Project list is invalid",
+            400,
+            "configuration_invalid",
+        ));
     }
     let now_iso = timestamp(now);
     database.transaction(false, |database| {
@@ -497,7 +523,8 @@ pub fn replace_projects(
         if status == "revoked" {
             return Err(ExternalAgentFailure::not_found("agent_not_found"));
         }
-        if !unique.is_empty() && matching_projects(database, &company_id, &unique)? != unique.len() {
+        if !unique.is_empty() && matching_projects(database, &company_id, &unique)? != unique.len()
+        {
             return Err(ExternalAgentFailure::not_found("scope_not_found"));
         }
         let existing = {
@@ -508,8 +535,16 @@ pub fn replace_projects(
                 .query_map([agent_id], |row| row.get::<_, String>(0))?
                 .collect::<rusqlite::Result<Vec<_>>>()?
         };
-        let added = unique.iter().filter(|id| !existing.contains(id)).cloned().collect::<Vec<_>>();
-        let removed = existing.iter().filter(|id| !unique.contains(id)).cloned().collect::<Vec<_>>();
+        let added = unique
+            .iter()
+            .filter(|id| !existing.contains(id))
+            .cloned()
+            .collect::<Vec<_>>();
+        let removed = existing
+            .iter()
+            .filter(|id| !unique.contains(id))
+            .cloned()
+            .collect::<Vec<_>>();
         database.connection().execute(
             "DELETE FROM suplex_external_agent_project_grants WHERE agent_id = ?1",
             [agent_id],
@@ -727,18 +762,28 @@ pub fn provision_oauth_agent(
     companies::require_company_access(database, input.actor_user_id, input.company_id)?;
     let project_ids = sorted_unique(input.project_ids);
     if project_ids.is_empty() || project_ids.iter().any(|id| !valid_id(id)) {
-        return Err(invalid_configuration("Select at least one project", 400, "configuration_invalid"));
+        return Err(invalid_configuration(
+            "Select at least one project",
+            400,
+            "configuration_invalid",
+        ));
     }
     if matching_projects(database, input.company_id, &project_ids)? != project_ids.len() {
         return Err(ExternalAgentFailure::not_found("scope_not_found"));
     }
     let now_iso = timestamp(now);
     let agent_id = random_hex_id("agent")?;
-    let utf16 = |value: &str, count: usize| String::from_utf16_lossy(&value.encode_utf16().take(count).collect::<Vec<_>>());
+    let utf16 = |value: &str, count: usize| {
+        String::from_utf16_lossy(&value.encode_utf16().take(count).collect::<Vec<_>>())
+    };
     let client_units = input.client_id.encode_utf16().collect::<Vec<_>>();
     let suffix = String::from_utf16_lossy(&client_units[client_units.len().saturating_sub(8)..]);
     let base = utf16(js_trim(input.client_name), 60);
-    let base = if base.is_empty() { "OAuth client".to_owned() } else { base };
+    let base = if base.is_empty() {
+        "OAuth client".to_owned()
+    } else {
+        base
+    };
     let mut name = utf16(&format!("{base} ({suffix})"), 80);
     let mut collision = 1;
     while database.connection().query_row(
@@ -757,7 +802,13 @@ pub fn provision_oauth_agent(
         "INSERT INTO suplex_external_agents (id, company_id, status, paired_at, created_at, updated_at) VALUES (?1, ?2, 'paired', ?3, ?3, ?3)",
         params![agent_id, input.company_id, now_iso],
     )?;
-    insert_grants(database, &agent_id, input.company_id, &project_ids, &now_iso)?;
+    insert_grants(
+        database,
+        &agent_id,
+        input.company_id,
+        &project_ids,
+        &now_iso,
+    )?;
     audit(
         database,
         (Some(input.actor_user_id), None),
@@ -884,14 +935,24 @@ pub(crate) mod tests {
         ));
         let mut database = SuplexDatabase::open(&path, OpenMode::Migrate).unwrap();
         let now = Utc::now();
-        let admin = auth::development_sign_in(&mut database, now).unwrap().user.id;
+        let admin = auth::development_sign_in(&mut database, now)
+            .unwrap()
+            .user
+            .id;
         let stamp = timestamp(now);
         let connection = database.connection();
         connection.execute("INSERT INTO suplex_users (id, display_name, username, role, status, created_at, updated_at, identity_version) VALUES ('member_test_1', 'Member', 'member', 'member', 'active', ?1, ?1, 1)", [&stamp]).unwrap();
-        for (id, name) in [("company_main", "External Company"), ("company_other", "Other Company")] {
+        for (id, name) in [
+            ("company_main", "External Company"),
+            ("company_other", "Other Company"),
+        ] {
             connection.execute("INSERT INTO suplex_companies (id, name, status, created_at) VALUES (?1, ?2, 'active', ?3)", params![id, name, stamp]).unwrap();
         }
-        for (id, company, identity) in [("project_allowed", "company_main", "meiji/allowed"), ("project_second", "company_main", "meiji/second"), ("project_other", "company_other", "meiji/other")] {
+        for (id, company, identity) in [
+            ("project_allowed", "company_main", "meiji/allowed"),
+            ("project_second", "company_main", "meiji/second"),
+            ("project_other", "company_other", "meiji/other"),
+        ] {
             connection.execute("INSERT INTO suplex_projects (id, company_id, name, repository_path, worktree_root, repository_identity, base_branch, setup_command, verification_command, created_at, updated_at) VALUES (?1, ?2, ?1, ?3, ?4, ?5, 'main', '', '', ?6, ?6)", params![id, company, format!("/tmp/{id}"), format!("/tmp/{id}-worktrees"), identity, stamp]).unwrap();
         }
         Fixture {
@@ -904,25 +965,41 @@ pub(crate) mod tests {
     }
 
     pub(crate) fn issue(fixture: &mut Fixture, name: &str, projects: &[&str]) -> Issued {
-        let projects = projects.iter().map(|id| (*id).to_owned()).collect::<Vec<_>>();
+        let projects = projects
+            .iter()
+            .map(|id| (*id).to_owned())
+            .collect::<Vec<_>>();
         create(
             &mut fixture.database,
             &fixture.admin.clone(),
-            CreateInput { name, company_id: &fixture.company.clone(), project_ids: &projects, avatar_seed: None },
+            CreateInput {
+                name,
+                company_id: &fixture.company.clone(),
+                project_ids: &projects,
+                avatar_seed: None,
+            },
             Utc::now(),
         )
         .unwrap()
     }
 
     fn failure(error: Box<dyn Error>) -> ExternalAgentFailure {
-        error.downcast_ref::<ExternalAgentFailure>().cloned().unwrap_or_else(|| {
-            let auth = error.downcast_ref::<auth::AuthFailure>().expect("domain failure");
-            ExternalAgentFailure::new(auth.message, auth.status_code, auth.code)
-        })
+        error
+            .downcast_ref::<ExternalAgentFailure>()
+            .cloned()
+            .unwrap_or_else(|| {
+                let auth = error
+                    .downcast_ref::<auth::AuthFailure>()
+                    .expect("domain failure");
+                ExternalAgentFailure::new(auth.message, auth.status_code, auth.code)
+            })
     }
 
     fn count(database: &SuplexDatabase, sql: &str) -> i64 {
-        database.connection().query_row(sql, [], |row| row.get(0)).unwrap()
+        database
+            .connection()
+            .query_row(sql, [], |row| row.get(0))
+            .unwrap()
     }
 
     #[test]
@@ -935,13 +1012,44 @@ pub(crate) mod tests {
             "SELECT ag.name, e.status FROM suplex_agents ag JOIN suplex_external_agents e ON e.id = ag.id WHERE ag.id = ?1",
             [&issued.agent.id], |row| Ok((row.get(0)?, row.get(1)?)),
         ).unwrap();
-        assert_eq!((name.as_str(), status.as_str()), ("External Dev", "pending"));
+        assert_eq!(
+            (name.as_str(), status.as_str()),
+            ("External Dev", "pending")
+        );
 
-        let paired = exchange(&mut fixture.database, &issued.pairing_code, Some("dev"), Utc::now()).unwrap();
+        let paired = exchange(
+            &mut fixture.database,
+            &issued.pairing_code,
+            Some("dev"),
+            Utc::now(),
+        )
+        .unwrap();
         assert!(paired.credential.starts_with("fha_"));
-        let principal = authenticate(&mut fixture.database, &paired.credential, Utc::now()).unwrap();
-        assert_eq!((principal.agent_id.as_str(), principal.company_id.as_str(), principal.profile_id.as_deref(), principal.project_ids.as_slice()), (issued.agent.id.as_str(), "company_main", Some("dev"), ["project_allowed".to_owned()].as_slice()));
-        let again = failure(exchange(&mut fixture.database, &issued.pairing_code, Some("dev"), Utc::now()).unwrap_err());
+        let principal =
+            authenticate(&mut fixture.database, &paired.credential, Utc::now()).unwrap();
+        assert_eq!(
+            (
+                principal.agent_id.as_str(),
+                principal.company_id.as_str(),
+                principal.profile_id.as_deref(),
+                principal.project_ids.as_slice()
+            ),
+            (
+                issued.agent.id.as_str(),
+                "company_main",
+                Some("dev"),
+                ["project_allowed".to_owned()].as_slice()
+            )
+        );
+        let again = failure(
+            exchange(
+                &mut fixture.database,
+                &issued.pairing_code,
+                Some("dev"),
+                Utc::now(),
+            )
+            .unwrap_err(),
+        );
         assert_eq!((again.status_code, again.code), (401, "pairing_invalid"));
 
         let dump: String = fixture.database.connection().query_row(
@@ -952,8 +1060,14 @@ pub(crate) mod tests {
         let actors = |action: &str| -> (Option<String>, Option<String>) {
             fixture.database.connection().query_row("SELECT actor_user_id, actor_agent_id FROM suplex_audit_events WHERE action = ?1", [action], |row| Ok((row.get(0)?, row.get(1)?))).unwrap()
         };
-        assert_eq!(actors("external_agent_paired"), (None, Some(issued.agent.id.clone())));
-        assert_eq!(actors("external_agent_created"), (Some(fixture.admin.clone()), None));
+        assert_eq!(
+            actors("external_agent_paired"),
+            (None, Some(issued.agent.id.clone()))
+        );
+        assert_eq!(
+            actors("external_agent_created"),
+            (Some(fixture.admin.clone()), None)
+        );
     }
 
     #[test]
@@ -963,21 +1077,99 @@ pub(crate) mod tests {
         let admin = fixture.admin.clone();
         let company = fixture.company.clone();
         let projects = vec!["project_allowed".to_owned()];
-        let input = |name| CreateInput { name, company_id: &company, project_ids: &projects, avatar_seed: None };
-        let duplicate = failure(create(&mut fixture.database, &admin, input("Duplicate"), Utc::now()).unwrap_err());
-        assert_eq!((duplicate.status_code, duplicate.public_message.as_str()), (409, "An agent with this name already exists"));
+        let input = |name| CreateInput {
+            name,
+            company_id: &company,
+            project_ids: &projects,
+            avatar_seed: None,
+        };
+        let duplicate = failure(
+            create(
+                &mut fixture.database,
+                &admin,
+                input("Duplicate"),
+                Utc::now(),
+            )
+            .unwrap_err(),
+        );
+        assert_eq!(
+            (duplicate.status_code, duplicate.public_message.as_str()),
+            (409, "An agent with this name already exists")
+        );
         let other = vec!["project_other".to_owned()];
-        let cross = failure(create(&mut fixture.database, &admin, CreateInput { name: "Cross", company_id: &company, project_ids: &other, avatar_seed: None }, Utc::now()).unwrap_err());
+        let cross = failure(
+            create(
+                &mut fixture.database,
+                &admin,
+                CreateInput {
+                    name: "Cross",
+                    company_id: &company,
+                    project_ids: &other,
+                    avatar_seed: None,
+                },
+                Utc::now(),
+            )
+            .unwrap_err(),
+        );
         assert_eq!((cross.status_code, cross.code), (404, "scope_not_found"));
-        assert_eq!(count(&fixture.database, "SELECT COUNT(*) FROM suplex_external_agents"), 1);
+        assert_eq!(
+            count(
+                &fixture.database,
+                "SELECT COUNT(*) FROM suplex_external_agents"
+            ),
+            1
+        );
         let member = fixture.member.clone();
-        assert_eq!(failure(create(&mut fixture.database, &member, input("Member"), Utc::now()).unwrap_err()).public_message, "Not found");
-        assert_eq!(failure(create(&mut fixture.database, "missing_user", input("Anon"), Utc::now()).unwrap_err()).public_message, "Authentication required");
-        assert_eq!(failure(list(&fixture.database, &member, None).unwrap_err()).public_message, "Not found");
-        assert_eq!(failure(replace_projects(&mut fixture.database, &member, "any", &projects, Utc::now()).unwrap_err()).public_message, "Not found");
-        assert_eq!(failure(issue_initial_pairing(&mut fixture.database, &member, "any", Utc::now()).unwrap_err()).public_message, "Not found");
-        assert_eq!(failure(rotate(&mut fixture.database, &member, "any", Utc::now()).unwrap_err()).public_message, "Not found");
-        assert_eq!(failure(revoke(&mut fixture.database, &member, "any", Utc::now()).unwrap_err()).public_message, "Not found");
+        assert_eq!(
+            failure(
+                create(&mut fixture.database, &member, input("Member"), Utc::now()).unwrap_err()
+            )
+            .public_message,
+            "Not found"
+        );
+        assert_eq!(
+            failure(
+                create(
+                    &mut fixture.database,
+                    "missing_user",
+                    input("Anon"),
+                    Utc::now()
+                )
+                .unwrap_err()
+            )
+            .public_message,
+            "Authentication required"
+        );
+        assert_eq!(
+            failure(list(&fixture.database, &member, None).unwrap_err()).public_message,
+            "Not found"
+        );
+        assert_eq!(
+            failure(
+                replace_projects(&mut fixture.database, &member, "any", &projects, Utc::now())
+                    .unwrap_err()
+            )
+            .public_message,
+            "Not found"
+        );
+        assert_eq!(
+            failure(
+                issue_initial_pairing(&mut fixture.database, &member, "any", Utc::now())
+                    .unwrap_err()
+            )
+            .public_message,
+            "Not found"
+        );
+        assert_eq!(
+            failure(rotate(&mut fixture.database, &member, "any", Utc::now()).unwrap_err())
+                .public_message,
+            "Not found"
+        );
+        assert_eq!(
+            failure(revoke(&mut fixture.database, &member, "any", Utc::now()).unwrap_err())
+                .public_message,
+            "Not found"
+        );
         let issued = issue(&mut fixture, "Constraint", &["project_allowed"]);
         let error = fixture.database.connection().execute(
             "INSERT INTO suplex_external_agent_project_grants (agent_id, company_id, project_id, created_at) VALUES (?1, ?2, 'project_other', 'now')",
@@ -990,28 +1182,115 @@ pub(crate) mod tests {
     fn list_scope_replacement_and_initial_pairing_reissue() {
         let mut fixture = fixture();
         let first = issue(&mut fixture, "Agent 1", &["project_allowed"]);
-        let second = issue(&mut fixture, "Agent 2", &["project_second", "project_allowed"]);
+        let second = issue(
+            &mut fixture,
+            "Agent 2",
+            &["project_second", "project_allowed"],
+        );
         let admin = fixture.admin.clone();
         let all = list(&fixture.database, &admin, None).unwrap();
         assert_eq!(all.len(), 2);
         let listed = all.iter().find(|agent| agent.id == first.agent.id).unwrap();
-        assert_eq!((listed.status.as_str(), listed.project_ids.as_slice(), listed.pairing_expires_at.is_some(), listed.credential_created_at.is_none()), ("pending", ["project_allowed".to_owned()].as_slice(), true, true));
-        assert_eq!(all.iter().find(|agent| agent.id == second.agent.id).unwrap().project_ids, ["project_allowed", "project_second"]);
-        assert_eq!(list(&fixture.database, &admin, Some("company_main")).unwrap().len(), 2);
+        assert_eq!(
+            (
+                listed.status.as_str(),
+                listed.project_ids.as_slice(),
+                listed.pairing_expires_at.is_some(),
+                listed.credential_created_at.is_none()
+            ),
+            (
+                "pending",
+                ["project_allowed".to_owned()].as_slice(),
+                true,
+                true
+            )
+        );
+        assert_eq!(
+            all.iter()
+                .find(|agent| agent.id == second.agent.id)
+                .unwrap()
+                .project_ids,
+            ["project_allowed", "project_second"]
+        );
+        assert_eq!(
+            list(&fixture.database, &admin, Some("company_main"))
+                .unwrap()
+                .len(),
+            2
+        );
 
         let both = vec!["project_allowed".to_owned(), "project_second".to_owned()];
-        assert_eq!(replace_projects(&mut fixture.database, &admin, &first.agent.id, &both, Utc::now()).unwrap().project_ids, both);
-        assert!(replace_projects(&mut fixture.database, &admin, &first.agent.id, &[], Utc::now()).unwrap().project_ids.is_empty());
+        assert_eq!(
+            replace_projects(
+                &mut fixture.database,
+                &admin,
+                &first.agent.id,
+                &both,
+                Utc::now()
+            )
+            .unwrap()
+            .project_ids,
+            both
+        );
+        assert!(
+            replace_projects(
+                &mut fixture.database,
+                &admin,
+                &first.agent.id,
+                &[],
+                Utc::now()
+            )
+            .unwrap()
+            .project_ids
+            .is_empty()
+        );
         let other = vec!["project_other".to_owned()];
-        assert_eq!(failure(replace_projects(&mut fixture.database, &admin, &first.agent.id, &other, Utc::now()).unwrap_err()).code, "scope_not_found");
-        assert!(admin_agent(&fixture.database, &first.agent.id).unwrap().project_ids.is_empty());
+        assert_eq!(
+            failure(
+                replace_projects(
+                    &mut fixture.database,
+                    &admin,
+                    &first.agent.id,
+                    &other,
+                    Utc::now()
+                )
+                .unwrap_err()
+            )
+            .code,
+            "scope_not_found"
+        );
+        assert!(
+            admin_agent(&fixture.database, &first.agent.id)
+                .unwrap()
+                .project_ids
+                .is_empty()
+        );
 
-        let reissued = issue_initial_pairing(&mut fixture.database, &admin, &second.agent.id, Utc::now()).unwrap();
+        let reissued =
+            issue_initial_pairing(&mut fixture.database, &admin, &second.agent.id, Utc::now())
+                .unwrap();
         assert_ne!(reissued.pairing_code, second.pairing_code);
-        assert!(exchange(&mut fixture.database, &second.pairing_code, Some("profile-reissue"), Utc::now()).is_err());
-        let paired = exchange(&mut fixture.database, &reissued.pairing_code, Some("profile-reissue"), Utc::now()).unwrap();
+        assert!(
+            exchange(
+                &mut fixture.database,
+                &second.pairing_code,
+                Some("profile-reissue"),
+                Utc::now()
+            )
+            .is_err()
+        );
+        let paired = exchange(
+            &mut fixture.database,
+            &reissued.pairing_code,
+            Some("profile-reissue"),
+            Utc::now(),
+        )
+        .unwrap();
         assert_eq!(paired.agent.status, "paired");
-        assert!(issue_initial_pairing(&mut fixture.database, &admin, &second.agent.id, Utc::now()).is_err());
+        assert!(
+            issue_initial_pairing(&mut fixture.database, &admin, &second.agent.id, Utc::now())
+                .is_err()
+        );
     }
 
     #[test]
@@ -1019,12 +1298,40 @@ pub(crate) mod tests {
         let mut fixture = fixture();
         let admin = fixture.admin.clone();
         let first = issue(&mut fixture, "Rotate", &["project_allowed"]);
-        let original = exchange(&mut fixture.database, &first.pairing_code, Some("profile-stable"), Utc::now()).unwrap();
+        let original = exchange(
+            &mut fixture.database,
+            &first.pairing_code,
+            Some("profile-stable"),
+            Utc::now(),
+        )
+        .unwrap();
         let rotation = rotate(&mut fixture.database, &admin, &first.agent.id, Utc::now()).unwrap();
-        assert_eq!(authenticate(&mut fixture.database, &original.credential, Utc::now()).unwrap().agent_id, first.agent.id);
-        let replacement = exchange(&mut fixture.database, &rotation.pairing_code, Some("recreated-client"), Utc::now()).unwrap();
-        assert_eq!(failure(authenticate(&mut fixture.database, &original.credential, Utc::now()).unwrap_err()).code, "credential_invalid");
-        assert_eq!(authenticate(&mut fixture.database, &replacement.credential, Utc::now()).unwrap().agent_id, first.agent.id);
+        assert_eq!(
+            authenticate(&mut fixture.database, &original.credential, Utc::now())
+                .unwrap()
+                .agent_id,
+            first.agent.id
+        );
+        let replacement = exchange(
+            &mut fixture.database,
+            &rotation.pairing_code,
+            Some("recreated-client"),
+            Utc::now(),
+        )
+        .unwrap();
+        assert_eq!(
+            failure(
+                authenticate(&mut fixture.database, &original.credential, Utc::now()).unwrap_err()
+            )
+            .code,
+            "credential_invalid"
+        );
+        assert_eq!(
+            authenticate(&mut fixture.database, &replacement.credential, Utc::now())
+                .unwrap()
+                .agent_id,
+            first.agent.id
+        );
         let rotated: (Option<String>, Option<String>) = fixture.database.connection().query_row("SELECT actor_user_id, actor_agent_id FROM suplex_audit_events WHERE action = 'external_agent_rotated'", [], |row| Ok((row.get(0)?, row.get(1)?))).unwrap();
         assert_eq!(rotated, (None, Some(first.agent.id.clone())));
         revoke(&mut fixture.database, &admin, &first.agent.id, Utc::now()).unwrap();
@@ -1037,18 +1344,52 @@ pub(crate) mod tests {
         let admin = fixture.admin.clone();
         let company = fixture.company.clone();
         let projects = vec!["project_allowed".to_owned()];
-        let start = DateTime::parse_from_rfc3339("2026-08-14T12:00:00.000Z").unwrap().with_timezone(&Utc);
-        let issued = create(&mut fixture.database, &admin, CreateInput { name: "Expiring", company_id: &company, project_ids: &projects, avatar_seed: None }, start).unwrap();
+        let start = DateTime::parse_from_rfc3339("2026-08-14T12:00:00.000Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let issued = create(
+            &mut fixture.database,
+            &admin,
+            CreateInput {
+                name: "Expiring",
+                company_id: &company,
+                project_ids: &projects,
+                avatar_seed: None,
+            },
+            start,
+        )
+        .unwrap();
         let later = start + Duration::minutes(PAIRING_TTL_MINUTES) + Duration::milliseconds(1);
-        for code in [issued.pairing_code.as_str(), "not-a-code", "fhp_invalid0000000000000000000000000000000000"] {
-            let error = failure(exchange(&mut fixture.database, code, Some("profile-expired"), later).unwrap_err());
-            assert_eq!((error.status_code, error.public_message.as_str(), error.code), (401, "Pairing failed", "pairing_invalid"));
+        for code in [
+            issued.pairing_code.as_str(),
+            "not-a-code",
+            "fhp_invalid0000000000000000000000000000000000",
+        ] {
+            let error = failure(
+                exchange(&mut fixture.database, code, Some("profile-expired"), later).unwrap_err(),
+            );
+            assert_eq!(
+                (error.status_code, error.public_message.as_str(), error.code),
+                (401, "Pairing failed", "pairing_invalid")
+            );
         }
         let one = issue(&mut fixture, "Profile 1", &["project_allowed"]);
         let two = issue(&mut fixture, "Profile 2", &["project_allowed"]);
         for issued in [one, two] {
-            let paired = exchange(&mut fixture.database, &issued.pairing_code, Some("default"), Utc::now()).unwrap();
-            assert_eq!(authenticate(&mut fixture.database, &paired.credential, Utc::now()).unwrap().profile_id.as_deref(), Some("default"));
+            let paired = exchange(
+                &mut fixture.database,
+                &issued.pairing_code,
+                Some("default"),
+                Utc::now(),
+            )
+            .unwrap();
+            assert_eq!(
+                authenticate(&mut fixture.database, &paired.credential, Utc::now())
+                    .unwrap()
+                    .profile_id
+                    .as_deref(),
+                Some("default")
+            );
         }
     }
 
@@ -1067,7 +1408,8 @@ pub(crate) mod tests {
                 let barrier = barrier.clone();
                 std::thread::spawn(move || {
                     barrier.wait();
-                    exchange(&mut database, &code, Some("profile-concurrent"), Utc::now()).map_err(|error| failure(error).code)
+                    exchange(&mut database, &code, Some("profile-concurrent"), Utc::now())
+                        .map_err(|error| failure(error).code)
                 })
             })
             .collect::<Vec<_>>()
@@ -1075,8 +1417,26 @@ pub(crate) mod tests {
             .map(|handle| handle.join().unwrap())
             .collect::<Vec<_>>();
         assert_eq!(outcomes.iter().filter(|outcome| outcome.is_ok()).count(), 1);
-        assert_eq!(outcomes.iter().filter_map(|outcome| outcome.as_ref().err()).collect::<Vec<_>>(), [&"pairing_invalid"]);
-        assert_eq!(count(&fixture.database, "SELECT COUNT(*) FROM suplex_external_agent_credentials WHERE revoked_at IS NULL"), 1);
-        assert_eq!(count(&fixture.database, "SELECT COUNT(*) FROM suplex_audit_events WHERE action = 'external_agent_paired'"), 1);
+        assert_eq!(
+            outcomes
+                .iter()
+                .filter_map(|outcome| outcome.as_ref().err())
+                .collect::<Vec<_>>(),
+            [&"pairing_invalid"]
+        );
+        assert_eq!(
+            count(
+                &fixture.database,
+                "SELECT COUNT(*) FROM suplex_external_agent_credentials WHERE revoked_at IS NULL"
+            ),
+            1
+        );
+        assert_eq!(
+            count(
+                &fixture.database,
+                "SELECT COUNT(*) FROM suplex_audit_events WHERE action = 'external_agent_paired'"
+            ),
+            1
+        );
     }
 }

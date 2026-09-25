@@ -43,9 +43,9 @@ use crate::{
 use super::{
     archive::operations as archive,
     commands::{self, TaskFailure},
-    images, integration, sources,
+    images, integration,
     repository::{self, TaskCreator},
-    response,
+    response, sources,
 };
 
 /// A task failure with the runtime detail fields TypeScript spreads into the error body.
@@ -74,7 +74,12 @@ fn fail(message: &str, status_code: u16, code: &'static str) -> Box<dyn Error> {
     })
 }
 
-fn fail_with(message: &str, status_code: u16, code: &'static str, details: Value) -> Box<dyn Error> {
+fn fail_with(
+    message: &str,
+    status_code: u16,
+    code: &'static str,
+    details: Value,
+) -> Box<dyn Error> {
     Box::new(AgentTaskFailure {
         public_message: message.to_owned(),
         status_code,
@@ -108,8 +113,14 @@ fn hmac(key: &str, message: &str) -> String {
         block[..key.len()].copy_from_slice(key.as_bytes());
     }
     let pad = |byte: u8| block.iter().map(|value| value ^ byte).collect::<Vec<_>>();
-    let inner = Sha256::new().chain_update(pad(0x36)).chain_update(message.as_bytes()).finalize();
-    let outer = Sha256::new().chain_update(pad(0x5c)).chain_update(inner).finalize();
+    let inner = Sha256::new()
+        .chain_update(pad(0x36))
+        .chain_update(message.as_bytes())
+        .finalize();
+    let outer = Sha256::new()
+        .chain_update(pad(0x5c))
+        .chain_update(inner)
+        .finalize();
     URL_SAFE_NO_PAD.encode(outer)
 }
 
@@ -142,7 +153,11 @@ fn row_from(row: &rusqlite::Row<'_>) -> rusqlite::Result<Row> {
 fn task_row(database: &SuplexDatabase, task_id: &str) -> DatabaseResult<Option<Row>> {
     Ok(database
         .connection()
-        .query_row(&format!("{ROW_SELECT} WHERE t.id = ?1"), [task_id], row_from)
+        .query_row(
+            &format!("{ROW_SELECT} WHERE t.id = ?1"),
+            [task_id],
+            row_from,
+        )
         .optional()?)
 }
 
@@ -190,19 +205,36 @@ fn require_scope(
     ).optional()?;
     match status {
         None => Err(denied(failure)),
-        Some(status) if active && status != "active" => Err(fail("The company is not active", 409, "task_failure")),
+        Some(status) if active && status != "active" => {
+            Err(fail("The company is not active", 409, "task_failure"))
+        }
         Some(_) => Ok(()),
     }
 }
 
-fn require_readable(database: &SuplexDatabase, principal: &Principal, task_id: &str) -> DatabaseResult<Row> {
+fn require_readable(
+    database: &SuplexDatabase,
+    principal: &Principal,
+    task_id: &str,
+) -> DatabaseResult<Row> {
     let row = task_row(database, task_id)?.ok_or_else(not_found)?;
-    require_scope(database, principal, &row.company_id, &row.project_id, false, None)?;
+    require_scope(
+        database,
+        principal,
+        &row.company_id,
+        &row.project_id,
+        false,
+        None,
+    )?;
     Ok(row)
 }
 
 /// Commands, dependency writes, and delivery operations stay with the creating agent.
-fn require_owned(database: &SuplexDatabase, principal: &Principal, task_id: &str) -> DatabaseResult<Row> {
+fn require_owned(
+    database: &SuplexDatabase,
+    principal: &Principal,
+    task_id: &str,
+) -> DatabaseResult<Row> {
     let row = require_readable(database, principal, task_id)?;
     if row.creator_agent_id.as_deref() != Some(principal.agent_id.as_str()) {
         return Err(not_found());
@@ -211,7 +243,9 @@ fn require_owned(database: &SuplexDatabase, principal: &Principal, task_id: &str
 }
 
 /// The live archive authority an agent holds over a task it created.
-fn agent_authority(principal: &Principal) -> impl Fn(&SuplexDatabase, &repository::TaskRecord) -> DatabaseResult<()> + Sync + '_ {
+fn agent_authority(
+    principal: &Principal,
+) -> impl Fn(&SuplexDatabase, &repository::TaskRecord) -> DatabaseResult<()> + Sync + '_ {
     move |database, task| require_owned(database, principal, &task.id).map(|_| ())
 }
 
@@ -230,8 +264,18 @@ fn permitted_commands(task: &Value, creator: bool) -> Vec<&'static str> {
         vec!["unarchive_task"]
     } else {
         match status {
-            "backlog" => vec!["start_task", "cancel_task", "archive_task", "duplicate_task"],
-            "queued" => vec!["disarm_task", "cancel_task", "archive_task", "duplicate_task"],
+            "backlog" => vec![
+                "start_task",
+                "cancel_task",
+                "archive_task",
+                "duplicate_task",
+            ],
+            "queued" => vec![
+                "disarm_task",
+                "cancel_task",
+                "archive_task",
+                "duplicate_task",
+            ],
             "active" => vec!["cancel_task", "duplicate_task", "send_task_note"],
             "waiting_human" => vec!["cancel_task", "duplicate_task"],
             "cancelled" | "delivered" => vec!["archive_task", "duplicate_task"],
@@ -256,7 +300,16 @@ fn response_blocker(item: &Value) -> Value {
         return item.clone();
     };
     let mut ordered = Map::new();
-    for name in ["id", "title", "status", "kind", "number", "url", "state", "observedAt"] {
+    for name in [
+        "id",
+        "title",
+        "status",
+        "kind",
+        "number",
+        "url",
+        "state",
+        "observedAt",
+    ] {
         if let Some(value) = fields.get(name) {
             ordered.insert(name.to_owned(), value.clone());
         }
@@ -265,7 +318,11 @@ fn response_blocker(item: &Value) -> Value {
 }
 
 /// `agentApiProjection`: the stored-state projection and its revision.
-fn projection_of(database: &SuplexDatabase, row: &Row, principal: &Principal) -> DatabaseResult<Value> {
+fn projection_of(
+    database: &SuplexDatabase,
+    row: &Row,
+    principal: &Principal,
+) -> DatabaseResult<Value> {
     let task = task_json(database, &row.id)?;
     let project: Option<(String, String)> = database
         .connection()
@@ -275,7 +332,8 @@ fn projection_of(database: &SuplexDatabase, row: &Row, principal: &Principal) ->
             |row| Ok((row.get(0)?, row.get(1)?)),
         )
         .optional()?;
-    let (project_id, project_name) = project.ok_or_else(|| fail("Not found", 404, "task_failure"))?;
+    let (project_id, project_name) =
+        project.ok_or_else(|| fail("Not found", 404, "task_failure"))?;
     let question = task["humanQuestion"]["text"].as_str().map(str::to_owned);
     let wait = &task["workflowState"]["deliveryWait"];
     let completion = &task["workflowState"]["completion"];
@@ -313,7 +371,10 @@ fn projection_of(database: &SuplexDatabase, row: &Row, principal: &Principal) ->
     };
     let creator = row.creator_agent_id.as_deref() == Some(principal.agent_id.as_str());
     let (workflow_id, workflow_name, template_id) = selection(&task);
-    let source = task["configuration"].get("source").cloned().unwrap_or(Value::Null);
+    let source = task["configuration"]
+        .get("source")
+        .cloned()
+        .unwrap_or(Value::Null);
     let archived = !task["archivedAt"].is_null();
     let permitted = permitted_commands(&task, creator);
     let fields: Vec<(&str, Value)> = vec![
@@ -332,22 +393,45 @@ fn projection_of(database: &SuplexDatabase, row: &Row, principal: &Principal) ->
         ("humanQuestion", json!(question)),
         ("blocker", blocker),
         ("workflowStage", json!(stage)),
-        ("workflow", json!({"id": workflow_id, "engine": task["workflow"], "name": workflow_name})),
+        (
+            "workflow",
+            json!({"id": workflow_id, "engine": task["workflow"], "name": workflow_name}),
+        ),
         ("templateId", template_id),
         ("deliveryTarget", task["deliveryTarget"].clone()),
-        ("runProjectTests", task["configuration"]["runProjectTests"].clone()),
-        ("visualEvidence", task["configuration"]["visualEvidence"].clone()),
+        (
+            "runProjectTests",
+            task["configuration"]["runProjectTests"].clone(),
+        ),
+        (
+            "visualEvidence",
+            task["configuration"]["visualEvidence"].clone(),
+        ),
         ("delivery", delivery),
         ("createdAt", task["createdAt"].clone()),
         ("updatedAt", task["updatedAt"].clone()),
     ];
-    let value = Value::Object(fields.iter().map(|(name, value)| ((*name).to_owned(), value.clone())).collect());
-    let hashed = crate::shared::js_json::stringify(&json!({"value": value, "commandRevision": row.command_revision}));
+    let value = Value::Object(
+        fields
+            .iter()
+            .map(|(name, value)| ((*name).to_owned(), value.clone()))
+            .collect(),
+    );
+    let hashed = crate::shared::js_json::stringify(
+        &json!({"value": value, "commandRevision": row.command_revision}),
+    );
     let revision = URL_SAFE_NO_PAD.encode(Sha256::digest(hashed.as_bytes()));
     let mut ordered = Map::new();
     for (name, value) in fields {
         let value = if name == "blockedBy" {
-            Value::Array(value.as_array().into_iter().flatten().map(response_blocker).collect())
+            Value::Array(
+                value
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .map(response_blocker)
+                    .collect(),
+            )
         } else {
             value
         };
@@ -360,7 +444,11 @@ fn projection_of(database: &SuplexDatabase, row: &Row, principal: &Principal) ->
 }
 
 /// `getAgentApiTask`: any task in a granted project.
-pub fn projection(database: &SuplexDatabase, principal: &Principal, task_id: &str) -> DatabaseResult<Value> {
+pub fn projection(
+    database: &SuplexDatabase,
+    principal: &Principal,
+    task_id: &str,
+) -> DatabaseResult<Value> {
     let row = require_readable(database, principal, task_id)?;
     projection_of(database, &row, principal)
 }
@@ -376,7 +464,8 @@ pub fn identity(database: &SuplexDatabase, principal: &Principal) -> DatabaseRes
         .collect::<rusqlite::Result<Vec<_>>>()?;
     let mut projects_json = Vec::new();
     for (id, name) in rows {
-        let policy = projects::get_in_company(database, &principal.company_id, &id)?.agent_task_policy;
+        let policy =
+            projects::get_in_company(database, &principal.company_id, &id)?.agent_task_policy;
         // A project fixes exactly one permitted delivery target; the list keeps room for more.
         projects_json.push(json!({"id": id, "name": name, "agentTaskPolicy": {"deliveryTargets": [policy.delivery_target], "runProjectTests": policy.run_project_tests, "visualEvidence": policy.visual_evidence}}));
     }
@@ -392,14 +481,32 @@ pub fn identity(database: &SuplexDatabase, principal: &Principal) -> DatabaseRes
     }))
 }
 
-pub fn workflows(database: &SuplexDatabase, principal: &Principal, project_id: &str) -> DatabaseResult<Vec<Value>> {
-    require_scope(database, principal, &principal.company_id, project_id, false, None)?;
-    let policy = projects::get_in_company(database, &principal.company_id, project_id)?.agent_task_policy;
+pub fn workflows(
+    database: &SuplexDatabase,
+    principal: &Principal,
+    project_id: &str,
+) -> DatabaseResult<Vec<Value>> {
+    require_scope(
+        database,
+        principal,
+        &principal.company_id,
+        project_id,
+        false,
+        None,
+    )?;
+    let policy =
+        projects::get_in_company(database, &principal.company_id, project_id)?.agent_task_policy;
     let mut statement = database.connection().prepare(
         "SELECT id, name, description FROM suplex_workflows WHERE archived_at IS NULL ORDER BY name COLLATE NOCASE, id",
     )?;
     let rows = statement
-        .query_map([], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?)))?
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     Ok(rows
         .into_iter()
@@ -410,14 +517,32 @@ pub fn workflows(database: &SuplexDatabase, principal: &Principal, project_id: &
         .collect())
 }
 
-pub fn templates(database: &SuplexDatabase, principal: &Principal, project_id: &str) -> DatabaseResult<Vec<Value>> {
-    require_scope(database, principal, &principal.company_id, project_id, false, None)?;
-    let policy = projects::get_in_company(database, &principal.company_id, project_id)?.agent_task_policy;
+pub fn templates(
+    database: &SuplexDatabase,
+    principal: &Principal,
+    project_id: &str,
+) -> DatabaseResult<Vec<Value>> {
+    require_scope(
+        database,
+        principal,
+        &principal.company_id,
+        project_id,
+        false,
+        None,
+    )?;
+    let policy =
+        projects::get_in_company(database, &principal.company_id, project_id)?.agent_task_policy;
     let mut statement = database.connection().prepare(
         "SELECT id, name, configuration_json FROM suplex_task_templates WHERE project_id = ?1 ORDER BY name COLLATE NOCASE, id",
     )?;
     let rows = statement
-        .query_map([project_id], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?)))?
+        .query_map([project_id], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
     rows.into_iter()
         .map(|(id, name, configuration)| {
@@ -446,10 +571,21 @@ struct RowFilter<'a> {
 }
 
 /// `agentApiRows`: tasks in the agent's live grants, newest activity first.
-fn rows(database: &SuplexDatabase, principal: &Principal, filter: RowFilter<'_>) -> DatabaseResult<Vec<Row>> {
+fn rows(
+    database: &SuplexDatabase,
+    principal: &Principal,
+    filter: RowFilter<'_>,
+) -> DatabaseResult<Vec<Row>> {
     let activity = "CASE WHEN julianday(t.updated_at) >= julianday(COALESCE(control.updated_at, t.updated_at)) THEN t.updated_at ELSE control.updated_at END";
-    let mut conditions = vec!["t.company_id = ?".to_owned(), "a.status = 'paired'".into(), "a.revoked_at IS NULL".into()];
-    let mut values: Vec<SqlValue> = vec![principal.agent_id.clone().into(), principal.company_id.clone().into()];
+    let mut conditions = vec![
+        "t.company_id = ?".to_owned(),
+        "a.status = 'paired'".into(),
+        "a.revoked_at IS NULL".into(),
+    ];
+    let mut values: Vec<SqlValue> = vec![
+        principal.agent_id.clone().into(),
+        principal.company_id.clone().into(),
+    ];
     let text = |value: &str| SqlValue::Text(value.to_owned());
     if let Some(creator) = filter.creator_agent_id {
         conditions.push("t.creator_agent_id = ?".into());
@@ -477,10 +613,24 @@ fn rows(database: &SuplexDatabase, principal: &Principal, filter: RowFilter<'_>)
         values.push(text(&format!("%{}%", title.to_lowercase())));
     }
     if let Some(archived) = filter.archived {
-        conditions.push(if archived { "t.archived_at IS NOT NULL" } else { "t.archived_at IS NULL" }.into());
+        conditions.push(
+            if archived {
+                "t.archived_at IS NOT NULL"
+            } else {
+                "t.archived_at IS NULL"
+            }
+            .into(),
+        );
     }
     if let Some(attention) = filter.attention {
-        conditions.push(if attention { "control.human_question IS NOT NULL AND control.human_question_id IS NOT NULL" } else { "(control.human_question IS NULL OR control.human_question_id IS NULL)" }.into());
+        conditions.push(
+            if attention {
+                "control.human_question IS NOT NULL AND control.human_question_id IS NOT NULL"
+            } else {
+                "(control.human_question IS NULL OR control.human_question_id IS NULL)"
+            }
+            .into(),
+        );
     }
     if let Some(blocker) = filter.blocker {
         conditions.push(if blocker { "((control.human_question IS NOT NULL AND control.human_question_id IS NOT NULL) OR json_extract(control.workflow_state_json, '$.deliveryWait') IS NOT NULL)" } else { "((control.human_question IS NULL OR control.human_question_id IS NULL) AND json_extract(control.workflow_state_json, '$.deliveryWait') IS NULL)" }.into());
@@ -511,7 +661,11 @@ fn rows(database: &SuplexDatabase, principal: &Principal, filter: RowFilter<'_>)
 }
 
 fn cursor_filter(query: &TaskListQuery) -> Value {
-    let flag = |value: &Option<String>| value.as_ref().map_or(Value::Null, |value| json!(value == "true"));
+    let flag = |value: &Option<String>| {
+        value
+            .as_ref()
+            .map_or(Value::Null, |value| json!(value == "true"))
+    };
     json!({
         "projectId": query.project_id, "status": query.status, "pullRequestNumber": query.pull_request_number,
         "sourceBranch": query.source_branch, "titleContains": query.title_contains, "archived": flag(&query.archived),
@@ -523,7 +677,11 @@ fn invalid_cursor() -> Box<dyn Error> {
     fail("Invalid cursor", 400, "cursor_invalid")
 }
 
-fn parse_cursor(value: &str, principal: &Principal, filter: &Value) -> DatabaseResult<(String, String)> {
+fn parse_cursor(
+    value: &str,
+    principal: &Principal,
+    filter: &Value,
+) -> DatabaseResult<(String, String)> {
     let parts = value.split('.').collect::<Vec<_>>();
     let [payload, signature] = parts.as_slice() else {
         return Err(invalid_cursor());
@@ -532,7 +690,10 @@ fn parse_cursor(value: &str, principal: &Principal, filter: &Value) -> DatabaseR
         return Err(invalid_cursor());
     }
     let expected = hmac(&principal.cursor_key, payload);
-    if !bool::from(subtle::ConstantTimeEq::ct_eq(signature.as_bytes(), expected.as_bytes())) {
+    if !bool::from(subtle::ConstantTimeEq::ct_eq(
+        signature.as_bytes(),
+        expected.as_bytes(),
+    )) {
         return Err(invalid_cursor());
     }
     let decoded = URL_SAFE_NO_PAD
@@ -541,8 +702,17 @@ fn parse_cursor(value: &str, principal: &Principal, filter: &Value) -> DatabaseR
         .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
         .ok_or_else(invalid_cursor)?;
     let fields = decoded.as_object().ok_or_else(invalid_cursor)?;
-    let (Some(Value::String(agent_id)), Some(Value::Object(cursor_filter)), Some(Value::String(updated_at)), Some(Value::String(id))) =
-        (fields.get("agentId"), fields.get("filter"), fields.get("updatedAt"), fields.get("id"))
+    let (
+        Some(Value::String(agent_id)),
+        Some(Value::Object(cursor_filter)),
+        Some(Value::String(updated_at)),
+        Some(Value::String(id)),
+    ) = (
+        fields.get("agentId"),
+        fields.get("filter"),
+        fields.get("updatedAt"),
+        fields.get("id"),
+    )
     else {
         return Err(invalid_cursor());
     };
@@ -566,28 +736,47 @@ fn create_cursor(principal: &Principal, filter: &Value, task: &Value) -> String 
 }
 
 /// `listAgentApiTasks`: one page of stored projections and its opaque cursor.
-fn list_page(database: &SuplexDatabase, principal: &Principal, query: &TaskListQuery) -> DatabaseResult<(Vec<Value>, Option<String>)> {
+fn list_page(
+    database: &SuplexDatabase,
+    principal: &Principal,
+    query: &TaskListQuery,
+) -> DatabaseResult<(Vec<Value>, Option<String>)> {
     if let Some(project_id) = &query.project_id {
-        require_scope(database, principal, &principal.company_id, project_id, false, None)?;
+        require_scope(
+            database,
+            principal,
+            &principal.company_id,
+            project_id,
+            false,
+            None,
+        )?;
     }
     let filter = cursor_filter(query);
-    let cursor = query.cursor.as_deref().map(|cursor| parse_cursor(cursor, principal, &filter)).transpose()?;
+    let cursor = query
+        .cursor
+        .as_deref()
+        .map(|cursor| parse_cursor(cursor, principal, &filter))
+        .transpose()?;
     let limit = query.limit as usize;
     let flag = |value: &Option<String>| value.as_ref().map(|value| value == "true");
-    let found = rows(database, principal, RowFilter {
-        project_id: query.project_id.as_deref(),
-        status: query.status.as_deref(),
-        pull_request_number: query.pull_request_number,
-        source_branch: query.source_branch.as_deref(),
-        title_contains: query.title_contains.as_deref(),
-        archived: flag(&query.archived),
-        attention: flag(&query.attention),
-        blocker: flag(&query.blocker),
-        updated_since: query.updated_since.as_deref(),
-        cursor,
-        limit: Some(limit + 1),
-        ..RowFilter::default()
-    })?;
+    let found = rows(
+        database,
+        principal,
+        RowFilter {
+            project_id: query.project_id.as_deref(),
+            status: query.status.as_deref(),
+            pull_request_number: query.pull_request_number,
+            source_branch: query.source_branch.as_deref(),
+            title_contains: query.title_contains.as_deref(),
+            archived: flag(&query.archived),
+            attention: flag(&query.attention),
+            blocker: flag(&query.blocker),
+            updated_since: query.updated_since.as_deref(),
+            cursor,
+            limit: Some(limit + 1),
+            ..RowFilter::default()
+        },
+    )?;
     let more = found.len() > limit;
     let tasks = found
         .iter()
@@ -613,7 +802,10 @@ fn summary(task: &Value) -> Value {
         fields.insert("source".into(), task["source"].clone());
     }
     if !task["delivery"].is_null() && !task["delivery"]["pullRequest"].is_null() {
-        fields.insert("pullRequestNumber".into(), task["delivery"]["pullRequest"]["number"].clone());
+        fields.insert(
+            "pullRequestNumber".into(),
+            task["delivery"]["pullRequest"]["number"].clone(),
+        );
     }
     fields.insert("dependsOn".into(), task["dependsOn"].clone());
     fields.insert("updatedAt".into(), task["updatedAt"].clone());
@@ -630,22 +822,43 @@ struct Observed {
 
 async fn observe(github: &mut Option<Result<Github, String>>, task: &Value) -> Observed {
     if !integration::observable_delivery(task) {
-        return Observed { observation: None, failure: None };
+        return Observed {
+            observation: None,
+            failure: None,
+        };
     }
     if github.is_none() {
-        *github = Some(Github::load().await.map_err(|failure| failure.code.to_owned()));
+        *github = Some(
+            Github::load()
+                .await
+                .map_err(|failure| failure.code.to_owned()),
+        );
     }
     let client = match github.as_ref().expect("GitHub client loaded") {
         Ok(client) => client,
-        Err(code) => return Observed { observation: None, failure: Some(code.clone()) },
+        Err(code) => {
+            return Observed {
+                observation: None,
+                failure: Some(code.clone()),
+            };
+        }
     };
     let configuration = &task["configuration"];
     let number = task["pullRequest"]["number"].as_u64();
     let repository = configuration["repository"].as_str().unwrap_or_default();
     let branch = configuration["branch"].as_str().unwrap_or_default();
-    match client.observe_pull_request(repository, branch, number).await {
-        Ok(observation) => Observed { observation: Some(observation), failure: None },
-        Err(failure) => Observed { observation: None, failure: Some(failure.code.to_owned()) },
+    match client
+        .observe_pull_request(repository, branch, number)
+        .await
+    {
+        Ok(observation) => Observed {
+            observation: Some(observation),
+            failure: None,
+        },
+        Err(failure) => Observed {
+            observation: None,
+            failure: Some(failure.code.to_owned()),
+        },
     }
 }
 
@@ -655,37 +868,68 @@ struct Targets {
     pool: Vec<Value>,
 }
 
-fn targets(database: &SuplexDatabase, principal: &Principal, projections: &[Value]) -> DatabaseResult<Targets> {
+fn targets(
+    database: &SuplexDatabase,
+    principal: &Principal,
+    projections: &[Value],
+) -> DatabaseResult<Targets> {
     let targets = projections
         .iter()
         .map(|projection| {
             let id = projection["id"].as_str().unwrap_or_default();
-            Ok((task_row(database, id)?.ok_or_else(not_found)?, task_json(database, id)?))
+            Ok((
+                task_row(database, id)?.ok_or_else(not_found)?,
+                task_json(database, id)?,
+            ))
         })
         .collect::<DatabaseResult<Vec<_>>>()?;
-    let pool = rows(database, principal, RowFilter { limit: Some(UPSTREAM_POOL), ..RowFilter::default() })?
-        .iter()
-        .map(|row| task_json(database, &row.id))
-        .collect::<DatabaseResult<Vec<_>>>()?;
+    let pool = rows(
+        database,
+        principal,
+        RowFilter {
+            limit: Some(UPSTREAM_POOL),
+            ..RowFilter::default()
+        },
+    )?
+    .iter()
+    .map(|row| task_json(database, &row.id))
+    .collect::<DatabaseResult<Vec<_>>>()?;
     Ok(Targets { targets, pool })
 }
 
-async fn with_integration(principal: &Principal, projections: Vec<Value>, stored: Targets) -> Vec<Value> {
+async fn with_integration(
+    principal: &Principal,
+    projections: Vec<Value>,
+    stored: Targets,
+) -> Vec<Value> {
     let Targets { targets, pool } = stored;
     let observed_at = timestamp(Utc::now());
     let upstreams = targets
         .iter()
-        .map(|(_, task)| pool.iter().filter(|other| integration::is_upstream_of(other, task)).collect::<Vec<_>>())
+        .map(|(_, task)| {
+            pool.iter()
+                .filter(|other| integration::is_upstream_of(other, task))
+                .collect::<Vec<_>>()
+        })
         .collect::<Vec<_>>();
     let mut github = None;
     let mut integrations = std::collections::HashMap::new();
-    for task in targets.iter().map(|(_, task)| task).chain(upstreams.iter().flatten().copied()) {
+    for task in targets
+        .iter()
+        .map(|(_, task)| task)
+        .chain(upstreams.iter().flatten().copied())
+    {
         let id = task["id"].as_str().unwrap_or_default().to_owned();
         if integrations.contains_key(&id) {
             continue;
         }
         let observed = observe(&mut github, task).await;
-        let value = integration::derive_task_integration(task, observed.observation.as_ref(), observed.failure.as_deref(), &observed_at);
+        let value = integration::derive_task_integration(
+            task,
+            observed.observation.as_ref(),
+            observed.failure.as_deref(),
+            &observed_at,
+        );
         integrations.insert(id, value);
     }
     projections
@@ -721,22 +965,45 @@ pub async fn read(state: &AppState, principal: &Principal, task_id: &str) -> Dat
         let stored = targets(database, principal, std::slice::from_ref(&projection))?;
         Ok::<_, Box<dyn Error>>((projection, stored))
     })?;
-    Ok(with_integration(principal, vec![projection], stored).await.remove(0))
+    Ok(with_integration(principal, vec![projection], stored)
+        .await
+        .remove(0))
 }
 
 /// `readAgentApiTasks`; `view` defaults differ between HTTP (full) and MCP (summary).
-pub async fn read_list(state: &AppState, principal: &Principal, query: &TaskListQuery, view: &str) -> DatabaseResult<Value> {
+pub async fn read_list(
+    state: &AppState,
+    principal: &Principal,
+    query: &TaskListQuery,
+    view: &str,
+) -> DatabaseResult<Value> {
     let (tasks, next) = state.with_database(|database| list_page(database, principal, query))?;
     if view == "summary" && query.filter.is_none() {
-        return Ok(json!({"tasks": tasks.iter().map(summary).collect::<Vec<_>>(), "nextCursor": next}));
+        return Ok(
+            json!({"tasks": tasks.iter().map(summary).collect::<Vec<_>>(), "nextCursor": next}),
+        );
     }
     let stored = state.with_database(|database| targets(database, principal, &tasks))?;
     let tasks = with_integration(principal, tasks, stored).await;
     // Integration health comes from GitHub, not the query, so the filter narrows a page already drawn.
     let tasks = tasks
         .into_iter()
-        .filter(|task| query.filter.as_deref().is_none_or(|filter| integration::matches_agent_api_filter(&task["integration"], &task["actionRequired"], filter)))
-        .map(|task| if view == "summary" { summary(&task) } else { task })
+        .filter(|task| {
+            query.filter.as_deref().is_none_or(|filter| {
+                integration::matches_agent_api_filter(
+                    &task["integration"],
+                    &task["actionRequired"],
+                    filter,
+                )
+            })
+        })
+        .map(|task| {
+            if view == "summary" {
+                summary(&task)
+            } else {
+                task
+            }
+        })
         .collect::<Vec<_>>();
     Ok(json!({"tasks": tasks, "nextCursor": next}))
 }
@@ -760,16 +1027,40 @@ fn workflow_input_failure(message: &str) -> Box<dyn Error> {
 
 /// `normalizeWorkflowInput(raw, { requireSource: true })`.
 fn normalize_workflow(fields: &mut Map<String, Value>) -> DatabaseResult<()> {
-    let workflow = fields.get("workflow").and_then(Value::as_str).unwrap_or("standard").to_owned();
-    if !["standard", "direct_build", "independent_review", "competing_plans", "refine_pull_request"].contains(&workflow.as_str()) {
-        return Err(workflow_input_failure("The selected workflow does not exist"));
+    let workflow = fields
+        .get("workflow")
+        .and_then(Value::as_str)
+        .unwrap_or("standard")
+        .to_owned();
+    if ![
+        "standard",
+        "direct_build",
+        "independent_review",
+        "competing_plans",
+        "refine_pull_request",
+    ]
+    .contains(&workflow.as_str())
+    {
+        return Err(workflow_input_failure(
+            "The selected workflow does not exist",
+        ));
     }
-    let advisors = fields.get("advisorProfileIds").cloned().unwrap_or_else(|| json!({}));
+    let advisors = fields
+        .get("advisorProfileIds")
+        .cloned()
+        .unwrap_or_else(|| json!({}));
     let valid = advisors.as_object().is_some_and(|ids| {
-        ids.iter().all(|(role, id)| ADVISOR_ROLES.contains(&role.as_str()) && id.as_str().is_some_and(|id| (1..=256).contains(&id.encode_utf16().count())))
+        ids.iter().all(|(role, id)| {
+            ADVISOR_ROLES.contains(&role.as_str())
+                && id
+                    .as_str()
+                    .is_some_and(|id| (1..=256).contains(&id.encode_utf16().count()))
+        })
     });
     if !valid {
-        return Err(workflow_input_failure("The Advisor profile selection is not valid"));
+        return Err(workflow_input_failure(
+            "The Advisor profile selection is not valid",
+        ));
     }
     let allowed = advisor_roles(&workflow);
     let extra = ADVISOR_ROLES
@@ -790,19 +1081,36 @@ fn normalize_workflow(fields: &mut Map<String, Value>) -> DatabaseResult<()> {
             "competing_plans" => "Combined planning",
             _ => "Pull request repair",
         };
-        return Err(workflow_input_failure(&format!("The {name} workflow has no {} Advisor", extra.join(", "))));
+        return Err(workflow_input_failure(&format!(
+            "The {name} workflow has no {} Advisor",
+            extra.join(", ")
+        )));
     }
     fields.insert("workflow".into(), json!(workflow));
     fields.insert("advisorProfileIds".into(), advisors);
     if workflow == "refine_pull_request" {
-        if fields.get("deliveryTarget").is_some_and(|value| value != "merged") {
-            return Err(workflow_input_failure("Pull request repair always delivers a merged pull request"));
+        if fields
+            .get("deliveryTarget")
+            .is_some_and(|value| value != "merged")
+        {
+            return Err(workflow_input_failure(
+                "Pull request repair always delivers a merged pull request",
+            ));
         }
-        if fields.get("runProjectTests").is_some_and(|value| value != true) {
-            return Err(workflow_input_failure("Pull request repair always runs the project tests"));
+        if fields
+            .get("runProjectTests")
+            .is_some_and(|value| value != true)
+        {
+            return Err(workflow_input_failure(
+                "Pull request repair always runs the project tests",
+            ));
         }
-        if fields.get("source").and_then(|source| source.get("kind")) != Some(&json!("pull_request")) {
-            return Err(workflow_input_failure("Select a pull request source for Pull request repair"));
+        if fields.get("source").and_then(|source| source.get("kind"))
+            != Some(&json!("pull_request"))
+        {
+            return Err(workflow_input_failure(
+                "Select a pull request source for Pull request repair",
+            ));
         }
         fields.insert("deliveryTarget".into(), json!("merged"));
         fields.insert("runProjectTests".into(), json!(true));
@@ -814,7 +1122,9 @@ fn normalize_workflow(fields: &mut Map<String, Value>) -> DatabaseResult<()> {
 fn task_input(mut fields: Map<String, Value>) -> DatabaseResult<task_contracts::TaskCreateBody> {
     normalize_workflow(&mut fields)?;
     task_contracts::parse_task_create(Some(&Value::Object(fields))).map_err(|error| match error {
-        ContractFailure::Issues(issues) => std::io::Error::other(format!("task input is invalid: {issues:?}")).into(),
+        ContractFailure::Issues(issues) => {
+            std::io::Error::other(format!("task input is invalid: {issues:?}")).into()
+        }
         other => std::io::Error::other(format!("task input is invalid: {other:?}")).into(),
     })
 }
@@ -825,8 +1135,17 @@ fn sorted(value: &Value) -> Value {
         Value::Array(items) => Value::Array(items.iter().map(sorted).collect()),
         Value::Object(fields) => {
             let mut entries = fields.iter().collect::<Vec<_>>();
-            entries.sort_by(|(left, _), (right, _)| left.to_lowercase().cmp(&right.to_lowercase()).then_with(|| left.cmp(right)));
-            Value::Object(entries.into_iter().map(|(name, value)| (name.clone(), sorted(value))).collect())
+            entries.sort_by(|(left, _), (right, _)| {
+                left.to_lowercase()
+                    .cmp(&right.to_lowercase())
+                    .then_with(|| left.cmp(right))
+            });
+            Value::Object(
+                entries
+                    .into_iter()
+                    .map(|(name, value)| (name.clone(), sorted(value)))
+                    .collect(),
+            )
         }
         other => other.clone(),
     }
@@ -851,7 +1170,8 @@ fn is_legacy_request(raw: &TaskCreateBody) -> bool {
         && raw.template_id.is_none()
         && raw.root_profile_id.is_none()
         && raw.worker_profile_id.is_none()
-        && serde_json::to_value(&raw.advisor_profile_ids).is_ok_and(|ids| ids.as_object().is_none_or(Map::is_empty))
+        && serde_json::to_value(&raw.advisor_profile_ids)
+            .is_ok_and(|ids| ids.as_object().is_none_or(Map::is_empty))
         && raw.delivery_target.is_none()
         && raw.run_project_tests.is_none()
         && raw.visual_evidence.is_none()
@@ -865,8 +1185,16 @@ fn legacy_hash(raw: &TaskCreateBody, agent_id: &str) -> DatabaseResult<String> {
             .cloned()
             .unwrap_or_default(),
     )?;
-    let mut fields = serde_json::to_value(input)?.as_object().cloned().unwrap_or_default();
-    for name in ["workflow", "advisorProfileIds", "dependsOn", "blockedByPullRequests"] {
+    let mut fields = serde_json::to_value(input)?
+        .as_object()
+        .cloned()
+        .unwrap_or_default();
+    for name in [
+        "workflow",
+        "advisorProfileIds",
+        "dependsOn",
+        "blockedByPullRequests",
+    ] {
         fields.remove(name);
     }
     let payload = json!({"input": fields, "creator": {"kind": "agent", "id": agent_id}});
@@ -874,11 +1202,21 @@ fn legacy_hash(raw: &TaskCreateBody, agent_id: &str) -> DatabaseResult<String> {
 }
 
 fn conflict() -> Box<dyn Error> {
-    fail("This idempotency key belongs to a different request", 409, "task_failure")
+    fail(
+        "This idempotency key belongs to a different request",
+        409,
+        "task_failure",
+    )
 }
 
 /// `TaskRepository.existing` for an agent creator.
-fn existing(database: &SuplexDatabase, company_id: &str, key: &str, hash: &str, agent_id: &str) -> DatabaseResult<Option<String>> {
+fn existing(
+    database: &SuplexDatabase,
+    company_id: &str,
+    key: &str,
+    hash: &str,
+    agent_id: &str,
+) -> DatabaseResult<Option<String>> {
     let found: Option<(String, String, Option<String>)> = database
         .connection()
         .query_row(
@@ -889,7 +1227,9 @@ fn existing(database: &SuplexDatabase, company_id: &str, key: &str, hash: &str, 
         .optional()?;
     match found {
         None => Ok(None),
-        Some((id, stored, creator)) if stored == hash && creator.as_deref() == Some(agent_id) => Ok(Some(id)),
+        Some((id, stored, creator)) if stored == hash && creator.as_deref() == Some(agent_id) => {
+            Ok(Some(id))
+        }
         Some(_) => Err(conflict()),
     }
 }
@@ -909,16 +1249,32 @@ fn profile_not_available(profile_id: &str, role: &str, field: &str) -> Box<dyn E
         "advisor_profile_not_found"
     };
     let reason = "The selected agent profile is not available.";
-    fail_with(reason, 422, code, json!({"field": field, "value": profile_id, "reason": reason}))
+    fail_with(
+        reason,
+        422,
+        code,
+        json!({"field": field, "value": profile_id, "reason": reason}),
+    )
 }
 
 fn profile(database: &SuplexDatabase, profile_id: &str, role: &str) -> DatabaseResult<Value> {
-    commands::read_profile(database, profile_id, role)?
-        .ok_or_else(|| fail("The selected agent profile does not exist", 422, "task_failure"))
+    commands::read_profile(database, profile_id, role)?.ok_or_else(|| {
+        fail(
+            "The selected agent profile does not exist",
+            422,
+            "task_failure",
+        )
+    })
 }
 
 /// `projectProfile`: an explicit selection, the project default when allowed, or the first allowed profile.
-fn project_profile(database: &SuplexDatabase, explicit: Option<&str>, default_id: &str, role: &str, project: &Project) -> DatabaseResult<Value> {
+fn project_profile(
+    database: &SuplexDatabase,
+    explicit: Option<&str>,
+    default_id: &str,
+    role: &str,
+    project: &Project,
+) -> DatabaseResult<Value> {
     if let Some(explicit) = explicit {
         return profile(database, explicit, role);
     }
@@ -929,18 +1285,28 @@ fn project_profile(database: &SuplexDatabase, explicit: Option<&str>, default_id
     let mut statement = database
         .connection()
         .prepare("SELECT id FROM suplex_profiles WHERE role = ?1 AND archived_at IS NULL ORDER BY created_at, id")?;
-    let ids = statement.query_map([role], |row| row.get::<_, String>(0))?.collect::<rusqlite::Result<Vec<_>>>()?;
+    let ids = statement
+        .query_map([role], |row| row.get::<_, String>(0))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
     for id in ids {
         let candidate = profile(database, &id, role)?;
         if commands::allowed_profile(project.provider_policy.as_ref(), &candidate) {
             return Ok(candidate);
         }
     }
-    Err(fail("Create an agent with a provider and login allowed by this project", 422, "task_failure"))
+    Err(fail(
+        "Create an agent with a provider and login allowed by this project",
+        422,
+        "task_failure",
+    ))
 }
 
 /// `resolveAgentApiRequest`: the workflow or template the project permits, applied under its policy.
-fn resolve(database: &SuplexDatabase, company_id: &str, raw: &TaskCreateBody) -> DatabaseResult<Resolved> {
+fn resolve(
+    database: &SuplexDatabase,
+    company_id: &str,
+    raw: &TaskCreateBody,
+) -> DatabaseResult<Resolved> {
     let project = projects::get_in_company(database, company_id, &raw.project_id)?;
     let policy = &project.agent_task_policy;
     let mut selected = Map::new();
@@ -956,16 +1322,33 @@ fn resolve(database: &SuplexDatabase, company_id: &str, raw: &TaskCreateBody) ->
             )
             .optional()?;
         let Some(stored) = stored else {
-            return Err(fail_with("The selected template is not available", 422, "template_not_found", details("The selected template is not available.")));
+            return Err(fail_with(
+                "The selected template is not available",
+                422,
+                "template_not_found",
+                details("The selected template is not available."),
+            ));
         };
         if !policy.template_ids.contains(template_id) {
-            return Err(fail_with("The selected template is not permitted", 422, "template_not_permitted", details("The selected template is not permitted.")));
+            return Err(fail_with(
+                "The selected template is not permitted",
+                422,
+                "template_not_permitted",
+                details("The selected template is not permitted."),
+            ));
         }
-        let template = task_templates::parse_stored_configuration(serde_json::from_str(&stored)?).map_err(std::io::Error::other)?;
-        selected = serde_json::to_value(&template)?.as_object().cloned().unwrap_or_default();
+        let template = task_templates::parse_stored_configuration(serde_json::from_str(&stored)?)
+            .map_err(std::io::Error::other)?;
+        selected = serde_json::to_value(&template)?
+            .as_object()
+            .cloned()
+            .unwrap_or_default();
         selection = json!({"workflowId": null, "workflowName": null, "templateId": template_id});
     } else {
-        let workflow_id = raw.workflow_id.clone().unwrap_or_else(|| policy.default_workflow_id.clone());
+        let workflow_id = raw
+            .workflow_id
+            .clone()
+            .unwrap_or_else(|| policy.default_workflow_id.clone());
         let details = |reason: &str| json!({"field": "workflowId", "value": workflow_id, "reason": reason, "permittedWorkflowIds": policy.workflow_ids});
         let record: Option<(String, String, String)> = database
             .connection()
@@ -976,16 +1359,36 @@ fn resolve(database: &SuplexDatabase, company_id: &str, raw: &TaskCreateBody) ->
             )
             .optional()?;
         let Some((name, configuration, engine)) = record else {
-            return Err(fail_with("The selected workflow is not available", 422, "workflow_not_found", details("The selected workflow is not available.")));
+            return Err(fail_with(
+                "The selected workflow is not available",
+                422,
+                "workflow_not_found",
+                details("The selected workflow is not available."),
+            ));
         };
         if !policy.workflow_ids.contains(&workflow_id) {
-            return Err(fail_with("The selected workflow is not permitted", 422, "workflow_not_permitted", details("The selected workflow is not permitted.")));
+            return Err(fail_with(
+                "The selected workflow is not permitted",
+                422,
+                "workflow_not_permitted",
+                details("The selected workflow is not permitted."),
+            ));
         }
         let configuration: Value = serde_json::from_str(&configuration)?;
         selected.insert("workflow".into(), json!(engine));
-        selected.insert("advisorProfileIds".into(), configuration.get("advisorProfileIds").cloned().unwrap_or_else(|| json!({})));
+        selected.insert(
+            "advisorProfileIds".into(),
+            configuration
+                .get("advisorProfileIds")
+                .cloned()
+                .unwrap_or_else(|| json!({})),
+        );
         for name in ["rootProfileId", "workerProfileId"] {
-            if let Some(id) = configuration.get(name).and_then(Value::as_str).filter(|id| !id.is_empty()) {
+            if let Some(id) = configuration
+                .get(name)
+                .and_then(Value::as_str)
+                .filter(|id| !id.is_empty())
+            {
                 selected.insert(name.into(), json!(id));
             }
         }
@@ -995,7 +1398,12 @@ fn resolve(database: &SuplexDatabase, company_id: &str, raw: &TaskCreateBody) ->
     let mut fields = Map::new();
     fields.insert("projectId".into(), json!(raw.project_id));
     fields.insert("title".into(), json!(raw.title));
-    let description = raw.description.clone().map(Value::String).or_else(|| selected.get("description").cloned()).unwrap_or_else(|| json!(""));
+    let description = raw
+        .description
+        .clone()
+        .map(Value::String)
+        .or_else(|| selected.get("description").cloned())
+        .unwrap_or_else(|| json!(""));
     fields.insert("description".into(), description);
     fields.insert("idempotencyKey".into(), json!(raw.idempotency_key));
     fields.insert("images".into(), serde_json::to_value(&raw.images)?);
@@ -1006,11 +1414,27 @@ fn resolve(database: &SuplexDatabase, company_id: &str, raw: &TaskCreateBody) ->
         fields.insert("dependsOn".into(), json!(depends_on));
     }
     if let Some(pull_requests) = &raw.blocked_by_pull_requests {
-        fields.insert("blockedByPullRequests".into(), serde_json::to_value(pull_requests)?);
+        fields.insert(
+            "blockedByPullRequests".into(),
+            serde_json::to_value(pull_requests)?,
+        );
     }
-    fields.insert("workflow".into(), selected.get("workflow").cloned().unwrap_or_else(|| json!("standard")));
-    for (name, value) in [("rootProfileId", &raw.root_profile_id), ("workerProfileId", &raw.worker_profile_id)] {
-        if let Some(value) = value.clone().map(Value::String).or_else(|| selected.get(name).cloned()) {
+    fields.insert(
+        "workflow".into(),
+        selected
+            .get("workflow")
+            .cloned()
+            .unwrap_or_else(|| json!("standard")),
+    );
+    for (name, value) in [
+        ("rootProfileId", &raw.root_profile_id),
+        ("workerProfileId", &raw.worker_profile_id),
+    ] {
+        if let Some(value) = value
+            .clone()
+            .map(Value::String)
+            .or_else(|| selected.get(name).cloned())
+        {
             fields.insert(name.into(), value);
         }
     }
@@ -1018,7 +1442,10 @@ fn resolve(database: &SuplexDatabase, company_id: &str, raw: &TaskCreateBody) ->
     let advisors = if raw_advisors.as_object().is_some_and(|ids| !ids.is_empty()) {
         raw_advisors.clone()
     } else {
-        selected.get("advisorProfileIds").cloned().unwrap_or_else(|| json!({}))
+        selected
+            .get("advisorProfileIds")
+            .cloned()
+            .unwrap_or_else(|| json!({}))
     };
     fields.insert("advisorProfileIds".into(), advisors);
     fields.insert("deliveryTarget".into(), json!(policy.delivery_target));
@@ -1026,9 +1453,17 @@ fn resolve(database: &SuplexDatabase, company_id: &str, raw: &TaskCreateBody) ->
     fields.insert("visualEvidence".into(), json!(policy.visual_evidence));
     fields.insert("startImmediately".into(), json!(raw.queue.unwrap_or(false)));
     let mut request = task_input(fields)?;
-    if raw.delivery_target.as_ref().is_some_and(|target| target != &policy.delivery_target)
-        || raw.run_project_tests.is_some_and(|value| value != policy.run_project_tests)
-        || raw.visual_evidence.as_ref().is_some_and(|value| value != &policy.visual_evidence)
+    if raw
+        .delivery_target
+        .as_ref()
+        .is_some_and(|target| target != &policy.delivery_target)
+        || raw
+            .run_project_tests
+            .is_some_and(|value| value != policy.run_project_tests)
+        || raw
+            .visual_evidence
+            .as_ref()
+            .is_some_and(|value| value != &policy.visual_evidence)
     {
         return Err(fail(
             &format!(
@@ -1040,13 +1475,27 @@ fn resolve(database: &SuplexDatabase, company_id: &str, raw: &TaskCreateBody) ->
         ));
     }
     if let Some(id) = &raw.root_profile_id {
-        commands::read_profile(database, id, "root")?.ok_or_else(|| profile_not_available(id, "root", "rootProfileId"))?;
+        commands::read_profile(database, id, "root")?
+            .ok_or_else(|| profile_not_available(id, "root", "rootProfileId"))?;
     }
     if let Some(id) = &raw.worker_profile_id {
-        commands::read_profile(database, id, "worker")?.ok_or_else(|| profile_not_available(id, "worker", "workerProfileId"))?;
+        commands::read_profile(database, id, "worker")?
+            .ok_or_else(|| profile_not_available(id, "worker", "workerProfileId"))?;
     }
-    let root = project_profile(database, request.root_profile_id.as_deref(), &project.root_profile_id, "root", &project)?;
-    let worker = project_profile(database, request.worker_profile_id.as_deref(), &project.worker_profile_id, "worker", &project)?;
+    let root = project_profile(
+        database,
+        request.root_profile_id.as_deref(),
+        &project.root_profile_id,
+        "root",
+        &project,
+    )?;
+    let worker = project_profile(
+        database,
+        request.worker_profile_id.as_deref(),
+        &project.worker_profile_id,
+        "worker",
+        &project,
+    )?;
     let root_id = root["profileId"].as_str().unwrap_or_default().to_owned();
     let worker_id = worker["profileId"].as_str().unwrap_or_default().to_owned();
     // The allowlist governs what a caller may choose; server-chosen defaults are already trusted.
@@ -1054,31 +1503,58 @@ fn resolve(database: &SuplexDatabase, company_id: &str, raw: &TaskCreateBody) ->
         && !policy.root_profile_ids.contains(id)
     {
         let reason = "The selected root profile is not permitted.";
-        return Err(fail_with(reason, 422, "root_profile_not_permitted", json!({"field": "rootProfileId", "value": id, "reason": reason})));
+        return Err(fail_with(
+            reason,
+            422,
+            "root_profile_not_permitted",
+            json!({"field": "rootProfileId", "value": id, "reason": reason}),
+        ));
     }
     if let Some(id) = &raw.worker_profile_id
         && !policy.worker_profile_ids.contains(id)
     {
         let reason = "The selected worker profile is not permitted.";
-        return Err(fail_with(reason, 422, "worker_profile_not_permitted", json!({"field": "workerProfileId", "value": id, "reason": reason})));
+        return Err(fail_with(
+            reason,
+            422,
+            "worker_profile_not_permitted",
+            json!({"field": "workerProfileId", "value": id, "reason": reason}),
+        ));
     }
     let requested_advisors = serde_json::to_value(&request.advisor_profile_ids)?;
     let permitted_advisors = serde_json::to_value(&policy.advisor_profile_ids)?;
     for role in advisor_roles(&request.workflow) {
-        let profile_id = requested_advisors[*role].as_str().unwrap_or(&root_id).to_owned();
+        let profile_id = requested_advisors[*role]
+            .as_str()
+            .unwrap_or(&root_id)
+            .to_owned();
         let field = format!("advisorProfileIds.{role}");
         if raw_advisors.get(*role).is_some() {
-            commands::read_profile(database, &profile_id, "root")?.ok_or_else(|| profile_not_available(&profile_id, "root", &field))?;
+            commands::read_profile(database, &profile_id, "root")?
+                .ok_or_else(|| profile_not_available(&profile_id, "root", &field))?;
         }
-        if !permitted_advisors[*role].as_array().is_some_and(|ids| ids.iter().any(|id| id == &json!(profile_id))) {
+        if !permitted_advisors[*role]
+            .as_array()
+            .is_some_and(|ids| ids.iter().any(|id| id == &json!(profile_id)))
+        {
             let reason = "The selected Advisor profile is not permitted.";
-            return Err(fail_with(reason, 422, "advisor_profile_not_permitted", json!({"field": field, "value": profile_id, "reason": reason})));
+            return Err(fail_with(
+                reason,
+                422,
+                "advisor_profile_not_permitted",
+                json!({"field": field, "value": profile_id, "reason": reason}),
+            ));
         }
     }
     request.root_profile_id = Some(root_id);
     request.worker_profile_id = Some(worker_id);
-    let signature = crate::shared::js_json::stringify(&json!({"request": request, "selection": selection}));
-    Ok(Resolved { request, selection, signature })
+    let signature =
+        crate::shared::js_json::stringify(&json!({"request": request, "selection": selection}));
+    Ok(Resolved {
+        request,
+        selection,
+        signature,
+    })
 }
 
 fn project_signature(project: &Project) -> Value {
@@ -1091,14 +1567,21 @@ fn project_signature(project: &Project) -> Value {
 
 fn dependency_unavailable(dependency: &str) -> Box<dyn Error> {
     let reason = "The dependency is not available.";
-    fail_with(reason, 422, "dependency_not_found", json!({"field": "dependsOn", "value": dependency, "reason": reason}))
+    fail_with(
+        reason,
+        422,
+        "dependency_not_found",
+        json!({"field": "dependsOn", "value": dependency, "reason": reason}),
+    )
 }
 
 fn would_start(task: &Value) -> Value {
     match task["status"].as_str() {
         Some("backlog") => json!({"wouldStart": "backlog", "blockingPrerequisiteIds": []}),
         Some("active") => json!({"wouldStart": "now", "blockingPrerequisiteIds": []}),
-        _ => json!({"wouldStart": "waiting", "blockingPrerequisiteIds": task["queue"]["waitingOn"].as_array().into_iter().flatten().map(|wait| wait["id"].clone()).collect::<Vec<_>>()}),
+        _ => {
+            json!({"wouldStart": "waiting", "blockingPrerequisiteIds": task["queue"]["waitingOn"].as_array().into_iter().flatten().map(|wait| wait["id"].clone()).collect::<Vec<_>>()})
+        }
     }
 }
 
@@ -1112,7 +1595,11 @@ fn merged(mut base: Value, extra: Value) -> Value {
 /// The outcome the routes and MCP runtime present.
 pub enum Creation {
     /// `created` is false for an idempotent replay.
-    Task { id: String, created: bool, active: bool },
+    Task {
+        id: String,
+        created: bool,
+        active: bool,
+    },
     DryRun(Value),
 }
 
@@ -1140,55 +1627,126 @@ struct Pending {
 }
 
 /// Everything before the live Git capture: authority, idempotency, policy, and local-engine support.
-fn admit(database: &SuplexDatabase, principal: &Principal, raw: &TaskCreateBody) -> DatabaseResult<Admission> {
+fn admit(
+    database: &SuplexDatabase,
+    principal: &Principal,
+    raw: &TaskCreateBody,
+) -> DatabaseResult<Admission> {
     let dry_run = raw.dry_run == Some(true);
-    if raw.extra.keys().any(|name| !["companyId", "agentId", "startImmediately"].contains(&name.as_str())) {
+    if raw
+        .extra
+        .keys()
+        .any(|name| !["companyId", "agentId", "startImmediately"].contains(&name.as_str()))
+    {
         return Err(fail("Invalid request", 400, "request_invalid"));
     }
     let hash = request_hash(raw, &principal.agent_id)?;
-    require_scope(database, principal, &principal.company_id, &raw.project_id, true, Some(project_scope_failure(&raw.project_id)))?;
-    let found = match existing(database, &principal.company_id, &raw.idempotency_key, &hash, &principal.agent_id) {
-        Err(error) if error.to_string() == "This idempotency key belongs to a different request" => {
+    require_scope(
+        database,
+        principal,
+        &principal.company_id,
+        &raw.project_id,
+        true,
+        Some(project_scope_failure(&raw.project_id)),
+    )?;
+    let found = match existing(
+        database,
+        &principal.company_id,
+        &raw.idempotency_key,
+        &hash,
+        &principal.agent_id,
+    ) {
+        Err(error)
+            if error.to_string() == "This idempotency key belongs to a different request" =>
+        {
             if !is_legacy_request(raw) {
                 return Err(error);
             }
             let legacy = legacy_hash(raw, &principal.agent_id)?;
-            existing(database, &principal.company_id, &raw.idempotency_key, &legacy, &principal.agent_id)?
+            existing(
+                database,
+                &principal.company_id,
+                &raw.idempotency_key,
+                &legacy,
+                &principal.agent_id,
+            )?
         }
         other => other?,
     };
     if let Some(id) = found {
         if dry_run {
-            return Ok(Admission::Done(Creation::DryRun(json!({"dryRun": true, "status": 200, "existingTaskId": id}))));
+            return Ok(Admission::Done(Creation::DryRun(
+                json!({"dryRun": true, "status": 200, "existingTaskId": id}),
+            )));
         }
         let active = task_json(database, &id)?["status"] == "active";
-        return Ok(Admission::Done(Creation::Task { id, created: false, active }));
+        return Ok(Admission::Done(Creation::Task {
+            id,
+            created: false,
+            active,
+        }));
     }
     let resolved = resolve(database, &principal.company_id, raw)?;
     let request = &resolved.request;
-    require_scope(database, principal, &principal.company_id, &request.project_id, true, Some(project_scope_failure(&request.project_id)))?;
-    if let Some(id) = existing(database, &principal.company_id, &request.idempotency_key, &hash, &principal.agent_id)? {
+    require_scope(
+        database,
+        principal,
+        &principal.company_id,
+        &request.project_id,
+        true,
+        Some(project_scope_failure(&request.project_id)),
+    )?;
+    if let Some(id) = existing(
+        database,
+        &principal.company_id,
+        &request.idempotency_key,
+        &hash,
+        &principal.agent_id,
+    )? {
         let active = task_json(database, &id)?["status"] == "active";
-        return Ok(Admission::Done(Creation::Task { id, created: false, active }));
+        return Ok(Admission::Done(Creation::Task {
+            id,
+            created: false,
+            active,
+        }));
     }
     let project = projects::get_in_company(database, &principal.company_id, &request.project_id)?;
     let bitbucket = matches!(
-        project.integration.as_ref().map(|integration| &integration.repository),
+        project
+            .integration
+            .as_ref()
+            .map(|integration| &integration.repository),
         Some(crate::http::contracts::typed::projects::RepositoryConnection::Bitbucket { .. })
     );
-    if bitbucket && matches!(request.delivery_target.as_str(), "pull_request_ready" | "merged") {
-        return Err(fail("Bitbucket supports draft pull requests. Select a supported delivery target.", 422, "task_failure"));
+    if bitbucket
+        && matches!(
+            request.delivery_target.as_str(),
+            "pull_request_ready" | "merged"
+        )
+    {
+        return Err(fail(
+            "Bitbucket supports draft pull requests. Select a supported delivery target.",
+            422,
+            "task_failure",
+        ));
     }
     if project.repository.is_none() {
-        return Err(fail("Configure the project repository before creating a task", 422, "task_failure"));
+        return Err(fail(
+            "Configure the project repository before creating a task",
+            422,
+            "task_failure",
+        ));
     }
     for dependency in &request.depends_on {
         task_row(database, dependency)?.ok_or_else(|| dependency_unavailable(dependency))?;
-        require_readable(database, principal, dependency).map_err(|_| dependency_unavailable(dependency))?;
+        require_readable(database, principal, dependency)
+            .map_err(|_| dependency_unavailable(dependency))?;
     }
     // The same engine limits as board creation in `routes/tasks.rs`.
     if request.workflow != "standard" || !request.blocked_by_pull_requests.is_empty() {
-        return Err(not_ported("Only Standard tasks without pull request prerequisites are ported"));
+        return Err(not_ported(
+            "Only Standard tasks without pull request prerequisites are ported",
+        ));
     }
     let images = request
         .images
@@ -1196,10 +1754,16 @@ fn admit(database: &SuplexDatabase, principal: &Principal, raw: &TaskCreateBody)
         .map(images::decode_task_image)
         .collect::<Result<Vec<_>, _>>()
         .map_err(|failure| Box::new(failure) as Box<dyn Error>)?;
-    Ok(Admission::Capture(Box::new(Pending { resolved, project, hash, images })))
+    Ok(Admission::Capture(Box::new(Pending {
+        resolved,
+        project,
+        hash,
+        images,
+    })))
 }
 
 /// The admission transaction: recheck authority and policy against the captured snapshot, then write once.
+#[allow(clippy::too_many_arguments)]
 fn write(
     database: &mut SuplexDatabase,
     principal: &Principal,
@@ -1215,7 +1779,15 @@ fn write(
     let request = &pending.resolved.request;
     let mut prepared = {
         let profiles = commands::select_local_profiles(database, &pending.project, request)?;
-        commands::prepare_local_user_task(&principal.company_id, &principal.agent_id, &pending.project, request, profiles, base_sha, now)?
+        commands::prepare_local_user_task(
+            &principal.company_id,
+            &principal.agent_id,
+            &pending.project,
+            request,
+            profiles,
+            base_sha,
+            now,
+        )?
     };
     sources::apply(&mut prepared, source);
     prepared.creator = TaskCreator::Agent(principal.agent_id.clone());
@@ -1274,7 +1846,10 @@ fn write(
     });
     match result {
         Err(error) if error.is::<DryRunRollback>() => {
-            let preview = error.downcast::<DryRunRollback>().map_err(|_| "dry run failed")?.0;
+            let preview = error
+                .downcast::<DryRunRollback>()
+                .map_err(|_| "dry run failed")?
+                .0;
             Ok(Creation::DryRun(preview))
         }
         Err(error) => {
@@ -1290,29 +1865,72 @@ fn write(
 }
 
 /// `createTaskForAgentApi`. The live Git capture runs outside the database lock.
-pub async fn create(state: &AppState, principal: &Principal, raw: &TaskCreateBody, copied_from: Option<&str>) -> DatabaseResult<Creation> {
+pub async fn create(
+    state: &AppState,
+    principal: &Principal,
+    raw: &TaskCreateBody,
+    copied_from: Option<&str>,
+) -> DatabaseResult<Creation> {
     let pending = match state.with_database(|database| admit(database, principal, raw))? {
         Admission::Done(creation) => return Ok(creation),
         Admission::Capture(pending) => pending,
     };
     let request = &pending.resolved.request;
-    let selector = request.source.as_ref().map(serde_json::to_value).transpose()?;
-    let source = match sources::creation_source(&pending.project, &request.title, &request.description, selector.as_ref(), None).await {
+    let selector = request
+        .source
+        .as_ref()
+        .map(serde_json::to_value)
+        .transpose()?;
+    let source = match sources::creation_source(
+        &pending.project,
+        &request.title,
+        &request.description,
+        selector.as_ref(),
+        None,
+    )
+    .await
+    {
         Ok(source) => source,
         Err(error) => return Err(source_rejection(error, selector.as_ref())),
     };
     let repository_path = PathBuf::from(&pending.project.repository_path);
     let base_branch = pending.project.base_branch.clone();
-    let host = match pending.project.integration.as_ref().map(|integration| &integration.repository) {
-        Some(crate::http::contracts::typed::projects::RepositoryConnection::Bitbucket { .. }) => "bitbucket",
+    let host = match pending
+        .project
+        .integration
+        .as_ref()
+        .map(|integration| &integration.repository)
+    {
+        Some(crate::http::contracts::typed::projects::RepositoryConnection::Bitbucket {
+            ..
+        }) => "bitbucket",
         _ => "github",
     };
-    let captured = tokio::task::spawn_blocking(move || git::capture_local_task_heads(&repository_path, &base_branch, host)).await?;
+    let captured = tokio::task::spawn_blocking(move || {
+        git::capture_local_task_heads(&repository_path, &base_branch, host)
+    })
+    .await?;
     let base_sha = captured.map_err(|findings| {
-        Box::new(ProjectFailure { message: "Project configuration could not be captured", status_code: 422, findings }) as Box<dyn Error>
+        Box::new(ProjectFailure {
+            message: "Project configuration could not be captured",
+            status_code: 422,
+            findings,
+        }) as Box<dyn Error>
     })?;
     let artifact_root = state.artifact_root.clone();
-    state.with_database(|database| write(database, principal, raw, &pending, &base_sha, source, copied_from, artifact_root.as_deref(), Utc::now()))
+    state.with_database(|database| {
+        write(
+            database,
+            principal,
+            raw,
+            &pending,
+            &base_sha,
+            source,
+            copied_from,
+            artifact_root.as_deref(),
+            Utc::now(),
+        )
+    })
 }
 
 /// A rejected source names its field, value, and reason; provider outages keep their own failure.
@@ -1328,22 +1946,50 @@ fn source_rejection(error: Box<dyn Error>, selector: Option<&Value>) -> Box<dyn 
         return error;
     };
     let (field, code, value) = match selector["kind"].as_str() {
-        Some("issue") => ("source.issue", "source_issue_rejected", selector["number"].to_string()),
-        Some("pull_request") => ("source.pullRequest", "source_pull_request_rejected", selector["number"].to_string()),
-        _ => ("source.branch", "source_branch_rejected", selector["branch"].as_str().unwrap_or_default().to_owned()),
+        Some("issue") => (
+            "source.issue",
+            "source_issue_rejected",
+            selector["number"].to_string(),
+        ),
+        Some("pull_request") => (
+            "source.pullRequest",
+            "source_pull_request_rejected",
+            selector["number"].to_string(),
+        ),
+        _ => (
+            "source.branch",
+            "source_branch_rejected",
+            selector["branch"].as_str().unwrap_or_default().to_owned(),
+        ),
     };
-    fail_with(&reason, 422, code, json!({"field": field, "value": value, "reason": reason}))
+    fail_with(
+        &reason,
+        422,
+        code,
+        json!({"field": field, "value": value, "reason": reason}),
+    )
 }
 
 // Dependencies.
 
 /// `replaceTaskDependencies`: company scope and acyclicity proven in the writing transaction.
-fn replace_dependencies(database: &mut SuplexDatabase, task_id: &str, company_id: &str, depends_on: &[String], now: DateTime<Utc>, reconcile_if_blocked: bool) -> DatabaseResult<()> {
+fn replace_dependencies(
+    database: &mut SuplexDatabase,
+    task_id: &str,
+    company_id: &str,
+    depends_on: &[String],
+    now: DateTime<Utc>,
+    reconcile_if_blocked: bool,
+) -> DatabaseResult<()> {
     let mut depends_on = depends_on.to_vec();
     depends_on.sort();
     depends_on.dedup();
     if depends_on.iter().any(|dependency| dependency == task_id) {
-        return Err(Box::new(TaskFailure { public_message: "A task cannot depend on itself".into(), status_code: 422, code: "task_failure" }));
+        return Err(Box::new(TaskFailure {
+            public_message: "A task cannot depend on itself".into(),
+            status_code: 422,
+            code: "task_failure",
+        }));
     }
     let time = timestamp(now);
     database.transaction(true, |database| {
@@ -1389,7 +2035,13 @@ fn replace_dependencies(database: &mut SuplexDatabase, task_id: &str, company_id
     })
 }
 
-fn audit(database: &SuplexDatabase, principal: &Principal, action: &str, task_id: &str, now: DateTime<Utc>) -> DatabaseResult<()> {
+fn audit(
+    database: &SuplexDatabase,
+    principal: &Principal,
+    action: &str,
+    task_id: &str,
+    now: DateTime<Utc>,
+) -> DatabaseResult<()> {
     let state = database
         .connection()
         .query_row(
@@ -1399,55 +2051,115 @@ fn audit(database: &SuplexDatabase, principal: &Principal, action: &str, task_id
         )
         .optional()?
         .map_or_else(|| "unknown".to_owned(), |(status, archived)| json!({"status": status, "archived": archived}).to_string());
-    let metadata = json!({"taskId": task_id, "resultingState": state}).as_object().cloned().unwrap_or_default();
-    external_agents::audit(database, (None, Some(&principal.agent_id)), action, &principal.company_id, metadata, now)
+    let metadata = json!({"taskId": task_id, "resultingState": state})
+        .as_object()
+        .cloned()
+        .unwrap_or_default();
+    external_agents::audit(
+        database,
+        (None, Some(&principal.agent_id)),
+        action,
+        &principal.company_id,
+        metadata,
+        now,
+    )
 }
 
 /// The synchronous array form used by MCP and dry runs.
-fn set_dependency_ids(database: &mut SuplexDatabase, principal: &Principal, task_id: &str, depends_on: &[String], now: DateTime<Utc>) -> DatabaseResult<Value> {
+fn set_dependency_ids(
+    database: &mut SuplexDatabase,
+    principal: &Principal,
+    task_id: &str,
+    depends_on: &[String],
+    now: DateTime<Utc>,
+) -> DatabaseResult<Value> {
     let row = require_owned(database, principal, task_id)?;
     for dependency in depends_on {
         require_readable(database, principal, dependency)?;
     }
     replace_dependencies(database, task_id, &row.company_id, depends_on, now, true)?;
-    audit(database, principal, "task_dependencies_updated", task_id, now)?;
+    audit(
+        database,
+        principal,
+        "task_dependencies_updated",
+        task_id,
+        now,
+    )?;
     projection(database, principal, task_id)
 }
 
-pub fn set_dependencies_array(database: &mut SuplexDatabase, principal: &Principal, task_id: &str, depends_on: &[String]) -> DatabaseResult<Value> {
+pub fn set_dependencies_array(
+    database: &mut SuplexDatabase,
+    principal: &Principal,
+    task_id: &str,
+    depends_on: &[String],
+) -> DatabaseResult<Value> {
     set_dependency_ids(database, principal, task_id, depends_on, Utc::now())
 }
 
 /// The HTTP body form: pull request prerequisites are replaced with the task prerequisites.
-pub fn set_dependencies(database: &mut SuplexDatabase, principal: &Principal, task_id: &str, body: &TaskDependenciesBody) -> DatabaseResult<Value> {
+pub fn set_dependencies(
+    database: &mut SuplexDatabase,
+    principal: &Principal,
+    task_id: &str,
+    body: &TaskDependenciesBody,
+) -> DatabaseResult<Value> {
     let now = Utc::now();
     let row = require_owned(database, principal, task_id)?;
     for dependency in &body.depends_on {
         task_row(database, dependency)?.ok_or_else(|| dependency_unavailable(dependency))?;
-        require_readable(database, principal, dependency).map_err(|_| dependency_unavailable(dependency))?;
+        require_readable(database, principal, dependency)
+            .map_err(|_| dependency_unavailable(dependency))?;
     }
     if !body.blocked_by_pull_requests.is_empty() {
         return Err(not_ported("Pull request prerequisites are not ported"));
     }
-    replace_dependencies(database, task_id, &row.company_id, &body.depends_on, now, false)?;
+    replace_dependencies(
+        database,
+        task_id,
+        &row.company_id,
+        &body.depends_on,
+        now,
+        false,
+    )?;
     // Replace every prerequisite before a queued task is considered for admission.
     database.transaction(true, |database| {
-        database.connection().execute("DELETE FROM suplex_task_pull_request_dependencies WHERE task_id = ?1", [task_id])?;
+        database.connection().execute(
+            "DELETE FROM suplex_task_pull_request_dependencies WHERE task_id = ?1",
+            [task_id],
+        )?;
         repository::reconcile_dependency_release(database, task_id, now).map(|_| ())
     })?;
-    audit(database, principal, "task_dependencies_updated", task_id, now)?;
+    audit(
+        database,
+        principal,
+        "task_dependencies_updated",
+        task_id,
+        now,
+    )?;
     projection(database, principal, task_id)
 }
 
 /// `previewAgentApiTaskDependencies`: the array replacement, rolled back.
-pub fn preview_dependencies(database: &mut SuplexDatabase, principal: &Principal, task_id: &str, depends_on: &[String]) -> DatabaseResult<Value> {
+pub fn preview_dependencies(
+    database: &mut SuplexDatabase,
+    principal: &Principal,
+    task_id: &str,
+    depends_on: &[String],
+) -> DatabaseResult<Value> {
     let result = database.transaction(true, |database| {
         let task = set_dependency_ids(database, principal, task_id, depends_on, Utc::now())?;
-        let preview = merged(json!({"dryRun": true, "dependsOn": task["dependsOn"]}), would_start(&task));
+        let preview = merged(
+            json!({"dryRun": true, "dependsOn": task["dependsOn"]}),
+            would_start(&task),
+        );
         Err::<(), _>(Box::new(DryRunRollback(preview)) as Box<dyn Error>)
     });
     match result {
-        Err(error) if error.is::<DryRunRollback>() => Ok(error.downcast::<DryRunRollback>().map_err(|_| "dry run failed")?.0),
+        Err(error) if error.is::<DryRunRollback>() => Ok(error
+            .downcast::<DryRunRollback>()
+            .map_err(|_| "dry run failed")?
+            .0),
         Err(error) => Err(error),
         Ok(()) => Err("dry run did not roll back".into()),
     }
@@ -1485,7 +2197,10 @@ fn command_audit(command: &str) -> &'static str {
 
 /// Commands the route follows with a host wake.
 pub fn wakes_host(command: &str) -> bool {
-    matches!(command, "start_task" | "cancel_task" | "send_task_note" | "recheck_delivery_wait")
+    matches!(
+        command,
+        "start_task" | "cancel_task" | "send_task_note" | "recheck_delivery_wait"
+    )
 }
 
 fn stale() -> Box<dyn Error> {
@@ -1497,8 +2212,15 @@ enum Claim {
     Claimed { guard: InFlight, hash: String },
 }
 
-fn claim(database: &mut SuplexDatabase, principal: &Principal, task_id: &str, input: &TaskCommandBody) -> DatabaseResult<Claim> {
-    let hash = sha256_hex(&crate::shared::js_json::stringify(&serde_json::to_value(input)?));
+fn claim(
+    database: &mut SuplexDatabase,
+    principal: &Principal,
+    task_id: &str,
+    input: &TaskCommandBody,
+) -> DatabaseResult<Claim> {
+    let hash = sha256_hex(&crate::shared::js_json::stringify(&serde_json::to_value(
+        input,
+    )?));
     require_owned(database, principal, task_id)?;
     // This historical table name preserves idempotency receipts across the public rename.
     let stored: Option<(String, String)> = database
@@ -1511,14 +2233,29 @@ fn claim(database: &mut SuplexDatabase, principal: &Principal, task_id: &str, in
         .optional()?;
     if let Some((stored_hash, result)) = stored {
         if stored_hash != hash {
-            return Err(fail("This idempotency key belongs to a different request", 409, "idempotency_conflict"));
+            return Err(fail(
+                "This idempotency key belongs to a different request",
+                409,
+                "idempotency_conflict",
+            ));
         }
         return Ok(Claim::Replay(serde_json::from_str(&result)?));
     }
-    let key = crate::shared::js_json::stringify(&json!([principal.agent_id, task_id, input.idempotency_key]));
-    let inserted = commands_in_flight().lock().map_err(|_| "command state is unavailable")?.insert(key.clone());
+    let key = crate::shared::js_json::stringify(&json!([
+        principal.agent_id,
+        task_id,
+        input.idempotency_key
+    ]));
+    let inserted = commands_in_flight()
+        .lock()
+        .map_err(|_| "command state is unavailable")?
+        .insert(key.clone());
     if !inserted {
-        return Err(fail("This command is still being processed", 409, "command_in_progress"));
+        return Err(fail(
+            "This command is still being processed",
+            409,
+            "command_in_progress",
+        ));
     }
     let guard = InFlight(key);
     let row = require_owned(database, principal, task_id)?;
@@ -1526,8 +2263,15 @@ fn claim(database: &mut SuplexDatabase, principal: &Principal, task_id: &str, in
     if before["revision"] != json!(input.revision) {
         return Err(stale());
     }
-    if !before["permittedCommands"].as_array().is_some_and(|commands| commands.contains(&json!(input.command))) {
-        return Err(fail("This command is not legal for the current task", 409, "illegal_command"));
+    if !before["permittedCommands"]
+        .as_array()
+        .is_some_and(|commands| commands.contains(&json!(input.command)))
+    {
+        return Err(fail(
+            "This command is not legal for the current task",
+            409,
+            "illegal_command",
+        ));
     }
     // The revision claim is the optimistic lock: a concurrent command on the same revision loses here.
     let claimed = database.transaction(true, |database| {
@@ -1542,7 +2286,14 @@ fn claim(database: &mut SuplexDatabase, principal: &Principal, task_id: &str, in
     Ok(Claim::Claimed { guard, hash })
 }
 
-fn finish(database: &mut SuplexDatabase, principal: &Principal, task_id: &str, result_task_id: &str, input: &TaskCommandBody, hash: &str) -> DatabaseResult<Value> {
+fn finish(
+    database: &mut SuplexDatabase,
+    principal: &Principal,
+    task_id: &str,
+    result_task_id: &str,
+    input: &TaskCommandBody,
+    hash: &str,
+) -> DatabaseResult<Value> {
     let now = Utc::now();
     let result = projection(database, principal, result_task_id)?;
     database.transaction(false, |database| {
@@ -1552,16 +2303,31 @@ fn finish(database: &mut SuplexDatabase, principal: &Principal, task_id: &str, r
         )?;
         Ok(())
     })?;
-    audit(database, principal, command_audit(&input.command), task_id, now)?;
+    audit(
+        database,
+        principal,
+        command_audit(&input.command),
+        task_id,
+        now,
+    )?;
     Ok(result)
 }
 
-fn apply(database: &mut SuplexDatabase, principal: &Principal, task_id: &str, input: &TaskCommandBody) -> DatabaseResult<()> {
+fn apply(
+    database: &mut SuplexDatabase,
+    principal: &Principal,
+    task_id: &str,
+    input: &TaskCommandBody,
+) -> DatabaseResult<()> {
     let now = Utc::now();
     match input.command.as_str() {
         "start_task" => {
             if archive::in_progress(task_id) {
-                return Err(fail("Archive cleanup is in progress", 409, "illegal_command"));
+                return Err(fail(
+                    "Archive cleanup is in progress",
+                    409,
+                    "illegal_command",
+                ));
             }
             repository::start(database, task_id, now)?;
         }
@@ -1577,14 +2343,26 @@ fn apply(database: &mut SuplexDatabase, principal: &Principal, task_id: &str, in
         "send_task_note" => {
             require_owned(database, principal, task_id)?;
             let task = task_json(database, task_id)?;
-            if !task["archivedAt"].is_null() || !matches!(task["status"].as_str(), Some("active" | "delivered")) {
-                return Err(fail("Start the task or answer its current decision before you send a message.", 409, "illegal_command"));
+            if !task["archivedAt"].is_null()
+                || !matches!(task["status"].as_str(), Some("active" | "delivered"))
+            {
+                return Err(fail(
+                    "Start the task or answer its current decision before you send a message.",
+                    409,
+                    "illegal_command",
+                ));
             }
             if task["workflow"] != "standard" {
                 return Err(not_ported("Only Standard notes are ported"));
             }
             let label = format!("Agent note ({})", principal.agent_id);
-            root_session_store::send_labeled_note(database, task_id, input.note.as_deref().unwrap_or_default(), &label, now)?;
+            root_session_store::send_labeled_note(
+                database,
+                task_id,
+                input.note.as_deref().unwrap_or_default(),
+                &label,
+                now,
+            )?;
         }
         // TaskHost owns delivery observation; the route wakes it after this returns.
         _ => {}
@@ -1594,8 +2372,17 @@ fn apply(database: &mut SuplexDatabase, principal: &Principal, task_id: &str, in
 
 fn duplicate_title(title: &str) -> String {
     let (base, copy) = match title.rsplit_once(" (") {
-        Some((base, rest)) if rest.strip_suffix(')').is_some_and(|number| !number.is_empty() && number.bytes().all(|byte| byte.is_ascii_digit())) => {
-            (base, rest.trim_end_matches(')').parse::<u64>().map_or(2, |number| number + 1))
+        Some((base, rest))
+            if rest.strip_suffix(')').is_some_and(|number| {
+                !number.is_empty() && number.bytes().all(|byte| byte.is_ascii_digit())
+            }) =>
+        {
+            (
+                base,
+                rest.trim_end_matches(')')
+                    .parse::<u64>()
+                    .map_or(2, |number| number + 1),
+            )
         }
         _ => (title, 2),
     };
@@ -1605,11 +2392,18 @@ fn duplicate_title(title: &str) -> String {
 }
 
 /// The copy's create request: the source configuration the project still permits.
-fn duplicate_request(database: &SuplexDatabase, principal: &Principal, task_id: &str, key: &str, artifact_root: Option<&std::path::Path>) -> DatabaseResult<TaskCreateBody> {
+fn duplicate_request(
+    database: &SuplexDatabase,
+    principal: &Principal,
+    task_id: &str,
+    key: &str,
+    artifact_root: Option<&std::path::Path>,
+) -> DatabaseResult<TaskCreateBody> {
     require_owned(database, principal, task_id)?;
     let source = task_json(database, task_id)?;
     let project_id = source["projectId"].as_str().unwrap_or_default().to_owned();
-    let policy = projects::get_in_company(database, &principal.company_id, &project_id)?.agent_task_policy;
+    let policy =
+        projects::get_in_company(database, &principal.company_id, &project_id)?.agent_task_policy;
     let mut images = Vec::new();
     for image in source["images"].as_array().into_iter().flatten() {
         let artifact: Option<(String, String, String)> = database
@@ -1620,11 +2414,20 @@ fn duplicate_request(database: &SuplexDatabase, principal: &Principal, task_id: 
                 |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
             )
             .optional()?;
-        let (Some((filename, mime_type, storage_path)), Some(root)) = (artifact, artifact_root) else {
-            return Err(fail("A source task image is no longer available", 409, "illegal_command"));
+        let (Some((filename, mime_type, storage_path)), Some(root)) = (artifact, artifact_root)
+        else {
+            return Err(fail(
+                "A source task image is no longer available",
+                409,
+                "illegal_command",
+            ));
         };
         let bytes = artifacts::read(root, &principal.company_id, &storage_path)?;
-        images.push(TaskImage { filename, mime_type, base64: STANDARD.encode(bytes) });
+        images.push(TaskImage {
+            filename,
+            mime_type,
+            base64: STANDARD.encode(bytes),
+        });
     }
     let engine = source["workflow"].as_str().unwrap_or("standard");
     let workflow_id = policy
@@ -1633,7 +2436,11 @@ fn duplicate_request(database: &SuplexDatabase, principal: &Principal, task_id: 
         .find(|id| {
             database
                 .connection()
-                .query_row("SELECT engine FROM suplex_workflows WHERE id = ?1 AND archived_at IS NULL", [id], |row| row.get::<_, String>(0))
+                .query_row(
+                    "SELECT engine FROM suplex_workflows WHERE id = ?1 AND archived_at IS NULL",
+                    [id],
+                    |row| row.get::<_, String>(0),
+                )
                 .optional()
                 .ok()
                 .flatten()
@@ -1642,22 +2449,36 @@ fn duplicate_request(database: &SuplexDatabase, principal: &Principal, task_id: 
         })
         .cloned()
         .unwrap_or_else(|| policy.default_workflow_id.clone());
-    let permitted = |ids: &[String], id: &Value| id.as_str().filter(|id| ids.iter().any(|allowed| allowed == id)).map(str::to_owned);
+    let permitted = |ids: &[String], id: &Value| {
+        id.as_str()
+            .filter(|id| ids.iter().any(|allowed| allowed == id))
+            .map(str::to_owned)
+    };
     let advisors = serde_json::to_value(&policy.advisor_profile_ids)?;
     let mut advisor_ids = Map::new();
     if let Some(stored) = source["advisorProfiles"].as_object() {
         for (role, profile) in stored {
-            let allowed = advisors[role].as_array().is_some_and(|ids| ids.contains(&profile["profileId"]));
+            let allowed = advisors[role]
+                .as_array()
+                .is_some_and(|ids| ids.contains(&profile["profileId"]));
             if allowed {
                 advisor_ids.insert(role.clone(), profile["profileId"].clone());
             }
         }
     }
-    let task_source = source["configuration"].get("source").filter(|value| !value.is_null()).cloned();
+    let task_source = source["configuration"]
+        .get("source")
+        .filter(|value| !value.is_null())
+        .cloned();
     Ok(TaskCreateBody {
         project_id,
         title: duplicate_title(source["title"].as_str().unwrap_or_default()),
-        description: Some(source["description"].as_str().unwrap_or_default().to_owned()),
+        description: Some(
+            source["description"]
+                .as_str()
+                .unwrap_or_default()
+                .to_owned(),
+        ),
         idempotency_key: format!("duplicate-{}", sha256_hex(&format!("{task_id}:{key}"))),
         depends_on: None,
         blocked_by_pull_requests: None,
@@ -1666,8 +2487,14 @@ fn duplicate_request(database: &SuplexDatabase, principal: &Principal, task_id: 
         source: task_source.map(serde_json::from_value).transpose()?,
         workflow_id: Some(workflow_id),
         template_id: None,
-        root_profile_id: permitted(&policy.root_profile_ids, &source["rootProfile"]["profileId"]),
-        worker_profile_id: permitted(&policy.worker_profile_ids, &source["workerProfile"]["profileId"]),
+        root_profile_id: permitted(
+            &policy.root_profile_ids,
+            &source["rootProfile"]["profileId"],
+        ),
+        worker_profile_id: permitted(
+            &policy.worker_profile_ids,
+            &source["workerProfile"]["profileId"],
+        ),
         advisor_profile_ids: serde_json::from_value(Value::Object(advisor_ids))?,
         delivery_target: None,
         run_project_tests: None,
@@ -1678,11 +2505,17 @@ fn duplicate_request(database: &SuplexDatabase, principal: &Principal, task_id: 
 }
 
 /// `commandAgentApiTask`: revision, receipt, and creator authority, then one effect.
-pub async fn command(state: &AppState, principal: &Principal, task_id: &str, input: &TaskCommandBody) -> DatabaseResult<Value> {
-    let (guard, hash) = match state.with_database(|database| claim(database, principal, task_id, input))? {
-        Claim::Replay(result) => return Ok(result),
-        Claim::Claimed { guard, hash } => (guard, hash),
-    };
+pub async fn command(
+    state: &AppState,
+    principal: &Principal,
+    task_id: &str,
+    input: &TaskCommandBody,
+) -> DatabaseResult<Value> {
+    let (guard, hash) =
+        match state.with_database(|database| claim(database, principal, task_id, input))? {
+            Claim::Replay(result) => return Ok(result),
+            Claim::Claimed { guard, hash } => (guard, hash),
+        };
     let mut result_task_id = task_id.to_owned();
     match input.command.as_str() {
         "archive_task" => {
@@ -1692,12 +2525,17 @@ pub async fn command(state: &AppState, principal: &Principal, task_id: &str, inp
             let archiving = principal.clone();
             let id = task_id.to_owned();
             let outcome = tokio::task::spawn_blocking(move || {
-                archive::archive_task(&path, &agent_authority(&archiving), &id, false).map_err(crossed)
+                archive::archive_task(&path, &agent_authority(&archiving), &id, false)
+                    .map_err(crossed)
             })
             .await?;
             match outcome {
                 Ok(archive::ArchiveOutcome::ConfirmationRequired(_)) => {
-                    return Err(fail("Discard dirty worktree changes before archiving", 409, "illegal_command"));
+                    return Err(fail(
+                        "Discard dirty worktree changes before archiving",
+                        409,
+                        "illegal_command",
+                    ));
                 }
                 Ok(archive::ArchiveOutcome::Archived(_)) => {}
                 Err(error) => return Err(uncrossed(error)),
@@ -1705,7 +2543,15 @@ pub async fn command(state: &AppState, principal: &Principal, task_id: &str, inp
         }
         "duplicate_task" => {
             let root = state.artifact_root.clone();
-            let request = state.with_database(|database| duplicate_request(database, principal, task_id, &input.idempotency_key, root.as_deref()))?;
+            let request = state.with_database(|database| {
+                duplicate_request(
+                    database,
+                    principal,
+                    task_id,
+                    &input.idempotency_key,
+                    root.as_deref(),
+                )
+            })?;
             match create(state, principal, &request, Some(task_id)).await? {
                 Creation::Task { id, active, .. } => {
                     if active && let Some(host) = &state.task_host {
@@ -1718,7 +2564,9 @@ pub async fn command(state: &AppState, principal: &Principal, task_id: &str, inp
         }
         _ => state.with_database(|database| apply(database, principal, task_id, input))?,
     }
-    let result = state.with_database(|database| finish(database, principal, task_id, &result_task_id, input, &hash));
+    let result = state.with_database(|database| {
+        finish(database, principal, task_id, &result_task_id, input, &hash)
+    });
     drop(guard);
     result
 }

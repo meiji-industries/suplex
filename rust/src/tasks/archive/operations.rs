@@ -97,8 +97,12 @@ fn required_path(configuration: &Value, field: &str) -> DatabaseResult<PathBuf> 
 /// Live authority over one task: a board user's company access or a paired agent's grant.
 pub type Authority<'a> = &'a (dyn Fn(&SuplexDatabase, &TaskRecord) -> DatabaseResult<()> + Sync);
 
-fn user_authority(actor_user_id: &str) -> impl Fn(&SuplexDatabase, &TaskRecord) -> DatabaseResult<()> + Sync + '_ {
-    move |database, task| companies::require_company_access(database, actor_user_id, &task.company_id).map(|_| ())
+fn user_authority(
+    actor_user_id: &str,
+) -> impl Fn(&SuplexDatabase, &TaskRecord) -> DatabaseResult<()> + Sync + '_ {
+    move |database, task| {
+        companies::require_company_access(database, actor_user_id, &task.company_id).map(|_| ())
+    }
 }
 
 fn task_scope(
@@ -117,7 +121,11 @@ fn task_scope(
     Ok((task, serde_json::from_str(&configuration)?))
 }
 
-fn reauthorize(database_path: &Path, authority: Authority<'_>, task_id: &str) -> DatabaseResult<()> {
+fn reauthorize(
+    database_path: &Path,
+    authority: Authority<'_>,
+    task_id: &str,
+) -> DatabaseResult<()> {
     let database = SuplexDatabase::open(database_path, OpenMode::ReadOnly)?;
     task_scope(&database, authority, task_id)?;
     Ok(())
@@ -219,7 +227,12 @@ pub fn archive_local_task(
     task_id: &str,
     confirm_discard_dirty: bool,
 ) -> DatabaseResult<ArchiveOutcome> {
-    archive_task(database_path, &user_authority(actor_user_id), task_id, confirm_discard_dirty)
+    archive_task(
+        database_path,
+        &user_authority(actor_user_id),
+        task_id,
+        confirm_discard_dirty,
+    )
 }
 
 pub fn archive_task(

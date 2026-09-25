@@ -21,17 +21,17 @@ pub mod agent_api_runtime;
 pub mod contracts;
 pub mod routes {
     pub mod admin_identity;
-    pub mod agent_pairing;
     pub mod admin_platform;
-    pub mod auth;
-    pub mod mcp;
-    pub mod oauth;
-    pub mod discovery;
     pub mod agent_api;
+    pub mod agent_pairing;
+    pub mod auth;
     pub mod companies;
+    pub mod discovery;
     pub mod external_agent_administration;
     pub mod github_auth;
     pub mod health;
+    pub mod mcp;
+    pub mod oauth;
     pub mod pages;
     pub mod profiles;
     pub mod projects;
@@ -75,7 +75,8 @@ pub struct AppState {
     pub oauth_registrations: OAuthRegistrations,
 }
 
-pub type OAuthRegistrations = Arc<Mutex<std::collections::HashMap<String, Vec<std::time::Instant>>>>;
+pub type OAuthRegistrations =
+    Arc<Mutex<std::collections::HashMap<String, Vec<std::time::Instant>>>>;
 
 impl AppState {
     pub fn new(database: SuplexDatabase, session_config: session::SessionConfig) -> Self {

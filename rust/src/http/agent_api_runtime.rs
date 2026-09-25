@@ -55,7 +55,10 @@ pub(crate) fn body_failure(status_code: StatusCode, runtime: bool) -> Response {
     if runtime {
         json_response(status_code, json!({"error": message, "code": code}))
     } else if status_code == StatusCode::PAYLOAD_TOO_LARGE {
-        json_response(status_code, json!({"error":"Request is too large","findings":[{"code":"request-too-large","field":"images","message":"Attach fewer or smaller images and submit again"}]}))
+        json_response(
+            status_code,
+            json!({"error":"Request is too large","findings":[{"code":"request-too-large","field":"images","message":"Attach fewer or smaller images and submit again"}]}),
+        )
     } else {
         auth::error(status_code, message)
     }
@@ -128,11 +131,23 @@ pub(crate) fn failure(error: Box<dyn Error>, runtime: bool) -> Response {
     }
     let task = error
         .downcast_ref::<AgentTaskFailure>()
-        .map(|failure| (failure.status_code, failure.code, failure.public_message.clone(), failure.details.clone()))
+        .map(|failure| {
+            (
+                failure.status_code,
+                failure.code,
+                failure.public_message.clone(),
+                failure.details.clone(),
+            )
+        })
         .or_else(|| {
-            error
-                .downcast_ref::<TaskFailure>()
-                .map(|failure| (failure.status_code, failure.code, failure.public_message.clone(), Map::new()))
+            error.downcast_ref::<TaskFailure>().map(|failure| {
+                (
+                    failure.status_code,
+                    failure.code,
+                    failure.public_message.clone(),
+                    Map::new(),
+                )
+            })
         })
         .or_else(|| {
             error
@@ -146,7 +161,10 @@ pub(crate) fn failure(error: Box<dyn Error>, runtime: bool) -> Response {
         let mut body = Map::new();
         body.insert("error".into(), json!(message));
         if runtime {
-            body.insert("code".into(), json!(runtime_task_code(status_code, code, &message)));
+            body.insert(
+                "code".into(),
+                json!(runtime_task_code(status_code, code, &message)),
+            );
             body.extend(details);
         } else if code != "task_failure" {
             body.insert("code".into(), json!(code));
@@ -162,11 +180,22 @@ pub(crate) fn failure(error: Box<dyn Error>, runtime: bool) -> Response {
         return json_response(status(failure.status_code), body);
     }
     if let Some(failure) = error.downcast_ref::<crate::tasks::sources::TaskSourceFailure>() {
-        let code = if runtime { "task_unavailable" } else { failure.code };
-        return json_response(status(failure.status_code), json!({"error": failure.message, "code": code}));
+        let code = if runtime {
+            "task_unavailable"
+        } else {
+            failure.code
+        };
+        return json_response(
+            status(failure.status_code),
+            json!({"error": failure.message, "code": code}),
+        );
     }
     if let Some(failure) = error.downcast_ref::<ArtifactFailure>() {
-        let code = if runtime { "task_unavailable" } else { failure.code };
+        let code = if runtime {
+            "task_unavailable"
+        } else {
+            failure.code
+        };
         return json_response(
             StatusCode::UNPROCESSABLE_ENTITY,
             json!({"error": failure.message, "code": code}),
@@ -181,10 +210,29 @@ mod tests {
 
     #[test]
     fn runtime_task_codes_follow_the_typescript_mapping() {
-        assert_eq!(runtime_task_code(404, "resource_not_found", "Not found"), "not_found");
-        assert_eq!(runtime_task_code(409, "task_failure", "This idempotency key belongs to a different request"), "idempotency_conflict");
-        assert_eq!(runtime_task_code(409, "idempotency_conflict", "other"), "task_unavailable");
-        assert_eq!(runtime_task_code(412, "revision_stale", "Task revision is stale"), "revision_stale");
-        assert_eq!(runtime_task_code(422, "task_failure", "Project configuration changed"), "task_unavailable");
+        assert_eq!(
+            runtime_task_code(404, "resource_not_found", "Not found"),
+            "not_found"
+        );
+        assert_eq!(
+            runtime_task_code(
+                409,
+                "task_failure",
+                "This idempotency key belongs to a different request"
+            ),
+            "idempotency_conflict"
+        );
+        assert_eq!(
+            runtime_task_code(409, "idempotency_conflict", "other"),
+            "task_unavailable"
+        );
+        assert_eq!(
+            runtime_task_code(412, "revision_stale", "Task revision is stale"),
+            "revision_stale"
+        );
+        assert_eq!(
+            runtime_task_code(422, "task_failure", "Project configuration changed"),
+            "task_unavailable"
+        );
     }
 }

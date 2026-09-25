@@ -52,6 +52,114 @@ pub fn router() -> Router<AppState> {
             "/api/projects/{project_id}/provider-instances",
             get(provider_instances),
         )
+        .route("/api/projects/{project_id}/issues", get(issues))
+        .route("/api/projects/{project_id}/task-sources", get(task_sources))
+}
+
+/// Query pairs as a JSON object; a repeated key keeps its last value.
+fn query_object(uri: &axum::http::Uri) -> serde_json::Value {
+    serde_json::Value::Object(
+        url::form_urlencoded::parse(uri.query().unwrap_or("").as_bytes())
+            .map(|(key, value)| (key.into_owned(), json!(value.into_owned())))
+            .collect(),
+    )
+}
+
+pub(super) fn source_error(error: Box<dyn Error>) -> Response {
+    match error.downcast::<crate::tasks::sources::TaskSourceFailure>() {
+        Ok(failure) => (
+            StatusCode::from_u16(failure.status_code).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
+            axum::Json(json!({"error": failure.message, "code": failure.code})),
+        )
+            .into_response(),
+        Err(error) => match error.downcast::<crate::tasks::commands::TaskFailure>() {
+            Ok(failure) if failure.code == "experimental_not_ported" => auth::not_ported(),
+            Ok(failure) => auth::error(
+                StatusCode::from_u16(failure.status_code).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
+                &failure.public_message,
+            ),
+            Err(error) => service_error(error),
+        },
+    }
+}
+
+/// TypeScript `searchIssues`: the configured tracker, else the project's GitHub Issues.
+async fn issues(
+    State(state): State<AppState>,
+    Path(project_id): Path<String>,
+    axum::extract::OriginalUri(uri): axum::extract::OriginalUri,
+    headers: HeaderMap,
+) -> Response {
+    if let Err(response) = validated_path("common.ProjectIdParamsSchema", "projectId", &project_id)
+    {
+        return *response;
+    }
+    let query = query_object(&uri)["query"].as_str().unwrap_or("").to_owned();
+    if query.encode_utf16().count() > 200 {
+        return auth::validation_error(vec![json!({"code": "too_big", "path": ["query"]})]);
+    }
+    let (user_id, cookies) = match authorize(&state, &headers) {
+        Ok(value) => value,
+        Err(response) => return *response,
+    };
+    let project = match state.with_database(|database| service::get(database, &user_id, &project_id)) {
+        Ok(project) => project,
+        Err(source) => return with_cookies(service_error(source), cookies),
+    };
+    let tracker = match &project.integration {
+        Some(integration) => serde_json::to_value(&integration.tracker).unwrap_or_default(),
+        None => project
+            .repository
+            .as_ref()
+            .map_or(serde_json::Value::Null, |repository| json!({"kind": "github", "repository": repository})),
+    };
+    if tracker.is_null() {
+        return with_cookies(axum::Json(json!({"issues": []})).into_response(), cookies);
+    }
+    let found = async {
+        crate::integrations::issue_tracker::IssueTracker::new(&tracker)
+            .await?
+            .search(&query)
+            .await
+    };
+    let response = match found.await {
+        Ok(issues) => axum::Json(json!({"issues": issues})).into_response(),
+        Err(error) => auth::service_error(error.to_string().into()),
+    };
+    with_cookies(response, cookies)
+}
+
+/// TypeScript `discoverTaskSources`.
+async fn task_sources(
+    State(state): State<AppState>,
+    Path(project_id): Path<String>,
+    axum::extract::OriginalUri(uri): axum::extract::OriginalUri,
+    headers: HeaderMap,
+) -> Response {
+    if let Err(response) = validated_path("common.ProjectIdParamsSchema", "projectId", &project_id)
+    {
+        return *response;
+    }
+    let query = query_object(&uri);
+    match contracts::validate("projects.TaskSourceQuerySchema", Some(&query)) {
+        Some(Ok(_)) => {}
+        Some(Err(issues)) => return auth::validation_error(issues),
+        None => return auth::error(StatusCode::INTERNAL_SERVER_ERROR, "Internal server error"),
+    }
+    let kind = query["kind"].as_str().unwrap_or("").to_owned();
+    let (user_id, cookies) = match authorize(&state, &headers) {
+        Ok(value) => value,
+        Err(response) => return *response,
+    };
+    let project = match state.with_database(|database| service::get(database, &user_id, &project_id)) {
+        Ok(project) => project,
+        Err(source) => return with_cookies(service_error(source), cookies),
+    };
+    let response = match crate::tasks::sources::discover(&project, &kind).await {
+        Ok(sources) => axum::Json(sources).into_response(),
+        Err(error) => source_error(error),
+    };
+    with_cookies(response, cookies)
 }
 
 fn validated_path(contract: &str, name: &str, value: &str) -> Result<(), Box<Response>> {

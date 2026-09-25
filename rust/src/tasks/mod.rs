@@ -8,3 +8,4 @@ pub mod templates;
 pub mod timeline;
 pub mod worktree;
 pub mod issue_context;
+pub mod sources;

@@ -26,8 +26,21 @@ pub enum TaskRole<'a> {
     Worker(WorkerPurpose),
 }
 
+/// TypeScript `scope.workflow`, `workerMode`, and `advisorRole` for a
+/// non-Standard workflow role. The default is the Standard role.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct WorkflowLaunch {
+    /// A Coordinator of a non-Standard workflow.
+    pub workflow_root: bool,
+    /// A Direct build implementation Worker.
+    pub direct: bool,
+    /// A read-only Advisor that runs in a Worker session.
+    pub advisor: Option<crate::coordination::advisor_bridge::AdvisorRole>,
+}
+
 /// TypeScript `TaskScope`: one native session launch, resolved by the host.
 pub struct TaskScope<'a> {
+    pub workflow: WorkflowLaunch,
     pub database_path: &'a Path,
     pub artifact_root: &'a Path,
     pub task_id: &'a str,

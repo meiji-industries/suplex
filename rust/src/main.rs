@@ -15,6 +15,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if command == ["mcp", "advisor"] {
         return suplex::coordination::advisor_bridge::serve_from_environment().await;
     }
+    if let [subcommand, directory] = command.as_slice()
+        && subcommand == suplex::runtimes::codex::display::SUBCOMMAND
+    {
+        return suplex::runtimes::codex::display::serve(directory).await;
+    }
     if command == ["mcp", "root"] {
         // The Root bridge forwards its events to the server's system log.
         if let Ok(binding) = suplex::coordination::root_bridge::authenticated_binding() {

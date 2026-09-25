@@ -17,6 +17,7 @@ use crate::{
     platform::database::{DatabaseResult, OpenMode, SuplexDatabase},
     runtimes::{codex::session_reader, process::inspect_process, task_harness_registry},
     tasks::{
+        archive::displays,
         commands::TaskFailure,
         repository::{self, TaskRecord},
         worktree::{self, TaskWorktreeIntent, WorktreeCleanup},
@@ -237,6 +238,7 @@ pub fn archive_task(
     }
     let _guard = ArchiveGuard::acquire(task_id)?;
     archive_sessions_idle(&database, database_path, task_id).map_err(cleanup_error)?;
+    let displays = displays::prepare_task_displays(&database, task_id).map_err(cleanup_error)?;
     drop(database);
     reauthorize(database_path, authority, task_id)?;
 
@@ -261,6 +263,7 @@ pub fn archive_task(
         return Ok(ArchiveOutcome::ConfirmationRequired(dirty_file_paths));
     }
     reauthorize(database_path, authority, task_id)?;
+    displays.close().map_err(cleanup_error)?;
     let mut database = SuplexDatabase::open(database_path, OpenMode::ReadWrite)?;
     database.transaction(true, |database| {
         let (current, _) = task_scope(database, authority, task_id)?;
@@ -384,18 +387,7 @@ mod tests {
         assert!(archive_local_task(&database_path, &user.id, &task_id, false).is_err());
         assert!(worktree.path.exists());
         fs::remove_file(directory.join("turn.json")).unwrap();
-        let database = SuplexDatabase::open(&database_path, OpenMode::ReadWrite).unwrap();
-        database.connection().execute("UPDATE suplex_task_sessions SET native_session_id = 'ses-other' WHERE id = 'archive_session'", []).unwrap();
-        drop(database);
-        let unsupported =
-            archive_local_task(&database_path, &user.id, &task_id, false).unwrap_err();
-        assert_eq!(
-            unsupported
-                .downcast_ref::<TaskFailure>()
-                .unwrap()
-                .status_code,
-            501
-        );
+        // Every provider is ported, so no native session is an unsupported one anymore.
         let database = SuplexDatabase::open(&database_path, OpenMode::ReadWrite).unwrap();
         database.connection().execute("UPDATE suplex_task_sessions SET native_session_id = NULL WHERE id = 'archive_session'", []).unwrap();
         drop(database);

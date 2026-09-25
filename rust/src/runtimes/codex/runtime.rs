@@ -147,6 +147,18 @@ pub fn observe(
         result.process_running = true;
         return Ok(result);
     }
+    // The process can finish between the first log read and the liveness check;
+    // its final events are complete only once it is observed stopped.
+    let events = transcript::parse_events(
+        &read_optional(&headless::turn_file(directory, turn_id, "jsonl"))?.unwrap_or_default(),
+    );
+    let completed = transcript::completed(&events);
+    result.unsettled_tool_ids = transcript::unsettled_tool_ids(&events)
+        .into_iter()
+        .take(32)
+        .map(str::to_owned)
+        .collect();
+    result.native_final_observed = completed;
     let exit = read_optional(&headless::turn_file(directory, turn_id, "exit"))?;
     if !result.unsettled_tool_ids.is_empty() {
         if exit.is_none() {

@@ -379,6 +379,16 @@ impl TaskHarness for ClaudeCodeTaskRuntime {
             scope.project_environment,
         );
         let args = claude_arguments(scope, scope.native_session_id, resume, &directory);
+        if let Ok(display) = super::display::claude_display_command(&directory) {
+            let attached =
+                |argv: &[String]| super::display::claude_display_attached(&directory, argv);
+            crate::runtimes::task_display::show_scope(
+                scope,
+                "claude-code",
+                &display.command,
+                &attached,
+            );
+        }
         let record = headless::dispatch_with_exclusions(
             headless::DispatchInput {
                 directory: &directory,
@@ -558,6 +568,7 @@ mod tests {
         instance: Option<&'a Path>,
     ) -> TaskScope<'a> {
         TaskScope {
+            workflow: Default::default(),
             database_path: &f.database,
             artifact_root: &f.root,
             task_id: "task-claude",
@@ -828,6 +839,7 @@ mod tests {
         assert!(!allowed.contains("mcp__context7__*"));
         let verification = claude_arguments(
             &TaskScope {
+                workflow: Default::default(),
                 role: TaskRole::Worker(WorkerPurpose::Verification),
                 project_mcp: None,
                 ..scope

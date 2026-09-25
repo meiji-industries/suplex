@@ -84,18 +84,9 @@ pub fn write_binding(
     if executable.is_empty() {
         return Err(io::Error::other("Advisor bridge executable is empty"));
     }
-    std::fs::create_dir_all(runtime_directory)?;
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(runtime_directory, std::fs::Permissions::from_mode(0o700))?;
-    }
+    bridge_auth::prepare_runtime_directory(runtime_directory)?;
     let binding_path = runtime_directory.join("advisor.binding.json");
-    let token = std::fs::read(&binding_path)
-        .ok()
-        .and_then(|bytes| serde_json::from_slice::<Value>(&bytes).ok())
-        .and_then(|value| value.get("token")?.as_str().map(str::to_owned))
-        .filter(|token| bridge_auth::valid_token(token))
+    let token = bridge_auth::existing_token(&binding_path)
         .unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
     let binding = Binding {
         version: 1,
@@ -106,7 +97,7 @@ pub fn write_binding(
             args: vec!["mcp".into(), "advisor".into()],
         },
     };
-    atomic_write(
+    bridge_auth::atomic_write_private(
         &binding_path,
         &serde_json::to_vec(&binding).map_err(io::Error::other)?,
     )?;
@@ -375,29 +366,7 @@ pub fn validate_submission(role: AdvisorRole, raw: Value) -> Result<Value, Strin
 }
 
 fn capture(path: &std::path::Path, report: &Value) -> io::Result<()> {
-    atomic_write(path, &serde_json::to_vec(report).map_err(io::Error::other)?)
-}
-
-fn atomic_write(path: &std::path::Path, bytes: &[u8]) -> io::Result<()> {
-    use std::io::Write;
-    let pending = path.with_extension(format!("{}.pending", uuid::Uuid::new_v4()));
-    let mut options = std::fs::OpenOptions::new();
-    options.write(true).create_new(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-    }
-    let result = (|| {
-        let mut file = options.open(&pending)?;
-        file.write_all(bytes)?;
-        file.sync_all()?;
-        std::fs::rename(&pending, path)
-    })();
-    if result.is_err() {
-        let _ = std::fs::remove_file(&pending);
-    }
-    result
+    bridge_auth::atomic_write_private(path, &serde_json::to_vec(report).map_err(io::Error::other)?)
 }
 
 pub async fn serve_from_environment() -> Result<(), Box<dyn std::error::Error>> {

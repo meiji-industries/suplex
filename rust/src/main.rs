@@ -10,8 +10,12 @@ use tokio::net::TcpListener;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    if std::env::args().skip(1).collect::<Vec<_>>() == ["mcp", "advisor"] {
+    let command = std::env::args().skip(1).collect::<Vec<_>>();
+    if command == ["mcp", "advisor"] {
         return suplex::coordination::advisor_bridge::serve_from_environment().await;
+    }
+    if command == ["mcp", "root"] {
+        return suplex::coordination::root_stdio::serve_from_environment().await;
     }
     let installation = Installation::load()?;
     let database = SuplexDatabase::open(&installation.database, OpenMode::Migrate)?;

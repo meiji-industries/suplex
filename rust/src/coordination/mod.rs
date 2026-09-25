@@ -1,4 +1,8 @@
 pub mod advisor_bridge;
 pub mod bridge_auth;
+pub mod root_bridge;
+pub mod root_controller;
+pub mod root_prompts;
 pub mod root_session_store;
+pub mod root_stdio;
 pub mod workflow_records;

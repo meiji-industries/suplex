@@ -3,10 +3,13 @@
 use chrono::{DateTime, SecondsFormat, Utc};
 use rusqlite::{OptionalExtension, Row, params};
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use sha2::{Digest, Sha256};
+use std::sync::Mutex;
 use uuid::Uuid;
 
 use crate::platform::database::{DatabaseResult, SuplexDatabase};
+use crate::runtimes::process::inspect_process;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct RootSession {
@@ -42,6 +45,138 @@ pub struct RootTurn {
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct TaskLimitUsage {
     pub estimated_cost_usd: Option<f64>,
+}
+
+/// Persisted Root inputs. The controller adds live Git and native observations.
+pub struct RootObservationRows {
+    pub control: Value,
+    pub context: Value,
+    pub dependencies: Vec<Value>,
+    pub root: Option<Value>,
+    pub worker: Option<Value>,
+    pub workers: Vec<Value>,
+    pub sessions: Vec<Value>,
+    pub turns: Vec<Value>,
+}
+
+fn json_rows(database: &SuplexDatabase, sql: &str, task_id: &str) -> DatabaseResult<Vec<Value>> {
+    let mut statement = database.connection().prepare(sql)?;
+    let rows = statement
+        .query_map([task_id], |row| row.get::<_, String>(0))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    rows.into_iter()
+        .map(|row| serde_json::from_str(&row).map_err(Into::into))
+        .collect()
+}
+
+pub fn root_observation_rows(
+    database: &SuplexDatabase,
+    task_id: &str,
+) -> DatabaseResult<RootObservationRows> {
+    let control = json_rows(
+        database,
+        r#"SELECT json_object(
+            'taskId',task_id,'objective',objective,'deliveryTarget',delivery_target,
+            'deliveryIntent',json(delivery_intent_json),'status',status,'wakeAt',wake_at,
+            'humanQuestion',human_question,
+            'humanQuestionOptions',json(COALESCE(human_question_options_json,'[]')),
+            'humanQuestionId',human_question_id,'recoveryTurnId',recovery_turn_id,
+            'limitPause',json(limit_pause_json),'worktree',json(worktree_json),
+            'pullRequest',json(pull_request_json),'rootSessionId',root_session_id,
+            'workerSessionId',worker_session_id,'shellPaneId',shell_pane_id,
+            'rootProfile',json(root_profile_json),'workerProfile',json(worker_profile_json),
+            'workflow',workflow,'advisorProfiles',json(advisor_profiles_json),
+            'workflowState',json(workflow_state_json))
+            FROM suplex_task_controls WHERE task_id = ?1"#,
+        task_id,
+    )?
+    .into_iter()
+    .next()
+    .ok_or("task_control_missing")?;
+    let context = json_rows(
+        database,
+        r#"SELECT json_object(
+            'configuration',json(configuration_json),
+            'images',json(COALESCE((
+                SELECT json_group_array(json_object('artifactId',id,'filename',filename))
+                FROM (SELECT id,filename FROM suplex_artifacts
+                      WHERE task_id = t.id AND kind IN ('task-image','delivery-image')
+                      ORDER BY created_at,id)
+            ),'[]')),
+            'issueContext',json(issue_context_json))
+            FROM suplex_tasks t WHERE id = ?1"#,
+        task_id,
+    )?
+    .into_iter()
+    .next()
+    .ok_or("task_context_missing")?;
+    let dependencies = json_rows(
+        database,
+        r#"SELECT json_object('id',t.id,'title',t.title,'status',COALESCE(c.status,'backlog'))
+            FROM suplex_task_dependencies d JOIN suplex_tasks t ON t.id = d.depends_on_task_id
+            LEFT JOIN suplex_task_controls c ON c.task_id = t.id
+            WHERE d.task_id = ?1 ORDER BY t.id"#,
+        task_id,
+    )?;
+    let sessions = json_rows(
+        database,
+        r#"SELECT json_object(
+            'profile',json(profile_json),
+            'replacement',CASE WHEN replaces_session_id IS NULL THEN NULL ELSE json_object(
+                'sessionId',replaces_session_id,'reason',replacement_reason,'handoff',replacement_handoff) END,
+            'id',id,'taskId',task_id,'kind',kind,'generation',generation,
+            'current',json(CASE is_current WHEN 1 THEN 'true' ELSE 'false' END),
+            'paneId',pane_id,'nativeSessionId',native_session_id,'lifecycle',lifecycle,
+            'assignmentHash',assignment_hash,'launchOwner',launch_owner,
+            'launchOwnerPid',launch_owner_pid,'launchOwnerStartTime',launch_owner_start_time,
+            'stopRequestedAt',stop_requested_at,'stoppedAt',stopped_at,
+            'advisorRole',advisor_role,'delegateSlot',delegate_slot,
+            'workflowInput',json(workflow_input_json))
+            FROM suplex_task_sessions WHERE task_id = ?1 ORDER BY created_at,id"#,
+        task_id,
+    )?;
+    let turns = json_rows(
+        database,
+        r#"SELECT json_object(
+            'id',id,'taskId',task_id,'sessionId',session_id,'generation',generation,
+            'assignmentHash',assignment_hash,'promptHash',prompt_hash,'promptText',prompt_text,
+            'status',status,'promptedAt',prompted_at,'completedAt',completed_at,
+            'resultReceiptId',result_receipt_id,'terminalObservation',terminal_observation,
+            'nativeTurnId',native_turn_id,'dispatchAttempt',json(dispatch_attempt_json),
+            'workflowInput',json(workflow_input_json))
+            FROM suplex_task_turns WHERE task_id = ?1 ORDER BY created_at,id"#,
+        task_id,
+    )?;
+    let root = sessions
+        .iter()
+        .find(|session| session["kind"] == "root" && session["current"] == true)
+        .cloned();
+    let mut workers = sessions
+        .iter()
+        .filter(|session| session["kind"] == "worker" && session["current"] == true)
+        .cloned()
+        .collect::<Vec<_>>();
+    workers.sort_by_key(|session| match session["delegateSlot"].as_str() {
+        Some("planner_a") => 0,
+        Some("planner_b") => 1,
+        _ => 2,
+    });
+    let pointed = control["workerSessionId"].as_str();
+    let worker = workers
+        .iter()
+        .find(|session| session["id"].as_str() == pointed)
+        .or_else(|| workers.first())
+        .cloned();
+    Ok(RootObservationRows {
+        control,
+        context,
+        dependencies,
+        root,
+        worker,
+        workers,
+        sessions,
+        turns,
+    })
 }
 
 #[derive(Clone, Copy, Debug, Serialize)]
@@ -121,6 +256,34 @@ fn timestamp(now: DateTime<Utc>) -> String {
     now.to_rfc3339_opts(SecondsFormat::Millis, true)
 }
 
+fn new_turn_id(now: DateTime<Utc>) -> DatabaseResult<String> {
+    const BASE62: &[u8; 62] = b"0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+    static COUNTER: Mutex<(i64, u64)> = Mutex::new((0, 0));
+    let millis = now.timestamp_millis();
+    let counter = {
+        let mut state = COUNTER
+            .lock()
+            .map_err(|_| std::io::Error::other("turn ID counter poisoned"))?;
+        if state.0 != millis {
+            *state = (millis, 0);
+        }
+        state.1 += 1;
+        state.1
+    };
+    let value = (millis as u128) * 0x1000 + u128::from(counter);
+    let mut id = String::from("msg_");
+    for index in 0..6 {
+        let byte = ((value >> (40 - 8 * index)) & 0xff) as u8;
+        id.push_str(&format!("{byte:02x}"));
+    }
+    let mut random = [0u8; 14];
+    getrandom::fill(&mut random).map_err(|error| std::io::Error::other(error.to_string()))?;
+    for byte in random {
+        id.push(BASE62[usize::from(byte % 62)] as char);
+    }
+    Ok(id)
+}
+
 fn session(row: &Row<'_>) -> rusqlite::Result<RootSession> {
     Ok(RootSession {
         id: row.get("id")?,
@@ -166,6 +329,238 @@ pub fn current_root(
         "SELECT * FROM suplex_task_sessions WHERE task_id = ?1 AND kind = 'root' AND is_current = 1",
         [task_id], session,
     ).optional()?)
+}
+
+pub fn assert_current_root(
+    database: &SuplexDatabase,
+    task_id: &str,
+    session_id: &str,
+    generation: i64,
+) -> DatabaseResult<()> {
+    let current = current_root(database, task_id)?;
+    let active: bool = database.connection().query_row(
+        "SELECT EXISTS(SELECT 1 FROM suplex_task_controls WHERE task_id = ?1 AND status = 'active')",
+        [task_id],
+        |row| row.get(0),
+    )?;
+    if !active
+        || !current.is_some_and(|root| {
+            root.id == session_id && root.generation == generation && root.lifecycle != "cancelled"
+        })
+    {
+        return Err(std::io::Error::other("root_identity_mismatch").into());
+    }
+    Ok(())
+}
+
+/// A live bridge keeps its token. An unobservable PID is retained unless the OS
+/// confirms it is gone; a reused PID may be replaced.
+pub fn claim_tool_owner(
+    database: &mut SuplexDatabase,
+    task_id: &str,
+    now: DateTime<Utc>,
+) -> DatabaseResult<Option<String>> {
+    let current: Option<(String, u32, String)> = database
+        .connection()
+        .query_row(
+            "SELECT json_extract(workflow_state_json, '$.toolOwner.token'), json_extract(workflow_state_json, '$.toolOwner.pid'), json_extract(workflow_state_json, '$.toolOwner.processStartTime') FROM suplex_task_controls WHERE task_id = ?1",
+            [task_id],
+            |row| {
+                let token: Option<String> = row.get(0)?;
+                let pid: Option<u32> = row.get(1)?;
+                let start: Option<String> = row.get(2)?;
+                Ok(token.zip(pid).zip(start).map(|((token, pid), start)| (token, pid, start)))
+            },
+        )
+        .optional()?
+        .flatten();
+    if let Some((_, pid, start)) = &current {
+        if let Some(observed) = inspect_process(*pid) {
+            if observed.start_time == *start {
+                return Ok(None);
+            }
+        } else if nix::sys::signal::kill(nix::unistd::Pid::from_raw(*pid as i32), None)
+            != Err(nix::errno::Errno::ESRCH)
+        {
+            return Ok(None);
+        }
+    }
+    let self_pid = std::process::id();
+    let Some(self_identity) = inspect_process(self_pid) else {
+        return Ok(None);
+    };
+    let token = Uuid::new_v4().to_string();
+    let owner = serde_json::json!({
+        "token": token,
+        "pid": self_pid,
+        "processStartTime": self_identity.start_time,
+    });
+    let prior = current.as_ref().map(|(token, _, _)| token.as_str());
+    let changed = database.transaction(true, |database| {
+        Ok(database.connection().execute(
+            "UPDATE suplex_task_controls SET workflow_state_json = json_set(workflow_state_json, '$.toolOwner', json(?1)), updated_at = ?2 WHERE task_id = ?3 AND json_extract(workflow_state_json, '$.toolOwner.token') IS ?4",
+            params![owner.to_string(), timestamp(now), task_id, prior],
+        )?)
+    })?;
+    Ok((changed == 1).then_some(token))
+}
+
+pub fn release_tool_owner(
+    database: &mut SuplexDatabase,
+    task_id: &str,
+    token: &str,
+) -> DatabaseResult<()> {
+    database.transaction(true, |database| {
+        database.connection().execute(
+            "UPDATE suplex_task_controls SET workflow_state_json = json_set(workflow_state_json, '$.toolOwner', json('null')) WHERE task_id = ?1 AND json_extract(workflow_state_json, '$.toolOwner.token') = ?2",
+            params![task_id, token],
+        )?;
+        Ok(())
+    })
+}
+
+pub fn assert_tool_owner(
+    database: &SuplexDatabase,
+    task_id: &str,
+    token: &str,
+) -> DatabaseResult<()> {
+    let actual: Option<String> = database.connection().query_row(
+        "SELECT json_extract(workflow_state_json, '$.toolOwner.token') FROM suplex_task_controls WHERE task_id = ?1",
+        [task_id],
+        |row| row.get(0),
+    ).optional()?.flatten();
+    if actual.as_deref() != Some(token) {
+        return Err(std::io::Error::other("task_tool_owner_lost").into());
+    }
+    Ok(())
+}
+
+pub fn ask_human_for_root(
+    database: &mut SuplexDatabase,
+    task_id: &str,
+    session_id: &str,
+    generation: i64,
+    question: &str,
+    options: &Value,
+    now: DateTime<Utc>,
+) -> DatabaseResult<bool> {
+    let question = question.trim();
+    if question.is_empty() {
+        return Err(std::io::Error::other("question_is_empty").into());
+    }
+    let options = serde_json::to_string(options)?;
+    database.transaction(true, |database| {
+        Ok(database.connection().execute(
+            "UPDATE suplex_task_controls SET status = 'waiting_human', human_question = ?1, human_question_options_json = ?2, human_question_id = ?3, limit_pause_json = NULL, wake_at = NULL, workflow_state_json = json_set(workflow_state_json, '$.deliveryWait', json('null')), updated_at = ?4 WHERE task_id = ?5 AND status = 'active' AND root_session_id = ?6 AND EXISTS (SELECT 1 FROM suplex_task_sessions s WHERE s.id = ?6 AND s.task_id = suplex_task_controls.task_id AND s.kind = 'root' AND s.generation = ?7 AND s.is_current = 1 AND s.lifecycle <> 'cancelled')",
+            params![question, options, Uuid::new_v4().to_string(), timestamp(now), task_id, session_id, generation],
+        )? == 1)
+    })
+}
+
+/// Reserve the next Standard Worker turn atomically with Root identity and
+/// serial-delegate checks. Native dispatch is a separate after-commit step.
+pub fn launch_standard_worker(
+    database: &mut SuplexDatabase,
+    root: &RootSession,
+    assignment_text: &str,
+    prompt_text: &str,
+    workflow_input: Option<&Value>,
+    now: DateTime<Utc>,
+) -> DatabaseResult<Value> {
+    let task_id = root.task_id.as_str();
+    let root_session_id = root.id.as_str();
+    let root_generation = root.generation;
+    let assignment_hash = format!("{:x}", Sha256::digest(assignment_text.as_bytes()));
+    let prompt_hash = format!("{:x}", Sha256::digest(prompt_text.as_bytes()));
+    let workflow_json = workflow_input.map(serde_json::to_string).transpose()?;
+    let time = timestamp(now);
+    database.transaction(true, |database| {
+        assert_current_root(database, task_id, root_session_id, root_generation)?;
+        let workflow: String = database.connection().query_row(
+            "SELECT workflow FROM suplex_task_controls WHERE task_id = ?1",
+            [task_id],
+            |row| row.get(0),
+        )?;
+        if workflow != "standard" {
+            return Err(std::io::Error::other("standard_worker_requires_standard_workflow").into());
+        }
+        let active_turn: bool = database.connection().query_row(
+            "SELECT EXISTS(SELECT 1 FROM suplex_task_sessions s JOIN suplex_task_turns t ON t.session_id = s.id AND t.generation = s.generation WHERE s.task_id = ?1 AND s.kind = 'worker' AND s.is_current = 1 AND t.status IN ('pending_prompt','prompted','unknown'))",
+            [task_id],
+            |row| row.get(0),
+        )?;
+        if active_turn {
+            return Err(std::io::Error::other("worker_already_assigned").into());
+        }
+        let current: Option<(String, i64, bool, bool)> = database.connection().query_row(
+            "SELECT id,generation,stop_requested_at IS NOT NULL AND stopped_at IS NULL,launch_owner IS NOT NULL AND stopped_at IS NULL FROM suplex_task_sessions WHERE task_id = ?1 AND kind = 'worker' AND delegate_slot = 'delegate' AND is_current = 1",
+            [task_id],
+            |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?)),
+        ).optional()?;
+        if current.as_ref().is_some_and(|(_, _, stopping, launching)| *stopping || *launching) {
+            return Err(std::io::Error::other("worker_already_assigned").into());
+        }
+        let generation: i64 = database.connection().query_row(
+            "SELECT COALESCE(MAX(generation),0)+1 FROM suplex_task_sessions WHERE task_id = ?1 AND kind = 'worker'",
+            [task_id], |row| row.get(0),
+        )?;
+        let profile: String = database.connection().query_row(
+            "SELECT worker_profile_json FROM suplex_task_controls WHERE task_id = ?1",
+            [task_id], |row| row.get(0),
+        )?;
+        let compatible: Option<(String, bool)> = database.connection().query_row(
+            "SELECT id,stop_requested_at IS NOT NULL AND stopped_at IS NULL FROM suplex_task_sessions WHERE task_id = ?1 AND kind = 'worker' AND advisor_role IS NULL AND lifecycle <> 'cancelled' AND (profile_json IS NULL OR json(profile_json) = json(?2)) ORDER BY generation DESC,created_at DESC,id DESC LIMIT 1",
+            params![task_id, profile],
+            |row| Ok((row.get(0)?,row.get(1)?)),
+        ).optional()?;
+        if compatible.as_ref().is_some_and(|(_, stopping)| *stopping) {
+            return Err(std::io::Error::other("worker_already_assigned").into());
+        }
+        let id = compatible
+            .as_ref()
+            .map(|(id, _)| id.clone())
+            .unwrap_or_else(|| Uuid::new_v4().to_string());
+        if let Some((current_id, _, _, _)) = &current
+            && current_id != &id
+        {
+            database.connection().execute(
+                "UPDATE suplex_task_sessions SET is_current = 0,updated_at = ?1 WHERE id = ?2 AND is_current = 1",
+                params![time, current_id],
+            )?;
+        }
+        if compatible.is_some() {
+            let changed = database.connection().execute(
+                "UPDATE suplex_task_sessions SET generation = ?1,is_current = 1,lifecycle = CASE WHEN lifecycle = 'stopped' THEN 'reserved' ELSE lifecycle END,assignment_hash = ?2,profile_json = COALESCE(profile_json,?3),launch_owner = NULL,launch_owner_pid = NULL,launch_owner_start_time = NULL,launch_claimed_at = NULL,stop_requested_at = NULL,stopped_at = NULL,updated_at = ?4 WHERE id = ?5 AND lifecycle IN ('reserved','live','stopped') AND (launch_owner IS NULL OR stopped_at IS NOT NULL) AND (stop_requested_at IS NULL OR stopped_at IS NOT NULL) AND NOT EXISTS (SELECT 1 FROM suplex_task_turns t WHERE t.session_id = suplex_task_sessions.id AND t.generation = suplex_task_sessions.generation AND t.status IN ('pending_prompt','prompted','unknown'))",
+                params![generation, assignment_hash, profile, time, id],
+            )?;
+            if changed != 1 {
+                return Err(std::io::Error::other("worker_already_assigned").into());
+            }
+        } else {
+            if let Some((current_id, current_generation, _, _)) = &current {
+                database.connection().execute(
+                    "UPDATE suplex_task_sessions SET is_current = 0,updated_at = ?1 WHERE id = ?2 AND generation = ?3 AND is_current = 1",
+                    params![time, current_id, current_generation],
+                )?;
+            }
+            database.connection().execute(
+                "INSERT INTO suplex_task_sessions (id,task_id,kind,generation,is_current,lifecycle,assignment_hash,delegate_slot,workflow_input_json,profile_json,created_at,updated_at) VALUES (?1,?2,'worker',?3,1,'reserved',?4,'delegate',?5,?6,?7,?7)",
+                params![id, task_id, generation, assignment_hash, workflow_json, profile, time],
+            )?;
+        }
+        database.connection().execute(
+            "UPDATE suplex_task_controls SET worker_session_id = ?1,updated_at = ?2 WHERE task_id = ?3 AND status = 'active'",
+            params![id, time, task_id],
+        )?;
+        database.connection().execute(
+            "INSERT INTO suplex_task_turns (id,task_id,session_id,generation,assignment_hash,prompt_hash,prompt_text,status,workflow_input_json,created_at,updated_at) VALUES (?1,?2,?3,?4,?5,?6,?7,'pending_prompt',?8,?9,?9)",
+            params![new_turn_id(now)?, task_id, id, generation, assignment_hash, prompt_hash, prompt_text, workflow_json, time],
+        )?;
+        Ok(())
+    })?;
+    root_observation_rows(database, task_id)?
+        .worker
+        .ok_or_else(|| std::io::Error::other("worker_session_missing").into())
 }
 
 /// Reserve one Root generation for an active task; a repeated admission returns it.
@@ -215,7 +610,7 @@ pub fn ensure_initial_prompt(
             [&root.id], |row| row.get(0),
         )?;
         if existing { return Ok(None); }
-        let id = Uuid::new_v4().to_string();
+        let id = new_turn_id(now)?;
         let hash = format!("{:x}", Sha256::digest(prompt.as_bytes()));
         let time = timestamp(now);
         database.connection().execute(
@@ -379,6 +774,14 @@ mod tests {
         let now = DateTime::parse_from_rfc3339("2026-09-25T12:00:00Z")
             .unwrap()
             .with_timezone(&Utc);
+        let message_id = new_turn_id(now).unwrap();
+        assert_eq!(message_id.len(), 30);
+        assert!(message_id.starts_with("msg_0d86fca"));
+        assert!(
+            message_id[16..]
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric())
+        );
         let mut database = SuplexDatabase::open(&filename, OpenMode::Migrate).unwrap();
         let user = auth::development_sign_in(&mut database, now).unwrap().user;
         database.connection().execute(
@@ -483,9 +886,84 @@ mod tests {
             )
             .unwrap();
         let root = reserve_root(&mut database, &created.task.id, now).unwrap();
+        assert!(Uuid::parse_str(&root.id).is_ok());
+        let observed = root_observation_rows(&database, &created.task.id).unwrap();
+        assert_eq!(observed.control["status"], "active");
+        assert_eq!(observed.control["workflow"], "standard");
+        assert_eq!(observed.context["configuration"]["branch"], "task-one");
+        assert_eq!(observed.root.as_ref().unwrap()["id"], root.id);
+        assert!(observed.worker.is_none());
+        assert!(observed.workers.is_empty());
+        assert!(observed.turns.is_empty());
+        assert_current_root(&database, &created.task.id, &root.id, root.generation).unwrap();
+        assert!(
+            assert_current_root(&database, &created.task.id, &root.id, root.generation + 1)
+                .is_err()
+        );
+        let tool_token = claim_tool_owner(&mut database, &created.task.id, now)
+            .unwrap()
+            .unwrap();
+        assert!(
+            claim_tool_owner(&mut database, &created.task.id, now)
+                .unwrap()
+                .is_none()
+        );
+        assert_tool_owner(&database, &created.task.id, &tool_token).unwrap();
+        release_tool_owner(&mut database, &created.task.id, "wrong-token").unwrap();
+        assert_tool_owner(&database, &created.task.id, &tool_token).unwrap();
+        release_tool_owner(&mut database, &created.task.id, &tool_token).unwrap();
+        assert!(assert_tool_owner(&database, &created.task.id, &tool_token).is_err());
+        let worker = launch_standard_worker(
+            &mut database,
+            &root,
+            "Implement",
+            "Worker assignment: Implement",
+            None,
+            now,
+        )
+        .unwrap();
+        assert_eq!(worker["kind"], "worker");
+        assert!(
+            root_observation_rows(&database, &created.task.id)
+                .unwrap()
+                .turns[0]["id"]
+                .as_str()
+                .unwrap()
+                .starts_with("msg_")
+        );
+        assert!(
+            launch_standard_worker(
+                &mut database,
+                &root,
+                "Duplicate",
+                "Worker assignment: Duplicate",
+                None,
+                now,
+            )
+            .is_err()
+        );
+        database
+            .connection()
+            .execute(
+                "UPDATE suplex_task_turns SET status = 'completed' WHERE session_id = ?1",
+                [worker["id"].as_str().unwrap()],
+            )
+            .unwrap();
+        let next_worker = launch_standard_worker(
+            &mut database,
+            &root,
+            "Verify",
+            "Worker assignment: Verify",
+            None,
+            now,
+        )
+        .unwrap();
+        assert_eq!(next_worker["id"], worker["id"]);
+        assert_eq!(next_worker["generation"], 2);
         let turn = ensure_initial_prompt(&mut database, &root, "Begin", now)
             .unwrap()
             .unwrap();
+        assert!(turn.id.starts_with("msg_"));
         assert!(
             claim_session_operation(&mut database, &root, "owner-one", 123, "process-start", now)
                 .unwrap()

@@ -1,4 +1,4 @@
-use std::io;
+use std::{io, path::Path};
 use subtle::ConstantTimeEq;
 
 pub const ROOT_BINDING_ENV: &str = "SUPLEX_ROOT_BINDING";
@@ -63,6 +63,46 @@ pub fn authenticate_token(
             "{label} bridge authentication failed: {name} does not match the binding"
         )))
     }
+}
+
+pub fn prepare_runtime_directory(path: &Path) -> io::Result<()> {
+    std::fs::create_dir_all(path)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700))?;
+    }
+    Ok(())
+}
+
+pub fn existing_token(path: &Path) -> Option<String> {
+    std::fs::read(path)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<serde_json::Value>(&bytes).ok())
+        .and_then(|value| value.get("token")?.as_str().map(str::to_owned))
+        .filter(|token| valid_token(token))
+}
+
+pub fn atomic_write_private(path: &Path, bytes: &[u8]) -> io::Result<()> {
+    use std::io::Write;
+    let pending = path.with_extension(format!("{}.pending", uuid::Uuid::new_v4()));
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let result = (|| {
+        let mut file = options.open(&pending)?;
+        file.write_all(bytes)?;
+        file.sync_all()?;
+        std::fs::rename(&pending, path)
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_file(&pending);
+    }
+    result
 }
 
 #[cfg(test)]

@@ -7,7 +7,10 @@ use std::io;
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 
-use git2::{BranchType, Repository, StatusOptions, WorktreeAddOptions, WorktreePruneOptions};
+use git2::{
+    AutotagOption, BranchType, DiffFindOptions, DiffOptions, Direction, FetchOptions, Repository,
+    StatusOptions, WorktreeAddOptions, WorktreePruneOptions,
+};
 
 pub type WorktreeResult<T> = Result<T, Box<dyn Error>>;
 
@@ -84,6 +87,67 @@ pub fn observe_worktree(path: &Path) -> WorktreeResult<WorktreeObservation> {
     options.include_untracked(true).recurse_untracked_dirs(true);
     let dirty = !repository.statuses(Some(&mut options))?.is_empty();
     Ok(WorktreeObservation { head_sha, dirty })
+}
+
+/// Count tracked changes against the configured repository's current published
+/// base. Local origin is used only to obtain that immutable commit when absent;
+/// its URL and remote-tracking refs are not authority for the published head.
+pub fn local_diff_file_count(
+    path: &Path,
+    configured_repository: &str,
+    base_branch: &str,
+) -> WorktreeResult<usize> {
+    let repository = Repository::open(path)?;
+    let published_sha = published_base_commit(&repository, configured_repository, base_branch)?;
+    let head = repository.head()?.peel_to_commit()?.id();
+    let base = repository.merge_base(published_sha, head)?;
+    let tree = repository.find_commit(base)?.tree()?;
+    let mut options = DiffOptions::new();
+    let mut diff = repository.diff_tree_to_workdir_with_index(Some(&tree), Some(&mut options))?;
+    let config = repository.config()?;
+    let rename_detection = match config.get_string("diff.renames") {
+        Ok(value) if value.eq_ignore_ascii_case("copies") => true,
+        Ok(_) => config.get_bool("diff.renames")?,
+        Err(error) if error.code() == git2::ErrorCode::NotFound => true,
+        Err(error) => return Err(error.into()),
+    };
+    if rename_detection {
+        diff.find_similar(Some(DiffFindOptions::new().renames(true)))?;
+    }
+    Ok(diff.deltas().count())
+}
+
+/// Observe the configured repository's published branch and ensure its
+/// immutable commit is available locally without using tracking-ref state.
+pub fn published_base_commit(
+    repository: &Repository,
+    configured_repository: &str,
+    base_branch: &str,
+) -> WorktreeResult<git2::Oid> {
+    let canonical = format!("https://github.com/{configured_repository}.git");
+    let coordinate = crate::projects::repository::repository_coordinate(&canonical)
+        .filter(|coordinate| coordinate.host == "github")
+        .ok_or_else(|| invalid("Configured GitHub repository is invalid"))?;
+    let mut published = repository.remote_anonymous(&coordinate.clone_url)?;
+    published.connect(Direction::Fetch)?;
+    let reference = format!("refs/heads/{base_branch}");
+    let published_sha = published
+        .list()?
+        .iter()
+        .find(|remote| remote.name() == reference)
+        .map(git2::RemoteHead::oid)
+        .ok_or_else(|| invalid("GitHub did not return the configured base branch"))?;
+    published.disconnect()?;
+    if repository.find_commit(published_sha).is_err() {
+        let mut origin = repository.find_remote("origin")?;
+        let mut options = FetchOptions::new();
+        options
+            .download_tags(AutotagOption::None)
+            .update_fetchhead(false);
+        origin.fetch(&[published_sha.to_string()], Some(&mut options), None)?;
+        repository.find_commit(published_sha)?;
+    }
+    Ok(published_sha)
 }
 
 fn invalid(message: &'static str) -> Box<dyn Error> {

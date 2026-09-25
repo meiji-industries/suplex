@@ -23,7 +23,7 @@ use crate::{
     identity::companies,
     platform::database::SuplexDatabase,
     runtimes::codex::{session_reader, tool_evidence},
-    tasks::commands::TaskFailure,
+    tasks::{commands::TaskFailure, worktree},
 };
 
 use super::auth;
@@ -314,23 +314,75 @@ async fn diff_summary(
         Ok(value) => value,
         Err(response) => return *response,
     };
-    let result = state.with_database(|database| -> Result<Option<Value>, Box<dyn Error>> {
+    enum DiffIntent {
+        NoWorktree,
+        Unsupported,
+        Local {
+            path: PathBuf,
+            repository: String,
+            base_branch: String,
+        },
+    }
+    let intent = match state.with_database(|database| -> Result<DiffIntent, Box<dyn Error>> {
         let (rows, _) = read_task(database, &user_id, &task_id)?;
-        if rows.control["worktree"].is_null() {
-            Ok(Some(json!({"available":false,"files":0})))
-        } else {
-            Ok(None)
+        let Some(path) = rows.control["worktree"].get("path").and_then(Value::as_str) else {
+            if rows.control["worktree"].is_null() {
+                return Ok(DiffIntent::NoWorktree);
+            }
+            return Err("Task worktree path is invalid".into());
+        };
+        let configuration = &rows.context["configuration"];
+        if !rows.control["pullRequest"].is_null()
+            || configuration["source"]["kind"] == "pull_request"
+            || configuration["integration"]["repository"]["kind"] == "bitbucket"
+        {
+            return Ok(DiffIntent::Unsupported);
         }
-    });
-    match result {
-        Ok(Some(value)) => respond(Ok(value), cookies),
-        Ok(None) => {
+        let repository = configuration["repository"]
+            .as_str()
+            .ok_or("Task repository is missing")?;
+        let base_branch = configuration["baseBranch"]
+            .as_str()
+            .ok_or("Task base branch is missing")?;
+        Ok(DiffIntent::Local {
+            path: PathBuf::from(path),
+            repository: repository.to_owned(),
+            base_branch: base_branch.to_owned(),
+        })
+    }) {
+        Ok(intent) => intent,
+        Err(error) => return respond(Err(error), cookies),
+    };
+    let (path, repository, base_branch) = match intent {
+        DiffIntent::NoWorktree => {
+            return respond(Ok(json!({"available":false,"files":0})), cookies);
+        }
+        DiffIntent::Unsupported => {
             let mut response = auth::not_ported();
             auth::append_cookies(&mut response, cookies);
-            response
+            return response;
         }
-        Err(error) => respond(Err(error), cookies),
-    }
+        DiffIntent::Local {
+            path,
+            repository,
+            base_branch,
+        } => (path, repository, base_branch),
+    };
+    let observed = tokio::task::spawn_blocking(move || {
+        worktree::local_diff_file_count(&path, &repository, &base_branch)
+            .map_err(|error| error.to_string())
+    })
+    .await;
+    let files = match observed {
+        Ok(Ok(files)) => files,
+        Ok(Err(error)) => return respond(Err(Box::new(std::io::Error::other(error))), cookies),
+        Err(error) => return respond(Err(Box::new(error)), cookies),
+    };
+    let scope = state.with_database(|database| read_task(database, &user_id, &task_id));
+    respond(
+        scope.map(|_| json!({"available":true,"files":files})),
+        cookies,
+    )
 }
 
 #[cfg(test)]
@@ -348,6 +400,20 @@ mod tests {
         io::{BufRead, BufReader, Write},
         process::{Command, Stdio},
     };
+
+    fn git(args: &[&str], cwd: &std::path::Path) -> String {
+        let output = Command::new("git")
+            .args(args)
+            .current_dir(cwd)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8(output.stdout).unwrap().trim().to_owned()
+    }
 
     #[tokio::test]
     async fn task_detail_reads_follow_live_scope_and_saved_native_intent() {
@@ -444,13 +510,199 @@ mod tests {
             serde_json::from_slice::<Value>(&body).unwrap(),
             json!({"available":false,"files":0})
         );
+        let bare = root.join("origin.git");
+        let local = root.join("repository");
+        let publisher = root.join("publisher");
+        git(
+            &[
+                "init",
+                "--quiet",
+                "--bare",
+                "--initial-branch=main",
+                bare.to_str().unwrap(),
+            ],
+            &root,
+        );
+        git(
+            &[
+                "init",
+                "--quiet",
+                "--initial-branch=main",
+                local.to_str().unwrap(),
+            ],
+            &root,
+        );
+        git(&["config", "user.name", "Probe"], &local);
+        git(&["config", "user.email", "probe@example.invalid"], &local);
+        fs::write(local.join("README.md"), "Before\n").unwrap();
+        git(&["add", "README.md"], &local);
+        git(&["commit", "--quiet", "-m", "Base"], &local);
+        let base = git(&["rev-parse", "HEAD"], &local);
+        git(&["remote", "add", "origin", bare.to_str().unwrap()], &local);
+        git(&["push", "--quiet", "origin", "main"], &local);
+        git(&["checkout", "--quiet", "-b", "task-change"], &local);
+        fs::write(local.join("task.txt"), "Task change\n").unwrap();
+        git(&["add", "task.txt"], &local);
+        git(&["commit", "--quiet", "-m", "Task"], &local);
+        fs::write(local.join("README.md"), "Staged\n").unwrap();
+        git(&["add", "README.md"], &local);
+        fs::write(local.join("README.md"), "Staged\nUnstaged\n").unwrap();
+        fs::write(local.join("NEW.md"), "Untracked\n").unwrap();
+        git(
+            &[
+                "clone",
+                "--quiet",
+                bare.to_str().unwrap(),
+                publisher.to_str().unwrap(),
+            ],
+            &root,
+        );
+        git(&["config", "user.name", "Publisher"], &publisher);
+        git(
+            &["config", "user.email", "publisher@example.invalid"],
+            &publisher,
+        );
+        fs::write(publisher.join("published.txt"), "Published base\n").unwrap();
+        git(&["add", "published.txt"], &publisher);
+        git(&["commit", "--quiet", "-m", "Published"], &publisher);
+        git(&["push", "--quiet", "origin", "main"], &publisher);
+        let published = git(&["rev-parse", "HEAD"], &publisher);
+        assert!(
+            git2::Repository::open(&local)
+                .unwrap()
+                .find_commit(git2::Oid::from_str(&published).unwrap())
+                .is_err()
+        );
+        let rewrite = format!("url.file://{}.insteadOf", bare.display());
+        git(
+            &[
+                "config",
+                "--local",
+                &rewrite,
+                "https://github.com/acme/demo.git",
+            ],
+            &local,
+        );
         state.with_database(|database| {
             database.connection().execute(
+                "UPDATE suplex_tasks SET configuration_json = json_set(configuration_json,'$.repository','acme/demo','$.baseBranch','main','$.baselineSha',?1) WHERE id = ?2",
+                rusqlite::params!["0".repeat(40), task.id],
+            ).unwrap();
+            database.connection().execute(
                 "UPDATE suplex_task_controls SET worktree_json = ?1 WHERE task_id = ?2",
-                rusqlite::params![
-                    json!({"path":"/tmp/task-read-worktree","branch":"task-reads","baseSha":"a".repeat(40),"headSha":"a".repeat(40),"dirty":false}).to_string(),
-                    task.id,
-                ],
+                rusqlite::params![json!({"path":local,"branch":"saved-branch","baseSha":"f".repeat(40),"headSha":"f".repeat(40),"dirty":false}).to_string(), task.id],
+            ).unwrap();
+        });
+        let summary =
+            diff_summary(State(state.clone()), Path(task.id.clone()), headers.clone()).await;
+        assert_eq!(summary.status(), StatusCode::OK);
+        let body = to_bytes(summary.into_body(), usize::MAX).await.unwrap();
+        assert_eq!(
+            serde_json::from_slice::<Value>(&body).unwrap(),
+            json!({"available":true,"files":2})
+        );
+        assert!(
+            git2::Repository::open(&local)
+                .unwrap()
+                .find_commit(git2::Oid::from_str(&published).unwrap())
+                .is_ok()
+        );
+        git(&["update-ref", "refs/remotes/origin/main", &base], &local);
+        git(&["add", "NEW.md"], &local);
+        let summary =
+            diff_summary(State(state.clone()), Path(task.id.clone()), headers.clone()).await;
+        assert_eq!(summary.status(), StatusCode::OK);
+        assert_eq!(
+            serde_json::from_slice::<Value>(
+                &to_bytes(summary.into_body(), usize::MAX).await.unwrap()
+            )
+            .unwrap(),
+            json!({"available":true,"files":3})
+        );
+        let wrong = root.join("unrelated.git");
+        git(
+            &["init", "--quiet", "--bare", wrong.to_str().unwrap()],
+            &root,
+        );
+        git(
+            &["remote", "set-url", "origin", wrong.to_str().unwrap()],
+            &local,
+        );
+        git(&["update-ref", "-d", "refs/remotes/origin/main"], &local);
+        assert!(
+            git2::Repository::open(&local)
+                .unwrap()
+                .find_reference("refs/remotes/origin/main")
+                .is_err()
+        );
+        let summary =
+            diff_summary(State(state.clone()), Path(task.id.clone()), headers.clone()).await;
+        assert_eq!(summary.status(), StatusCode::OK);
+        let summary_body = to_bytes(summary.into_body(), usize::MAX).await.unwrap();
+        assert_eq!(
+            serde_json::from_slice::<Value>(&summary_body).unwrap(),
+            json!({"available":true,"files":3})
+        );
+        if std::env::var_os("SUPLEX_TASK_DIFF_TS_ORACLE").is_some() {
+            let script = r#"import {readTaskDiffSummary} from './src/tasks/inspection.ts'; const task=JSON.parse(process.env.SUPLEX_DIFF_TASK); const published=process.env.SUPLEX_DIFF_BASE; readTaskDiffSummary(task,{getBranchHead:async()=>published,getPullRequest:async()=>{throw new Error('Unexpected PR lookup')}}).then(value=>process.stdout.write(JSON.stringify(value))).catch(error=>{console.error(error);process.exitCode=1});"#;
+            let output = Command::new("node")
+                .args(["node_modules/tsx/dist/cli.mjs", "-e", script])
+                .current_dir(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap())
+                .env("SUPLEX_DIFF_TASK", json!({"configuration":{"repository":"acme/demo","baseBranch":"main","source":null},"worktree":{"path":local},"pullRequest":null}).to_string())
+                .env("SUPLEX_DIFF_BASE", &published)
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert_eq!(summary_body.as_ref(), output.stdout);
+        }
+        git(&["restore", "--staged", "--worktree", "README.md"], &local);
+        git(&["mv", "README.md", "MOVED.md"], &local);
+        git(&["config", "diff.renames", "false"], &local);
+        let source_files = git(
+            &[
+                "diff",
+                "--no-ext-diff",
+                "--no-textconv",
+                "--no-color",
+                "--name-only",
+                &base,
+                "--",
+            ],
+            &local,
+        )
+        .lines()
+        .count();
+        assert_eq!(source_files, 4);
+        let summary =
+            diff_summary(State(state.clone()), Path(task.id.clone()), headers.clone()).await;
+        assert_eq!(summary.status(), StatusCode::OK);
+        assert_eq!(
+            serde_json::from_slice::<Value>(
+                &to_bytes(summary.into_body(), usize::MAX).await.unwrap()
+            )
+            .unwrap(),
+            json!({"available":true,"files":source_files})
+        );
+        state.with_database(|database| {
+            database.connection().execute(
+                "UPDATE suplex_tasks SET configuration_json = json_set(configuration_json,'$.baseBranch','missing') WHERE id = ?1",
+                [&task.id],
+            ).unwrap();
+        });
+        assert_eq!(
+            diff_summary(State(state.clone()), Path(task.id.clone()), headers.clone())
+                .await
+                .status(),
+            StatusCode::INTERNAL_SERVER_ERROR
+        );
+        state.with_database(|database| {
+            database.connection().execute(
+                "UPDATE suplex_tasks SET configuration_json = json_set(configuration_json,'$.baseBranch','main','$.source',json('{\"kind\":\"pull_request\"}')) WHERE id = ?1",
+                [&task.id],
             ).unwrap();
         });
         assert_eq!(
@@ -459,6 +711,12 @@ mod tests {
                 .status(),
             StatusCode::NOT_IMPLEMENTED
         );
+        state.with_database(|database| {
+            database.connection().execute(
+                "UPDATE suplex_tasks SET configuration_json = json_remove(configuration_json,'$.source') WHERE id = ?1",
+                [&task.id],
+            ).unwrap();
+        });
         let member_hash = Sha256::digest(b"read_member_token")
             .iter()
             .map(|byte| format!("{byte:02x}"))
@@ -500,6 +758,12 @@ mod tests {
         });
         assert_eq!(
             activity(State(state.clone()), Path(task.id.clone()), headers.clone())
+                .await
+                .status(),
+            StatusCode::NOT_FOUND
+        );
+        assert_eq!(
+            diff_summary(State(state.clone()), Path(task.id.clone()), headers.clone())
                 .await
                 .status(),
             StatusCode::NOT_FOUND

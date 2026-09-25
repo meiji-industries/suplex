@@ -1,10 +1,15 @@
 use serde_json::{Map, Value, json};
 
+mod common;
+
 pub type ParseResult = Result<Value, Vec<Value>>;
 
 /// Explicit Rust ports of Zod HTTP contracts. `None` means the contract is
 /// still unported; parity tests never count it as verified.
 pub fn validate(contract: &str, input: Option<&Value>) -> Option<ParseResult> {
+    if let Some(result) = common::validate(contract, input) {
+        return Some(result);
+    }
     match contract {
         "auth.CompanyNameBodySchema" => Some(string_default_object(input, "name")),
         "auth.DisplayNameBodySchema" => Some(string_default_object(input, "displayName")),

@@ -1,0 +1,13 @@
+{
+  "contract": "common.TokenBodySchema",
+  "case": "explicit_empty",
+  "input": {
+    "token": ""
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "token": ""
+    }
+  }
+}

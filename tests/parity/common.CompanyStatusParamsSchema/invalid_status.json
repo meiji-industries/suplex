@@ -1,0 +1,25 @@
+{
+  "contract": "common.CompanyStatusParamsSchema",
+  "case": "invalid_status",
+  "input": {
+    "companyId": "company",
+    "status": "inactive"
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid_value",
+        "values": [
+          "active",
+          "paused",
+          "archived"
+        ],
+        "path": [
+          "status"
+        ],
+        "message": "Invalid option: expected one of \"active\"|\"paused\"|\"archived\""
+      }
+    ]
+  }
+}

@@ -12,6 +12,43 @@ const inputs = {
   unknown_field: { unexpected: true },
   empty_array: [],
 } as const;
+const semanticInputs: Record<string, Record<string, unknown>> = {
+  "common.IdSchema": {
+    empty_string: "",
+    max_length: "x".repeat(256),
+    over_max_length: "x".repeat(257),
+    astral_at_max: "😀".repeat(128),
+    astral_over_max: "😀".repeat(129),
+  },
+  "common.CompanyIdParamsSchema": {
+    empty_id: { companyId: "" },
+    over_max_id: { companyId: "x".repeat(257) },
+    astral_over_max_id: { companyId: "😀".repeat(129) },
+  },
+  "common.TaskArtifactParamsSchema": {
+    both_ids_empty: { taskId: "", artifactId: "" },
+    second_id_missing: { taskId: "task" },
+  },
+  "common.CompanyStatusParamsSchema": {
+    invalid_status: { companyId: "company", status: "inactive" },
+    valid_status: { companyId: "company", status: "paused", extra: true },
+  },
+  "common.TokenBodySchema": {
+    explicit_empty: { token: "" },
+    invalid_token: { token: null },
+  },
+  "common.RegistrationVerificationBodySchema": {
+    null_response: { response: null },
+    nested_response: { response: { id: "credential", extension: [1, null] }, token: "token" },
+  },
+  "common.AuthenticationVerificationBodySchema": {
+    null_response: { response: null },
+    nested_response: { response: [1, "x"] },
+  },
+  "common.EmptyBodySchema": {
+    nested_unknown: { nested: { value: [1, null] } },
+  },
+};
 
 type Fixture = { contract: string; case: string; input?: unknown; expected: { accepted: true; value: unknown } | { accepted: false; error: z.core.$ZodIssue[] } };
 type Definition = { type: string; innerType?: z.ZodType; element?: z.ZodType; shape?: Record<string, z.ZodType>; options?: z.ZodType[]; entries?: Record<string, string>; values?: unknown[]; keyType?: z.ZodType; valueType?: z.ZodType; items?: z.ZodType[]; in?: z.ZodType; checks?: Array<{ _zod: { def: { check?: string; minimum?: number; value?: number; inclusive?: boolean } } }> };
@@ -81,6 +118,16 @@ for (const moduleName of modules) {
     for (const [caseName, input] of Object.entries(inputs)) {
       const parsed = schema.safeParse(input);
       const fixture: Fixture = { contract, case: caseName, ...(caseName === "missing" ? {} : { input }), expected: parsed.success ? { accepted: true, value: parsed.data } : { accepted: false, error: parsed.error.issues } };
+      const path = join(directory, `${caseName}.json`);
+      const content = `${JSON.stringify(fixture, null, 2)}\n`;
+      if (check) {
+        if (await readFile(path, "utf8") !== content) throw new Error(`Stale parity fixture: ${path}`);
+      } else await writeFile(path, content);
+      fixtures++;
+    }
+    for (const [caseName, input] of Object.entries(semanticInputs[contract] ?? {})) {
+      const parsed = schema.safeParse(input);
+      const fixture: Fixture = { contract, case: caseName, input, expected: parsed.success ? { accepted: true, value: parsed.data } : { accepted: false, error: parsed.error.issues } };
       const path = join(directory, `${caseName}.json`);
       const content = `${JSON.stringify(fixture, null, 2)}\n`;
       if (check) {

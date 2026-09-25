@@ -1,0 +1,20 @@
+{
+  "contract": "common.TaskArtifactParamsSchema",
+  "case": "second_id_missing",
+  "input": {
+    "taskId": "task"
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "expected": "string",
+        "code": "invalid_type",
+        "path": [
+          "artifactId"
+        ],
+        "message": "Invalid input: expected string, received undefined"
+      }
+    ]
+  }
+}

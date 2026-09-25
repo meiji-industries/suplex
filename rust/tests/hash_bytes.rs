@@ -1,10 +1,8 @@
-#[path = "../src/shared/js_json.rs"]
-mod js_json;
-
 use base64::Engine;
 use serde::Deserialize;
 use serde_json::Value;
 use sha2::{Digest, Sha256};
+use suplex::shared::js_json;
 
 #[derive(Deserialize)]
 #[allow(dead_code)]

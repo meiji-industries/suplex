@@ -1,0 +1,20 @@
+{
+  "contract": "common.TokenBodySchema",
+  "case": "invalid_token",
+  "input": {
+    "token": null
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "expected": "string",
+        "code": "invalid_type",
+        "path": [
+          "token"
+        ],
+        "message": "Invalid input: expected string, received null"
+      }
+    ]
+  }
+}

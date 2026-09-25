@@ -1,8 +1,6 @@
-#[path = "../src/http/contracts/mod.rs"]
-mod contracts;
-
 use serde::Deserialize;
 use serde_json::Value;
+use suplex::http::contracts;
 
 #[derive(Deserialize)]
 struct Fixture {
@@ -67,6 +65,10 @@ fn ported_contracts_match_zod_fixtures() {
             }
         }
     }
-    assert_eq!(schemas.len(), 5, "five explicitly ported auth schemas");
-    assert!(verified >= 30, "every ported schema has multiple Zod cases");
+    assert_eq!(schemas.len(), 19, "nineteen explicitly ported schemas");
+    assert!(
+        verified >= 140,
+        "every ported schema has multiple Zod cases"
+    );
+    println!("verified {verified} cases across {} schemas", schemas.len());
 }

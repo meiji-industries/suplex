@@ -645,12 +645,31 @@ async fn finish_admitted_create(state: AppState, admitted: AdmittedCreate) -> Re
         profiles,
         decoded_images,
     } = admitted;
-    let source = request.source.as_ref().map(serde_json::to_value).transpose();
-    let issue = request.issue.as_ref().map(|issue| issue.as_ref().map(serde_json::to_value).transpose()).transpose();
+    let source = request
+        .source
+        .as_ref()
+        .map(serde_json::to_value)
+        .transpose();
+    let issue = request
+        .issue
+        .as_ref()
+        .map(|issue| issue.as_ref().map(serde_json::to_value).transpose())
+        .transpose();
     let (Ok(source), Ok(issue)) = (source, issue) else {
-        return with_cookies(auth::error(StatusCode::INTERNAL_SERVER_ERROR, "Internal server error"), cookies);
+        return with_cookies(
+            auth::error(StatusCode::INTERNAL_SERVER_ERROR, "Internal server error"),
+            cookies,
+        );
     };
-    let pinned = match crate::tasks::sources::creation_source(&project, &request.title, &request.description, source.as_ref(), issue.as_ref().map(Option::as_ref)).await {
+    let pinned = match crate::tasks::sources::creation_source(
+        &project,
+        &request.title,
+        &request.description,
+        source.as_ref(),
+        issue.as_ref().map(Option::as_ref),
+    )
+    .await
+    {
         Ok(pinned) => pinned,
         Err(error) => return with_cookies(super::projects::source_error(error), cookies),
     };
@@ -1776,6 +1795,43 @@ mod tests {
         let detail = get_one(State(state.clone()), Path(task_id.clone()), headers.clone()).await;
         assert_eq!(detail.status(), StatusCode::OK);
         assert_eq!(to_bytes(detail.into_body(), 128 * 1024).await.unwrap(), raw);
+        let refreshed = client
+            .post(format!(
+                "http://127.0.0.1:{}/api/tasks/{task_id}/refresh",
+                address.port()
+            ))
+            .header("cookie", format!("sid_v1={}", admin.session_token))
+            .header("origin", format!("http://127.0.0.1:{}", address.port()))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(refreshed.status(), StatusCode::OK);
+        assert_eq!(refreshed.bytes().await.unwrap(), raw);
+        let refused = client
+            .post(format!(
+                "http://127.0.0.1:{}/api/tasks/{task_id}/refresh",
+                address.port()
+            ))
+            .header("cookie", format!("sid_v1={}", admin.session_token))
+            .header("origin", "https://wrong.example.test")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(refused.status(), StatusCode::FORBIDDEN);
+        let checks = client
+            .get(format!(
+                "http://127.0.0.1:{}/api/tasks/{task_id}/checks",
+                address.port()
+            ))
+            .header("cookie", format!("sid_v1={}", admin.session_token))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(checks.status(), StatusCode::OK);
+        assert_eq!(
+            checks.text().await.unwrap(),
+            r#"{"available":false,"runs":[]}"#
+        );
         let listed = list_company(
             State(state.clone()),
             Path("task_http_company".into()),

@@ -14,9 +14,9 @@ use crate::{
         projects::ProjectProviderPolicy,
         task_answers::{AnswerBody, LimitDecisionBody, TaskLimitDecision},
         tasks::{
-            TaskAgentSelectionBody, TaskContinueDeliveryBody,
-            TaskCoordinatorReplacementBody, TaskCreateBody, TaskDependenciesBody, TaskDetailsBody,
-            TaskNoteBody, TaskRenameBody, TaskWorkerReplacementBody,
+            TaskAgentSelectionBody, TaskContinueDeliveryBody, TaskCoordinatorReplacementBody,
+            TaskCreateBody, TaskDependenciesBody, TaskDetailsBody, TaskNoteBody, TaskRenameBody,
+            TaskWorkerReplacementBody,
         },
     },
     identity::companies,
@@ -1705,7 +1705,7 @@ mod tests {
     }
 
     #[test]
-    fn continue_delivery_keeps_source_rejections_and_does_not_resume_github_delivery() {
+    fn continue_delivery_resumes_the_coordinator_toward_the_new_target() {
         let (filename, mut database, user, prepared) = command_fixture();
         let task = repository::create(&mut database, &prepared, Utc::now())
             .unwrap()
@@ -1743,17 +1743,37 @@ mod tests {
             )
         );
         set(&database, "delivered", "pull_request_draft");
-        let not_ported = run(&mut database, "merged")
-            .unwrap_err()
-            .downcast::<TaskFailure>()
+        database
+            .connection()
+            .execute(
+                "UPDATE suplex_task_controls SET workflow_state_json = json_set(workflow_state_json, '$.acceptedDelivery', json('{\"headSha\":\"a\"}')) WHERE task_id = ?1",
+                [&task.id],
+            )
             .unwrap();
-        assert_eq!(
-            (not_ported.status_code, not_ported.code),
-            (501, "experimental_not_ported")
-        );
-        set(&database, "active", "merged");
         assert_eq!(run(&mut database, "merged").unwrap().status, "active");
         assert_eq!(wakes.load(Ordering::SeqCst), 1);
+        let rows = root_session_store::root_observation_rows(&database, &task.id).unwrap();
+        assert_eq!(rows.control["deliveryTarget"], "merged");
+        assert_eq!(rows.control["workflowState"]["followUp"], true);
+        assert!(rows.control["workflowState"]["acceptedDelivery"].is_null());
+        assert_eq!(
+            rows.control["workflowState"]["deliveryHistory"][0]["acceptedDelivery"]["headSha"],
+            "a"
+        );
+        assert_eq!(
+            rows.turns.len(),
+            2,
+            "the initial Coordinator prompt and one continuation"
+        );
+        assert!(rows.turns.iter().any(|turn| {
+            turn["promptText"]
+                .as_str()
+                .unwrap()
+                .contains("from pull_request_draft to merged")
+        }));
+        assert!(rows.root.is_some());
+        assert_eq!(run(&mut database, "merged").unwrap().status, "active");
+        assert_eq!(wakes.load(Ordering::SeqCst), 2);
         assert_eq!(
             failure(run(&mut database, "pull_request_ready").unwrap_err()),
             (409, "The delivery target cannot move backward.".into())
@@ -1780,7 +1800,7 @@ mod tests {
                 "Open the archived task before you continue delivery.".into()
             )
         );
-        assert_eq!(wakes.load(Ordering::SeqCst), 1);
+        assert_eq!(wakes.load(Ordering::SeqCst), 2);
         drop(database);
         let _ = std::fs::remove_file(&filename);
     }
@@ -1809,9 +1829,16 @@ mod tests {
         set_user_task_issue(&mut database, &user, &task.id, Some(&resolved), now).unwrap();
         let stored: String = database
             .connection()
-            .query_row("SELECT issue_json FROM suplex_tasks WHERE id = ?1", [&task.id], |row| row.get(0))
+            .query_row(
+                "SELECT issue_json FROM suplex_tasks WHERE id = ?1",
+                [&task.id],
+                |row| row.get(0),
+            )
             .unwrap();
-        assert_eq!(serde_json::from_str::<Value>(&stored).unwrap()["title"], "Current title");
+        assert_eq!(
+            serde_json::from_str::<Value>(&stored).unwrap()["title"],
+            "Current title"
+        );
         assert!(set_user_task_issue(&mut database, "missing-user", &task.id, None, now).is_err());
         set_user_task_issue(&mut database, &user, &task.id, None, now).unwrap();
         let (issue_json, context): (Option<String>, Option<String>) = database

@@ -2,7 +2,11 @@ use std::{collections::HashMap, error::Error, io, path::Path};
 
 use super::{executable, invocation, role_prompt, runtime, session_reader};
 use crate::{
-    coordination::{bridge_auth, root_bridge},
+    coordination::{
+        advisor_bridge::{self, AdvisorRole},
+        bridge_auth, root_bridge,
+        root_prompts::{ADVISOR_ROLE_PROMPT, ROOT_WORKFLOW_ROLE_PROMPT, WORKER_DIRECT_ROLE_PROMPT},
+    },
     runtimes::{git_guard, task_harness},
 };
 
@@ -22,6 +26,8 @@ pub struct RootCodexLaunch<'a> {
     pub reasoning_effort: &'a str,
     pub codex_executable: Option<&'a Path>,
     pub inherited_environment: &'a HashMap<String, String>,
+    /// False selects the workflow Coordinator role prompt.
+    pub standard: bool,
 }
 
 pub struct WorkerCodexLaunch<'a> {
@@ -40,6 +46,10 @@ pub struct WorkerCodexLaunch<'a> {
     pub reasoning_effort: &'a str,
     pub codex_executable: Option<&'a Path>,
     pub inherited_environment: &'a HashMap<String, String>,
+    /// A Direct build implementation uses the Direct build Worker role.
+    pub direct: bool,
+    /// An Advisor runs read-only with only its report bridge.
+    pub advisor: Option<AdvisorRole>,
 }
 
 fn require_absent(directory: &Path, session_id: &str, turn_id: &str) -> io::Result<()> {
@@ -122,7 +132,11 @@ where
         input.project_context,
         input.project_context_path,
     );
-    let prompt = role_prompt::root_standard_prompt(&task_prompt);
+    let prompt = if input.standard {
+        role_prompt::root_standard_prompt(&task_prompt)
+    } else {
+        format!("{ROOT_WORKFLOW_ROLE_PROMPT}\n\n{task_prompt}")
+    };
     runtime::dispatch(
         runtime::CodexDispatch {
             directory: &directory,
@@ -143,7 +157,7 @@ where
 }
 
 /// Workers use the same durable native dispatch and Git guard, without a Root
-/// or Advisor bridge capability in their child environment.
+/// bridge capability. An Advisor gets only its report bridge and runs read-only.
 pub fn dispatch_codex_worker<F>(
     input: WorkerCodexLaunch<'_>,
     claim: F,
@@ -161,8 +175,45 @@ where
         gh.as_deref(),
         input.inherited_environment,
     )?;
-    let environment =
-        task_harness::task_bridge_environment(&guard.environment, None, &HashMap::new());
+    let suplex = std::env::current_exe()?;
+    let suplex = suplex
+        .to_str()
+        .ok_or_else(|| io::Error::other("Suplex executable path is invalid"))?;
+    let server_args = ["mcp".to_owned(), "advisor".to_owned()];
+    let server_names = [
+        bridge_auth::ADVISOR_BINDING_ENV.to_owned(),
+        bridge_auth::ADVISOR_TOKEN_ENV.to_owned(),
+    ];
+    let (bridge_environment, additions) = match input.advisor {
+        Some(role) => {
+            let binding = advisor_bridge::write_binding(&directory, role, suplex)?;
+            let result = advisor_bridge::advisor_result_path(&directory, input.turn_id)?;
+            (
+                Some(HashMap::from([
+                    (
+                        bridge_auth::ADVISOR_BINDING_ENV.to_owned(),
+                        binding.binding_path.to_string_lossy().into_owned(),
+                    ),
+                    (bridge_auth::ADVISOR_TOKEN_ENV.to_owned(), binding.token),
+                ])),
+                HashMap::from([(
+                    bridge_auth::ADVISOR_RESULT_ENV.to_owned(),
+                    result.to_string_lossy().into_owned(),
+                )]),
+            )
+        }
+        None => (None, HashMap::new()),
+    };
+    let server = invocation::BridgeServer {
+        command: suplex,
+        args: &server_args,
+        environment_names: &server_names,
+    };
+    let environment = task_harness::task_bridge_environment(
+        &guard.environment,
+        bridge_environment.as_ref(),
+        &additions,
+    );
     let environment = task_harness::task_scope_environment(
         environment,
         input.worktree,
@@ -173,7 +224,18 @@ where
         input.project_context,
         input.project_context_path,
     );
-    let prompt = role_prompt::worker_standard_prompt(input.purpose, &task_prompt);
+    let prompt = match (input.advisor, input.direct, input.purpose) {
+        (Some(_), _, _) => format!("{ADVISOR_ROLE_PROMPT}\n\n{task_prompt}"),
+        (None, true, role_prompt::WorkerPurpose::Implementation) => {
+            format!("{WORKER_DIRECT_ROLE_PROMPT}\n\n{task_prompt}")
+        }
+        _ => role_prompt::worker_standard_prompt(input.purpose, &task_prompt),
+    };
+    let (role, bridge) = if input.advisor.is_some() {
+        (invocation::Role::Advisor, Some(&server))
+    } else {
+        (invocation::Role::Worker, None)
+    };
     runtime::dispatch(
         runtime::CodexDispatch {
             directory: &directory,
@@ -184,8 +246,8 @@ where
             prompt: &prompt,
             model: input.model,
             reasoning_effort: input.reasoning_effort,
-            role: invocation::Role::Worker,
-            bridge: None,
+            role,
+            bridge,
             environment: &environment,
             excluded_environment_keys: input.excluded_environment_keys,
         },
@@ -251,6 +313,7 @@ mod tests {
             reasoning_effort: "medium",
             codex_executable: Some(&codex),
             inherited_environment: &inherited,
+            standard: true,
         };
         let claimed = AtomicBool::new(false);
         let result = dispatch_codex_root(launch, |generation| {
@@ -333,6 +396,7 @@ mod tests {
                 reasoning_effort: "medium",
                 codex_executable: Some(&codex),
                 inherited_environment: &inherited,
+                standard: true,
             },
             |_| Ok(false),
         );
@@ -341,6 +405,63 @@ mod tests {
         let directory = session_reader::session_directory(&database, &identity.session_id).unwrap();
         assert!(!directory.join("turn.json").exists());
         fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
+    fn advisor_launch_is_read_only_with_only_the_report_bridge() {
+        let base =
+            std::env::temp_dir().join(format!("suplex-advisor-codex-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&base).unwrap();
+        let database = base.join("installation.sqlite");
+        let worktree = base.join("worktree");
+        fs::create_dir(&worktree).unwrap();
+        let codex = base.join("codex");
+        fs::write(
+            &codex,
+            "#!/bin/sh\ntest -z \"$SUPLEX_ROOT_TOKEN$SUPLEX_ROOT_BINDING\" || exit 21\ntest -n \"$SUPLEX_ADVISOR_TOKEN\" || exit 22\ntest -f \"$SUPLEX_ADVISOR_BINDING\" || exit 23\ncase \"$SUPLEX_ADVISOR_RESULT\" in *turn-msg_advisor.advisor-report.json) ;; *) exit 24 ;; esac\ncase \"$*\" in *'sandbox_mode=\"read-only\"'*'mcp_servers.suplex_advisor='*) ;; *) exit 25 ;; esac\ngrep -q 'read-only Suplex Advisor' || exit 26\nprintf '%s\\n' '{\"type\":\"thread.started\",\"thread_id\":\"advisor-thread\"}'\nsleep 0.3\nprintf '%s\\n' '{\"type\":\"turn.completed\"}'\n",
+        )
+        .unwrap();
+        fs::set_permissions(&codex, fs::Permissions::from_mode(0o700)).unwrap();
+        let inherited = HashMap::from([
+            ("PATH".into(), "/usr/bin:/bin".into()),
+            ("SUPLEX_ROOT_TOKEN".into(), "stale-root".into()),
+        ]);
+        let result = dispatch_codex_worker(
+            WorkerCodexLaunch {
+                database_path: &database,
+                session_id: "advisor_session",
+                native_session_id: "codex-advisor-1",
+                turn_id: "msg_advisor",
+                worktree: &worktree,
+                prompt: "Review the change",
+                project_context: None,
+                project_context_path: None,
+                project_environment: &HashMap::new(),
+                excluded_environment_keys: &[],
+                purpose: role_prompt::WorkerPurpose::Implementation,
+                model: "gpt-6-sol",
+                reasoning_effort: "medium",
+                codex_executable: Some(&codex),
+                inherited_environment: &inherited,
+                direct: false,
+                advisor: Some(AdvisorRole::Reviewer),
+            },
+            |_| Ok(true),
+        )
+        .unwrap();
+        assert!(result.admission_observed);
+        let directory = session_reader::session_directory(&database, "advisor_session").unwrap();
+        let exit = crate::runtimes::headless::turn_file(&directory, "msg_advisor", "exit");
+        for _ in 0..60 {
+            if let Ok(status) = fs::read_to_string(&exit) {
+                assert_eq!(status.trim(), "0");
+                assert_eq!(result.state, runtime::PromptState::Running, "{result:?}");
+                fs::remove_dir_all(base).unwrap();
+                return;
+            }
+            thread::sleep(Duration::from_millis(50));
+        }
+        panic!("fake Advisor Codex did not exit");
     }
 
     #[test]
@@ -380,6 +501,8 @@ mod tests {
                 reasoning_effort: "medium",
                 codex_executable: Some(&codex),
                 inherited_environment: &inherited,
+                direct: false,
+                advisor: None,
             },
             |_| Ok(true),
         )

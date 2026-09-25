@@ -1,0 +1,15 @@
+Coordinator plan:
+Fix
+
+Rater report and repair constraints:
+Rated 7
+
+Acceptance criteria:
+1. One
+2. Two
+
+Worker instructions:
+Do it
+
+Screenshots:
+Screenshots are on for this task. Capture browser screenshots of user-visible changes when practical and review them. Missing screenshots are advisory, not blocking.

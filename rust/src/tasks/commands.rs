@@ -327,6 +327,7 @@ fn task_branch_name(title: &str, task_id: &str) -> String {
 pub struct LocalProfiles {
     root: Value,
     worker: Value,
+    advisors: Value,
 }
 
 /// Profile selection precedes the Git fetch in the TypeScript create flow.
@@ -349,7 +350,24 @@ pub fn select_local_profiles(
         &project.worker_profile_id,
         "worker",
     )?;
-    Ok(LocalProfiles { root, worker })
+    // TypeScript `create`: each workflow Advisor defaults to the Coordinator profile.
+    let mut advisors = Map::new();
+    let roles = crate::coordination::workflows::workflow_definition(&input.workflow)
+        .map_or(&[][..], |definition| definition.advisor_roles);
+    let selected = serde_json::to_value(&input.advisor_profile_ids)?;
+    for role in roles {
+        let id = selected[*role]
+            .as_str()
+            .or(root["profileId"].as_str())
+            .unwrap_or_default();
+        let profile = selected_profile(database, project, Some(id), id, "root")?;
+        advisors.insert((*role).to_owned(), profile);
+    }
+    Ok(LocalProfiles {
+        root,
+        worker,
+        advisors: Value::Object(advisors),
+    })
 }
 
 /// Prepare a Standard task from a fresh Git base commit. The caller owns the
@@ -412,7 +430,7 @@ pub fn prepare_local_user_task(
         delivery_intent: json!({"repository": repository, "headBranch": branch, "baseBranch": project.base_branch, "baselineSha": base_sha, "pullRequestNumber": null}),
         root_profile: profiles.root,
         worker_profile: profiles.worker,
-        advisor_profiles: json!({}),
+        advisor_profiles: profiles.advisors,
         issue: None,
         start_queued: input.start_immediately,
         copied_from_task_id: None,
@@ -455,17 +473,20 @@ pub fn create_user_task(
         expected_project,
         prepared,
         None,
+        "standard",
         now,
         wake,
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 pub fn create_user_task_with_images(
     database: &mut SuplexDatabase,
     actor_user_id: &str,
     expected_project: &Project,
     prepared: &PreparedTask,
     files: ImageFiles<'_>,
+    workflow: &str,
     now: DateTime<Utc>,
     wake: impl FnOnce(String) + Send + 'static,
 ) -> DatabaseResult<TaskWrite> {
@@ -475,6 +496,7 @@ pub fn create_user_task_with_images(
         expected_project,
         prepared,
         Some((files.root, files.images)),
+        workflow,
         now,
         wake,
     )
@@ -485,12 +507,14 @@ pub struct ImageFiles<'a> {
     pub images: &'a [DecodedTaskImage],
 }
 
+#[allow(clippy::too_many_arguments)]
 fn create_user_task_inner(
     database: &mut SuplexDatabase,
     actor_user_id: &str,
     expected_project: &Project,
     prepared: &PreparedTask,
     images: Option<(&Path, &[DecodedTaskImage])>,
+    workflow: &str,
     now: DateTime<Utc>,
     wake: impl FnOnce(String) + Send + 'static,
 ) -> DatabaseResult<TaskWrite> {
@@ -535,6 +559,12 @@ fn create_user_task_inner(
             )?,
             None => repository::create(database, prepared, now)?,
         };
+        if result.created && workflow != "standard" {
+            database.connection().execute(
+                "UPDATE suplex_task_controls SET workflow = ?1 WHERE task_id = ?2",
+                params![workflow, result.task.id],
+            )?;
+        }
         if result.task.status == "active" {
             let id = result.task.id.clone();
             database.after_commit(move || wake(id));
@@ -2178,6 +2208,7 @@ mod tests {
                 root: &artifact_root,
                 images: std::slice::from_ref(&image),
             },
+            "standard",
             now,
             move |_| {
                 count.fetch_add(1, Ordering::SeqCst);
@@ -2244,6 +2275,7 @@ mod tests {
                 root: &artifact_root,
                 images: std::slice::from_ref(&image),
             },
+            "standard",
             now,
             move |_| {
                 count.fetch_add(1, Ordering::SeqCst);
@@ -2276,6 +2308,7 @@ mod tests {
                     root: &artifact_root,
                     images: std::slice::from_ref(&image)
                 },
+                "standard",
                 now,
                 |_| {},
             )

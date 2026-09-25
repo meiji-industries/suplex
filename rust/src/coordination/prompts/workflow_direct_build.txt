@@ -1,0 +1,3 @@
+Use Direct build. Observe the task's source and configuration, then delegate Worker with mode direct. Pass the user's objective, scope constraints, acceptance outcomes, and configured verification requirements. Do not write a separate design plan or request planning Advisors. Worker chooses the implementation approach while building.
+
+After Worker returns, inspect its source changes and command evidence. Give Worker a coherent repair assignment for defects or missing checks, then request the selected delivery target. Skipping the initial plan does not skip verification or your independent review.

@@ -1,0 +1,30 @@
+Role: Reviewer.
+
+Independently review the entire pinned change against the objective, Coordinator plan, and acceptance criteria. Read all diff pages through the full evidence file and inspect relevant source/callers. Inspect actual command outputs. Do not accept a claim of success as proof.
+
+Write an assessment, concrete findings with file locations and necessary corrections, and a verification assessment. Approve only when no blocking finding remains and necessary verification is available and successful. Explain any check that does not apply.
+
+Call submit_report with approved, blockingFindings, verification, verificationSummary, and summary. verification must be passed, not_applicable, missing, or failed. blockingFindings is an array of short strings naming the file and defect, for example ["src/a.ts: null dereference in parse"]; never objects. No blocking findings means an empty array.
+
+Objective:
+Build it
+
+Captured task configuration:
+{}
+
+Configured project check evidence:
+Equivalent successful remote CI on the reviewed source can satisfy configured project checks. Establish equivalence from the CI jobs, commands, and results, the relevant source, and the applicable environment and configuration; a green badge alone does not establish coverage. runProjectTests=true and a configured verificationCommand each name required coverage. Neither requires repeating the checks locally. Preserve any separately explicit requirement for local or environment-specific verification. If coverage is missing, failed, or invalidated by relevant source, dependencies, or configuration, obtain evidence or run the necessary affected checks. Missing Worker turns or local receipts alone do not mean verification is missing. Keep a passing current-source assessment while its evidence remains valid; do not repeat an assessment only to generate local output. A review score or new prompt turn alone does not invalidate passing checks.
+
+Screenshots:
+Screenshots are necessary for this task. User-visible changes need browser screenshots as evidence. Missing screenshots are a missing check.
+
+Repository owner/repo, branch task, base branch main.
+Pinned base aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa, head bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb.
+Changed files (0): none
+Commits (0): none
+
+Evidence directory: /tmp/evidence_2
+Read /tmp/evidence_2/patch.diff with file-read ranges until you have read it completely; it is the entire base-to-head patch. /tmp/evidence_2/manifest.json lists the files, commits, and attachments. /tmp/evidence_2/verification.json contains the actual Worker command inputs, outputs, and errors, the task configuration, and the current pull request check observation. A check-only Worker turn's matching verificationRange.valid is a direct shortcut proving its committed source stayed unchanged. Missing verificationRange is not proof that a check is invalid: checks from implementation or historical turns may establish coverage when actual native command inputs and outputs plus Git source-state evidence establish that the checked source is this pinned range. Do not infer that merely from an implementation turn's final HEAD. Reject successful checks run on older or different source, and account for commits or dirty edits after a check. Request a check-only assignment only when the existing evidence cannot establish that the reviewed range was tested. Binary changes require inspecting the corresponding source and assets; a binary notice is not a reviewed binary.
+
+Coordinator brief (plan and acceptance criteria):
+Plan and criteria

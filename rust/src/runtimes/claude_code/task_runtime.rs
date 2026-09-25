@@ -558,6 +558,7 @@ mod tests {
         instance: Option<&'a Path>,
     ) -> TaskScope<'a> {
         TaskScope {
+            workflow: Default::default(),
             database_path: &f.database,
             artifact_root: &f.root,
             task_id: "task-claude",
@@ -828,6 +829,7 @@ mod tests {
         assert!(!allowed.contains("mcp__context7__*"));
         let verification = claude_arguments(
             &TaskScope {
+                workflow: Default::default(),
                 role: TaskRole::Worker(WorkerPurpose::Verification),
                 project_mcp: None,
                 ..scope

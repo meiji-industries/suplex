@@ -19,9 +19,10 @@ use uuid::Uuid;
 
 use crate::{
     coordination::{
+        advisor_bridge,
         root_bridge::RootIdentity,
-        root_prompts::STANDARD_WORKER_RESULT_WAKE,
         root_session_store::{self, PromptDispatchAttempt, RootSession, RootTurn, TaskLimitUsage},
+        session_recovery, workflows,
     },
     platform::database::{DatabaseResult, OpenMode, SuplexDatabase},
     profiles::model_pricing::ModelsDevCatalogReader,
@@ -30,7 +31,8 @@ use crate::{
         process::{ProcessOwnerObservation, inspect_process, observe_process_owner},
         task_harness::{
             DispatchState, NativeTimeline, PromptObservation, PromptState, ReaderSession,
-            TaskHarness, TaskRole, TaskScope, UsageEntry, WorkerPurpose, task_context_prompt,
+            TaskHarness, TaskRole, TaskScope, UsageEntry, WorkerPurpose, WorkflowLaunch,
+            task_context_prompt,
         },
         task_harness_registry,
     },
@@ -478,39 +480,8 @@ fn complete_root_if_terminal(
     Ok(completed)
 }
 
-fn worker_result_wake(
-    receipt: &str,
-    turn: &RootTurn,
-    observation: &PromptObservation,
-    text: &str,
-    purpose: WorkerPurpose,
-) -> String {
-    let mut units = 0;
-    let summary = text
-        .trim_matches(|character: char| character.is_whitespace() || character == '\u{feff}')
-        .chars()
-        .take_while(|character| {
-            units += character.len_utf16();
-            units <= 1_200
-        })
-        .collect::<String>();
-    let summary = if summary.is_empty() {
-        "(no Worker summary)"
-    } else {
-        &summary
-    };
-    let range = if purpose == WorkerPurpose::Verification {
-        " No check-only range shortcut was recorded. This alone does not invalidate implementation or historical command evidence; inspect native command and Git evidence before deciding whether a check is missing."
-    } else {
-        ""
-    };
-    format!(
-        "Worker result {receipt}. {STANDARD_WORKER_RESULT_WAKE}{range} Worker reported ({}): {summary}\nCall suplex_root read_worker_evidence with turnId {} for the compact tool index. Then select the exact toolId, field, and position tail to read its final evidence. Use position head and the returned field cursor only when you need earlier content. Do not rerun commands only to obtain logs.",
-        terminal_state(observation.state),
-        turn.id
-    )
-}
-
+/// TypeScript `finishTurn` for a Worker or Advisor: the native evidence is read
+/// here, and `session_recovery` records the workflow result and Coordinator wake.
 #[allow(clippy::too_many_arguments)]
 fn complete_worker_if_terminal(
     database: &mut SuplexDatabase,
@@ -520,7 +491,7 @@ fn complete_worker_if_terminal(
     native_id: &str,
     turn: &RootTurn,
     observation: &PromptObservation,
-    purpose: WorkerPurpose,
+    launch: &DelegateLaunch,
 ) -> DatabaseResult<bool> {
     if !terminal(observation.state) || !observation.admission_observed {
         return Ok(false);
@@ -528,26 +499,36 @@ fn complete_worker_if_terminal(
     let rows = root_session_store::root_observation_rows(database, &session.task_id)?;
     let directory = session_reader::session_directory(database_path, &session.id)?;
     let text = harness.result_text(&directory, &turn.id)?;
-    let native = native_observation(harness, &directory, &rows, "worker", turn)?;
-    let terminal_observation = terminal_observation(observation, native, &text, &directory, turn)?;
-    let receipt = format!(
-        "{native_id}:{}:{}",
-        turn.id,
-        terminal_state(observation.state)
-    );
-    let prompt = worker_result_wake(&receipt, turn, observation, &text, purpose);
-    let result = root_session_store::StandardWorkerResult {
-        task_id: &session.task_id,
-        session_id: &session.id,
-        generation: session.generation,
-        receipt_id: &receipt,
-        observation: &serde_json::to_string(&terminal_observation)?,
-        native_turn_id: (observation.state == PromptState::Completed).then_some(turn.id.as_str()),
-        wake_prompt: &prompt,
+    let agent = if launch.workflow.advisor.is_some() {
+        "suplex-advisor"
+    } else {
+        "suplex-worker"
     };
-    Ok(
-        root_session_store::record_standard_worker_result_and_wake(database, &result, Utc::now())?
-            .is_some(),
+    let provider = launch.profile["provider"].as_str().unwrap_or_default();
+    let native = harness.native(
+        &directory,
+        &turn.id,
+        serde_json::json!({
+            "messageID":turn.id,"parentID":turn.id,
+            "providerID":task_harness_registry::profile_harness(provider),
+            "modelID":launch.profile["model"],"mode":agent,
+            "agent":agent,"cwd":rows.control["worktree"]["path"],
+            "root":rows.control["worktree"]["path"],
+        }),
+    )?;
+    let terminal_observation = terminal_observation(observation, native, &text, &directory, turn)?;
+    session_recovery::finish_delegate_turn(
+        database,
+        database_path,
+        session_recovery::TerminalDelegateTurn {
+            session,
+            native_session_id: native_id,
+            turn,
+            state: terminal_state(observation.state),
+            reason: observation.reason,
+            text: &text,
+            base: serde_json::to_value(&terminal_observation)?,
+        },
     )
 }
 
@@ -787,6 +768,12 @@ fn recover_prepared_root_blocking(
             &format!("No task harness for {provider}"),
         ));
     };
+    if rows.control["workflow"] != "standard" && provider != "codex" {
+        return Ok(skip_unported(
+            &session.id,
+            "Only Codex runs a non-Standard workflow Coordinator",
+        ));
+    }
     if current_owner_still_running(&session) {
         return Ok(None);
     }
@@ -889,6 +876,10 @@ fn recover_prepared_root_blocking(
             task_id,
             session_id: &session.id,
             native_session_id: &native_id,
+            workflow: WorkflowLaunch {
+                workflow_root: rows.control["workflow"] != "standard",
+                ..WorkflowLaunch::default()
+            },
             role: TaskRole::Root(&identity),
             worktree: Path::new(worktree),
             model,
@@ -968,16 +959,70 @@ pub async fn recover_prepared_root(
     .map_err(|error| io::Error::other(error).into())
 }
 
+/// TypeScript `scope` for one delegate session: its captured profile, and the
+/// Advisor role or Worker mode and purpose of its pending turn.
+struct DelegateLaunch {
+    profile: serde_json::Value,
+    purpose: WorkerPurpose,
+    workflow: WorkflowLaunch,
+}
+
+fn delegate_launch(
+    rows: &root_session_store::RootObservationRows,
+    session_id: &str,
+    turn_id: &str,
+) -> DelegateLaunch {
+    let session = rows
+        .sessions
+        .iter()
+        .find(|session| session["id"] == session_id)
+        .cloned()
+        .unwrap_or_default();
+    let role = session["advisorRole"].as_str();
+    let profile = if session["profile"].is_object() {
+        session["profile"].clone()
+    } else if let Some(role) = role {
+        Some(&rows.control["advisorProfiles"][role])
+            .filter(|profile| profile.is_object())
+            .unwrap_or(&rows.control["rootProfile"])
+            .clone()
+    } else {
+        rows.control["workerProfile"].clone()
+    };
+    let turn = rows
+        .turns
+        .iter()
+        .find(|turn| turn["id"] == turn_id)
+        .cloned()
+        .unwrap_or_default();
+    let input = workflows::turn_workflow_input(&rows.sessions, &turn)
+        .filter(|input| input["kind"] == "worker");
+    DelegateLaunch {
+        profile,
+        purpose: if input.is_some_and(|input| input["purpose"] == "verification") {
+            WorkerPurpose::Verification
+        } else {
+            WorkerPurpose::Implementation
+        },
+        workflow: WorkflowLaunch {
+            workflow_root: false,
+            direct: input.is_some_and(|input| input["mode"] == "direct"),
+            advisor: role.and_then(advisor_bridge::advisor_role),
+        },
+    }
+}
+
 fn recover_prepared_worker_blocking(
     database_path: &Path,
     artifact_root: &Path,
     task_id: &str,
+    slot: &str,
     executable: Option<&Path>,
     inherited_environment: &HashMap<String, String>,
     usage: TaskLimitUsage,
 ) -> DatabaseResult<Option<PromptObservation>> {
     let mut database = SuplexDatabase::open(database_path, OpenMode::ReadWrite)?;
-    let Some(session) = root_session_store::current_worker(&database, task_id)? else {
+    let Some(session) = root_session_store::current_delegate(&database, task_id, slot)? else {
         return Ok(None);
     };
     let Some(turn) = root_session_store::pending_turns(&database, &session.id)?
@@ -990,12 +1035,18 @@ fn recover_prepared_worker_blocking(
         return Ok(None);
     }
     let rows = root_session_store::root_observation_rows(&database, task_id)?;
-    let profile = selected_profile(&rows, "worker");
-    let provider = profile["provider"].as_str().unwrap_or_default();
+    let delegate = delegate_launch(&rows, &session.id, &turn.id);
+    let provider = delegate.profile["provider"].as_str().unwrap_or_default();
     let Some(harness) = task_harness_registry::for_profile(provider) else {
         return Ok(skip_unported(
             &session.id,
             &format!("No task harness for {provider}"),
+        ));
+    };
+    if delegate.workflow != WorkflowLaunch::default() && provider != "codex" {
+        return Ok(skip_unported(
+            &session.id,
+            "Only Codex runs Advisor and Direct build sessions",
         ));
     };
     if current_owner_still_running(&session) {
@@ -1028,15 +1079,6 @@ fn recover_prepared_worker_blocking(
         )? {
             return Err(io::Error::other("Native Worker session changed before dispatch").into());
         }
-        let worker = rows
-            .worker
-            .as_ref()
-            .ok_or_else(|| io::Error::other("Current Worker is missing"))?;
-        let purpose = if worker["workflowInput"]["purpose"] == "verification" {
-            WorkerPurpose::Verification
-        } else {
-            WorkerPurpose::Implementation
-        };
         let (before, replayable) = observe_or_recover_fenced(
             &mut database,
             database_path,
@@ -1056,7 +1098,7 @@ fn recover_prepared_worker_blocking(
                 &native_id,
                 &turn,
                 &before,
-                purpose,
+                &delegate,
             )?;
             return Ok(before);
         }
@@ -1066,6 +1108,7 @@ fn recover_prepared_worker_blocking(
         let worktree = rows.control["worktree"]["path"]
             .as_str()
             .ok_or_else(|| io::Error::other("Task worktree is not prepared"))?;
+        let profile = &delegate.profile;
         let model = profile["model"]
             .as_str()
             .ok_or_else(|| io::Error::other("Worker model is missing"))?;
@@ -1084,7 +1127,8 @@ fn recover_prepared_worker_blocking(
             task_id,
             session_id: &session.id,
             native_session_id: &native_id,
-            role: TaskRole::Worker(purpose),
+            workflow: delegate.workflow,
+            role: TaskRole::Worker(delegate.purpose),
             worktree: Path::new(worktree),
             model,
             reasoning_effort: reasoning,
@@ -1121,7 +1165,7 @@ fn recover_prepared_worker_blocking(
             &native_id,
             &turn,
             &observation,
-            purpose,
+            &delegate,
         )?;
         Ok(observation)
     })();
@@ -1148,16 +1192,24 @@ pub async fn recover_prepared_worker(
     let task_id = task_id.to_owned();
     let executable = executable.map(Path::to_path_buf);
     let inherited_environment = inherited_environment.clone();
+    // TypeScript `recover` resumes every current delegate: the serial Worker or
+    // Advisor slot and both Combined planning slots.
     tokio::task::spawn_blocking(move || {
-        recover_prepared_worker_blocking(
-            &database_path,
-            &artifact_root,
-            &task_id,
-            executable.as_deref(),
-            &inherited_environment,
-            usage,
-        )
-        .map_err(|error| error.to_string())
+        let mut first = None;
+        for slot in ["delegate", "planner_a", "planner_b"] {
+            let observed = recover_prepared_worker_blocking(
+                &database_path,
+                &artifact_root,
+                &task_id,
+                slot,
+                executable.as_deref(),
+                &inherited_environment,
+                usage,
+            )
+            .map_err(|error| error.to_string())?;
+            first = first.or(observed);
+        }
+        Ok::<_, String>(first)
     })
     .await?
     .map_err(|error| io::Error::other(error).into())
@@ -1507,32 +1559,16 @@ mod tests {
 
     #[test]
     fn standard_worker_wake_matches_pinned_typescript_bytes() {
-        let turn = RootTurn {
-            id: "msg-one".into(),
-            task_id: "task-one".into(),
-            session_id: "worker-one".into(),
-            generation: 1,
-            prompt_text: String::new(),
-            status: "completed".into(),
-            dispatch_attempt: None,
-            native_turn_id: Some("msg-one".into()),
-        };
-        let observation = PromptObservation {
-            state: PromptState::Completed,
-            admission_observed: true,
-            retry_allowed: false,
-            reason: "native_turn_completed",
-            unsettled_tool_ids: Vec::new(),
-            native_final_observed: true,
-            process_running: false,
-            execution_uncertain: false,
-        };
-        let prompt = worker_result_wake(
+        let prompt = crate::coordination::root_prompts::worker_result_wake(
+            "standard",
             "codex-one:msg-one:completed",
-            &turn,
-            &observation,
-            "  Worker completed the fixture.  ",
-            WorkerPurpose::Implementation,
+            &crate::coordination::root_prompts::WorkerResult {
+                turn_id: "msg-one",
+                state: "completed",
+                text: "  Worker completed the fixture.  ",
+                verification_range: None,
+            },
+            "implementation",
         );
         assert_eq!(
             format!("{:x}", sha2::Sha256::digest(prompt.as_bytes())),
@@ -2067,7 +2103,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn unported_workflows_report_501_and_the_sweep_skips_them() {
+    async fn workflow_tasks_are_observed_and_the_sweep_skips_unported_providers() {
         let (base, database_path, task_id) = fixture_task();
         let root = root_controller::prepare_root(&database_path, &task_id).unwrap();
         let identity = RootIdentity {
@@ -2082,12 +2118,8 @@ mod tests {
                 [&task_id],
             ).unwrap();
         }
-        let failure = root_controller::observe(&database_path, &identity).unwrap_err();
-        let failure = failure.downcast_ref::<TaskFailure>().unwrap();
-        assert_eq!(
-            (failure.status_code, failure.code),
-            (501, "experimental_not_ported")
-        );
+        let observed = root_controller::observe(&database_path, &identity).unwrap();
+        assert_eq!(observed["control"]["workflow"], "competing_plans");
         let environment = HashMap::new();
         for _ in 0..2 {
             assert!(

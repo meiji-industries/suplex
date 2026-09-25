@@ -22,6 +22,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         return suplex::coordination::root_stdio::serve_from_environment().await;
     }
+    if let [display, provider, directory] = command.as_slice()
+        && display == "display"
+        && provider == "claude-code"
+    {
+        return Ok(suplex::runtimes::claude_code::display::run_claude_display(
+            std::path::Path::new(directory),
+        )?);
+    }
     match command.first().map(String::as_str) {
         None | Some("serve") => serve().await,
         Some(name) => match suplex::cli::run(name, &command[1..]).await {

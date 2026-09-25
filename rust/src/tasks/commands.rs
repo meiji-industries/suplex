@@ -855,9 +855,9 @@ pub fn select_user_task_agent(
         if !allowed_profile(policy.as_ref(), &profile) {
             return Err(conflict("Select an agent with a provider and login allowed by this project"));
         }
-        if workflow != "standard" || delivery_target != "local_worktree" || profile["provider"] != "codex" {
+        if workflow != "standard" || delivery_target != "local_worktree" || crate::runtimes::task_harness_registry::for_profile(profile["provider"].as_str().unwrap_or_default()).is_none() {
             return Err(Box::new(TaskFailure::not_ported(
-                "Only Codex Standard local-worktree agent selection is ported",
+                "Only Standard local-worktree agent selection is ported",
             )));
         }
         let profile_json = crate::shared::js_json::stringify(&profile);

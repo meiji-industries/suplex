@@ -999,8 +999,8 @@ pub fn replace_worker(
             "SELECT workflow,delivery_target FROM suplex_task_controls WHERE task_id = ?1",
             [task_id], |row| Ok((row.get(0)?, row.get(1)?)),
         )?;
-        if workflow != "standard" || delivery_target != "local_worktree" || profile["provider"] != "codex" {
-            return Err(std::io::Error::other("experimental_not_ported: Only Codex Standard local-worktree Worker replacement is implemented").into());
+        if workflow != "standard" || delivery_target != "local_worktree" || crate::runtimes::task_harness_registry::for_profile(profile["provider"].as_str().unwrap_or_default()).is_none() {
+            return Err(std::io::Error::other("experimental_not_ported: Only Standard local-worktree Worker replacement is implemented").into());
         }
         let latest_result: Option<String> = database.connection().query_row(
             "SELECT terminal_observation FROM suplex_task_turns WHERE session_id = ?1 AND terminal_observation IS NOT NULL ORDER BY created_at DESC,id DESC LIMIT 1",
@@ -1186,8 +1186,8 @@ pub fn replace_coordinator(
             return Err(std::io::Error::other("Select an agent with a provider and login allowed by this project").into());
         }
         let rows = root_observation_rows(database, task_id)?;
-        if rows.control["workflow"] != "standard" || rows.control["deliveryTarget"] != "local_worktree" || profile["provider"] != "codex" {
-            return Err(std::io::Error::other("experimental_not_ported: Only Codex Standard local-worktree Coordinator replacement is implemented").into());
+        if rows.control["workflow"] != "standard" || rows.control["deliveryTarget"] != "local_worktree" || crate::runtimes::task_harness_registry::for_profile(profile["provider"].as_str().unwrap_or_default()).is_none() {
+            return Err(std::io::Error::other("experimental_not_ported: Only Standard local-worktree Coordinator replacement is implemented").into());
         }
         let old_profile_json = old_profile_json.unwrap_or(control_profile);
         let old_profile: Value = serde_json::from_str(&old_profile_json)?;

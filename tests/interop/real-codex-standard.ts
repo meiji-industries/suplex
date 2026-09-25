@@ -3,6 +3,7 @@
 // The default run checks the form only. Set SUPLEX_REAL_CODEX_RUN=1 to execute one real task;
 // SUPLEX_REAL_CODEX_MODEL selects an explicitly authorized test model. Set
 // SUPLEX_DETERMINISTIC_CODEX_RUN=1 for the same journey with a test-only Codex process stand-in.
+// The deterministic phase deliver_claude runs the deliver journey with Claude Code profiles and its stand-in.
 import { deepStrictEqual, equal, notEqual, ok } from "node:assert/strict";
 import { rmSync } from "node:fs";
 import { access, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
@@ -20,7 +21,14 @@ const deterministic = process.env.SUPLEX_DETERMINISTIC_CODEX_RUN === "1";
 if (deterministic && process.env.SUPLEX_REAL_CODEX_RUN === "1") throw new Error("Choose one Codex run mode");
 if (deterministic) process.env.SUPLEX_CODEX_COMMAND = fileURLToPath(new URL("../fixtures/codex-standard-cli.mjs", import.meta.url));
 const phase = deterministic ? process.env.SUPLEX_DETERMINISTIC_PHASE ?? "deliver" : "deliver";
-if (!["deliver", "deliver_pr", "answer", "restart", "cancel"].includes(phase)) throw new Error("Unknown deterministic phase");
+if (!["deliver", "deliver_pr", "answer", "restart", "cancel", "deliver_claude"].includes(phase)) throw new Error("Unknown deterministic phase");
+const claude = phase === "deliver_claude";
+const claudeConfig = claude ? await mkdtemp(join(tmpdir(), "suplex-claude-config-")) : null;
+if (claudeConfig) {
+  process.on("exit", () => rmSync(claudeConfig, { recursive: true, force: true }));
+  process.env.SUPLEX_CLAUDE_COMMAND = fileURLToPath(new URL("../fixtures/claude-code-standard-cli.mjs", import.meta.url));
+  process.env.CLAUDE_CONFIG_DIR = claudeConfig;
+}
 const timeoutMs = Number(process.env.SUPLEX_JOURNEY_TIMEOUT_MS ?? 300_000);
 let lastStep = "script started";
 const progress = (step: string) => {
@@ -160,9 +168,11 @@ try {
   await git("-C", fixture.project.repositoryPath, "config", "--local", `url.${pathToFileURL(origin).href}.insteadOf`, canonicalOrigin);
   const revision = (await git("-C", fixture.project.repositoryPath, "rev-parse", "HEAD")).stdout.trim();
   for (const id of ["profile_native_root", "profile_native_worker"]) {
-    const profile = fixture.profiles.update(fixture.userId, id, { provider: "codex", model, reasoningLevel: "medium", serviceTier: "default" });
-    equal(profile.provider, "codex");
-    equal(profile.model, model);
+    const provider = claude ? "claude-code" : "codex";
+    const profileModel = claude ? "haiku" : model;
+    const profile = fixture.profiles.update(fixture.userId, id, { provider, model: profileModel, reasoningLevel: "medium", serviceTier: "default" });
+    equal(profile.provider, provider);
+    equal(profile.model, profileModel);
     equal(profile.reasoningLevel, "medium");
   }
   const response = await fixture.page.goto(`${fixture.base}/tasks?company=${fixture.company.id}`);
@@ -181,7 +191,7 @@ try {
     console.log(JSON.stringify({ backend: fixture.backend, taskPage: response?.status(), dialog: "ready", project: fixture.project.id, revision }));
   } else {
     preserveData = true;
-    const proof = resolve(deterministic ? phase === "deliver" ? ".context/deterministic-codex-standard" : `.context/deterministic-codex-${phase}` : ".context/real-codex-standard");
+    const proof = resolve(deterministic ? phase === "deliver" ? ".context/deterministic-codex-standard" : claude ? ".context/deterministic-claude-standard" : `.context/deterministic-codex-${phase}` : ".context/real-codex-standard");
     await mkdir(proof, { recursive: true });
     await fixture.page.screenshot({ path: `${proof}/new-task.png`, fullPage: true });
     const createdResponse = fixture.page.waitForResponse(candidate => candidate.request().method() === "POST" && candidate.url().endsWith(`/api/companies/${fixture.company.id}/tasks`));

@@ -23,7 +23,7 @@ use crate::{
     identity::companies,
     integrations::github::Access,
     platform::database::SuplexDatabase,
-    runtimes::codex::{session_reader, tool_evidence},
+    runtimes::{task_harness::ReaderSession, task_harness_registry},
     tasks::{commands::TaskFailure, worktree},
 };
 
@@ -269,42 +269,28 @@ fn execution_document(rows: &RootObservationRows, database_path: &std::path::Pat
                 "generation":session["generation"],
             });
             let profile = session_profile(rows, session);
-            let observed = if profile["provider"] == "codex" {
-                session["id"]
-                    .as_str()
-                    .ok_or("Task session ID is invalid")
-                    .and_then(|id| {
-                        session_reader::session_directory(database_path, id)
-                            .map_err(|_| "Task session directory is unavailable")
-                    })
-                    .and_then(|directory| {
-                        session_reader::turns(&directory)
-                            .map_err(|_| "Native session observation failed")
-                    })
-                    .map(|turns| {
-                        turns
-                            .iter()
-                            .flat_map(|turn| {
-                                tool_evidence::codex_tools(&turn.events).into_iter().map(
-                                    move |mut tool| {
-                                        tool.id = format!("{}:{}", turn.id, tool.id);
-                                        tool
-                                    },
-                                )
-                            })
-                            .collect::<Vec<_>>()
-                    })
-            } else {
-                Err("The native provider is unavailable")
-            };
+            let observed = session["nativeSessionId"]
+                .as_str()
+                .and_then(|native_session_id| {
+                    let reader = task_harness_registry::native_session_reader(native_session_id)?;
+                    let session = ReaderSession {
+                        database_path,
+                        session_id: session["id"].as_str()?,
+                        native_session_id,
+                        instance_home_directory: profile["instanceHomeDirectory"]
+                            .as_str()
+                            .map(std::path::Path::new),
+                    };
+                    reader.execution(&session).ok()
+                });
             match observed {
-                Ok(tools) => {
+                Some((tools, plan)) => {
                     entry["available"] = json!(true);
                     entry["limited"] = json!(false);
                     entry["tools"] = json!(tools);
-                    entry["plan"] = Value::Null;
+                    entry["plan"] = plan;
                 }
-                Err(_) => {
+                None => {
                     entry["available"] = json!(false);
                     entry["limited"] = json!(false);
                     entry["tools"] = json!([]);

@@ -1230,23 +1230,16 @@ pub fn send_user_note(
         let task = repository::task_by_id(database, task_id)?
             .ok_or_else(|| Box::new(TaskFailure::new("Not found", 404)) as Box<dyn Error>)?;
         companies::require_company_access(database, actor_user_id, &task.company_id)?;
-        let (archived, workflow): (bool, String) = database.connection().query_row(
-            "SELECT t.archived_at IS NOT NULL,c.workflow FROM suplex_tasks t JOIN suplex_task_controls c ON c.task_id = t.id WHERE t.id = ?1",
+        let archived: bool = database.connection().query_row(
+            "SELECT archived_at IS NOT NULL FROM suplex_tasks WHERE id = ?1",
             [task_id],
-            |row| Ok((row.get(0)?, row.get(1)?)),
+            |row| row.get(0),
         )?;
         if archived || !matches!(task.status.as_str(), "active" | "delivered") {
             return Err(Box::new(TaskFailure::new(
                 "Start the task or answer its current decision before you send a message.",
                 409,
             )));
-        }
-        if workflow != "standard" {
-            return Err(Box::new(TaskFailure {
-                public_message: "experimental_not_ported".into(),
-                status_code: 501,
-                code: "experimental_not_ported",
-            }));
         }
         root_session_store::send_note(database, task_id, &request.note, now)?;
         let updated = repository::task_by_id(database, task_id)?

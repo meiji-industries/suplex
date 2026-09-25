@@ -2394,9 +2394,6 @@ fn apply(
                     "illegal_command",
                 ));
             }
-            if task["workflow"] != "standard" {
-                return Err(not_ported("Only Standard notes are ported"));
-            }
             let label = format!("Agent note ({})", principal.agent_id);
             root_session_store::send_labeled_note(
                 database,

@@ -2203,7 +2203,7 @@ mod tests {
         );
         state.with_database(|database| {
             database.connection().execute(
-                "UPDATE suplex_task_controls SET status = 'delivered',workflow_state_json = json_set(workflow_state_json,'$.completion',json(?1)) WHERE task_id = ?2",
+                "UPDATE suplex_task_controls SET status = 'delivered',workflow = 'independent_review',workflow_state_json = json_set(workflow_state_json,'$.completion',json(?1)) WHERE task_id = ?2",
                 rusqlite::params![r#"{"kind":"workflow","reviewedHead":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","pullRequestNumber":1597,"observedAt":"2026-09-25T12:00:00.000Z"}"#, immediate_id],
             ).unwrap();
             database.connection().execute(

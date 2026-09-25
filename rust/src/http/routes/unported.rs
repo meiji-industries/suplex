@@ -19,34 +19,7 @@ use Access::{Administrator, Authenticated};
 // upgrade. `scripts/rust-route-coverage.ts` checks this list stays complete.
 const ROUTES: &[(Method, &str, Access)] = &[
     (Method::GET, "/api/admin/providers", Administrator),
-    (Method::GET, "/api/admin/provider-instances", Administrator),
-    (Method::POST, "/api/admin/provider-instances", Administrator),
-    (
-        Method::DELETE,
-        "/api/admin/provider-instances/{instance_id}",
-        Administrator,
-    ),
     (Method::GET, "/api/admin/models", Authenticated),
-    (
-        Method::POST,
-        "/api/admin/provider-instances/{instance_id}/login",
-        Administrator,
-    ),
-    (
-        Method::DELETE,
-        "/api/admin/provider-login/{pane_id}",
-        Administrator,
-    ),
-    (
-        Method::GET,
-        "/api/admin/provider-login/{pane_id}/terminal",
-        Administrator,
-    ),
-    (
-        Method::POST,
-        "/api/admin/providers/{provider_id}/login",
-        Administrator,
-    ),
     (Method::POST, "/api/admin/workflows", Authenticated),
     (
         Method::PATCH,
@@ -128,23 +101,8 @@ const ROUTES: &[(Method, &str, Access)] = &[
         Authenticated,
     ),
     (
-        Method::GET,
-        "/api/tasks/{task_id}/pane/{role}/terminal",
-        Authenticated,
-    ),
-    (
         Method::POST,
         "/api/tasks/{task_id}/save-as-template",
-        Authenticated,
-    ),
-    (
-        Method::GET,
-        "/api/tasks/{task_id}/worktree/apps",
-        Authenticated,
-    ),
-    (
-        Method::POST,
-        "/api/tasks/{task_id}/worktree/open",
         Authenticated,
     ),
 ];

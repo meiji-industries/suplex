@@ -1,6 +1,6 @@
 use std::{collections::HashMap, error::Error, io, path::Path};
 
-use super::{executable, invocation, role_prompt, runtime, session_reader};
+use super::{display, executable, invocation, role_prompt, runtime, session_reader};
 use crate::{
     coordination::{
         advisor_bridge::{self, AdvisorRole},
@@ -137,6 +137,14 @@ where
     } else {
         format!("{ROOT_WORKFLOW_ROLE_PROMPT}\n\n{task_prompt}")
     };
+    let session = &input.identity.session_id;
+    display::show(
+        input.database_path,
+        session,
+        input.native_session_id,
+        input.worktree,
+        input.model,
+    );
     runtime::dispatch(
         runtime::CodexDispatch {
             directory: &directory,
@@ -236,6 +244,14 @@ where
     } else {
         (invocation::Role::Worker, None)
     };
+    let session = input.session_id;
+    display::show(
+        input.database_path,
+        session,
+        input.native_session_id,
+        input.worktree,
+        input.model,
+    );
     runtime::dispatch(
         runtime::CodexDispatch {
             directory: &directory,

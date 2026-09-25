@@ -11,8 +11,9 @@ use axum::{
 };
 use tokio_util::sync::CancellationToken;
 
-use crate::integrations::github_device::DeviceAuth;
+use crate::integrations::{github_device::DeviceAuth, herdr::Herdr};
 use crate::platform::{database::SuplexDatabase, embedded};
+use crate::profiles::provider_login::ProviderLogins;
 use crate::projects::repository::Commands;
 use crate::tasks::host::TaskHostHandle;
 
@@ -27,12 +28,15 @@ pub mod routes {
     pub mod pages;
     pub mod profiles;
     pub mod projects;
+    pub mod provider_login;
     pub mod task_agents;
     pub mod task_artifacts;
     pub mod task_history;
+    pub mod task_pane;
     pub mod task_reads;
     pub mod task_templates;
     pub mod task_timeline;
+    pub mod task_worktree;
     pub mod tasks;
     pub mod unported;
     pub mod update;
@@ -57,6 +61,8 @@ pub struct AppState {
     pub task_host: Option<TaskHostHandle>,
     pub history_shutdown: CancellationToken,
     pub github_device: Arc<DeviceAuth>,
+    pub herdr: Herdr,
+    pub provider_logins: Arc<ProviderLogins>,
     dev_assets_dir: Option<PathBuf>,
 }
 
@@ -71,6 +77,8 @@ impl AppState {
             task_host: None,
             history_shutdown: CancellationToken::new(),
             github_device: Arc::new(DeviceAuth::new().expect("GitHub device endpoints are valid")),
+            herdr: Herdr::default(),
+            provider_logins: Arc::default(),
             dev_assets_dir: None,
         }
     }
@@ -134,11 +142,14 @@ pub fn router(state: AppState) -> Router {
         .merge(routes::pages::router())
         .merge(routes::profiles::router())
         .merge(routes::projects::router())
+        .merge(routes::provider_login::router())
         .merge(routes::task_agents::router())
         .merge(routes::task_artifacts::router())
         .merge(routes::task_reads::router())
         .merge(routes::task_timeline::router())
         .merge(routes::task_history::router())
+        .merge(routes::task_pane::router())
+        .merge(routes::task_worktree::router())
         .merge(routes::task_templates::router())
         .merge(routes::tasks::router())
         .merge(routes::workflows::router())
@@ -272,6 +283,8 @@ mod tests {
             task_host: None,
             history_shutdown: CancellationToken::new(),
             github_device: Arc::new(DeviceAuth::new().unwrap()),
+            herdr: Herdr::default(),
+            provider_logins: Arc::default(),
             dev_assets_dir: None,
         };
         let observed = Arc::new(AtomicBool::new(false));

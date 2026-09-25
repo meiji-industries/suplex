@@ -6,5 +6,6 @@ pub mod headless;
 pub mod opencode;
 pub mod process;
 pub mod project_mcp;
+pub mod task_display;
 pub mod task_harness;
 pub mod task_harness_registry;

@@ -1,0 +1,23 @@
+{
+  "contract": "task-templates.CreateTaskTemplateBodySchema",
+  "case": "overlong_profile_id",
+  "input": {
+    "name": "Build",
+    "rootProfileId": "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "origin": "string",
+        "code": "too_big",
+        "maximum": 256,
+        "inclusive": true,
+        "path": [
+          "rootProfileId"
+        ],
+        "message": "Too big: expected string to have <=256 characters"
+      }
+    ]
+  }
+}

@@ -1,0 +1,25 @@
+{
+  "contract": "task-templates.UpdateTaskTemplateBodySchema",
+  "case": "present_options",
+  "input": {
+    "deliveryTarget": "merged",
+    "runProjectTests": false,
+    "visualEvidence": "required",
+    "workflow": "refine_pull_request",
+    "advisorProfileIds": {
+      "planner_a": "planner"
+    }
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "deliveryTarget": "merged",
+      "runProjectTests": false,
+      "visualEvidence": "required",
+      "workflow": "refine_pull_request",
+      "advisorProfileIds": {
+        "planner_a": "planner"
+      }
+    }
+  }
+}

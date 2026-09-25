@@ -1,0 +1,82 @@
+{
+  "contract": "task-templates.CreateTaskTemplateBodySchema",
+  "case": "null_defaults",
+  "input": {
+    "name": "Build",
+    "description": null,
+    "deliveryTarget": null,
+    "runProjectTests": null,
+    "visualEvidence": null,
+    "workflow": null,
+    "advisorProfileIds": null
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "expected": "string",
+        "code": "invalid_type",
+        "path": [
+          "description"
+        ],
+        "message": "Invalid input: expected string, received null"
+      },
+      {
+        "code": "invalid_value",
+        "values": [
+          "local_worktree",
+          "remote_branch",
+          "pull_request_draft",
+          "pull_request_ready",
+          "merged"
+        ],
+        "path": [
+          "deliveryTarget"
+        ],
+        "message": "Invalid option: expected one of \"local_worktree\"|\"remote_branch\"|\"pull_request_draft\"|\"pull_request_ready\"|\"merged\""
+      },
+      {
+        "expected": "boolean",
+        "code": "invalid_type",
+        "path": [
+          "runProjectTests"
+        ],
+        "message": "Invalid input: expected boolean, received null"
+      },
+      {
+        "code": "invalid_value",
+        "values": [
+          "off",
+          "capture",
+          "required"
+        ],
+        "path": [
+          "visualEvidence"
+        ],
+        "message": "Invalid option: expected one of \"off\"|\"capture\"|\"required\""
+      },
+      {
+        "code": "invalid_value",
+        "values": [
+          "standard",
+          "direct_build",
+          "independent_review",
+          "competing_plans",
+          "refine_pull_request"
+        ],
+        "path": [
+          "workflow"
+        ],
+        "message": "Invalid option: expected one of \"standard\"|\"direct_build\"|\"independent_review\"|\"competing_plans\"|\"refine_pull_request\""
+      },
+      {
+        "expected": "object",
+        "code": "invalid_type",
+        "path": [
+          "advisorProfileIds"
+        ],
+        "message": "Invalid input: expected object, received null"
+      }
+    ]
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "contract": "task-templates.SaveTaskAsTemplateBodySchema",
+  "case": "trimmed",
+  "input": {
+    "name": "  Build  "
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "name": "Build"
+    }
+  }
+}

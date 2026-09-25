@@ -1,0 +1,81 @@
+{
+  "contract": "task-templates.UpdateTaskTemplateBodySchema",
+  "case": "invalid_and_unknown",
+  "input": {
+    "name": " ",
+    "description": " ",
+    "rootProfileId": "",
+    "deliveryTarget": "other",
+    "advisorProfileIds": {
+      "extra": true
+    },
+    "extra": true
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "origin": "string",
+        "code": "too_small",
+        "minimum": 1,
+        "inclusive": true,
+        "path": [
+          "name"
+        ],
+        "message": "Too small: expected string to have >=1 characters"
+      },
+      {
+        "origin": "string",
+        "code": "too_small",
+        "minimum": 1,
+        "inclusive": true,
+        "path": [
+          "description"
+        ],
+        "message": "Too small: expected string to have >=1 characters"
+      },
+      {
+        "origin": "string",
+        "code": "too_small",
+        "minimum": 1,
+        "inclusive": true,
+        "path": [
+          "rootProfileId"
+        ],
+        "message": "Too small: expected string to have >=1 characters"
+      },
+      {
+        "code": "invalid_value",
+        "values": [
+          "local_worktree",
+          "remote_branch",
+          "pull_request_draft",
+          "pull_request_ready",
+          "merged"
+        ],
+        "path": [
+          "deliveryTarget"
+        ],
+        "message": "Invalid option: expected one of \"local_worktree\"|\"remote_branch\"|\"pull_request_draft\"|\"pull_request_ready\"|\"merged\""
+      },
+      {
+        "code": "unrecognized_keys",
+        "keys": [
+          "extra"
+        ],
+        "path": [
+          "advisorProfileIds"
+        ],
+        "message": "Unrecognized key: \"extra\""
+      },
+      {
+        "code": "unrecognized_keys",
+        "keys": [
+          "extra"
+        ],
+        "path": [],
+        "message": "Unrecognized key: \"extra\""
+      }
+    ]
+  }
+}

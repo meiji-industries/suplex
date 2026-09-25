@@ -1,0 +1,55 @@
+{
+  "contract": "task-templates.CreateTaskTemplateBodySchema",
+  "case": "invalid_enums",
+  "input": {
+    "name": "Build",
+    "deliveryTarget": "publish",
+    "visualEvidence": "screen",
+    "workflow": "other"
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid_value",
+        "values": [
+          "local_worktree",
+          "remote_branch",
+          "pull_request_draft",
+          "pull_request_ready",
+          "merged"
+        ],
+        "path": [
+          "deliveryTarget"
+        ],
+        "message": "Invalid option: expected one of \"local_worktree\"|\"remote_branch\"|\"pull_request_draft\"|\"pull_request_ready\"|\"merged\""
+      },
+      {
+        "code": "invalid_value",
+        "values": [
+          "off",
+          "capture",
+          "required"
+        ],
+        "path": [
+          "visualEvidence"
+        ],
+        "message": "Invalid option: expected one of \"off\"|\"capture\"|\"required\""
+      },
+      {
+        "code": "invalid_value",
+        "values": [
+          "standard",
+          "direct_build",
+          "independent_review",
+          "competing_plans",
+          "refine_pull_request"
+        ],
+        "path": [
+          "workflow"
+        ],
+        "message": "Invalid option: expected one of \"standard\"|\"direct_build\"|\"independent_review\"|\"competing_plans\"|\"refine_pull_request\""
+      }
+    ]
+  }
+}

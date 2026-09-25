@@ -28,7 +28,47 @@ const workflowRecord = { name: "  Build  ", engine: "standard", id: "workflow", 
 const taskBody = { projectId: "project", title: "  Build  ", idempotencyKey: "task-0001" };
 const githubIssue = { kind: "github", repository: "team/repo", number: 12, id: "123", key: "GH-12", title: "Issue", url: "https://github.com/team/repo/issues/12" };
 const jiraIssue = { kind: "jira", site: "https://team.atlassian.net", id: "123", key: "APP-12", title: "Issue", url: "https://team.atlassian.net/browse/APP-12" };
+const taskTemplate = { name: "  Build  " };
+const taskTemplateResponse = { name: "Build", description: "", deliveryTarget: "pull_request_draft", runProjectTests: true, visualEvidence: "off", workflow: "standard", advisorProfileIds: {}, id: "template", projectId: "project", createdAt: "now", updatedAt: "now" };
 const semanticInputs: Record<string, Record<string, unknown>> = {
+  "task-templates.TaskTemplateParamsSchema": { valid_strip: { templateId: "template", extra: true }, empty_id: { templateId: "" }, astral_id: { templateId: "😀" } },
+  "task-templates.ProjectTaskTemplatesParamsSchema": { valid_strip: { projectId: "project", extra: true }, empty_id: { projectId: "" } },
+  "task-templates.SaveTaskAsTemplateParamsSchema": { valid_strip: { taskId: "task", extra: true }, empty_id: { taskId: "" } },
+  "task-templates.SaveTaskAsTemplateBodySchema": { trimmed: { name: "  Build  " }, blank: { name: " \t " }, unknown: { name: "Build", extra: true } },
+  "task-templates.CreateTaskTemplateBodySchema": {
+    defaults: taskTemplate,
+    full: { ...taskTemplate, description: "  Description  ", rootProfileId: "root", workerProfileId: "worker", deliveryTarget: "merged", runProjectTests: false, visualEvidence: "capture", workflow: "direct_build", advisorProfileIds: { reviewer: "reviewer" } },
+    blank_name: { name: "  " },
+    empty_description: { name: "Build", description: "  " },
+    invalid_profiles: { name: "Build", rootProfileId: "", workerProfileId: "😀".repeat(129) },
+    max_profile_id: { name: "Build", rootProfileId: "😀".repeat(128) },
+    overlong_profile_id: { name: "Build", rootProfileId: "x".repeat(257) },
+    array_name: { name: [] },
+    invalid_enums: { name: "Build", deliveryTarget: "publish", visualEvidence: "screen", workflow: "other" },
+    invalid_advisors_and_unknown: { name: "Build", advisorProfileIds: { reviewer: "", extra: true }, extra: true },
+    null_defaults: { name: "Build", description: null, deliveryTarget: null, runProjectTests: null, visualEvidence: null, workflow: null, advisorProfileIds: null },
+  },
+  "task-templates.UpdateTaskTemplateBodySchema": {
+    empty_patch: {},
+    trim: { name: "  Rename  ", description: "  Detail  " },
+    nullable_profiles: { rootProfileId: null, workerProfileId: null },
+    unbounded_patch_profile_id: { rootProfileId: "x".repeat(257) },
+    array_description: { description: [] },
+    present_options: { deliveryTarget: "merged", runProjectTests: false, visualEvidence: "required", workflow: "refine_pull_request", advisorProfileIds: { planner_a: "planner" } },
+    invalid_and_unknown: { name: " ", description: " ", rootProfileId: "", deliveryTarget: "other", advisorProfileIds: { extra: true }, extra: true },
+    null_nonnullable: { deliveryTarget: null, workflow: null, runProjectTests: null },
+  },
+  "task-templates.TaskTemplateResponseSchema": {
+    complete: taskTemplateResponse,
+    stripped_unknown: { ...taskTemplateResponse, extra: true },
+    missing_metadata: { name: "Build" },
+    malformed_metadata: { ...taskTemplateResponse, id: null, createdAt: 1 },
+  },
+  "task-templates.TaskTemplateListResponseSchema": {
+    empty_list: { templates: [] },
+    one_template: { templates: [taskTemplateResponse], extra: true },
+    invalid_item: { templates: [taskTemplateResponse, { ...taskTemplateResponse, workflow: "other" }] },
+  },
   "tasks.TaskAnswerBodySchema": {
     trimmed_answer: { questionId: "question", answer: "  Yes  ", confirmCommandsStopped: true },
     blank_answer: { questionId: "question", answer: "  " },
@@ -531,6 +571,14 @@ const semanticInputs: Record<string, Record<string, unknown>> = {
 
 type Fixture = { contract: string; case: string; input?: unknown; expected: { accepted: true; value: unknown } | { accepted: false; error: unknown } };
 const rawInputs: Record<string, Record<string, string>> = {
+  "task-templates.TaskTemplateParamsSchema": { surrogate_id: String.raw`{"templateId":"\ud800"}` },
+  "task-templates.ProjectTaskTemplatesParamsSchema": { surrogate_id: String.raw`{"projectId":"\ud800"}` },
+  "task-templates.SaveTaskAsTemplateParamsSchema": { surrogate_id: String.raw`{"taskId":"\ud800"}` },
+  "task-templates.SaveTaskAsTemplateBodySchema": { surrogate_name: String.raw`{"name":"\ud800"}`, strict_surrogate: String.raw`{"name":"Build","\ud800":1}` },
+  "task-templates.CreateTaskTemplateBodySchema": { surrogate_name: String.raw`{"name":"\ud800"}`, surrogate_advisor: String.raw`{"name":"Build","advisorProfileIds":{"reviewer":"\ud800"}}`, strict_surrogate: String.raw`{"name":"Build","\ud800":1}` },
+  "task-templates.UpdateTaskTemplateBodySchema": { surrogate_description: String.raw`{"description":"\ud800"}`, strict_surrogate: String.raw`{"\ud800":1}` },
+  "task-templates.TaskTemplateResponseSchema": { surrogate_metadata: String.raw`{"name":"Build","id":"\ud800","projectId":"project","createdAt":"now","updatedAt":"now"}`, strict_surrogate: String.raw`{"name":"Build","id":"id","projectId":"project","createdAt":"now","updatedAt":"now","\ud800":1}` },
+  "task-templates.TaskTemplateListResponseSchema": { surrogate_nested: String.raw`{"templates":[{"name":"Build","id":"\ud800","projectId":"project","createdAt":"now","updatedAt":"now"}]}` },
   "tasks.TaskAnswerBodySchema": {
     lone_surrogate_answer: String.raw`{"questionId":"question","answer":"\ud800"}`,
     strict_surrogate_key: String.raw`{"questionId":"question","answer":"yes","\ud800":1}`,

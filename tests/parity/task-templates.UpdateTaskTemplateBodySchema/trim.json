@@ -1,0 +1,15 @@
+{
+  "contract": "task-templates.UpdateTaskTemplateBodySchema",
+  "case": "trim",
+  "input": {
+    "name": "  Rename  ",
+    "description": "  Detail  "
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "name": "Rename",
+      "description": "Detail"
+    }
+  }
+}

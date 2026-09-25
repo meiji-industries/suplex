@@ -1,0 +1,38 @@
+{
+  "contract": "task-templates.TaskTemplateResponseSchema",
+  "case": "malformed_metadata",
+  "input": {
+    "name": "Build",
+    "description": "",
+    "deliveryTarget": "pull_request_draft",
+    "runProjectTests": true,
+    "visualEvidence": "off",
+    "workflow": "standard",
+    "advisorProfileIds": {},
+    "id": null,
+    "projectId": "project",
+    "createdAt": 1,
+    "updatedAt": "now"
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "expected": "string",
+        "code": "invalid_type",
+        "path": [
+          "id"
+        ],
+        "message": "Invalid input: expected string, received null"
+      },
+      {
+        "expected": "string",
+        "code": "invalid_type",
+        "path": [
+          "createdAt"
+        ],
+        "message": "Invalid input: expected string, received number"
+      }
+    ]
+  }
+}

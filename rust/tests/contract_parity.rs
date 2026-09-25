@@ -50,6 +50,14 @@ fn ported_contracts_match_zod_fixtures() {
         "tasks.TaskCoordinatorReplacementBodySchema",
         "tasks.TaskAgentSelectionBodySchema",
         "tasks.TaskAnswerBodySchema",
+        "task-templates.TaskTemplateParamsSchema",
+        "task-templates.ProjectTaskTemplatesParamsSchema",
+        "task-templates.SaveTaskAsTemplateParamsSchema",
+        "task-templates.SaveTaskAsTemplateBodySchema",
+        "task-templates.CreateTaskTemplateBodySchema",
+        "task-templates.UpdateTaskTemplateBodySchema",
+        "task-templates.TaskTemplateResponseSchema",
+        "task-templates.TaskTemplateListResponseSchema",
         "workflows.WorkflowRecordInputSchema",
         "workflows.WorkflowRecordPatchSchema",
         "workflows.WorkflowRecordSchema",
@@ -143,7 +151,7 @@ fn ported_contracts_match_zod_fixtures() {
             }
         }
     }
-    assert_eq!(schemas.len(), 81, "eighty-one explicitly ported schemas");
+    assert_eq!(schemas.len(), 89, "eighty-nine explicitly ported schemas");
     assert!(
         verified >= 140,
         "every ported schema has multiple Zod cases"

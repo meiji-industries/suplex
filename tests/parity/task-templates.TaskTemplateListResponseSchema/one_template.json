@@ -1,0 +1,42 @@
+{
+  "contract": "task-templates.TaskTemplateListResponseSchema",
+  "case": "one_template",
+  "input": {
+    "templates": [
+      {
+        "name": "Build",
+        "description": "",
+        "deliveryTarget": "pull_request_draft",
+        "runProjectTests": true,
+        "visualEvidence": "off",
+        "workflow": "standard",
+        "advisorProfileIds": {},
+        "id": "template",
+        "projectId": "project",
+        "createdAt": "now",
+        "updatedAt": "now"
+      }
+    ],
+    "extra": true
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "templates": [
+        {
+          "description": "",
+          "deliveryTarget": "pull_request_draft",
+          "runProjectTests": true,
+          "visualEvidence": "off",
+          "workflow": "standard",
+          "advisorProfileIds": {},
+          "name": "Build",
+          "id": "template",
+          "projectId": "project",
+          "createdAt": "now",
+          "updatedAt": "now"
+        }
+      ]
+    }
+  }
+}

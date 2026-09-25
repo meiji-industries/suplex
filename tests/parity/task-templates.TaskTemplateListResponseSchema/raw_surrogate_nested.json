@@ -1,0 +1,10 @@
+{
+  "contract": "task-templates.TaskTemplateListResponseSchema",
+  "case": "raw_surrogate_nested",
+  "encoding": "raw-json",
+  "input": "{\"templates\":[{\"name\":\"Build\",\"id\":\"\\ud800\",\"projectId\":\"project\",\"createdAt\":\"now\",\"updatedAt\":\"now\"}]}",
+  "expected": {
+    "accepted": true,
+    "value": "{\"templates\":[{\"description\":\"\",\"deliveryTarget\":\"pull_request_draft\",\"runProjectTests\":true,\"visualEvidence\":\"off\",\"workflow\":\"standard\",\"advisorProfileIds\":{},\"name\":\"Build\",\"id\":\"\\ud800\",\"projectId\":\"project\",\"createdAt\":\"now\",\"updatedAt\":\"now\"}]}"
+  }
+}

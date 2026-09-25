@@ -1,0 +1,10 @@
+{
+  "contract": "task-templates.CreateTaskTemplateBodySchema",
+  "case": "raw_strict_surrogate",
+  "encoding": "raw-json",
+  "input": "{\"name\":\"Build\",\"\\ud800\":1}",
+  "expected": {
+    "accepted": false,
+    "error": "[{\"code\":\"unrecognized_keys\",\"keys\":[\"\\ud800\"],\"path\":[],\"message\":\"Unrecognized key: \\\"\\ud800\\\"\"}]"
+  }
+}

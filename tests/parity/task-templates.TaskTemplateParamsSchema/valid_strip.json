@@ -1,0 +1,14 @@
+{
+  "contract": "task-templates.TaskTemplateParamsSchema",
+  "case": "valid_strip",
+  "input": {
+    "templateId": "template",
+    "extra": true
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "templateId": "template"
+    }
+  }
+}

@@ -1,0 +1,10 @@
+{
+  "contract": "task-templates.ProjectTaskTemplatesParamsSchema",
+  "case": "raw_surrogate_id",
+  "encoding": "raw-json",
+  "input": "{\"projectId\":\"\\ud800\"}",
+  "expected": {
+    "accepted": true,
+    "value": "{\"projectId\":\"\\ud800\"}"
+  }
+}

@@ -62,7 +62,7 @@ fn lossless_contracts_match_zod_raw_json() {
             verified += 1;
         }
     }
-    assert_eq!(verified, 52);
+    assert_eq!(verified, 65);
 
     let mut nested = serde_json::json!(0);
     for _ in 0..129 {

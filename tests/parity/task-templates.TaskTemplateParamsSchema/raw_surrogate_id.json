@@ -1,0 +1,10 @@
+{
+  "contract": "task-templates.TaskTemplateParamsSchema",
+  "case": "raw_surrogate_id",
+  "encoding": "raw-json",
+  "input": "{\"templateId\":\"\\ud800\"}",
+  "expected": {
+    "accepted": true,
+    "value": "{\"templateId\":\"\\ud800\"}"
+  }
+}

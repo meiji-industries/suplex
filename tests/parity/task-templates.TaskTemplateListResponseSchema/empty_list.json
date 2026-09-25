@@ -1,0 +1,13 @@
+{
+  "contract": "task-templates.TaskTemplateListResponseSchema",
+  "case": "empty_list",
+  "input": {
+    "templates": []
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "templates": []
+    }
+  }
+}

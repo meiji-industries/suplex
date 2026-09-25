@@ -1,0 +1,50 @@
+{
+  "contract": "task-templates.UpdateTaskTemplateBodySchema",
+  "case": "null_nonnullable",
+  "input": {
+    "deliveryTarget": null,
+    "workflow": null,
+    "runProjectTests": null
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid_value",
+        "values": [
+          "local_worktree",
+          "remote_branch",
+          "pull_request_draft",
+          "pull_request_ready",
+          "merged"
+        ],
+        "path": [
+          "deliveryTarget"
+        ],
+        "message": "Invalid option: expected one of \"local_worktree\"|\"remote_branch\"|\"pull_request_draft\"|\"pull_request_ready\"|\"merged\""
+      },
+      {
+        "expected": "boolean",
+        "code": "invalid_type",
+        "path": [
+          "runProjectTests"
+        ],
+        "message": "Invalid input: expected boolean, received null"
+      },
+      {
+        "code": "invalid_value",
+        "values": [
+          "standard",
+          "direct_build",
+          "independent_review",
+          "competing_plans",
+          "refine_pull_request"
+        ],
+        "path": [
+          "workflow"
+        ],
+        "message": "Invalid option: expected one of \"standard\"|\"direct_build\"|\"independent_review\"|\"competing_plans\"|\"refine_pull_request\""
+      }
+    ]
+  }
+}

@@ -1,0 +1,34 @@
+{
+  "contract": "task-templates.CreateTaskTemplateBodySchema",
+  "case": "invalid_profiles",
+  "input": {
+    "name": "Build",
+    "rootProfileId": "",
+    "workerProfileId": "😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀"
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "origin": "string",
+        "code": "too_small",
+        "minimum": 1,
+        "inclusive": true,
+        "path": [
+          "rootProfileId"
+        ],
+        "message": "Too small: expected string to have >=1 characters"
+      },
+      {
+        "origin": "string",
+        "code": "too_big",
+        "maximum": 256,
+        "inclusive": true,
+        "path": [
+          "workerProfileId"
+        ],
+        "message": "Too big: expected string to have <=256 characters"
+      }
+    ]
+  }
+}

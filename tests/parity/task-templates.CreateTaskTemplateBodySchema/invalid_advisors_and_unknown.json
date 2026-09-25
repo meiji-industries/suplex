@@ -1,0 +1,46 @@
+{
+  "contract": "task-templates.CreateTaskTemplateBodySchema",
+  "case": "invalid_advisors_and_unknown",
+  "input": {
+    "name": "Build",
+    "advisorProfileIds": {
+      "reviewer": "",
+      "extra": true
+    },
+    "extra": true
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "origin": "string",
+        "code": "too_small",
+        "minimum": 1,
+        "inclusive": true,
+        "path": [
+          "advisorProfileIds",
+          "reviewer"
+        ],
+        "message": "Too small: expected string to have >=1 characters"
+      },
+      {
+        "code": "unrecognized_keys",
+        "keys": [
+          "extra"
+        ],
+        "path": [
+          "advisorProfileIds"
+        ],
+        "message": "Unrecognized key: \"extra\""
+      },
+      {
+        "code": "unrecognized_keys",
+        "keys": [
+          "extra"
+        ],
+        "path": [],
+        "message": "Unrecognized key: \"extra\""
+      }
+    ]
+  }
+}

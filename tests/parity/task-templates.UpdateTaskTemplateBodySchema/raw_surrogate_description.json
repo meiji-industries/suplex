@@ -1,0 +1,10 @@
+{
+  "contract": "task-templates.UpdateTaskTemplateBodySchema",
+  "case": "raw_surrogate_description",
+  "encoding": "raw-json",
+  "input": "{\"description\":\"\\ud800\"}",
+  "expected": {
+    "accepted": true,
+    "value": "{\"description\":\"\\ud800\"}"
+  }
+}

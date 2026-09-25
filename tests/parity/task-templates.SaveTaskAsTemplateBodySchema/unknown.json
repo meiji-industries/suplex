@@ -1,0 +1,21 @@
+{
+  "contract": "task-templates.SaveTaskAsTemplateBodySchema",
+  "case": "unknown",
+  "input": {
+    "name": "Build",
+    "extra": true
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "unrecognized_keys",
+        "keys": [
+          "extra"
+        ],
+        "path": [],
+        "message": "Unrecognized key: \"extra\""
+      }
+    ]
+  }
+}

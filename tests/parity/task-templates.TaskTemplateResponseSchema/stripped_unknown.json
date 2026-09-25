@@ -1,0 +1,31 @@
+{
+  "contract": "task-templates.TaskTemplateResponseSchema",
+  "case": "stripped_unknown",
+  "input": {
+    "name": "Build",
+    "description": "",
+    "deliveryTarget": "pull_request_draft",
+    "runProjectTests": true,
+    "visualEvidence": "off",
+    "workflow": "standard",
+    "advisorProfileIds": {},
+    "id": "template",
+    "projectId": "project",
+    "createdAt": "now",
+    "updatedAt": "now",
+    "extra": true
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "unrecognized_keys",
+        "keys": [
+          "extra"
+        ],
+        "path": [],
+        "message": "Unrecognized key: \"extra\""
+      }
+    ]
+  }
+}

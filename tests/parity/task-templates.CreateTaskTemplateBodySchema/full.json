@@ -1,0 +1,33 @@
+{
+  "contract": "task-templates.CreateTaskTemplateBodySchema",
+  "case": "full",
+  "input": {
+    "name": "  Build  ",
+    "description": "  Description  ",
+    "rootProfileId": "root",
+    "workerProfileId": "worker",
+    "deliveryTarget": "merged",
+    "runProjectTests": false,
+    "visualEvidence": "capture",
+    "workflow": "direct_build",
+    "advisorProfileIds": {
+      "reviewer": "reviewer"
+    }
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "description": "Description",
+      "rootProfileId": "root",
+      "workerProfileId": "worker",
+      "deliveryTarget": "merged",
+      "runProjectTests": false,
+      "visualEvidence": "capture",
+      "workflow": "direct_build",
+      "advisorProfileIds": {
+        "reviewer": "reviewer"
+      },
+      "name": "Build"
+    }
+  }
+}

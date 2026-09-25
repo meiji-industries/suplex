@@ -175,6 +175,11 @@ pub trait NativeSessionReader {
 pub trait TaskHarness: NativeSessionReader + Sync {
     /// Reserve a new native session identity.
     fn new_session_id(&self) -> String;
+    /// TypeScript `ensureSession`: prepare what the native session needs, such
+    /// as its server, before the host observes or dispatches a turn.
+    fn ensure_session(&self, _scope: &TaskScope<'_>) -> Result<(), Box<dyn Error>> {
+        Ok(())
+    }
     fn observe(
         &self,
         directory: &Path,

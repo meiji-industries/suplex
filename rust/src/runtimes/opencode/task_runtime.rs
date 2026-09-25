@@ -699,6 +699,12 @@ impl TaskHarness for OpenCodeTaskRuntime {
         format!("opencode-{}", uuid::Uuid::new_v4())
     }
 
+    /// A dead server, such as after a machine restart, is started again here.
+    fn ensure_session(&self, scope: &TaskScope<'_>) -> Result<(), Box<dyn Error>> {
+        run(ensure_session(scope))?;
+        Ok(())
+    }
+
     fn observe(
         &self,
         directory: &Path,
@@ -983,6 +989,83 @@ mod tests {
             "opencode"
         );
         fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn ensure_session_restarts_a_lost_server_and_keeps_the_native_session() {
+        use std::os::unix::fs::PermissionsExt;
+        let base = temporary("opencode-ensure");
+        let worktree = base.join("worktree");
+        fs::create_dir_all(&worktree).unwrap();
+        let executable = base.join("opencode");
+        fs::write(
+            &executable,
+            format!(
+                r#"#!{}
+const http = require("node:http");
+const port = Number(process.argv[process.argv.indexOf("--port") + 1]);
+const session = {{ id: "ses_kept", projectID: "project", directory: process.cwd(), title: "Kept", version: "1", time: {{ created: 1, updated: 1 }} }};
+const server = http.createServer((request, response) => {{
+  response.setHeader("content-type", "application/json");
+  if (request.url.startsWith("/global/health")) response.end(JSON.stringify({{ healthy: true, version: "test" }}));
+  else if (request.url.startsWith("/session/status")) response.end("{{}}");
+  else if (request.url.startsWith("/session")) response.end(JSON.stringify(session));
+  else {{ response.statusCode = 404; response.end("{{}}"); }}
+}});
+server.listen(port, "127.0.0.1");
+process.on("SIGTERM", () => server.close(() => process.exit(0)));
+"#,
+                crate::runtimes::opencode::server::tests::node()
+            ),
+        )
+        .unwrap();
+        fs::set_permissions(&executable, fs::Permissions::from_mode(0o700)).unwrap();
+        let inherited: std::collections::HashMap<String, String> = std::env::vars().collect();
+        let empty = std::collections::HashMap::new();
+        let database = base.join("suplex.sqlite");
+        let scope = TaskScope {
+            workflow: WorkflowLaunch::default(),
+            database_path: &database,
+            artifact_root: &base,
+            task_id: "task-opencode",
+            session_id: "session-opencode",
+            native_session_id: "opencode-reserved",
+            role: TaskRole::Worker(WorkerPurpose::Implementation),
+            worktree: &worktree,
+            model: "openai/test",
+            reasoning_effort: "medium",
+            instance_home_directory: None,
+            project_mcp: None,
+            project_context_path: None,
+            project_environment: &empty,
+            excluded_environment_keys: &[],
+            executable: Some(&executable),
+            inherited_environment: &inherited,
+        };
+        OpenCodeTaskRuntime.ensure_session(&scope).unwrap();
+        let runtime = scope.runtime_directory().unwrap();
+        let first = server::read_server(&runtime).unwrap().unwrap();
+        assert_eq!(
+            native_session_id(&runtime, "opencode-reserved")
+                .unwrap()
+                .as_deref(),
+            Some("ses_kept")
+        );
+        // The machine restarted: the recorded server is gone.
+        server::stop_server(&first).unwrap();
+        assert!(!server::server_running(&first));
+        OpenCodeTaskRuntime.ensure_session(&scope).unwrap();
+        let restarted = server::read_server(&runtime).unwrap().unwrap();
+        assert_ne!(restarted.generation, first.generation);
+        assert!(server::server_running(&restarted));
+        assert_eq!(
+            native_session_id(&runtime, "opencode-reserved")
+                .unwrap()
+                .as_deref(),
+            Some("ses_kept")
+        );
+        server::stop_server(&restarted).unwrap();
+        fs::remove_dir_all(base).unwrap();
     }
 
     fn reference_json(

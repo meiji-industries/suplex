@@ -774,6 +774,50 @@ fn recover_prepared_root_blocking(
         )? {
             return Err(io::Error::other("Native Root session changed before dispatch").into());
         }
+        let worktree = rows.control["worktree"]["path"].as_str();
+        let model = profile["model"]
+            .as_str()
+            .ok_or_else(|| io::Error::other("Root model is missing"))?;
+        let reasoning = profile["reasoningLevel"]
+            .as_str()
+            .ok_or_else(|| io::Error::other("Root reasoning level is missing"))?;
+        let project_scope = project_launch_scope(
+            &rows.context["configuration"],
+            &rows.context["issueContext"],
+            database_path,
+            task_id,
+        );
+        let identity = RootIdentity {
+            task_id: task_id.to_owned(),
+            session_id: session.id.clone(),
+            generation: session.generation,
+        };
+        let scope = TaskScope {
+            database_path,
+            artifact_root,
+            task_id,
+            session_id: &session.id,
+            native_session_id: &native_id,
+            workflow: WorkflowLaunch {
+                workflow_root: rows.control["workflow"] != "standard",
+                ..WorkflowLaunch::default()
+            },
+            role: TaskRole::Root(&identity),
+            worktree: Path::new(worktree.unwrap_or_default()),
+            model,
+            reasoning_effort: reasoning,
+            instance_home_directory: profile["instanceHomeDirectory"].as_str().map(Path::new),
+            project_mcp: project_mcp(&rows),
+            project_context_path: project_scope.context_path.as_deref(),
+            project_environment: &project_scope.environment,
+            excluded_environment_keys: &project_scope.excluded_keys,
+            executable,
+            inherited_environment,
+        };
+        // TypeScript `ensureSession`: a runtime restarts what it needs, such as a lost OpenCode server, before observation.
+        if worktree.is_some() {
+            harness.ensure_session(&scope)?;
+        }
         let mut turn = turn.clone();
         let before = loop {
             let (before, replayable) = observe_or_recover_fenced(
@@ -820,48 +864,9 @@ fn recover_prepared_root_blocking(
             &turn.id,
             Utc::now(),
         )?;
-        let worktree = rows.control["worktree"]["path"]
-            .as_str()
-            .ok_or_else(|| io::Error::other("Task worktree is not prepared"))?;
-        let model = profile["model"]
-            .as_str()
-            .ok_or_else(|| io::Error::other("Root model is missing"))?;
-        let reasoning = profile["reasoningLevel"]
-            .as_str()
-            .ok_or_else(|| io::Error::other("Root reasoning level is missing"))?;
-        let project_scope = project_launch_scope(
-            &rows.context["configuration"],
-            &rows.context["issueContext"],
-            database_path,
-            task_id,
-        );
-        let identity = RootIdentity {
-            task_id: task_id.to_owned(),
-            session_id: session.id.clone(),
-            generation: session.generation,
-        };
-        let scope = TaskScope {
-            database_path,
-            artifact_root,
-            task_id,
-            session_id: &session.id,
-            native_session_id: &native_id,
-            workflow: WorkflowLaunch {
-                workflow_root: rows.control["workflow"] != "standard",
-                ..WorkflowLaunch::default()
-            },
-            role: TaskRole::Root(&identity),
-            worktree: Path::new(worktree),
-            model,
-            reasoning_effort: reasoning,
-            instance_home_directory: profile["instanceHomeDirectory"].as_str().map(Path::new),
-            project_mcp: project_mcp(&rows),
-            project_context_path: project_scope.context_path.as_deref(),
-            project_environment: &project_scope.environment,
-            excluded_environment_keys: &project_scope.excluded_keys,
-            executable,
-            inherited_environment,
-        };
+        if worktree.is_none() {
+            return Err(io::Error::other("Task worktree is not prepared").into());
+        }
         let prompt = task_context_prompt(
             &turn.prompt_text,
             project_scope.context.as_deref(),
@@ -1040,6 +1045,42 @@ fn recover_prepared_worker_blocking(
         )? {
             return Err(io::Error::other("Native Worker session changed before dispatch").into());
         }
+        let worktree = rows.control["worktree"]["path"].as_str();
+        let profile = &delegate.profile;
+        let model = profile["model"]
+            .as_str()
+            .ok_or_else(|| io::Error::other("Worker model is missing"))?;
+        let reasoning = profile["reasoningLevel"]
+            .as_str()
+            .ok_or_else(|| io::Error::other("Worker reasoning level is missing"))?;
+        let project_scope = project_launch_scope(
+            &rows.context["configuration"],
+            &rows.context["issueContext"],
+            database_path,
+            task_id,
+        );
+        let scope = TaskScope {
+            database_path,
+            artifact_root,
+            task_id,
+            session_id: &session.id,
+            native_session_id: &native_id,
+            workflow: delegate.workflow,
+            role: TaskRole::Worker(delegate.purpose),
+            worktree: Path::new(worktree.unwrap_or_default()),
+            model,
+            reasoning_effort: reasoning,
+            instance_home_directory: profile["instanceHomeDirectory"].as_str().map(Path::new),
+            project_mcp: project_mcp(&rows),
+            project_context_path: project_scope.context_path.as_deref(),
+            project_environment: &project_scope.environment,
+            excluded_environment_keys: &project_scope.excluded_keys,
+            executable,
+            inherited_environment,
+        };
+        if worktree.is_some() {
+            harness.ensure_session(&scope)?;
+        }
         let (before, replayable) = observe_or_recover_fenced(
             &mut database,
             database_path,
@@ -1066,41 +1107,9 @@ fn recover_prepared_worker_blocking(
         if dependency_blocked(&rows) {
             return Ok(before);
         }
-        let worktree = rows.control["worktree"]["path"]
-            .as_str()
-            .ok_or_else(|| io::Error::other("Task worktree is not prepared"))?;
-        let profile = &delegate.profile;
-        let model = profile["model"]
-            .as_str()
-            .ok_or_else(|| io::Error::other("Worker model is missing"))?;
-        let reasoning = profile["reasoningLevel"]
-            .as_str()
-            .ok_or_else(|| io::Error::other("Worker reasoning level is missing"))?;
-        let project_scope = project_launch_scope(
-            &rows.context["configuration"],
-            &rows.context["issueContext"],
-            database_path,
-            task_id,
-        );
-        let scope = TaskScope {
-            database_path,
-            artifact_root,
-            task_id,
-            session_id: &session.id,
-            native_session_id: &native_id,
-            workflow: delegate.workflow,
-            role: TaskRole::Worker(delegate.purpose),
-            worktree: Path::new(worktree),
-            model,
-            reasoning_effort: reasoning,
-            instance_home_directory: profile["instanceHomeDirectory"].as_str().map(Path::new),
-            project_mcp: project_mcp(&rows),
-            project_context_path: project_scope.context_path.as_deref(),
-            project_environment: &project_scope.environment,
-            excluded_environment_keys: &project_scope.excluded_keys,
-            executable,
-            inherited_environment,
-        };
+        if worktree.is_none() {
+            return Err(io::Error::other("Task worktree is not prepared").into());
+        }
         let prompt = task_context_prompt(
             &turn.prompt_text,
             project_scope.context.as_deref(),

@@ -302,15 +302,20 @@ fn observe_turn(
     )?)
 }
 
+/// Record native admission. An execution Suplex cannot identify
+/// (TypeScript `executionUncertain`) asks a human to stop its commands.
 fn persist_native_admission(
     database: &mut SuplexDatabase,
     turn: &RootTurn,
     observation: &PromptObservation,
 ) -> DatabaseResult<()> {
-    if !observation.admission_observed {
-        return Ok(());
+    if observation.admission_observed {
+        root_session_store::mark_prompted(database, turn, None, Utc::now())?;
     }
-    root_session_store::mark_prompted(database, turn, None, Utc::now())?;
+    // Codex reports `executionUncertain` only with this reason.
+    if observation.reason == "dispatch_identity_missing" {
+        root_session_store::require_execution_cleanup(database, turn, Utc::now())?;
+    }
     Ok(())
 }
 
@@ -1662,6 +1667,53 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(control().0, "active");
+        fs::remove_dir_all(base).unwrap();
+    }
+
+    #[tokio::test]
+    async fn unidentified_execution_asks_for_command_cleanup() {
+        let (base, database_path, task_id) = fixture_task();
+        let root = root_controller::prepare_root(&database_path, &task_id).unwrap();
+        let turn_id = {
+            let database = SuplexDatabase::open(&database_path, OpenMode::ReadWrite).unwrap();
+            let turn = root_session_store::pending_turns(&database, &root.id)
+                .unwrap()
+                .remove(0);
+            let attempt = PromptDispatchAttempt {
+                server_generation: "lost-record".into(),
+                claimed_at: Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true),
+            };
+            database.connection().execute(
+                "UPDATE suplex_task_turns SET status = 'unknown', dispatch_attempt_json = ?1 WHERE id = ?2",
+                rusqlite::params![serde_json::to_string(&attempt).unwrap(), turn.id],
+            ).unwrap();
+            turn.id
+        };
+        // A native log exists, but no dispatch record identifies its process.
+        let directory = session_reader::session_directory(&database_path, &root.id).unwrap();
+        fs::create_dir_all(&directory).unwrap();
+        fs::write(
+            crate::runtimes::headless::turn_file(&directory, &turn_id, "jsonl"),
+            "",
+        )
+        .unwrap();
+        let observed =
+            recover_prepared_root(&database_path, &base, &task_id, None, &HashMap::new())
+                .await
+                .unwrap()
+                .unwrap();
+        assert_eq!(observed.reason, "dispatch_identity_missing");
+        let database = SuplexDatabase::open(&database_path, OpenMode::ReadOnly).unwrap();
+        let (status, recovery_turn_id): (String, Option<String>) = database
+            .connection()
+            .query_row(
+                "SELECT status,recovery_turn_id FROM suplex_task_controls WHERE task_id = ?1",
+                [&task_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(status, "waiting_human");
+        assert_eq!(recovery_turn_id.as_deref(), Some(turn_id.as_str()));
         fs::remove_dir_all(base).unwrap();
     }
 

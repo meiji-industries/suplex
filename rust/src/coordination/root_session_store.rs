@@ -1829,6 +1829,32 @@ pub fn reconcile_task_limit_pause(
     })
 }
 
+/// TypeScript `TaskControlStore.requireExecutionCleanup`: a current session
+/// whose execution Suplex cannot identify asks a human to stop its commands.
+pub fn require_execution_cleanup(
+    database: &mut SuplexDatabase,
+    turn: &RootTurn,
+    now: DateTime<Utc>,
+) -> DatabaseResult<()> {
+    database.transaction(false, |database| {
+        let current: bool = database.connection().query_row(
+            "SELECT EXISTS(SELECT 1 FROM suplex_task_sessions s JOIN suplex_task_controls c ON c.task_id = s.task_id WHERE s.id = ?1 AND s.generation = ?2 AND s.is_current = 1 AND s.lifecycle <> 'cancelled' AND c.status = 'active' AND (s.kind = 'worker' OR c.root_session_id = s.id))",
+            params![turn.session_id, turn.generation], |row| row.get(0),
+        )?;
+        if !current { return Ok(()); }
+        let changed = database.connection().execute(
+            "UPDATE suplex_task_controls SET status = 'waiting_human', human_question = ?1, human_question_options_json = '[]', human_question_id = ?2, limit_pause_json = NULL, wake_at = NULL, workflow_state_json = json_set(workflow_state_json, '$.deliveryWait', json('null')), updated_at = ?3 WHERE task_id = ?4 AND status = 'active'",
+            params!["The agent stopped during a tool call. A command can still be active in the worktree. Stop those commands before you continue. Describe what you checked, then confirm that all commands from this session have stopped.", Uuid::new_v4().to_string(), timestamp(now), turn.task_id],
+        )?;
+        if changed != 1 { return Err(std::io::Error::other("task_not_active").into()); }
+        database.connection().execute(
+            "UPDATE suplex_task_controls SET recovery_turn_id = ?1 WHERE task_id = ?2",
+            params![turn.id, turn.task_id],
+        )?;
+        Ok(())
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

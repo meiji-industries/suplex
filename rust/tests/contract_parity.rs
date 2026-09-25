@@ -67,6 +67,18 @@ fn ported_contracts_match_zod_fixtures() {
             let typed =
                 contracts::typed::auth::validate(&fixture.contract, fixture.fields.get("input"))
                     .or_else(|| {
+                        contracts::typed::avatars::validate(
+                            &fixture.contract,
+                            fixture.fields.get("input"),
+                        )
+                    })
+                    .or_else(|| {
+                        contracts::typed::github_triggers::validate(
+                            &fixture.contract,
+                            fixture.fields.get("input"),
+                        )
+                    })
+                    .or_else(|| {
                         contracts::typed::projects::validate(
                             &fixture.contract,
                             fixture.fields.get("input"),
@@ -133,7 +145,7 @@ fn ported_contracts_match_zod_fixtures() {
             }
         }
     }
-    assert_eq!(schemas.len(), 52, "fifty-two implemented request schemas");
+    assert_eq!(schemas.len(), 60, "sixty implemented request schemas");
     assert!(
         verified >= 140,
         "every ported schema has multiple Zod cases"

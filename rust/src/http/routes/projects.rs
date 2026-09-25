@@ -310,7 +310,7 @@ async fn finish_local_project(
         verification_command: &fields[6],
     };
     match repository::prepare_local_project(
-        &state.project_commands,
+        &state.project_github,
         &roots.repositories,
         &roots.worktrees,
         &input,
@@ -397,7 +397,7 @@ async fn create_coordinate(
     let repository_path = roots.repositories.join(owner).join(name);
     let worktree_root = roots.worktrees.join(owner).join(name);
     if let Err(error) = provisioning::ensure(
-        &state.project_commands,
+        &state.project_github,
         &coordinate.clone_url,
         &coordinate.repository,
         &repository_path,
@@ -437,8 +437,7 @@ async fn create_with_new_repository(
     let owner = if second.is_some() {
         first.to_owned()
     } else {
-        match provisioning::github_owners(&state.project_commands, std::path::Path::new(".")).await
-        {
+        match provisioning::github_owners(&state.project_github).await {
             Ok(owners) => owners.into_iter().next().unwrap_or_default(),
             Err(error) => return service_error(Box::new(error)),
         }
@@ -474,7 +473,7 @@ async fn create_with_new_repository(
     let name = parts.next().expect("validated coordinate name");
     let repository_path = roots.repositories.join(owner).join(name);
     if let Err(error) = provisioning::create(
-        &state.project_commands,
+        &state.project_github,
         &coordinate,
         &coordinate.clone_url,
         &repository_path,
@@ -684,7 +683,7 @@ async fn replace_project(
         verification_command: &body.verification_command,
     };
     let prepared = match repository::prepare_local_project(
-        &state.project_commands,
+        &state.project_github,
         &roots.repositories,
         &roots.worktrees,
         &input,
@@ -717,7 +716,7 @@ async fn patch_project(
     );
     if plan.repository_changed {
         let Some((repository_path, worktree_root, errors)) = service::validate_patched_repository(
-            &state.project_commands,
+            &state.project_github,
             (&roots.repositories, &roots.worktrees),
             &plan.candidate,
             patch.worktree_root.is_some(),
@@ -821,8 +820,7 @@ async fn repository_owners(
     {
         return with_cookies(response, cookies);
     }
-    let result =
-        provisioning::github_owners(&state.project_commands, std::path::Path::new(".")).await;
+    let result = provisioning::github_owners(&state.project_github).await;
     let response = match result {
         Ok(owners) => axum::Json(json!({"owners": owners})).into_response(),
         Err(error) => service_error(Box::new(error)),
@@ -875,12 +873,7 @@ async fn owner_repositories(
     {
         return with_cookies(response, cookies);
     }
-    let result = provisioning::github_repositories(
-        &state.project_commands,
-        &owner,
-        std::path::Path::new("."),
-    )
-    .await;
+    let result = provisioning::github_repositories(&state.project_github, &owner).await;
     let response = match result {
         Ok(repositories) => axum::Json(json!({"repositories": repositories})).into_response(),
         Err(error) => service_error(Box::new(error)),
@@ -890,7 +883,15 @@ async fn owner_repositories(
 
 #[cfg(test)]
 mod tests {
-    use std::{fs, os::unix::fs::PermissionsExt, path::Path as FilePath, time::Duration};
+    use std::{
+        fs,
+        path::Path as FilePath,
+        sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        },
+        time::Duration,
+    };
 
     use axum::{
         body::to_bytes,
@@ -1048,7 +1049,7 @@ mod tests {
         let repository = repositories.join("owner/repo");
         let worktree = worktrees.join("owner/repo");
         let bare = root.join("bare.git");
-        let new_bare = root.join("new-bare.git");
+        let new_bare = root.join("owner/new.git");
         fs::create_dir_all(&repository).unwrap();
         fs::create_dir_all(&worktree).unwrap();
         git(
@@ -1110,46 +1111,58 @@ mod tests {
             ],
             &repository,
         );
-        let marker = root.join("git-started");
-        let git_command = root.join("git-fixture");
-        fs::write(
-            &git_command,
-            format!(
-                "#!/bin/sh\nprintf x >> '{}'\nsleep 0.2\nif [ \"$1\" = remote ] && [ \"$2\" = get-url ]; then exec /usr/bin/git config --get remote.origin.url; fi\nif [ \"$1\" = commit ]; then exec /usr/bin/git -c user.name=Test -c user.email=test@example.invalid \"$@\"; fi\nexec /usr/bin/git \"$@\"\n",
-                marker.display()
-            ),
-        )
-        .unwrap();
-        let gh_command = root.join("gh-fixture");
-        let gh_marker = root.join("gh-started");
-        fs::write(
-            &gh_command,
-            format!(
-                r##"#!/bin/sh
-printf x >> '{}'
-if [ "$1" = auth ]; then exit 0; fi
-if [ "$1" = api ] && [ "$2" = user ]; then printf 'owner\n'; exit 0; fi
-if [ "$1" = api ] && [ "$2" = user/orgs ]; then exit 0; fi
-if [ "$1" = repo ] && [ "$2" = list ]; then printf '[{{"name":"zeta","defaultBranchRef":null}},{{"name":"Alpha","defaultBranchRef":{{"name":"release"}}}}]'; exit 0; fi
-if [ "$1" = repo ] && [ "$2" = view ]; then printf '{{"nameWithOwner":"%s","url":"https://github.com/%s"}}' "$3" "$3"; exit 0; fi
-if [ "$1" = repo ] && [ "$2" = create ]; then
-  /usr/bin/git -C "$6" remote add origin "https://github.com/$3.git" || exit 1
-  /usr/bin/git -C "$6" config --local 'url.file://{}.insteadOf' "https://github.com/$3.git" || exit 1
-  /usr/bin/git -C "$6" push --quiet origin main || exit 1
-  exit 0
-fi
-exit 1
-"##,
-                gh_marker.display(),
-                new_bare.display()
-            ),
-        )
-        .unwrap();
-        for command in [&git_command, &gh_command] {
-            let mut permissions = fs::metadata(command).unwrap().permissions();
-            permissions.set_mode(0o700);
-            fs::set_permissions(command, permissions).unwrap();
-        }
+        // GitHub stands in on loopback; Git reaches `https://github.com/` through
+        // the file URLs under `root`.
+        let github_calls = Arc::new(AtomicUsize::new(0));
+        let counted = |calls: &Arc<AtomicUsize>| {
+            calls.fetch_add(1, Ordering::SeqCst);
+        };
+        let api = axum::Router::new()
+            .route(
+                "/user",
+                axum::routing::get({
+                    let calls = github_calls.clone();
+                    move || async move {
+                        counted(&calls);
+                        axum::Json(json!({"login": "owner"}))
+                    }
+                }),
+            )
+            .route("/user/orgs", axum::routing::get(|| async { axum::Json(json!([])) }))
+            .route(
+                "/graphql",
+                axum::routing::post({
+                    let calls = github_calls.clone();
+                    move || async move {
+                        counted(&calls);
+                        axum::Json(json!({"data": {"repositoryOwner": {"repositories": {
+                            "nodes": [{"name": "zeta", "defaultBranchRef": null}, {"name": "Alpha", "defaultBranchRef": {"name": "release"}}],
+                            "pageInfo": {"hasNextPage": false, "endCursor": null}
+                        }}}}))
+                    }
+                }),
+            )
+            .route(
+                "/repos/{owner}/{name}",
+                axum::routing::get({
+                    let calls = github_calls.clone();
+                    move |Path((owner, name)): Path<(String, String)>| async move {
+                        counted(&calls);
+                        tokio::time::sleep(Duration::from_millis(200)).await;
+                        axum::Json(json!({
+                            "full_name": format!("{owner}/{name}"),
+                            "html_url": format!("https://github.com/{owner}/{name}")
+                        }))
+                    }
+                }),
+            )
+            .route(
+                "/user/repos",
+                axum::routing::post(|| async { axum::Json(json!({})) }),
+            );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let api_base = format!("http://{}/", listener.local_addr().unwrap());
+        tokio::spawn(async move { axum::serve(listener, api).await.unwrap() });
         let mut database =
             SuplexDatabase::open(&root.join("test.sqlite"), OpenMode::Migrate).unwrap();
         let now = Utc::now();
@@ -1165,9 +1178,9 @@ exit 1
             },
         )
         .with_project_roots(repositories, worktrees)
-        .with_project_commands(repository::Commands {
-            git: git_command,
-            gh: gh_command,
+        .with_project_github(crate::projects::repository::Github {
+            api: Some((api_base, "fixture-token".to_owned())),
+            git: Some(format!("file://{}/", root.display())),
         });
         let body = Bytes::from(
             serde_json::to_vec(&json!({
@@ -1193,7 +1206,11 @@ exit 1
         )
         .await;
         assert_eq!(denied.status(), StatusCode::UNAUTHORIZED);
-        assert!(!marker.exists(), "Git must not run before authorization");
+        assert_eq!(
+            github_calls.load(Ordering::SeqCst),
+            0,
+            "no GitHub call before authorization"
+        );
         let malformed_company = "x".repeat(257);
         let malformed_create = create(
             State(state.clone()),
@@ -1203,9 +1220,10 @@ exit 1
         )
         .await;
         assert_eq!(malformed_create.status(), StatusCode::BAD_REQUEST);
-        assert!(
-            !marker.exists(),
-            "Git must not run for invalid path parameters"
+        assert_eq!(
+            github_calls.load(Ordering::SeqCst),
+            0,
+            "no GitHub call for invalid paths"
         );
         let malformed_picker = owner_repositories(
             State(state.clone()),
@@ -1222,9 +1240,10 @@ exit 1
             malformed_picker_body.find(".companyId").unwrap()
                 < malformed_picker_body.find(".owner").unwrap()
         );
-        assert!(
-            !gh_marker.exists(),
-            "gh must not run for invalid path parameters"
+        assert_eq!(
+            github_calls.load(Ordering::SeqCst),
+            0,
+            "no GitHub call for invalid paths"
         );
         let denied_owners = repository_owners(
             State(state.clone()),
@@ -1233,7 +1252,11 @@ exit 1
         )
         .await;
         assert_eq!(denied_owners.status(), StatusCode::UNAUTHORIZED);
-        assert!(!gh_marker.exists(), "gh must not run before authorization");
+        assert_eq!(
+            github_calls.load(Ordering::SeqCst),
+            0,
+            "no GitHub call before authorization"
+        );
         headers.insert("origin", HeaderValue::from_static("http://127.0.0.1:4113"));
         headers.insert(
             "cookie",
@@ -1269,6 +1292,7 @@ exit 1
         )
         .await;
         assert_eq!(bad_owner.status(), StatusCode::BAD_REQUEST);
+        let before = github_calls.load(Ordering::SeqCst);
         let request = tokio::spawn(create(
             State(state.clone()),
             Path(company.id.clone()),
@@ -1276,7 +1300,7 @@ exit 1
             body,
         ));
         tokio::time::timeout(Duration::from_secs(3), async {
-            while !marker.exists() {
+            while github_calls.load(Ordering::SeqCst) == before {
                 tokio::task::yield_now().await;
             }
         })
@@ -1501,15 +1525,23 @@ exit 1
             ],
             &repository,
         );
-        let gh_command = root.join("gh-fixture");
-        fs::write(
-            &gh_command,
-            "#!/bin/sh\nif [ \"$1\" = auth ]; then exit 0; fi\nif [ \"$1\" = repo ] && [ \"$2\" = view ]; then printf '{\"nameWithOwner\":\"%s\",\"url\":\"https://github.com/%s\"}' \"$3\" \"$3\"; exit 0; fi\nexit 1\n",
+        let api_base = crate::projects::repository::fixtures::github_api(
+            axum::Router::new()
+                .route(
+                    "/user",
+                    axum::routing::get(|| async { axum::Json(json!({"login": "owner"})) }),
+                )
+                .route(
+                    "/repos/{owner}/{name}",
+                    axum::routing::get(|Path((owner, name)): Path<(String, String)>| async move {
+                        axum::Json(json!({
+                            "full_name": format!("{owner}/{name}"),
+                            "html_url": format!("https://github.com/{owner}/{name}")
+                        }))
+                    }),
+                ),
         )
-        .unwrap();
-        let mut permissions = fs::metadata(&gh_command).unwrap().permissions();
-        permissions.set_mode(0o700);
-        fs::set_permissions(&gh_command, permissions).unwrap();
+        .await;
         let repository = fs::canonicalize(&repository).unwrap();
         let worktree = fs::canonicalize(&worktree).unwrap();
         let mut database =
@@ -1544,9 +1576,9 @@ exit 1
             },
         )
         .with_project_roots(repositories, worktrees)
-        .with_project_commands(repository::Commands {
-            git: "git".into(),
-            gh: gh_command,
+        .with_project_github(crate::projects::repository::Github {
+            api: Some((api_base, "fixture-token".to_owned())),
+            git: None,
         });
         let mut headers = HeaderMap::new();
         headers.insert(

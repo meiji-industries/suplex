@@ -14,7 +14,7 @@ use tokio_util::sync::CancellationToken;
 use crate::integrations::{github_device::DeviceAuth, herdr::Herdr};
 use crate::platform::{database::SuplexDatabase, embedded};
 use crate::profiles::provider_login::ProviderLogins;
-use crate::projects::repository::Commands;
+use crate::projects::repository::Github;
 use crate::tasks::host::TaskHostHandle;
 
 pub mod agent_api_runtime;
@@ -24,11 +24,14 @@ pub mod routes {
     pub mod admin_platform;
     pub mod agent_api;
     pub mod agent_pairing;
+    pub mod analytics;
     pub mod auth;
+    pub mod avatars;
     pub mod companies;
     pub mod discovery;
     pub mod external_agent_administration;
     pub mod github_auth;
+    pub mod github_triggers;
     pub mod health;
     pub mod mcp;
     pub mod oauth;
@@ -64,7 +67,7 @@ pub struct AppState {
     pub session_config: session::SessionConfig,
     pub project_roots: Option<ProjectRoots>,
     pub artifact_root: Option<PathBuf>,
-    pub project_commands: Commands,
+    pub project_github: Github,
     pub task_host: Option<TaskHostHandle>,
     pub history_shutdown: CancellationToken,
     pub github_device: Arc<DeviceAuth>,
@@ -85,7 +88,7 @@ impl AppState {
             session_config,
             project_roots: None,
             artifact_root: None,
-            project_commands: Commands::default(),
+            project_github: Github::default(),
             task_host: None,
             history_shutdown: CancellationToken::new(),
             github_device: Arc::new(DeviceAuth::new().expect("GitHub device endpoints are valid")),
@@ -104,8 +107,8 @@ impl AppState {
         self
     }
 
-    pub fn with_project_commands(mut self, commands: Commands) -> Self {
-        self.project_commands = commands;
+    pub fn with_project_github(mut self, github: Github) -> Self {
+        self.project_github = github;
         self
     }
 
@@ -150,13 +153,16 @@ pub fn router(state: AppState) -> Router {
         .merge(routes::agent_pairing::router())
         .merge(routes::external_agent_administration::router())
         .merge(routes::admin_platform::router())
+        .merge(routes::analytics::router())
         .merge(routes::auth::router())
+        .merge(routes::avatars::router())
         .merge(routes::mcp::router())
         .merge(routes::oauth::router())
         .merge(routes::discovery::router())
         .merge(routes::agent_api::router())
         .merge(routes::companies::router())
         .merge(routes::github_auth::router())
+        .merge(routes::github_triggers::router())
         .merge(routes::health::router())
         .merge(routes::pages::router())
         .merge(routes::profiles::router())
@@ -298,7 +304,7 @@ mod tests {
             },
             project_roots: None,
             artifact_root: None,
-            project_commands: Commands::default(),
+            project_github: Github::default(),
             task_host: None,
             history_shutdown: CancellationToken::new(),
             github_device: Arc::new(DeviceAuth::new().unwrap()),

@@ -541,6 +541,10 @@ pub(crate) fn observe_lifecycle(
     database: &mut SuplexDatabase,
     task_id: &str,
 ) -> DatabaseResult<()> {
+    // TypeScript records the analytics lifecycle event in the same write; a failure only warns.
+    if let Err(error) = crate::tasks::analytics::observe_lifecycle(database, task_id) {
+        eprintln!("Analytics lifecycle observation failed for {task_id}: {error}");
+    }
     if !system_events::enabled() {
         return Ok(());
     }

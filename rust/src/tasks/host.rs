@@ -1260,6 +1260,13 @@ pub fn spawn_task_host(database_path: PathBuf, artifact_root: PathBuf) -> TaskHo
         shutdown_tx,
         finished_rx,
     };
+    crate::tasks::analytics::collector::spawn(database_path.clone(), shutdown_rx.clone());
+    let poller_host = handle.clone();
+    crate::integrations::github_triggers::spawn_poller(
+        database_path.clone(),
+        move |id| poller_host.wake(id),
+        shutdown_rx.clone(),
+    );
     tokio::spawn(async move {
         let environment = std::env::vars().collect::<HashMap<_, _>>();
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(1));

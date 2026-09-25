@@ -17,54 +17,7 @@ use Access::{Administrator, Authenticated};
 // this list explicit so an unknown path still receives the normal 404 response.
 // WebSocket routes are plain GET handlers here: they answer 501 before any
 // upgrade. `scripts/rust-route-coverage.ts` checks this list stays complete.
-const ROUTES: &[(Method, &str, Access)] = &[
-    (Method::GET, "/api/admin/providers", Administrator),
-    (Method::GET, "/api/admin/models", Authenticated),
-    (Method::GET, "/api/avatars", Authenticated),
-    (Method::GET, "/api/avatars/{owner_id}", Authenticated),
-    (Method::PUT, "/api/avatars/{owner_id}", Authenticated),
-    (
-        Method::GET,
-        "/api/companies/{company_id}/analytics",
-        Authenticated,
-    ),
-    (
-        Method::GET,
-        "/api/companies/{company_id}/github-triggers",
-        Authenticated,
-    ),
-    (
-        Method::POST,
-        "/api/companies/{company_id}/github-triggers",
-        Authenticated,
-    ),
-    (
-        Method::PATCH,
-        "/api/companies/{company_id}/github-triggers/{rule_id}",
-        Authenticated,
-    ),
-    (
-        Method::GET,
-        "/api/companies/{company_id}/github-triggers/{rule_id}/activity",
-        Authenticated,
-    ),
-    (
-        Method::POST,
-        "/api/companies/{company_id}/github-triggers/{rule_id}/check",
-        Authenticated,
-    ),
-    (
-        Method::GET,
-        "/api/companies/{company_id}/task-costs",
-        Authenticated,
-    ),
-    (
-        Method::GET,
-        "/api/companies/{company_id}/timeline",
-        Authenticated,
-    ),
-    (Method::GET, "/api/models", Authenticated),
-];
+const ROUTES: &[(Method, &str, Access)] = &[];
 
 pub fn router() -> Router<AppState> {
     ROUTES

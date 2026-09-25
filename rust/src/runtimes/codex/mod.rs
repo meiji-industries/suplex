@@ -1,3 +1,4 @@
+pub mod display;
 pub mod executable;
 pub mod invocation;
 pub mod role_prompt;

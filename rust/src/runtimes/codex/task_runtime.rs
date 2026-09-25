@@ -1,6 +1,6 @@
 use std::{collections::HashMap, error::Error, io, path::Path};
 
-use super::{executable, invocation, role_prompt, runtime, session_reader};
+use super::{display, executable, invocation, role_prompt, runtime, session_reader};
 use crate::{
     coordination::{bridge_auth, root_bridge},
     runtimes::{git_guard, task_harness},
@@ -123,6 +123,14 @@ where
         input.project_context_path,
     );
     let prompt = role_prompt::root_standard_prompt(&task_prompt);
+    let session = &input.identity.session_id;
+    display::show(
+        input.database_path,
+        session,
+        input.native_session_id,
+        input.worktree,
+        input.model,
+    );
     runtime::dispatch(
         runtime::CodexDispatch {
             directory: &directory,
@@ -174,6 +182,14 @@ where
         input.project_context_path,
     );
     let prompt = role_prompt::worker_standard_prompt(input.purpose, &task_prompt);
+    let session = input.session_id;
+    display::show(
+        input.database_path,
+        session,
+        input.native_session_id,
+        input.worktree,
+        input.model,
+    );
     runtime::dispatch(
         runtime::CodexDispatch {
             directory: &directory,

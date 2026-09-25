@@ -3,19 +3,15 @@ use std::{
     fs,
     os::unix::ffi::OsStrExt,
     path::{Path, PathBuf},
-    process::Stdio,
     sync::LazyLock,
-    time::Duration,
 };
 
 use regex::Regex;
 use serde::Serialize;
-use tokio::{io::AsyncReadExt, process::Command};
 
-use git2::{AutotagOption, FetchOptions, Repository};
+use git2::{AutotagOption, Cred, CredentialType, FetchOptions, RemoteCallbacks, Repository};
 
-const GIT_OUTPUT_LIMIT: usize = 16 * 1024;
-const GH_OUTPUT_LIMIT: usize = 64 * 1024 * 1024;
+use crate::integrations::github::{Access, AccessResult};
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
 pub struct Finding {
@@ -32,34 +28,84 @@ fn finding(code: &str, field: &str, message: &str) -> Finding {
     }
 }
 
-/// Capture the base commit from Git's origin, as task creation does in the
-/// TypeScript service. Fetch refreshes Git's own remote-tracking ref before it
-/// is read; a cached ref is not evidence of the current branch head.
-pub fn capture_local_task_heads(
-    repository_path: &Path,
+/// How project inspection and provisioning reach GitHub. The default uses the
+/// installed credential for github.com. Tests point both at local fixtures.
+#[derive(Clone, Debug, Default)]
+pub struct Github {
+    /// API base URI and token that replace the installed credential.
+    pub api: Option<(String, String)>,
+    /// Git base URL that stands in for `https://github.com/`.
+    pub git: Option<String>,
+}
+
+impl Github {
+    pub(super) async fn access(&self) -> AccessResult<Access> {
+        match &self.api {
+            Some((base, token)) => Access::for_api(base, Some(token.clone())),
+            None => Access::load().await,
+        }
+    }
+
+    /// The token for Git and API requests. Without one, Git still tries the SSH
+    /// agent and GitHub reports the missing authentication.
+    pub(super) async fn token(&self) -> Option<String> {
+        self.access()
+            .await
+            .ok()
+            .and_then(|access| access.token().map(str::to_owned))
+    }
+
+    /// Route this repository's `https://github.com/` remotes to the Git fixture.
+    pub(super) fn route_git(&self, repository: &Repository) -> Result<(), git2::Error> {
+        if let Some(base) = &self.git {
+            repository
+                .config()?
+                .set_str(&format!("url.{base}.insteadOf"), "https://github.com/")?;
+        }
+        Ok(())
+    }
+}
+
+/// Git credentials: the GitHub token over HTTPS to github.com, else the SSH agent.
+pub(super) fn remote_callbacks(token: Option<&str>) -> RemoteCallbacks<'_> {
+    let mut callbacks = RemoteCallbacks::new();
+    callbacks.credentials(move |url, username, allowed| {
+        if allowed.contains(CredentialType::USER_PASS_PLAINTEXT)
+            && let Some(token) = token
+            && crate::tasks::worktree::token_audience_matches(url)
+        {
+            return Cred::userpass_plaintext("x-access-token", token);
+        }
+        if allowed.contains(CredentialType::SSH_KEY) {
+            return Cred::ssh_key_from_agent(username.unwrap_or("git"));
+        }
+        Err(git2::Error::from_str("No credential for Git remote"))
+    });
+    callbacks
+}
+
+fn unavailable() -> Vec<Finding> {
+    vec![finding(
+        "repository-unavailable",
+        "repositoryPath",
+        "Git could not inspect the configured repository",
+    )]
+}
+
+/// Check origin's identity, fetch the base branch from it, and return the
+/// repository identity and fetched commit. Fetch refreshes Git's own
+/// remote-tracking ref before it is read; a cached ref is not evidence of the
+/// current branch head.
+fn fetch_origin_branch(
+    repository: &Repository,
     base_branch: &str,
     expected_host: &str,
-) -> Result<String, Vec<Finding>> {
-    if !repository_path.is_dir() {
-        return Err(vec![finding(
-            "repository-path-missing",
-            "repositoryPath",
-            "The repository path does not exist on this host",
-        )]);
-    }
-    let unavailable = || {
-        vec![finding(
-            "repository-unavailable",
-            "repositoryPath",
-            "Git could not inspect the configured repository",
-        )]
-    };
-    let repository = Repository::open(repository_path).map_err(|_| unavailable())?;
-    repository.workdir().ok_or_else(unavailable)?;
-    repository.statuses(None).map_err(|_| unavailable())?;
+    token: Option<&str>,
+) -> Result<(String, String), Vec<Finding>> {
     let mut origin = repository
         .find_remote("origin")
         .map_err(|_| unavailable())?;
+    // The configured value, not a URL rewritten by `insteadOf`.
     let remote_url = repository
         .config()
         .and_then(|config| config.get_string("remote.origin.url"))
@@ -75,25 +121,48 @@ pub fn capture_local_task_heads(
             "Credential-bearing repository URLs are not accepted",
         )]);
     }
-    if repository_coordinate(&remote_url).is_none_or(|coordinate| coordinate.host != expected_host)
-    {
-        return Err(vec![finding(
-            "repository-identity",
-            "repository",
-            "Origin must identify the configured repository host",
-        )]);
-    }
+    let coordinate = repository_coordinate(&remote_url)
+        .filter(|coordinate| coordinate.host == expected_host)
+        .ok_or_else(|| {
+            vec![finding(
+                "repository-identity",
+                "repository",
+                "Origin must identify the configured repository host",
+            )]
+        })?;
     let mut options = FetchOptions::new();
-    options.download_tags(AutotagOption::None);
+    options
+        .download_tags(AutotagOption::None)
+        .remote_callbacks(remote_callbacks(token));
     let refspec = format!("refs/heads/{base_branch}:refs/remotes/origin/{base_branch}");
     origin
         .fetch(&[refspec.as_str()], Some(&mut options), None)
         .map_err(|_| unavailable())?;
-    let reference = repository
+    let commit = repository
         .find_reference(&format!("refs/remotes/origin/{base_branch}"))
+        .and_then(|reference| reference.peel_to_commit())
         .map_err(|_| unavailable())?;
-    let commit = reference.peel_to_commit().map_err(|_| unavailable())?;
-    Ok(commit.id().to_string())
+    Ok((coordinate.repository, commit.id().to_string()))
+}
+
+/// Capture the base commit from Git's origin, as task creation does in the
+/// TypeScript service.
+pub fn capture_local_task_heads(
+    repository_path: &Path,
+    base_branch: &str,
+    expected_host: &str,
+) -> Result<String, Vec<Finding>> {
+    if !repository_path.is_dir() {
+        return Err(vec![finding(
+            "repository-path-missing",
+            "repositoryPath",
+            "The repository path does not exist on this host",
+        )]);
+    }
+    let repository = Repository::open(repository_path).map_err(|_| unavailable())?;
+    repository.workdir().ok_or_else(unavailable)?;
+    repository.statuses(None).map_err(|_| unavailable())?;
+    fetch_origin_branch(&repository, base_branch, expected_host, None).map(|(_, sha)| sha)
 }
 
 fn resolve(path: &Path) -> std::io::Result<PathBuf> {
@@ -246,7 +315,7 @@ fn valid_command(command: &str) -> bool {
 }
 
 pub async fn prepare_local_project(
-    commands: &Commands,
+    github: &Github,
     repository_root: &Path,
     worktree_root: &Path,
     input: &LocalProjectInput<'_>,
@@ -326,7 +395,17 @@ pub async fn prepare_local_project(
     }
     let repository_path = repository_path.expect("checked repository path");
     let worktree_path = worktree_path.expect("checked worktree path");
-    let inspection = inspect(commands, &repository_path, base_branch, "github").await?;
+    // A failed credential load leaves Git to try the SSH agent; GitHub
+    // verification then reports the missing authentication.
+    let access = github.access().await.ok();
+    let token = access
+        .as_ref()
+        .and_then(|access| access.token().map(str::to_owned));
+    let (path, branch) = (repository_path.clone(), base_branch.to_owned());
+    let inspection =
+        tokio::task::spawn_blocking(move || inspect(&path, &branch, "github", token.as_deref()))
+            .await
+            .map_err(|_| unavailable())??;
     if inspection.canonical_path != repository_path {
         findings.push(finding(
             "repository-path-mismatch",
@@ -351,7 +430,7 @@ pub async fn prepare_local_project(
     if !findings.is_empty() {
         return Err(findings);
     }
-    verify_github(commands, &repository_path, &repository)
+    verify_github(access.as_ref(), &repository)
         .await
         .map_err(|error| vec![error])?;
     Ok(PreparedLocalProject {
@@ -451,229 +530,73 @@ pub fn repository_coordinate(raw: &str) -> Option<Coordinate> {
 pub struct Inspection {
     pub canonical_path: PathBuf,
     pub remote_repository: String,
-    pub clean: bool,
     pub base_sha: String,
 }
 
-#[derive(Clone, Debug)]
-pub struct Commands {
-    pub git: PathBuf,
-    pub gh: PathBuf,
-}
-
-impl Default for Commands {
-    fn default() -> Self {
-        Self {
-            git: PathBuf::from("git"),
-            gh: std::env::var_os("SUPLEX_GH_COMMAND")
-                .map(PathBuf::from)
-                .unwrap_or_else(|| PathBuf::from("gh")),
-        }
-    }
-}
-
-async fn bounded_output(
-    reader: impl tokio::io::AsyncRead + Unpin,
-    maximum: usize,
-) -> Result<Vec<u8>, String> {
-    let mut output = Vec::new();
-    reader
-        .take((maximum + 1) as u64)
-        .read_to_end(&mut output)
-        .await
-        .map_err(|error| error.to_string())?;
-    if output.len() > maximum {
-        return Err("subprocess output exceeded its limit".to_owned());
-    }
-    Ok(output)
-}
-
-pub(super) async fn run(
-    command: &Path,
-    args: &[&str],
-    cwd: &Path,
-    seconds: u64,
-    maximum: usize,
-) -> Result<String, String> {
-    let mut process = Command::new(command);
-    process
-        .args(args)
-        .current_dir(cwd)
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .kill_on_drop(true);
-    let mut child = process.spawn().map_err(|error| error.to_string())?;
-    let stdout = child.stdout.take().expect("piped stdout");
-    let stderr = child.stderr.take().expect("piped stderr");
-    tokio::time::timeout(Duration::from_secs(seconds), async move {
-        let (stdout, stderr) = tokio::try_join!(
-            bounded_output(stdout, maximum),
-            bounded_output(stderr, maximum)
-        )?;
-        let status = child.wait().await.map_err(|error| error.to_string())?;
-        if !status.success() {
-            return Err(String::from_utf8_lossy(&stderr).into_owned());
-        }
-        Ok(String::from_utf8_lossy(&stdout).trim().to_owned())
-    })
-    .await
-    .map_err(|error| error.to_string())?
-}
-
-pub async fn inspect(
-    commands: &Commands,
+/// Inspect the checkout that contains `repository_path` and fetch its origin
+/// base branch.
+pub fn inspect(
     repository_path: &Path,
     base_branch: &str,
     expected_host: &str,
+    token: Option<&str>,
 ) -> Result<Inspection, Vec<Finding>> {
-    let unavailable = || {
-        vec![finding(
-            "repository-unavailable",
-            "repositoryPath",
-            "Git could not inspect the configured repository",
-        )]
-    };
-    let canonical_path = run(
-        &commands.git,
-        &["rev-parse", "--show-toplevel"],
-        repository_path,
-        8,
-        GIT_OUTPUT_LIMIT,
-    )
-    .await
-    .map_err(|_| unavailable())?;
-    let status = run(
-        &commands.git,
-        &["status", "--porcelain", "--untracked-files=all"],
-        repository_path,
-        8,
-        GIT_OUTPUT_LIMIT,
-    )
-    .await
-    .map_err(|_| unavailable())?;
-    let remote = run(
-        &commands.git,
-        &["config", "--get", "remote.origin.url"],
-        repository_path,
-        8,
-        GIT_OUTPUT_LIMIT,
-    )
-    .await
-    .map_err(|_| unavailable())?;
-    static CREDENTIAL_URL: LazyLock<Regex> = LazyLock::new(|| {
-        Regex::new(r"(?i)^[a-z][a-z0-9+.-]*://[^/@\s]+@|(?:token|password|secret)=")
-            .expect("credential URL pattern")
-    });
-    if CREDENTIAL_URL.is_match(&remote) {
-        return Err(vec![finding(
-            "credential-url",
-            "repository",
-            "Credential-bearing repository URLs are not accepted",
-        )]);
-    }
-    let coordinate = repository_coordinate(&remote)
-        .filter(|coordinate| coordinate.host == expected_host)
-        .ok_or_else(|| {
-            vec![finding(
-                "repository-identity",
-                "repository",
-                "Origin must identify the configured repository host",
-            )]
-        })?;
-    let refspec = format!("refs/heads/{base_branch}:refs/remotes/origin/{base_branch}");
-    run(
-        &commands.git,
-        &["fetch", "--no-tags", "origin", &refspec],
-        repository_path,
-        30,
-        GIT_OUTPUT_LIMIT,
-    )
-    .await
-    .map_err(|_| unavailable())?;
-    let base_sha = run(
-        &commands.git,
-        &[
-            "rev-parse",
-            "--verify",
-            &format!("refs/remotes/origin/{base_branch}"),
-        ],
-        repository_path,
-        8,
-        GIT_OUTPUT_LIMIT,
-    )
-    .await
-    .map_err(|_| unavailable())?;
+    let repository = Repository::discover(repository_path).map_err(|_| unavailable())?;
+    let canonical_path = repository
+        .workdir()
+        .and_then(|path| fs::canonicalize(path).ok())
+        .ok_or_else(unavailable)?;
+    let (remote_repository, base_sha) =
+        fetch_origin_branch(&repository, base_branch, expected_host, token)?;
     Ok(Inspection {
-        canonical_path: PathBuf::from(canonical_path),
-        remote_repository: coordinate.repository,
-        clean: status.is_empty(),
+        canonical_path,
+        remote_repository,
         base_sha,
     })
 }
 
-pub async fn verify_github(
-    commands: &Commands,
-    repository_path: &Path,
-    repository: &str,
-) -> Result<(), Finding> {
-    let gh_failure = |message: &str| {
-        static AUTH_ERROR: LazyLock<Regex> = LazyLock::new(|| {
-            Regex::new("(?i)auth|not logged in|login required|oauth|credential")
-                .expect("GitHub authentication error pattern")
-        });
+/// GitHub's status for a failed request, when GitHub answered.
+pub(super) fn github_status(error: &octocrab::Error) -> Option<u16> {
+    match error {
+        octocrab::Error::GitHub { source, .. } => Some(source.status_code.as_u16()),
+        _ => None,
+    }
+}
+
+pub async fn verify_github(access: Option<&Access>, repository: &str) -> Result<(), Finding> {
+    let failure = |code| {
         finding(
-            if AUTH_ERROR.is_match(message) {
-                "github-auth-unavailable"
-            } else {
-                "github-repository-unavailable"
-            },
+            code,
             "repository",
             "GitHub repository identity could not be verified",
         )
     };
-    run(
-        &commands.gh,
-        &["auth", "status", "--hostname", "github.com"],
-        repository_path,
-        30,
-        GH_OUTPUT_LIMIT,
-    )
-    .await
-    .map_err(|_| {
-        finding(
-            "github-auth-unavailable",
-            "repository",
-            "GitHub repository identity could not be verified",
-        )
-    })?;
-    let response = run(
-        &commands.gh,
-        &["repo", "view", repository, "--json", "nameWithOwner,url"],
-        repository_path,
-        30,
-        GH_OUTPUT_LIMIT,
-    )
-    .await
-    .map_err(|error| gh_failure(&error))?;
-    let value: serde_json::Value = serde_json::from_str(&response).map_err(|_| {
-        finding(
-            "github-repository-unavailable",
-            "repository",
-            "GitHub repository identity could not be verified",
-        )
-    })?;
-    let actual = value["nameWithOwner"].as_str().unwrap_or_default();
-    let url = value["url"].as_str().unwrap_or_default();
+    let access = access
+        .filter(|access| access.token().is_some())
+        .ok_or_else(|| failure("github-auth-unavailable"))?;
+    access
+        .current_user_login()
+        .await
+        .map_err(|_| failure("github-auth-unavailable"))?;
+    let value: serde_json::Value = access
+        .client()
+        .get(format!("/repos/{repository}"), None::<&()>)
+        .await
+        .map_err(|error| {
+            failure(if github_status(&error) == Some(401) {
+                "github-auth-unavailable"
+            } else {
+                "github-repository-unavailable"
+            })
+        })?;
+    let actual = value["full_name"].as_str().unwrap_or_default();
+    let url = value["html_url"].as_str().unwrap_or_default();
     let normalized_actual = actual.trim();
     let normalized_actual = normalized_actual
         .strip_suffix(".git")
         .unwrap_or(normalized_actual);
     if normalized_actual.to_ascii_lowercase() != repository {
-        return Err(finding(
-            "github-repository-unavailable",
-            "repository",
-            "GitHub repository identity could not be verified",
-        ));
+        return Err(failure("github-repository-unavailable"));
     }
     if actual.to_ascii_lowercase() != repository {
         return Err(finding(
@@ -712,113 +635,114 @@ pub async fn verify_github(
     Ok(())
 }
 
+/// Git and GitHub stand-ins for project tests, built with `git2` and a
+/// loopback HTTP server instead of the `git` and `gh` executables.
+#[cfg(test)]
+pub(crate) mod fixtures {
+    use std::path::{Path, PathBuf};
+
+    use git2::{Repository, RepositoryInitOptions, Signature};
+
+    pub fn init(path: &Path, bare: bool) -> Repository {
+        let mut options = RepositoryInitOptions::new();
+        options.bare(bare).initial_head("main");
+        Repository::init_opts(path, &options).unwrap()
+    }
+
+    /// Record an empty commit on HEAD.
+    pub fn commit(repository: &Repository, message: &str) -> git2::Oid {
+        let signature = Signature::now("Probe", "probe@example.invalid").unwrap();
+        let tree = repository
+            .find_tree(repository.index().unwrap().write_tree().unwrap())
+            .unwrap();
+        let parent = repository
+            .head()
+            .ok()
+            .and_then(|head| head.peel_to_commit().ok());
+        let parents = parent.iter().collect::<Vec<_>>();
+        repository
+            .commit(
+                Some("HEAD"),
+                &signature,
+                &signature,
+                message,
+                &tree,
+                &parents,
+            )
+            .unwrap()
+    }
+
+    pub fn push_main(repository: &Repository, bare: &Path) {
+        repository
+            .remote_anonymous(bare.to_str().unwrap())
+            .unwrap()
+            .push(&["refs/heads/main:refs/heads/main"], None)
+            .unwrap();
+    }
+
+    /// A checkout whose origin is `https://github.com/<repository>.git`, served
+    /// from a local bare repository through `insteadOf`.
+    pub fn github_checkout(local: &Path, bare: &Path, repository: &str) -> Repository {
+        init(bare, true);
+        let checkout = init(local, false);
+        commit(&checkout, "initial");
+        push_main(&checkout, bare);
+        let url = format!("https://github.com/{repository}.git");
+        checkout.remote("origin", &url).unwrap();
+        checkout
+            .config()
+            .unwrap()
+            .set_str(&format!("url.file://{}.insteadOf", bare.display()), &url)
+            .unwrap();
+        checkout
+    }
+
+    /// Serve `router` on loopback and return its base URI.
+    pub async fn github_api(router: axum::Router) -> String {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}/", listener.local_addr().unwrap());
+        tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+        base
+    }
+
+    pub fn temporary(prefix: &str) -> PathBuf {
+        let root = std::env::temp_dir().join(format!("{prefix}-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::canonicalize(root).unwrap()
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::sync::{Arc, Mutex};
 
-    fn git(args: &[&str], cwd: &Path) {
-        let output = std::process::Command::new("git")
-            .args(args)
-            .current_dir(cwd)
-            .output()
-            .unwrap();
-        assert!(
-            output.status.success(),
-            "{}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-    }
+    use axum::{Json, Router, routing::get};
+    use serde_json::{Value, json};
+
+    use super::{fixtures::*, *};
 
     #[test]
     fn task_capture_refreshes_the_origin_branch_before_returning_its_commit() {
-        let root =
-            std::env::temp_dir().join(format!("suplex-task-capture-{}", uuid::Uuid::new_v4()));
-        fs::create_dir_all(&root).unwrap();
+        let root = temporary("suplex-task-capture");
         let bare = root.join("origin.git");
         let local = root.join("repo");
-        git(
-            &[
-                "init",
-                "--quiet",
-                "--bare",
-                "--initial-branch=main",
-                bare.to_str().unwrap(),
-            ],
-            &root,
-        );
-        git(
-            &[
-                "init",
-                "--quiet",
-                "--initial-branch=main",
-                local.to_str().unwrap(),
-            ],
-            &root,
-        );
-        git(&["remote", "add", "origin", bare.to_str().unwrap()], &local);
-        git(
-            &[
-                "-c",
-                "user.name=Probe",
-                "-c",
-                "user.email=probe@example.invalid",
-                "commit",
-                "--quiet",
-                "--allow-empty",
-                "-m",
-                "one",
-            ],
-            &local,
-        );
-        git(&["push", "--quiet", "origin", "main"], &local);
-        git(
-            &[
-                "remote",
-                "set-url",
-                "origin",
-                "https://github.com/acme/repo.git",
-            ],
-            &local,
-        );
-        let rewrite = format!("url.file://{}.insteadOf", bare.display());
-        git(
-            &[
-                "config",
-                "--local",
-                &rewrite,
-                "https://github.com/acme/repo.git",
-            ],
-            &local,
-        );
+        let checkout = github_checkout(&local, &bare, "acme/repo");
         let first = capture_local_task_heads(&local, "main", "github").unwrap();
         assert_eq!(first.len(), 40);
 
-        git(
-            &[
-                "-c",
-                "user.name=Probe",
-                "-c",
-                "user.email=probe@example.invalid",
-                "commit",
-                "--quiet",
-                "--allow-empty",
-                "-m",
-                "two",
-            ],
-            &local,
-        );
-        let second = Repository::open(&local)
-            .unwrap()
-            .head()
-            .unwrap()
-            .target()
-            .unwrap()
-            .to_string();
-        git(&["push", "--quiet", "origin", "main"], &local);
-        git(&["update-ref", "refs/remotes/origin/main", &first], &local);
+        let second = commit(&checkout, "two");
+        push_main(&checkout, &bare);
+        checkout
+            .reference(
+                "refs/remotes/origin/main",
+                git2::Oid::from_str(&first).unwrap(),
+                true,
+                "stale observation",
+            )
+            .unwrap();
         assert_eq!(
             capture_local_task_heads(&local, "main", "github").unwrap(),
-            second
+            second.to_string()
         );
         assert_eq!(
             capture_local_task_heads(&local, "main", "bitbucket").unwrap_err()[0].code,
@@ -833,11 +757,7 @@ mod tests {
 
     #[test]
     fn canonical_path_guard_matches_local_project_boundaries() {
-        let root = std::env::temp_dir().join(format!(
-            "suplex-project-path-{}-{}",
-            std::process::id(),
-            chrono::Utc::now().timestamp_nanos_opt().unwrap()
-        ));
+        let root = temporary("suplex-project-path");
         let repository = root.join("repositories/owner/project");
         let outside = root.join("outside");
         fs::create_dir_all(&repository).unwrap();
@@ -884,6 +804,22 @@ mod tests {
 
     #[test]
     fn repository_coordinates_preserve_host_and_reject_credentials() {
+        for value in [
+            "https://github.com/meiji-industries/sampler",
+            "https://github.com/meiji-industries/sampler.git",
+            "git@github.com:meiji-industries/sampler.git",
+        ] {
+            let coordinate = repository_coordinate(value).unwrap();
+            assert_eq!(coordinate.host, "github");
+            assert_eq!(coordinate.repository, "meiji-industries/sampler");
+            assert_eq!(coordinate.name, "sampler");
+        }
+        assert_eq!(
+            repository_coordinate("git@github.com:meiji-industries/sampler.git")
+                .unwrap()
+                .clone_url,
+            "git@github.com:meiji-industries/sampler.git"
+        );
         assert_eq!(
             repository_coordinate("https://github.com/Owner/Repo.git/").unwrap(),
             Coordinate {
@@ -906,6 +842,8 @@ mod tests {
             "https://github.com/owner/repo//",
             "https://github.com/owner/repo?token=value",
             "https://user:secret@github.com/owner/repo",
+            "https://token@github.com/meiji-industries/sampler.git",
+            "https://gitlab.com/meiji-industries/sampler.git",
             "https://github.com/-owner/repo",
             "https://github.com/owner/../repo",
         ] {
@@ -913,91 +851,49 @@ mod tests {
         }
     }
 
+    /// GitHub's `/user` and `/repos/{owner}/{name}` answering with `repository`.
+    async fn github_with(repository: Arc<Mutex<Value>>) -> String {
+        github_api(
+            Router::new()
+                .route("/user", get(|| async { Json(json!({"login": "acme"})) }))
+                .route(
+                    "/repos/{owner}/{name}",
+                    get(move || {
+                        let repository = repository.clone();
+                        async move { Json(repository.lock().unwrap().clone()) }
+                    }),
+                ),
+        )
+        .await
+    }
+
     #[tokio::test]
     async fn local_inspection_fetches_origin_and_checks_github_identity() {
-        use std::os::unix::fs::PermissionsExt;
-
-        let root = std::env::temp_dir().join(format!(
-            "suplex-project-inspect-{}-{}",
-            std::process::id(),
-            chrono::Utc::now().timestamp_nanos_opt().unwrap()
-        ));
-        fs::create_dir_all(&root).unwrap();
-        let bare = root.join("bare");
+        let root = temporary("suplex-project-inspect");
         let local = root.join("repo");
-        git(
-            &[
-                "init",
-                "--quiet",
-                "--bare",
-                "--initial-branch=main",
-                bare.to_str().unwrap(),
-            ],
-            &root,
-        );
-        git(
-            &[
-                "init",
-                "--quiet",
-                "--initial-branch=main",
-                local.to_str().unwrap(),
-            ],
-            &root,
-        );
-        git(
-            &[
-                "-c",
-                "user.name=Probe",
-                "-c",
-                "user.email=probe@example.invalid",
-                "commit",
-                "--quiet",
-                "--allow-empty",
-                "-m",
-                "initial",
-            ],
-            &local,
-        );
-        git(&["remote", "add", "origin", bare.to_str().unwrap()], &local);
-        git(&["push", "--quiet", "origin", "main"], &local);
-        git(
-            &[
-                "remote",
-                "set-url",
-                "origin",
-                "https://github.com/acme/repo.git",
-            ],
-            &local,
-        );
-        let rewrite = format!("url.file://{}.insteadOf", bare.display());
-        git(
-            &[
-                "config",
-                "--local",
-                &rewrite,
-                "https://github.com/acme/repo.git",
-            ],
-            &local,
-        );
-
-        let gh = root.join("gh-fixture");
-        fs::write(&gh, "#!/bin/sh\nif [ \"$1\" = auth ]; then exit 0; fi\nif [ \"$1\" = repo ]; then printf '{\"nameWithOwner\":\"acme/repo\",\"url\":\"https://github.com/acme/repo\"}'; exit 0; fi\nexit 1\n").unwrap();
-        let mut permissions = fs::metadata(&gh).unwrap().permissions();
-        permissions.set_mode(0o700);
-        fs::set_permissions(&gh, permissions).unwrap();
-        let commands = Commands {
-            git: "git".into(),
-            gh,
+        github_checkout(&local, &root.join("bare"), "acme/repo");
+        let answer = Arc::new(Mutex::new(
+            json!({"full_name": "acme/repo", "html_url": "https://github.com/acme/repo"}),
+        ));
+        let base = github_with(answer.clone()).await;
+        let github = Github {
+            api: Some((base.clone(), "fixture-token".to_owned())),
+            git: None,
         };
-        let inspected = inspect(&commands, &local, "main", "github").await.unwrap();
+
+        let inspected = inspect(&local, "main", "github", None).unwrap();
         assert_eq!(inspected.remote_repository, "acme/repo");
         assert_eq!(inspected.base_sha.len(), 40);
-        assert!(inspected.clean);
+        assert_eq!(inspected.canonical_path, local);
         assert_eq!(
-            fs::canonicalize(inspected.canonical_path).unwrap(),
-            fs::canonicalize(&local).unwrap()
+            inspect(&local.join(".git"), "main", "github", None)
+                .unwrap()
+                .canonical_path,
+            local
         );
-        verify_github(&commands, &local, "acme/repo").await.unwrap();
+        let access = github.access().await.unwrap();
+        verify_github(Some(&access), "acme/repo").await.unwrap();
+
         let worktrees = root.join("worktrees");
         fs::create_dir_all(&worktrees).unwrap();
         let input = LocalProjectInput {
@@ -1009,13 +905,12 @@ mod tests {
             setup_command: " pnpm install ",
             verification_command: " pnpm test ",
         };
-        let prepared = prepare_local_project(&commands, &root, &root, &input)
+        let prepared = prepare_local_project(&github, &root, &root, &input)
             .await
             .unwrap();
         assert_eq!(prepared.name, "Local project");
         assert_eq!(prepared.repository, "acme/repo");
         assert_eq!(prepared.setup_command, "pnpm install");
-        assert_eq!(inspected.base_sha.len(), 40);
         let mut database = crate::platform::database::SuplexDatabase::open(
             &root.join("service.sqlite"),
             crate::platform::database::OpenMode::Migrate,
@@ -1043,42 +938,104 @@ mod tests {
         )
         .unwrap();
         assert_eq!(created.repository.as_deref(), Some("acme/repo"));
-        assert_eq!(
-            Path::new(&created.repository_path),
-            fs::canonicalize(&local).unwrap()
-        );
+        assert_eq!(Path::new(&created.repository_path), local);
         drop(database);
+
         let mismatch = LocalProjectInput {
             repository: "other/repository",
             ..input
         };
         assert_eq!(
-            prepare_local_project(&commands, &root, &root, &mismatch)
+            prepare_local_project(&github, &root, &root, &mismatch)
                 .await
                 .unwrap_err()[0]
                 .code,
             "repository-mismatch"
         );
         assert_eq!(
-            inspect(&commands, &local, "main", "bitbucket")
-                .await
-                .unwrap_err()[0]
-                .code,
+            inspect(&local, "main", "bitbucket", None).unwrap_err()[0].code,
             "repository-identity"
         );
-        fs::write(
-            &commands.gh,
-            "#!/bin/sh\nif [ \"$1\" = auth ]; then exit 0; fi\nif [ \"$1\" = repo ]; then printf '{\"nameWithOwner\":\"other/repo\",\"url\":\"https://github.com/other/repo\"}'; exit 0; fi\nexit 1\n",
-        )
-        .unwrap();
         assert_eq!(
-            verify_github(&commands, &local, "acme/repo")
+            inspect(&local, "missing", "github", None).unwrap_err()[0].code,
+            "repository-unavailable"
+        );
+        let anonymous = crate::integrations::github::Access::for_api(&base, None).unwrap();
+        assert_eq!(
+            verify_github(Some(&anonymous), "acme/repo")
+                .await
+                .unwrap_err()
+                .code,
+            "github-auth-unavailable"
+        );
+        assert_eq!(
+            verify_github(None, "acme/repo").await.unwrap_err().code,
+            "github-auth-unavailable"
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[tokio::test]
+    async fn github_verification_rejects_other_repositories_hosts_and_paths() {
+        let answer = Arc::new(Mutex::new(Value::Null));
+        let base = github_with(answer.clone()).await;
+        let access =
+            crate::integrations::github::Access::for_api(&base, Some("fixture".into())).unwrap();
+        for (full_name, url, code) in [
+            (
+                "other/repo",
+                "https://github.com/other/repo",
+                "github-repository-unavailable",
+            ),
+            (
+                "acme/repo.git",
+                "https://github.com/acme/repo",
+                "provider-mismatch",
+            ),
+            (
+                "acme/repo",
+                "https://notgithub.com/acme/repo",
+                "provider-host",
+            ),
+            (
+                "acme/repo",
+                "https://github.com/other/repo",
+                "provider-path",
+            ),
+        ] {
+            *answer.lock().unwrap() = json!({"full_name": full_name, "html_url": url});
+            assert_eq!(
+                verify_github(Some(&access), "acme/repo")
+                    .await
+                    .unwrap_err()
+                    .code,
+                code,
+                "{full_name} {url}"
+            );
+        }
+        let missing = github_api(
+            Router::new()
+                .route("/user", get(|| async { Json(json!({"login": "acme"})) }))
+                .route(
+                    "/repos/{owner}/{name}",
+                    get(|| async {
+                        (
+                            axum::http::StatusCode::NOT_FOUND,
+                            Json(json!({"message": "Not Found"})),
+                        )
+                    }),
+                ),
+        )
+        .await;
+        let access =
+            crate::integrations::github::Access::for_api(&missing, Some("fixture".into())).unwrap();
+        assert_eq!(
+            verify_github(Some(&access), "acme/repo")
                 .await
                 .unwrap_err()
                 .code,
             "github-repository-unavailable"
         );
-        let _ = fs::remove_dir_all(root);
     }
 
     #[test]
@@ -1094,6 +1051,7 @@ mod tests {
             "/main",
             ".branch",
             "a..b",
+            "feature..token",
             "branch.lock",
             "a//b",
             "space here",
@@ -1105,50 +1063,5 @@ mod tests {
         assert!(valid_command("pnpm test"));
         assert!(!valid_command("echo token =secret"));
         assert!(!valid_command("echo one\necho two"));
-    }
-
-    #[tokio::test]
-    async fn subprocess_output_and_timeout_match_git_adapter_limits() {
-        use std::os::unix::fs::PermissionsExt;
-
-        let root = std::env::temp_dir().join(format!(
-            "suplex-project-command-{}-{}",
-            std::process::id(),
-            chrono::Utc::now().timestamp_nanos_opt().unwrap()
-        ));
-        fs::create_dir_all(&root).unwrap();
-        let command = root.join("command");
-        fs::write(&command, "#!/bin/sh\nhead -c 16385 /dev/zero\n").unwrap();
-        let mut permissions = fs::metadata(&command).unwrap().permissions();
-        permissions.set_mode(0o700);
-        fs::set_permissions(&command, permissions).unwrap();
-        assert!(
-            run(&command, &[], &root, 8, GIT_OUTPUT_LIMIT)
-                .await
-                .unwrap_err()
-                .contains("output exceeded")
-        );
-        assert_eq!(
-            run(&command, &[], &root, 8, GH_OUTPUT_LIMIT)
-                .await
-                .unwrap()
-                .len(),
-            GIT_OUTPUT_LIMIT + 1
-        );
-        fs::write(&command, "#!/bin/sh\nhead -c 16385 /dev/zero >&2\n").unwrap();
-        assert!(
-            run(&command, &[], &root, 8, GIT_OUTPUT_LIMIT)
-                .await
-                .unwrap_err()
-                .contains("output exceeded")
-        );
-        fs::write(&command, "#!/bin/sh\nsleep 2\n").unwrap();
-        assert!(
-            run(&command, &[], &root, 1, GIT_OUTPUT_LIMIT)
-                .await
-                .unwrap_err()
-                .contains("deadline")
-        );
-        let _ = fs::remove_dir_all(root);
     }
 }

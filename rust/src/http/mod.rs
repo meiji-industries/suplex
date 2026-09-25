@@ -14,7 +14,7 @@ use tokio_util::sync::CancellationToken;
 use crate::integrations::{github_device::DeviceAuth, herdr::Herdr};
 use crate::platform::{database::SuplexDatabase, embedded};
 use crate::profiles::provider_login::ProviderLogins;
-use crate::projects::repository::Commands;
+use crate::projects::repository::Github;
 use crate::tasks::host::TaskHostHandle;
 
 pub mod agent_api_runtime;
@@ -64,7 +64,7 @@ pub struct AppState {
     pub session_config: session::SessionConfig,
     pub project_roots: Option<ProjectRoots>,
     pub artifact_root: Option<PathBuf>,
-    pub project_commands: Commands,
+    pub project_github: Github,
     pub task_host: Option<TaskHostHandle>,
     pub history_shutdown: CancellationToken,
     pub github_device: Arc<DeviceAuth>,
@@ -85,7 +85,7 @@ impl AppState {
             session_config,
             project_roots: None,
             artifact_root: None,
-            project_commands: Commands::default(),
+            project_github: Github::default(),
             task_host: None,
             history_shutdown: CancellationToken::new(),
             github_device: Arc::new(DeviceAuth::new().expect("GitHub device endpoints are valid")),
@@ -104,8 +104,8 @@ impl AppState {
         self
     }
 
-    pub fn with_project_commands(mut self, commands: Commands) -> Self {
-        self.project_commands = commands;
+    pub fn with_project_github(mut self, github: Github) -> Self {
+        self.project_github = github;
         self
     }
 
@@ -298,7 +298,7 @@ mod tests {
             },
             project_roots: None,
             artifact_root: None,
-            project_commands: Commands::default(),
+            project_github: Github::default(),
             task_host: None,
             history_shutdown: CancellationToken::new(),
             github_device: Arc::new(DeviceAuth::new().unwrap()),

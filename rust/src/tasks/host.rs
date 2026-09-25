@@ -2193,7 +2193,8 @@ mod tests {
         drop(repository);
         let marker = base.join("launches");
         let codex = base.join("codex");
-        fs::write(&codex, format!("#!/bin/sh\nprintf x >> '{}'\ncat >/dev/null\nprintf '%s\\n' '{{\"type\":\"thread.started\",\"thread_id\":\"host-thread\"}}' '{{\"type\":\"turn.completed\",\"usage\":{{\"input_tokens\":1,\"cached_input_tokens\":0,\"cache_write_input_tokens\":0,\"output_tokens\":1,\"reasoning_output_tokens\":0}}}}'\n", marker.display())).unwrap();
+        // The child outlives both recoveries, so the second one observes an admitted, running turn.
+        fs::write(&codex, format!("#!/bin/sh\nprintf x >> '{}'\ncat >/dev/null\nsleep 0.5\nprintf '%s\\n' '{{\"type\":\"thread.started\",\"thread_id\":\"host-thread\"}}' '{{\"type\":\"turn.completed\",\"usage\":{{\"input_tokens\":1,\"cached_input_tokens\":0,\"cache_write_input_tokens\":0,\"output_tokens\":1,\"reasoning_output_tokens\":0}}}}'\n", marker.display())).unwrap();
         fs::set_permissions(&codex, fs::Permissions::from_mode(0o700)).unwrap();
         let now = Utc::now();
         let task_id = {

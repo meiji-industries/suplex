@@ -49,7 +49,7 @@ The table lists all 238 backend TypeScript modules present at the baseline, incl
 | [http/contracts/agent-api.ts](../src/http/contracts/agent-api.ts) | not started | |
 | [http/contracts/auth.ts](../src/http/contracts/auth.ts) | not started | Five validators pass 39 [Zod fixture comparisons](../rust/tests/contract_parity.rs); full module/HTTP parity remains incomplete. [Corpus scope](spikes/rust-json-hash-bytes.md) |
 | [http/contracts/avatars.ts](../src/http/contracts/avatars.ts) | not started | |
-| [http/contracts/common.ts](../src/http/contracts/common.ts) | not started | |
+| [http/contracts/common.ts](../src/http/contracts/common.ts) | not started | 14 common validators implemented; combined [parity test](../rust/tests/contract_parity.rs) passes 177 fixtures / 19 total schemas. Full common-contract and HTTP coverage remain pending |
 | [http/contracts/github-triggers.ts](../src/http/contracts/github-triggers.ts) | not started | |
 | [http/contracts/oauth.ts](../src/http/contracts/oauth.ts) | not started | |
 | [http/contracts/projects.ts](../src/http/contracts/projects.ts) | not started | |
@@ -120,7 +120,7 @@ The table lists all 238 backend TypeScript modules present at the baseline, incl
 | [platform/backup.ts](../src/platform/backup.ts) | not started | |
 | [platform/command-runner.ts](../src/platform/command-runner.ts) | not started | |
 | [platform/config.ts](../src/platform/config.ts) | not started | Partial foundation in [config.rs](../rust/src/platform/config.rs), commit `924c9efe`: isolated defaults and port only; full configuration remains pending |
-| [platform/database.ts](../src/platform/database.ts) | not started | All 149 SQL migrations embedded by [build.rs](../rust/build.rs); database behavior remains pending |
+| [platform/database.ts](../src/platform/database.ts) | verified | [Rust database and tests](../rust/src/platform/database.rs): all 149 migrations, transactions/callbacks/rollback, read-only reopening, and additive rebuilds pass; TS↔Rust reopening matches all 155 schema rows and 149 ledger rows. Binary startup wiring remains pending |
 | [platform/development.ts](../src/platform/development.ts) | not started | |
 | [platform/diagnostics/doctor.ts](../src/platform/diagnostics/doctor.ts) | not started | |
 | [platform/diagnostics/task.ts](../src/platform/diagnostics/task.ts) | not started | |

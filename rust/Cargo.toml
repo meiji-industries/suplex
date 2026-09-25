@@ -7,8 +7,10 @@ rust-version = "1.93.1"
 [dependencies]
 axum = "0.8"
 base64 = "0.22"
+chrono = "0.4"
 openssl = "0.10"
 rmcp = { version = "=3.4.1", default-features = false, features = ["server", "macros", "transport-io", "transport-streamable-http-server"] }
+rusqlite = { version = "0.40.2", default-features = false, features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
 serde_cbor_2 = "0.13"
 ryu-js = "1.0.3"

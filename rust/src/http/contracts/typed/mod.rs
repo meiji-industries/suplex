@@ -2,6 +2,7 @@ use serde::{Serialize, de::DeserializeOwned};
 use serde_json::{Map, Value, json};
 
 pub mod auth;
+pub mod avatars;
 pub mod github_auth;
 pub mod projects;
 pub mod task_answers;

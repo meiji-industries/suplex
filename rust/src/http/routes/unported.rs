@@ -65,9 +65,6 @@ const ROUTES: &[(Method, &str, Access)] = &[
         "/api/admin/workflows/{workflow_id}/duplicate",
         Authenticated,
     ),
-    (Method::GET, "/api/avatars", Authenticated),
-    (Method::GET, "/api/avatars/{owner_id}", Authenticated),
-    (Method::PUT, "/api/avatars/{owner_id}", Authenticated),
     (
         Method::GET,
         "/api/companies/{company_id}/analytics",

@@ -20,6 +20,7 @@ pub mod contracts;
 pub mod routes {
     pub mod admin_identity;
     pub mod auth;
+    pub mod avatars;
     pub mod companies;
     pub mod github_auth;
     pub mod health;
@@ -125,6 +126,7 @@ pub fn router(state: AppState) -> Router {
     Router::new()
         .merge(routes::admin_identity::router())
         .merge(routes::auth::router())
+        .merge(routes::avatars::router())
         .merge(routes::companies::router())
         .merge(routes::github_auth::router())
         .merge(routes::health::router())

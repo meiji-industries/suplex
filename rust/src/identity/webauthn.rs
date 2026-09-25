@@ -1,7 +1,8 @@
-use std::time::Duration;
+use std::{cmp::Ordering, time::Duration};
 
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use openssl::{
+    asn1::Asn1Time,
     bn::BigNum,
     ec::{EcGroup, EcKey, EcPoint},
     hash::MessageDigest,
@@ -9,6 +10,7 @@ use openssl::{
     pkey::PKey,
     rsa::{Padding, Rsa},
     sign::{RsaPssSaltlen, Verifier},
+    x509::X509,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -122,18 +124,17 @@ fn raw_cose(attestation_object: &str) -> Result<Vec<u8>, String> {
     let serde_cbor_2::Value::Map(map) = object else {
         return Err("attestation object is not a map".into());
     };
-    if map.get(&serde_cbor_2::Value::Text("fmt".into()))
-        != Some(&serde_cbor_2::Value::Text("none".into()))
-    {
-        return Err("attestation format requires separate trust verification".into());
-    }
+    let format = map.get(&serde_cbor_2::Value::Text("fmt".into()));
     let Some(serde_cbor_2::Value::Map(statement)) =
         map.get(&serde_cbor_2::Value::Text("attStmt".into()))
     else {
         return Err("missing attestation statement".into());
     };
-    if !statement.is_empty() {
-        return Err("none attestation has nonempty statement".into());
+    match format {
+        Some(serde_cbor_2::Value::Text(value)) if value == "none" && statement.is_empty() => {}
+        Some(serde_cbor_2::Value::Text(value)) if value == "packed" => {}
+        Some(serde_cbor_2::Value::Text(value)) if value == "fido-u2f" => {}
+        _ => return Err("attestation format requires separate trust verification".into()),
     }
     let Some(serde_cbor_2::Value::Bytes(auth_data)) =
         map.get(&serde_cbor_2::Value::Text("authData".into()))
@@ -152,6 +153,112 @@ fn raw_cose(attestation_object: &str) -> Result<Vec<u8>, String> {
     let _: serde_cbor_2::Value =
         Deserialize::deserialize(&mut decoder).map_err(|error| error.to_string())?;
     Ok(auth_data[key_start..key_start + decoder.byte_offset()].to_vec())
+}
+
+fn core_attestation_required(attestation_object: &str) -> Result<bool, String> {
+    let bytes = URL_SAFE_NO_PAD
+        .decode(attestation_object)
+        .map_err(|error| error.to_string())?;
+    let serde_cbor_2::Value::Map(object) = serde_cbor_2::from_slice::<serde_cbor_2::Value>(&bytes)
+        .map_err(|error| error.to_string())?
+    else {
+        return Err("invalid attestation object".into());
+    };
+    let packed = object.get(&serde_cbor_2::Value::Text("fmt".into()))
+        == Some(&serde_cbor_2::Value::Text("packed".into()));
+    let none = object.get(&serde_cbor_2::Value::Text("fmt".into()))
+        == Some(&serde_cbor_2::Value::Text("none".into()));
+    let u2f = object.get(&serde_cbor_2::Value::Text("fmt".into()))
+        == Some(&serde_cbor_2::Value::Text("fido-u2f".into()));
+    let Some(serde_cbor_2::Value::Map(statement)) =
+        object.get(&serde_cbor_2::Value::Text("attStmt".into()))
+    else {
+        return Err("missing attestation statement".into());
+    };
+    if u2f {
+        let Some(serde_cbor_2::Value::Bytes(auth_data)) =
+            object.get(&serde_cbor_2::Value::Text("authData".into()))
+        else {
+            return Err("missing authenticator data".into());
+        };
+        if auth_data.get(37..53) != Some(&[0_u8; 16][..]) {
+            return Err("U2F AAGUID must be zero".into());
+        }
+    }
+    if !packed {
+        return Ok(!none);
+    }
+    let Some(certificates) = statement.get(&serde_cbor_2::Value::Text("x5c".into())) else {
+        return Ok(false);
+    };
+    let serde_cbor_2::Value::Array(certificates) = certificates else {
+        return Err("invalid packed certificate chain".into());
+    };
+    let Some(serde_cbor_2::Value::Bytes(leaf)) = certificates.first() else {
+        return Err("missing packed leaf certificate".into());
+    };
+    let leaf = X509::from_der(leaf).map_err(|error| error.to_string())?;
+    let now =
+        Asn1Time::from_unix(chrono::Utc::now().timestamp()).map_err(|error| error.to_string())?;
+    if leaf
+        .not_before()
+        .compare(&now)
+        .map_err(|error| error.to_string())?
+        == Ordering::Greater
+        || leaf
+            .not_after()
+            .compare(&now)
+            .map_err(|error| error.to_string())?
+            == Ordering::Less
+    {
+        return Err("packed certificate is outside its validity period".into());
+    }
+    Ok(true)
+}
+
+fn core_registration_response(response: &Value) -> Result<Value, String> {
+    let mut response = response.clone();
+    let attestation = response["response"]["attestationObject"]
+        .as_str()
+        .ok_or("missing attestation object")?;
+    let bytes = URL_SAFE_NO_PAD
+        .decode(attestation)
+        .map_err(|error| error.to_string())?;
+    let mut object: serde_cbor_2::Value =
+        serde_cbor_2::from_slice(&bytes).map_err(|error| error.to_string())?;
+    let serde_cbor_2::Value::Map(ref mut map) = object else {
+        return Err("invalid attestation object".into());
+    };
+    if map.get(&serde_cbor_2::Value::Text("fmt".into()))
+        != Some(&serde_cbor_2::Value::Text("fido-u2f".into()))
+    {
+        return Ok(response);
+    }
+    let Some(serde_cbor_2::Value::Map(statement)) =
+        map.get_mut(&serde_cbor_2::Value::Text("attStmt".into()))
+    else {
+        return Err("missing attestation statement".into());
+    };
+    let Some(serde_cbor_2::Value::Array(certificates)) =
+        statement.get_mut(&serde_cbor_2::Value::Text("x5c".into()))
+    else {
+        return Err("missing U2F certificate".into());
+    };
+    if certificates.is_empty()
+        || certificates
+            .iter()
+            .any(|certificate| !matches!(certificate, serde_cbor_2::Value::Bytes(_)))
+    {
+        return Err("invalid U2F certificate chain".into());
+    }
+    // Suplex's SimpleWebAuthn verifier has no U2F trust roots configured. It
+    // verifies the leaf signature and accepts additional x5c entries. Core's
+    // U2F verifier requires exactly one entry, so present only the signed leaf.
+    certificates.truncate(1);
+    response["response"]["attestationObject"] = json!(
+        URL_SAFE_NO_PAD.encode(serde_cbor_2::to_vec(&object).map_err(|error| error.to_string())?)
+    );
+    Ok(response)
 }
 
 fn cose_map(
@@ -189,6 +296,7 @@ fn cose_bytes(
 
 fn rsa_digest(algorithm: i128) -> Result<(MessageDigest, Padding), String> {
     match algorithm {
+        -257 => Ok((MessageDigest::sha256(), Padding::PKCS1)),
         -37 => Ok((MessageDigest::sha256(), Padding::PKCS1_PSS)),
         -38 => Ok((MessageDigest::sha384(), Padding::PKCS1_PSS)),
         -39 => Ok((MessageDigest::sha512(), Padding::PKCS1_PSS)),
@@ -201,12 +309,13 @@ fn rsa_digest(algorithm: i128) -> Result<(MessageDigest, Padding), String> {
 
 fn verify_rsa_signature(
     public_key: &[u8],
-    algorithm: i128,
+    key_algorithm: i128,
+    signature_algorithm: i128,
     data: &[u8],
     signature: &[u8],
 ) -> Result<(), String> {
     let map = cose_map(public_key)?;
-    if cose_number(&map, 1)? != 3 || cose_number(&map, 3)? != algorithm {
+    if cose_number(&map, 1)? != 3 || cose_number(&map, 3)? != key_algorithm {
         return Err("invalid RSA COSE key".into());
     }
     let modulus = cose_bytes(&map, -1)?;
@@ -220,7 +329,8 @@ fn verify_rsa_signature(
     )
     .map_err(|error| error.to_string())?;
     let key = PKey::from_rsa(rsa).map_err(|error| error.to_string())?;
-    let (digest, padding) = rsa_digest(algorithm)?;
+    let (digest, _) = rsa_digest(signature_algorithm)?;
+    let (_, padding) = rsa_digest(key_algorithm)?;
     let mut verifier = Verifier::new(digest, &key).map_err(|error| error.to_string())?;
     verifier
         .set_rsa_padding(padding)
@@ -299,19 +409,12 @@ fn verify_fallback_registration(
     else {
         return Err("invalid attestation object".into());
     };
-    if map.get(&serde_cbor_2::Value::Text("fmt".into()))
-        != Some(&serde_cbor_2::Value::Text("none".into()))
-    {
-        return Err("unsupported attestation format for fallback".into());
-    }
+    let format = map.get(&serde_cbor_2::Value::Text("fmt".into()));
     let Some(serde_cbor_2::Value::Map(statement)) =
         map.get(&serde_cbor_2::Value::Text("attStmt".into()))
     else {
         return Err("missing attestation statement".into());
     };
-    if !statement.is_empty() {
-        return Err("none attestation has nonempty statement".into());
-    }
     let Some(serde_cbor_2::Value::Bytes(auth_data)) =
         map.get(&serde_cbor_2::Value::Text("authData".into()))
     else {
@@ -352,6 +455,46 @@ fn verify_fallback_registration(
         || cose_bytes(&map, -2)?.is_empty()
     {
         return Err("invalid RSA COSE key".into());
+    }
+    match format {
+        Some(serde_cbor_2::Value::Text(value)) if value == "none" && statement.is_empty() => {}
+        Some(serde_cbor_2::Value::Text(value))
+            if value == "packed"
+                && !statement.contains_key(&serde_cbor_2::Value::Text("x5c".into())) =>
+        {
+            let Some(serde_cbor_2::Value::Integer(attestation_algorithm)) =
+                statement.get(&serde_cbor_2::Value::Text("alg".into()))
+            else {
+                return Err("missing packed attestation algorithm".into());
+            };
+            let Some(serde_cbor_2::Value::Bytes(signature)) =
+                statement.get(&serde_cbor_2::Value::Text("sig".into()))
+            else {
+                return Err("missing packed attestation signature".into());
+            };
+            let attestation_algorithm = *attestation_algorithm;
+            let client_data = URL_SAFE_NO_PAD
+                .decode(
+                    response["response"]["clientDataJSON"]
+                        .as_str()
+                        .ok_or("missing client data")?,
+                )
+                .map_err(|error| error.to_string())?;
+            let mut signed = auth_data.clone();
+            signed.extend_from_slice(&Sha256::digest(client_data));
+            if attestation_algorithm == -36 {
+                verify_es512_signature(&public_key, &signed, signature)?;
+            } else {
+                verify_rsa_signature(
+                    &public_key,
+                    algorithm,
+                    attestation_algorithm,
+                    &signed,
+                    signature,
+                )?;
+            }
+        }
+        _ => return Err("unsupported attestation format for fallback".into()),
     }
     let counter = u32::from_be_bytes(
         auth_data[33..37]
@@ -435,7 +578,13 @@ fn verify_fallback_authentication(
     if algorithm == -36 {
         verify_es512_signature(&stored.public_key, &signed, &signature)?;
     } else {
-        verify_rsa_signature(&stored.public_key, algorithm, &signed, &signature)?;
+        verify_rsa_signature(
+            &stored.public_key,
+            algorithm,
+            algorithm,
+            &signed,
+            &signature,
+        )?;
     }
     Ok(counter)
 }
@@ -454,7 +603,11 @@ pub fn verify_registration(
             .ok_or("missing attestation object")?,
     )?;
     let algorithm = cose_number(&cose_map(&public_key)?, 3)?;
-    if algorithm == -36 || rsa_digest(algorithm).is_ok() {
+    let attestation_object = response["response"]["attestationObject"]
+        .as_str()
+        .ok_or("missing attestation object")?;
+    let core_attestation = core_attestation_required(attestation_object)?;
+    if (algorithm == -36 || rsa_digest(algorithm).is_ok()) && !core_attestation {
         return verify_fallback_registration(response, rp_id, &response_id, public_key, algorithm);
     }
     let core = core(rp_id, origin)?;
@@ -479,7 +632,8 @@ pub fn verify_registration(
         .map_err(|error| format!("{error:?}"))?;
     let state: RegistrationState = expected_state(&state, challenge)?;
     let parsed: RegisterPublicKeyCredential =
-        serde_json::from_value(response.clone()).map_err(|error| error.to_string())?;
+        serde_json::from_value(core_registration_response(response)?)
+            .map_err(|error| error.to_string())?;
     let credential = core
         .register_credential(&parsed, &state, None)
         .map_err(|error| format!("{error:?}"))?;
@@ -713,6 +867,79 @@ mod tests {
             )
             .unwrap(),
             1
+        );
+        for packed in [
+            "packedEs256",
+            "packedPs256",
+            "packedRs256Rs384",
+            "packedFullRs256",
+        ] {
+            let stored = verify_registration(
+                &fixture[packed],
+                fixture["registrationChallenge"].as_str().unwrap(),
+                origin,
+                rp_id,
+            )
+            .unwrap_or_else(|error| panic!("{packed}: {error}"));
+            assert_eq!(stored.counter, 0);
+        }
+        assert!(
+            verify_registration(
+                &fixture["invalidPackedSignature"],
+                fixture["registrationChallenge"].as_str().unwrap(),
+                origin,
+                rp_id,
+            )
+            .is_err()
+        );
+        assert!(
+            verify_registration(
+                &fixture["invalidPackedPadding"],
+                fixture["registrationChallenge"].as_str().unwrap(),
+                origin,
+                rp_id,
+            )
+            .is_err()
+        );
+        for invalid in ["invalidPackedFullSubject", "invalidPackedFullSignature"] {
+            assert!(
+                verify_registration(
+                    &fixture[invalid],
+                    fixture["registrationChallenge"].as_str().unwrap(),
+                    origin,
+                    rp_id,
+                )
+                .is_err(),
+                "{invalid}"
+            );
+        }
+        for u2f in ["u2fRegistration", "u2fExtraCertificate"] {
+            let stored = verify_registration(
+                &fixture[u2f],
+                fixture["registrationChallenge"].as_str().unwrap(),
+                origin,
+                rp_id,
+            )
+            .unwrap_or_else(|error| panic!("{u2f}: {error}"));
+            assert_eq!(stored.counter, 0);
+        }
+        assert!(
+            verify_registration(
+                &fixture["invalidU2fAaguid"],
+                fixture["registrationChallenge"].as_str().unwrap(),
+                origin,
+                rp_id,
+            )
+            .is_err()
+        );
+        assert!(
+            verify_registration(
+                &fixture["invalidU2fSignature"],
+                fixture["registrationChallenge"].as_str().unwrap(),
+                origin,
+                rp_id,
+            )
+            .is_err()
         );
         for algorithm in ["rs256", "ps256", "ps384", "ps512", "rs384", "rs512", "rs1"] {
             let vector = &fixture[algorithm];

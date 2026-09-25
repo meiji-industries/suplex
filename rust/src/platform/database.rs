@@ -81,7 +81,8 @@ impl Error for DatabaseMigrationFailure {}
 pub struct SuplexDatabase {
     connection: Connection,
     mode: OpenMode,
-    callbacks: Vec<Vec<Box<dyn FnOnce()>>>,
+    callbacks: Vec<Vec<Box<dyn FnOnce() + Send>>>,
+    deferred_callbacks: Option<Vec<Box<dyn FnOnce() + Send>>>,
 }
 
 impl SuplexDatabase {
@@ -104,6 +105,7 @@ impl SuplexDatabase {
             connection,
             mode,
             callbacks: Vec::new(),
+            deferred_callbacks: None,
         };
         if mode == OpenMode::Migrate {
             database.preflight_repository_identities()?;
@@ -150,6 +152,8 @@ impl SuplexDatabase {
                     let callbacks = self.callbacks.pop().expect("transaction callbacks");
                     if let Some(parent) = self.callbacks.last_mut() {
                         parent.extend(callbacks);
+                    } else if let Some(deferred) = self.deferred_callbacks.as_mut() {
+                        deferred.extend(callbacks);
                     } else {
                         for callback in callbacks {
                             let _ = catch_unwind(AssertUnwindSafe(callback));
@@ -185,12 +189,22 @@ impl SuplexDatabase {
         let _ = self.connection.execute_batch(&sql);
     }
 
-    pub fn after_commit(&mut self, callback: impl FnOnce() + 'static) {
+    pub fn after_commit(&mut self, callback: impl FnOnce() + Send + 'static) {
         if let Some(pending) = self.callbacks.last_mut() {
             pending.push(Box::new(callback));
+        } else if let Some(deferred) = self.deferred_callbacks.as_mut() {
+            deferred.push(Box::new(callback));
         } else {
             let _ = catch_unwind(AssertUnwindSafe(callback));
         }
+    }
+
+    pub(crate) fn defer_callbacks(&mut self) {
+        self.deferred_callbacks = Some(Vec::new());
+    }
+
+    pub(crate) fn take_deferred_callbacks(&mut self) -> Vec<Box<dyn FnOnce() + Send>> {
+        self.deferred_callbacks.take().unwrap_or_default()
     }
 
     fn preflight_repository_identities(&mut self) -> DatabaseResult<()> {
@@ -582,9 +596,10 @@ fn rebuild_copy_tables(statement: &str) -> Option<(String, String)> {
 #[cfg(test)]
 mod tests {
     use std::{
-        cell::RefCell,
-        rc::Rc,
-        sync::atomic::{AtomicU64, Ordering},
+        sync::{
+            Arc, Mutex,
+            atomic::{AtomicU64, Ordering},
+        },
         time::{SystemTime, UNIX_EPOCH},
     };
 
@@ -687,26 +702,26 @@ mod tests {
     fn nested_callbacks_follow_outer_commit_and_rollback() {
         let filename = temporary_database();
         let mut database = SuplexDatabase::open(&filename, OpenMode::Migrate).unwrap();
-        let observed = Rc::new(RefCell::new(Vec::new()));
+        let observed = Arc::new(Mutex::new(Vec::new()));
         let result = database.transaction(true, |database| {
             let observed_inner = observed.clone();
-            database.after_commit(move || observed_inner.borrow_mut().push("outer"));
+            database.after_commit(move || observed_inner.lock().unwrap().push("outer"));
             let _: DatabaseResult<()> = database.transaction(false, |database| {
                 let observed_rolled_back = observed.clone();
                 database
-                    .after_commit(move || observed_rolled_back.borrow_mut().push("rolled back"));
+                    .after_commit(move || observed_rolled_back.lock().unwrap().push("rolled back"));
                 Err("abort savepoint".into())
             });
             let observed_committed = observed.clone();
             database.transaction(false, |database| {
-                database.after_commit(move || observed_committed.borrow_mut().push("inner"));
+                database.after_commit(move || observed_committed.lock().unwrap().push("inner"));
                 Ok(())
             })?;
-            assert!(observed.borrow().is_empty());
+            assert!(observed.lock().unwrap().is_empty());
             Ok(())
         });
         result.unwrap();
-        assert_eq!(&*observed.borrow(), &["outer", "inner"]);
+        assert_eq!(&*observed.lock().unwrap(), &["outer", "inner"]);
         database.after_commit(|| panic!("diagnostic failure after commit"));
         assert_eq!(
             database
@@ -717,10 +732,10 @@ mod tests {
         );
         let observed_discarded = observed.clone();
         let _: DatabaseResult<()> = database.transaction(false, |database| {
-            database.after_commit(move || observed_discarded.borrow_mut().push("discarded"));
+            database.after_commit(move || observed_discarded.lock().unwrap().push("discarded"));
             Err("abort outer".into())
         });
-        assert_eq!(&*observed.borrow(), &["outer", "inner"]);
+        assert_eq!(&*observed.lock().unwrap(), &["outer", "inner"]);
         drop(database);
         let _ = fs::remove_file(&filename);
     }
@@ -749,7 +764,7 @@ mod tests {
             .connection()
             .execute_batch("CREATE TABLE transaction_check (value TEXT)")
             .unwrap();
-        let observed = Rc::new(RefCell::new(false));
+        let observed = Arc::new(Mutex::new(false));
         let callback_flag = observed.clone();
         let failure = catch_unwind(AssertUnwindSafe(|| {
             let _: DatabaseResult<()> = database.transaction(true, |database| {
@@ -757,7 +772,7 @@ mod tests {
                     "INSERT INTO transaction_check VALUES ('should roll back')",
                     [],
                 )?;
-                database.after_commit(move || *callback_flag.borrow_mut() = true);
+                database.after_commit(move || *callback_flag.lock().unwrap() = true);
                 panic!("transaction failed");
             });
         }));
@@ -769,7 +784,7 @@ mod tests {
             })
             .unwrap();
         assert_eq!(count, 0);
-        assert!(!*observed.borrow());
+        assert!(!*observed.lock().unwrap());
         drop(database);
         let _ = fs::remove_file(&filename);
     }

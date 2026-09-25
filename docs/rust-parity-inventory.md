@@ -65,10 +65,10 @@ The table lists all 238 backend TypeScript modules present at the baseline, incl
 | [http/routes/agent-api.ts](../src/http/routes/agent-api.ts) | not started | |
 | [http/routes/agent-pairing.ts](../src/http/routes/agent-pairing.ts) | not started | |
 | [http/routes/assets.ts](../src/http/routes/assets.ts) | not started | |
-| [http/routes/auth.ts](../src/http/routes/auth.ts) | not started | |
+| [http/routes/auth.ts](../src/http/routes/auth.ts) | not started | Partial: status, current user, and sign-out routes pass isolated live checks; ceremonies and account mutations remain incomplete |
 | [http/routes/authenticated.ts](../src/http/routes/authenticated.ts) | not started | |
 | [http/routes/avatars.ts](../src/http/routes/avatars.ts) | not started | |
-| [http/routes/companies.ts](../src/http/routes/companies.ts) | not started | |
+| [http/routes/companies.ts](../src/http/routes/companies.ts) | not started | Partial: company list/get and membership visibility pass isolated live checks; protected mutation routes remain 501 |
 | [http/routes/discovery.ts](../src/http/routes/discovery.ts) | not started | |
 | [http/routes/external-agent-administration.ts](../src/http/routes/external-agent-administration.ts) | not started | |
 | [http/routes/github-triggers.ts](../src/http/routes/github-triggers.ts) | not started | |
@@ -84,13 +84,13 @@ The table lists all 238 backend TypeScript modules present at the baseline, incl
 | [http/routes/tasks.ts](../src/http/routes/tasks.ts) | not started | |
 | [http/routes/update.ts](../src/http/routes/update.ts) | not started | |
 | [http/routes/workflows.ts](../src/http/routes/workflows.ts) | not started | |
-| [http/session.ts](../src/http/session.ts) | not started | |
+| [http/session.ts](../src/http/session.ts) | not started | Partial integration: session lookup, trusted development sign-in, legacy rollover, cookies, and CSRF checks ported; full HTTP route coverage remains pending |
 | [identity/auth-contracts.ts](../src/identity/auth-contracts.ts) | not started | |
 | [identity/auth-identifiers.ts](../src/identity/auth-identifiers.ts) | not started | |
 | [identity/auth-repository.ts](../src/identity/auth-repository.ts) | not started | |
 | [identity/auth-schema.ts](../src/identity/auth-schema.ts) | not started | |
-| [identity/auth-webauthn.ts](../src/identity/auth-webauthn.ts) | not started | Partial adapter and [10-algorithm spike evidence](rust-spikes/webauthn.md); non-`none` registration attestation and full ceremony/HTTP integration remain incomplete |
-| [identity/auth.ts](../src/identity/auth.ts) | not started | |
+| [identity/auth-webauthn.ts](../src/identity/auth-webauthn.ts) | not started | Partial adapter and [10-algorithm spike evidence](rust-spikes/webauthn.md), including synthetic packed and FIDO U2F attestation; Apple, Android Key, TPM, SafetyNet, hardware credentials, and full ceremony/HTTP integration remain incomplete |
+| [identity/auth.ts](../src/identity/auth.ts) | not started | Partial: current/legacy session hashes and expiry, development administrator, sign-out, and rollover; identity tests and live session checks pass |
 | [identity/avatar-kinds.ts](../src/identity/avatar-kinds.ts) | not started | |
 | [identity/avatars.ts](../src/identity/avatars.ts) | not started | |
 | [identity/external-agents.ts](../src/identity/external-agents.ts) | not started | |
@@ -120,7 +120,7 @@ The table lists all 238 backend TypeScript modules present at the baseline, incl
 | [platform/backup.ts](../src/platform/backup.ts) | not started | |
 | [platform/command-runner.ts](../src/platform/command-runner.ts) | not started | |
 | [platform/config.ts](../src/platform/config.ts) | not started | Partial foundation in [config.rs](../rust/src/platform/config.rs), commit `924c9efe`: isolated defaults and port only; full configuration remains pending |
-| [platform/database.ts](../src/platform/database.ts) | verified | [Rust database and tests](../rust/src/platform/database.rs): all 149 migrations, transactions/callbacks/rollback, read-only reopening, and additive rebuilds pass; TS↔Rust reopening matches all 155 schema rows and 149 ledger rows. Binary startup wiring remains pending |
+| [platform/database.ts](../src/platform/database.ts) | verified | [Rust database and tests](../rust/src/platform/database.rs): all 149 migrations, transactions/callbacks/rollback, read-only reopening, and additive rebuilds pass; TS↔Rust reopening matches all 155 schema rows and 149 ledger rows. Binary startup passes. Shared HTTP wrapper releases its lock before callbacks; callers must preserve each TypeScript transaction boundary |
 | [platform/development.ts](../src/platform/development.ts) | not started | |
 | [platform/diagnostics/doctor.ts](../src/platform/diagnostics/doctor.ts) | not started | |
 | [platform/diagnostics/task.ts](../src/platform/diagnostics/task.ts) | not started | |

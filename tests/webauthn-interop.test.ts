@@ -29,6 +29,18 @@ const fixture = JSON.parse(readFileSync(new URL('./fixtures/webauthn-interop.jso
   invalidTokenBindingRegistration: RegistrationResponseJSON;
   invalidTokenBindingAssertion: AuthenticationResponseJSON;
   crossOriginAssertion: AuthenticationResponseJSON;
+  packedEs256: RegistrationResponseJSON;
+  packedPs256: RegistrationResponseJSON;
+  packedRs256Rs384: RegistrationResponseJSON;
+  packedFullRs256: RegistrationResponseJSON;
+  invalidPackedSignature: RegistrationResponseJSON;
+  invalidPackedPadding: RegistrationResponseJSON;
+  invalidPackedFullSubject: RegistrationResponseJSON;
+  invalidPackedFullSignature: RegistrationResponseJSON;
+  u2fRegistration: RegistrationResponseJSON;
+  u2fExtraCertificate: RegistrationResponseJSON;
+  invalidU2fAaguid: RegistrationResponseJSON;
+  invalidU2fSignature: RegistrationResponseJSON;
 };
 
 test('SimpleWebAuthn accepts the shared synthetic credential and both counter modes', async () => {
@@ -97,4 +109,22 @@ test('SimpleWebAuthn rejects changed ceremony identity, UV, and signature', asyn
   const ps256Credential = { id: fixture.ps256.credentialId, publicKey: Buffer.from(fixture.ps256.publicKey, 'base64url'), counter: 0 };
   await expect(verifyAuthenticationResponse({ ...input, response: fixture.invalidTokenBindingAssertion, credential: ps256Credential })).rejects.toThrow();
   expect((await verifyAuthenticationResponse({ ...input, response: fixture.crossOriginAssertion, credential: ps256Credential })).verified).toBe(true);
+  for (const response of [fixture.packedEs256, fixture.packedPs256, fixture.packedRs256Rs384, fixture.packedFullRs256]) {
+    expect((await verifyRegistrationResponse({ ...registrationInput, response })).verified).toBe(true);
+  }
+  expect((await verifyRegistrationResponse({ ...registrationInput, response: fixture.invalidPackedSignature })).verified).toBe(false);
+  expect((await verifyRegistrationResponse({ ...registrationInput, response: fixture.invalidPackedPadding })).verified).toBe(false);
+  for (const response of [fixture.invalidPackedFullSubject, fixture.invalidPackedFullSignature, fixture.invalidU2fSignature]) {
+    let verified = false;
+    try {
+      verified = (await verifyRegistrationResponse({ ...registrationInput, response })).verified;
+    } catch {
+      verified = false;
+    }
+    expect(verified).toBe(false);
+  }
+  for (const response of [fixture.u2fRegistration, fixture.u2fExtraCertificate]) {
+    expect((await verifyRegistrationResponse({ ...registrationInput, response })).verified).toBe(true);
+  }
+  await expect(verifyRegistrationResponse({ ...registrationInput, response: fixture.invalidU2fAaguid })).rejects.toThrow();
 });

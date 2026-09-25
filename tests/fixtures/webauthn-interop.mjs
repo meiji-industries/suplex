@@ -1,10 +1,13 @@
 import { constants, createHash, generateKeyPairSync, randomBytes, sign } from 'node:crypto';
 import { createRequire } from 'node:module';
-import { writeFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { writeFileSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { verifyAuthenticationResponse, verifyRegistrationResponse } from '@simplewebauthn/server';
 
 const requireFromServer = createRequire(import.meta.resolve('@simplewebauthn/server'));
-const { encodeCBOR } = requireFromServer('@levischuck/tiny-cbor');
+const { decodeCBOR, encodeCBOR } = requireFromServer('@levischuck/tiny-cbor');
 const b64 = (bytes) => Buffer.from(bytes).toString('base64url');
 const hash = (bytes) => createHash('sha256').update(bytes).digest();
 const rpId = 'suplex.example.test';
@@ -152,6 +155,97 @@ const invalidTokenBindingAssertion = signedPs256WithClientData({ tokenBinding: {
 const crossOriginAssertion = signedPs256WithClientData({ crossOrigin: true });
 const crossOriginVerified = await verifyAuthenticationResponse({ response: crossOriginAssertion, expectedChallenge: authenticationChallenge, expectedOrigin: origin, expectedRPID: rpId, credential: { id: ps256.credentialId, publicKey: Buffer.from(ps256.publicKey, 'base64url'), counter: 0 }, requireUserVerification: true });
 if (!crossOriginVerified.verified) throw new Error('SimpleWebAuthn crossOrigin fixture failed');
+function packedSelfRegistration(base, privateKey, algorithm, hashName, padding) {
+  const response = structuredClone(base);
+  const object = decodeCBOR(Uint8Array.from(Buffer.from(response.response.attestationObject, 'base64url')));
+  const signed = Buffer.concat([Buffer.from(object.get('authData')), hash(Buffer.from(response.response.clientDataJSON, 'base64url'))]);
+  const signature = sign(hashName, signed, padding ? { key: privateKey, padding, saltLength: padding === constants.RSA_PKCS1_PSS_PADDING ? constants.RSA_PSS_SALTLEN_DIGEST : undefined } : privateKey);
+  response.response.attestationObject = b64(encodeCBOR(new Map([['fmt', 'packed'], ['authData', object.get('authData')], ['attStmt', new Map([['alg', algorithm], ['sig', signature]])]])));
+  return response;
+}
+const packedEs256 = packedSelfRegistration(registration, privateKey, -7, 'sha256');
+const packedPs256 = packedSelfRegistration(ps256.registration, rsaKeyPair.privateKey, -37, 'sha256', constants.RSA_PKCS1_PSS_PADDING);
+const packedRs256Rs384 = packedSelfRegistration(rs256.registration, rsaKeyPair.privateKey, -258, 'sha384', constants.RSA_PKCS1_PADDING);
+function certificateForKey(privateKey, subject) {
+  const directory = mkdtempSync(join(tmpdir(), 'suplex-attestation-'));
+  try {
+    const keyPath = join(directory, 'key.pem');
+    const certPath = join(directory, 'cert.der');
+    writeFileSync(keyPath, privateKey.export({ format: 'pem', type: 'pkcs8' }));
+    const generated = spawnSync('openssl', ['req', '-new', '-x509', '-key', keyPath, '-out', certPath, '-outform', 'DER', '-days', '1', '-subj', subject, '-addext', 'basicConstraints=CA:FALSE'], { encoding: 'utf8' });
+    if (generated.status !== 0) throw new Error(`OpenSSL certificate generation failed: ${generated.stderr}`);
+    return readFileSync(certPath);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+}
+function packedFullRegistration(base, subject = '/C=CA/O=Suplex/OU=Authenticator Attestation/CN=Test Authenticator') {
+  const pair = generateKeyPairSync('rsa', { modulusLength: 2048 });
+  const certificate = certificateForKey(pair.privateKey, subject);
+  const response = structuredClone(base);
+  const object = decodeCBOR(Uint8Array.from(Buffer.from(response.response.attestationObject, 'base64url')));
+  const signed = Buffer.concat([Buffer.from(object.get('authData')), hash(Buffer.from(response.response.clientDataJSON, 'base64url'))]);
+  const signature = sign('sha256', signed, { key: pair.privateKey, padding: constants.RSA_PKCS1_PADDING });
+  response.response.attestationObject = b64(encodeCBOR(new Map([['fmt', 'packed'], ['authData', object.get('authData')], ['attStmt', new Map([['alg', -257], ['sig', signature], ['x5c', [certificate]]])]])));
+  return response;
+}
+const packedFullRs256 = packedFullRegistration(rs256.registration);
+const invalidPackedFullSubject = packedFullRegistration(rs256.registration, '/C=CA/O=Suplex/OU=Wrong/CN=Test Authenticator');
+const invalidPackedFullSignature = structuredClone(packedFullRs256);
+const invalidPackedFullObject = decodeCBOR(Uint8Array.from(Buffer.from(invalidPackedFullSignature.response.attestationObject, 'base64url')));
+invalidPackedFullObject.get('attStmt').set('sig', Buffer.alloc(256));
+invalidPackedFullSignature.response.attestationObject = b64(encodeCBOR(invalidPackedFullObject));
+const u2fAttestationKey = generateKeyPairSync('ec', { namedCurve: 'prime256v1' }).privateKey;
+const u2fCertificate = certificateForKey(u2fAttestationKey, '/C=CA/O=Suplex/OU=Authenticator Attestation/CN=U2F Test');
+const u2fSigned = Buffer.concat([Buffer.from([0]), hash(rpId), hash(Buffer.from(registration.response.clientDataJSON, 'base64url')), credentialId, Buffer.from([4]), Buffer.from(jwk.x, 'base64url'), Buffer.from(jwk.y, 'base64url')]);
+const u2fSignature = sign('sha256', u2fSigned, u2fAttestationKey);
+const u2fRegistration = structuredClone(registration);
+u2fRegistration.response.attestationObject = b64(encodeCBOR(new Map([['fmt', 'fido-u2f'], ['authData', registrationAuthData], ['attStmt', new Map([['sig', u2fSignature], ['x5c', [u2fCertificate]]])]])));
+const invalidU2fAaguid = structuredClone(u2fRegistration);
+const invalidU2fObject = decodeCBOR(Uint8Array.from(Buffer.from(invalidU2fAaguid.response.attestationObject, 'base64url')));
+const invalidU2fAuthData = Buffer.from(invalidU2fObject.get('authData'));
+invalidU2fAuthData[37] = 1;
+invalidU2fObject.set('authData', invalidU2fAuthData);
+invalidU2fAaguid.response.attestationObject = b64(encodeCBOR(invalidU2fObject));
+const invalidU2fSignature = structuredClone(u2fRegistration);
+const invalidU2fSignatureObject = decodeCBOR(Uint8Array.from(Buffer.from(invalidU2fSignature.response.attestationObject, 'base64url')));
+invalidU2fSignatureObject.get('attStmt').set('sig', Buffer.alloc(72));
+invalidU2fSignature.response.attestationObject = b64(encodeCBOR(invalidU2fSignatureObject));
+const u2fExtraCertificate = structuredClone(u2fRegistration);
+const u2fExtraObject = decodeCBOR(Uint8Array.from(Buffer.from(u2fExtraCertificate.response.attestationObject, 'base64url')));
+u2fExtraObject.get('attStmt').set('x5c', [u2fCertificate, u2fCertificate]);
+u2fExtraCertificate.response.attestationObject = b64(encodeCBOR(u2fExtraObject));
+const invalidPackedPadding = packedSelfRegistration(ps256.registration, rsaKeyPair.privateKey, -257, 'sha256', constants.RSA_PKCS1_PADDING);
+const invalidPackedSignature = structuredClone(packedPs256);
+const invalidPackedObject = decodeCBOR(Uint8Array.from(Buffer.from(invalidPackedSignature.response.attestationObject, 'base64url')));
+invalidPackedObject.get('attStmt').set('sig', Buffer.alloc(256));
+invalidPackedSignature.response.attestationObject = b64(encodeCBOR(invalidPackedObject));
+for (const packed of [packedEs256, packedPs256, packedRs256Rs384, packedFullRs256]) {
+  const verified = await verifyRegistrationResponse({ response: packed, expectedChallenge: registrationChallenge, expectedOrigin: origin, expectedRPID: rpId, requireUserVerification: true });
+  if (!verified.verified) throw new Error('SimpleWebAuthn packed self attestation failed');
+}
+for (const u2f of [u2fRegistration, u2fExtraCertificate]) {
+  const verified = await verifyRegistrationResponse({ response: u2f, expectedChallenge: registrationChallenge, expectedOrigin: origin, expectedRPID: rpId, requireUserVerification: true });
+  if (!verified.verified) throw new Error('SimpleWebAuthn U2F attestation failed');
+}
+try {
+  const invalid = await verifyRegistrationResponse({ response: invalidU2fAaguid, expectedChallenge: registrationChallenge, expectedOrigin: origin, expectedRPID: rpId, requireUserVerification: true });
+  if (invalid.verified) throw new Error('SimpleWebAuthn accepted invalid U2F AAGUID');
+} catch (error) {
+  if (error.message === 'SimpleWebAuthn accepted invalid U2F AAGUID') throw error;
+}
+const invalidPackedVerified = await verifyRegistrationResponse({ response: invalidPackedSignature, expectedChallenge: registrationChallenge, expectedOrigin: origin, expectedRPID: rpId, requireUserVerification: true });
+if (invalidPackedVerified.verified) throw new Error('SimpleWebAuthn accepted invalid packed signature');
+const invalidPackedPaddingVerified = await verifyRegistrationResponse({ response: invalidPackedPadding, expectedChallenge: registrationChallenge, expectedOrigin: origin, expectedRPID: rpId, requireUserVerification: true });
+if (invalidPackedPaddingVerified.verified) throw new Error('SimpleWebAuthn accepted wrong packed RSA padding');
+for (const invalid of [invalidPackedFullSubject, invalidPackedFullSignature, invalidU2fSignature]) {
+  try {
+    const result = await verifyRegistrationResponse({ response: invalid, expectedChallenge: registrationChallenge, expectedOrigin: origin, expectedRPID: rpId, requireUserVerification: true });
+    if (result.verified) throw new Error('SimpleWebAuthn accepted invalid attestation');
+  } catch (error) {
+    if (error.message === 'SimpleWebAuthn accepted invalid attestation') throw error;
+  }
+}
 
 writeFileSync(new URL('./webauthn-interop.json', import.meta.url), `${JSON.stringify({
   rpId, origin, userId, registrationChallenge, authenticationChallenge,
@@ -161,4 +255,6 @@ writeFileSync(new URL('./webauthn-interop.json', import.meta.url), `${JSON.strin
   es512: { credentialId: b64(es512Id), publicKey: b64(es512Cose), registration: es512Registration, assertion: es512Assertion },
   rs256, ps256, ps384, ps512, rs384, rs512, rs1,
   invalidTokenBindingRegistration, invalidTokenBindingAssertion, crossOriginAssertion,
+  packedEs256, packedPs256, packedRs256Rs384, packedFullRs256, invalidPackedSignature, invalidPackedPadding, invalidPackedFullSubject, invalidPackedFullSignature,
+  u2fRegistration, u2fExtraCertificate, invalidU2fAaguid, invalidU2fSignature,
 }, null, 2)}\n`);

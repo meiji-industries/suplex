@@ -1,9 +1,104 @@
 use std::collections::HashMap;
-use std::path::Path;
+use std::error::Error;
+use std::io;
+use std::path::{Path, PathBuf};
+
+use serde_json::Value;
 
 use crate::coordination::bridge_auth::{
     ADVISOR_BINDING_ENV, ADVISOR_RESULT_ENV, ADVISOR_TOKEN_ENV, ROOT_BINDING_ENV, ROOT_TOKEN_ENV,
 };
+use crate::coordination::root_bridge::RootIdentity;
+use crate::runtimes::headless;
+
+// The prompt observation vocabulary is shared by every harness; each native
+// runtime maps its own evidence onto it.
+pub use crate::runtimes::codex::role_prompt::WorkerPurpose;
+pub use crate::runtimes::codex::runtime::{DispatchState, PromptObservation, PromptState};
+pub use crate::runtimes::codex::session_reader::session_directory as task_session_runtime_directory;
+
+/// The Standard roles the task host runs.
+#[derive(Clone, Copy)]
+pub enum TaskRole<'a> {
+    Root(&'a RootIdentity),
+    Worker(WorkerPurpose),
+}
+
+/// TypeScript `TaskScope`: one native session launch, resolved by the host.
+pub struct TaskScope<'a> {
+    pub database_path: &'a Path,
+    pub artifact_root: &'a Path,
+    pub task_id: &'a str,
+    pub session_id: &'a str,
+    pub native_session_id: &'a str,
+    pub role: TaskRole<'a>,
+    pub worktree: &'a Path,
+    pub model: &'a str,
+    pub reasoning_effort: &'a str,
+    pub instance_home_directory: Option<&'a Path>,
+    /// Project `execution.mcp`, when the project configures execution.
+    pub project_mcp: Option<&'a Value>,
+    pub project_context_path: Option<&'a Path>,
+    pub project_environment: &'a HashMap<String, String>,
+    pub excluded_environment_keys: &'a [String],
+    /// Test override for the native CLI executable.
+    pub executable: Option<&'a Path>,
+    pub inherited_environment: &'a HashMap<String, String>,
+}
+
+impl TaskScope<'_> {
+    pub fn runtime_directory(&self) -> io::Result<PathBuf> {
+        task_session_runtime_directory(self.database_path, self.session_id)
+    }
+}
+
+pub type DispatchClaim<'a> = &'a mut dyn FnMut(&str) -> Result<bool, Box<dyn Error>>;
+
+/// TypeScript `TaskHarness`. The registry selects one implementation by the
+/// profile provider or the native session identity.
+pub trait TaskHarness: Sync {
+    /// Reserve a new native session identity.
+    fn new_session_id(&self) -> String;
+    fn observe(
+        &self,
+        directory: &Path,
+        native_session_id: &str,
+        turn_id: &str,
+        dispatch: DispatchState,
+        generation: Option<&str>,
+    ) -> io::Result<PromptObservation>;
+    /// Claim the prompt inside the native dispatch, then start it once.
+    fn dispatch(
+        &self,
+        scope: &TaskScope<'_>,
+        turn_id: &str,
+        prompt: &str,
+        claim: DispatchClaim<'_>,
+    ) -> Result<PromptObservation, Box<dyn Error>>;
+    /// Stop a fenced execution, then observe it as not submitted.
+    fn recover_dispatch(
+        &self,
+        directory: &Path,
+        native_session_id: &str,
+        turn_id: &str,
+        generation: &str,
+    ) -> io::Result<PromptObservation>;
+    fn result_text(&self, directory: &Path, turn_id: &str) -> io::Result<String>;
+    /// TypeScript `observation.native`, completed from native evidence.
+    fn native(&self, _directory: &Path, _turn_id: &str, base: Value) -> io::Result<Value> {
+        Ok(base)
+    }
+    fn stop(&self, directory: &Path, native_session_id: Option<&str>) -> io::Result<()>;
+}
+
+/// TypeScript `recoverHeadlessDispatch`: stop the fenced generation only.
+pub fn recover_headless_dispatch(directory: &Path, generation: &str) -> io::Result<()> {
+    let record_path = directory.join(format!("dispatch-{generation}.json"));
+    if let Some(record) = headless::read_record(&record_path)? {
+        headless::stop_owned(&record)?;
+    }
+    headless::stop_execution(directory, generation)
+}
 
 /// Build one native task process environment. A recovered task must not inherit
 /// another task's bridge capability from the API process environment.

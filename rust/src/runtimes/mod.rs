@@ -3,3 +3,4 @@ pub mod git_guard;
 pub mod headless;
 pub mod process;
 pub mod task_harness;
+pub mod task_harness_registry;

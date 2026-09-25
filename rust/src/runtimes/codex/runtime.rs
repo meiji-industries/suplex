@@ -37,6 +37,8 @@ pub struct PromptObservation {
     pub unsettled_tool_ids: Vec<String>,
     pub native_final_observed: bool,
     pub process_running: bool,
+    /// TypeScript `executionUncertain`: a native execution Suplex cannot identify.
+    pub execution_uncertain: bool,
 }
 
 fn observation(
@@ -53,6 +55,7 @@ fn observation(
         unsettled_tool_ids: Vec::new(),
         native_final_observed: false,
         process_running: false,
+        execution_uncertain: false,
     }
 }
 
@@ -107,12 +110,15 @@ pub fn observe(
                 },
             )
         } else {
-            observation(
-                PromptState::Unknown,
-                false,
-                false,
-                "dispatch_identity_missing",
-            )
+            PromptObservation {
+                execution_uncertain: true,
+                ..observation(
+                    PromptState::Unknown,
+                    false,
+                    false,
+                    "dispatch_identity_missing",
+                )
+            }
         });
     };
     if record.session_id != session_id {

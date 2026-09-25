@@ -26,14 +26,13 @@ use crate::{
     platform::database::{DatabaseResult, OpenMode, SuplexDatabase},
     profiles::model_pricing::ModelsDevCatalogReader,
     runtimes::{
-        codex::{
-            role_prompt::WorkerPurpose,
-            runtime::{self, DispatchState, PromptObservation, PromptState},
-            session_reader,
-            task_runtime::{self, RootCodexLaunch, WorkerCodexLaunch},
-            usage,
-        },
+        codex::{session_reader, usage},
         process::{ProcessOwnerObservation, inspect_process, observe_process_owner},
+        task_harness::{
+            DispatchState, PromptObservation, PromptState, TaskHarness, TaskRole, TaskScope,
+            WorkerPurpose, task_context_prompt,
+        },
+        task_harness_registry,
     },
     shared::js_json,
     tasks::{
@@ -134,6 +133,11 @@ fn project_launch_scope(
         environment,
         excluded_keys,
     }
+}
+
+/// TypeScript `execution.mcp`, passed only when the project configures it.
+fn project_mcp(rows: &root_session_store::RootObservationRows) -> Option<&serde_json::Value> {
+    Some(&rows.context["configuration"]["execution"]["mcp"]).filter(|value| value.is_array())
 }
 
 fn required_path(value: &serde_json::Value, name: &str) -> DatabaseResult<PathBuf> {
@@ -237,12 +241,13 @@ fn dispatch_state(turn: &RootTurn) -> DispatchState {
 fn observe_or_recover_fenced(
     database: &mut SuplexDatabase,
     database_path: &Path,
+    harness: &dyn TaskHarness,
     session: &RootSession,
     native_id: &str,
     turn: &RootTurn,
     owner: &str,
 ) -> DatabaseResult<(PromptObservation, bool)> {
-    let observed = observe_turn(database_path, session, native_id, turn)?;
+    let observed = observe_turn(database_path, harness, session, native_id, turn)?;
     if turn.status == "pending_prompt" && turn.dispatch_attempt.is_none() {
         let replayable = observed.retry_allowed;
         return Ok((observed, replayable));
@@ -262,18 +267,8 @@ fn observe_or_recover_fenced(
         return Ok((observed, false));
     }
     let directory = session_reader::session_directory(database_path, &session.id)?;
-    let record_path = directory.join(format!("dispatch-{}.json", attempt.server_generation));
-    if let Some(record) = crate::runtimes::headless::read_record(&record_path)? {
-        crate::runtimes::headless::stop_owned(&record)?;
-    }
-    crate::runtimes::headless::stop_execution(&directory, &attempt.server_generation)?;
-    let recovered = runtime::observe(
-        &directory,
-        native_id,
-        &turn.id,
-        DispatchState::NotSubmitted,
-        Some(&attempt.server_generation),
-    )?;
+    let recovered =
+        harness.recover_dispatch(&directory, native_id, &turn.id, &attempt.server_generation)?;
     if recovered.retry_allowed {
         root_session_store::requeue_fenced_prompt(database, turn, attempt, owner, Utc::now())?;
     }
@@ -284,6 +279,7 @@ fn observe_or_recover_fenced(
 
 fn observe_turn(
     database_path: &Path,
+    harness: &dyn TaskHarness,
     session: &RootSession,
     native_id: &str,
     turn: &RootTurn,
@@ -293,7 +289,7 @@ fn observe_turn(
         .dispatch_attempt
         .as_ref()
         .map(|attempt: &PromptDispatchAttempt| attempt.server_generation.as_str());
-    Ok(runtime::observe(
+    Ok(harness.observe(
         &directory,
         native_id,
         &turn.id,
@@ -320,8 +316,7 @@ fn persist_native_admission(
     if observation.admission_observed {
         root_session_store::mark_prompted(database, turn, None, Utc::now())?;
     }
-    // Codex reports `executionUncertain` only with this reason.
-    if observation.reason == "dispatch_identity_missing" {
+    if observation.execution_uncertain {
         root_session_store::require_execution_cleanup(database, turn, Utc::now())?;
     }
     Ok(())
@@ -397,9 +392,50 @@ fn terminal_observation<'a>(
     })
 }
 
+/// TypeScript `observation.native`, completed by the harness.
+fn native_observation(
+    harness: &dyn TaskHarness,
+    directory: &Path,
+    rows: &root_session_store::RootObservationRows,
+    kind: &str,
+    turn: &RootTurn,
+) -> DatabaseResult<serde_json::Value> {
+    let profile = selected_profile(rows, kind);
+    let provider =
+        task_harness_registry::profile_harness(profile["provider"].as_str().unwrap_or_default());
+    let agent = format!("suplex-{kind}");
+    Ok(harness.native(
+        directory,
+        &turn.id,
+        serde_json::json!({
+            "messageID":turn.id,"parentID":turn.id,"providerID":provider,
+            "modelID":profile["model"],"mode":agent,
+            "agent":agent,"cwd":rows.control["worktree"]["path"],
+            "root":rows.control["worktree"]["path"],
+        }),
+    )?)
+}
+
+/// TypeScript `session.profile ?? control.<role>Profile`.
+fn selected_profile<'a>(
+    rows: &'a root_session_store::RootObservationRows,
+    kind: &str,
+) -> &'a serde_json::Value {
+    let (session, fallback) = if kind == "root" {
+        (rows.root.as_ref(), &rows.control["rootProfile"])
+    } else {
+        (rows.worker.as_ref(), &rows.control["workerProfile"])
+    };
+    session
+        .map(|session| &session["profile"])
+        .filter(|profile| profile.is_object())
+        .unwrap_or(fallback)
+}
+
 fn complete_root_if_terminal(
     database: &mut SuplexDatabase,
     database_path: &Path,
+    harness: &dyn TaskHarness,
     session: &RootSession,
     turn: &RootTurn,
     observation: &PromptObservation,
@@ -409,13 +445,8 @@ fn complete_root_if_terminal(
     }
     let rows = root_session_store::root_observation_rows(database, &session.task_id)?;
     let directory = session_reader::session_directory(database_path, &session.id)?;
-    let text = runtime::result_text(&directory, &turn.id)?;
-    let native = serde_json::json!({
-        "messageID":turn.id,"parentID":turn.id,"providerID":"codex",
-        "modelID":rows.control["rootProfile"]["model"],"mode":"suplex-root",
-        "agent":"suplex-root","cwd":rows.control["worktree"]["path"],
-        "root":rows.control["worktree"]["path"],
-    });
+    let text = harness.result_text(&directory, &turn.id)?;
+    let native = native_observation(harness, &directory, &rows, "root", turn)?;
     let terminal_observation = terminal_observation(observation, native, &text, &directory, turn)?;
     let continuation = (observation.state == PromptState::Interrupted).then_some("The previous execution stopped before a final response. Its admitted message will not be replayed. Observe current task, worktree and GitHub state, preserve any partial work, and continue from that evidence.");
     let completed = root_session_store::complete_root_turn(
@@ -480,9 +511,11 @@ fn worker_result_wake(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn complete_worker_if_terminal(
     database: &mut SuplexDatabase,
     database_path: &Path,
+    harness: &dyn TaskHarness,
     session: &RootSession,
     native_id: &str,
     turn: &RootTurn,
@@ -494,13 +527,8 @@ fn complete_worker_if_terminal(
     }
     let rows = root_session_store::root_observation_rows(database, &session.task_id)?;
     let directory = session_reader::session_directory(database_path, &session.id)?;
-    let text = runtime::result_text(&directory, &turn.id)?;
-    let native = serde_json::json!({
-        "messageID":turn.id,"parentID":turn.id,"providerID":"codex",
-        "modelID":rows.control["workerProfile"]["model"],"mode":"suplex-worker",
-        "agent":"suplex-worker","cwd":rows.control["worktree"]["path"],
-        "root":rows.control["worktree"]["path"],
-    });
+    let text = harness.result_text(&directory, &turn.id)?;
+    let native = native_observation(harness, &directory, &rows, "worker", turn)?;
     let terminal_observation = terminal_observation(observation, native, &text, &directory, turn)?;
     let receipt = format!(
         "{native_id}:{}:{}",
@@ -708,7 +736,7 @@ fn recover_prepared_root_blocking(
     database_path: &Path,
     artifact_root: &Path,
     task_id: &str,
-    codex_executable: Option<&Path>,
+    executable: Option<&Path>,
     inherited_environment: &HashMap<String, String>,
     usage: TaskLimitUsage,
 ) -> DatabaseResult<Option<PromptObservation>> {
@@ -727,12 +755,14 @@ fn recover_prepared_root_blocking(
         return Ok(None);
     };
     let rows = root_session_store::root_observation_rows(&database, task_id)?;
-    if rows.control["rootProfile"]["provider"] != "codex" {
+    let profile = selected_profile(&rows, "root");
+    let provider = profile["provider"].as_str().unwrap_or_default();
+    let Some(harness) = task_harness_registry::for_profile(provider) else {
         return Ok(skip_unported(
             &session.id,
-            "Only Codex Standard Root execution is ported",
+            &format!("No task harness for {provider}"),
         ));
-    }
+    };
     if current_owner_still_running(&session) {
         return Ok(None);
     }
@@ -754,7 +784,7 @@ fn recover_prepared_root_blocking(
         let native_id = session
             .native_session_id
             .clone()
-            .unwrap_or_else(|| format!("codex-{}", Uuid::new_v4()));
+            .unwrap_or_else(|| harness.new_session_id());
         if !root_session_store::bind_native_session(
             &mut database,
             &session,
@@ -768,6 +798,7 @@ fn recover_prepared_root_blocking(
             let (before, replayable) = observe_or_recover_fenced(
                 &mut database,
                 database_path,
+                harness,
                 &session,
                 &native_id,
                 &turn,
@@ -775,7 +806,14 @@ fn recover_prepared_root_blocking(
             )?;
             if !before.retry_allowed || !replayable {
                 persist_native_admission(&mut database, &turn, &before)?;
-                complete_root_if_terminal(&mut database, database_path, &session, &turn, &before)?;
+                complete_root_if_terminal(
+                    &mut database,
+                    database_path,
+                    harness,
+                    &session,
+                    &turn,
+                    &before,
+                )?;
                 return Ok(before);
             }
             if !root_session_store::coalesce_unadmitted_idle_root_turn(
@@ -804,10 +842,10 @@ fn recover_prepared_root_blocking(
         let worktree = rows.control["worktree"]["path"]
             .as_str()
             .ok_or_else(|| io::Error::other("Task worktree is not prepared"))?;
-        let model = rows.control["rootProfile"]["model"]
+        let model = profile["model"]
             .as_str()
             .ok_or_else(|| io::Error::other("Root model is missing"))?;
-        let reasoning = rows.control["rootProfile"]["reasoningLevel"]
+        let reasoning = profile["reasoningLevel"]
             .as_str()
             .ok_or_else(|| io::Error::other("Root reasoning level is missing"))?;
         let project_scope = project_launch_scope(
@@ -821,35 +859,49 @@ fn recover_prepared_root_blocking(
             session_id: session.id.clone(),
             generation: session.generation,
         };
-        let launch = RootCodexLaunch {
+        let scope = TaskScope {
             database_path,
             artifact_root,
-            identity: &identity,
+            task_id,
+            session_id: &session.id,
             native_session_id: &native_id,
-            turn_id: &turn.id,
+            role: TaskRole::Root(&identity),
             worktree: Path::new(worktree),
-            prompt: &turn.prompt_text,
-            project_context: project_scope.context.as_deref(),
+            model,
+            reasoning_effort: reasoning,
+            instance_home_directory: profile["instanceHomeDirectory"].as_str().map(Path::new),
+            project_mcp: project_mcp(&rows),
             project_context_path: project_scope.context_path.as_deref(),
             project_environment: &project_scope.environment,
             excluded_environment_keys: &project_scope.excluded_keys,
-            model,
-            reasoning_effort: reasoning,
-            codex_executable,
+            executable,
             inherited_environment,
         };
-        let observation = task_runtime::dispatch_codex_root(launch, |server_generation| {
-            root_session_store::claim_prompt(
-                &mut database,
-                &turn,
-                &owner,
-                server_generation,
-                usage,
-                Utc::now(),
-            )
-        })?;
+        let prompt = task_context_prompt(
+            &turn.prompt_text,
+            project_scope.context.as_deref(),
+            project_scope.context_path.as_deref(),
+        );
+        let observation =
+            harness.dispatch(&scope, &turn.id, &prompt, &mut |server_generation| {
+                root_session_store::claim_prompt(
+                    &mut database,
+                    &turn,
+                    &owner,
+                    server_generation,
+                    usage,
+                    Utc::now(),
+                )
+            })?;
         persist_native_admission(&mut database, &turn, &observation)?;
-        complete_root_if_terminal(&mut database, database_path, &session, &turn, &observation)?;
+        complete_root_if_terminal(
+            &mut database,
+            database_path,
+            harness,
+            &session,
+            &turn,
+            &observation,
+        )?;
         Ok(observation)
     })();
     root_session_store::release_session_operation(&mut database, &session.id, &owner, Utc::now())?;
@@ -862,7 +914,7 @@ pub async fn recover_prepared_root(
     database_path: &Path,
     artifact_root: &Path,
     task_id: &str,
-    codex_executable: Option<&Path>,
+    executable: Option<&Path>,
     inherited_environment: &HashMap<String, String>,
 ) -> DatabaseResult<Option<PromptObservation>> {
     let usage = if needs_admission_usage(database_path, task_id, "root")? {
@@ -875,14 +927,14 @@ pub async fn recover_prepared_root(
     let database_path = database_path.to_path_buf();
     let artifact_root = artifact_root.to_path_buf();
     let task_id = task_id.to_owned();
-    let codex_executable: Option<PathBuf> = codex_executable.map(Path::to_path_buf);
+    let executable: Option<PathBuf> = executable.map(Path::to_path_buf);
     let inherited_environment = inherited_environment.clone();
     tokio::task::spawn_blocking(move || {
         recover_prepared_root_blocking(
             &database_path,
             &artifact_root,
             &task_id,
-            codex_executable.as_deref(),
+            executable.as_deref(),
             &inherited_environment,
             usage,
         )
@@ -894,8 +946,9 @@ pub async fn recover_prepared_root(
 
 fn recover_prepared_worker_blocking(
     database_path: &Path,
+    artifact_root: &Path,
     task_id: &str,
-    codex_executable: Option<&Path>,
+    executable: Option<&Path>,
     inherited_environment: &HashMap<String, String>,
     usage: TaskLimitUsage,
 ) -> DatabaseResult<Option<PromptObservation>> {
@@ -913,12 +966,14 @@ fn recover_prepared_worker_blocking(
         return Ok(None);
     }
     let rows = root_session_store::root_observation_rows(&database, task_id)?;
-    if rows.control["workerProfile"]["provider"] != "codex" {
+    let profile = selected_profile(&rows, "worker");
+    let provider = profile["provider"].as_str().unwrap_or_default();
+    let Some(harness) = task_harness_registry::for_profile(provider) else {
         return Ok(skip_unported(
             &session.id,
-            "Only Codex Standard Worker execution is ported",
+            &format!("No task harness for {provider}"),
         ));
-    }
+    };
     if current_owner_still_running(&session) {
         return Ok(None);
     }
@@ -940,7 +995,7 @@ fn recover_prepared_worker_blocking(
         let native_id = session
             .native_session_id
             .clone()
-            .unwrap_or_else(|| format!("codex-{}", Uuid::new_v4()));
+            .unwrap_or_else(|| harness.new_session_id());
         if !root_session_store::bind_native_session(
             &mut database,
             &session,
@@ -961,6 +1016,7 @@ fn recover_prepared_worker_blocking(
         let (before, replayable) = observe_or_recover_fenced(
             &mut database,
             database_path,
+            harness,
             &session,
             &native_id,
             &turn,
@@ -971,6 +1027,7 @@ fn recover_prepared_worker_blocking(
             complete_worker_if_terminal(
                 &mut database,
                 database_path,
+                harness,
                 &session,
                 &native_id,
                 &turn,
@@ -985,7 +1042,6 @@ fn recover_prepared_worker_blocking(
         let worktree = rows.control["worktree"]["path"]
             .as_str()
             .ok_or_else(|| io::Error::other("Task worktree is not prepared"))?;
-        let profile = &rows.control["workerProfile"];
         let model = profile["model"]
             .as_str()
             .ok_or_else(|| io::Error::other("Worker model is missing"))?;
@@ -998,37 +1054,45 @@ fn recover_prepared_worker_blocking(
             database_path,
             task_id,
         );
-        let launch = WorkerCodexLaunch {
+        let scope = TaskScope {
             database_path,
+            artifact_root,
+            task_id,
             session_id: &session.id,
             native_session_id: &native_id,
-            turn_id: &turn.id,
+            role: TaskRole::Worker(purpose),
             worktree: Path::new(worktree),
-            prompt: &turn.prompt_text,
-            project_context: project_scope.context.as_deref(),
+            model,
+            reasoning_effort: reasoning,
+            instance_home_directory: profile["instanceHomeDirectory"].as_str().map(Path::new),
+            project_mcp: project_mcp(&rows),
             project_context_path: project_scope.context_path.as_deref(),
             project_environment: &project_scope.environment,
             excluded_environment_keys: &project_scope.excluded_keys,
-            purpose,
-            model,
-            reasoning_effort: reasoning,
-            codex_executable,
+            executable,
             inherited_environment,
         };
-        let observation = task_runtime::dispatch_codex_worker(launch, |server_generation| {
-            root_session_store::claim_prompt(
-                &mut database,
-                &turn,
-                &owner,
-                server_generation,
-                usage,
-                Utc::now(),
-            )
-        })?;
+        let prompt = task_context_prompt(
+            &turn.prompt_text,
+            project_scope.context.as_deref(),
+            project_scope.context_path.as_deref(),
+        );
+        let observation =
+            harness.dispatch(&scope, &turn.id, &prompt, &mut |server_generation| {
+                root_session_store::claim_prompt(
+                    &mut database,
+                    &turn,
+                    &owner,
+                    server_generation,
+                    usage,
+                    Utc::now(),
+                )
+            })?;
         persist_native_admission(&mut database, &turn, &observation)?;
         complete_worker_if_terminal(
             &mut database,
             database_path,
+            harness,
             &session,
             &native_id,
             &turn,
@@ -1043,8 +1107,9 @@ fn recover_prepared_worker_blocking(
 
 pub async fn recover_prepared_worker(
     database_path: &Path,
+    artifact_root: &Path,
     task_id: &str,
-    codex_executable: Option<&Path>,
+    executable: Option<&Path>,
     inherited_environment: &HashMap<String, String>,
 ) -> DatabaseResult<Option<PromptObservation>> {
     let usage = if needs_admission_usage(database_path, task_id, "worker")? {
@@ -1055,14 +1120,16 @@ pub async fn recover_prepared_worker(
         }
     };
     let database_path = database_path.to_path_buf();
+    let artifact_root = artifact_root.to_path_buf();
     let task_id = task_id.to_owned();
-    let codex_executable = codex_executable.map(Path::to_path_buf);
+    let executable = executable.map(Path::to_path_buf);
     let inherited_environment = inherited_environment.clone();
     tokio::task::spawn_blocking(move || {
         recover_prepared_worker_blocking(
             &database_path,
+            &artifact_root,
             &task_id,
-            codex_executable.as_deref(),
+            executable.as_deref(),
             &inherited_environment,
             usage,
         )
@@ -1219,7 +1286,12 @@ async fn stop_retired_sessions(database_path: &Path, task_id: &str) -> DatabaseR
         }
         let directory = session_reader::session_directory(database_path, &session_id)?;
         match tokio::task::spawn_blocking(move || {
-            crate::runtimes::headless::stop_session(&directory, native_id.as_deref())
+            match task_harness_registry::for_session(native_id.as_deref()) {
+                Some(harness) => harness.stop(&directory, native_id.as_deref()),
+                // An unbound session never started a native process.
+                None if native_id.is_none() => Ok(()),
+                None => Err(io::Error::other("No task harness for session")),
+            }
         })
         .await?
         {
@@ -1300,7 +1372,7 @@ pub async fn sweep_task(
     database_path: &Path,
     artifact_root: &Path,
     task_id: &str,
-    codex_executable: Option<&Path>,
+    executable: Option<&Path>,
     inherited_environment: &HashMap<String, String>,
 ) -> DatabaseResult<()> {
     {
@@ -1332,8 +1404,9 @@ pub async fn sweep_task(
     crate::coordination::root_controller::prepare_root(database_path, task_id)?;
     recover_prepared_worker(
         database_path,
+        artifact_root,
         task_id,
-        codex_executable,
+        executable,
         inherited_environment,
     )
     .await?;
@@ -1341,7 +1414,7 @@ pub async fn sweep_task(
         database_path,
         artifact_root,
         task_id,
-        codex_executable,
+        executable,
         inherited_environment,
     )
     .await?;
@@ -1423,6 +1496,7 @@ mod tests {
             unsettled_tool_ids: Vec::new(),
             native_final_observed: true,
             process_running: false,
+            execution_uncertain: false,
         };
         let prompt = worker_result_wake(
             "codex-one:msg-one:completed",
@@ -1474,6 +1548,7 @@ mod tests {
             unsettled_tool_ids: Vec::new(),
             native_final_observed: false,
             process_running: false,
+            execution_uncertain: false,
         };
         let terminal =
             terminal_observation(&observation, serde_json::json!({}), "", &directory, &turn)
@@ -2132,7 +2207,7 @@ mod tests {
         };
         let environment = HashMap::from([("PATH".into(), "/usr/bin:/bin".into())]);
         let launched =
-            recover_prepared_worker(&database_path, &task_id, Some(&codex), &environment)
+            recover_prepared_worker(&database_path, &base, &task_id, Some(&codex), &environment)
                 .await
                 .unwrap()
                 .unwrap();
@@ -2416,7 +2491,7 @@ mod tests {
             .remove(0);
         drop(database);
         let launched =
-            recover_prepared_worker(&database_path, &task_id, Some(&codex), &environment)
+            recover_prepared_worker(&database_path, &base, &task_id, Some(&codex), &environment)
                 .await
                 .unwrap()
                 .unwrap();
@@ -2432,7 +2507,7 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
         assert!(worker_exit.exists());
-        recover_prepared_worker(&database_path, &task_id, Some(&codex), &environment)
+        recover_prepared_worker(&database_path, &base, &task_id, Some(&codex), &environment)
             .await
             .unwrap();
         let database = SuplexDatabase::open(&database_path, OpenMode::ReadOnly).unwrap();
@@ -2484,7 +2559,7 @@ mod tests {
             id
         };
         assert!(
-            recover_prepared_worker(&database_path, &task_id, Some(&codex), &environment)
+            recover_prepared_worker(&database_path, &base, &task_id, Some(&codex), &environment)
                 .await
                 .unwrap()
                 .is_none()
@@ -2500,7 +2575,7 @@ mod tests {
             );
         }
         let replacement_launch =
-            recover_prepared_worker(&database_path, &task_id, Some(&codex), &environment)
+            recover_prepared_worker(&database_path, &base, &task_id, Some(&codex), &environment)
                 .await
                 .unwrap()
                 .unwrap();
@@ -2531,7 +2606,7 @@ mod tests {
             tokio::time::sleep(Duration::from_millis(50)).await;
         }
         assert!(replacement_exit.exists());
-        recover_prepared_worker(&database_path, &task_id, Some(&codex), &environment)
+        recover_prepared_worker(&database_path, &base, &task_id, Some(&codex), &environment)
             .await
             .unwrap();
         assert_eq!(fs::read(&marker).unwrap(), b"xxx");
@@ -2739,11 +2814,13 @@ mod tests {
             unsettled_tool_ids: vec![],
             native_final_observed: false,
             process_running: false,
+            execution_uncertain: false,
         };
         assert!(
             complete_root_if_terminal(
                 &mut database,
                 &database_path,
+                &crate::runtimes::codex::harness::CodexTaskRuntime,
                 &failing_root,
                 &failing_turn,
                 &failure

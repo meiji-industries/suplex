@@ -531,14 +531,8 @@ async fn observed_usage(database_path: &Path, task_id: &str) -> DatabaseResult<T
     )
     .await?
     .map_err(io::Error::other)?;
-    if observed
-        .iter()
-        .any(|(_, _, _, session)| session.turns.is_empty())
-    {
-        return Err(
-            io::Error::other("Codex turn usage is not available; observation will retry").into(),
-        );
-    }
+    // TypeScript `observeTaskLimitUsage`: a session without usage leaves the
+    // observation incomplete; dispatch continues with the partial cost.
     static PRICING: OnceLock<Result<ModelsDevCatalogReader, String>> = OnceLock::new();
     let unpriced = observed.iter().any(|(_, _, _, session)| {
         session.turns.iter().any(|turn| {
@@ -573,14 +567,6 @@ fn replace_observed_usage(
     observed: Vec<(String, String, String, usage::CodexUsageObservation)>,
     pricing: Option<&crate::profiles::model_pricing::ModelPricingCatalog>,
 ) -> DatabaseResult<f64> {
-    if observed
-        .iter()
-        .any(|(_, _, _, session)| session.turns.is_empty())
-    {
-        return Err(
-            io::Error::other("Codex turn usage is not available; observation will retry").into(),
-        );
-    }
     let mut snapshots = Vec::new();
     let mut cost = 0.0;
     for (_, native_id, role, session) in observed {
@@ -1403,6 +1389,79 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn empty_native_usage_is_incomplete_and_does_not_block_dispatch() {
+        let base = std::env::temp_dir().join(format!("suplex-usage-{}", Uuid::new_v4()));
+        fs::create_dir_all(&base).unwrap();
+        let database_path = base.join("suplex.sqlite");
+        let now = Utc::now();
+        let task_id = {
+            let mut database = SuplexDatabase::open(&database_path, OpenMode::Migrate).unwrap();
+            let user = auth::development_sign_in(&mut database, now).unwrap().user;
+            let time = now.to_rfc3339();
+            database.connection().execute("INSERT INTO suplex_companies (id,name,status,created_at) VALUES ('usage_company','Usage','active',?1)", [&time]).unwrap();
+            database.connection().execute("INSERT INTO suplex_projects (id,company_id,name,repository_path,worktree_root,repository_identity,base_branch,setup_command,verification_command,root_profile_id,worker_profile_id,agent_task_policy_json,created_at,updated_at) VALUES ('usage_project','usage_company','Project','/tmp/repo','/tmp/worktrees',NULL,'main','','','root_profile','worker_profile','{}',?1,?1)", [&time]).unwrap();
+            let prepared = PreparedTask {
+                id: repository::new_task_id(),
+                company_id: "usage_company".into(),
+                project_id: "usage_project".into(),
+                title: "Usage task".into(),
+                description: "Observe usage".into(),
+                configuration: serde_json::json!({"repository":"owner/repo","branch":"task-usage","baseBranch":"main"}),
+                idempotency_key: "usage-key".into(),
+                request_hash: "usage-request".into(),
+                creator: TaskCreator::User(user.id),
+                delivery_target: "local_worktree".into(),
+                delivery_intent: serde_json::json!({"repository":"owner/repo","headBranch":"task-usage","baseBranch":"main"}),
+                root_profile: serde_json::json!({"profileId":"root_profile","provider":"codex","model":"gpt-6-sol","reasoningLevel":"medium","serviceTier":"default"}),
+                worker_profile: serde_json::json!({"profileId":"worker_profile","provider":"codex","model":"gpt-6-sol","reasoningLevel":"medium","serviceTier":"default"}),
+                advisor_profiles: serde_json::json!({}),
+                issue: None,
+                start_queued: true,
+                copied_from_task_id: None,
+                depends_on: vec![],
+            };
+            repository::create(&mut database, &prepared, now)
+                .unwrap()
+                .task
+                .id
+        };
+        let root = root_controller::prepare_root(&database_path, &task_id).unwrap();
+        let turn_id = {
+            let mut database = SuplexDatabase::open(&database_path, OpenMode::ReadWrite).unwrap();
+            assert!(
+                root_session_store::bind_native_session(&mut database, &root, "codex-usage", now)
+                    .unwrap()
+            );
+            let turn = root_session_store::pending_turns(&database, &root.id)
+                .unwrap()
+                .remove(0);
+            database
+                .connection()
+                .execute(
+                    "UPDATE suplex_task_turns SET status = 'prompted', prompted_at = ?1 WHERE id = ?2",
+                    rusqlite::params![now.to_rfc3339(), turn.id],
+                )
+                .unwrap();
+            turn.id
+        };
+        let directory = session_reader::session_directory(&database_path, &root.id).unwrap();
+        fs::create_dir_all(&directory).unwrap();
+        fs::write(
+            directory.join(format!("turn-{turn_id}.jsonl")),
+            "{\"type\":\"thread.started\",\"thread_id\":\"codex-usage\"}\n",
+        )
+        .unwrap();
+        assert!(
+            !usage::observe_session(&directory, "codex-usage", None)
+                .unwrap()
+                .complete
+        );
+        let observed = observed_usage(&database_path, &task_id).await.unwrap();
+        assert_eq!(observed.estimated_cost_usd, Some(0.0));
+        fs::remove_dir_all(base).unwrap();
+    }
+
+    #[tokio::test]
     async fn root_dispatch_claim_survives_reopen_without_replaying_child() {
         let base = std::env::temp_dir().join(format!("suplex-root-host-{}", Uuid::new_v4()));
         fs::create_dir_all(&base).unwrap();
@@ -1612,7 +1671,9 @@ mod tests {
                 complete: false,
                 estimated_cost_usd: 0.0,
             };
-            assert!(
+            // TypeScript `replaceNativeUsage` replaces the task usage with the
+            // partial observation; missing native usage never blocks dispatch.
+            assert_eq!(
                 replace_observed_usage(
                     &database_path,
                     &task_id,
@@ -1624,13 +1685,14 @@ mod tests {
                     )],
                     None
                 )
-                .is_err()
+                .unwrap(),
+                0.0
             );
             let retained: i64 = database.connection().query_row(
                 "SELECT COUNT(*) FROM suplex_task_usage WHERE task_id = ?1 AND message_id = 'prior-native'",
                 [&task_id], |row| row.get(0),
             ).unwrap();
-            assert_eq!(retained, 1);
+            assert_eq!(retained, 0);
         }
         let mut database = SuplexDatabase::open(&database_path, OpenMode::ReadWrite).unwrap();
         root_session_store::launch_standard_worker(

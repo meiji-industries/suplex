@@ -36,9 +36,19 @@ const webAuthn: WebAuthnAdapter = {
   async verifyAuthenticationResponse() { return { verified: true, newCounter: 1 }; },
 };
 
-export async function nativeApp(fixtureOptions: { githubTrigger?: GithubTriggerPort; herdr?: TaskPanePort; logSink?: (line: string) => void; systemEvents?: EventSink; issueTracker?: TaskServicePorts["issueTracker"]; pullRequestObserver?: TaskServicePorts["pullRequestObserver"]; reachableAddress?: string } = {}) {
+export async function nativeApp(fixtureOptions: { githubTrigger?: GithubTriggerPort; herdr?: TaskPanePort; logSink?: (line: string) => void; systemEvents?: EventSink; issueTracker?: TaskServicePorts["issueTracker"]; pullRequestObserver?: TaskServicePorts["pullRequestObserver"]; reachableAddress?: string; rustLayout?: boolean } = {}) {
   const directory = await mkdtemp(join(tmpdir(), "suplex-native-app-"));
-  const config = createTestConfig(directory, { reachableAddress: fixtureOptions.reachableAddress ?? "http://127.0.0.1:4111" });
+  const reachableAddress = fixtureOptions.reachableAddress ?? "http://127.0.0.1:4111";
+  const config = createTestConfig(directory, {
+    reachableAddress,
+    ...(fixtureOptions.rustLayout ? {
+      port: Number(new URL(reachableAddress).port),
+      dataRoot: join(directory, "data"),
+      databasePath: join(directory, "data", "suplex.sqlite"),
+      artifactRoot: join(directory, "data", "artifacts"),
+      runtimeRoot: join(directory, "data", "runtime"),
+    } : {}),
+  });
   const database = createTestDatabase(config.databasePath);
   const auth = new AuthService(database, config, { webAuthn });
   const profiles = new AgentProfileService(database, auth);

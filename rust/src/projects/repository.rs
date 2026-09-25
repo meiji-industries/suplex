@@ -159,7 +159,7 @@ fn valid_repository(repository: &str) -> bool {
     REPOSITORY.is_match(repository)
 }
 
-fn valid_branch(branch: &str) -> bool {
+pub(crate) fn valid_branch(branch: &str) -> bool {
     !branch.is_empty()
         && !branch.starts_with(['.', '/'])
         && !branch.contains("..")
@@ -303,6 +303,8 @@ pub async fn prepare_local_project(
 pub struct Coordinate {
     pub host: String,
     pub repository: String,
+    pub name: String,
+    pub clone_url: String,
 }
 
 fn secret_shaped(value: &str) -> bool {
@@ -338,13 +340,22 @@ fn coordinate_parts(host: &str, path: &str, https: bool) -> Option<Coordinate> {
     if !valid(owner) || !valid(name) {
         return None;
     }
+    let kind = match host {
+        "github.com" => "github".to_owned(),
+        "bitbucket.org" => "bitbucket".to_owned(),
+        _ => return None,
+    };
+    let repository = format!("{owner}/{name}").to_ascii_lowercase();
+    let clone_url = if https {
+        format!("https://{host}/{repository}.git")
+    } else {
+        format!("git@{host}:{repository}.git")
+    };
     Some(Coordinate {
-        host: match host {
-            "github.com" => "github".to_owned(),
-            "bitbucket.org" => "bitbucket".to_owned(),
-            _ => return None,
-        },
-        repository: format!("{owner}/{name}").to_ascii_lowercase(),
+        host: kind,
+        repository,
+        name: name.to_owned(),
+        clone_url,
     })
 }
 
@@ -411,7 +422,7 @@ async fn bounded_output(
     Ok(output)
 }
 
-async fn run(
+pub(super) async fn run(
     command: &Path,
     args: &[&str],
     cwd: &Path,
@@ -710,6 +721,8 @@ mod tests {
             Coordinate {
                 host: "github".to_owned(),
                 repository: "owner/repo".to_owned(),
+                name: "Repo".to_owned(),
+                clone_url: "https://github.com/owner/repo.git".to_owned(),
             }
         );
         assert_eq!(
@@ -717,6 +730,8 @@ mod tests {
             Coordinate {
                 host: "bitbucket".to_owned(),
                 repository: "team/repo".to_owned(),
+                name: "Repo".to_owned(),
+                clone_url: "git@bitbucket.org:team/repo.git".to_owned(),
             }
         );
         for value in [

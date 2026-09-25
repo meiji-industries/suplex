@@ -3,13 +3,14 @@ use std::{error::Error, fmt};
 use chrono::{DateTime, SecondsFormat, Utc};
 use openssl::rand::rand_bytes;
 use rusqlite::{OptionalExtension, Row, params};
+use serde::Serialize;
 use serde_json::{Value, json};
 
 use crate::{
     http::contracts,
     identity::{auth, companies},
     platform::database::{DatabaseResult, SuplexDatabase},
-    shared::js_json::JsDocument,
+    shared::js_json::{JsDocument, JsNode},
 };
 
 use super::repository::{Finding, PreparedLocalProject};
@@ -80,6 +81,66 @@ pub struct Project {
     pub updated_at: String,
 }
 
+/// Apply the same response contract as the TypeScript route without passing
+/// stored JSON columns through serde_json::Value, which cannot retain lone
+/// UTF-16 surrogates or large JSON numbers.
+pub fn response_document(project: &Project) -> DatabaseResult<JsDocument> {
+    let mut fields = Vec::new();
+    if let Some(integration) = &project.integration {
+        fields.push(format!("\"integration\":{}", integration.stringify()));
+    }
+    if let Some(execution) = &project.execution {
+        fields.push(format!("\"execution\":{}", execution.stringify()));
+    }
+    for (name, value) in [
+        ("id", &project.id),
+        ("companyId", &project.company_id),
+        ("name", &project.name),
+        ("repositoryPath", &project.repository_path),
+        ("worktreeRoot", &project.worktree_root),
+        ("baseBranch", &project.base_branch),
+        ("setupCommand", &project.setup_command),
+        ("verificationCommand", &project.verification_command),
+        ("rootProfileId", &project.root_profile_id),
+        ("workerProfileId", &project.worker_profile_id),
+        ("createdAt", &project.created_at),
+        ("updatedAt", &project.updated_at),
+    ] {
+        fields.push(format!(
+            "\"{name}\":{}",
+            crate::shared::js_json::stringify(&Value::String(value.clone()))
+        ));
+    }
+    if let Some(repository) = &project.repository {
+        fields.push(format!(
+            "\"repository\":{}",
+            crate::shared::js_json::stringify(&Value::String(repository.clone()))
+        ));
+    }
+    fields.push(format!(
+        "\"agentTaskPolicy\":{}",
+        project.agent_task_policy.stringify()
+    ));
+    fields.push(format!(
+        "\"providerPolicy\":{}",
+        project
+            .provider_policy
+            .as_ref()
+            .map_or_else(|| "null".to_owned(), JsDocument::stringify)
+    ));
+    let source = JsDocument::parse(&format!("{{{}}}", fields.join(",")))
+        .map_err(|message| Box::new(std::io::Error::other(message)) as Box<dyn Error>)?;
+    contracts::validate_js_detailed("projects.ProjectResponseSchema", Some(&source))
+        .ok_or_else(|| {
+            Box::new(std::io::Error::other(
+                "Project response contract is unavailable",
+            )) as Box<dyn Error>
+        })?
+        .map_err(|_| {
+            Box::new(std::io::Error::other("Project response is invalid")) as Box<dyn Error>
+        })
+}
+
 struct StoredProject {
     integration_json: Option<String>,
     execution_json: Option<String>,
@@ -136,6 +197,194 @@ fn default_policy(root_profile_id: &str, worker_profile_id: &str) -> Value {
         "runProjectTests": true,
         "visualEvidence": "off"
     })
+}
+
+fn configuration_field(document: Option<&JsDocument>, name: &str) -> Option<JsDocument> {
+    let document = document?;
+    let field = document.get(document.root(), name)?;
+    let mut value = document.clone();
+    value.set_root(field);
+    Some(value)
+}
+
+fn string_at(document: &JsDocument, node: usize) -> String {
+    let JsNode::String(value) = document.node(node) else {
+        unreachable!("validated project configuration string")
+    };
+    String::from_utf16_lossy(value)
+}
+
+fn strings_at(document: &JsDocument, object: usize, name: &str) -> Vec<String> {
+    let field = document
+        .get(object, name)
+        .expect("validated project configuration field");
+    let JsNode::Array(values) = document.node(field) else {
+        unreachable!("validated project configuration array")
+    };
+    values
+        .iter()
+        .map(|value| string_at(document, *value))
+        .collect()
+}
+
+fn profile_provider(
+    database: &SuplexDatabase,
+    profile_id: &str,
+    role: &str,
+) -> DatabaseResult<Option<(String, Option<String>)>> {
+    database.connection().query_row(
+        "SELECT provider, provider_instance_id FROM suplex_profiles WHERE id = ?1 AND role = ?2 AND archived_at IS NULL",
+        params![profile_id, role],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    ).optional().map_err(Into::into)
+}
+
+fn validate_provider_policy(
+    database: &SuplexDatabase,
+    policy: &JsDocument,
+    root_profile_id: &str,
+    worker_profile_id: &str,
+) -> DatabaseResult<()> {
+    let root = policy.root();
+    let allowed_providers = strings_at(policy, root, "allowedProviders");
+    let allowed_instances = strings_at(policy, root, "allowedInstanceIds");
+    for instance_id in &allowed_instances {
+        let exists: bool = database.connection().query_row(
+            "SELECT EXISTS(SELECT 1 FROM suplex_provider_instances WHERE id = ?1)",
+            [instance_id],
+            |row| row.get(0),
+        )?;
+        if !exists {
+            return Err(failure(
+                "Project configuration is invalid",
+                422,
+                vec![finding(
+                    "instance-ineligible",
+                    "providerPolicy",
+                    "Select an existing provider login",
+                )],
+            ));
+        }
+    }
+    for (role, profile_id) in [("root", root_profile_id), ("worker", worker_profile_id)] {
+        let (provider, instance) =
+            profile_provider(database, profile_id, role)?.ok_or_else(|| {
+                failure(
+                    "Project configuration is invalid",
+                    422,
+                    vec![finding(
+                        "profile-ineligible",
+                        &format!("{role}ProfileId"),
+                        "Select an active profile with the matching role",
+                    )],
+                )
+            })?;
+        let allowed = instance.as_ref().map_or_else(
+            || allowed_providers.contains(&provider),
+            |instance| allowed_instances.contains(instance),
+        );
+        if !allowed {
+            return Err(failure(
+                "Project configuration is invalid",
+                422,
+                vec![finding(
+                    "profile-provider-ineligible",
+                    &format!("{role}ProfileId"),
+                    "Select an agent with a provider and login allowed by this project",
+                )],
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn validate_agent_policy(
+    database: &SuplexDatabase,
+    policy: &JsDocument,
+    project_id: &str,
+) -> DatabaseResult<()> {
+    let root = policy.root();
+    let workflow_ids = strings_at(policy, root, "workflowIds");
+    for workflow_id in &workflow_ids {
+        let exists: bool = database.connection().query_row(
+            "SELECT EXISTS(SELECT 1 FROM suplex_workflows WHERE id = ?1 AND archived_at IS NULL)",
+            [workflow_id],
+            |row| row.get(0),
+        )?;
+        if !exists {
+            return Err(failure(
+                "Project configuration is invalid",
+                422,
+                vec![finding(
+                    "workflow-ineligible",
+                    "agentTaskPolicy.workflowIds",
+                    "Select active workflows",
+                )],
+            ));
+        }
+    }
+    let default_id = string_at(policy, policy.get(root, "defaultWorkflowId").unwrap());
+    if !workflow_ids.contains(&default_id) {
+        return Err(failure(
+            "Project configuration is invalid",
+            422,
+            vec![finding(
+                "workflow-default-ineligible",
+                "agentTaskPolicy.defaultWorkflowId",
+                "Select one allowed workflow as the default",
+            )],
+        ));
+    }
+    for template_id in strings_at(policy, root, "templateIds") {
+        let exists: bool = database.connection().query_row(
+            "SELECT EXISTS(SELECT 1 FROM suplex_task_templates WHERE id = ?1 AND project_id = ?2)",
+            params![template_id, project_id],
+            |row| row.get(0),
+        )?;
+        if !exists {
+            return Err(failure(
+                "Project configuration is invalid",
+                422,
+                vec![finding(
+                    "template-ineligible",
+                    "agentTaskPolicy.templateIds",
+                    "Select templates that belong to this project",
+                )],
+            ));
+        }
+    }
+    for (role, field) in [("root", "rootProfileIds"), ("worker", "workerProfileIds")] {
+        for profile_id in strings_at(policy, root, field) {
+            if profile_provider(database, &profile_id, role)?.is_none() {
+                return Err(failure(
+                    "Project configuration is invalid",
+                    422,
+                    vec![finding(
+                        "profile-ineligible",
+                        "agentTaskPolicy",
+                        "Select active profiles with matching roles",
+                    )],
+                ));
+            }
+        }
+    }
+    let advisor = policy.get(root, "advisorProfileIds").unwrap();
+    for field in ["reviewer", "planner_a", "planner_b", "rater"] {
+        for profile_id in strings_at(policy, advisor, field) {
+            if profile_provider(database, &profile_id, "root")?.is_none() {
+                return Err(failure(
+                    "Project configuration is invalid",
+                    422,
+                    vec![finding(
+                        "profile-ineligible",
+                        "agentTaskPolicy",
+                        "Select active Advisor profiles",
+                    )],
+                ));
+            }
+        }
+    }
+    Ok(())
 }
 
 fn stored_contract(raw: &str, contract: &'static str) -> DatabaseResult<JsDocument> {
@@ -302,6 +551,33 @@ pub fn list(
     rows.into_iter().map(public_project).collect()
 }
 
+#[derive(Serialize)]
+pub struct ProviderInstance {
+    pub id: String,
+    pub provider: String,
+    pub label: String,
+}
+
+pub fn list_provider_instances(
+    database: &SuplexDatabase,
+    actor_user_id: &str,
+    project_id: &str,
+) -> DatabaseResult<Vec<ProviderInstance>> {
+    get(database, actor_user_id, project_id)?;
+    let mut statement = database.connection().prepare(
+        "SELECT id, provider, label FROM suplex_provider_instances ORDER BY provider, label COLLATE NOCASE, id",
+    )?;
+    Ok(statement
+        .query_map([], |row| {
+            Ok(ProviderInstance {
+                id: row.get(0)?,
+                provider: row.get(1)?,
+                label: row.get(2)?,
+            })
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?)
+}
+
 pub fn create_local_default(
     database: &mut SuplexDatabase,
     actor_user_id: &str,
@@ -311,8 +587,49 @@ pub fn create_local_default(
     worker_profile_id: &str,
     now: DateTime<Utc>,
 ) -> DatabaseResult<Project> {
-    let root_profile_id = auth::js_trim(root_profile_id);
-    let worker_profile_id = auth::js_trim(worker_profile_id);
+    create_local(
+        database,
+        actor_user_id,
+        company_id,
+        prepared,
+        CreateLocalOptions {
+            root_profile_id,
+            worker_profile_id,
+            configuration: None,
+            now,
+        },
+    )
+}
+
+pub struct CreateLocalOptions<'a> {
+    pub root_profile_id: &'a str,
+    pub worker_profile_id: &'a str,
+    pub configuration: Option<&'a JsDocument>,
+    pub now: DateTime<Utc>,
+}
+
+pub fn create_local(
+    database: &mut SuplexDatabase,
+    actor_user_id: &str,
+    company_id: &str,
+    prepared: &PreparedLocalProject,
+    options: CreateLocalOptions<'_>,
+) -> DatabaseResult<Project> {
+    let root_profile_id = auth::js_trim(options.root_profile_id);
+    let worker_profile_id = auth::js_trim(options.worker_profile_id);
+    let integration = configuration_field(options.configuration, "integration")
+        .map(|value| stored_contract(&value.stringify(), "projects.ProjectIntegrationSchema"))
+        .transpose()?;
+    let execution = configuration_field(options.configuration, "execution")
+        .map(|value| stored_contract(&value.stringify(), "projects.ProjectExecutionSchema"))
+        .transpose()?;
+    let explicit_policy = configuration_field(options.configuration, "agentTaskPolicy")
+        .map(|value| stored_contract(&value.stringify(), "projects.ProjectAgentTaskPolicySchema"))
+        .transpose()?;
+    let provider_policy = configuration_field(options.configuration, "providerPolicy")
+        .filter(|value| !matches!(value.node(value.root()), JsNode::Null))
+        .map(|value| stored_contract(&value.stringify(), "projects.ProjectProviderPolicySchema"))
+        .transpose()?;
     let company = companies::require_company_access(database, actor_user_id, company_id)?;
     if company.status != "active" {
         return Err(failure(
@@ -327,9 +644,11 @@ pub fn create_local_default(
     }
     let id = project_id()?;
     let audit_id = auth::random_hex_id("audit")?;
-    let stamp = now.to_rfc3339_opts(SecondsFormat::Millis, true);
-    let policy = default_policy(root_profile_id, worker_profile_id);
-    let policy_json = crate::shared::js_json::stringify(&policy);
+    let stamp = options.now.to_rfc3339_opts(SecondsFormat::Millis, true);
+    let policy_json = explicit_policy.as_ref().map_or_else(
+        || crate::shared::js_json::stringify(&default_policy(root_profile_id, worker_profile_id)),
+        JsDocument::stringify,
+    );
     let result = database.transaction(false, |database| {
         let company = companies::require_company_access(database, actor_user_id, company_id)?;
         if company.status != "active" {
@@ -349,13 +668,27 @@ pub fn create_local_default(
                 ));
             }
         }
+        if let Some(policy) = &provider_policy {
+            validate_provider_policy(database, policy, root_profile_id, worker_profile_id)?;
+        }
+        if let Some(policy) = &explicit_policy {
+            validate_agent_policy(database, policy, &id)?;
+        }
         database.connection().execute(
             "INSERT INTO suplex_projects (id, company_id, name, repository_path, worktree_root, repository_identity, base_branch, setup_command, verification_command, root_profile_id, worker_profile_id, agent_task_policy_json, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?13)",
             params![id, company_id, prepared.name, prepared.repository_path.to_string_lossy(), prepared.worktree_root.to_string_lossy(), prepared.repository, prepared.base_branch, prepared.setup_command, prepared.verification_command, root_profile_id, worker_profile_id, policy_json, stamp],
         )?;
         database.connection().execute(
+            "UPDATE suplex_projects SET integration_json = ?1, execution_json = ?2 WHERE id = ?3",
+            params![integration.as_ref().map(JsDocument::stringify), execution.as_ref().map(JsDocument::stringify), id],
+        )?;
+        database.connection().execute(
             "INSERT INTO suplex_audit_events (id, actor_user_id, actor_agent_id, action, target_user_id, company_id, metadata_json, created_at) VALUES (?1, ?2, NULL, 'project_created', NULL, ?3, ?4, ?5)",
             params![audit_id, actor_user_id, company_id, crate::shared::js_json::stringify(&json!({"projectId": id})), stamp],
+        )?;
+        database.connection().execute(
+            "UPDATE suplex_projects SET provider_policy_json = ?1 WHERE id = ?2",
+            params![provider_policy.as_ref().map(JsDocument::stringify), id],
         )?;
         Ok(())
     });
@@ -424,20 +757,35 @@ mod tests {
             setup_command: "pnpm install".to_owned(),
             verification_command: "pnpm test".to_owned(),
         };
-        let created = create_local_default(
+        let configured = JsDocument::parse(r#"{"integration":{"repository":{"kind":"github"}},"execution":{"instructions":"Build"},"agentTaskPolicy":{"workflowIds":["workflow_native_standard"],"defaultWorkflowId":"workflow_native_standard","rootProfileIds":["profile_native_root"],"workerProfileIds":["profile_native_worker"]},"providerPolicy":null}"#).unwrap();
+        let created = create_local(
             &mut database,
             &admin.id,
             &company.id,
             &prepared,
-            " profile_native_root ",
-            " profile_native_worker ",
-            now,
+            CreateLocalOptions {
+                root_profile_id: " profile_native_root ",
+                worker_profile_id: " profile_native_worker ",
+                configuration: Some(&configured),
+                now,
+            },
         )
         .unwrap();
         assert!(created.id.starts_with("project_"));
         assert_eq!(created.id.len(), 32);
         assert_eq!(created.repository.as_deref(), Some("owner/local"));
         assert_eq!(created.root_profile_id, "profile_native_root");
+        assert_eq!(
+            created.integration.unwrap().stringify(),
+            r#"{"repository":{"kind":"github"},"tracker":null}"#
+        );
+        assert!(
+            created
+                .execution
+                .unwrap()
+                .stringify()
+                .contains(r#""instructions":"Build""#)
+        );
         assert_eq!(
             created
                 .agent_task_policy
@@ -467,6 +815,40 @@ mod tests {
             get(&database, "project_member", &created.id).unwrap().id,
             created.id
         );
+        let missing_instance = JsDocument::parse(r#"{"providerPolicy":{"allowedProviders":[],"allowedInstanceIds":["missing_instance"]}}"#).unwrap();
+        let rejected_instance = create_local(
+            &mut database,
+            &admin.id,
+            &company.id,
+            &prepared,
+            CreateLocalOptions {
+                root_profile_id: "profile_native_root",
+                worker_profile_id: "profile_native_worker",
+                configuration: Some(&missing_instance),
+                now,
+            },
+        )
+        .unwrap_err();
+        let rejected_instance = rejected_instance.downcast_ref::<ProjectFailure>().unwrap();
+        assert_eq!(rejected_instance.status_code, 422);
+        assert_eq!(rejected_instance.findings[0].code, "instance-ineligible");
+        let missing_workflow = JsDocument::parse(r#"{"agentTaskPolicy":{"workflowIds":["missing_workflow"],"defaultWorkflowId":"missing_workflow","rootProfileIds":["profile_native_root"],"workerProfileIds":["profile_native_worker"]}}"#).unwrap();
+        let rejected_workflow = create_local(
+            &mut database,
+            &admin.id,
+            &company.id,
+            &prepared,
+            CreateLocalOptions {
+                root_profile_id: "profile_native_root",
+                worker_profile_id: "profile_native_worker",
+                configuration: Some(&missing_workflow),
+                now,
+            },
+        )
+        .unwrap_err();
+        let rejected_workflow = rejected_workflow.downcast_ref::<ProjectFailure>().unwrap();
+        assert_eq!(rejected_workflow.status_code, 422);
+        assert_eq!(rejected_workflow.findings[0].code, "workflow-ineligible");
         let duplicate = create_local_default(
             &mut database,
             &admin.id,
@@ -634,6 +1016,11 @@ mod tests {
             [&created.id],
         ).unwrap();
         let normalized = get(&database, &admin.id, &created.id).unwrap();
+        let response = response_document(&normalized).unwrap().stringify();
+        assert!(response.contains(r#""instructions":"\ud800""#));
+        assert!(response.contains(r#""rootProfileIds":["\ud800"]"#));
+        assert!(response.contains(r#""skillDirectories":[]"#));
+        assert!(!response.contains("extra"));
         assert_eq!(
             normalized.integration.unwrap().stringify(),
             r#"{"repository":{"kind":"github"},"tracker":null}"#

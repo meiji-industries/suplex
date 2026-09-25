@@ -11,6 +11,7 @@ use axum::{
 };
 
 use crate::platform::{database::SuplexDatabase, embedded};
+use crate::projects::repository::Commands;
 
 pub mod contracts;
 pub mod routes {
@@ -18,15 +19,24 @@ pub mod routes {
     pub mod auth;
     pub mod companies;
     pub mod profiles;
+    pub mod projects;
     pub mod unported;
 }
 pub mod session;
 pub mod validation;
 
 #[derive(Clone)]
+pub struct ProjectRoots {
+    pub repositories: PathBuf,
+    pub worktrees: PathBuf,
+}
+
+#[derive(Clone)]
 pub struct AppState {
     database: Arc<Mutex<SuplexDatabase>>,
     pub session_config: session::SessionConfig,
+    pub project_roots: Option<ProjectRoots>,
+    pub project_commands: Commands,
     dev_assets_dir: Option<PathBuf>,
 }
 
@@ -35,8 +45,23 @@ impl AppState {
         Self {
             database: Arc::new(Mutex::new(database)),
             session_config,
+            project_roots: None,
+            project_commands: Commands::default(),
             dev_assets_dir: None,
         }
+    }
+
+    pub fn with_project_roots(mut self, repositories: PathBuf, worktrees: PathBuf) -> Self {
+        self.project_roots = Some(ProjectRoots {
+            repositories,
+            worktrees,
+        });
+        self
+    }
+
+    pub fn with_project_commands(mut self, commands: Commands) -> Self {
+        self.project_commands = commands;
+        self
     }
 
     pub fn with_dev_assets_dir(mut self, directory: PathBuf) -> Self {
@@ -66,6 +91,7 @@ pub fn router(state: AppState) -> Router {
         .merge(routes::auth::router())
         .merge(routes::companies::router())
         .merge(routes::profiles::router())
+        .merge(routes::projects::router())
         .merge(routes::unported::router())
         .route("/auth", get(auth_page))
         .route("/assets/{filename}", get(asset))
@@ -189,6 +215,8 @@ mod tests {
                 reachable_address: "http://127.0.0.1:4113".to_owned(),
                 tailscale_exposure: "off".to_owned(),
             },
+            project_roots: None,
+            project_commands: Commands::default(),
             dev_assets_dir: None,
         };
         let observed = Arc::new(AtomicBool::new(false));

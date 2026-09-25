@@ -76,7 +76,7 @@ The table lists all 238 backend TypeScript modules present at the baseline, incl
 | [http/routes/mcp.ts](../src/http/routes/mcp.ts) | not started | |
 | [http/routes/oauth.ts](../src/http/routes/oauth.ts) | not started | |
 | [http/routes/pages.ts](../src/http/routes/pages.ts) | not started | |
-| [http/routes/projects.ts](../src/http/routes/projects.ts) | not started | Profile listing ported, including repeated query-key handling and live checks; project operations remain incomplete |
+| [http/routes/projects.ts](../src/http/routes/projects.ts) | not started | Profile listing, project reads/defaults/provider instances, GitHub pickers, and local/existing/new GitHub creation implemented. Focused HTTP checks, corrected parameter/body-before-session ordering, and isolated staged listener checks pass. Bitbucket, updates, ancillary routes, and complete raw response parity remain incomplete |
 | [http/routes/provider-login.ts](../src/http/routes/provider-login.ts) | not started | |
 | [http/routes/task-pane.ts](../src/http/routes/task-pane.ts) | not started | |
 | [http/routes/task-templates.ts](../src/http/routes/task-templates.ts) | not started | |
@@ -157,12 +157,12 @@ The table lists all 238 backend TypeScript modules present at the baseline, incl
 | [projects/contracts.ts](../src/projects/contracts.ts) | not started | |
 | [projects/execution-configuration.ts](../src/projects/execution-configuration.ts) | not started | |
 | [projects/integration-configuration.ts](../src/projects/integration-configuration.ts) | not started | |
-| [projects/projects.ts](../src/projects/projects.ts) | not started | Default local GitHub preflight/create/get/list implemented with live membership, profile eligibility, duplicate rollback, audit, and lossless normalization of all four stored JSON columns. Independent Rust project checks7/7 and TypeScript reference23/23 pass; isolated staged full Rust checks pass. Optional writes, remote/new repositories, Bitbucket, updates, and HTTP composition remain incomplete |
+| [projects/projects.ts](../src/projects/projects.ts) | not started | Local GitHub preflight/create/get/list, optional configurations, existing/new GitHub repository creation and HTTP composition implemented with live membership, profile eligibility, duplicate rollback, audit, and lossless stored JSON. Independent source review, focused checks, and private staged full Rust checks pass. Bitbucket, updates, and ancillary operations remain incomplete |
 | [projects/provider-policy.ts](../src/projects/provider-policy.ts) | not started | |
 | [projects/repository-commands.ts](../src/projects/repository-commands.ts) | not started | |
 | [projects/repository-coordinate.ts](../src/projects/repository-coordinate.ts) | not started | GitHub coordinate/remote parsing covered by repository tests; full provider coverage remains incomplete |
 | [projects/repository-inspection.ts](../src/projects/repository-inspection.ts) | not started | Existing local GitHub repo inspection, real Git fetch, fake-gh observations, path checks, buffer limits/timeouts tested; Bitbucket and live GitHub-account proof remain incomplete |
-| [projects/repository-provisioning.ts](../src/projects/repository-provisioning.ts) | not started | |
+| [projects/repository-provisioning.ts](../src/projects/repository-provisioning.ts) | not started | Existing/new GitHub repository provisioning and name inference implemented with real local Git and controlled gh checks, including operation order and admitted completion after HTTP disconnect. Bitbucket and live GitHub-account evidence remain incomplete |
 | [runtimes/claude-code/display.ts](../src/runtimes/claude-code/display.ts) | not started | |
 | [runtimes/claude-code/environment.ts](../src/runtimes/claude-code/environment.ts) | not started | |
 | [runtimes/claude-code/live-history.ts](../src/runtimes/claude-code/live-history.ts) | not started | |

@@ -29,6 +29,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             reachable_address: format!("http://127.0.0.1:{}", installation.port),
             tailscale_exposure: "off".to_owned(),
         },
+    )
+    .with_project_roots(
+        installation.repositories.clone(),
+        installation.worktrees.clone(),
     );
     #[cfg(debug_assertions)]
     let state = match std::env::var_os("SUPLEX_RUST_ASSETS_DIR") {

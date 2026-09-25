@@ -973,6 +973,73 @@ pub struct TaskWorkerReplacementBody {
     pub worker_profile_id: Option<String>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, Validate)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TaskCoordinatorReplacementBody {
+    #[garde(length(utf16, min = 1))]
+    pub session_id: String,
+    #[garde(length(utf16, min = 1))]
+    pub root_profile_id: String,
+    #[serde(
+        default,
+        deserialize_with = "optional_trimmed",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[garde(skip)]
+    pub handoff: Option<String>,
+    #[garde(skip)]
+    pub resume: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[garde(inner(length(utf16, min = 1)))]
+    pub question_id: Option<String>,
+}
+
+pub fn parse_task_coordinator_replacement(
+    input: Option<&Value>,
+) -> ContractResult<TaskCoordinatorReplacementBody> {
+    let fields = object(input)?;
+    let Some(resume) = fields.get("resume").and_then(Value::as_bool) else {
+        return Err(ContractFailure::Issues(vec![finding(
+            "invalid_union",
+            &[Value::String("resume".into())],
+        )]));
+    };
+    let mut issues = Vec::new();
+    for name in ["sessionId", "rootProfileId", "handoff", "questionId"] {
+        if name == "questionId" && !resume {
+            continue;
+        }
+        match fields.get(name) {
+            Some(Value::String(value)) => {
+                if value.is_empty() && name != "handoff" {
+                    issues.push(finding("too_small", &[Value::String(name.into())]));
+                }
+            }
+            None if name == "handoff" => {}
+            None if name == "questionId" && !resume => {}
+            _ => issues.push(finding("invalid_type", &[Value::String(name.into())])),
+        }
+    }
+    if fields.keys().any(|key| {
+        !(matches!(
+            key.as_str(),
+            "sessionId" | "rootProfileId" | "handoff" | "resume"
+        ) || (resume && key == "questionId"))
+    }) {
+        issues.push(finding("unrecognized_keys", &[]));
+    }
+    if !issues.is_empty() {
+        return Err(ContractFailure::Issues(issues));
+    }
+    let parsed: TaskCoordinatorReplacementBody =
+        serde_json::from_value(Value::Object(fields.clone()))
+            .map_err(|_| ContractFailure::Unhandled)?;
+    parsed
+        .validate()
+        .map_err(|report| ContractFailure::Issues(garde_findings(&report)))?;
+    Ok(parsed)
+}
+
 /// A user may select another allowed Worker profile; the Root MCP contract
 /// deliberately omits that field and preserves the outgoing profile.
 pub fn parse_task_worker_replacement(
@@ -1064,6 +1131,15 @@ mod tests {
             "tasks.TaskWorkerReplacementBodySchema",
             13,
             parse_task_worker_replacement,
+        );
+    }
+
+    #[test]
+    fn task_coordinator_replacement_matches_public_zod_contract() {
+        assert_request_fixtures(
+            "tasks.TaskCoordinatorReplacementBodySchema",
+            15,
+            parse_task_coordinator_replacement,
         );
     }
 

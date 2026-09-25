@@ -1,3 +1,4 @@
+use nix::{errno::Errno, sys::signal::kill, unistd::Pid};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::path::Path;
@@ -13,6 +14,30 @@ pub struct ProcessIdentity {
     pub process_group: u32,
     pub start_time: String,
     pub owner_uid: Option<u32>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ProcessOwnerObservation {
+    Running { start_time: String },
+    Absent,
+    Unknown,
+}
+
+/// A failed `ps` read is ambiguous until the kernel confirms ESRCH. This
+/// distinction keeps an uninspectable owner from being treated as stopped.
+pub fn observe_process_owner(pid: u32) -> ProcessOwnerObservation {
+    if let Some(identity) = inspect_process(pid) {
+        return ProcessOwnerObservation::Running {
+            start_time: identity.start_time,
+        };
+    }
+    let Ok(pid) = i32::try_from(pid) else {
+        return ProcessOwnerObservation::Unknown;
+    };
+    match kill(Pid::from_raw(pid), None) {
+        Err(Errno::ESRCH) => ProcessOwnerObservation::Absent,
+        Ok(()) | Err(_) => ProcessOwnerObservation::Unknown,
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

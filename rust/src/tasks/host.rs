@@ -32,7 +32,7 @@ use crate::{
             task_runtime::{self, RootCodexLaunch, WorkerCodexLaunch},
             usage,
         },
-        process::inspect_process,
+        process::{ProcessOwnerObservation, inspect_process, observe_process_owner},
     },
     shared::js_json,
     tasks::{
@@ -178,9 +178,30 @@ fn current_owner_still_running(session: &RootSession) -> bool {
     else {
         return false;
     };
-    inspect_process(pid).is_some_and(|observed| {
-        session.launch_owner_start_time.as_deref() == Some(observed.start_time.as_str())
-    })
+    claim_owner_busy(
+        session.launch_owner_start_time.as_deref(),
+        observe_process_owner(pid),
+    )
+}
+
+fn claim_owner_busy(saved_start: Option<&str>, observed: ProcessOwnerObservation) -> bool {
+    match observed {
+        ProcessOwnerObservation::Running { start_time } => {
+            saved_start.is_none_or(|saved| saved == start_time)
+        }
+        ProcessOwnerObservation::Unknown => true,
+        ProcessOwnerObservation::Absent => false,
+    }
+}
+
+fn retired_owner_can_stop(saved_start: Option<&str>, observed: ProcessOwnerObservation) -> bool {
+    match observed {
+        ProcessOwnerObservation::Absent => true,
+        ProcessOwnerObservation::Running { start_time } => {
+            saved_start.is_none_or(|saved| saved != start_time)
+        }
+        ProcessOwnerObservation::Unknown => false,
+    }
 }
 
 fn dispatch_state(turn: &RootTurn) -> DispatchState {
@@ -645,6 +666,9 @@ fn recover_prepared_root_blocking(
         return Ok(None);
     };
     root_session_store::assert_current_root(&database, task_id, &session.id, session.generation)?;
+    if !root_session_store::worker_replacement_ready(&database, &session.id)? {
+        return Ok(None);
+    }
     let Some(turn) = root_session_store::pending_turns(&database, &session.id)?
         .into_iter()
         .next()
@@ -1108,9 +1132,7 @@ async fn stop_retired_sessions(database_path: &Path, task_id: &str) -> DatabaseR
     let mut failures = Vec::new();
     for (session_id, native_id, owner_pid, owner_start) in sessions {
         if let Some(pid) = owner_pid.and_then(|pid| u32::try_from(pid).ok())
-            && owner_start.as_deref().is_some_and(|start| {
-                inspect_process(pid).is_some_and(|observed| start == observed.start_time)
-            })
+            && !retired_owner_can_stop(owner_start.as_deref(), observe_process_owner(pid))
         {
             continue;
         }
@@ -1399,6 +1421,51 @@ mod tests {
         assert_eq!(
             scope.context_path.unwrap(),
             Path::new("/tmp/suplex/data/runtime/task-preparation/task_one/context.md")
+        );
+    }
+
+    #[test]
+    fn owner_observation_keeps_unknown_claims_and_stops_only_safe_retirements() {
+        let running = ProcessOwnerObservation::Running {
+            start_time: "same".into(),
+        };
+        assert!(claim_owner_busy(None, running.clone()));
+        assert!(claim_owner_busy(Some("same"), running.clone()));
+        assert!(!claim_owner_busy(Some("old"), running.clone()));
+        assert!(claim_owner_busy(
+            Some("old"),
+            ProcessOwnerObservation::Unknown
+        ));
+        assert!(!claim_owner_busy(
+            Some("old"),
+            ProcessOwnerObservation::Absent
+        ));
+        assert!(!retired_owner_can_stop(Some("same"), running.clone()));
+        assert!(retired_owner_can_stop(None, running.clone()));
+        assert!(retired_owner_can_stop(Some("old"), running));
+        assert!(!retired_owner_can_stop(
+            Some("old"),
+            ProcessOwnerObservation::Unknown
+        ));
+        assert!(retired_owner_can_stop(
+            Some("old"),
+            ProcessOwnerObservation::Absent
+        ));
+        assert_eq!(
+            observe_process_owner(std::process::id()),
+            ProcessOwnerObservation::Running {
+                start_time: inspect_process(std::process::id()).unwrap().start_time,
+            }
+        );
+        let mut exited = std::process::Command::new("sh")
+            .args(["-c", "exit 0"])
+            .spawn()
+            .unwrap();
+        let exited_pid = exited.id();
+        exited.wait().unwrap();
+        assert_eq!(
+            observe_process_owner(exited_pid),
+            ProcessOwnerObservation::Absent
         );
     }
 
@@ -2006,6 +2073,161 @@ mod tests {
                 .contains(&failing_task)
         );
         assert!(worktree_child.wait().unwrap().code().is_none());
+        let replacement_task = {
+            let mut database = SuplexDatabase::open(&database_path, OpenMode::ReadWrite).unwrap();
+            let user = auth::development_sign_in(&mut database, Utc::now())
+                .unwrap()
+                .user;
+            database.connection().execute(
+                "INSERT INTO suplex_profiles (id,name,role,avatar_seed,provider,model,reasoning_level,service_tier,created_at,updated_at) VALUES ('new-root-host','New Root','root','new-root-host','codex','gpt-6-sol','medium','default',?1,?1)",
+                [Utc::now().to_rfc3339()],
+            ).unwrap();
+            let prepared = PreparedTask {
+                id: repository::new_task_id(),
+                company_id: "host_company".into(),
+                project_id: "host_project".into(),
+                title: "Replace native Root".into(),
+                description: String::new(),
+                configuration: serde_json::json!({"repository":"owner/repo","branch":"task-one","baseBranch":"main","baselineSha":"head"}),
+                idempotency_key: "host-root-replacement".into(),
+                request_hash: "host-root-replacement".into(),
+                creator: TaskCreator::User(user.id),
+                delivery_target: "local_worktree".into(),
+                delivery_intent: serde_json::json!({"repository":"owner/repo","headBranch":"task-one","baseBranch":"main","baselineSha":"head","pullRequestNumber":null}),
+                root_profile: serde_json::json!({"profileId":"root_profile","provider":"codex","model":"gpt-6-sol","reasoningLevel":"medium","serviceTier":"default"}),
+                worker_profile: serde_json::json!({"profileId":"worker_profile","provider":"codex","model":"gpt-6-sol","reasoningLevel":"medium","serviceTier":"default"}),
+                advisor_profiles: serde_json::json!({}),
+                issue: None,
+                start_queued: true,
+                copied_from_task_id: None,
+                depends_on: vec![],
+            };
+            let task = repository::create(&mut database, &prepared, Utc::now())
+                .unwrap()
+                .task;
+            database.connection().execute("UPDATE suplex_task_controls SET worktree_json = ?1 WHERE task_id = ?2",rusqlite::params![serde_json::json!({"path":worktree,"branch":"task-one","baseSha":head,"headSha":head,"dirty":false}).to_string(),task.id]).unwrap();
+            task.id
+        };
+        root_controller::prepare_root(&database_path, &replacement_task).unwrap();
+        let old_root = {
+            let database = SuplexDatabase::open(&database_path, OpenMode::ReadOnly).unwrap();
+            root_session_store::current_root(&database, &replacement_task)
+                .unwrap()
+                .unwrap()
+        };
+        let admitted = recover_prepared_root(
+            &database_path,
+            &base,
+            &replacement_task,
+            Some(&codex),
+            &environment,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert!(admitted.admission_observed);
+        let old_turn = {
+            let database = SuplexDatabase::open(&database_path, OpenMode::ReadOnly).unwrap();
+            database.connection().query_row("SELECT id FROM suplex_task_turns WHERE session_id = ?1 ORDER BY rowid DESC LIMIT 1",[&old_root.id],|row|row.get::<_,String>(0)).unwrap()
+        };
+        let old_directory =
+            session_reader::session_directory(&database_path, &old_root.id).unwrap();
+        for _ in 0..40 {
+            if crate::runtimes::headless::turn_file(&old_directory, &old_turn, "exit").exists() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        assert!(crate::runtimes::headless::turn_file(&old_directory, &old_turn, "exit").exists());
+        recover_prepared_root(
+            &database_path,
+            &base,
+            &replacement_task,
+            Some(&codex),
+            &environment,
+        )
+        .await
+        .unwrap();
+        let next_root = {
+            let mut database = SuplexDatabase::open(&database_path, OpenMode::ReadWrite).unwrap();
+            let rows =
+                root_session_store::root_observation_rows(&database, &replacement_task).unwrap();
+            let initial = crate::coordination::root_prompts::initial_coordinator_prompt(
+                &rows.control,
+                &rows.context,
+                &rows.dependencies,
+            )
+            .unwrap();
+            let request = crate::http::contracts::typed::tasks::TaskCoordinatorReplacementBody {
+                session_id: old_root.id.clone(),
+                root_profile_id: "new-root-host".into(),
+                handoff: Some("Continue safely".into()),
+                resume: false,
+                question_id: None,
+            };
+            let next = root_session_store::replace_coordinator(
+                &mut database,
+                &replacement_task,
+                &request,
+                &initial,
+                Utc::now(),
+            )
+            .unwrap();
+            let id = next["id"].as_str().unwrap().to_owned();
+            assert!(!root_session_store::worker_replacement_ready(&database, &id).unwrap());
+            id
+        };
+        let before = fs::read(&marker).unwrap();
+        assert!(
+            recover_prepared_root(
+                &database_path,
+                &base,
+                &replacement_task,
+                Some(&codex),
+                &environment
+            )
+            .await
+            .unwrap()
+            .is_none()
+        );
+        assert_eq!(fs::read(&marker).unwrap(), before);
+        stop_retired_sessions(&database_path, &replacement_task)
+            .await
+            .unwrap();
+        {
+            let database = SuplexDatabase::open(&database_path, OpenMode::ReadOnly).unwrap();
+            assert!(root_session_store::worker_replacement_ready(&database, &next_root).unwrap());
+        }
+        let launched = recover_prepared_root(
+            &database_path,
+            &base,
+            &replacement_task,
+            Some(&codex),
+            &environment,
+        )
+        .await
+        .unwrap()
+        .unwrap();
+        assert!(launched.admission_observed);
+        for _ in 0..40 {
+            if fs::read(&marker).is_ok_and(|launches| launches.len() == before.len() + 1) {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        assert_eq!(fs::read(&marker).unwrap().len(), before.len() + 1);
+        let new_turn = {
+            let database = SuplexDatabase::open(&database_path, OpenMode::ReadOnly).unwrap();
+            database.connection().query_row("SELECT id FROM suplex_task_turns WHERE session_id = ?1 ORDER BY rowid DESC LIMIT 1",[&next_root],|row|row.get::<_,String>(0)).unwrap()
+        };
+        let next_directory = session_reader::session_directory(&database_path, &next_root).unwrap();
+        for _ in 0..40 {
+            if crate::runtimes::headless::turn_file(&next_directory, &new_turn, "exit").exists() {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(50)).await;
+        }
+        assert!(crate::runtimes::headless::turn_file(&next_directory, &new_turn, "exit").exists());
         fs::remove_dir_all(base).unwrap();
     }
 }

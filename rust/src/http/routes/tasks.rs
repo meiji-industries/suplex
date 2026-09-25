@@ -66,6 +66,10 @@ pub fn router() -> Router<AppState> {
             axum::routing::post(replace_worker),
         )
         .route(
+            "/api/tasks/{task_id}/replace-coordinator",
+            axum::routing::post(replace_coordinator),
+        )
+        .route(
             "/api/tasks/{task_id}/answer",
             axum::routing::post(answer_pending),
         )
@@ -1073,6 +1077,54 @@ async fn replace_worker(
     }
 }
 
+async fn replace_coordinator(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    if let Err(response) = validated_task_id(&id) {
+        return *response;
+    }
+    let request = match auth::validated_typed_body(
+        &headers,
+        &body,
+        task_contracts::parse_task_coordinator_replacement,
+    ) {
+        Ok(request) => request,
+        Err(response) => return *response,
+    };
+    if !session::csrf_allowed(&state.session_config, &headers, "POST", false) {
+        return auth::error(StatusCode::FORBIDDEN, "request_origin_invalid");
+    }
+    let (user_id, cookies) = match authorize(&state, &headers) {
+        Ok(value) => value,
+        Err(response) => return *response,
+    };
+    let host = state.task_host.clone();
+    let result = state.with_database(
+        |database| -> Result<task_response::TaskResponse, Box<dyn Error>> {
+            commands::replace_user_coordinator(
+                database,
+                &user_id,
+                &id,
+                &request,
+                Utc::now(),
+                move |id| {
+                    if let Some(host) = host {
+                        host.wake(id);
+                    }
+                },
+            )?;
+            task_response::get(database, &id)?.ok_or_else(|| "replacement task disappeared".into())
+        },
+    );
+    match result {
+        Ok(task) => with_cookies(Json(task).into_response(), cookies),
+        Err(error) => with_cookies(service_error(error), cookies),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1876,6 +1928,110 @@ mod tests {
                 })
                 .unwrap()
         );
+        state.with_database(|database| {
+            database.connection().execute(
+                "INSERT INTO suplex_profiles (id,name,role,avatar_seed,provider,model,reasoning_level,service_tier,created_at,updated_at) VALUES ('replacement-root','Replacement Root','root','replacement-root','codex','gpt-6-sol','medium','default',?1,?1)",
+                [Utc::now().to_rfc3339()],
+            )
+        }).unwrap();
+        let invalid_coordinator = replace_coordinator(
+            State(state.clone()),
+            Path(immediate_id.clone()),
+            headers.clone(),
+            Bytes::from_static(br#"{"sessionId":"","rootProfileId":"","resume":true}"#),
+        )
+        .await;
+        assert_eq!(invalid_coordinator.status(), StatusCode::BAD_REQUEST);
+        let coordinator_body = Bytes::from(json!({"sessionId":root_session,"rootProfileId":"replacement-root","resume":false,"handoff":"  Continue the task  "}).to_string());
+        let coordinator = replace_coordinator(
+            State(state.clone()),
+            Path(immediate_id.clone()),
+            headers.clone(),
+            coordinator_body.clone(),
+        )
+        .await;
+        assert_eq!(coordinator.status(), StatusCode::OK);
+        let coordinator_raw = to_bytes(coordinator.into_body(), 128 * 1024).await.unwrap();
+        assert_typescript_task_body(&db_path, &root.join("artifacts"), &coordinator_raw);
+        let new_root_id = state.with_database(|database| {
+            let root =
+                crate::coordination::root_session_store::current_root(database, &immediate_id)
+                    .unwrap()
+                    .unwrap();
+            assert_ne!(root.id, root_session);
+            assert!(
+                !crate::coordination::root_session_store::worker_replacement_ready(
+                    database, &root.id
+                )
+                .unwrap()
+            );
+            assert_eq!(
+                crate::coordination::root_session_store::current_worker(database, &immediate_id)
+                    .unwrap()
+                    .unwrap()
+                    .id,
+                replacement_id
+            );
+            root.id
+        });
+        let coordinator_replay = replace_coordinator(
+            State(state.clone()),
+            Path(immediate_id.clone()),
+            headers.clone(),
+            coordinator_body,
+        )
+        .await;
+        assert_eq!(coordinator_replay.status(), StatusCode::OK);
+        assert_eq!(
+            to_bytes(coordinator_replay.into_body(), 128 * 1024)
+                .await
+                .unwrap(),
+            coordinator_raw
+        );
+        state
+            .with_database(|database| {
+                database.connection().execute(
+                    "UPDATE suplex_task_sessions SET stopped_at = ?1 WHERE id = ?2",
+                    rusqlite::params![Utc::now().to_rfc3339(), root_session],
+                )
+            })
+            .unwrap();
+        assert!(
+            state
+                .with_database(|database| {
+                    crate::coordination::root_session_store::worker_replacement_ready(
+                        database,
+                        &new_root_id,
+                    )
+                })
+                .unwrap()
+        );
+        state.with_database(|database| database.connection().execute(
+            "UPDATE suplex_task_controls SET status = 'waiting_human',human_question = 'Resolve provider failure?',human_question_id = 'coordinator-question',human_question_options_json = '[]' WHERE task_id = ?1",
+            [&immediate_id],
+        )).unwrap();
+        let resumed = replace_coordinator(
+            State(state.clone()),Path(immediate_id.clone()),headers.clone(),
+            Bytes::from(json!({"sessionId":new_root_id,"rootProfileId":"replacement-root","resume":true,"questionId":"coordinator-question"}).to_string()),
+        ).await;
+        assert_eq!(resumed.status(), StatusCode::OK);
+        let resumed_raw = to_bytes(resumed.into_body(), 128 * 1024).await.unwrap();
+        assert_typescript_task_body(&db_path, &root.join("artifacts"), &resumed_raw);
+        assert_eq!(
+            serde_json::from_slice::<Value>(&resumed_raw).unwrap()["status"],
+            "active"
+        );
+        state.with_database(|database| {
+            let next =
+                crate::coordination::root_session_store::current_root(database, &immediate_id)
+                    .unwrap()
+                    .unwrap();
+            let prompt = crate::coordination::root_session_store::pending_turns(database, &next.id)
+                .unwrap()
+                .remove(0)
+                .prompt_text;
+            assert!(prompt.contains("Question coordinator-question:\nResolve provider failure?"));
+        });
         let pause = json!({
             "kind":"task_limit", "reason":"budget",
             "limits":{"budgetUsd":15,"maxTurns":40},

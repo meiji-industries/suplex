@@ -9,13 +9,13 @@ use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use crate::{
-    coordination::root_session_store,
+    coordination::{root_prompts, root_session_store},
     http::contracts::typed::{
         projects::ProjectProviderPolicy,
         task_answers::{AnswerBody, LimitDecisionBody, TaskLimitDecision},
         tasks::{
-            TaskCreateBody, TaskDetailsBody, TaskNoteBody, TaskRenameBody,
-            TaskWorkerReplacementBody,
+            TaskCoordinatorReplacementBody, TaskCreateBody, TaskDetailsBody, TaskNoteBody,
+            TaskRenameBody, TaskWorkerReplacementBody,
         },
     },
     identity::companies,
@@ -745,6 +745,49 @@ pub fn replace_user_worker(
                 Box::new(TaskFailure::new(message, 409)) as Box<dyn Error>
             }
         })?;
+        let task = repository::task_by_id(database, task_id)?
+            .ok_or_else(|| Box::new(TaskFailure::new("Not found", 404)) as Box<dyn Error>)?;
+        let id = task_id.to_owned();
+        database.after_commit(move || wake(id));
+        Ok(task)
+    })
+}
+
+/// Select a fresh Root after checking the live task's company. The host wakes
+/// only after the replacement session and its first prompt are durable.
+pub fn replace_user_coordinator(
+    database: &mut SuplexDatabase,
+    actor_user_id: &str,
+    task_id: &str,
+    request: &TaskCoordinatorReplacementBody,
+    now: DateTime<Utc>,
+    wake: impl FnOnce(String) + Send + 'static,
+) -> DatabaseResult<TaskRecord> {
+    database.transaction(true, |database| {
+        let task = repository::task_by_id(database, task_id)?
+            .ok_or_else(|| Box::new(TaskFailure::new("Not found", 404)) as Box<dyn Error>)?;
+        companies::require_company_access(database, actor_user_id, &task.company_id)?;
+        let rows = root_session_store::root_observation_rows(database, task_id)?;
+        let initial = root_prompts::initial_coordinator_prompt(
+            &rows.control,
+            &rows.context,
+            &rows.dependencies,
+        )
+        .map_err(|message| Box::new(TaskFailure::new(message, 501)) as Box<dyn Error>)?;
+        root_session_store::replace_coordinator(database, task_id, request, &initial, now)
+            .map_err(|error| {
+                let message = error.to_string();
+                if message.starts_with("experimental_not_ported:") {
+                    Box::new(TaskFailure {
+                        public_message: "This task workflow is not implemented in the Rust engine"
+                            .into(),
+                        status_code: 501,
+                        code: "experimental_not_ported",
+                    }) as Box<dyn Error>
+                } else {
+                    Box::new(TaskFailure::new(message, 409)) as Box<dyn Error>
+                }
+            })?;
         let task = repository::task_by_id(database, task_id)?
             .ok_or_else(|| Box::new(TaskFailure::new("Not found", 404)) as Box<dyn Error>)?;
         let id = task_id.to_owned();

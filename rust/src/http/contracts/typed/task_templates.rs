@@ -1,12 +1,13 @@
-//! Stored task-template configuration used by the project template list.
+//! Task-template request contracts and stored configuration.
 
 use garde::Validate;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{Map, Value};
 
 use super::{
-    delivery_target as check_delivery_target, id_1_256, tasks,
-    visual_evidence as check_visual_evidence,
+    ContractFailure, ContractResult, DELIVERY_TARGETS, Field, ID, Rule, TRIMMED_NAME,
+    VISUAL_EVIDENCE, WORKFLOW_IDS, delivery_target as check_delivery_target, id_1_256, optional,
+    parse_object, serialized, tasks, visual_evidence as check_visual_evidence,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize, Validate)]
@@ -68,4 +69,103 @@ pub fn parse_stored_configuration(value: Value) -> Result<TemplateConfiguration,
         .validate()
         .map_err(|error| error.to_string())?;
     Ok(configuration)
+}
+
+const DESCRIPTION: Rule = Rule::Text {
+    trim: true,
+    min: 0,
+    max: None,
+};
+const PATCH_PROFILE_ID: Rule = Rule::Text {
+    trim: false,
+    min: 1,
+    max: None,
+};
+
+const CREATE: &[Field] = &[
+    Field {
+        default: Some("\"\""),
+        ..optional("description", DESCRIPTION)
+    },
+    optional("rootProfileId", ID),
+    optional("workerProfileId", ID),
+    Field {
+        default: Some("\"pull_request_draft\""),
+        ..optional("deliveryTarget", DELIVERY_TARGETS)
+    },
+    Field {
+        default: Some("true"),
+        ..optional("runProjectTests", Rule::Flag)
+    },
+    Field {
+        default: Some("\"off\""),
+        ..optional("visualEvidence", VISUAL_EVIDENCE)
+    },
+    Field {
+        default: Some("\"standard\""),
+        ..optional("workflow", WORKFLOW_IDS)
+    },
+    Field {
+        default: Some("{}"),
+        ..optional("advisorProfileIds", Rule::Advisors)
+    },
+    Field {
+        required: true,
+        ..optional("name", TRIMMED_NAME)
+    },
+];
+
+// A patch carries no defaults: the service merges it with the stored template first.
+const UPDATE: &[Field] = &[
+    optional("name", TRIMMED_NAME),
+    optional("description", TRIMMED_NAME),
+    Field {
+        nullable: true,
+        ..optional("rootProfileId", PATCH_PROFILE_ID)
+    },
+    Field {
+        nullable: true,
+        ..optional("workerProfileId", PATCH_PROFILE_ID)
+    },
+    optional("deliveryTarget", DELIVERY_TARGETS),
+    optional("runProjectTests", Rule::Flag),
+    optional("visualEvidence", VISUAL_EVIDENCE),
+    optional("workflow", WORKFLOW_IDS),
+    optional("advisorProfileIds", Rule::Advisors),
+];
+
+const SAVE: &[Field] = &[Field {
+    required: true,
+    ..optional("name", TRIMMED_NAME)
+}];
+
+/// `CreateTaskTemplateBodySchema`.
+pub fn parse_create(input: Option<&Value>) -> ContractResult<TemplateConfiguration> {
+    let value = parse_object(input, CREATE, true)?;
+    parse_stored_configuration(Value::Object(value)).map_err(ContractFailure::Internal)
+}
+
+/// `UpdateTaskTemplateBodySchema`: only the present fields.
+pub fn parse_update(input: Option<&Value>) -> ContractResult<Map<String, Value>> {
+    parse_object(input, UPDATE, true)
+}
+
+/// `SaveTaskAsTemplateBodySchema`: the trimmed template name.
+pub fn parse_save(input: Option<&Value>) -> ContractResult<String> {
+    let mut value = parse_object(input, SAVE, true)?;
+    Ok(value
+        .remove("name")
+        .and_then(|name| name.as_str().map(str::to_owned))
+        .unwrap_or_default())
+}
+
+pub fn validate(contract: &str, input: Option<&Value>) -> Option<ContractResult<Value>> {
+    Some(match contract {
+        "task-templates.CreateTaskTemplateBodySchema" => serialized(parse_create(input)),
+        "task-templates.UpdateTaskTemplateBodySchema" => parse_update(input).map(Value::Object),
+        "task-templates.SaveTaskAsTemplateBodySchema" => {
+            parse_save(input).map(|name| serde_json::json!({ "name": name }))
+        }
+        _ => return None,
+    })
 }

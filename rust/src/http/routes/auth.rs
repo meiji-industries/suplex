@@ -13,12 +13,11 @@ use serde::Serialize;
 use serde_json::json;
 
 use crate::{
-    http::contracts::{self, JsContractFailure},
+    http::contracts::{self, typed},
     identity::{
         auth::{self, AuthFailure, AuthUser, ProfileUpdate},
         ceremony::{self, PreparedCredential, WebAuthnSite},
     },
-    shared::js_json::{JsDocument, JsNode},
 };
 
 use super::super::{AppState, session, validation};
@@ -64,7 +63,7 @@ async fn registration_options(
     body: Bytes,
     kind: &'static str,
 ) -> Response {
-    let parsed = match validated_js_body(&headers, &body, "common.TokenBodySchema") {
+    let parsed = match validated_typed_body(&headers, &body, typed::auth::parse_token) {
         Ok(parsed) => parsed,
         Err(response) => return *response,
     };
@@ -75,7 +74,7 @@ async fn registration_options(
         Ok(reachable) => reachable,
         Err(response) => return *response,
     };
-    let token = js_string(&parsed, "token");
+    let token = parsed.token;
     let origin = reachable.origin().ascii_serialization();
     let result = state.with_database(|database| {
         ceremony::begin_registration(
@@ -101,11 +100,14 @@ async fn registration_verify(
     body: Bytes,
     kind: &'static str,
 ) -> Response {
-    let parsed =
-        match validated_js_body(&headers, &body, "common.RegistrationVerificationBodySchema") {
-            Ok(parsed) => parsed,
-            Err(response) => return *response,
-        };
+    let parsed = match validated_typed_body(
+        &headers,
+        &body,
+        typed::auth::parse_registration_verification,
+    ) {
+        Ok(parsed) => parsed,
+        Err(response) => return *response,
+    };
     if !session::csrf_allowed(&state.session_config, &headers, "POST", false) {
         return error(StatusCode::FORBIDDEN, "request_origin_invalid");
     }
@@ -113,9 +115,9 @@ async fn registration_verify(
         Ok(reachable) => reachable,
         Err(response) => return *response,
     };
-    let token = js_string(&parsed, "token");
-    let challenge_id = js_string(&parsed, "challengeId");
-    let response = js_response(&parsed, WebAuthnCredentialKind::Registration);
+    let token = parsed.token;
+    let challenge_id = parsed.challenge_id;
+    let response = prepared_response(parsed.response);
     let origin = reachable.origin().ascii_serialization();
     let rp_id = reachable.host_str().unwrap_or_default().to_owned();
     // A blocking task continues the accepted ceremony if the HTTP waiter drops.
@@ -282,10 +284,10 @@ async fn authentication_verify(
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
-    let parsed = match validated_js_body(
+    let parsed = match validated_typed_body(
         &headers,
         &body,
-        "common.AuthenticationVerificationBodySchema",
+        typed::auth::parse_authentication_verification,
     ) {
         Ok(parsed) => parsed,
         Err(response) => return *response,
@@ -297,11 +299,11 @@ async fn authentication_verify(
         Ok(reachable) => reachable,
         Err(response) => return *response,
     };
-    let response = js_response(&parsed, WebAuthnCredentialKind::Authentication);
+    let response = prepared_response(parsed.response);
     let result = state.with_database(|database| {
         ceremony::complete_authentication_prepared(
             database,
-            &js_string(&parsed, "challengeId"),
+            &parsed.challenge_id,
             response,
             WebAuthnSite {
                 origin: reachable.origin().ascii_serialization().as_str(),
@@ -356,16 +358,13 @@ pub(crate) fn append_cookies(response: &mut Response, cookies: Vec<String>) {
 }
 
 pub(crate) fn validation_error(issues: Vec<serde_json::Value>) -> Response {
-    let raw = crate::shared::js_json::stringify(&serde_json::Value::Array(issues));
-    let document = JsDocument::parse(&raw).expect("serialized validation issues parse");
-    validation::validation_error_js(&document)
+    validation::validation_error(issues)
 }
 
-pub(crate) fn validated_body(
+pub(crate) fn parsed_body(
     headers: &HeaderMap,
     body: &Bytes,
-    contract: &str,
-) -> Result<serde_json::Value, Box<Response>> {
+) -> Result<Option<serde_json::Value>, Box<Response>> {
     let content_type = headers
         .get(header::CONTENT_TYPE)
         .and_then(|value| value.to_str().ok())
@@ -388,6 +387,36 @@ pub(crate) fn validated_body(
             "Unsupported media type",
         )));
     };
+    Ok(parsed)
+}
+
+pub(crate) fn validated_typed_body<T>(
+    headers: &HeaderMap,
+    body: &Bytes,
+    parse: fn(Option<&serde_json::Value>) -> contracts::typed::ContractResult<T>,
+) -> Result<T, Box<Response>> {
+    let parsed = parsed_body(headers, body)?;
+    match parse(parsed.as_ref()) {
+        Ok(value) => Ok(value),
+        Err(contracts::typed::ContractFailure::Issues(findings)) => {
+            Err(Box::new(validation::validation_error_public(findings)))
+        }
+        Err(
+            contracts::typed::ContractFailure::Unhandled
+            | contracts::typed::ContractFailure::Internal(_),
+        ) => Err(Box::new(error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Internal server error",
+        ))),
+    }
+}
+
+pub(crate) fn validated_body(
+    headers: &HeaderMap,
+    body: &Bytes,
+    contract: &str,
+) -> Result<serde_json::Value, Box<Response>> {
+    let parsed = parsed_body(headers, body)?;
     match contracts::validate(contract, parsed.as_ref()) {
         Some(Ok(value)) => Ok(value),
         Some(Err(issues)) => Err(Box::new(validation_error(issues))),
@@ -398,131 +427,15 @@ pub(crate) fn validated_body(
     }
 }
 
-pub(crate) fn validated_js_body(
-    headers: &HeaderMap,
-    body: &Bytes,
-    contract: &str,
-) -> Result<JsDocument, Box<Response>> {
-    let content_type = headers
-        .get(header::CONTENT_TYPE)
-        .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.split(';').next())
-        .unwrap_or_default();
-    let document = if body.is_empty() {
-        None
-    } else if content_type == "text/plain" {
-        let text = String::from_utf8_lossy(body);
-        let encoded = serde_json::to_string(&text).expect("text body is valid JSON string");
-        Some(JsDocument::parse(&encoded).expect("encoded text body parses"))
-    } else if content_type == "application/json" {
-        let raw = std::str::from_utf8(body)
-            .map_err(|_| Box::new(error(StatusCode::BAD_REQUEST, "Invalid request")))?;
-        Some(
-            JsDocument::parse(raw)
-                .map_err(|_| Box::new(error(StatusCode::BAD_REQUEST, "Invalid request")))?,
-        )
-    } else {
-        return Err(Box::new(error(
-            StatusCode::UNSUPPORTED_MEDIA_TYPE,
-            "Unsupported media type",
-        )));
-    };
-    match contracts::validate_js_detailed(contract, document.as_ref()) {
-        Some(Ok(value)) => Ok(value),
-        Some(Err(JsContractFailure::Issues(issues))) => {
-            Err(Box::new(validation::validation_error_js(&issues)))
-        }
-        Some(Err(JsContractFailure::Thrown(_))) => Err(Box::new(error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "Internal server error",
-        ))),
-        None => Err(Box::new(error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "Internal server error",
-        ))),
-    }
-}
-
-fn js_string(document: &JsDocument, name: &str) -> String {
-    document
-        .get(document.root(), name)
-        .and_then(|index| match document.node(index) {
-            JsNode::String(value) => String::from_utf16(value).ok(),
-            _ => None,
-        })
-        .unwrap_or_default()
-}
-
-#[derive(Clone, Copy)]
-enum WebAuthnCredentialKind {
-    Registration,
-    Authentication,
-}
-
-fn js_fields(document: &JsDocument, object: usize, names: &[&str]) -> Vec<(Vec<u16>, usize)> {
-    let JsNode::Object(fields) = document.node(object) else {
-        return Vec::new();
-    };
-    fields
-        .iter()
-        .filter(|(key, _)| {
-            names
-                .iter()
-                .any(|name| key.iter().copied().eq(name.encode_utf16()))
-        })
-        .cloned()
-        .collect()
-}
-
-fn js_response(
-    document: &JsDocument,
-    kind: WebAuthnCredentialKind,
-) -> ceremony::PreparedCredential {
-    let Some(credential) = document.get(document.root(), "response") else {
-        return ceremony::PreparedCredential {
-            shape_valid: false,
-            payload: None,
-        };
-    };
-    let shape_valid = document.get(credential, "id").is_some_and(|index| {
-        matches!(document.node(index), JsNode::String(value) if !value.is_empty() && value.len() <= 512)
-    }) && document.get(credential, "type").is_some_and(|index| {
-        matches!(document.node(index), JsNode::String(value) if value.iter().copied().eq("public-key".encode_utf16()))
-    });
-    if !shape_valid {
-        return ceremony::PreparedCredential {
-            shape_valid,
-            payload: None,
-        };
-    }
-    let mut projected = document.clone();
-    let fields = match kind {
-        WebAuthnCredentialKind::Registration => {
-            &["clientDataJSON", "attestationObject", "transports"][..]
-        }
-        WebAuthnCredentialKind::Authentication => &[
-            "clientDataJSON",
-            "authenticatorData",
-            "signature",
-            "userHandle",
-        ][..],
-    };
-    let nested = document.get(credential, "response").map(|index| {
-        if matches!(document.node(index), JsNode::Object(_)) {
-            projected.append_node(JsNode::Object(js_fields(document, index, fields)))
-        } else {
-            index
-        }
-    });
-    let mut top = js_fields(document, credential, &["id", "rawId", "type"]);
-    if let Some(index) = nested {
-        top.push(("response".encode_utf16().collect(), index));
-    }
-    let root = projected.append_node(JsNode::Object(top));
-    projected.set_root(root);
-    ceremony::PreparedCredential {
+fn prepared_response(response: serde_json::Value) -> PreparedCredential {
+    let shape_valid = response
+        .get("id")
+        .and_then(serde_json::Value::as_str)
+        .is_some_and(|id| !id.is_empty() && id.encode_utf16().count() <= 512)
+        && response.get("type").and_then(serde_json::Value::as_str) == Some("public-key");
+    PreparedCredential {
         shape_valid,
-        payload: projected.to_serde_if_representable().ok(),
+        payload: Some(response),
     }
 }
 
@@ -565,7 +478,7 @@ async fn me(State(state): State<AppState>, headers: HeaderMap) -> Response {
 }
 
 async fn update_me(State(state): State<AppState>, headers: HeaderMap, body: Bytes) -> Response {
-    let parsed = match validated_body(&headers, &body, "auth.ProfileBodySchema") {
+    let parsed = match validated_typed_body(&headers, &body, typed::auth::parse_profile) {
         Ok(parsed) => parsed,
         Err(response) => return *response,
     };
@@ -579,18 +492,9 @@ async fn update_me(State(state): State<AppState>, headers: HeaderMap, body: Byte
             return Ok::<_, Box<dyn Error>>((None, session.set_cookies));
         };
         let update = ProfileUpdate {
-            display_name: parsed
-                .get("displayName")
-                .and_then(|value| value.as_str())
-                .map(str::to_owned),
-            username: parsed
-                .get("username")
-                .and_then(|value| value.as_str())
-                .map(str::to_owned),
-            avatar_seed: parsed
-                .get("avatarSeed")
-                .and_then(|value| value.as_str())
-                .map(str::to_owned),
+            display_name: parsed.display_name,
+            username: parsed.username,
+            avatar_seed: parsed.avatar_seed,
         };
         let updated = auth::update_profile(database, &user.id, update, Utc::now());
         Ok((Some(updated), session.set_cookies))

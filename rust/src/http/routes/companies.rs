@@ -11,7 +11,7 @@ use serde::Serialize;
 use serde_json::{Value, json};
 
 use crate::{
-    http::contracts,
+    http::contracts::{self, typed},
     identity::{auth::AuthUser, companies},
 };
 
@@ -132,10 +132,11 @@ async fn get_company(
 }
 
 async fn create(State(state): State<AppState>, headers: HeaderMap, body: Bytes) -> Response {
-    let parsed = match auth_routes::validated_body(&headers, &body, "auth.CompanyNameBodySchema") {
-        Ok(value) => value,
-        Err(response) => return *response,
-    };
+    let parsed =
+        match auth_routes::validated_typed_body(&headers, &body, typed::auth::parse_company_name) {
+            Ok(value) => value,
+            Err(response) => return *response,
+        };
     if let Some(error) = csrf_failure(&state, &headers, "POST") {
         return error;
     }
@@ -143,7 +144,7 @@ async fn create(State(state): State<AppState>, headers: HeaderMap, body: Bytes) 
         Ok(value) => value,
         Err(error) => return *error,
     };
-    let name = parsed["name"].as_str().unwrap_or_default();
+    let name = &parsed.name;
     let response = match state
         .with_database(|database| companies::create_company(database, &user.id, name, Utc::now()))
     {
@@ -165,10 +166,11 @@ async fn rename(
     ) {
         return *response;
     }
-    let parsed = match auth_routes::validated_body(&headers, &body, "auth.CompanyNameBodySchema") {
-        Ok(value) => value,
-        Err(response) => return *response,
-    };
+    let parsed =
+        match auth_routes::validated_typed_body(&headers, &body, typed::auth::parse_company_name) {
+            Ok(value) => value,
+            Err(response) => return *response,
+        };
     if let Some(error) = csrf_failure(&state, &headers, "PATCH") {
         return error;
     }
@@ -177,13 +179,7 @@ async fn rename(
         Err(error) => return *error,
     };
     let response = match state.with_database(|database| {
-        companies::rename_company(
-            database,
-            &user.id,
-            &company_id,
-            parsed["name"].as_str().unwrap_or_default(),
-            Utc::now(),
-        )
+        companies::rename_company(database, &user.id, &company_id, &parsed.name, Utc::now())
     }) {
         Ok(company) => Json(company).into_response(),
         Err(error) => auth_routes::service_error(error),
@@ -203,11 +199,14 @@ async fn issue_code(
     ) {
         return *response;
     }
-    let parsed =
-        match auth_routes::validated_body(&headers, &body, "auth.CompanyIssueCodeBodySchema") {
-            Ok(value) => value,
-            Err(response) => return *response,
-        };
+    let parsed = match auth_routes::validated_typed_body(
+        &headers,
+        &body,
+        typed::auth::parse_company_issue_code,
+    ) {
+        Ok(value) => value,
+        Err(response) => return *response,
+    };
     if let Some(error) = csrf_failure(&state, &headers, "PATCH") {
         return error;
     }
@@ -220,7 +219,7 @@ async fn issue_code(
             database,
             &user.id,
             &company_id,
-            parsed["issueCode"].as_str(),
+            parsed.issue_code.as_deref(),
             Utc::now(),
         )
     }) {
@@ -269,10 +268,11 @@ async fn add_membership(
     ) {
         return *response;
     }
-    let parsed = match auth_routes::validated_body(&headers, &body, "auth.MembershipBodySchema") {
-        Ok(value) => value,
-        Err(response) => return *response,
-    };
+    let parsed =
+        match auth_routes::validated_typed_body(&headers, &body, typed::auth::parse_membership) {
+            Ok(value) => value,
+            Err(response) => return *response,
+        };
     if let Some(error) = csrf_failure(&state, &headers, "POST") {
         return error;
     }
@@ -281,13 +281,7 @@ async fn add_membership(
         Err(error) => return *error,
     };
     let response = match state.with_database(|database| {
-        companies::add_membership(
-            database,
-            &user.id,
-            parsed["userId"].as_str().unwrap_or_default(),
-            &company_id,
-            Utc::now(),
-        )
+        companies::add_membership(database, &user.id, &parsed.user_id, &company_id, Utc::now())
     }) {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
         Err(error) => auth_routes::service_error(error),

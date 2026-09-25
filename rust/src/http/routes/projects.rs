@@ -4,7 +4,7 @@ use axum::{
     Router,
     body::Bytes,
     extract::{Path, State},
-    http::{HeaderMap, StatusCode, header},
+    http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     routing::get,
 };
@@ -12,12 +12,18 @@ use chrono::Utc;
 use serde_json::json;
 
 use crate::{
-    http::{AppState, contracts, session},
+    http::{
+        AppState,
+        contracts::{
+            self,
+            typed::projects::{self as project_contracts, ProjectCreateBody, RepositoryConnection},
+        },
+        session,
+    },
     projects::{
         provisioning, repository,
         service::{self, ProjectFailure},
     },
-    shared::js_json::{JsDocument, JsNode},
 };
 
 use super::auth;
@@ -61,27 +67,16 @@ fn validated_path(contract: &str, name: &str, value: &str) -> Result<(), Box<Res
     }
 }
 
-fn string_field(document: &JsDocument, name: &str) -> String {
-    let index = document
-        .get(document.root(), name)
-        .expect("validated project body field");
-    let JsNode::String(value) = document.node(index) else {
-        unreachable!("validated project body string")
+fn bitbucket_connection(body: &ProjectCreateBody) -> bool {
+    let integration = match body {
+        ProjectCreateBody::Local(value) => value.integration.as_ref(),
+        ProjectCreateBody::ExistingRepository(value) => value.integration.as_ref(),
+        ProjectCreateBody::NewRepository(value) => value.integration.as_ref(),
     };
-    String::from_utf16_lossy(value)
-}
-
-fn bitbucket_connection(document: &JsDocument) -> bool {
-    let Some(integration) = document.get(document.root(), "integration") else {
-        return false;
-    };
-    let Some(repository) = document.get(integration, "repository") else {
-        return false;
-    };
-    let Some(kind) = document.get(repository, "kind") else {
-        return false;
-    };
-    matches!(document.node(kind), JsNode::String(value) if value.iter().copied().eq("bitbucket".encode_utf16()))
+    matches!(
+        integration.map(|value| &value.repository),
+        Some(RepositoryConnection::Bitbucket { .. })
+    )
 }
 
 async fn create(
@@ -94,11 +89,10 @@ async fn create(
     {
         return *response;
     }
-    let document =
-        match auth::validated_js_body(&headers, &body, "projects.ProjectCreateBodySchema") {
-            Ok(value) => value,
-            Err(response) => return *response,
-        };
+    let body = match auth::validated_typed_body(&headers, &body, project_contracts::parse_create) {
+        Ok(value) => value,
+        Err(response) => return *response,
+    };
     if !session::csrf_allowed(&state.session_config, &headers, "POST", false) {
         return auth::error(StatusCode::FORBIDDEN, "request_origin_invalid");
     }
@@ -132,29 +126,50 @@ async fn create(
         Err(response) => return with_cookies(response, cookies),
         Ok(_) => {}
     }
-    if bitbucket_connection(&document) {
+    if bitbucket_connection(&body) {
         return with_cookies(auth::not_ported(), cookies);
     }
     let (sender, receiver) = tokio::sync::oneshot::channel();
     tokio::spawn(async move {
-        let response = if document.get(document.root(), "repositoryUrl").is_some() {
-            create_from_repository(&state, &roots, &user_id, &company_id, &document).await
-        } else if document.get(document.root(), "repositoryName").is_some() {
-            create_with_new_repository(&state, &roots, &user_id, &company_id, &document).await
-        } else {
-            let fields = [
-                "name",
-                "repositoryPath",
-                "worktreeRoot",
-                "repository",
-                "baseBranch",
-                "setupCommand",
-                "verificationCommand",
-                "rootProfileId",
-                "workerProfileId",
-            ]
-            .map(|name| string_field(&document, name));
-            finish_local_project(&state, &roots, &user_id, &company_id, &document, &fields).await
+        let response = match &body {
+            ProjectCreateBody::ExistingRepository(value) => {
+                create_from_repository(
+                    &state,
+                    &roots,
+                    &user_id,
+                    &company_id,
+                    &body,
+                    &value.repository_url,
+                    value.base_branch.as_deref(),
+                )
+                .await
+            }
+            ProjectCreateBody::NewRepository(value) => {
+                create_with_new_repository(
+                    &state,
+                    &roots,
+                    &user_id,
+                    &company_id,
+                    &body,
+                    &value.repository_name,
+                    value.base_branch.as_deref(),
+                )
+                .await
+            }
+            ProjectCreateBody::Local(value) => {
+                let fields = [
+                    value.name.clone(),
+                    value.repository_path.clone(),
+                    value.worktree_root.clone(),
+                    value.repository.clone(),
+                    value.base_branch.clone(),
+                    value.setup_command.clone(),
+                    value.verification_command.clone(),
+                    value.root_profile_id.clone(),
+                    value.worker_profile_id.clone(),
+                ];
+                finish_local_project(&state, &roots, &user_id, &company_id, &body, &fields).await
+            }
         };
         let _ = sender.send(with_cookies(response, cookies));
     });
@@ -168,7 +183,7 @@ async fn finish_local_project(
     roots: &crate::http::ProjectRoots,
     user_id: &str,
     company_id: &str,
-    document: &JsDocument,
+    body: &ProjectCreateBody,
     fields: &[String; 9],
 ) -> Response {
     let input = repository::LocalProjectInput {
@@ -197,15 +212,16 @@ async fn finish_local_project(
                 service::CreateLocalOptions {
                     root_profile_id: &fields[7],
                     worker_profile_id: &fields[8],
-                    configuration: Some(document),
+                    configuration: Some(body),
                     now: Utc::now(),
                 },
             )
         }) {
-            Ok(project) => match service::response_document(&project) {
-                Ok(document) => raw_json(document, StatusCode::CREATED),
-                Err(source) => service_error(source),
-            },
+            Ok(project) => (
+                StatusCode::CREATED,
+                axum::Json(service::response_project(&project)),
+            )
+                .into_response(),
             Err(source) => service_error(source),
         },
         Err(findings) => service_error(Box::new(ProjectFailure {
@@ -221,10 +237,11 @@ async fn create_from_repository(
     roots: &crate::http::ProjectRoots,
     user_id: &str,
     company_id: &str,
-    document: &JsDocument,
+    body: &ProjectCreateBody,
+    raw_url: &str,
+    requested_base_branch: Option<&str>,
 ) -> Response {
-    let raw_url = string_field(document, "repositoryUrl");
-    let Some(coordinate) = repository::repository_coordinate(&raw_url) else {
+    let Some(coordinate) = repository::repository_coordinate(raw_url) else {
         return service_error(Box::new(ProjectFailure {
             message: "Repository URL is invalid",
             status_code: 422,
@@ -238,16 +255,13 @@ async fn create_from_repository(
             findings: Vec::new(),
         }));
     }
-    let base_branch = document.get(document.root(), "baseBranch").map_or_else(
-        || "main".to_owned(),
-        |_| string_field(document, "baseBranch"),
-    );
+    let base_branch = requested_base_branch.unwrap_or("main").to_owned();
     create_coordinate(
         state,
         roots,
         user_id,
         company_id,
-        document,
+        body,
         coordinate,
         base_branch,
     )
@@ -259,7 +273,7 @@ async fn create_coordinate(
     roots: &crate::http::ProjectRoots,
     user_id: &str,
     company_id: &str,
-    document: &JsDocument,
+    body: &ProjectCreateBody,
     coordinate: repository::Coordinate,
     base_branch: String,
 ) -> Response {
@@ -291,7 +305,7 @@ async fn create_coordinate(
         "profile_native_root".to_owned(),
         "profile_native_worker".to_owned(),
     ];
-    finish_local_project(state, roots, user_id, company_id, document, &fields).await
+    finish_local_project(state, roots, user_id, company_id, body, &fields).await
 }
 
 async fn create_with_new_repository(
@@ -299,9 +313,10 @@ async fn create_with_new_repository(
     roots: &crate::http::ProjectRoots,
     user_id: &str,
     company_id: &str,
-    document: &JsDocument,
+    body: &ProjectCreateBody,
+    repository_name: &str,
+    requested_base_branch: Option<&str>,
 ) -> Response {
-    let repository_name = string_field(document, "repositoryName");
     let mut parts = repository_name.trim().split('/');
     let first = parts.next().unwrap_or_default();
     let second = parts.next();
@@ -328,10 +343,7 @@ async fn create_with_new_repository(
     let name = second.unwrap_or(first);
     let coordinate =
         repository::repository_coordinate(&format!("https://github.com/{owner}/{name}"));
-    let base_branch = document.get(document.root(), "baseBranch").map_or_else(
-        || "main".to_owned(),
-        |_| string_field(document, "baseBranch"),
-    );
+    let base_branch = requested_base_branch.unwrap_or("main").to_owned();
     let Some(coordinate) = coordinate.filter(|_| repository::valid_branch(&base_branch)) else {
         return service_error(Box::new(ProjectFailure {
             message: "Repository name is invalid",
@@ -363,7 +375,7 @@ async fn create_with_new_repository(
         roots,
         user_id,
         company_id,
-        document,
+        body,
         coordinate,
         base_branch,
     )
@@ -379,15 +391,6 @@ fn service_error(source: Box<dyn Error>) -> Response {
             .into_response(),
         Err(source) => auth::service_error(source),
     }
-}
-
-fn raw_json(document: JsDocument, status: StatusCode) -> Response {
-    (
-        status,
-        [(header::CONTENT_TYPE, "application/json")],
-        document.stringify(),
-    )
-        .into_response()
 }
 
 fn authorize(
@@ -422,36 +425,7 @@ fn list_for(state: AppState, headers: HeaderMap, company_id: Option<String>) -> 
     let result =
         state.with_database(|database| service::list(database, &user_id, company_id.as_deref()));
     let response = match result {
-        Ok(projects) => {
-            let documents = projects
-                .iter()
-                .map(service::response_document)
-                .collect::<Result<Vec<_>, _>>();
-            match documents {
-                Ok(documents) => {
-                    let input = format!(
-                        "{{\"projects\":[{}]}}",
-                        documents
-                            .iter()
-                            .map(JsDocument::stringify)
-                            .collect::<Vec<_>>()
-                            .join(",")
-                    );
-                    match JsDocument::parse(&input).ok().and_then(|document| {
-                        contracts::validate_js_detailed(
-                            "projects.ProjectListResponseSchema",
-                            Some(&document),
-                        )
-                    }) {
-                        Some(Ok(document)) => raw_json(document, StatusCode::OK),
-                        _ => {
-                            auth::error(StatusCode::INTERNAL_SERVER_ERROR, "Internal server error")
-                        }
-                    }
-                }
-                Err(source) => service_error(source),
-            }
-        }
+        Ok(projects) => axum::Json(json!({"projects": projects.iter().map(service::response_project).collect::<Vec<_>>() })).into_response(),
         Err(source) => service_error(source),
     };
     with_cookies(response, cookies)
@@ -488,10 +462,7 @@ async fn get_one(
     };
     let response =
         match state.with_database(|database| service::get(database, &user_id, &project_id)) {
-            Ok(project) => match service::response_document(&project) {
-                Ok(document) => raw_json(document, StatusCode::OK),
-                Err(source) => service_error(source),
-            },
+            Ok(project) => axum::Json(service::response_project(&project)).into_response(),
             Err(source) => service_error(source),
         };
     with_cookies(response, cookies)
@@ -641,7 +612,10 @@ async fn owner_repositories(
 mod tests {
     use std::{fs, os::unix::fs::PermissionsExt, path::Path as FilePath, time::Duration};
 
-    use axum::{body::to_bytes, http::HeaderValue};
+    use axum::{
+        body::to_bytes,
+        http::{HeaderValue, header},
+    };
     use chrono::DateTime;
     use sha2::{Digest, Sha256};
 
@@ -665,7 +639,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn project_reads_apply_response_contract_without_losing_stored_utf16() {
+    async fn project_reads_serialize_normalized_configuration_and_enforce_scope() {
         let path = std::env::temp_dir().join(format!(
             "{}.sqlite",
             identity_auth::random_hex_id("suplex_project_http").unwrap()
@@ -679,7 +653,7 @@ mod tests {
             companies::create_company(&mut database, &admin.user.id, "Projects", now).unwrap();
         database.connection().execute(
             "INSERT INTO suplex_projects (id, company_id, name, repository_path, worktree_root, repository_identity, base_branch, setup_command, verification_command, root_profile_id, worker_profile_id, integration_json, execution_json, provider_policy_json, agent_task_policy_json, created_at, updated_at) VALUES ('project_http', ?1, 'Project', '/tmp/repository', '/tmp/worktrees', 'owner/repo', 'main', '', '', 'profile_native_root', 'profile_native_worker', '{}', ?2, NULL, '{}', ?3, ?3)",
-            rusqlite::params![company.id, r#"{"instructions":"\ud800"}"#, now.to_rfc3339()],
+            rusqlite::params![company.id, r#"{"instructions":"Build"}"#, now.to_rfc3339()],
         ).unwrap();
         let member_now = Utc::now();
         database.connection().execute(
@@ -749,7 +723,7 @@ mod tests {
         assert_eq!(response.status(), StatusCode::OK);
         let body = to_bytes(response.into_body(), 1024 * 1024).await.unwrap();
         let body = std::str::from_utf8(&body).unwrap();
-        assert!(body.contains(r#""instructions":"\ud800""#));
+        assert!(body.contains(r#""instructions":"Build""#));
         assert!(body.contains(r#""skillDirectories":[]"#));
         let defaults = repository_defaults(
             State(state.clone()),
@@ -778,7 +752,7 @@ mod tests {
         assert!(
             std::str::from_utf8(&body)
                 .unwrap()
-                .contains(r#""instructions":"\ud800""#)
+                .contains(r#""instructions":"Build""#)
         );
         let _ = std::fs::remove_file(&path);
         let _ = std::fs::remove_file(path.with_extension("sqlite-wal"));

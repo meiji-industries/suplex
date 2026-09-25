@@ -1,7 +1,6 @@
 use serde_json::{Map, Value, json};
 
 use super::{ParseResult, value_type};
-use crate::shared::js_json::utf16_len;
 
 type Path = Vec<Value>;
 
@@ -112,7 +111,7 @@ fn string(
     } else {
         value.as_str()
     };
-    let length = utf16_len(value);
+    let length = value.encode_utf16().count();
     let mut issues = Vec::new();
     if length < minimum {
         issues.push(json!({

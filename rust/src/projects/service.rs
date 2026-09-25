@@ -7,10 +7,12 @@ use serde::Serialize;
 use serde_json::{Value, json};
 
 use crate::{
-    http::contracts,
+    http::contracts::typed::projects::{
+        self as project_contracts, ProjectAgentTaskPolicy, ProjectCreateBody, ProjectExecution,
+        ProjectIntegration, ProjectProviderPolicy, ProjectResponse,
+    },
     identity::{auth, companies},
     platform::database::{DatabaseResult, SuplexDatabase},
-    shared::js_json::{JsDocument, JsNode},
 };
 
 use super::repository::{Finding, PreparedLocalProject};
@@ -62,8 +64,8 @@ fn project_id() -> DatabaseResult<String> {
 /// integration, execution, provider policy, and response contracts.
 #[derive(Clone, Debug)]
 pub struct Project {
-    pub integration: Option<JsDocument>,
-    pub execution: Option<JsDocument>,
+    pub integration: Option<ProjectIntegration>,
+    pub execution: Option<ProjectExecution>,
     pub id: String,
     pub company_id: String,
     pub name: String,
@@ -75,70 +77,32 @@ pub struct Project {
     pub verification_command: String,
     pub root_profile_id: String,
     pub worker_profile_id: String,
-    pub agent_task_policy: JsDocument,
-    pub provider_policy: Option<JsDocument>,
+    pub agent_task_policy: ProjectAgentTaskPolicy,
+    pub provider_policy: Option<ProjectProviderPolicy>,
     pub created_at: String,
     pub updated_at: String,
 }
 
-/// Apply the same response contract as the TypeScript route without passing
-/// stored JSON columns through serde_json::Value, which cannot retain lone
-/// UTF-16 surrogates or large JSON numbers.
-pub fn response_document(project: &Project) -> DatabaseResult<JsDocument> {
-    let mut fields = Vec::new();
-    if let Some(integration) = &project.integration {
-        fields.push(format!("\"integration\":{}", integration.stringify()));
+pub fn response_project(project: &Project) -> ProjectResponse {
+    ProjectResponse {
+        integration: project.integration.clone(),
+        execution: project.execution.clone(),
+        id: project.id.clone(),
+        company_id: project.company_id.clone(),
+        name: project.name.clone(),
+        repository_path: project.repository_path.clone(),
+        worktree_root: project.worktree_root.clone(),
+        repository: project.repository.clone(),
+        base_branch: project.base_branch.clone(),
+        setup_command: project.setup_command.clone(),
+        verification_command: project.verification_command.clone(),
+        root_profile_id: project.root_profile_id.clone(),
+        worker_profile_id: project.worker_profile_id.clone(),
+        agent_task_policy: project.agent_task_policy.clone(),
+        provider_policy: project.provider_policy.clone(),
+        created_at: project.created_at.clone(),
+        updated_at: project.updated_at.clone(),
     }
-    if let Some(execution) = &project.execution {
-        fields.push(format!("\"execution\":{}", execution.stringify()));
-    }
-    for (name, value) in [
-        ("id", &project.id),
-        ("companyId", &project.company_id),
-        ("name", &project.name),
-        ("repositoryPath", &project.repository_path),
-        ("worktreeRoot", &project.worktree_root),
-        ("baseBranch", &project.base_branch),
-        ("setupCommand", &project.setup_command),
-        ("verificationCommand", &project.verification_command),
-        ("rootProfileId", &project.root_profile_id),
-        ("workerProfileId", &project.worker_profile_id),
-        ("createdAt", &project.created_at),
-        ("updatedAt", &project.updated_at),
-    ] {
-        fields.push(format!(
-            "\"{name}\":{}",
-            crate::shared::js_json::stringify(&Value::String(value.clone()))
-        ));
-    }
-    if let Some(repository) = &project.repository {
-        fields.push(format!(
-            "\"repository\":{}",
-            crate::shared::js_json::stringify(&Value::String(repository.clone()))
-        ));
-    }
-    fields.push(format!(
-        "\"agentTaskPolicy\":{}",
-        project.agent_task_policy.stringify()
-    ));
-    fields.push(format!(
-        "\"providerPolicy\":{}",
-        project
-            .provider_policy
-            .as_ref()
-            .map_or_else(|| "null".to_owned(), JsDocument::stringify)
-    ));
-    let source = JsDocument::parse(&format!("{{{}}}", fields.join(",")))
-        .map_err(|message| Box::new(std::io::Error::other(message)) as Box<dyn Error>)?;
-    contracts::validate_js_detailed("projects.ProjectResponseSchema", Some(&source))
-        .ok_or_else(|| {
-            Box::new(std::io::Error::other(
-                "Project response contract is unavailable",
-            )) as Box<dyn Error>
-        })?
-        .map_err(|_| {
-            Box::new(std::io::Error::other("Project response is invalid")) as Box<dyn Error>
-        })
 }
 
 struct StoredProject {
@@ -199,32 +163,10 @@ fn default_policy(root_profile_id: &str, worker_profile_id: &str) -> Value {
     })
 }
 
-fn configuration_field(document: Option<&JsDocument>, name: &str) -> Option<JsDocument> {
-    let document = document?;
-    let field = document.get(document.root(), name)?;
-    let mut value = document.clone();
-    value.set_root(field);
-    Some(value)
-}
-
-fn string_at(document: &JsDocument, node: usize) -> String {
-    let JsNode::String(value) = document.node(node) else {
-        unreachable!("validated project configuration string")
-    };
-    String::from_utf16_lossy(value)
-}
-
-fn strings_at(document: &JsDocument, object: usize, name: &str) -> Vec<String> {
-    let field = document
-        .get(object, name)
-        .expect("validated project configuration field");
-    let JsNode::Array(values) = document.node(field) else {
-        unreachable!("validated project configuration array")
-    };
-    values
-        .iter()
-        .map(|value| string_at(document, *value))
-        .collect()
+fn json_text<T: Serialize>(value: &T) -> DatabaseResult<String> {
+    Ok(crate::shared::js_json::stringify(&serde_json::to_value(
+        value,
+    )?))
 }
 
 fn profile_provider(
@@ -241,14 +183,11 @@ fn profile_provider(
 
 fn validate_provider_policy(
     database: &SuplexDatabase,
-    policy: &JsDocument,
+    policy: &ProjectProviderPolicy,
     root_profile_id: &str,
     worker_profile_id: &str,
 ) -> DatabaseResult<()> {
-    let root = policy.root();
-    let allowed_providers = strings_at(policy, root, "allowedProviders");
-    let allowed_instances = strings_at(policy, root, "allowedInstanceIds");
-    for instance_id in &allowed_instances {
+    for instance_id in &policy.allowed_instance_ids {
         let exists: bool = database.connection().query_row(
             "SELECT EXISTS(SELECT 1 FROM suplex_provider_instances WHERE id = ?1)",
             [instance_id],
@@ -280,8 +219,8 @@ fn validate_provider_policy(
                 )
             })?;
         let allowed = instance.as_ref().map_or_else(
-            || allowed_providers.contains(&provider),
-            |instance| allowed_instances.contains(instance),
+            || policy.allowed_providers.contains(&provider),
+            |instance| policy.allowed_instance_ids.contains(instance),
         );
         if !allowed {
             return Err(failure(
@@ -300,12 +239,10 @@ fn validate_provider_policy(
 
 fn validate_agent_policy(
     database: &SuplexDatabase,
-    policy: &JsDocument,
+    policy: &ProjectAgentTaskPolicy,
     project_id: &str,
 ) -> DatabaseResult<()> {
-    let root = policy.root();
-    let workflow_ids = strings_at(policy, root, "workflowIds");
-    for workflow_id in &workflow_ids {
+    for workflow_id in &policy.workflow_ids {
         let exists: bool = database.connection().query_row(
             "SELECT EXISTS(SELECT 1 FROM suplex_workflows WHERE id = ?1 AND archived_at IS NULL)",
             [workflow_id],
@@ -323,8 +260,7 @@ fn validate_agent_policy(
             ));
         }
     }
-    let default_id = string_at(policy, policy.get(root, "defaultWorkflowId").unwrap());
-    if !workflow_ids.contains(&default_id) {
+    if !policy.workflow_ids.contains(&policy.default_workflow_id) {
         return Err(failure(
             "Project configuration is invalid",
             422,
@@ -335,7 +271,7 @@ fn validate_agent_policy(
             )],
         ));
     }
-    for template_id in strings_at(policy, root, "templateIds") {
+    for template_id in &policy.template_ids {
         let exists: bool = database.connection().query_row(
             "SELECT EXISTS(SELECT 1 FROM suplex_task_templates WHERE id = ?1 AND project_id = ?2)",
             params![template_id, project_id],
@@ -353,9 +289,14 @@ fn validate_agent_policy(
             ));
         }
     }
-    for (role, field) in [("root", "rootProfileIds"), ("worker", "workerProfileIds")] {
-        for profile_id in strings_at(policy, root, field) {
-            if profile_provider(database, &profile_id, role)?.is_none() {
+    for role in ["root", "worker"] {
+        let profile_ids = if role == "root" {
+            &policy.root_profile_ids
+        } else {
+            &policy.worker_profile_ids
+        };
+        for profile_id in profile_ids {
+            if profile_provider(database, profile_id, role)?.is_none() {
                 return Err(failure(
                     "Project configuration is invalid",
                     422,
@@ -368,10 +309,14 @@ fn validate_agent_policy(
             }
         }
     }
-    let advisor = policy.get(root, "advisorProfileIds").unwrap();
-    for field in ["reviewer", "planner_a", "planner_b", "rater"] {
-        for profile_id in strings_at(policy, advisor, field) {
-            if profile_provider(database, &profile_id, "root")?.is_none() {
+    for profile_ids in [
+        &policy.advisor_profile_ids.reviewer,
+        &policy.advisor_profile_ids.planner_a,
+        &policy.advisor_profile_ids.planner_b,
+        &policy.advisor_profile_ids.rater,
+    ] {
+        for profile_id in profile_ids {
+            if profile_provider(database, profile_id, "root")?.is_none() {
                 return Err(failure(
                     "Project configuration is invalid",
                     422,
@@ -387,46 +332,36 @@ fn validate_agent_policy(
     Ok(())
 }
 
-fn stored_contract(raw: &str, contract: &'static str) -> DatabaseResult<JsDocument> {
-    let parsed = JsDocument::parse(raw).map_err(|message| {
+fn stored_contract<T>(
+    raw: &str,
+    parse: fn(Option<&Value>) -> project_contracts::ContractResult<T>,
+) -> DatabaseResult<T> {
+    let parsed: Value = serde_json::from_str(raw)?;
+    parse(Some(&parsed)).map_err(|error| {
         Box::new(std::io::Error::new(
             std::io::ErrorKind::InvalidData,
-            message,
+            format!("Stored project configuration is invalid: {error:?}"),
         )) as Box<dyn Error>
-    })?;
-    contracts::validate_js_detailed(contract, Some(&parsed))
-        .ok_or_else(|| {
-            Box::new(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                format!("Project contract is unavailable: {contract}"),
-            )) as Box<dyn Error>
-        })?
-        .map_err(|_| {
-            Box::new(std::io::Error::new(
-                std::io::ErrorKind::InvalidData,
-                format!("Stored project {contract} is invalid"),
-            )) as Box<dyn Error>
-        })
+    })
 }
 
-fn parse_optional(
+fn parse_optional<T>(
     raw: Option<String>,
-    contract: &'static str,
-) -> DatabaseResult<Option<JsDocument>> {
+    parse: fn(Option<&Value>) -> project_contracts::ContractResult<T>,
+) -> DatabaseResult<Option<T>> {
     raw.filter(|value| !value.is_empty())
-        .map(|value| stored_contract(&value, contract))
+        .map(|value| stored_contract(&value, parse))
         .transpose()
 }
 
 fn public_project(stored: StoredProject) -> DatabaseResult<Project> {
     let legacy = default_policy(&stored.root_profile_id, &stored.worker_profile_id);
     let policy = if stored.agent_task_policy_json == "{}" {
-        JsDocument::parse(&crate::shared::js_json::stringify(&legacy))
-            .expect("generated default agent task policy is JSON")
+        serde_json::from_value(legacy).expect("generated default agent task policy is valid")
     } else {
         stored_contract(
             &stored.agent_task_policy_json,
-            "projects.ProjectAgentTaskPolicySchema",
+            project_contracts::parse_agent_policy,
         )
         .map_err(|_| {
             failure(
@@ -441,8 +376,11 @@ fn public_project(stored: StoredProject) -> DatabaseResult<Project> {
         })?
     };
     Ok(Project {
-        integration: parse_optional(stored.integration_json, "projects.ProjectIntegrationSchema")?,
-        execution: parse_optional(stored.execution_json, "projects.ProjectExecutionSchema")?,
+        integration: parse_optional(
+            stored.integration_json,
+            project_contracts::parse_integration,
+        )?,
+        execution: parse_optional(stored.execution_json, project_contracts::parse_execution)?,
         id: stored.id,
         company_id: stored.company_id,
         name: stored.name,
@@ -457,7 +395,7 @@ fn public_project(stored: StoredProject) -> DatabaseResult<Project> {
         agent_task_policy: policy,
         provider_policy: parse_optional(
             stored.provider_policy_json,
-            "projects.ProjectProviderPolicySchema",
+            project_contracts::parse_provider_policy,
         )?,
         created_at: stored.created_at,
         updated_at: stored.updated_at,
@@ -604,7 +542,7 @@ pub fn create_local_default(
 pub struct CreateLocalOptions<'a> {
     pub root_profile_id: &'a str,
     pub worker_profile_id: &'a str,
-    pub configuration: Option<&'a JsDocument>,
+    pub configuration: Option<&'a ProjectCreateBody>,
     pub now: DateTime<Utc>,
 }
 
@@ -617,19 +555,21 @@ pub fn create_local(
 ) -> DatabaseResult<Project> {
     let root_profile_id = auth::js_trim(options.root_profile_id);
     let worker_profile_id = auth::js_trim(options.worker_profile_id);
-    let integration = configuration_field(options.configuration, "integration")
-        .map(|value| stored_contract(&value.stringify(), "projects.ProjectIntegrationSchema"))
-        .transpose()?;
-    let execution = configuration_field(options.configuration, "execution")
-        .map(|value| stored_contract(&value.stringify(), "projects.ProjectExecutionSchema"))
-        .transpose()?;
-    let explicit_policy = configuration_field(options.configuration, "agentTaskPolicy")
-        .map(|value| stored_contract(&value.stringify(), "projects.ProjectAgentTaskPolicySchema"))
-        .transpose()?;
-    let provider_policy = configuration_field(options.configuration, "providerPolicy")
-        .filter(|value| !matches!(value.node(value.root()), JsNode::Null))
-        .map(|value| stored_contract(&value.stringify(), "projects.ProjectProviderPolicySchema"))
-        .transpose()?;
+    let (integration, execution, explicit_policy, provider_policy) = match options.configuration {
+        Some(ProjectCreateBody::Local(value)) => (
+            value.integration.clone(),
+            value.execution.clone(),
+            value.agent_task_policy.clone(),
+            value.provider_policy.clone().flatten(),
+        ),
+        Some(ProjectCreateBody::ExistingRepository(value)) => {
+            (value.integration.clone(), None, None, None)
+        }
+        Some(ProjectCreateBody::NewRepository(value)) => {
+            (value.integration.clone(), None, None, None)
+        }
+        None => (None, None, None, None),
+    };
     let company = companies::require_company_access(database, actor_user_id, company_id)?;
     if company.status != "active" {
         return Err(failure(
@@ -645,10 +585,15 @@ pub fn create_local(
     let id = project_id()?;
     let audit_id = auth::random_hex_id("audit")?;
     let stamp = options.now.to_rfc3339_opts(SecondsFormat::Millis, true);
-    let policy_json = explicit_policy.as_ref().map_or_else(
-        || crate::shared::js_json::stringify(&default_policy(root_profile_id, worker_profile_id)),
-        JsDocument::stringify,
-    );
+    let policy_json = match &explicit_policy {
+        Some(policy) => json_text(policy)?,
+        None => {
+            crate::shared::js_json::stringify(&default_policy(root_profile_id, worker_profile_id))
+        }
+    };
+    let integration_json = integration.as_ref().map(json_text).transpose()?;
+    let execution_json = execution.as_ref().map(json_text).transpose()?;
+    let provider_policy_json = provider_policy.as_ref().map(json_text).transpose()?;
     let result = database.transaction(false, |database| {
         let company = companies::require_company_access(database, actor_user_id, company_id)?;
         if company.status != "active" {
@@ -680,7 +625,7 @@ pub fn create_local(
         )?;
         database.connection().execute(
             "UPDATE suplex_projects SET integration_json = ?1, execution_json = ?2 WHERE id = ?3",
-            params![integration.as_ref().map(JsDocument::stringify), execution.as_ref().map(JsDocument::stringify), id],
+            params![integration_json, execution_json, id],
         )?;
         database.connection().execute(
             "INSERT INTO suplex_audit_events (id, actor_user_id, actor_agent_id, action, target_user_id, company_id, metadata_json, created_at) VALUES (?1, ?2, NULL, 'project_created', NULL, ?3, ?4, ?5)",
@@ -688,7 +633,7 @@ pub fn create_local(
         )?;
         database.connection().execute(
             "UPDATE suplex_projects SET provider_policy_json = ?1 WHERE id = ?2",
-            params![provider_policy.as_ref().map(JsDocument::stringify), id],
+            params![provider_policy_json, id],
         )?;
         Ok(())
     });
@@ -731,6 +676,24 @@ mod tests {
 
     use super::*;
 
+    fn local_configuration(fields: Value) -> ProjectCreateBody {
+        let mut base = json!({
+            "name":"Local repository",
+            "repositoryPath":"/tmp/project-local-repository",
+            "worktreeRoot":"/tmp/project-local-worktrees",
+            "repository":"owner/local",
+            "baseBranch":"main",
+            "setupCommand":"pnpm install",
+            "verificationCommand":"pnpm test",
+            "rootProfileId":"profile_native_root",
+            "workerProfileId":"profile_native_worker"
+        });
+        base.as_object_mut()
+            .unwrap()
+            .extend(fields.as_object().unwrap().clone());
+        serde_json::from_value(base).unwrap()
+    }
+
     #[test]
     fn local_create_audits_once_and_reads_follow_live_membership() {
         let filename = std::env::temp_dir().join(format!(
@@ -757,7 +720,9 @@ mod tests {
             setup_command: "pnpm install".to_owned(),
             verification_command: "pnpm test".to_owned(),
         };
-        let configured = JsDocument::parse(r#"{"integration":{"repository":{"kind":"github"}},"execution":{"instructions":"Build"},"agentTaskPolicy":{"workflowIds":["workflow_native_standard"],"defaultWorkflowId":"workflow_native_standard","rootProfileIds":["profile_native_root"],"workerProfileIds":["profile_native_worker"]},"providerPolicy":null}"#).unwrap();
+        let configured = local_configuration(
+            json!({"integration":{"repository":{"kind":"github"}},"execution":{"instructions":"Build"},"agentTaskPolicy":{"workflowIds":["workflow_native_standard"],"defaultWorkflowId":"workflow_native_standard","rootProfileIds":["profile_native_root"],"workerProfileIds":["profile_native_worker"]},"providerPolicy":null}),
+        );
         let created = create_local(
             &mut database,
             &admin.id,
@@ -776,22 +741,13 @@ mod tests {
         assert_eq!(created.repository.as_deref(), Some("owner/local"));
         assert_eq!(created.root_profile_id, "profile_native_root");
         assert_eq!(
-            created.integration.unwrap().stringify(),
-            r#"{"repository":{"kind":"github"},"tracker":null}"#
+            serde_json::to_value(created.integration.as_ref().unwrap()).unwrap(),
+            json!({"repository":{"kind":"github"},"tracker":null})
         );
-        assert!(
-            created
-                .execution
-                .unwrap()
-                .stringify()
-                .contains(r#""instructions":"Build""#)
-        );
+        assert!(created.execution.unwrap().instructions == "Build");
         assert_eq!(
-            created
-                .agent_task_policy
-                .to_serde_if_representable()
-                .unwrap()["rootProfileIds"],
-            json!(["profile_native_root"])
+            created.agent_task_policy.root_profile_ids,
+            vec!["profile_native_root"]
         );
         assert_eq!(
             list(&database, &admin.id, Some(&company.id)).unwrap().len(),
@@ -815,7 +771,9 @@ mod tests {
             get(&database, "project_member", &created.id).unwrap().id,
             created.id
         );
-        let missing_instance = JsDocument::parse(r#"{"providerPolicy":{"allowedProviders":[],"allowedInstanceIds":["missing_instance"]}}"#).unwrap();
+        let missing_instance = local_configuration(
+            json!({"providerPolicy":{"allowedProviders":[],"allowedInstanceIds":["missing_instance"]}}),
+        );
         let rejected_instance = create_local(
             &mut database,
             &admin.id,
@@ -832,7 +790,9 @@ mod tests {
         let rejected_instance = rejected_instance.downcast_ref::<ProjectFailure>().unwrap();
         assert_eq!(rejected_instance.status_code, 422);
         assert_eq!(rejected_instance.findings[0].code, "instance-ineligible");
-        let missing_workflow = JsDocument::parse(r#"{"agentTaskPolicy":{"workflowIds":["missing_workflow"],"defaultWorkflowId":"missing_workflow","rootProfileIds":["profile_native_root"],"workerProfileIds":["profile_native_worker"]}}"#).unwrap();
+        let missing_workflow = local_configuration(
+            json!({"agentTaskPolicy":{"workflowIds":["missing_workflow"],"defaultWorkflowId":"missing_workflow","rootProfileIds":["profile_native_root"],"workerProfileIds":["profile_native_worker"]}}),
+        );
         let rejected_workflow = create_local(
             &mut database,
             &admin.id,
@@ -955,8 +915,8 @@ mod tests {
             get(&database, &admin.id, &created.id)
                 .unwrap()
                 .agent_task_policy
-                .stringify(),
-            created.agent_task_policy.stringify()
+                .workflow_ids,
+            created.agent_task_policy.workflow_ids
         );
         database
             .connection()
@@ -980,7 +940,7 @@ mod tests {
     }
 
     #[test]
-    fn stored_configuration_contracts_normalize_without_losing_utf16() {
+    fn stored_configuration_contracts_normalize_defaults_and_unknown_fields() {
         let filename = std::env::temp_dir().join(format!(
             "{}.sqlite",
             auth::random_hex_id("suplex_project_json").unwrap()
@@ -1012,33 +972,31 @@ mod tests {
         )
         .unwrap();
         database.connection().execute(
-            r#"UPDATE suplex_projects SET integration_json = '{}', execution_json = '{"instructions":"\ud800","mcp":[{"name":"context7","transport":{"type":"http","url":"https://example.test/mcp","extra":true},"grants":{"root":[],"advisor":[],"worker":[],"extra":true},"extra":true}]}', provider_policy_json = '{"allowedProviders":["codex"],"allowedInstanceIds":["instance_a"]}', agent_task_policy_json = '{"workflowIds":["workflow_native_standard"],"defaultWorkflowId":"workflow_native_standard","rootProfileIds":["\ud800"],"workerProfileIds":["profile_native_worker"]}' WHERE id = ?1"#,
+            r#"UPDATE suplex_projects SET integration_json = '{}', execution_json = '{"instructions":"Build","mcp":[{"name":"context7","transport":{"type":"http","url":"https://example.test/mcp","extra":true},"grants":{"root":[],"advisor":[],"worker":[],"extra":true},"extra":true}]}', provider_policy_json = '{"allowedProviders":["codex"],"allowedInstanceIds":["instance_a"]}', agent_task_policy_json = '{"workflowIds":["workflow_native_standard"],"defaultWorkflowId":"workflow_native_standard","rootProfileIds":["profile_native_root"],"workerProfileIds":["profile_native_worker"]}' WHERE id = ?1"#,
             [&created.id],
         ).unwrap();
         let normalized = get(&database, &admin.id, &created.id).unwrap();
-        let response = response_document(&normalized).unwrap().stringify();
-        assert!(response.contains(r#""instructions":"\ud800""#));
-        assert!(response.contains(r#""rootProfileIds":["\ud800"]"#));
-        assert!(response.contains(r#""skillDirectories":[]"#));
-        assert!(!response.contains("extra"));
+        let response = serde_json::to_value(response_project(&normalized)).unwrap();
+        assert_eq!(response["execution"]["instructions"], "Build");
         assert_eq!(
-            normalized.integration.unwrap().stringify(),
-            r#"{"repository":{"kind":"github"},"tracker":null}"#
+            response["agentTaskPolicy"]["rootProfileIds"],
+            json!(["profile_native_root"])
         );
-        let execution = normalized.execution.unwrap().stringify();
-        assert!(execution.contains(r#""instructions":"\ud800""#));
-        assert!(!execution.contains("extra"));
-        assert!(execution.contains(r#""skillDirectories":[]"#));
+        assert_eq!(response["execution"]["skillDirectories"], json!([]));
+        assert!(!response.to_string().contains("extra"));
         assert_eq!(
-            normalized.provider_policy.unwrap().stringify(),
-            r#"{"allowedProviders":["codex"],"allowedInstanceIds":["instance_a"]}"#
+            serde_json::to_value(normalized.integration.as_ref().unwrap()).unwrap(),
+            json!({"repository":{"kind":"github"},"tracker":null})
         );
-        assert!(
-            normalized
-                .agent_task_policy
-                .stringify()
-                .contains(r#""rootProfileIds":["\ud800"]"#)
+        let execution = serde_json::to_value(normalized.execution.as_ref().unwrap()).unwrap();
+        assert_eq!(execution["instructions"], "Build");
+        assert!(!execution.to_string().contains("extra"));
+        assert_eq!(execution["skillDirectories"], json!([]));
+        assert_eq!(
+            serde_json::to_value(normalized.provider_policy.as_ref().unwrap()).unwrap(),
+            json!({"allowedProviders":["codex"],"allowedInstanceIds":["instance_a"]})
         );
+        assert!(normalized.agent_task_policy.root_profile_ids == vec!["profile_native_root"]);
         database.connection().execute(
             "UPDATE suplex_projects SET execution_json = '{\"environment\":{\"PATH\":\"x\"}}' WHERE id = ?1",
             [&created.id],

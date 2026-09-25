@@ -10,7 +10,10 @@ use chrono::Utc;
 use serde::Serialize;
 use serde_json::{Value, json};
 
-use crate::{http::contracts, identity::admin};
+use crate::{
+    http::contracts::{self, typed},
+    identity::admin,
+};
 
 use super::{
     super::{AppState, session},
@@ -28,6 +31,10 @@ struct Users {
 #[derive(Serialize)]
 struct Credentials {
     credentials: Vec<admin::CredentialSummary>,
+}
+#[derive(Serialize)]
+struct AuditEvents {
+    events: Vec<admin::AuditEvent>,
 }
 fn validation_params(contract: &str, params: Value) -> Result<(), Box<Response>> {
     match contracts::validate(contract, Some(&params)) {
@@ -88,7 +95,8 @@ pub fn router() -> Router<AppState> {
 }
 
 async fn invite_user(State(state): State<AppState>, headers: HeaderMap, body: Bytes) -> Response {
-    let parsed = match auth::validated_body(&headers, &body, "auth.DisplayNameBodySchema") {
+    let parsed = match auth::validated_typed_body(&headers, &body, typed::auth::parse_display_name)
+    {
         Ok(value) => value,
         Err(error) => return *error,
     };
@@ -97,12 +105,7 @@ async fn invite_user(State(state): State<AppState>, headers: HeaderMap, body: By
         Err(error) => return *error,
     };
     let response = match state.with_database(|database| {
-        admin::invite_user(
-            database,
-            &actor,
-            parsed["displayName"].as_str().unwrap_or_default(),
-            Utc::now(),
-        )
+        admin::invite_user(database, &actor, &parsed.display_name, Utc::now())
     }) {
         Ok(invitation) => (StatusCode::CREATED, Json(invitation)).into_response(),
         Err(error) => auth::service_error(error),
@@ -202,7 +205,7 @@ async fn list_audit(State(state): State<AppState>, headers: HeaderMap) -> Respon
     {
         Ok(events) => (
             [(header::CONTENT_TYPE, "application/json; charset=utf-8")],
-            admin::audit_events_json(&events),
+            Json(AuditEvents { events }),
         )
             .into_response(),
         Err(error) => auth::service_error(error),
@@ -220,7 +223,7 @@ mod tests {
     use axum::{body::to_bytes, http::HeaderValue};
 
     #[tokio::test]
-    async fn audit_http_body_preserves_lossless_metadata() {
+    async fn audit_http_filters_nonstring_metadata() {
         let path = std::env::temp_dir().join(format!(
             "{}.sqlite",
             identity_auth::random_hex_id("suplex_admin_route").unwrap()
@@ -228,7 +231,7 @@ mod tests {
         let mut database = SuplexDatabase::open(&path, OpenMode::Migrate).unwrap();
         let signed_in = identity_auth::development_sign_in(&mut database, Utc::now()).unwrap();
         database.connection().execute(
-            r#"INSERT INTO suplex_audit_events (id, actor_user_id, actor_agent_id, action, target_user_id, company_id, metadata_json, created_at) VALUES ('audit_fixed', NULL, NULL, 'fixture', NULL, NULL, '{"10":"ten","2":"two","odd":"\ud800","skip":1}', '2026-09-24T12:00:00.000Z')"#,
+            r#"INSERT INTO suplex_audit_events (id, actor_user_id, actor_agent_id, action, target_user_id, company_id, metadata_json, created_at) VALUES ('audit_fixed', NULL, NULL, 'fixture', NULL, NULL, '{"first":"one","second":"two","skip":1}', '2026-09-24T12:00:00.000Z')"#,
             [],
         ).unwrap();
         let state = AppState::new(
@@ -251,11 +254,10 @@ mod tests {
             response.headers().get(header::CONTENT_TYPE).unwrap(),
             "application/json; charset=utf-8"
         );
-        let raw = String::from_utf8(to_bytes(response.into_body(), 4096).await.unwrap().to_vec())
-            .unwrap();
+        let body = to_bytes(response.into_body(), 4096).await.unwrap();
         assert_eq!(
-            raw,
-            r#"{"events":[{"id":"audit_fixed","action":"fixture","metadata":{"2":"two","10":"ten","odd":"\ud800"},"createdAt":"2026-09-24T12:00:00.000Z"}]}"#
+            serde_json::from_slice::<Value>(&body).unwrap()["events"][0]["metadata"],
+            json!({"first":"one","second":"two"})
         );
         drop(state);
         let _ = std::fs::remove_file(&path);

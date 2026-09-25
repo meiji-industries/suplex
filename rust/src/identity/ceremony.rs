@@ -4,7 +4,6 @@ use serde::Serialize;
 use serde_json::{Value, json};
 
 use crate::platform::database::{DatabaseResult, SuplexDatabase};
-use crate::shared::js_json::{JsDocument, JsNode};
 
 use super::{
     auth::{self, AuthFailure, AuthResult},
@@ -115,17 +114,13 @@ fn valid_invitation(
 }
 
 fn transports(raw: &str) -> Option<Vec<String>> {
-    let document = JsDocument::parse(raw).ok()?;
-    let JsNode::Array(items) = document.node(document.root()) else {
+    let serde_json::Value::Array(items) = serde_json::from_str(raw).ok()? else {
         return None;
     };
     Some(
         items
-            .iter()
-            .filter_map(|index| match document.node(*index) {
-                JsNode::String(value) => String::from_utf16(value).ok(),
-                _ => None,
-            })
+            .into_iter()
+            .filter_map(|item| item.as_str().map(str::to_owned))
             .filter(|item| {
                 matches!(
                     item.as_str(),

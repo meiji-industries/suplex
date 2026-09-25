@@ -1,0 +1,17 @@
+{
+  "contract": "projects.ProjectExecutionSchema",
+  "case": "instructions_null",
+  "input": {
+    "instructions": null
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-invalid_type",
+        "field": ".instructions",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

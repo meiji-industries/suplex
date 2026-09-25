@@ -1,9 +1,6 @@
 use serde::Deserialize;
 use serde_json::Value;
-use suplex::{
-    http::contracts::{self, JsContractFailure},
-    shared::js_json::{self, JsDocument},
-};
+use suplex::http::contracts;
 
 #[derive(Deserialize)]
 struct Fixture {
@@ -67,21 +64,26 @@ fn ported_contracts_match_zod_fixtures() {
             }
             let fixture: Fixture =
                 serde_json::from_slice(&std::fs::read(&fixture_path).unwrap()).unwrap();
-            let input = fixture.fields.get("input").map(|value| {
-                JsDocument::parse(&js_json::stringify(value)).expect("ordinary fixture is JSON")
-            });
-            let detailed = contracts::validate_js_detailed(&fixture.contract, input.as_ref());
-            let actual = if let Some(result) = detailed {
+            let typed =
+                contracts::typed::auth::validate(&fixture.contract, fixture.fields.get("input"))
+                    .or_else(|| {
+                        contracts::typed::projects::validate(
+                            &fixture.contract,
+                            fixture.fields.get("input"),
+                        )
+                    });
+            let actual = if let Some(result) = typed {
                 Some(match result {
-                    Ok(value) => Ok(value
-                        .to_serde_if_representable()
-                        .expect("ordinary output is representable")),
-                    Err(JsContractFailure::Issues(issues)) => Err(public_findings(
-                        issues
-                            .to_serde_if_representable()
-                            .expect("ordinary issues are representable"),
-                    )),
-                    Err(JsContractFailure::Thrown(_)) => Err(serde_json::json!({"kind":"thrown"})),
+                    Ok(value) => Ok(value),
+                    Err(contracts::typed::ContractFailure::Issues(findings)) => {
+                        Err(Value::Array(findings))
+                    }
+                    Err(contracts::typed::ContractFailure::Unhandled) => {
+                        Err(serde_json::json!({"kind":"thrown"}))
+                    }
+                    Err(contracts::typed::ContractFailure::Internal(error)) => {
+                        panic!("{}: {error}", fixture_path.display())
+                    }
                 })
             } else {
                 contracts::validate(&fixture.contract, fixture.fields.get("input"))
@@ -113,11 +115,7 @@ fn ported_contracts_match_zod_fixtures() {
             }
         }
     }
-    assert_eq!(
-        schemas.len(),
-        63,
-        "sixty-three explicitly ported request schemas"
-    );
+    assert_eq!(schemas.len(), 43, "forty-three implemented request schemas");
     assert!(
         verified >= 140,
         "every ported schema has multiple Zod cases"

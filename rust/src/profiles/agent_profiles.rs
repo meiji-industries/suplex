@@ -6,7 +6,7 @@ use rusqlite::{OptionalExtension, Row, params};
 use serde::{Deserialize, Serialize};
 
 use crate::{
-    http::contracts,
+    http::contracts::typed::projects,
     identity::auth::AuthFailure,
     platform::database::{DatabaseResult, SuplexDatabase},
 };
@@ -382,11 +382,10 @@ fn pruned_policy(
         return Ok(None);
     }
     let input: serde_json::Value = serde_json::from_str(raw)?;
-    let Some(Ok(mut parsed)) =
-        contracts::validate("projects.ProjectAgentTaskPolicySchema", Some(&input))
-    else {
+    let Ok(policy) = projects::parse_agent_policy(Some(&input)) else {
         return Ok(None);
     };
+    let mut parsed = serde_json::to_value(policy)?;
     let original = parsed.clone();
     let object = parsed.as_object_mut().expect("validated policy object");
     for (field, fallback) in [("rootProfileIds", root_id), ("workerProfileIds", worker_id)] {

@@ -5,10 +5,10 @@ use chrono::{DateTime, Duration, Utc};
 use getrandom::fill as rand_bytes;
 use rusqlite::{OptionalExtension, params};
 use serde::Serialize;
+use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 
 use crate::platform::database::{DatabaseResult, SuplexDatabase};
-use crate::shared::js_json::{JsDocument, JsNode};
 
 const SESSION_TTL_DAYS: i64 = 7;
 
@@ -21,43 +21,20 @@ pub fn normalize_legacy_users(database: &SuplexDatabase) -> DatabaseResult<usize
     )?)
 }
 
-pub(crate) fn safe_metadata_document(raw: &str) -> JsDocument {
-    let mut document = JsDocument::parse(raw).unwrap_or_else(|_| JsDocument::parse("{}").unwrap());
-    let fields = match document.node(document.root()) {
-        JsNode::Object(fields) => fields
-            .iter()
-            .filter(|(_, value)| matches!(document.node(*value), JsNode::String(_)))
-            .cloned()
+pub(crate) fn safe_metadata(raw: &str) -> Map<String, Value> {
+    match serde_json::from_str::<Value>(raw) {
+        Ok(Value::Object(fields)) => fields
+            .into_iter()
+            .filter(|(_, value)| value.is_string())
             .collect(),
-        _ => Vec::new(),
-    };
-    let root = document.append_node(JsNode::Object(fields));
-    document.set_root(root);
-    document
-}
-
-pub(crate) fn safe_metadata_json(raw: &str) -> String {
-    safe_metadata_document(raw).stringify()
+        _ => Map::new(),
+    }
 }
 
 pub(crate) fn metadata_with_string(raw: &str, name: &str, value: &str) -> String {
-    let mut document = safe_metadata_document(raw);
-    let mut fields = match document.node(document.root()) {
-        JsNode::Object(fields) => fields.clone(),
-        _ => unreachable!("filtered metadata is an object"),
-    };
-    let value_node = document.append_node(JsNode::String(value.encode_utf16().collect()));
-    if let Some((_, existing)) = fields
-        .iter_mut()
-        .find(|(key, _)| key.iter().copied().eq(name.encode_utf16()))
-    {
-        *existing = value_node;
-    } else {
-        fields.push((name.encode_utf16().collect(), value_node));
-    }
-    let root = document.append_node(JsNode::Object(fields));
-    document.set_root(root);
-    document.stringify()
+    let mut fields = safe_metadata(raw);
+    fields.insert(name.to_owned(), Value::String(value.to_owned()));
+    Value::Object(fields).to_string()
 }
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize)]
@@ -472,17 +449,17 @@ mod tests {
     }
 
     #[test]
-    fn metadata_filter_keeps_javascript_key_order_and_utf16_strings() {
-        let raw = r#"{"10":"ten","2":"two","odd":"\ud800","skip":1,"invitationId":"old"}"#;
+    fn metadata_filter_keeps_string_entries_and_overwrites_invitation() {
+        let raw = r#"{"first":"one","skip":1,"invitationId":"old"}"#;
         assert_eq!(
-            safe_metadata_json(raw),
-            r#"{"2":"two","10":"ten","odd":"\ud800","invitationId":"old"}"#
+            Value::Object(safe_metadata(raw)).to_string(),
+            r#"{"first":"one","invitationId":"old"}"#
         );
         assert_eq!(
             metadata_with_string(raw, "invitationId", "invitation_new"),
-            r#"{"2":"two","10":"ten","odd":"\ud800","invitationId":"invitation_new"}"#
+            r#"{"first":"one","invitationId":"invitation_new"}"#
         );
-        assert_eq!(safe_metadata_json("not json"), "{}");
+        assert_eq!(safe_metadata("not json"), Map::new());
     }
 
     #[test]

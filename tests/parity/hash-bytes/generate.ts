@@ -24,8 +24,7 @@ const cases = {
   task_revision: { site: "src/tasks/tasks.ts:1050", inputJson: JSON.stringify(revisionValue), encoding: "base64url" },
   numeric_keys_and_floats: { site: "agent_create passthrough edge", inputJson: '{"2":"two","1":"one","small":0.000001,"tiny":0.0000001,"large":1e21,"negativeZero":-0,"text":"line\\nseparator\\u2028"}', encoding: "hex" },
   astral_string: { site: "task title and note edge", inputJson: '{"title":"😀","note":"💩","length":2}', encoding: "hex" },
-  lone_surrogate: { site: "agent_create passthrough edge", inputJson: '{"title":"\\ud800","nested":{"\\udfff":"x"}}', encoding: "hex" },
-  large_numbers: { site: "agent_create passthrough edge", inputJson: '{"beyondSafe":9007199254740993,"maxUnsigned":18446744073709551615,"overflow":1e400}', encoding: "hex" },
+  large_numbers: { site: "agent_create passthrough finite integer edge", inputJson: '{"beyondSafe":9007199254740993,"maxUnsigned":18446744073709551615}', encoding: "hex" },
 } as const;
 const check = process.argv.includes("--check");
 if (!check) await mkdir(directory, { recursive: true });

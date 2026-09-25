@@ -16,19 +16,6 @@ struct Expected {
     error: Option<Vec<Value>>,
 }
 
-fn public_findings(issues: Vec<Value>) -> Vec<Value> {
-    issues.into_iter().map(|issue| {
-        let field = issue.get("path").and_then(Value::as_array).map_or_else(String::new, |path| {
-            path.iter().map(|part| part.as_str().map(str::to_owned).unwrap_or_else(|| part.to_string())).collect::<Vec<_>>().join(".")
-        });
-        serde_json::json!({
-            "code": format!("invalid-{}", issue.get("code").and_then(Value::as_str).unwrap_or("request")),
-            "field": format!(".{field}"),
-            "message": "Request value is invalid"
-        })
-    }).collect()
-}
-
 #[test]
 fn stored_project_nested_schemas_match_zod() {
     let root = concat!(env!("CARGO_MANIFEST_DIR"), "/../tests/parity");
@@ -55,29 +42,28 @@ fn stored_project_nested_schemas_match_zod() {
                 continue;
             }
             let fixture: Fixture = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
-            let actual = contracts::validate(&fixture.contract, Some(&fixture.input))
-                .unwrap_or_else(|| panic!("unported stored-project schema: {}", fixture.contract));
+            let actual =
+                contracts::typed::projects::validate(&fixture.contract, Some(&fixture.input))
+                    .unwrap_or_else(|| {
+                        panic!("unported stored-project schema: {}", fixture.contract)
+                    });
             schemas.insert(fixture.contract);
             match actual {
                 Ok(value) => {
                     assert!(fixture.expected.accepted, "{}", path.display());
                     assert_eq!(Some(value), fixture.expected.value, "{}", path.display());
                 }
-                Err(error) => {
+                Err(contracts::typed::ContractFailure::Issues(error)) => {
                     assert!(!fixture.expected.accepted, "{}", path.display());
-                    assert_eq!(
-                        Some(public_findings(error)),
-                        fixture.expected.error,
-                        "{}",
-                        path.display()
-                    );
+                    assert_eq!(Some(error), fixture.expected.error, "{}", path.display());
                 }
+                Err(other) => panic!("{}: {other:?}", path.display()),
             }
             cases += 1;
         }
     }
     assert_eq!(schemas.len(), 3);
-    assert_eq!(cases, 18);
+    assert_eq!(cases, 23);
     println!(
         "verified {cases} stored-project cases across {} nested schemas",
         schemas.len()

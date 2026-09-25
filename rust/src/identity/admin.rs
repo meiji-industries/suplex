@@ -3,6 +3,7 @@ use chrono::{DateTime, Duration, Utc};
 use getrandom::fill as rand_bytes;
 use rusqlite::{OptionalExtension, params};
 use serde::Serialize;
+use serde_json::Value;
 use sha2::{Digest, Sha256};
 
 use crate::platform::database::{DatabaseResult, SuplexDatabase};
@@ -43,50 +44,19 @@ pub struct CredentialSummary {
     pub revoked_at: Option<String>,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct AuditEvent {
     pub id: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub actor_user_id: Option<String>,
     pub action: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub target_user_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub company_id: Option<String>,
-    pub metadata_json: String,
+    pub metadata: Value,
     pub created_at: String,
-}
-
-pub fn audit_events_json(events: &[AuditEvent]) -> String {
-    fn quoted(value: &str) -> String {
-        serde_json::to_string(value).expect("stored audit fields are UTF-8")
-    }
-    let mut output = String::from("{\"events\":[");
-    for (position, event) in events.iter().enumerate() {
-        if position > 0 {
-            output.push(',');
-        }
-        output.push_str("{\"id\":");
-        output.push_str(&quoted(&event.id));
-        if let Some(actor) = &event.actor_user_id {
-            output.push_str(",\"actorUserId\":");
-            output.push_str(&quoted(actor));
-        }
-        output.push_str(",\"action\":");
-        output.push_str(&quoted(&event.action));
-        if let Some(target) = &event.target_user_id {
-            output.push_str(",\"targetUserId\":");
-            output.push_str(&quoted(target));
-        }
-        if let Some(company) = &event.company_id {
-            output.push_str(",\"companyId\":");
-            output.push_str(&quoted(company));
-        }
-        output.push_str(",\"metadata\":");
-        output.push_str(&event.metadata_json);
-        output.push_str(",\"createdAt\":");
-        output.push_str(&quoted(&event.created_at));
-        output.push('}');
-    }
-    output.push_str("]}");
-    output
 }
 
 fn timestamp(now: DateTime<Utc>) -> String {
@@ -297,7 +267,7 @@ pub fn list_audit_events(
                 action: row.get(2)?,
                 target_user_id: row.get(3)?,
                 company_id: row.get(4)?,
-                metadata_json: auth::safe_metadata_json(&raw),
+                metadata: Value::Object(auth::safe_metadata(&raw)),
                 created_at: row.get(6)?,
             })
         })?
@@ -310,7 +280,7 @@ mod tests {
     use crate::platform::database::OpenMode;
 
     #[test]
-    fn audit_listing_preserves_lossless_metadata_and_response_order() {
+    fn audit_listing_filters_nonstring_metadata() {
         let path = std::env::temp_dir().join(format!(
             "{}.sqlite",
             auth::random_hex_id("suplex_admin").unwrap()
@@ -321,13 +291,13 @@ mod tests {
             .with_timezone(&Utc);
         let admin = auth::development_sign_in(&mut database, now).unwrap();
         database.connection().execute(
-            r#"INSERT INTO suplex_audit_events (id, actor_user_id, actor_agent_id, action, target_user_id, company_id, metadata_json, created_at) VALUES ('audit_fixed', 'user_development', NULL, 'fixture', NULL, NULL, '{"10":"ten","2":"two","odd":"\ud800","skip":1}', '2026-09-24T12:00:00.000Z')"#,
+            r#"INSERT INTO suplex_audit_events (id, actor_user_id, actor_agent_id, action, target_user_id, company_id, metadata_json, created_at) VALUES ('audit_fixed', 'user_development', NULL, 'fixture', NULL, NULL, '{"first":"one","second":"two","skip":1}', '2026-09-24T12:00:00.000Z')"#,
             [],
         ).unwrap();
         let events = list_audit_events(&database, &admin.user.id).unwrap();
         assert_eq!(
-            audit_events_json(&events),
-            r#"{"events":[{"id":"audit_fixed","actorUserId":"user_development","action":"fixture","metadata":{"2":"two","10":"ten","odd":"\ud800"},"createdAt":"2026-09-24T12:00:00.000Z"}]}"#
+            events[0].metadata,
+            serde_json::json!({"first":"one","second":"two"})
         );
         drop(database);
         let _ = std::fs::remove_file(&path);

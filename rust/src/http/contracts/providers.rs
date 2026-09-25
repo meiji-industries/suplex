@@ -1,7 +1,6 @@
 use serde_json::{Map, Value, json};
 
 use super::{ParseResult, value_type};
-use crate::shared::js_json::utf16_len;
 
 type Path = Vec<Value>;
 
@@ -280,7 +279,7 @@ fn label(input: Option<&Value>, path: &[Value]) -> ParseResult {
     let trimmed = value.trim_matches(|character: char| {
         character == '\u{feff}' || (character.is_whitespace() && character != '\u{0085}')
     });
-    let length = utf16_len(trimmed);
+    let length = trimmed.encode_utf16().count();
     if length == 0 {
         return Err(vec![json!({
             "origin": "string", "code": "too_small", "minimum": 1, "inclusive": true,

@@ -1,0 +1,18 @@
+{
+  "contract": "projects.ProjectCreateBodySchema",
+  "case": "null_optional_integration",
+  "input": {
+    "repositoryUrl": "https://github.com/team/repo.git",
+    "integration": null
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-invalid_union",
+        "field": ".",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

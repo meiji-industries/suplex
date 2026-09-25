@@ -1,7 +1,6 @@
 use serde_json::{Map, Value, json};
 
 use super::{ParseResult, invalid_type, object};
-use crate::shared::js_json::utf16_len;
 
 pub(super) fn validate(contract: &str, input: Option<&Value>) -> Option<ParseResult> {
     match contract {
@@ -35,7 +34,7 @@ fn id<'a>(input: Option<&'a Value>, path: &str) -> Result<&'a str, Vec<Value>> {
         }
         return Err(issues);
     };
-    let length = utf16_len(value);
+    let length = value.encode_utf16().count();
     if length < 1 {
         return Err(vec![json!({
             "origin": "string", "code": "too_small", "minimum": 1, "inclusive": true,

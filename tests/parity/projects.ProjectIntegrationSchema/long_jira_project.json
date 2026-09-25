@@ -1,0 +1,28 @@
+{
+  "contract": "projects.ProjectIntegrationSchema",
+  "case": "long_jira_project",
+  "input": {
+    "tracker": {
+      "kind": "jira",
+      "site": "https://team.atlassian.net/",
+      "project": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+      "emailEnvironment": "JIRA_EMAIL",
+      "tokenEnvironment": "JIRA_TOKEN"
+    }
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "repository": {
+        "kind": "github"
+      },
+      "tracker": {
+        "kind": "jira",
+        "site": "https://team.atlassian.net/",
+        "project": "AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA",
+        "emailEnvironment": "JIRA_EMAIL",
+        "tokenEnvironment": "JIRA_TOKEN"
+      }
+    }
+  }
+}

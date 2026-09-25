@@ -1,7 +1,6 @@
 use serde_json::{Map, Value, json};
 
 use super::{ParseResult, value_type};
-use crate::shared::js_json::utf16_len;
 
 type Path = Vec<Value>;
 
@@ -11,7 +10,9 @@ pub(super) fn validate(contract: &str, input: Option<&Value>) -> Option<ParseRes
         "projects.ProfilePatchBodySchema" => Some(profile(input, &[], ProfileMode::Patch)),
         "projects.ProfileResponseSchema" => Some(profile(input, &[], ProfileMode::Response)),
         "projects.ProfileListResponseSchema" => Some(profile_list(input, &[])),
-        "projects.ProfileListQuerySchema" => Some(profile_query(input, &[])),
+        "projects.ProfileListQuerySchema" | "workflows.WorkflowListQuerySchema" => {
+            Some(profile_query(input, &[]))
+        }
         _ => None,
     }
 }
@@ -90,7 +91,7 @@ fn text(input: Option<&Value>, path: &[Value], rule: TextRule) -> ParseResult {
     } else {
         value.as_str()
     };
-    let length = utf16_len(value);
+    let length = value.encode_utf16().count();
     let mut issues = Vec::new();
     if length < min {
         issues.push(json!({

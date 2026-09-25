@@ -37,3 +37,6 @@ serde-saphyr = { version = "1.3.0", default-features = false, features = ["deser
 
 [target.'cfg(target_os = "macos")'.dependencies]
 security-framework-sys = "2.17"
+
+[dev-dependencies]
+webauthn-authenticator-rs = { version = "=0.5.4", features = ["softtoken"] }

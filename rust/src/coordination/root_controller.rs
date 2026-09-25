@@ -291,10 +291,10 @@ pub fn read_worker_evidence(
     Ok(Value::Object(output))
 }
 
+/// TypeScript `delegateWorker` (Standard path) checks no tool owner.
 pub fn delegate_worker(
     database_path: &Path,
     root: &RootIdentity,
-    owner_token: &str,
     assignment: &StandardWorkerAssignment,
 ) -> DatabaseResult<Value> {
     if assignment.purpose != "implementation" {
@@ -317,7 +317,6 @@ pub fn delegate_worker(
         &root.session_id,
         root.generation,
     )?;
-    root_session_store::assert_tool_owner(&database, &root.task_id, owner_token)?;
     let before = root_session_store::root_observation_rows(&database, &root.task_id)?;
     if before.control["workflow"] != "standard"
         || before.control["deliveryTarget"] != "local_worktree"
@@ -347,7 +346,6 @@ pub fn delegate_worker(
         &root.session_id,
         root.generation,
     )?;
-    root_session_store::assert_tool_owner(&database, &root.task_id, owner_token)?;
     let current_root = root_session_store::current_root(&database, &root.task_id)?
         .ok_or_else(|| invalid("current Root session is missing"))?;
     let worker = root_session_store::launch_standard_worker(
@@ -393,10 +391,10 @@ pub fn replace_worker(
     })
 }
 
+/// TypeScript `askHuman` checks no tool owner.
 pub fn ask_human(
     database_path: &Path,
     root: &RootIdentity,
-    owner_token: &str,
     question: &str,
     options: &Value,
 ) -> DatabaseResult<Value> {
@@ -407,7 +405,6 @@ pub fn ask_human(
         &root.session_id,
         root.generation,
     )?;
-    root_session_store::assert_tool_owner(&database, &root.task_id, owner_token)?;
     if !root_session_store::ask_human_for_root(
         &mut database,
         &root.task_id,

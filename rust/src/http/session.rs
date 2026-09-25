@@ -1,7 +1,7 @@
 use axum::http::HeaderMap;
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use chrono::{DateTime, Utc};
-use openssl::rand::rand_bytes;
+use getrandom::fill as rand_bytes;
 
 use crate::{
     identity::auth::{self, AuthUser},

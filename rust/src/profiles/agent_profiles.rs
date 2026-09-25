@@ -1,7 +1,7 @@
 use std::{error::Error, fmt};
 
 use chrono::{DateTime, SecondsFormat, Utc};
-use openssl::rand::rand_bytes;
+use getrandom::fill;
 use rusqlite::{OptionalExtension, Row, params};
 use serde::{Deserialize, Serialize};
 
@@ -110,7 +110,7 @@ fn timestamp(now: DateTime<Utc>) -> String {
 
 fn random_id(prefix: &str) -> DatabaseResult<String> {
     let mut bytes = [0_u8; 16];
-    rand_bytes(&mut bytes)?;
+    fill(&mut bytes)?;
     Ok(format!(
         "{prefix}_{}",
         bytes
@@ -122,7 +122,7 @@ fn random_id(prefix: &str) -> DatabaseResult<String> {
 
 fn profile_id() -> DatabaseResult<String> {
     let mut bytes = [0_u8; 16];
-    rand_bytes(&mut bytes)?;
+    fill(&mut bytes)?;
     bytes[6] = (bytes[6] & 0x0f) | 0x40;
     bytes[8] = (bytes[8] & 0x3f) | 0x80;
     Ok(format!(
@@ -334,7 +334,7 @@ pub fn duplicate(
         copy += 1;
     }
     let mut seed = [0_u8; 16];
-    rand_bytes(&mut seed)?;
+    fill(&mut seed)?;
     let input = ProfileInput {
         name,
         role: source.role,

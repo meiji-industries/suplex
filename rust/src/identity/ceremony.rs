@@ -1,6 +1,4 @@
-use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use chrono::{DateTime, Duration, Utc};
-use openssl::rand::rand_bytes;
 use rusqlite::{OptionalExtension, params};
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -52,12 +50,6 @@ fn passkey_failure() -> Box<dyn std::error::Error> {
         400,
         "passkey_invalid",
     ))
-}
-
-fn challenge() -> DatabaseResult<String> {
-    let mut bytes = [0_u8; 32];
-    rand_bytes(&mut bytes)?;
-    Ok(URL_SAFE_NO_PAD.encode(bytes))
 }
 
 fn valid_token_shape(token: &str, kind: &str) -> bool {
@@ -168,7 +160,7 @@ pub fn begin_registration(
     database: &mut SuplexDatabase,
     kind: &str,
     token: &str,
-    rp_id: &str,
+    site: WebAuthnSite<'_>,
     now: DateTime<Utc>,
 ) -> DatabaseResult<AuthOptions> {
     if !matches!(kind, "bootstrap" | "user" | "recovery") {
@@ -185,19 +177,20 @@ pub fn begin_registration(
         Some(id) => credentials_for_user(database, id)?,
         None => Vec::new(),
     };
-    let challenge = challenge()?;
-    let options = json!({
-        "challenge": challenge,
-        "rp": { "name": "Suplex", "id": rp_id },
-        "user": { "id": URL_SAFE_NO_PAD.encode(URL_SAFE_NO_PAD.encode(user_id.as_bytes()).as_bytes()), "name": username, "displayName": invitation.display_name },
-        "pubKeyCredParams": [{"alg": -8, "type": "public-key"}, {"alg": -7, "type": "public-key"}, {"alg": -257, "type": "public-key"}],
-        "timeout": 60000,
-        "attestation": "none",
-        "excludeCredentials": exclude,
-        "authenticatorSelection": {"residentKey": "preferred", "userVerification": "required", "requireResidentKey": false},
-        "extensions": {"credProps": true},
-        "hints": [],
-    });
+    let excluded_ids = exclude
+        .iter()
+        .filter_map(|item| item["id"].as_str().map(str::to_owned))
+        .collect::<Vec<_>>();
+    let started = webauthn::start_registration(
+        site.origin,
+        site.rp_id,
+        &username,
+        &invitation.display_name,
+        &excluded_ids,
+    )
+    .map_err(|_| passkey_failure())?;
+    let challenge = started.state;
+    let options = started.options;
     let challenge_id = auth::random_hex_id("challenge")?;
     database.transaction(false, |database| {
         let current = valid_invitation(database, token, kind, now)?.ok_or_else(invitation_failure)?;
@@ -272,7 +265,7 @@ pub fn complete_registration_prepared(
         consume_registration_challenge(database, kind, token, challenge_id, &response, now)?;
     let response = response.payload.as_ref().ok_or_else(passkey_failure)?;
     let verified =
-        webauthn::verify_registration(response, &expected_challenge, site.origin, site.rp_id)
+        webauthn::finish_registration(response, &expected_challenge, site.origin, site.rp_id)
             .map_err(|_| passkey_failure())?;
     finish_registration(database, kind, token, verified, now)
 }
@@ -357,54 +350,42 @@ pub fn finish_registration(
     })
 }
 
-pub async fn verify_consumed_registration(
+pub fn verify_consumed_registration(
     response: &PreparedCredential,
     expected_challenge: &str,
     site: WebAuthnSite<'_>,
 ) -> DatabaseResult<StoredCredential> {
     let response = response.payload.as_ref().ok_or_else(passkey_failure)?;
-    webauthn::verify_registration_with_revocation(
-        response,
-        expected_challenge,
-        site.origin,
-        site.rp_id,
-    )
-    .await
-    .map_err(|_| passkey_failure())
+    webauthn::finish_registration(response, expected_challenge, site.origin, site.rp_id)
+        .map_err(|_| passkey_failure())
 }
 
 pub fn begin_authentication(
     database: &SuplexDatabase,
-    rp_id: &str,
+    site: WebAuthnSite<'_>,
     now: DateTime<Utc>,
 ) -> DatabaseResult<AuthOptions> {
-    let mut statement = database.connection().prepare("SELECT suplex_credentials.credential_id, suplex_credentials.transports FROM suplex_credentials INNER JOIN suplex_users ON suplex_users.id = suplex_credentials.user_id WHERE suplex_credentials.revoked_at IS NULL AND suplex_users.status = 'active' ORDER BY suplex_credentials.created_at ASC")?;
+    let mut statement = database.connection().prepare("SELECT suplex_credentials.credential_id, suplex_credentials.public_key, suplex_credentials.counter, suplex_credentials.transports FROM suplex_credentials INNER JOIN suplex_users ON suplex_users.id = suplex_credentials.user_id WHERE suplex_credentials.revoked_at IS NULL AND suplex_users.status = 'active' ORDER BY suplex_credentials.created_at ASC")?;
     let credentials = statement
         .query_map([], |row| {
-            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+            Ok(StoredCredential {
+                id: row.get(0)?,
+                public_key: row.get(1)?,
+                counter: row.get(2)?,
+                transports: transports(&row.get::<_, String>(3)?).unwrap_or_default(),
+            })
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
-    if credentials.is_empty() {
-        return Err(Box::new(AuthFailure::new(
-            "No passkey is enrolled",
-            400,
-            "auth_failure",
-        )));
-    }
-    let allow = credentials
-        .into_iter()
-        .map(|(id, stored_transports)| {
-            let mut item = serde_json::Map::new();
-            item.insert("id".into(), json!(id));
-            if let Some(items) = transports(&stored_transports) {
-                item.insert("transports".into(), json!(items));
-            }
-            item.insert("type".into(), json!("public-key"));
-            Value::Object(item)
-        })
-        .collect::<Vec<_>>();
-    let challenge = challenge()?;
-    let options = json!({ "rpId": rp_id, "challenge": challenge, "allowCredentials": allow, "timeout": 60000, "userVerification": "required" });
+    let started =
+        webauthn::start_authentication(site.origin, site.rp_id, &credentials).map_err(|_| {
+            Box::new(AuthFailure::new(
+                "No passkey is enrolled",
+                400,
+                "auth_failure",
+            )) as Box<dyn std::error::Error>
+        })?;
+    let challenge = started.state;
+    let options = started.options;
     let challenge_id = auth::random_hex_id("challenge")?;
     database.connection().execute("INSERT INTO suplex_challenges (id, challenge, kind, invitation_id, user_id, expires_at, consumed_at, created_at) VALUES (?1, ?2, 'authentication', NULL, NULL, ?3, NULL, ?4)", params![challenge_id, challenge, timestamp(now + Duration::minutes(5)), timestamp(now)])?;
     Ok(AuthOptions {
@@ -453,7 +434,7 @@ pub fn complete_authentication_prepared(
     let Some((credential_row_id, user_id, public_key, counter, stored_transports)) = row else {
         return Err(passkey_failure());
     };
-    let verified = webauthn::verify_authentication(
+    let verified = webauthn::finish_authentication(
         response,
         &challenge,
         site.origin,
@@ -466,11 +447,11 @@ pub fn complete_authentication_prepared(
         },
     )
     .map_err(|_| passkey_failure())?;
-    if counter > 0 && verified <= counter {
+    if counter > 0 && verified.counter <= counter {
         return Err(passkey_failure());
     }
     database.transaction(false, |database| {
-        let updated = database.connection().execute("UPDATE suplex_credentials SET counter = ?3 WHERE id = ?1 AND counter = ?2 AND revoked_at IS NULL", params![credential_row_id, counter, verified])?;
+        let updated = database.connection().execute("UPDATE suplex_credentials SET counter = ?3, public_key = ?4 WHERE id = ?1 AND counter = ?2 AND revoked_at IS NULL", params![credential_row_id, counter, verified.counter, verified.public_key])?;
         if updated != 1 { return Err(passkey_failure()); }
         let user = auth::public_user(database, &user_id)?.ok_or_else(passkey_failure)?;
         if user.status != "active" { return Err(passkey_failure()); }
@@ -482,331 +463,168 @@ pub fn complete_authentication_prepared(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::platform::database::OpenMode;
+    use crate::{identity::webauthn::test_support::synthetic, platform::database::OpenMode};
+    use webauthn_rs::prelude::Passkey;
 
-    fn seed_shared_ceremony(
-        database: &SuplexDatabase,
-        token: &str,
-        now: DateTime<Utc>,
-        registration_id: &str,
-    ) {
-        database.connection().execute("INSERT INTO suplex_users (id, display_name, username, avatar_seed, role, status, created_at, updated_at, identity_version) VALUES ('user_existing', 'Fixture member', 'user_v1_user_existing', 'user_v1_user_existing', 'member', 'pending', ?1, ?1, 1)", [timestamp(now)]).unwrap();
-        database.connection().execute("INSERT INTO suplex_invitations (id, token_hash, kind, display_name, user_id, expires_at, created_at, metadata_json) VALUES ('invitation_shared', ?1, 'user', 'Fixture member', 'user_existing', ?2, ?3, '{}')", params![auth::hash_secret(token), timestamp(now + Duration::days(1)), timestamp(now)]).unwrap();
-        let fixture: Value = serde_json::from_str(include_str!(
-            "../../../tests/fixtures/webauthn-interop.json"
-        ))
-        .unwrap();
-        database.connection().execute("INSERT INTO suplex_challenges (id, challenge, kind, invitation_id, user_id, expires_at, created_at) VALUES (?1, ?2, 'registration:user', 'invitation_shared', 'user_existing', ?3, ?4)", params![registration_id, fixture["registrationChallenge"].as_str().unwrap(), timestamp(now + Duration::minutes(5)), timestamp(now)]).unwrap();
-    }
-
-    fn shared_auth_challenge(database: &SuplexDatabase, now: DateTime<Utc>, id: &str) {
-        let fixture: Value = serde_json::from_str(include_str!(
-            "../../../tests/fixtures/webauthn-interop.json"
-        ))
-        .unwrap();
-        database.connection().execute("INSERT INTO suplex_challenges (id, challenge, kind, expires_at, created_at) VALUES (?1, ?2, 'authentication', ?3, ?4)", params![id, fixture["authenticationChallenge"].as_str().unwrap(), timestamp(now + Duration::minutes(5)), timestamp(now)]).unwrap();
-    }
-
-    #[test]
-    fn signed_registration_persists_authenticator_id_when_response_id_differs() {
-        let fixture: Value = serde_json::from_str(include_str!(
-            "../../../tests/fixtures/webauthn-interop.json"
-        ))
-        .unwrap();
-        let token = format!("invite_v1_user_{}", "A".repeat(43));
-        let now = Utc::now();
+    fn setup() -> (SuplexDatabase, std::path::PathBuf, String, DateTime<Utc>) {
         let path = std::env::temp_dir().join(format!(
             "{}.sqlite",
-            auth::random_hex_id("suplex_signed_internal_id").unwrap()
+            auth::random_hex_id("suplex_highlevel_ceremony").unwrap()
         ));
-        let mut database = SuplexDatabase::open(&path, OpenMode::Migrate).unwrap();
-        seed_shared_ceremony(&database, &token, now, "challenge_internal_id");
-        let mut response = fixture["packedFullRs256"].clone();
-        response["id"] = json!("YWJj");
-        response["rawId"] = json!("YWJj");
-        let enrolled = complete_registration(
-            &mut database,
-            "user",
-            &token,
-            "challenge_internal_id",
-            &response,
-            WebAuthnSite {
-                origin: fixture["origin"].as_str().unwrap(),
-                rp_id: fixture["rpId"].as_str().unwrap(),
-            },
-            now,
-        )
-        .unwrap();
-        assert_eq!(enrolled.user.id, "user_existing");
-        let stored: String = database
-            .connection()
-            .query_row("SELECT credential_id FROM suplex_credentials", [], |row| {
-                row.get(0)
-            })
-            .unwrap();
-        assert_eq!(stored, "g06So-HmBl8oCMHl5j466FSFEHvjutKcDJL3rhSZttc");
-        assert_ne!(stored, response["id"]);
-        drop(database);
-        let _ = std::fs::remove_file(&path);
+        let database = SuplexDatabase::open(&path, OpenMode::Migrate).unwrap();
+        let token = format!("invite_v1_user_{}", "A".repeat(43));
+        let now = Utc::now();
+        database.connection().execute("INSERT INTO suplex_users (id, display_name, username, avatar_seed, role, status, created_at, updated_at, identity_version) VALUES ('user_existing', 'Fixture member', 'user_v1_user_existing', 'user_v1_user_existing', 'member', 'pending', ?1, ?1, 1)", [timestamp(now)]).unwrap();
+        database.connection().execute("INSERT INTO suplex_invitations (id, token_hash, kind, display_name, user_id, expires_at, created_at, metadata_json) VALUES ('invitation_new', ?1, 'user', 'Fixture member', 'user_existing', ?2, ?3, '{}')", params![auth::hash_secret(&token), timestamp(now + Duration::days(1)), timestamp(now)]).unwrap();
+        (database, path, token, now)
+    }
+
+    fn site() -> WebAuthnSite<'static> {
+        WebAuthnSite {
+            origin: "https://suplex.example.test:4111",
+            rp_id: "suplex.example.test",
+        }
+    }
+
+    fn cleanup(path: &std::path::Path) {
+        let _ = std::fs::remove_file(path);
         let _ = std::fs::remove_file(path.with_extension("sqlite-wal"));
         let _ = std::fs::remove_file(path.with_extension("sqlite-shm"));
     }
 
-    fn run_typescript(
-        mode: &str,
-        path: &std::path::Path,
-        token: &str,
-        challenge_id: &str,
-    ) -> Value {
-        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .unwrap();
-        let output = std::process::Command::new("node")
-            .current_dir(root)
-            .args([
-                "--import",
-                "tsx",
-                "tests/support/ceremony-cross-runtime.ts",
-                mode,
-            ])
-            .arg(path)
-            .args([token, challenge_id])
-            .output()
-            .expect("run TypeScript AuthService");
-        assert!(
-            output.status.success(),
-            "{}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        serde_json::from_slice(&output.stdout).unwrap()
-    }
-
     #[test]
-    #[ignore = "run explicitly with Node dependencies installed for signed TypeScript and Rust service interop"]
-    fn signed_typescript_and_rust_services_share_credentials_and_sessions_both_directions() {
-        let fixture: Value = serde_json::from_str(include_str!(
-            "../../../tests/fixtures/webauthn-interop.json"
-        ))
-        .unwrap();
-        let token = format!("invite_v1_user_{}", "A".repeat(43));
-        let now = Utc::now();
-        let site = WebAuthnSite {
-            origin: fixture["origin"].as_str().unwrap(),
-            rp_id: fixture["rpId"].as_str().unwrap(),
-        };
-
-        let ts_path = std::env::temp_dir().join(format!(
-            "{}.sqlite",
-            auth::random_hex_id("suplex_ts_register").unwrap()
-        ));
-        let database = SuplexDatabase::open(&ts_path, OpenMode::Migrate).unwrap();
-        seed_shared_ceremony(&database, &token, now, "challenge_ts_register");
-        drop(database);
-        let ts_enrolled = run_typescript("register", &ts_path, &token, "challenge_ts_register");
-        assert_eq!(
-            ts_enrolled,
-            json!({"userId":"user_existing","sessionUserId":"user_existing"})
-        );
-        let mut database = SuplexDatabase::open(&ts_path, OpenMode::ReadWrite).unwrap();
-        let (public_key, counter): (Vec<u8>, u32) = database
-            .connection()
-            .query_row(
-                "SELECT public_key, counter FROM suplex_credentials WHERE credential_id = ?1",
-                [fixture["credentialId"].as_str().unwrap()],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            )
-            .unwrap();
-        assert_eq!(URL_SAFE_NO_PAD.encode(public_key), fixture["publicKey"]);
-        assert_eq!(counter, 0);
-        shared_auth_challenge(&database, now, "challenge_rust_auth");
-        let rust_login = complete_authentication(
-            &mut database,
-            "challenge_rust_auth",
-            &fixture["assertion"],
-            site,
-            now,
-        )
-        .unwrap();
-        assert_eq!(rust_login.user.id, "user_existing");
-        let counter: u32 = database
-            .connection()
-            .query_row(
-                "SELECT counter FROM suplex_credentials WHERE credential_id = ?1",
-                [fixture["credentialId"].as_str().unwrap()],
-                |row| row.get(0),
-            )
-            .unwrap();
-        assert_eq!(counter, 1);
-        drop(database);
-
-        let rust_path = std::env::temp_dir().join(format!(
-            "{}.sqlite",
-            auth::random_hex_id("suplex_rust_register").unwrap()
-        ));
-        let mut database = SuplexDatabase::open(&rust_path, OpenMode::Migrate).unwrap();
-        seed_shared_ceremony(&database, &token, now, "challenge_rust_register");
-        let rust_enrolled = complete_registration(
-            &mut database,
-            "user",
-            &token,
-            "challenge_rust_register",
-            &fixture["registration"],
-            site,
-            now,
-        )
-        .unwrap();
-        assert_eq!(rust_enrolled.user.id, "user_existing");
-        shared_auth_challenge(&database, now, "challenge_ts_auth");
-        drop(database);
-        let ts_login = run_typescript("authenticate", &rust_path, "", "challenge_ts_auth");
-        assert_eq!(
-            ts_login,
-            json!({"userId":"user_existing","sessionUserId":"user_existing"})
-        );
-        let database = SuplexDatabase::open(&rust_path, OpenMode::ReadWrite).unwrap();
-        let counter: u32 = database
-            .connection()
-            .query_row(
-                "SELECT counter FROM suplex_credentials WHERE credential_id = ?1",
-                [fixture["credentialId"].as_str().unwrap()],
-                |row| row.get(0),
-            )
-            .unwrap();
-        assert_eq!(counter, 1);
-        drop(database);
-        for path in [ts_path, rust_path] {
-            let _ = std::fs::remove_file(&path);
-            let _ = std::fs::remove_file(path.with_extension("sqlite-wal"));
-            let _ = std::fs::remove_file(path.with_extension("sqlite-shm"));
-        }
-    }
-
-    #[test]
-    fn signed_simplewebauthn_responses_complete_shared_registration_and_login() {
-        assert_eq!(
-            transports(r#"["internal",1e400,"\ud800","usb"]"#),
-            Some(vec!["internal".to_owned(), "usb".to_owned()])
-        );
-        let fixture: Value = serde_json::from_str(include_str!(
-            "../../../tests/fixtures/webauthn-interop.json"
-        ))
-        .unwrap();
-        let path = std::env::temp_dir().join(format!(
-            "{}.sqlite",
-            auth::random_hex_id("suplex_ceremony").unwrap()
-        ));
-        let mut database = SuplexDatabase::open(&path, OpenMode::Migrate).unwrap();
-        let now = DateTime::parse_from_rfc3339("2026-09-24T12:00:00Z")
-            .unwrap()
-            .with_timezone(&Utc);
-        let token = format!("invite_v1_user_{}", "A".repeat(43));
-        let user_id = fixture["userId"].as_str().unwrap();
-        database.connection().execute("INSERT INTO suplex_users (id, display_name, username, avatar_seed, role, status, created_at, updated_at, identity_version) VALUES (?1, 'Fixture member', ?2, ?2, 'member', 'pending', ?3, ?3, 1)", params![user_id, format!("user_v1_{user_id}"), timestamp(now)]).unwrap();
-        let invitation_id = auth::random_hex_id("invitation").unwrap();
-        database.connection().execute("INSERT INTO suplex_invitations (id, token_hash, kind, display_name, user_id, expires_at, created_at, metadata_json) VALUES (?1, ?2, 'user', 'Fixture member', ?3, ?4, ?5, '{}')", params![invitation_id, auth::hash_secret(&token), user_id, timestamp(now + Duration::days(1)), timestamp(now)]).unwrap();
-        let offered = begin_registration(
-            &mut database,
-            "user",
-            &token,
-            fixture["rpId"].as_str().unwrap(),
-            now,
-        )
-        .unwrap();
+    fn highlevel_options_store_state_with_none_attestation_and_required_uv() {
+        let (mut database, path, token, now) = setup();
+        let offered = begin_registration(&mut database, "user", &token, site(), now).unwrap();
         assert_eq!(offered.options["attestation"], "none");
-        assert_eq!(
-            offered.options["user"]["id"],
-            URL_SAFE_NO_PAD.encode(URL_SAFE_NO_PAD.encode(user_id.as_bytes()).as_bytes())
-        );
         assert_eq!(
             offered.options["authenticatorSelection"]["userVerification"],
             "required"
         );
         assert_eq!(
             offered.options["pubKeyCredParams"],
-            json!([{"alg":-8,"type":"public-key"},{"alg":-7,"type":"public-key"},{"alg":-257,"type":"public-key"}])
+            json!([
+                {"type":"public-key","alg":-7},
+                {"type":"public-key","alg":-257}
+            ])
         );
-        let raw_options = serde_json::to_string(&offered)
-            .unwrap()
-            .replace(&offered.challenge_id, "CHALLENGE_ID")
-            .replace(offered.options["challenge"].as_str().unwrap(), "CHALLENGE");
-        assert_eq!(
-            raw_options,
-            r#"{"challengeId":"CHALLENGE_ID","options":{"challenge":"CHALLENGE","rp":{"name":"Suplex","id":"suplex.example.test"},"user":{"id":"ZFhObGNsOWxlR2x6ZEdsdVp3","name":"user_v1_user_existing","displayName":"Fixture member"},"pubKeyCredParams":[{"alg":-8,"type":"public-key"},{"alg":-7,"type":"public-key"},{"alg":-257,"type":"public-key"}],"timeout":60000,"attestation":"none","excludeCredentials":[],"authenticatorSelection":{"residentKey":"preferred","userVerification":"required","requireResidentKey":false},"extensions":{"credProps":true},"hints":[]}}"#
-        );
-        let challenge_id = auth::random_hex_id("challenge").unwrap();
-        database.connection().execute("INSERT INTO suplex_challenges (id, challenge, kind, invitation_id, user_id, expires_at, created_at) VALUES (?1, ?2, 'registration:user', ?3, ?4, ?5, ?6)", params![challenge_id, fixture["registrationChallenge"].as_str().unwrap(), invitation_id, user_id, timestamp(now + Duration::minutes(5)), timestamp(now)]).unwrap();
+        let state: String = database
+            .connection()
+            .query_row(
+                "SELECT challenge FROM suplex_challenges WHERE id = ?1",
+                [&offered.challenge_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(serde_json::from_str::<webauthn_rs::prelude::PasskeyRegistration>(&state).is_ok());
+        drop(database);
+        cleanup(&path);
+    }
+
+    #[test]
+    #[ignore = "requires Node and @simplewebauthn/server for ephemeral signed authenticator responses"]
+    fn signed_fresh_passkey_survives_reopen_and_updates_counter() {
+        let (mut database, path, token, now) = setup();
+        let offered = begin_registration(&mut database, "user", &token, site(), now).unwrap();
+        let signed = synthetic(&json!({
+            "mode":"register", "options":offered.options, "origin":site().origin, "counter":7
+        }));
         let enrolled = complete_registration(
             &mut database,
             "user",
             &token,
-            &challenge_id,
-            &fixture["registration"],
-            WebAuthnSite {
-                origin: fixture["origin"].as_str().unwrap(),
-                rp_id: fixture["rpId"].as_str().unwrap(),
-            },
+            &offered.challenge_id,
+            &signed["response"],
+            site(),
             now,
         )
         .unwrap();
-        assert_eq!(enrolled.user.id, user_id);
-        assert_eq!(enrolled.user.status, "active");
-        assert!(
-            auth::get_user_by_session(&database, &enrolled.session_token, now)
-                .unwrap()
-                .is_some()
-        );
-        let (stored_key, stored_counter, stored_id): (Vec<u8>, u32, String) = database.connection().query_row("SELECT public_key, counter, credential_id FROM suplex_credentials WHERE user_id = ?1", [user_id], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?))).unwrap();
-        assert_eq!(
-            URL_SAFE_NO_PAD.encode(&stored_key),
-            fixture["publicKey"].as_str().unwrap()
-        );
-        assert_eq!(stored_counter, 0);
-        assert_eq!(stored_id, fixture["credentialId"]);
-        let offered_auth =
-            begin_authentication(&database, fixture["rpId"].as_str().unwrap(), now).unwrap();
-        assert_eq!(offered_auth.options["allowCredentials"][0]["id"], stored_id);
-        let authentication_challenge_id = auth::random_hex_id("challenge").unwrap();
-        database.connection().execute("INSERT INTO suplex_challenges (id, challenge, kind, expires_at, created_at) VALUES (?1, ?2, 'authentication', ?3, ?4)", params![authentication_challenge_id, fixture["authenticationChallenge"].as_str().unwrap(), timestamp(now + Duration::minutes(5)), timestamp(now)]).unwrap();
-        let logged_in = complete_authentication(
-            &mut database,
-            &authentication_challenge_id,
-            &fixture["assertion"],
-            WebAuthnSite {
-                origin: fixture["origin"].as_str().unwrap(),
-                rp_id: fixture["rpId"].as_str().unwrap(),
-            },
-            now,
-        )
-        .unwrap();
-        assert_eq!(logged_in.user.id, user_id);
-        let counter: u32 = database
+        assert_eq!(enrolled.user.id, "user_existing");
+        let credential_id = signed["credentialId"].as_str().unwrap();
+        let (stored, counter): (Vec<u8>, u32) = database
             .connection()
             .query_row(
-                "SELECT counter FROM suplex_credentials WHERE user_id = ?1",
-                [user_id],
-                |row| row.get(0),
+                "SELECT public_key, counter FROM suplex_credentials WHERE credential_id = ?1",
+                [credential_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .unwrap();
-        assert_eq!(counter, 1);
+        assert!(serde_json::from_slice::<Passkey>(&stored).is_ok());
+        assert_eq!(counter, 7);
+        database.connection().execute("INSERT INTO suplex_credentials (id, user_id, credential_id, public_key, counter, transports, created_at, revoked_at) VALUES ('old_credential_row', 'user_existing', 'old_raw_credential', X'010203', 0, '[]', ?1, NULL)", [timestamp(now)]).unwrap();
+        drop(database);
+
+        let mut database = SuplexDatabase::open(&path, OpenMode::ReadWrite).unwrap();
+        let offered_auth = begin_authentication(&database, site(), now).unwrap();
+        assert_eq!(
+            offered_auth.options["allowCredentials"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+        assert_eq!(offered_auth.options["userVerification"], "required");
+        let assertion = synthetic(&json!({
+            "mode":"authenticate", "options":offered_auth.options,
+            "origin":site().origin, "credentialId":credential_id,
+            "privateKeyPem":signed["privateKeyPem"], "counter":8
+        }));
+        let logged_in = complete_authentication(
+            &mut database,
+            &offered_auth.challenge_id,
+            &assertion["response"],
+            site(),
+            now,
+        )
+        .unwrap();
+        assert_eq!(logged_in.user.id, "user_existing");
         assert!(
             auth::get_user_by_session(&database, &logged_in.session_token, now)
                 .unwrap()
                 .is_some()
         );
-        let replay = complete_authentication(
-            &mut database,
-            &authentication_challenge_id,
-            &fixture["assertion"],
-            WebAuthnSite {
-                origin: fixture["origin"].as_str().unwrap(),
-                rp_id: fixture["rpId"].as_str().unwrap(),
-            },
-            now,
-        )
-        .unwrap_err();
-        assert_eq!(
-            replay.downcast_ref::<AuthFailure>().unwrap().code,
-            "passkey_invalid"
+        let (updated, counter): (Vec<u8>, u32) = database
+            .connection()
+            .query_row(
+                "SELECT public_key, counter FROM suplex_credentials WHERE credential_id = ?1",
+                [credential_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_ne!(updated, stored);
+        assert_eq!(counter, 8);
+        let old_bytes: Vec<u8> = database.connection().query_row(
+            "SELECT public_key FROM suplex_credentials WHERE credential_id = 'old_raw_credential'",
+            [], |row| row.get(0)
+        ).unwrap();
+        assert_eq!(old_bytes, vec![1, 2, 3]);
+        let stale_challenge = begin_authentication(&database, site(), now).unwrap();
+        let stale_assertion = synthetic(&json!({
+            "mode":"authenticate", "options":stale_challenge.options,
+            "origin":site().origin, "credentialId":credential_id,
+            "privateKeyPem":signed["privateKeyPem"], "counter":8
+        }));
+        assert!(
+            complete_authentication(
+                &mut database,
+                &stale_challenge.challenge_id,
+                &stale_assertion["response"],
+                site(),
+                now
+            )
+            .is_err()
         );
+        assert!(
+            complete_authentication(
+                &mut database,
+                &offered_auth.challenge_id,
+                &assertion["response"],
+                site(),
+                now
+            )
+            .is_err()
+        );
+        drop(database);
+        cleanup(&path);
     }
 }

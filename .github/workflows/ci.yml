@@ -56,7 +56,8 @@ jobs:
       - run: cargo fmt --manifest-path rust/Cargo.toml --check
       - run: cargo clippy --manifest-path rust/Cargo.toml --all-targets -- -D warnings
       - run: cargo test --manifest-path rust/Cargo.toml
-      - run: cargo test --manifest-path rust/Cargo.toml --lib signed_typescript_and_rust_services_share_credentials_and_sessions_both_directions -- --ignored --nocapture
+      - run: cargo test --manifest-path rust/Cargo.toml --lib signed_fresh_passkey_survives_reopen_and_updates_counter -- --ignored --nocapture
+      - run: cargo test --manifest-path rust/Cargo.toml --lib signed_fresh_passkey_over_isolated_tcp_listener -- --ignored --nocapture
 
   test:
     name: Test suite

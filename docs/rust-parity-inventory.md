@@ -69,7 +69,7 @@ Request corpus: 1,139 fixtures across 95 request exports plus 18 stored-project 
 | [http/routes/agent-api.ts](../src/http/routes/agent-api.ts) | not started | |
 | [http/routes/agent-pairing.ts](../src/http/routes/agent-pairing.ts) | not started | |
 | [http/routes/assets.ts](../src/http/routes/assets.ts) | not started | |
-| [http/routes/auth.ts](../src/http/routes/auth.ts) | ported | `0856b0d4`, `2ef5fab1`: profile editing, signed TCP ceremonies and TS↔Rust stored credentials/sessions tested; typed requests and high-level WebAuthn replacement need fresh checks. Passkey reenrollment is explicitly accepted. |
+| [http/routes/auth.ts](../src/http/routes/auth.ts) | ported | High-level signed TCP registration/sign-in passes with exact user response and session/CSRF cookies; dropping its waiter does not cancel admitted registration. Peer review passes. Typed request conversion remains pending; old-passkey reenrollment is accepted. |
 | [http/routes/authenticated.ts](../src/http/routes/authenticated.ts) | not started | |
 | [http/routes/avatars.ts](../src/http/routes/avatars.ts) | not started | |
 | [http/routes/companies.ts](../src/http/routes/companies.ts) | ported | `f50af424`: company mutations, authority and raw ordinary response checks pass; typed request migration in progress. |
@@ -79,7 +79,7 @@ Request corpus: 1,139 fixtures across 95 request exports plus 18 stored-project 
 | [http/routes/health.ts](../src/http/routes/health.ts) | not started | |
 | [http/routes/mcp.ts](../src/http/routes/mcp.ts) | not started | |
 | [http/routes/oauth.ts](../src/http/routes/oauth.ts) | not started | |
-| [http/routes/pages.ts](../src/http/routes/pages.ts) | verified | Page/session/redirect port: five focused checks, live redirect/HTML/OAuth policy checks and desktop/narrow React boot inspected. Cookie/error corrections reviewed. Isolated staged fmt, all-target Clippy, 68 library tests and all five integration tests pass; one separate Node test remains ignored in this run. Health stays an authenticated 501 in its own pending route; page boot does not verify task execution. |
+| [http/routes/pages.ts](../src/http/routes/pages.ts) | verified | `6631e45c`: five focused checks, live redirect/HTML/OAuth policy and desktop/narrow React boot pass. The auth follow-up removes two accidentally committed deferred-workflow registrations; its exact index export passes 54 library tests, five integration tests, fmt and all-target Clippy. Health and task execution remain separate pending capabilities. |
 | [http/routes/projects.ts](../src/http/routes/projects.ts) | not started | `1e2b2f0c`: reads/defaults/provider instances, GitHub pickers and local/existing/new GitHub creation tested; typed requests next, Bitbucket/PATCH/ancillary routes deferred. |
 | [http/routes/provider-login.ts](../src/http/routes/provider-login.ts) | not started | |
 | [http/routes/task-pane.ts](../src/http/routes/task-pane.ts) | not started | |
@@ -93,7 +93,7 @@ Request corpus: 1,139 fixtures across 95 request exports plus 18 stored-project 
 | [identity/auth-identifiers.ts](../src/identity/auth-identifiers.ts) | not started | |
 | [identity/auth-repository.ts](../src/identity/auth-repository.ts) | not started | |
 | [identity/auth-schema.ts](../src/identity/auth-schema.ts) | not started | |
-| [identity/auth-webauthn.ts](../src/identity/auth-webauthn.ts) | not started | Previous adapter is being replaced with high-level webauthn-rs. User accepts old-passkey reenrollment and library defaults; core compatibility work is dropped. Fresh signed registration/sign-in/restart/counter checks pending. OpenSSL remains transitive |
+| [identity/auth-webauthn.ts](../src/identity/auth-webauthn.ts) | verified | High-level webauthn-rs replaces custom attestation/core/CBOR glue; library state uses existing columns and old credential rows remain intact. Signed registration/sign-in/reopen, counters7→8, equal-counter/replay rejection and detached TCP completion pass. Exact index export: fmt/all-target Clippy,54 library tests and5 integration tests pass; both ignored Node signer tests also pass explicitly, as do TS signer1/1, ESLint and typecheck. Reenrollment is accepted; OpenSSL remains transitive. |
 | [identity/auth.ts](../src/identity/auth.ts) | not started | `905b7b82`, `99c6e5f8`, `f50af424`: legacy normalization, identity/company administration and metadata tested; typed JSON migration and M2 integration next, operational CLI still pending. |
 | [identity/avatar-kinds.ts](../src/identity/avatar-kinds.ts) | not started | |
 | [identity/avatars.ts](../src/identity/avatars.ts) | not started | |

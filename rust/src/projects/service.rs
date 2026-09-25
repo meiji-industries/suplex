@@ -1,7 +1,7 @@
 use std::{error::Error, fmt};
 
 use chrono::{DateTime, SecondsFormat, Utc};
-use openssl::rand::rand_bytes;
+use getrandom::fill;
 use rusqlite::{OptionalExtension, Row, params};
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -48,7 +48,7 @@ fn finding(code: &str, field: &str, message: &str) -> Finding {
 
 fn project_id() -> DatabaseResult<String> {
     let mut bytes = [0_u8; 12];
-    rand_bytes(&mut bytes)?;
+    fill(&mut bytes)?;
     Ok(format!(
         "project_{}",
         bytes

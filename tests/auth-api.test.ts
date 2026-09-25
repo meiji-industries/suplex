@@ -78,6 +78,10 @@ test("API enrollment and authorization fail closed before company details are re
     expect(malformedCompany.statusCode).toBe(400);
     const validCompanyWrongOrigin = await app.inject({ method: "POST", url: "/api/admin/companies", headers: { cookie: "sid_v1=stale", origin: "https://wrong.example" }, payload: { name: "Company" } });
     expect(validCompanyWrongOrigin.statusCode).toBe(403);
+    const malformedInvitation = await app.inject({ method: "POST", url: "/api/admin/invitations", headers: { cookie: "sid_v1=stale", origin: "https://wrong.example" }, payload: { displayName: 42 } });
+    expect(malformedInvitation.statusCode).toBe(400);
+    const validInvitationWrongOrigin = await app.inject({ method: "POST", url: "/api/admin/invitations", headers: { cookie: "sid_v1=stale", origin: "https://wrong.example" }, payload: { displayName: "Member" } });
+    expect(validInvitationWrongOrigin.statusCode).toBe(403);
     const invitation = auth.ensureBootstrapInvitation()!;
     expect((await app.inject({ method: "GET", url: "/api/auth/status" })).json()).toMatchObject({ required: true, authenticated: false });
     const options = await app.inject({ method: "POST", url: "/api/auth/bootstrap/options", payload: { token: invitation.token } });
@@ -114,7 +118,12 @@ test("API enrollment and authorization fail closed before company details are re
     expect((await app.inject({ method: "POST", url: `/api/admin/companies/${companyA.id}/status/paused`, headers: { cookie: adminCookie, origin: config.reachableAddress }, payload: {} })).statusCode).toBe(200);
     expect((await app.inject({ method: "PATCH", url: `/api/admin/companies/${companyA.id}`, headers: { cookie: adminCookie, origin: config.reachableAddress }, payload: { name: "" } })).json()).toEqual({ error: "Company name is invalid" });
     expect((await app.inject({ method: "DELETE", url: `/api/admin/companies/${companyA.id}`, headers: { cookie: adminCookie, origin: config.reachableAddress } })).statusCode).toBe(404);
-    const invite = (await app.inject({ method: "POST", url: "/api/admin/invitations", headers: { cookie: adminCookie, origin: config.reachableAddress }, payload: { displayName: "API member" } })).json() as { token: string; user: { id: string } };
+    const inviteResponse = await app.inject({ method: "POST", url: "/api/admin/invitations", headers: { cookie: adminCookie, origin: config.reachableAddress }, payload: { displayName: "API member" } });
+    const invite = inviteResponse.json() as { token: string; expiresAt: string; user: { id: string } };
+    expect(inviteResponse.statusCode).toBe(201);
+    expect(invite.token).toMatch(/^invite_v1_user_[A-Za-z0-9_-]{43}$/);
+    expect(invite.expiresAt).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/);
+    expect(inviteResponse.body.replaceAll(invite.token, "TOKEN").replaceAll(invite.user.id, "user_ID").replaceAll(invite.expiresAt, "TIMESTAMP")).toBe('{"token":"TOKEN","kind":"user","expiresAt":"TIMESTAMP","user":{"id":"user_ID","displayName":"API member","username":"user_v1_user_ID","avatarSeed":"user_v1_user_ID","role":"member","status":"pending","companyIds":[]}}');
     const memberOptions = await app.inject({ method: "POST", url: "/api/auth/invitation/options", payload: { token: invite.token } });
     const memberCeremony = memberOptions.json() as { challengeId: string };
     const memberEnrolled = await app.inject({ method: "POST", url: "/api/auth/invitation/verify", payload: { token: invite.token, challengeId: memberCeremony.challengeId, response: { id: "member-api-credential", type: "public-key" } } });

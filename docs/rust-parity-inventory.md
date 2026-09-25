@@ -61,7 +61,7 @@ The table lists all 238 backend TypeScript modules present at the baseline, incl
 | [http/contracts/workflows.ts](../src/http/contracts/workflows.ts) | not started | |
 | [http/errors.ts](../src/http/errors.ts) | not started | |
 | [http/oauth-runtime.ts](../src/http/oauth-runtime.ts) | not started | |
-| [http/routes/administration.ts](../src/http/routes/administration.ts) | not started | Profile CRUD/duplicate routes ported with validation/auth/live checks. Other known administration routes return 501 with per-operation member/admin policies; their services remain pending |
+| [http/routes/administration.ts](../src/http/routes/administration.ts) | not started | Profile CRUD and identity invitation/list/revocation/audit routes ported with validation/auth/live checks. Other administration services and full raw HTTP parity remain pending |
 | [http/routes/agent-api.ts](../src/http/routes/agent-api.ts) | not started | |
 | [http/routes/agent-pairing.ts](../src/http/routes/agent-pairing.ts) | not started | |
 | [http/routes/assets.ts](../src/http/routes/assets.ts) | not started | |
@@ -90,7 +90,7 @@ The table lists all 238 backend TypeScript modules present at the baseline, incl
 | [identity/auth-repository.ts](../src/identity/auth-repository.ts) | not started | |
 | [identity/auth-schema.ts](../src/identity/auth-schema.ts) | not started | |
 | [identity/auth-webauthn.ts](../src/identity/auth-webauthn.ts) | not started | Partial adapter and [10-algorithm spike evidence](rust-spikes/webauthn.md), including synthetic packed and FIDO U2F attestation; Apple, Android Key, TPM, SafetyNet, stored-credential roundtrips, and full ceremony/HTTP integration remain incomplete |
-| [identity/auth.ts](../src/identity/auth.ts) | not started | Partial: sessions, development administrator, current-user profile/audit updates, and company read/mutation/membership operations; focused and live checks pass. Account administration and ceremonies remain incomplete |
+| [identity/auth.ts](../src/identity/auth.ts) | not started | Sessions, development administrator, profile/company operations, invitations, lists, and revocation implemented with focused/live checks. Signed ceremonies, stored-credential roundtrips, and lossless metadata remain incomplete |
 | [identity/avatar-kinds.ts](../src/identity/avatar-kinds.ts) | not started | |
 | [identity/avatars.ts](../src/identity/avatars.ts) | not started | |
 | [identity/external-agents.ts](../src/identity/external-agents.ts) | not started | |

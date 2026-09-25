@@ -32,18 +32,6 @@ pub fn router() -> Router<AppState> {
             "/api/admin/provider-instances/{instance_id}",
             axum::routing::delete(administrator),
         )
-        .route(
-            "/api/admin/invitations",
-            get(identity_admin).post(identity_admin),
-        )
-        .route("/api/admin/users", get(identity_admin))
-        .route("/api/admin/credentials", get(identity_admin))
-        .route(
-            "/api/admin/credentials/{credential_id}/revoke",
-            post(identity_admin),
-        )
-        .route("/api/admin/users/{user_id}/revoke", post(identity_admin))
-        .route("/api/admin/audit", get(identity_admin))
         .route("/api/admin/models", get(authenticated))
 }
 
@@ -51,7 +39,6 @@ pub fn router() -> Router<AppState> {
 enum Access {
     Authenticated,
     Administrator,
-    IdentityAdministrator,
 }
 
 async fn authenticated(
@@ -70,14 +57,6 @@ async fn administrator(
     guarded(&state, &headers, &method, Access::Administrator)
 }
 
-async fn identity_admin(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    method: Method,
-) -> Response {
-    guarded(&state, &headers, &method, Access::IdentityAdministrator)
-}
-
 fn guarded(state: &AppState, headers: &HeaderMap, method: &Method, access: Access) -> Response {
     if !session::csrf_allowed(&state.session_config, headers, method.as_str(), false) {
         return auth::error(StatusCode::FORBIDDEN, "request_origin_invalid");
@@ -92,9 +71,6 @@ fn guarded(state: &AppState, headers: &HeaderMap, method: &Method, access: Acces
         None => auth::error(StatusCode::UNAUTHORIZED, "Authentication required"),
         Some(user) if matches!(access, Access::Administrator) && user.role != "admin" => {
             auth::error(StatusCode::FORBIDDEN, "Administrator access required")
-        }
-        Some(user) if matches!(access, Access::IdentityAdministrator) && user.role != "admin" => {
-            auth::error(StatusCode::NOT_FOUND, "Not found")
         }
         Some(_) => auth::not_ported(),
     };
@@ -164,16 +140,6 @@ mod tests {
         assert_eq!(
             guarded(&state, &headers, &Method::GET, Access::Authenticated).status(),
             StatusCode::NOT_IMPLEMENTED
-        );
-        assert_eq!(
-            guarded(
-                &state,
-                &headers,
-                &Method::GET,
-                Access::IdentityAdministrator
-            )
-            .status(),
-            StatusCode::NOT_FOUND
         );
         headers.insert(
             "cookie",

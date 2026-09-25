@@ -14,6 +14,7 @@ use crate::platform::{database::SuplexDatabase, embedded};
 
 pub mod contracts;
 pub mod routes {
+    pub mod admin_identity;
     pub mod auth;
     pub mod companies;
     pub mod profiles;
@@ -60,6 +61,7 @@ impl AppState {
 
 pub fn router(state: AppState) -> Router {
     Router::new()
+        .merge(routes::admin_identity::router())
         .merge(routes::auth::router())
         .merge(routes::companies::router())
         .merge(routes::profiles::router())

@@ -103,7 +103,10 @@ pub(crate) fn js_trim(value: &str) -> &str {
     })
 }
 
-fn public_user(database: &SuplexDatabase, user_id: &str) -> DatabaseResult<Option<AuthUser>> {
+pub(crate) fn public_user(
+    database: &SuplexDatabase,
+    user_id: &str,
+) -> DatabaseResult<Option<AuthUser>> {
     let user = database
         .connection()
         .query_row(

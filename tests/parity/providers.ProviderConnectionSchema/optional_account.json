@@ -1,0 +1,18 @@
+{
+  "contract": "providers.ProviderConnectionSchema",
+  "case": "optional_account",
+  "input": {
+    "status": "connected",
+    "summary": "Ready",
+    "account": "user@example.test",
+    "extra": true
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "status": "connected",
+      "summary": "Ready",
+      "account": "user@example.test"
+    }
+  }
+}

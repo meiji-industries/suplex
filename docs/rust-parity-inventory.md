@@ -53,7 +53,7 @@ The table lists all 238 backend TypeScript modules present at the baseline, incl
 | [http/contracts/github-triggers.ts](../src/http/contracts/github-triggers.ts) | not started | |
 | [http/contracts/oauth.ts](../src/http/contracts/oauth.ts) | not started | |
 | [http/contracts/projects.ts](../src/http/contracts/projects.ts) | not started | |
-| [http/contracts/providers.ts](../src/http/contracts/providers.ts) | not started | |
+| [http/contracts/providers.ts](../src/http/contracts/providers.ts) | ported | All nine validators implemented in [providers.rs](../rust/src/http/contracts/providers.rs); combined corpus passes 284 cases / 28 schemas. Raw HTTP JSON representation and endpoint integration remain unverified |
 | [http/contracts/system-events.ts](../src/http/contracts/system-events.ts) | not started | |
 | [http/contracts/task-templates.ts](../src/http/contracts/task-templates.ts) | not started | |
 | [http/contracts/tasks.ts](../src/http/contracts/tasks.ts) | not started | |

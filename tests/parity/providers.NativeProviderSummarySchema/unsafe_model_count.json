@@ -1,0 +1,27 @@
+{
+  "contract": "providers.NativeProviderSummarySchema",
+  "case": "unsafe_model_count",
+  "input": {
+    "id": "codex",
+    "label": "Codex",
+    "modelCount": 9007199254740992,
+    "models": [],
+    "status": "configured"
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "too_big",
+        "maximum": 9007199254740991,
+        "note": "Integers must be within the safe integer range.",
+        "origin": "int",
+        "inclusive": true,
+        "path": [
+          "modelCount"
+        ],
+        "message": "Too big: expected int to be <=9007199254740991"
+      }
+    ]
+  }
+}

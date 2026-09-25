@@ -1,0 +1,25 @@
+{
+  "contract": "providers.ProviderInstanceReadinessSchema",
+  "case": "invalid_status",
+  "input": {
+    "status": "ready",
+    "summary": "Ready"
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid_value",
+        "values": [
+          "healthy",
+          "warning",
+          "unhealthy"
+        ],
+        "path": [
+          "status"
+        ],
+        "message": "Invalid option: expected one of \"healthy\"|\"warning\"|\"unhealthy\""
+      }
+    ]
+  }
+}

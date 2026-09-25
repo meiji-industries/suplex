@@ -1,0 +1,15 @@
+{
+  "contract": "providers.ProviderInstanceCreateBodySchema",
+  "case": "next_line_not_trimmed",
+  "input": {
+    "provider": "codex",
+    "label": "Codex"
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "provider": "codex",
+      "label": "Codex"
+    }
+  }
+}

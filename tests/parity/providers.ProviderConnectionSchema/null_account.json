@@ -1,0 +1,22 @@
+{
+  "contract": "providers.ProviderConnectionSchema",
+  "case": "null_account",
+  "input": {
+    "status": "unknown",
+    "summary": "Unknown",
+    "account": null
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "expected": "string",
+        "code": "invalid_type",
+        "path": [
+          "account"
+        ],
+        "message": "Invalid input: expected string, received null"
+      }
+    ]
+  }
+}

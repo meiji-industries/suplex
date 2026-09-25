@@ -1,0 +1,24 @@
+{
+  "contract": "providers.ProviderInstanceSchema",
+  "case": "unknown_on_valid_nested",
+  "input": {
+    "id": "1",
+    "provider": "codex",
+    "label": "Codex",
+    "homeDirectory": "/tmp",
+    "createdAt": "now",
+    "updatedAt": "now",
+    "extra": true
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "id": "1",
+      "provider": "codex",
+      "label": "Codex",
+      "homeDirectory": "/tmp",
+      "createdAt": "now",
+      "updatedAt": "now"
+    }
+  }
+}

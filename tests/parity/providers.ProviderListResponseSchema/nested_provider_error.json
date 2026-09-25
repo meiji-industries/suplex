@@ -1,0 +1,53 @@
+{
+  "contract": "providers.ProviderListResponseSchema",
+  "case": "nested_provider_error",
+  "input": {
+    "directory": "/tmp",
+    "observedAt": "now",
+    "providers": [
+      {
+        "id": "bad",
+        "label": "Bad",
+        "modelCount": -1,
+        "models": [],
+        "status": "missing",
+        "connection": {
+          "status": "unknown",
+          "summary": "?"
+        }
+      }
+    ]
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid_value",
+        "values": [
+          "opencode",
+          "claude-code",
+          "devin",
+          "codex"
+        ],
+        "path": [
+          "providers",
+          0,
+          "id"
+        ],
+        "message": "Invalid option: expected one of \"opencode\"|\"claude-code\"|\"devin\"|\"codex\""
+      },
+      {
+        "origin": "number",
+        "code": "too_small",
+        "minimum": 0,
+        "inclusive": true,
+        "path": [
+          "providers",
+          0,
+          "modelCount"
+        ],
+        "message": "Too small: expected number to be >=0"
+      }
+    ]
+  }
+}

@@ -1,0 +1,25 @@
+{
+  "contract": "providers.NativeProviderSummarySchema",
+  "case": "fractional_model_count",
+  "input": {
+    "id": "codex",
+    "label": "Codex",
+    "modelCount": 1.5,
+    "models": [],
+    "status": "configured"
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "expected": "int",
+        "format": "safeint",
+        "code": "invalid_type",
+        "path": [
+          "modelCount"
+        ],
+        "message": "Invalid input: expected int, received number"
+      }
+    ]
+  }
+}

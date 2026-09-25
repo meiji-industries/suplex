@@ -1,0 +1,44 @@
+{
+  "contract": "providers.ProviderInstanceListResponseSchema",
+  "case": "nested_instance_error",
+  "input": {
+    "instances": [
+      {
+        "id": "1",
+        "provider": "codex",
+        "label": "Codex",
+        "homeDirectory": "/tmp",
+        "createdAt": "now",
+        "updatedAt": "now",
+        "readiness": {
+          "status": "wrong",
+          "summary": ""
+        },
+        "connection": {
+          "status": "unknown",
+          "summary": "?"
+        }
+      }
+    ]
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid_value",
+        "values": [
+          "healthy",
+          "warning",
+          "unhealthy"
+        ],
+        "path": [
+          "instances",
+          0,
+          "readiness",
+          "status"
+        ],
+        "message": "Invalid option: expected one of \"healthy\"|\"warning\"|\"unhealthy\""
+      }
+    ]
+  }
+}

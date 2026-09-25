@@ -1,0 +1,24 @@
+{
+  "contract": "providers.NativeProviderSummarySchema",
+  "case": "models_wrong_type",
+  "input": {
+    "id": "codex",
+    "label": "Codex",
+    "modelCount": 0,
+    "models": {},
+    "status": "configured"
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "expected": "array",
+        "code": "invalid_type",
+        "path": [
+          "models"
+        ],
+        "message": "Invalid input: expected array, received object"
+      }
+    ]
+  }
+}

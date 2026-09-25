@@ -1,0 +1,15 @@
+{
+  "contract": "providers.ProviderInstanceCreateBodySchema",
+  "case": "byte_order_mark_trim",
+  "input": {
+    "provider": "codex",
+    "label": "﻿Codex﻿"
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "provider": "codex",
+      "label": "Codex"
+    }
+  }
+}

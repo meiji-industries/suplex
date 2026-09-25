@@ -1,0 +1,23 @@
+{
+  "contract": "providers.ProviderInstanceCreateBodySchema",
+  "case": "astral_over_max_label",
+  "input": {
+    "provider": "codex",
+    "label": "😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀"
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "origin": "string",
+        "code": "too_big",
+        "maximum": 128,
+        "inclusive": true,
+        "path": [
+          "label"
+        ],
+        "message": "Too big: expected string to have <=128 characters"
+      }
+    ]
+  }
+}

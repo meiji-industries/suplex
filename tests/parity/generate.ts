@@ -48,6 +48,50 @@ const semanticInputs: Record<string, Record<string, unknown>> = {
   "common.EmptyBodySchema": {
     nested_unknown: { nested: { value: [1, null] } },
   },
+  "providers.ProviderConnectionSchema": {
+    optional_account: { status: "connected", summary: "Ready", account: "user@example.test", extra: true },
+    invalid_status: { status: "ready", summary: "Ready" },
+    null_account: { status: "unknown", summary: "Unknown", account: null },
+  },
+  "providers.NativeProviderSummarySchema": {
+    negative_model_count: { id: "opencode", label: "OpenCode", modelCount: -1, models: [], status: "configured" },
+    fractional_model_count: { id: "codex", label: "Codex", modelCount: 1.5, models: [], status: "configured" },
+    unsafe_model_count: { id: "codex", label: "Codex", modelCount: 9_007_199_254_740_992, models: [], status: "configured" },
+    nested_model_error: { id: "codex", label: "Codex", modelCount: 1, models: [{ id: "model", label: null }], status: "configured" },
+    nested_model_strip: { id: "codex", label: "Codex", modelCount: 1, models: [{ id: "model", label: "Model", extra: true }], status: "configured", extra: true },
+    models_wrong_type: { id: "codex", label: "Codex", modelCount: 0, models: {}, status: "configured" },
+  },
+  "providers.ProviderSummarySchema": {
+    nested_connection_error: { id: "devin", label: "Devin", modelCount: 0, models: [], status: "missing", connection: { status: "ready", summary: 1 } },
+  },
+  "providers.ProviderListResponseSchema": {
+    nested_provider_error: { directory: "/tmp", observedAt: "now", providers: [{ id: "bad", label: "Bad", modelCount: -1, models: [], status: "missing", connection: { status: "unknown", summary: "?" } }] },
+  },
+  "providers.ProviderInstanceSchema": {
+    invalid_provider: { id: "1", provider: "other", label: "Other", homeDirectory: "/tmp", createdAt: "now", updatedAt: "now" },
+    unknown_on_valid_nested: { id: "1", provider: "codex", label: "Codex", homeDirectory: "/tmp", createdAt: "now", updatedAt: "now", extra: true },
+  },
+  "providers.ProviderInstanceReadinessSchema": {
+    invalid_status: { status: "ready", summary: "Ready" },
+  },
+  "providers.ProviderInstanceListResponseSchema": {
+    nested_instance_error: { instances: [{ id: "1", provider: "codex", label: "Codex", homeDirectory: "/tmp", createdAt: "now", updatedAt: "now", readiness: { status: "wrong", summary: "" }, connection: { status: "unknown", summary: "?" } }] },
+  },
+  "providers.ProviderInstanceCreateBodySchema": {
+    trim_label: { provider: "codex", label: "  Codex  " },
+    empty_trimmed_label: { provider: "codex", label: " \t " },
+    max_label: { provider: "codex", label: "x".repeat(128) },
+    over_max_label: { provider: "codex", label: "x".repeat(129) },
+    astral_over_max_label: { provider: "codex", label: "😀".repeat(65) },
+    byte_order_mark_trim: { provider: "codex", label: "\ufeffCodex\ufeff" },
+    next_line_not_trimmed: { provider: "codex", label: "\u0085Codex\u0085" },
+    wrong_provider: { provider: "other", label: "Codex" },
+    label_empty_array: { provider: "codex", label: [] },
+    label_large_array: { provider: "codex", label: Array(129).fill("x") },
+  },
+  "providers.ProviderLoginResponseSchema": {
+    invalid_pane: { paneId: 1 },
+  },
 };
 
 type Fixture = { contract: string; case: string; input?: unknown; expected: { accepted: true; value: unknown } | { accepted: false; error: z.core.$ZodIssue[] } };

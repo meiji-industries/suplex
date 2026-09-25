@@ -1,0 +1,42 @@
+{
+  "contract": "providers.ProviderSummarySchema",
+  "case": "nested_connection_error",
+  "input": {
+    "id": "devin",
+    "label": "Devin",
+    "modelCount": 0,
+    "models": [],
+    "status": "missing",
+    "connection": {
+      "status": "ready",
+      "summary": 1
+    }
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid_value",
+        "values": [
+          "connected",
+          "not-connected",
+          "unknown"
+        ],
+        "path": [
+          "connection",
+          "status"
+        ],
+        "message": "Invalid option: expected one of \"connected\"|\"not-connected\"|\"unknown\""
+      },
+      {
+        "expected": "string",
+        "code": "invalid_type",
+        "path": [
+          "connection",
+          "summary"
+        ],
+        "message": "Invalid input: expected string, received number"
+      }
+    ]
+  }
+}

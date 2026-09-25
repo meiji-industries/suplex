@@ -1,0 +1,23 @@
+{
+  "contract": "providers.ProviderInstanceCreateBodySchema",
+  "case": "empty_trimmed_label",
+  "input": {
+    "provider": "codex",
+    "label": " \t "
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "origin": "string",
+        "code": "too_small",
+        "minimum": 1,
+        "inclusive": true,
+        "path": [
+          "label"
+        ],
+        "message": "Too small: expected string to have >=1 characters"
+      }
+    ]
+  }
+}

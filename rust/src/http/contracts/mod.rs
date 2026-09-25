@@ -1,6 +1,7 @@
 use serde_json::{Map, Value, json};
 
 mod common;
+mod providers;
 
 pub type ParseResult = Result<Value, Vec<Value>>;
 
@@ -8,6 +9,9 @@ pub type ParseResult = Result<Value, Vec<Value>>;
 /// still unported; parity tests never count it as verified.
 pub fn validate(contract: &str, input: Option<&Value>) -> Option<ParseResult> {
     if let Some(result) = common::validate(contract, input) {
+        return Some(result);
+    }
+    if let Some(result) = providers::validate(contract, input) {
         return Some(result);
     }
     match contract {

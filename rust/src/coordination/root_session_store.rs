@@ -1773,6 +1773,62 @@ fn ready_queued_task_ids(database: &SuplexDatabase) -> DatabaseResult<Vec<String
     Ok(ready)
 }
 
+/// TypeScript `TaskLimitStore.reconcilePause`: resume a limit-paused task
+/// when observed usage is within its current limits, or refresh the pause.
+pub fn reconcile_task_limit_pause(
+    database: &mut SuplexDatabase,
+    task_id: &str,
+    question_id: &str,
+    usage: TaskLimitUsage,
+    now: DateTime<Utc>,
+) -> DatabaseResult<bool> {
+    database.transaction(true, |database| {
+        let row: Option<(Option<f64>, Option<i64>, String)> = database.connection().query_row(
+            "SELECT budget_usd, max_turns, limit_pause_json FROM suplex_task_controls WHERE task_id = ?1 AND human_question_id = ?2 AND status = 'waiting_human' AND limit_pause_json IS NOT NULL",
+            params![task_id, question_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        ).optional()?;
+        let Some((budget_usd, max_turns, raw_pause)) = row else { return Ok(false); };
+        let _: PersistedLimitPause = serde_json::from_str(&raw_pause)?;
+        let defaults = database.connection().query_row(
+            "SELECT default_budget_usd, default_max_turns FROM suplex_environment_settings WHERE id = 'host'",
+            [], |row| Ok(TaskLimits { budget_usd: row.get(0)?, max_turns: row.get(1)? }),
+        ).optional()?.unwrap_or(TaskLimits { budget_usd: 15.0, max_turns: 40 });
+        let limits = TaskLimits { budget_usd: budget_usd.unwrap_or(defaults.budget_usd), max_turns: max_turns.unwrap_or(defaults.max_turns) };
+        if limits.budget_usd > 0.0 && usage.estimated_cost_usd.is_none() { return Ok(false); }
+        let admitted_turns: i64 = database.connection().query_row(
+            "SELECT COUNT(*) FROM suplex_task_turns WHERE task_id = ?1 AND prompted_at IS NOT NULL",
+            [task_id], |row| row.get(0),
+        )?;
+        let time = timestamp(now);
+        let hit_budget = limits.budget_usd > 0.0 && usage.estimated_cost_usd.is_some_and(|cost| cost >= limits.budget_usd);
+        let hit_turns = limits.max_turns > 0 && admitted_turns >= limits.max_turns;
+        if !hit_budget && !hit_turns {
+            return Ok(database.connection().execute(
+                "UPDATE suplex_task_controls SET status = 'active', limit_pause_json = NULL, human_question = NULL, human_question_id = NULL, human_question_options_json = '[]', wake_at = ?1, updated_at = ?1 WHERE task_id = ?2 AND status = 'waiting_human' AND human_question_id = ?3",
+                params![time, task_id, question_id],
+            )? == 1);
+        }
+        // ponytail: same evaluation as `claim_prompt`; share one helper once both packages merge.
+        let reason = match (hit_budget, hit_turns) { (true, true) => "budget_and_turns", (true, false) => "budget", _ => "turns" };
+        let budget_allowance = if defaults.budget_usd > 0.0 { defaults.budget_usd } else { limits.budget_usd };
+        let turn_allowance = if defaults.max_turns > 0 { defaults.max_turns } else { limits.max_turns };
+        let proposed = TaskLimits {
+            budget_usd: if hit_budget { suggested_budget(usage.estimated_cost_usd.unwrap_or(0.0) + budget_allowance, usage.estimated_cost_usd.unwrap_or(0.0)) } else { limits.budget_usd },
+            max_turns: if hit_turns { admitted_turns + turn_allowance } else { limits.max_turns },
+        };
+        let observed = PersistedLimitUsage { estimated_cost_usd: usage.estimated_cost_usd, admitted_turns };
+        let pause = js_json::stringify(&serde_json::json!({ "kind": "task_limit", "reason": reason, "limits": limits, "usage": observed, "proposedLimits": proposed }));
+        if pause != js_json::stringify(&serde_json::from_str(&raw_pause)?) {
+            database.connection().execute(
+                "UPDATE suplex_task_controls SET limit_pause_json = ?1, human_question = ?2, updated_at = ?3 WHERE task_id = ?4 AND status = 'waiting_human' AND human_question_id = ?5",
+                params![pause, task_limit_question(reason, limits, proposed, observed), time, task_id, question_id],
+            )?;
+        }
+        Ok(false)
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

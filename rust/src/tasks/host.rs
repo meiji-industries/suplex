@@ -9,6 +9,7 @@ use std::{
 };
 
 use chrono::{DateTime, SecondsFormat, Utc};
+use rusqlite::OptionalExtension;
 use serde::Serialize;
 use tokio::{
     sync::{mpsc, watch},
@@ -509,7 +510,13 @@ fn complete_worker_if_terminal(
     )
 }
 
-async fn observed_usage(database_path: &Path, task_id: &str) -> DatabaseResult<TaskLimitUsage> {
+/// TypeScript `observeTaskLimitUsage`. `require_complete` reports no cost
+/// unless every session has settled, fully priced usage.
+async fn observed_usage(
+    database_path: &Path,
+    task_id: &str,
+    require_complete: bool,
+) -> DatabaseResult<TaskLimitUsage> {
     let (sessions, budget, max_turns, admitted_turns) = {
         let database = SuplexDatabase::open(database_path, OpenMode::ReadOnly)?;
         let (budget_override, turns_override): (Option<f64>, Option<i64>) =
@@ -553,7 +560,7 @@ async fn observed_usage(database_path: &Path, task_id: &str) -> DatabaseResult<T
     }
     if sessions.is_empty() {
         return Ok(TaskLimitUsage {
-            estimated_cost_usd: Some(0.0),
+            estimated_cost_usd: (!require_complete).then_some(0.0),
         });
     }
     let native_database_path = database_path.to_path_buf();
@@ -597,6 +604,28 @@ async fn observed_usage(database_path: &Path, task_id: &str) -> DatabaseResult<T
     } else {
         None
     };
+    if require_complete
+        && observed.iter().any(|(_, _, _, session)| {
+            session.turns.is_empty()
+                || session.live_turn_id.is_some()
+                || session.turns.iter().any(|turn| {
+                    let cost = pricing
+                        .as_deref()
+                        .and_then(|catalog| catalog.get(&format!("openai/{}", turn.model)))
+                        .map_or(turn.cost_usd, |price| price.estimate(turn.tokens));
+                    let tokens = turn.tokens.input
+                        + turn.tokens.output
+                        + turn.tokens.reasoning
+                        + turn.tokens.cache_read
+                        + turn.tokens.cache_write;
+                    turn.model == "unknown" || (cost == 0.0 && tokens > 0.0)
+                })
+        })
+    {
+        return Ok(TaskLimitUsage {
+            estimated_cost_usd: None,
+        });
+    }
     let cost = replace_observed_usage(database_path, task_id, observed, pricing.as_deref())?;
     Ok(TaskLimitUsage {
         estimated_cost_usd: Some(cost),
@@ -797,7 +826,7 @@ pub async fn recover_prepared_root(
     inherited_environment: &HashMap<String, String>,
 ) -> DatabaseResult<Option<PromptObservation>> {
     let usage = if needs_admission_usage(database_path, task_id, "root")? {
-        observed_usage(database_path, task_id).await?
+        observed_usage(database_path, task_id, false).await?
     } else {
         TaskLimitUsage {
             estimated_cost_usd: None,
@@ -976,7 +1005,7 @@ pub async fn recover_prepared_worker(
     inherited_environment: &HashMap<String, String>,
 ) -> DatabaseResult<Option<PromptObservation>> {
     let usage = if needs_admission_usage(database_path, task_id, "worker")? {
-        observed_usage(database_path, task_id).await?
+        observed_usage(database_path, task_id, false).await?
     } else {
         TaskLimitUsage {
             estimated_cost_usd: None,
@@ -1176,6 +1205,41 @@ async fn stop_retired_sessions(database_path: &Path, task_id: &str) -> DatabaseR
     Ok(())
 }
 
+/// TypeScript `RootController.recover`: a task paused at its limits resumes
+/// once complete native usage is within the current limits. A paused task is
+/// observed again in 15 seconds either way.
+async fn reconcile_limit_pause(database_path: &Path, task_id: &str) -> DatabaseResult<()> {
+    let question_id: Option<String> = {
+        let database = SuplexDatabase::open(database_path, OpenMode::ReadOnly)?;
+        database.connection().query_row(
+            "SELECT human_question_id FROM suplex_task_controls WHERE task_id = ?1 AND status = 'waiting_human' AND limit_pause_json IS NOT NULL",
+            [task_id], |row| row.get(0),
+        ).optional()?.flatten()
+    };
+    let Some(question_id) = question_id else {
+        return Ok(());
+    };
+    let reconciled = async {
+        let usage = observed_usage(database_path, task_id, true).await?;
+        let mut database = SuplexDatabase::open(database_path, OpenMode::ReadWrite)?;
+        root_session_store::reconcile_task_limit_pause(
+            &mut database,
+            task_id,
+            &question_id,
+            usage,
+            Utc::now(),
+        )
+    }
+    .await;
+    let database = SuplexDatabase::open(database_path, OpenMode::ReadWrite)?;
+    let now = Utc::now();
+    database.connection().execute(
+        "UPDATE suplex_task_controls SET wake_at = ?1,updated_at = ?2 WHERE task_id = ?3 AND status = 'waiting_human'",
+        rusqlite::params![(now + chrono::Duration::seconds(15)).to_rfc3339_opts(SecondsFormat::Millis, true), now.to_rfc3339_opts(SecondsFormat::Millis, true), task_id],
+    )?;
+    reconciled.map(|_| ())
+}
+
 pub async fn sweep_task(
     database_path: &Path,
     artifact_root: &Path,
@@ -1188,6 +1252,7 @@ pub async fn sweep_task(
         root_session_store::retire_delivered_sessions(&mut database, task_id, Utc::now())?;
     }
     stop_retired_sessions(database_path, task_id).await?;
+    reconcile_limit_pause(database_path, task_id).await?;
     let (active, needs_worktree) = {
         let database = SuplexDatabase::open(database_path, OpenMode::ReadOnly)?;
         let rows = root_session_store::root_observation_rows(&database, task_id)?;
@@ -1554,6 +1619,53 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn recovery_resumes_a_limit_pause_once_usage_is_within_limits() {
+        let (base, database_path, task_id) = fixture_task();
+        let control = || -> (String, Option<String>) {
+            let database = SuplexDatabase::open(&database_path, OpenMode::ReadOnly).unwrap();
+            database
+                .connection()
+                .query_row(
+                    "SELECT status,wake_at FROM suplex_task_controls WHERE task_id = ?1",
+                    [&task_id],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .unwrap()
+        };
+        {
+            let database = SuplexDatabase::open(&database_path, OpenMode::ReadWrite).unwrap();
+            let pause = r#"{"kind":"task_limit","reason":"budget","limits":{"budgetUsd":1,"maxTurns":5},"usage":{"estimatedCostUsd":1,"admittedTurns":0},"proposedLimits":{"budgetUsd":20,"maxTurns":5}}"#;
+            database.connection().execute(
+                "UPDATE suplex_task_controls SET status = 'waiting_human', limit_pause_json = ?1, human_question = 'Limit', human_question_id = 'limit-question', budget_usd = 1, max_turns = 5, wake_at = NULL WHERE task_id = ?2",
+                rusqlite::params![pause, task_id],
+            ).unwrap();
+        }
+        // Without complete native usage the pause stays and is observed again.
+        reconcile_limit_pause(&database_path, &task_id)
+            .await
+            .unwrap();
+        let (status, wake_at) = control();
+        assert_eq!(status, "waiting_human");
+        assert!(wake_at.is_some());
+        // The budget was removed outside the pause answer. Recovery resumes.
+        {
+            let database = SuplexDatabase::open(&database_path, OpenMode::ReadWrite).unwrap();
+            database
+                .connection()
+                .execute(
+                    "UPDATE suplex_task_controls SET budget_usd = 0 WHERE task_id = ?1",
+                    [&task_id],
+                )
+                .unwrap();
+        }
+        reconcile_limit_pause(&database_path, &task_id)
+            .await
+            .unwrap();
+        assert_eq!(control().0, "active");
+        fs::remove_dir_all(base).unwrap();
+    }
+
+    #[tokio::test]
     async fn empty_native_usage_is_incomplete_and_does_not_block_dispatch() {
         let (base, database_path, task_id) = fixture_task();
         let now = Utc::now();
@@ -1588,7 +1700,9 @@ mod tests {
                 .unwrap()
                 .complete
         );
-        let observed = observed_usage(&database_path, &task_id).await.unwrap();
+        let observed = observed_usage(&database_path, &task_id, false)
+            .await
+            .unwrap();
         assert_eq!(observed.estimated_cost_usd, Some(0.0));
         fs::remove_dir_all(base).unwrap();
     }

@@ -2,6 +2,7 @@ pub mod archive;
 pub mod commands;
 pub mod host;
 pub mod images;
+pub mod preparation;
 pub mod repository;
 pub mod response;
 pub mod templates;

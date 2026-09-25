@@ -18,13 +18,6 @@ use Access::{Administrator, Authenticated};
 // WebSocket routes are plain GET handlers here: they answer 501 before any
 // upgrade. `scripts/rust-route-coverage.ts` checks this list stays complete.
 const ROUTES: &[(Method, &str, Access)] = &[
-    (Method::GET, "/api/admin/environment", Administrator),
-    (Method::PATCH, "/api/admin/environment", Administrator),
-    (Method::GET, "/api/admin/backups", Administrator),
-    (Method::POST, "/api/admin/backups", Administrator),
-    (Method::POST, "/api/admin/backups/restore", Administrator),
-    (Method::GET, "/api/admin/backups/{name}", Administrator),
-    (Method::POST, "/api/admin/factory-reset", Administrator),
     (Method::GET, "/api/admin/providers", Administrator),
     (Method::GET, "/api/admin/provider-instances", Administrator),
     (Method::POST, "/api/admin/provider-instances", Administrator),
@@ -134,7 +127,6 @@ const ROUTES: &[(Method, &str, Access)] = &[
         "/api/projects/{project_id}/task-sources",
         Authenticated,
     ),
-    (Method::POST, "/api/system/client-lifecycle", Authenticated),
     (
         Method::PATCH,
         "/api/task-templates/{template_id}",
@@ -167,8 +159,6 @@ const ROUTES: &[(Method, &str, Access)] = &[
         "/api/tasks/{task_id}/worktree/open",
         Authenticated,
     ),
-    (Method::GET, "/api/update", Authenticated),
-    (Method::POST, "/api/update/restart", Administrator),
 ];
 
 pub fn router() -> Router<AppState> {

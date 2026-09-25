@@ -1,3 +1,4 @@
+pub mod cli;
 pub mod coordination;
 pub mod delivery;
 pub mod http;

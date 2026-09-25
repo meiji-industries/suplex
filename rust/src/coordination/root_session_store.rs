@@ -2419,7 +2419,15 @@ mod tests {
             .filter(|event| event["taskId"] == a.as_str() || event["taskId"] == b.as_str())
             .map(|mut event| {
                 let fields = event.as_object_mut().unwrap();
-                for key in ["schemaVersion", "time", "eventId", "pid"] {
+                for key in [
+                    "schemaVersion",
+                    "time",
+                    "eventId",
+                    "bootId",
+                    "sequence",
+                    "pid",
+                    "bootElapsedMs",
+                ] {
                     assert!(fields.remove(key).is_some());
                 }
                 event

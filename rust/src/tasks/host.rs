@@ -43,14 +43,14 @@ use crate::{
     },
 };
 
-struct ProjectLaunchScope {
+pub(crate) struct ProjectLaunchScope {
     context: Option<String>,
-    context_path: Option<PathBuf>,
+    pub(crate) context_path: Option<PathBuf>,
     environment: HashMap<String, String>,
-    excluded_keys: Vec<String>,
+    pub(crate) excluded_keys: Vec<String>,
 }
 
-fn project_launch_scope(
+pub(crate) fn project_launch_scope(
     configuration: &serde_json::Value,
     issue_context: &serde_json::Value,
     database_path: &Path,
@@ -1329,6 +1329,7 @@ pub async fn sweep_task(
         let mut database = SuplexDatabase::open(database_path, OpenMode::ReadWrite)?;
         root_session_store::set_worktree(&mut database, task_id, &worktree, Utc::now())?;
     }
+    crate::tasks::preparation::prepare_before_native_work(database_path, task_id).await?;
     crate::coordination::root_controller::prepare_root(database_path, task_id)?;
     recover_prepared_worker(
         database_path,
@@ -1713,7 +1714,15 @@ mod tests {
             })
             .map(|mut event| {
                 let fields = event.as_object_mut().unwrap();
-                for key in ["schemaVersion", "time", "eventId", "pid"] {
+                for key in [
+                    "schemaVersion",
+                    "time",
+                    "eventId",
+                    "bootId",
+                    "sequence",
+                    "pid",
+                    "bootElapsedMs",
+                ] {
                     assert!(fields.remove(key).is_some());
                 }
                 event

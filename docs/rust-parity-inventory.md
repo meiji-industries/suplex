@@ -61,7 +61,7 @@ The table lists all 238 backend TypeScript modules present at the baseline, incl
 | [http/contracts/workflows.ts](../src/http/contracts/workflows.ts) | not started | |
 | [http/errors.ts](../src/http/errors.ts) | not started | |
 | [http/oauth-runtime.ts](../src/http/oauth-runtime.ts) | not started | |
-| [http/routes/administration.ts](../src/http/routes/administration.ts) | not started | |
+| [http/routes/administration.ts](../src/http/routes/administration.ts) | not started | Explicit known-route 501 registration with session/CSRF and per-operation member/admin policies passes focused and live checks; service implementations pending |
 | [http/routes/agent-api.ts](../src/http/routes/agent-api.ts) | not started | |
 | [http/routes/agent-pairing.ts](../src/http/routes/agent-pairing.ts) | not started | |
 | [http/routes/assets.ts](../src/http/routes/assets.ts) | not started | |

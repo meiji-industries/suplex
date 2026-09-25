@@ -15,6 +15,7 @@ pub mod contracts;
 pub mod routes {
     pub mod auth;
     pub mod companies;
+    pub mod unported;
 }
 pub mod session;
 
@@ -52,8 +53,10 @@ pub fn router(state: AppState) -> Router {
     Router::new()
         .merge(routes::auth::router())
         .merge(routes::companies::router())
+        .merge(routes::unported::router())
         .route("/auth", get(auth_page))
         .route("/assets/{filename}", get(asset))
+        .method_not_allowed_fallback(not_found)
         .fallback(not_found)
         .with_state(state)
 }

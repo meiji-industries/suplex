@@ -233,12 +233,9 @@ async fn control(
                 return;
             }
             line = output.next_line(), if output_open => match line {
-                Ok(Some(line)) => match parse_bridge_record(&line) {
-                    Some(event) => {
-                        settled = matches!(event, BridgeEvent::Closed(_));
-                        let _ = events.send(event);
-                    }
-                    None => {}
+                Ok(Some(line)) => if let Some(event) = parse_bridge_record(&line) {
+                    settled = matches!(event, BridgeEvent::Closed(_));
+                    let _ = events.send(event);
                 },
                 _ => output_open = false,
             },

@@ -7,12 +7,15 @@ use crate::profiles::agent_profiles::executable;
 
 pub const WORKTREE_APP_IDS: [&str; 5] = ["finder", "cursor", "vscode", "ghostty", "terminal"];
 
+/// Builds the fixed argument array for a worktree path.
+pub type LauncherArgs = Arc<dyn Fn(&str) -> Vec<String> + Send + Sync>;
+
 #[derive(Clone)]
 pub struct Launcher {
     pub id: &'static str,
     pub label: &'static str,
     pub command: String,
-    pub args: Arc<dyn Fn(&str) -> Vec<String> + Send + Sync>,
+    pub args: LauncherArgs,
     /// The worktree path is the working directory instead of an argument.
     pub cwd_is_path: bool,
 }

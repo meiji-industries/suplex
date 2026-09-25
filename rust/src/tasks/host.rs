@@ -1459,7 +1459,37 @@ async fn reconcile_limit_pause(database_path: &Path, task_id: &str) -> DatabaseR
     reconciled.map(|_| ())
 }
 
+/// TypeScript `recoverOne`: whatever the sweep did, and even when it failed,
+/// an active or waiting task is observed again in 15 seconds (30 during a
+/// delivery wait), so a failing task cannot starve the others.
 pub async fn sweep_task(
+    database_path: &Path,
+    artifact_root: &Path,
+    task_id: &str,
+    executable: Option<&Path>,
+    inherited_environment: &HashMap<String, String>,
+) -> DatabaseResult<()> {
+    let swept = sweep_task_once(
+        database_path,
+        artifact_root,
+        task_id,
+        executable,
+        inherited_environment,
+    )
+    .await;
+    let database = SuplexDatabase::open(database_path, OpenMode::ReadWrite)?;
+    let now = Utc::now();
+    let time = |seconds| {
+        (now + chrono::Duration::seconds(seconds)).to_rfc3339_opts(SecondsFormat::Millis, true)
+    };
+    database.connection().execute(
+        "UPDATE suplex_task_controls SET wake_at = CASE WHEN json_extract(workflow_state_json,'$.deliveryWait') IS NULL THEN ?1 ELSE ?2 END,updated_at = ?3 WHERE task_id = ?4 AND status IN ('active','waiting_human')",
+        rusqlite::params![time(15), time(30), time(0), task_id],
+    )?;
+    swept
+}
+
+async fn sweep_task_once(
     database_path: &Path,
     artifact_root: &Path,
     task_id: &str,
@@ -1523,12 +1553,6 @@ pub async fn sweep_task(
         );
         root_session_store::wake_idle_root(&mut database, task_id, &prompt, Utc::now())?;
     }
-    let database = SuplexDatabase::open(database_path, OpenMode::ReadWrite)?;
-    let now = Utc::now();
-    database.connection().execute(
-        "UPDATE suplex_task_controls SET wake_at = ?1,updated_at = ?2 WHERE task_id = ?3 AND status IN ('active','waiting_human')",
-        rusqlite::params![(now + chrono::Duration::seconds(15)).to_rfc3339_opts(SecondsFormat::Millis, true), now.to_rfc3339_opts(SecondsFormat::Millis, true), task_id],
-    )?;
     Ok(())
 }
 
@@ -1940,6 +1964,68 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(control().0, "active");
+        fs::remove_dir_all(base).unwrap();
+    }
+
+    #[tokio::test]
+    async fn a_failing_sweep_waits_before_retrying_and_leaves_other_tasks_due() {
+        let (base, database_path, failing) = fixture_task();
+        let other = {
+            let mut database = SuplexDatabase::open(&database_path, OpenMode::ReadWrite).unwrap();
+            let user = auth::development_sign_in(&mut database, Utc::now())
+                .unwrap()
+                .user;
+            let prepared = PreparedTask {
+                id: repository::new_task_id(),
+                company_id: "usage_company".into(),
+                project_id: "usage_project".into(),
+                title: "Other task".into(),
+                description: "".into(),
+                configuration: serde_json::json!({"repository":"owner/repo","branch":"task-other","baseBranch":"main"}),
+                idempotency_key: "other-key".into(),
+                request_hash: "other-request".into(),
+                creator: TaskCreator::User(user.id),
+                delivery_target: "local_worktree".into(),
+                delivery_intent: serde_json::json!({"repository":"owner/repo","headBranch":"task-other","baseBranch":"main"}),
+                root_profile: serde_json::json!({"profileId":"root_profile","provider":"codex","model":"gpt-6-sol","reasoningLevel":"medium","serviceTier":"default"}),
+                worker_profile: serde_json::json!({"profileId":"worker_profile","provider":"codex","model":"gpt-6-sol","reasoningLevel":"medium","serviceTier":"default"}),
+                advisor_profiles: serde_json::json!({}),
+                issue: None,
+                start_queued: false,
+                copied_from_task_id: None,
+                depends_on: vec![],
+                pull_request_dependencies: vec![],
+            };
+            let other = repository::create(&mut database, &prepared, Utc::now())
+                .unwrap()
+                .task
+                .id;
+            // Both tasks are due now. The repository path does not exist, so
+            // worktree preparation fails after the early sweep steps.
+            database.connection().execute(
+                "UPDATE suplex_task_controls SET status = 'active', wake_at = NULL, worktree_json = NULL WHERE task_id IN (?1, ?2)",
+                [&failing, &other],
+            ).unwrap();
+            other
+        };
+        assert!(due_task_ids(&database_path).unwrap().contains(&failing));
+        assert!(
+            sweep_task(
+                &database_path,
+                &base.join("artifacts"),
+                &failing,
+                None,
+                &HashMap::new()
+            )
+            .await
+            .is_err()
+        );
+        let due = due_task_ids(&database_path).unwrap();
+        assert!(
+            !due.contains(&failing),
+            "a failed sweep is due again at once"
+        );
+        assert!(due.contains(&other));
         fs::remove_dir_all(base).unwrap();
     }
 

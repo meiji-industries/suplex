@@ -1,3 +1,4 @@
+pub mod claude_code;
 pub mod codex;
 pub mod git_guard;
 pub mod headless;

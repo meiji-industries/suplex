@@ -21,6 +21,7 @@ use crate::{
         session, validation,
     },
     identity::companies,
+    integrations::github::Access,
     platform::database::SuplexDatabase,
     runtimes::codex::{session_reader, tool_evidence},
     tasks::{commands::TaskFailure, worktree},
@@ -307,6 +308,15 @@ async fn diff_summary(
     Path(task_id): Path<String>,
     headers: HeaderMap,
 ) -> Response {
+    diff_summary_with_access(state, task_id, headers, None).await
+}
+
+async fn diff_summary_with_access(
+    state: AppState,
+    task_id: String,
+    headers: HeaderMap,
+    access_override: Option<Access>,
+) -> Response {
     if let Err(response) = validated_task_id(&task_id) {
         return *response;
     }
@@ -368,8 +378,17 @@ async fn diff_summary(
             base_branch,
         } => (path, repository, base_branch),
     };
+    let access = match access_override.map(Ok).unwrap_or_else(Access::load) {
+        Ok(access) => access,
+        Err(error) => return respond(Err(error), cookies),
+    };
+    let published_sha = match access.published_branch_sha(&repository, &base_branch).await {
+        Ok(sha) => sha,
+        Err(error) => return respond(Err(error), cookies),
+    };
+    let token = access.token().map(str::to_owned);
     let observed = tokio::task::spawn_blocking(move || {
-        worktree::local_diff_file_count(&path, &repository, &base_branch)
+        worktree::local_diff_file_count(&path, published_sha, token.as_deref())
             .map_err(|error| error.to_string())
     })
     .await;
@@ -567,6 +586,36 @@ mod tests {
         git(&["commit", "--quiet", "-m", "Published"], &publisher);
         git(&["push", "--quiet", "origin", "main"], &publisher);
         let published = git(&["rev-parse", "HEAD"], &publisher);
+        let api = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let api_url = format!("http://{}", api.local_addr().unwrap());
+        let published_for_api = published.clone();
+        let api_task = tokio::spawn(async move {
+            use tokio::io::{AsyncReadExt, AsyncWriteExt};
+            loop {
+                let Ok((mut socket, _)) = api.accept().await else {
+                    break;
+                };
+                let mut request = [0_u8; 8192];
+                let bytes = socket.read(&mut request).await.unwrap();
+                let request = String::from_utf8_lossy(&request[..bytes]);
+                let body = if request.starts_with("GET /repos/acme/demo/branches/main ") {
+                    format!("{{\"commit\":{{\"sha\":\"{published_for_api}\"}}}}")
+                } else {
+                    "{\"message\":\"Not Found\"}".to_owned()
+                };
+                let status = if request.starts_with("GET /repos/acme/demo/branches/main ") {
+                    "200 OK"
+                } else {
+                    "404 Not Found"
+                };
+                let response = format!(
+                    "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                socket.write_all(response.as_bytes()).await.unwrap();
+            }
+        });
+        let access = || Access::for_api(&api_url, None).unwrap();
         assert!(
             git2::Repository::open(&local)
                 .unwrap()
@@ -593,8 +642,13 @@ mod tests {
                 rusqlite::params![json!({"path":local,"branch":"saved-branch","baseSha":"f".repeat(40),"headSha":"f".repeat(40),"dirty":false}).to_string(), task.id],
             ).unwrap();
         });
-        let summary =
-            diff_summary(State(state.clone()), Path(task.id.clone()), headers.clone()).await;
+        let summary = diff_summary_with_access(
+            state.clone(),
+            task.id.clone(),
+            headers.clone(),
+            Some(access()),
+        )
+        .await;
         assert_eq!(summary.status(), StatusCode::OK);
         let body = to_bytes(summary.into_body(), usize::MAX).await.unwrap();
         assert_eq!(
@@ -609,8 +663,13 @@ mod tests {
         );
         git(&["update-ref", "refs/remotes/origin/main", &base], &local);
         git(&["add", "NEW.md"], &local);
-        let summary =
-            diff_summary(State(state.clone()), Path(task.id.clone()), headers.clone()).await;
+        let summary = diff_summary_with_access(
+            state.clone(),
+            task.id.clone(),
+            headers.clone(),
+            Some(access()),
+        )
+        .await;
         assert_eq!(summary.status(), StatusCode::OK);
         assert_eq!(
             serde_json::from_slice::<Value>(
@@ -635,8 +694,13 @@ mod tests {
                 .find_reference("refs/remotes/origin/main")
                 .is_err()
         );
-        let summary =
-            diff_summary(State(state.clone()), Path(task.id.clone()), headers.clone()).await;
+        let summary = diff_summary_with_access(
+            state.clone(),
+            task.id.clone(),
+            headers.clone(),
+            Some(access()),
+        )
+        .await;
         assert_eq!(summary.status(), StatusCode::OK);
         let summary_body = to_bytes(summary.into_body(), usize::MAX).await.unwrap();
         assert_eq!(
@@ -677,8 +741,13 @@ mod tests {
         .lines()
         .count();
         assert_eq!(source_files, 4);
-        let summary =
-            diff_summary(State(state.clone()), Path(task.id.clone()), headers.clone()).await;
+        let summary = diff_summary_with_access(
+            state.clone(),
+            task.id.clone(),
+            headers.clone(),
+            Some(access()),
+        )
+        .await;
         assert_eq!(summary.status(), StatusCode::OK);
         assert_eq!(
             serde_json::from_slice::<Value>(
@@ -694,9 +763,14 @@ mod tests {
             ).unwrap();
         });
         assert_eq!(
-            diff_summary(State(state.clone()), Path(task.id.clone()), headers.clone())
-                .await
-                .status(),
+            diff_summary_with_access(
+                state.clone(),
+                task.id.clone(),
+                headers.clone(),
+                Some(access())
+            )
+            .await
+            .status(),
             StatusCode::INTERNAL_SERVER_ERROR
         );
         state.with_database(|database| {
@@ -774,6 +848,7 @@ mod tests {
                 .status(),
             StatusCode::NOT_FOUND
         );
+        api_task.abort();
         drop(state);
         fs::remove_dir_all(root).unwrap();
     }

@@ -448,11 +448,12 @@ impl RootBridgeServer {
                     root_controller::delegate_worker(&database_path, &root, &token, &assignment)
                         .map_err(|error| error.to_string())
                 }
-                RootCall::InspectDeliveryDiff => delivery::inspection::inspect_standard_delivery_diff(
-                    &database_path,
-                    &root,
-                )
-                .map_err(|error| error.to_string()),
+                RootCall::InspectDeliveryDiff => runtime
+                    .block_on(delivery::inspection::inspect_standard_delivery_diff(
+                        &database_path,
+                        &root,
+                    ))
+                    .map_err(|error| error.to_string()),
                 RootCall::RequestDelivery { expected_head } => runtime
                     .block_on(delivery::operations::complete_local_work(
                         &database_path,

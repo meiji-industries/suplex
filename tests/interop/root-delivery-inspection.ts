@@ -1,6 +1,7 @@
 // Run against a built Rust binary. All Git remotes and task data are isolated.
 import { deepStrictEqual, equal } from "node:assert/strict";
 import { chmod, mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import { createServer } from "node:http";
 import { join, resolve } from "node:path";
 import { RootController } from "../../src/coordination/root-controller.js";
 import { inspectDeliveryDiff } from "../../src/delivery/review.js";
@@ -11,6 +12,20 @@ import { initializeAndList, runMcpProcess } from "../helpers/mcp-process.js";
 import { nativeApp } from "../helpers/native-app.js";
 
 const fixture = await nativeApp();
+let publishedSha: string | null = null;
+const api = createServer((request, response) => {
+  if (request.url === "/repos/owner/repo/branches/main" && publishedSha) {
+    response.writeHead(200, { "content-type": "application/json" });
+    response.end(JSON.stringify({ commit: { sha: publishedSha } }));
+    return;
+  }
+  response.writeHead(404, { "content-type": "application/json" });
+  response.end(JSON.stringify({ message: "Not Found" }));
+});
+await new Promise<void>(resolve => api.listen(0, "127.0.0.1", resolve));
+const address = api.address();
+if (!address || typeof address === "string") throw new Error("Fake GitHub API did not bind a TCP port");
+const apiEnvironment = { SUPLEX_RUST_TEST_GITHUB_API: `http://127.0.0.1:${address.port}` };
 try {
   const created = await fixture.tasks.createTask(fixture.userId, fixture.company.id, {
     projectId: fixture.project.id,
@@ -39,6 +54,7 @@ try {
   await git(worktree, "add", ".");
   await git(worktree, "commit", "-m", "Base");
   const publishedBase = await git(worktree, "rev-parse", "HEAD");
+  publishedSha = publishedBase;
   await git(fixture.directory, "clone", "--bare", worktree, bare);
   await git(worktree, "config", "--local", `url.file://${bare}.insteadOf`, "https://github.com/owner/repo.git");
   await git(worktree, "remote", "add", "origin", "https://github.com/owner/repo.git");
@@ -61,7 +77,7 @@ try {
   const source = { ...await inspectDeliveryDiff(worktree, publishedBase, headSha), baseBranch: "main" };
   const binding = await writeRootBridgeBinding({ runtimeDirectory: taskSessionRuntimeDirectory(fixture.config.databasePath, root.id), identity, databasePath: fixture.config.databasePath, artifactRoot: fixture.config.artifactRoot });
   const server = { ...binding, command: resolve(process.env.SUPLEX_RUST_BIN ?? "rust/target/debug/suplex"), args: ["mcp", "root"] };
-  const responses = await runMcpProcess(server, { ...process.env, ...binding.environment }, [
+  const responses = await runMcpProcess(server, { ...process.env, ...binding.environment, ...apiEnvironment }, [
     ...initializeAndList,
     { jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "suplex_root", arguments: { kind: "request_delivery", operation: "inspect_delivery_diff" } } },
   ]);
@@ -71,8 +87,8 @@ try {
   deepStrictEqual(call?.result?.structuredContent, source);
   equal((await readFile(join(worktree, "plain.txt"), "utf8")), "after\n");
   equal(store.get(created.task.id).worktree?.headSha, "f".repeat(40), "inspection must not replace saved task intent");
-  await git(bare, "update-ref", "-d", "refs/heads/main");
-  const missing = await runMcpProcess(server, { ...process.env, ...binding.environment }, [
+  publishedSha = null;
+  const missing = await runMcpProcess(server, { ...process.env, ...binding.environment, ...apiEnvironment }, [
     ...initializeAndList,
     { jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "suplex_root", arguments: { kind: "request_delivery", operation: "inspect_delivery_diff" } } },
   ]);
@@ -80,7 +96,7 @@ try {
     typeof candidate === "object" && candidate !== null && "id" in candidate && candidate.id === 3);
   equal(missingCall?.result?.isError, true, "a cached commit and tracking ref cannot replace the published branch");
   store.cancel(created.task.id);
-  const cancelled = await runMcpProcess(server, { ...process.env, ...binding.environment }, [
+  const cancelled = await runMcpProcess(server, { ...process.env, ...binding.environment, ...apiEnvironment }, [
     ...initializeAndList,
     { jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "suplex_root", arguments: { kind: "request_delivery", operation: "inspect_delivery_diff" } } },
   ]);
@@ -89,5 +105,6 @@ try {
   equal(cancelledCall?.result?.isError, true, "a cancelled Root cannot inspect delivery");
   console.log("Rust Root delivery inspection matches the complete TypeScript patch response on the same Git task.");
 } finally {
+  await new Promise<void>((resolve, reject) => api.close(error => error ? reject(error) : resolve()));
   await fixture.close();
 }

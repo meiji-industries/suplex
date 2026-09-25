@@ -8,8 +8,9 @@ use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 
 use git2::{
-    AutotagOption, BranchType, DiffFindOptions, DiffOptions, Direction, FetchOptions, Repository,
-    StatusOptions, WorktreeAddOptions, WorktreePruneOptions,
+    AutotagOption, BranchType, Cred, CredentialType, DiffFindOptions, DiffOptions, FetchOptions,
+    RemoteCallbacks, RemoteRedirect, Repository, StatusOptions, WorktreeAddOptions,
+    WorktreePruneOptions,
 };
 
 pub type WorktreeResult<T> = Result<T, Box<dyn Error>>;
@@ -94,11 +95,11 @@ pub fn observe_worktree(path: &Path) -> WorktreeResult<WorktreeObservation> {
 /// its URL and remote-tracking refs are not authority for the published head.
 pub fn local_diff_file_count(
     path: &Path,
-    configured_repository: &str,
-    base_branch: &str,
+    published_sha: git2::Oid,
+    github_token: Option<&str>,
 ) -> WorktreeResult<usize> {
     let repository = Repository::open(path)?;
-    let published_sha = published_base_commit(&repository, configured_repository, base_branch)?;
+    let published_sha = published_base_commit(&repository, published_sha, github_token)?;
     let head = repository.head()?.peel_to_commit()?.id();
     let base = repository.merge_base(published_sha, head)?;
     let tree = repository.find_commit(base)?.tree()?;
@@ -117,37 +118,73 @@ pub fn local_diff_file_count(
     Ok(diff.deltas().count())
 }
 
-/// Observe the configured repository's published branch and ensure its
-/// immutable commit is available locally without using tracking-ref state.
+/// Ensure the GitHub API's authoritative immutable branch commit is available
+/// locally without consulting mutable tracking refs or origin identity.
 pub fn published_base_commit(
     repository: &Repository,
-    configured_repository: &str,
-    base_branch: &str,
+    published_sha: git2::Oid,
+    github_token: Option<&str>,
 ) -> WorktreeResult<git2::Oid> {
-    let canonical = format!("https://github.com/{configured_repository}.git");
-    let coordinate = crate::projects::repository::repository_coordinate(&canonical)
-        .filter(|coordinate| coordinate.host == "github")
-        .ok_or_else(|| invalid("Configured GitHub repository is invalid"))?;
-    let mut published = repository.remote_anonymous(&coordinate.clone_url)?;
-    published.connect(Direction::Fetch)?;
-    let reference = format!("refs/heads/{base_branch}");
-    let published_sha = published
-        .list()?
-        .iter()
-        .find(|remote| remote.name() == reference)
-        .map(git2::RemoteHead::oid)
-        .ok_or_else(|| invalid("GitHub did not return the configured base branch"))?;
-    published.disconnect()?;
     if repository.find_commit(published_sha).is_err() {
         let mut origin = repository.find_remote("origin")?;
+        let mut callbacks = RemoteCallbacks::new();
+        callbacks.credentials(|url, username, allowed| {
+            if allowed.contains(CredentialType::USER_PASS_PLAINTEXT)
+                && github_token.is_some()
+                && token_audience_matches(url)
+            {
+                return Cred::userpass_plaintext(
+                    "x-access-token",
+                    github_token.unwrap_or_default(),
+                );
+            }
+            if allowed.contains(CredentialType::SSH_KEY) {
+                return Cred::ssh_key_from_agent(username.unwrap_or("git"));
+            }
+            Err(git2::Error::from_str("No credential for Git remote"))
+        });
         let mut options = FetchOptions::new();
         options
             .download_tags(AutotagOption::None)
-            .update_fetchhead(false);
+            .update_fetchhead(false)
+            .follow_redirects(RemoteRedirect::None)
+            .remote_callbacks(callbacks);
         origin.fetch(&[published_sha.to_string()], Some(&mut options), None)?;
         repository.find_commit(published_sha)?;
     }
     Ok(published_sha)
+}
+
+fn token_audience_matches(raw: &str) -> bool {
+    url::Url::parse(raw).is_ok_and(|url| {
+        url.scheme() == "https"
+            && url.host_str() == Some("github.com")
+            && url.port_or_known_default() == Some(443)
+            && url.username().is_empty()
+            && url.password().is_none()
+    })
+}
+
+#[cfg(test)]
+mod github_credentials_tests {
+    use super::token_audience_matches;
+
+    #[test]
+    fn git_token_is_only_for_https_github_authority() {
+        assert!(token_audience_matches("https://github.com/owner/repo.git"));
+        assert!(token_audience_matches(
+            "https://github.com:443/renamed/repo.git"
+        ));
+        for remote in [
+            "https://github.com.evil.test/owner/repo.git",
+            "http://github.com/owner/repo.git",
+            "https://github.com:444/owner/repo.git",
+            "https://user@github.com/owner/repo.git",
+            "https://127.0.0.1/owner/repo.git",
+        ] {
+            assert!(!token_audience_matches(remote));
+        }
+    }
 }
 
 fn invalid(message: &'static str) -> Box<dyn Error> {

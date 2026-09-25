@@ -8,6 +8,7 @@ use sha2::{Digest, Sha256};
 
 use crate::{
     coordination::{root_bridge::RootIdentity, root_session_store},
+    integrations::github::Access,
     platform::{
         database::{DatabaseResult, OpenMode, SuplexDatabase},
         redaction,
@@ -45,13 +46,13 @@ fn patch_display(patch: &str) -> (String, bool) {
 /// is hashed before the display is truncated to the source's UTF-16 limit.
 pub fn inspect_git_range(
     path: &Path,
-    configured_repository: &str,
+    head: git2::Oid,
+    published_base: git2::Oid,
+    github_token: Option<&str>,
     base_branch: &str,
 ) -> Result<DeliveryDiff, Box<dyn Error>> {
-    let local = worktree::observe_local_revision(path)?;
-    let head = git2::Oid::from_str(&local.head_sha)?;
     let repository = Repository::open(path)?;
-    let base = worktree::published_base_commit(&repository, configured_repository, base_branch)?;
+    let base = worktree::published_base_commit(&repository, published_base, github_token)?;
     let merge_base = repository.merge_base(base, head)?;
     let base_tree = repository.find_commit(merge_base)?.tree()?;
     let head_tree = repository.find_commit(head)?.tree()?;
@@ -115,7 +116,7 @@ pub fn inspect_git_range(
 
 /// The MCP transport already holds this call's tool-owner token. The source
 /// inspection itself requires only a current Root assertion before Git reads.
-pub fn inspect_standard_delivery_diff(
+pub async fn inspect_standard_delivery_diff(
     database_path: &Path,
     root: &RootIdentity,
 ) -> DatabaseResult<serde_json::Value> {
@@ -147,7 +148,17 @@ pub fn inspect_standard_delivery_diff(
     let branch = control["deliveryIntent"]["baseBranch"]
         .as_str()
         .ok_or_else(|| unavailable("Task delivery base branch is missing"))?;
-    let diff = inspect_git_range(Path::new(path), repository, branch)?;
+    let local = worktree::observe_local_revision(Path::new(path))?;
+    let head = git2::Oid::from_str(&local.head_sha)?;
+    let access = Access::load()?;
+    let published_base = access.published_branch_sha(repository, branch).await?;
+    let diff = inspect_git_range(
+        Path::new(path),
+        head,
+        published_base,
+        access.token(),
+        branch,
+    )?;
     Ok(serde_json::to_value(diff)?)
 }
 

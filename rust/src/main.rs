@@ -52,9 +52,11 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         None => state,
     };
     println!("Experimental API routes are still being ported.");
+    let shutdown_state = state.clone();
     let result = axum::serve(listener, http::router(state))
-        .with_graceful_shutdown(async {
+        .with_graceful_shutdown(async move {
             let _ = tokio::signal::ctrl_c().await;
+            shutdown_state.shutdown_history();
         })
         .await;
     task_host.stop().await;

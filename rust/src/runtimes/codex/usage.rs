@@ -149,6 +149,12 @@ pub fn observe_session(
     }
     if native_turns.iter().all(|turn| turn.id.starts_with("msg_")) {
         native_turns.sort_by(|left, right| left.id.cmp(&right.id));
+    } else {
+        native_turns.sort_by(|left, right| {
+            left.updated_at
+                .cmp(&right.updated_at)
+                .then(left.id.cmp(&right.id))
+        });
     }
     let mut previous = HashMap::<String, NativeCounts>::new();
     let mut gaps = HashMap::<String, HashSet<String>>::new();
@@ -322,6 +328,44 @@ mod tests {
         let models = dispatched_models(&directory).unwrap();
         assert_eq!(models["msg_old"], "legacy-model");
         assert_eq!(models["msg_empty"], "unknown");
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn older_non_message_turns_use_mtime_for_cumulative_usage() {
+        let directory = std::env::temp_dir().join(format!(
+            "suplex-codex-old-turn-order-{}",
+            uuid::Uuid::new_v4()
+        ));
+        fs::create_dir_all(&directory).unwrap();
+        let earlier = directory.join("turn-z.jsonl");
+        let later = directory.join("turn-a.jsonl");
+        fs::write(&earlier, concat!(
+            "{\"type\":\"thread.started\",\"thread_id\":\"old-thread\"}\n",
+            "{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":100,\"output_tokens\":20}}\n"
+        )).unwrap();
+        fs::write(&later, concat!(
+            "{\"type\":\"thread.started\",\"thread_id\":\"old-thread\"}\n",
+            "{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":180,\"output_tokens\":35}}\n"
+        )).unwrap();
+        let base =
+            std::time::SystemTime::UNIX_EPOCH + std::time::Duration::from_secs(1_700_000_000);
+        fs::File::options()
+            .write(true)
+            .open(&earlier)
+            .unwrap()
+            .set_times(fs::FileTimes::new().set_modified(base))
+            .unwrap();
+        fs::File::options()
+            .write(true)
+            .open(&later)
+            .unwrap()
+            .set_times(fs::FileTimes::new().set_modified(base + std::time::Duration::from_secs(10)))
+            .unwrap();
+        let observed = observe_session(&directory, "codex-old", None).unwrap();
+        assert_eq!(observed.turns[0].turn_id, "z");
+        assert_eq!(observed.turns[1].turn_id, "a");
+        assert_eq!(observed.turns[1].tokens.input, 80.0);
         fs::remove_dir_all(directory).unwrap();
     }
 }

@@ -63,11 +63,10 @@ pub fn turns(directory: &Path) -> io::Result<Vec<NativeTurn>> {
             updated_at,
         });
     }
-    turns.sort_by(|left, right| {
-        left.updated_at
-            .cmp(&right.updated_at)
-            .then(left.id.cmp(&right.id))
-    });
+    // Node's readdir order for native turn filenames on the supported host is
+    // lexical. History retains that native listing order; usage sorts its own
+    // timeline separately below the reader boundary.
+    turns.sort_by(|left, right| left.id.cmp(&right.id));
     Ok(turns)
 }
 

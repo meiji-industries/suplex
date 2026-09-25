@@ -9,6 +9,7 @@ use axum::{
     response::{IntoResponse, Response},
     routing::get,
 };
+use tokio_util::sync::CancellationToken;
 
 use crate::platform::{database::SuplexDatabase, embedded};
 use crate::projects::repository::Commands;
@@ -22,6 +23,7 @@ pub mod routes {
     pub mod pages;
     pub mod profiles;
     pub mod projects;
+    pub mod task_history;
     pub mod task_reads;
     pub mod task_templates;
     pub mod tasks;
@@ -44,6 +46,7 @@ pub struct AppState {
     pub project_roots: Option<ProjectRoots>,
     pub project_commands: Commands,
     pub task_host: Option<TaskHostHandle>,
+    pub history_shutdown: CancellationToken,
     dev_assets_dir: Option<PathBuf>,
 }
 
@@ -55,6 +58,7 @@ impl AppState {
             project_roots: None,
             project_commands: Commands::default(),
             task_host: None,
+            history_shutdown: CancellationToken::new(),
             dev_assets_dir: None,
         }
     }
@@ -96,6 +100,10 @@ impl AppState {
             Err(payload) => resume_unwind(payload),
         }
     }
+
+    pub fn shutdown_history(&self) {
+        self.history_shutdown.cancel();
+    }
 }
 
 pub fn router(state: AppState) -> Router {
@@ -107,6 +115,7 @@ pub fn router(state: AppState) -> Router {
         .merge(routes::profiles::router())
         .merge(routes::projects::router())
         .merge(routes::task_reads::router())
+        .merge(routes::task_history::router())
         .merge(routes::task_templates::router())
         .merge(routes::tasks::router())
         .merge(routes::workflows::router())
@@ -236,6 +245,7 @@ mod tests {
             project_roots: None,
             project_commands: Commands::default(),
             task_host: None,
+            history_shutdown: CancellationToken::new(),
             dev_assets_dir: None,
         };
         let observed = Arc::new(AtomicBool::new(false));

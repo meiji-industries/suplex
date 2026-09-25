@@ -1,0 +1,37 @@
+{
+  "contract": "tasks.TaskAgentsBatchQuerySchema",
+  "case": "null_task_id",
+  "input": {
+    "taskId": null
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid_union",
+        "errors": [
+          [
+            {
+              "expected": "string",
+              "code": "invalid_type",
+              "path": [],
+              "message": "Invalid input: expected string, received null"
+            }
+          ],
+          [
+            {
+              "expected": "array",
+              "code": "invalid_type",
+              "path": [],
+              "message": "Invalid input: expected array, received null"
+            }
+          ]
+        ],
+        "path": [
+          "taskId"
+        ],
+        "message": "Invalid input"
+      }
+    ]
+  }
+}

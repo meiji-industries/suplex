@@ -19,6 +19,7 @@ pub(super) fn validate(contract: &str, input: Option<&Value>) -> Option<ParseRes
         "tasks.TaskHarnessKindSchema" => Some(harness_kind(input, &[])),
         "tasks.WorktreeAppSchema" => Some(worktree_app(input, &[])),
         "tasks.WorktreeAppsResponseSchema" => Some(worktree_apps(input, &[])),
+        "tasks.TaskAgentsBatchQuerySchema" => Some(agents_batch_query(input, &[])),
         _ => None,
     }
 }
@@ -357,4 +358,77 @@ fn apps(input: Option<&Value>, path: &[Value]) -> ParseResult {
 
 fn worktree_apps(input: Option<&Value>, path: &[Value]) -> ParseResult {
     record(input, path, |record| record.field("apps", false, apps))
+}
+
+fn agents_batch_query(input: Option<&Value>, path: &[Value]) -> ParseResult {
+    record(input, path, |record| {
+        record.field("taskId", false, |value, path| {
+            let Some(value) = value else {
+                return Ok(json!([]));
+            };
+            let mut ids = match value {
+                Value::String(_) => vec![string(Some(value), path, 1, Some(256), false)?],
+                Value::Array(items) => {
+                    let mut ids = Vec::with_capacity(items.len());
+                    let mut item_issues = Vec::new();
+                    let mut wrong_type = false;
+                    for (index, item) in items.iter().enumerate() {
+                        let item_path = child(path, json!(index));
+                        match string(Some(item), &item_path, 1, Some(256), false) {
+                            Ok(value) => ids.push(value),
+                            Err(error) => {
+                                wrong_type |= !item.is_string();
+                                item_issues.extend(error);
+                            }
+                        }
+                    }
+                    if wrong_type {
+                        let array_errors = item_issues
+                            .into_iter()
+                            .map(|mut issue| {
+                                issue["path"] = json!(
+                                    issue["path"].as_array().expect("issue path")[path.len()..]
+                                );
+                                issue
+                            })
+                            .collect::<Vec<_>>();
+                        return Err(vec![json!({
+                            "code": "invalid_union", "errors": [
+                                [invalid_type("string", Some(value), &[])],
+                                array_errors,
+                            ],
+                            "path": path, "message": "Invalid input"
+                        })]);
+                    }
+                    if items.len() > 10 {
+                        item_issues.push(json!({
+                            "origin": "array", "code": "too_big", "maximum": 10, "inclusive": true,
+                            "path": path, "message": "Too big: expected array to have <=10 items"
+                        }));
+                    }
+                    if !item_issues.is_empty() {
+                        return Err(item_issues);
+                    }
+                    ids
+                }
+                _ => {
+                    return Err(vec![json!({
+                        "code": "invalid_union", "errors": [
+                            [invalid_type("string", Some(value), &[])],
+                            [invalid_type("array", Some(value), &[])],
+                        ],
+                        "path": path, "message": "Invalid input"
+                    })]);
+                }
+            };
+            ids.sort_by(|left, right| {
+                left.as_str()
+                    .expect("string")
+                    .encode_utf16()
+                    .cmp(right.as_str().expect("string").encode_utf16())
+            });
+            ids.dedup();
+            Ok(Value::Array(ids))
+        });
+    })
 }

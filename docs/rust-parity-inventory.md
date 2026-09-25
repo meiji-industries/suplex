@@ -52,11 +52,11 @@ The table lists all 238 backend TypeScript modules present at the baseline, incl
 | [http/contracts/common.ts](../src/http/contracts/common.ts) | not started | 21 common validators implemented; combined [parity test](../rust/tests/contract_parity.rs) passes 395 fixtures / 35 total schemas. Full common-contract and HTTP coverage remain pending |
 | [http/contracts/github-triggers.ts](../src/http/contracts/github-triggers.ts) | not started | |
 | [http/contracts/oauth.ts](../src/http/contracts/oauth.ts) | not started | |
-| [http/contracts/projects.ts](../src/http/contracts/projects.ts) | not started | Five profile and six auxiliary schemas ported and independently checked, including strict/partial/nullable/nested/response behavior; combined parity test passes 533 cases / 46 schemas. Remaining project schemas and full HTTP coverage are incomplete |
+| [http/contracts/projects.ts](../src/http/contracts/projects.ts) | not started | Five profile, six auxiliary, and project task-policy schemas independently checked, including strict/partial/nullable/default/nested/response behavior; combined parity test passes 698 cases / 60 schemas. Remaining project schemas and full HTTP coverage are incomplete |
 | [http/contracts/providers.ts](../src/http/contracts/providers.ts) | ported | All nine validators implemented in [providers.rs](../rust/src/http/contracts/providers.rs); combined corpus passes 284 cases / 28 schemas. Raw HTTP JSON representation and endpoint integration remain unverified |
 | [http/contracts/system-events.ts](../src/http/contracts/system-events.ts) | not started | |
 | [http/contracts/task-templates.ts](../src/http/contracts/task-templates.ts) | not started | |
-| [http/contracts/tasks.ts](../src/http/contracts/tasks.ts) | not started | Twelve auxiliary task schemas independently checked, including strict rename, note/cursor bounds, enums, and nested worktree-app values; combined parity test passes 665 cases / 58 schemas. Remaining task schemas and runtime routes are incomplete |
+| [http/contracts/tasks.ts](../src/http/contracts/tasks.ts) | not started | Twelve auxiliary task schemas and task-agent batch query independently checked, including strict rename, note/cursor bounds, enums, nested values, and UTF-16 sort/dedup behavior; combined parity test passes 698 cases / 60 schemas. Remaining task schemas and runtime routes are incomplete |
 | [http/contracts/update.ts](../src/http/contracts/update.ts) | not started | |
 | [http/contracts/workflows.ts](../src/http/contracts/workflows.ts) | not started | |
 | [http/errors.ts](../src/http/errors.ts) | not started | |
@@ -89,7 +89,7 @@ The table lists all 238 backend TypeScript modules present at the baseline, incl
 | [identity/auth-identifiers.ts](../src/identity/auth-identifiers.ts) | not started | |
 | [identity/auth-repository.ts](../src/identity/auth-repository.ts) | not started | |
 | [identity/auth-schema.ts](../src/identity/auth-schema.ts) | not started | |
-| [identity/auth-webauthn.ts](../src/identity/auth-webauthn.ts) | not started | Partial adapter and [10-algorithm spike evidence](rust-spikes/webauthn.md), including synthetic packed and FIDO U2F attestation; Apple, Android Key, TPM, SafetyNet, hardware credentials, and full ceremony/HTTP integration remain incomplete |
+| [identity/auth-webauthn.ts](../src/identity/auth-webauthn.ts) | not started | Partial adapter and [10-algorithm spike evidence](rust-spikes/webauthn.md), including synthetic packed and FIDO U2F attestation; Apple, Android Key, TPM, SafetyNet, stored-credential roundtrips, and full ceremony/HTTP integration remain incomplete |
 | [identity/auth.ts](../src/identity/auth.ts) | not started | Partial: current/legacy sessions, development administrator, sign-out, rollover, and current-user profile/audit updates; focused identity and paired route tests pass. Full identity operations remain incomplete |
 | [identity/avatar-kinds.ts](../src/identity/avatar-kinds.ts) | not started | |
 | [identity/avatars.ts](../src/identity/avatars.ts) | not started | |

@@ -1,0 +1,41 @@
+{
+  "contract": "projects.ProjectAgentTaskPolicySchema",
+  "case": "empty_array_workflow_id",
+  "input": {
+    "workflowIds": [
+      []
+    ],
+    "defaultWorkflowId": "workflow",
+    "rootProfileIds": [
+      "root"
+    ],
+    "workerProfileIds": [
+      "worker"
+    ]
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "expected": "string",
+        "code": "invalid_type",
+        "path": [
+          "workflowIds",
+          0
+        ],
+        "message": "Invalid input: expected string, received array"
+      },
+      {
+        "origin": "array",
+        "code": "too_small",
+        "minimum": 1,
+        "inclusive": true,
+        "path": [
+          "workflowIds",
+          0
+        ],
+        "message": "Too small: expected array to have >=1 items"
+      }
+    ]
+  }
+}

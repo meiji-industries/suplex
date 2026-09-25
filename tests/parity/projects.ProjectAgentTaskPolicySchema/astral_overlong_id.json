@@ -1,0 +1,32 @@
+{
+  "contract": "projects.ProjectAgentTaskPolicySchema",
+  "case": "astral_overlong_id",
+  "input": {
+    "workflowIds": [
+      "😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀"
+    ],
+    "defaultWorkflowId": "workflow",
+    "rootProfileIds": [
+      "root"
+    ],
+    "workerProfileIds": [
+      "worker"
+    ]
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "origin": "string",
+        "code": "too_big",
+        "maximum": 256,
+        "inclusive": true,
+        "path": [
+          "workflowIds",
+          0
+        ],
+        "message": "Too big: expected string to have <=256 characters"
+      }
+    ]
+  }
+}

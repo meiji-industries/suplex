@@ -1,0 +1,34 @@
+{
+  "contract": "tasks.TaskAgentsBatchQuerySchema",
+  "case": "too_many",
+  "input": {
+    "taskId": [
+      "task-0",
+      "task-1",
+      "task-2",
+      "task-3",
+      "task-4",
+      "task-5",
+      "task-6",
+      "task-7",
+      "task-8",
+      "task-9",
+      "task-10"
+    ]
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "origin": "array",
+        "code": "too_big",
+        "maximum": 10,
+        "inclusive": true,
+        "path": [
+          "taskId"
+        ],
+        "message": "Too big: expected array to have <=10 items"
+      }
+    ]
+  }
+}

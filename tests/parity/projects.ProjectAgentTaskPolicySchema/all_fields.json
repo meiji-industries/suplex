@@ -1,0 +1,60 @@
+{
+  "contract": "projects.ProjectAgentTaskPolicySchema",
+  "case": "all_fields",
+  "input": {
+    "workflowIds": [
+      "workflow"
+    ],
+    "defaultWorkflowId": "workflow",
+    "templateIds": [
+      "template"
+    ],
+    "rootProfileIds": [
+      "root"
+    ],
+    "workerProfileIds": [
+      "worker"
+    ],
+    "advisorProfileIds": {
+      "reviewer": [
+        "reviewer"
+      ],
+      "planner_a": [],
+      "planner_b": [],
+      "rater": [],
+      "extra": true
+    },
+    "deliveryTarget": "local_worktree",
+    "runProjectTests": false,
+    "visualEvidence": "required"
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "workflowIds": [
+        "workflow"
+      ],
+      "defaultWorkflowId": "workflow",
+      "templateIds": [
+        "template"
+      ],
+      "rootProfileIds": [
+        "root"
+      ],
+      "workerProfileIds": [
+        "worker"
+      ],
+      "advisorProfileIds": {
+        "reviewer": [
+          "reviewer"
+        ],
+        "planner_a": [],
+        "planner_b": [],
+        "rater": []
+      },
+      "deliveryTarget": "local_worktree",
+      "runProjectTests": false,
+      "visualEvidence": "required"
+    }
+  }
+}

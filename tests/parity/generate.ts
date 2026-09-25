@@ -154,6 +154,27 @@ const semanticInputs: Record<string, Record<string, unknown>> = {
   "providers.ProviderLoginResponseSchema": {
     invalid_pane: { paneId: 1 },
   },
+  "tasks.TaskAgentsBatchQuerySchema": {
+    one: { taskId: "task-b", extra: true },
+    sorted_deduplicated: { taskId: ["task-b", "task-a", "task-b"] },
+    empty_string: { taskId: "" },
+    empty_task_id_array: { taskId: [] },
+    too_many: { taskId: Array.from({ length: 11 }, (_, index) => `task-${index}`) },
+    null_task_id: { taskId: null },
+    invalid_array_item: { taskId: ["task-a", null] },
+    overlong_string: { taskId: "x".repeat(257) },
+    astral_sort: { taskId: ["😀", "\ue000", "😀"] },
+  },
+  "projects.ProjectAgentTaskPolicySchema": {
+    defaults: { workflowIds: ["workflow"], defaultWorkflowId: "workflow", rootProfileIds: ["root"], workerProfileIds: ["worker"] },
+    all_fields: { workflowIds: ["workflow"], defaultWorkflowId: "workflow", templateIds: ["template"], rootProfileIds: ["root"], workerProfileIds: ["worker"], advisorProfileIds: { reviewer: ["reviewer"], planner_a: [], planner_b: [], rater: [], extra: true }, deliveryTarget: "local_worktree", runProjectTests: false, visualEvidence: "required" },
+    empty_required_arrays: { workflowIds: [], defaultWorkflowId: "workflow", rootProfileIds: [], workerProfileIds: [] },
+    empty_default_workflow: { workflowIds: ["workflow"], defaultWorkflowId: "", rootProfileIds: ["root"], workerProfileIds: ["worker"] },
+    invalid_nested_advisor: { workflowIds: ["workflow"], defaultWorkflowId: "workflow", rootProfileIds: ["root"], workerProfileIds: ["worker"], advisorProfileIds: { reviewer: [null] } },
+    astral_overlong_id: { workflowIds: ["😀".repeat(129)], defaultWorkflowId: "workflow", rootProfileIds: ["root"], workerProfileIds: ["worker"] },
+    wrong_enum_and_unknown: { workflowIds: ["workflow"], defaultWorkflowId: "workflow", rootProfileIds: ["root"], workerProfileIds: ["worker"], deliveryTarget: "publish", visualEvidence: "screenshots", extra: true },
+    empty_array_workflow_id: { workflowIds: [[]], defaultWorkflowId: "workflow", rootProfileIds: ["root"], workerProfileIds: ["worker"] },
+  },
   "projects.ProfileBodySchema": {
     trimmed_fields: { provider: "codex", model: "  codex/gpt-6  ", reasoningLevel: "high", serviceTier: "priority", name: "  Profile  ", role: "worker", avatarSeed: "0123456789abcdef0123456789abcdef", providerInstanceId: null },
     bad_model_pattern: { provider: "codex", model: "bad model", reasoningLevel: "high", serviceTier: "priority", name: "Profile", role: "worker", avatarSeed: "0123456789abcdef0123456789abcdef" },

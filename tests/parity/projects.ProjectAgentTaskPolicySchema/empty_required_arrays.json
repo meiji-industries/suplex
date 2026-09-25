@@ -1,0 +1,45 @@
+{
+  "contract": "projects.ProjectAgentTaskPolicySchema",
+  "case": "empty_required_arrays",
+  "input": {
+    "workflowIds": [],
+    "defaultWorkflowId": "workflow",
+    "rootProfileIds": [],
+    "workerProfileIds": []
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "origin": "array",
+        "code": "too_small",
+        "minimum": 1,
+        "inclusive": true,
+        "path": [
+          "workflowIds"
+        ],
+        "message": "Too small: expected array to have >=1 items"
+      },
+      {
+        "origin": "array",
+        "code": "too_small",
+        "minimum": 1,
+        "inclusive": true,
+        "path": [
+          "rootProfileIds"
+        ],
+        "message": "Too small: expected array to have >=1 items"
+      },
+      {
+        "origin": "array",
+        "code": "too_small",
+        "minimum": 1,
+        "inclusive": true,
+        "path": [
+          "workerProfileIds"
+        ],
+        "message": "Too small: expected array to have >=1 items"
+      }
+    ]
+  }
+}

@@ -4,6 +4,7 @@ mod common;
 mod common_commands;
 mod profile;
 mod project_aux;
+mod project_policy;
 mod providers;
 mod task_aux;
 
@@ -25,6 +26,9 @@ pub fn validate(contract: &str, input: Option<&Value>) -> Option<ParseResult> {
         return Some(result);
     }
     if let Some(result) = project_aux::validate(contract, input) {
+        return Some(result);
+    }
+    if let Some(result) = project_policy::validate(contract, input) {
         return Some(result);
     }
     if let Some(result) = task_aux::validate(contract, input) {

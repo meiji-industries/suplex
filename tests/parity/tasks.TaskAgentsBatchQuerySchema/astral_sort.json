@@ -1,0 +1,20 @@
+{
+  "contract": "tasks.TaskAgentsBatchQuerySchema",
+  "case": "astral_sort",
+  "input": {
+    "taskId": [
+      "😀",
+      "",
+      "😀"
+    ]
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "taskId": [
+        "😀",
+        ""
+      ]
+    }
+  }
+}

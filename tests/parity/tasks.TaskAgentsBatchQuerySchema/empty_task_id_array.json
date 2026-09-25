@@ -1,0 +1,13 @@
+{
+  "contract": "tasks.TaskAgentsBatchQuerySchema",
+  "case": "empty_task_id_array",
+  "input": {
+    "taskId": []
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "taskId": []
+    }
+  }
+}

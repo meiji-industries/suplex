@@ -123,7 +123,11 @@ fn public_control(mut control: Value) -> DatabaseResult<Value> {
     Ok(control)
 }
 
-fn assemble_observation(rows: RootObservationRows, worktree: Value) -> DatabaseResult<Value> {
+fn assemble_observation(
+    rows: RootObservationRows,
+    worktree: Value,
+    pull_request: Value,
+) -> DatabaseResult<Value> {
     let mut results = Map::new();
     for worker in &rows.workers {
         let id = worker["id"]
@@ -147,7 +151,6 @@ fn assemble_observation(rows: RootObservationRows, worktree: Value) -> DatabaseR
         .filter(|worker| worker["advisorRole"].is_null())
         .and_then(|worker| accepted_assignment(&rows.turns, worker))
         .unwrap_or(Value::Null);
-    let pull_request = rows.control["pullRequest"].clone();
     Ok(json!({
         "control": public_control(rows.control)?,
         "context": rows.context,
@@ -160,6 +163,7 @@ fn assemble_observation(rows: RootObservationRows, worktree: Value) -> DatabaseR
         "results": results,
         "worktree": worktree,
         "pullRequest": pull_request,
+        // Reached only after `delivery::operations::observe` succeeded.
         "github": {"available":true},
     }))
 }
@@ -183,6 +187,7 @@ pub fn observe(database_path: &Path, root: &RootIdentity) -> DatabaseResult<Valu
             "Only Standard local-worktree Root observation is ported",
         ));
     }
+    let pull_request = crate::delivery::operations::observe(&rows.control)?;
     let worktree = match rows.control["worktree"]["path"].as_str() {
         Some(path) => match worktree::observe_worktree(Path::new(path)) {
             Ok(observed) => json!({"headSha":observed.head_sha,"dirty":observed.dirty}),
@@ -190,7 +195,7 @@ pub fn observe(database_path: &Path, root: &RootIdentity) -> DatabaseResult<Valu
         },
         None => Value::Null,
     };
-    assemble_observation(rows, worktree)
+    assemble_observation(rows, worktree, pull_request)
 }
 
 /// Return task-owned image bytes to the Root MCP tool after a fresh Root check.
@@ -436,7 +441,7 @@ mod tests {
     #[test]
     fn absent_worktree_evidence_does_not_remove_task_context() {
         let rows = RootObservationRows {
-            control: json!({"workflow":"standard","deliveryTarget":"local_worktree","pullRequest":null,"workflowState":{"version":1,"reviews":[],"acceptedDelivery":null,"deliveryWait":null,"completion":null,"toolOwner":{"token":"private"}}}),
+            control: json!({"workflow":"standard","deliveryTarget":"local_worktree","status":"active","pullRequest":{"number":7},"workflowState":{"version":1,"reviews":[],"acceptedDelivery":null,"deliveryWait":null,"completion":null,"toolOwner":{"token":"private"}}}),
             context: json!({"configuration":{"visualEvidence":"off"},"images":[]}),
             dependencies: vec![],
             root: None,
@@ -445,9 +450,15 @@ mod tests {
             sessions: vec![],
             turns: vec![],
         };
-        let result =
-            assemble_observation(rows, json!({"state":"unknown","error":"missing worktree"}))
-                .unwrap();
+        let pull_request = crate::delivery::operations::observe(&rows.control).unwrap();
+        assert_eq!(pull_request, Value::Null);
+        let result = assemble_observation(
+            rows,
+            json!({"state":"unknown","error":"missing worktree"}),
+            pull_request,
+        )
+        .unwrap();
+        assert_eq!(result["pullRequest"], Value::Null);
         assert_eq!(result["worktree"]["state"], "unknown");
         assert!(
             result["control"]["workflowState"]

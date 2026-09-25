@@ -34,6 +34,20 @@ impl fmt::Display for DeliveryOperationFailure {
 
 impl Error for DeliveryOperationFailure {}
 
+/// TypeScript `DeliveryOperations.observe`: a finished task keeps its recorded
+/// pull request, and a local-worktree task has no pull request to observe.
+pub fn observe(control: &Value) -> DatabaseResult<Value> {
+    if matches!(control["status"].as_str(), Some("cancelled" | "delivered")) {
+        return Ok(control["pullRequest"].clone());
+    }
+    if control["deliveryTarget"] == "local_worktree" {
+        return Ok(Value::Null);
+    }
+    Err(Box::new(TaskFailure::not_ported(
+        "GitHub pull request observation is not ported",
+    )))
+}
+
 /// Check source control state before waiting for a Git observation.
 pub fn standard_local_worktree_path(control: &Value) -> Result<&str, DeliveryOperationFailure> {
     if control["deliveryTarget"] != "local_worktree" {
@@ -115,6 +129,22 @@ mod tests {
     use serde_json::json;
 
     use super::*;
+
+    #[test]
+    fn delivery_observation_matches_typescript_observe() {
+        let local =
+            json!({"status":"active","deliveryTarget":"local_worktree","pullRequest":{"number":7}});
+        assert_eq!(observe(&local).unwrap(), Value::Null);
+        let delivered = json!({"status":"delivered","deliveryTarget":"pull_request","pullRequest":{"number":7}});
+        assert_eq!(observe(&delivered).unwrap(), json!({"number":7}));
+        let github = json!({"status":"active","deliveryTarget":"pull_request","pullRequest":null});
+        let failure = observe(&github).unwrap_err();
+        let failure = failure.downcast_ref::<TaskFailure>().unwrap();
+        assert_eq!(
+            (failure.status_code, failure.code),
+            (501, "experimental_not_ported")
+        );
+    }
 
     #[test]
     fn standard_completion_uses_actual_branch_and_head_without_a_clean_tree_gate() {

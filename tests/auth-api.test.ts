@@ -56,6 +56,18 @@ test("API enrollment and authorization fail closed before company details are re
   const auth = new AuthService(database, config, { webAuthn: fakeWebAuthn() });
   const app = createApp({ config, auth, health, getHealth: async () => ({ generatedAt: new Date().toISOString(), reachableAddress: config.reachableAddress, ready: true, checks: [] }) });
   try {
+    const malformedProfile = await app.inject({ method: "PATCH", url: "/api/auth/me", headers: { cookie: "sid_v1=stale", origin: "https://wrong.example" }, payload: {} });
+    expect(malformedProfile.statusCode).toBe(400);
+    expect(malformedProfile.json()).toEqual({ error: "Invalid request", findings: [{ code: "invalid-custom", field: ".", message: "Request value is invalid" }] });
+    const wrongTypeProfile = await app.inject({ method: "PATCH", url: "/api/auth/me", headers: { cookie: "sid_v1=stale", origin: "https://wrong.example" }, payload: { username: 42 } });
+    expect(wrongTypeProfile.statusCode).toBe(400);
+    expect(wrongTypeProfile.json()).toEqual({ error: "Invalid request", findings: [{ code: "invalid-invalid_type", field: ".username", message: "Request value is invalid" }] });
+    const noBodyProfile = await app.inject({ method: "PATCH", url: "/api/auth/me", headers: { cookie: "sid_v1=stale", origin: "https://wrong.example" } });
+    expect(noBodyProfile.statusCode).toBe(400);
+    expect(noBodyProfile.json()).toEqual({ error: "Invalid request", findings: [{ code: "invalid-invalid_type", field: ".", message: "Request value is invalid" }] });
+    const textProfile = await app.inject({ method: "PATCH", url: "/api/auth/me", headers: { cookie: "sid_v1=stale", origin: "https://wrong.example", "content-type": "text/plain" }, payload: "hello" });
+    expect(textProfile.statusCode).toBe(400);
+    expect(textProfile.json()).toEqual({ error: "Invalid request", findings: [{ code: "invalid-invalid_type", field: ".", message: "Request value is invalid" }] });
     const invitation = auth.ensureBootstrapInvitation()!;
     expect((await app.inject({ method: "GET", url: "/api/auth/status" })).json()).toMatchObject({ required: true, authenticated: false });
     const options = await app.inject({ method: "POST", url: "/api/auth/bootstrap/options", payload: { token: invitation.token } });

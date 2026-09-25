@@ -237,6 +237,7 @@ test("the tailnet is the login boundary: loopback or a tailnet identity signs in
     const loopback = await fixture.app.inject({ method: "GET", url: "/api/auth/me", headers: { host: `localhost:${port}` } });
     expect(loopback.statusCode).toBe(200);
     expect(loopback.json()).toMatchObject({ user: { role: "admin", displayName: "Operator" } });
+    expect(loopback.body).toBe('{"user":{"id":"user_development","displayName":"Operator","username":"operator@suplex.local","avatarSeed":"operator@suplex.local","role":"admin","status":"active","companyIds":[]}}');
     const tailnet = await fixture.app.inject({ method: "GET", url: "/api/auth/me", headers: { host: reachableHost, "tailscale-user-login": "alice@example.com" } });
     expect(tailnet.statusCode).toBe(200);
     const funnel = await fixture.app.inject({ method: "GET", url: "/api/auth/me", headers: { host: reachableHost } });
@@ -245,6 +246,16 @@ test("the tailnet is the login boundary: loopback or a tailnet identity signs in
     expect(spoofedLoopback.statusCode).toBe(200);
 
     const cookie = `${SESSION_COOKIE_NAME}=${loopback.cookies.find((entry) => entry.name === SESSION_COOKIE_NAME)!.value}`;
+    const profile = await fixture.app.inject({ method: "PATCH", url: "/api/auth/me", headers: { host: reachableHost, cookie, origin: reachableAddress }, payload: { displayName: "\uFEFFUpdated Operator\uFEFF", username: "\uFEFFupdated-operator\uFEFF", avatarSeed: "\uFEFFupdated-avatar\uFEFF" } });
+    expect(profile.statusCode).toBe(200);
+    expect(profile.body).toBe('{"user":{"id":"user_development","displayName":"Updated Operator","username":"updated-operator","avatarSeed":"updated-avatar","role":"admin","status":"active","companyIds":[]}}');
+    const encodedCookie = cookie.replace("session_v1_", "session%5Fv1%5F");
+    const decodedSession = await fixture.app.inject({ method: "GET", url: "/api/auth/me", headers: { host: reachableHost, cookie: encodedCookie } });
+    expect(decodedSession.statusCode).toBe(200);
+    const secondCookieHeader = await fixture.app.inject({ method: "GET", url: "/api/auth/me", headers: { host: reachableHost, cookie: ["other=value", encodedCookie] } });
+    expect(secondCookieHeader.statusCode).toBe(401);
+    const firstCookieHeader = await fixture.app.inject({ method: "GET", url: "/api/auth/me", headers: { host: reachableHost, cookie: [encodedCookie, "other=value"] } });
+    expect(firstCookieHeader.statusCode).toBe(401);
     const remoteLoopbackOrigin = await fixture.app.inject({ method: "POST", url: "/api/auth/sign-out", headers: { cookie, host: reachableHost, origin: `http://localhost:${port}` } });
     expect(remoteLoopbackOrigin.statusCode).toBe(403);
     const localMutation = await fixture.app.inject({ method: "POST", url: "/api/auth/sign-out", headers: { cookie, host: `localhost:${port}`, origin: `http://localhost:${port}` } });

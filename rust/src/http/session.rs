@@ -26,12 +26,51 @@ pub struct SessionUser {
 }
 
 pub(crate) fn cookie(headers: &HeaderMap, name: &str) -> Option<String> {
-    headers.get_all("cookie").iter().find_map(|line| {
-        line.to_str().ok()?.split(';').find_map(|part| {
-            let (key, value) = part.trim().split_once('=')?;
-            (key == name).then(|| value.to_owned())
-        })
+    let mut lines = headers.get_all("cookie").iter();
+    let line = lines.next()?;
+    // Fastify passes a repeated Cookie header as an array to @fastify/cookie,
+    // whose parser yields no cookie names for that input.
+    if lines.next().is_some() {
+        return None;
+    }
+    line.to_str().ok()?.split(';').find_map(|part| {
+        let (key, value) = part.trim().split_once('=')?;
+        (key == name).then(|| decode_cookie_value(value.trim()))
     })
+}
+
+fn decode_cookie_value(value: &str) -> String {
+    if !value.contains('%') {
+        return value.to_owned();
+    }
+    let bytes = value.as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'%' {
+            let Some((high, low)) = bytes.get(index + 1).zip(bytes.get(index + 2)) else {
+                return value.to_owned();
+            };
+            let Some((high, low)) = hex_digit(*high).zip(hex_digit(*low)) else {
+                return value.to_owned();
+            };
+            decoded.push((high << 4) | low);
+            index += 3;
+        } else {
+            decoded.push(bytes[index]);
+            index += 1;
+        }
+    }
+    String::from_utf8(decoded).unwrap_or_else(|_| value.to_owned())
+}
+
+fn hex_digit(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        _ => None,
+    }
 }
 
 pub fn is_loopback_host(config: &SessionConfig, host: Option<&str>) -> bool {
@@ -249,6 +288,27 @@ mod tests {
         let existing = session_user(&mut database, &headers, Some(&config()), now).unwrap();
         assert_eq!(existing.user.unwrap().id, "user_development");
         assert!(existing.set_cookies.is_empty());
+        headers.insert("host", HeaderValue::from_static("suplex.example.test:4111"));
+        let encoded = format!(
+            "sid_v1={}",
+            session_token.replace("session_v1_", "session%5Fv1%5F")
+        );
+        headers.insert("cookie", HeaderValue::from_str(&encoded).unwrap());
+        assert_eq!(
+            session_user(&mut database, &headers, Some(&config()), now)
+                .unwrap()
+                .user
+                .unwrap()
+                .id,
+            "user_development"
+        );
+        headers.append("cookie", HeaderValue::from_static("other=value"));
+        assert!(
+            session_user(&mut database, &headers, Some(&config()), now)
+                .unwrap()
+                .user
+                .is_none()
+        );
         headers.remove("cookie");
         let no_reply = session_user(&mut database, &headers, None, now).unwrap();
         assert!(no_reply.user.is_none());

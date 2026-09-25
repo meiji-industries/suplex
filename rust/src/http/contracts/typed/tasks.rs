@@ -1093,6 +1093,95 @@ pub fn parse_task_worker_replacement(
     Ok(parsed)
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TaskAgentSelectionBody {
+    pub role: String,
+    pub expected_profile_id: String,
+    pub expected_session_id: Option<String>,
+    pub profile_id: String,
+    pub direction: String,
+    pub resume: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub question_id: Option<String>,
+}
+
+/// `resume` selects the union branch; only a resumed selection names its question.
+pub fn parse_task_agent_selection(input: Option<&Value>) -> ContractResult<TaskAgentSelectionBody> {
+    let fields = object(input)?;
+    let Some(resume) = fields.get("resume").and_then(Value::as_bool) else {
+        return Err(ContractFailure::Issues(vec![finding(
+            "invalid_union",
+            &[Value::String("resume".into())],
+        )]));
+    };
+    let mut issues = Vec::new();
+    let role = fields.get("role").and_then(Value::as_str).filter(|role| {
+        matches!(
+            *role,
+            "root" | "worker" | "reviewer" | "planner_a" | "planner_b" | "rater"
+        )
+    });
+    if role.is_none() {
+        issues.push(finding("invalid_value", &[Value::String("role".into())]));
+    }
+    let mut text = |name: &str, nullable: bool| -> Option<String> {
+        match fields.get(name) {
+            Some(Value::String(value)) if name == "direction" => {
+                Some(crate::identity::auth::js_trim(value).to_owned())
+            }
+            Some(Value::String(value)) if value.is_empty() => {
+                issues.push(finding("too_small", &[Value::String(name.into())]));
+                None
+            }
+            Some(Value::String(value)) => Some(value.clone()),
+            Some(Value::Null) if nullable => None,
+            _ => {
+                issues.push(finding("invalid_type", &[Value::String(name.into())]));
+                None
+            }
+        }
+    };
+    let expected_profile_id = text("expectedProfileId", false);
+    let expected_session_id = text("expectedSessionId", true);
+    let profile_id = text("profileId", false);
+    let direction = text("direction", false);
+    let question_id = if resume {
+        text("questionId", false)
+    } else {
+        None
+    };
+    if fields.keys().any(|key| {
+        !(matches!(
+            key.as_str(),
+            "role"
+                | "expectedProfileId"
+                | "expectedSessionId"
+                | "profileId"
+                | "direction"
+                | "resume"
+        ) || (resume && key == "questionId"))
+    }) {
+        issues.push(finding("unrecognized_keys", &[]));
+    }
+    match (role, expected_profile_id, profile_id, direction) {
+        (Some(role), Some(expected_profile_id), Some(profile_id), Some(direction))
+            if issues.is_empty() =>
+        {
+            Ok(TaskAgentSelectionBody {
+                role: role.to_owned(),
+                expected_profile_id,
+                expected_session_id,
+                profile_id,
+                direction,
+                resume,
+                question_id,
+            })
+        }
+        _ => Err(ContractFailure::Issues(issues)),
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, Validate)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct TaskDependenciesBody {
@@ -1286,6 +1375,15 @@ mod tests {
             "tasks.TaskContinueDeliveryBodySchema",
             12,
             parse_task_continue_delivery,
+        );
+    }
+
+    #[test]
+    fn task_agent_selection_request_fixtures_match_public_zod_contract() {
+        assert_request_fixtures(
+            "tasks.TaskAgentSelectionBodySchema",
+            15,
+            parse_task_agent_selection,
         );
     }
 

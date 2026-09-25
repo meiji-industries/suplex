@@ -159,11 +159,6 @@ const ROUTES: &[(Method, &str, Access)] = &[
         Authenticated,
     ),
     (
-        Method::POST,
-        "/api/tasks/{task_id}/select-agent",
-        Authenticated,
-    ),
-    (
         Method::GET,
         "/api/tasks/{task_id}/worktree/apps",
         Authenticated,

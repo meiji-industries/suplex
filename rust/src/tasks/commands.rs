@@ -1,6 +1,6 @@
 //! User task commands keep authorization, intent, audit, and wake admission together.
 
-use std::{error::Error, fmt};
+use std::{error::Error, fmt, path::Path};
 
 use chrono::{DateTime, SecondsFormat, Utc};
 use rusqlite::{OptionalExtension, params};
@@ -15,11 +15,15 @@ use crate::{
         tasks::TaskCreateBody,
     },
     identity::companies,
-    platform::database::{DatabaseResult, SuplexDatabase},
+    platform::{
+        artifacts,
+        database::{DatabaseResult, SuplexDatabase},
+    },
     projects::service::{self, Project},
 };
 
 use super::archive::operations as archive;
+use super::images::DecodedTaskImage;
 use super::repository::{self, PreparedTask, TaskCreator, TaskRecord, TaskWrite};
 
 #[derive(Debug)]
@@ -422,7 +426,53 @@ pub fn create_user_task(
     now: DateTime<Utc>,
     wake: impl FnOnce(String) + Send + 'static,
 ) -> DatabaseResult<TaskWrite> {
-    database.transaction(true, |database| {
+    create_user_task_inner(
+        database,
+        actor_user_id,
+        expected_project,
+        prepared,
+        None,
+        now,
+        wake,
+    )
+}
+
+pub fn create_user_task_with_images(
+    database: &mut SuplexDatabase,
+    actor_user_id: &str,
+    expected_project: &Project,
+    prepared: &PreparedTask,
+    files: ImageFiles<'_>,
+    now: DateTime<Utc>,
+    wake: impl FnOnce(String) + Send + 'static,
+) -> DatabaseResult<TaskWrite> {
+    create_user_task_inner(
+        database,
+        actor_user_id,
+        expected_project,
+        prepared,
+        Some((files.root, files.images)),
+        now,
+        wake,
+    )
+}
+
+pub struct ImageFiles<'a> {
+    pub root: &'a Path,
+    pub images: &'a [DecodedTaskImage],
+}
+
+fn create_user_task_inner(
+    database: &mut SuplexDatabase,
+    actor_user_id: &str,
+    expected_project: &Project,
+    prepared: &PreparedTask,
+    images: Option<(&Path, &[DecodedTaskImage])>,
+    now: DateTime<Utc>,
+    wake: impl FnOnce(String) + Send + 'static,
+) -> DatabaseResult<TaskWrite> {
+    let mut written = Vec::new();
+    let result = database.transaction(true, |database| {
         let company =
             companies::require_company_access(database, actor_user_id, &prepared.company_id)?;
         if company.status != "active" {
@@ -451,13 +501,31 @@ pub fn create_user_task(
                 409,
             )));
         }
-        let result = repository::create(database, prepared, now)?;
+        let result = match images {
+            Some((artifact_root, images)) => repository::create_with_images(
+                database,
+                prepared,
+                artifact_root,
+                images,
+                now,
+                &mut written,
+            )?,
+            None => repository::create(database, prepared, now)?,
+        };
         if result.task.status == "active" {
             let id = result.task.id.clone();
             database.after_commit(move || wake(id));
         }
         Ok(result)
-    })
+    });
+    if result.is_err()
+        && let Some((artifact_root, _)) = images
+    {
+        for artifact in &written {
+            artifacts::remove_written(artifact_root, artifact);
+        }
+    }
+    result
 }
 
 /// Start is params-only at HTTP; this command rechecks the live user's task scope.
@@ -765,13 +833,23 @@ mod tests {
             copied_from_task_id: None,
             depends_on: vec![],
         };
+        let artifact_root = filename.with_extension("artifacts");
+        let image = DecodedTaskImage {
+            filename: "proof.png".into(),
+            mime_type: "image/png".into(),
+            bytes: vec![0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a],
+        };
         let wakes = Arc::new(AtomicUsize::new(0));
         let count = Arc::clone(&wakes);
-        let created = create_user_task(
+        let created = create_user_task_with_images(
             &mut database,
             &user.id,
             &project,
             &prepared,
+            ImageFiles {
+                root: &artifact_root,
+                images: std::slice::from_ref(&image),
+            },
             now,
             move |_| {
                 count.fetch_add(1, Ordering::SeqCst);
@@ -807,12 +885,37 @@ mod tests {
                 .unwrap();
         assert!(body.starts_with(&format!("{{\"id\":\"{}\",\"companyId\":\"command_company\",\"projectId\":\"command_project\",\"issueKey\":null", created.task.id)));
         assert!(body.contains("\"status\":\"active\""));
+        let created_snapshot =
+            serde_json::to_value(response::get(&database, &created.task.id).unwrap().unwrap())
+                .unwrap();
+        let stored_image = root_session_store::task_artifact(
+            &database,
+            &created.task.id,
+            created_snapshot["images"][0]["artifactId"]
+                .as_str()
+                .unwrap(),
+        )
+        .unwrap()
+        .unwrap();
+        assert_eq!(
+            artifacts::read(
+                &artifact_root,
+                &stored_image.company_id,
+                &stored_image.storage_path
+            )
+            .unwrap(),
+            image.bytes
+        );
         let count = Arc::clone(&wakes);
-        let repeated = create_user_task(
+        let repeated = create_user_task_with_images(
             &mut database,
             &user.id,
             &project,
             &prepared,
+            ImageFiles {
+                root: &artifact_root,
+                images: std::slice::from_ref(&image),
+            },
             now,
             move |_| {
                 count.fetch_add(1, Ordering::SeqCst);
@@ -821,6 +924,49 @@ mod tests {
         .unwrap();
         assert!(!repeated.created);
         assert_eq!(wakes.load(Ordering::SeqCst), 2);
+        let image_count: i64 = database
+            .connection()
+            .query_row(
+                "SELECT count(*) FROM suplex_artifacts WHERE task_id = ?1",
+                [&created.task.id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(image_count, 1);
+        let mut invalid = prepared.clone();
+        invalid.id = repository::new_task_id();
+        invalid.idempotency_key = "command-failing-image".into();
+        invalid.request_hash = "command-failing-image-hash".into();
+        invalid.depends_on = vec!["missing-dependency".into()];
+        assert!(
+            create_user_task_with_images(
+                &mut database,
+                &user.id,
+                &project,
+                &invalid,
+                ImageFiles {
+                    root: &artifact_root,
+                    images: std::slice::from_ref(&image)
+                },
+                now,
+                |_| {},
+            )
+            .is_err()
+        );
+        let image_count: i64 = database
+            .connection()
+            .query_row("SELECT count(*) FROM suplex_artifacts", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(image_count, 1);
+        let stored_path = artifact_root.join(&stored_image.storage_path);
+        assert_eq!(
+            std::fs::read_dir(stored_path.parent().unwrap())
+                .unwrap()
+                .count(),
+            1
+        );
         let root = root_session_store::reserve_root(&mut database, &created.task.id, now).unwrap();
         assert!(
             root_session_store::ask_human_for_root(

@@ -29,10 +29,12 @@ use super::{
 pub struct RootBridgeServer {
     root: RootIdentity,
     database_path: PathBuf,
+    artifact_root: PathBuf,
 }
 
 enum RootCall {
     Observe,
+    ReadImage(String),
     ReadWorkerEvidence(WorkerEvidenceRequest),
     DelegateWorker(StandardWorkerAssignment),
     RequestDelivery { expected_head: Option<String> },
@@ -43,6 +45,10 @@ enum RootCall {
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 enum WireCall {
     Observe(Empty),
+    ReadImage {
+        #[serde(rename = "artifactId")]
+        artifact_id: String,
+    },
     ReadWorkerEvidence(WorkerEvidenceInput),
     DelegateWorker(Box<WorkerInput>),
     RequestDelivery(DeliveryInput),
@@ -216,6 +222,12 @@ fn parse_call(mut input: Map<String, Value>) -> Result<RootCall, String> {
         serde_json::from_value(Value::Object(input)).map_err(|error| error.to_string())?;
     match call {
         WireCall::Observe(_) => Ok(RootCall::Observe),
+        WireCall::ReadImage { artifact_id } => {
+            if !root_bridge::valid_opaque_id(&artifact_id) {
+                return Err("Task image artifact id is invalid".into());
+            }
+            Ok(RootCall::ReadImage(artifact_id))
+        }
         WireCall::ReadWorkerEvidence(input) => {
             if !root_bridge::valid_opaque_id(&input.turn_id)
                 || input
@@ -367,11 +379,12 @@ fn parse_call(mut input: Map<String, Value>) -> Result<RootCall, String> {
 fn tool() -> Tool {
     Tool::new(
         "suplex_root",
-        "Observe this task, read native Worker evidence, delegate a Standard Worker, complete local work, or ask a specific human question.",
+        "Observe this task, read an image or native Worker evidence, delegate a Standard Worker, complete local work, or ask a specific human question.",
         serde_json::from_value::<Map<String, Value>>(json!({
             "type":"object",
             "properties":{
-                "kind":{"type":"string","enum":["observe","read_worker_evidence","delegate_worker","request_delivery","ask_human"],"description":"Fields per kind. observe: no other fields. read_worker_evidence: required turnId; optional toolId, field (input/output/error), position (head/tail), cursor, maxCharacters (1000..20000). delegate_worker: required plan, acceptanceCriteria, instruction; optional mode (planned), purpose (implementation), Advisor references (unused in Standard). request_delivery: required operation (complete_local_work); optional expectedHead and source review fields. ask_human: required question, options."},
+                "kind":{"type":"string","enum":["observe","read_image","read_worker_evidence","delegate_worker","request_delivery","ask_human"],"description":"Fields per kind. observe: no other fields. read_image: required artifactId. read_worker_evidence: required turnId; optional toolId, field (input/output/error), position (head/tail), cursor, maxCharacters (1000..20000). delegate_worker: required plan, acceptanceCriteria, instruction; optional mode (planned), purpose (implementation), Advisor references (unused in Standard). request_delivery: required operation (complete_local_work); optional expectedHead and source review fields. ask_human: required question, options."},
+                "artifactId":{"type":"string","minLength":1,"maxLength":256,"pattern":"^[A-Za-z0-9][A-Za-z0-9._:-]*$"},
                 "operation":{"type":"string","enum":["complete_local_work"],"description":"Complete reviewed Standard local work after confirming the current Git head."},
                 "expectedHead":{"type":"string","minLength":1},
                 "review":{"type":"object","description":"Optional source review metadata; ignored for Standard local completion."},
@@ -405,6 +418,7 @@ fn tool() -> Tool {
 impl RootBridgeServer {
     async fn call(&self, call: RootCall) -> Result<Value, String> {
         let database_path = self.database_path.clone();
+        let artifact_root = self.artifact_root.clone();
         let root = self.root.clone();
         let runtime = tokio::runtime::Handle::current();
         // The blocking worker owns claim, operation, and release together. Dropping
@@ -419,6 +433,8 @@ impl RootBridgeServer {
                 .ok_or_else(|| "Another Suplex tool call for this task is still in progress. Retry after it finishes.".to_owned())?;
             let result = match call {
                 RootCall::Observe => root_controller::observe(&database_path, &root)
+                    .map_err(|error| error.to_string()),
+                RootCall::ReadImage(artifact_id) => root_controller::read_image(&database_path, &artifact_root, &root, &artifact_id)
                     .map_err(|error| error.to_string()),
                 RootCall::ReadWorkerEvidence(request) => {
                     root_controller::read_worker_evidence(&database_path, &root, &request)
@@ -483,6 +499,22 @@ impl ServerHandler for RootBridgeServer {
         }
         let result = match parse_call(request.arguments.unwrap_or_default()) {
             Ok(call) => match self.call(call).await {
+                Ok(value) if value["kind"] == "image" => {
+                    let (Some(filename), Some(mime_type), Some(data)) = (
+                        value["filename"].as_str(),
+                        value["mimeType"].as_str(),
+                        value["data"].as_str(),
+                    ) else {
+                        return Ok(CallToolResult::error(vec![ContentBlock::text(
+                            "Task image result is invalid",
+                        )])
+                        .into());
+                    };
+                    CallToolResult::success(vec![
+                        ContentBlock::text(filename),
+                        ContentBlock::image(data, mime_type),
+                    ])
+                }
                 Ok(value) => CallToolResult::structured(value),
                 Err(error) => CallToolResult::error(vec![ContentBlock::text(error)]),
             },
@@ -499,6 +531,7 @@ pub async fn serve_from_environment() -> Result<(), Box<dyn std::error::Error>> 
     let server = RootBridgeServer {
         root: binding.root,
         database_path: binding.database_path,
+        artifact_root: binding.artifact_root,
     };
     server
         .serve(rmcp::transport::stdio())
@@ -519,6 +552,7 @@ mod tests {
             schema["properties"]["kind"]["enum"],
             json!([
                 "observe",
+                "read_image",
                 "read_worker_evidence",
                 "delegate_worker",
                 "request_delivery",

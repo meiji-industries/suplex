@@ -3,6 +3,7 @@
 use chrono::{DateTime, SecondsFormat, Utc};
 use rusqlite::{OptionalExtension, Row, params};
 use serde_json::Value;
+use std::path::Path;
 use uuid::Uuid;
 
 #[derive(Debug)]
@@ -27,7 +28,12 @@ impl std::fmt::Display for TaskConflict {
 
 impl std::error::Error for TaskConflict {}
 
-use crate::platform::database::{DatabaseResult, SuplexDatabase};
+use crate::platform::{
+    artifacts::{self, ArtifactInput, StoredArtifact},
+    database::{DatabaseResult, SuplexDatabase},
+};
+
+use super::images::DecodedTaskImage;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum TaskCreator {
@@ -217,7 +223,31 @@ pub fn create(
     input: &PreparedTask,
     now: DateTime<Utc>,
 ) -> DatabaseResult<TaskWrite> {
-    database.transaction(true, |database| {
+    create_inner(database, input, None, now, &mut Vec::new())
+}
+
+/// Keep newly written opaque files visible to the outer command, which may
+/// still roll back its authorization, dependency, or audit transaction.
+pub fn create_with_images(
+    database: &mut SuplexDatabase,
+    input: &PreparedTask,
+    artifact_root: &Path,
+    images: &[DecodedTaskImage],
+    now: DateTime<Utc>,
+    written: &mut Vec<StoredArtifact>,
+) -> DatabaseResult<TaskWrite> {
+    create_inner(database, input, Some((artifact_root, images)), now, written)
+}
+
+fn create_inner(
+    database: &mut SuplexDatabase,
+    input: &PreparedTask,
+    images: Option<(&Path, &[DecodedTaskImage])>,
+    now: DateTime<Utc>,
+    written: &mut Vec<StoredArtifact>,
+) -> DatabaseResult<TaskWrite> {
+    let first_written = written.len();
+    let result = database.transaction(true, |database| {
         if let Some(task) = existing(database, input)? { return Ok(TaskWrite { task, created: false }); }
         let id = &input.id;
         let time = timestamp(now);
@@ -229,6 +259,23 @@ pub fn create(
             "INSERT INTO suplex_tasks (id, company_id, project_id, title, description, configuration_json, idempotency_key, request_hash, creator_user_id, creator_agent_id, copied_from_task_id, issue_json, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?13)",
             params![id, input.company_id, input.project_id, input.title, input.description, input.configuration.to_string(), input.idempotency_key, input.request_hash, creator_user_id, creator_agent_id, input.copied_from_task_id, input.issue.as_ref().map(Value::to_string), time],
         )?;
+        if let Some((artifact_root, images)) = images {
+            for image in images {
+                written.push(artifacts::put_in_transaction(
+                    database,
+                    artifact_root,
+                    &input.company_id,
+                    "task-image",
+                    &ArtifactInput {
+                        filename: &image.filename,
+                        mime_type: &image.mime_type,
+                        bytes: &image.bytes,
+                        task_id: id,
+                    },
+                    now,
+                )?);
+            }
+        }
         let objective = if input.description.is_empty() { input.title.clone() } else { format!("{}\n\n{}", input.title, input.description) };
         database.connection().execute(
             "INSERT INTO suplex_task_controls (task_id, objective, delivery_target, delivery_intent_json, status, root_profile_json, worker_profile_json, workflow, advisor_profiles_json, workflow_state_json, status_changed_at, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'standard', ?8, '{\"version\":1,\"reviews\":[],\"acceptedDelivery\":null,\"deliveryWait\":null,\"completion\":null,\"toolOwner\":null}', ?9, ?9, ?9)",
@@ -254,7 +301,15 @@ pub fn create(
             params![format!("audit_{}", Uuid::new_v4().simple()), creator_user_id, creator_agent_id, input.company_id, serde_json::json!({"taskId": id, "resultingState": resulting_state}).to_string(), time],
         )?;
         Ok(TaskWrite { task: created, created: true })
-    })
+    });
+    if result.is_err()
+        && let Some((artifact_root, _)) = images
+    {
+        for artifact in written.drain(first_written..) {
+            artifacts::remove_written(artifact_root, &artifact);
+        }
+    }
+    result
 }
 
 /// Start records intent as queued; admission rechecks prerequisites in this transaction.

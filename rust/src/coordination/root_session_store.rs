@@ -63,6 +63,37 @@ pub struct RootObservationRows {
     pub turns: Vec<Value>,
 }
 
+pub struct TaskArtifact {
+    pub kind: String,
+    pub filename: String,
+    pub mime_type: String,
+    pub company_id: String,
+    pub storage_path: String,
+    pub sha256: String,
+}
+
+pub fn task_artifact(
+    database: &SuplexDatabase,
+    task_id: &str,
+    artifact_id: &str,
+) -> DatabaseResult<Option<TaskArtifact>> {
+    Ok(database
+        .connection()
+        .query_row(
+            "SELECT a.kind, a.filename, a.mime_type, a.company_id, a.storage_path, a.sha256 FROM suplex_artifacts a JOIN suplex_tasks t ON t.id = a.task_id AND t.company_id = a.company_id WHERE t.id = ?1 AND a.id = ?2",
+            params![task_id, artifact_id],
+            |row| Ok(TaskArtifact {
+                kind: row.get(0)?,
+                filename: row.get(1)?,
+                mime_type: row.get(2)?,
+                company_id: row.get(3)?,
+                storage_path: row.get(4)?,
+                sha256: row.get(5)?,
+            }),
+        )
+        .optional()?)
+}
+
 fn json_rows(database: &SuplexDatabase, sql: &str, task_id: &str) -> DatabaseResult<Vec<Value>> {
     let mut statement = database.connection().prepare(sql)?;
     let rows = statement

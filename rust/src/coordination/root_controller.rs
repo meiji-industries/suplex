@@ -2,10 +2,15 @@
 
 use std::path::Path;
 
+use base64::{Engine, engine::general_purpose::STANDARD};
 use serde_json::{Map, Value, json};
+use sha2::{Digest, Sha256};
 
 use crate::{
-    platform::database::{DatabaseResult, OpenMode, SuplexDatabase},
+    platform::{
+        artifacts,
+        database::{DatabaseResult, OpenMode, SuplexDatabase},
+    },
     runtimes::codex::{session_reader, tool_evidence},
     tasks::worktree,
 };
@@ -180,6 +185,47 @@ pub fn observe(database_path: &Path, root: &RootIdentity) -> DatabaseResult<Valu
         None => Value::Null,
     };
     assemble_observation(rows, worktree)
+}
+
+/// Return task-owned image bytes to the Root MCP tool after a fresh Root check.
+/// The artifact row is scoped by both task and company; the file hash is live
+/// evidence that the opaque bytes still match that row.
+pub fn read_image(
+    database_path: &Path,
+    artifact_root: &Path,
+    root: &RootIdentity,
+    artifact_id: &str,
+) -> DatabaseResult<Value> {
+    let database = SuplexDatabase::open(database_path, OpenMode::ReadOnly)?;
+    root_session_store::assert_current_root(
+        &database,
+        &root.task_id,
+        &root.session_id,
+        root.generation,
+    )?;
+    let artifact = root_session_store::task_artifact(&database, &root.task_id, artifact_id)?
+        .ok_or_else(|| invalid("Task image is not available"))?;
+    if !matches!(artifact.kind.as_str(), "task-image" | "delivery-image")
+        || !matches!(
+            artifact.mime_type.as_str(),
+            "image/png" | "image/jpeg" | "image/webp" | "image/gif"
+        )
+    {
+        return Err(invalid("Task image is not available"));
+    }
+    let bytes = artifacts::read(artifact_root, &artifact.company_id, &artifact.storage_path)?;
+    root_session_store::assert_current_root(
+        &database,
+        &root.task_id,
+        &root.session_id,
+        root.generation,
+    )?;
+    if format!("{:x}", Sha256::digest(&bytes)) != artifact.sha256 {
+        return Err(invalid("The task image changed in storage"));
+    }
+    Ok(
+        json!({"kind":"image", "filename":artifact.filename, "mimeType":artifact.mime_type, "data":STANDARD.encode(bytes)}),
+    )
 }
 
 pub struct WorkerEvidenceRequest {

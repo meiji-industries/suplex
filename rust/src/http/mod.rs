@@ -24,6 +24,7 @@ pub mod routes {
     pub mod profiles;
     pub mod projects;
     pub mod task_agents;
+    pub mod task_artifacts;
     pub mod task_history;
     pub mod task_reads;
     pub mod task_templates;
@@ -45,6 +46,7 @@ pub struct AppState {
     database: Arc<Mutex<SuplexDatabase>>,
     pub session_config: session::SessionConfig,
     pub project_roots: Option<ProjectRoots>,
+    pub artifact_root: Option<PathBuf>,
     pub project_commands: Commands,
     pub task_host: Option<TaskHostHandle>,
     pub history_shutdown: CancellationToken,
@@ -57,6 +59,7 @@ impl AppState {
             database: Arc::new(Mutex::new(database)),
             session_config,
             project_roots: None,
+            artifact_root: None,
             project_commands: Commands::default(),
             task_host: None,
             history_shutdown: CancellationToken::new(),
@@ -74,6 +77,11 @@ impl AppState {
 
     pub fn with_project_commands(mut self, commands: Commands) -> Self {
         self.project_commands = commands;
+        self
+    }
+
+    pub fn with_artifact_root(mut self, root: PathBuf) -> Self {
+        self.artifact_root = Some(root);
         self
     }
 
@@ -116,6 +124,7 @@ pub fn router(state: AppState) -> Router {
         .merge(routes::profiles::router())
         .merge(routes::projects::router())
         .merge(routes::task_agents::router())
+        .merge(routes::task_artifacts::router())
         .merge(routes::task_reads::router())
         .merge(routes::task_history::router())
         .merge(routes::task_templates::router())
@@ -245,6 +254,7 @@ mod tests {
                 tailscale_exposure: "off".to_owned(),
             },
             project_roots: None,
+            artifact_root: None,
             project_commands: Commands::default(),
             task_host: None,
             history_shutdown: CancellationToken::new(),

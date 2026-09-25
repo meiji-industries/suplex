@@ -5,7 +5,7 @@ use std::{error::Error, path::PathBuf};
 use axum::{
     Json, Router,
     body::Bytes,
-    extract::{OriginalUri, Path, State},
+    extract::{DefaultBodyLimit, OriginalUri, Path, State, rejection::BytesRejection},
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     routing::get,
@@ -25,6 +25,7 @@ use crate::{
         session, validation,
     },
     identity::companies,
+    platform::artifacts::ArtifactFailure,
     projects::{
         repository as git,
         service::{self as projects, ProjectFailure},
@@ -32,6 +33,7 @@ use crate::{
     tasks::{
         archive::operations::{self as archive, ArchiveOutcome},
         commands::{self, TaskFailure},
+        images::{self, DecodedTaskImage},
         repository::TaskConflict,
         response as task_response,
     },
@@ -44,7 +46,9 @@ pub fn router() -> Router<AppState> {
         .route("/api/tasks", get(list_all))
         .route(
             "/api/companies/{company_id}/tasks",
-            get(list_company).post(create),
+            get(list_company)
+                .post(create)
+                .layer(DefaultBodyLimit::max(images::MAX_TASK_REQUEST_BYTES)),
         )
         .route("/api/tasks/{task_id}", get(get_one))
         .route(
@@ -244,6 +248,16 @@ fn with_cookies(mut response: Response, cookies: Vec<String>) -> Response {
 }
 
 fn service_error(source: Box<dyn Error>) -> Response {
+    let source = match source.downcast::<ArtifactFailure>() {
+        Ok(failure) => {
+            return (
+                StatusCode::UNPROCESSABLE_ENTITY,
+                Json(json!({"error": failure.message, "code": failure.code})),
+            )
+                .into_response();
+        }
+        Err(source) => source,
+    };
     let source = match source.downcast::<TaskFailure>() {
         Ok(failure) => {
             if failure.code == "experimental_not_ported" {
@@ -407,11 +421,18 @@ async fn create(
     State(state): State<AppState>,
     Path(company_id): Path<String>,
     headers: HeaderMap,
-    body: Bytes,
+    body: Result<Bytes, BytesRejection>,
 ) -> Response {
     if let Err(response) = validated_company_id(&company_id) {
         return *response;
     }
+    let body = match body {
+        Ok(body) => body,
+        Err(error) if error.status() == StatusCode::PAYLOAD_TOO_LARGE => {
+            return (StatusCode::PAYLOAD_TOO_LARGE, Json(json!({"error":"Request is too large","findings":[{"code":"request-too-large","field":"images","message":"Attach fewer or smaller images and submit again"}]}))).into_response();
+        }
+        Err(_) => return auth::error(StatusCode::BAD_REQUEST, "Invalid request"),
+    };
     let mut parsed = match auth::parsed_body(&headers, &body) {
         Ok(value) => value,
         Err(response) => return *response,
@@ -495,7 +516,6 @@ async fn create(
     if request.workflow != "standard"
         || request.source.is_some()
         || request.issue.as_ref().is_some_and(|issue| issue.is_some())
-        || !request.images.is_empty()
         || !request.blocked_by_pull_requests.is_empty()
         || request.delivery_target != "local_worktree"
     {
@@ -519,8 +539,26 @@ async fn create(
             Err(error) => return with_cookies(service_error(error), cookies),
         }
     };
+    let decoded_images = match request
+        .images
+        .iter()
+        .map(images::decode_task_image)
+        .collect::<Result<Vec<_>, _>>()
+    {
+        Ok(images) => images,
+        Err(failure) => return with_cookies(service_error(Box::new(failure)), cookies),
+    };
     let operation = tokio::spawn(finish_admitted_create(
-        state, company_id, user_id, cookies, project, request, profiles,
+        state,
+        AdmittedCreate {
+            company_id,
+            user_id,
+            cookies,
+            project,
+            request,
+            profiles,
+            decoded_images,
+        },
     ));
     match operation.await {
         Ok(response) => response,
@@ -530,15 +568,26 @@ async fn create(
 
 /// Once authorization and policy admit creation, the Git fetch and database
 /// transaction keep running even if the HTTP waiter goes away.
-async fn finish_admitted_create(
-    state: AppState,
+struct AdmittedCreate {
     company_id: String,
     user_id: String,
     cookies: Vec<String>,
     project: projects::Project,
     request: task_contracts::TaskCreateBody,
     profiles: commands::LocalProfiles,
-) -> Response {
+    decoded_images: Vec<DecodedTaskImage>,
+}
+
+async fn finish_admitted_create(state: AppState, admitted: AdmittedCreate) -> Response {
+    let AdmittedCreate {
+        company_id,
+        user_id,
+        cookies,
+        project,
+        request,
+        profiles,
+        decoded_images,
+    } = admitted;
     let repository_path = PathBuf::from(&project.repository_path);
     let base_branch = project.base_branch.clone();
     let host = match project
@@ -576,12 +625,26 @@ async fn finish_admitted_create(
             &base_sha,
             now,
         )?;
-        let result =
-            commands::create_user_task(database, &user_id, &project, &prepared, now, move |id| {
+        let artifact_root = state
+            .artifact_root
+            .as_deref()
+            .ok_or("Artifact root is not configured")?;
+        let result = commands::create_user_task_with_images(
+            database,
+            &user_id,
+            &project,
+            &prepared,
+            commands::ImageFiles {
+                root: artifact_root,
+                images: &decoded_images,
+            },
+            now,
+            move |id| {
                 if let Some(host) = host {
                     host.wake(id);
                 }
-            })?;
+            },
+        )?;
         let snapshot =
             task_response::get(database, &result.task.id)?.ok_or("created task disappeared")?;
         Ok((result.created, snapshot))
@@ -855,6 +918,15 @@ async fn answer_pending(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    async fn create(
+        state: State<AppState>,
+        company_id: Path<String>,
+        headers: HeaderMap,
+        body: Bytes,
+    ) -> Response {
+        super::create(state, company_id, headers, Ok(body)).await
+    }
     use crate::{
         identity::auth as identity_auth,
         platform::database::{OpenMode, SuplexDatabase},
@@ -1020,7 +1092,8 @@ mod tests {
                 reachable_address: format!("http://127.0.0.1:{}", address.port()),
                 tailscale_exposure: "none".into(),
             },
-        );
+        )
+        .with_artifact_root(root.join("artifacts"));
         let app = crate::http::router(state.clone());
         let server = tokio::spawn(async move { axum::serve(listener, app).await });
         let mut headers = HeaderMap::new();
@@ -1041,6 +1114,7 @@ mod tests {
             json!({
                 "projectId":"task_http_project", "title":"Build the task route",
                 "idempotencyKey":"task-http-key", "deliveryTarget":"local_worktree",
+                "images":[{"filename":"design.png","mimeType":"image/png","base64":"iVBORw0KGgo="}],
             })
             .to_string(),
         );
@@ -1069,6 +1143,23 @@ mod tests {
         )
         .await;
         assert_eq!(invalid_body.status(), StatusCode::BAD_REQUEST);
+        let oversized = reqwest::Client::new()
+            .post(format!(
+                "http://127.0.0.1:{}/api/companies/task_http_company/tasks",
+                address.port()
+            ))
+            .header("cookie", format!("sid_v1={}", admin.session_token))
+            .header("origin", format!("http://127.0.0.1:{}", address.port()))
+            .header("content-type", "application/json")
+            .body(vec![b' '; images::MAX_TASK_REQUEST_BYTES + 1])
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(oversized.status(), StatusCode::PAYLOAD_TOO_LARGE);
+        assert_eq!(
+            oversized.text().await.unwrap(),
+            "{\"error\":\"Request is too large\",\"findings\":[{\"code\":\"request-too-large\",\"field\":\"images\",\"message\":\"Attach fewer or smaller images and submit again\"}]}"
+        );
         let mut wrong_origin_headers = headers.clone();
         wrong_origin_headers.insert(
             "origin",
@@ -1106,6 +1197,77 @@ mod tests {
         let raw = Bytes::copy_from_slice(wire_body.as_bytes());
         assert_typescript_task_body(&db_path, &root.join("artifacts"), &raw);
         let value: Value = serde_json::from_slice(&raw).unwrap();
+        let artifact_id = value["images"][0]["artifactId"].as_str().unwrap();
+        let client = reqwest::Client::new();
+        for alias in ["images", "artifacts"] {
+            let response = client
+                .get(format!(
+                    "http://127.0.0.1:{}/api/tasks/{}/{}/{}",
+                    address.port(),
+                    value["id"].as_str().unwrap(),
+                    alias,
+                    artifact_id
+                ))
+                .header("cookie", format!("sid_v1={}", admin.session_token))
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            assert_eq!(response.headers()["cache-control"], "private, no-store");
+            assert_eq!(response.headers()["x-content-type-options"], "nosniff");
+            assert_eq!(response.headers()["content-type"], "image/png");
+            assert_eq!(
+                response.bytes().await.unwrap().as_ref(),
+                &[0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a]
+            );
+        }
+        for (task_id, id) in [
+            (value["id"].as_str().unwrap(), "missing-artifact"),
+            ("missing-task", artifact_id),
+        ] {
+            let response = client
+                .get(format!(
+                    "http://127.0.0.1:{}/api/tasks/{}/images/{}",
+                    address.port(),
+                    task_id,
+                    id
+                ))
+                .header("cookie", format!("sid_v1={}", admin.session_token))
+                .send()
+                .await
+                .unwrap();
+            assert_eq!(response.status(), StatusCode::NOT_FOUND);
+            assert_eq!(response.text().await.unwrap(), "{\"error\":\"Not found\"}");
+        }
+        let storage_path: String = state.with_database(|database| {
+            database
+                .connection()
+                .query_row(
+                    "SELECT storage_path FROM suplex_artifacts WHERE id = ?1",
+                    [artifact_id],
+                    |row| row.get(0),
+                )
+                .unwrap()
+        });
+        let file_path = root.join("artifacts").join(&storage_path);
+        fs::write(&file_path, b"changed").unwrap();
+        let corrupt = client
+            .get(format!(
+                "http://127.0.0.1:{}/api/tasks/{}/images/{}",
+                address.port(),
+                value["id"].as_str().unwrap(),
+                artifact_id
+            ))
+            .header("cookie", format!("sid_v1={}", admin.session_token))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(corrupt.status(), StatusCode::CONFLICT);
+        assert_eq!(
+            corrupt.text().await.unwrap(),
+            "{\"error\":\"The stored artifact failed its integrity check\"}"
+        );
+        fs::write(&file_path, [0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a]).unwrap();
         assert_eq!(value["status"], "backlog");
         assert_eq!(value["workflow"], "standard");
         assert_eq!(value["configuration"]["repository"], "acme/demo");
@@ -1606,6 +1768,27 @@ mod tests {
         )
         .await;
         assert_eq!(replay_without_project_scope.status(), StatusCode::NOT_FOUND);
+        state.with_database(|database| {
+            database
+                .connection()
+                .execute(
+                    "UPDATE suplex_tasks SET company_id = 'task_other_company' WHERE id = ?1",
+                    [&task_id],
+                )
+                .unwrap()
+        });
+        let revoked = client
+            .get(format!(
+                "http://127.0.0.1:{}/api/tasks/{}/artifacts/{}",
+                address.port(),
+                task_id,
+                artifact_id
+            ))
+            .header("cookie", format!("sid_v1={}", admin.session_token))
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(revoked.status(), StatusCode::NOT_FOUND);
         server.abort();
         let _ = server.await;
         drop(state);

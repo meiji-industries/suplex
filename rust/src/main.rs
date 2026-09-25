@@ -45,6 +45,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         installation.repositories.clone(),
         installation.worktrees.clone(),
     )
+    .with_artifact_root(installation.artifacts.clone())
     .with_task_host(task_host.clone());
     #[cfg(debug_assertions)]
     let state = match std::env::var_os("SUPLEX_RUST_ASSETS_DIR") {

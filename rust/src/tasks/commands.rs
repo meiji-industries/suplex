@@ -14,8 +14,8 @@ use crate::{
         projects::ProjectProviderPolicy,
         task_answers::{AnswerBody, LimitDecisionBody, TaskLimitDecision},
         tasks::{
-            TaskCoordinatorReplacementBody, TaskCreateBody, TaskDetailsBody, TaskNoteBody,
-            TaskRenameBody, TaskWorkerReplacementBody,
+            TaskContinueDeliveryBody, TaskCoordinatorReplacementBody, TaskCreateBody,
+            TaskDetailsBody, TaskNoteBody, TaskRenameBody, TaskWorkerReplacementBody,
         },
     },
     identity::companies,
@@ -630,6 +630,75 @@ pub fn disarm_user_task(
     Ok(task)
 }
 
+/// Move a delivered pull request task toward a later target. Resuming the
+/// pull request delivery itself needs GitHub delivery, which is not ported.
+pub fn continue_user_delivery(
+    database: &mut SuplexDatabase,
+    actor_user_id: &str,
+    task_id: &str,
+    request: &TaskContinueDeliveryBody,
+    wake: impl FnOnce(String) + Send + 'static,
+) -> DatabaseResult<TaskRecord> {
+    database.transaction(true, |database| {
+        let task = require_user_task(database, actor_user_id, task_id)?;
+        if archive::in_progress(task_id) {
+            return Err(Box::new(TaskFailure::new(
+                "Archive cleanup is in progress",
+                409,
+            )));
+        }
+        let (archived, repository_kind, previous_target): (bool, Option<String>, String) =
+            database.connection().query_row(
+                "SELECT t.archived_at IS NOT NULL, json_extract(t.configuration_json, '$.integration.repository.kind'), c.delivery_target FROM suplex_tasks t JOIN suplex_task_controls c ON c.task_id = t.id WHERE t.id = ?1",
+                [task_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            )?;
+        let conflict = |message: &str| Box::new(TaskFailure::new(message, 409)) as Box<dyn Error>;
+        if archived {
+            return Err(conflict(
+                "Open the archived task before you continue delivery.",
+            ));
+        }
+        if repository_kind.as_deref() == Some("bitbucket") {
+            return Err(Box::new(TaskFailure::new(
+                "Bitbucket supports draft pull requests. Select a supported delivery target.",
+                422,
+            )));
+        }
+        let order = |target: &str| {
+            [
+                "local_worktree",
+                "remote_branch",
+                "pull_request_draft",
+                "pull_request_ready",
+                "merged",
+            ]
+            .iter()
+            .position(|known| *known == target)
+            .ok_or_else(|| conflict("Invalid delivery target"))
+        };
+        let (next, previous) = (order(&request.delivery_target)?, order(&previous_target)?);
+        if next < previous {
+            return Err(conflict("The delivery target cannot move backward."));
+        }
+        if next == previous && matches!(task.status.as_str(), "active" | "delivered") {
+            if task.status == "active" {
+                let id = task.id.clone();
+                database.after_commit(move || wake(id));
+            }
+            return Ok(task);
+        }
+        if task.status != "delivered" || previous < order("pull_request_draft")? {
+            return Err(conflict(
+                "Only delivered pull request tasks can continue delivery.",
+            ));
+        }
+        Err(Box::new(TaskFailure::not_ported(
+            "Continuing pull request delivery is not ported",
+        )))
+    })
+}
+
 /// Cancel intent before waking the host. A disconnected HTTP waiter cannot
 /// undo the committed stop request or cause the native session to replay.
 pub fn cancel_user_task(
@@ -1189,6 +1258,87 @@ mod tests {
             failure(disarm_user_task(&mut database, &user, &blocker.id, now).unwrap_err()),
             (409, "Only a task in the backlog can be disarmed".into())
         );
+        drop(database);
+        let _ = std::fs::remove_file(&filename);
+    }
+
+    #[test]
+    fn continue_delivery_keeps_source_rejections_and_does_not_resume_github_delivery() {
+        let (filename, mut database, user, prepared) = command_fixture();
+        let task = repository::create(&mut database, &prepared, Utc::now())
+            .unwrap()
+            .task;
+        let target = |delivery_target: &str| TaskContinueDeliveryBody {
+            delivery_target: delivery_target.into(),
+        };
+        let wakes = Arc::new(AtomicUsize::new(0));
+        let run = |database: &mut SuplexDatabase, delivery_target: &str| {
+            let count = Arc::clone(&wakes);
+            continue_user_delivery(
+                database,
+                &user,
+                &task.id,
+                &target(delivery_target),
+                move |_| {
+                    count.fetch_add(1, Ordering::SeqCst);
+                },
+            )
+        };
+        let set = |database: &SuplexDatabase, status: &str, delivery_target: &str| {
+            database
+                .connection()
+                .execute(
+                    "UPDATE suplex_task_controls SET status = ?1, delivery_target = ?2 WHERE task_id = ?3",
+                    params![status, delivery_target, task.id],
+                )
+                .unwrap();
+        };
+        assert_eq!(
+            failure(run(&mut database, "merged").unwrap_err()),
+            (
+                409,
+                "Only delivered pull request tasks can continue delivery.".into()
+            )
+        );
+        set(&database, "delivered", "pull_request_draft");
+        let not_ported = run(&mut database, "merged")
+            .unwrap_err()
+            .downcast::<TaskFailure>()
+            .unwrap();
+        assert_eq!(
+            (not_ported.status_code, not_ported.code),
+            (501, "experimental_not_ported")
+        );
+        set(&database, "active", "merged");
+        assert_eq!(run(&mut database, "merged").unwrap().status, "active");
+        assert_eq!(wakes.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            failure(run(&mut database, "pull_request_ready").unwrap_err()),
+            (409, "The delivery target cannot move backward.".into())
+        );
+        database
+            .connection()
+            .execute(
+                "UPDATE suplex_tasks SET configuration_json = json_set(configuration_json, '$.integration', json('{\"repository\":{\"kind\":\"bitbucket\"}}')) WHERE id = ?1",
+                [&task.id],
+            )
+            .unwrap();
+        assert_eq!(failure(run(&mut database, "merged").unwrap_err()).0, 422);
+        database
+            .connection()
+            .execute(
+                "UPDATE suplex_tasks SET archived_at = created_at WHERE id = ?1",
+                [&task.id],
+            )
+            .unwrap();
+        assert_eq!(
+            failure(run(&mut database, "merged").unwrap_err()),
+            (
+                409,
+                "Open the archived task before you continue delivery.".into()
+            )
+        );
+        assert_eq!(wakes.load(Ordering::SeqCst), 1);
         drop(database);
         let _ = std::fs::remove_file(&filename);
     }

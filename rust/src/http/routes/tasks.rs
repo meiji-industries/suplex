@@ -64,6 +64,10 @@ pub fn router() -> Router<AppState> {
             "/api/tasks/{task_id}/disarm",
             axum::routing::post(disarm_pending),
         )
+        .route(
+            "/api/tasks/{task_id}/continue-delivery",
+            axum::routing::post(continue_delivery),
+        )
         .route("/api/tasks/{task_id}/note", axum::routing::post(send_note))
         .route(
             "/api/tasks/{task_id}/replace-worker",
@@ -964,6 +968,47 @@ async fn disarm_pending(
         },
     );
     match disarmed {
+        Ok(task) => with_cookies(Json(task).into_response(), cookies),
+        Err(error) => with_cookies(service_error(error), cookies),
+    }
+}
+
+async fn continue_delivery(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    if let Err(response) = validated_task_id(&id) {
+        return *response;
+    }
+    let request = match auth::validated_typed_body(
+        &headers,
+        &body,
+        task_contracts::parse_task_continue_delivery,
+    ) {
+        Ok(request) => request,
+        Err(response) => return *response,
+    };
+    if !session::csrf_allowed(&state.session_config, &headers, "POST", false) {
+        return auth::error(StatusCode::FORBIDDEN, "request_origin_invalid");
+    }
+    let (user_id, cookies) = match authorize(&state, &headers) {
+        Ok(value) => value,
+        Err(response) => return *response,
+    };
+    let host = state.task_host.clone();
+    let result = state.with_database(
+        |database| -> Result<task_response::TaskResponse, Box<dyn Error>> {
+            commands::continue_user_delivery(database, &user_id, &id, &request, move |id| {
+                if let Some(host) = host {
+                    host.wake(id);
+                }
+            })?;
+            task_response::get(database, &id)?.ok_or_else(|| "continued task disappeared".into())
+        },
+    );
+    match result {
         Ok(task) => with_cookies(Json(task).into_response(), cookies),
         Err(error) => with_cookies(service_error(error), cookies),
     }

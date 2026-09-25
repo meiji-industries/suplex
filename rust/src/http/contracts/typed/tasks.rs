@@ -1089,6 +1089,39 @@ pub fn parse_task_worker_replacement(
     Ok(parsed)
 }
 
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TaskContinueDeliveryBody {
+    pub delivery_target: String,
+}
+
+/// Delivery can continue only to a ready pull request or a merge.
+pub fn parse_task_continue_delivery(
+    input: Option<&Value>,
+) -> ContractResult<TaskContinueDeliveryBody> {
+    let fields = object(input)?;
+    let mut issues = Vec::new();
+    let target = fields
+        .get("deliveryTarget")
+        .and_then(Value::as_str)
+        .filter(|target| matches!(*target, "pull_request_ready" | "merged"));
+    if target.is_none() {
+        issues.push(finding(
+            "invalid_value",
+            &[Value::String("deliveryTarget".into())],
+        ));
+    }
+    if fields.keys().any(|key| key != "deliveryTarget") {
+        issues.push(finding("unrecognized_keys", &[]));
+    }
+    match target {
+        Some(target) if issues.is_empty() => Ok(TaskContinueDeliveryBody {
+            delivery_target: target.to_owned(),
+        }),
+        _ => Err(ContractFailure::Issues(issues)),
+    }
+}
+
 /// The user note body is a strict object; Zod trims before checking UTF-16 length.
 pub fn parse_task_note(input: Option<&Value>) -> ContractResult<TaskNoteBody> {
     let fields = object(input)?;
@@ -1180,6 +1213,15 @@ mod tests {
     fn task_edit_request_fixtures_match_public_zod_contracts() {
         assert_request_fixtures("tasks.TaskDetailsBodySchema", 16, parse_task_details);
         assert_request_fixtures("tasks.TaskRenameBodySchema", 13, parse_task_rename);
+    }
+
+    #[test]
+    fn task_continue_delivery_request_fixtures_match_public_zod_contract() {
+        assert_request_fixtures(
+            "tasks.TaskContinueDeliveryBodySchema",
+            12,
+            parse_task_continue_delivery,
+        );
     }
 
     #[test]

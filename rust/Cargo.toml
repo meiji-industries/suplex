@@ -10,6 +10,7 @@ base64 = "0.22"
 chrono = "0.4"
 garde = { version = "0.22", features = ["derive", "regex"] }
 getrandom = "0.4"
+git2 = { version = "0.21", default-features = false, features = ["https", "ssh", "vendored-libgit2", "vendored-openssl"] }
 libc = "0.2"
 nix = { version = "0.31.3", features = ["signal", "process"] }
 regex = "1"

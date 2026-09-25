@@ -12,6 +12,8 @@ use regex::Regex;
 use serde::Serialize;
 use tokio::{io::AsyncReadExt, process::Command};
 
+use git2::{AutotagOption, FetchOptions, Repository};
+
 const GIT_OUTPUT_LIMIT: usize = 16 * 1024;
 const GH_OUTPUT_LIMIT: usize = 64 * 1024 * 1024;
 
@@ -28,6 +30,70 @@ fn finding(code: &str, field: &str, message: &str) -> Finding {
         field: field.to_owned(),
         message: message.to_owned(),
     }
+}
+
+/// Capture the base commit from Git's origin, as task creation does in the
+/// TypeScript service. Fetch refreshes Git's own remote-tracking ref before it
+/// is read; a cached ref is not evidence of the current branch head.
+pub fn capture_local_task_heads(
+    repository_path: &Path,
+    base_branch: &str,
+    expected_host: &str,
+) -> Result<String, Vec<Finding>> {
+    if !repository_path.is_dir() {
+        return Err(vec![finding(
+            "repository-path-missing",
+            "repositoryPath",
+            "The repository path does not exist on this host",
+        )]);
+    }
+    let unavailable = || {
+        vec![finding(
+            "repository-unavailable",
+            "repositoryPath",
+            "Git could not inspect the configured repository",
+        )]
+    };
+    let repository = Repository::open(repository_path).map_err(|_| unavailable())?;
+    repository.workdir().ok_or_else(unavailable)?;
+    repository.statuses(None).map_err(|_| unavailable())?;
+    let mut origin = repository
+        .find_remote("origin")
+        .map_err(|_| unavailable())?;
+    let remote_url = repository
+        .config()
+        .and_then(|config| config.get_string("remote.origin.url"))
+        .map_err(|_| unavailable())?;
+    static CREDENTIAL_URL: LazyLock<Regex> = LazyLock::new(|| {
+        Regex::new(r"(?i)^[a-z][a-z0-9+.-]*://[^/@\s]+@|(?:token|password|secret)=")
+            .expect("credential URL pattern")
+    });
+    if CREDENTIAL_URL.is_match(&remote_url) {
+        return Err(vec![finding(
+            "credential-url",
+            "repository",
+            "Credential-bearing repository URLs are not accepted",
+        )]);
+    }
+    if repository_coordinate(&remote_url).is_none_or(|coordinate| coordinate.host != expected_host)
+    {
+        return Err(vec![finding(
+            "repository-identity",
+            "repository",
+            "Origin must identify the configured repository host",
+        )]);
+    }
+    let mut options = FetchOptions::new();
+    options.download_tags(AutotagOption::None);
+    let refspec = format!("refs/heads/{base_branch}:refs/remotes/origin/{base_branch}");
+    origin
+        .fetch(&[refspec.as_str()], Some(&mut options), None)
+        .map_err(|_| unavailable())?;
+    let reference = repository
+        .find_reference(&format!("refs/remotes/origin/{base_branch}"))
+        .map_err(|_| unavailable())?;
+    let commit = reference.peel_to_commit().map_err(|_| unavailable())?;
+    Ok(commit.id().to_string())
 }
 
 fn resolve(path: &Path) -> std::io::Result<PathBuf> {
@@ -661,6 +727,108 @@ mod tests {
             "{}",
             String::from_utf8_lossy(&output.stderr)
         );
+    }
+
+    #[test]
+    fn task_capture_refreshes_the_origin_branch_before_returning_its_commit() {
+        let root =
+            std::env::temp_dir().join(format!("suplex-task-capture-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&root).unwrap();
+        let bare = root.join("origin.git");
+        let local = root.join("repo");
+        git(
+            &[
+                "init",
+                "--quiet",
+                "--bare",
+                "--initial-branch=main",
+                bare.to_str().unwrap(),
+            ],
+            &root,
+        );
+        git(
+            &[
+                "init",
+                "--quiet",
+                "--initial-branch=main",
+                local.to_str().unwrap(),
+            ],
+            &root,
+        );
+        git(&["remote", "add", "origin", bare.to_str().unwrap()], &local);
+        git(
+            &[
+                "-c",
+                "user.name=Probe",
+                "-c",
+                "user.email=probe@example.invalid",
+                "commit",
+                "--quiet",
+                "--allow-empty",
+                "-m",
+                "one",
+            ],
+            &local,
+        );
+        git(&["push", "--quiet", "origin", "main"], &local);
+        git(
+            &[
+                "remote",
+                "set-url",
+                "origin",
+                "https://github.com/acme/repo.git",
+            ],
+            &local,
+        );
+        let rewrite = format!("url.file://{}.insteadOf", bare.display());
+        git(
+            &[
+                "config",
+                "--local",
+                &rewrite,
+                "https://github.com/acme/repo.git",
+            ],
+            &local,
+        );
+        let first = capture_local_task_heads(&local, "main", "github").unwrap();
+        assert_eq!(first.len(), 40);
+
+        git(
+            &[
+                "-c",
+                "user.name=Probe",
+                "-c",
+                "user.email=probe@example.invalid",
+                "commit",
+                "--quiet",
+                "--allow-empty",
+                "-m",
+                "two",
+            ],
+            &local,
+        );
+        let second = Repository::open(&local)
+            .unwrap()
+            .head()
+            .unwrap()
+            .target()
+            .unwrap()
+            .to_string();
+        git(&["push", "--quiet", "origin", "main"], &local);
+        git(&["update-ref", "refs/remotes/origin/main", &first], &local);
+        assert_eq!(
+            capture_local_task_heads(&local, "main", "github").unwrap(),
+            second
+        );
+        assert_eq!(
+            capture_local_task_heads(&local, "main", "bitbucket").unwrap_err()[0].code,
+            "repository-identity"
+        );
+        assert_eq!(
+            capture_local_task_heads(&root.join("missing"), "main", "github").unwrap_err()[0].code,
+            "repository-path-missing"
+        );
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

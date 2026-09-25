@@ -18,7 +18,7 @@ Request corpus: 1,141 fixtures across 95 request exports plus 23 stored-project 
 | [coordination/advisor-report-bridge.ts](../src/coordination/advisor-report-bridge.ts) | ported | `31ce45ae`: `rust/src/coordination/advisor_bridge.rs` passes 86 library tests, three integration tests, fmt and all-target Clippy; focused Advisor 4/4 and TS report 10/10 pass. Actual stdio checks cover token denial, initialize/list, invalid report without capture, exact valid result and 0600 file. Role/schema, JS trimming, numeric output and binding writer match source. Native Advisor launch composition remains pending. |
 | [coordination/advisor-report.ts](../src/coordination/advisor-report.ts) | not started | `1c24c183`: existing schemas extracted with compatible exports and passing TypeScript checks; Rust service remains pending |
 | [coordination/bridge-auth.ts](../src/coordination/bridge-auth.ts) | not started | `rust/src/coordination/bridge_auth.rs` validates source UUID grammar and compares original token bytes with `subtle::ConstantTimeEq`; no token values enter errors. Advisor authorization-before-write and wrong-token stdio checks pass. Root bridge integration remains pending. |
-| [coordination/controller-reports.ts](../src/coordination/controller-reports.ts) | not started | |
+| [coordination/controller-reports.ts](../src/coordination/controller-reports.ts) | not started | `tasks::worktree::observe_worktree` reads live Git HEAD and dirty state for Root observation. A real worktree check passes; it adds no comparison against saved branch intent. Report interpretation remains pending. |
 | [coordination/coordinator-replacement-contracts.ts](../src/coordination/coordinator-replacement-contracts.ts) | not started | |
 | [coordination/coordinator-replacement.ts](../src/coordination/coordinator-replacement.ts) | not started | |
 | [coordination/human-question.ts](../src/coordination/human-question.ts) | not started | |
@@ -31,7 +31,7 @@ Request corpus: 1,141 fixtures across 95 request exports plus 23 stored-project 
 | [coordination/session-recovery.ts](../src/coordination/session-recovery.ts) | not started | |
 | [coordination/task-agent-selection-contracts.ts](../src/coordination/task-agent-selection-contracts.ts) | not started | |
 | [coordination/task-agent-selection.ts](../src/coordination/task-agent-selection.ts) | not started | |
-| [coordination/worker-environment.ts](../src/coordination/worker-environment.ts) | not started | |
+| [coordination/worker-environment.ts](../src/coordination/worker-environment.ts) | not started | `rust/src/runtimes/git_guard.rs` preserves guarded Git/GitHub commands, configured Git lookup, private executable files and cleanup. Real Git permits status and denies reset/branch deletion; a fake gh permits PR reads and denies mutation. The isolated staged unit passes 93 library tests, three integration tests, fmt and all-target Clippy. Full native launch composition remains pending. |
 | [coordination/worker-replacement-contracts.ts](../src/coordination/worker-replacement-contracts.ts) | not started | |
 | [coordination/worker-replacement.ts](../src/coordination/worker-replacement.ts) | not started | |
 | [coordination/worker-turn-evidence.ts](../src/coordination/worker-turn-evidence.ts) | not started | |
@@ -51,7 +51,7 @@ Request corpus: 1,141 fixtures across 95 request exports plus 23 stored-project 
 | [delivery/target-capabilities.ts](../src/delivery/target-capabilities.ts) | not started | |
 | [http/agent-api-runtime.ts](../src/http/agent-api-runtime.ts) | not started | |
 | [http/contracts/agent-api.ts](../src/http/contracts/agent-api.ts) | not started | |
-| [http/contracts/auth.ts](../src/http/contracts/auth.ts) | ported | Named Serde/Garde requests replace the special JSON validators. Request corpus and signed registration/sign-in pass after conversion. |
+| [http/contracts/auth.ts](../src/http/contracts/auth.ts) | ported | `b43d8fa3`: named Serde/Garde requests replace the special JSON validators; the cleanup removes a net 3,132 Rust source lines. Request corpus and signed registration/sign-in pass after conversion. |
 | [http/contracts/avatars.ts](../src/http/contracts/avatars.ts) | not started | |
 | [http/contracts/common.ts](../src/http/contracts/common.ts) | not started | Live identity/company/admin bodies use named DTOs and public findings. Current request corpus passes; remaining schemas are deferred. |
 | [http/contracts/github-triggers.ts](../src/http/contracts/github-triggers.ts) | not started | |
@@ -85,7 +85,7 @@ Request corpus: 1,141 fixtures across 95 request exports plus 23 stored-project 
 | [http/routes/task-pane.ts](../src/http/routes/task-pane.ts) | not started | |
 | [http/routes/task-templates.ts](../src/http/routes/task-templates.ts) | not started | |
 | [http/routes/task-worktree.ts](../src/http/routes/task-worktree.ts) | not started | |
-| [http/routes/tasks.ts](../src/http/routes/tasks.ts) | not started | `rust/src/http/routes/tasks.rs` implements local backlog create/list/detail. The isolated index export passes 91 library tests, three integration tests, fmt and all-target Clippy; focused task checks pass 7/7. Actual TCP create returns the same complete bytes as pinned TS reading that database, with no ID/time normalization. Replay, live project scope and completion after a dropped handler waiter pass. Start remains authorized 501 until a real host wake exists. |
+| [http/routes/tasks.ts](../src/http/routes/tasks.ts) | not started | `bf426610`: local backlog create/list/detail passes 91 library tests, three integration tests, fmt and all-target Clippy; focused task checks pass 7/7. Actual TCP create returns the same complete bytes as pinned TS reading that database, with no ID/time normalization. Replay, live project scope and completion after a dropped handler waiter pass. Start remains authorized 501 until a real host wake exists. |
 | [http/routes/update.ts](../src/http/routes/update.ts) | not started | |
 | [http/routes/workflows.ts](../src/http/routes/workflows.ts) | not started | GET listing passes query findings, session authority and ordered raw response checks in the isolated cleanup export. CRUD remains 501. TS tests2/2 pass with an added seeded raw-body assertion; no contract or existing expectation changed. |
 | [http/session.ts](../src/http/session.ts) | not started | `92f290e3`, `0856b0d4`: session lookup, trusted sign-in, legacy rollover, cookies and CSRF tested; full route integration pending. |

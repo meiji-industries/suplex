@@ -28,6 +28,23 @@ pub struct WorktreeReference {
     pub dirty: bool,
 }
 
+#[derive(Debug, Clone, Eq, PartialEq)]
+pub struct WorktreeObservation {
+    pub head_sha: String,
+    pub dirty: bool,
+}
+
+/// Read current Git facts without comparing them to a task's saved intent.
+/// Callers can report an unavailable observation without blocking the task.
+pub fn observe_worktree(path: &Path) -> WorktreeResult<WorktreeObservation> {
+    let repository = Repository::open(path)?;
+    let head_sha = repository.head()?.peel_to_commit()?.id().to_string();
+    let mut options = StatusOptions::new();
+    options.include_untracked(true).recurse_untracked_dirs(true);
+    let dirty = !repository.statuses(Some(&mut options))?.is_empty();
+    Ok(WorktreeObservation { head_sha, dirty })
+}
+
 fn invalid(message: &'static str) -> Box<dyn Error> {
     io::Error::new(io::ErrorKind::InvalidInput, message).into()
 }
@@ -63,10 +80,7 @@ fn observe(
     {
         return Err(invalid("Task worktree does not match its repository"));
     }
-    let head_sha = task_repository.head()?.peel_to_commit()?.id().to_string();
-    let mut options = StatusOptions::new();
-    options.include_untracked(true).recurse_untracked_dirs(true);
-    let dirty = !task_repository.statuses(Some(&mut options))?.is_empty();
+    let WorktreeObservation { head_sha, dirty } = observe_worktree(path)?;
     Ok(WorktreeReference {
         path: path.to_path_buf(),
         branch: intent.branch.clone(),
@@ -225,6 +239,13 @@ mod tests {
         );
         fs::write(created.path.join("new.txt"), "untracked\n").unwrap();
         assert!(prepare_local_task_worktree(&intent).unwrap().dirty);
+        assert_eq!(
+            observe_worktree(&created.path).unwrap(),
+            WorktreeObservation {
+                head_sha: commit.to_string(),
+                dirty: true,
+            }
+        );
         let switched = Command::new("git")
             .args([
                 "-C",

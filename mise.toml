@@ -70,6 +70,7 @@ cargo test
 
 [tasks."test:parity"]
 run = '''
+pnpm exec tsx scripts/rust-route-coverage.ts
 pnpm exec tsx tests/parity/generate.ts
 pnpm exec tsx tests/parity/hash-bytes/generate.ts
 cd rust

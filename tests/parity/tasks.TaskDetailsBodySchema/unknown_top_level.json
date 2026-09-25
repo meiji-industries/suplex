@@ -1,0 +1,21 @@
+{
+  "contract": "tasks.TaskDetailsBodySchema",
+  "case": "unknown_top_level",
+  "input": {
+    "description": "valid",
+    "extra": true
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "unrecognized_keys",
+        "keys": [
+          "extra"
+        ],
+        "path": [],
+        "message": "Unrecognized key: \"extra\""
+      }
+    ]
+  }
+}

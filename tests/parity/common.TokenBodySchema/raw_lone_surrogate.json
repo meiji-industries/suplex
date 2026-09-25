@@ -1,0 +1,10 @@
+{
+  "contract": "common.TokenBodySchema",
+  "case": "raw_lone_surrogate",
+  "encoding": "raw-json",
+  "input": "{\"token\":\"\\ud800\"}",
+  "expected": {
+    "accepted": true,
+    "value": "{\"token\":\"\\ud800\"}"
+  }
+}

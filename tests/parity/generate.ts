@@ -154,6 +154,17 @@ const semanticInputs: Record<string, Record<string, unknown>> = {
   "providers.ProviderLoginResponseSchema": {
     invalid_pane: { paneId: 1 },
   },
+  "tasks.TaskDetailsBodySchema": {
+    all_fields: { title: "  Rename  ", description: "  Description  ", rootProfileId: "root", workerProfileId: "worker", deliveryTarget: "remote_branch", runProjectTests: false, visualEvidence: "capture", workflow: "direct_build", advisorProfileIds: { reviewer: "reviewer" } },
+    empty_partial: {},
+    trimmed_empty_title: { title: "  " },
+    trimmed_empty_description: { description: "  " },
+    invalid_enums: { deliveryTarget: "publish", visualEvidence: "screenshots", workflow: "unknown" },
+    invalid_nested_advisor: { advisorProfileIds: { reviewer: "", planner_a: "😀".repeat(129), extra: true } },
+    unknown_top_level: { description: "valid", extra: true },
+    invalid_boolean: { runProjectTests: "false" },
+    empty_array_profile: { rootProfileId: [] },
+  },
   "tasks.TaskAgentsBatchQuerySchema": {
     one: { taskId: "task-b", extra: true },
     sorted_deduplicated: { taskId: ["task-b", "task-a", "task-b"] },
@@ -295,6 +306,39 @@ const semanticInputs: Record<string, Record<string, unknown>> = {
 };
 
 type Fixture = { contract: string; case: string; input?: unknown; expected: { accepted: true; value: unknown } | { accepted: false; error: z.core.$ZodIssue[] } };
+const rawInputs: Record<string, Record<string, string>> = {
+  "common.EmptyBodySchema": {
+    surrogate_and_overflow: String.raw`{"x":"\ud800","count":1e400}`,
+    deep_passthrough: `{"nested":${"[".repeat(20_000)}0${"]".repeat(20_000)}}`,
+  },
+  "common.TokenBodySchema": {
+    lone_surrogate: String.raw`{"token":"\ud800"}`,
+  },
+  "common.RegistrationVerificationBodySchema": {
+    response_special_values: String.raw`{"response":{"surrogate":"\ud800","count":1e400}}`,
+  },
+  "common.AuthenticationVerificationBodySchema": {
+    response_special_values: String.raw`{"response":{"surrogate":"\udfff","count":1e400}}`,
+  },
+  "auth.CompanyNameBodySchema": {
+    lone_surrogate: String.raw`{"name":"\ud800"}`,
+    overflow_name: String.raw`{"name":1e400}`,
+  },
+  "auth.DisplayNameBodySchema": {
+    lone_surrogate: String.raw`{"displayName":"\udfff"}`,
+  },
+  "auth.MembershipBodySchema": {
+    lone_surrogate: String.raw`{"userId":"\ud800"}`,
+  },
+  "auth.CompanyIssueCodeBodySchema": {
+    lone_surrogate: String.raw`{"issueCode":"\ud800"}`,
+    overflow_issue_code: String.raw`{"issueCode":1e400}`,
+  },
+  "auth.ProfileBodySchema": {
+    surrogate_and_overflow_unknown: String.raw`{"displayName":"\ud800","unknown":1e400}`,
+    deep_unknown: `{"displayName":"Deep","unknown":${"[".repeat(20_000)}0${"]".repeat(20_000)}}`,
+  },
+};
 type Definition = { type: string; innerType?: z.ZodType; element?: z.ZodType; shape?: Record<string, z.ZodType>; options?: z.ZodType[]; entries?: Record<string, string>; values?: unknown[]; keyType?: z.ZodType; valueType?: z.ZodType; items?: z.ZodType[]; in?: z.ZodType; checks?: Array<{ _zod: { def: { check?: string; minimum?: number; value?: number; inclusive?: boolean } } }> };
 const definition = (schema: z.ZodType): Definition => schema._zod.def as Definition;
 const accepted = (schema: z.ZodType, input: unknown): boolean => schema.safeParse(input).success;
@@ -373,6 +417,24 @@ for (const moduleName of modules) {
       const parsed = schema.safeParse(input);
       const fixture: Fixture = { contract, case: caseName, input, expected: parsed.success ? { accepted: true, value: parsed.data } : { accepted: false, error: parsed.error.issues } };
       const path = join(directory, `${caseName}.json`);
+      const content = `${JSON.stringify(fixture, null, 2)}\n`;
+      if (check) {
+        if (await readFile(path, "utf8") !== content) throw new Error(`Stale parity fixture: ${path}`);
+      } else await writeFile(path, content);
+      fixtures++;
+    }
+    for (const [caseName, inputJson] of Object.entries(rawInputs[contract] ?? {})) {
+      const parsed = schema.safeParse(JSON.parse(inputJson));
+      const fixture = {
+        contract,
+        case: `raw_${caseName}`,
+        encoding: "raw-json",
+        input: inputJson,
+        expected: parsed.success
+          ? { accepted: true, value: JSON.stringify(parsed.data) }
+          : { accepted: false, error: JSON.stringify(parsed.error.issues) },
+      };
+      const path = join(directory, `raw_${caseName}.json`);
       const content = `${JSON.stringify(fixture, null, 2)}\n`;
       if (check) {
         if (await readFile(path, "utf8") !== content) throw new Error(`Stale parity fixture: ${path}`);

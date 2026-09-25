@@ -32,6 +32,9 @@ fn ported_contracts_match_zod_fixtures() {
             if fixture_path
                 .extension()
                 .is_none_or(|extension| extension != "json")
+                || fixture_path
+                    .file_stem()
+                    .is_some_and(|stem| stem.to_string_lossy().starts_with("raw_"))
             {
                 continue;
             }
@@ -65,7 +68,7 @@ fn ported_contracts_match_zod_fixtures() {
             }
         }
     }
-    assert_eq!(schemas.len(), 60, "sixty explicitly ported schemas");
+    assert_eq!(schemas.len(), 61, "sixty-one explicitly ported schemas");
     assert!(
         verified >= 140,
         "every ported schema has multiple Zod cases"

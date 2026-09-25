@@ -20,6 +20,7 @@ pub(super) fn validate(contract: &str, input: Option<&Value>) -> Option<ParseRes
         "tasks.WorktreeAppSchema" => Some(worktree_app(input, &[])),
         "tasks.WorktreeAppsResponseSchema" => Some(worktree_apps(input, &[])),
         "tasks.TaskAgentsBatchQuerySchema" => Some(agents_batch_query(input, &[])),
+        "tasks.TaskDetailsBodySchema" => Some(details(input, &[])),
         _ => None,
     }
 }
@@ -430,5 +431,75 @@ fn agents_batch_query(input: Option<&Value>, path: &[Value]) -> ParseResult {
             ids.dedup();
             Ok(Value::Array(ids))
         });
+    })
+}
+
+fn advisor_profile_ids(input: Option<&Value>, path: &[Value]) -> ParseResult {
+    record(input, path, |record| {
+        for role in ["reviewer", "planner_a", "planner_b", "rater"] {
+            record.field(role, true, |value, path| {
+                string(value, path, 1, Some(256), false)
+            });
+        }
+        record.strict(&["reviewer", "planner_a", "planner_b", "rater"]);
+    })
+}
+
+fn details(input: Option<&Value>, path: &[Value]) -> ParseResult {
+    record(input, path, |record| {
+        record.field("title", true, |value, path| {
+            string(value, path, 1, None, true)
+        });
+        record.field("description", true, |value, path| {
+            string(value, path, 0, None, true)
+        });
+        record.field("rootProfileId", true, |value, path| {
+            string(value, path, 1, Some(256), false)
+        });
+        record.field("workerProfileId", true, |value, path| {
+            string(value, path, 1, Some(256), false)
+        });
+        record.field("deliveryTarget", true, |value, path| {
+            enumeration(
+                value,
+                path,
+                &[
+                    "local_worktree",
+                    "remote_branch",
+                    "pull_request_draft",
+                    "pull_request_ready",
+                    "merged",
+                ],
+            )
+        });
+        record.field("runProjectTests", true, boolean);
+        record.field("visualEvidence", true, |value, path| {
+            enumeration(value, path, &["off", "capture", "required"])
+        });
+        record.field("workflow", true, |value, path| {
+            enumeration(
+                value,
+                path,
+                &[
+                    "standard",
+                    "direct_build",
+                    "independent_review",
+                    "competing_plans",
+                    "refine_pull_request",
+                ],
+            )
+        });
+        record.field("advisorProfileIds", true, advisor_profile_ids);
+        record.strict(&[
+            "title",
+            "description",
+            "rootProfileId",
+            "workerProfileId",
+            "deliveryTarget",
+            "runProjectTests",
+            "visualEvidence",
+            "workflow",
+            "advisorProfileIds",
+        ]);
     })
 }

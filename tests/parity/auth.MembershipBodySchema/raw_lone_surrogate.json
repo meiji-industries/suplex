@@ -1,0 +1,10 @@
+{
+  "contract": "auth.MembershipBodySchema",
+  "case": "raw_lone_surrogate",
+  "encoding": "raw-json",
+  "input": "{\"userId\":\"\\ud800\"}",
+  "expected": {
+    "accepted": true,
+    "value": "{\"userId\":\"\\ud800\"}"
+  }
+}

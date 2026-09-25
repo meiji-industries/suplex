@@ -1,0 +1,10 @@
+{
+  "contract": "auth.ProfileBodySchema",
+  "case": "raw_surrogate_and_overflow_unknown",
+  "encoding": "raw-json",
+  "input": "{\"displayName\":\"\\ud800\",\"unknown\":1e400}",
+  "expected": {
+    "accepted": true,
+    "value": "{\"displayName\":\"\\ud800\"}"
+  }
+}

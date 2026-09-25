@@ -1,0 +1,30 @@
+{
+  "contract": "tasks.TaskDetailsBodySchema",
+  "case": "empty_array_profile",
+  "input": {
+    "rootProfileId": []
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "expected": "string",
+        "code": "invalid_type",
+        "path": [
+          "rootProfileId"
+        ],
+        "message": "Invalid input: expected string, received array"
+      },
+      {
+        "origin": "array",
+        "code": "too_small",
+        "minimum": 1,
+        "inclusive": true,
+        "path": [
+          "rootProfileId"
+        ],
+        "message": "Too small: expected array to have >=1 items"
+      }
+    ]
+  }
+}

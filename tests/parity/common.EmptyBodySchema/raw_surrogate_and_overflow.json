@@ -1,0 +1,10 @@
+{
+  "contract": "common.EmptyBodySchema",
+  "case": "raw_surrogate_and_overflow",
+  "encoding": "raw-json",
+  "input": "{\"x\":\"\\ud800\",\"count\":1e400}",
+  "expected": {
+    "accepted": true,
+    "value": "{\"x\":\"\\ud800\",\"count\":null}"
+  }
+}

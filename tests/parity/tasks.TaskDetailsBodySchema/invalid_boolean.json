@@ -1,0 +1,20 @@
+{
+  "contract": "tasks.TaskDetailsBodySchema",
+  "case": "invalid_boolean",
+  "input": {
+    "runProjectTests": "false"
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "expected": "boolean",
+        "code": "invalid_type",
+        "path": [
+          "runProjectTests"
+        ],
+        "message": "Invalid input: expected boolean, received string"
+      }
+    ]
+  }
+}

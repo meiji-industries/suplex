@@ -184,6 +184,28 @@ impl JsDocument {
         &self.nodes[index]
     }
 
+    pub fn value_type(&self, index: usize) -> &'static str {
+        match self.node(index) {
+            JsNode::Null => "null",
+            JsNode::Bool(_) => "boolean",
+            JsNode::Number(_) => "number",
+            JsNode::String(_) => "string",
+            JsNode::Array(_) => "array",
+            JsNode::Object(_) => "object",
+        }
+    }
+
+    pub fn append_node(&mut self, node: JsNode) -> usize {
+        let index = self.nodes.len();
+        self.nodes.push(node);
+        index
+    }
+
+    pub fn set_root(&mut self, index: usize) {
+        assert!(index < self.nodes.len(), "root node must exist");
+        self.root = index;
+    }
+
     pub fn get(&self, object: usize, name: &str) -> Option<usize> {
         let JsNode::Object(fields) = self.node(object) else {
             return None;

@@ -1,0 +1,10 @@
+{
+  "contract": "auth.DisplayNameBodySchema",
+  "case": "raw_lone_surrogate",
+  "encoding": "raw-json",
+  "input": "{\"displayName\":\"\\udfff\"}",
+  "expected": {
+    "accepted": true,
+    "value": "{\"displayName\":\"\\udfff\"}"
+  }
+}

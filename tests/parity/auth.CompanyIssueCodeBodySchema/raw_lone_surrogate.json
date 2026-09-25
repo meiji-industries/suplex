@@ -1,0 +1,10 @@
+{
+  "contract": "auth.CompanyIssueCodeBodySchema",
+  "case": "raw_lone_surrogate",
+  "encoding": "raw-json",
+  "input": "{\"issueCode\":\"\\ud800\"}",
+  "expected": {
+    "accepted": true,
+    "value": "{\"issueCode\":\"\\ud800\"}"
+  }
+}

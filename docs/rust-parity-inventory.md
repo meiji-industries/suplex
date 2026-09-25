@@ -47,16 +47,16 @@ The table lists all 238 backend TypeScript modules present at the baseline, incl
 | [delivery/target-capabilities.ts](../src/delivery/target-capabilities.ts) | not started | |
 | [http/agent-api-runtime.ts](../src/http/agent-api-runtime.ts) | not started | |
 | [http/contracts/agent-api.ts](../src/http/contracts/agent-api.ts) | not started | |
-| [http/contracts/auth.ts](../src/http/contracts/auth.ts) | not started | Five validators pass 39 [Zod fixture comparisons](../rust/tests/contract_parity.rs); full module/HTTP parity remains incomplete. [Corpus scope](spikes/rust-json-hash-bytes.md) |
+| [http/contracts/auth.ts](../src/http/contracts/auth.ts) | ported | Five schemas now share one lossless validator implementation with ordinary adapters; normal and raw Zod fixtures pass. HTTP parsing still uses Serde, so full route parity remains incomplete |
 | [http/contracts/avatars.ts](../src/http/contracts/avatars.ts) | not started | |
-| [http/contracts/common.ts](../src/http/contracts/common.ts) | not started | 21 common validators implemented; combined [parity test](../rust/tests/contract_parity.rs) passes 395 fixtures / 35 total schemas. Full common-contract and HTTP coverage remain pending |
+| [http/contracts/common.ts](../src/http/contracts/common.ts) | not started | 21 common validators implemented, four migrated to lossless rules. Combined parity passes 714 ordinary / 13 raw cases across 61 schemas; remaining common contracts and HTTP integration are incomplete |
 | [http/contracts/github-triggers.ts](../src/http/contracts/github-triggers.ts) | not started | |
 | [http/contracts/oauth.ts](../src/http/contracts/oauth.ts) | not started | |
 | [http/contracts/projects.ts](../src/http/contracts/projects.ts) | not started | Five profile, six auxiliary, and project task-policy schemas independently checked, including strict/partial/nullable/default/nested/response behavior; combined parity test passes 698 cases / 60 schemas. Remaining project schemas and full HTTP coverage are incomplete |
 | [http/contracts/providers.ts](../src/http/contracts/providers.ts) | ported | All nine validators implemented in [providers.rs](../rust/src/http/contracts/providers.rs); combined corpus passes 284 cases / 28 schemas. Raw HTTP JSON representation and endpoint integration remain unverified |
 | [http/contracts/system-events.ts](../src/http/contracts/system-events.ts) | not started | |
 | [http/contracts/task-templates.ts](../src/http/contracts/task-templates.ts) | not started | |
-| [http/contracts/tasks.ts](../src/http/contracts/tasks.ts) | not started | Twelve auxiliary task schemas and task-agent batch query independently checked, including strict rename, note/cursor bounds, enums, nested values, and UTF-16 sort/dedup behavior; combined parity test passes 698 cases / 60 schemas. Remaining task schemas and runtime routes are incomplete |
+| [http/contracts/tasks.ts](../src/http/contracts/tasks.ts) | not started | Auxiliary schemas, task-agent batch query, and task-details response independently checked; combined parity passes 714 ordinary / 13 raw cases across 61 schemas. Remaining task schemas, lossless migration, and runtime routes are incomplete |
 | [http/contracts/update.ts](../src/http/contracts/update.ts) | not started | |
 | [http/contracts/workflows.ts](../src/http/contracts/workflows.ts) | not started | |
 | [http/errors.ts](../src/http/errors.ts) | not started | |

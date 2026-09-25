@@ -1,0 +1,33 @@
+{
+  "contract": "tasks.TaskDetailsBodySchema",
+  "case": "all_fields",
+  "input": {
+    "title": "  Rename  ",
+    "description": "  Description  ",
+    "rootProfileId": "root",
+    "workerProfileId": "worker",
+    "deliveryTarget": "remote_branch",
+    "runProjectTests": false,
+    "visualEvidence": "capture",
+    "workflow": "direct_build",
+    "advisorProfileIds": {
+      "reviewer": "reviewer"
+    }
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "title": "Rename",
+      "description": "Description",
+      "rootProfileId": "root",
+      "workerProfileId": "worker",
+      "deliveryTarget": "remote_branch",
+      "runProjectTests": false,
+      "visualEvidence": "capture",
+      "workflow": "direct_build",
+      "advisorProfileIds": {
+        "reviewer": "reviewer"
+      }
+    }
+  }
+}

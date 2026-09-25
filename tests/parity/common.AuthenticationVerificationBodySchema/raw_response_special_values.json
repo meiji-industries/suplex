@@ -1,0 +1,10 @@
+{
+  "contract": "common.AuthenticationVerificationBodySchema",
+  "case": "raw_response_special_values",
+  "encoding": "raw-json",
+  "input": "{\"response\":{\"surrogate\":\"\\udfff\",\"count\":1e400}}",
+  "expected": {
+    "accepted": true,
+    "value": "{\"challengeId\":\"\",\"response\":{\"surrogate\":\"\\udfff\",\"count\":null}}"
+  }
+}

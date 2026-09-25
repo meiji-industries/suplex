@@ -1,0 +1,48 @@
+{
+  "contract": "tasks.TaskDetailsBodySchema",
+  "case": "invalid_nested_advisor",
+  "input": {
+    "advisorProfileIds": {
+      "reviewer": "",
+      "planner_a": "😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀",
+      "extra": true
+    }
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "origin": "string",
+        "code": "too_small",
+        "minimum": 1,
+        "inclusive": true,
+        "path": [
+          "advisorProfileIds",
+          "reviewer"
+        ],
+        "message": "Too small: expected string to have >=1 characters"
+      },
+      {
+        "origin": "string",
+        "code": "too_big",
+        "maximum": 256,
+        "inclusive": true,
+        "path": [
+          "advisorProfileIds",
+          "planner_a"
+        ],
+        "message": "Too big: expected string to have <=256 characters"
+      },
+      {
+        "code": "unrecognized_keys",
+        "keys": [
+          "extra"
+        ],
+        "path": [
+          "advisorProfileIds"
+        ],
+        "message": "Unrecognized key: \"extra\""
+      }
+    ]
+  }
+}

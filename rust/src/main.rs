@@ -17,6 +17,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if command == ["mcp", "root"] {
         return suplex::coordination::root_stdio::serve_from_environment().await;
     }
+    if let [display, provider, directory] = command.as_slice()
+        && display == "display"
+        && provider == "claude-code"
+    {
+        return Ok(suplex::runtimes::claude_code::display::run_claude_display(
+            std::path::Path::new(directory),
+        )?);
+    }
     let installation = Installation::load()?;
     suplex::platform::system_events::install(installation.logs.clone());
     let database = SuplexDatabase::open(&installation.database, OpenMode::Migrate)?;

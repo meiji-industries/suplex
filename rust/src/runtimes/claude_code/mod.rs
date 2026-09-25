@@ -1,3 +1,4 @@
+pub mod display;
 pub mod environment;
 pub mod live_history;
 pub mod session_reader;

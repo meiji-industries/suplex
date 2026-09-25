@@ -12,7 +12,6 @@ use axum::{
 };
 use chrono::{SecondsFormat, Utc};
 use serde_json::{Map, Value, json};
-use sha2::{Digest, Sha256};
 use tokio::io::AsyncWriteExt;
 
 use crate::{
@@ -234,11 +233,7 @@ fn backups(state: &AppState) -> Option<BackupService> {
     })?;
     let data_root = database_path.parent()?.to_path_buf();
     let artifact_root = state.artifact_root.clone()?;
-    let digest = Sha256::digest(database_path.as_os_str().as_encoded_bytes());
-    let installation_id = format!(
-        "rust-{}",
-        digest[..6].iter().map(|byte| format!("{byte:02x}")).collect::<String>()
-    );
+    let installation_id = crate::cli::installation_id(&database_path);
     let mut configuration = Map::new();
     configuration.insert("accessMode".into(), json!("local"));
     configuration.insert(

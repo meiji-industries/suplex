@@ -534,8 +534,15 @@ impl DeliveryOperations {
         )
     }
 
-    /// TypeScript `TaskControlStore.setPullRequest`.
-    pub fn set_pull_request(&self, task_id: &str, pull: Option<&Value>) -> DatabaseResult<()> {
+    /// TypeScript `TaskControlStore.setPullRequest`. A Root delivery operation
+    /// `claim`s the pull request, which another live task must not own. Passive
+    /// observation records what GitHub reports without that check.
+    pub fn set_pull_request(
+        &self,
+        task_id: &str,
+        pull: Option<&Value>,
+        claim: bool,
+    ) -> DatabaseResult<()> {
         let mut database = self.open(OpenMode::ReadWrite)?;
         let value = pull.map(crate::shared::js_json::stringify);
         let changed = database.transaction(true, |database| {
@@ -547,7 +554,7 @@ impl DeliveryOperations {
                     |row| row.get(0),
                 )
                 .optional()?;
-            if let Some(pull) = pull
+            if let Some(pull) = pull.filter(|_| claim)
                 && matches!(status.as_deref(), Some("active" | "waiting_human"))
             {
                 repository::assert_pull_request_available(
@@ -1416,7 +1423,7 @@ impl DeliveryOperations {
             return self.adopt_known_pull(control, &pull, options).await;
         }
         if !control["pullRequest"].is_null() {
-            self.set_pull_request(task_id, None)?;
+            self.set_pull_request(task_id, None, false)?;
         }
         Ok(Value::Null)
     }
@@ -1435,7 +1442,11 @@ impl DeliveryOperations {
         }
         let reference = pull.reference();
         if options.defer_completion && pull.state == "open" {
-            self.set_pull_request(control["taskId"].as_str().unwrap_or(""), Some(&reference))?;
+            self.set_pull_request(
+                control["taskId"].as_str().unwrap_or(""),
+                Some(&reference),
+                options.recheck.is_some(),
+            )?;
             return Ok(reference);
         }
         self.complete_if_target_matches(
@@ -1466,7 +1477,7 @@ impl DeliveryOperations {
             .await?;
         let pull = observed_pull_reference(repository, &observed);
         if let Some(pull) = &pull {
-            self.set_pull_request(task_id, Some(pull))?;
+            self.set_pull_request(task_id, Some(pull), false)?;
         }
         Ok(pull.unwrap_or(Value::Null))
     }
@@ -1481,7 +1492,7 @@ impl DeliveryOperations {
         options: Adoption<'_>,
     ) -> DatabaseResult<Value> {
         let task_id = control["taskId"].as_str().unwrap_or("");
-        self.set_pull_request(task_id, Some(&pull))?;
+        self.set_pull_request(task_id, Some(&pull), options.recheck.is_some())?;
         let target = control["deliveryTarget"].as_str().unwrap_or("");
         let reached = pull["state"] == "merged"
             || (pull["state"] == "open"

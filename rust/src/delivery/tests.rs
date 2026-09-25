@@ -566,7 +566,7 @@ async fn direct_merge_completes_and_stale_local_pull_request_is_replaced() {
         .await
         .unwrap();
     // A stale cached pull request never blocks: GitHub's current match replaces it.
-    operations.set_pull_request(&fixture.task_id, Some(&json!({"repository":"owner/repo","number":1,"url":"https://github.com/owner/repo/pull/1","headSha":"f".repeat(40),"state":"closed","mergedAt":null}))).unwrap();
+    operations.set_pull_request(&fixture.task_id, Some(&json!({"repository":"owner/repo","number":1,"url":"https://github.com/owner/repo/pull/1","headSha":"f".repeat(40),"state":"closed","mergedAt":null})), true).unwrap();
     let observed = operations.observe(&fixture.task_id).await.unwrap();
     assert_eq!(observed["state"], "open");
     assert_eq!(observed["headSha"], head.as_str());
@@ -629,5 +629,79 @@ async fn refused_merge_reports_github_evidence_and_merge_input_is_checked() {
             .unwrap(),
         None
     );
+    std::fs::remove_dir_all(&fixture.base).unwrap();
+}
+
+#[tokio::test]
+async fn observing_a_pull_request_another_task_names_records_the_observation() {
+    let fixture = fixture("merged");
+    let (operations, _fake) = operations(&fixture).await;
+    let root = &fixture.root;
+    let (head, review) = reviewed(&operations, root).await;
+    for operation in ["push_branch", "create_or_adopt_pull_request"] {
+        operations
+            .execute(
+                root,
+                None,
+                operation,
+                Some(&head),
+                Some(&review),
+                Some("Add line"),
+                Some(BODY),
+            )
+            .await
+            .unwrap();
+    }
+    // Another live task names the same pull request, and this task's cached
+    // reference is gone after a restart. GitHub still reports the pull request
+    // on this task's branch.
+    let mut database = SuplexDatabase::open(&fixture.database_path, OpenMode::ReadWrite).unwrap();
+    let user = auth::development_sign_in(&mut database, Utc::now())
+        .unwrap()
+        .user;
+    let profile = json!({"profileId":"root_profile","provider":"codex","model":"gpt-6-sol","reasoningLevel":"medium","serviceTier":"default"});
+    let other = repository::create(
+        &mut database,
+        &PreparedTask {
+            id: repository::new_task_id(),
+            company_id: "delivery_company".into(),
+            project_id: "delivery_project".into(),
+            title: "Other".into(),
+            description: "Other".into(),
+            configuration: json!({"repository":"owner/repo","branch":"task-other","baseBranch":"main","source":null}),
+            idempotency_key: "delivery-other".into(),
+            request_hash: "delivery-other".into(),
+            creator: TaskCreator::User(user.id),
+            delivery_target: "merged".into(),
+            delivery_intent: json!({"repository":"owner/repo","headBranch":"task-other","baseBranch":"main","pullRequestNumber":null}),
+            root_profile: profile.clone(),
+            worker_profile: profile,
+            advisor_profiles: json!({}),
+            issue: None,
+            start_queued: true,
+            copied_from_task_id: None,
+            depends_on: vec![],
+            pull_request_dependencies: vec![],
+        },
+        Utc::now(),
+    )
+    .unwrap()
+    .task
+    .id;
+    database.connection().execute(
+        "UPDATE suplex_task_controls SET status = 'active', delivery_intent_json = json_set(delivery_intent_json, '$.pullRequestNumber', 1) WHERE task_id = ?1",
+        [&other],
+    ).unwrap();
+    database
+        .connection()
+        .execute(
+            "UPDATE suplex_task_controls SET pull_request_json = NULL WHERE task_id = ?1",
+            [&fixture.task_id],
+        )
+        .unwrap();
+    drop(database);
+    let observed = operations.observe(&fixture.task_id).await.unwrap();
+    assert_eq!(observed["number"], 1);
+    assert_eq!(control(&fixture)["pullRequest"]["number"], 1);
     std::fs::remove_dir_all(&fixture.base).unwrap();
 }

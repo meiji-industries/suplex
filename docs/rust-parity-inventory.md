@@ -15,7 +15,7 @@ Request corpus: 1,141 fixtures across 95 request exports plus 23 stored-project 
 | [app.ts](../src/app.ts) | not started | `924c9efe`, `92f290e3`: Cargo/toolchain/CI, isolated startup, SQLite and sign-in assets tested locally; task host and full route wiring remain pending. |
 | [cli.ts](../src/cli.ts) | not started | Real `mcp advisor` dispatch runs before installation/database/listener startup and passes a staged-binary stdio probe. Other operational commands remain pending. |
 | [coordination/advisor-evidence.ts](../src/coordination/advisor-evidence.ts) | not started | |
-| [coordination/advisor-report-bridge.ts](../src/coordination/advisor-report-bridge.ts) | ported | `rust/src/coordination/advisor_bridge.rs`: final staged export passes 86 library tests, three integration tests, fmt and all-target Clippy; focused Advisor 4/4 and TS report 10/10 pass. Actual stdio checks cover token denial, initialize/list, invalid report without capture, exact valid result and 0600 file. Role/schema, JS trimming, numeric output and binding writer match source. Native Advisor launch composition remains pending. |
+| [coordination/advisor-report-bridge.ts](../src/coordination/advisor-report-bridge.ts) | ported | `31ce45ae`: `rust/src/coordination/advisor_bridge.rs` passes 86 library tests, three integration tests, fmt and all-target Clippy; focused Advisor 4/4 and TS report 10/10 pass. Actual stdio checks cover token denial, initialize/list, invalid report without capture, exact valid result and 0600 file. Role/schema, JS trimming, numeric output and binding writer match source. Native Advisor launch composition remains pending. |
 | [coordination/advisor-report.ts](../src/coordination/advisor-report.ts) | not started | `1c24c183`: existing schemas extracted with compatible exports and passing TypeScript checks; Rust service remains pending |
 | [coordination/bridge-auth.ts](../src/coordination/bridge-auth.ts) | not started | `rust/src/coordination/bridge_auth.rs` validates source UUID grammar and compares original token bytes with `subtle::ConstantTimeEq`; no token values enter errors. Advisor authorization-before-write and wrong-token stdio checks pass. Root bridge integration remains pending. |
 | [coordination/controller-reports.ts](../src/coordination/controller-reports.ts) | not started | |
@@ -184,7 +184,7 @@ Request corpus: 1,141 fixtures across 95 request exports plus 23 stored-project 
 | [runtimes/devin/task-runtime.ts](../src/runtimes/devin/task-runtime.ts) | not started | |
 | [runtimes/devin/transcript.ts](../src/runtimes/devin/transcript.ts) | not started | |
 | [runtimes/harness-kind.ts](../src/runtimes/harness-kind.ts) | not started | |
-| [runtimes/headless/turn-process.ts](../src/runtimes/headless/turn-process.ts) | not started | `rust/src/runtimes/headless.rs` detached claim-before-launch, source-shaped dispatch/exit records, process-group stop and missing-turn recovery pass with real short-lived children. Environment-only rediscovery after loss of all records is unproved on this Mac; the same-host TS scanner also missed the tagged child. No new record gate added. Durable store and real Codex integration remain pending. |
+| [runtimes/headless/turn-process.ts](../src/runtimes/headless/turn-process.ts) | not started | `rust/src/runtimes/headless.rs` detached claim-before-launch, dispatch/exit records, group stop and missing-turn recovery pass with real children. Child environment now replaces inherited variables as TS does; an actual child excludes a stale Root token and receives its explicit Advisor token. Environment-only rediscovery after loss of all records is unproved on this Mac; the same-host TS scanner also missed the tagged child. Real Codex/controller integration remains pending. |
 | [runtimes/opencode/client.ts](../src/runtimes/opencode/client.ts) | not started | |
 | [runtimes/opencode/contracts.ts](../src/runtimes/opencode/contracts.ts) | not started | |
 | [runtimes/opencode/providers.ts](../src/runtimes/opencode/providers.ts) | not started | |
@@ -197,7 +197,7 @@ Request corpus: 1,141 fixtures across 95 request exports plus 23 stored-project 
 | [runtimes/project-mcp.ts](../src/runtimes/project-mcp.ts) | not started | |
 | [runtimes/task-display.ts](../src/runtimes/task-display.ts) | not started | |
 | [runtimes/task-harness-registry.ts](../src/runtimes/task-harness-registry.ts) | not started | |
-| [runtimes/task-harness.ts](../src/runtimes/task-harness.ts) | not started | |
+| [runtimes/task-harness.ts](../src/runtimes/task-harness.ts) | not started | `rust/src/runtimes/task_harness.rs` removes the five source bridge-capability variables before applying current bindings and additions. Precedence and actual detached-child isolation pass without global test-environment mutation. Isolated staged export passes 88 library tests, three integration tests, locked fmt and all-target Clippy. Full TaskHarness and controller integration remain pending. |
 | [server.ts](../src/server.ts) | not started | |
 | [shared/abort-signal.ts](../src/shared/abort-signal.ts) | not started | |
 | [shared/assert-never.ts](../src/shared/assert-never.ts) | not started | |

@@ -130,6 +130,7 @@ where
         .arg(input.executable)
         .args(input.args)
         .current_dir(input.worktree)
+        .env_clear()
         .envs(input.environment)
         .env("SUPLEX_TASK_PROCESS_OWNER", owner_marker(input.worktree))
         .env(

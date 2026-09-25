@@ -706,6 +706,48 @@ pub async fn delegate_planners(
     Ok(json!({"planners":planners,"evidenceDirectory":evidence.evidence.directory,"next":"End this Coordinator turn now. Suplex will send one combined planning result after both Plan A and Plan B have terminal reports. Do not poll or wait inside this turn."}))
 }
 
+/// TypeScript `completeLocal` outside Standard: the committed live range must
+/// satisfy the workflow policy at one final completion boundary.
+pub async fn complete_workflow_local_work(
+    database_path: &Path,
+    root: &RootIdentity,
+    owner_token: &str,
+    expected_head: Option<&str>,
+) -> DatabaseResult<Value> {
+    use crate::delivery::operations::{self, WorkflowCompletion};
+    let (_, rows) = open_root(database_path, root)?;
+    let control = rows.control;
+    let path = operations::standard_local_worktree_path(&control)?.to_owned();
+    let local = worktree::observe_local_revision(Path::new(&path))?;
+    operations::check_standard_local_completion(&control, expected_head, &local)?;
+    let range = current_range(database_path, &root.task_id).await?.range;
+    // TypeScript `commitCompletion`: one last local observation after every await.
+    let local = worktree::observe_local_revision(Path::new(&path))
+        .map_err(|error| std::io::Error::other(format!("The local source could not be observed: {error}")))?;
+    let mut database = SuplexDatabase::open(database_path, OpenMode::ReadWrite)?;
+    let current = root_session_store::root_observation_rows(&database, &root.task_id)?.control;
+    if current["status"] == "active" {
+        let mut projected = current["worktree"].clone();
+        projected["branch"] = json!(local.branch);
+        projected["headSha"] = json!(local.head_sha);
+        projected["dirty"] = json!(!local.clean);
+        root_session_store::set_worktree(&mut database, &root.task_id, &projected, chrono::Utc::now())?;
+    }
+    let decision = operations::complete_workflow_delivery(&mut database, &root.task_id, &range, &local, None, false, |database| {
+        recheck(database, root, owner_token)
+    })?;
+    match decision {
+        WorkflowCompletion::Completed | WorkflowCompletion::Already => {
+            Ok(json!({"kind":"local_work_completed","headSha":range.head_sha}))
+        }
+        WorkflowCompletion::Cancelled => {
+            recheck(&database, root, owner_token)?;
+            Err(invalid("The task was cancelled; Suplex recorded no workflow completion."))
+        }
+        WorkflowCompletion::Declined { reason, .. } => Err(std::io::Error::other(reason).into()),
+    }
+}
+
 /// TypeScript `requestDelivery` for `inspect_delivery_diff` outside Standard:
 /// the reviewed range also gets a pinned evidence directory.
 pub async fn inspect_workflow_delivery_diff(database_path: &Path, root: &RootIdentity) -> DatabaseResult<Value> {

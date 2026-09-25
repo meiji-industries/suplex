@@ -256,3 +256,161 @@ pub async fn reconcile_completed_advisor_report(
     }
     Ok(outcome)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{
+        delivery::operations::{self, WorkflowCompletion},
+        identity::auth,
+        tasks::{
+            repository::{self, PreparedTask, TaskCreator},
+            worktree::LocalRevisionObservation,
+        },
+    };
+    use std::path::PathBuf;
+
+    const PROFILE: &str = r#"{"profileId":"profile_root","provider":"codex","model":"gpt-6-sol","reasoningLevel":"medium","serviceTier":"default"}"#;
+
+    fn sha(letter: char) -> String {
+        letter.to_string().repeat(40)
+    }
+
+    fn range() -> ReviewRange {
+        ReviewRange { base_sha: sha('a'), head_sha: sha('b'), files: vec!["a.txt".into()], commits: vec![sha('b')], patch_digest: Some("d".repeat(64)) }
+    }
+
+    /// One active task in the given workflow with a reserved Coordinator.
+    fn fixture(workflow: &str) -> (PathBuf, SuplexDatabase, RootSession) {
+        let directory = std::env::temp_dir().join(format!("suplex-workflow-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&directory).unwrap();
+        let mut database = SuplexDatabase::open(&directory.join("suplex.sqlite"), OpenMode::Migrate).unwrap();
+        let now = Utc::now();
+        let user = auth::development_sign_in(&mut database, now).unwrap().user;
+        let stamp = now.to_rfc3339();
+        database.connection().execute("INSERT INTO suplex_companies (id,name,status,created_at) VALUES ('company_flow','Flow','active',?1)", [&stamp]).unwrap();
+        database.connection().execute("INSERT INTO suplex_projects (id,company_id,name,repository_path,worktree_root,repository_identity,base_branch,setup_command,verification_command,root_profile_id,worker_profile_id,agent_task_policy_json,created_at,updated_at) VALUES ('project_flow','company_flow','Flow','/tmp/repo','/tmp/worktrees',NULL,'main','','','profile_root','profile_worker','{}',?1,?1)", [&stamp]).unwrap();
+        let profile: Value = serde_json::from_str(PROFILE).unwrap();
+        let task = repository::create(&mut database, &PreparedTask {
+            id: repository::new_task_id(), company_id: "company_flow".into(), project_id: "project_flow".into(),
+            title: "Workflow task".into(), description: "Exercise the workflow".into(),
+            configuration: json!({"branch":"task-flow","baseBranch":"main","visualEvidence":"off"}),
+            idempotency_key: "workflow-1".into(), request_hash: "workflow-hash".into(),
+            creator: TaskCreator::User(user.id), delivery_target: "local_worktree".into(),
+            delivery_intent: json!({"repository":"owner/repo","headBranch":"task-flow","baseBranch":"main","pullRequestNumber":null}),
+            root_profile: profile.clone(), worker_profile: profile, advisor_profiles: json!({}), issue: None, start_queued: true,
+            copied_from_task_id: None, depends_on: vec![],
+        }, now).unwrap().task;
+        database.connection().execute("UPDATE suplex_task_controls SET workflow = ?1, worktree_json = ?2 WHERE task_id = ?3", params(workflow, &task.id)).unwrap();
+        let root = root_session_store::reserve_root(&mut database, &task.id, now).unwrap();
+        (directory, database, root)
+    }
+
+    fn params<'a>(workflow: &'a str, task_id: &'a str) -> (&'a str, String, &'a str) {
+        (workflow, json!({"path":"/tmp/task-flow","branch":"task-flow","baseSha":sha('a'),"headSha":sha('b'),"dirty":false}).to_string(), task_id)
+    }
+
+    fn advisor_input(role: &str, pair: Option<&str>) -> Value {
+        let mut input = json!({"kind":"advisor","role":role,"range":range(),"evidenceDirectory":"/tmp/evidence_1","evidenceSha256":"e".repeat(64),"verificationTurnIds":[]});
+        if let Some(pair) = pair {
+            input["plannerPairId"] = json!(pair);
+        }
+        input
+    }
+
+    fn record(database: &mut SuplexDatabase, session: &Value, receipt: &str, observation: &Value, review: Option<&Value>) -> Option<RootTurn> {
+        root_session_store::record_standard_worker_result_and_wake(database, &StandardWorkerResult {
+            task_id: session["taskId"].as_str().unwrap(),
+            session_id: session["id"].as_str().unwrap(),
+            generation: session["generation"].as_i64().unwrap(),
+            receipt_id: receipt,
+            observation: &observation.to_string(),
+            native_turn_id: None,
+            wake_prompt: "Advisor wake",
+            review,
+        }, Utc::now()).unwrap()
+    }
+
+    #[test]
+    fn planner_pair_reserves_both_roles_and_wakes_coordinator_once_both_settle() {
+        let (directory, mut database, root) = fixture("competing_plans");
+        let pair = "pair_1";
+        let (a, b) = (advisor_input("planner_a", Some(pair)), advisor_input("planner_b", Some(pair)));
+        let [plan_a, plan_b] = root_session_store::launch_planner_pair(&mut database, &root, pair, [("Plan A prompt", &a), ("Plan B prompt", &b)], Utc::now()).unwrap();
+        assert_eq!((plan_a["advisorRole"].as_str(), plan_b["delegateSlot"].as_str()), (Some("planner_a"), Some("planner_b")));
+        assert_ne!(plan_a["id"], plan_b["id"]);
+        assert!(root_session_store::launch_advisor(&mut database, &root, "planner_a", "Retry", &advisor_input("planner_a", None), Utc::now()).unwrap_err().to_string().contains("worker_already_assigned"));
+        let report = |role: &str| json!({"state":"completed","text":"Plan","advisor":{"role":role,"result":{"summary":"Plan","role":role},"invalidReason":null}});
+        assert!(record(&mut database, &plan_a, "a:1:completed", &report("planner_a"), None).is_none());
+        let wake = record(&mut database, &plan_b, "b:1:completed", &report("planner_b"), None).unwrap();
+        assert!(wake.prompt_text.starts_with(&format!("Combined planning pair {pair} completed. Plan A session {} and Plan B session {}", plan_a["id"].as_str().unwrap(), plan_b["id"].as_str().unwrap())));
+        assert!(wake.prompt_text.contains("Both reports are valid."));
+        assert!(record(&mut database, &plan_b, "b:1:completed", &report("planner_b"), None).is_none());
+        let other = root_session_store::launch_planner_pair(&mut database, &root, "pair_2", [("A", &a), ("B", &b)], Utc::now());
+        assert!(other.unwrap_err().to_string().contains("invalid_planner_pair"));
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn rater_results_keep_their_launch_range_and_duplicates_add_no_record() {
+        let (directory, mut database, root) = fixture("refine_pull_request");
+        let rater = root_session_store::launch_advisor(&mut database, &root, "rater", "Rate the pull request", &advisor_input("rater", None), Utc::now()).unwrap();
+        assert_eq!((rater["advisorRole"].as_str(), rater["delegateSlot"].as_str()), (Some("rater"), Some("delegate")));
+        assert_eq!(rater["profile"]["profileId"], "profile_root", "an Advisor defaults to the Coordinator profile");
+        let invalid = json!({"result":null,"invalidReason":"The report has no JSON object"});
+        let observation = json!({"state":"completed","text":"No JSON","advisor":{"role":"rater","result":null,"invalidReason":"The report has no JSON object"}});
+        assert!(record(&mut database, &rater, "r:1:completed", &observation, Some(&invalid)).is_some());
+        assert!(record(&mut database, &rater, "r:1:completed", &observation, Some(&invalid)).is_none());
+        let state = root_session_store::workflow_state(&database, &rater["taskId"].as_str().unwrap().to_owned()).unwrap();
+        let reviews = state["reviews"].as_array().unwrap();
+        assert_eq!(reviews.len(), 1);
+        assert_eq!((reviews[0]["range"].clone(), reviews[0]["result"].clone()), (json!(range()), Value::Null));
+        let result = json!({"rating":9,"blockingFindings":[],"verification":"passed","verificationSummary":"ok","summary":"Ready","role":"rater"});
+        let task_id = rater["taskId"].as_str().unwrap();
+        root_session_store::reconcile_advisor_result(&mut database, task_id, rater["id"].as_str().unwrap(), reviews[0]["turnId"].as_str().unwrap(), &result, Utc::now()).unwrap();
+        let state = root_session_store::workflow_state(&database, task_id).unwrap();
+        assert_eq!((state["reviews"][0]["result"]["rating"].clone(), state["reviews"][0]["invalidReason"].clone()), (json!(9), Value::Null));
+        assert!(root_session_store::reconcile_advisor_result(&mut database, task_id, rater["id"].as_str().unwrap(), reviews[0]["turnId"].as_str().unwrap(), &result, Utc::now()).is_err());
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn a_failed_reviewer_turn_records_an_invalid_review_and_wakes_coordinator() {
+        let (directory, mut database, root) = fixture("independent_review");
+        let reviewer = root_session_store::launch_advisor(&mut database, &root, "reviewer", "Review", &advisor_input("reviewer", None), Utc::now()).unwrap();
+        let session = root_session_store::current_worker(&database, &root.task_id).unwrap().unwrap();
+        let turn = root_session_store::pending_turns(&database, &session.id).unwrap().remove(0);
+        let database_path = directory.join("suplex.sqlite");
+        assert!(finish_delegate_turn(&mut database, &database_path, TerminalDelegateTurn {
+            session: &session, native_session_id: "codex-review", turn: &turn, state: "error", reason: "native_error", text: "",
+            base: json!({"state":"error","native":{},"reason":"native_error","text":""}),
+        }).unwrap());
+        let state = root_session_store::workflow_state(&database, &root.task_id).unwrap();
+        assert_eq!(state["reviews"][0]["invalidReason"], "The Reviewer turn ended with state error (native_error)");
+        let rows = root_session_store::root_observation_rows(&database, &root.task_id).unwrap();
+        let wake = rows.turns.iter().rev().find(|turn| turn["sessionId"] == root.id.as_str()).unwrap();
+        assert!(wake["promptText"].as_str().unwrap().starts_with(&format!("Reviewer result codex-review:{}:error. The Reviewer report was not accepted", turn.id)));
+        assert_eq!(reviewer["advisorRole"], "reviewer");
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn local_workflow_completion_requires_the_review_for_the_exact_range() {
+        let (directory, mut database, root) = fixture("independent_review");
+        let local = LocalRevisionObservation { branch: "task-flow".into(), head_sha: sha('b'), tree_sha: sha('c'), clean: true };
+        let complete = |database: &mut SuplexDatabase| operations::complete_workflow_delivery(database, &root.task_id, &range(), &local, None, false, |_| Ok(())).unwrap();
+        assert!(matches!(complete(&mut database), WorkflowCompletion::Declined { code: "workflow_review_required", .. }));
+        let dirty = LocalRevisionObservation { clean: false, ..local.clone() };
+        assert!(matches!(operations::complete_workflow_delivery(&mut database, &root.task_id, &range(), &dirty, None, false, |_| Ok(())).unwrap(), WorkflowCompletion::Declined { code: "worktree_dirty", .. }));
+        root_session_store::update_workflow_state(&mut database, &root.task_id, Utc::now(), |state| {
+            state["reviews"] = json!([{"sessionId":"s","turnId":"t","role":"reviewer","range":range(),"result":{"role":"reviewer","approved":true,"blockingFindings":[],"verification":"passed","verificationSummary":"ok","summary":"ok"},"invalidReason":null,"recordedAt":"2026-09-25T00:00:00.000Z"}]);
+        }).unwrap();
+        assert!(operations::complete_workflow_delivery(&mut database, &root.task_id, &range(), &local, None, false, |_| Err("task_tool_owner_lost".into())).is_err(), "a lost owner writes nothing");
+        assert_eq!(complete(&mut database), WorkflowCompletion::Completed);
+        let rows = root_session_store::root_observation_rows(&database, &root.task_id).unwrap();
+        assert_eq!(rows.control["status"], "delivered");
+        assert_eq!(rows.control["workflowState"]["completion"]["reviewedHead"], sha('b'));
+        assert_eq!(complete(&mut database), WorkflowCompletion::Already);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+}

@@ -94,9 +94,13 @@ pub async fn complete_local_work(
     let initial = SuplexDatabase::open(database_path, OpenMode::ReadOnly)?;
     let control = root_session_store::root_observation_rows(&initial, &root.task_id)?.control;
     if control["workflow"] != "standard" {
-        return Err(Box::new(TaskFailure::not_ported(
-            "Only Standard workflow local completion is ported",
-        )));
+        return crate::coordination::root_controller::complete_workflow_local_work(
+            database_path,
+            root,
+            owner_token,
+            expected_head,
+        )
+        .await;
     }
     let path = PathBuf::from(standard_local_worktree_path(&control)?);
     drop(initial);
@@ -122,6 +126,77 @@ pub async fn complete_local_work(
     root_session_store::set_worktree(&mut database, &root.task_id, &worktree, Utc::now())?;
     root_session_store::mark_delivered(&mut database, &root.task_id, Utc::now())?;
     Ok(json!({"kind":"local_work_completed","headSha":local.head_sha}))
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub enum WorkflowCompletion {
+    Completed,
+    Already,
+    Cancelled,
+    Declined {
+        code: &'static str,
+        reason: String,
+    },
+}
+
+/// TypeScript `completeWorkflowDelivery`: the completion commit boundary for
+/// non-Standard workflows. One short transaction reloads the task, its reviews,
+/// and its delegates, applies the delivery policy to the validated range against
+/// freshly observed local facts, rechecks ownership, and records the workflow
+/// completion with the delivered status. No Git or network I/O runs inside it.
+pub fn complete_workflow_delivery(
+    database: &mut SuplexDatabase,
+    task_id: &str,
+    range: &crate::coordination::workflows::ReviewRange,
+    local: &LocalRevisionObservation,
+    pull_request_number: Option<i64>,
+    require_accepted: bool,
+    recheck: impl FnOnce(&SuplexDatabase) -> DatabaseResult<()>,
+) -> DatabaseResult<WorkflowCompletion> {
+    use crate::coordination::workflows::{self, LocalSourceFacts, ReviewRange};
+    database.transaction(true, |database| {
+        let rows = root_session_store::root_observation_rows(database, task_id)?;
+        let control = &rows.control;
+        if control["status"] == "cancelled" {
+            return Ok(WorkflowCompletion::Cancelled);
+        }
+        let state = root_session_store::workflow_state(database, task_id)?;
+        if !state["completion"].is_null() || control["status"] == "delivered" {
+            if control["status"] != "delivered" {
+                root_session_store::mark_delivered(database, task_id, Utc::now())?;
+            }
+            return Ok(WorkflowCompletion::Already);
+        }
+        let accepted = ReviewRange::from_value(&state["acceptedDelivery"]);
+        if require_accepted && accepted.is_none_or(|accepted| !workflows::same_range(&accepted, range)) {
+            return Ok(WorkflowCompletion::Declined {
+                code: "workflow_review_required",
+                reason: "No accepted delivery decision matches this range. Complete the workflow's review and request delivery.".into(),
+            });
+        }
+        let facts = LocalSourceFacts {
+            branch: Some(&local.branch),
+            head_sha: Some(&local.head_sha),
+            clean: local.clean,
+        };
+        if let Err(refusal) = workflows::delivery_decision(control, &rows.sessions, &rows.turns, range, &facts, true) {
+            return Ok(WorkflowCompletion::Declined {
+                code: refusal.code,
+                reason: refusal.reason,
+            });
+        }
+        recheck(database)?;
+        let mut state = state;
+        state["acceptedDelivery"] = json!(range);
+        state["deliveryWait"] = Value::Null;
+        state["completion"] = json!({
+            "kind":"workflow","reviewedHead":range.head_sha,"pullRequestNumber":pull_request_number,
+            "observedAt":Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+        });
+        root_session_store::write_workflow_state(database, task_id, &state, Utc::now())?;
+        root_session_store::mark_delivered(database, task_id, Utc::now())?;
+        Ok(WorkflowCompletion::Completed)
+    })
 }
 
 #[cfg(test)]

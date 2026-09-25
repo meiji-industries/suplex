@@ -9,3 +9,4 @@ pub mod timeline;
 pub mod worktree;
 pub mod issue_context;
 pub mod sources;
+pub mod integration;

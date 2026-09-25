@@ -26,8 +26,10 @@ use crate::{
         root_session_store,
         workflows::{self, DeliveryRefusal, LocalSourceFacts},
     },
-    integrations::github_delivery::{
-        self, Github, GithubFailure, MergeResult, Observation, PullRequest,
+    integrations::{
+        github_delivery::{self, Github, GithubFailure, MergeResult, Observation, PullRequest},
+        github_triggers_dispatches::{self, DeliveryPolicy},
+        github_triggers_inspection::{self, PullRequestInspection},
     },
     platform::database::{DatabaseResult, OpenMode, SuplexDatabase},
     tasks::{
@@ -1609,7 +1611,7 @@ impl DeliveryOperations {
         actual: &ReviewRange,
     ) -> DatabaseResult<Value> {
         let task_id = control["taskId"].as_str().unwrap_or("");
-        self.trigger_policy(task_id)?;
+        let trigger = self.inspect_trigger_policy(control, None, false).await?;
         let github = self.github(task_id).await?;
         let remote_head = github.get_branch_head(repository, &local.branch).await?;
         self.final_recheck(control, actual, recheck, false).await?;
@@ -1637,6 +1639,16 @@ impl DeliveryOperations {
                 "head_diverged",
                 "The remote branch does not match the observed worktree head",
             ));
+        }
+        if let Some((policy, pull)) = &trigger {
+            github_triggers_dispatches::record_trigger_push(
+                &mut self.open(OpenMode::ReadWrite)?,
+                task_id,
+                &policy.dispatch_id,
+                remote_head.as_deref().unwrap_or(&pull.head_sha),
+                &local.head_sha,
+                &serde_json::to_value(actual)?,
+            )?;
         }
         self.recheck(recheck)?;
         if control["deliveryTarget"] == "remote_branch" {
@@ -1915,8 +1927,10 @@ impl DeliveryOperations {
                 "The pull request head changed after the Coordinator reviewed it",
             ));
         }
-        self.trigger_policy(task_id)?;
-        if control["workflow"] != "standard" {
+        let trigger = self
+            .inspect_trigger_policy(control, Some(&head), true)
+            .await?;
+        if trigger.is_some() || control["workflow"] != "standard" {
             let (base_branch, base_sha) = match self.resolve_delivery_base(control).await {
                 Ok(base) => base,
                 Err(error) if Self::observation_unavailable(error.as_ref()) => {
@@ -1971,11 +1985,50 @@ impl DeliveryOperations {
         }
         self.recheck(recheck)?;
         let requested = observed.number.unwrap_or(0);
-        // TypeScript `mergePullRequest` discards the conditional result and observes the pull request.
-        github
-            .merge_conditionally(repository, requested, &head, true)
-            .await
-            .map(|result| matches!(result, MergeResult::Merged { .. }))?;
+        if trigger.is_some() {
+            if observed.auto_merge_enabled == Some(true) {
+                return Err(self.trigger_blocked(
+                    control,
+                    "Auto-merge is enabled for this trigger pull request. Review delivery manually.",
+                    "merge_not_eligible",
+                )?);
+            }
+            // TypeScript `mergePullRequestDirect`: a trigger merge reports its conditional result.
+            let (disposition, message) = match github
+                .merge_conditionally(repository, requested, &head, false)
+                .await?
+            {
+                MergeResult::Merged { .. } => (None, String::new()),
+                MergeResult::NotMerged => (Some(""), "GitHub has not completed the merge".into()),
+                MergeResult::Disposition {
+                    disposition,
+                    message,
+                } => (Some(disposition), message),
+            };
+            if let Some(disposition) = disposition {
+                if disposition == "blocked" {
+                    return Err(delivery_failure("merge_not_eligible", message));
+                }
+                let reason = if disposition == "waiting" {
+                    "checks"
+                } else {
+                    "merge_queue"
+                };
+                let wait = json!({"headSha": head, "fingerprint": delivery_wait_fingerprint(&observed), "since": timestamp(Utc::now()), "reason": reason});
+                self.update_workflow_state(task_id, |state| state["deliveryWait"] = wait.clone())?;
+                self.schedule_wake(task_id, 30)?;
+                return Ok(if disposition == "queued" {
+                    json!({"kind": "merge_requested", "checkSummary": check_summary(&observed), "wait": wait, "next": DELIVERY_WAIT_NEXT})
+                } else {
+                    json!({"kind": "waiting", "problems": [message], "wait": wait, "next": DELIVERY_WAIT_NEXT})
+                });
+            }
+        } else {
+            // TypeScript `mergePullRequest` discards the conditional result and observes the pull request.
+            github
+                .merge_conditionally(repository, requested, &head, true)
+                .await?;
+        }
         let last = github.get_pull_request(repository, requested).await?;
         if last.state != "merged" {
             let wait = json!({"headSha": head, "fingerprint": delivery_wait_fingerprint(&observed), "since": timestamp(Utc::now()), "reason": "merge_queue"});
@@ -2026,17 +2079,82 @@ impl DeliveryOperations {
         Ok(result)
     }
 
-    /// GitHub trigger tasks carry a stored delivery policy that is not ported.
-    fn trigger_policy(&self, task_id: &str) -> DatabaseResult<()> {
-        let present: bool = self.open(OpenMode::ReadOnly)?.connection().query_row(
-            "SELECT EXISTS(SELECT 1 FROM suplex_github_trigger_dispatches WHERE task_id = ?1)",
-            [task_id],
-            |row| row.get(0),
-        )?;
-        if present {
-            return Err(not_ported("GitHub trigger delivery is not ported"));
+    /// TypeScript `triggerBlocked`: an active task asks its human; the operation fails either way.
+    fn trigger_blocked(
+        &self,
+        control: &Value,
+        question: &str,
+        code: &'static str,
+    ) -> DatabaseResult<Box<dyn Error>> {
+        if control["status"] == "active" {
+            self.ask_human(control["taskId"].as_str().unwrap_or(""), question)?;
         }
-        Ok(())
+        Ok(delivery_failure(code, question))
+    }
+
+    /// TypeScript `inspectTriggerPolicy`: a GitHub trigger task delivers only
+    /// while its captured pull request keeps its identity and open reviewable state.
+    async fn inspect_trigger_policy(
+        &self,
+        control: &Value,
+        expected_head: Option<&str>,
+        protected_paths: bool,
+    ) -> DatabaseResult<Option<(DeliveryPolicy, PullRequestInspection)>> {
+        let task_id = control["taskId"].as_str().unwrap_or("");
+        let Some(policy) = github_triggers_dispatches::trigger_delivery_policy(
+            &self.open(OpenMode::ReadOnly)?,
+            task_id,
+        )?
+        else {
+            return Ok(None);
+        };
+        let uninspectable = || {
+            delivery_failure(
+                "head_diverged",
+                "GitHub trigger delivery policy could not be inspected",
+            )
+        };
+        let github = self.github(task_id).await.map_err(|_| uninspectable())?;
+        let pull = github_triggers_inspection::inspect_pull_request(
+            github,
+            &policy.repository_name,
+            policy.pull_request_number,
+        )
+        .await
+        .map_err(|_| uninspectable())?;
+        let same_repository = |repository: &github_triggers_inspection::Repository| {
+            repository.id == policy.repository_id
+                && repository.full_name.to_lowercase() == policy.repository_name
+        };
+        let valid = pull.number == policy.pull_request_number
+            && pull.state == "open"
+            && !pull.is_draft
+            && !pull.is_cross_repository
+            && same_repository(&pull.base_repository)
+            && pull.head_repository.as_ref().is_some_and(same_repository)
+            && pull.head_branch == policy.head_branch
+            && pull.base_branch == policy.base_branch;
+        if !valid {
+            return Err(self.trigger_blocked(
+                control,
+                "The trigger pull request identity or open reviewable state changed. Review delivery manually.",
+                "head_diverged",
+            )?);
+        }
+        if protected_paths && !pull.matching_paths(&policy.protected_paths).is_empty() {
+            return Err(self.trigger_blocked(
+                control,
+                "The trigger pull request changes a protected path. Review delivery manually.",
+                "merge_not_eligible",
+            )?);
+        }
+        if expected_head.is_some_and(|head| head != pull.head_sha) {
+            return Err(delivery_failure(
+                "head_diverged",
+                "The pull request has new commits. Fetch and reconcile the branch, verify the result, and request a fresh review before delivery.",
+            ));
+        }
+        Ok(Some((policy, pull)))
     }
 }
 
@@ -2360,6 +2478,104 @@ mod tests {
             head.as_str()
         );
         assert_eq!(control["status"], "delivered");
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    /// A loopback GitHub REST API answering each path and query from `replies`.
+    async fn loopback_github(replies: Vec<(&'static str, Value)>) -> Github {
+        use axum::{Json, Router, extract::OriginalUri, http::StatusCode, response::IntoResponse};
+        let replies = std::sync::Arc::new(replies);
+        let app = Router::new().fallback(move |OriginalUri(uri): OriginalUri| {
+            let replies = replies.clone();
+            async move {
+                let key = uri
+                    .path_and_query()
+                    .map(|value| value.as_str())
+                    .unwrap_or("");
+                match replies.iter().find(|(path, _)| *path == key) {
+                    Some((_, body)) => Json(body.clone()).into_response(),
+                    None => (StatusCode::NOT_FOUND, Json(json!({"message": "Not Found"})))
+                        .into_response(),
+                }
+            }
+        });
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}/", listener.local_addr().unwrap());
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let access =
+            crate::integrations::github::Access::for_api(&base, Some("test-token".into())).unwrap();
+        let mut github = Github::new(access);
+        github.retry_pauses.clear();
+        github
+    }
+
+    #[tokio::test]
+    async fn trigger_policy_blocks_changed_heads_and_protected_paths_with_a_human_question() {
+        let (directory, operations, task_id, _) = workflow_task("standard");
+        let database = operations.open(OpenMode::ReadWrite).unwrap();
+        let policy = json!({"headSha": "a".repeat(40), "baseSha": "b".repeat(40), "headBranch": "feature", "baseBranch": "main", "protectedPaths": ["src/"], "repositoryId": 9, "repositoryName": "owner/repo", "deliveryTarget": "merged"});
+        database
+            .connection()
+            .execute_batch("PRAGMA foreign_keys = OFF")
+            .unwrap();
+        database.connection().execute(
+            "INSERT INTO suplex_github_trigger_dispatches (id, rule_id, company_id, project_id, repository_id, repository_name, pull_request_number, authority_user_id, request_json, policy_json, preset_json, profiles_json, idempotency_key, task_id, created_at, updated_at) VALUES ('dispatch_1', 'rule_1', 'company_flow', 'project_flow', 9, 'owner/repo', 7, 'user', '{}', ?1, '{}', '{}', 'key_1', ?2, 'now', 'now')",
+            params![policy.to_string(), task_id],
+        ).unwrap();
+        database
+            .connection()
+            .execute(
+                "UPDATE suplex_task_controls SET status = 'active' WHERE task_id = ?1",
+                [&task_id],
+            )
+            .unwrap();
+        drop(database);
+        let side = |branch: &str, sha: char| json!({"ref": branch, "sha": sha.to_string().repeat(40), "repo": {"id": 9, "full_name": "owner/repo"}});
+        let pull = json!({"number": 7, "html_url": "https://github.com/owner/repo/pull/7", "state": "open", "draft": false, "changed_files": 1, "labels": [], "title": "Candidate", "head": side("feature", 'a'), "base": side("main", 'b')});
+        let file = json!({"sha": "c", "filename": "src/new.ts", "previous_filename": "docs/old.ts", "status": "renamed", "additions": 1, "deletions": 0, "changes": 1, "blob_url": "https://github.com/b", "raw_url": "https://github.com/r", "contents_url": "https://api.github.com/c"});
+        let github = loopback_github(vec![
+            ("/repos/owner/repo/pulls/7", pull),
+            (
+                "/repos/owner/repo/pulls/7/files?per_page=100&page=1",
+                json!([file]),
+            ),
+        ])
+        .await;
+        let operations = DeliveryOperations::with_github(
+            operations.database_path(),
+            operations.artifact_root(),
+            github,
+        );
+        let control = operations.get(&task_id).unwrap();
+        let (policy, _) = operations
+            .inspect_trigger_policy(&control, None, false)
+            .await
+            .unwrap()
+            .expect("the task carries a trigger policy");
+        assert_eq!(policy.dispatch_id, "dispatch_1");
+        let code =
+            |error: Box<dyn Error>| error.downcast::<DeliveryOperationFailure>().unwrap().code;
+        let moved = operations
+            .inspect_trigger_policy(&control, Some(&"c".repeat(40)), false)
+            .await
+            .unwrap_err();
+        assert_eq!(code(moved), "head_diverged");
+        assert_eq!(
+            operations.get(&task_id).unwrap()["status"],
+            "active",
+            "new commits are repair work, not a human question"
+        );
+        let protected = operations
+            .inspect_trigger_policy(&control, Some(&"a".repeat(40)), true)
+            .await
+            .unwrap_err();
+        assert_eq!(code(protected), "merge_not_eligible");
+        let control = operations.get(&task_id).unwrap();
+        assert_eq!(control["status"], "waiting_human");
+        assert_eq!(
+            control["humanQuestion"],
+            "The trigger pull request changes a protected path. Review delivery manually."
+        );
         std::fs::remove_dir_all(directory).unwrap();
     }
 

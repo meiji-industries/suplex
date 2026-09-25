@@ -390,6 +390,7 @@ mod tests {
             [timestamp(now)],
         ).unwrap();
         let prepared = PreparedTask {
+            id: repository::new_task_id(),
             company_id: "company_task_test".into(),
             project_id: "project_task_test".into(),
             title: "One task".into(),
@@ -415,6 +416,7 @@ mod tests {
         assert!(!repeated.created);
         assert_eq!(created.task.id, repeated.task.id);
         let blocked_input = PreparedTask {
+            id: repository::new_task_id(),
             title: "Dependent task".into(),
             idempotency_key: "dependent-key".into(),
             request_hash: "dependent-request".into(),
@@ -424,6 +426,7 @@ mod tests {
         let blocked = repository::create(&mut database, &blocked_input, now).unwrap();
         assert_eq!(blocked.task.status, "queued");
         let backlog_input = PreparedTask {
+            id: repository::new_task_id(),
             title: "Manual task".into(),
             idempotency_key: "manual-key".into(),
             request_hash: "manual-request".into(),
@@ -440,6 +443,7 @@ mod tests {
             "active"
         );
         let pull_request_input = PreparedTask {
+            id: repository::new_task_id(),
             title: "Pull request task".into(),
             idempotency_key: "pull-request-key".into(),
             request_hash: "pull-request-request".into(),
@@ -451,6 +455,7 @@ mod tests {
         let pull_request = repository::create(&mut database, &pull_request_input, now).unwrap();
         assert!(pull_request.created);
         let conflicting_pull_request = PreparedTask {
+            id: repository::new_task_id(),
             idempotency_key: "another-pull-request-key".into(),
             request_hash: "another-pull-request-request".into(),
             ..pull_request_input

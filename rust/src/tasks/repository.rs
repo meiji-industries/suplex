@@ -5,6 +5,17 @@ use rusqlite::{OptionalExtension, Row, params};
 use serde_json::Value;
 use uuid::Uuid;
 
+#[derive(Debug)]
+pub struct TaskConflict;
+
+impl std::fmt::Display for TaskConflict {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("This idempotency key belongs to a different request")
+    }
+}
+
+impl std::error::Error for TaskConflict {}
+
 use crate::platform::database::{DatabaseResult, SuplexDatabase};
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -15,6 +26,7 @@ pub enum TaskCreator {
 
 #[derive(Clone, Debug)]
 pub struct PreparedTask {
+    pub id: String,
     pub company_id: String,
     pub project_id: String,
     pub title: String,
@@ -78,7 +90,10 @@ pub fn new_task_id() -> String {
     format!("task_{}", Uuid::new_v4().simple())
 }
 
-fn existing(database: &SuplexDatabase, input: &PreparedTask) -> DatabaseResult<Option<TaskRecord>> {
+pub(crate) fn existing(
+    database: &SuplexDatabase,
+    input: &PreparedTask,
+) -> DatabaseResult<Option<TaskRecord>> {
     let row = database.connection().query_row(
         "SELECT t.id, t.company_id, t.project_id, t.title, t.description, c.status, t.created_at, t.request_hash, t.creator_user_id, t.creator_agent_id FROM suplex_tasks t JOIN suplex_task_controls c ON c.task_id = t.id WHERE t.company_id = ?1 AND t.idempotency_key = ?2",
         params![input.company_id, input.idempotency_key],
@@ -94,9 +109,7 @@ fn existing(database: &SuplexDatabase, input: &PreparedTask) -> DatabaseResult<O
         TaskCreator::Agent(id) => agent_id.as_deref() == Some(id),
     };
     if hash != input.request_hash || !same_creator {
-        return Err(
-            std::io::Error::other("This idempotency key belongs to a different request").into(),
-        );
+        return Err(Box::new(TaskConflict));
     }
     Ok(Some(task))
 }
@@ -195,7 +208,7 @@ pub fn create(
 ) -> DatabaseResult<TaskWrite> {
     database.transaction(true, |database| {
         if let Some(task) = existing(database, input)? { return Ok(TaskWrite { task, created: false }); }
-        let id = new_task_id();
+        let id = &input.id;
         let time = timestamp(now);
         let (creator_user_id, creator_agent_id) = match &input.creator {
             TaskCreator::User(id) => (Some(id.as_str()), None),
@@ -210,7 +223,7 @@ pub fn create(
             "INSERT INTO suplex_task_controls (task_id, objective, delivery_target, delivery_intent_json, status, root_profile_json, worker_profile_json, workflow, advisor_profiles_json, workflow_state_json, status_changed_at, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'standard', ?8, '{\"version\":1,\"reviews\":[],\"acceptedDelivery\":null,\"deliveryWait\":null,\"completion\":null,\"toolOwner\":null}', ?9, ?9, ?9)",
             params![id, objective, input.delivery_target, input.delivery_intent.to_string(), if input.start_queued { "queued" } else { "backlog" }, input.root_profile.to_string(), input.worker_profile.to_string(), input.advisor_profiles.to_string(), time],
         )?;
-        assert_task_pull_requests_available(database, &id)?;
+        assert_task_pull_requests_available(database, id)?;
         for dependency in input.depends_on.iter().collect::<std::collections::BTreeSet<_>>() {
             let available: bool = database.connection().query_row(
                 "SELECT EXISTS(SELECT 1 FROM suplex_tasks WHERE id = ?1 AND company_id = ?2)",
@@ -222,8 +235,8 @@ pub fn create(
                 params![id, dependency, time],
             )?;
         }
-        if input.start_queued { let _ = admit_queued(database, &id, now)?; }
-        let created = task_by_id(database, &id)?.ok_or_else(|| std::io::Error::other("Task insert did not persist"))?;
+        if input.start_queued { let _ = admit_queued(database, id, now)?; }
+        let created = task_by_id(database, id)?.ok_or_else(|| std::io::Error::other("Task insert did not persist"))?;
         let resulting_state = serde_json::json!({"status": created.status, "archived": false}).to_string();
         database.connection().execute(
             "INSERT INTO suplex_audit_events (id, actor_user_id, actor_agent_id, action, target_user_id, company_id, metadata_json, created_at) VALUES (?1, ?2, ?3, 'task_created', NULL, ?4, ?5, ?6)",

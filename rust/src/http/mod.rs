@@ -21,6 +21,7 @@ pub mod routes {
     pub mod pages;
     pub mod profiles;
     pub mod projects;
+    pub mod tasks;
     pub mod unported;
     pub mod workflows;
 }
@@ -95,6 +96,7 @@ pub fn router(state: AppState) -> Router {
         .merge(routes::pages::router())
         .merge(routes::profiles::router())
         .merge(routes::projects::router())
+        .merge(routes::tasks::router())
         .merge(routes::workflows::router())
         .merge(routes::unported::router())
         .route("/auth", get(auth_page))

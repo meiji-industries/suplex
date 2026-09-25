@@ -671,4 +671,68 @@ mod tests {
         assert!(inspect_process(std::process::id()).is_some());
         fs::remove_dir_all(directory).unwrap();
     }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn stop_rediscovers_session_from_environment_without_any_record() {
+        let mut suffix = [0_u8; 8];
+        getrandom::fill(&mut suffix).unwrap();
+        let directory = std::env::temp_dir().join(format!(
+            "suplex-headless-environment-{}",
+            u64::from_ne_bytes(suffix)
+        ));
+        fs::create_dir_all(&directory).unwrap();
+        let mut child = Command::new("/usr/bin/python3")
+            .args(["-c", "import time; time.sleep(20)"])
+            .env_clear()
+            .env("SUPLEX_SESSION_PROCESS_OWNER", owner_marker(&directory))
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        let mut unrelated = Command::new("/usr/bin/python3")
+            .args(["-c", "import time; time.sleep(20)"])
+            .env_clear()
+            .env(
+                "SUPLEX_SESSION_PROCESS_OWNER",
+                owner_marker(&directory.join("another-session")),
+            )
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+
+        let result = (|| -> io::Result<()> {
+            let visible = (0..40).any(|_| {
+                let found = discovered_process_ids("SUPLEX_SESSION_PROCESS_OWNER", &directory)
+                    .is_ok_and(|pids| pids.contains(&child.id()));
+                if !found {
+                    thread::sleep(Duration::from_millis(100));
+                }
+                found
+            });
+            if !visible {
+                return Err(io::Error::other("Tagged child was not rediscovered"));
+            }
+            if fs::read_dir(&directory)?.next().is_some() {
+                return Err(io::Error::other(
+                    "Recovery directory contains a local record",
+                ));
+            }
+            stop_session(&directory, None)?;
+            child.wait()?;
+            if unrelated.try_wait()?.is_some() {
+                return Err(io::Error::other("Unrelated child was stopped"));
+            }
+            Ok(())
+        })();
+        let _ = child.kill();
+        let _ = child.wait();
+        let _ = unrelated.kill();
+        let _ = unrelated.wait();
+        fs::remove_dir_all(&directory).unwrap();
+        result.unwrap();
+    }
 }

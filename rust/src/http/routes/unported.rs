@@ -58,31 +58,6 @@ const ROUTES: &[(Method, &str, Access)] = &[
         "/api/admin/workflows/{workflow_id}/duplicate",
         Authenticated,
     ),
-    (
-        Method::GET,
-        "/api/companies/{company_id}/github-triggers",
-        Authenticated,
-    ),
-    (
-        Method::POST,
-        "/api/companies/{company_id}/github-triggers",
-        Authenticated,
-    ),
-    (
-        Method::PATCH,
-        "/api/companies/{company_id}/github-triggers/{rule_id}",
-        Authenticated,
-    ),
-    (
-        Method::GET,
-        "/api/companies/{company_id}/github-triggers/{rule_id}/activity",
-        Authenticated,
-    ),
-    (
-        Method::POST,
-        "/api/companies/{company_id}/github-triggers/{rule_id}/check",
-        Authenticated,
-    ),
     (Method::GET, "/api/models", Authenticated),
     (
         Method::GET,

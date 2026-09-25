@@ -4,6 +4,7 @@ use serde_json::{Map, Value, json};
 pub mod auth;
 pub mod avatars;
 pub mod github_auth;
+pub mod github_triggers;
 pub mod projects;
 pub mod system;
 pub mod task_answers;

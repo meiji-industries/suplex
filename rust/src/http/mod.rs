@@ -25,6 +25,7 @@ pub mod routes {
     pub mod avatars;
     pub mod companies;
     pub mod github_auth;
+    pub mod github_triggers;
     pub mod health;
     pub mod pages;
     pub mod profiles;
@@ -134,6 +135,7 @@ pub fn router(state: AppState) -> Router {
         .merge(routes::avatars::router())
         .merge(routes::companies::router())
         .merge(routes::github_auth::router())
+        .merge(routes::github_triggers::router())
         .merge(routes::health::router())
         .merge(routes::pages::router())
         .merge(routes::profiles::router())

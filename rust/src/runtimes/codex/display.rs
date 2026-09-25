@@ -15,8 +15,6 @@ use std::{
     time::{Duration, SystemTime},
 };
 
-use chrono::{SecondsFormat, Utc};
-use rusqlite::{OptionalExtension, params};
 use serde_json::Value;
 
 use super::{session_reader, transcript};
@@ -26,8 +24,7 @@ use crate::{
         ROOT_TOKEN_ENV,
     },
     integrations::herdr::Herdr,
-    platform::database::{OpenMode, SuplexDatabase},
-    runtimes::task_display::{self, AttachRequest},
+    runtimes::task_display::{self, SessionDisplay},
 };
 
 const WAITING_LABEL: &str = "Waiting for Codex output...\n";
@@ -344,106 +341,25 @@ pub async fn serve(runtime_directory: &str) -> Result<(), Box<dyn Error>> {
 /// Dispatch shows the session in Herdr first. The display is an observation;
 /// its failure never blocks native work.
 pub fn show(database_path: &Path, session: &str, native: &str, worktree: &Path, model: &str) {
-    let _ = attach(
-        &Herdr::default(),
-        database_path,
-        session,
-        native,
-        worktree,
-        model,
-    );
-}
-
-/// Opens or refreshes the Herdr display for one Codex task session. The
-/// display is best effort: callers ignore its failure and continue native work.
-pub fn attach(
-    herdr: &Herdr,
-    database_path: &Path,
-    session_id: &str,
-    native_session_id: &str,
-    worktree: &Path,
-    model: &str,
-) -> Result<String, Box<dyn Error>> {
-    let runtime_directory = session_reader::session_directory(database_path, session_id)?;
-    let database = SuplexDatabase::open(database_path, OpenMode::ReadWrite)?;
-    let (task_id, kind, generation, pane_id) = database.connection().query_row(
-        "SELECT task_id, kind, generation, pane_id FROM suplex_task_sessions WHERE id = ?1",
-        [session_id],
-        |row| {
-            Ok((
-                row.get::<_, String>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, i64>(2)?,
-                row.get::<_, Option<String>>(3)?,
-            ))
-        },
-    )?;
-    let shell_pane_id = database
-        .connection()
-        .query_row(
-            "SELECT shell_pane_id FROM suplex_task_controls WHERE task_id = ?1",
-            [&task_id],
-            |row| row.get::<_, Option<String>>(0),
-        )
-        .optional()?
-        .flatten();
-    let root_pane_id = if kind == "worker" {
-        database
-            .connection()
-            .query_row(
-                "SELECT pane_id FROM suplex_task_sessions WHERE task_id = ?1 AND kind = 'root' AND is_current = 1",
-                [&task_id],
-                |row| row.get::<_, Option<String>>(0),
-            )
-            .optional()?
-            .flatten()
-    } else {
-        None
+    let Ok(runtime_directory) = session_reader::session_directory(database_path, session) else {
+        return;
     };
-    let display = display_command(&runtime_directory)?;
-    let is_attached = |argv: &[String]| display_attached(&runtime_directory, argv);
-    let now = || Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
-    let directory = worktree.to_string_lossy();
-    task_display::attach_task_display(
-        herdr,
-        &AttachRequest {
-            task_id: &task_id,
-            binding_id: session_id,
-            directory: &directory,
-            role: if kind == "root" {
-                "Coordinator"
-            } else {
-                "Worker"
-            },
+    let Ok(display) = display_command(&runtime_directory) else {
+        return;
+    };
+    let _ = task_display::attach_session(
+        &Herdr::default(),
+        &SessionDisplay {
+            database_path,
+            session_id: session,
+            native_session_id: native,
+            worktree,
             model,
             provider: "codex",
-            native_session_id,
-            generation: native_session_id,
-            pane_id: pane_id.as_deref(),
-            root_pane_id: root_pane_id.as_deref(),
-            shell_pane_id: shell_pane_id.as_deref(),
             command: &display.command,
-            is_attached: &is_attached,
+            is_attached: &|argv| display_attached(&runtime_directory, argv),
         },
-        &mut |pane| {
-            let changed = database.connection().execute(
-                "UPDATE suplex_task_sessions SET pane_id = ?1, updated_at = ?2 WHERE id = ?3 AND generation = ?4 AND is_current = 1 AND lifecycle <> 'cancelled'",
-                params![pane, now(), session_id, generation],
-            )?;
-            if changed == 1 {
-                Ok(())
-            } else {
-                Err("stale_generation".into())
-            }
-        },
-        &mut |pane| {
-            database.connection().execute(
-                "UPDATE suplex_task_controls SET shell_pane_id = ?1, updated_at = ?2 WHERE task_id = ?3",
-                params![pane, now(), task_id],
-            )?;
-            Ok(())
-        },
-    )
+    );
 }
 
 #[cfg(test)]

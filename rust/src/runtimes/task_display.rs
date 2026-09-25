@@ -9,8 +9,12 @@ use std::{
     time::{Duration, Instant},
 };
 
+use chrono::{SecondsFormat, Utc};
+use rusqlite::{OptionalExtension, params};
+
 use crate::{
     integrations::herdr::{Herdr, HerdrFailure, MetadataReport, Pane, ProcessInfo},
+    platform::database::{OpenMode, SuplexDatabase},
     tasks::pane_layout::split_balanced_pane_row,
 };
 
@@ -300,6 +304,124 @@ pub fn attach_task_display(
     }
     herdr.run_pane_command(&pane.pane_id, request.command)?;
     Ok(pane.pane_id)
+}
+
+/// One native session's display, bound in the task database.
+pub struct SessionDisplay<'a> {
+    pub database_path: &'a Path,
+    pub session_id: &'a str,
+    pub native_session_id: &'a str,
+    pub worktree: &'a Path,
+    pub model: &'a str,
+    pub provider: &'a str,
+    /// Shell command that runs the passive display in the pane.
+    pub command: &'a str,
+    pub is_attached: &'a dyn Fn(&[String]) -> bool,
+}
+
+/// Opens or refreshes the Herdr display for one task session and records the
+/// pane bindings. Callers ignore its failure and continue native work.
+pub fn attach_session(herdr: &Herdr, display: &SessionDisplay<'_>) -> DisplayResult<String> {
+    let database = SuplexDatabase::open(display.database_path, OpenMode::ReadWrite)?;
+    let (task_id, kind, generation, pane_id) = database.connection().query_row(
+        "SELECT task_id, kind, generation, pane_id FROM suplex_task_sessions WHERE id = ?1",
+        [display.session_id],
+        |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, i64>(2)?,
+                row.get::<_, Option<String>>(3)?,
+            ))
+        },
+    )?;
+    let shell_pane_id = database
+        .connection()
+        .query_row(
+            "SELECT shell_pane_id FROM suplex_task_controls WHERE task_id = ?1",
+            [&task_id],
+            |row| row.get::<_, Option<String>>(0),
+        )
+        .optional()?
+        .flatten();
+    let root_pane_id = if kind == "worker" {
+        database
+            .connection()
+            .query_row(
+                "SELECT pane_id FROM suplex_task_sessions WHERE task_id = ?1 AND kind = 'root' AND is_current = 1",
+                [&task_id],
+                |row| row.get::<_, Option<String>>(0),
+            )
+            .optional()?
+            .flatten()
+    } else {
+        None
+    };
+    let now = || Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
+    let directory = display.worktree.to_string_lossy();
+    attach_task_display(
+        herdr,
+        &AttachRequest {
+            task_id: &task_id,
+            binding_id: display.session_id,
+            directory: &directory,
+            role: if kind == "root" {
+                "Coordinator"
+            } else {
+                "Worker"
+            },
+            model: display.model,
+            provider: display.provider,
+            native_session_id: display.native_session_id,
+            generation: display.native_session_id,
+            pane_id: pane_id.as_deref(),
+            root_pane_id: root_pane_id.as_deref(),
+            shell_pane_id: shell_pane_id.as_deref(),
+            command: display.command,
+            is_attached: display.is_attached,
+        },
+        &mut |pane| {
+            let changed = database.connection().execute(
+                "UPDATE suplex_task_sessions SET pane_id = ?1, updated_at = ?2 WHERE id = ?3 AND generation = ?4 AND is_current = 1 AND lifecycle <> 'cancelled'",
+                params![pane, now(), display.session_id, generation],
+            )?;
+            if changed == 1 {
+                Ok(())
+            } else {
+                Err("stale_generation".into())
+            }
+        },
+        &mut |pane| {
+            database.connection().execute(
+                "UPDATE suplex_task_controls SET shell_pane_id = ?1, updated_at = ?2 WHERE task_id = ?3",
+                params![pane, now(), task_id],
+            )?;
+            Ok(())
+        },
+    )
+}
+
+/// Shows a harness session in Herdr before dispatch. The display is an
+/// observation; its failure never blocks native work.
+pub fn show_scope(
+    scope: &crate::runtimes::task_harness::TaskScope<'_>,
+    provider: &str,
+    command: &str,
+    is_attached: &dyn Fn(&[String]) -> bool,
+) {
+    let _ = attach_session(
+        &Herdr::default(),
+        &SessionDisplay {
+            database_path: scope.database_path,
+            session_id: scope.session_id,
+            native_session_id: scope.native_session_id,
+            worktree: scope.worktree,
+            model: scope.model,
+            provider,
+            command,
+            is_attached,
+        },
+    );
 }
 
 #[cfg(test)]

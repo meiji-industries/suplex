@@ -379,6 +379,16 @@ impl TaskHarness for ClaudeCodeTaskRuntime {
             scope.project_environment,
         );
         let args = claude_arguments(scope, scope.native_session_id, resume, &directory);
+        if let Ok(display) = super::display::claude_display_command(&directory) {
+            let attached =
+                |argv: &[String]| super::display::claude_display_attached(&directory, argv);
+            crate::runtimes::task_display::show_scope(
+                scope,
+                "claude-code",
+                &display.command,
+                &attached,
+            );
+        }
         let record = headless::dispatch_with_exclusions(
             headless::DispatchInput {
                 directory: &directory,

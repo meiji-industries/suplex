@@ -1,0 +1,27 @@
+{
+  "contract": "projects.ProjectIntegrationSchema",
+  "case": "invalid_site_type",
+  "input": {
+    "tracker": {
+      "kind": "jira",
+      "site": 1,
+      "project": "APP",
+      "emailEnvironment": "JIRA_EMAIL",
+      "tokenEnvironment": "JIRA_TOKEN"
+    }
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "expected": "string",
+        "code": "invalid_type",
+        "path": [
+          "tracker",
+          "site"
+        ],
+        "message": "Invalid input: expected string, received number"
+      }
+    ]
+  }
+}

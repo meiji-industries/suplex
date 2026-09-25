@@ -1,0 +1,29 @@
+{
+  "contract": "projects.ProjectCreateBodySchema",
+  "case": "full_project",
+  "input": {
+    "name": "Project",
+    "repositoryPath": "/tmp/project",
+    "worktreeRoot": "/tmp/worktrees",
+    "repository": "team/project",
+    "baseBranch": "main",
+    "setupCommand": "pnpm install",
+    "verificationCommand": "pnpm test",
+    "rootProfileId": "root",
+    "workerProfileId": "worker"
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "name": "Project",
+      "repositoryPath": "/tmp/project",
+      "worktreeRoot": "/tmp/worktrees",
+      "repository": "team/project",
+      "baseBranch": "main",
+      "setupCommand": "pnpm install",
+      "verificationCommand": "pnpm test",
+      "rootProfileId": "root",
+      "workerProfileId": "worker"
+    }
+  }
+}

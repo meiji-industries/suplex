@@ -23,6 +23,19 @@ test("projects expose two profile defaults and no check or activation mirror", a
   } finally { await f.close(); }
 });
 
+test("malformed Jira URL refinement keeps the existing internal error response", async () => {
+  const f = await nativeApp();
+  try {
+    const input = { repositoryUrl: "repo", integration: { tracker: { kind: "jira", site: "x", project: "APP", emailEnvironment: "JIRA_EMAIL", tokenEnvironment: "JIRA_TOKEN" } } };
+    const thrown = await f.app.inject({ method: "POST", url: `/api/companies/${f.company.id}/projects`, headers: f.headers, payload: input });
+    expect(thrown.statusCode).toBe(500);
+    expect(thrown.body).toBe('{"error":"Internal server error"}');
+    const rejected = await f.app.inject({ method: "POST", url: `/api/companies/${f.company.id}/projects`, headers: f.headers, payload: { ...input, integration: { tracker: { ...input.integration.tracker, site: "https://attacker.example/" } } } });
+    expect(rejected.statusCode).toBe(400);
+    expect(rejected.json().error).toBe("Invalid request");
+  } finally { await f.close(); }
+});
+
 test("project task sources accept issue discovery through the HTTP route", async () => {
   const f = await nativeApp();
   try {

@@ -1,0 +1,14 @@
+{
+  "contract": "projects.ProjectExecutionSchema",
+  "case": "defaults",
+  "input": {},
+  "expected": {
+    "accepted": true,
+    "value": {
+      "instructions": "",
+      "skillDirectories": [],
+      "environment": {},
+      "mcp": []
+    }
+  }
+}

@@ -1,0 +1,40 @@
+{
+  "contract": "projects.ProjectRepositoryBodySchema",
+  "case": "nested_unknown",
+  "input": {
+    "repositoryUrl": "repo",
+    "integration": {
+      "repository": {
+        "kind": "github",
+        "extra": true
+      },
+      "extra": true
+    }
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "unrecognized_keys",
+        "keys": [
+          "extra"
+        ],
+        "path": [
+          "integration",
+          "repository"
+        ],
+        "message": "Unrecognized key: \"extra\""
+      },
+      {
+        "code": "unrecognized_keys",
+        "keys": [
+          "extra"
+        ],
+        "path": [
+          "integration"
+        ],
+        "message": "Unrecognized key: \"extra\""
+      }
+    ]
+  }
+}

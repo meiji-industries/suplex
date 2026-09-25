@@ -1,0 +1,13 @@
+{
+  "contract": "projects.ProjectPatchBodySchema",
+  "case": "null_provider_policy",
+  "input": {
+    "providerPolicy": null
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "providerPolicy": null
+    }
+  }
+}

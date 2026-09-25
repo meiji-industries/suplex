@@ -1,0 +1,55 @@
+{
+  "contract": "projects.ProjectBodySchema",
+  "case": "invalid_provider_policy",
+  "input": {
+    "name": "Project",
+    "repositoryPath": "/tmp/project",
+    "worktreeRoot": "/tmp/worktrees",
+    "repository": "team/project",
+    "baseBranch": "main",
+    "setupCommand": "pnpm install",
+    "verificationCommand": "pnpm test",
+    "rootProfileId": "root",
+    "workerProfileId": "worker",
+    "providerPolicy": {
+      "allowedProviders": [
+        "bad"
+      ],
+      "allowedInstanceIds": [
+        ""
+      ]
+    }
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid_value",
+        "values": [
+          "opencode",
+          "claude-code",
+          "devin",
+          "codex"
+        ],
+        "path": [
+          "providerPolicy",
+          "allowedProviders",
+          0
+        ],
+        "message": "Invalid option: expected one of \"opencode\"|\"claude-code\"|\"devin\"|\"codex\""
+      },
+      {
+        "origin": "string",
+        "code": "too_small",
+        "minimum": 1,
+        "inclusive": true,
+        "path": [
+          "providerPolicy",
+          "allowedInstanceIds",
+          0
+        ],
+        "message": "Too small: expected string to have >=1 characters"
+      }
+    ]
+  }
+}

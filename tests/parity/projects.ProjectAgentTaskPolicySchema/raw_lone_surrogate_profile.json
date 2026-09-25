@@ -1,0 +1,10 @@
+{
+  "contract": "projects.ProjectAgentTaskPolicySchema",
+  "case": "raw_lone_surrogate_profile",
+  "encoding": "raw-json",
+  "input": "{\"workflowIds\":[\"flow\"],\"defaultWorkflowId\":\"flow\",\"rootProfileIds\":[\"\\ud800\"],\"workerProfileIds\":[\"worker\"]}",
+  "expected": {
+    "accepted": true,
+    "value": "{\"workflowIds\":[\"flow\"],\"defaultWorkflowId\":\"flow\",\"templateIds\":[],\"rootProfileIds\":[\"\\ud800\"],\"workerProfileIds\":[\"worker\"],\"advisorProfileIds\":{\"reviewer\":[],\"planner_a\":[],\"planner_b\":[],\"rater\":[]},\"deliveryTarget\":\"pull_request_draft\",\"runProjectTests\":true,\"visualEvidence\":\"off\"}"
+  }
+}

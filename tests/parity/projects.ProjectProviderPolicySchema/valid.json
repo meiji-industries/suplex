@@ -1,0 +1,23 @@
+{
+  "contract": "projects.ProjectProviderPolicySchema",
+  "case": "valid",
+  "input": {
+    "allowedProviders": [
+      "codex"
+    ],
+    "allowedInstanceIds": [
+      "instance"
+    ]
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "allowedProviders": [
+        "codex"
+      ],
+      "allowedInstanceIds": [
+        "instance"
+      ]
+    }
+  }
+}

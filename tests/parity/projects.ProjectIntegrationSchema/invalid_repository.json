@@ -1,0 +1,26 @@
+{
+  "contract": "projects.ProjectIntegrationSchema",
+  "case": "invalid_repository",
+  "input": {
+    "repository": {
+      "kind": "bitbucket",
+      "tokenEnvironment": "bad"
+    }
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "origin": "string",
+        "code": "invalid_format",
+        "format": "regex",
+        "pattern": "/^[A-Z][A-Z0-9_]{0,127}$/",
+        "path": [
+          "repository",
+          "tokenEnvironment"
+        ],
+        "message": "Invalid string: must match pattern /^[A-Z][A-Z0-9_]{0,127}$/"
+      }
+    ]
+  }
+}

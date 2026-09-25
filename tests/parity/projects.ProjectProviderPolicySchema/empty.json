@@ -1,0 +1,15 @@
+{
+  "contract": "projects.ProjectProviderPolicySchema",
+  "case": "empty",
+  "input": {
+    "allowedProviders": [],
+    "allowedInstanceIds": []
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "allowedProviders": [],
+      "allowedInstanceIds": []
+    }
+  }
+}

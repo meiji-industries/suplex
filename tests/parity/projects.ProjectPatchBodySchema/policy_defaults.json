@@ -1,0 +1,45 @@
+{
+  "contract": "projects.ProjectPatchBodySchema",
+  "case": "policy_defaults",
+  "input": {
+    "agentTaskPolicy": {
+      "workflowIds": [
+        "workflow"
+      ],
+      "defaultWorkflowId": "workflow",
+      "rootProfileIds": [
+        "root"
+      ],
+      "workerProfileIds": [
+        "worker"
+      ]
+    }
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "agentTaskPolicy": {
+        "workflowIds": [
+          "workflow"
+        ],
+        "defaultWorkflowId": "workflow",
+        "templateIds": [],
+        "rootProfileIds": [
+          "root"
+        ],
+        "workerProfileIds": [
+          "worker"
+        ],
+        "advisorProfileIds": {
+          "reviewer": [],
+          "planner_a": [],
+          "planner_b": [],
+          "rater": []
+        },
+        "deliveryTarget": "pull_request_draft",
+        "runProjectTests": true,
+        "visualEvidence": "off"
+      }
+    }
+  }
+}

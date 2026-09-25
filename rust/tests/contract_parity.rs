@@ -1,6 +1,9 @@
 use serde::Deserialize;
 use serde_json::Value;
-use suplex::http::contracts;
+use suplex::{
+    http::contracts::{self, JsContractFailure},
+    shared::js_json::{self, JsDocument},
+};
 
 #[derive(Deserialize)]
 struct Fixture {
@@ -14,17 +17,50 @@ struct Fixture {
 struct Expected {
     accepted: bool,
     value: Option<Value>,
-    error: Option<Vec<Value>>,
+    error: Option<Value>,
 }
 
 #[test]
 fn ported_contracts_match_zod_fixtures() {
+    let lossless_schemas = [
+        "auth.CompanyNameBodySchema",
+        "auth.DisplayNameBodySchema",
+        "auth.MembershipBodySchema",
+        "auth.CompanyIssueCodeBodySchema",
+        "auth.ProfileBodySchema",
+        "common.EmptyBodySchema",
+        "common.TokenBodySchema",
+        "common.RegistrationVerificationBodySchema",
+        "common.AuthenticationVerificationBodySchema",
+        "projects.ProjectAgentTaskPolicySchema",
+        "projects.ProjectRepositoryBodySchema",
+        "projects.ProjectIntegrationSchema",
+        "projects.ProjectExecutionSchema",
+        "projects.ProjectProviderPolicySchema",
+        "projects.ProjectNewRepositoryBodySchema",
+        "projects.ProjectBodySchema",
+        "projects.ProjectPatchBodySchema",
+        "projects.ProjectCreateBodySchema",
+        "projects.ProjectResponseSchema",
+        "projects.ProjectListResponseSchema",
+    ];
     let directory = concat!(env!("CARGO_MANIFEST_DIR"), "/../tests/parity");
     let mut verified = 0;
     let mut schemas = std::collections::BTreeSet::new();
     for entry in std::fs::read_dir(directory).unwrap() {
         let path = entry.unwrap().path();
-        if !path.is_dir() || path.file_name().is_some_and(|name| name == "hash-bytes") {
+        if !path.is_dir()
+            || path.file_name().is_some_and(|name| {
+                [
+                    "hash-bytes",
+                    "projects.ProjectIntegrationSchema",
+                    "projects.ProjectExecutionSchema",
+                    "projects.ProjectProviderPolicySchema",
+                ]
+                .iter()
+                .any(|candidate| name == *candidate)
+            })
+        {
             continue;
         }
         for fixture_path in std::fs::read_dir(path).unwrap() {
@@ -40,9 +76,35 @@ fn ported_contracts_match_zod_fixtures() {
             }
             let fixture: Fixture =
                 serde_json::from_slice(&std::fs::read(&fixture_path).unwrap()).unwrap();
-            if let Some(actual) =
+            let input = fixture.fields.get("input").map(|value| {
+                JsDocument::parse(&js_json::stringify(value)).expect("ordinary fixture is JSON")
+            });
+            let detailed = contracts::validate_js_detailed(&fixture.contract, input.as_ref());
+            if lossless_schemas.contains(&fixture.contract.as_str()) {
+                assert!(
+                    detailed.is_some(),
+                    "lossless schema was skipped: {}",
+                    fixture_path.display()
+                );
+            }
+            let actual = if let Some(result) = detailed {
+                Some(match result {
+                    Ok(value) => Ok(value
+                        .to_serde_if_representable()
+                        .expect("ordinary output is representable")),
+                    Err(JsContractFailure::Issues(issues)) => Err(issues
+                        .to_serde_if_representable()
+                        .expect("ordinary issues are representable")),
+                    Err(JsContractFailure::Thrown(thrown)) => Err(thrown
+                        .as_document()
+                        .to_serde_if_representable()
+                        .expect("ordinary thrown metadata is representable")),
+                })
+            } else {
                 contracts::validate(&fixture.contract, fixture.fields.get("input"))
-            {
+                    .map(|result| result.map_err(Value::Array))
+            };
+            if let Some(actual) = actual {
                 schemas.insert(fixture.contract.clone());
                 match actual {
                     Ok(value) => {
@@ -68,7 +130,7 @@ fn ported_contracts_match_zod_fixtures() {
             }
         }
     }
-    assert_eq!(schemas.len(), 61, "sixty-one explicitly ported schemas");
+    assert_eq!(schemas.len(), 68, "sixty-eight explicitly ported schemas");
     assert!(
         verified >= 140,
         "every ported schema has multiple Zod cases"

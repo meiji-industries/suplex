@@ -1,0 +1,37 @@
+{
+  "contract": "projects.ProjectBodySchema",
+  "case": "empty_skill_directory",
+  "input": {
+    "name": "Project",
+    "repositoryPath": "/tmp/project",
+    "worktreeRoot": "/tmp/worktrees",
+    "repository": "team/project",
+    "baseBranch": "main",
+    "setupCommand": "pnpm install",
+    "verificationCommand": "pnpm test",
+    "rootProfileId": "root",
+    "workerProfileId": "worker",
+    "execution": {
+      "skillDirectories": [
+        ""
+      ]
+    }
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "origin": "string",
+        "code": "too_small",
+        "minimum": 1,
+        "inclusive": true,
+        "path": [
+          "execution",
+          "skillDirectories",
+          0
+        ],
+        "message": "Too small: expected string to have >=1 characters"
+      }
+    ]
+  }
+}

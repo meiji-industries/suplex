@@ -1,0 +1,10 @@
+{
+  "contract": "projects.ProjectRepositoryBodySchema",
+  "case": "raw_malformed_jira_url",
+  "encoding": "raw-json",
+  "input": "{\"repositoryUrl\":\"repo\",\"integration\":{\"tracker\":{\"kind\":\"jira\",\"site\":\"x\",\"project\":\"APP\",\"emailEnvironment\":\"JIRA_EMAIL\",\"tokenEnvironment\":\"JIRA_TOKEN\"}}}",
+  "expected": {
+    "accepted": false,
+    "error": "{\"kind\":\"thrown\",\"name\":\"TypeError\",\"code\":\"ERR_INVALID_URL\",\"message\":\"Invalid URL\",\"input\":\"x\"}"
+  }
+}

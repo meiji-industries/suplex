@@ -1,0 +1,53 @@
+{
+  "contract": "projects.ProjectBodySchema",
+  "case": "reserved_mcp_name",
+  "input": {
+    "name": "Project",
+    "repositoryPath": "/tmp/project",
+    "worktreeRoot": "/tmp/worktrees",
+    "repository": "team/project",
+    "baseBranch": "main",
+    "setupCommand": "pnpm install",
+    "verificationCommand": "pnpm test",
+    "rootProfileId": "root",
+    "workerProfileId": "worker",
+    "execution": {
+      "mcp": [
+        {
+          "name": "suplex_bad",
+          "transport": {
+            "type": "http",
+            "url": "https://example.test/mcp",
+            "headers": {
+              "Authorization": "CONTEXT7_TOKEN"
+            }
+          },
+          "grants": {
+            "root": [
+              "query_docs"
+            ],
+            "advisor": [],
+            "worker": [
+              "query_docs"
+            ]
+          }
+        }
+      ]
+    }
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "custom",
+        "path": [
+          "execution",
+          "mcp",
+          0,
+          "name"
+        ],
+        "message": "Suplex server names are reserved"
+      }
+    ]
+  }
+}

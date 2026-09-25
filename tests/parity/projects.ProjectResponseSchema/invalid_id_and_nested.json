@@ -1,0 +1,49 @@
+{
+  "contract": "projects.ProjectResponseSchema",
+  "case": "invalid_id_and_nested",
+  "input": {
+    "name": "Project",
+    "repositoryPath": "/tmp/project",
+    "worktreeRoot": "/tmp/worktrees",
+    "repository": "team/project",
+    "baseBranch": "main",
+    "setupCommand": "pnpm install",
+    "verificationCommand": "pnpm test",
+    "rootProfileId": "root",
+    "workerProfileId": "worker",
+    "id": null,
+    "companyId": "company",
+    "createdAt": "now",
+    "updatedAt": "now",
+    "execution": {
+      "skillDirectories": [
+        ""
+      ]
+    }
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "origin": "string",
+        "code": "too_small",
+        "minimum": 1,
+        "inclusive": true,
+        "path": [
+          "execution",
+          "skillDirectories",
+          0
+        ],
+        "message": "Too small: expected string to have >=1 characters"
+      },
+      {
+        "expected": "string",
+        "code": "invalid_type",
+        "path": [
+          "id"
+        ],
+        "message": "Invalid input: expected string, received null"
+      }
+    ]
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "contract": "projects.ProjectExecutionSchema",
+  "case": "invalid_environment_value",
+  "input": {
+    "environment": {
+      "KEY": 1
+    }
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "expected": "string",
+        "code": "invalid_type",
+        "path": [
+          "environment",
+          "KEY"
+        ],
+        "message": "Invalid input: expected string, received number"
+      }
+    ]
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "contract": "projects.ProjectCreateBodySchema",
+  "case": "existing_repository",
+  "input": {
+    "repositoryUrl": "https://github.com/team/repo.git"
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "repositoryUrl": "https://github.com/team/repo.git"
+    }
+  }
+}

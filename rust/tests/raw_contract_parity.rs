@@ -35,8 +35,9 @@ fn lossless_contracts_match_zod_raw_json() {
             }
             let fixture: Fixture = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
             assert_eq!(fixture.encoding, "raw-json", "{}", path.display());
-            let input = JsDocument::parse(&fixture.input).unwrap();
-            let actual = contracts::validate_js(&fixture.contract, Some(&input))
+            let input = JsDocument::parse(&fixture.input)
+                .unwrap_or_else(|error| panic!("{}: {error}", path.display()));
+            let actual = contracts::validate_js_detailed(&fixture.contract, Some(&input))
                 .unwrap_or_else(|| panic!("unported raw contract: {}", fixture.contract));
             match actual {
                 Ok(value) => {
@@ -48,10 +49,10 @@ fn lossless_contracts_match_zod_raw_json() {
                         path.display()
                     );
                 }
-                Err(issues) => {
+                Err(failure) => {
                     assert!(!fixture.expected.accepted, "{}", path.display());
                     assert_eq!(
-                        Some(serde_json::to_string(&issues).unwrap()),
+                        Some(failure.stringify()),
                         fixture.expected.error,
                         "{}",
                         path.display()
@@ -61,7 +62,7 @@ fn lossless_contracts_match_zod_raw_json() {
             verified += 1;
         }
     }
-    assert_eq!(verified, 13);
+    assert_eq!(verified, 26);
 
     let mut nested = serde_json::json!(0);
     for _ in 0..129 {

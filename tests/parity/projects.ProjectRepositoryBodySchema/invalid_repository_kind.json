@@ -1,0 +1,33 @@
+{
+  "contract": "projects.ProjectRepositoryBodySchema",
+  "case": "invalid_repository_kind",
+  "input": {
+    "repositoryUrl": "repo",
+    "integration": {
+      "repository": {
+        "kind": "gitlab"
+      }
+    }
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid_union",
+        "errors": [],
+        "note": "No matching discriminator",
+        "discriminator": "kind",
+        "options": [
+          "github",
+          "bitbucket"
+        ],
+        "path": [
+          "integration",
+          "repository",
+          "kind"
+        ],
+        "message": "Invalid discriminator value. Expected 'github' | 'bitbucket'"
+      }
+    ]
+  }
+}

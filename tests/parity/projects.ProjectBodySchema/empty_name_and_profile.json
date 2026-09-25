@@ -1,0 +1,40 @@
+{
+  "contract": "projects.ProjectBodySchema",
+  "case": "empty_name_and_profile",
+  "input": {
+    "name": "",
+    "repositoryPath": "/tmp/project",
+    "worktreeRoot": "/tmp/worktrees",
+    "repository": "team/project",
+    "baseBranch": "main",
+    "setupCommand": "pnpm install",
+    "verificationCommand": "pnpm test",
+    "rootProfileId": "",
+    "workerProfileId": "worker"
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "origin": "string",
+        "code": "too_small",
+        "minimum": 1,
+        "inclusive": true,
+        "path": [
+          "name"
+        ],
+        "message": "Too small: expected string to have >=1 characters"
+      },
+      {
+        "origin": "string",
+        "code": "too_small",
+        "minimum": 1,
+        "inclusive": true,
+        "path": [
+          "rootProfileId"
+        ],
+        "message": "Too small: expected string to have >=1 characters"
+      }
+    ]
+  }
+}

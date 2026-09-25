@@ -1,0 +1,123 @@
+{
+  "contract": "projects.ProjectCreateBodySchema",
+  "case": "ambiguous_repository_fields",
+  "input": {
+    "repositoryUrl": "repo",
+    "repositoryName": "repo"
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid_union",
+        "errors": [
+          [
+            {
+              "code": "unrecognized_keys",
+              "keys": [
+                "repositoryName"
+              ],
+              "path": [],
+              "message": "Unrecognized key: \"repositoryName\""
+            }
+          ],
+          [
+            {
+              "code": "unrecognized_keys",
+              "keys": [
+                "repositoryUrl"
+              ],
+              "path": [],
+              "message": "Unrecognized key: \"repositoryUrl\""
+            }
+          ],
+          [
+            {
+              "expected": "string",
+              "code": "invalid_type",
+              "path": [
+                "name"
+              ],
+              "message": "Invalid input: expected string, received undefined"
+            },
+            {
+              "expected": "string",
+              "code": "invalid_type",
+              "path": [
+                "repositoryPath"
+              ],
+              "message": "Invalid input: expected string, received undefined"
+            },
+            {
+              "expected": "string",
+              "code": "invalid_type",
+              "path": [
+                "worktreeRoot"
+              ],
+              "message": "Invalid input: expected string, received undefined"
+            },
+            {
+              "expected": "string",
+              "code": "invalid_type",
+              "path": [
+                "repository"
+              ],
+              "message": "Invalid input: expected string, received undefined"
+            },
+            {
+              "expected": "string",
+              "code": "invalid_type",
+              "path": [
+                "baseBranch"
+              ],
+              "message": "Invalid input: expected string, received undefined"
+            },
+            {
+              "expected": "string",
+              "code": "invalid_type",
+              "path": [
+                "setupCommand"
+              ],
+              "message": "Invalid input: expected string, received undefined"
+            },
+            {
+              "expected": "string",
+              "code": "invalid_type",
+              "path": [
+                "verificationCommand"
+              ],
+              "message": "Invalid input: expected string, received undefined"
+            },
+            {
+              "expected": "string",
+              "code": "invalid_type",
+              "path": [
+                "rootProfileId"
+              ],
+              "message": "Invalid input: expected string, received undefined"
+            },
+            {
+              "expected": "string",
+              "code": "invalid_type",
+              "path": [
+                "workerProfileId"
+              ],
+              "message": "Invalid input: expected string, received undefined"
+            },
+            {
+              "code": "unrecognized_keys",
+              "keys": [
+                "repositoryUrl",
+                "repositoryName"
+              ],
+              "path": [],
+              "message": "Unrecognized keys: \"repositoryUrl\", \"repositoryName\""
+            }
+          ]
+        ],
+        "path": [],
+        "message": "Invalid input"
+      }
+    ]
+  }
+}

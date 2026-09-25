@@ -1,0 +1,20 @@
+{
+  "contract": "projects.ProjectPatchBodySchema",
+  "case": "unknown_patch",
+  "input": {
+    "extra": true
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "unrecognized_keys",
+        "keys": [
+          "extra"
+        ],
+        "path": [],
+        "message": "Unrecognized key: \"extra\""
+      }
+    ]
+  }
+}

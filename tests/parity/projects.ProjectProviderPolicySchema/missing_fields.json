@@ -1,0 +1,26 @@
+{
+  "contract": "projects.ProjectProviderPolicySchema",
+  "case": "missing_fields",
+  "input": {},
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "expected": "array",
+        "code": "invalid_type",
+        "path": [
+          "allowedProviders"
+        ],
+        "message": "Invalid input: expected array, received undefined"
+      },
+      {
+        "expected": "array",
+        "code": "invalid_type",
+        "path": [
+          "allowedInstanceIds"
+        ],
+        "message": "Invalid input: expected array, received undefined"
+      }
+    ]
+  }
+}

@@ -1,0 +1,86 @@
+{
+  "contract": "projects.ProjectBodySchema",
+  "case": "too_many_skill_directories",
+  "input": {
+    "name": "Project",
+    "repositoryPath": "/tmp/project",
+    "worktreeRoot": "/tmp/worktrees",
+    "repository": "team/project",
+    "baseBranch": "main",
+    "setupCommand": "pnpm install",
+    "verificationCommand": "pnpm test",
+    "rootProfileId": "root",
+    "workerProfileId": "worker",
+    "execution": {
+      "skillDirectories": [
+        "/tmp/skill",
+        "/tmp/skill",
+        "/tmp/skill",
+        "/tmp/skill",
+        "/tmp/skill",
+        "/tmp/skill",
+        "/tmp/skill",
+        "/tmp/skill",
+        "/tmp/skill",
+        "/tmp/skill",
+        "/tmp/skill",
+        "/tmp/skill",
+        "/tmp/skill",
+        "/tmp/skill",
+        "/tmp/skill",
+        "/tmp/skill",
+        "/tmp/skill",
+        "/tmp/skill",
+        "/tmp/skill",
+        "/tmp/skill",
+        "/tmp/skill",
+        "/tmp/skill",
+        "/tmp/skill",
+        "/tmp/skill",
+        "/tmp/skill",
+        "/tmp/skill",
+        "/tmp/skill",
+        "/tmp/skill",
+        "/tmp/skill",
+        "/tmp/skill",
+        "/tmp/skill",
+        "/tmp/skill",
+        "/tmp/skill",
+        "/tmp/skill",
+        "/tmp/skill",
+        "/tmp/skill",
+        "/tmp/skill",
+        "/tmp/skill",
+        "/tmp/skill",
+        "/tmp/skill",
+        "/tmp/skill",
+        "/tmp/skill",
+        "/tmp/skill",
+        "/tmp/skill",
+        "/tmp/skill",
+        "/tmp/skill",
+        "/tmp/skill",
+        "/tmp/skill",
+        "/tmp/skill",
+        "/tmp/skill",
+        "/tmp/skill"
+      ]
+    }
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "origin": "array",
+        "code": "too_big",
+        "maximum": 50,
+        "inclusive": true,
+        "path": [
+          "execution",
+          "skillDirectories"
+        ],
+        "message": "Too big: expected array to have <=50 items"
+      }
+    ]
+  }
+}

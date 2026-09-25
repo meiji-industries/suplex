@@ -1,0 +1,47 @@
+{
+  "contract": "projects.ProjectListResponseSchema",
+  "case": "one_stripped_project",
+  "input": {
+    "projects": [
+      {
+        "name": "Project",
+        "repositoryPath": "/tmp/project",
+        "worktreeRoot": "/tmp/worktrees",
+        "repository": "team/project",
+        "baseBranch": "main",
+        "setupCommand": "pnpm install",
+        "verificationCommand": "pnpm test",
+        "rootProfileId": "root",
+        "workerProfileId": "worker",
+        "id": "project",
+        "companyId": "company",
+        "createdAt": "now",
+        "updatedAt": "now",
+        "extra": true
+      }
+    ],
+    "extra": true
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "projects": [
+        {
+          "name": "Project",
+          "repositoryPath": "/tmp/project",
+          "worktreeRoot": "/tmp/worktrees",
+          "repository": "team/project",
+          "baseBranch": "main",
+          "setupCommand": "pnpm install",
+          "verificationCommand": "pnpm test",
+          "rootProfileId": "root",
+          "workerProfileId": "worker",
+          "id": "project",
+          "companyId": "company",
+          "createdAt": "now",
+          "updatedAt": "now"
+        }
+      ]
+    }
+  }
+}

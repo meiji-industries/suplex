@@ -1,0 +1,15 @@
+{
+  "contract": "projects.ProjectPatchBodySchema",
+  "case": "empty_patch",
+  "input": {},
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "custom",
+        "path": [],
+        "message": "Provide at least one project field"
+      }
+    ]
+  }
+}

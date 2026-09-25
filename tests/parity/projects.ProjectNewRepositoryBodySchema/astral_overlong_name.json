@@ -1,0 +1,22 @@
+{
+  "contract": "projects.ProjectNewRepositoryBodySchema",
+  "case": "astral_overlong_name",
+  "input": {
+    "repositoryName": "😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀😀"
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "origin": "string",
+        "code": "too_big",
+        "maximum": 200,
+        "inclusive": true,
+        "path": [
+          "repositoryName"
+        ],
+        "message": "Too big: expected string to have <=200 characters"
+      }
+    ]
+  }
+}

@@ -12,6 +12,18 @@ const inputs = {
   unknown_field: { unexpected: true },
   empty_array: [],
 } as const;
+const projectBody = {
+  name: "Project", repositoryPath: "/tmp/project", worktreeRoot: "/tmp/worktrees",
+  repository: "team/project", baseBranch: "main", setupCommand: "pnpm install",
+  verificationCommand: "pnpm test", rootProfileId: "root", workerProfileId: "worker",
+};
+const projectPolicy = {
+  workflowIds: ["workflow"], defaultWorkflowId: "workflow", rootProfileIds: ["root"], workerProfileIds: ["worker"],
+};
+const mcpServer = {
+  name: "context7", transport: { type: "http", url: "https://example.test/mcp", headers: { Authorization: "CONTEXT7_TOKEN" } },
+  grants: { root: ["query_docs"], advisor: [], worker: ["query_docs"] },
+};
 const semanticInputs: Record<string, Record<string, unknown>> = {
   "common.IdSchema": {
     empty_string: "",
@@ -186,6 +198,68 @@ const semanticInputs: Record<string, Record<string, unknown>> = {
     wrong_enum_and_unknown: { workflowIds: ["workflow"], defaultWorkflowId: "workflow", rootProfileIds: ["root"], workerProfileIds: ["worker"], deliveryTarget: "publish", visualEvidence: "screenshots", extra: true },
     empty_array_workflow_id: { workflowIds: [[]], defaultWorkflowId: "workflow", rootProfileIds: ["root"], workerProfileIds: ["worker"] },
   },
+  "projects.ProjectRepositoryBodySchema": {
+    valid_bitbucket_and_jira: { repositoryUrl: "git@bitbucket.org:team/repo.git", integration: { repository: { kind: "bitbucket", tokenEnvironment: "BITBUCKET_TOKEN", usernameEnvironment: "BITBUCKET_USER" }, tracker: { kind: "jira", site: "https://team.atlassian.net/", project: "APP", emailEnvironment: "JIRA_EMAIL", tokenEnvironment: "JIRA_TOKEN" } }, baseBranch: "main" },
+    default_integration: { repositoryUrl: "repo", integration: {} },
+    empty_repository_url: { repositoryUrl: "" },
+    invalid_base_branch: { repositoryUrl: "repo", baseBranch: "" },
+    invalid_repository_kind: { repositoryUrl: "repo", integration: { repository: { kind: "gitlab" } } },
+    invalid_jira_host: { repositoryUrl: "repo", integration: { tracker: { kind: "jira", site: "https://attacker.example/", project: "APP", emailEnvironment: "JIRA_EMAIL", tokenEnvironment: "JIRA_TOKEN" } } },
+    malformed_jira_url: { repositoryUrl: "repo", integration: { tracker: { kind: "jira", site: "x", project: "APP", emailEnvironment: "JIRA_EMAIL", tokenEnvironment: "JIRA_TOKEN" } } },
+    nested_unknown: { repositoryUrl: "repo", integration: { repository: { kind: "github", extra: true }, extra: true } },
+    github_tracker_repository_pattern: { repositoryUrl: "repo", integration: { tracker: { kind: "github", repository: "bad" } } },
+    invalid_bitbucket_environment: { repositoryUrl: "repo", integration: { repository: { kind: "bitbucket", tokenEnvironment: "bad" } } },
+  },
+  "projects.ProjectNewRepositoryBodySchema": {
+    valid_with_branch: { repositoryName: "new-repo", baseBranch: "main" },
+    overlong_name: { repositoryName: "x".repeat(201) },
+    astral_overlong_name: { repositoryName: "😀".repeat(101) },
+    nested_integration: { repositoryName: "new-repo", integration: { repository: { kind: "github" }, tracker: null } },
+    invalid_branch_and_unknown: { repositoryName: "repo", baseBranch: "", extra: true },
+  },
+  "projects.ProjectBodySchema": {
+    valid_nested_defaults: { ...projectBody, integration: {}, execution: {}, agentTaskPolicy: projectPolicy, providerPolicy: { allowedProviders: ["codex"], allowedInstanceIds: [] } },
+    valid_mcp: { ...projectBody, execution: { mcp: [mcpServer], environment: { CUSTOM_TOKEN: "value" }, skillDirectories: ["/tmp/skills"] } },
+    duplicate_mcp_name: { ...projectBody, execution: { mcp: [mcpServer, mcpServer] } },
+    reserved_mcp_name: { ...projectBody, execution: { mcp: [{ ...mcpServer, name: "suplex_bad" }] } },
+    invalid_mcp_url: { ...projectBody, execution: { mcp: [{ ...mcpServer, transport: { type: "http", url: "not a URL" } }] } },
+    invalid_mcp_grant: { ...projectBody, execution: { mcp: [{ ...mcpServer, grants: { root: ["*"], advisor: [], worker: [] } }] } },
+    invalid_environment_key: { ...projectBody, execution: { environment: { HOME: "bad" } } },
+    invalid_environment_value: { ...projectBody, execution: { environment: { CUSTOM: 1 } } },
+    too_many_skill_directories: { ...projectBody, execution: { skillDirectories: Array(51).fill("/tmp/skill") } },
+    empty_skill_directory: { ...projectBody, execution: { skillDirectories: [""] } },
+    invalid_policy: { ...projectBody, agentTaskPolicy: { ...projectPolicy, defaultWorkflowId: "" } },
+    invalid_provider_policy: { ...projectBody, providerPolicy: { allowedProviders: ["bad"], allowedInstanceIds: [""] } },
+    unknown_top_level: { ...projectBody, extra: true },
+    empty_name_and_profile: { ...projectBody, name: "", rootProfileId: "" },
+  },
+  "projects.ProjectPatchBodySchema": {
+    empty_patch: {},
+    one_name: { name: "Renamed" },
+    execution_partial_no_defaults: { execution: { environment: { CUSTOM: "value" } } },
+    execution_empty_object: { execution: {} },
+    execution_invalid: { execution: { skillDirectories: [""] } },
+    policy_defaults: { agentTaskPolicy: projectPolicy },
+    null_provider_policy: { providerPolicy: null },
+    unknown_patch: { extra: true },
+    invalid_and_unknown: { name: "", extra: true },
+  },
+  "projects.ProjectCreateBodySchema": {
+    existing_repository: { repositoryUrl: "https://github.com/team/repo.git" },
+    new_repository: { repositoryName: "repo" },
+    full_project: projectBody,
+    ambiguous_repository_fields: { repositoryUrl: "repo", repositoryName: "repo" },
+    all_branch_errors: { repositoryUrl: "", repositoryName: "", name: "" },
+  },
+  "projects.ProjectResponseSchema": {
+    stripped_top_and_nested: { ...projectBody, id: "project", companyId: "company", createdAt: "now", updatedAt: "now", execution: { instructions: "run", extra: true }, extra: true },
+    missing_optional_repository: { ...projectBody, repository: undefined, id: "project", companyId: "company", createdAt: "now", updatedAt: "now" },
+    invalid_id_and_nested: { ...projectBody, id: null, companyId: "company", createdAt: "now", updatedAt: "now", execution: { skillDirectories: [""] } },
+  },
+  "projects.ProjectListResponseSchema": {
+    one_stripped_project: { projects: [{ ...projectBody, id: "project", companyId: "company", createdAt: "now", updatedAt: "now", extra: true }], extra: true },
+    invalid_second_project: { projects: [{ ...projectBody, id: "one", companyId: "company", createdAt: "now", updatedAt: "now" }, { ...projectBody, id: "two", companyId: "company", createdAt: "now", updatedAt: "now", rootProfileId: null }] },
+  },
   "projects.ProfileBodySchema": {
     trimmed_fields: { provider: "codex", model: "  codex/gpt-6  ", reasoningLevel: "high", serviceTier: "priority", name: "  Profile  ", role: "worker", avatarSeed: "0123456789abcdef0123456789abcdef", providerInstanceId: null },
     bad_model_pattern: { provider: "codex", model: "bad model", reasoningLevel: "high", serviceTier: "priority", name: "Profile", role: "worker", avatarSeed: "0123456789abcdef0123456789abcdef" },
@@ -305,7 +379,7 @@ const semanticInputs: Record<string, Record<string, unknown>> = {
   },
 };
 
-type Fixture = { contract: string; case: string; input?: unknown; expected: { accepted: true; value: unknown } | { accepted: false; error: z.core.$ZodIssue[] } };
+type Fixture = { contract: string; case: string; input?: unknown; expected: { accepted: true; value: unknown } | { accepted: false; error: unknown } };
 const rawInputs: Record<string, Record<string, string>> = {
   "common.EmptyBodySchema": {
     surrogate_and_overflow: String.raw`{"x":"\ud800","count":1e400}`,
@@ -337,6 +411,29 @@ const rawInputs: Record<string, Record<string, string>> = {
   "auth.ProfileBodySchema": {
     surrogate_and_overflow_unknown: String.raw`{"displayName":"\ud800","unknown":1e400}`,
     deep_unknown: `{"displayName":"Deep","unknown":${"[".repeat(20_000)}0${"]".repeat(20_000)}}`,
+  },
+  "projects.ProjectRepositoryBodySchema": {
+    strict_surrogate_key: String.raw`{"repositoryUrl":"repo","\ud800":1}`,
+    malformed_jira_url: String.raw`{"repositoryUrl":"repo","integration":{"tracker":{"kind":"jira","site":"x","project":"APP","emailEnvironment":"JIRA_EMAIL","tokenEnvironment":"JIRA_TOKEN"}}}`,
+  },
+  "projects.ProjectAgentTaskPolicySchema": {
+    lone_surrogate_profile: String.raw`{"workflowIds":["flow"],"defaultWorkflowId":"flow","rootProfileIds":["\ud800"],"workerProfileIds":["worker"]}`,
+  },
+  "projects.ProjectBodySchema": {
+    strict_surrogate_key: `${JSON.stringify(projectBody).slice(0, -1)}${String.raw`,"\ud800":1}`}`,
+    nested_strict_surrogate_key: `${JSON.stringify(projectBody).slice(0, -1)}${String.raw`,"integration":{"repository":{"kind":"github","\ud800":1}}}`}`,
+    environment_surrogate_key_issue: `${JSON.stringify(projectBody).slice(0, -1)}${String.raw`,"execution":{"environment":{"\ud800":"x"}}}`}`,
+    environment_colliding_surrogate_keys: `${JSON.stringify(projectBody).slice(0, -1)}${String.raw`,"execution":{"environment":{"\ud800":"x","\udfff":"y"}}}`}`,
+    environment_surrogate_value_issue: `${JSON.stringify(projectBody).slice(0, -1)}${String.raw`,"execution":{"environment":{"\ud800":1}}}`}`,
+    stripped_nested_overflow: `${JSON.stringify(projectBody).slice(0, -1)}${String.raw`,"execution":{"unknown":1e400}}`}`,
+  },
+  "projects.ProjectCreateBodySchema": {
+    malformed_jira_url: String.raw`{"repositoryUrl":"repo","integration":{"tracker":{"kind":"jira","site":"x","project":"APP","emailEnvironment":"JIRA_EMAIL","tokenEnvironment":"JIRA_TOKEN"}}}`,
+    strict_surrogate_key_union: String.raw`{"repositoryUrl":"repo","\ud800":1}`,
+    environment_colliding_surrogate_keys_union: `${JSON.stringify(projectBody).slice(0, -1)}${String.raw`,"execution":{"environment":{"\ud800":"x","\udfff":"y"}}}`}`,
+  },
+  "projects.ProjectResponseSchema": {
+    stripped_surrogate_unknown: `${JSON.stringify({ ...projectBody, id: "project", companyId: "company", createdAt: "now", updatedAt: "now" }).slice(0, -1)}${String.raw`,"\ud800":1}`}`,
   },
 };
 type Definition = { type: string; innerType?: z.ZodType; element?: z.ZodType; shape?: Record<string, z.ZodType>; options?: z.ZodType[]; entries?: Record<string, string>; values?: unknown[]; keyType?: z.ZodType; valueType?: z.ZodType; items?: z.ZodType[]; in?: z.ZodType; checks?: Array<{ _zod: { def: { check?: string; minimum?: number; value?: number; inclusive?: boolean } } }> };
@@ -414,8 +511,16 @@ for (const moduleName of modules) {
       fixtures++;
     }
     for (const [caseName, input] of Object.entries(semanticInputs[contract] ?? {})) {
-      const parsed = schema.safeParse(input);
-      const fixture: Fixture = { contract, case: caseName, input, expected: parsed.success ? { accepted: true, value: parsed.data } : { accepted: false, error: parsed.error.issues } };
+      let expected: Fixture["expected"];
+      try {
+        const parsed = schema.safeParse(input);
+        expected = parsed.success ? { accepted: true, value: parsed.data } : { accepted: false, error: parsed.error.issues };
+      } catch (reason) {
+        if (!(reason instanceof Error)) throw reason;
+        const thrown = reason as Error & { code?: string; input?: string };
+        expected = { accepted: false, error: { kind: "thrown", name: thrown.name, code: thrown.code, message: thrown.message, input: thrown.input } };
+      }
+      const fixture: Fixture = { contract, case: caseName, input, expected };
       const path = join(directory, `${caseName}.json`);
       const content = `${JSON.stringify(fixture, null, 2)}\n`;
       if (check) {
@@ -424,15 +529,24 @@ for (const moduleName of modules) {
       fixtures++;
     }
     for (const [caseName, inputJson] of Object.entries(rawInputs[contract] ?? {})) {
-      const parsed = schema.safeParse(JSON.parse(inputJson));
+      const rawInput = JSON.parse(inputJson);
+      let expected: { accepted: boolean; value?: string; error?: string };
+      try {
+        const parsed = schema.safeParse(rawInput);
+        expected = parsed.success
+          ? { accepted: true, value: JSON.stringify(parsed.data) }
+          : { accepted: false, error: JSON.stringify(parsed.error.issues) };
+      } catch (reason) {
+        if (!(reason instanceof Error)) throw reason;
+        const thrown = reason as Error & { code?: string; input?: string };
+        expected = { accepted: false, error: JSON.stringify({ kind: "thrown", name: thrown.name, code: thrown.code, message: thrown.message, input: thrown.input }) };
+      }
       const fixture = {
         contract,
         case: `raw_${caseName}`,
         encoding: "raw-json",
         input: inputJson,
-        expected: parsed.success
-          ? { accepted: true, value: JSON.stringify(parsed.data) }
-          : { accepted: false, error: JSON.stringify(parsed.error.issues) },
+        expected,
       };
       const path = join(directory, `raw_${caseName}.json`);
       const content = `${JSON.stringify(fixture, null, 2)}\n`;
@@ -477,3 +591,57 @@ for (const moduleName of modules) {
   }
 }
 console.log(`${check ? "Checked" : "Generated"} ${fixtures} Zod fixtures for ${schemas} exported HTTP schemas.`);
+
+// These schemas are also parsed directly from stored project JSON. They are
+// separate from the exported HTTP-contract inventory above.
+const projectDependencies = {
+  "projects.ProjectIntegrationSchema": {
+    schema: (await import("../../src/projects/integration-contracts.js")).ProjectIntegrationSchema,
+    cases: {
+      defaults: {},
+      nested_strip: { repository: { kind: "github", extra: true }, tracker: null },
+      invalid_repository: { repository: { kind: "bitbucket", tokenEnvironment: "bad" } },
+      invalid_tracker: { tracker: { kind: "jira", site: "https://other.example/", project: "APP", emailEnvironment: "JIRA_EMAIL", tokenEnvironment: "JIRA_TOKEN" } },
+      invalid_site_type: { tracker: { kind: "jira", site: 1, project: "APP", emailEnvironment: "JIRA_EMAIL", tokenEnvironment: "JIRA_TOKEN" } },
+      strict_unknown: { extra: true },
+    },
+  },
+  "projects.ProjectExecutionSchema": {
+    schema: (await import("../../src/projects/execution-contracts.js")).ProjectExecutionSchema,
+    cases: {
+      defaults: {},
+      nested_mcp_strip: { mcp: [{ ...mcpServer, extra: true, transport: { ...mcpServer.transport, extra: true }, grants: { ...mcpServer.grants, extra: true } }] },
+      invalid_environment_key: { environment: { HOME: "value" } },
+      invalid_environment_value: { environment: { KEY: 1 } },
+      invalid_mcp: { mcp: [{ ...mcpServer, name: "suplex" }] },
+      strict_unknown: { extra: true },
+    },
+  },
+  "projects.ProjectProviderPolicySchema": {
+    schema: (await import("../../src/projects/provider-policy-contracts.js")).ProjectProviderPolicySchema,
+    cases: {
+      empty: { allowedProviders: [], allowedInstanceIds: [] },
+      valid: { allowedProviders: ["codex"], allowedInstanceIds: ["instance"] },
+      invalid_provider: { allowedProviders: ["other"], allowedInstanceIds: [] },
+      invalid_instance: { allowedProviders: [], allowedInstanceIds: [""] },
+      missing_fields: {},
+      strict_unknown: { allowedProviders: [], allowedInstanceIds: [], extra: true },
+    },
+  },
+} as const;
+let dependencyFixtures = 0;
+for (const [contract, { schema, cases }] of Object.entries(projectDependencies)) {
+  const directory = join(root, contract);
+  if (!check) await mkdir(directory, { recursive: true });
+  for (const [caseName, input] of Object.entries(cases)) {
+    const parsed = schema.safeParse(input);
+    const fixture = { contract, case: caseName, input, expected: parsed.success ? { accepted: true, value: parsed.data } : { accepted: false, error: parsed.error.issues } };
+    const path = join(directory, `${caseName}.json`);
+    const content = `${JSON.stringify(fixture, null, 2)}\n`;
+    if (check) {
+      if (await readFile(path, "utf8") !== content) throw new Error(`Stale project dependency fixture: ${path}`);
+    } else await writeFile(path, content);
+    dependencyFixtures++;
+  }
+}
+console.log(`${check ? "Checked" : "Generated"} ${dependencyFixtures} stored-project fixtures for ${Object.keys(projectDependencies).length} nested schemas.`);

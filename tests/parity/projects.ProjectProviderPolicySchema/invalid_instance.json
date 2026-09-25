@@ -1,0 +1,26 @@
+{
+  "contract": "projects.ProjectProviderPolicySchema",
+  "case": "invalid_instance",
+  "input": {
+    "allowedProviders": [],
+    "allowedInstanceIds": [
+      ""
+    ]
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "origin": "string",
+        "code": "too_small",
+        "minimum": 1,
+        "inclusive": true,
+        "path": [
+          "allowedInstanceIds",
+          0
+        ],
+        "message": "Too small: expected string to have >=1 characters"
+      }
+    ]
+  }
+}

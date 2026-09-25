@@ -1,0 +1,30 @@
+{
+  "contract": "projects.ProjectExecutionSchema",
+  "case": "invalid_environment_key",
+  "input": {
+    "environment": {
+      "HOME": "value"
+    }
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid_key",
+        "origin": "record",
+        "issues": [
+          {
+            "code": "custom",
+            "path": [],
+            "message": "Provider routing variables are not project environment values"
+          }
+        ],
+        "path": [
+          "environment",
+          "HOME"
+        ],
+        "message": "Invalid key in record"
+      }
+    ]
+  }
+}

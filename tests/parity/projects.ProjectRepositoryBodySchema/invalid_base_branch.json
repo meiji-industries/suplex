@@ -1,0 +1,23 @@
+{
+  "contract": "projects.ProjectRepositoryBodySchema",
+  "case": "invalid_base_branch",
+  "input": {
+    "repositoryUrl": "repo",
+    "baseBranch": ""
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "origin": "string",
+        "code": "too_small",
+        "minimum": 1,
+        "inclusive": true,
+        "path": [
+          "baseBranch"
+        ],
+        "message": "Too small: expected string to have >=1 characters"
+      }
+    ]
+  }
+}

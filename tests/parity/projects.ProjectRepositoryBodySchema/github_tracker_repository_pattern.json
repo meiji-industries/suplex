@@ -1,0 +1,30 @@
+{
+  "contract": "projects.ProjectRepositoryBodySchema",
+  "case": "github_tracker_repository_pattern",
+  "input": {
+    "repositoryUrl": "repo",
+    "integration": {
+      "tracker": {
+        "kind": "github",
+        "repository": "bad"
+      }
+    }
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "origin": "string",
+        "code": "invalid_format",
+        "format": "regex",
+        "pattern": "/^[\\w.-]+\\/[\\w.-]+$/",
+        "path": [
+          "integration",
+          "tracker",
+          "repository"
+        ],
+        "message": "Invalid string: must match pattern /^[\\w.-]+\\/[\\w.-]+$/"
+      }
+    ]
+  }
+}

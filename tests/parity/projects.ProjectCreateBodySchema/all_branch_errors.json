@@ -1,0 +1,148 @@
+{
+  "contract": "projects.ProjectCreateBodySchema",
+  "case": "all_branch_errors",
+  "input": {
+    "repositoryUrl": "",
+    "repositoryName": "",
+    "name": ""
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid_union",
+        "errors": [
+          [
+            {
+              "origin": "string",
+              "code": "too_small",
+              "minimum": 1,
+              "inclusive": true,
+              "path": [
+                "repositoryUrl"
+              ],
+              "message": "Too small: expected string to have >=1 characters"
+            },
+            {
+              "code": "unrecognized_keys",
+              "keys": [
+                "repositoryName",
+                "name"
+              ],
+              "path": [],
+              "message": "Unrecognized keys: \"repositoryName\", \"name\""
+            }
+          ],
+          [
+            {
+              "origin": "string",
+              "code": "too_small",
+              "minimum": 1,
+              "inclusive": true,
+              "path": [
+                "repositoryName"
+              ],
+              "message": "Too small: expected string to have >=1 characters"
+            },
+            {
+              "code": "unrecognized_keys",
+              "keys": [
+                "repositoryUrl",
+                "name"
+              ],
+              "path": [],
+              "message": "Unrecognized keys: \"repositoryUrl\", \"name\""
+            }
+          ],
+          [
+            {
+              "origin": "string",
+              "code": "too_small",
+              "minimum": 1,
+              "inclusive": true,
+              "path": [
+                "name"
+              ],
+              "message": "Too small: expected string to have >=1 characters"
+            },
+            {
+              "expected": "string",
+              "code": "invalid_type",
+              "path": [
+                "repositoryPath"
+              ],
+              "message": "Invalid input: expected string, received undefined"
+            },
+            {
+              "expected": "string",
+              "code": "invalid_type",
+              "path": [
+                "worktreeRoot"
+              ],
+              "message": "Invalid input: expected string, received undefined"
+            },
+            {
+              "expected": "string",
+              "code": "invalid_type",
+              "path": [
+                "repository"
+              ],
+              "message": "Invalid input: expected string, received undefined"
+            },
+            {
+              "expected": "string",
+              "code": "invalid_type",
+              "path": [
+                "baseBranch"
+              ],
+              "message": "Invalid input: expected string, received undefined"
+            },
+            {
+              "expected": "string",
+              "code": "invalid_type",
+              "path": [
+                "setupCommand"
+              ],
+              "message": "Invalid input: expected string, received undefined"
+            },
+            {
+              "expected": "string",
+              "code": "invalid_type",
+              "path": [
+                "verificationCommand"
+              ],
+              "message": "Invalid input: expected string, received undefined"
+            },
+            {
+              "expected": "string",
+              "code": "invalid_type",
+              "path": [
+                "rootProfileId"
+              ],
+              "message": "Invalid input: expected string, received undefined"
+            },
+            {
+              "expected": "string",
+              "code": "invalid_type",
+              "path": [
+                "workerProfileId"
+              ],
+              "message": "Invalid input: expected string, received undefined"
+            },
+            {
+              "code": "unrecognized_keys",
+              "keys": [
+                "repositoryUrl",
+                "repositoryName"
+              ],
+              "path": [],
+              "message": "Unrecognized keys: \"repositoryUrl\", \"repositoryName\""
+            }
+          ]
+        ],
+        "path": [],
+        "message": "Invalid input"
+      }
+    ]
+  }
+}

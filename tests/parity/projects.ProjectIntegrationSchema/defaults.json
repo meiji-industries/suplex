@@ -1,0 +1,14 @@
+{
+  "contract": "projects.ProjectIntegrationSchema",
+  "case": "defaults",
+  "input": {},
+  "expected": {
+    "accepted": true,
+    "value": {
+      "repository": {
+        "kind": "github"
+      },
+      "tracker": null
+    }
+  }
+}

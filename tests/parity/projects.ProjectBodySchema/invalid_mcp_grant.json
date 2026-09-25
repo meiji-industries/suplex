@@ -1,0 +1,56 @@
+{
+  "contract": "projects.ProjectBodySchema",
+  "case": "invalid_mcp_grant",
+  "input": {
+    "name": "Project",
+    "repositoryPath": "/tmp/project",
+    "worktreeRoot": "/tmp/worktrees",
+    "repository": "team/project",
+    "baseBranch": "main",
+    "setupCommand": "pnpm install",
+    "verificationCommand": "pnpm test",
+    "rootProfileId": "root",
+    "workerProfileId": "worker",
+    "execution": {
+      "mcp": [
+        {
+          "name": "context7",
+          "transport": {
+            "type": "http",
+            "url": "https://example.test/mcp",
+            "headers": {
+              "Authorization": "CONTEXT7_TOKEN"
+            }
+          },
+          "grants": {
+            "root": [
+              "*"
+            ],
+            "advisor": [],
+            "worker": []
+          }
+        }
+      ]
+    }
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "origin": "string",
+        "code": "invalid_format",
+        "format": "regex",
+        "pattern": "/^[A-Za-z0-9_-]+$/",
+        "path": [
+          "execution",
+          "mcp",
+          0,
+          "grants",
+          "root",
+          0
+        ],
+        "message": "Invalid string: must match pattern /^[A-Za-z0-9_-]+$/"
+      }
+    ]
+  }
+}

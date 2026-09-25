@@ -1,0 +1,59 @@
+{
+  "contract": "projects.ProjectExecutionSchema",
+  "case": "nested_mcp_strip",
+  "input": {
+    "mcp": [
+      {
+        "name": "context7",
+        "transport": {
+          "type": "http",
+          "url": "https://example.test/mcp",
+          "headers": {
+            "Authorization": "CONTEXT7_TOKEN"
+          },
+          "extra": true
+        },
+        "grants": {
+          "root": [
+            "query_docs"
+          ],
+          "advisor": [],
+          "worker": [
+            "query_docs"
+          ],
+          "extra": true
+        },
+        "extra": true
+      }
+    ]
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "instructions": "",
+      "skillDirectories": [],
+      "environment": {},
+      "mcp": [
+        {
+          "name": "context7",
+          "transport": {
+            "type": "http",
+            "url": "https://example.test/mcp",
+            "headers": {
+              "Authorization": "CONTEXT7_TOKEN"
+            }
+          },
+          "grants": {
+            "root": [
+              "query_docs"
+            ],
+            "advisor": [],
+            "worker": [
+              "query_docs"
+            ]
+          }
+        }
+      ]
+    }
+  }
+}

@@ -1,0 +1,32 @@
+{
+  "contract": "projects.ProjectNewRepositoryBodySchema",
+  "case": "invalid_branch_and_unknown",
+  "input": {
+    "repositoryName": "repo",
+    "baseBranch": "",
+    "extra": true
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "origin": "string",
+        "code": "too_small",
+        "minimum": 1,
+        "inclusive": true,
+        "path": [
+          "baseBranch"
+        ],
+        "message": "Too small: expected string to have >=1 characters"
+      },
+      {
+        "code": "unrecognized_keys",
+        "keys": [
+          "extra"
+        ],
+        "path": [],
+        "message": "Unrecognized key: \"extra\""
+      }
+    ]
+  }
+}

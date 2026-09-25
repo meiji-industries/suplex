@@ -1,0 +1,25 @@
+{
+  "contract": "projects.ProjectNewRepositoryBodySchema",
+  "case": "nested_integration",
+  "input": {
+    "repositoryName": "new-repo",
+    "integration": {
+      "repository": {
+        "kind": "github"
+      },
+      "tracker": null
+    }
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "repositoryName": "new-repo",
+      "integration": {
+        "repository": {
+          "kind": "github"
+        },
+        "tracker": null
+      }
+    }
+  }
+}

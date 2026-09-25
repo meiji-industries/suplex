@@ -35,6 +35,68 @@ pub fn router() -> Router<AppState> {
         .route("/api/tasks/{task_id}/execution", get(execution))
         .route("/api/tasks/{task_id}/diff", get(diff))
         .route("/api/tasks/{task_id}/diff/summary", get(diff_summary))
+        .route("/api/tasks/{task_id}/checks", get(checks))
+}
+
+/// TypeScript `readTaskChecks`: live check runs of the task's pull request.
+async fn checks(
+    State(state): State<AppState>,
+    Path(task_id): Path<String>,
+    headers: HeaderMap,
+) -> Response {
+    if let Err(response) = validated_task_id(&task_id) {
+        return *response;
+    }
+    let (user_id, cookies) = match authorize(&state, &headers) {
+        Ok(value) => value,
+        Err(response) => return *response,
+    };
+    let intent = state.with_database(|database| -> Result<_, Box<dyn Error>> {
+        let (rows, _) = read_task(database, &user_id, &task_id)?;
+        let configuration = &rows.context["configuration"];
+        Ok(rows.control["pullRequest"]["number"]
+            .as_u64()
+            .map(|number| {
+                (
+                    number,
+                    configuration["repository"]
+                        .as_str()
+                        .unwrap_or("")
+                        .to_owned(),
+                    configuration["branch"].as_str().unwrap_or("").to_owned(),
+                    configuration["integration"]["repository"]["kind"] == "bitbucket",
+                )
+            }))
+    });
+    let intent = intent.map_err(|error| error.to_string());
+    let (number, repository, branch, bitbucket) = match intent {
+        Ok(Some(intent)) => intent,
+        Ok(None) => return respond(Ok(json!({"available":false,"runs":[]})), cookies),
+        Err(error) => return respond(Err(error.into()), cookies),
+    };
+    if bitbucket {
+        let mut response = auth::not_ported();
+        auth::append_cookies(&mut response, cookies);
+        return response;
+    }
+    let observed = async {
+        let github = crate::integrations::github_delivery::Github::load().await?;
+        github
+            .observe_pull_request(&repository, &branch, Some(number))
+            .await
+    };
+    let observation = match observed.await {
+        Ok(observation) => observation,
+        Err(error) => return respond(Err(Box::new(error)), cookies),
+    };
+    let pull_request_state = match observation.state.as_deref() {
+        Some("open") if observation.is_draft == Some(false) => json!("ready"),
+        Some("open") => json!("draft"),
+        other => json!(other),
+    };
+    let value = json!({"available": observation.exists, "runs": observation.checks.runs, "pullRequestState": pull_request_state});
+    let scope = state.with_database(|database| read_task(database, &user_id, &task_id));
+    respond(scope.map(|_| value), cookies)
 }
 
 fn validated_task_id(id: &str) -> Result<(), Box<Response>> {
@@ -356,6 +418,7 @@ async fn read_diff(
             path: PathBuf,
             repository: String,
             base_branch: String,
+            pull_request: Option<u64>,
         },
     }
     let intent = match state.with_database(|database| -> Result<DiffIntent, Box<dyn Error>> {
@@ -367,12 +430,15 @@ async fn read_diff(
             return Err("Task worktree path is invalid".into());
         };
         let configuration = &rows.context["configuration"];
-        if !rows.control["pullRequest"].is_null()
-            || configuration["source"]["kind"] == "pull_request"
-            || configuration["integration"]["repository"]["kind"] == "bitbucket"
-        {
+        if configuration["integration"]["repository"]["kind"] == "bitbucket" {
             return Ok(DiffIntent::Unsupported);
         }
+        // TypeScript `resolveTaskDiffBase`: a pull request diff uses its current base branch.
+        let pull_request = rows.control["pullRequest"]["number"].as_u64().or_else(|| {
+            (configuration["source"]["kind"] == "pull_request")
+                .then(|| configuration["source"]["number"].as_u64())
+                .flatten()
+        });
         let repository = configuration["repository"]
             .as_str()
             .ok_or("Task repository is missing")?;
@@ -383,12 +449,13 @@ async fn read_diff(
             path: PathBuf::from(path),
             repository: repository.to_owned(),
             base_branch: base_branch.to_owned(),
+            pull_request,
         })
     }) {
         Ok(intent) => intent,
         Err(error) => return respond(Err(error), cookies),
     };
-    let (path, repository, base_branch) = match intent {
+    let (path, repository, mut base_branch, pull_request) = match intent {
         DiffIntent::NoWorktree => {
             let value = match kind {
                 DiffKind::Patch => json!({"available":false,"patch":"","truncated":false}),
@@ -405,8 +472,19 @@ async fn read_diff(
             path,
             repository,
             base_branch,
-        } => (path, repository, base_branch),
+            pull_request,
+        } => (path, repository, base_branch, pull_request),
     };
+    if let Some(number) = pull_request {
+        let pull = async {
+            let github = crate::integrations::github_delivery::Github::load().await?;
+            github.get_pull_request(&repository, number).await
+        };
+        match pull.await {
+            Ok(pull) => base_branch = pull.base_branch,
+            Err(error) => return respond(Err(Box::new(error)), cookies),
+        }
+    }
     let access_result = match access_override {
         Some(access) => Ok(access),
         None => Access::load().await,
@@ -939,7 +1017,7 @@ mod tests {
         );
         state.with_database(|database| {
             database.connection().execute(
-                "UPDATE suplex_tasks SET configuration_json = json_set(configuration_json,'$.baseBranch','main','$.source',json('{\"kind\":\"pull_request\"}')) WHERE id = ?1",
+                "UPDATE suplex_tasks SET configuration_json = json_set(configuration_json,'$.baseBranch','main','$.integration',json('{\"repository\":{\"kind\":\"bitbucket\"}}')) WHERE id = ?1",
                 [&task.id],
             ).unwrap();
         });
@@ -951,7 +1029,7 @@ mod tests {
         );
         state.with_database(|database| {
             database.connection().execute(
-                "UPDATE suplex_tasks SET configuration_json = json_remove(configuration_json,'$.source') WHERE id = ?1",
+                "UPDATE suplex_tasks SET configuration_json = json_remove(configuration_json,'$.integration') WHERE id = ?1",
                 [&task.id],
             ).unwrap();
         });

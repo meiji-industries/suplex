@@ -181,13 +181,11 @@ pub fn observe(database_path: &Path, root: &RootIdentity) -> DatabaseResult<Valu
         )?;
         root_session_store::root_observation_rows(&database, &root.task_id)?
     };
-    if rows.control["workflow"] != "standard" || rows.control["deliveryTarget"] != "local_worktree"
-    {
-        return Err(not_ported(
-            "Only Standard local-worktree Root observation is ported",
-        ));
+    if rows.control["workflow"] != "standard" {
+        return Err(not_ported("Only Standard Root observation is ported"));
     }
-    let pull_request = crate::delivery::operations::observe(&rows.control)?;
+    let (pull_request, github) =
+        crate::delivery::operations::observe_for_root(database_path, &rows.control)?;
     let worktree = match rows.control["worktree"]["path"].as_str() {
         Some(path) => match worktree::observe_worktree(Path::new(path)) {
             Ok(observed) => json!({"headSha":observed.head_sha,"dirty":observed.dirty}),
@@ -195,7 +193,9 @@ pub fn observe(database_path: &Path, root: &RootIdentity) -> DatabaseResult<Valu
         },
         None => Value::Null,
     };
-    assemble_observation(rows, worktree, pull_request)
+    let mut observation = assemble_observation(rows, worktree, pull_request)?;
+    observation["github"] = github;
+    Ok(observation)
 }
 
 /// Return task-owned image bytes to the Root MCP tool after a fresh Root check.
@@ -327,12 +327,8 @@ pub fn delegate_worker(
         root.generation,
     )?;
     let before = root_session_store::root_observation_rows(&database, &root.task_id)?;
-    if before.control["workflow"] != "standard"
-        || before.control["deliveryTarget"] != "local_worktree"
-    {
-        return Err(not_ported(
-            "Only Standard local-worktree Worker delegation is ported",
-        ));
+    if before.control["workflow"] != "standard" {
+        return Err(not_ported("Only Standard Worker delegation is ported"));
     }
     let visual_evidence = before.context["configuration"]["visualEvidence"]
         .as_str()
@@ -450,7 +446,10 @@ mod tests {
             sessions: vec![],
             turns: vec![],
         };
-        let pull_request = crate::delivery::operations::observe(&rows.control).unwrap();
+        let pull_request =
+            crate::delivery::operations::observe_for_root(Path::new(""), &rows.control)
+                .unwrap()
+                .0;
         assert_eq!(pull_request, Value::Null);
         let result = assemble_observation(
             rows,

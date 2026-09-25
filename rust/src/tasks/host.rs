@@ -1309,6 +1309,7 @@ pub async fn sweep_task(
     }
     stop_retired_sessions(database_path, task_id).await?;
     reconcile_limit_pause(database_path, task_id).await?;
+    crate::delivery::operations::host_observation(database_path, artifact_root, task_id).await;
     let (active, needs_worktree) = {
         let database = SuplexDatabase::open(database_path, OpenMode::ReadOnly)?;
         let rows = root_session_store::root_observation_rows(&database, task_id)?;
@@ -1328,6 +1329,9 @@ pub async fn sweep_task(
         });
         let mut database = SuplexDatabase::open(database_path, OpenMode::ReadWrite)?;
         root_session_store::set_worktree(&mut database, task_id, &worktree, Utc::now())?;
+    }
+    if !super::issue_context::prepare_for_host(database_path, artifact_root, task_id).await? {
+        return Ok(());
     }
     crate::tasks::preparation::prepare_before_native_work(database_path, task_id).await?;
     crate::coordination::root_controller::prepare_root(database_path, task_id)?;
@@ -2198,7 +2202,8 @@ mod tests {
         drop(repository);
         let marker = base.join("launches");
         let codex = base.join("codex");
-        fs::write(&codex, format!("#!/bin/sh\nprintf x >> '{}'\ncat >/dev/null\nprintf '%s\\n' '{{\"type\":\"thread.started\",\"thread_id\":\"host-thread\"}}' '{{\"type\":\"turn.completed\",\"usage\":{{\"input_tokens\":1,\"cached_input_tokens\":0,\"cache_write_input_tokens\":0,\"output_tokens\":1,\"reasoning_output_tokens\":0}}}}'\n", marker.display())).unwrap();
+        // The child outlives both recoveries, so the second one observes an admitted, running turn.
+        fs::write(&codex, format!("#!/bin/sh\nprintf x >> '{}'\ncat >/dev/null\nsleep 0.5\nprintf '%s\\n' '{{\"type\":\"thread.started\",\"thread_id\":\"host-thread\"}}' '{{\"type\":\"turn.completed\",\"usage\":{{\"input_tokens\":1,\"cached_input_tokens\":0,\"cache_write_input_tokens\":0,\"output_tokens\":1,\"reasoning_output_tokens\":0}}}}'\n", marker.display())).unwrap();
         fs::set_permissions(&codex, fs::Permissions::from_mode(0o700)).unwrap();
         let now = Utc::now();
         let task_id = {

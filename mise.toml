@@ -81,14 +81,14 @@ cargo test --lib signed_fresh_passkey_over_isolated_tcp_listener -- --ignored --
 '''
 
 [tasks."test:journey:rust"]
-description = "Run the four deterministic Codex browser journeys against the Rust backend"
+description = "Run the five deterministic Codex browser journeys against the Rust backend"
 run = '''
 set -e
 [ -f dist/web/suplex-ui.js ] || pnpm exec vite build
-(cd rust && unset RUSTUP_TOOLCHAIN && cargo build --bin suplex)
+(cd rust && unset RUSTUP_TOOLCHAIN && cargo build --bin suplex --features github-test-endpoint)
 export SUPLEX_RUST_BIN="${CARGO_TARGET_DIR:-$PWD/rust/target}/debug/suplex"
 export SUPLEX_BROWSER_BACKEND=rust SUPLEX_DETERMINISTIC_CODEX_RUN=1
-for phase in deliver answer restart cancel; do
+for phase in deliver deliver_pr answer restart cancel; do
   SUPLEX_DETERMINISTIC_PHASE=$phase pnpm exec tsx tests/interop/real-codex-standard.ts
 done
 '''

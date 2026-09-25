@@ -1,0 +1,23 @@
+{
+  "contract": "tasks.TaskDiffSummaryResponseSchema",
+  "case": "negative_files",
+  "input": {
+    "available": true,
+    "files": -1
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "origin": "number",
+        "code": "too_small",
+        "minimum": 0,
+        "inclusive": true,
+        "path": [
+          "files"
+        ],
+        "message": "Too small: expected number to be >=0"
+      }
+    ]
+  }
+}

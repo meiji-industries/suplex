@@ -1,0 +1,22 @@
+{
+  "contract": "tasks.TaskDiffSummaryResponseSchema",
+  "case": "fractional_files",
+  "input": {
+    "available": true,
+    "files": 1.5
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "expected": "int",
+        "format": "safeint",
+        "code": "invalid_type",
+        "path": [
+          "files"
+        ],
+        "message": "Invalid input: expected int, received number"
+      }
+    ]
+  }
+}

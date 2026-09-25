@@ -1,0 +1,24 @@
+{
+  "contract": "tasks.TaskDiffSummaryResponseSchema",
+  "case": "unsafe_files",
+  "input": {
+    "available": true,
+    "files": 9007199254740992
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "too_big",
+        "maximum": 9007199254740991,
+        "note": "Integers must be within the safe integer range.",
+        "origin": "int",
+        "inclusive": true,
+        "path": [
+          "files"
+        ],
+        "message": "Too big: expected int to be <=9007199254740991"
+      }
+    ]
+  }
+}

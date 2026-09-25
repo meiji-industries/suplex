@@ -1,0 +1,13 @@
+{
+  "contract": "tasks.TaskContinueDeliveryBodySchema",
+  "case": "merged_target",
+  "input": {
+    "deliveryTarget": "merged"
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "deliveryTarget": "merged"
+    }
+  }
+}

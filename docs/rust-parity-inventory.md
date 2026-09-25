@@ -56,7 +56,7 @@ The table lists all 238 backend TypeScript modules present at the baseline, incl
 | [http/contracts/providers.ts](../src/http/contracts/providers.ts) | ported | All nine validators implemented in [providers.rs](../rust/src/http/contracts/providers.rs); combined corpus passes 284 cases / 28 schemas. Raw HTTP JSON representation and endpoint integration remain unverified |
 | [http/contracts/system-events.ts](../src/http/contracts/system-events.ts) | not started | |
 | [http/contracts/task-templates.ts](../src/http/contracts/task-templates.ts) | not started | |
-| [http/contracts/tasks.ts](../src/http/contracts/tasks.ts) | not started | |
+| [http/contracts/tasks.ts](../src/http/contracts/tasks.ts) | not started | Twelve auxiliary task schemas independently checked, including strict rename, note/cursor bounds, enums, and nested worktree-app values; combined parity test passes 665 cases / 58 schemas. Remaining task schemas and runtime routes are incomplete |
 | [http/contracts/update.ts](../src/http/contracts/update.ts) | not started | |
 | [http/contracts/workflows.ts](../src/http/contracts/workflows.ts) | not started | |
 | [http/errors.ts](../src/http/errors.ts) | not started | |
@@ -65,7 +65,7 @@ The table lists all 238 backend TypeScript modules present at the baseline, incl
 | [http/routes/agent-api.ts](../src/http/routes/agent-api.ts) | not started | |
 | [http/routes/agent-pairing.ts](../src/http/routes/agent-pairing.ts) | not started | |
 | [http/routes/assets.ts](../src/http/routes/assets.ts) | not started | |
-| [http/routes/auth.ts](../src/http/routes/auth.ts) | not started | Partial: status/current-user/sign-out pass live checks; profile PATCH has paired raw-response and validation-order tests. Full account operations, ceremonies, and live PATCH proof remain incomplete |
+| [http/routes/auth.ts](../src/http/routes/auth.ts) | not started | Partial: status/current-user/sign-out/profile PATCH pass live checks; paired raw-response and validation-order tests pass. Full account operations and ceremonies remain incomplete |
 | [http/routes/authenticated.ts](../src/http/routes/authenticated.ts) | not started | |
 | [http/routes/avatars.ts](../src/http/routes/avatars.ts) | not started | |
 | [http/routes/companies.ts](../src/http/routes/companies.ts) | not started | Partial: company list/get and membership visibility pass isolated live checks; protected mutation routes remain 501 |

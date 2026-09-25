@@ -1,0 +1,30 @@
+{
+  "contract": "tasks.TaskRenameBodySchema",
+  "case": "title_array",
+  "input": {
+    "title": []
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "expected": "string",
+        "code": "invalid_type",
+        "path": [
+          "title"
+        ],
+        "message": "Invalid input: expected string, received array"
+      },
+      {
+        "origin": "array",
+        "code": "too_small",
+        "minimum": 1,
+        "inclusive": true,
+        "path": [
+          "title"
+        ],
+        "message": "Too small: expected array to have >=1 items"
+      }
+    ]
+  }
+}

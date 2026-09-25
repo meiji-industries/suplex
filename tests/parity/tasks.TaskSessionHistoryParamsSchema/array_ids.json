@@ -1,0 +1,49 @@
+{
+  "contract": "tasks.TaskSessionHistoryParamsSchema",
+  "case": "array_ids",
+  "input": {
+    "taskId": [],
+    "sessionId": []
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "expected": "string",
+        "code": "invalid_type",
+        "path": [
+          "taskId"
+        ],
+        "message": "Invalid input: expected string, received array"
+      },
+      {
+        "origin": "array",
+        "code": "too_small",
+        "minimum": 1,
+        "inclusive": true,
+        "path": [
+          "taskId"
+        ],
+        "message": "Too small: expected array to have >=1 items"
+      },
+      {
+        "expected": "string",
+        "code": "invalid_type",
+        "path": [
+          "sessionId"
+        ],
+        "message": "Invalid input: expected string, received array"
+      },
+      {
+        "origin": "array",
+        "code": "too_small",
+        "minimum": 1,
+        "inclusive": true,
+        "path": [
+          "sessionId"
+        ],
+        "message": "Too small: expected array to have >=1 items"
+      }
+    ]
+  }
+}

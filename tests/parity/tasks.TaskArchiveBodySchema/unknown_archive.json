@@ -1,0 +1,20 @@
+{
+  "contract": "tasks.TaskArchiveBodySchema",
+  "case": "unknown_archive",
+  "input": {
+    "extra": true
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "unrecognized_keys",
+        "keys": [
+          "extra"
+        ],
+        "path": [],
+        "message": "Unrecognized key: \"extra\""
+      }
+    ]
+  }
+}

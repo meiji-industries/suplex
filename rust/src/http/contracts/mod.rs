@@ -5,6 +5,7 @@ mod common_commands;
 mod profile;
 mod project_aux;
 mod providers;
+mod task_aux;
 
 pub type ParseResult = Result<Value, Vec<Value>>;
 
@@ -24,6 +25,9 @@ pub fn validate(contract: &str, input: Option<&Value>) -> Option<ParseResult> {
         return Some(result);
     }
     if let Some(result) = project_aux::validate(contract, input) {
+        return Some(result);
+    }
+    if let Some(result) = task_aux::validate(contract, input) {
         return Some(result);
     }
     match contract {

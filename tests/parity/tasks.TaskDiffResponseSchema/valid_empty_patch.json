@@ -1,0 +1,18 @@
+{
+  "contract": "tasks.TaskDiffResponseSchema",
+  "case": "valid_empty_patch",
+  "input": {
+    "available": false,
+    "patch": "",
+    "truncated": false,
+    "extra": true
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "available": false,
+      "patch": "",
+      "truncated": false
+    }
+  }
+}

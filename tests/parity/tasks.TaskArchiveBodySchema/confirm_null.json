@@ -1,0 +1,20 @@
+{
+  "contract": "tasks.TaskArchiveBodySchema",
+  "case": "confirm_null",
+  "input": {
+    "confirmDiscardDirty": null
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "expected": "boolean",
+        "code": "invalid_type",
+        "path": [
+          "confirmDiscardDirty"
+        ],
+        "message": "Invalid input: expected boolean, received null"
+      }
+    ]
+  }
+}

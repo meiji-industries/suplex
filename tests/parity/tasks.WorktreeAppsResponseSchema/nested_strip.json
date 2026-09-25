@@ -1,0 +1,25 @@
+{
+  "contract": "tasks.WorktreeAppsResponseSchema",
+  "case": "nested_strip",
+  "input": {
+    "apps": [
+      {
+        "id": "ghostty",
+        "label": "Ghostty",
+        "extra": true
+      }
+    ],
+    "extra": true
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "apps": [
+        {
+          "id": "ghostty",
+          "label": "Ghostty"
+        }
+      ]
+    }
+  }
+}

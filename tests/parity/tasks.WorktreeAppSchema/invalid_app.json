@@ -1,0 +1,22 @@
+{
+  "contract": "tasks.WorktreeAppSchema",
+  "case": "invalid_app",
+  "input": "browser",
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid_value",
+        "values": [
+          "finder",
+          "cursor",
+          "vscode",
+          "ghostty",
+          "terminal"
+        ],
+        "path": [],
+        "message": "Invalid option: expected one of \"finder\"|\"cursor\"|\"vscode\"|\"ghostty\"|\"terminal\""
+      }
+    ]
+  }
+}

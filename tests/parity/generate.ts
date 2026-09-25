@@ -219,6 +219,58 @@ const semanticInputs: Record<string, Record<string, unknown>> = {
     invalid_kind: { kind: "other" },
     stripped_unknown: { kind: "issue", extra: true },
   },
+  "tasks.TaskRenameBodySchema": {
+    trimmed_title: { title: "  New title  " },
+    empty_title: { title: " \t " },
+    unknown_on_valid_title: { title: "Title", extra: true },
+    title_array: { title: [] },
+  },
+  "tasks.TaskNoteBodySchema": {
+    trimmed_note: { note: "  Note  " },
+    empty_note: { note: " \t " },
+    max_note: { note: "x".repeat(20_000) },
+    over_max_note: { note: "x".repeat(20_001) },
+    astral_over_max_note: { note: "😀".repeat(10_001) },
+    array_note: { note: [] },
+  },
+  "tasks.TaskArchiveBodySchema": {
+    confirm_true: { confirmDiscardDirty: true },
+    confirm_null: { confirmDiscardDirty: null },
+    unknown_archive: { extra: true },
+  },
+  "tasks.TaskContinueDeliveryBodySchema": {
+    merged_target: { deliveryTarget: "merged" },
+    invalid_target: { deliveryTarget: "pull_request_draft" },
+    unknown_target: { deliveryTarget: "merged", extra: true },
+  },
+  "tasks.TaskSessionHistoryParamsSchema": {
+    empty_ids: { taskId: "", sessionId: "" },
+    array_ids: { taskId: [], sessionId: [] },
+    stripped_unknown: { taskId: "task", sessionId: "session", extra: true },
+  },
+  "tasks.TaskSessionHistoryQuerySchema": {
+    before_max: { before: "x".repeat(512) },
+    before_over_max: { before: "x".repeat(513) },
+    before_empty: { before: "" },
+    before_array: { before: [] },
+    stripped_unknown: { before: "cursor", extra: true },
+  },
+  "tasks.TaskDiffResponseSchema": {
+    valid_empty_patch: { available: false, patch: "", truncated: false, extra: true },
+    invalid_fields: { available: "no", patch: null, truncated: 0 },
+  },
+  "tasks.TaskDiffSummaryResponseSchema": {
+    negative_files: { available: true, files: -1 },
+    fractional_files: { available: true, files: 1.5 },
+    unsafe_files: { available: true, files: 9_007_199_254_740_992 },
+  },
+  "tasks.TaskAgentStatusSchema": { invalid_status: "started", known_status: "waiting_human" },
+  "tasks.TaskHarnessKindSchema": { invalid_kind: "other", known_kind: "codex" },
+  "tasks.WorktreeAppSchema": { invalid_app: "browser", known_app: "ghostty" },
+  "tasks.WorktreeAppsResponseSchema": {
+    nested_invalid_app: { apps: [{ id: "browser", label: "Browser" }] },
+    nested_strip: { apps: [{ id: "ghostty", label: "Ghostty", extra: true }], extra: true },
+  },
 };
 
 type Fixture = { contract: string; case: string; input?: unknown; expected: { accepted: true; value: unknown } | { accepted: false; error: z.core.$ZodIssue[] } };

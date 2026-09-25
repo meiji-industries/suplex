@@ -1,0 +1,16 @@
+{
+  "contract": "tasks.TaskSessionHistoryParamsSchema",
+  "case": "stripped_unknown",
+  "input": {
+    "taskId": "task",
+    "sessionId": "session",
+    "extra": true
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "taskId": "task",
+      "sessionId": "session"
+    }
+  }
+}

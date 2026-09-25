@@ -60,6 +60,7 @@ pub fn router() -> Router<AppState> {
             "/api/tasks/{task_id}/cancel",
             axum::routing::post(cancel_pending),
         )
+        .route("/api/tasks/{task_id}/note", axum::routing::post(send_note))
         .route(
             "/api/tasks/{task_id}/answer",
             axum::routing::post(answer_pending),
@@ -929,6 +930,44 @@ async fn cancel_pending(
     }
 }
 
+async fn send_note(
+    State(state): State<AppState>,
+    Path(id): Path<String>,
+    headers: HeaderMap,
+    body: Bytes,
+) -> Response {
+    if let Err(response) = validated_task_id(&id) {
+        return *response;
+    }
+    let request = match auth::validated_typed_body(&headers, &body, task_contracts::parse_task_note)
+    {
+        Ok(request) => request,
+        Err(response) => return *response,
+    };
+    if !session::csrf_allowed(&state.session_config, &headers, "POST", false) {
+        return auth::error(StatusCode::FORBIDDEN, "request_origin_invalid");
+    }
+    let (user_id, cookies) = match authorize(&state, &headers) {
+        Ok(value) => value,
+        Err(response) => return *response,
+    };
+    let host = state.task_host.clone();
+    let result = state.with_database(
+        |database| -> Result<task_response::TaskResponse, Box<dyn Error>> {
+            commands::send_user_note(database, &user_id, &id, &request, Utc::now(), move |id| {
+                if let Some(host) = host {
+                    host.wake(id);
+                }
+            })?;
+            task_response::get(database, &id)?.ok_or_else(|| "noted task disappeared".into())
+        },
+    );
+    match result {
+        Ok(task) => with_cookies(Json(task).into_response(), cookies),
+        Err(error) => with_cookies(service_error(error), cookies),
+    }
+}
+
 async fn answer_pending(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -1633,6 +1672,69 @@ mod tests {
         let answered_value: Value = serde_json::from_slice(&answered_raw).unwrap();
         assert_eq!(answered_value["status"], "active");
         assert!(answered_value["humanQuestion"].is_null());
+        let invalid_note = send_note(
+            State(state.clone()),
+            Path(immediate_id.clone()),
+            headers.clone(),
+            Bytes::from_static(br#"{"note":"   ","extra":true}"#),
+        )
+        .await;
+        assert_eq!(invalid_note.status(), StatusCode::BAD_REQUEST);
+        let noted = send_note(
+            State(state.clone()),
+            Path(immediate_id.clone()),
+            headers.clone(),
+            Bytes::from_static(br#"{"note":"  Check the current result.  "}"#),
+        )
+        .await;
+        assert_eq!(noted.status(), StatusCode::OK);
+        let noted_raw = to_bytes(noted.into_body(), 128 * 1024).await.unwrap();
+        assert_typescript_task_body(&db_path, &root.join("artifacts"), &noted_raw);
+        let (noted_root, noted_hash): (String, String) = state.with_database(|database| {
+            database.connection().query_row(
+                "SELECT session_id,prompt_hash FROM suplex_task_turns WHERE task_id = ?1 AND prompt_text = 'Human note:' || char(10) || 'Check the current result.'",
+                [&immediate_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+        }).unwrap();
+        assert_eq!(noted_root, root_session);
+        assert_eq!(
+            noted_hash,
+            "d41fa338e9f66d1b305d9678a1d2556a9c7559c0ec366d11abf1088a500507eb"
+        );
+        state.with_database(|database| {
+            database.connection().execute(
+                "UPDATE suplex_task_controls SET status = 'delivered',workflow_state_json = json_set(workflow_state_json,'$.completion',json(?1)) WHERE task_id = ?2",
+                rusqlite::params![r#"{"kind":"workflow","reviewedHead":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","pullRequestNumber":1597,"observedAt":"2026-09-25T12:00:00.000Z"}"#, immediate_id],
+            ).unwrap();
+            database.connection().execute(
+                "UPDATE suplex_task_sessions SET is_current = 0,lifecycle = 'stopped',native_session_id = 'codex-retained',stopped_at = ?1 WHERE id = ?2",
+                rusqlite::params![Utc::now().to_rfc3339(), root_session],
+            ).unwrap();
+        });
+        let follow_up = send_note(
+            State(state.clone()),
+            Path(immediate_id.clone()),
+            headers.clone(),
+            Bytes::from_static(br#"{"note":"Fix the checks."}"#),
+        )
+        .await;
+        assert_eq!(follow_up.status(), StatusCode::OK);
+        let follow_up_raw = to_bytes(follow_up.into_body(), 128 * 1024).await.unwrap();
+        assert_typescript_task_body(&db_path, &root.join("artifacts"), &follow_up_raw);
+        assert_eq!(
+            serde_json::from_slice::<Value>(&follow_up_raw).unwrap()["status"],
+            "active"
+        );
+        state.with_database(|database| {
+            let (id, native): (String, String) = database.connection().query_row(
+                "SELECT id,native_session_id FROM suplex_task_sessions WHERE task_id = ?1 AND kind = 'root' AND is_current = 1",
+                [&immediate_id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            ).unwrap();
+            assert_eq!(id, root_session);
+            assert_eq!(native, "codex-retained");
+        });
         let stale_answer = answer_pending(
             State(state.clone()),
             Path(immediate_id.clone()),

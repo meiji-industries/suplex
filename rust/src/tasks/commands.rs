@@ -13,7 +13,7 @@ use crate::{
     http::contracts::typed::{
         projects::ProjectProviderPolicy,
         task_answers::{AnswerBody, LimitDecisionBody, TaskLimitDecision},
-        tasks::{TaskCreateBody, TaskDetailsBody, TaskRenameBody},
+        tasks::{TaskCreateBody, TaskDetailsBody, TaskNoteBody, TaskRenameBody},
     },
     identity::companies,
     platform::{
@@ -608,6 +608,47 @@ pub fn cancel_user_task(
         let id = task_id.to_owned();
         database.after_commit(move || wake(id));
         Ok(cancelled)
+    })
+}
+
+/// Send a human note to an active Root, or resume the retained Root of a
+/// delivered task. The targeted host wake follows the durable prompt commit.
+pub fn send_user_note(
+    database: &mut SuplexDatabase,
+    actor_user_id: &str,
+    task_id: &str,
+    request: &TaskNoteBody,
+    now: DateTime<Utc>,
+    wake: impl FnOnce(String) + Send + 'static,
+) -> DatabaseResult<TaskRecord> {
+    database.transaction(true, |database| {
+        let task = repository::task_by_id(database, task_id)?
+            .ok_or_else(|| Box::new(TaskFailure::new("Not found", 404)) as Box<dyn Error>)?;
+        companies::require_company_access(database, actor_user_id, &task.company_id)?;
+        let (archived, workflow): (bool, String) = database.connection().query_row(
+            "SELECT t.archived_at IS NOT NULL,c.workflow FROM suplex_tasks t JOIN suplex_task_controls c ON c.task_id = t.id WHERE t.id = ?1",
+            [task_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+        if archived || !matches!(task.status.as_str(), "active" | "delivered") {
+            return Err(Box::new(TaskFailure::new(
+                "Start the task or answer its current decision before you send a message.",
+                409,
+            )));
+        }
+        if workflow != "standard" {
+            return Err(Box::new(TaskFailure {
+                public_message: "experimental_not_ported".into(),
+                status_code: 501,
+                code: "experimental_not_ported",
+            }));
+        }
+        root_session_store::send_note(database, task_id, &request.note, now)?;
+        let updated = repository::task_by_id(database, task_id)?
+            .ok_or_else(|| Box::new(TaskFailure::new("Not found", 404)) as Box<dyn Error>)?;
+        let id = task_id.to_owned();
+        database.after_commit(move || wake(id));
+        Ok(updated)
     })
 }
 
@@ -1217,6 +1258,53 @@ mod tests {
             "active"
         );
         assert_eq!(wakes.load(Ordering::SeqCst), 3);
+        let note = TaskNoteBody {
+            note: "Check the current result.".into(),
+        };
+        let count = Arc::clone(&wakes);
+        assert!(
+            send_user_note(
+                &mut database,
+                "missing-user",
+                &created.task.id,
+                &note,
+                now,
+                move |_| {
+                    count.fetch_add(1, Ordering::SeqCst);
+                },
+            )
+            .is_err()
+        );
+        assert_eq!(wakes.load(Ordering::SeqCst), 3);
+        let count = Arc::clone(&wakes);
+        let reopen = filename.clone();
+        assert_eq!(send_user_note(
+            &mut database,
+            &user.id,
+            &created.task.id,
+            &note,
+            now,
+            move |id| {
+                let observed = SuplexDatabase::open(&reopen, OpenMode::ReadWrite).unwrap();
+                let persisted: i64 = observed.connection().query_row(
+                    "SELECT COUNT(*) FROM suplex_task_turns WHERE task_id = ?1 AND prompt_text = 'Human note:' || char(10) || 'Check the current result.'",
+                    [&id],
+                    |row| row.get(0),
+                ).unwrap();
+                assert_eq!(persisted, 1);
+                count.fetch_add(1, Ordering::SeqCst);
+            },
+        ).unwrap().status, "active");
+        assert_eq!(wakes.load(Ordering::SeqCst), 4);
+        let note_audits: i64 = database
+            .connection()
+            .query_row(
+                "SELECT COUNT(*) FROM suplex_audit_events WHERE action = 'task_note_added'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(note_audits, 0);
         let pause = json!({
             "kind":"task_limit", "reason":"turns",
             "limits":{"budgetUsd":15,"maxTurns":40},
@@ -1245,7 +1333,7 @@ mod tests {
             )
             .is_err()
         );
-        assert_eq!(wakes.load(Ordering::SeqCst), 3);
+        assert_eq!(wakes.load(Ordering::SeqCst), 4);
         let count = Arc::clone(&wakes);
         assert_eq!(
             answer_user_task_limit(
@@ -1262,7 +1350,7 @@ mod tests {
             .status,
             "cancelled"
         );
-        assert_eq!(wakes.load(Ordering::SeqCst), 4);
+        assert_eq!(wakes.load(Ordering::SeqCst), 5);
         let audited: String = database.connection().query_row(
             "SELECT action FROM suplex_audit_events WHERE company_id = 'command_company' ORDER BY rowid DESC LIMIT 1",
             [], |row| row.get(0),
@@ -1282,7 +1370,7 @@ mod tests {
             )
             .is_err()
         );
-        assert_eq!(wakes.load(Ordering::SeqCst), 4);
+        assert_eq!(wakes.load(Ordering::SeqCst), 5);
         drop(database);
         let _ = std::fs::remove_file(&filename);
         let _ = std::fs::remove_file(filename.with_extension("sqlite-wal"));

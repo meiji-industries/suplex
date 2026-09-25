@@ -178,7 +178,7 @@ fn assert_pull_request_available(
     Ok(())
 }
 
-fn assert_task_pull_requests_available(
+pub(crate) fn assert_task_pull_requests_available(
     database: &SuplexDatabase,
     task_id: &str,
 ) -> DatabaseResult<()> {

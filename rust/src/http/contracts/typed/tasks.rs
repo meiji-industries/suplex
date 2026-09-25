@@ -944,6 +944,43 @@ pub fn parse_task_archive(input: Option<&Value>) -> ContractResult<TaskArchiveBo
     }
 }
 
+#[derive(Debug, Clone, Serialize)]
+pub struct TaskNoteBody {
+    pub note: String,
+}
+
+/// The user note body is a strict object; Zod trims before checking UTF-16 length.
+pub fn parse_task_note(input: Option<&Value>) -> ContractResult<TaskNoteBody> {
+    let fields = object(input)?;
+    let mut issues = Vec::new();
+    let note = match fields.get("note") {
+        Some(Value::String(note)) => {
+            let note = crate::identity::auth::js_trim(note);
+            match note.encode_utf16().count() {
+                0 => issues.push(finding("too_small", &[Value::String("note".into())])),
+                20_001.. => issues.push(finding("too_big", &[Value::String("note".into())])),
+                _ => {}
+            }
+            note.to_owned()
+        }
+        other => {
+            issues.push(finding("invalid_type", &[Value::String("note".into())]));
+            if other.is_some_and(|value| value.as_array().is_some_and(Vec::is_empty)) {
+                issues.push(finding("too_small", &[Value::String("note".into())]));
+            }
+            String::new()
+        }
+    };
+    if fields.keys().any(|key| key != "note") {
+        issues.push(finding("unrecognized_keys", &[]));
+    }
+    if issues.is_empty() {
+        Ok(TaskNoteBody { note })
+    } else {
+        Err(ContractFailure::Issues(issues))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -985,6 +1022,11 @@ mod tests {
     fn task_edit_request_fixtures_match_public_zod_contracts() {
         assert_request_fixtures("tasks.TaskDetailsBodySchema", 16, parse_task_details);
         assert_request_fixtures("tasks.TaskRenameBodySchema", 13, parse_task_rename);
+    }
+
+    #[test]
+    fn task_note_request_fixtures_match_public_zod_contract() {
+        assert_request_fixtures("tasks.TaskNoteBodySchema", 15, parse_task_note);
     }
 
     #[test]

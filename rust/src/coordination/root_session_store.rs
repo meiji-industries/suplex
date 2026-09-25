@@ -8,8 +8,9 @@ use sha2::{Digest, Sha256};
 use std::sync::Mutex;
 use uuid::Uuid;
 
-use crate::coordination::root_prompts::STANDARD_WORKER_RESULT_WAKE;
+use crate::coordination::root_prompts::{self, STANDARD_WORKER_RESULT_WAKE};
 use crate::http::contracts::typed::task_answers::TaskLimitDecision;
+use crate::identity::auth::js_trim;
 use crate::platform::database::{DatabaseResult, SuplexDatabase};
 use crate::runtimes::process::inspect_process;
 use crate::shared::js_json;
@@ -879,6 +880,88 @@ pub fn ensure_initial_prompt(
     })
 }
 
+/// Append a human note to the current Root. A delivered task resumes its saved
+/// Root and delivery history in the same transaction as the new prompt.
+pub fn send_note(
+    database: &mut SuplexDatabase,
+    task_id: &str,
+    note: &str,
+    now: DateTime<Utc>,
+) -> DatabaseResult<RootTurn> {
+    let note = js_trim(note);
+    if note.is_empty() || note.encode_utf16().count() > 20_000 {
+        return Err(std::io::Error::other("note_invalid").into());
+    }
+    database.transaction(true, |database| {
+        let (status, archived, root_session_id, workflow_state): (String, bool, Option<String>, String) = database.connection().query_row(
+            "SELECT c.status,t.archived_at IS NOT NULL,c.root_session_id,c.workflow_state_json FROM suplex_task_controls c JOIN suplex_tasks t ON t.id = c.task_id WHERE c.task_id = ?1",
+            [task_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )?;
+        if archived || !matches!(status.as_str(), "active" | "delivered") {
+            return Err(std::io::Error::other("task_note_unavailable").into());
+        }
+        let resuming = status == "delivered";
+        let time = timestamp(now);
+        if resuming {
+            repository::assert_task_pull_requests_available(database, task_id)?;
+            let mut state: Value = serde_json::from_str(&workflow_state)?;
+            let prior_accepted = state.get("acceptedDelivery").cloned().unwrap_or(Value::Null);
+            let prior_completion = state.get("completion").cloned().unwrap_or(Value::Null);
+            let mut history = state.get("deliveryHistory").and_then(Value::as_array).cloned().unwrap_or_default();
+            history.push(serde_json::json!({
+                "resumedAt": time,
+                "acceptedDelivery": prior_accepted,
+                "completion": prior_completion,
+            }));
+            let fields = state.as_object_mut().ok_or("workflow_state_invalid")?;
+            fields.insert("acceptedDelivery".into(), Value::Null);
+            fields.insert("completion".into(), Value::Null);
+            fields.insert("deliveryWait".into(), Value::Null);
+            fields.insert("followUp".into(), Value::Bool(true));
+            fields.insert("deliveryHistory".into(), Value::Array(history));
+            database.connection().execute(
+                "UPDATE suplex_task_controls SET workflow_state_json = ?1,status = 'active',wake_at = ?2,updated_at = ?2 WHERE task_id = ?3 AND status = 'delivered'",
+                params![js_json::stringify(&state), time, task_id],
+            )?;
+            if let Some(root_session_id) = root_session_id {
+                database.connection().execute(
+                    "UPDATE suplex_task_sessions SET is_current = 1,lifecycle = 'reserved',stop_requested_at = NULL,stopped_at = NULL,updated_at = ?1 WHERE id = ?2 AND kind = 'root'",
+                    params![time, root_session_id],
+                )?;
+            }
+        }
+        let existing = current_root(database, task_id)?;
+        let root = match existing {
+            Some(root) => root,
+            None => {
+                let root = reserve_root(database, task_id, now)?;
+                let rows = root_observation_rows(database, task_id)?;
+                let initial = root_prompts::initial_coordinator_prompt(&rows.control, &rows.context, &[])
+                    .map_err(std::io::Error::other)?;
+                ensure_initial_prompt(database, &root, &initial, now)?;
+                root
+            }
+        };
+        assert_current_root(database, task_id, &root.id, root.generation)?;
+        let prompt = if resuming {
+            js_json::stringify(&serde_json::json!({
+                "question": "The user has resumed this delivered task. Handle the follow-up below before completing delivery again. Preserve existing work and inspect current GitHub state. Earlier delivery is history, not completion of this request. For failing checks, read the logs, reproduce and repair the failure, verify locally, push, and observe checks on the current head. Keep the delivery target unchanged. Request delivery explicitly only when the follow-up is satisfied.",
+                "answer": note,
+            }))
+        } else {
+            format!("Human note:\n{note}")
+        };
+        let id = new_turn_id(now)?;
+        let hash = format!("{:x}", Sha256::digest(prompt.as_bytes()));
+        database.connection().execute(
+            "INSERT INTO suplex_task_turns (id,task_id,session_id,generation,prompt_hash,prompt_text,status,created_at,updated_at) VALUES (?1,?2,?3,?4,?5,?6,'pending_prompt',?7,?7)",
+            params![id, task_id, root.id, root.generation, hash, prompt, time],
+        )?;
+        database.connection().query_row("SELECT * FROM suplex_task_turns WHERE id = ?1", [&id], turn).map_err(Into::into)
+    })
+}
+
 pub fn pending_turns(database: &SuplexDatabase, session_id: &str) -> DatabaseResult<Vec<RootTurn>> {
     let mut statement = database.connection().prepare(
         "SELECT * FROM suplex_task_turns WHERE session_id = ?1 AND status IN ('pending_prompt', 'unknown', 'prompted') ORDER BY created_at, id",
@@ -1281,6 +1364,103 @@ mod tests {
         tasks::repository::{self, PreparedTask, TaskCreator},
     };
     use std::{collections::HashMap, path::Path};
+
+    #[test]
+    fn human_note_reuses_root_and_resumes_delivered_intent_without_replay() {
+        let filename = std::env::temp_dir().join(format!("suplex_note_{}.sqlite", Uuid::new_v4()));
+        let now = DateTime::parse_from_rfc3339("2026-09-25T12:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let mut database = SuplexDatabase::open(&filename, OpenMode::Migrate).unwrap();
+        let user = auth::development_sign_in(&mut database, now).unwrap().user;
+        database.connection().execute("INSERT INTO suplex_companies (id,name,status,created_at) VALUES ('note_company','Notes','active',?1)", [timestamp(now)]).unwrap();
+        database.connection().execute("INSERT INTO suplex_projects (id,company_id,name,repository_path,worktree_root,repository_identity,base_branch,setup_command,verification_command,root_profile_id,worker_profile_id,agent_task_policy_json,created_at,updated_at) VALUES ('note_project','note_company','Notes','/tmp/note-repo','/tmp/note-worktrees',NULL,'main','','','root','worker','{}',?1,?1)", [timestamp(now)]).unwrap();
+        let prepared = PreparedTask {
+            id: repository::new_task_id(),
+            company_id: "note_company".into(),
+            project_id: "note_project".into(),
+            title: "Note task".into(),
+            description: "".into(),
+            configuration: serde_json::json!({"repository":"owner/repo","branch":"task-note","baseBranch":"main","baselineSha":"head","runProjectTests":false,"visualEvidence":"off"}),
+            idempotency_key: "note-key".into(),
+            request_hash: "note-hash".into(),
+            creator: TaskCreator::User(user.id),
+            delivery_target: "local_worktree".into(),
+            delivery_intent: serde_json::json!({"repository":"owner/repo","headBranch":"task-note","baseBranch":"main","baselineSha":"head","pullRequestNumber":null}),
+            root_profile: serde_json::json!({"profileId":"root","provider":"codex","model":"test","reasoningLevel":"medium","serviceTier":"default"}),
+            worker_profile: serde_json::json!({"profileId":"worker","provider":"codex","model":"test","reasoningLevel":"medium","serviceTier":"default"}),
+            advisor_profiles: serde_json::json!({}),
+            issue: None,
+            start_queued: true,
+            copied_from_task_id: None,
+            depends_on: vec![],
+        };
+        let task = repository::create(&mut database, &prepared, now)
+            .unwrap()
+            .task;
+        let note = send_note(&mut database, &task.id, " \u{feff}First  ", now).unwrap();
+        assert_eq!(note.prompt_text, "Human note:\nFirst");
+        let (root_id, note_hash): (String, String) = database
+            .connection()
+            .query_row(
+                "SELECT session_id,prompt_hash FROM suplex_task_turns WHERE id = ?1",
+                [&note.id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!(
+            note_hash,
+            "a3d575167f0d45878ed9616d0c2a95a2c62b01365bfc7e5be52dc38a33e118d9"
+        );
+        assert_eq!(pending_turns(&database, &root_id).unwrap().len(), 2);
+        database.connection().execute(
+            "UPDATE suplex_task_sessions SET native_session_id = 'codex-retained' WHERE id = ?1",
+            [&root_id],
+        ).unwrap();
+        drop(database);
+        let mut database = SuplexDatabase::open(&filename, OpenMode::ReadWrite).unwrap();
+        assert_eq!(pending_turns(&database, &root_id).unwrap().len(), 2);
+        database.connection().execute(
+            "UPDATE suplex_task_controls SET status = 'delivered',workflow_state_json = json_set(workflow_state_json,'$.acceptedDelivery',json(?1),'$.completion',json(?2)) WHERE task_id = ?3",
+            params![r#"{"baseSha":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","headSha":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","files":["file.txt"],"commits":["bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"]}"#, r#"{"kind":"workflow","reviewedHead":"bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb","pullRequestNumber":1597,"observedAt":"2026-09-25T12:00:00.000Z"}"#, task.id],
+        ).unwrap();
+        database.connection().execute("UPDATE suplex_task_sessions SET is_current = 0,lifecycle = 'stopped',stop_requested_at = ?1,stopped_at = ?1 WHERE id = ?2", params![timestamp(now), root_id]).unwrap();
+        let resumed = send_note(&mut database, &task.id, " Follow up ", now).unwrap();
+        assert_eq!(resumed.session_id, root_id);
+        assert_eq!(
+            resumed.prompt_text,
+            "{\"question\":\"The user has resumed this delivered task. Handle the follow-up below before completing delivery again. Preserve existing work and inspect current GitHub state. Earlier delivery is history, not completion of this request. For failing checks, read the logs, reproduce and repair the failure, verify locally, push, and observe checks on the current head. Keep the delivery target unchanged. Request delivery explicitly only when the follow-up is satisfied.\",\"answer\":\"Follow up\"}"
+        );
+        let resumed_hash: String = database
+            .connection()
+            .query_row(
+                "SELECT prompt_hash FROM suplex_task_turns WHERE id = ?1",
+                [&resumed.id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(
+            resumed_hash,
+            "6b9a237b2658b9659363286f8a54845684e413b60d9e3decf4d3006beb066b8b"
+        );
+        let rows = root_observation_rows(&database, &task.id).unwrap();
+        assert_eq!(rows.control["status"], "active");
+        assert_eq!(rows.control["workflowState"]["followUp"], true);
+        assert_eq!(
+            rows.control["workflowState"]["deliveryHistory"][0]["acceptedDelivery"]["headSha"],
+            "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        );
+        assert_eq!(rows.root.as_ref().unwrap()["id"], root_id);
+        assert_eq!(
+            rows.root.as_ref().unwrap()["nativeSessionId"],
+            "codex-retained"
+        );
+        assert_eq!(pending_turns(&database, &root_id).unwrap().len(), 3);
+        drop(database);
+        let _ = std::fs::remove_file(&filename);
+        let _ = std::fs::remove_file(filename.with_extension("sqlite-wal"));
+        let _ = std::fs::remove_file(filename.with_extension("sqlite-shm"));
+    }
 
     #[test]
     fn committed_claim_survives_reopen_and_budget_pause_never_dispatches() {

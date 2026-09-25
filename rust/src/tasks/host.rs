@@ -2,10 +2,10 @@
 //! and the outer task wake loop call this after durable task/root setup.
 
 use std::{
-    collections::{BTreeSet, HashMap, HashSet},
+    collections::{HashMap, HashSet},
     io,
     path::{Path, PathBuf},
-    sync::{Mutex, OnceLock, PoisonError},
+    sync::OnceLock,
 };
 
 use chrono::{DateTime, SecondsFormat, Utc};
@@ -39,7 +39,6 @@ use crate::{
     shared::js_json,
     tasks::{
         archive::processes,
-        commands::TaskFailure,
         worktree::{self, TaskWorktreeIntent, WorktreeReference},
     },
 };
@@ -210,26 +209,6 @@ fn retired_owner_can_stop(saved_start: Option<&str>, observed: ProcessOwnerObser
         }
         ProcessOwnerObservation::Unknown => false,
     }
-}
-
-/// Sessions whose unported provider was already reported. The sweep skips
-/// them before any claim, so it does not fail the task every second.
-// ponytail: process-local; a restart reports each unported session once more.
-static UNPORTED_SESSIONS: Mutex<BTreeSet<String>> = Mutex::new(BTreeSet::new());
-
-fn skip_unported(session_id: &str, message: &str) -> Option<PromptObservation> {
-    let failure = TaskFailure::not_ported(message);
-    if UNPORTED_SESSIONS
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .insert(session_id.to_owned())
-    {
-        eprintln!(
-            "warning: session {session_id} is skipped: {failure} ({})",
-            failure.code
-        );
-    }
-    None
 }
 
 fn dispatch_state(turn: &RootTurn) -> DispatchState {
@@ -762,18 +741,9 @@ fn recover_prepared_root_blocking(
     let rows = root_session_store::root_observation_rows(&database, task_id)?;
     let profile = selected_profile(&rows, "root");
     let provider = profile["provider"].as_str().unwrap_or_default();
-    let Some(harness) = task_harness_registry::for_profile(provider) else {
-        return Ok(skip_unported(
-            &session.id,
-            &format!("No task harness for {provider}"),
-        ));
-    };
-    if rows.control["workflow"] != "standard" && provider != "codex" {
-        return Ok(skip_unported(
-            &session.id,
-            "Only Codex runs a non-Standard workflow Coordinator",
-        ));
-    }
+    // TypeScript `HarnessRouter.forScope`.
+    let harness = task_harness_registry::for_profile(provider)
+        .ok_or_else(|| std::io::Error::other(format!("No task harness for {provider}")))?;
     if current_owner_still_running(&session) {
         return Ok(None);
     }
@@ -1037,18 +1007,9 @@ fn recover_prepared_worker_blocking(
     let rows = root_session_store::root_observation_rows(&database, task_id)?;
     let delegate = delegate_launch(&rows, &session.id, &turn.id);
     let provider = delegate.profile["provider"].as_str().unwrap_or_default();
-    let Some(harness) = task_harness_registry::for_profile(provider) else {
-        return Ok(skip_unported(
-            &session.id,
-            &format!("No task harness for {provider}"),
-        ));
-    };
-    if delegate.workflow != WorkflowLaunch::default() && provider != "codex" {
-        return Ok(skip_unported(
-            &session.id,
-            "Only Codex runs Advisor and Direct build sessions",
-        ));
-    };
+    // TypeScript `HarnessRouter.forScope`.
+    let harness = task_harness_registry::for_profile(provider)
+        .ok_or_else(|| std::io::Error::other(format!("No task harness for {provider}")))?;
     if current_owner_still_running(&session) {
         return Ok(None);
     }
@@ -2130,7 +2091,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn workflow_tasks_are_observed_and_the_sweep_skips_unported_providers() {
+    async fn workflow_tasks_are_observed_and_every_provider_runs_the_workflow_coordinator() {
         let (base, database_path, task_id) = fixture_task();
         let root = root_controller::prepare_root(&database_path, &task_id).unwrap();
         let identity = RootIdentity {
@@ -2148,20 +2109,11 @@ mod tests {
         let observed = root_controller::observe(&database_path, &identity).unwrap();
         assert_eq!(observed["control"]["workflow"], "competing_plans");
         let environment = HashMap::new();
-        for _ in 0..2 {
-            assert!(
-                recover_prepared_root(&database_path, &base, &task_id, None, &environment)
-                    .await
-                    .unwrap()
-                    .is_none()
-            );
-        }
-        let database = SuplexDatabase::open(&database_path, OpenMode::ReadOnly).unwrap();
-        let root = root_session_store::current_root(&database, &task_id)
-            .unwrap()
-            .unwrap();
-        assert!(root.native_session_id.is_none() && root.launch_owner.is_none());
-        assert!(UNPORTED_SESSIONS.lock().unwrap().contains(&root.id));
+        // A Devin Coordinator of a non-Standard workflow is not skipped: it proceeds to worktree preparation.
+        let error = recover_prepared_root(&database_path, &base, &task_id, None, &environment)
+            .await
+            .unwrap_err();
+        assert_eq!(error.to_string(), "Task worktree is not prepared");
         fs::remove_dir_all(base).unwrap();
     }
 

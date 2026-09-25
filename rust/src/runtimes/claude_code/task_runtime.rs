@@ -7,7 +7,7 @@ use std::{
     error::Error,
     fs, io,
     os::unix::fs::{OpenOptionsExt, PermissionsExt},
-    path::{Path, PathBuf},
+    path::Path,
 };
 
 use serde_json::{Value, json};
@@ -17,10 +17,10 @@ use super::{
     transcript::{self, ClaudeMessageEntry},
 };
 use crate::{
-    coordination::{bridge_auth, root_bridge},
+    coordination::{advisor_bridge, bridge_auth, root_bridge},
     profiles::agent_profiles::home_directory,
     runtimes::{
-        codex::{role_prompt, runtime as headless_observation},
+        codex::runtime as headless_observation,
         git_guard, headless,
         project_mcp::{project_mcp_servers, project_mcp_tools},
         task_harness::{
@@ -43,23 +43,6 @@ const ROOT_TOOLS: &str = "Read,Glob,Grep,WebFetch,WebSearch,TodoWrite";
 const WORKER_TOOLS: &str =
     "Bash,Read,Write,Edit,Glob,Grep,NotebookEdit,WebFetch,WebSearch,TodoWrite,Skill";
 
-fn role_name(role: TaskRole<'_>) -> &'static str {
-    match role {
-        TaskRole::Root(_) => "root",
-        TaskRole::Worker(_) => "worker",
-    }
-}
-
-/// TypeScript `taskEvidenceRoot(databasePath)/<taskId>`.
-fn evidence_root(scope: &TaskScope<'_>) -> PathBuf {
-    scope
-        .database_path
-        .parent()
-        .unwrap_or(Path::new("."))
-        .join("runtime/task-evidence")
-        .join(scope.task_id)
-}
-
 /// TypeScript `claudeArguments` for a printed Standard turn.
 pub fn claude_arguments(
     scope: &TaskScope<'_>,
@@ -67,7 +50,7 @@ pub fn claude_arguments(
     resume: bool,
     runtime_directory: &Path,
 ) -> Vec<String> {
-    let role = role_name(scope.role);
+    let role = scope.workflow.role_name(scope.role);
     let mcp_tools = project_mcp_tools(scope.project_mcp, role);
     let has_project_mcp = scope
         .project_mcp
@@ -93,10 +76,7 @@ pub fn claude_arguments(
     args.extend(claude_settings_arguments(
         scope.instance_home_directory.is_some() || has_project_mcp,
     ));
-    let role_prompt = match scope.role {
-        TaskRole::Root(_) => role_prompt::ROOT_STANDARD,
-        TaskRole::Worker(purpose) => role_prompt::worker_standard_role(purpose),
-    };
+    let role_prompt = scope.workflow.role_prompt(scope.role);
     let mcp_config = if role != "worker" || !mcp_tools.is_empty() {
         runtime_directory
             .join("mcp.json")
@@ -112,12 +92,14 @@ pub fn claude_arguments(
         "--mcp-config".into(),
         mcp_config,
     ]);
-    // Standard is the only workflow the host runs, so the evidence root is
-    // shared only with prepared project context.
-    if let Some(context) = scope.project_context_path {
+    if scope.project_context_path.is_some() || scope.workflow.reads_evidence(scope.role) {
         args.extend([
             "--add-dir".into(),
-            evidence_root(scope).to_string_lossy().into_owned(),
+            scope.evidence_root().to_string_lossy().into_owned(),
+        ]);
+    }
+    if let Some(context) = scope.project_context_path {
+        args.extend([
             "--add-dir".into(),
             context
                 .parent()
@@ -126,8 +108,13 @@ pub fn claude_arguments(
                 .into_owned(),
         ]);
     }
-    if role == "root" {
-        let allowed = ["mcp__suplex_root", "WebFetch", "WebSearch"]
+    if role != "worker" {
+        let bridge = if role == "root" {
+            "mcp__suplex_root"
+        } else {
+            "mcp__suplex_advisor__submit_report"
+        };
+        let allowed = [bridge, "WebFetch", "WebSearch"]
             .map(str::to_owned)
             .into_iter()
             .chain(mcp_tools)
@@ -197,8 +184,26 @@ fn prepare_session(
 ) -> io::Result<()> {
     fs::create_dir_all(directory)?;
     fs::set_permissions(directory, fs::Permissions::from_mode(0o700))?;
-    let role = role_name(scope.role);
+    let role = scope.workflow.role_name(scope.role);
+    if scope.workflow.reads_evidence(scope.role) {
+        fs::create_dir_all(scope.evidence_root())?;
+        fs::set_permissions(scope.evidence_root(), fs::Permissions::from_mode(0o700))?;
+    }
     let mut servers = project_mcp_servers(scope.project_mcp, role, environment)?;
+    if let (TaskRole::Worker(_), Some(advisor)) = (scope.role, scope.workflow.advisor) {
+        let suplex = std::env::current_exe()?;
+        let suplex = suplex
+            .to_str()
+            .ok_or_else(|| io::Error::other("Suplex executable path is invalid"))?;
+        let binding = advisor_bridge::write_binding(directory, advisor, suplex)?;
+        servers.insert(
+            "suplex_advisor".into(),
+            json!({"type":"stdio","command":suplex,"args":["mcp","advisor"],"env":{
+                bridge_auth::ADVISOR_BINDING_ENV: binding.binding_path,
+                bridge_auth::ADVISOR_TOKEN_ENV: binding.token,
+            }}),
+        );
+    }
     if let TaskRole::Root(identity) = scope.role {
         let suplex = std::env::current_exe()?;
         let suplex = suplex
@@ -360,8 +365,8 @@ impl TaskHarness for ClaudeCodeTaskRuntime {
             Path::to_path_buf,
         );
         let resume = transcript::find_transcript(scope.native_session_id, &config)?.is_some();
-        let inherited = match scope.role {
-            TaskRole::Worker(_) => {
+        let inherited = match (scope.role, scope.workflow.advisor) {
+            (TaskRole::Worker(_), None) => {
                 let (git, gh) = git_guard::resolve_guard_binaries(scope.inherited_environment)?;
                 git_guard::create_git_command_guard(
                     &directory,
@@ -371,7 +376,7 @@ impl TaskHarness for ClaudeCodeTaskRuntime {
                 )?
                 .environment
             }
-            TaskRole::Root(_) => scope.inherited_environment.clone(),
+            _ => scope.inherited_environment.clone(),
         };
         let environment = task_scope_environment(
             claude_environment(scope.instance_home_directory, &inherited),
@@ -474,6 +479,7 @@ mod tests {
     use super::*;
     use crate::runtimes::codex::session_reader;
     use crate::runtimes::task_harness::WorkerPurpose;
+    use std::path::PathBuf;
     use std::{thread, time::Duration};
 
     const SESSION: &str = "71618050-0d31-428e-a547-d6c4a2eca88f";
@@ -804,6 +810,62 @@ mod tests {
                 .unwrap()
                 + 1]
             .starts_with(" When you need a decision")
+        );
+    }
+
+    #[test]
+    fn an_advisor_runs_read_only_with_its_report_bridge_and_the_workflow_evidence() {
+        let f = fixture("complete");
+        let mut scope = scope(
+            &f,
+            "session-advisor",
+            TaskRole::Worker(WorkerPurpose::Implementation),
+            None,
+        );
+        scope.workflow.advisor = Some(crate::coordination::advisor_bridge::AdvisorRole::Reviewer);
+        let directory = scope.runtime_directory().unwrap();
+        prepare_session(&scope, &directory, &f.inherited).unwrap();
+        let config: Value =
+            serde_json::from_slice(&fs::read(directory.join("mcp.json")).unwrap()).unwrap();
+        let bridge = &config["mcpServers"]["suplex_advisor"];
+        assert_eq!(bridge["args"], json!(["mcp", "advisor"]));
+        assert!(bridge["env"][bridge_auth::ADVISOR_TOKEN_ENV].is_string());
+        assert!(config["mcpServers"]["suplex_root"].is_null());
+        assert!(scope.evidence_root().is_dir());
+        let args = claude_arguments(&scope, "session", false, &directory);
+        let after = |flag: &str| &args[args.iter().position(|arg| arg == flag).unwrap() + 1];
+        assert_eq!(
+            after("--append-system-prompt"),
+            crate::coordination::root_prompts::ADVISOR_ROLE_PROMPT
+        );
+        assert_eq!(after("--tools"), ROOT_TOOLS);
+        assert_eq!(
+            after("--allowedTools"),
+            "mcp__suplex_advisor__submit_report,WebFetch,WebSearch"
+        );
+        assert_eq!(after("--add-dir"), &scope.evidence_root().to_string_lossy());
+        assert!(
+            !args
+                .iter()
+                .any(|arg| arg == "--dangerously-skip-permissions")
+        );
+        // A Direct build Worker keeps Worker tools with the Direct role prompt.
+        scope.workflow = crate::runtimes::task_harness::WorkflowLaunch {
+            direct: true,
+            ..Default::default()
+        };
+        let args = claude_arguments(&scope, "session", false, &directory);
+        assert_eq!(
+            args[args
+                .iter()
+                .position(|arg| arg == "--append-system-prompt")
+                .unwrap()
+                + 1],
+            crate::coordination::root_prompts::WORKER_DIRECT_ROLE_PROMPT
+        );
+        assert!(
+            args.iter()
+                .any(|arg| arg == "--dangerously-skip-permissions")
         );
     }
 

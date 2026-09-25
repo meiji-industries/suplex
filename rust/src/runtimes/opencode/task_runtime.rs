@@ -33,7 +33,11 @@ use super::{
 };
 use crate::{
     coordination::{
-        bridge_auth::{ROOT_BINDING_ENV, ROOT_TOKEN_ENV, atomic_write_private},
+        advisor_bridge,
+        bridge_auth::{
+            ADVISOR_BINDING_ENV, ADVISOR_TOKEN_ENV, ROOT_BINDING_ENV, ROOT_TOKEN_ENV,
+            atomic_write_private,
+        },
         root_bridge,
     },
     profiles::model_pricing::ModelPricingCatalog,
@@ -43,16 +47,11 @@ use crate::{
         task_harness::{
             DispatchClaim, DispatchState, NativeSessionReader, NativeTimeline, PromptObservation,
             PromptState, ReaderSession, TaskHarness, TaskRole, TaskScope, UsageEntry,
-            WorkerPurpose, task_scope_environment,
+            WorkflowLaunch, task_scope_environment,
         },
     },
 };
 
-const ROOT_STANDARD: &str = include_str!("../codex/root_standard_role_prompt.txt");
-const WORKER_IMPLEMENTATION: &str =
-    include_str!("../codex/worker_planned_implementation_role_prompt.txt");
-const WORKER_VERIFICATION: &str =
-    include_str!("../codex/worker_planned_verification_role_prompt.txt");
 const SESSION_BINDING: &str = "opencode-session.json";
 
 pub struct OpenCodeTaskRuntime;
@@ -135,21 +134,18 @@ pub fn display_attached(reference: &ServerReference, session_id: &str, args: &[S
         && after("--dir") == Some(&reference.directory)
 }
 
-fn role_parts(role: TaskRole<'_>) -> (RoleKind, &'static str, &'static str, &'static str) {
-    match role {
-        TaskRole::Root(_) => (RoleKind::Root, "suplex-root", "Coordinator", ROOT_STANDARD),
-        TaskRole::Worker(WorkerPurpose::Implementation) => (
-            RoleKind::Worker,
-            "suplex-worker",
-            "Worker",
-            WORKER_IMPLEMENTATION,
-        ),
-        TaskRole::Worker(WorkerPurpose::Verification) => (
-            RoleKind::Worker,
-            "suplex-worker",
-            "Worker",
-            WORKER_VERIFICATION,
-        ),
+fn role_parts(
+    role: TaskRole<'_>,
+    workflow: WorkflowLaunch,
+) -> (RoleKind, &'static str, &'static str, &'static str) {
+    let prompt = workflow.role_prompt(role);
+    match (role, workflow.advisor) {
+        (TaskRole::Root(_), _) => (RoleKind::Root, "suplex-root", "Coordinator", prompt),
+        (TaskRole::Worker(_), Some(advisor)) => {
+            let label = crate::coordination::workflows::advisor_label(advisor.label());
+            (RoleKind::Advisor, "suplex-advisor", label, prompt)
+        }
+        (TaskRole::Worker(_), None) => (RoleKind::Worker, "suplex-worker", "Worker", prompt),
     }
 }
 
@@ -157,7 +153,7 @@ fn role_parts(role: TaskRole<'_>) -> (RoleKind, &'static str, &'static str, &'st
 pub async fn ensure_session(scope: &TaskScope<'_>) -> Result<String, BoxError> {
     let runtime = scope.runtime_directory()?;
     let executable = server::resolve_executable(scope.executable)?;
-    let (role, agent, label, _) = role_parts(scope.role);
+    let (role, agent, label, _) = role_parts(scope.role, scope.workflow);
     let bridge = match scope.role {
         TaskRole::Root(identity) => {
             let suplex = std::env::current_exe()?.to_string_lossy().into_owned();
@@ -181,10 +177,28 @@ pub async fn ensure_session(scope: &TaskScope<'_>) -> Result<String, BoxError> {
                 .into(),
             })
         }
-        TaskRole::Worker(_) => None,
+        TaskRole::Worker(_) => match scope.workflow.advisor {
+            Some(advisor) => {
+                let suplex = std::env::current_exe()?.to_string_lossy().into_owned();
+                let binding = advisor_bridge::write_binding(&runtime, advisor, &suplex)?;
+                Some(BridgeServer {
+                    command: suplex,
+                    args: vec!["mcp".into(), "advisor".into()],
+                    environment: [
+                        (
+                            ADVISOR_BINDING_ENV.to_owned(),
+                            binding.binding_path.to_string_lossy().into_owned(),
+                        ),
+                        (ADVISOR_TOKEN_ENV.to_owned(), binding.token),
+                    ]
+                    .into(),
+                })
+            }
+            None => None,
+        },
     };
-    let environment = match scope.role {
-        TaskRole::Worker(_) => {
+    let environment = match role {
+        RoleKind::Worker => {
             let (git, gh) = git_guard::resolve_guard_binaries(scope.inherited_environment)?;
             git_guard::create_git_command_guard(
                 &runtime,
@@ -194,7 +208,7 @@ pub async fn ensure_session(scope: &TaskScope<'_>) -> Result<String, BoxError> {
             )?
             .environment
         }
-        TaskRole::Root(_) => scope.inherited_environment.clone(),
+        _ => scope.inherited_environment.clone(),
     };
     let mut environment =
         task_scope_environment(environment, scope.worktree, scope.project_environment);
@@ -210,13 +224,18 @@ pub async fn ensure_session(scope: &TaskScope<'_>) -> Result<String, BoxError> {
         .project_context_path
         .and_then(Path::parent)
         .map(|path| path.to_string_lossy().into_owned());
+    // Coordinator and Advisor sessions read the pinned workflow evidence or prepared project context.
+    let evidence = (role != RoleKind::Worker
+        && (scope.workflow.reads_evidence(scope.role) || scope.project_context_path.is_some()))
+    .then(|| scope.evidence_root().to_string_lossy().into_owned());
+    let worktree = scope.worktree.to_string_lossy().into_owned();
     let config = server::role_config(RoleConfigInput {
         role,
         profile: &profile,
         bridge: bridge.as_ref(),
-        evidence_directory: None,
+        evidence_directory: evidence.as_deref(),
         context_directory: context.as_deref(),
-        directory: None,
+        directory: evidence.as_ref().map(|_| worktree.as_str()),
     })?;
     let reference = server::ensure_server(EnsureInput {
         runtime_directory: &runtime,
@@ -228,13 +247,18 @@ pub async fn ensure_session(scope: &TaskScope<'_>) -> Result<String, BoxError> {
     .await?;
     let client = server::client(&reference)?;
     let directory = scope.worktree.to_string_lossy();
-    if role == RoleKind::Root {
-        let status = client.mcp_status(&directory).await?.remove("suplex_root");
+    if role != RoleKind::Worker {
+        let (name, label) = if role == RoleKind::Root {
+            ("suplex_root", "Coordinator")
+        } else {
+            ("suplex_advisor", "Advisor report")
+        };
+        let status = client.mcp_status(&directory).await?.remove(name);
         if status.as_ref().map(|status| status.status.as_str()) != Some("connected") {
             let detail = status
                 .map(|status| status.error.unwrap_or(status.status))
                 .unwrap_or_else(|| "not configured".into());
-            return Err(format!("Suplex Coordinator bridge is unavailable: {detail}").into());
+            return Err(format!("Suplex {label} bridge is unavailable: {detail}").into());
         }
     }
     if let Some(native) = native_session_id(&runtime, scope.native_session_id)? {
@@ -702,7 +726,7 @@ impl TaskHarness for OpenCodeTaskRuntime {
     ) -> Result<PromptObservation, Box<dyn Error>> {
         let directory = scope.runtime_directory()?;
         let native = run(ensure_session(scope))?;
-        let (_, agent, _, system) = role_parts(scope.role);
+        let (_, agent, _, system) = role_parts(scope.role, scope.workflow);
         let intent = PromptIntent {
             session_id: native,
             message_id: turn_id.to_owned(),
@@ -837,6 +861,7 @@ impl TaskHarness for OpenCodeTaskRuntime {
 mod tests {
     use super::*;
     use crate::runtimes::opencode::{client::fake, server::tests::temporary};
+    use crate::runtimes::task_harness::WorkerPurpose;
     use std::sync::{
         Arc,
         atomic::{AtomicUsize, Ordering},
@@ -877,9 +902,27 @@ mod tests {
 
     #[test]
     fn role_prompts_keep_the_coordinator_review_and_delivery_contract() {
-        let (_, agent, _, prompt) = role_parts(TaskRole::Worker(WorkerPurpose::Verification));
+        let (_, agent, _, prompt) = role_parts(
+            TaskRole::Worker(WorkerPurpose::Verification),
+            WorkflowLaunch::default(),
+        );
         assert_eq!(agent, "suplex-worker");
         assert!(prompt.starts_with("You are Suplex's verification Worker."));
+        const ROOT_STANDARD: &str = crate::runtimes::codex::role_prompt::ROOT_STANDARD;
+        let rater = WorkflowLaunch {
+            advisor: Some(crate::coordination::advisor_bridge::AdvisorRole::Rater),
+            ..WorkflowLaunch::default()
+        };
+        let (kind, agent, label, prompt) =
+            role_parts(TaskRole::Worker(WorkerPurpose::Implementation), rater);
+        assert_eq!(
+            (kind, agent, label),
+            (RoleKind::Advisor, "suplex-advisor", "Rater")
+        );
+        assert_eq!(
+            prompt,
+            crate::coordination::root_prompts::ADVISOR_ROLE_PROMPT
+        );
         assert!(ROOT_STANDARD.contains("Delegate one coherent functional assignment"));
         assert!(ROOT_STANDARD.contains("independent reviewer"));
         assert!(

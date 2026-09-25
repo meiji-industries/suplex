@@ -11,7 +11,7 @@ use super::{
 use crate::{
     profiles::model_pricing::ModelPricingCatalog,
     runtimes::{
-        codex::{role_prompt, tool_evidence::NativeTool},
+        codex::tool_evidence::NativeTool,
         task_harness::{
             DispatchClaim, DispatchState, NativeSessionReader, NativeTimeline, PromptObservation,
             ReaderSession, TaskHarness, TaskRole, TaskScope,
@@ -84,19 +84,15 @@ impl TaskHarness for DevinTaskRuntime {
         claim: DispatchClaim<'_>,
     ) -> Result<PromptObservation, Box<dyn Error>> {
         // The host already prepended the project context to `prompt`.
-        let (role, role_prompt) = match scope.role {
-            TaskRole::Root(identity) => (
-                DevinRole::Root {
-                    identity,
-                    artifact_root: scope.artifact_root,
-                },
-                role_prompt::ROOT_STANDARD,
-            ),
-            TaskRole::Worker(purpose) => (
-                DevinRole::Worker,
-                role_prompt::worker_standard_role(purpose),
-            ),
+        let role = match (scope.role, scope.workflow.advisor) {
+            (TaskRole::Root(identity), _) => DevinRole::Root {
+                identity,
+                artifact_root: scope.artifact_root,
+            },
+            (TaskRole::Worker(_), Some(advisor)) => DevinRole::Advisor(advisor),
+            (TaskRole::Worker(_), None) => DevinRole::Worker,
         };
+        let role_prompt = scope.workflow.role_prompt(scope.role);
         task_runtime::dispatch(
             &DevinScope {
                 database_path: scope.database_path,
@@ -140,7 +136,7 @@ impl TaskHarness for DevinTaskRuntime {
 mod tests {
     use super::*;
     use crate::runtimes::{
-        codex::role_prompt::WorkerPurpose,
+        codex::role_prompt::{self, WorkerPurpose},
         headless,
         task_harness::PromptState,
         task_harness_registry::{for_profile, native_session_reader},

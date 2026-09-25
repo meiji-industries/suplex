@@ -63,7 +63,8 @@ run = "cargo +1.93.1 test --manifest-path rust/Cargo.toml"
 run = '''
 pnpm exec tsx tests/parity/generate.ts
 pnpm exec tsx tests/parity/hash-bytes/generate.ts
-cargo +1.93.1 test --manifest-path rust/Cargo.toml --test contract_parity --test hash_bytes
+cargo +1.93.1 test --manifest-path rust/Cargo.toml --test contract_parity --test hash_bytes --test raw_contract_parity
+cargo +1.93.1 test --manifest-path rust/Cargo.toml --lib signed_typescript_and_rust_services_share_credentials_and_sessions_both_directions -- --ignored --nocapture
 '''
 
 [tasks.down]

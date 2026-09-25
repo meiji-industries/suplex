@@ -77,7 +77,7 @@ fn new_session_token() -> DatabaseResult<String> {
     Ok(format!("session_v1_{}", URL_SAFE_NO_PAD.encode(bytes)))
 }
 
-fn hash_secret(secret: &str) -> String {
+pub(crate) fn hash_secret(secret: &str) -> String {
     Sha256::digest(secret.as_bytes())
         .iter()
         .map(|byte| format!("{byte:02x}"))
@@ -172,7 +172,7 @@ pub fn bootstrap_required(database: &SuplexDatabase) -> DatabaseResult<bool> {
     Ok(active_admins == 0)
 }
 
-fn create_session(
+pub(crate) fn create_session(
     database: &SuplexDatabase,
     user_id: &str,
     now: DateTime<Utc>,

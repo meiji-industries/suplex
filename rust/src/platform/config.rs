@@ -15,7 +15,10 @@ pub struct Installation {
 
 impl Installation {
     pub fn load() -> Result<Self, Box<dyn std::error::Error>> {
-        let root = env::current_dir()?.join(".suplex-rust");
+        let root = match env::var_os("SUPLEX_RUST_ROOT") {
+            Some(path) => PathBuf::from(path),
+            None => env::current_dir()?.join(".suplex-rust"),
+        };
         let port = match env::var("SUPLEX_RUST_PORT") {
             Ok(value) => parse_port(&value)?,
             Err(env::VarError::NotPresent) => {

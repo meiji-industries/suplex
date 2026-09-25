@@ -2,17 +2,21 @@
 
 Baseline: TypeScript backend at `a57a47f5` (2026-09-24). This is a development status record, never a runtime input. The implementation scope includes milestones 4a and 4b.
 
-States: `not started` means no complete Rust equivalent; `ported` means implementation exists with verification outstanding; `verified` means the relevant parity and integration checks pass. Tests for a smaller helper do not verify its containing route or workflow. Platform-dependent release evidence is tracked in the [PRD](plans/2026-09-24-experimental-rust-backend.md#15-implementation-progress).
+States: `not started` means no complete Rust equivalent; `ported` means implementation exists with verification outstanding; `verified` means the relevant parity and integration checks pass. Tests for a smaller helper do not verify its containing route or workflow. The [PRD](plans/2026-09-24-experimental-rust-backend.md) defines release criteria; keep completion and test evidence here.
 
-The table lists all 238 backend TypeScript modules present at the baseline, including contracts, routes, and each provider adapter. New contract-only files introduced during M0 will be tracked with their source rows. Shared SQL migrations remain unchanged.
+The table lists all 238 backend TypeScript modules present at the baseline, including contracts, routes, and each provider adapter. Contract extractions already committed during M0 are tracked with their source rows; no further extraction is required. Shared SQL migrations remain unchanged. Inventory introduced in `ea44af63`.
+
+Current sequence: use Serde/Garde requests and public validation findings, Serialize responses with raw HTTP checks, and library WebAuthn verification; then complete one Codex Standard task through the UI with cancellation and restart recovery. Other API breadth is deferred. Remove the UTF-16 document model, raw-JSON fixtures and response-schema fixtures; retain the hash serializer. Git2 and GitHub API/keychain integration follow their M2/M3 delivery seams. Historic checks below do not verify their replacements.
+
+Validation baseline: before this cleanup, the latest isolated Rust snapshot passed 63 unit tests and six integration cases; 89 HTTP schemas had ordinary corpus coverage. The TypeScript full suite passed 1,613/1,623 tests: seven failures reproduce at pre-port `a57a47f5`, and three Devin failures pass focused reruns. Hosted CI, both macOS packages, full provider/task execution, switching, and the eight-hour run remain unverified. Final snapshots use separate Cargo target directories after an earlier shared-target collision made staged-artifact evidence unreliable.
 
 | TypeScript source | Status | Rust equivalent and evidence |
 |---|---|---|
-| [app.ts](../src/app.ts) | not started | |
+| [app.ts](../src/app.ts) | not started | `924c9efe`, `92f290e3`: Cargo/toolchain/CI, isolated startup, SQLite and sign-in assets tested locally; task host and full route wiring remain pending. |
 | [cli.ts](../src/cli.ts) | not started | |
 | [coordination/advisor-evidence.ts](../src/coordination/advisor-evidence.ts) | not started | |
 | [coordination/advisor-report-bridge.ts](../src/coordination/advisor-report-bridge.ts) | not started | |
-| [coordination/advisor-report.ts](../src/coordination/advisor-report.ts) | not started | |
+| [coordination/advisor-report.ts](../src/coordination/advisor-report.ts) | not started | `1c24c183`: existing schemas extracted with compatible exports and passing TypeScript checks; Rust service remains pending |
 | [coordination/bridge-auth.ts](../src/coordination/bridge-auth.ts) | not started | |
 | [coordination/controller-reports.ts](../src/coordination/controller-reports.ts) | not started | |
 | [coordination/coordinator-replacement-contracts.ts](../src/coordination/coordinator-replacement-contracts.ts) | not started | |
@@ -33,8 +37,8 @@ The table lists all 238 backend TypeScript modules present at the baseline, incl
 | [coordination/worker-turn-evidence.ts](../src/coordination/worker-turn-evidence.ts) | not started | |
 | [coordination/workflow-evidence.ts](../src/coordination/workflow-evidence.ts) | not started | |
 | [coordination/workflow-prompts.ts](../src/coordination/workflow-prompts.ts) | not started | |
-| [coordination/workflow-records.ts](../src/coordination/workflow-records.ts) | not started | |
-| [coordination/workflows.ts](../src/coordination/workflows.ts) | not started | |
+| [coordination/workflow-records.ts](../src/coordination/workflow-records.ts) | not started | Uncommitted service/four-route work is deferred; M2 needs listing first. Focused Rust4/4 and TS2/2 passed; private final check was interrupted for the course correction. |
+| [coordination/workflows.ts](../src/coordination/workflows.ts) | not started | `1c24c183`: existing schemas extracted with compatible exports and passing TypeScript checks; next Rust work is limited to the Standard task slice |
 | [delivery/agent-delivery.ts](../src/delivery/agent-delivery.ts) | not started | |
 | [delivery/completed-pull-requests.ts](../src/delivery/completed-pull-requests.ts) | not started | |
 | [delivery/failure.ts](../src/delivery/failure.ts) | not started | |
@@ -47,50 +51,50 @@ The table lists all 238 backend TypeScript modules present at the baseline, incl
 | [delivery/target-capabilities.ts](../src/delivery/target-capabilities.ts) | not started | |
 | [http/agent-api-runtime.ts](../src/http/agent-api-runtime.ts) | not started | |
 | [http/contracts/agent-api.ts](../src/http/contracts/agent-api.ts) | not started | |
-| [http/contracts/auth.ts](../src/http/contracts/auth.ts) | ported | Five schemas share lossless validators with ordinary adapters; normal/raw Zod fixtures and lossless HTTP validation checks pass. The complete raw request/response corpus remains incomplete |
+| [http/contracts/auth.ts](../src/http/contracts/auth.ts) | ported | `40eac0e1`, `a7eb5238`: ordinary auth corpus checks pass; converting the existing validators to typed Serde requests. |
 | [http/contracts/avatars.ts](../src/http/contracts/avatars.ts) | not started | |
-| [http/contracts/common.ts](../src/http/contracts/common.ts) | not started | 21 common validators implemented, four migrated to lossless rules. Combined parity passes 714 ordinary / 13 raw cases across 61 schemas; remaining common contracts and HTTP integration are incomplete |
+| [http/contracts/common.ts](../src/http/contracts/common.ts) | not started | `d10b9419`: common validators and ordinary corpus established; remaining schemas and typed consumer conversion pending. |
 | [http/contracts/github-triggers.ts](../src/http/contracts/github-triggers.ts) | not started | |
 | [http/contracts/oauth.ts](../src/http/contracts/oauth.ts) | not started | |
-| [http/contracts/projects.ts](../src/http/contracts/projects.ts) | not started | Profile/auxiliary schemas plus project bodies, create union, patch, single/list responses, and task policy implemented. Seven new HTTP schemas and the migrated task policy use lossless rules. Combined parity passes 825 ordinary / 26 raw cases across 68 HTTP schemas; 18 additional stored-configuration cases cover three nested schemas. Remaining project schemas and full HTTP coverage are incomplete |
-| [http/contracts/providers.ts](../src/http/contracts/providers.ts) | ported | All nine validators implemented in [providers.rs](../rust/src/http/contracts/providers.rs); combined corpus passes 284 cases / 28 schemas. Raw HTTP JSON representation and endpoint integration remain unverified |
+| [http/contracts/projects.ts](../src/http/contracts/projects.ts) | not started | `081a3b4e`, `bb4d757e`, `631d691c`: profile/project requests and nested stored configurations tested; typed Serde replacement in progress, remaining route contracts deferred. |
+| [http/contracts/providers.ts](../src/http/contracts/providers.ts) | ported | `88bb9b9d`: nine validators pass the ordinary corpus; provider runtime/HTTP integration remains unverified. |
 | [http/contracts/system-events.ts](../src/http/contracts/system-events.ts) | not started | |
-| [http/contracts/task-templates.ts](../src/http/contracts/task-templates.ts) | ported | All eight schemas implemented with lossless rules, including create defaults, update omission/null behavior, strict input fields, and response stripping. Independent review, ordinary/raw parity, and private staged Rust checks pass; combined coverage1,162 ordinary/65 raw across89 HTTP schemas. Services and complete raw HTTP response parity remain pending |
-| [http/contracts/tasks.ts](../src/http/contracts/tasks.ts) | not started | Creation, issue/dependency changes, replacement/selection/answer requests, auxiliary schemas, batch query, and task-details edit body implemented. Combined parity1,056 ordinary/52 raw across81 HTTP schemas; new control schemas use lossless rules. Remaining task schemas, legacy lossless migration, and runtime routes are incomplete |
+| [http/contracts/task-templates.ts](../src/http/contracts/task-templates.ts) | ported | `a974de91`: all eight schemas passed ordinary/raw checks before cleanup; special JSON validators are being removed, template services deferred except M2 prerequisites. |
+| [http/contracts/tasks.ts](../src/http/contracts/tasks.ts) | not started | `7b49a179`, `f3f65930`, `65612746`, `a7eb5238`, `2b8ba630`, `e15a46b5`: task parameters, commands, body and control requests tested; next contract work is limited to M2 requests/responses. |
 | [http/contracts/update.ts](../src/http/contracts/update.ts) | not started | |
-| [http/contracts/workflows.ts](../src/http/contracts/workflows.ts) | ported | All six record/input/patch/params/list-query/list-response schemas implemented with lossless rules. Independent ordinary/raw parity and isolated Rust checks pass; combined coverage893 ordinary/29 raw across74 HTTP schemas. Workflow route integration and raw responses remain pending |
-| [http/errors.ts](../src/http/errors.ts) | not started | |
+| [http/contracts/workflows.ts](../src/http/contracts/workflows.ts) | ported | `09e3ded3`: six record/input/patch/list schemas passed corpus checks; replacing special JSON rules with typed requests as routes need them. |
+| [http/errors.ts](../src/http/errors.ts) | not started | `c9295428`: shared validation error mapping tested; special UTF-16 issue machinery is being replaced by small ordinary JSON helpers. |
 | [http/oauth-runtime.ts](../src/http/oauth-runtime.ts) | not started | |
-| [http/routes/administration.ts](../src/http/routes/administration.ts) | not started | Profile CRUD and identity invitation/list/revocation/audit routes ported with validation/auth/live checks. Other administration services and full raw HTTP parity remain pending |
+| [http/routes/administration.ts](../src/http/routes/administration.ts) | not started | `e49977ee`, `99c6e5f8`, `f23bab60`: known-route registration and identity/profile administration tested; wider administration deferred. |
 | [http/routes/agent-api.ts](../src/http/routes/agent-api.ts) | not started | |
 | [http/routes/agent-pairing.ts](../src/http/routes/agent-pairing.ts) | not started | |
 | [http/routes/assets.ts](../src/http/routes/assets.ts) | not started | |
-| [http/routes/auth.ts](../src/http/routes/auth.ts) | ported | All methods represented. Signed TCP and shared-service checks pass, including exact user bytes/cookies/counter. Async registration releases DB access during CRL verification and persists after its handler waiter is dropped. Lossless validation findings/thrown errors are covered; wider raw request/response corpus remains pending |
+| [http/routes/auth.ts](../src/http/routes/auth.ts) | ported | `0856b0d4`, `2ef5fab1`: profile editing, signed TCP ceremonies and TS↔Rust stored credentials/sessions tested; typed request/core verifier replacement needs fresh checks. |
 | [http/routes/authenticated.ts](../src/http/routes/authenticated.ts) | not started | |
 | [http/routes/avatars.ts](../src/http/routes/avatars.ts) | not started | |
-| [http/routes/companies.ts](../src/http/routes/companies.ts) | ported | Read/create/rename/issue-code/status/membership operations implemented with authorization and validation-order checks; focused Rust/TS and live raw-response probes pass. Lossless HTTP JSON and shared response-corpus coverage remain incomplete |
+| [http/routes/companies.ts](../src/http/routes/companies.ts) | ported | `f50af424`: company mutations, authority and raw ordinary response checks pass; typed request migration in progress. |
 | [http/routes/discovery.ts](../src/http/routes/discovery.ts) | not started | |
 | [http/routes/external-agent-administration.ts](../src/http/routes/external-agent-administration.ts) | not started | |
 | [http/routes/github-triggers.ts](../src/http/routes/github-triggers.ts) | not started | |
 | [http/routes/health.ts](../src/http/routes/health.ts) | not started | |
 | [http/routes/mcp.ts](../src/http/routes/mcp.ts) | not started | |
 | [http/routes/oauth.ts](../src/http/routes/oauth.ts) | not started | |
-| [http/routes/pages.ts](../src/http/routes/pages.ts) | not started | |
-| [http/routes/projects.ts](../src/http/routes/projects.ts) | not started | Profile listing, project reads/defaults/provider instances, GitHub pickers, and local/existing/new GitHub creation implemented. Focused HTTP checks, corrected parameter/body-before-session ordering, and isolated staged listener checks pass. Bitbucket, updates, ancillary routes, and complete raw response parity remain incomplete |
+| [http/routes/pages.ts](../src/http/routes/pages.ts) | not started | Uncommitted page/session/redirect port: five focused checks and desktop/narrow React boot inspected; cookie/error corrections reviewed. Health and final staged check remain pending. |
+| [http/routes/projects.ts](../src/http/routes/projects.ts) | not started | `1e2b2f0c`: reads/defaults/provider instances, GitHub pickers and local/existing/new GitHub creation tested; typed requests next, Bitbucket/PATCH/ancillary routes deferred. |
 | [http/routes/provider-login.ts](../src/http/routes/provider-login.ts) | not started | |
 | [http/routes/task-pane.ts](../src/http/routes/task-pane.ts) | not started | |
 | [http/routes/task-templates.ts](../src/http/routes/task-templates.ts) | not started | |
 | [http/routes/task-worktree.ts](../src/http/routes/task-worktree.ts) | not started | |
 | [http/routes/tasks.ts](../src/http/routes/tasks.ts) | not started | |
 | [http/routes/update.ts](../src/http/routes/update.ts) | not started | |
-| [http/routes/workflows.ts](../src/http/routes/workflows.ts) | not started | |
-| [http/session.ts](../src/http/session.ts) | not started | Partial integration: session lookup, trusted development sign-in, legacy rollover, cookie percent decoding/repeated headers, and CSRF checks ported; focused tests pass. Full HTTP route coverage remains pending |
+| [http/routes/workflows.ts](../src/http/routes/workflows.ts) | not started | Uncommitted listing/admin routes passed focused checks; CRUD deferred for M2. TS test diff adds only a seeded raw-body assertion, with no contract or existing expectation change. |
+| [http/session.ts](../src/http/session.ts) | not started | `92f290e3`, `0856b0d4`: session lookup, trusted sign-in, legacy rollover, cookies and CSRF tested; full route integration pending. |
 | [identity/auth-contracts.ts](../src/identity/auth-contracts.ts) | not started | |
 | [identity/auth-identifiers.ts](../src/identity/auth-identifiers.ts) | not started | |
 | [identity/auth-repository.ts](../src/identity/auth-repository.ts) | not started | |
 | [identity/auth-schema.ts](../src/identity/auth-schema.ts) | not started | |
-| [identity/auth-webauthn.ts](../src/identity/auth-webauthn.ts) | ported | [All seven formats and ten algorithms](rust-spikes/webauthn.md) implemented with SDK root/revocation policy and signed positive/negative checks. TypeScript/Rust shared-store and TCP flows pass. Apple positive uses a historical clock; Android Key/SafetyNet positives use test roots, with production-root rejection checked. No physical/default-root positive is claimed for those two formats |
-| [identity/auth.ts](../src/identity/auth.ts) | not started | Sessions, administrator/company/profile/account operations, ceremonies, legacy-user startup normalization, and lossless audit/recovery metadata implemented with independent checks. Shared-store interoperability and detached verification pass. Setup/recovery CLI entrypoints and downstream task/delivery integration remain incomplete |
+| [identity/auth-webauthn.ts](../src/identity/auth-webauthn.ts) | ported | `936429f6`, `2ef5fab1`, `c9295428`: signed interoperability proved; custom attestation removal in progress. High-level0.5.4 probe accepts ES256/RS256 but rejects Suplex's offered EdDSA, so retain a narrow core adapter. Core still brings OpenSSL transitively |
+| [identity/auth.ts](../src/identity/auth.ts) | not started | `905b7b82`, `99c6e5f8`, `f50af424`: legacy normalization, identity/company administration and metadata tested; typed JSON migration and M2 integration next, operational CLI still pending. |
 | [identity/avatar-kinds.ts](../src/identity/avatar-kinds.ts) | not started | |
 | [identity/avatars.ts](../src/identity/avatars.ts) | not started | |
 | [identity/external-agents.ts](../src/identity/external-agents.ts) | not started | |
@@ -114,20 +118,20 @@ The table lists all 238 backend TypeScript modules present at the baseline, incl
 | [integrations/herdr/terminal-bridge.ts](../src/integrations/herdr/terminal-bridge.ts) | not started | |
 | [integrations/issue-tracker.ts](../src/integrations/issue-tracker.ts) | not started | |
 | [integrations/provider-http.ts](../src/integrations/provider-http.ts) | not started | |
-| [integrations/suplex/mcp-bridge.ts](../src/integrations/suplex/mcp-bridge.ts) | not started | |
+| [integrations/suplex/mcp-bridge.ts](../src/integrations/suplex/mcp-bridge.ts) | not started | `4d0861e3`: rmcp stdio/HTTP initialize/list/call transport probes pass; [spike](rust-spikes/mcp.md). Real Rust bridges/tools/auth remain M2 work. |
 | [integrations/suplex/mcp-runtime.ts](../src/integrations/suplex/mcp-runtime.ts) | not started | |
 | [platform/artifacts.ts](../src/platform/artifacts.ts) | not started | |
 | [platform/backup.ts](../src/platform/backup.ts) | not started | |
 | [platform/command-runner.ts](../src/platform/command-runner.ts) | not started | |
-| [platform/config.ts](../src/platform/config.ts) | not started | Partial foundation in [config.rs](../rust/src/platform/config.rs), commit `924c9efe`: isolated defaults and port only; full configuration remains pending |
-| [platform/database.ts](../src/platform/database.ts) | verified | [Rust database and tests](../rust/src/platform/database.rs): all 149 migrations, transactions/callbacks/rollback, read-only reopening, and additive rebuilds pass; TS↔Rust reopening matches all 155 schema rows and 149 ledger rows. Binary startup passes. Shared HTTP wrapper releases its lock before callbacks; callers must preserve each TypeScript transaction boundary |
+| [platform/config.ts](../src/platform/config.ts) | not started | `924c9efe`: isolated defaults/port; tested task correction pending commit: plain cargo selects nested toolchain, config2/2 and isolated root/listener checks pass, Clippy passes. Full configuration pending |
+| [platform/database.ts](../src/platform/database.ts) | verified | `0555c057`: all149 migrations,155 schema rows, transactions/savepoints/callbacks/rollback/read-only/rebuild and TS↔Rust reopening pass; callers must preserve each source transaction boundary. |
 | [platform/development.ts](../src/platform/development.ts) | not started | |
 | [platform/diagnostics/doctor.ts](../src/platform/diagnostics/doctor.ts) | not started | |
 | [platform/diagnostics/task.ts](../src/platform/diagnostics/task.ts) | not started | |
 | [platform/environment-settings.ts](../src/platform/environment-settings.ts) | not started | |
 | [platform/executable-resolver.ts](../src/platform/executable-resolver.ts) | not started | |
 | [platform/factory-reset.ts](../src/platform/factory-reset.ts) | not started | |
-| [platform/frontend-development.ts](../src/platform/frontend-development.ts) | not started | |
+| [platform/frontend-development.ts](../src/platform/frontend-development.ts) | not started | `e555e83b`: built-asset watch/refresh and release embedding checks pass; no frontend helper rewrite. |
 | [platform/health-contract.ts](../src/platform/health-contract.ts) | not started | |
 | [platform/health.ts](../src/platform/health.ts) | not started | |
 | [platform/host-health.ts](../src/platform/host-health.ts) | not started | |
@@ -142,11 +146,11 @@ The table lists all 238 backend TypeScript modules present at the baseline, incl
 | [platform/system-event-transport.ts](../src/platform/system-event-transport.ts) | not started | |
 | [platform/system-events.ts](../src/platform/system-events.ts) | not started | |
 | [platform/tailscale.ts](../src/platform/tailscale.ts) | not started | |
-| [platform/ui.ts](../src/platform/ui.ts) | not started | Asset embedding tested in [embedded.rs](../rust/src/platform/embedded.rs), commit `924c9efe`; serving and UI behavior remain pending |
+| [platform/ui.ts](../src/platform/ui.ts) | not started | `924c9efe`, `e555e83b`: sign-in shell/assets tested; ordinary page rendering has uncommitted desktop/narrow boot evidence, health rendering remains pending. |
 | [platform/updates/supervisor.ts](../src/platform/updates/supervisor.ts) | not started | |
 | [platform/updates/update-client.ts](../src/platform/updates/update-client.ts) | not started | |
 | [profiles/agent-profile-contracts.ts](../src/profiles/agent-profile-contracts.ts) | not started | |
-| [profiles/agent-profiles.ts](../src/profiles/agent-profiles.ts) | ported | CRUD/duplicate/default selection, references, policy pruning/rollback, audit, and OS-based CLI discovery ported; Rust unit/live checks and 13 TS reference tests pass. Full raw HTTP/response-corpus parity remains pending |
+| [profiles/agent-profiles.ts](../src/profiles/agent-profiles.ts) | ported | `f23bab60`: CRUD/duplicate/defaults, references, policy pruning/rollback, audit and CLI discovery tested; typed configuration conversion next. |
 | [profiles/model-pricing.ts](../src/profiles/model-pricing.ts) | not started | |
 | [profiles/models-dev-catalog.ts](../src/profiles/models-dev-catalog.ts) | not started | |
 | [profiles/provider-catalog.ts](../src/profiles/provider-catalog.ts) | not started | |
@@ -155,14 +159,14 @@ The table lists all 238 backend TypeScript modules present at the baseline, incl
 | [profiles/provider-login.ts](../src/profiles/provider-login.ts) | not started | |
 | [profiles/provider-readiness.ts](../src/profiles/provider-readiness.ts) | not started | |
 | [projects/contracts.ts](../src/projects/contracts.ts) | not started | |
-| [projects/execution-configuration.ts](../src/projects/execution-configuration.ts) | not started | |
-| [projects/integration-configuration.ts](../src/projects/integration-configuration.ts) | not started | |
-| [projects/projects.ts](../src/projects/projects.ts) | not started | Local GitHub preflight/create/get/list, optional configurations, existing/new GitHub repository creation and HTTP composition implemented with live membership, profile eligibility, duplicate rollback, audit, and lossless stored JSON. Independent source review, focused checks, and private staged full Rust checks pass. Bitbucket, updates, and ancillary operations remain incomplete |
-| [projects/provider-policy.ts](../src/projects/provider-policy.ts) | not started | |
+| [projects/execution-configuration.ts](../src/projects/execution-configuration.ts) | not started | `be865a9f`: schemas extracted with compatible exports; TypeScript reference checks pass; Rust stored configuration conversion in progress. |
+| [projects/integration-configuration.ts](../src/projects/integration-configuration.ts) | not started | `be865a9f`: schemas extracted with compatible exports; TypeScript reference checks pass; Rust stored configuration conversion in progress. |
+| [projects/projects.ts](../src/projects/projects.ts) | not started | `035f253b`, `1e2b2f0c`: local/existing/new GitHub creation, configuration persistence, reads and HTTP tested; typed DTO conversion next, other project operations deferred. |
+| [projects/provider-policy.ts](../src/projects/provider-policy.ts) | not started | `be865a9f`, `65612746`, `631d691c`: schema extraction and stored policy validation tested; replacing special JSON representation. |
 | [projects/repository-commands.ts](../src/projects/repository-commands.ts) | not started | |
 | [projects/repository-coordinate.ts](../src/projects/repository-coordinate.ts) | not started | GitHub coordinate/remote parsing covered by repository tests; full provider coverage remains incomplete |
-| [projects/repository-inspection.ts](../src/projects/repository-inspection.ts) | not started | Existing local GitHub repo inspection, real Git fetch, fake-gh observations, path checks, buffer limits/timeouts tested; Bitbucket and live GitHub-account proof remain incomplete |
-| [projects/repository-provisioning.ts](../src/projects/repository-provisioning.ts) | not started | Existing/new GitHub repository provisioning and name inference implemented with real local Git and controlled gh checks, including operation order and admitted completion after HTTP disconnect. Bitbucket and live GitHub-account evidence remain incomplete |
+| [projects/repository-inspection.ts](../src/projects/repository-inspection.ts) | not started | `09db91ae`: local GitHub inspection/preflight, real Git, controlled gh, path/buffer/timeout checks pass; other providers deferred. |
+| [projects/repository-provisioning.ts](../src/projects/repository-provisioning.ts) | not started | `1e2b2f0c`: existing/new GitHub provisioning and admitted completion after HTTP disconnect tested; Bitbucket deferred. |
 | [runtimes/claude-code/display.ts](../src/runtimes/claude-code/display.ts) | not started | |
 | [runtimes/claude-code/environment.ts](../src/runtimes/claude-code/environment.ts) | not started | |
 | [runtimes/claude-code/live-history.ts](../src/runtimes/claude-code/live-history.ts) | not started | |
@@ -200,7 +204,7 @@ The table lists all 238 backend TypeScript modules present at the baseline, incl
 | [shared/canonical-json.ts](../src/shared/canonical-json.ts) | not started | |
 | [shared/entrypoint.ts](../src/shared/entrypoint.ts) | not started | |
 | [shared/ids.ts](../src/shared/ids.ts) | not started | |
-| [shared/json.ts](../src/shared/json.ts) | not started | |
+| [shared/json.ts](../src/shared/json.ts) | not started | `40eac0e1`: [hash bytes spike](spikes/rust-json-hash-bytes.md) passed; keep stringify/ryu-js. The `bec50786` document model and raw-JSON machinery are being removed. |
 | [shared/mcp-stdio.ts](../src/shared/mcp-stdio.ts) | not started | |
 | [tasks/agent-status.ts](../src/tasks/agent-status.ts) | not started | |
 | [tasks/analytics/analytics.ts](../src/tasks/analytics/analytics.ts) | not started | |

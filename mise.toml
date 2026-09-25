@@ -46,25 +46,36 @@ description = "Build the frontend and run the isolated experimental Rust backend
 run = '''
 pnpm exec vite build
 export SUPLEX_RUST_ASSETS_DIR="$PWD/dist/web"
-exec cargo +1.93.1 run --manifest-path rust/Cargo.toml --bin suplex
+export SUPLEX_RUST_ROOT="$PWD/.suplex-rust"
+cd rust
+unset RUSTUP_TOOLCHAIN
+exec cargo run --bin suplex
 '''
 
 [tasks."build:rust"]
 description = "Build the experimental Rust binary with frontend assets and migrations"
 run = '''
 pnpm exec vite build
-cargo +1.93.1 build --release --manifest-path rust/Cargo.toml --bin suplex
+cd rust
+unset RUSTUP_TOOLCHAIN
+cargo build --release --bin suplex
 '''
 
 [tasks."test:rust"]
-run = "cargo +1.93.1 test --manifest-path rust/Cargo.toml"
+run = '''
+cd rust
+unset RUSTUP_TOOLCHAIN
+cargo test
+'''
 
 [tasks."test:parity"]
 run = '''
 pnpm exec tsx tests/parity/generate.ts
 pnpm exec tsx tests/parity/hash-bytes/generate.ts
-cargo +1.93.1 test --manifest-path rust/Cargo.toml --test contract_parity --test hash_bytes --test raw_contract_parity
-cargo +1.93.1 test --manifest-path rust/Cargo.toml --lib signed_typescript_and_rust_services_share_credentials_and_sessions_both_directions -- --ignored --nocapture
+cd rust
+unset RUSTUP_TOOLCHAIN
+cargo test --test contract_parity --test hash_bytes --test raw_contract_parity
+cargo test --lib signed_typescript_and_rust_services_share_credentials_and_sessions_both_directions -- --ignored --nocapture
 '''
 
 [tasks.down]

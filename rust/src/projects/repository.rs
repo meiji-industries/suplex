@@ -162,7 +162,26 @@ pub fn capture_local_task_heads(
     let repository = Repository::open(repository_path).map_err(|_| unavailable())?;
     repository.workdir().ok_or_else(unavailable)?;
     repository.statuses(None).map_err(|_| unavailable())?;
-    fetch_origin_branch(&repository, base_branch, expected_host, None).map(|(_, sha)| sha)
+    // A private HTTPS origin needs the GitHub token to fetch, as inspection does.
+    let token = repository
+        .find_remote("origin")
+        .ok()
+        .and_then(|origin| {
+            origin
+                .url()
+                .ok()
+                .map(crate::tasks::worktree::token_audience_matches)
+        })
+        .unwrap_or(false)
+        .then(|| {
+            crate::integrations::github::disable_keychain_interaction()
+                .and_then(|()| crate::integrations::github::installed_token())
+                .ok()
+                .flatten()
+        })
+        .flatten();
+    fetch_origin_branch(&repository, base_branch, expected_host, token.as_deref())
+        .map(|(_, sha)| sha)
 }
 
 fn resolve(path: &Path) -> std::io::Result<PathBuf> {

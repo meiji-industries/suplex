@@ -558,7 +558,7 @@ pub fn start_user_task(
     now: DateTime<Utc>,
     wake: impl FnOnce(String) + Send + 'static,
 ) -> DatabaseResult<TaskRecord> {
-    database.transaction(true, |database| {
+    let task = database.transaction(true, |database| {
         let scope = database
             .connection()
             .query_row(
@@ -584,13 +584,14 @@ pub fn start_user_task(
         let task = repository::start(database, task_id, now)?.ok_or_else(|| {
             Box::new(TaskFailure::new("This task cannot be started", 409)) as Box<dyn Error>
         })?;
-        audit(database, actor_user_id, "task_started", &task, now)?;
         if task.status == "active" {
             let id = task.id.clone();
             database.after_commit(move || wake(id));
         }
         Ok(task)
-    })
+    })?;
+    audit(database, actor_user_id, "task_started", &task, now)?;
+    Ok(task)
 }
 
 /// Cancel intent before waking the host. A disconnected HTTP waiter cannot
@@ -602,7 +603,7 @@ pub fn cancel_user_task(
     now: DateTime<Utc>,
     wake: impl FnOnce(String) + Send + 'static,
 ) -> DatabaseResult<TaskRecord> {
-    database.transaction(true, |database| {
+    let cancelled = database.transaction(true, |database| {
         let task = repository::task_by_id(database, task_id)?
             .ok_or_else(|| Box::new(TaskFailure::new("Not found", 404)) as Box<dyn Error>)?;
         companies::require_company_access(database, actor_user_id, &task.company_id)?;
@@ -620,11 +621,12 @@ pub fn cancel_user_task(
         }
         let cancelled = repository::task_by_id(database, task_id)?
             .ok_or_else(|| Box::new(TaskFailure::new("Not found", 404)) as Box<dyn Error>)?;
-        audit(database, actor_user_id, "task_cancelled", &cancelled, now)?;
         let id = task_id.to_owned();
         database.after_commit(move || wake(id));
         Ok(cancelled)
-    })
+    })?;
+    audit(database, actor_user_id, "task_cancelled", &cancelled, now)?;
+    Ok(cancelled)
 }
 
 /// Send a human note to an active Root, or resume the retained Root of a
@@ -677,7 +679,7 @@ pub fn answer_user_task(
     now: DateTime<Utc>,
     wake: impl FnOnce(String) + Send + 'static,
 ) -> DatabaseResult<TaskRecord> {
-    database.transaction(true, |database| {
+    let answered = database.transaction(true, |database| {
         let task = repository::task_by_id(database, task_id)?
             .ok_or_else(|| Box::new(TaskFailure::new("Not found", 404)) as Box<dyn Error>)?;
         companies::require_company_access(database, actor_user_id, &task.company_id)?;
@@ -719,11 +721,12 @@ pub fn answer_user_task(
         )?;
         let answered = repository::task_by_id(database, task_id)?
             .ok_or_else(|| Box::new(TaskFailure::new("Not found", 404)) as Box<dyn Error>)?;
-        audit(database, actor_user_id, "task_answered", &answered, now)?;
         let id = task_id.to_owned();
         database.after_commit(move || wake(id));
         Ok(answered)
-    })
+    })?;
+    audit(database, actor_user_id, "task_answered", &answered, now)?;
+    Ok(answered)
 }
 
 /// User replacement authorizes the task, persists the fresh Worker, then
@@ -814,7 +817,7 @@ pub fn answer_user_task_limit(
     now: DateTime<Utc>,
     wake: impl FnOnce(String) + Send + 'static,
 ) -> DatabaseResult<TaskRecord> {
-    database.transaction(true, |database| {
+    let answered = database.transaction(true, |database| {
         let task = repository::task_by_id(database, task_id)?
             .ok_or_else(|| Box::new(TaskFailure::new("Not found", 404)) as Box<dyn Error>)?;
         companies::require_company_access(database, actor_user_id, &task.company_id)?;
@@ -844,16 +847,17 @@ pub fn answer_user_task_limit(
         )?;
         let answered = repository::task_by_id(database, task_id)?
             .ok_or_else(|| Box::new(TaskFailure::new("Not found", 404)) as Box<dyn Error>)?;
-        let action = if matches!(answer.limit_decision, TaskLimitDecision::CancelTask) {
-            "task_cancelled"
-        } else {
-            "task_answered"
-        };
-        audit(database, actor_user_id, action, &answered, now)?;
         let id = task_id.to_owned();
         database.after_commit(move || wake(id));
         Ok(answered)
-    })
+    })?;
+    let action = if matches!(answer.limit_decision, TaskLimitDecision::CancelTask) {
+        "task_cancelled"
+    } else {
+        "task_answered"
+    };
+    audit(database, actor_user_id, action, &answered, now)?;
+    Ok(answered)
 }
 
 fn edit_profile(
@@ -1336,8 +1340,13 @@ mod tests {
             .is_err()
         );
         assert_eq!(wakes.load(Ordering::SeqCst), 2);
+        // The audit row follows the committed answer; its failure cannot undo the answer.
+        database
+            .connection()
+            .execute_batch("CREATE TEMP TRIGGER reject_audit BEFORE INSERT ON suplex_audit_events BEGIN SELECT RAISE(ABORT, 'audit unavailable'); END;")
+            .unwrap();
         let count = Arc::clone(&wakes);
-        assert_eq!(
+        assert!(
             answer_user_task(
                 &mut database,
                 &user.id,
@@ -1348,11 +1357,22 @@ mod tests {
                     count.fetch_add(1, Ordering::SeqCst);
                 }
             )
-            .unwrap()
-            .status,
-            "active"
+            .is_err()
         );
         assert_eq!(wakes.load(Ordering::SeqCst), 3);
+        database
+            .connection()
+            .execute_batch("DROP TRIGGER reject_audit")
+            .unwrap();
+        let (status, open_question): (String, bool) = database
+            .connection()
+            .query_row(
+                "SELECT status, human_question_id IS NOT NULL FROM suplex_task_controls WHERE task_id = ?1",
+                [&created.task.id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert_eq!((status.as_str(), open_question), ("active", false));
         let note = TaskNoteBody {
             note: "Check the current result.".into(),
         };

@@ -1,3 +1,4 @@
+pub mod agent_api;
 pub mod archive;
 pub mod commands;
 pub mod host;

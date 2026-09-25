@@ -16,11 +16,14 @@ use crate::platform::{database::SuplexDatabase, embedded};
 use crate::projects::repository::Commands;
 use crate::tasks::host::TaskHostHandle;
 
+pub mod agent_api_runtime;
 pub mod contracts;
 pub mod routes {
     pub mod admin_identity;
+    pub mod agent_pairing;
     pub mod auth;
     pub mod companies;
+    pub mod external_agent_administration;
     pub mod github_auth;
     pub mod health;
     pub mod pages;
@@ -124,6 +127,8 @@ impl AppState {
 pub fn router(state: AppState) -> Router {
     Router::new()
         .merge(routes::admin_identity::router())
+        .merge(routes::agent_pairing::router())
+        .merge(routes::external_agent_administration::router())
         .merge(routes::auth::router())
         .merge(routes::companies::router())
         .merge(routes::github_auth::router())

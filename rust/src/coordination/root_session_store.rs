@@ -1370,6 +1370,17 @@ pub fn send_note(
     note: &str,
     now: DateTime<Utc>,
 ) -> DatabaseResult<RootTurn> {
+    send_labeled_note(database, task_id, note, "Human note", now)
+}
+
+/// A paired agent's note carries its own label, `Agent note (<agentId>)`.
+pub fn send_labeled_note(
+    database: &mut SuplexDatabase,
+    task_id: &str,
+    note: &str,
+    label: &str,
+    now: DateTime<Utc>,
+) -> DatabaseResult<RootTurn> {
     let note = js_trim(note);
     if note.is_empty() || note.encode_utf16().count() > 20_000 {
         return Err(std::io::Error::other("note_invalid").into());
@@ -1432,7 +1443,7 @@ pub fn send_note(
                 "answer": note,
             }))
         } else {
-            format!("Human note:\n{note}")
+            format!("{label}:\n{note}")
         };
         let id = new_turn_id(now)?;
         let hash = format!("{:x}", Sha256::digest(prompt.as_bytes()));

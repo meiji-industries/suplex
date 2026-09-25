@@ -1,4 +1,5 @@
 pub mod artifacts;
+pub mod backup;
 pub mod config;
 pub mod database;
 pub mod embedded;

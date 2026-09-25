@@ -11,6 +11,7 @@ use serde_json::{Value, json};
 
 use crate::{
     integrations::{
+        bitbucket::{BitbucketClient, ReleasePort},
         github_delivery::{self, Github},
         issue_tracker::IssueTracker,
     },
@@ -167,12 +168,13 @@ fn remote_branches(
         .collect())
 }
 
-fn bitbucket(project: &Project) -> bool {
-    project.integration.as_ref().is_some_and(|integration| {
-        matches!(
-            integration.repository,
-            crate::http::contracts::typed::projects::RepositoryConnection::Bitbucket { .. }
-        )
+/// TypeScript `ProjectService`: a Bitbucket project reads sources through its own release port.
+fn bitbucket(project: &Project) -> Result<Option<BitbucketClient>, Box<dyn Error>> {
+    Ok(match &project.integration {
+        Some(integration) => {
+            ReleasePort::bitbucket(&serde_json::to_value(&integration.repository)?)
+        }
+        None => None,
     })
 }
 
@@ -193,12 +195,15 @@ pub async fn discover(project: &Project, kind: &str) -> Result<Value, Box<dyn Er
             json!({"available": false, "reason": "The source issue does not match the configured tracker.", "sources": []}),
         );
     }
-    if bitbucket(project) {
-        return Err(Box::new(crate::tasks::commands::TaskFailure::not_ported(
-            "Bitbucket task sources are not ported",
-        )));
-    }
-    let github = Github::load().await.ok();
+    let bitbucket = bitbucket(project)?;
+    let github = match bitbucket {
+        Some(_) => None,
+        None => Github::load().await.ok(),
+    };
+    let port = match bitbucket {
+        Some(client) => Some(ReleasePort::Bitbucket(client)),
+        None => github.as_ref().map(ReleasePort::Github),
+    };
     match kind {
         "issue" => {
             let (Some(repository), Some(github)) = (&project.repository, &github) else {
@@ -217,12 +222,12 @@ pub async fn discover(project: &Project, kind: &str) -> Result<Value, Box<dyn Er
             }
         }
         "pull_request" => {
-            let (Some(repository), Some(github)) = (&project.repository, &github) else {
+            let (Some(repository), Some(port)) = (&project.repository, &port) else {
                 return Ok(
                     json!({"available": false, "reason": "Pull request provider unavailable", "sources": []}),
                 );
             };
-            match github.list_open_pull_requests(repository, 100).await {
+            match port.list_open_pull_requests(repository, 100).await {
                 Ok(pulls) => Ok(
                     json!({"available": true, "sources": pulls.iter().filter(|pull| pull.is_cross_repository != Some(true) && pull.state == "open" && pull.head_branch != project.base_branch).map(|pull| {
                     let mut source = json!({
@@ -275,15 +280,15 @@ pub async fn resolve(project: &Project, selector: &Value) -> Result<Value, Box<d
             }));
         }
     }
-    if bitbucket(project) {
-        return Err(Box::new(crate::tasks::commands::TaskFailure::not_ported(
-            "Bitbucket task sources are not ported",
-        )));
-    }
+    let bitbucket = bitbucket(project)?;
     let number = selector["number"].as_u64().unwrap_or(0);
     match selector["kind"].as_str() {
         Some("issue") => {
-            let (Some(repository), Ok(github)) = (&project.repository, Github::load().await) else {
+            let github = match bitbucket {
+                Some(_) => None,
+                None => Github::load().await.ok(),
+            };
+            let (Some(repository), Some(github)) = (&project.repository, github) else {
                 return Err(failure(
                     "source-provider-unavailable",
                     "Issues are not available.",
@@ -314,8 +319,15 @@ pub async fn resolve(project: &Project, selector: &Value) -> Result<Value, Box<d
                     503,
                 )
             };
-            let github = Github::load().await.map_err(|_| provider())?;
-            let pull = github
+            let github;
+            let port = match bitbucket {
+                Some(client) => ReleasePort::Bitbucket(client),
+                None => {
+                    github = Github::load().await.map_err(|_| provider())?;
+                    ReleasePort::Github(&github)
+                }
+            };
+            let pull = port
                 .get_pull_request(repository, number)
                 .await
                 .map_err(|_| provider())?;
@@ -344,10 +356,11 @@ pub async fn resolve(project: &Project, selector: &Value) -> Result<Value, Box<d
         _ => {
             let branch = selector["branch"].as_str().unwrap_or("").to_owned();
             safe_branch(project, &branch)?;
-            let token = Github::load()
-                .await
-                .ok()
-                .and_then(|github| github.token().map(str::to_owned));
+            let token = match bitbucket {
+                Some(_) => None,
+                None => Github::load().await.ok(),
+            }
+            .and_then(|github| github.token().map(str::to_owned));
             let path = project.repository_path.clone();
             let fetched = branch.clone();
             let head = tokio::task::spawn_blocking(move || -> Result<String, git2::Error> {

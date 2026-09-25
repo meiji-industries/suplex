@@ -9,7 +9,7 @@ use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
 use super::{
-    github_delivery::{Checks, GithubFailure, Observation, PullRequest, failure},
+    github_delivery::{Checks, Github, GithubFailure, Observation, PullRequest, failure},
     issue_tracker::{BeforeWrite, environment_credential},
     provider_http::{self, MAXIMUM_BYTES, ProviderHttpFailure, ProviderResult},
 };
@@ -567,6 +567,197 @@ impl BitbucketClient {
     }
 }
 
+/// TypeScript `forTask`: the release port of a task or project. Bitbucket
+/// repositories use `createBitbucketReleasePort`; every other repository uses GitHub.
+pub enum ReleasePort<'a> {
+    Github(&'a Github),
+    Bitbucket(BitbucketClient),
+}
+
+type PortResult<T> = Result<T, Box<dyn std::error::Error>>;
+
+fn port<T>(result: ProviderResult<T>) -> PortResult<T> {
+    result.map_err(|error| error as _)
+}
+
+impl ReleasePort<'_> {
+    /// The Bitbucket connection of a repository connection value, if it is one.
+    pub fn bitbucket(connection: &Value) -> Option<BitbucketClient> {
+        (connection["kind"] == "bitbucket").then(|| BitbucketClient::new(connection))
+    }
+
+    pub fn github(&self) -> Option<&Github> {
+        match self {
+            ReleasePort::Github(github) => Some(github),
+            ReleasePort::Bitbucket(_) => None,
+        }
+    }
+
+    /// The GitHub token for Git transport; Bitbucket pushes use the local Git credentials.
+    pub fn token(&self) -> Option<&str> {
+        self.github().and_then(Github::token)
+    }
+
+    pub fn remote_repository(&self, cwd: &Path) -> Result<String, GithubFailure> {
+        match self {
+            ReleasePort::Github(_) => super::github_delivery::remote_repository(cwd),
+            ReleasePort::Bitbucket(_) => remote_repository(cwd),
+        }
+    }
+
+    pub async fn get_pull_request(&self, repository: &str, number: u64) -> PortResult<PullRequest> {
+        Ok(match self {
+            ReleasePort::Github(github) => github.get_pull_request(repository, number).await?,
+            ReleasePort::Bitbucket(client) => {
+                port(client.get_pull_request(repository, number).await)?
+            }
+        })
+    }
+
+    pub async fn get_branch_head(
+        &self,
+        repository: &str,
+        branch: &str,
+    ) -> PortResult<Option<String>> {
+        Ok(match self {
+            ReleasePort::Github(github) => github.get_branch_head(repository, branch).await?,
+            ReleasePort::Bitbucket(client) => {
+                port(client.get_branch_head(repository, branch).await)?
+            }
+        })
+    }
+
+    pub async fn list_pull_requests(
+        &self,
+        repository: &str,
+        head_branch: &str,
+        base_branch: &str,
+    ) -> PortResult<Vec<PullRequest>> {
+        Ok(match self {
+            ReleasePort::Github(github) => {
+                github.list_pull_requests(repository, head_branch).await?
+            }
+            ReleasePort::Bitbucket(client) => port(
+                client
+                    .list_pull_requests(repository, head_branch, base_branch)
+                    .await,
+            )?,
+        })
+    }
+
+    pub async fn list_open_pull_requests(
+        &self,
+        repository: &str,
+        limit: u64,
+    ) -> PortResult<Vec<PullRequest>> {
+        Ok(match self {
+            ReleasePort::Github(github) => {
+                github.list_open_pull_requests(repository, limit).await?
+            }
+            ReleasePort::Bitbucket(client) => port(
+                client
+                    .list_open_pull_requests(repository, limit as usize)
+                    .await,
+            )?,
+        })
+    }
+
+    pub async fn observe_pull_request(
+        &self,
+        repository: &str,
+        branch: &str,
+        number: Option<u64>,
+    ) -> PortResult<Observation> {
+        Ok(match self {
+            ReleasePort::Github(github) => {
+                github
+                    .observe_pull_request(repository, branch, number)
+                    .await?
+            }
+            ReleasePort::Bitbucket(client) => port(
+                client
+                    .observe_pull_request(repository, branch, number)
+                    .await,
+            )?,
+        })
+    }
+
+    pub async fn create_draft_pull_request(
+        &self,
+        repository: &str,
+        head_branch: &str,
+        base_branch: &str,
+        title: &str,
+        body: &str,
+    ) -> PortResult<PullRequest> {
+        Ok(match self {
+            ReleasePort::Github(github) => {
+                github
+                    .create_draft_pull_request(repository, head_branch, base_branch, title, body)
+                    .await?
+            }
+            ReleasePort::Bitbucket(client) => port(
+                client
+                    .create_draft_pull_request(repository, title, body, head_branch, base_branch)
+                    .await,
+            )?,
+        })
+    }
+
+    pub async fn update_draft_pull_request(
+        &self,
+        repository: &str,
+        number: u64,
+        title: &str,
+        body: &str,
+    ) -> PortResult<PullRequest> {
+        Ok(match self {
+            ReleasePort::Github(github) => {
+                github
+                    .update_draft_pull_request(repository, number, title, body)
+                    .await?
+            }
+            ReleasePort::Bitbucket(client) => port(
+                client
+                    .update_draft_pull_request(repository, number, title, body)
+                    .await,
+            )?,
+        })
+    }
+
+    /// Bitbucket delivery stops at draft pull requests, so it has no merge.
+    pub async fn merge_conditionally(
+        &self,
+        repository: &str,
+        number: u64,
+        head_sha: &str,
+        allow_queue: bool,
+    ) -> PortResult<super::github_delivery::MergeResult> {
+        match self {
+            ReleasePort::Github(github) => Ok(github
+                .merge_conditionally(repository, number, head_sha, allow_queue)
+                .await?),
+            ReleasePort::Bitbucket(_) => Err(Box::new(BitbucketClient::draft_only())),
+        }
+    }
+
+    pub async fn mark_ready_for_review(&self, repository: &str, number: u64) -> PortResult<()> {
+        match self {
+            ReleasePort::Github(github) => {
+                Ok(github.mark_ready_for_review(repository, number).await?)
+            }
+            ReleasePort::Bitbucket(_) => Err(Box::new(BitbucketClient::draft_only())),
+        }
+    }
+
+    pub async fn pull_request_states(&self, inputs: &[(String, u64)]) -> PortResult<Vec<Value>> {
+        Ok(match self {
+            ReleasePort::Github(github) => github.pull_request_states(inputs).await?,
+            ReleasePort::Bitbucket(client) => port(client.get_pull_request_states(inputs).await)?,
+        })
+    }
+}
+
 /// `getRemoteRepository`: the Bitbucket `workspace/name` of the origin remote.
 pub fn remote_repository(cwd: &Path) -> Result<String, GithubFailure> {
     let wrong = || failure("wrong-remote", "Git origin is not a Bitbucket repository");
@@ -707,6 +898,90 @@ mod tests {
         assert!(
             client
                 .upload("team/repo", "../escape", b"x", "image/png", allow)
+                .await
+                .is_err()
+        );
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn release_port_maps_delivery_calls_to_bitbucket_and_stops_at_drafts() {
+        let created = Arc::new(Mutex::new(None::<Value>));
+        let log = created.clone();
+        let app = Router::new().fallback(
+            move |method: axum::http::Method,
+                  OriginalUri(uri): OriginalUri,
+                  body: axum::body::Bytes| {
+                let log = log.clone();
+                async move {
+                    let path = uri.path_and_query().unwrap().as_str().to_owned();
+                    if method == axum::http::Method::POST
+                        && path == "/2.0/repositories/team/repo/pullrequests"
+                    {
+                        *log.lock().unwrap() = serde_json::from_slice(&body).ok();
+                        return Json(bitbucket_pull(4, "OPEN")).into_response();
+                    }
+                    if path.starts_with("/2.0/repositories/team/repo/pullrequests?pagelen=50") {
+                        let mut other = bitbucket_pull(2, "OPEN");
+                        other["destination"]["branch"]["name"] = json!("release");
+                        return Json(json!({"values": [bitbucket_pull(1, "OPEN"), other]}))
+                            .into_response();
+                    }
+                    StatusCode::NOT_FOUND.into_response()
+                }
+            },
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let origin = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        // SAFETY: test-only credential variable with a name unique to this test.
+        unsafe { std::env::set_var("SUPLEX_TEST_BITBUCKET_PORT_TOKEN", "secret") };
+        let connection =
+            json!({"kind": "bitbucket", "tokenEnvironment": "SUPLEX_TEST_BITBUCKET_PORT_TOKEN"});
+        assert!(ReleasePort::bitbucket(&json!({"kind": "github"})).is_none());
+        assert!(ReleasePort::bitbucket(&connection).is_some());
+        let port = ReleasePort::Bitbucket(BitbucketClient::with_origin(&connection, &origin));
+        assert!(port.github().is_none() && port.token().is_none());
+        let pull = port
+            .create_draft_pull_request("team/repo", "feature", "main", "Title", "Body")
+            .await
+            .unwrap();
+        assert_eq!(pull.number, 4);
+        let request = created.lock().unwrap().clone().unwrap();
+        assert_eq!(
+            (
+                &request["source"]["branch"]["name"],
+                &request["destination"]["branch"]["name"],
+                &request["title"],
+                &request["description"],
+                &request["draft"]
+            ),
+            (
+                &json!("feature"),
+                &json!("main"),
+                &json!("Title"),
+                &json!("Body"),
+                &json!(true)
+            )
+        );
+        let listed = port
+            .list_pull_requests("team/repo", "feature", "main")
+            .await
+            .unwrap();
+        assert_eq!(
+            listed.iter().map(|pull| pull.number).collect::<Vec<_>>(),
+            [1]
+        );
+        let refused = port
+            .mark_ready_for_review("team/repo", 4)
+            .await
+            .unwrap_err();
+        assert_eq!(
+            refused.to_string(),
+            "Bitbucket delivery supports draft pull requests only"
+        );
+        assert!(
+            port.merge_conditionally("team/repo", 4, &"a".repeat(40), true)
                 .await
                 .is_err()
         );

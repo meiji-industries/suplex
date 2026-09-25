@@ -64,21 +64,16 @@ async fn checks(
                         .unwrap_or("")
                         .to_owned(),
                     configuration["branch"].as_str().unwrap_or("").to_owned(),
-                    configuration["integration"]["repository"]["kind"] == "bitbucket",
                 )
             }))
     });
     let intent = intent.map_err(|error| error.to_string());
-    let (number, repository, branch, bitbucket) = match intent {
+    let (number, repository, branch) = match intent {
         Ok(Some(intent)) => intent,
         Ok(None) => return respond(Ok(json!({"available":false,"runs":[]})), cookies),
         Err(error) => return respond(Err(error.into()), cookies),
     };
-    if bitbucket {
-        let mut response = auth::not_ported();
-        auth::append_cookies(&mut response, cookies);
-        return response;
-    }
+    // TypeScript `readTaskChecks` reads GitHub for every repository connection.
     let observed = async {
         let github = crate::integrations::github_delivery::Github::load().await?;
         github
@@ -399,7 +394,6 @@ async fn read_diff(
     };
     enum DiffIntent {
         NoWorktree,
-        Unsupported,
         Local {
             path: PathBuf,
             repository: String,
@@ -416,9 +410,6 @@ async fn read_diff(
             return Err("Task worktree path is invalid".into());
         };
         let configuration = &rows.context["configuration"];
-        if configuration["integration"]["repository"]["kind"] == "bitbucket" {
-            return Ok(DiffIntent::Unsupported);
-        }
         // TypeScript `resolveTaskDiffBase`: a pull request diff uses its current base branch.
         let pull_request = rows.control["pullRequest"]["number"].as_u64().or_else(|| {
             (configuration["source"]["kind"] == "pull_request")
@@ -448,11 +439,6 @@ async fn read_diff(
                 DiffKind::Summary => json!({"available":false,"files":0}),
             };
             return respond(Ok(value), cookies);
-        }
-        DiffIntent::Unsupported => {
-            let mut response = auth::not_ported();
-            auth::append_cookies(&mut response, cookies);
-            return response;
         }
         DiffIntent::Local {
             path,
@@ -562,7 +548,7 @@ mod tests {
             root_profile: json!({"profileId":"profile_root","provider":"codex","model":"gpt-6-sol","reasoningLevel":"medium","serviceTier":"default"}),
             worker_profile: json!({"profileId":"profile_worker","provider":"codex","model":"gpt-6-sol","reasoningLevel":"medium","serviceTier":"default"}),
             advisor_profiles: json!({}), issue: None, start_queued: true,
-            copied_from_task_id: None, depends_on: vec![],
+            copied_from_task_id: None, depends_on: vec![], pull_request_dependencies: vec![],
         }, now).unwrap().task;
         let root_session = root_session_store::reserve_root(&mut database, &task.id, now).unwrap();
         root_session_store::ensure_initial_prompt(&mut database, &root_session, "Inspect", now)
@@ -1003,19 +989,7 @@ mod tests {
         );
         state.with_database(|database| {
             database.connection().execute(
-                "UPDATE suplex_tasks SET configuration_json = json_set(configuration_json,'$.baseBranch','main','$.integration',json('{\"repository\":{\"kind\":\"bitbucket\"}}')) WHERE id = ?1",
-                [&task.id],
-            ).unwrap();
-        });
-        assert_eq!(
-            diff_summary(State(state.clone()), Path(task.id.clone()), headers.clone())
-                .await
-                .status(),
-            StatusCode::NOT_IMPLEMENTED
-        );
-        state.with_database(|database| {
-            database.connection().execute(
-                "UPDATE suplex_tasks SET configuration_json = json_remove(configuration_json,'$.integration') WHERE id = ?1",
+                "UPDATE suplex_tasks SET configuration_json = json_set(configuration_json,'$.baseBranch','main') WHERE id = ?1",
                 [&task.id],
             ).unwrap();
         });

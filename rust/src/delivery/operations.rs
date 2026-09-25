@@ -1,8 +1,9 @@
 //! TypeScript `DeliveryOperations`: Git and GitHub are observed before every
 //! deterministic delivery operation. The durable task control is rechecked
 //! after each provider await and before each mutation.
-//! Non-Standard workflow decisions and Bitbucket delivery are not ported here;
-//! they return 501 at the one seam that needs them.
+//! Non-Standard workflows apply `workflows::delivery_decision` to the reviewed
+//! range and fresh local facts. Bitbucket repositories deliver through the
+//! Bitbucket release port.
 
 use std::{
     error::Error,
@@ -20,13 +21,19 @@ use super::{
     issue_evidence,
 };
 use crate::{
-    coordination::{root_bridge::RootIdentity, root_session_store},
-    integrations::github_delivery::{
-        self, Github, GithubFailure, MergeResult, Observation, PullRequest,
+    coordination::{
+        root_bridge::RootIdentity,
+        root_session_store,
+        workflows::{self, DeliveryRefusal, LocalSourceFacts},
+    },
+    integrations::{
+        bitbucket::ReleasePort,
+        github_delivery::{self, Github, GithubFailure, MergeResult, Observation, PullRequest},
+        github_triggers_dispatches::{self, DeliveryPolicy},
+        github_triggers_inspection::{self, PullRequestInspection},
     },
     platform::database::{DatabaseResult, OpenMode, SuplexDatabase},
     tasks::{
-        commands::TaskFailure,
         repository,
         worktree::{self, LocalRevisionObservation},
     },
@@ -54,10 +61,6 @@ pub fn delivery_failure(code: &'static str, message: impl Into<String>) -> Box<d
         code,
         message: message.into(),
     })
-}
-
-fn not_ported(message: &str) -> Box<dyn Error> {
-    Box::new(TaskFailure::not_ported(message))
 }
 
 fn timestamp(time: chrono::DateTime<Utc>) -> String {
@@ -370,8 +373,59 @@ fn select_discovered_pull(
         .or_else(|| matches.first().cloned()))
 }
 
+fn short(sha: &str) -> &str {
+    &sha[..sha.len().min(12)]
+}
+
+fn facts(local: &LocalRevisionObservation) -> LocalSourceFacts<'_> {
+    LocalSourceFacts {
+        branch: Some(&local.branch),
+        head_sha: Some(&local.head_sha),
+        clean: local.clean,
+    }
+}
+
+/// The Root and tool-owner assertions of `recheck` inside an open transaction.
+fn recheck_in(database: &SuplexDatabase, recheck: &Recheck<'_>) -> DatabaseResult<()> {
+    root_session_store::assert_current_root(
+        database,
+        &recheck.root.task_id,
+        &recheck.root.session_id,
+        recheck.root.generation,
+    )?;
+    if let Some(token) = recheck.owner_token {
+        root_session_store::assert_tool_owner(database, &recheck.root.task_id, token)?;
+    }
+    Ok(())
+}
+
+/// TypeScript `CommitDecision`.
+enum Commit {
+    Done,
+    Declined(&'static str, String),
+    Cancelled,
+}
+
+impl Commit {
+    /// A refusal becomes the delivery failure; a cancellation rechecks ownership first.
+    fn into_result(self, recheck: impl FnOnce() -> DatabaseResult<()>) -> DatabaseResult<()> {
+        match self {
+            Commit::Done => Ok(()),
+            Commit::Declined(code, reason) => Err(delivery_failure(code, reason)),
+            Commit::Cancelled => {
+                recheck()?;
+                Err(delivery_failure(
+                    "workflow_review_required",
+                    "The task was cancelled; Suplex recorded no workflow completion.",
+                ))
+            }
+        }
+    }
+}
+
 #[derive(Clone, Copy, Default)]
 struct Adoption<'a> {
+    publication: bool,
     explicit: bool,
     recheck: Option<&'a Recheck<'a>>,
     defer_completion: bool,
@@ -433,17 +487,19 @@ impl DeliveryOperations {
     }
 
     /// TypeScript `forTask`: Bitbucket repositories use their own provider.
-    pub async fn github(&self, task_id: &str) -> DatabaseResult<&Github> {
-        if self.context(task_id)?["configuration"]["integration"]["repository"]["kind"]
-            == "bitbucket"
+    pub async fn for_task(&self, task_id: &str) -> DatabaseResult<ReleasePort<'_>> {
+        let context = self.context(task_id)?;
+        if let Some(client) =
+            ReleasePort::bitbucket(&context["configuration"]["integration"]["repository"])
         {
-            return Err(not_ported("Bitbucket delivery is not ported"));
+            return Ok(ReleasePort::Bitbucket(client));
         }
-        Ok(self
-            .github
-            .get_or_try_init(Github::load)
-            .await
-            .map_err(Box::new)?)
+        Ok(ReleasePort::Github(
+            self.github
+                .get_or_try_init(Github::load)
+                .await
+                .map_err(Box::new)?,
+        ))
     }
 
     pub fn recheck(&self, recheck: &Recheck<'_>) -> DatabaseResult<()> {
@@ -663,7 +719,7 @@ impl DeliveryOperations {
             .as_str()
             .unwrap_or("")
             .to_owned();
-        let github = self.github(task_id).await?;
+        let github = self.for_task(task_id).await?;
         let number = control["pullRequest"]["number"]
             .as_u64()
             .or_else(|| control["deliveryIntent"]["pullRequestNumber"].as_u64());
@@ -678,11 +734,16 @@ impl DeliveryOperations {
             .await
         {
             Ok(observed) => observed,
-            Err(error) if error.code == "authentication-required" => {
-                let asked = self.fail_delivery_wait(task_id, &wait, &format!("GitHub could not access this pull request. Restore the GitHub CLI login or repository permission, then continue. {}", error.summary))?;
+            Err(error) => {
+                let Some(denied) = error
+                    .downcast_ref::<GithubFailure>()
+                    .filter(|failure| failure.code == "authentication-required")
+                else {
+                    return Err(error);
+                };
+                let asked = self.fail_delivery_wait(task_id, &wait, &format!("GitHub could not access this pull request. Restore the GitHub CLI login or repository permission, then continue. {}", denied.summary))?;
                 return Ok(if asked { "changed" } else { "none" });
             }
-            Err(error) => return Err(Box::new(error)),
         };
         if observed.state.as_deref() == Some("merged")
             && let Some(number) = observed.number
@@ -738,7 +799,7 @@ impl DeliveryOperations {
         else {
             return Ok(None);
         };
-        let Ok(github) = self.github(task_id).await else {
+        let Ok(github) = self.for_task(task_id).await else {
             return Ok(None);
         };
         Ok(github
@@ -777,7 +838,7 @@ impl DeliveryOperations {
         let repository = control["deliveryIntent"]["repository"]
             .as_str()
             .unwrap_or("");
-        let github = self.github(task_id).await?;
+        let github = self.for_task(task_id).await?;
         let mut branch = control["deliveryIntent"]["baseBranch"]
             .as_str()
             .unwrap_or("")
@@ -808,7 +869,7 @@ impl DeliveryOperations {
         };
         let path = PathBuf::from(control["worktree"]["path"].as_str().unwrap_or(""));
         let token = self
-            .github(control["taskId"].as_str().unwrap_or(""))
+            .for_task(control["taskId"].as_str().unwrap_or(""))
             .await?
             .token()
             .map(str::to_owned);
@@ -850,17 +911,255 @@ impl DeliveryOperations {
         )
     }
 
-    /// TypeScript `deliveryDecision`: always accepted for the Standard workflow.
-    fn workflow_decision(&self, control: &Value) -> DatabaseResult<()> {
-        if control["workflow"] == "standard" {
-            return Ok(());
-        }
-        Err(not_ported("Non-Standard delivery decisions are not ported"))
+    /// TypeScript `workflowDecision`: the shared policy over fresh task, delegate, and review state.
+    fn workflow_decision(
+        &self,
+        task_id: &str,
+        actual: &ReviewRange,
+        local: &LocalSourceFacts<'_>,
+        require_review: bool,
+    ) -> DatabaseResult<Result<(), DeliveryRefusal>> {
+        let rows =
+            root_session_store::root_observation_rows(&self.open(OpenMode::ReadOnly)?, task_id)?;
+        Ok(workflows::delivery_decision(
+            &rows.control,
+            &rows.sessions,
+            &rows.turns,
+            actual,
+            local,
+            require_review,
+        ))
     }
 
-    async fn final_recheck(&self, control: &Value, recheck: &Recheck<'_>) -> DatabaseResult<()> {
-        self.workflow_decision(control)?;
+    /// TypeScript `gateWorkflow`.
+    fn gate_workflow(
+        &self,
+        task_id: &str,
+        actual: &ReviewRange,
+        local: &LocalSourceFacts<'_>,
+        require_review: bool,
+    ) -> DatabaseResult<()> {
+        self.workflow_decision(task_id, actual, local, require_review)?
+            .map_err(|refusal| delivery_failure(refusal.code, refusal.reason))
+    }
+
+    /// TypeScript `finalRecheck`: outside Standard, the local source must still
+    /// be the reviewed head on the task branch, clean, and gated.
+    async fn final_recheck(
+        &self,
+        control: &Value,
+        actual: &ReviewRange,
+        recheck: &Recheck<'_>,
+        require_review: bool,
+    ) -> DatabaseResult<()> {
+        if control["workflow"] != "standard" {
+            let path = control["worktree"]["path"].as_str().unwrap_or("");
+            let local =
+                github_delivery::inspect_local_revision(Path::new(path)).map_err(Box::new)?;
+            self.gate_workflow(
+                control["taskId"].as_str().unwrap_or(""),
+                actual,
+                &facts(&local),
+                require_review,
+            )?;
+        }
         self.recheck(recheck)
+    }
+
+    async fn equivalence(
+        &self,
+        task_id: &str,
+        path: &str,
+        review: &ReviewRange,
+        base_sha: &str,
+    ) -> DatabaseResult<Result<ReviewRange, String>> {
+        let (path, review, base, token) = (
+            PathBuf::from(path),
+            review.clone(),
+            base_sha.to_owned(),
+            self.for_task(task_id).await?.token().map(str::to_owned),
+        );
+        Ok(tokio::task::spawn_blocking(move || {
+            inspection::review_equivalence(&path, &review, &base, token.as_deref())
+        })
+        .await?)
+    }
+
+    fn record_workflow_outcome(&self, task_id: &str, completion: &Value) -> DatabaseResult<()> {
+        root_session_store::record_workflow_outcome(
+            &mut self.open(OpenMode::ReadWrite)?,
+            task_id,
+            completion,
+            Utc::now(),
+        )?;
+        Ok(())
+    }
+
+    /// TypeScript `commitCompletion`: one last local observation after every
+    /// provider await, then one transaction that applies the policy and records completion.
+    async fn commit_completion(
+        &self,
+        control: &Value,
+        range: &ReviewRange,
+        pull_request_number: Option<u64>,
+        require_accepted: bool,
+        recheck: Option<&Recheck<'_>>,
+    ) -> DatabaseResult<Commit> {
+        let task_id = control["taskId"].as_str().unwrap_or("");
+        let Some(path) = control["worktree"]["path"].as_str() else {
+            return Ok(Commit::Declined(
+                "worktree_missing",
+                "The task has no observed worktree to confirm the reviewed source.".into(),
+            ));
+        };
+        if let Some(number) = pull_request_number {
+            issue_evidence::complete(self, task_id, number, &range.head_sha, recheck).await?;
+        }
+        let local = match github_delivery::inspect_local_revision(Path::new(path)) {
+            Ok(local) => local,
+            Err(error) => {
+                return Ok(Commit::Declined(
+                    "worktree_missing",
+                    format!("The local source could not be observed: {error}"),
+                ));
+            }
+        };
+        let result = complete_workflow_delivery(
+            &mut self.open(OpenMode::ReadWrite)?,
+            task_id,
+            range,
+            &local,
+            pull_request_number.map(|number| number as i64),
+            require_accepted,
+            |database| match recheck {
+                Some(recheck) => recheck_in(database, recheck),
+                None => Ok(()),
+            },
+        )?;
+        Ok(match result {
+            WorkflowCompletion::Completed | WorkflowCompletion::Already => Commit::Done,
+            WorkflowCompletion::Cancelled => Commit::Cancelled,
+            WorkflowCompletion::Declined { code, reason } => Commit::Declined(code, reason),
+        })
+    }
+
+    /// TypeScript `completeRemoteBranch`.
+    async fn complete_remote_branch(
+        &self,
+        control: &Value,
+        actual: &ReviewRange,
+        recheck: &Recheck<'_>,
+    ) -> DatabaseResult<()> {
+        let task_id = control["taskId"].as_str().unwrap_or("");
+        if control["workflow"] == "standard" {
+            return self.mark_delivered(task_id);
+        }
+        let path = control["worktree"]["path"].as_str().unwrap_or("");
+        let local = github_delivery::inspect_local_revision(Path::new(path)).map_err(Box::new)?;
+        if let Err(refusal) = self.workflow_decision(task_id, actual, &facts(&local), true)?
+            && refusal.code == "workflow_review_required"
+        {
+            return Ok(());
+        }
+        self.commit_completion(control, actual, None, true, Some(recheck))
+            .await?
+            .into_result(|| self.recheck(recheck))
+    }
+
+    /// TypeScript `externalCompletion`: the latest valid review's head is kept, never relabeled.
+    fn external_completion(current: &Value, pull_request_number: &Value) -> Value {
+        let reviewed_head = workflows::review_role(current["workflow"].as_str().unwrap_or(""))
+            .and_then(|role| {
+                workflows::latest_review(
+                    current["workflowState"]["reviews"]
+                        .as_array()
+                        .map(Vec::as_slice)
+                        .unwrap_or_default(),
+                    role,
+                )
+            })
+            .filter(|latest| !latest["result"].is_null())
+            .map(|latest| latest["range"]["headSha"].clone())
+            .unwrap_or(Value::Null);
+        json!({"kind": "external_merge", "reviewedHead": reviewed_head, "pullRequestNumber": pull_request_number, "observedAt": timestamp(Utc::now())})
+    }
+
+    /// TypeScript `cancelledOutcome`.
+    fn cancelled_outcome(
+        current: &Value,
+        pull: &Value,
+        validated_range: Option<&ReviewRange>,
+    ) -> Value {
+        match validated_range {
+            Some(range) if pull["headSha"] == range.head_sha.as_str() => {
+                json!({"kind": "workflow", "reviewedHead": range.head_sha, "pullRequestNumber": pull["number"], "observedAt": timestamp(Utc::now())})
+            }
+            _ => Self::external_completion(current, &pull["number"]),
+        }
+    }
+
+    /// TypeScript `openCompletionDecision`.
+    async fn open_completion_decision(
+        &self,
+        control: &Value,
+        pull: &Value,
+        recheck: Option<&Recheck<'_>>,
+    ) -> DatabaseResult<Commit> {
+        let Some(accepted) = ReviewRange::from_value(&control["workflowState"]["acceptedDelivery"])
+        else {
+            return Ok(Commit::Declined(
+                "workflow_review_required",
+                "No accepted delivery decision exists for this pull request yet. Complete the workflow's review and request delivery.".into(),
+            ));
+        };
+        let head = pull["headSha"].as_str().unwrap_or("");
+        if head != accepted.head_sha {
+            return Ok(Commit::Declined(
+                "head_diverged",
+                format!(
+                    "The pull request head {} is not the accepted head {}.",
+                    short(head),
+                    short(&accepted.head_sha)
+                ),
+            ));
+        }
+        let (branch, sha) = match self.resolve_delivery_base(control).await {
+            Ok(base) => base,
+            Err(error) if Self::observation_unavailable(error.as_ref()) => {
+                return Ok(Commit::Declined(
+                    "observation_unavailable",
+                    "GitHub did not return the current delivery base; Suplex will observe it again."
+                        .into(),
+                ));
+            }
+            Err(error) => return Err(error),
+        };
+        let Some(sha) = sha else {
+            return Ok(Commit::Declined(
+                "observation_unavailable",
+                format!(
+                    "GitHub did not return the head of {branch}; Suplex will observe it again."
+                ),
+            ));
+        };
+        let task_id = control["taskId"].as_str().unwrap_or("");
+        let Some(path) = control["worktree"]["path"].as_str() else {
+            return Ok(Commit::Declined(
+                "worktree_missing",
+                "The task has no observed worktree to confirm the reviewed source.".into(),
+            ));
+        };
+        if let Err(reason) = self.equivalence(task_id, path, &accepted, &sha).await? {
+            return Ok(Commit::Declined(
+                "delivery_review_required",
+                format!(
+                    "{reason}{}",
+                    workflows::fresh_review_hint(control["workflow"].as_str().unwrap_or(""))
+                ),
+            ));
+        }
+        self.commit_completion(control, &accepted, pull["number"].as_u64(), true, recheck)
+            .await
     }
 
     /// The whole TypeScript `execute` for the Standard workflow.
@@ -904,7 +1203,6 @@ impl DeliveryOperations {
             }
             return complete_local_work(&self.database_path, root, token, expected_head).await;
         }
-        self.workflow_decision(&control)?;
         let known = if operation == "push_branch" {
             Value::Null
         } else {
@@ -940,8 +1238,8 @@ impl DeliveryOperations {
             .as_str()
             .unwrap_or("")
             .to_owned();
-        let github = self.github(task_id).await?;
-        let remote = github_delivery::remote_repository(&path).map_err(Box::new)?;
+        let github = self.for_task(task_id).await?;
+        let remote = github.remote_repository(&path).map_err(Box::new)?;
         if remote != repository {
             return Err(delivery_failure(
                 "head_diverged",
@@ -991,16 +1289,21 @@ impl DeliveryOperations {
                     ));
                 }
             } else {
-                let (review, base, token) = (
-                    review.clone(),
-                    range.base_sha.clone(),
-                    github.token().map(str::to_owned),
-                );
-                let path = path.clone();
-                range = tokio::task::spawn_blocking(move || inspection::review_equivalence(&path, &review, &base, token.as_deref()))
+                range = self
+                    .equivalence(task_id, &path.to_string_lossy(), review, &range.base_sha)
                     .await?
                     .map_err(|reason| delivery_failure("delivery_review_required", format!("{reason} Inspect delivery again and review the new range before retrying.")))?;
             }
+            self.gate_workflow(
+                task_id,
+                &range,
+                &LocalSourceFacts {
+                    branch: None,
+                    head_sha: None,
+                    clean: local.clean,
+                },
+                !matches!(operation, "push_branch" | "create_or_adopt_pull_request"),
+            )?;
             self.recheck(&recheck)?;
             actual = Some(range);
         }
@@ -1024,7 +1327,11 @@ impl DeliveryOperations {
                 )
                 .await;
         }
-        if let Some(actual) = &actual {
+        if let Some(actual) = &actual
+            && self
+                .workflow_decision(task_id, actual, &facts(&local), true)?
+                .is_ok()
+        {
             let accepted = serde_json::to_value(actual)?;
             self.update_workflow_state(task_id, |state| state["acceptedDelivery"] = accepted)?;
         }
@@ -1047,6 +1354,7 @@ impl DeliveryOperations {
                     &repository,
                     &local,
                     &pull,
+                    actual.as_ref().expect("reviewed"),
                     pull_request_title,
                     pull_request_body,
                 )
@@ -1060,6 +1368,7 @@ impl DeliveryOperations {
                     &repository,
                     &local.branch,
                     expected_head,
+                    actual.as_ref().expect("reviewed"),
                 )
                 .await
             }
@@ -1087,7 +1396,7 @@ impl DeliveryOperations {
         let repository = control["deliveryIntent"]["repository"]
             .as_str()
             .unwrap_or("");
-        let github = self.github(task_id).await?;
+        let github = self.for_task(task_id).await?;
         if let Some(number) = control["deliveryIntent"]["pullRequestNumber"].as_u64() {
             let pull = github.get_pull_request(repository, number).await?;
             return self.adopt_known_pull(control, &pull, options).await;
@@ -1096,6 +1405,9 @@ impl DeliveryOperations {
             .list_pull_requests(
                 repository,
                 control["deliveryIntent"]["headBranch"]
+                    .as_str()
+                    .unwrap_or(""),
+                control["deliveryIntent"]["baseBranch"]
                     .as_str()
                     .unwrap_or(""),
             )
@@ -1148,7 +1460,7 @@ impl DeliveryOperations {
         };
         let task_id = control["taskId"].as_str().unwrap_or("");
         let observed = self
-            .github(task_id)
+            .for_task(task_id)
             .await?
             .observe_pull_request(repository, branch, Some(number))
             .await?;
@@ -1159,7 +1471,9 @@ impl DeliveryOperations {
         Ok(pull.unwrap_or(Value::Null))
     }
 
-    /// TypeScript `completeIfTargetMatches` for the Standard workflow.
+    /// TypeScript `completeIfTargetMatches`: Standard completes on a matching
+    /// endpoint; other workflows complete only through the final boundary, or
+    /// record an external merge truthfully.
     async fn complete_if_target_matches(
         &self,
         control: &Value,
@@ -1177,7 +1491,18 @@ impl DeliveryOperations {
             return Ok(pull);
         }
         let current = self.get(task_id)?;
+        let standard = control["workflow"] == "standard";
         if current["status"] == "cancelled" {
+            // An accepted remote request finished after cancellation: record the outcome and stay cancelled.
+            if !standard
+                && current["workflowState"]["completion"].is_null()
+                && pull["state"] == "merged"
+            {
+                self.record_workflow_outcome(
+                    task_id,
+                    &Self::cancelled_outcome(&current, &pull, options.validated_range),
+                )?;
+            }
             return Ok(pull);
         }
         if current["workflowState"]["followUp"] == true
@@ -1186,7 +1511,85 @@ impl DeliveryOperations {
         {
             return Ok(pull);
         }
-        self.workflow_decision(control)?;
+        if !standard {
+            if !current["workflowState"]["completion"].is_null() {
+                if current["status"] != "delivered" {
+                    self.mark_delivered(task_id)?;
+                }
+                return Ok(pull);
+            }
+            if pull["state"] == "merged" {
+                let accepted =
+                    ReviewRange::from_value(&current["workflowState"]["acceptedDelivery"]);
+                let head = pull["headSha"].as_str().unwrap_or("");
+                let proof = match (options.validated_range, &accepted) {
+                    (Some(range), _) if head != range.head_sha => Commit::Declined(
+                        "head_diverged",
+                        format!(
+                            "GitHub reports the merged pull request head {}, not the reviewed head {}.",
+                            short(head),
+                            short(&range.head_sha)
+                        ),
+                    ),
+                    (Some(_), _) => Commit::Done,
+                    (None, None) => Commit::Declined(
+                        "workflow_review_required",
+                        "No accepted delivery decision exists for this pull request.".into(),
+                    ),
+                    (None, Some(accepted)) if accepted.head_sha != head => Commit::Declined(
+                        "head_diverged",
+                        format!(
+                            "The merged head {} is not the accepted head {}.",
+                            short(head),
+                            short(&accepted.head_sha)
+                        ),
+                    ),
+                    (None, Some(_)) => Commit::Done,
+                };
+                let decision = match (proof, options.validated_range.or(accepted.as_ref())) {
+                    (Commit::Done, Some(range)) => {
+                        self.commit_completion(
+                            &current,
+                            range,
+                            pull["number"].as_u64(),
+                            options.validated_range.is_none(),
+                            options.recheck,
+                        )
+                        .await?
+                    }
+                    (proof, _) => proof,
+                };
+                match decision {
+                    Commit::Done => {}
+                    Commit::Cancelled => self.record_workflow_outcome(
+                        task_id,
+                        &Self::cancelled_outcome(
+                            &self.get(task_id)?,
+                            &pull,
+                            options.validated_range,
+                        ),
+                    )?,
+                    Commit::Declined(..) => self.record_workflow_outcome(
+                        task_id,
+                        &Self::external_completion(&self.get(task_id)?, &pull["number"]),
+                    )?,
+                }
+                return Ok(pull);
+            }
+            let decision = self
+                .open_completion_decision(&current, &pull, options.recheck)
+                .await?;
+            if options.explicit && !options.publication && !matches!(decision, Commit::Done) {
+                return Err(match decision {
+                    Commit::Declined(code, reason) => delivery_failure(code, reason),
+                    _ => delivery_failure(
+                        "workflow_review_required",
+                        "The task was cancelled; Suplex recorded no workflow completion.",
+                    ),
+                });
+            }
+            return Ok(pull);
+        }
         issue_evidence::complete(
             self,
             task_id,
@@ -1211,16 +1614,17 @@ impl DeliveryOperations {
         control: &Value,
         repository: &str,
         local: &LocalRevisionObservation,
-        _actual: &ReviewRange,
+        actual: &ReviewRange,
     ) -> DatabaseResult<Value> {
         let task_id = control["taskId"].as_str().unwrap_or("");
-        self.trigger_policy(task_id)?;
-        let github = self.github(task_id).await?;
+        let trigger = self.inspect_trigger_policy(control, None, false).await?;
+        let github = self.for_task(task_id).await?;
         let remote_head = github.get_branch_head(repository, &local.branch).await?;
-        self.final_recheck(control, recheck).await?;
+        self.final_recheck(control, actual, recheck, false).await?;
         if remote_head.as_deref() == Some(local.head_sha.as_str()) {
             if control["deliveryTarget"] == "remote_branch" {
-                self.mark_delivered(task_id)?;
+                self.complete_remote_branch(control, actual, recheck)
+                    .await?;
             }
             return Ok(json!({"kind": "adopted", "headSha": local.head_sha}));
         }
@@ -1242,9 +1646,20 @@ impl DeliveryOperations {
                 "The remote branch does not match the observed worktree head",
             ));
         }
+        if let Some((policy, pull)) = &trigger {
+            github_triggers_dispatches::record_trigger_push(
+                &mut self.open(OpenMode::ReadWrite)?,
+                task_id,
+                &policy.dispatch_id,
+                remote_head.as_deref().unwrap_or(&pull.head_sha),
+                &local.head_sha,
+                &serde_json::to_value(actual)?,
+            )?;
+        }
         self.recheck(recheck)?;
         if control["deliveryTarget"] == "remote_branch" {
-            self.mark_delivered(task_id)?;
+            self.complete_remote_branch(control, actual, recheck)
+                .await?;
         }
         Ok(json!({"kind": "pushed", "headSha": observed}))
     }
@@ -1258,12 +1673,14 @@ impl DeliveryOperations {
         repository: &str,
         local: &LocalRevisionObservation,
         pull: &Value,
+        actual: &ReviewRange,
         title: Option<&str>,
         body: Option<&str>,
     ) -> DatabaseResult<Value> {
         let task_id = control["taskId"].as_str().unwrap_or("");
-        let github = self.github(task_id).await?;
+        let github = self.for_task(task_id).await?;
         let adopt = Adoption {
+            publication: true,
             explicit: true,
             recheck: Some(recheck),
             ..Adoption::default()
@@ -1284,7 +1701,7 @@ impl DeliveryOperations {
             let full = github
                 .get_pull_request(repository, pull["number"].as_u64().unwrap_or(0))
                 .await?;
-            self.recheck(recheck)?;
+            self.final_recheck(control, actual, recheck, false).await?;
             return self.adopt_known_pull(control, &full, adopt).await;
         }
         if !control["deliveryIntent"]["pullRequestNumber"].is_null() {
@@ -1301,7 +1718,15 @@ impl DeliveryOperations {
         }
         let candidate = select_discovered_pull(
             control,
-            github.list_pull_requests(repository, &local.branch).await?,
+            github
+                .list_pull_requests(
+                    repository,
+                    &local.branch,
+                    control["deliveryIntent"]["baseBranch"]
+                        .as_str()
+                        .unwrap_or(""),
+                )
+                .await?,
         )?;
         if let Some(candidate) = &candidate {
             if candidate.state == "closed" {
@@ -1317,7 +1742,7 @@ impl DeliveryOperations {
                 ));
             }
         }
-        self.recheck(recheck)?;
+        self.final_recheck(control, actual, recheck, false).await?;
         if let Some(candidate) = candidate {
             return self.adopt_known_pull(control, &candidate, adopt).await;
         }
@@ -1361,7 +1786,7 @@ impl DeliveryOperations {
             ));
         };
         let observed = self
-            .github(control["taskId"].as_str().unwrap_or(""))
+            .for_task(control["taskId"].as_str().unwrap_or(""))
             .await?
             .observe_pull_request(repository, branch, Some(number))
             .await?;
@@ -1425,6 +1850,7 @@ impl DeliveryOperations {
         repository: &str,
         branch: &str,
         expected_head: Option<&str>,
+        actual: &ReviewRange,
     ) -> DatabaseResult<Value> {
         let task_id = control["taskId"].as_str().unwrap_or("");
         let observed = self.checks(control, repository, branch).await?;
@@ -1449,8 +1875,8 @@ impl DeliveryOperations {
                 "The pull request is not open for review",
             ));
         };
-        self.final_recheck(control, recheck).await?;
-        let github = self.github(task_id).await?;
+        self.final_recheck(control, actual, recheck, true).await?;
+        let github = self.for_task(task_id).await?;
         github.mark_ready_for_review(repository, number).await?;
         let last = github.get_pull_request(repository, number).await?;
         if Some(last.head_sha.as_str()) != expected_head {
@@ -1485,7 +1911,7 @@ impl DeliveryOperations {
         actual: &ReviewRange,
     ) -> DatabaseResult<Value> {
         let task_id = control["taskId"].as_str().unwrap_or("");
-        let github = self.github(task_id).await?;
+        let github = self.for_task(task_id).await?;
         let observed = self.checks(control, repository, branch).await?;
         if observed.state.as_deref() == Some("merged")
             && let Some(number) = observed.number
@@ -1515,8 +1941,38 @@ impl DeliveryOperations {
                 "The pull request head changed after the Coordinator reviewed it",
             ));
         }
-        self.trigger_policy(task_id)?;
-        self.final_recheck(control, recheck).await?;
+        let trigger = self
+            .inspect_trigger_policy(control, Some(&head), true)
+            .await?;
+        if trigger.is_some() || control["workflow"] != "standard" {
+            let (base_branch, base_sha) = match self.resolve_delivery_base(control).await {
+                Ok(base) => base,
+                Err(error) if Self::observation_unavailable(error.as_ref()) => {
+                    return self.observation_wait(control, &head, "the current delivery base");
+                }
+                Err(error) => return Err(error),
+            };
+            let Some(base_sha) = base_sha else {
+                return self.observation_wait(
+                    control,
+                    &head,
+                    &format!("the head of {base_branch}"),
+                );
+            };
+            // Concrete harm prevented: merging content the accepted review never covered.
+            // Evidence: the Git integration result on the current authoritative base.
+            let path = control["worktree"]["path"].as_str().unwrap_or("");
+            if let Err(reason) = self.equivalence(task_id, path, actual, &base_sha).await? {
+                return Err(delivery_failure(
+                    "delivery_review_required",
+                    format!(
+                        "{reason}{}",
+                        workflows::fresh_review_hint(control["workflow"].as_str().unwrap_or(""))
+                    ),
+                ));
+            }
+        }
+        self.final_recheck(control, actual, recheck, true).await?;
         let rows =
             root_session_store::root_observation_rows(&self.open(OpenMode::ReadOnly)?, task_id)?;
         let blockers = rows
@@ -1543,11 +1999,50 @@ impl DeliveryOperations {
         }
         self.recheck(recheck)?;
         let requested = observed.number.unwrap_or(0);
-        // TypeScript `mergePullRequest` discards the conditional result and observes the pull request.
-        github
-            .merge_conditionally(repository, requested, &head, true)
-            .await
-            .map(|result| matches!(result, MergeResult::Merged { .. }))?;
+        if trigger.is_some() {
+            if observed.auto_merge_enabled == Some(true) {
+                return Err(self.trigger_blocked(
+                    control,
+                    "Auto-merge is enabled for this trigger pull request. Review delivery manually.",
+                    "merge_not_eligible",
+                )?);
+            }
+            // TypeScript `mergePullRequestDirect`: a trigger merge reports its conditional result.
+            let (disposition, message) = match github
+                .merge_conditionally(repository, requested, &head, false)
+                .await?
+            {
+                MergeResult::Merged { .. } => (None, String::new()),
+                MergeResult::NotMerged => (Some(""), "GitHub has not completed the merge".into()),
+                MergeResult::Disposition {
+                    disposition,
+                    message,
+                } => (Some(disposition), message),
+            };
+            if let Some(disposition) = disposition {
+                if disposition == "blocked" {
+                    return Err(delivery_failure("merge_not_eligible", message));
+                }
+                let reason = if disposition == "waiting" {
+                    "checks"
+                } else {
+                    "merge_queue"
+                };
+                let wait = json!({"headSha": head, "fingerprint": delivery_wait_fingerprint(&observed), "since": timestamp(Utc::now()), "reason": reason});
+                self.update_workflow_state(task_id, |state| state["deliveryWait"] = wait.clone())?;
+                self.schedule_wake(task_id, 30)?;
+                return Ok(if disposition == "queued" {
+                    json!({"kind": "merge_requested", "checkSummary": check_summary(&observed), "wait": wait, "next": DELIVERY_WAIT_NEXT})
+                } else {
+                    json!({"kind": "waiting", "problems": [message], "wait": wait, "next": DELIVERY_WAIT_NEXT})
+                });
+            }
+        } else {
+            // TypeScript `mergePullRequest` discards the conditional result and observes the pull request.
+            github
+                .merge_conditionally(repository, requested, &head, true)
+                .await?;
+        }
         let last = github.get_pull_request(repository, requested).await?;
         if last.state != "merged" {
             let wait = json!({"headSha": head, "fingerprint": delivery_wait_fingerprint(&observed), "since": timestamp(Utc::now()), "reason": "merge_queue"});
@@ -1598,17 +2093,82 @@ impl DeliveryOperations {
         Ok(result)
     }
 
-    /// GitHub trigger tasks carry a stored delivery policy that is not ported.
-    fn trigger_policy(&self, task_id: &str) -> DatabaseResult<()> {
-        let present: bool = self.open(OpenMode::ReadOnly)?.connection().query_row(
-            "SELECT EXISTS(SELECT 1 FROM suplex_github_trigger_dispatches WHERE task_id = ?1)",
-            [task_id],
-            |row| row.get(0),
-        )?;
-        if present {
-            return Err(not_ported("GitHub trigger delivery is not ported"));
+    /// TypeScript `triggerBlocked`: an active task asks its human; the operation fails either way.
+    fn trigger_blocked(
+        &self,
+        control: &Value,
+        question: &str,
+        code: &'static str,
+    ) -> DatabaseResult<Box<dyn Error>> {
+        if control["status"] == "active" {
+            self.ask_human(control["taskId"].as_str().unwrap_or(""), question)?;
         }
-        Ok(())
+        Ok(delivery_failure(code, question))
+    }
+
+    /// TypeScript `inspectTriggerPolicy`: a GitHub trigger task delivers only
+    /// while its captured pull request keeps its identity and open reviewable state.
+    async fn inspect_trigger_policy(
+        &self,
+        control: &Value,
+        expected_head: Option<&str>,
+        protected_paths: bool,
+    ) -> DatabaseResult<Option<(DeliveryPolicy, PullRequestInspection)>> {
+        let task_id = control["taskId"].as_str().unwrap_or("");
+        let Some(policy) = github_triggers_dispatches::trigger_delivery_policy(
+            &self.open(OpenMode::ReadOnly)?,
+            task_id,
+        )?
+        else {
+            return Ok(None);
+        };
+        let uninspectable = || {
+            delivery_failure(
+                "head_diverged",
+                "GitHub trigger delivery policy could not be inspected",
+            )
+        };
+        let port = self.for_task(task_id).await.map_err(|_| uninspectable())?;
+        let pull = github_triggers_inspection::inspect_pull_request(
+            port.github().ok_or_else(uninspectable)?,
+            &policy.repository_name,
+            policy.pull_request_number,
+        )
+        .await
+        .map_err(|_| uninspectable())?;
+        let same_repository = |repository: &github_triggers_inspection::Repository| {
+            repository.id == policy.repository_id
+                && repository.full_name.to_lowercase() == policy.repository_name
+        };
+        let valid = pull.number == policy.pull_request_number
+            && pull.state == "open"
+            && !pull.is_draft
+            && !pull.is_cross_repository
+            && same_repository(&pull.base_repository)
+            && pull.head_repository.as_ref().is_some_and(same_repository)
+            && pull.head_branch == policy.head_branch
+            && pull.base_branch == policy.base_branch;
+        if !valid {
+            return Err(self.trigger_blocked(
+                control,
+                "The trigger pull request identity or open reviewable state changed. Review delivery manually.",
+                "head_diverged",
+            )?);
+        }
+        if protected_paths && !pull.matching_paths(&policy.protected_paths).is_empty() {
+            return Err(self.trigger_blocked(
+                control,
+                "The trigger pull request changes a protected path. Review delivery manually.",
+                "merge_not_eligible",
+            )?);
+        }
+        if expected_head.is_some_and(|head| head != pull.head_sha) {
+            return Err(delivery_failure(
+                "head_diverged",
+                "The pull request has new commits. Fetch and reconcile the branch, verify the result, and request a fresh review before delivery.",
+            ));
+        }
+        Ok(Some((policy, pull)))
     }
 }
 
@@ -1805,6 +2365,232 @@ mod tests {
         assert!(!valid_body(
             "## Why\n## Summary\n## Validation\n## Review notes"
         ));
+    }
+
+    /// One active task in `workflow` whose worktree is a real repository on its task branch.
+    fn workflow_task(workflow: &str) -> (PathBuf, DeliveryOperations, String, String) {
+        use crate::tasks::repository::{PreparedTask, TaskCreator};
+        let directory =
+            std::env::temp_dir().join(format!("suplex-delivery-{}", uuid::Uuid::new_v4()));
+        let worktree = directory.join("worktree");
+        let repository = git2::Repository::init(&worktree).unwrap();
+        std::fs::write(worktree.join("a.txt"), "a\n").unwrap();
+        let mut index = repository.index().unwrap();
+        index.add_path(Path::new("a.txt")).unwrap();
+        index.write().unwrap();
+        let tree = repository.find_tree(index.write_tree().unwrap()).unwrap();
+        let signature = git2::Signature::now("Suplex", "suplex@localhost").unwrap();
+        let head = repository
+            .commit(
+                Some("refs/heads/task-flow"),
+                &signature,
+                &signature,
+                "a",
+                &tree,
+                &[],
+            )
+            .unwrap()
+            .to_string();
+        repository.set_head("refs/heads/task-flow").unwrap();
+        let database_path = directory.join("suplex.sqlite");
+        let mut database = SuplexDatabase::open(&database_path, OpenMode::Migrate).unwrap();
+        let now = Utc::now();
+        let user = crate::identity::auth::development_sign_in(&mut database, now)
+            .unwrap()
+            .user;
+        let stamp = now.to_rfc3339();
+        database.connection().execute("INSERT INTO suplex_companies (id,name,status,created_at) VALUES ('company_flow','Flow','active',?1)", [&stamp]).unwrap();
+        database.connection().execute("INSERT INTO suplex_projects (id,company_id,name,repository_path,worktree_root,repository_identity,base_branch,setup_command,verification_command,root_profile_id,worker_profile_id,agent_task_policy_json,created_at,updated_at) VALUES ('project_flow','company_flow','Flow','/tmp/repo','/tmp/worktrees',NULL,'main','','','profile_root','profile_worker','{}',?1,?1)", [&stamp]).unwrap();
+        let profile = json!({"profileId":"profile_root","provider":"codex","model":"gpt-6-sol","reasoningLevel":"medium","serviceTier":"default"});
+        let task = repository::create(&mut database, &PreparedTask {
+            id: repository::new_task_id(), company_id: "company_flow".into(), project_id: "project_flow".into(),
+            title: "Workflow task".into(), description: "Exercise delivery".into(),
+            configuration: json!({"branch":"task-flow","baseBranch":"main","visualEvidence":"off"}),
+            idempotency_key: "delivery-1".into(), request_hash: "delivery-hash".into(),
+            creator: TaskCreator::User(user.id), delivery_target: "merged".into(),
+            delivery_intent: json!({"repository":"owner/repo","headBranch":"task-flow","baseBranch":"main","pullRequestNumber":null}),
+            root_profile: profile.clone(), worker_profile: profile, advisor_profiles: json!({}), issue: None, start_queued: true,
+            copied_from_task_id: None, depends_on: vec![], pull_request_dependencies: vec![],
+        }, now).unwrap().task;
+        let worktree_json = json!({"path": worktree, "branch": "task-flow", "baseSha": head, "headSha": head, "dirty": false});
+        database.connection().execute(
+            "UPDATE suplex_task_controls SET workflow = ?1, worktree_json = ?2 WHERE task_id = ?3",
+            params![workflow, worktree_json.to_string(), task.id],
+        ).unwrap();
+        let operations = DeliveryOperations::new(&database_path, &directory.join("artifacts"));
+        (directory, operations, task.id, head)
+    }
+
+    #[tokio::test]
+    async fn non_standard_merges_complete_only_on_the_accepted_head_and_record_external_merges() {
+        let merged = |head: &str| json!({"repository":"owner/repo","number":7,"url":"https://github.com/owner/repo/pull/7","headSha":head,"state":"merged","mergedAt":null});
+        // No accepted decision: GitHub's merge is recorded truthfully as external.
+        let (directory, operations, task_id, head) = workflow_task("independent_review");
+        let control = operations.get(&task_id).unwrap();
+        operations
+            .complete_if_target_matches(&control, merged(&head), Adoption::default())
+            .await
+            .unwrap();
+        let control = operations.get(&task_id).unwrap();
+        assert_eq!(
+            control["workflowState"]["completion"]["kind"],
+            "external_merge"
+        );
+        assert_eq!(
+            control["workflowState"]["completion"]["pullRequestNumber"],
+            7
+        );
+        std::fs::remove_dir_all(directory).unwrap();
+
+        // The accepted and reviewed head completes the workflow through the final boundary.
+        let (directory, operations, task_id, head) = workflow_task("independent_review");
+        let range = ReviewRange {
+            base_sha: "a".repeat(40),
+            head_sha: head.clone(),
+            files: vec!["a.txt".into()],
+            commits: vec![head.clone()],
+            patch_digest: Some("d".repeat(64)),
+        };
+        operations
+            .update_workflow_state(&task_id, |state| {
+                state["acceptedDelivery"] = json!(range);
+                state["reviews"] = json!([{"sessionId":"s","turnId":"t","role":"reviewer","range":range,"result":{"role":"reviewer","approved":true,"blockingFindings":[],"verification":"passed","verificationSummary":"ok","summary":"ok"},"invalidReason":null,"recordedAt":"2026-09-25T00:00:00.000Z"}]);
+            })
+            .unwrap();
+        let control = operations.get(&task_id).unwrap();
+        operations
+            .complete_if_target_matches(&control, merged(&"f".repeat(40)), Adoption::default())
+            .await
+            .unwrap();
+        assert_eq!(
+            operations.get(&task_id).unwrap()["workflowState"]["completion"]["kind"],
+            "external_merge",
+            "a merge of another head is never relabeled as the workflow's"
+        );
+        // Reopen the same task to observe the reviewed merge.
+        operations
+            .update_workflow_state(&task_id, |state| state["completion"] = Value::Null)
+            .unwrap();
+        operations
+            .open(OpenMode::ReadWrite)
+            .unwrap()
+            .connection()
+            .execute(
+                "UPDATE suplex_task_controls SET status = 'active' WHERE task_id = ?1",
+                [&task_id],
+            )
+            .unwrap();
+        let control = operations.get(&task_id).unwrap();
+        operations
+            .complete_if_target_matches(&control, merged(&head), Adoption::default())
+            .await
+            .unwrap();
+        let control = operations.get(&task_id).unwrap();
+        assert_eq!(control["workflowState"]["completion"]["kind"], "workflow");
+        assert_eq!(
+            control["workflowState"]["completion"]["reviewedHead"],
+            head.as_str()
+        );
+        assert_eq!(control["status"], "delivered");
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
+    /// A loopback GitHub REST API answering each path and query from `replies`.
+    async fn loopback_github(replies: Vec<(&'static str, Value)>) -> Github {
+        use axum::{Json, Router, extract::OriginalUri, http::StatusCode, response::IntoResponse};
+        let replies = std::sync::Arc::new(replies);
+        let app = Router::new().fallback(move |OriginalUri(uri): OriginalUri| {
+            let replies = replies.clone();
+            async move {
+                let key = uri
+                    .path_and_query()
+                    .map(|value| value.as_str())
+                    .unwrap_or("");
+                match replies.iter().find(|(path, _)| *path == key) {
+                    Some((_, body)) => Json(body.clone()).into_response(),
+                    None => (StatusCode::NOT_FOUND, Json(json!({"message": "Not Found"})))
+                        .into_response(),
+                }
+            }
+        });
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}/", listener.local_addr().unwrap());
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let access =
+            crate::integrations::github::Access::for_api(&base, Some("test-token".into())).unwrap();
+        let mut github = Github::new(access);
+        github.retry_pauses.clear();
+        github
+    }
+
+    #[tokio::test]
+    async fn trigger_policy_blocks_changed_heads_and_protected_paths_with_a_human_question() {
+        let (directory, operations, task_id, _) = workflow_task("standard");
+        let database = operations.open(OpenMode::ReadWrite).unwrap();
+        let policy = json!({"headSha": "a".repeat(40), "baseSha": "b".repeat(40), "headBranch": "feature", "baseBranch": "main", "protectedPaths": ["src/"], "repositoryId": 9, "repositoryName": "owner/repo", "deliveryTarget": "merged"});
+        database
+            .connection()
+            .execute_batch("PRAGMA foreign_keys = OFF")
+            .unwrap();
+        database.connection().execute(
+            "INSERT INTO suplex_github_trigger_dispatches (id, rule_id, company_id, project_id, repository_id, repository_name, pull_request_number, authority_user_id, request_json, policy_json, preset_json, profiles_json, idempotency_key, task_id, created_at, updated_at) VALUES ('dispatch_1', 'rule_1', 'company_flow', 'project_flow', 9, 'owner/repo', 7, 'user', '{}', ?1, '{}', '{}', 'key_1', ?2, 'now', 'now')",
+            params![policy.to_string(), task_id],
+        ).unwrap();
+        database
+            .connection()
+            .execute(
+                "UPDATE suplex_task_controls SET status = 'active' WHERE task_id = ?1",
+                [&task_id],
+            )
+            .unwrap();
+        drop(database);
+        let side = |branch: &str, sha: char| json!({"ref": branch, "sha": sha.to_string().repeat(40), "repo": {"id": 9, "full_name": "owner/repo"}});
+        let pull = json!({"number": 7, "html_url": "https://github.com/owner/repo/pull/7", "state": "open", "draft": false, "changed_files": 1, "labels": [], "title": "Candidate", "head": side("feature", 'a'), "base": side("main", 'b')});
+        let file = json!({"sha": "c", "filename": "src/new.ts", "previous_filename": "docs/old.ts", "status": "renamed", "additions": 1, "deletions": 0, "changes": 1, "blob_url": "https://github.com/b", "raw_url": "https://github.com/r", "contents_url": "https://api.github.com/c"});
+        let github = loopback_github(vec![
+            ("/repos/owner/repo/pulls/7", pull),
+            (
+                "/repos/owner/repo/pulls/7/files?per_page=100&page=1",
+                json!([file]),
+            ),
+        ])
+        .await;
+        let operations = DeliveryOperations::with_github(
+            operations.database_path(),
+            operations.artifact_root(),
+            github,
+        );
+        let control = operations.get(&task_id).unwrap();
+        let (policy, _) = operations
+            .inspect_trigger_policy(&control, None, false)
+            .await
+            .unwrap()
+            .expect("the task carries a trigger policy");
+        assert_eq!(policy.dispatch_id, "dispatch_1");
+        let code =
+            |error: Box<dyn Error>| error.downcast::<DeliveryOperationFailure>().unwrap().code;
+        let moved = operations
+            .inspect_trigger_policy(&control, Some(&"c".repeat(40)), false)
+            .await
+            .unwrap_err();
+        assert_eq!(code(moved), "head_diverged");
+        assert_eq!(
+            operations.get(&task_id).unwrap()["status"],
+            "active",
+            "new commits are repair work, not a human question"
+        );
+        let protected = operations
+            .inspect_trigger_policy(&control, Some(&"a".repeat(40)), true)
+            .await
+            .unwrap_err();
+        assert_eq!(code(protected), "merge_not_eligible");
+        let control = operations.get(&task_id).unwrap();
+        assert_eq!(control["status"], "waiting_human");
+        assert_eq!(
+            control["humanQuestion"],
+            "The trigger pull request changes a protected path. Review delivery manually."
+        );
+        std::fs::remove_dir_all(directory).unwrap();
     }
 
     #[test]

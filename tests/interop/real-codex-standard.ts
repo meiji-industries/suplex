@@ -22,8 +22,10 @@ if (deterministic && process.env.SUPLEX_REAL_CODEX_RUN === "1") throw new Error(
 if (deterministic) process.env.SUPLEX_CODEX_COMMAND = fileURLToPath(new URL("../fixtures/codex-standard-cli.mjs", import.meta.url));
 const phase = deterministic ? process.env.SUPLEX_DETERMINISTIC_PHASE ?? "deliver" : "deliver";
 // Workflow phases run one non-Standard workflow to local delivery; their Advisors use the stand-in's report bridge calls.
-const workflowNames: Record<string, string> = { direct_build: "Direct build", independent_review: "Second opinion", competing_plans: "Combined planning" };
+// refine_pull_request starts from pull request #1 on the seeded `feature` branch and delivers by push and merge.
+const workflowNames: Record<string, string> = { direct_build: "Direct build", independent_review: "Second opinion", competing_plans: "Combined planning", refine_pull_request: "Pull request repair" };
 const workflowPhase = phase in workflowNames;
+const repair = phase === "refine_pull_request";
 if (!["deliver", "deliver_pr", "answer", "restart", "cancel", "deliver_claude"].includes(phase) && !workflowPhase) throw new Error("Unknown deterministic phase");
 const claude = phase === "deliver_claude";
 const claudeConfig = claude ? await mkdtemp(join(tmpdir(), "suplex-claude-config-")) : null;
@@ -53,6 +55,13 @@ if (seedDirectory) {
   await writeFile(join(work, "package.json"), `${JSON.stringify({ name: "seed", private: true, scripts: { test: "node -e \"process.exit(0)\"" } })}\n`);
   await git("-C", work, "add", ".");
   await git("-C", work, "-c", "user.name=Suplex fixture", "-c", "user.email=suplex-fixture@example.invalid", "-c", "commit.gpgsign=false", "commit", "-m", "Seed");
+  if (repair) {
+    await git("-C", work, "checkout", "-b", "feature");
+    await writeFile(join(work, "NOTES.md"), "Pull request under repair.\n");
+    await git("-C", work, "add", "NOTES.md");
+    await git("-C", work, "-c", "user.name=Suplex fixture", "-c", "user.email=suplex-fixture@example.invalid", "-c", "commit.gpgsign=false", "commit", "-m", "Open the pull request");
+    await git("-C", work, "checkout", "main");
+  }
   await git("clone", "--bare", work, join(seedDirectory, "origin.git"));
 }
 const origin = seedDirectory ? join(seedDirectory, "origin.git") : process.env.SUPLEX_REAL_CODEX_ORIGIN;
@@ -65,16 +74,21 @@ if (deterministic) {
 }
 progress(`fixture ready: origin ${origin}`);
 // deliver_pr and workflow phases: a loopback GitHub API that reads branch heads from the seeded origin and records pull requests.
-const pulls: Array<{ number: number; repository: string; head: string; headSha: string; base: string; baseSha: string; title: string; body: string; draft: boolean }> = [];
+const pulls: Array<{ number: number; repository: string; head: string; headSha: string; base: string; baseSha: string; title: string; body: string; draft: boolean; merged?: boolean }> = [];
+const branchHead = async (branch: string) => {
+  const result = await runCommand({ taskId: null, stepId: null, command: "git", args: ["--git-dir", origin, "rev-parse", "--verify", "--quiet", `refs/heads/${branch}^{commit}`], expectNonZero: true });
+  return result.exitCode === 0 ? result.stdout.trim() : null;
+};
 let githubApi: Server | null = null;
 if (phase === "deliver_pr" || workflowPhase) {
-  const branchHead = async (branch: string) => {
-    const result = await runCommand({ taskId: null, stepId: null, command: "git", args: ["--git-dir", origin, "rev-parse", "--verify", "--quiet", `refs/heads/${branch}^{commit}`], expectNonZero: true });
-    return result.exitCode === 0 ? result.stdout.trim() : null;
+  // An open pull request follows its head branch; a merged one keeps the merged head.
+  const refresh = async (pull: typeof pulls[number]) => {
+    if (!pull.merged) pull.headSha = await branchHead(pull.head) ?? pull.headSha;
+    return pull;
   };
   const rest = (pull: typeof pulls[number]) => {
     const side = (ref: string, sha: string) => ({ ref, sha, repo: { full_name: pull.repository } });
-    return { number: pull.number, html_url: `https://github.com/${pull.repository}/pull/${pull.number}`, node_id: `PR_${pull.number}`, state: "open", draft: pull.draft, merged_at: null, auto_merge: null, head: side(pull.head, pull.headSha), base: side(pull.base, pull.baseSha), title: pull.title, body: pull.body, user: { login: "suplex" }, updated_at: "2026-09-25T00:00:00Z" };
+    return { number: pull.number, html_url: `https://github.com/${pull.repository}/pull/${pull.number}`, node_id: `PR_${pull.number}`, state: pull.merged ? "closed" : "open", draft: pull.draft, merged_at: pull.merged ? "2026-09-25T00:00:00Z" : null, auto_merge: null, head: side(pull.head, pull.headSha), base: side(pull.base, pull.baseSha), title: pull.title, body: pull.body, user: { login: "suplex" }, updated_at: "2026-09-25T00:00:00Z" };
   };
   githubApi = createServer((request, response) => {
     let raw = "";
@@ -100,17 +114,33 @@ if (phase === "deliver_pr" || workflowPhase) {
       const read = /^\/repos\/([^/]+\/[^/]+)\/pulls\/(\d+)$/.exec(url.pathname);
       if (request.method === "GET" && read) {
         const pull = pulls[Number(read[2]) - 1];
-        return pull ? send(200, rest(pull)) : send(404, { message: "Not Found" });
+        return pull ? send(200, rest(await refresh(pull))) : send(404, { message: "Not Found" });
+      }
+      if (request.method === "GET" && /^\/repos\/[^/]+\/[^/]+$/.test(url.pathname)) return send(200, { allow_squash_merge: false, allow_merge_commit: true, allow_rebase_merge: false });
+      // The exact-head merge: GitHub refuses a stale head and otherwise advances the base branch.
+      const merge = /^\/repos\/([^/]+\/[^/]+)\/pulls\/(\d+)\/merge$/.exec(url.pathname);
+      if (request.method === "PUT" && merge) {
+        const pull = pulls[Number(merge[2]) - 1];
+        if (!pull || pull.merged) return send(405, { message: "Pull Request is not mergeable" });
+        await refresh(pull);
+        if (body.sha !== pull.headSha) return send(409, { message: "Head branch was modified. Review and try the merge again." });
+        await runCommand({ taskId: null, stepId: null, command: "git", args: ["--git-dir", origin, "update-ref", `refs/heads/${pull.base}`, pull.headSha] });
+        pull.merged = true;
+        return send(200, { merged: true, message: "Pull Request successfully merged", sha: pull.headSha });
       }
       if (request.method === "POST" && url.pathname === "/graphql") {
         const query = String(body.query);
+        const state = (pull: typeof pulls[number]) => pull.merged ? "MERGED" : "OPEN";
         if (query.includes("pullRequests(")) {
-          const nodes = pulls.filter(pull => pull.head === body.variables?.head).map(pull => ({ number: pull.number, url: `https://github.com/${pull.repository}/pull/${pull.number}`, isDraft: pull.draft, state: "OPEN", headRefName: pull.head, headRefOid: pull.headSha, baseRefName: pull.base, baseRefOid: pull.baseSha, title: pull.title, body: pull.body, author: { login: "suplex" }, updatedAt: "2026-09-25T00:00:00Z", isCrossRepository: false }));
+          const matching = pulls.filter(pull => body.variables?.head === undefined ? !pull.merged : pull.head === body.variables.head);
+          for (const pull of matching) await refresh(pull);
+          const nodes = matching.map(pull => ({ number: pull.number, url: `https://github.com/${pull.repository}/pull/${pull.number}`, isDraft: pull.draft, state: state(pull), headRefName: pull.head, headRefOid: pull.headSha, baseRefName: pull.base, baseRefOid: pull.baseSha, title: pull.title, body: pull.body, author: { login: "suplex" }, updatedAt: "2026-09-25T00:00:00Z", isCrossRepository: false }));
           return send(200, { data: { repository: { pullRequests: { nodes } } } });
         }
         const pull = pulls[Number(body.variables?.number) - 1];
         if (!pull) return send(200, { data: { repository: { pullRequest: null } } });
-        return send(200, { data: { repository: { pullRequest: { number: pull.number, url: `https://github.com/${pull.repository}/pull/${pull.number}`, state: "OPEN", isDraft: pull.draft, headRefOid: pull.headSha, baseRefOid: pull.baseSha, mergeable: "MERGEABLE", mergeStateStatus: "CLEAN", autoMergeRequest: null, reviewDecision: null, author: { login: "suplex", avatarUrl: "https://avatars.githubusercontent.com/suplex" }, changedFiles: 1, additions: 1, deletions: 0, title: pull.title, commits: { nodes: [{ commit: { statusCheckRollup: null } }] } } } } });
+        await refresh(pull);
+        return send(200, { data: { repository: { pullRequest: { number: pull.number, url: `https://github.com/${pull.repository}/pull/${pull.number}`, state: state(pull), isDraft: pull.draft, headRefOid: pull.headSha, baseRefOid: pull.baseSha, mergeable: "MERGEABLE", mergeStateStatus: "CLEAN", autoMergeRequest: null, reviewDecision: null, author: { login: "suplex", avatarUrl: "https://avatars.githubusercontent.com/suplex" }, changedFiles: 1, additions: 1, deletions: 0, title: pull.title, commits: { nodes: [{ commit: { statusCheckRollup: null } }] } } } } });
       }
       send(404, { message: "Not Found" });
     })().catch(error => { response.writeHead(500); response.end(String(error)); }));
@@ -170,6 +200,11 @@ try {
   await git("-C", fixture.project.repositoryPath, "remote", "set-url", "origin", canonicalOrigin);
   await git("-C", fixture.project.repositoryPath, "config", "--local", `url.${pathToFileURL(origin).href}.insteadOf`, canonicalOrigin);
   const revision = (await git("-C", fixture.project.repositoryPath, "rev-parse", "HEAD")).stdout.trim();
+  if (repair) {
+    const [headSha, baseSha] = [await branchHead("feature"), await branchHead("main")];
+    ok(headSha && baseSha, "The seeded origin has the pull request branches");
+    pulls.push({ number: 1, repository: fixture.project.repository!.toLowerCase(), head: "feature", headSha, base: "main", baseSha, title: "Repair the README", body: "Add the verified README line.", draft: false });
+  }
   for (const id of ["profile_native_root", "profile_native_worker"]) {
     const provider = claude ? "claude-code" : "codex";
     const profileModel = claude ? "haiku" : model;
@@ -192,7 +227,11 @@ try {
     await fixture.page.getByRole("menuitem", { name: workflowName }).click();
     await dialog.getByRole("button", { name: "Workflow", exact: true }).filter({ hasText: workflowName }).waitFor();
   }
-  await dialog.getByRole("radio", { name: phase === "deliver_pr" ? "Draft pull request" : "Keep in worktree" }).check();
+  if (repair) {
+    await dialog.getByRole("button", { name: "New from source", exact: true }).click();
+    await fixture.page.getByRole("menuitem").filter({ hasText: "#1 Repair the README" }).click();
+    await dialog.getByRole("button", { name: "New from source", exact: true }).filter({ hasText: "PR #1" }).waitFor();
+  } else await dialog.getByRole("radio", { name: phase === "deliver_pr" ? "Draft pull request" : "Keep in worktree" }).check();
   await dialog.getByRole("checkbox", { name: "Start immediately", exact: true }).uncheck();
   equal(await dialog.getByRole("button", { name: "New task", exact: true }).isEnabled(), true);
   equal(fixture.errors.length, 0, fixture.errors.join("; "));
@@ -209,7 +248,8 @@ try {
     equal(created.status(), 201, await created.text());
     const task = TaskSchema.parse(await created.json());
     equal(task.status, "backlog");
-    equal(task.deliveryTarget, phase === "deliver_pr" ? "pull_request_draft" : "local_worktree");
+    equal(task.deliveryTarget, phase === "deliver_pr" ? "pull_request_draft" : repair ? "merged" : "local_worktree");
+    if (repair) equal(task.configuration.branch, "feature");
     if (workflowPhase) equal(task.workflow, phase);
     progress(`task created ${task.id}`);
     await fixture.page.getByRole("heading", { name: task.title, level: 2, exact: true }).waitFor();
@@ -316,9 +356,18 @@ try {
     ok(sessions.some(session => session.kind === "worker" && session.nativeSessionId));
     if (workflowPhase) {
       const roles = fixture.database.authQuery(db => db.prepare("SELECT advisor_role AS role FROM suplex_task_sessions WHERE task_id = ? AND advisor_role IS NOT NULL ORDER BY advisor_role").all(task.id)) as Array<{ role: string }>;
-      deepStrictEqual(roles.map(({ role }) => role), phase === "independent_review" ? ["reviewer"] : phase === "competing_plans" ? ["planner_a", "planner_b"] : []);
+      deepStrictEqual(roles.map(({ role }) => role), phase === "independent_review" ? ["reviewer"] : phase === "competing_plans" ? ["planner_a", "planner_b"] : repair ? ["rater"] : []);
       equal(delivered.workflowState.completion?.kind, "workflow");
       if (phase === "independent_review") equal(delivered.workflowState.reviews.at(-1)?.result?.role, "reviewer");
+      if (repair) {
+        // Pull request repair rates the pull request, repairs it, and rates the repaired head.
+        deepStrictEqual(delivered.workflowState.reviews.map(review => review.result?.role === "rater" ? review.result.rating : null), [6, 9]);
+        equal(pulls[0]!.merged, true, "Suplex merged the pull request");
+        equal(pulls[0]!.headSha, head, "The merged pull request head is the rated worktree head");
+        equal(await branchHead("feature"), head, "Suplex pushed the rated head");
+        equal(delivered.pullRequest?.state, "merged");
+        progress("pull request pushed and merged at the rated head");
+      }
     }
     // The host may stop terminal sessions on a later sweep. Wait before fixture deletion.
     progress("waiting for native sessions to stop");

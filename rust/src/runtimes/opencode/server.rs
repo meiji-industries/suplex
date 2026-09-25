@@ -580,7 +580,7 @@ pub(crate) mod tests {
         );
     }
 
-    fn node() -> String {
+    pub(crate) fn node() -> String {
         let output = Command::new("which").arg("node").output().unwrap();
         assert!(
             output.status.success(),

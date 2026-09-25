@@ -38,6 +38,40 @@ pub struct WorkflowLaunch {
     pub advisor: Option<crate::coordination::advisor_bridge::AdvisorRole>,
 }
 
+impl WorkflowLaunch {
+    /// TypeScript `scope.role`: "root", "worker", or "advisor".
+    pub fn role_name(self, role: TaskRole<'_>) -> &'static str {
+        match (role, self.advisor) {
+            (TaskRole::Root(_), _) => "root",
+            (TaskRole::Worker(_), Some(_)) => "advisor",
+            (TaskRole::Worker(_), None) => "worker",
+        }
+    }
+
+    /// TypeScript `scope.role !== "worker" && scope.workflow !== "standard"`:
+    /// the session reads the pinned workflow evidence directory.
+    pub fn reads_evidence(self, role: TaskRole<'_>) -> bool {
+        self.workflow_root || (matches!(role, TaskRole::Worker(_)) && self.advisor.is_some())
+    }
+
+    /// TypeScript `taskRolePrompt(scope.role, { workflow, workerMode, purpose })`.
+    pub fn role_prompt(self, role: TaskRole<'_>) -> &'static str {
+        use crate::coordination::root_prompts::{
+            ADVISOR_ROLE_PROMPT, ROOT_WORKFLOW_ROLE_PROMPT, WORKER_DIRECT_ROLE_PROMPT,
+        };
+        use crate::runtimes::codex::role_prompt;
+        match role {
+            TaskRole::Root(_) if self.workflow_root => ROOT_WORKFLOW_ROLE_PROMPT,
+            TaskRole::Root(_) => role_prompt::ROOT_STANDARD,
+            TaskRole::Worker(_) if self.advisor.is_some() => ADVISOR_ROLE_PROMPT,
+            TaskRole::Worker(WorkerPurpose::Implementation) if self.direct => {
+                WORKER_DIRECT_ROLE_PROMPT
+            }
+            TaskRole::Worker(purpose) => role_prompt::worker_standard_role(purpose),
+        }
+    }
+}
+
 /// TypeScript `TaskScope`: one native session launch, resolved by the host.
 pub struct TaskScope<'a> {
     pub workflow: WorkflowLaunch,
@@ -64,6 +98,15 @@ pub struct TaskScope<'a> {
 impl TaskScope<'_> {
     pub fn runtime_directory(&self) -> io::Result<PathBuf> {
         task_session_runtime_directory(self.database_path, self.session_id)
+    }
+
+    /// TypeScript `taskEvidenceRoot(databasePath)/<taskId>`.
+    pub fn evidence_root(&self) -> PathBuf {
+        self.database_path
+            .parent()
+            .unwrap_or(Path::new("."))
+            .join("runtime/task-evidence")
+            .join(self.task_id)
     }
 }
 
@@ -132,6 +175,11 @@ pub trait NativeSessionReader {
 pub trait TaskHarness: NativeSessionReader + Sync {
     /// Reserve a new native session identity.
     fn new_session_id(&self) -> String;
+    /// TypeScript `ensureSession`: prepare what the native session needs, such
+    /// as its server, before the host observes or dispatches a turn.
+    fn ensure_session(&self, _scope: &TaskScope<'_>) -> Result<(), Box<dyn Error>> {
+        Ok(())
+    }
     fn observe(
         &self,
         directory: &Path,

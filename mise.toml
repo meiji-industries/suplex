@@ -88,7 +88,7 @@ set -e
 (cd rust && unset RUSTUP_TOOLCHAIN && cargo build --bin suplex --features github-test-endpoint)
 export SUPLEX_RUST_BIN="${CARGO_TARGET_DIR:-$PWD/rust/target}/debug/suplex"
 export SUPLEX_BROWSER_BACKEND=rust SUPLEX_DETERMINISTIC_CODEX_RUN=1
-for phase in deliver deliver_pr answer restart cancel deliver_claude direct_build independent_review competing_plans; do
+for phase in deliver deliver_pr answer restart cancel deliver_claude direct_build independent_review competing_plans refine_pull_request; do
   SUPLEX_DETERMINISTIC_PHASE=$phase pnpm exec tsx tests/interop/real-codex-standard.ts
 done
 '''

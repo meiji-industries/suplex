@@ -3,7 +3,7 @@
 
 use std::{
     collections::HashSet,
-    fs, io,
+    io,
     path::{Path, PathBuf},
     sync::{Mutex, OnceLock},
 };
@@ -15,7 +15,12 @@ use serde_json::Value;
 use crate::{
     identity::companies,
     platform::database::{DatabaseResult, OpenMode, SuplexDatabase},
-    runtimes::{codex::session_reader, process::inspect_process, task_harness_registry},
+    runtimes::{
+        codex::session_reader,
+        process::inspect_process,
+        task_harness::{ReaderSession, TaskHarness},
+        task_harness_registry,
+    },
     tasks::{
         archive::displays,
         commands::TaskFailure,
@@ -68,14 +73,6 @@ fn failure_code(message: &str, status_code: u16, code: &'static str) -> Box<dyn 
         status_code,
         code,
     })
-}
-
-fn not_ported() -> Box<dyn std::error::Error> {
-    failure_code(
-        "Experimental Rust backend has not ported this route",
-        501,
-        "experimental_not_ported",
-    )
 }
 
 fn cleanup_error(error: Box<dyn std::error::Error>) -> Box<dyn std::error::Error> {
@@ -131,13 +128,22 @@ fn reauthorize(
     Ok(())
 }
 
+/// One idle native session that archive stops after its displays are prepared.
+struct IdleSession {
+    harness: &'static dyn TaskHarness,
+    directory: PathBuf,
+    native_session_id: Option<String>,
+}
+
+/// TypeScript `stopIdleArchiveSessions`: every native reader confirms its
+/// session is idle before anything stops.
 fn archive_sessions_idle(
     database: &SuplexDatabase,
     database_path: &Path,
     task_id: &str,
-) -> DatabaseResult<()> {
+) -> DatabaseResult<Vec<IdleSession>> {
     let mut statement = database.connection().prepare(
-        "SELECT id, launch_owner_pid, launch_owner_start_time, native_session_id FROM suplex_task_sessions WHERE task_id = ?1",
+        "SELECT id, launch_owner_pid, launch_owner_start_time, native_session_id, json_extract(profile_json, '$.instanceHomeDirectory') FROM suplex_task_sessions WHERE task_id = ?1",
     )?;
     let sessions = statement
         .query_map([task_id], |row| {
@@ -146,10 +152,12 @@ fn archive_sessions_idle(
                 row.get::<_, Option<u32>>(1)?,
                 row.get::<_, Option<String>>(2)?,
                 row.get::<_, Option<String>>(3)?,
+                row.get::<_, Option<String>>(4)?,
             ))
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
-    for (session_id, owner_pid, owner_start_time, native_session_id) in sessions {
+    let mut idle = Vec::new();
+    for (session_id, owner_pid, owner_start_time, native_session_id, instance_home) in sessions {
         if let (Some(pid), Some(start_time)) = (owner_pid, owner_start_time)
             && inspect_process(pid)
                 .as_ref()
@@ -161,24 +169,28 @@ fn archive_sessions_idle(
             ));
         }
         let directory = session_reader::session_directory(database_path, &session_id)?;
-        match native_session_id.as_deref() {
-            Some(native_id)
-                if task_harness_registry::native_session_reader(native_id).is_some() => {}
-            None => match fs::metadata(directory.join("server.json")) {
-                Err(error) if error.kind() == io::ErrorKind::NotFound => {}
-                Ok(_) => return Err(not_ported()),
-                Err(error) => return Err(error.into()),
-            },
-            Some(_) => return Err(not_ported()),
-        }
-        if session_reader::busy(&directory)? {
+        // TypeScript `nativeSessionReader`: a session without a native identity belongs to OpenCode.
+        let harness = task_harness_registry::for_session(native_session_id.as_deref())
+            .ok_or_else(|| io::Error::other("No native reader for this session"))?;
+        let busy = harness.busy(&ReaderSession {
+            database_path,
+            session_id: &session_id,
+            native_session_id: native_session_id.as_deref().unwrap_or_default(),
+            instance_home_directory: instance_home.as_deref().map(Path::new),
+        })?;
+        if busy {
             return Err(failure(
                 "An agent is still active. Retry after it stops.",
                 409,
             ));
         }
+        idle.push(IdleSession {
+            harness,
+            directory,
+            native_session_id,
+        });
     }
-    Ok(())
+    Ok(idle)
 }
 
 #[derive(Debug)]
@@ -250,9 +262,16 @@ pub fn archive_task(
         return Err(failure("Cancel the task before archiving it", 409));
     }
     let _guard = ArchiveGuard::acquire(task_id)?;
-    archive_sessions_idle(&database, database_path, task_id).map_err(cleanup_error)?;
+    let idle = archive_sessions_idle(&database, database_path, task_id).map_err(cleanup_error)?;
     let displays = displays::prepare_task_displays(&database, task_id).map_err(cleanup_error)?;
     drop(database);
+    // An idle OpenCode server still runs until its harness stops it.
+    for session in &idle {
+        session
+            .harness
+            .stop(&session.directory, session.native_session_id.as_deref())
+            .map_err(|error| cleanup_error(error.into()))?;
+    }
     reauthorize(database_path, authority, task_id)?;
 
     let intent = TaskWorktreeIntent {
@@ -353,7 +372,7 @@ mod tests {
             title: "Archive task".into(), description: "".into(),
             configuration: json!({"repositoryPath":repository_path,"worktreeRoot":worktree_root,"branch":"task-archive","startingSha":sha}),
             idempotency_key: "archive-key".into(), request_hash: "archive-hash".into(), creator: TaskCreator::User(user.id.clone()),
-            delivery_target: "pull_request_draft".into(), delivery_intent: json!({}), root_profile: json!({}), worker_profile: json!({}), advisor_profiles: json!({}), issue: None, start_queued: false, copied_from_task_id: None, depends_on: vec![],
+            delivery_target: "pull_request_draft".into(), delivery_intent: json!({}), root_profile: json!({}), worker_profile: json!({}), advisor_profiles: json!({}), issue: None, start_queued: false, copied_from_task_id: None, depends_on: vec![], pull_request_dependencies: vec![],
         }, now).unwrap().task;
         database
             .connection()
@@ -416,12 +435,54 @@ mod tests {
             ArchiveOutcome::ConfirmationRequired(paths) => assert_eq!(paths, ["draft.txt"]),
             ArchiveOutcome::Archived(_) => panic!("dirty pull-request task needs confirmation"),
         }
-        fs::write(directory.join("server.json"), "{}").unwrap();
-        let unsupported =
-            archive_local_task(&database_path, &user.id, &task_id, false).unwrap_err();
-        assert_eq!(
-            unsupported.downcast_ref::<TaskFailure>().unwrap().code,
-            "experimental_not_ported"
+        // An idle OpenCode server of a session without a native identity is stopped by its harness.
+        // A detached server, like a real one: init reaps it once it stops.
+        let spawned = {
+            use std::os::unix::process::CommandExt;
+            std::process::Command::new("/bin/sh")
+                .args(["-c", "/bin/sleep 30 >/dev/null 2>&1 & echo $!"])
+                .process_group(0)
+                .output()
+                .unwrap()
+        };
+        let server: u32 = String::from_utf8(spawned.stdout)
+            .unwrap()
+            .trim()
+            .parse()
+            .unwrap();
+        let identity = inspect_process(server).unwrap();
+        let status = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let base_url = format!("http://{}", status.local_addr().unwrap());
+        std::thread::spawn(move || {
+            use std::io::{Read, Write};
+            for stream in status.incoming() {
+                let mut stream = stream.unwrap();
+                let mut request = [0; 4096];
+                let _ = stream.read(&mut request);
+                let _ = stream.write_all(b"HTTP/1.1 200 OK\r\ncontent-type: application/json\r\ncontent-length: 2\r\nconnection: close\r\n\r\n{}");
+            }
+        });
+        let reference = json!({
+            "pid": server, "baseUrl": base_url, "password": "p".repeat(32),
+            "directory": worktree.path, "executable": identity.executable,
+            "generation": uuid::Uuid::new_v4().to_string(), "configHash": "a".repeat(64),
+            "processIdentity": {"command": identity.command, "executable": identity.executable, "argv": identity.argv,
+                "processGroup": identity.process_group, "startTime": identity.start_time, "ownerUid": identity.owner_uid.unwrap()},
+        });
+        fs::write(directory.join("server.json"), reference.to_string()).unwrap();
+        match archive_local_task(&database_path, &user.id, &task_id, false).unwrap() {
+            ArchiveOutcome::ConfirmationRequired(paths) => assert_eq!(paths, ["draft.txt"]),
+            ArchiveOutcome::Archived(_) => panic!("dirty worktree needs confirmation"),
+        }
+        assert!(
+            (0..50).any(|_| {
+                let exited = !crate::runtimes::opencode::server::process_alive(server);
+                if !exited {
+                    std::thread::sleep(std::time::Duration::from_millis(100));
+                }
+                exited
+            }),
+            "archive stopped the idle OpenCode server"
         );
         fs::remove_file(directory.join("server.json")).unwrap();
         let database = SuplexDatabase::open(&database_path, OpenMode::ReadWrite).unwrap();

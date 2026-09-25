@@ -1181,22 +1181,46 @@ async fn dispatch_rule<D: Db>(
     let mut activity = Vec::new();
     let result = admit(database, github, rule, wake, &mut activity).await;
     if let Err(error) = &result {
-        let (text, retry) = message(error.as_ref());
-        let retry = retry.unwrap_or_else(|| timestamp(Utc::now() + chrono::Duration::seconds(60)));
-        let _ = database.run(|database| {
-            record(
-                database,
-                rule,
-                &activity,
-                false,
-                Some(&text),
-                Some(&retry),
-                false,
-                |_| Ok(()),
-            )
-        });
+        record_failure(database, rule, &activity, error.as_ref());
     }
     result
+}
+
+fn record_failure<D: Db>(
+    database: &D,
+    rule: &Rule,
+    activity: &[Activity],
+    error: &(dyn Error + 'static),
+) {
+    let (text, retry) = message(error);
+    let retry = retry.unwrap_or_else(|| timestamp(Utc::now() + chrono::Duration::seconds(60)));
+    let _ = database.run(|database| {
+        record(
+            database,
+            rule,
+            activity,
+            false,
+            Some(&text),
+            Some(&retry),
+            false,
+            |_| Ok(()),
+        )
+    });
+}
+
+/// TypeScript records a failed GitHub provider call on each due rule; an
+/// unavailable GitHub login fails every due rule the same way.
+pub async fn record_provider_unavailable<D: Db>(
+    database: &D,
+    error: &(dyn Error + Send + Sync + 'static),
+) {
+    let _queue = QUEUE.lock().await;
+    let Ok(rules) = db(database, |database| enabled_due(database)) else {
+        return;
+    };
+    for rule in rules {
+        record_failure(database, &rule, &[], error);
+    }
 }
 
 async fn admit<D: Db>(
@@ -1783,8 +1807,10 @@ pub fn spawn_poller(
                 let database = Mutex::new(
                     SuplexDatabase::open(&database_path, OpenMode::ReadWrite).map_err(send)?,
                 );
-                let github = Github::load().await?;
-                process_enabled_rules(&database, &github, &wake).await;
+                match Github::load().await {
+                    Ok(github) => process_enabled_rules(&database, &github, &wake).await,
+                    Err(error) => record_provider_unavailable(&database, &error).await,
+                }
                 Ok::<(), Failure>(())
             };
             if let Err(error) = pass.await {
@@ -2267,6 +2293,41 @@ mod tests {
             .unwrap();
         assert!(stored.last_successful_check_at.is_some());
         server.abort();
+        let _ = std::fs::remove_file(f.filename);
+    }
+
+    #[tokio::test]
+    async fn unavailable_github_access_records_the_provider_error_on_every_due_rule() {
+        let f = fixture();
+        let (github, _, server) = fake_github(replies(&[])).await;
+        let rule = create(&f.state, &github, &f.admin, "c", create_input(&[]))
+            .await
+            .unwrap();
+        update(
+            &f.state,
+            &github,
+            &f.admin,
+            "c",
+            &rule.id,
+            GithubTriggerPatch {
+                enabled: Some(true),
+                ..patch(rule.revision)
+            },
+        )
+        .await
+        .unwrap();
+        server.abort();
+        let denied = crate::integrations::github_delivery::failure(
+            "authentication-required",
+            "GitHub sign-in is necessary",
+        );
+        record_provider_unavailable(&f.state, &denied).await;
+        let stored = f
+            .state
+            .with_database(|database| required_rule(database, "c", &rule.id))
+            .unwrap();
+        assert!(stored.latest_error.is_some());
+        assert!(stored.next_retry_at.is_some());
         let _ = std::fs::remove_file(f.filename);
     }
 

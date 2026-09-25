@@ -2,10 +2,10 @@
 //! and the outer task wake loop call this after durable task/root setup.
 
 use std::{
-    collections::{BTreeSet, HashMap, HashSet},
+    collections::{HashMap, HashSet},
     io,
     path::{Path, PathBuf},
-    sync::{Mutex, OnceLock, PoisonError},
+    sync::OnceLock,
 };
 
 use chrono::{DateTime, SecondsFormat, Utc};
@@ -39,7 +39,6 @@ use crate::{
     shared::js_json,
     tasks::{
         archive::processes,
-        commands::TaskFailure,
         worktree::{self, TaskWorktreeIntent, WorktreeReference},
     },
 };
@@ -215,26 +214,6 @@ fn retired_owner_can_stop(saved_start: Option<&str>, observed: ProcessOwnerObser
         }
         ProcessOwnerObservation::Unknown => false,
     }
-}
-
-/// Sessions whose unported provider was already reported. The sweep skips
-/// them before any claim, so it does not fail the task every second.
-// ponytail: process-local; a restart reports each unported session once more.
-static UNPORTED_SESSIONS: Mutex<BTreeSet<String>> = Mutex::new(BTreeSet::new());
-
-fn skip_unported(session_id: &str, message: &str) -> Option<PromptObservation> {
-    let failure = TaskFailure::not_ported(message);
-    if UNPORTED_SESSIONS
-        .lock()
-        .unwrap_or_else(PoisonError::into_inner)
-        .insert(session_id.to_owned())
-    {
-        eprintln!(
-            "warning: session {session_id} is skipped: {failure} ({})",
-            failure.code
-        );
-    }
-    None
 }
 
 fn dispatch_state(turn: &RootTurn) -> DispatchState {
@@ -782,18 +761,9 @@ fn recover_prepared_root_blocking(
     let rows = root_session_store::root_observation_rows(&database, task_id)?;
     let profile = selected_profile(&rows, "root");
     let provider = profile["provider"].as_str().unwrap_or_default();
-    let Some(harness) = task_harness_registry::for_profile(provider) else {
-        return Ok(skip_unported(
-            &session.id,
-            &format!("No task harness for {provider}"),
-        ));
-    };
-    if rows.control["workflow"] != "standard" && provider != "codex" {
-        return Ok(skip_unported(
-            &session.id,
-            "Only Codex runs a non-Standard workflow Coordinator",
-        ));
-    }
+    // TypeScript `HarnessRouter.forScope`.
+    let harness = task_harness_registry::for_profile(provider)
+        .ok_or_else(|| std::io::Error::other(format!("No task harness for {provider}")))?;
     if current_owner_still_running(&session) {
         return Ok(None);
     }
@@ -823,6 +793,50 @@ fn recover_prepared_root_blocking(
             Utc::now(),
         )? {
             return Err(io::Error::other("Native Root session changed before dispatch").into());
+        }
+        let worktree = rows.control["worktree"]["path"].as_str();
+        let model = profile["model"]
+            .as_str()
+            .ok_or_else(|| io::Error::other("Root model is missing"))?;
+        let reasoning = profile["reasoningLevel"]
+            .as_str()
+            .ok_or_else(|| io::Error::other("Root reasoning level is missing"))?;
+        let project_scope = project_launch_scope(
+            &rows.context["configuration"],
+            &rows.context["issueContext"],
+            database_path,
+            task_id,
+        );
+        let identity = RootIdentity {
+            task_id: task_id.to_owned(),
+            session_id: session.id.clone(),
+            generation: session.generation,
+        };
+        let scope = TaskScope {
+            database_path,
+            artifact_root,
+            task_id,
+            session_id: &session.id,
+            native_session_id: &native_id,
+            workflow: WorkflowLaunch {
+                workflow_root: rows.control["workflow"] != "standard",
+                ..WorkflowLaunch::default()
+            },
+            role: TaskRole::Root(&identity),
+            worktree: Path::new(worktree.unwrap_or_default()),
+            model,
+            reasoning_effort: reasoning,
+            instance_home_directory: profile["instanceHomeDirectory"].as_str().map(Path::new),
+            project_mcp: project_mcp(&rows),
+            project_context_path: project_scope.context_path.as_deref(),
+            project_environment: &project_scope.environment,
+            excluded_environment_keys: &project_scope.excluded_keys,
+            executable,
+            inherited_environment,
+        };
+        // TypeScript `ensureSession`: a runtime restarts what it needs, such as a lost OpenCode server, before observation.
+        if worktree.is_some() {
+            harness.ensure_session(&scope)?;
         }
         let mut turn = turn.clone();
         let before = loop {
@@ -870,48 +884,9 @@ fn recover_prepared_root_blocking(
             &turn.id,
             Utc::now(),
         )?;
-        let worktree = rows.control["worktree"]["path"]
-            .as_str()
-            .ok_or_else(|| io::Error::other("Task worktree is not prepared"))?;
-        let model = profile["model"]
-            .as_str()
-            .ok_or_else(|| io::Error::other("Root model is missing"))?;
-        let reasoning = profile["reasoningLevel"]
-            .as_str()
-            .ok_or_else(|| io::Error::other("Root reasoning level is missing"))?;
-        let project_scope = project_launch_scope(
-            &rows.context["configuration"],
-            &rows.context["issueContext"],
-            database_path,
-            task_id,
-        );
-        let identity = RootIdentity {
-            task_id: task_id.to_owned(),
-            session_id: session.id.clone(),
-            generation: session.generation,
-        };
-        let scope = TaskScope {
-            database_path,
-            artifact_root,
-            task_id,
-            session_id: &session.id,
-            native_session_id: &native_id,
-            workflow: WorkflowLaunch {
-                workflow_root: rows.control["workflow"] != "standard",
-                ..WorkflowLaunch::default()
-            },
-            role: TaskRole::Root(&identity),
-            worktree: Path::new(worktree),
-            model,
-            reasoning_effort: reasoning,
-            instance_home_directory: profile["instanceHomeDirectory"].as_str().map(Path::new),
-            project_mcp: project_mcp(&rows),
-            project_context_path: project_scope.context_path.as_deref(),
-            project_environment: &project_scope.environment,
-            excluded_environment_keys: &project_scope.excluded_keys,
-            executable,
-            inherited_environment,
-        };
+        if worktree.is_none() {
+            return Err(io::Error::other("Task worktree is not prepared").into());
+        }
         let prompt = task_context_prompt(
             &turn.prompt_text,
             project_scope.context.as_deref(),
@@ -1057,18 +1032,9 @@ fn recover_prepared_worker_blocking(
     let rows = root_session_store::root_observation_rows(&database, task_id)?;
     let delegate = delegate_launch(&rows, &session.id, &turn.id);
     let provider = delegate.profile["provider"].as_str().unwrap_or_default();
-    let Some(harness) = task_harness_registry::for_profile(provider) else {
-        return Ok(skip_unported(
-            &session.id,
-            &format!("No task harness for {provider}"),
-        ));
-    };
-    if delegate.workflow != WorkflowLaunch::default() && provider != "codex" {
-        return Ok(skip_unported(
-            &session.id,
-            "Only Codex runs Advisor and Direct build sessions",
-        ));
-    };
+    // TypeScript `HarnessRouter.forScope`.
+    let harness = task_harness_registry::for_profile(provider)
+        .ok_or_else(|| std::io::Error::other(format!("No task harness for {provider}")))?;
     if current_owner_still_running(&session) {
         return Ok(None);
     }
@@ -1099,6 +1065,42 @@ fn recover_prepared_worker_blocking(
         )? {
             return Err(io::Error::other("Native Worker session changed before dispatch").into());
         }
+        let worktree = rows.control["worktree"]["path"].as_str();
+        let profile = &delegate.profile;
+        let model = profile["model"]
+            .as_str()
+            .ok_or_else(|| io::Error::other("Worker model is missing"))?;
+        let reasoning = profile["reasoningLevel"]
+            .as_str()
+            .ok_or_else(|| io::Error::other("Worker reasoning level is missing"))?;
+        let project_scope = project_launch_scope(
+            &rows.context["configuration"],
+            &rows.context["issueContext"],
+            database_path,
+            task_id,
+        );
+        let scope = TaskScope {
+            database_path,
+            artifact_root,
+            task_id,
+            session_id: &session.id,
+            native_session_id: &native_id,
+            workflow: delegate.workflow,
+            role: TaskRole::Worker(delegate.purpose),
+            worktree: Path::new(worktree.unwrap_or_default()),
+            model,
+            reasoning_effort: reasoning,
+            instance_home_directory: profile["instanceHomeDirectory"].as_str().map(Path::new),
+            project_mcp: project_mcp(&rows),
+            project_context_path: project_scope.context_path.as_deref(),
+            project_environment: &project_scope.environment,
+            excluded_environment_keys: &project_scope.excluded_keys,
+            executable,
+            inherited_environment,
+        };
+        if worktree.is_some() {
+            harness.ensure_session(&scope)?;
+        }
         let (before, replayable) = observe_or_recover_fenced(
             &mut database,
             database_path,
@@ -1125,41 +1127,9 @@ fn recover_prepared_worker_blocking(
         if dependency_blocked(&rows) {
             return Ok(before);
         }
-        let worktree = rows.control["worktree"]["path"]
-            .as_str()
-            .ok_or_else(|| io::Error::other("Task worktree is not prepared"))?;
-        let profile = &delegate.profile;
-        let model = profile["model"]
-            .as_str()
-            .ok_or_else(|| io::Error::other("Worker model is missing"))?;
-        let reasoning = profile["reasoningLevel"]
-            .as_str()
-            .ok_or_else(|| io::Error::other("Worker reasoning level is missing"))?;
-        let project_scope = project_launch_scope(
-            &rows.context["configuration"],
-            &rows.context["issueContext"],
-            database_path,
-            task_id,
-        );
-        let scope = TaskScope {
-            database_path,
-            artifact_root,
-            task_id,
-            session_id: &session.id,
-            native_session_id: &native_id,
-            workflow: delegate.workflow,
-            role: TaskRole::Worker(delegate.purpose),
-            worktree: Path::new(worktree),
-            model,
-            reasoning_effort: reasoning,
-            instance_home_directory: profile["instanceHomeDirectory"].as_str().map(Path::new),
-            project_mcp: project_mcp(&rows),
-            project_context_path: project_scope.context_path.as_deref(),
-            project_environment: &project_scope.environment,
-            excluded_environment_keys: &project_scope.excluded_keys,
-            executable,
-            inherited_environment,
-        };
+        if worktree.is_none() {
+            return Err(io::Error::other("Task worktree is not prepared").into());
+        }
         let prompt = task_context_prompt(
             &turn.prompt_text,
             project_scope.context.as_deref(),
@@ -1272,6 +1242,24 @@ pub fn spawn_task_host(database_path: PathBuf, artifact_root: PathBuf) -> TaskHo
         move |id| poller_host.wake(id),
         shutdown_rx.clone(),
     );
+    // TypeScript `refreshPullRequestPrerequisites`: GitHub is re-read every minute; the next queue sweep admits.
+    let (prerequisites_path, mut prerequisites_shutdown) =
+        (database_path.clone(), shutdown_rx.clone());
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
+        loop {
+            tokio::select! {
+                result = prerequisites_shutdown.changed() => {
+                    if result.is_err() || *prerequisites_shutdown.borrow() { break; }
+                },
+                _ = interval.tick() => {
+                    if let Err(error) = crate::tasks::pull_request_dependencies::refresh(&prerequisites_path).await {
+                        eprintln!("Pull request prerequisite refresh will be retried: {error}");
+                    }
+                },
+            }
+        }
+    });
     tokio::spawn(async move {
         let environment = std::env::vars().collect::<HashMap<_, _>>();
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(1));
@@ -1764,6 +1752,7 @@ mod tests {
                 start_queued: true,
                 copied_from_task_id: None,
                 depends_on: vec![],
+                pull_request_dependencies: vec![],
             };
             repository::create(&mut database, &prepared, now)
                 .unwrap()
@@ -1849,6 +1838,7 @@ mod tests {
                 start_queued: false,
                 copied_from_task_id: None,
                 depends_on: vec![],
+                pull_request_dependencies: vec![],
             };
             let waiting = repository::create(&mut database, &prepared, Utc::now())
                 .unwrap()
@@ -2309,7 +2299,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn workflow_tasks_are_observed_and_the_sweep_skips_unported_providers() {
+    async fn workflow_tasks_are_observed_and_every_provider_runs_the_workflow_coordinator() {
         let (base, database_path, task_id) = fixture_task();
         let root = root_controller::prepare_root(&database_path, &task_id).unwrap();
         let identity = RootIdentity {
@@ -2327,20 +2317,11 @@ mod tests {
         let observed = root_controller::observe(&database_path, &identity).unwrap();
         assert_eq!(observed["control"]["workflow"], "competing_plans");
         let environment = HashMap::new();
-        for _ in 0..2 {
-            assert!(
-                recover_prepared_root(&database_path, &base, &task_id, None, &environment)
-                    .await
-                    .unwrap()
-                    .is_none()
-            );
-        }
-        let database = SuplexDatabase::open(&database_path, OpenMode::ReadOnly).unwrap();
-        let root = root_session_store::current_root(&database, &task_id)
-            .unwrap()
-            .unwrap();
-        assert!(root.native_session_id.is_none() && root.launch_owner.is_none());
-        assert!(UNPORTED_SESSIONS.lock().unwrap().contains(&root.id));
+        // A Devin Coordinator of a non-Standard workflow is not skipped: it proceeds to worktree preparation.
+        let error = recover_prepared_root(&database_path, &base, &task_id, None, &environment)
+            .await
+            .unwrap_err();
+        assert_eq!(error.to_string(), "Task worktree is not prepared");
         fs::remove_dir_all(base).unwrap();
     }
 
@@ -2568,6 +2549,7 @@ mod tests {
                 start_queued: true,
                 copied_from_task_id: None,
                 depends_on: vec![],
+                pull_request_dependencies: vec![],
             };
             let task = repository::create(&mut database, &prepared, now)
                 .unwrap()
@@ -3056,6 +3038,7 @@ mod tests {
                 start_queued: true,
                 copied_from_task_id: None,
                 depends_on: vec![],
+                pull_request_dependencies: vec![],
             };
             repository::create(&mut database, &prepared, Utc::now())
                 .unwrap()
@@ -3178,6 +3161,7 @@ mod tests {
                 start_queued: true,
                 copied_from_task_id: None,
                 depends_on: vec![],
+                pull_request_dependencies: vec![],
             };
             let task = repository::create(&mut database, &prepared, Utc::now())
                 .unwrap()

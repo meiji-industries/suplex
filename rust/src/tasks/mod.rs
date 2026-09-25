@@ -9,6 +9,7 @@ pub mod integration;
 pub mod issue_context;
 pub mod pane_layout;
 pub mod preparation;
+pub mod pull_request_dependencies;
 pub mod repository;
 pub mod response;
 pub mod sources;

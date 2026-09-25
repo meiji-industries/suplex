@@ -424,13 +424,31 @@ async fn dependencies(
         contracts::parse_task_dependencies(body.as_ref()),
         true
     ));
-    let result = state.with_database(|database| {
-        if request.dry_run == Some(true) {
+    if request.dry_run == Some(true) {
+        let result = state.with_database(|database| {
             agent_api::preview_dependencies(database, &principal, &id, &request.depends_on)
-        } else {
-            agent_api::set_dependencies(database, &principal, &id, &request)
-        }
-    });
+        });
+        return respond(result, StatusCode::OK, true);
+    }
+    // GitHub observes each pull request prerequisite between the checks and the write.
+    let repository = match state.with_database(|database| {
+        agent_api::dependency_repository(database, &principal, &id, &request)
+    }) {
+        Ok(repository) => repository,
+        Err(error) => return respond(Err(error), StatusCode::OK, true),
+    };
+    let numbers = request
+        .blocked_by_pull_requests
+        .iter()
+        .map(|dependency| dependency.number)
+        .collect::<Vec<_>>();
+    let observed = crate::tasks::pull_request_dependencies::observe(&repository, &numbers).await;
+    let result = match observed {
+        Err(rejection) => Err(agent_api::pull_request_unavailable(rejection)),
+        Ok(pull_requests) => state.with_database(|database| {
+            agent_api::set_dependencies(database, &principal, &id, &request, &pull_requests)
+        }),
+    };
     respond(result, StatusCode::OK, true)
 }
 

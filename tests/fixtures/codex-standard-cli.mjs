@@ -159,6 +159,25 @@ async function workflowRoot(binding, observed) {
     await rootTool(binding, "delegate_planners");
     return say("root_planners", "Requested Plan A and Plan B.");
   }
+  // Pull request repair: rate the current head, repair on a failing rating, then push and merge the rated head.
+  if (workflow === "refine_pull_request") {
+    const head = (await command("git", ["rev-parse", "HEAD"])).trim();
+    const latest = observed.control.workflowState.reviews.filter(review => review.role === "rater").at(-1);
+    if (!latest || latest.range.headSha !== head) {
+      await rootTool(binding, "delegate_advisor", { role: "rater", brief: `${assignment.plan}\nAcceptance criteria: ${assignment.acceptanceCriteria.join("; ")}` });
+      return say("root_rate", "Requested the Rater for the current range.");
+    }
+    if (!latest.result || latest.result.rating < 9) {
+      await rootTool(binding, "delegate_worker", { ...assignment, advisorTurnId: latest.turnId });
+      return say("root_repair", "Assigned the Rater findings to the Worker.");
+    }
+    const diff = await rootTool(binding, "request_delivery", { operation: "inspect_delivery_diff" });
+    const review = { baseSha: diff.baseSha, headSha: diff.headSha, files: diff.files, commits: diff.commits, patchDigest: diff.patchDigest };
+    await rootTool(binding, "request_delivery", { operation: "push_branch", expectedHead: head, review });
+    const merged = await rootTool(binding, "request_delivery", { operation: "merge_pull_request", expectedHead: head, review });
+    if (merged.state !== "merged") throw new Error(`The pull request merge did not complete: ${JSON.stringify(merged)}`);
+    return say("root_delivery", "Pushed the rated head and merged the pull request.");
+  }
   throw new Error(`The deterministic stand-in has no ${workflow} Coordinator`);
 }
 
@@ -173,7 +192,11 @@ const advisorReports = {
 async function advisor() {
   const binding = JSON.parse(await readFile(process.env.SUPLEX_ADVISOR_BINDING, "utf8"));
   line({ type: "thread.started", thread_id: `fixture-advisor-${binding.role}-${process.pid}` });
-  const report = advisorReports[binding.role];
+  let report = advisorReports[binding.role];
+  // The Rater fails a head that lacks the requested README line, so Pull request repair exercises one Worker repair.
+  if (binding.role === "rater" && !(await readFile("README.md", "utf8")).includes("Verified by Suplex Standard task.")) {
+    report = { rating: 6, blockingFindings: ["README.md lacks the verified line."], verification: "passed", verificationSummary: "The checks passed on this head.", summary: "Append the verified README line." };
+  }
   const result = await mcpCall(binding, "submit_report", report);
   if (result?.isError !== false) throw new Error(`Advisor report was rejected: ${JSON.stringify(result?.content ?? null)}`);
   line({ type: "item.completed", item: { id: "advisor_report", type: "mcp_tool_call", server: "suplex_advisor", tool: "submit_report", arguments: report, result, status: "completed" } });

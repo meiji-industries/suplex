@@ -108,7 +108,6 @@ const ROUTES: &[(Method, &str, Access)] = &[
         "/api/companies/{company_id}/timeline",
         Authenticated,
     ),
-    (Method::GET, "/api/health", Authenticated),
     (Method::GET, "/api/models", Authenticated),
     (
         Method::GET,

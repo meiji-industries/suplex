@@ -383,7 +383,7 @@ mod tests {
         database.connection().execute("UPDATE suplex_task_controls SET delivery_target = 'pull_request_draft' WHERE task_id = ?1", [&task_id]).unwrap();
         drop(database);
         match archive_local_task(&database_path, &user.id, &task_id, false).unwrap() {
-            ArchiveOutcome::ConfirmationRequired(paths) => assert_eq!(paths, ["dirty.txt"]),
+            ArchiveOutcome::ConfirmationRequired(paths) => assert_eq!(paths, ["draft.txt"]),
             ArchiveOutcome::Archived(_) => panic!("dirty pull-request task needs confirmation"),
         }
         fs::write(directory.join("server.json"), "{}").unwrap();

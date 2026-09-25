@@ -23,6 +23,8 @@ pub mod routes {
     pub mod agent_pairing;
     pub mod admin_platform;
     pub mod auth;
+    pub mod mcp;
+    pub mod oauth;
     pub mod discovery;
     pub mod agent_api;
     pub mod companies;
@@ -63,7 +65,11 @@ pub struct AppState {
     pub history_shutdown: CancellationToken,
     pub github_device: Arc<DeviceAuth>,
     dev_assets_dir: Option<PathBuf>,
+    /// Dynamic client registrations per source address in the last hour.
+    pub oauth_registrations: OAuthRegistrations,
 }
+
+pub type OAuthRegistrations = Arc<Mutex<std::collections::HashMap<String, Vec<std::time::Instant>>>>;
 
 impl AppState {
     pub fn new(database: SuplexDatabase, session_config: session::SessionConfig) -> Self {
@@ -77,6 +83,7 @@ impl AppState {
             history_shutdown: CancellationToken::new(),
             github_device: Arc::new(DeviceAuth::new().expect("GitHub device endpoints are valid")),
             dev_assets_dir: None,
+            oauth_registrations: OAuthRegistrations::default(),
         }
     }
 
@@ -135,6 +142,8 @@ pub fn router(state: AppState) -> Router {
         .merge(routes::external_agent_administration::router())
         .merge(routes::admin_platform::router())
         .merge(routes::auth::router())
+        .merge(routes::mcp::router())
+        .merge(routes::oauth::router())
         .merge(routes::discovery::router())
         .merge(routes::agent_api::router())
         .merge(routes::companies::router())
@@ -282,6 +291,7 @@ mod tests {
             history_shutdown: CancellationToken::new(),
             github_device: Arc::new(DeviceAuth::new().unwrap()),
             dev_assets_dir: None,
+            oauth_registrations: OAuthRegistrations::default(),
         };
         let observed = Arc::new(AtomicBool::new(false));
         let callback_state = state.clone();

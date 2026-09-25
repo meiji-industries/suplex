@@ -106,7 +106,7 @@ mod tests {
         assert_eq!(catalog["pairing"][0]["path"], "/api/agent/pairing/exchange");
         let (_, resource) = server.send(reqwest::Method::GET, "/.well-known/oauth-protected-resource/mcp", None, None).await;
         assert_eq!(resource, json!({"resource": "https://suplex.example.test:4111/mcp", "authorization_servers": ["https://suplex.example.test:4111"], "scopes_supported": ["suplex:mcp"], "bearer_methods_supported": ["header"]}));
-        for entry in catalog["runtime"].as_array().unwrap().iter().filter(|entry| entry["path"] != "/mcp") {
+        for entry in catalog["runtime"].as_array().unwrap() {
             let path = entry["path"].as_str().unwrap().replace("{taskId}", "task_missing");
             let method = reqwest::Method::from_bytes(entry["method"].as_str().unwrap().as_bytes()).unwrap();
             let body = (method != reqwest::Method::GET).then(|| json!({}));

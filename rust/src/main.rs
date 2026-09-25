@@ -22,6 +22,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         return suplex::coordination::root_stdio::serve_from_environment().await;
     }
+    if command == ["mcp"] {
+        return suplex::integrations::suplex::bridge::serve_from_environment().await;
+    }
     if command.starts_with(&["display".to_owned(), "devin".to_owned()]) {
         return suplex::runtimes::devin::display::main(&command[2..]);
     }
@@ -126,7 +129,8 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
         }
     });
     let shutdown_state = state.clone();
-    let result = axum::serve(listener, http::router(state))
+    let app = http::router(state).into_make_service_with_connect_info::<std::net::SocketAddr>();
+    let result = axum::serve(listener, app)
         .with_graceful_shutdown(async move {
             let _ = tokio::signal::ctrl_c().await;
             server_event("shutdown_requested", json!({"reason": "SIGINT"}));

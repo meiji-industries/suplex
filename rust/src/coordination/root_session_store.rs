@@ -246,7 +246,7 @@ struct PersistedLimitPause {
     proposed_limits: TaskLimits,
 }
 
-fn suggested_budget(proposed: f64, spent: f64) -> f64 {
+pub(crate) fn suggested_budget(proposed: f64, spent: f64) -> f64 {
     (proposed / 5.0)
         .round()
         .mul_add(5.0, 0.0)

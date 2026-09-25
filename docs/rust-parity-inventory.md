@@ -27,7 +27,7 @@ Request corpus: 1,140 fixtures across 95 request exports plus 23 stored-project 
 | [coordination/root-bridge.ts](../src/coordination/root-bridge.ts) | not started | |
 | [coordination/root-contracts.ts](../src/coordination/root-contracts.ts) | not started | |
 | [coordination/root-controller.ts](../src/coordination/root-controller.ts) | not started | |
-| [coordination/root-session-store.ts](../src/coordination/root-session-store.ts) | not started | |
+| [coordination/root-session-store.ts](../src/coordination/root-session-store.ts) | not started | `rust/src/coordination/root_session_store.rs` reserves current Root generation and claims prompts atomically with source dependency/budget/turn/owner checks. Real detached shell launch, duplicate denial, reopened SQLite attempt/record agreement and prerequisite regression pass. Isolated staged export passes 76 library tests, three integration tests, locked fmt and all-target Clippy. Full controller recovery and real Codex remain pending. |
 | [coordination/session-recovery.ts](../src/coordination/session-recovery.ts) | not started | |
 | [coordination/task-agent-selection-contracts.ts](../src/coordination/task-agent-selection-contracts.ts) | not started | |
 | [coordination/task-agent-selection.ts](../src/coordination/task-agent-selection.ts) | not started | |
@@ -175,7 +175,7 @@ Request corpus: 1,140 fixtures across 95 request exports plus 23 stored-project 
 | [runtimes/claude-code/transcript.ts](../src/runtimes/claude-code/transcript.ts) | not started | |
 | [runtimes/codex/display.ts](../src/runtimes/codex/display.ts) | not started | |
 | [runtimes/codex/session-reader.ts](../src/runtimes/codex/session-reader.ts) | not started | `rust/src/runtimes/codex/session_reader.rs` and thread recovery pass focused runtime checks. Real Codex and the complete NativeSessionReader remain pending. |
-| [runtimes/codex/task-runtime.ts](../src/runtimes/codex/task-runtime.ts) | not started | `rust/src/runtimes/codex` invocation, dispatch, observation and recovery helpers pass the runtime unit's 17 focused checks. Its isolated staged export passes 75 library tests, three integration tests, locked fmt and all-target Clippy. Full TaskHarness, durable store binding, real Codex, bridges and UI remain pending. |
+| [runtimes/codex/task-runtime.ts](../src/runtimes/codex/task-runtime.ts) | not started | `ce20b01e`: `rust/src/runtimes/codex` invocation, dispatch, observation and recovery helpers pass 17 focused checks. Its isolated staged export passes 75 library tests, three integration tests, locked fmt and all-target Clippy. Full TaskHarness, durable store binding, real Codex, bridges and UI remain pending. |
 | [runtimes/codex/transcript.ts](../src/runtimes/codex/transcript.ts) | not started | `rust/src/runtimes/codex/transcript.rs` parsing, result text and completion evidence pass focused runtime checks. Real-provider verification remains pending. |
 | [runtimes/devin/advisor-evidence.ts](../src/runtimes/devin/advisor-evidence.ts) | not started | |
 | [runtimes/devin/display.ts](../src/runtimes/devin/display.ts) | not started | |
@@ -240,8 +240,8 @@ Request corpus: 1,140 fixtures across 95 request exports plus 23 stored-project 
 | [tasks/limits/limits.ts](../src/tasks/limits/limits.ts) | not started | |
 | [tasks/preparation.ts](../src/tasks/preparation.ts) | not started | |
 | [tasks/pull-request-dependencies.ts](../src/tasks/pull-request-dependencies.ts) | not started | |
-| [tasks/queue.ts](../src/tasks/queue.ts) | not started | |
-| [tasks/repository.ts](../src/tasks/repository.ts) | not started | |
+| [tasks/queue.ts](../src/tasks/queue.ts) | not started | Task repository tests cover queued prerequisite admission and backlog start. Queue host/controller integration remains pending. |
+| [tasks/repository.ts](../src/tasks/repository.ts) | not started | `rust/src/tasks/repository.rs` implements atomic task/control/dependency/audit creation and idempotent replay, plus internal start/admission mutations. Store tests cover replay, prerequisites, PR ownership conflict and budget pause. Wider metadata operations and task HTTP/authorization integration remain pending. |
 | [tasks/sources.ts](../src/tasks/sources.ts) | not started | |
 | [tasks/tasks.ts](../src/tasks/tasks.ts) | not started | |
 | [tasks/templates.ts](../src/tasks/templates.ts) | not started | |

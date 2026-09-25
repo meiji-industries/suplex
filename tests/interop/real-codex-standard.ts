@@ -6,6 +6,7 @@
 import { deepStrictEqual, equal, notEqual, ok } from "node:assert/strict";
 import { rmSync } from "node:fs";
 import { access, mkdir, mkdtemp, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { setTimeout } from "node:timers/promises";
 import { dirname, join, resolve } from "node:path";
@@ -19,7 +20,10 @@ const deterministic = process.env.SUPLEX_DETERMINISTIC_CODEX_RUN === "1";
 if (deterministic && process.env.SUPLEX_REAL_CODEX_RUN === "1") throw new Error("Choose one Codex run mode");
 if (deterministic) process.env.SUPLEX_CODEX_COMMAND = fileURLToPath(new URL("../fixtures/codex-standard-cli.mjs", import.meta.url));
 const phase = deterministic ? process.env.SUPLEX_DETERMINISTIC_PHASE ?? "deliver" : "deliver";
-if (!["deliver", "answer", "restart", "cancel"].includes(phase)) throw new Error("Unknown deterministic phase");
+// Workflow phases run one non-Standard workflow to local delivery; their Advisors use the stand-in's report bridge calls.
+const workflowNames: Record<string, string> = { direct_build: "Direct build", independent_review: "Second opinion", competing_plans: "Combined planning" };
+const workflowPhase = phase in workflowNames;
+if (!["deliver", "answer", "restart", "cancel"].includes(phase) && !workflowPhase) throw new Error("Unknown deterministic phase");
 const timeoutMs = Number(process.env.SUPLEX_JOURNEY_TIMEOUT_MS ?? 300_000);
 let lastStep = "script started";
 const progress = (step: string) => {
@@ -52,6 +56,22 @@ if (deterministic) {
   }
 }
 progress(`fixture ready: origin ${origin}`);
+// Workflow delegation pins the published-base-to-head range, so workflow phases answer the
+// GitHub branch read from the seeded origin over loopback (Rust build feature github-test-endpoint).
+const publishedApi = workflowPhase ? createServer((request, response) => {
+  void git("-C", origin, "rev-parse", "HEAD").then(head => {
+    const found = /^\/repos\/[^/]+\/[^/]+\/branches\/main$/.test(request.url ?? "");
+    response.writeHead(found ? 200 : 404, { "content-type": "application/json" });
+    response.end(JSON.stringify(found ? { name: "main", commit: { sha: head.stdout.trim() } } : { message: "Not Found" }));
+  });
+}) : null;
+if (publishedApi) {
+  await new Promise<void>(ready => publishedApi.listen(0, "127.0.0.1", ready));
+  const address = publishedApi.address();
+  if (!address || typeof address === "string") throw new Error("The loopback GitHub API did not bind a TCP port");
+  process.env.SUPLEX_RUST_TEST_GITHUB_API = `http://127.0.0.1:${address.port}`;
+  publishedApi.unref();
+}
 const controlDirectory = deterministic && ["restart", "cancel"].includes(phase) ? await mkdtemp(join(tmpdir(), "suplex-codex-control-")) : null;
 if (controlDirectory) {
   process.env.SUPLEX_DETERMINISTIC_PHASE = phase;
@@ -115,6 +135,11 @@ try {
   await dialog.waitFor();
   await dialog.getByLabel("Task title", { exact: true }).fill("Append one verified README line");
   await dialog.getByLabel("Task description", { exact: true }).fill("Append `Verified by Suplex Standard task.` to README.md, run pnpm test, commit the change, and deliver the local worktree.");
+  if (workflowPhase) {
+    await dialog.getByRole("button", { name: "Workflow", exact: true }).click();
+    await fixture.page.getByRole("menuitem", { name: workflowNames[phase] }).click();
+    await dialog.getByRole("button", { name: "Workflow", exact: true }).filter({ hasText: workflowNames[phase] }).waitFor();
+  }
   await dialog.getByRole("radio", { name: "Keep in worktree" }).check();
   await dialog.getByRole("checkbox", { name: "Start immediately", exact: true }).uncheck();
   equal(await dialog.getByRole("button", { name: "New task", exact: true }).isEnabled(), true);
@@ -133,6 +158,7 @@ try {
     const task = TaskSchema.parse(await created.json());
     equal(task.status, "backlog");
     equal(task.deliveryTarget, "local_worktree");
+    if (workflowPhase) equal(task.workflow, phase);
     progress(`task created ${task.id}`);
     await fixture.page.getByRole("heading", { name: task.title, level: 2, exact: true }).waitFor();
     await fixture.page.screenshot({ path: `${proof}/created.png`, fullPage: true });
@@ -227,6 +253,12 @@ try {
     const sessions = fixture.database.authQuery(db => db.prepare("SELECT id,kind,lifecycle,stopped_at AS stoppedAt,native_session_id AS nativeSessionId FROM suplex_task_sessions WHERE task_id = ? ORDER BY kind,id").all(task.id)) as Array<{ id: string; kind: string; lifecycle: string; stoppedAt: string | null; nativeSessionId: string | null }>;
     ok(sessions.some(session => session.kind === "root" && session.nativeSessionId));
     ok(sessions.some(session => session.kind === "worker" && session.nativeSessionId));
+    if (workflowPhase) {
+      const roles = fixture.database.authQuery(db => db.prepare("SELECT advisor_role AS role FROM suplex_task_sessions WHERE task_id = ? AND advisor_role IS NOT NULL ORDER BY advisor_role").all(task.id)) as Array<{ role: string }>;
+      deepStrictEqual(roles.map(({ role }) => role), phase === "independent_review" ? ["reviewer"] : phase === "competing_plans" ? ["planner_a", "planner_b"] : []);
+      equal(delivered.workflowState.completion?.kind, "workflow");
+      if (phase === "independent_review") equal(delivered.workflowState.reviews.at(-1)?.result?.role, "reviewer");
+    }
     // The host may stop terminal sessions on a later sweep. Wait before fixture deletion.
     progress("waiting for native sessions to stop");
     const stopDeadline = Date.now() + 30_000;

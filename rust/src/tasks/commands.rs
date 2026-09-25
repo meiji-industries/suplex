@@ -9,7 +9,7 @@ use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use crate::{
-    coordination::{root_prompts, root_session_store},
+    coordination::{root_prompts, root_session_store, workflows},
     http::contracts::typed::{
         projects::ProjectProviderPolicy,
         task_answers::{AnswerBody, LimitDecisionBody, TaskLimitDecision},
@@ -822,7 +822,7 @@ pub fn select_user_task_agent(
     let time = timestamp(now);
     database.transaction(true, |database| {
         let row = database.connection().query_row(
-            "SELECT c.status, t.archived_at IS NOT NULL, c.workflow, c.delivery_target, c.workflow_state_json, c.root_session_id, c.root_profile_json, c.worker_profile_json, t.configuration_json, c.human_question_id, c.human_question, c.human_question_options_json, c.limit_pause_json IS NOT NULL OR c.recovery_turn_id IS NOT NULL FROM suplex_task_controls c JOIN suplex_tasks t ON t.id = c.task_id WHERE c.task_id = ?1",
+            "SELECT c.status, t.archived_at IS NOT NULL, c.workflow, c.delivery_target, c.workflow_state_json, c.root_session_id, c.root_profile_json, c.worker_profile_json, t.configuration_json, c.human_question_id, c.human_question, c.human_question_options_json, c.limit_pause_json IS NOT NULL OR c.recovery_turn_id IS NOT NULL, c.advisor_profiles_json, c.worker_session_id FROM suplex_task_controls c JOIN suplex_tasks t ON t.id = c.task_id WHERE c.task_id = ?1",
             [task_id],
             |row| Ok((
                 row.get::<_, String>(0)?, row.get::<_, bool>(1)?, row.get::<_, String>(2)?,
@@ -830,20 +830,20 @@ pub fn select_user_task_agent(
                 row.get::<_, String>(6)?, row.get::<_, String>(7)?, row.get::<_, String>(8)?,
                 row.get::<_, Option<String>>(9)?, row.get::<_, Option<String>>(10)?,
                 row.get::<_, Option<String>>(11)?, row.get::<_, bool>(12)?,
+                row.get::<_, String>(13)?, row.get::<_, Option<String>>(14)?,
             )),
         ).optional()?;
         let root = request.role == "root";
-        let Some((status, _archived, workflow, delivery_target, state, root_session_id, root_profile, worker_profile, configuration, question_id, question, question_options, pending_decision)) = row
+        let Some((status, _archived, workflow, _delivery_target, state, root_session_id, root_profile, worker_profile, configuration, question_id, question, question_options, pending_decision, advisor_profiles, worker_session_id)) = row
             .filter(|row| !row.1 && matches!(row.0.as_str(), "active" | "waiting_human"))
         else {
             return Err(conflict(if root { coordinator_changed } else { "Only active or paused tasks can select an agent." }));
         };
-        if !root && workflow != "standard" {
-            return Err(Box::new(TaskFailure::not_ported(
-                "Advisor workflows are not ported",
-            )));
-        }
-        if !root && request.role != "worker" {
+        let advisor_role = (!root && request.role != "worker").then_some(request.role.as_str());
+        if advisor_role.is_some_and(|role| {
+            !workflows::workflow_definition(&workflow)
+                .is_some_and(|definition| definition.advisor_roles.contains(&role))
+        }) {
             return Err(conflict("The selected role is not in this workflow."));
         }
         let mut state: Value = serde_json::from_str(&state)?;
@@ -853,14 +853,18 @@ pub fn select_user_task_agent(
             "direction": request.direction, "resume": request.resume,
             "questionId": if request.resume { request.question_id.as_deref() } else { None },
         });
-        let previous_profile: Value =
-            serde_json::from_str(if root { &root_profile } else { &worker_profile })?;
+        let mut advisors: Value = serde_json::from_str(&advisor_profiles)?;
+        let previous_profile: Value = match advisor_role {
+            Some(role) if !advisors[role].is_null() => advisors[role].clone(),
+            Some(_) => serde_json::from_str(&root_profile)?,
+            None => serde_json::from_str(if root { &root_profile } else { &worker_profile })?,
+        };
         let current = if root {
             None
         } else {
             database.connection().query_row(
-                "SELECT id, generation, delegate_slot, workflow_input_json, replacement_handoff FROM suplex_task_sessions WHERE task_id = ?1 AND kind = 'worker' AND advisor_role IS NULL AND is_current = 1 ORDER BY generation DESC LIMIT 1",
-                [task_id],
+                "SELECT id, generation, delegate_slot, workflow_input_json, replacement_handoff FROM suplex_task_sessions WHERE task_id = ?1 AND kind = 'worker' AND advisor_role IS ?2 AND is_current = 1 ORDER BY generation DESC LIMIT 1",
+                params![task_id, advisor_role],
                 |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?, row.get::<_, Option<String>>(2)?, row.get::<_, Option<String>>(3)?, row.get::<_, Option<String>>(4)?)),
             ).optional()?
         };
@@ -880,17 +884,12 @@ pub fn select_user_task_agent(
         if request.resume && (status != "waiting_human" || question_id != request.question_id || pending_decision) {
             return Err(conflict("Answer the current task decision before resuming."));
         }
-        let profile = read_profile(database, &request.profile_id, if root { "root" } else { "worker" })?
+        let profile = read_profile(database, &request.profile_id, if request.role == "worker" { "worker" } else { "root" })?
             .ok_or_else(|| conflict(if root { "The selected Coordinator profile does not exist." } else { "The selected agent profile does not exist." }))?;
         let configuration: Value = serde_json::from_str(&configuration)?;
         let policy: Option<ProjectProviderPolicy> = serde_json::from_value(configuration["providerPolicy"].clone())?;
         if !allowed_profile(policy.as_ref(), &profile) {
             return Err(conflict("Select an agent with a provider and login allowed by this project"));
-        }
-        if workflow != "standard" || delivery_target != "local_worktree" || crate::runtimes::task_harness_registry::for_profile(profile["provider"].as_str().unwrap_or_default()).is_none() {
-            return Err(Box::new(TaskFailure::not_ported(
-                "Only Standard local-worktree agent selection is ported",
-            )));
         }
         let profile_json = crate::shared::js_json::stringify(&profile);
         let insert_turn = |database: &SuplexDatabase, session_id: &str, generation: i64, prompt: &str| -> DatabaseResult<()> {
@@ -938,8 +937,8 @@ pub fn select_user_task_agent(
             }
         } else {
             database.connection().execute(
-                "UPDATE suplex_task_sessions SET profile_json = ?1 WHERE task_id = ?2 AND kind = 'worker' AND advisor_role IS NULL AND profile_json IS NULL",
-                params![worker_profile, task_id],
+                "UPDATE suplex_task_sessions SET profile_json = ?1 WHERE task_id = ?2 AND kind = 'worker' AND advisor_role IS ?3 AND profile_json IS NULL",
+                params![crate::shared::js_json::stringify(&previous_profile), task_id, advisor_role],
             )?;
             if let Some((current_id, current_generation, slot, session_input, inherited)) = &current {
                 let latest = database.connection().query_row(
@@ -949,7 +948,10 @@ pub fn select_user_task_agent(
                 ).optional()?;
                 if let Some((turn_status, observation, assignment, turn_input)) = latest {
                     let outcome = observation.as_deref().and_then(|raw| serde_json::from_str::<Value>(raw).ok());
-                    let successful = turn_status == "completed" && outcome.as_ref().is_some_and(|outcome| outcome["state"] == "completed");
+                    let successful = turn_status == "completed" && outcome.as_ref().is_some_and(|outcome| {
+                        outcome["state"] == "completed"
+                            && advisor_role.is_none_or(|role| outcome["advisor"]["role"] == role && !outcome["advisor"]["result"].is_null())
+                    });
                     if !successful {
                         let inherited = inherited.clone().unwrap_or_default();
                         let suffix = format!("\n\nFresh Worker handoff:\n{inherited}");
@@ -968,25 +970,36 @@ pub fn select_user_task_agent(
                             params![time, current_id],
                         )?;
                         database.connection().execute(
-                            "INSERT INTO suplex_task_sessions (id, task_id, kind, generation, is_current, lifecycle, assignment_hash, advisor_role, delegate_slot, workflow_input_json, profile_json, replaces_session_id, replacement_reason, replacement_handoff, created_at, updated_at) VALUES (?1, ?2, 'worker', ?3, 1, 'reserved', ?4, NULL, ?5, ?6, ?7, ?8, 'User selected a new agent', ?9, ?10, ?10)",
-                            params![id, task_id, generation, hash(&prompt), slot.as_deref().unwrap_or("delegate"), input, profile_json, current_id, handoff, time],
+                            "INSERT INTO suplex_task_sessions (id, task_id, kind, generation, is_current, lifecycle, assignment_hash, advisor_role, delegate_slot, workflow_input_json, profile_json, replaces_session_id, replacement_reason, replacement_handoff, created_at, updated_at) VALUES (?1, ?2, 'worker', ?3, 1, 'reserved', ?4, ?11, ?5, ?6, ?7, ?8, 'User selected a new agent', ?9, ?10, ?10)",
+                            params![id, task_id, generation, hash(&prompt), slot.as_deref().unwrap_or("delegate"), input, profile_json, current_id, handoff, time, advisor_role],
                         )?;
                         database.connection().execute(
                             "INSERT INTO suplex_task_turns (id, task_id, session_id, generation, assignment_hash, prompt_hash, prompt_text, status, workflow_input_json, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?5, ?6, 'pending_prompt', ?7, ?8, ?8)",
                             params![root_session_store::new_turn_id(now)?, task_id, id, generation, hash(&prompt), prompt, input, time],
                         )?;
-                        database.connection().execute(
-                            "UPDATE suplex_task_controls SET worker_session_id = ?1 WHERE task_id = ?2",
-                            params![id, task_id],
-                        )?;
+                        if advisor_role.is_none() || worker_session_id.as_ref() == Some(current_id) {
+                            database.connection().execute(
+                                "UPDATE suplex_task_controls SET worker_session_id = ?1 WHERE task_id = ?2",
+                                params![id, task_id],
+                            )?;
+                        }
                         replacement = Some(id);
                     }
                 }
             }
-            database.connection().execute(
-                "UPDATE suplex_task_controls SET worker_profile_json = ?1 WHERE task_id = ?2",
-                params![profile_json, task_id],
-            )?;
+            match advisor_role {
+                None => database.connection().execute(
+                    "UPDATE suplex_task_controls SET worker_profile_json = ?1 WHERE task_id = ?2",
+                    params![profile_json, task_id],
+                )?,
+                Some(role) => {
+                    advisors[role] = profile.clone();
+                    database.connection().execute(
+                        "UPDATE suplex_task_controls SET advisor_profiles_json = ?1 WHERE task_id = ?2",
+                        params![crate::shared::js_json::stringify(&advisors), task_id],
+                    )?
+                }
+            };
             let live_root = database.connection().query_row(
                 "SELECT id, generation FROM suplex_task_sessions WHERE id = ?1 AND task_id = ?2 AND kind = 'root' AND is_current = 1",
                 params![root_session_id, task_id],
@@ -1010,7 +1023,7 @@ pub fn select_user_task_agent(
                 }
             };
             let note = [
-                Some(format!("The user selected Worker profile {}.", request.profile_id)),
+                Some(format!("The user selected {} profile {}.", advisor_role.map_or("Worker", workflows::advisor_label), request.profile_id)),
                 direction.clone(),
                 pending_question.clone(),
                 Some(match &replacement {
@@ -1325,17 +1338,7 @@ pub fn replace_user_worker(
             .ok_or_else(|| Box::new(TaskFailure::new("Not found", 404)) as Box<dyn Error>)?;
         companies::require_company_access(database, actor_user_id, &task.company_id)?;
         root_session_store::replace_worker(database, task_id, request, now).map_err(|error| {
-            let message = error.to_string();
-            if message.starts_with("experimental_not_ported:") {
-                Box::new(TaskFailure {
-                    public_message: "This task workflow is not implemented in the Rust engine"
-                        .into(),
-                    status_code: 501,
-                    code: "experimental_not_ported",
-                }) as Box<dyn Error>
-            } else {
-                Box::new(TaskFailure::new(message, 409)) as Box<dyn Error>
-            }
+            Box::new(TaskFailure::new(error.to_string(), 409)) as Box<dyn Error>
         })?;
         let task = repository::task_by_id(database, task_id)?
             .ok_or_else(|| Box::new(TaskFailure::new("Not found", 404)) as Box<dyn Error>)?;
@@ -1368,17 +1371,7 @@ pub fn replace_user_coordinator(
         .map_err(|message| Box::new(TaskFailure::new(message, 501)) as Box<dyn Error>)?;
         root_session_store::replace_coordinator(database, task_id, request, &initial, now)
             .map_err(|error| {
-                let message = error.to_string();
-                if message.starts_with("experimental_not_ported:") {
-                    Box::new(TaskFailure {
-                        public_message: "This task workflow is not implemented in the Rust engine"
-                            .into(),
-                        status_code: 501,
-                        code: "experimental_not_ported",
-                    }) as Box<dyn Error>
-                } else {
-                    Box::new(TaskFailure::new(message, 409)) as Box<dyn Error>
-                }
+                Box::new(TaskFailure::new(error.to_string(), 409)) as Box<dyn Error>
             })?;
         let task = repository::task_by_id(database, task_id)?
             .ok_or_else(|| Box::new(TaskFailure::new("Not found", 404)) as Box<dyn Error>)?;
@@ -1484,32 +1477,32 @@ pub fn update_user_task_details(
         companies::require_company_access(database, actor_user_id, &scope.company_id)?;
         let current = repository::edit_snapshot(database, task_id)?
             .ok_or_else(|| Box::new(TaskFailure::new("Not found", 404)) as Box<dyn Error>)?;
-        let workflow = input.workflow.as_deref().unwrap_or(&current.workflow);
-        if workflow == "standard" {
-            if let Some(advisors) = &input.advisor_profile_ids {
-                let names = [
-                    (advisors.reviewer.as_ref(), "Reviewer"),
-                    (advisors.planner_a.as_ref(), "Plan A"),
-                    (advisors.planner_b.as_ref(), "Plan B"),
-                    (advisors.rater.as_ref(), "Rater"),
-                ]
-                .into_iter()
-                .filter_map(|(value, label)| value.map(|_| label))
-                .collect::<Vec<_>>();
-                if !names.is_empty() {
-                    return Err(Box::new(TaskFailure::new(
-                        format!("The Standard workflow has no {} Advisor", names.join(", ")),
-                        422,
-                    )));
-                }
-            }
-        } else {
-            return Err(Box::new(TaskFailure {
-                public_message: "Experimental Rust backend has not ported this route".into(),
-                status_code: 501,
-                code: "experimental_not_ported",
-            }));
+        // The task keeps the source it was created from, so the workflow rules judge the edit against that source.
+        let mut normalized = Map::new();
+        normalized.insert(
+            "workflow".into(),
+            json!(input.workflow.as_deref().unwrap_or(&current.workflow)),
+        );
+        normalized.insert(
+            "advisorProfileIds".into(),
+            serde_json::to_value(input.advisor_profile_ids.clone().unwrap_or_default())?,
+        );
+        if let Some(source) = current
+            .configuration
+            .get("source")
+            .filter(|source| !source.is_null())
+        {
+            normalized.insert("source".into(), source.clone());
         }
+        if let Some(target) = &input.delivery_target {
+            normalized.insert("deliveryTarget".into(), json!(target));
+        }
+        if let Some(tests) = input.run_project_tests {
+            normalized.insert("runProjectTests".into(), json!(tests));
+        }
+        crate::coordination::workflow_records::normalize_workflow_input(&mut normalized, true)
+            .map_err(|message| Box::new(TaskFailure::new(message, 422)) as Box<dyn Error>)?;
+        let workflow = normalized["workflow"].as_str().unwrap_or("standard");
         let root_id = input
             .root_profile_id
             .as_deref()
@@ -1532,6 +1525,28 @@ pub fn update_user_task_details(
             .ok_or("Stored Worker profile is missing")?;
         let root_profile = edit_profile(database, root_id, &current.root_profile, "root")?;
         let worker_profile = edit_profile(database, worker_id, &current.worker_profile, "worker")?;
+        // A request that names its Advisors states them all; only a request without any Advisor selection keeps the stored ones.
+        let mut advisor_profiles = Map::new();
+        let roles = workflows::workflow_definition(workflow)
+            .map_or(&[][..], |definition| definition.advisor_roles);
+        for role in roles {
+            let stored = input
+                .advisor_profile_ids
+                .is_none()
+                .then(|| current.advisor_profiles[*role]["profileId"].as_str())
+                .flatten();
+            let id = normalized["advisorProfileIds"][*role]
+                .as_str()
+                .or(stored)
+                .or_else(|| root_profile["profileId"].as_str())
+                .unwrap_or_default();
+            let profile = if root_profile["profileId"] == id {
+                root_profile.clone()
+            } else {
+                edit_profile(database, id, &current.advisor_profiles[*role], "root")?
+            };
+            advisor_profiles.insert((*role).to_owned(), profile);
+        }
         let policy: Option<ProjectProviderPolicy> = current
             .configuration
             .get("providerPolicy")
@@ -1539,17 +1554,19 @@ pub fn update_user_task_details(
             .cloned()
             .map(serde_json::from_value)
             .transpose()?;
-        if !allowed_profile(policy.as_ref(), &root_profile)
-            || !allowed_profile(policy.as_ref(), &worker_profile)
+        if [&root_profile, &worker_profile]
+            .into_iter()
+            .chain(advisor_profiles.values())
+            .any(|profile| !allowed_profile(policy.as_ref(), profile))
         {
             return Err(Box::new(TaskFailure::new(
                 "Select agents with providers and logins allowed by this project",
                 422,
             )));
         }
-        let delivery_target = input
-            .delivery_target
-            .as_deref()
+        let delivery_target = normalized
+            .get("deliveryTarget")
+            .and_then(Value::as_str)
             .unwrap_or(&current.delivery_target);
         if current
             .configuration
@@ -1584,14 +1601,17 @@ pub fn update_user_task_details(
                 .unwrap_or_else(|| current.task.description.clone()),
             delivery_target: delivery_target.to_owned(),
             workflow: workflow.to_owned(),
-            run_project_tests: input.run_project_tests.unwrap_or(stored_tests),
+            run_project_tests: normalized
+                .get("runProjectTests")
+                .and_then(Value::as_bool)
+                .unwrap_or(stored_tests),
             visual_evidence: input
                 .visual_evidence
                 .clone()
                 .unwrap_or_else(|| stored_visual.to_owned()),
             root_profile,
             worker_profile,
-            advisor_profiles: json!({}),
+            advisor_profiles: Value::Object(advisor_profiles),
         };
         if !repository::update_details(database, task_id, &details, now)? {
             return Err(Box::new(TaskFailure::new(
@@ -2108,6 +2128,26 @@ mod tests {
         assert_eq!(rows.control["workerSessionId"], replacement.as_str());
         assert!(rows.turns.iter().any(|turn| turn["promptText"]
             == format!("Human note:\nThe user selected Worker profile third-worker.\n\nAdditional direction from the user:\nUse tests\n\nContinue with replacement session {replacement} and the preserved assignment.").as_str()));
+        // A workflow Advisor defaults to the Coordinator profile and records its own selection.
+        database
+            .connection()
+            .execute(
+                "UPDATE suplex_task_controls SET workflow = 'independent_review' WHERE task_id = ?1",
+                [&task.id],
+            )
+            .unwrap();
+        select(&mut database, json!({"role":"reviewer","expectedProfileId":"alternate-root","expectedSessionId":null,"profileId":"alternate-root","direction":"","resume":false})).unwrap();
+        let rows = root_session_store::root_observation_rows(&database, &task.id).unwrap();
+        assert_eq!(
+            rows.control["advisorProfiles"]["reviewer"]["profileId"],
+            "alternate-root"
+        );
+        assert!(rows.turns.iter().any(|turn| turn["promptText"]
+            == "Human note:\nThe user selected Reviewer profile alternate-root.\n\nUse this selection for future assignments. Do not repeat completed work."));
+        assert_eq!(
+            failure(select(&mut database, json!({"role":"rater","expectedProfileId":"x","expectedSessionId":null,"profileId":"x","direction":"","resume":false})).unwrap_err()),
+            (409, "The selected role is not in this workflow.".into())
+        );
         drop(database);
         let _ = std::fs::remove_file(&filename);
     }

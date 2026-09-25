@@ -92,10 +92,6 @@ fn not_found() -> Box<dyn Error> {
     fail("Not found", 404, "resource_not_found")
 }
 
-fn not_ported(message: &str) -> Box<dyn Error> {
-    Box::new(TaskFailure::not_ported(message))
-}
-
 fn timestamp(now: DateTime<Utc>) -> String {
     now.to_rfc3339_opts(SecondsFormat::Millis, true)
 }
@@ -1744,10 +1740,6 @@ fn admit(
         require_readable(database, principal, dependency)
             .map_err(|_| dependency_unavailable(dependency))?;
     }
-    // The same engine limits as board creation in `routes/tasks.rs`.
-    if request.workflow != "standard" {
-        return Err(not_ported("Only Standard tasks are ported"));
-    }
     let images = request
         .images
         .iter()
@@ -1830,6 +1822,12 @@ fn write(
             None if !dry_run && !pending.images.is_empty() => return Err("Artifact root is not configured".into()),
             _ => repository::create(database, &prepared, now)?,
         };
+        if result.created && request.workflow != "standard" {
+            database.connection().execute(
+                "UPDATE suplex_task_controls SET workflow = ?1 WHERE task_id = ?2",
+                params![request.workflow, result.task.id],
+            )?;
+        }
         let task = task_json(database, &result.task.id)?;
         if dry_run {
             let preview = merged(

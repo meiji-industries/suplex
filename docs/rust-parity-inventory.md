@@ -65,7 +65,7 @@ The table lists all 238 backend TypeScript modules present at the baseline, incl
 | [http/routes/agent-api.ts](../src/http/routes/agent-api.ts) | not started | |
 | [http/routes/agent-pairing.ts](../src/http/routes/agent-pairing.ts) | not started | |
 | [http/routes/assets.ts](../src/http/routes/assets.ts) | not started | |
-| [http/routes/auth.ts](../src/http/routes/auth.ts) | ported | All methods represented. Status/current-user/sign-out/profile PATCH and signed ceremonies pass focused checks; signed registration/authentication also pass an actual TCP listener with exact raw user bytes, cookies, and stored counter. Wider raw request/response corpus and complete attestation trust behavior remain pending |
+| [http/routes/auth.ts](../src/http/routes/auth.ts) | ported | All methods represented. Signed TCP and shared-service checks pass, including exact user bytes/cookies/counter. Async registration releases DB access during CRL verification and persists after its handler waiter is dropped. Lossless validation findings/thrown errors are covered; wider raw request/response corpus remains pending |
 | [http/routes/authenticated.ts](../src/http/routes/authenticated.ts) | not started | |
 | [http/routes/avatars.ts](../src/http/routes/avatars.ts) | not started | |
 | [http/routes/companies.ts](../src/http/routes/companies.ts) | ported | Read/create/rename/issue-code/status/membership operations implemented with authorization and validation-order checks; focused Rust/TS and live raw-response probes pass. Lossless HTTP JSON and shared response-corpus coverage remain incomplete |
@@ -89,8 +89,8 @@ The table lists all 238 backend TypeScript modules present at the baseline, incl
 | [identity/auth-identifiers.ts](../src/identity/auth-identifiers.ts) | not started | |
 | [identity/auth-repository.ts](../src/identity/auth-repository.ts) | not started | |
 | [identity/auth-schema.ts](../src/identity/auth-schema.ts) | not started | |
-| [identity/auth-webauthn.ts](../src/identity/auth-webauthn.ts) | not started | Partial adapter and [10-algorithm spike evidence](rust-spikes/webauthn.md), including synthetic packed and FIDO U2F attestation. Actual TypeScript/Rust services and shared SQLite register/authenticate in both directions; signed TCP flow passes. Apple, Android Key, TPM, and SafetyNet trust behavior remain incomplete |
-| [identity/auth.ts](../src/identity/auth.ts) | not started | Sessions, development administrator, profile/company operations, invitations, lists, revocation, and signed ceremonies implemented with focused/live checks. Shared-database TypeScript↔Rust credential/session roundtrips pass. Legacy-user constructor normalization, setup/recovery CLI entrypoints, downstream agent audits, lossless metadata, and full attestation parity remain incomplete |
+| [identity/auth-webauthn.ts](../src/identity/auth-webauthn.ts) | ported | [All seven formats and ten algorithms](rust-spikes/webauthn.md) implemented with SDK root/revocation policy and signed positive/negative checks. TypeScript/Rust shared-store and TCP flows pass. Apple positive uses a historical clock; Android Key/SafetyNet positives use test roots, with production-root rejection checked. No physical/default-root positive is claimed for those two formats |
+| [identity/auth.ts](../src/identity/auth.ts) | not started | Sessions, development administrator, profile/company operations, invitations, lists, revocation, and signed ceremonies implemented with focused/live checks. Shared-store interoperability and detached async verification pass. Legacy-user constructor normalization, setup/recovery CLI entrypoints, downstream agent audits, and lossless metadata remain incomplete |
 | [identity/avatar-kinds.ts](../src/identity/avatar-kinds.ts) | not started | |
 | [identity/avatars.ts](../src/identity/avatars.ts) | not started | |
 | [identity/external-agents.ts](../src/identity/external-agents.ts) | not started | |

@@ -268,6 +268,23 @@ pub fn complete_registration_prepared(
     site: WebAuthnSite<'_>,
     now: DateTime<Utc>,
 ) -> DatabaseResult<AuthResult> {
+    let expected_challenge =
+        consume_registration_challenge(database, kind, token, challenge_id, &response, now)?;
+    let response = response.payload.as_ref().ok_or_else(passkey_failure)?;
+    let verified =
+        webauthn::verify_registration(response, &expected_challenge, site.origin, site.rp_id)
+            .map_err(|_| passkey_failure())?;
+    finish_registration(database, kind, token, verified, now)
+}
+
+pub fn consume_registration_challenge(
+    database: &mut SuplexDatabase,
+    kind: &str,
+    token: &str,
+    challenge_id: &str,
+    response: &PreparedCredential,
+    now: DateTime<Utc>,
+) -> DatabaseResult<String> {
     if !matches!(kind, "bootstrap" | "user" | "recovery")
         || !valid_token_shape(token, kind)
         || !valid_challenge_id(challenge_id)
@@ -277,7 +294,7 @@ pub fn complete_registration_prepared(
     if !response.shape_valid {
         return Err(passkey_failure());
     }
-    let expected_challenge = database.transaction(false, |database| {
+    database.transaction(false, |database| {
         let invitation = valid_invitation(database, token, kind, now)?.ok_or_else(invitation_failure)?;
         let challenge_row = database.connection().query_row(
             "SELECT challenge, invitation_id, expires_at, consumed_at FROM suplex_challenges WHERE id = ?1 AND kind = ?2",
@@ -289,11 +306,16 @@ pub fn complete_registration_prepared(
         let updated = database.connection().execute("UPDATE suplex_challenges SET consumed_at = ?2 WHERE id = ?1 AND consumed_at IS NULL", params![challenge_id, timestamp(now)])?;
         if updated != 1 { return Err(invitation_failure()); }
         Ok(challenge)
-    })?;
-    let response = response.payload.as_ref().ok_or_else(passkey_failure)?;
-    let verified =
-        webauthn::verify_registration(response, &expected_challenge, site.origin, site.rp_id)
-            .map_err(|_| passkey_failure())?;
+    })
+}
+
+pub fn finish_registration(
+    database: &mut SuplexDatabase,
+    kind: &str,
+    token: &str,
+    verified: StoredCredential,
+    now: DateTime<Utc>,
+) -> DatabaseResult<AuthResult> {
     database.transaction(false, |database| {
         let invitation = valid_invitation(database, token, kind, now)?.ok_or_else(invitation_failure)?;
         let now_iso = timestamp(now);
@@ -336,6 +358,22 @@ pub fn complete_registration_prepared(
         let session_token = auth::create_session(database, &user_id, now)?;
         Ok(AuthResult { user, session_token })
     })
+}
+
+pub async fn verify_consumed_registration(
+    response: &PreparedCredential,
+    expected_challenge: &str,
+    site: WebAuthnSite<'_>,
+) -> DatabaseResult<StoredCredential> {
+    let response = response.payload.as_ref().ok_or_else(passkey_failure)?;
+    webauthn::verify_registration_with_revocation(
+        response,
+        expected_challenge,
+        site.origin,
+        site.rp_id,
+    )
+    .await
+    .map_err(|_| passkey_failure())
 }
 
 pub fn begin_authentication(
@@ -470,6 +508,51 @@ mod tests {
         ))
         .unwrap();
         database.connection().execute("INSERT INTO suplex_challenges (id, challenge, kind, expires_at, created_at) VALUES (?1, ?2, 'authentication', ?3, ?4)", params![id, fixture["authenticationChallenge"].as_str().unwrap(), timestamp(now + Duration::minutes(5)), timestamp(now)]).unwrap();
+    }
+
+    #[test]
+    fn signed_registration_persists_authenticator_id_when_response_id_differs() {
+        let fixture: Value = serde_json::from_str(include_str!(
+            "../../../tests/fixtures/webauthn-interop.json"
+        ))
+        .unwrap();
+        let token = format!("invite_v1_user_{}", "A".repeat(43));
+        let now = Utc::now();
+        let path = std::env::temp_dir().join(format!(
+            "{}.sqlite",
+            auth::random_hex_id("suplex_signed_internal_id").unwrap()
+        ));
+        let mut database = SuplexDatabase::open(&path, OpenMode::Migrate).unwrap();
+        seed_shared_ceremony(&database, &token, now, "challenge_internal_id");
+        let mut response = fixture["packedFullRs256"].clone();
+        response["id"] = json!("YWJj");
+        response["rawId"] = json!("YWJj");
+        let enrolled = complete_registration(
+            &mut database,
+            "user",
+            &token,
+            "challenge_internal_id",
+            &response,
+            WebAuthnSite {
+                origin: fixture["origin"].as_str().unwrap(),
+                rp_id: fixture["rpId"].as_str().unwrap(),
+            },
+            now,
+        )
+        .unwrap();
+        assert_eq!(enrolled.user.id, "user_existing");
+        let stored: String = database
+            .connection()
+            .query_row("SELECT credential_id FROM suplex_credentials", [], |row| {
+                row.get(0)
+            })
+            .unwrap();
+        assert_eq!(stored, "g06So-HmBl8oCMHl5j466FSFEHvjutKcDJL3rhSZttc");
+        assert_ne!(stored, response["id"]);
+        drop(database);
+        let _ = std::fs::remove_file(&path);
+        let _ = std::fs::remove_file(path.with_extension("sqlite-wal"));
+        let _ = std::fs::remove_file(path.with_extension("sqlite-shm"));
     }
 
     fn run_typescript(

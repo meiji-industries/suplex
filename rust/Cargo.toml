@@ -11,6 +11,7 @@ chrono = "0.4"
 libc = "0.2"
 openssl = "0.10"
 regex = "1"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
 rmcp = { version = "=3.4.1", default-features = false, features = ["server", "macros", "transport-io", "transport-streamable-http-server"] }
 rusqlite = { version = "0.40.2", default-features = false, features = ["bundled"] }
 serde = { version = "1", features = ["derive"] }
@@ -21,3 +22,4 @@ sha2 = "0.10"
 tokio = { version = "1", features = ["io-util", "macros", "net", "process", "rt-multi-thread", "signal", "time"] }
 url = "2"
 webauthn-rs-core = "=0.5.4"
+x509-parser = "0.16"

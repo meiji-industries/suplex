@@ -1,5 +1,7 @@
 import { readFileSync } from 'node:fs';
-import { expect, test } from 'vitest';
+import { createRequire } from 'node:module';
+import { X509Certificate } from 'node:crypto';
+import { expect, test, vi } from 'vitest';
 import { verifyAuthenticationResponse, verifyRegistrationResponse, type AuthenticationResponseJSON, type RegistrationResponseJSON } from '@simplewebauthn/server';
 
 const fixture = JSON.parse(readFileSync(new URL('./fixtures/webauthn-interop.json', import.meta.url), 'utf8')) as {
@@ -42,6 +44,144 @@ const fixture = JSON.parse(readFileSync(new URL('./fixtures/webauthn-interop.jso
   invalidU2fAaguid: RegistrationResponseJSON;
   invalidU2fSignature: RegistrationResponseJSON;
 };
+const upstreamTpm = JSON.parse(readFileSync(new URL('./fixtures/webauthn-tpm-upstream.json', import.meta.url), 'utf8')) as RegistrationResponseJSON;
+const upstreamApple = JSON.parse(readFileSync(new URL('./fixtures/webauthn-apple-upstream.json', import.meta.url), 'utf8')) as RegistrationResponseJSON;
+const upstreamAndroidKey = JSON.parse(readFileSync(new URL('./fixtures/webauthn-android-key-upstream.json', import.meta.url), 'utf8')) as RegistrationResponseJSON;
+const syntheticSafetyNet = JSON.parse(readFileSync(new URL('./fixtures/webauthn-safetynet-synthetic.json', import.meta.url), 'utf8')) as {
+  timestampMs: number;
+  rootPEM: string;
+  rpId: string;
+  origin: string;
+  challenge: string;
+  registration: RegistrationResponseJSON;
+  falseCtsRegistration: RegistrationResponseJSON;
+  paddedRegistration: RegistrationResponseJSON;
+};
+const requireFromServer = createRequire(import.meta.resolve('@simplewebauthn/server'));
+const { decodeCBOR, encodeCBOR } = requireFromServer('@levischuck/tiny-cbor') as {
+  decodeCBOR: (bytes: Uint8Array) => Map<string, unknown>;
+  encodeCBOR: (value: Map<string, unknown>) => Uint8Array;
+};
+
+test('SimpleWebAuthn accepts the signed upstream TPM response and rejects changed evidence', async () => {
+  const input = {
+    response: upstreamTpm,
+    expectedChallenge: 'E2YebMmG9992XialpFL1lkPptOIBPeKsphNkt1JcbKk',
+    expectedOrigin: 'https://webauthn.firstyear.id.au',
+    expectedRPID: 'webauthn.firstyear.id.au',
+    requireUserVerification: true,
+  };
+  expect((await verifyRegistrationResponse(input)).verified).toBe(true);
+  await expect(verifyRegistrationResponse({ ...input, expectedChallenge: 'wrong' })).rejects.toThrow();
+  await expect(verifyRegistrationResponse({ ...input, expectedOrigin: 'https://wrong.example' })).rejects.toThrow();
+  await expect(verifyRegistrationResponse({ ...input, expectedRPID: 'wrong.example' })).rejects.toThrow();
+  for (const field of ['sig', 'pubArea', 'certInfo']) {
+    const response = structuredClone(upstreamTpm);
+    const object = decodeCBOR(Uint8Array.from(Buffer.from(response.response.attestationObject, 'base64url')));
+    const statement = object.get('attStmt') as Map<string, Uint8Array>;
+    const changed = Uint8Array.from(statement.get(field)!);
+    changed[Math.floor(changed.length / 2)]! ^= 1;
+    statement.set(field, changed);
+    response.response.attestationObject = Buffer.from(encodeCBOR(object)).toString('base64url');
+    let verified = false;
+    try {
+      verified = (await verifyRegistrationResponse({ ...input, response })).verified;
+    } catch {
+      verified = false;
+    }
+    expect(verified, field).toBe(false);
+  }
+});
+
+test('SimpleWebAuthn checks the historical Apple attestation certificate window', async () => {
+  const input = {
+    response: upstreamApple,
+    expectedChallenge: 'JTbk7yekIKOZQwwdGW7NeDIfxrYK0PvuYxsue--G9NI',
+    expectedOrigin: 'https://spectral.local:8443',
+    expectedRPID: 'spectral.local',
+    requireUserVerification: true,
+  };
+  vi.useFakeTimers();
+  try {
+    vi.setSystemTime(new Date('2020-12-09T00:00:00Z'));
+    expect((await verifyRegistrationResponse(input)).verified).toBe(true);
+    vi.setSystemTime(new Date('2026-09-24T00:00:00Z'));
+    await expect(verifyRegistrationResponse(input)).rejects.toThrow();
+  } finally {
+    vi.useRealTimers();
+  }
+});
+
+test('SimpleWebAuthn requires the SafetyNet root and CTS policy for a signed statement', async () => {
+  const { SettingsService } = await import(new URL('./services/settingsService.js', import.meta.resolve('@simplewebauthn/server')).href);
+  const originalRoots = SettingsService.getRootCertificates({ identifier: 'android-safetynet' });
+  const input = {
+    expectedChallenge: syntheticSafetyNet.challenge,
+    expectedOrigin: syntheticSafetyNet.origin,
+    expectedRPID: syntheticSafetyNet.rpId,
+    requireUserVerification: true,
+  };
+  vi.useFakeTimers();
+  try {
+    vi.setSystemTime(syntheticSafetyNet.timestampMs + 1000);
+    await expect(verifyRegistrationResponse({ ...input, response: syntheticSafetyNet.registration })).rejects.toThrow();
+    SettingsService.setRootCertificates({ identifier: 'android-safetynet', certificates: [syntheticSafetyNet.rootPEM] });
+    expect((await verifyRegistrationResponse({ ...input, response: syntheticSafetyNet.registration })).verified).toBe(true);
+    expect((await verifyRegistrationResponse({ ...input, response: syntheticSafetyNet.paddedRegistration })).verified).toBe(true);
+    await expect(verifyRegistrationResponse({ ...input, response: syntheticSafetyNet.falseCtsRegistration })).rejects.toThrow();
+    const changedStatement = (field: string, value: unknown) => {
+      const response = structuredClone(syntheticSafetyNet.registration);
+      const object = decodeCBOR(Uint8Array.from(Buffer.from(response.response.attestationObject, 'base64url')));
+      const statement = object.get('attStmt') as Map<string, unknown>;
+      statement.set(field, value);
+      response.response.attestationObject = Buffer.from(encodeCBOR(object)).toString('base64url');
+      return response;
+    };
+    expect((await verifyRegistrationResponse({ ...input, response: changedStatement('ver', 1) })).verified).toBe(true);
+    await expect(verifyRegistrationResponse({ ...input, response: changedStatement('alg', 'invalid') })).rejects.toThrow();
+  } finally {
+    SettingsService.setRootCertificates({ identifier: 'android-safetynet', certificates: originalRoots });
+    vi.useRealTimers();
+  }
+});
+
+test('SimpleWebAuthn accepts archived Android Key only under its test root', async () => {
+  const { SettingsService } = await import(new URL('./services/settingsService.js', import.meta.resolve('@simplewebauthn/server')).href);
+  const originalRoots = SettingsService.getRootCertificates({ identifier: 'android-key' });
+  const input = {
+    response: upstreamAndroidKey,
+    expectedChallenge: 'Tf65bS6D5temh2BwvptqgBPb25iZDRxjwC5ans91IIJDrcrOpnWTK4LVgFjeUV4GDMe44w8SI5NsZssIXTUvDg',
+    expectedOrigin: 'https://webauthn.org',
+    expectedRPID: 'webauthn.org',
+    requireUserVerification: true,
+  };
+  const object = decodeCBOR(Uint8Array.from(Buffer.from(upstreamAndroidKey.response.attestationObject, 'base64url')));
+  const statement = object.get('attStmt') as Map<string, Uint8Array[]>;
+  const certificates = statement.get('x5c')!;
+  const root = new X509Certificate(Buffer.from(certificates.at(-1)!)).toString();
+  vi.useFakeTimers();
+  try {
+    vi.setSystemTime(new Date('2020-01-01T00:00:00Z'));
+    await expect(verifyRegistrationResponse(input)).rejects.toThrow();
+    SettingsService.setRootCertificates({ identifier: 'android-key', certificates: [root] });
+    const verified = await verifyRegistrationResponse(input);
+    expect(verified.verified).toBe(true);
+    if (verified.verified) expect(verified.registrationInfo.credential.id).toBe('AVUvAmX241vMKYd7ZBdmkNWaYcNYhoSZCJjFRGmROb6I4ygQUVmH6k9IMwcbZGeAQ4v4WMNphORudwje5h7ty9A');
+    const badSignature = structuredClone(upstreamAndroidKey);
+    const changed = decodeCBOR(Uint8Array.from(Buffer.from(badSignature.response.attestationObject, 'base64url')));
+    const statement = changed.get('attStmt') as Map<string, Uint8Array>;
+    const signature = Uint8Array.from(statement.get('sig')!);
+    signature[Math.floor(signature.length / 2)]! ^= 1;
+    statement.set('sig', signature);
+    badSignature.response.attestationObject = Buffer.from(encodeCBOR(changed)).toString('base64url');
+    let accepted = false;
+    try { accepted = (await verifyRegistrationResponse({ ...input, response: badSignature })).verified; } catch { accepted = false; }
+    expect(accepted).toBe(false);
+  } finally {
+    SettingsService.setRootCertificates({ identifier: 'android-key', certificates: originalRoots });
+    vi.useRealTimers();
+  }
+});
 
 test('SimpleWebAuthn accepts the shared synthetic credential and both counter modes', async () => {
   const registered = await verifyRegistrationResponse({ response: fixture.registration, expectedChallenge: fixture.registrationChallenge, expectedOrigin: fixture.origin, expectedRPID: fixture.rpId, requireUserVerification: true });
@@ -83,6 +223,21 @@ test('SimpleWebAuthn accepts the shared synthetic credential and both counter mo
     expect((await verifyAuthenticationResponse({ response: vector.assertion, expectedChallenge: fixture.authenticationChallenge, expectedOrigin: fixture.origin, expectedRPID: fixture.rpId, credential: registered.registrationInfo.credential, requireUserVerification: true })).verified).toBe(true);
   }
   await expect(verify(fixture.assertion, 1)).rejects.toThrow();
+});
+
+test('SimpleWebAuthn stores the signed authenticator ID when response id differs', async () => {
+  const response = structuredClone(fixture.packedFullRs256);
+  response.id = 'YWJj';
+  response.rawId = 'YWJj';
+  const verified = await verifyRegistrationResponse({
+    response,
+    expectedChallenge: fixture.registrationChallenge,
+    expectedOrigin: fixture.origin,
+    expectedRPID: fixture.rpId,
+    requireUserVerification: true,
+  });
+  expect(verified.verified).toBe(true);
+  if (verified.verified) expect(verified.registrationInfo.credential.id).toBe('g06So-HmBl8oCMHl5j466FSFEHvjutKcDJL3rhSZttc');
 });
 
 test('SimpleWebAuthn rejects changed ceremony identity, UV, and signature', async () => {

@@ -36,6 +36,20 @@ test("malformed Jira URL refinement keeps the existing internal error response",
   } finally { await f.close(); }
 });
 
+test("project validation responses preserve root and UTF-16 record findings before origin checks", async () => {
+  const f = await nativeApp();
+  try {
+    const invalidOrigin = { ...f.headers, origin: "https://foreign.example", "content-type": "application/json" };
+    const root = await f.app.inject({ method: "POST", url: `/api/companies/${f.company.id}/projects`, headers: invalidOrigin, payload: "{}" });
+    expect(root.statusCode).toBe(400);
+    expect(root.body).toBe('{"error":"Invalid request","findings":[{"code":"invalid-invalid_union","field":".","message":"Request value is invalid"}]}');
+    const existing = ProjectBodySchema.strip().parse(f.project);
+    const nested = await f.app.inject({ method: "PATCH", url: `/api/projects/${f.project.id}`, headers: invalidOrigin, payload: JSON.stringify({ ...existing, execution: { environment: { "\ud800": 1 } } }) });
+    expect(nested.statusCode).toBe(400);
+    expect(nested.body).toBe('{"error":"Invalid request","findings":[{"code":"invalid-invalid_key","field":".execution.environment.\\ud800","message":"Request value is invalid"}]}');
+  } finally { await f.close(); }
+});
+
 test("project task sources accept issue discovery through the HTTP route", async () => {
   const f = await nativeApp();
   try {

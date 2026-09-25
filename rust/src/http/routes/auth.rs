@@ -1,4 +1,4 @@
-use std::error::Error;
+use std::{error::Error, future::Future};
 
 use axum::{
     Json, Router,
@@ -13,15 +13,16 @@ use serde::Serialize;
 use serde_json::json;
 
 use crate::{
-    http::contracts,
+    http::contracts::{self, JsContractFailure},
     identity::{
         auth::{self, AuthFailure, AuthUser, ProfileUpdate},
-        ceremony::{self, WebAuthnSite},
+        ceremony::{self, PreparedCredential, WebAuthnSite},
+        webauthn::StoredCredential,
     },
     shared::js_json::{JsDocument, JsNode},
 };
 
-use super::super::{AppState, session};
+use super::super::{AppState, session, validation};
 
 #[derive(Serialize)]
 struct AuthEnvelope {
@@ -112,19 +113,81 @@ async fn registration_verify(
     let token = js_string(&parsed, "token");
     let challenge_id = js_string(&parsed, "challengeId");
     let response = js_response(&parsed, WebAuthnCredentialKind::Registration);
-    let result = state.with_database(|database| {
-        ceremony::complete_registration_prepared(
+    let origin = reachable.origin().ascii_serialization();
+    let rp_id = reachable.host_str().unwrap_or_default().to_owned();
+    // Once admitted, continue the ceremony even if its HTTP future is dropped.
+    // The SDK also consumes the challenge before awaiting attestation checks.
+    let task = tokio::spawn(run_registration_ceremony(
+        RegistrationAttempt {
+            state,
+            kind,
+            token,
+            challenge_id,
+            response,
+            origin,
+            rp_id,
+        },
+        |response, challenge, origin, rp_id| async move {
+            ceremony::verify_consumed_registration(
+                &response,
+                &challenge,
+                WebAuthnSite {
+                    origin: &origin,
+                    rp_id: &rp_id,
+                },
+            )
+            .await
+        },
+    ));
+    match task.await {
+        Ok(response) => response,
+        Err(_) => error(StatusCode::INTERNAL_SERVER_ERROR, "Internal server error"),
+    }
+}
+
+struct RegistrationAttempt {
+    state: AppState,
+    kind: &'static str,
+    token: String,
+    challenge_id: String,
+    response: PreparedCredential,
+    origin: String,
+    rp_id: String,
+}
+
+async fn run_registration_ceremony<F, Fut>(attempt: RegistrationAttempt, verify: F) -> Response
+where
+    F: FnOnce(PreparedCredential, String, String, String) -> Fut + Send,
+    Fut: Future<Output = Result<StoredCredential, Box<dyn Error>>> + Send,
+{
+    let RegistrationAttempt {
+        state,
+        kind,
+        token,
+        challenge_id,
+        response,
+        origin,
+        rp_id,
+    } = attempt;
+    let challenge = match state.with_database(|database| {
+        ceremony::consume_registration_challenge(
             database,
             kind,
             &token,
             &challenge_id,
-            response,
-            WebAuthnSite {
-                origin: reachable.origin().ascii_serialization().as_str(),
-                rp_id: reachable.host_str().unwrap_or_default(),
-            },
+            &response,
             Utc::now(),
         )
+    }) {
+        Ok(challenge) => challenge,
+        Err(error) => return service_error(error),
+    };
+    let verified = match verify(response, challenge, origin, rp_id).await {
+        Ok(verified) => verified,
+        Err(error) => return service_error(error),
+    };
+    let result = state.with_database(|database| {
+        ceremony::finish_registration(database, kind, &token, verified, Utc::now())
     });
     auth_result(&state, result)
 }
@@ -295,30 +358,9 @@ pub(crate) fn append_cookies(response: &mut Response, cookies: Vec<String>) {
 }
 
 pub(crate) fn validation_error(issues: Vec<serde_json::Value>) -> Response {
-    let findings = issues
-        .into_iter()
-        .map(|issue| {
-            let code = issue["code"].as_str().unwrap_or("request");
-            let field = issue["path"]
-                .as_array()
-                .map(|path| {
-                    format!(
-                        ".{}",
-                        path.iter()
-                            .filter_map(serde_json::Value::as_str)
-                            .collect::<Vec<_>>()
-                            .join(".")
-                    )
-                })
-                .unwrap_or_else(|| ".".to_owned());
-            json!({ "code": format!("invalid-{code}"), "field": field, "message": "Request value is invalid" })
-        })
-        .collect::<Vec<_>>();
-    (
-        StatusCode::BAD_REQUEST,
-        Json(json!({ "error": "Invalid request", "findings": findings })),
-    )
-        .into_response()
+    let raw = crate::shared::js_json::stringify(&serde_json::Value::Array(issues));
+    let document = JsDocument::parse(&raw).expect("serialized validation issues parse");
+    validation::validation_error_js(&document)
 }
 
 pub(crate) fn validated_body(
@@ -358,7 +400,7 @@ pub(crate) fn validated_body(
     }
 }
 
-fn validated_js_body(
+pub(crate) fn validated_js_body(
     headers: &HeaderMap,
     body: &Bytes,
     contract: &str,
@@ -387,9 +429,15 @@ fn validated_js_body(
             "Unsupported media type",
         )));
     };
-    match contracts::validate_js(contract, document.as_ref()) {
+    match contracts::validate_js_detailed(contract, document.as_ref()) {
         Some(Ok(value)) => Ok(value),
-        Some(Err(issues)) => Err(Box::new(validation_error(issues))),
+        Some(Err(JsContractFailure::Issues(issues))) => {
+            Err(Box::new(validation::validation_error_js(&issues)))
+        }
+        Some(Err(JsContractFailure::Thrown(_))) => Err(Box::new(error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Internal server error",
+        ))),
         None => Err(Box::new(error(
             StatusCode::INTERNAL_SERVER_ERROR,
             "Internal server error",
@@ -672,6 +720,129 @@ mod tests {
         headers.insert("host", HeaderValue::from_static("suplex.example.test:4111"));
         let after = me(State(state.clone()), headers).await;
         assert_eq!(after.status(), StatusCode::UNAUTHORIZED);
+        drop(state);
+        let _ = std::fs::remove_file(&filename);
+        let _ = std::fs::remove_file(filename.with_extension("sqlite-wal"));
+        let _ = std::fs::remove_file(filename.with_extension("sqlite-shm"));
+    }
+
+    #[tokio::test]
+    async fn crl_wait_releases_database_and_dropped_waiter_does_not_cancel_registration() {
+        use chrono::Duration;
+        use rusqlite::params;
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let (state, filename) = state();
+        let fixture: serde_json::Value = serde_json::from_str(include_str!(
+            "../../../../tests/fixtures/webauthn-interop.json"
+        ))
+        .unwrap();
+        let token = format!("invite_v1_user_{}", "A".repeat(43));
+        let now = Utc::now();
+        state.with_database(|database| {
+            database.connection().execute("INSERT INTO suplex_users (id, display_name, username, avatar_seed, role, status, created_at, updated_at, identity_version) VALUES ('user_existing', 'Fixture member', 'user_v1_user_existing', 'user_v1_user_existing', 'member', 'pending', ?1, ?1, 1)", [now.to_rfc3339()]).unwrap();
+            database.connection().execute("INSERT INTO suplex_invitations (id, token_hash, kind, display_name, user_id, expires_at, created_at, metadata_json) VALUES ('invitation_crl', ?1, 'user', 'Fixture member', 'user_existing', ?2, ?3, '{}')", params![auth::hash_secret(&token), (now + Duration::days(1)).to_rfc3339(), now.to_rfc3339()]).unwrap();
+            database.connection().execute("INSERT INTO suplex_challenges (id, challenge, kind, invitation_id, user_id, expires_at, created_at) VALUES ('challenge_crl', ?1, 'registration:user', 'invitation_crl', 'user_existing', ?2, ?3)", params![fixture["registrationChallenge"].as_str().unwrap(), (now + Duration::minutes(5)).to_rfc3339(), now.to_rfc3339()]).unwrap();
+        });
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/crl", listener.local_addr().unwrap());
+        let (request_seen, request_waiter) = tokio::sync::oneshot::channel();
+        let (release_sender, release) = tokio::sync::oneshot::channel();
+        let server = tokio::spawn(async move {
+            let (mut stream, _) = listener.accept().await.unwrap();
+            let mut request = [0_u8; 1024];
+            let _ = stream.read(&mut request).await.unwrap();
+            request_seen.send(()).unwrap();
+            release.await.unwrap();
+            stream
+                .write_all(
+                    b"HTTP/1.1 200 OK\r\nContent-Length: 7\r\nConnection: close\r\n\r\ninvalid",
+                )
+                .await
+                .unwrap();
+        });
+        let response = PreparedCredential {
+            shape_valid: true,
+            payload: Some(fixture["packedFullRs256"].clone()),
+        };
+        let attempt = RegistrationAttempt {
+            state: state.clone(),
+            kind: "user",
+            token,
+            challenge_id: "challenge_crl".into(),
+            response,
+            origin: fixture["origin"].as_str().unwrap().into(),
+            rp_id: fixture["rpId"].as_str().unwrap().into(),
+        };
+        let waiter = tokio::spawn(run_registration_ceremony(
+            attempt,
+            move |response, challenge, origin, rp_id| async move {
+                crate::identity::webauthn::probe_fixture_crl(&url)
+                    .await
+                    .map_err(|_| {
+                        Box::new(AuthFailure::new(
+                            "Passkey could not be verified",
+                            400,
+                            "passkey_invalid",
+                        )) as Box<dyn Error>
+                    })?;
+                ceremony::verify_consumed_registration(
+                    &response,
+                    &challenge,
+                    WebAuthnSite {
+                        origin: &origin,
+                        rp_id: &rp_id,
+                    },
+                )
+                .await
+            },
+        ));
+        request_waiter.await.unwrap();
+        let (consumed, status): (Option<String>, String) = state.with_database(|database| {
+            (
+                database
+                    .connection()
+                    .query_row(
+                        "SELECT consumed_at FROM suplex_challenges WHERE id = 'challenge_crl'",
+                        [],
+                        |row| row.get(0),
+                    )
+                    .unwrap(),
+                database
+                    .connection()
+                    .query_row(
+                        "SELECT status FROM suplex_users WHERE id = 'user_existing'",
+                        [],
+                        |row| row.get(0),
+                    )
+                    .unwrap(),
+            )
+        });
+        assert!(consumed.is_some());
+        assert_eq!(status, "pending");
+        drop(waiter);
+        release_sender.send(()).unwrap();
+        server.await.unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                let status: String = state.with_database(|database| {
+                    database
+                        .connection()
+                        .query_row(
+                            "SELECT status FROM suplex_users WHERE id = 'user_existing'",
+                            [],
+                            |row| row.get(0),
+                        )
+                        .unwrap()
+                });
+                if status == "active" {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
         drop(state);
         let _ = std::fs::remove_file(&filename);
         let _ = std::fs::remove_file(filename.with_extension("sqlite-wal"));

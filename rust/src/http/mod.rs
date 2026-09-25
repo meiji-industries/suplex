@@ -21,6 +21,7 @@ pub mod routes {
     pub mod unported;
 }
 pub mod session;
+pub mod validation;
 
 #[derive(Clone)]
 pub struct AppState {

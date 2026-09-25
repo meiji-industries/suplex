@@ -193,6 +193,32 @@ const semanticInputs: Record<string, Record<string, unknown>> = {
     nested_profile_error: { profiles: [{ provider: "codex", model: "gpt-6", reasoningLevel: "high", serviceTier: "priority", name: "Profile", role: "worker", avatarSeed: "bad", id: "profile", archivedAt: null, createdAt: "now", updatedAt: "now" }] },
     nested_profile_strip: { profiles: [{ provider: "codex", model: "gpt-6", reasoningLevel: "high", serviceTier: "priority", name: "Profile", role: "worker", avatarSeed: "0123456789abcdef0123456789abcdef", id: "profile", archivedAt: null, createdAt: "now", updatedAt: "now", extra: true }] },
   },
+  "projects.ProjectRepositoryDefaultsResponseSchema": {
+    empty_commands: { setupCommand: "", verificationCommand: "" },
+    stripped_unknown: { setupCommand: "pnpm install", verificationCommand: "pnpm test", extra: true },
+    wrong_command: { setupCommand: null, verificationCommand: 1 },
+  },
+  "projects.ProjectProviderInstanceSchema": {
+    invalid_provider: { id: "one", provider: "other", label: "Other" },
+    stripped_unknown: { id: "one", provider: "codex", label: "Codex", homeDirectory: "/tmp" },
+  },
+  "projects.ProjectProviderInstanceListResponseSchema": {
+    nested_invalid_provider: { instances: [{ id: "one", provider: "other", label: "Other" }] },
+    nested_strip: { instances: [{ id: "one", provider: "codex", label: "Codex", homeDirectory: "/tmp" }], extra: true },
+  },
+  "projects.ModelResponseSchema": {
+    invalid_status: { id: "one", provider: "codex", providerLabel: "Codex", providerStatus: "ready", displayName: "GPT" },
+    stripped_unknown: { id: "one", provider: "codex", providerLabel: "Codex", providerStatus: "configured", displayName: "GPT", extra: true },
+  },
+  "projects.ModelListResponseSchema": {
+    nested_invalid_model: { models: [{ id: "one", provider: "other", providerLabel: "Other", providerStatus: "ready", displayName: "GPT" }] },
+    nested_strip: { models: [{ id: "one", provider: "codex", providerLabel: "Codex", providerStatus: "configured", displayName: "GPT", extra: true }] },
+  },
+  "projects.TaskSourceQuerySchema": {
+    branch_kind: { kind: "branch" },
+    invalid_kind: { kind: "other" },
+    stripped_unknown: { kind: "issue", extra: true },
+  },
 };
 
 type Fixture = { contract: string; case: string; input?: unknown; expected: { accepted: true; value: unknown } | { accepted: false; error: z.core.$ZodIssue[] } };

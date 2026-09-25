@@ -1,0 +1,24 @@
+{
+  "contract": "projects.TaskSourceQuerySchema",
+  "case": "invalid_kind",
+  "input": {
+    "kind": "other"
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid_value",
+        "values": [
+          "pull_request",
+          "issue",
+          "branch"
+        ],
+        "path": [
+          "kind"
+        ],
+        "message": "Invalid option: expected one of \"pull_request\"|\"issue\"|\"branch\""
+      }
+    ]
+  }
+}

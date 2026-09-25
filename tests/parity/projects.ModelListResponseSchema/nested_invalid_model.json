@@ -1,0 +1,48 @@
+{
+  "contract": "projects.ModelListResponseSchema",
+  "case": "nested_invalid_model",
+  "input": {
+    "models": [
+      {
+        "id": "one",
+        "provider": "other",
+        "providerLabel": "Other",
+        "providerStatus": "ready",
+        "displayName": "GPT"
+      }
+    ]
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid_value",
+        "values": [
+          "opencode",
+          "claude-code",
+          "devin",
+          "codex"
+        ],
+        "path": [
+          "models",
+          0,
+          "provider"
+        ],
+        "message": "Invalid option: expected one of \"opencode\"|\"claude-code\"|\"devin\"|\"codex\""
+      },
+      {
+        "code": "invalid_value",
+        "values": [
+          "configured",
+          "missing"
+        ],
+        "path": [
+          "models",
+          0,
+          "providerStatus"
+        ],
+        "message": "Invalid option: expected one of \"configured\"|\"missing\""
+      }
+    ]
+  }
+}

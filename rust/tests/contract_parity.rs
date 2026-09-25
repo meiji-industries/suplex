@@ -65,7 +65,7 @@ fn ported_contracts_match_zod_fixtures() {
             }
         }
     }
-    assert_eq!(schemas.len(), 40, "forty explicitly ported schemas");
+    assert_eq!(schemas.len(), 46, "forty-six explicitly ported schemas");
     assert!(
         verified >= 140,
         "every ported schema has multiple Zod cases"

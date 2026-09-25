@@ -1,0 +1,14 @@
+{
+  "contract": "projects.TaskSourceQuerySchema",
+  "case": "stripped_unknown",
+  "input": {
+    "kind": "issue",
+    "extra": true
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "kind": "issue"
+    }
+  }
+}

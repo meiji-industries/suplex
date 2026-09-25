@@ -1,0 +1,18 @@
+{
+  "contract": "projects.ProjectProviderInstanceSchema",
+  "case": "stripped_unknown",
+  "input": {
+    "id": "one",
+    "provider": "codex",
+    "label": "Codex",
+    "homeDirectory": "/tmp"
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "id": "one",
+      "provider": "codex",
+      "label": "Codex"
+    }
+  }
+}

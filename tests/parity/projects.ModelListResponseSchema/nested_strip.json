@@ -1,0 +1,30 @@
+{
+  "contract": "projects.ModelListResponseSchema",
+  "case": "nested_strip",
+  "input": {
+    "models": [
+      {
+        "id": "one",
+        "provider": "codex",
+        "providerLabel": "Codex",
+        "providerStatus": "configured",
+        "displayName": "GPT",
+        "extra": true
+      }
+    ]
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "models": [
+        {
+          "id": "one",
+          "provider": "codex",
+          "providerLabel": "Codex",
+          "providerStatus": "configured",
+          "displayName": "GPT"
+        }
+      ]
+    }
+  }
+}

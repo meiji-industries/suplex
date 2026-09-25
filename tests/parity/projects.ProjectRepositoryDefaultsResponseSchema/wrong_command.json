@@ -1,0 +1,29 @@
+{
+  "contract": "projects.ProjectRepositoryDefaultsResponseSchema",
+  "case": "wrong_command",
+  "input": {
+    "setupCommand": null,
+    "verificationCommand": 1
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "expected": "string",
+        "code": "invalid_type",
+        "path": [
+          "setupCommand"
+        ],
+        "message": "Invalid input: expected string, received null"
+      },
+      {
+        "expected": "string",
+        "code": "invalid_type",
+        "path": [
+          "verificationCommand"
+        ],
+        "message": "Invalid input: expected string, received number"
+      }
+    ]
+  }
+}

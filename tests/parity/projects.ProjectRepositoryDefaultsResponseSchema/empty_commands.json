@@ -1,0 +1,15 @@
+{
+  "contract": "projects.ProjectRepositoryDefaultsResponseSchema",
+  "case": "empty_commands",
+  "input": {
+    "setupCommand": "",
+    "verificationCommand": ""
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "setupCommand": "",
+      "verificationCommand": ""
+    }
+  }
+}

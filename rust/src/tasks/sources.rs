@@ -501,6 +501,7 @@ mod tests {
         let work = base.join("work");
         let signature = git2::Signature::now("Fixture", "fixture@example.invalid").unwrap();
         let upstream = Repository::init(&origin).unwrap();
+        upstream.set_head("refs/heads/main").unwrap();
         let tree = upstream.treebuilder(None).unwrap().write().unwrap();
         let tree = upstream.find_tree(tree).unwrap();
         let main = upstream

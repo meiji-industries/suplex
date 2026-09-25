@@ -33,6 +33,7 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/api/tasks/{task_id}/activity", get(activity))
         .route("/api/tasks/{task_id}/execution", get(execution))
+        .route("/api/tasks/{task_id}/diff", get(diff))
         .route("/api/tasks/{task_id}/diff/summary", get(diff_summary))
 }
 
@@ -311,11 +312,35 @@ async fn diff_summary(
     diff_summary_with_access(state, task_id, headers, None).await
 }
 
+async fn diff(
+    State(state): State<AppState>,
+    Path(task_id): Path<String>,
+    headers: HeaderMap,
+) -> Response {
+    read_diff(state, task_id, headers, None, DiffKind::Patch).await
+}
+
+#[derive(Clone, Copy)]
+enum DiffKind {
+    Patch,
+    Summary,
+}
+
 async fn diff_summary_with_access(
     state: AppState,
     task_id: String,
     headers: HeaderMap,
     access_override: Option<Access>,
+) -> Response {
+    read_diff(state, task_id, headers, access_override, DiffKind::Summary).await
+}
+
+async fn read_diff(
+    state: AppState,
+    task_id: String,
+    headers: HeaderMap,
+    access_override: Option<Access>,
+    kind: DiffKind,
 ) -> Response {
     if let Err(response) = validated_task_id(&task_id) {
         return *response;
@@ -365,7 +390,11 @@ async fn diff_summary_with_access(
     };
     let (path, repository, base_branch) = match intent {
         DiffIntent::NoWorktree => {
-            return respond(Ok(json!({"available":false,"files":0})), cookies);
+            let value = match kind {
+                DiffKind::Patch => json!({"available":false,"patch":"","truncated":false}),
+                DiffKind::Summary => json!({"available":false,"files":0}),
+            };
+            return respond(Ok(value), cookies);
         }
         DiffIntent::Unsupported => {
             let mut response = auth::not_ported();
@@ -388,20 +417,24 @@ async fn diff_summary_with_access(
     };
     let token = access.token().map(str::to_owned);
     let observed = tokio::task::spawn_blocking(move || {
-        worktree::local_diff_file_count(&path, published_sha, token.as_deref())
-            .map_err(|error| error.to_string())
+        let result = match kind {
+            DiffKind::Patch => worktree::local_diff_patch(&path, published_sha, token.as_deref())
+                .map(|patch| json!({"available":true,"patch":patch,"truncated":false})),
+            DiffKind::Summary => {
+                worktree::local_diff_file_count(&path, published_sha, token.as_deref())
+                    .map(|files| json!({"available":true,"files":files}))
+            }
+        };
+        result.map_err(|error| error.to_string())
     })
     .await;
-    let files = match observed {
-        Ok(Ok(files)) => files,
+    let value = match observed {
+        Ok(Ok(value)) => value,
         Ok(Err(error)) => return respond(Err(Box::new(std::io::Error::other(error))), cookies),
         Err(error) => return respond(Err(Box::new(error)), cookies),
     };
     let scope = state.with_database(|database| read_task(database, &user_id, &task_id));
-    respond(
-        scope.map(|_| json!({"available":true,"files":files})),
-        cookies,
-    )
+    respond(scope.map(|_| value), cookies)
 }
 
 #[cfg(test)]
@@ -491,6 +524,16 @@ mod tests {
         headers.insert(
             "cookie",
             HeaderValue::from_str(&format!("sid_v1={}", admin.session_token)).unwrap(),
+        );
+        let empty_diff = diff(State(state.clone()), Path(task.id.clone()), headers.clone()).await;
+        assert_eq!(empty_diff.status(), StatusCode::OK);
+        assert_eq!(empty_diff.headers()[CACHE_CONTROL], "private, no-store");
+        assert_eq!(
+            serde_json::from_slice::<Value>(
+                &to_bytes(empty_diff.into_body(), usize::MAX).await.unwrap()
+            )
+            .unwrap(),
+            json!({"available":false,"patch":"","truncated":false})
         );
         let activity_response =
             activity(State(state.clone()), Path(task.id.clone()), headers.clone()).await;
@@ -707,6 +750,48 @@ mod tests {
             serde_json::from_slice::<Value>(&summary_body).unwrap(),
             json!({"available":true,"files":3})
         );
+        fs::write(
+            local.join("README.md"),
+            format!("password=fixture\n{}", "Large diff é\n".repeat(2000)),
+        )
+        .unwrap();
+        fs::write(local.join("UNTRACKED.md"), "Not in the patch\n").unwrap();
+        git(&["config", "diff.context", "5"], &local);
+        let patch_response = read_diff(
+            state.clone(),
+            task.id.clone(),
+            headers.clone(),
+            Some(access()),
+            DiffKind::Patch,
+        )
+        .await;
+        assert_eq!(patch_response.status(), StatusCode::OK);
+        assert_eq!(patch_response.headers()[CACHE_CONTROL], "private, no-store");
+        let patch_body = to_bytes(patch_response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        let patch: Value = serde_json::from_slice(&patch_body).unwrap();
+        assert_eq!(patch["available"], true);
+        assert_eq!(patch["truncated"], false);
+        assert!(patch["patch"].as_str().unwrap().len() > 8192);
+        assert!(patch["patch"].as_str().unwrap().contains("[REDACTED]"));
+        assert!(!patch["patch"].as_str().unwrap().contains("UNTRACKED.md"));
+        if std::env::var_os("SUPLEX_TASK_DIFF_TS_ORACLE").is_some() {
+            let script = r#"import {readTaskDiff} from './src/tasks/inspection.ts'; const task=JSON.parse(process.env.SUPLEX_DIFF_TASK); const published=process.env.SUPLEX_DIFF_BASE; readTaskDiff(task,{getBranchHead:async()=>published,getPullRequest:async()=>{throw new Error('Unexpected PR lookup')}}).then(value=>process.stdout.write(JSON.stringify(value))).catch(error=>{console.error(error);process.exitCode=1});"#;
+            let output = Command::new("node")
+                .args(["node_modules/tsx/dist/cli.mjs", "-e", script])
+                .current_dir(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap())
+                .env("SUPLEX_DIFF_TASK", json!({"configuration":{"repository":"acme/demo","baseBranch":"main","source":null},"worktree":{"path":local},"pullRequest":null}).to_string())
+                .env("SUPLEX_DIFF_BASE", &published)
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+            assert_eq!(patch_body.as_ref(), output.stdout);
+        }
         if std::env::var_os("SUPLEX_TASK_DIFF_TS_ORACLE").is_some() {
             let script = r#"import {readTaskDiffSummary} from './src/tasks/inspection.ts'; const task=JSON.parse(process.env.SUPLEX_DIFF_TASK); const published=process.env.SUPLEX_DIFF_BASE; readTaskDiffSummary(task,{getBranchHead:async()=>published,getPullRequest:async()=>{throw new Error('Unexpected PR lookup')}}).then(value=>process.stdout.write(JSON.stringify(value))).catch(error=>{console.error(error);process.exitCode=1});"#;
             let output = Command::new("node")
@@ -755,6 +840,81 @@ mod tests {
             )
             .unwrap(),
             json!({"available":true,"files":source_files})
+        );
+        for rename_setting in ["false", "true"] {
+            git(&["config", "diff.renames", rename_setting], &local);
+            let source = Command::new("git")
+                .args([
+                    "diff",
+                    "--no-ext-diff",
+                    "--no-textconv",
+                    "--no-color",
+                    &base,
+                    "--",
+                ])
+                .current_dir(&local)
+                .output()
+                .unwrap();
+            assert!(source.status.success());
+            let expected_patch = crate::platform::redaction::command_output(
+                &String::from_utf8(source.stdout).unwrap(),
+            );
+            let response = read_diff(
+                state.clone(),
+                task.id.clone(),
+                headers.clone(),
+                Some(access()),
+                DiffKind::Patch,
+            )
+            .await;
+            assert_eq!(response.status(), StatusCode::OK);
+            assert_eq!(
+                serde_json::from_slice::<Value>(
+                    &to_bytes(response.into_body(), usize::MAX).await.unwrap()
+                )
+                .unwrap(),
+                json!({"available":true,"patch":expected_patch,"truncated":false}),
+                "diff.renames={rename_setting}",
+            );
+        }
+        fs::write(local.join("MOVED.md"), "No final newline").unwrap();
+        fs::write(local.join("task.txt"), b"\0binary payload\n").unwrap();
+        let mode = fs::metadata(local.join("task.txt")).unwrap().permissions();
+        use std::os::unix::fs::PermissionsExt;
+        fs::set_permissions(
+            local.join("task.txt"),
+            fs::Permissions::from_mode(mode.mode() | 0o111),
+        )
+        .unwrap();
+        let source = Command::new("git")
+            .args([
+                "diff",
+                "--no-ext-diff",
+                "--no-textconv",
+                "--no-color",
+                &base,
+                "--",
+            ])
+            .current_dir(&local)
+            .output()
+            .unwrap();
+        assert!(source.status.success());
+        let response = read_diff(
+            state.clone(),
+            task.id.clone(),
+            headers.clone(),
+            Some(access()),
+            DiffKind::Patch,
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(
+            serde_json::from_slice::<Value>(
+                &to_bytes(response.into_body(), usize::MAX).await.unwrap()
+            )
+            .unwrap(),
+            json!({"available":true,"patch":crate::platform::redaction::command_output(&String::from_utf8(source.stdout).unwrap()),"truncated":false}),
+            "binary, mode, and no-final-newline patch",
         );
         state.with_database(|database| {
             database.connection().execute(
@@ -838,6 +998,12 @@ mod tests {
         );
         assert_eq!(
             diff_summary(State(state.clone()), Path(task.id.clone()), headers.clone())
+                .await
+                .status(),
+            StatusCode::NOT_FOUND
+        );
+        assert_eq!(
+            diff(State(state.clone()), Path(task.id.clone()), headers.clone())
                 .await
                 .status(),
             StatusCode::NOT_FOUND

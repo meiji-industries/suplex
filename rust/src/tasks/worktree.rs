@@ -8,9 +8,9 @@ use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
 
 use git2::{
-    AutotagOption, BranchType, Cred, CredentialType, DiffFindOptions, DiffOptions, FetchOptions,
-    RemoteCallbacks, RemoteRedirect, Repository, StatusOptions, WorktreeAddOptions,
-    WorktreePruneOptions,
+    AutotagOption, BranchType, Cred, CredentialType, Diff, DiffFindOptions, DiffFormat,
+    DiffOptions, FetchOptions, RemoteCallbacks, RemoteRedirect, Repository, StatusOptions,
+    WorktreeAddOptions, WorktreePruneOptions,
 };
 
 pub type WorktreeResult<T> = Result<T, Box<dyn Error>>;
@@ -105,17 +105,67 @@ pub fn local_diff_file_count(
     let tree = repository.find_commit(base)?.tree()?;
     let mut options = DiffOptions::new();
     let mut diff = repository.diff_tree_to_workdir_with_index(Some(&tree), Some(&mut options))?;
+    apply_diff_renames(&repository, &mut diff)?;
+    Ok(diff.deltas().count())
+}
+
+/// Read the complete tracked patch against the live published base. The Git
+/// index and workdir are observed together, as `git diff <merge-base> --` does.
+pub fn local_diff_patch(
+    path: &Path,
+    published_sha: git2::Oid,
+    github_token: Option<&str>,
+) -> WorktreeResult<String> {
+    let repository = Repository::open(path)?;
+    let published_sha = published_base_commit(&repository, published_sha, github_token)?;
+    let head = repository.head()?.peel_to_commit()?.id();
+    let base = repository.merge_base(published_sha, head)?;
+    let tree = repository.find_commit(base)?.tree()?;
     let config = repository.config()?;
-    let rename_detection = match config.get_string("diff.renames") {
-        Ok(value) if value.eq_ignore_ascii_case("copies") => true,
-        Ok(_) => config.get_bool("diff.renames")?,
-        Err(error) if error.code() == git2::ErrorCode::NotFound => true,
+    let mut options = DiffOptions::new();
+    options.id_abbrev(
+        config
+            .get_i32("core.abbrev")
+            .ok()
+            .filter(|value| (4..=40).contains(value))
+            .unwrap_or(7) as u16,
+    );
+    options.context_lines(
+        config
+            .get_i32("diff.context")
+            .ok()
+            .filter(|value| *value >= 0)
+            .unwrap_or(3) as u32,
+    );
+    let mut diff = repository.diff_tree_to_workdir_with_index(Some(&tree), Some(&mut options))?;
+    apply_diff_renames(&repository, &mut diff)?;
+    let mut patch_bytes = Vec::new();
+    diff.print(DiffFormat::Patch, |_delta, _hunk, line| {
+        if matches!(line.origin(), '+' | '-' | ' ') {
+            patch_bytes.push(line.origin() as u8);
+        }
+        patch_bytes.extend_from_slice(line.content());
+        true
+    })?;
+    Ok(crate::platform::redaction::command_output(
+        &String::from_utf8_lossy(&patch_bytes),
+    ))
+}
+
+fn apply_diff_renames(repository: &Repository, diff: &mut Diff<'_>) -> WorktreeResult<()> {
+    let config = repository.config()?;
+    let (renames, copies) = match config.get_string("diff.renames") {
+        Ok(value) if value.eq_ignore_ascii_case("copies") => (true, true),
+        Ok(_) => (config.get_bool("diff.renames")?, false),
+        Err(error) if error.code() == git2::ErrorCode::NotFound => (true, false),
         Err(error) => return Err(error.into()),
     };
-    if rename_detection {
+    if copies {
+        diff.find_similar(Some(DiffFindOptions::new().renames(true).copies(true)))?;
+    } else if renames {
         diff.find_similar(Some(DiffFindOptions::new().renames(true)))?;
     }
-    Ok(diff.deltas().count())
+    Ok(())
 }
 
 /// Ensure the GitHub API's authoritative immutable branch commit is available

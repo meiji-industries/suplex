@@ -356,12 +356,12 @@ try {
     ok(sessions.some(session => session.kind === "worker" && session.nativeSessionId));
     if (workflowPhase) {
       const roles = fixture.database.authQuery(db => db.prepare("SELECT advisor_role AS role FROM suplex_task_sessions WHERE task_id = ? AND advisor_role IS NOT NULL ORDER BY advisor_role").all(task.id)) as Array<{ role: string }>;
-      // Pull request repair rates the pull request, repairs it, and rates the repaired head.
-      deepStrictEqual(roles.map(({ role }) => role), phase === "independent_review" ? ["reviewer"] : phase === "competing_plans" ? ["planner_a", "planner_b"] : repair ? ["rater", "rater"] : []);
+      deepStrictEqual(roles.map(({ role }) => role), phase === "independent_review" ? ["reviewer"] : phase === "competing_plans" ? ["planner_a", "planner_b"] : repair ? ["rater"] : []);
       equal(delivered.workflowState.completion?.kind, "workflow");
       if (phase === "independent_review") equal(delivered.workflowState.reviews.at(-1)?.result?.role, "reviewer");
       if (repair) {
-        equal(delivered.workflowState.reviews.at(-1)?.result?.role, "rater");
+        // Pull request repair rates the pull request, repairs it, and rates the repaired head.
+        deepStrictEqual(delivered.workflowState.reviews.map(review => review.result?.role === "rater" ? review.result.rating : null), [6, 9]);
         equal(pulls[0]!.merged, true, "Suplex merged the pull request");
         equal(pulls[0]!.headSha, head, "The merged pull request head is the rated worktree head");
         equal(await branchHead("feature"), head, "Suplex pushed the rated head");

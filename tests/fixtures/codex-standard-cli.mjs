@@ -164,7 +164,7 @@ async function workflowRoot(binding, observed) {
     const head = (await command("git", ["rev-parse", "HEAD"])).trim();
     const latest = observed.control.workflowState.reviews.filter(review => review.role === "rater").at(-1);
     if (!latest || latest.range.headSha !== head) {
-      await rootTool(binding, "delegate_advisor", { role: "rater", brief: `${assignment.plan}\nAcceptance criteria: ${assignment.acceptanceCriteria.join("; ")}` });
+      await rootTool(binding, "delegate_advisor", { role: "rater" });
       return say("root_rate", "Requested the Rater for the current range.");
     }
     if (!latest.result || latest.result.rating < 9) {

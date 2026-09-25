@@ -1,0 +1,47 @@
+{
+  "contract": "agent-api.AgentApiAdminProjectsResponseSchema",
+  "case": "representative",
+  "input": {
+    "agent": {
+      "id": "x",
+      "kind": "external",
+      "name": "x",
+      "avatarSeed": "x",
+      "companyId": "x",
+      "clientProfileId": null,
+      "status": "pending",
+      "projectIds": [],
+      "pairingExpiresAt": null,
+      "pairedAt": null,
+      "credentialCreatedAt": null,
+      "connectionKind": "oauth",
+      "lastUsedAt": null,
+      "revokedAt": null,
+      "createdAt": "x",
+      "updatedAt": "x"
+    }
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "agent": {
+        "id": "x",
+        "kind": "external",
+        "name": "x",
+        "avatarSeed": "x",
+        "companyId": "x",
+        "clientProfileId": null,
+        "status": "pending",
+        "projectIds": [],
+        "pairingExpiresAt": null,
+        "pairedAt": null,
+        "credentialCreatedAt": null,
+        "connectionKind": "oauth",
+        "lastUsedAt": null,
+        "revokedAt": null,
+        "createdAt": "x",
+        "updatedAt": "x"
+      }
+    }
+  }
+}

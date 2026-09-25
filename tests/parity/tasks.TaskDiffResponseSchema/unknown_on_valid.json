@@ -1,0 +1,18 @@
+{
+  "contract": "tasks.TaskDiffResponseSchema",
+  "case": "unknown_on_valid",
+  "input": {
+    "available": true,
+    "patch": "x",
+    "truncated": true,
+    "__parityUnknown": true
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "available": true,
+      "patch": "x",
+      "truncated": true
+    }
+  }
+}

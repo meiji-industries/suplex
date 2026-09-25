@@ -1,0 +1,52 @@
+{
+  "contract": "github-triggers.GithubTriggerRuleSchema",
+  "case": "unknown_on_valid",
+  "input": {
+    "id": "x",
+    "companyId": "x",
+    "projectId": "x",
+    "name": "x",
+    "label": "x",
+    "workflowId": "x",
+    "deliveryTarget": "local_worktree",
+    "protectedPaths": [],
+    "repositoryId": 1,
+    "repositoryName": "x",
+    "authorityUserId": "x",
+    "enabled": true,
+    "archivedAt": null,
+    "revision": 1,
+    "lastSuccessfulCheckAt": null,
+    "nextRetryAt": null,
+    "latestError": null,
+    "failureCount": 1,
+    "createdAt": "x",
+    "updatedAt": "x",
+    "__parityUnknown": true
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "id": "x",
+      "companyId": "x",
+      "projectId": "x",
+      "name": "x",
+      "label": "x",
+      "workflowId": "x",
+      "deliveryTarget": "local_worktree",
+      "protectedPaths": [],
+      "repositoryId": 1,
+      "repositoryName": "x",
+      "authorityUserId": "x",
+      "enabled": true,
+      "archivedAt": null,
+      "revision": 1,
+      "lastSuccessfulCheckAt": null,
+      "nextRetryAt": null,
+      "latestError": null,
+      "failureCount": 1,
+      "createdAt": "x",
+      "updatedAt": "x"
+    }
+  }
+}

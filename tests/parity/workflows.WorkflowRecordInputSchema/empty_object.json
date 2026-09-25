@@ -1,0 +1,32 @@
+{
+  "contract": "workflows.WorkflowRecordInputSchema",
+  "case": "empty_object",
+  "input": {},
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "expected": "string",
+        "code": "invalid_type",
+        "path": [
+          "name"
+        ],
+        "message": "Invalid input: expected string, received undefined"
+      },
+      {
+        "code": "invalid_value",
+        "values": [
+          "standard",
+          "direct_build",
+          "independent_review",
+          "competing_plans",
+          "refine_pull_request"
+        ],
+        "path": [
+          "engine"
+        ],
+        "message": "Invalid option: expected one of \"standard\"|\"direct_build\"|\"independent_review\"|\"competing_plans\"|\"refine_pull_request\""
+      }
+    ]
+  }
+}

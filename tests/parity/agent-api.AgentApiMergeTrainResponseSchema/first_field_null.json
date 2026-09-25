@@ -1,0 +1,20 @@
+{
+  "contract": "agent-api.AgentApiMergeTrainResponseSchema",
+  "case": "first_field_null",
+  "input": {
+    "entries": null
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "expected": "array",
+        "code": "invalid_type",
+        "path": [
+          "entries"
+        ],
+        "message": "Invalid input: expected array, received null"
+      }
+    ]
+  }
+}

@@ -1,0 +1,28 @@
+{
+  "contract": "common.AuthOptionsResponseSchema",
+  "case": "unknown_field",
+  "input": {
+    "unexpected": true
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "expected": "string",
+        "code": "invalid_type",
+        "path": [
+          "challengeId"
+        ],
+        "message": "Invalid input: expected string, received undefined"
+      },
+      {
+        "code": "invalid_type",
+        "expected": "nonoptional",
+        "path": [
+          "options"
+        ],
+        "message": "Invalid input: expected nonoptional, received undefined"
+      }
+    ]
+  }
+}

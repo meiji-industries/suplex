@@ -1,0 +1,9 @@
+{
+  "contract": "tasks.TaskSessionHistoryQuerySchema",
+  "case": "representative",
+  "input": {},
+  "expected": {
+    "accepted": true,
+    "value": {}
+  }
+}

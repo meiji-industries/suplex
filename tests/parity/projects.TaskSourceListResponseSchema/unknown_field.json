@@ -1,0 +1,28 @@
+{
+  "contract": "projects.TaskSourceListResponseSchema",
+  "case": "unknown_field",
+  "input": {
+    "unexpected": true
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "expected": "boolean",
+        "code": "invalid_type",
+        "path": [
+          "available"
+        ],
+        "message": "Invalid input: expected boolean, received undefined"
+      },
+      {
+        "expected": "array",
+        "code": "invalid_type",
+        "path": [
+          "sources"
+        ],
+        "message": "Invalid input: expected array, received undefined"
+      }
+    ]
+  }
+}

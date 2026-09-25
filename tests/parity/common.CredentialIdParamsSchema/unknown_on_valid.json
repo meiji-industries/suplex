@@ -1,0 +1,14 @@
+{
+  "contract": "common.CredentialIdParamsSchema",
+  "case": "unknown_on_valid",
+  "input": {
+    "credentialId": "x",
+    "__parityUnknown": true
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "credentialId": "x"
+    }
+  }
+}

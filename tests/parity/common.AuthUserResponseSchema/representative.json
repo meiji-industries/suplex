@@ -1,0 +1,25 @@
+{
+  "contract": "common.AuthUserResponseSchema",
+  "case": "representative",
+  "input": {
+    "id": "x",
+    "displayName": "x",
+    "username": "x",
+    "avatarSeed": "x",
+    "role": "admin",
+    "status": "pending",
+    "companyIds": []
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "id": "x",
+      "displayName": "x",
+      "username": "x",
+      "avatarSeed": "x",
+      "role": "admin",
+      "status": "pending",
+      "companyIds": []
+    }
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "contract": "github-triggers.GithubTriggerActivityResponseSchema",
+  "case": "representative",
+  "input": {
+    "activity": []
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "activity": []
+    }
+  }
+}

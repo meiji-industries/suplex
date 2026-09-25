@@ -1,0 +1,16 @@
+{
+  "contract": "providers.ProviderInstanceCreateBodySchema",
+  "case": "unknown_on_valid",
+  "input": {
+    "provider": "opencode",
+    "label": "x",
+    "__parityUnknown": true
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "provider": "opencode",
+      "label": "x"
+    }
+  }
+}

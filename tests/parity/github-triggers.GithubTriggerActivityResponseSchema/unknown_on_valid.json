@@ -1,0 +1,14 @@
+{
+  "contract": "github-triggers.GithubTriggerActivityResponseSchema",
+  "case": "unknown_on_valid",
+  "input": {
+    "activity": [],
+    "__parityUnknown": true
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "activity": []
+    }
+  }
+}

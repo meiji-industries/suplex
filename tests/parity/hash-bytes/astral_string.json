@@ -1,0 +1,7 @@
+{
+  "site": "task title and note edge",
+  "inputJson": "{\"title\":\"😀\",\"note\":\"💩\",\"length\":2}",
+  "encoding": "hex",
+  "bytes": "{\"title\":\"😀\",\"note\":\"💩\",\"length\":2}",
+  "digest": "6418d2a3046af94b1d67ce9ac1395d9bab78cd5f1a2e33b8b362f0f8d2ff4a15"
+}

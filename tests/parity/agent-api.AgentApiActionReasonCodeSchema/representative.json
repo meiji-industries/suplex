@@ -1,0 +1,9 @@
+{
+  "contract": "agent-api.AgentApiActionReasonCodeSchema",
+  "case": "representative",
+  "input": "conflicting_pull_request",
+  "expected": {
+    "accepted": true,
+    "value": "conflicting_pull_request"
+  }
+}

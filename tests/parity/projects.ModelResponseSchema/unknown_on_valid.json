@@ -1,0 +1,22 @@
+{
+  "contract": "projects.ModelResponseSchema",
+  "case": "unknown_on_valid",
+  "input": {
+    "id": "x",
+    "provider": "opencode",
+    "providerLabel": "x",
+    "providerStatus": "configured",
+    "displayName": "x",
+    "__parityUnknown": true
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "id": "x",
+      "provider": "opencode",
+      "providerLabel": "x",
+      "providerStatus": "configured",
+      "displayName": "x"
+    }
+  }
+}

@@ -1,0 +1,20 @@
+{
+  "contract": "tasks.TaskSessionHistoryParamsSchema",
+  "case": "first_field_missing",
+  "input": {
+    "sessionId": "x"
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "expected": "string",
+        "code": "invalid_type",
+        "path": [
+          "taskId"
+        ],
+        "message": "Invalid input: expected string, received undefined"
+      }
+    ]
+  }
+}

@@ -1,0 +1,53 @@
+{
+  "contract": "agent-api.AgentApiTaskCommandBodySchema",
+  "case": "unknown_field",
+  "input": {
+    "unexpected": true
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid_value",
+        "values": [
+          "start_task",
+          "disarm_task",
+          "cancel_task",
+          "archive_task",
+          "unarchive_task",
+          "duplicate_task",
+          "send_task_note",
+          "recheck_delivery_wait"
+        ],
+        "path": [
+          "command"
+        ],
+        "message": "Invalid option: expected one of \"start_task\"|\"disarm_task\"|\"cancel_task\"|\"archive_task\"|\"unarchive_task\"|\"duplicate_task\"|\"send_task_note\"|\"recheck_delivery_wait\""
+      },
+      {
+        "expected": "string",
+        "code": "invalid_type",
+        "path": [
+          "revision"
+        ],
+        "message": "Invalid input: expected string, received undefined"
+      },
+      {
+        "expected": "string",
+        "code": "invalid_type",
+        "path": [
+          "idempotencyKey"
+        ],
+        "message": "Invalid input: expected string, received undefined"
+      },
+      {
+        "code": "unrecognized_keys",
+        "keys": [
+          "unexpected"
+        ],
+        "path": [],
+        "message": "Unrecognized key: \"unexpected\""
+      }
+    ]
+  }
+}

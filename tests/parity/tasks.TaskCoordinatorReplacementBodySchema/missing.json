@@ -1,0 +1,15 @@
+{
+  "contract": "tasks.TaskCoordinatorReplacementBodySchema",
+  "case": "missing",
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid_type",
+        "expected": "object",
+        "path": [],
+        "message": "Invalid input: expected object, received undefined"
+      }
+    ]
+  }
+}

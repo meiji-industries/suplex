@@ -1,0 +1,23 @@
+{
+  "contract": "oauth.OAuthConsentApprovalSchema",
+  "case": "first_field_null",
+  "input": {
+    "companyId": null,
+    "projectIds": [
+      "x"
+    ]
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "expected": "string",
+        "code": "invalid_type",
+        "path": [
+          "companyId"
+        ],
+        "message": "Invalid input: expected string, received null"
+      }
+    ]
+  }
+}

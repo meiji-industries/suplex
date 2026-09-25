@@ -1,0 +1,15 @@
+{
+  "contract": "github-triggers.GithubTriggerActivitySchema",
+  "case": "missing",
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "expected": "object",
+        "code": "invalid_type",
+        "path": [],
+        "message": "Invalid input: expected object, received undefined"
+      }
+    ]
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "contract": "agent-api.AgentApiWorkflowDiscoveryResponseSchema",
+  "case": "representative",
+  "input": {
+    "workflows": []
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "workflows": []
+    }
+  }
+}

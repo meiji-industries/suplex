@@ -1,0 +1,19 @@
+{
+  "contract": "update.UpdateRestartResponseSchema",
+  "case": "representative",
+  "input": {
+    "accepted": true,
+    "status": {
+      "kind": "idle"
+    }
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "accepted": true,
+      "status": {
+        "kind": "idle"
+      }
+    }
+  }
+}

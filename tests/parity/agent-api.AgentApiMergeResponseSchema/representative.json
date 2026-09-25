@@ -1,0 +1,17 @@
+{
+  "contract": "agent-api.AgentApiMergeResponseSchema",
+  "case": "representative",
+  "input": {
+    "taskId": "x",
+    "pullRequestNumber": 1,
+    "result": null
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "taskId": "x",
+      "pullRequestNumber": 1,
+      "result": null
+    }
+  }
+}

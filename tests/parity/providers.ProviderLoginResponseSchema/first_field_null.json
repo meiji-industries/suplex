@@ -1,0 +1,20 @@
+{
+  "contract": "providers.ProviderLoginResponseSchema",
+  "case": "first_field_null",
+  "input": {
+    "paneId": null
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "expected": "string",
+        "code": "invalid_type",
+        "path": [
+          "paneId"
+        ],
+        "message": "Invalid input: expected string, received null"
+      }
+    ]
+  }
+}

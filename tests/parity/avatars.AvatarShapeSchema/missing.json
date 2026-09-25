@@ -1,0 +1,18 @@
+{
+  "contract": "avatars.AvatarShapeSchema",
+  "case": "missing",
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid_value",
+        "values": [
+          "square",
+          "circle"
+        ],
+        "path": [],
+        "message": "Invalid option: expected one of \"square\"|\"circle\""
+      }
+    ]
+  }
+}

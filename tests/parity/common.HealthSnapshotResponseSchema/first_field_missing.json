@@ -1,0 +1,22 @@
+{
+  "contract": "common.HealthSnapshotResponseSchema",
+  "case": "first_field_missing",
+  "input": {
+    "reachableAddress": "x",
+    "ready": true,
+    "checks": []
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "expected": "string",
+        "code": "invalid_type",
+        "path": [
+          "generatedAt"
+        ],
+        "message": "Invalid input: expected string, received undefined"
+      }
+    ]
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "contract": "common.UserListResponseSchema",
+  "case": "representative",
+  "input": {
+    "users": []
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "users": []
+    }
+  }
+}

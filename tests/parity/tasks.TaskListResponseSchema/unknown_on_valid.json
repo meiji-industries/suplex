@@ -1,0 +1,14 @@
+{
+  "contract": "tasks.TaskListResponseSchema",
+  "case": "unknown_on_valid",
+  "input": {
+    "tasks": [],
+    "__parityUnknown": true
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "tasks": []
+    }
+  }
+}

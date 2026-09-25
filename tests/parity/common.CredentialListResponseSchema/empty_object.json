@@ -1,0 +1,18 @@
+{
+  "contract": "common.CredentialListResponseSchema",
+  "case": "empty_object",
+  "input": {},
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "expected": "array",
+        "code": "invalid_type",
+        "path": [
+          "credentials"
+        ],
+        "message": "Invalid input: expected array, received undefined"
+      }
+    ]
+  }
+}

@@ -1,0 +1,16 @@
+{
+  "contract": "agent-api.AgentApiRuntimeErrorSchema",
+  "case": "unknown_on_valid",
+  "input": {
+    "error": "x",
+    "code": "credential_invalid",
+    "__parityUnknown": true
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "error": "x",
+      "code": "credential_invalid"
+    }
+  }
+}

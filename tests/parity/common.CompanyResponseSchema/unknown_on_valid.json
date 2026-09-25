@@ -1,0 +1,22 @@
+{
+  "contract": "common.CompanyResponseSchema",
+  "case": "unknown_on_valid",
+  "input": {
+    "id": "x",
+    "name": "x",
+    "status": "active",
+    "issueCode": null,
+    "createdAt": "x",
+    "__parityUnknown": true
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "id": "x",
+      "name": "x",
+      "status": "active",
+      "issueCode": null,
+      "createdAt": "x"
+    }
+  }
+}

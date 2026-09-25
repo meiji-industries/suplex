@@ -1,0 +1,44 @@
+{
+  "contract": "agent-api.AgentApiMergeApprovalBodySchema",
+  "case": "unknown_field",
+  "input": {
+    "unexpected": true
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "expected": "number",
+        "code": "invalid_type",
+        "path": [
+          "pullRequestNumber"
+        ],
+        "message": "Invalid input: expected number, received undefined"
+      },
+      {
+        "expected": "string",
+        "code": "invalid_type",
+        "path": [
+          "headSha"
+        ],
+        "message": "Invalid input: expected string, received undefined"
+      },
+      {
+        "expected": "string",
+        "code": "invalid_type",
+        "path": [
+          "baseSha"
+        ],
+        "message": "Invalid input: expected string, received undefined"
+      },
+      {
+        "code": "unrecognized_keys",
+        "keys": [
+          "unexpected"
+        ],
+        "path": [],
+        "message": "Unrecognized key: \"unexpected\""
+      }
+    ]
+  }
+}

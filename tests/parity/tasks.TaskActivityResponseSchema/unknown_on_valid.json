@@ -1,0 +1,18 @@
+{
+  "contract": "tasks.TaskActivityResponseSchema",
+  "case": "unknown_on_valid",
+  "input": {
+    "sessions": [],
+    "turns": [],
+    "shellPaneId": null,
+    "__parityUnknown": true
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "sessions": [],
+      "turns": [],
+      "shellPaneId": null
+    }
+  }
+}

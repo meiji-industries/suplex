@@ -1,0 +1,26 @@
+{
+  "contract": "tasks.SessionHistoryPageSchema",
+  "case": "empty_object",
+  "input": {},
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "expected": "array",
+        "code": "invalid_type",
+        "path": [
+          "messages"
+        ],
+        "message": "Invalid input: expected array, received undefined"
+      },
+      {
+        "expected": "string",
+        "code": "invalid_type",
+        "path": [
+          "olderCursor"
+        ],
+        "message": "Invalid input: expected string, received undefined"
+      }
+    ]
+  }
+}

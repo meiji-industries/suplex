@@ -1,0 +1,27 @@
+{
+  "contract": "projects.ProfileBodySchema",
+  "case": "unknown_on_valid",
+  "input": {
+    "provider": "opencode",
+    "model": "x",
+    "reasoningLevel": "low",
+    "serviceTier": "default",
+    "name": "x",
+    "role": "root",
+    "avatarSeed": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "__parityUnknown": true
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "unrecognized_keys",
+        "keys": [
+          "__parityUnknown"
+        ],
+        "path": [],
+        "message": "Unrecognized key: \"__parityUnknown\""
+      }
+    ]
+  }
+}

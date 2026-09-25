@@ -1,0 +1,22 @@
+{
+  "contract": "common.AuditEventResponseSchema",
+  "case": "first_field_missing",
+  "input": {
+    "action": "x",
+    "metadata": {},
+    "createdAt": "x"
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "expected": "string",
+        "code": "invalid_type",
+        "path": [
+          "id"
+        ],
+        "message": "Invalid input: expected string, received undefined"
+      }
+    ]
+  }
+}

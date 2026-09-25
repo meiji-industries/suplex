@@ -1,0 +1,21 @@
+{
+  "contract": "providers.ProviderListResponseSchema",
+  "case": "first_field_missing",
+  "input": {
+    "observedAt": "x",
+    "providers": []
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "expected": "string",
+        "code": "invalid_type",
+        "path": [
+          "directory"
+        ],
+        "message": "Invalid input: expected string, received undefined"
+      }
+    ]
+  }
+}

@@ -1,0 +1,20 @@
+{
+  "contract": "task-templates.TaskTemplateParamsSchema",
+  "case": "first_field_null",
+  "input": {
+    "templateId": null
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "expected": "string",
+        "code": "invalid_type",
+        "path": [
+          "templateId"
+        ],
+        "message": "Invalid input: expected string, received null"
+      }
+    ]
+  }
+}

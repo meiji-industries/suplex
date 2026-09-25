@@ -1,0 +1,13 @@
+{
+  "contract": "agent-api.AgentApiAgentListResponseSchema",
+  "case": "representative",
+  "input": {
+    "agents": []
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "agents": []
+    }
+  }
+}

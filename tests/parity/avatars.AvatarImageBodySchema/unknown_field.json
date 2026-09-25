@@ -1,0 +1,41 @@
+{
+  "contract": "avatars.AvatarImageBodySchema",
+  "case": "unknown_field",
+  "input": {
+    "unexpected": true
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid_value",
+        "values": [
+          "image/png",
+          "image/jpeg",
+          "image/webp",
+          "image/gif"
+        ],
+        "path": [
+          "mimeType"
+        ],
+        "message": "Invalid option: expected one of \"image/png\"|\"image/jpeg\"|\"image/webp\"|\"image/gif\""
+      },
+      {
+        "expected": "string",
+        "code": "invalid_type",
+        "path": [
+          "base64"
+        ],
+        "message": "Invalid input: expected string, received undefined"
+      },
+      {
+        "code": "unrecognized_keys",
+        "keys": [
+          "unexpected"
+        ],
+        "path": [],
+        "message": "Unrecognized key: \"unexpected\""
+      }
+    ]
+  }
+}

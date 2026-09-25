@@ -1,0 +1,36 @@
+{
+  "contract": "update.UpdateResponseSchema",
+  "case": "unknown_field",
+  "input": {
+    "unexpected": true
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid_type",
+        "expected": "object",
+        "path": [
+          "status"
+        ],
+        "message": "Invalid input: expected object, received undefined"
+      },
+      {
+        "expected": "boolean",
+        "code": "invalid_type",
+        "path": [
+          "canRestart"
+        ],
+        "message": "Invalid input: expected boolean, received undefined"
+      },
+      {
+        "code": "unrecognized_keys",
+        "keys": [
+          "unexpected"
+        ],
+        "path": [],
+        "message": "Unrecognized key: \"unexpected\""
+      }
+    ]
+  }
+}

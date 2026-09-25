@@ -1,0 +1,46 @@
+{
+  "contract": "agent-api.AgentApiPullRequestObservationSchema",
+  "case": "unknown_on_valid",
+  "input": {
+    "exists": true,
+    "number": null,
+    "url": null,
+    "state": null,
+    "isDraft": null,
+    "headSha": null,
+    "baseSha": null,
+    "mergeable": null,
+    "mergeStateStatus": null,
+    "reviewDecision": null,
+    "checks": {
+      "total": 1,
+      "pending": 1,
+      "failing": 1,
+      "successful": 1,
+      "runs": []
+    },
+    "__parityUnknown": true
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "exists": true,
+      "number": null,
+      "url": null,
+      "state": null,
+      "isDraft": null,
+      "headSha": null,
+      "baseSha": null,
+      "mergeable": null,
+      "mergeStateStatus": null,
+      "reviewDecision": null,
+      "checks": {
+        "total": 1,
+        "pending": 1,
+        "failing": 1,
+        "successful": 1,
+        "runs": []
+      }
+    }
+  }
+}

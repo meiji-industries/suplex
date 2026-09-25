@@ -1,0 +1,20 @@
+{
+  "contract": "common.AuthOptionsResponseSchema",
+  "case": "first_field_missing",
+  "input": {
+    "options": null
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "expected": "string",
+        "code": "invalid_type",
+        "path": [
+          "challengeId"
+        ],
+        "message": "Invalid input: expected string, received undefined"
+      }
+    ]
+  }
+}

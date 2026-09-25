@@ -1,0 +1,20 @@
+{
+  "contract": "oauth.OAuthClientRegistrationSchema",
+  "case": "first_field_missing",
+  "input": {
+    "redirect_uris": []
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "expected": "string",
+        "code": "invalid_type",
+        "path": [
+          "client_name"
+        ],
+        "message": "Invalid input: expected string, received undefined"
+      }
+    ]
+  }
+}

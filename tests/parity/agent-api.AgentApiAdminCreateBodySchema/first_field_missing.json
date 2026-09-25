@@ -1,0 +1,23 @@
+{
+  "contract": "agent-api.AgentApiAdminCreateBodySchema",
+  "case": "first_field_missing",
+  "input": {
+    "companyId": "x",
+    "projectIds": [
+      "x"
+    ]
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "expected": "string",
+        "code": "invalid_type",
+        "path": [
+          "name"
+        ],
+        "message": "Invalid input: expected string, received undefined"
+      }
+    ]
+  }
+}

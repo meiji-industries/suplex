@@ -1,0 +1,21 @@
+{
+  "contract": "common.HttpPlanBlockerResponseBodySchema",
+  "case": "first_field_missing",
+  "input": {
+    "answer": "x",
+    "idempotencyKey": "xxxxxxxx"
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "expected": "number",
+        "code": "invalid_type",
+        "path": [
+          "expectedWorkflowRevision"
+        ],
+        "message": "Invalid input: expected number, received undefined"
+      }
+    ]
+  }
+}

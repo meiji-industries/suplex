@@ -1,0 +1,18 @@
+{
+  "contract": "agent-api.AgentApiAdminProjectsResponseSchema",
+  "case": "empty_object",
+  "input": {},
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "expected": "object",
+        "code": "invalid_type",
+        "path": [
+          "agent"
+        ],
+        "message": "Invalid input: expected object, received undefined"
+      }
+    ]
+  }
+}

@@ -1,0 +1,29 @@
+{
+  "contract": "projects.ProjectBodySchema",
+  "case": "unknown_on_valid",
+  "input": {
+    "name": "x",
+    "repositoryPath": "x",
+    "worktreeRoot": "x",
+    "repository": "x",
+    "baseBranch": "x",
+    "setupCommand": "x",
+    "verificationCommand": "x",
+    "rootProfileId": "x",
+    "workerProfileId": "x",
+    "__parityUnknown": true
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "unrecognized_keys",
+        "keys": [
+          "__parityUnknown"
+        ],
+        "path": [],
+        "message": "Unrecognized key: \"__parityUnknown\""
+      }
+    ]
+  }
+}

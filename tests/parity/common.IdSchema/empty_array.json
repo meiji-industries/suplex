@@ -1,0 +1,24 @@
+{
+  "contract": "common.IdSchema",
+  "case": "empty_array",
+  "input": [],
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "expected": "string",
+        "code": "invalid_type",
+        "path": [],
+        "message": "Invalid input: expected string, received array"
+      },
+      {
+        "origin": "array",
+        "code": "too_small",
+        "minimum": 1,
+        "inclusive": true,
+        "path": [],
+        "message": "Too small: expected array to have >=1 items"
+      }
+    ]
+  }
+}

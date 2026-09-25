@@ -1,0 +1,25 @@
+{
+  "contract": "common.InvitationSummaryResponseSchema",
+  "case": "first_field_null",
+  "input": {
+    "id": null,
+    "kind": "bootstrap",
+    "displayName": "x",
+    "expiresAt": "x",
+    "status": "active",
+    "createdAt": "x"
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "expected": "string",
+        "code": "invalid_type",
+        "path": [
+          "id"
+        ],
+        "message": "Invalid input: expected string, received null"
+      }
+    ]
+  }
+}

@@ -1,0 +1,26 @@
+{
+  "contract": "tasks.TaskChecksResponseSchema",
+  "case": "empty_object",
+  "input": {},
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "expected": "boolean",
+        "code": "invalid_type",
+        "path": [
+          "available"
+        ],
+        "message": "Invalid input: expected boolean, received undefined"
+      },
+      {
+        "expected": "array",
+        "code": "invalid_type",
+        "path": [
+          "runs"
+        ],
+        "message": "Invalid input: expected array, received undefined"
+      }
+    ]
+  }
+}

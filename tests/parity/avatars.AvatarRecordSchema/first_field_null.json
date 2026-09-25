@@ -1,0 +1,15 @@
+{
+  "contract": "avatars.AvatarRecordSchema",
+  "case": "first_field_null",
+  "input": {
+    "shape": null,
+    "imageVersion": null
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "shape": null,
+      "imageVersion": null
+    }
+  }
+}

@@ -1,0 +1,21 @@
+{
+  "contract": "workflows.WorkflowRecordInputSchema",
+  "case": "first_field_null",
+  "input": {
+    "name": null,
+    "engine": "standard"
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "expected": "string",
+        "code": "invalid_type",
+        "path": [
+          "name"
+        ],
+        "message": "Invalid input: expected string, received null"
+      }
+    ]
+  }
+}

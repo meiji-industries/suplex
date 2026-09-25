@@ -1,0 +1,16 @@
+{
+  "contract": "providers.ProviderConnectionSchema",
+  "case": "unknown_on_valid",
+  "input": {
+    "status": "connected",
+    "summary": "x",
+    "__parityUnknown": true
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "status": "connected",
+      "summary": "x"
+    }
+  }
+}

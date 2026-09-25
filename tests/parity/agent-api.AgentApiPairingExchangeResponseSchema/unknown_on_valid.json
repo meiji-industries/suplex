@@ -1,0 +1,44 @@
+{
+  "contract": "agent-api.AgentApiPairingExchangeResponseSchema",
+  "case": "unknown_on_valid",
+  "input": {
+    "agent": {
+      "id": "x",
+      "kind": "external",
+      "name": "x",
+      "avatarSeed": "x",
+      "companyId": "x",
+      "profileId": null,
+      "status": "pending",
+      "projectIds": [],
+      "pairedAt": null,
+      "lastUsedAt": null,
+      "revokedAt": null,
+      "createdAt": "x",
+      "updatedAt": "x"
+    },
+    "credential": "x",
+    "__parityUnknown": true
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "agent": {
+        "id": "x",
+        "kind": "external",
+        "name": "x",
+        "avatarSeed": "x",
+        "companyId": "x",
+        "profileId": null,
+        "status": "pending",
+        "projectIds": [],
+        "pairedAt": null,
+        "lastUsedAt": null,
+        "revokedAt": null,
+        "createdAt": "x",
+        "updatedAt": "x"
+      },
+      "credential": "x"
+    }
+  }
+}

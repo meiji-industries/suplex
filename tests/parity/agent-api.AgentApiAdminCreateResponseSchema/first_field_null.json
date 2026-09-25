@@ -1,0 +1,22 @@
+{
+  "contract": "agent-api.AgentApiAdminCreateResponseSchema",
+  "case": "first_field_null",
+  "input": {
+    "agent": null,
+    "pairingCode": "x",
+    "expiresAt": "x"
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "expected": "object",
+        "code": "invalid_type",
+        "path": [
+          "agent"
+        ],
+        "message": "Invalid input: expected object, received null"
+      }
+    ]
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "contract": "tasks.WorktreeAppsResponseSchema",
+  "case": "representative",
+  "input": {
+    "apps": []
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "apps": []
+    }
+  }
+}

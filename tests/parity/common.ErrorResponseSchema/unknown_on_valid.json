@@ -1,0 +1,14 @@
+{
+  "contract": "common.ErrorResponseSchema",
+  "case": "unknown_on_valid",
+  "input": {
+    "error": "x",
+    "__parityUnknown": true
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "error": "x"
+    }
+  }
+}

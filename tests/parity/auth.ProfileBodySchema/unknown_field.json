@@ -1,0 +1,17 @@
+{
+  "contract": "auth.ProfileBodySchema",
+  "case": "unknown_field",
+  "input": {
+    "unexpected": true
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "custom",
+        "path": [],
+        "message": "Invalid input"
+      }
+    ]
+  }
+}

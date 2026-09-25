@@ -1,0 +1,42 @@
+{
+  "contract": "common.AuditEventResponseSchema",
+  "case": "empty_object",
+  "input": {},
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "expected": "string",
+        "code": "invalid_type",
+        "path": [
+          "id"
+        ],
+        "message": "Invalid input: expected string, received undefined"
+      },
+      {
+        "expected": "string",
+        "code": "invalid_type",
+        "path": [
+          "action"
+        ],
+        "message": "Invalid input: expected string, received undefined"
+      },
+      {
+        "expected": "record",
+        "code": "invalid_type",
+        "path": [
+          "metadata"
+        ],
+        "message": "Invalid input: expected record, received undefined"
+      },
+      {
+        "expected": "string",
+        "code": "invalid_type",
+        "path": [
+          "createdAt"
+        ],
+        "message": "Invalid input: expected string, received undefined"
+      }
+    ]
+  }
+}

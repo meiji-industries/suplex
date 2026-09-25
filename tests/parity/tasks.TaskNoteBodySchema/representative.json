@@ -1,0 +1,13 @@
+{
+  "contract": "tasks.TaskNoteBodySchema",
+  "case": "representative",
+  "input": {
+    "note": "x"
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "note": "x"
+    }
+  }
+}

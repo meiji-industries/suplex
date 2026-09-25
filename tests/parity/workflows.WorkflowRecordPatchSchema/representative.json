@@ -1,0 +1,9 @@
+{
+  "contract": "workflows.WorkflowRecordPatchSchema",
+  "case": "representative",
+  "input": {},
+  "expected": {
+    "accepted": true,
+    "value": {}
+  }
+}

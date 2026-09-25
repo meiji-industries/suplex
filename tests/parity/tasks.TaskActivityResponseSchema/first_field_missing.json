@@ -1,0 +1,21 @@
+{
+  "contract": "tasks.TaskActivityResponseSchema",
+  "case": "first_field_missing",
+  "input": {
+    "turns": [],
+    "shellPaneId": null
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "expected": "array",
+        "code": "invalid_type",
+        "path": [
+          "sessions"
+        ],
+        "message": "Invalid input: expected array, received undefined"
+      }
+    ]
+  }
+}

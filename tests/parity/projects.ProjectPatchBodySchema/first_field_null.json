@@ -1,0 +1,48 @@
+{
+  "contract": "projects.ProjectPatchBodySchema",
+  "case": "first_field_null",
+  "input": {
+    "integration": null,
+    "execution": {
+      "instructions": "x",
+      "skillDirectories": [],
+      "environment": {},
+      "mcp": []
+    },
+    "name": "x",
+    "repositoryPath": "x",
+    "worktreeRoot": "x",
+    "repository": "x",
+    "baseBranch": "x",
+    "setupCommand": "x",
+    "verificationCommand": "x",
+    "rootProfileId": "x",
+    "workerProfileId": "x",
+    "agentTaskPolicy": {
+      "workflowIds": [
+        "x"
+      ],
+      "defaultWorkflowId": "x",
+      "rootProfileIds": [
+        "x"
+      ],
+      "workerProfileIds": [
+        "x"
+      ]
+    },
+    "providerPolicy": null
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "expected": "object",
+        "code": "invalid_type",
+        "path": [
+          "integration"
+        ],
+        "message": "Invalid input: expected object, received null"
+      }
+    ]
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "contract": "common.InvitationSummaryListResponseSchema",
+  "case": "unknown_on_valid",
+  "input": {
+    "invitations": [],
+    "__parityUnknown": true
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "invitations": []
+    }
+  }
+}

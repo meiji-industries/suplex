@@ -1,0 +1,16 @@
+{
+  "contract": "providers.ProviderInstanceReadinessSchema",
+  "case": "unknown_on_valid",
+  "input": {
+    "status": "healthy",
+    "summary": "x",
+    "__parityUnknown": true
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "status": "healthy",
+      "summary": "x"
+    }
+  }
+}

@@ -1,0 +1,31 @@
+{
+  "contract": "tasks.TaskContinueDeliveryBodySchema",
+  "case": "unknown_field",
+  "input": {
+    "unexpected": true
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid_value",
+        "values": [
+          "pull_request_ready",
+          "merged"
+        ],
+        "path": [
+          "deliveryTarget"
+        ],
+        "message": "Invalid option: expected one of \"pull_request_ready\"|\"merged\""
+      },
+      {
+        "code": "unrecognized_keys",
+        "keys": [
+          "unexpected"
+        ],
+        "path": [],
+        "message": "Unrecognized key: \"unexpected\""
+      }
+    ]
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "contract": "agent-api.AgentApiWorkflowDiscoverySchema",
+  "case": "representative",
+  "input": {
+    "id": "x",
+    "name": "x",
+    "description": "x",
+    "permittedForAgentTaskCreation": true
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "id": "x",
+      "name": "x",
+      "description": "x",
+      "permittedForAgentTaskCreation": true
+    }
+  }
+}

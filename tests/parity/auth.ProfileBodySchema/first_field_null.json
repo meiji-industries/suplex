@@ -1,0 +1,22 @@
+{
+  "contract": "auth.ProfileBodySchema",
+  "case": "first_field_null",
+  "input": {
+    "displayName": null,
+    "username": "x",
+    "avatarSeed": "x"
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "expected": "string",
+        "code": "invalid_type",
+        "path": [
+          "displayName"
+        ],
+        "message": "Invalid input: expected string, received null"
+      }
+    ]
+  }
+}

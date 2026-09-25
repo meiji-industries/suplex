@@ -1,0 +1,27 @@
+{
+  "contract": "github-triggers.GithubTriggerActivitySchema",
+  "case": "unknown_on_valid",
+  "input": {
+    "at": "x",
+    "pullRequestNumber": null,
+    "url": null,
+    "outcome": "eligible",
+    "reason": "x",
+    "matchingPaths": [],
+    "__parityUnknown": true
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "at": "x",
+      "pullRequestNumber": null,
+      "url": null,
+      "outcome": "eligible",
+      "reason": "x",
+      "matchingPaths": [],
+      "taskId": null,
+      "taskStatus": null,
+      "previouslyProcessed": false
+    }
+  }
+}

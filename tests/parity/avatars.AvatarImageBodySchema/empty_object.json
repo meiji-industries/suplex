@@ -1,0 +1,31 @@
+{
+  "contract": "avatars.AvatarImageBodySchema",
+  "case": "empty_object",
+  "input": {},
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid_value",
+        "values": [
+          "image/png",
+          "image/jpeg",
+          "image/webp",
+          "image/gif"
+        ],
+        "path": [
+          "mimeType"
+        ],
+        "message": "Invalid option: expected one of \"image/png\"|\"image/jpeg\"|\"image/webp\"|\"image/gif\""
+      },
+      {
+        "expected": "string",
+        "code": "invalid_type",
+        "path": [
+          "base64"
+        ],
+        "message": "Invalid input: expected string, received undefined"
+      }
+    ]
+  }
+}

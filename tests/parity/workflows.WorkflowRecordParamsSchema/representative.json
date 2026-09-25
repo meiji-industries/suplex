@@ -1,0 +1,13 @@
+{
+  "contract": "workflows.WorkflowRecordParamsSchema",
+  "case": "representative",
+  "input": {
+    "workflowId": "x"
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "workflowId": "x"
+    }
+  }
+}

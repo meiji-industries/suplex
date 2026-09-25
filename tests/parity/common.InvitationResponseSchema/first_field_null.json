@@ -1,0 +1,22 @@
+{
+  "contract": "common.InvitationResponseSchema",
+  "case": "first_field_null",
+  "input": {
+    "token": null,
+    "kind": "bootstrap",
+    "expiresAt": "x"
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "expected": "string",
+        "code": "invalid_type",
+        "path": [
+          "token"
+        ],
+        "message": "Invalid input: expected string, received null"
+      }
+    ]
+  }
+}

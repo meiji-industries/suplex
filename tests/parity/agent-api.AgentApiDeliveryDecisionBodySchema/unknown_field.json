@@ -1,0 +1,31 @@
+{
+  "contract": "agent-api.AgentApiDeliveryDecisionBodySchema",
+  "case": "unknown_field",
+  "input": {
+    "unexpected": true
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid_value",
+        "values": [
+          "wait_for_dependency",
+          "resume"
+        ],
+        "path": [
+          "decision"
+        ],
+        "message": "Invalid option: expected one of \"wait_for_dependency\"|\"resume\""
+      },
+      {
+        "code": "unrecognized_keys",
+        "keys": [
+          "unexpected"
+        ],
+        "path": [],
+        "message": "Unrecognized key: \"unexpected\""
+      }
+    ]
+  }
+}

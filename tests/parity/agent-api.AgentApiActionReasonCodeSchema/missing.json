@@ -1,0 +1,25 @@
+{
+  "contract": "agent-api.AgentApiActionReasonCodeSchema",
+  "case": "missing",
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid_value",
+        "values": [
+          "conflicting_pull_request",
+          "failed_checks",
+          "pending_checks",
+          "pending_review",
+          "stale_delivery",
+          "pull_request_missing",
+          "blocked_by_dependency",
+          "waiting_human",
+          "observation_unavailable"
+        ],
+        "path": [],
+        "message": "Invalid option: expected one of \"conflicting_pull_request\"|\"failed_checks\"|\"pending_checks\"|\"pending_review\"|\"stale_delivery\"|\"pull_request_missing\"|\"blocked_by_dependency\"|\"waiting_human\"|\"observation_unavailable\""
+      }
+    ]
+  }
+}

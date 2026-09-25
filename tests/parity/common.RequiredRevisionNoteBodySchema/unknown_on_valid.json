@@ -1,0 +1,16 @@
+{
+  "contract": "common.RequiredRevisionNoteBodySchema",
+  "case": "unknown_on_valid",
+  "input": {
+    "expectedRevision": 1,
+    "note": "x",
+    "__parityUnknown": true
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "expectedRevision": 1,
+      "note": "x"
+    }
+  }
+}

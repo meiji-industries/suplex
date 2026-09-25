@@ -1,0 +1,13 @@
+{
+  "contract": "update.UpdateStatusSchema",
+  "case": "representative",
+  "input": {
+    "kind": "idle"
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "kind": "idle"
+    }
+  }
+}

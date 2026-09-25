@@ -1,0 +1,13 @@
+{
+  "contract": "oauth.OAuthConsentParamsSchema",
+  "case": "representative",
+  "input": {
+    "requestId": "x"
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "requestId": "x"
+    }
+  }
+}

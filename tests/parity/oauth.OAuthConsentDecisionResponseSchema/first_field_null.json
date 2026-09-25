@@ -1,0 +1,20 @@
+{
+  "contract": "oauth.OAuthConsentDecisionResponseSchema",
+  "case": "first_field_null",
+  "input": {
+    "redirectTo": null
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "expected": "string",
+        "code": "invalid_type",
+        "path": [
+          "redirectTo"
+        ],
+        "message": "Invalid input: expected string, received null"
+      }
+    ]
+  }
+}

@@ -1,0 +1,20 @@
+{
+  "contract": "agent-api.AgentApiProjectDiscoveryQuerySchema",
+  "case": "first_field_null",
+  "input": {
+    "projectId": null
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "expected": "string",
+        "code": "invalid_type",
+        "path": [
+          "projectId"
+        ],
+        "message": "Invalid input: expected string, received null"
+      }
+    ]
+  }
+}

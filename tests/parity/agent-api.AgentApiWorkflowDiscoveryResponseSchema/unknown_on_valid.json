@@ -1,0 +1,14 @@
+{
+  "contract": "agent-api.AgentApiWorkflowDiscoveryResponseSchema",
+  "case": "unknown_on_valid",
+  "input": {
+    "workflows": [],
+    "__parityUnknown": true
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "workflows": []
+    }
+  }
+}

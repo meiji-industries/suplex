@@ -1,0 +1,32 @@
+{
+  "contract": "tasks.TaskAnswerBodySchema",
+  "case": "missing",
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid_union",
+        "errors": [
+          [
+            {
+              "expected": "object",
+              "code": "invalid_type",
+              "path": [],
+              "message": "Invalid input: expected object, received undefined"
+            }
+          ],
+          [
+            {
+              "expected": "object",
+              "code": "invalid_type",
+              "path": [],
+              "message": "Invalid input: expected object, received undefined"
+            }
+          ]
+        ],
+        "path": [],
+        "message": "Invalid input"
+      }
+    ]
+  }
+}

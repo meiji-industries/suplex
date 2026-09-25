@@ -1,0 +1,13 @@
+{
+  "contract": "agent-api.AgentApiPairingExchangeBodySchema",
+  "case": "representative",
+  "input": {
+    "pairingCode": "x"
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "pairingCode": "x"
+    }
+  }
+}

@@ -1,0 +1,7 @@
+{
+  "site": "agent_create passthrough edge",
+  "inputJson": "{\"2\":\"two\",\"1\":\"one\",\"small\":0.000001,\"tiny\":0.0000001,\"large\":1e21,\"negativeZero\":-0,\"text\":\"line\\nseparator\\u2028\"}",
+  "encoding": "hex",
+  "bytes": "{\"1\":\"one\",\"2\":\"two\",\"small\":0.000001,\"tiny\":1e-7,\"large\":1e+21,\"negativeZero\":0,\"text\":\"line\\nseparator \"}",
+  "digest": "6abbdfab451732cb2ad77459bdc18fc3d2ab07a0900876a48877d3f2cde83b43"
+}

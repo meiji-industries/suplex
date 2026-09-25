@@ -1,0 +1,14 @@
+{
+  "contract": "common.CompanyListResponseSchema",
+  "case": "unknown_on_valid",
+  "input": {
+    "companies": [],
+    "__parityUnknown": true
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "companies": []
+    }
+  }
+}

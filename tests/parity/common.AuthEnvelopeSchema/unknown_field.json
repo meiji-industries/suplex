@@ -1,0 +1,20 @@
+{
+  "contract": "common.AuthEnvelopeSchema",
+  "case": "unknown_field",
+  "input": {
+    "unexpected": true
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "expected": "object",
+        "code": "invalid_type",
+        "path": [
+          "user"
+        ],
+        "message": "Invalid input: expected object, received undefined"
+      }
+    ]
+  }
+}

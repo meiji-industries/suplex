@@ -1,0 +1,13 @@
+{
+  "contract": "common.ErrorResponseSchema",
+  "case": "representative",
+  "input": {
+    "error": "x"
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "error": "x"
+    }
+  }
+}

@@ -1,0 +1,33 @@
+{
+  "contract": "tasks.TaskArchiveResponseSchema",
+  "case": "empty_array",
+  "input": [],
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid_union",
+        "errors": [
+          [
+            {
+              "expected": "object",
+              "code": "invalid_type",
+              "path": [],
+              "message": "Invalid input: expected object, received array"
+            }
+          ],
+          [
+            {
+              "expected": "object",
+              "code": "invalid_type",
+              "path": [],
+              "message": "Invalid input: expected object, received array"
+            }
+          ]
+        ],
+        "path": [],
+        "message": "Invalid input"
+      }
+    ]
+  }
+}

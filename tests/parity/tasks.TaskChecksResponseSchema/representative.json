@@ -1,0 +1,15 @@
+{
+  "contract": "tasks.TaskChecksResponseSchema",
+  "case": "representative",
+  "input": {
+    "available": true,
+    "runs": []
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "available": true,
+      "runs": []
+    }
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "contract": "common.CompanyListResponseSchema",
+  "case": "representative",
+  "input": {
+    "companies": []
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "companies": []
+    }
+  }
+}

@@ -1,0 +1,20 @@
+{
+  "contract": "tasks.TaskRenameBodySchema",
+  "case": "first_field_null",
+  "input": {
+    "title": null
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "expected": "string",
+        "code": "invalid_type",
+        "path": [
+          "title"
+        ],
+        "message": "Invalid input: expected string, received null"
+      }
+    ]
+  }
+}

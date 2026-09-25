@@ -1,0 +1,19 @@
+{
+  "contract": "oauth.OAuthConsentApprovalSchema",
+  "case": "representative",
+  "input": {
+    "companyId": "x",
+    "projectIds": [
+      "x"
+    ]
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "companyId": "x",
+      "projectIds": [
+        "x"
+      ]
+    }
+  }
+}

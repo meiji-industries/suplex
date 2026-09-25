@@ -1,0 +1,21 @@
+{
+  "contract": "agent-api.AgentApiMergeResponseSchema",
+  "case": "first_field_missing",
+  "input": {
+    "pullRequestNumber": 1,
+    "result": null
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "expected": "string",
+        "code": "invalid_type",
+        "path": [
+          "taskId"
+        ],
+        "message": "Invalid input: expected string, received undefined"
+      }
+    ]
+  }
+}

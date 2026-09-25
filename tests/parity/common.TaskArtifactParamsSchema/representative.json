@@ -1,0 +1,15 @@
+{
+  "contract": "common.TaskArtifactParamsSchema",
+  "case": "representative",
+  "input": {
+    "taskId": "x",
+    "artifactId": "x"
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "taskId": "x",
+      "artifactId": "x"
+    }
+  }
+}

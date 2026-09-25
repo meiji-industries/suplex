@@ -1,0 +1,60 @@
+{
+  "contract": "projects.ModelResponseSchema",
+  "case": "unknown_field",
+  "input": {
+    "unexpected": true
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "expected": "string",
+        "code": "invalid_type",
+        "path": [
+          "id"
+        ],
+        "message": "Invalid input: expected string, received undefined"
+      },
+      {
+        "code": "invalid_value",
+        "values": [
+          "opencode",
+          "claude-code",
+          "devin",
+          "codex"
+        ],
+        "path": [
+          "provider"
+        ],
+        "message": "Invalid option: expected one of \"opencode\"|\"claude-code\"|\"devin\"|\"codex\""
+      },
+      {
+        "expected": "string",
+        "code": "invalid_type",
+        "path": [
+          "providerLabel"
+        ],
+        "message": "Invalid input: expected string, received undefined"
+      },
+      {
+        "code": "invalid_value",
+        "values": [
+          "configured",
+          "missing"
+        ],
+        "path": [
+          "providerStatus"
+        ],
+        "message": "Invalid option: expected one of \"configured\"|\"missing\""
+      },
+      {
+        "expected": "string",
+        "code": "invalid_type",
+        "path": [
+          "displayName"
+        ],
+        "message": "Invalid input: expected string, received undefined"
+      }
+    ]
+  }
+}

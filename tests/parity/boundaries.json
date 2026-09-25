@@ -1,0 +1,962 @@
+{
+  "counts": {
+    "coerce.number": 4,
+    "passthrough": 3,
+    "preprocess": 1,
+    "refine": 13,
+    "strict": 131,
+    "strip": 3,
+    "superRefine": 2,
+    "transform": 1
+  },
+  "entries": [
+    {
+      "file": "src/http/contracts/agent-api.ts",
+      "line": 111,
+      "column": 45,
+      "kind": "refine"
+    },
+    {
+      "file": "src/http/contracts/agent-api.ts",
+      "line": 111,
+      "column": 45,
+      "kind": "passthrough"
+    },
+    {
+      "file": "src/http/contracts/agent-api.ts",
+      "line": 117,
+      "column": 34,
+      "kind": "strict"
+    },
+    {
+      "file": "src/http/contracts/agent-api.ts",
+      "line": 133,
+      "column": 51,
+      "kind": "strict"
+    },
+    {
+      "file": "src/http/contracts/agent-api.ts",
+      "line": 135,
+      "column": 34,
+      "kind": "strict"
+    },
+    {
+      "file": "src/http/contracts/agent-api.ts",
+      "line": 146,
+      "column": 42,
+      "kind": "strict"
+    },
+    {
+      "file": "src/http/contracts/agent-api.ts",
+      "line": 148,
+      "column": 16,
+      "kind": "strict"
+    },
+    {
+      "file": "src/http/contracts/agent-api.ts",
+      "line": 158,
+      "column": 13,
+      "kind": "strict"
+    },
+    {
+      "file": "src/http/contracts/agent-api.ts",
+      "line": 163,
+      "column": 13,
+      "kind": "strict"
+    },
+    {
+      "file": "src/http/contracts/agent-api.ts",
+      "line": 171,
+      "column": 45,
+      "kind": "strict"
+    },
+    {
+      "file": "src/http/contracts/agent-api.ts",
+      "line": 175,
+      "column": 13,
+      "kind": "strict"
+    },
+    {
+      "file": "src/http/contracts/agent-api.ts",
+      "line": 181,
+      "column": 46,
+      "kind": "superRefine"
+    },
+    {
+      "file": "src/http/contracts/agent-api.ts",
+      "line": 181,
+      "column": 46,
+      "kind": "strict"
+    },
+    {
+      "file": "src/http/contracts/agent-api.ts",
+      "line": 223,
+      "column": 3,
+      "kind": "strict"
+    },
+    {
+      "file": "src/http/contracts/agent-api.ts",
+      "line": 224,
+      "column": 3,
+      "kind": "strict"
+    },
+    {
+      "file": "src/http/contracts/agent-api.ts",
+      "line": 225,
+      "column": 3,
+      "kind": "strict"
+    },
+    {
+      "file": "src/http/contracts/agent-api.ts",
+      "line": 228,
+      "column": 44,
+      "kind": "strict"
+    },
+    {
+      "file": "src/http/contracts/agent-api.ts",
+      "line": 231,
+      "column": 22,
+      "kind": "coerce.number"
+    },
+    {
+      "file": "src/http/contracts/agent-api.ts",
+      "line": 239,
+      "column": 10,
+      "kind": "coerce.number"
+    },
+    {
+      "file": "src/http/contracts/agent-api.ts",
+      "line": 244,
+      "column": 52,
+      "kind": "strict"
+    },
+    {
+      "file": "src/http/contracts/agent-api.ts",
+      "line": 294,
+      "column": 22,
+      "kind": "strict"
+    },
+    {
+      "file": "src/http/contracts/agent-api.ts",
+      "line": 304,
+      "column": 13,
+      "kind": "strict"
+    },
+    {
+      "file": "src/http/contracts/agent-api.ts",
+      "line": 316,
+      "column": 19,
+      "kind": "strict"
+    },
+    {
+      "file": "src/http/contracts/agent-api.ts",
+      "line": 321,
+      "column": 35,
+      "kind": "strict"
+    },
+    {
+      "file": "src/http/contracts/agent-api.ts",
+      "line": 327,
+      "column": 3,
+      "kind": "strict"
+    },
+    {
+      "file": "src/http/contracts/agent-api.ts",
+      "line": 332,
+      "column": 15,
+      "kind": "strict"
+    },
+    {
+      "file": "src/http/contracts/agent-api.ts",
+      "line": 338,
+      "column": 3,
+      "kind": "strict"
+    },
+    {
+      "file": "src/http/contracts/agent-api.ts",
+      "line": 341,
+      "column": 61,
+      "kind": "strict"
+    },
+    {
+      "file": "src/http/contracts/agent-api.ts",
+      "line": 351,
+      "column": 52,
+      "kind": "strict"
+    },
+    {
+      "file": "src/http/contracts/agent-api.ts",
+      "line": 396,
+      "column": 51,
+      "kind": "strict"
+    },
+    {
+      "file": "src/http/contracts/agent-api.ts",
+      "line": 424,
+      "column": 48,
+      "kind": "strict"
+    },
+    {
+      "file": "src/http/contracts/agent-api.ts",
+      "line": 439,
+      "column": 40,
+      "kind": "strict"
+    },
+    {
+      "file": "src/http/contracts/auth.ts",
+      "line": 6,
+      "column": 34,
+      "kind": "refine"
+    },
+    {
+      "file": "src/http/contracts/avatars.ts",
+      "line": 9,
+      "column": 38,
+      "kind": "strict"
+    },
+    {
+      "file": "src/http/contracts/avatars.ts",
+      "line": 10,
+      "column": 39,
+      "kind": "strict"
+    },
+    {
+      "file": "src/http/contracts/common.ts",
+      "line": 17,
+      "column": 21,
+      "kind": "coerce.number"
+    },
+    {
+      "file": "src/http/contracts/common.ts",
+      "line": 25,
+      "column": 78,
+      "kind": "coerce.number"
+    },
+    {
+      "file": "src/http/contracts/common.ts",
+      "line": 28,
+      "column": 32,
+      "kind": "passthrough"
+    },
+    {
+      "file": "src/http/contracts/github-triggers.ts",
+      "line": 10,
+      "column": 42,
+      "kind": "strict"
+    },
+    {
+      "file": "src/http/contracts/github-triggers.ts",
+      "line": 11,
+      "column": 41,
+      "kind": "strict"
+    },
+    {
+      "file": "src/http/contracts/oauth.ts",
+      "line": 3,
+      "column": 46,
+      "kind": "passthrough"
+    },
+    {
+      "file": "src/http/contracts/oauth.ts",
+      "line": 23,
+      "column": 43,
+      "kind": "strict"
+    },
+    {
+      "file": "src/http/contracts/projects.ts",
+      "line": 11,
+      "column": 45,
+      "kind": "strict"
+    },
+    {
+      "file": "src/http/contracts/projects.ts",
+      "line": 29,
+      "column": 34,
+      "kind": "strict"
+    },
+    {
+      "file": "src/http/contracts/projects.ts",
+      "line": 44,
+      "column": 39,
+      "kind": "refine"
+    },
+    {
+      "file": "src/http/contracts/projects.ts",
+      "line": 44,
+      "column": 39,
+      "kind": "strict"
+    },
+    {
+      "file": "src/http/contracts/projects.ts",
+      "line": 45,
+      "column": 14,
+      "kind": "strict"
+    },
+    {
+      "file": "src/http/contracts/projects.ts",
+      "line": 52,
+      "column": 44,
+      "kind": "strict"
+    },
+    {
+      "file": "src/http/contracts/projects.ts",
+      "line": 53,
+      "column": 47,
+      "kind": "strict"
+    },
+    {
+      "file": "src/http/contracts/projects.ts",
+      "line": 55,
+      "column": 38,
+      "kind": "strip"
+    },
+    {
+      "file": "src/http/contracts/projects.ts",
+      "line": 64,
+      "column": 39,
+      "kind": "strict"
+    },
+    {
+      "file": "src/http/contracts/projects.ts",
+      "line": 65,
+      "column": 38,
+      "kind": "strip"
+    },
+    {
+      "file": "src/http/contracts/system-events.ts",
+      "line": 3,
+      "column": 38,
+      "kind": "strict"
+    },
+    {
+      "file": "src/http/contracts/task-templates.ts",
+      "line": 8,
+      "column": 45,
+      "kind": "strict"
+    },
+    {
+      "file": "src/http/contracts/task-templates.ts",
+      "line": 9,
+      "column": 45,
+      "kind": "strict"
+    },
+    {
+      "file": "src/http/contracts/task-templates.ts",
+      "line": 11,
+      "column": 45,
+      "kind": "strict"
+    },
+    {
+      "file": "src/http/contracts/tasks.ts",
+      "line": 17,
+      "column": 35,
+      "kind": "strip"
+    },
+    {
+      "file": "src/http/contracts/tasks.ts",
+      "line": 22,
+      "column": 38,
+      "kind": "strict"
+    },
+    {
+      "file": "src/http/contracts/tasks.ts",
+      "line": 33,
+      "column": 36,
+      "kind": "strict"
+    },
+    {
+      "file": "src/http/contracts/tasks.ts",
+      "line": 35,
+      "column": 43,
+      "kind": "strict"
+    },
+    {
+      "file": "src/http/contracts/tasks.ts",
+      "line": 36,
+      "column": 38,
+      "kind": "strict"
+    },
+    {
+      "file": "src/http/contracts/tasks.ts",
+      "line": 43,
+      "column": 3,
+      "kind": "strict"
+    },
+    {
+      "file": "src/http/contracts/tasks.ts",
+      "line": 44,
+      "column": 3,
+      "kind": "strict"
+    },
+    {
+      "file": "src/http/contracts/tasks.ts",
+      "line": 49,
+      "column": 35,
+      "kind": "strict"
+    },
+    {
+      "file": "src/http/contracts/tasks.ts",
+      "line": 50,
+      "column": 47,
+      "kind": "strict"
+    },
+    {
+      "file": "src/http/contracts/tasks.ts",
+      "line": 65,
+      "column": 11,
+      "kind": "transform"
+    },
+    {
+      "file": "src/http/contracts/update.ts",
+      "line": 4,
+      "column": 3,
+      "kind": "strict"
+    },
+    {
+      "file": "src/http/contracts/update.ts",
+      "line": 5,
+      "column": 3,
+      "kind": "strict"
+    },
+    {
+      "file": "src/http/contracts/update.ts",
+      "line": 6,
+      "column": 3,
+      "kind": "strict"
+    },
+    {
+      "file": "src/http/contracts/update.ts",
+      "line": 7,
+      "column": 3,
+      "kind": "strict"
+    },
+    {
+      "file": "src/http/contracts/update.ts",
+      "line": 8,
+      "column": 3,
+      "kind": "strict"
+    },
+    {
+      "file": "src/http/contracts/update.ts",
+      "line": 9,
+      "column": 3,
+      "kind": "strict"
+    },
+    {
+      "file": "src/http/contracts/update.ts",
+      "line": 12,
+      "column": 37,
+      "kind": "strict"
+    },
+    {
+      "file": "src/http/contracts/update.ts",
+      "line": 20,
+      "column": 34,
+      "kind": "strict"
+    },
+    {
+      "file": "src/http/contracts/update.ts",
+      "line": 21,
+      "column": 44,
+      "kind": "strict"
+    },
+    {
+      "file": "src/http/contracts/workflows.ts",
+      "line": 8,
+      "column": 42,
+      "kind": "strict"
+    },
+    {
+      "file": "src/http/contracts/workflows.ts",
+      "line": 21,
+      "column": 42,
+      "kind": "strict"
+    },
+    {
+      "file": "src/http/contracts/workflows.ts",
+      "line": 37,
+      "column": 40,
+      "kind": "strict"
+    },
+    {
+      "file": "src/coordination/advisor-report-contracts.ts",
+      "line": 7,
+      "column": 43,
+      "kind": "strict"
+    },
+    {
+      "file": "src/coordination/advisor-report-contracts.ts",
+      "line": 11,
+      "column": 11,
+      "kind": "strict"
+    },
+    {
+      "file": "src/coordination/advisor-report-contracts.ts",
+      "line": 18,
+      "column": 34,
+      "kind": "strict"
+    },
+    {
+      "file": "src/coordination/advisor-report-contracts.ts",
+      "line": 19,
+      "column": 31,
+      "kind": "strict"
+    },
+    {
+      "file": "src/coordination/advisor-report-contracts.ts",
+      "line": 20,
+      "column": 33,
+      "kind": "strict"
+    },
+    {
+      "file": "src/coordination/advisor-report-contracts.ts",
+      "line": 22,
+      "column": 37,
+      "kind": "refine"
+    },
+    {
+      "file": "src/coordination/advisor-report-contracts.ts",
+      "line": 24,
+      "column": 34,
+      "kind": "refine"
+    },
+    {
+      "file": "src/coordination/coordinator-replacement-contracts.ts",
+      "line": 4,
+      "column": 3,
+      "kind": "strict"
+    },
+    {
+      "file": "src/coordination/coordinator-replacement-contracts.ts",
+      "line": 5,
+      "column": 3,
+      "kind": "strict"
+    },
+    {
+      "file": "src/coordination/human-question.ts",
+      "line": 3,
+      "column": 42,
+      "kind": "strict"
+    },
+    {
+      "file": "src/coordination/human-question.ts",
+      "line": 10,
+      "column": 49,
+      "kind": "refine"
+    },
+    {
+      "file": "src/coordination/human-question.ts",
+      "line": 10,
+      "column": 49,
+      "kind": "refine"
+    },
+    {
+      "file": "src/coordination/task-agent-selection-contracts.ts",
+      "line": 6,
+      "column": 3,
+      "kind": "strict"
+    },
+    {
+      "file": "src/coordination/task-agent-selection-contracts.ts",
+      "line": 7,
+      "column": 3,
+      "kind": "strict"
+    },
+    {
+      "file": "src/coordination/worker-replacement-contracts.ts",
+      "line": 3,
+      "column": 47,
+      "kind": "strict"
+    },
+    {
+      "file": "src/coordination/workflow-contracts.ts",
+      "line": 8,
+      "column": 40,
+      "kind": "strict"
+    },
+    {
+      "file": "src/coordination/workflow-contracts.ts",
+      "line": 11,
+      "column": 34,
+      "kind": "strict"
+    },
+    {
+      "file": "src/coordination/workflow-contracts.ts",
+      "line": 16,
+      "column": 3,
+      "kind": "strict"
+    },
+    {
+      "file": "src/coordination/workflow-contracts.ts",
+      "line": 17,
+      "column": 3,
+      "kind": "strict"
+    },
+    {
+      "file": "src/coordination/workflow-contracts.ts",
+      "line": 21,
+      "column": 38,
+      "kind": "strict"
+    },
+    {
+      "file": "src/coordination/workflow-contracts.ts",
+      "line": 23,
+      "column": 36,
+      "kind": "strict"
+    },
+    {
+      "file": "src/coordination/workflow-contracts.ts",
+      "line": 25,
+      "column": 41,
+      "kind": "strict"
+    },
+    {
+      "file": "src/coordination/workflow-contracts.ts",
+      "line": 26,
+      "column": 42,
+      "kind": "strict"
+    },
+    {
+      "file": "src/coordination/workflow-contracts.ts",
+      "line": 32,
+      "column": 40,
+      "kind": "strict"
+    },
+    {
+      "file": "src/coordination/workflow-contracts.ts",
+      "line": 35,
+      "column": 35,
+      "kind": "strict"
+    },
+    {
+      "file": "src/coordination/workflow-contracts.ts",
+      "line": 37,
+      "column": 41,
+      "kind": "strict"
+    },
+    {
+      "file": "src/coordination/workflow-contracts.ts",
+      "line": 39,
+      "column": 42,
+      "kind": "strict"
+    },
+    {
+      "file": "src/coordination/workflow-contracts.ts",
+      "line": 40,
+      "column": 43,
+      "kind": "strict"
+    },
+    {
+      "file": "src/coordination/workflow-contracts.ts",
+      "line": 41,
+      "column": 36,
+      "kind": "strict"
+    },
+    {
+      "file": "src/coordination/workflow-contracts.ts",
+      "line": 41,
+      "column": 130,
+      "kind": "strict"
+    },
+    {
+      "file": "src/coordination/workflow-contracts.ts",
+      "line": 41,
+      "column": 296,
+      "kind": "strict"
+    },
+    {
+      "file": "src/profiles/agent-profile-contracts.ts",
+      "line": 4,
+      "column": 40,
+      "kind": "strict"
+    },
+    {
+      "file": "src/profiles/agent-profile-contracts.ts",
+      "line": 11,
+      "column": 40,
+      "kind": "strict"
+    },
+    {
+      "file": "src/profiles/agent-profile-contracts.ts",
+      "line": 12,
+      "column": 35,
+      "kind": "strict"
+    },
+    {
+      "file": "src/projects/execution-contracts.ts",
+      "line": 4,
+      "column": 39,
+      "kind": "strict"
+    },
+    {
+      "file": "src/projects/execution-contracts.ts",
+      "line": 7,
+      "column": 25,
+      "kind": "refine"
+    },
+    {
+      "file": "src/projects/integration-contracts.ts",
+      "line": 5,
+      "column": 3,
+      "kind": "strict"
+    },
+    {
+      "file": "src/projects/integration-contracts.ts",
+      "line": 6,
+      "column": 3,
+      "kind": "strict"
+    },
+    {
+      "file": "src/projects/integration-contracts.ts",
+      "line": 9,
+      "column": 3,
+      "kind": "strict"
+    },
+    {
+      "file": "src/projects/integration-contracts.ts",
+      "line": 10,
+      "column": 3,
+      "kind": "strict"
+    },
+    {
+      "file": "src/projects/integration-contracts.ts",
+      "line": 10,
+      "column": 45,
+      "kind": "refine"
+    },
+    {
+      "file": "src/projects/integration-contracts.ts",
+      "line": 12,
+      "column": 41,
+      "kind": "strict"
+    },
+    {
+      "file": "src/projects/provider-policy-contracts.ts",
+      "line": 4,
+      "column": 44,
+      "kind": "strict"
+    },
+    {
+      "file": "src/runtimes/project-mcp-contracts.ts",
+      "line": 5,
+      "column": 33,
+      "kind": "refine"
+    },
+    {
+      "file": "src/runtimes/project-mcp-contracts.ts",
+      "line": 6,
+      "column": 9,
+      "kind": "refine"
+    },
+    {
+      "file": "src/tasks/contracts.ts",
+      "line": 22,
+      "column": 3,
+      "kind": "strict"
+    },
+    {
+      "file": "src/tasks/contracts.ts",
+      "line": 23,
+      "column": 3,
+      "kind": "strict"
+    },
+    {
+      "file": "src/tasks/contracts.ts",
+      "line": 24,
+      "column": 3,
+      "kind": "strict"
+    },
+    {
+      "file": "src/tasks/contracts.ts",
+      "line": 26,
+      "column": 37,
+      "kind": "strict"
+    },
+    {
+      "file": "src/tasks/contracts.ts",
+      "line": 27,
+      "column": 13,
+      "kind": "refine"
+    },
+    {
+      "file": "src/tasks/contracts.ts",
+      "line": 31,
+      "column": 49,
+      "kind": "strict"
+    },
+    {
+      "file": "src/tasks/contracts.ts",
+      "line": 32,
+      "column": 44,
+      "kind": "strict"
+    },
+    {
+      "file": "src/tasks/contracts.ts",
+      "line": 33,
+      "column": 32,
+      "kind": "strict"
+    },
+    {
+      "file": "src/tasks/contracts.ts",
+      "line": 58,
+      "column": 40,
+      "kind": "strict"
+    },
+    {
+      "file": "src/tasks/contracts.ts",
+      "line": 74,
+      "column": 20,
+      "kind": "strict"
+    },
+    {
+      "file": "src/tasks/contracts.ts",
+      "line": 84,
+      "column": 32,
+      "kind": "strict"
+    },
+    {
+      "file": "src/tasks/contracts.ts",
+      "line": 85,
+      "column": 36,
+      "kind": "strict"
+    },
+    {
+      "file": "src/tasks/contracts.ts",
+      "line": 86,
+      "column": 36,
+      "kind": "strict"
+    },
+    {
+      "file": "src/tasks/contracts.ts",
+      "line": 88,
+      "column": 36,
+      "kind": "strict"
+    },
+    {
+      "file": "src/tasks/contracts.ts",
+      "line": 89,
+      "column": 32,
+      "kind": "strict"
+    },
+    {
+      "file": "src/tasks/contracts.ts",
+      "line": 96,
+      "column": 3,
+      "kind": "strict"
+    },
+    {
+      "file": "src/tasks/contracts.ts",
+      "line": 97,
+      "column": 3,
+      "kind": "strict"
+    },
+    {
+      "file": "src/tasks/contracts.ts",
+      "line": 99,
+      "column": 27,
+      "kind": "strict"
+    },
+    {
+      "file": "src/tasks/contracts.ts",
+      "line": 119,
+      "column": 11,
+      "kind": "strict"
+    },
+    {
+      "file": "src/tasks/control-contracts.ts",
+      "line": 9,
+      "column": 44,
+      "kind": "strict"
+    },
+    {
+      "file": "src/tasks/control-contracts.ts",
+      "line": 11,
+      "column": 40,
+      "kind": "strict"
+    },
+    {
+      "file": "src/tasks/control-contracts.ts",
+      "line": 23,
+      "column": 34,
+      "kind": "preprocess"
+    },
+    {
+      "file": "src/tasks/control-contracts.ts",
+      "line": 25,
+      "column": 40,
+      "kind": "strict"
+    },
+    {
+      "file": "src/tasks/control-contracts.ts",
+      "line": 28,
+      "column": 43,
+      "kind": "strict"
+    },
+    {
+      "file": "src/tasks/control-contracts.ts",
+      "line": 31,
+      "column": 37,
+      "kind": "strict"
+    },
+    {
+      "file": "src/tasks/issue-association.ts",
+      "line": 3,
+      "column": 39,
+      "kind": "superRefine"
+    },
+    {
+      "file": "src/tasks/issue-association.ts",
+      "line": 4,
+      "column": 3,
+      "kind": "strict"
+    },
+    {
+      "file": "src/tasks/issue-association.ts",
+      "line": 4,
+      "column": 187,
+      "kind": "refine"
+    },
+    {
+      "file": "src/tasks/issue-association.ts",
+      "line": 5,
+      "column": 3,
+      "kind": "strict"
+    },
+    {
+      "file": "src/tasks/limits/contracts.ts",
+      "line": 4,
+      "column": 33,
+      "kind": "strict"
+    },
+    {
+      "file": "src/tasks/limits/contracts.ts",
+      "line": 5,
+      "column": 37,
+      "kind": "strict"
+    },
+    {
+      "file": "src/tasks/limits/contracts.ts",
+      "line": 7,
+      "column": 37,
+      "kind": "strict"
+    },
+    {
+      "file": "src/tasks/limits/contracts.ts",
+      "line": 15,
+      "column": 3,
+      "kind": "strict"
+    },
+    {
+      "file": "src/tasks/limits/contracts.ts",
+      "line": 16,
+      "column": 3,
+      "kind": "strict"
+    },
+    {
+      "file": "src/tasks/limits/contracts.ts",
+      "line": 17,
+      "column": 3,
+      "kind": "strict"
+    }
+  ]
+}

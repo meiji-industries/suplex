@@ -1,0 +1,20 @@
+{
+  "contract": "agent-api.AgentApiTemplateDiscoverySchema",
+  "case": "unknown_on_valid",
+  "input": {
+    "id": "x",
+    "name": "x",
+    "description": "x",
+    "permittedForAgentTaskCreation": true,
+    "__parityUnknown": true
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "id": "x",
+      "name": "x",
+      "description": "x",
+      "permittedForAgentTaskCreation": true
+    }
+  }
+}

@@ -1,0 +1,111 @@
+{
+  "contract": "projects.ProjectCreateBodySchema",
+  "case": "empty_object",
+  "input": {},
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid_union",
+        "errors": [
+          [
+            {
+              "expected": "string",
+              "code": "invalid_type",
+              "path": [
+                "repositoryUrl"
+              ],
+              "message": "Invalid input: expected string, received undefined"
+            }
+          ],
+          [
+            {
+              "expected": "string",
+              "code": "invalid_type",
+              "path": [
+                "repositoryName"
+              ],
+              "message": "Invalid input: expected string, received undefined"
+            }
+          ],
+          [
+            {
+              "expected": "string",
+              "code": "invalid_type",
+              "path": [
+                "name"
+              ],
+              "message": "Invalid input: expected string, received undefined"
+            },
+            {
+              "expected": "string",
+              "code": "invalid_type",
+              "path": [
+                "repositoryPath"
+              ],
+              "message": "Invalid input: expected string, received undefined"
+            },
+            {
+              "expected": "string",
+              "code": "invalid_type",
+              "path": [
+                "worktreeRoot"
+              ],
+              "message": "Invalid input: expected string, received undefined"
+            },
+            {
+              "expected": "string",
+              "code": "invalid_type",
+              "path": [
+                "repository"
+              ],
+              "message": "Invalid input: expected string, received undefined"
+            },
+            {
+              "expected": "string",
+              "code": "invalid_type",
+              "path": [
+                "baseBranch"
+              ],
+              "message": "Invalid input: expected string, received undefined"
+            },
+            {
+              "expected": "string",
+              "code": "invalid_type",
+              "path": [
+                "setupCommand"
+              ],
+              "message": "Invalid input: expected string, received undefined"
+            },
+            {
+              "expected": "string",
+              "code": "invalid_type",
+              "path": [
+                "verificationCommand"
+              ],
+              "message": "Invalid input: expected string, received undefined"
+            },
+            {
+              "expected": "string",
+              "code": "invalid_type",
+              "path": [
+                "rootProfileId"
+              ],
+              "message": "Invalid input: expected string, received undefined"
+            },
+            {
+              "expected": "string",
+              "code": "invalid_type",
+              "path": [
+                "workerProfileId"
+              ],
+              "message": "Invalid input: expected string, received undefined"
+            }
+          ]
+        ],
+        "path": [],
+        "message": "Invalid input"
+      }
+    ]
+  }
+}

@@ -1,0 +1,25 @@
+{
+  "contract": "github-triggers.GithubTriggerActivitySchema",
+  "case": "first_field_null",
+  "input": {
+    "at": null,
+    "pullRequestNumber": null,
+    "url": null,
+    "outcome": "eligible",
+    "reason": "x",
+    "matchingPaths": []
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "expected": "string",
+        "code": "invalid_type",
+        "path": [
+          "at"
+        ],
+        "message": "Invalid input: expected string, received null"
+      }
+    ]
+  }
+}

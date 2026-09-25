@@ -1,0 +1,25 @@
+{
+  "contract": "common.AuthUserResponseSchema",
+  "case": "first_field_missing",
+  "input": {
+    "displayName": "x",
+    "username": "x",
+    "avatarSeed": "x",
+    "role": "admin",
+    "status": "pending",
+    "companyIds": []
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "expected": "string",
+        "code": "invalid_type",
+        "path": [
+          "id"
+        ],
+        "message": "Invalid input: expected string, received undefined"
+      }
+    ]
+  }
+}

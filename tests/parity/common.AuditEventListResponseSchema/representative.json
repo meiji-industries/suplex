@@ -1,0 +1,13 @@
+{
+  "contract": "common.AuditEventListResponseSchema",
+  "case": "representative",
+  "input": {
+    "events": []
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "events": []
+    }
+  }
+}

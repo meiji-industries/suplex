@@ -1,0 +1,15 @@
+{
+  "contract": "tasks.SessionHistoryPageSchema",
+  "case": "representative",
+  "input": {
+    "messages": [],
+    "olderCursor": null
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "messages": [],
+      "olderCursor": null
+    }
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "contract": "tasks.TaskAgentsResponseSchema",
+  "case": "unknown_on_valid",
+  "input": {
+    "agents": [],
+    "__parityUnknown": true
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "agents": []
+    }
+  }
+}

@@ -1,0 +1,13 @@
+{
+  "contract": "common.CredentialListResponseSchema",
+  "case": "representative",
+  "input": {
+    "credentials": []
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "credentials": []
+    }
+  }
+}

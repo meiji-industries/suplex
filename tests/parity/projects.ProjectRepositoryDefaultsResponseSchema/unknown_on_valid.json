@@ -1,0 +1,16 @@
+{
+  "contract": "projects.ProjectRepositoryDefaultsResponseSchema",
+  "case": "unknown_on_valid",
+  "input": {
+    "setupCommand": "x",
+    "verificationCommand": "x",
+    "__parityUnknown": true
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "setupCommand": "x",
+      "verificationCommand": "x"
+    }
+  }
+}

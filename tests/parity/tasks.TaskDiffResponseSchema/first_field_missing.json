@@ -1,0 +1,21 @@
+{
+  "contract": "tasks.TaskDiffResponseSchema",
+  "case": "first_field_missing",
+  "input": {
+    "patch": "x",
+    "truncated": true
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "expected": "boolean",
+        "code": "invalid_type",
+        "path": [
+          "available"
+        ],
+        "message": "Invalid input: expected boolean, received undefined"
+      }
+    ]
+  }
+}

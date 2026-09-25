@@ -1,0 +1,15 @@
+{
+  "contract": "agent-api.AgentApiRuntimeErrorSchema",
+  "case": "representative",
+  "input": {
+    "error": "x",
+    "code": "credential_invalid"
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "error": "x",
+      "code": "credential_invalid"
+    }
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "contract": "common.AuthOptionsResponseSchema",
+  "case": "representative",
+  "input": {
+    "challengeId": "x",
+    "options": null
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "challengeId": "x",
+      "options": null
+    }
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "contract": "agent-api.AgentApiProvenanceResponseSchema",
+  "case": "unknown_on_valid",
+  "input": {
+    "records": [],
+    "__parityUnknown": true
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "records": []
+    }
+  }
+}

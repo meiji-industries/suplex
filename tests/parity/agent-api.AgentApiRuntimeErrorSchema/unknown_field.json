@@ -1,0 +1,57 @@
+{
+  "contract": "agent-api.AgentApiRuntimeErrorSchema",
+  "case": "unknown_field",
+  "input": {
+    "unexpected": true
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "expected": "string",
+        "code": "invalid_type",
+        "path": [
+          "error"
+        ],
+        "message": "Invalid input: expected string, received undefined"
+      },
+      {
+        "code": "invalid_value",
+        "values": [
+          "credential_invalid",
+          "not_found",
+          "resource_not_found",
+          "idempotency_conflict",
+          "command_in_progress",
+          "revision_stale",
+          "illegal_command",
+          "request_invalid",
+          "delivery_policy_rejected",
+          "project_not_found",
+          "dependency_not_found",
+          "root_profile_not_found",
+          "root_profile_not_permitted",
+          "worker_profile_not_found",
+          "worker_profile_not_permitted",
+          "advisor_profile_not_found",
+          "advisor_profile_not_permitted",
+          "source_issue_rejected",
+          "source_pull_request_rejected",
+          "source_branch_rejected",
+          "workflow_not_found",
+          "workflow_not_permitted",
+          "template_not_found",
+          "template_not_permitted",
+          "task_unavailable",
+          "payload_too_large",
+          "unsupported_media_type",
+          "internal_error"
+        ],
+        "path": [
+          "code"
+        ],
+        "message": "Invalid option: expected one of \"credential_invalid\"|\"not_found\"|\"resource_not_found\"|\"idempotency_conflict\"|\"command_in_progress\"|\"revision_stale\"|\"illegal_command\"|\"request_invalid\"|\"delivery_policy_rejected\"|\"project_not_found\"|\"dependency_not_found\"|\"root_profile_not_found\"|\"root_profile_not_permitted\"|\"worker_profile_not_found\"|\"worker_profile_not_permitted\"|\"advisor_profile_not_found\"|\"advisor_profile_not_permitted\"|\"source_issue_rejected\"|\"source_pull_request_rejected\"|\"source_branch_rejected\"|\"workflow_not_found\"|\"workflow_not_permitted\"|\"template_not_found\"|\"template_not_permitted\"|\"task_unavailable\"|\"payload_too_large\"|\"unsupported_media_type\"|\"internal_error\""
+      }
+    ]
+  }
+}

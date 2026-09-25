@@ -1,0 +1,20 @@
+{
+  "contract": "common.TaskExecutionParamsSchema",
+  "case": "first_field_missing",
+  "input": {
+    "executionId": "x"
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "expected": "string",
+        "code": "invalid_type",
+        "path": [
+          "taskId"
+        ],
+        "message": "Invalid input: expected string, received undefined"
+      }
+    ]
+  }
+}

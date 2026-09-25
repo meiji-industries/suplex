@@ -1,0 +1,13 @@
+{
+  "contract": "agent-api.AgentApiDeliveryDecisionBodySchema",
+  "case": "representative",
+  "input": {
+    "decision": "wait_for_dependency"
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "decision": "wait_for_dependency"
+    }
+  }
+}

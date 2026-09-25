@@ -1,0 +1,27 @@
+{
+  "contract": "tasks.TaskBodySchema",
+  "case": "representative",
+  "input": {
+    "projectId": "x",
+    "title": "x",
+    "idempotencyKey": "sample-001"
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "projectId": "x",
+      "title": "x",
+      "description": "",
+      "idempotencyKey": "sample-001",
+      "images": [],
+      "startImmediately": false,
+      "deliveryTarget": "pull_request_draft",
+      "runProjectTests": true,
+      "visualEvidence": "off",
+      "workflow": "standard",
+      "advisorProfileIds": {},
+      "dependsOn": [],
+      "blockedByPullRequests": []
+    }
+  }
+}

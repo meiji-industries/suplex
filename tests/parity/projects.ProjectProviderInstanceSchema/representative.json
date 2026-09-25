@@ -1,0 +1,17 @@
+{
+  "contract": "projects.ProjectProviderInstanceSchema",
+  "case": "representative",
+  "input": {
+    "id": "x",
+    "provider": "opencode",
+    "label": "x"
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "id": "x",
+      "provider": "opencode",
+      "label": "x"
+    }
+  }
+}

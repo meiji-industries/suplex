@@ -1,0 +1,85 @@
+{
+  "contract": "agent-api.AgentApiTaskCreateDryRunResponseSchema",
+  "case": "unknown_on_valid",
+  "input": {
+    "dryRun": true,
+    "projectId": "x",
+    "project": {
+      "id": "x",
+      "name": "x"
+    },
+    "title": "x",
+    "workflow": {
+      "id": null,
+      "engine": "x",
+      "name": null
+    },
+    "templateId": null,
+    "deliveryTarget": "local_worktree",
+    "branch": "x",
+    "dependsOn": [],
+    "wouldStart": "now",
+    "blockingPrerequisiteIds": [],
+    "__parityUnknown": true
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid_union",
+        "errors": [
+          [
+            {
+              "code": "unrecognized_keys",
+              "keys": [
+                "__parityUnknown"
+              ],
+              "path": [],
+              "message": "Unrecognized key: \"__parityUnknown\""
+            }
+          ],
+          [
+            {
+              "code": "invalid_value",
+              "values": [
+                200
+              ],
+              "path": [
+                "status"
+              ],
+              "message": "Invalid input: expected 200"
+            },
+            {
+              "expected": "string",
+              "code": "invalid_type",
+              "path": [
+                "existingTaskId"
+              ],
+              "message": "Invalid input: expected string, received undefined"
+            },
+            {
+              "code": "unrecognized_keys",
+              "keys": [
+                "projectId",
+                "project",
+                "title",
+                "workflow",
+                "templateId",
+                "deliveryTarget",
+                "branch",
+                "dependsOn",
+                "wouldStart",
+                "blockingPrerequisiteIds",
+                "__parityUnknown"
+              ],
+              "path": [],
+              "message": "Unrecognized keys: \"projectId\", \"project\", \"title\", \"workflow\", \"templateId\", \"deliveryTarget\", \"branch\", \"dependsOn\", \"wouldStart\", \"blockingPrerequisiteIds\", \"__parityUnknown\""
+            }
+          ]
+        ],
+        "path": [],
+        "message": "Invalid input"
+      }
+    ]
+  }
+}

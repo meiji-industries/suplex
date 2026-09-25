@@ -1,0 +1,34 @@
+{
+  "contract": "tasks.TaskDiffResponseSchema",
+  "case": "empty_object",
+  "input": {},
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "expected": "boolean",
+        "code": "invalid_type",
+        "path": [
+          "available"
+        ],
+        "message": "Invalid input: expected boolean, received undefined"
+      },
+      {
+        "expected": "string",
+        "code": "invalid_type",
+        "path": [
+          "patch"
+        ],
+        "message": "Invalid input: expected string, received undefined"
+      },
+      {
+        "expected": "boolean",
+        "code": "invalid_type",
+        "path": [
+          "truncated"
+        ],
+        "message": "Invalid input: expected boolean, received undefined"
+      }
+    ]
+  }
+}

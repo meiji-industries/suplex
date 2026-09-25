@@ -1,0 +1,28 @@
+{
+  "contract": "projects.ProjectBodySchema",
+  "case": "first_field_null",
+  "input": {
+    "name": null,
+    "repositoryPath": "x",
+    "worktreeRoot": "x",
+    "repository": "x",
+    "baseBranch": "x",
+    "setupCommand": "x",
+    "verificationCommand": "x",
+    "rootProfileId": "x",
+    "workerProfileId": "x"
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "expected": "string",
+        "code": "invalid_type",
+        "path": [
+          "name"
+        ],
+        "message": "Invalid input: expected string, received null"
+      }
+    ]
+  }
+}

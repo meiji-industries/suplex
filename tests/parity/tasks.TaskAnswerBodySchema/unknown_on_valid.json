@@ -1,0 +1,50 @@
+{
+  "contract": "tasks.TaskAnswerBodySchema",
+  "case": "unknown_on_valid",
+  "input": {
+    "questionId": "x",
+    "answer": "x",
+    "__parityUnknown": true
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid_union",
+        "errors": [
+          [
+            {
+              "code": "unrecognized_keys",
+              "keys": [
+                "__parityUnknown"
+              ],
+              "path": [],
+              "message": "Unrecognized key: \"__parityUnknown\""
+            }
+          ],
+          [
+            {
+              "code": "invalid_type",
+              "expected": "object",
+              "path": [
+                "limitDecision"
+              ],
+              "message": "Invalid input: expected object, received undefined"
+            },
+            {
+              "code": "unrecognized_keys",
+              "keys": [
+                "answer",
+                "__parityUnknown"
+              ],
+              "path": [],
+              "message": "Unrecognized keys: \"answer\", \"__parityUnknown\""
+            }
+          ]
+        ],
+        "path": [],
+        "message": "Invalid input"
+      }
+    ]
+  }
+}

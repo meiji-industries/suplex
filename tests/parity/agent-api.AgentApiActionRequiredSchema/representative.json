@@ -1,0 +1,25 @@
+{
+  "contract": "agent-api.AgentApiActionRequiredSchema",
+  "case": "representative",
+  "input": {
+    "owner": "agent",
+    "reasonCode": "conflicting_pull_request",
+    "summary": "x",
+    "upstream": null,
+    "evidenceAt": "x",
+    "suggestedCommands": [],
+    "humanApprovalRequired": true
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "owner": "agent",
+      "reasonCode": "conflicting_pull_request",
+      "summary": "x",
+      "upstream": null,
+      "evidenceAt": "x",
+      "suggestedCommands": [],
+      "humanApprovalRequired": true
+    }
+  }
+}

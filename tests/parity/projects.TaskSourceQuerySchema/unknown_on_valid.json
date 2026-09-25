@@ -1,0 +1,14 @@
+{
+  "contract": "projects.TaskSourceQuerySchema",
+  "case": "unknown_on_valid",
+  "input": {
+    "kind": "pull_request",
+    "__parityUnknown": true
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "kind": "pull_request"
+    }
+  }
+}

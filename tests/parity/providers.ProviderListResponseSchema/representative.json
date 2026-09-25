@@ -1,0 +1,17 @@
+{
+  "contract": "providers.ProviderListResponseSchema",
+  "case": "representative",
+  "input": {
+    "directory": "x",
+    "observedAt": "x",
+    "providers": []
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "directory": "x",
+      "observedAt": "x",
+      "providers": []
+    }
+  }
+}

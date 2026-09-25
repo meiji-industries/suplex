@@ -1,0 +1,24 @@
+{
+  "contract": "projects.ModelResponseSchema",
+  "case": "first_field_null",
+  "input": {
+    "id": null,
+    "provider": "opencode",
+    "providerLabel": "x",
+    "providerStatus": "configured",
+    "displayName": "x"
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "expected": "string",
+        "code": "invalid_type",
+        "path": [
+          "id"
+        ],
+        "message": "Invalid input: expected string, received null"
+      }
+    ]
+  }
+}

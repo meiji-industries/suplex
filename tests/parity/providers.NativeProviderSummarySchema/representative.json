@@ -1,0 +1,21 @@
+{
+  "contract": "providers.NativeProviderSummarySchema",
+  "case": "representative",
+  "input": {
+    "id": "opencode",
+    "label": "x",
+    "modelCount": 1,
+    "models": [],
+    "status": "configured"
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "id": "opencode",
+      "label": "x",
+      "modelCount": 1,
+      "models": [],
+      "status": "configured"
+    }
+  }
+}

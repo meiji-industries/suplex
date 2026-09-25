@@ -1,0 +1,14 @@
+{
+  "contract": "common.AuthenticationVerificationBodySchema",
+  "case": "representative",
+  "input": {
+    "response": null
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "challengeId": "",
+      "response": null
+    }
+  }
+}

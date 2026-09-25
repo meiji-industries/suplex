@@ -1,0 +1,13 @@
+{
+  "contract": "projects.ProjectProviderInstanceListResponseSchema",
+  "case": "representative",
+  "input": {
+    "instances": []
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "instances": []
+    }
+  }
+}

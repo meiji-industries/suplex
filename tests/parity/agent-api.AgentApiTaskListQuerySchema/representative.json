@@ -1,0 +1,11 @@
+{
+  "contract": "agent-api.AgentApiTaskListQuerySchema",
+  "case": "representative",
+  "input": {},
+  "expected": {
+    "accepted": true,
+    "value": {
+      "limit": 50
+    }
+  }
+}

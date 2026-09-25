@@ -1,0 +1,14 @@
+{
+  "contract": "tasks.WorktreeAppsResponseSchema",
+  "case": "unknown_on_valid",
+  "input": {
+    "apps": [],
+    "__parityUnknown": true
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "apps": []
+    }
+  }
+}

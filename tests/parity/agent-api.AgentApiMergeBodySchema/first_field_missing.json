@@ -1,0 +1,22 @@
+{
+  "contract": "agent-api.AgentApiMergeBodySchema",
+  "case": "first_field_missing",
+  "input": {
+    "expectedHeadSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "expectedBaseSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "approvalReceipt": "x"
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "expected": "number",
+        "code": "invalid_type",
+        "path": [
+          "pullRequestNumber"
+        ],
+        "message": "Invalid input: expected number, received undefined"
+      }
+    ]
+  }
+}

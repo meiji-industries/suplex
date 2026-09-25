@@ -1,0 +1,23 @@
+{
+  "contract": "avatars.AvatarRecordSchema",
+  "case": "first_field_missing",
+  "input": {
+    "imageVersion": null
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid_value",
+        "values": [
+          "square",
+          "circle"
+        ],
+        "path": [
+          "shape"
+        ],
+        "message": "Invalid option: expected one of \"square\"|\"circle\""
+      }
+    ]
+  }
+}

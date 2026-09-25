@@ -1,0 +1,14 @@
+{
+  "contract": "common.CredentialListResponseSchema",
+  "case": "unknown_on_valid",
+  "input": {
+    "credentials": [],
+    "__parityUnknown": true
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "credentials": []
+    }
+  }
+}

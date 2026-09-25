@@ -1,0 +1,22 @@
+{
+  "contract": "avatars.AvatarImageBodySchema",
+  "case": "unknown_on_valid",
+  "input": {
+    "mimeType": "image/png",
+    "base64": "x",
+    "__parityUnknown": true
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "unrecognized_keys",
+        "keys": [
+          "__parityUnknown"
+        ],
+        "path": [],
+        "message": "Unrecognized key: \"__parityUnknown\""
+      }
+    ]
+  }
+}

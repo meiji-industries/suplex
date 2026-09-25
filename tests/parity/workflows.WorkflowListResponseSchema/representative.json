@@ -1,0 +1,13 @@
+{
+  "contract": "workflows.WorkflowListResponseSchema",
+  "case": "representative",
+  "input": {
+    "workflows": []
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "workflows": []
+    }
+  }
+}

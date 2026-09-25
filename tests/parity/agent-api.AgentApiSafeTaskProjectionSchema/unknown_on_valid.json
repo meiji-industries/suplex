@@ -1,0 +1,84 @@
+{
+  "contract": "agent-api.AgentApiSafeTaskProjectionSchema",
+  "case": "unknown_on_valid",
+  "input": {
+    "id": "x",
+    "issueKey": null,
+    "projectId": "x",
+    "project": {
+      "id": "x",
+      "name": "x"
+    },
+    "title": "x",
+    "source": {
+      "kind": "issue",
+      "number": 1
+    },
+    "status": "backlog",
+    "queue": {
+      "waitingOn": []
+    },
+    "dependsOn": [],
+    "blockedBy": [],
+    "archived": true,
+    "revision": "x",
+    "permittedCommands": [],
+    "humanQuestion": null,
+    "blocker": null,
+    "workflowStage": "x",
+    "workflow": {
+      "id": null,
+      "engine": "x",
+      "name": null
+    },
+    "templateId": null,
+    "deliveryTarget": "local_worktree",
+    "runProjectTests": true,
+    "visualEvidence": "off",
+    "delivery": null,
+    "createdAt": "x",
+    "updatedAt": "x",
+    "__parityUnknown": true
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "id": "x",
+      "issueKey": null,
+      "projectId": "x",
+      "project": {
+        "id": "x",
+        "name": "x"
+      },
+      "title": "x",
+      "source": {
+        "kind": "issue",
+        "number": 1
+      },
+      "status": "backlog",
+      "queue": {
+        "waitingOn": []
+      },
+      "dependsOn": [],
+      "blockedBy": [],
+      "archived": true,
+      "revision": "x",
+      "permittedCommands": [],
+      "humanQuestion": null,
+      "blocker": null,
+      "workflowStage": "x",
+      "workflow": {
+        "id": null,
+        "engine": "x",
+        "name": null
+      },
+      "templateId": null,
+      "deliveryTarget": "local_worktree",
+      "runProjectTests": true,
+      "visualEvidence": "off",
+      "delivery": null,
+      "createdAt": "x",
+      "updatedAt": "x"
+    }
+  }
+}

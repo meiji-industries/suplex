@@ -1,0 +1,21 @@
+{
+  "contract": "tasks.TaskWorkerReplacementBodySchema",
+  "case": "first_field_null",
+  "input": {
+    "sessionId": null,
+    "reason": "x"
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "expected": "string",
+        "code": "invalid_type",
+        "path": [
+          "sessionId"
+        ],
+        "message": "Invalid input: expected string, received null"
+      }
+    ]
+  }
+}

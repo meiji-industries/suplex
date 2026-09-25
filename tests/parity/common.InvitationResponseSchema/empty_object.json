@@ -1,0 +1,38 @@
+{
+  "contract": "common.InvitationResponseSchema",
+  "case": "empty_object",
+  "input": {},
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "expected": "string",
+        "code": "invalid_type",
+        "path": [
+          "token"
+        ],
+        "message": "Invalid input: expected string, received undefined"
+      },
+      {
+        "code": "invalid_value",
+        "values": [
+          "bootstrap",
+          "user",
+          "recovery"
+        ],
+        "path": [
+          "kind"
+        ],
+        "message": "Invalid option: expected one of \"bootstrap\"|\"user\"|\"recovery\""
+      },
+      {
+        "expected": "string",
+        "code": "invalid_type",
+        "path": [
+          "expiresAt"
+        ],
+        "message": "Invalid input: expected string, received undefined"
+      }
+    ]
+  }
+}

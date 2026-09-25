@@ -1,0 +1,14 @@
+{
+  "contract": "common.AuditEventListResponseSchema",
+  "case": "unknown_on_valid",
+  "input": {
+    "events": [],
+    "__parityUnknown": true
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "events": []
+    }
+  }
+}

@@ -1,0 +1,20 @@
+{
+  "contract": "avatars.AvatarOwnerParamsSchema",
+  "case": "first_field_null",
+  "input": {
+    "ownerId": null
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "expected": "string",
+        "code": "invalid_type",
+        "path": [
+          "ownerId"
+        ],
+        "message": "Invalid input: expected string, received null"
+      }
+    ]
+  }
+}

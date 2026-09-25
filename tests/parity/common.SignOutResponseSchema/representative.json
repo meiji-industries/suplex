@@ -1,0 +1,13 @@
+{
+  "contract": "common.SignOutResponseSchema",
+  "case": "representative",
+  "input": {
+    "signedOut": true
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "signedOut": true
+    }
+  }
+}

@@ -1,0 +1,26 @@
+{
+  "contract": "system-events.ClientLifecycleSchema",
+  "case": "unknown_on_valid",
+  "input": {
+    "state": "startup",
+    "tabId": "00000000-0000-4000-8000-000000000001",
+    "documentId": "00000000-0000-4000-8000-000000000001",
+    "clientTime": "2026-09-24T00:00:00.000Z",
+    "visible": true,
+    "online": true,
+    "__parityUnknown": true
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "unrecognized_keys",
+        "keys": [
+          "__parityUnknown"
+        ],
+        "path": [],
+        "message": "Unrecognized key: \"__parityUnknown\""
+      }
+    ]
+  }
+}

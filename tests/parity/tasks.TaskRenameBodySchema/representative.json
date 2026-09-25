@@ -1,0 +1,13 @@
+{
+  "contract": "tasks.TaskRenameBodySchema",
+  "case": "representative",
+  "input": {
+    "title": "x"
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "title": "x"
+    }
+  }
+}

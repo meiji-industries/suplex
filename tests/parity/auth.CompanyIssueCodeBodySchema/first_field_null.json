@@ -1,0 +1,13 @@
+{
+  "contract": "auth.CompanyIssueCodeBodySchema",
+  "case": "first_field_null",
+  "input": {
+    "issueCode": null
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "issueCode": null
+    }
+  }
+}

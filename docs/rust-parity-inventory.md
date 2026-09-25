@@ -47,7 +47,7 @@ The table lists all 238 backend TypeScript modules present at the baseline, incl
 | [delivery/target-capabilities.ts](../src/delivery/target-capabilities.ts) | not started | |
 | [http/agent-api-runtime.ts](../src/http/agent-api-runtime.ts) | not started | |
 | [http/contracts/agent-api.ts](../src/http/contracts/agent-api.ts) | not started | |
-| [http/contracts/auth.ts](../src/http/contracts/auth.ts) | not started | |
+| [http/contracts/auth.ts](../src/http/contracts/auth.ts) | not started | Five validators pass 39 [Zod fixture comparisons](../rust/tests/contract_parity.rs); full module/HTTP parity remains incomplete. [Corpus scope](spikes/rust-json-hash-bytes.md) |
 | [http/contracts/avatars.ts](../src/http/contracts/avatars.ts) | not started | |
 | [http/contracts/common.ts](../src/http/contracts/common.ts) | not started | |
 | [http/contracts/github-triggers.ts](../src/http/contracts/github-triggers.ts) | not started | |

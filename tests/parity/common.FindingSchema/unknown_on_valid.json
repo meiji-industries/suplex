@@ -1,0 +1,18 @@
+{
+  "contract": "common.FindingSchema",
+  "case": "unknown_on_valid",
+  "input": {
+    "code": "x",
+    "field": "x",
+    "message": "x",
+    "__parityUnknown": true
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "code": "x",
+      "field": "x",
+      "message": "x"
+    }
+  }
+}

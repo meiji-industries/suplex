@@ -1,0 +1,22 @@
+{
+  "contract": "common.SignOutResponseSchema",
+  "case": "unknown_field",
+  "input": {
+    "unexpected": true
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid_value",
+        "values": [
+          true
+        ],
+        "path": [
+          "signedOut"
+        ],
+        "message": "Invalid input: expected true"
+      }
+    ]
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "contract": "oauth.OAuthConsentDecisionResponseSchema",
+  "case": "unknown_on_valid",
+  "input": {
+    "redirectTo": "x",
+    "__parityUnknown": true
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "redirectTo": "x"
+    }
+  }
+}

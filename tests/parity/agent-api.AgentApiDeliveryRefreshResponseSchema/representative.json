@@ -1,0 +1,17 @@
+{
+  "contract": "agent-api.AgentApiDeliveryRefreshResponseSchema",
+  "case": "representative",
+  "input": {
+    "taskId": "x",
+    "pullRequest": null,
+    "observation": null
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "taskId": "x",
+      "pullRequest": null,
+      "observation": null
+    }
+  }
+}

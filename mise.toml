@@ -60,8 +60,9 @@ run = "cargo +1.93.1 test --manifest-path rust/Cargo.toml"
 
 [tasks."test:parity"]
 run = '''
-pnpm exec vitest run --project unit tests/parity
-cargo +1.93.1 test --manifest-path rust/Cargo.toml parity
+pnpm exec tsx tests/parity/generate.ts
+pnpm exec tsx tests/parity/hash-bytes/generate.ts
+cargo +1.93.1 test --manifest-path rust/Cargo.toml --test contract_parity --test hash_bytes
 '''
 
 [tasks.down]

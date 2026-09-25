@@ -1,0 +1,36 @@
+{
+  "contract": "projects.ProjectResponseSchema",
+  "case": "unknown_on_valid",
+  "input": {
+    "name": "x",
+    "repositoryPath": "x",
+    "worktreeRoot": "x",
+    "baseBranch": "x",
+    "setupCommand": "x",
+    "verificationCommand": "x",
+    "rootProfileId": "x",
+    "workerProfileId": "x",
+    "id": "x",
+    "companyId": "x",
+    "createdAt": "x",
+    "updatedAt": "x",
+    "__parityUnknown": true
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "name": "x",
+      "repositoryPath": "x",
+      "worktreeRoot": "x",
+      "baseBranch": "x",
+      "setupCommand": "x",
+      "verificationCommand": "x",
+      "rootProfileId": "x",
+      "workerProfileId": "x",
+      "id": "x",
+      "companyId": "x",
+      "createdAt": "x",
+      "updatedAt": "x"
+    }
+  }
+}

@@ -1,0 +1,22 @@
+{
+  "contract": "tasks.VisualEvidenceSchema",
+  "case": "unknown_field",
+  "input": {
+    "unexpected": true
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid_value",
+        "values": [
+          "off",
+          "capture",
+          "required"
+        ],
+        "path": [],
+        "message": "Invalid option: expected one of \"off\"|\"capture\"|\"required\""
+      }
+    ]
+  }
+}

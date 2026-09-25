@@ -1,0 +1,24 @@
+{
+  "contract": "github-triggers.GithubTriggerCreateSchema",
+  "case": "first_field_missing",
+  "input": {
+    "name": "x",
+    "label": "x",
+    "workflowId": "x",
+    "deliveryTarget": "local_worktree",
+    "protectedPaths": []
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "expected": "string",
+        "code": "invalid_type",
+        "path": [
+          "projectId"
+        ],
+        "message": "Invalid input: expected string, received undefined"
+      }
+    ]
+  }
+}

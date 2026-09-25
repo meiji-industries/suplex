@@ -1,0 +1,18 @@
+{
+  "contract": "agent-api.AgentApiDeliveryDecisionResponseSchema",
+  "case": "unknown_on_valid",
+  "input": {
+    "taskId": "x",
+    "decision": "wait_for_dependency",
+    "blockingTaskIds": [],
+    "__parityUnknown": true
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "taskId": "x",
+      "decision": "wait_for_dependency",
+      "blockingTaskIds": []
+    }
+  }
+}

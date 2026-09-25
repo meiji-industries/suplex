@@ -1,0 +1,13 @@
+{
+  "contract": "auth.CompanyNameBodySchema",
+  "case": "unknown_on_valid",
+  "input": {
+    "__parityUnknown": true
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "name": ""
+    }
+  }
+}

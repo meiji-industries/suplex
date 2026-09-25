@@ -1,0 +1,11 @@
+{
+  "contract": "auth.MembershipBodySchema",
+  "case": "empty_object",
+  "input": {},
+  "expected": {
+    "accepted": true,
+    "value": {
+      "userId": ""
+    }
+  }
+}

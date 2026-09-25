@@ -1,0 +1,16 @@
+{
+  "contract": "agent-api.AgentApiAdminListQuerySchema",
+  "case": "empty_array",
+  "input": [],
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "expected": "object",
+        "code": "invalid_type",
+        "path": [],
+        "message": "Invalid input: expected object, received array"
+      }
+    ]
+  }
+}

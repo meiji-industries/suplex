@@ -1,0 +1,21 @@
+{
+  "contract": "tasks.TaskContinueDeliveryBodySchema",
+  "case": "empty_object",
+  "input": {},
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid_value",
+        "values": [
+          "pull_request_ready",
+          "merged"
+        ],
+        "path": [
+          "deliveryTarget"
+        ],
+        "message": "Invalid option: expected one of \"pull_request_ready\"|\"merged\""
+      }
+    ]
+  }
+}

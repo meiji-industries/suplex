@@ -1,0 +1,34 @@
+{
+  "contract": "agent-api.AgentApiDeliveryRefreshResponseSchema",
+  "case": "empty_object",
+  "input": {},
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "expected": "string",
+        "code": "invalid_type",
+        "path": [
+          "taskId"
+        ],
+        "message": "Invalid input: expected string, received undefined"
+      },
+      {
+        "expected": "object",
+        "code": "invalid_type",
+        "path": [
+          "pullRequest"
+        ],
+        "message": "Invalid input: expected object, received undefined"
+      },
+      {
+        "expected": "object",
+        "code": "invalid_type",
+        "path": [
+          "observation"
+        ],
+        "message": "Invalid input: expected object, received undefined"
+      }
+    ]
+  }
+}

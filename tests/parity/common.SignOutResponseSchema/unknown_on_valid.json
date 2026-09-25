@@ -1,0 +1,14 @@
+{
+  "contract": "common.SignOutResponseSchema",
+  "case": "unknown_on_valid",
+  "input": {
+    "signedOut": true,
+    "__parityUnknown": true
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "signedOut": true
+    }
+  }
+}

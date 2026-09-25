@@ -1,0 +1,7 @@
+{
+  "site": "agent_create passthrough edge",
+  "inputJson": "{\"beyondSafe\":9007199254740993,\"maxUnsigned\":18446744073709551615,\"overflow\":1e400}",
+  "encoding": "hex",
+  "bytes": "{\"beyondSafe\":9007199254740992,\"maxUnsigned\":18446744073709552000,\"overflow\":null}",
+  "digest": "92b05a2b2fe9add004d170f26e37a1aba83e15132f4c7b57b5f5343c91d2419c"
+}

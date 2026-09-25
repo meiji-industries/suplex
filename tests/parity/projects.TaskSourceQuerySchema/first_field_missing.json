@@ -1,0 +1,22 @@
+{
+  "contract": "projects.TaskSourceQuerySchema",
+  "case": "first_field_missing",
+  "input": {},
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid_value",
+        "values": [
+          "pull_request",
+          "issue",
+          "branch"
+        ],
+        "path": [
+          "kind"
+        ],
+        "message": "Invalid option: expected one of \"pull_request\"|\"issue\"|\"branch\""
+      }
+    ]
+  }
+}

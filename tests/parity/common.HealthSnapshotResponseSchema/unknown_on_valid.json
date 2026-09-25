@@ -1,0 +1,20 @@
+{
+  "contract": "common.HealthSnapshotResponseSchema",
+  "case": "unknown_on_valid",
+  "input": {
+    "generatedAt": "x",
+    "reachableAddress": "x",
+    "ready": true,
+    "checks": [],
+    "__parityUnknown": true
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "generatedAt": "x",
+      "reachableAddress": "x",
+      "ready": true,
+      "checks": []
+    }
+  }
+}

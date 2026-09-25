@@ -1,0 +1,38 @@
+{
+  "contract": "update.UpdateRestartResponseSchema",
+  "case": "unknown_field",
+  "input": {
+    "unexpected": true
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid_value",
+        "values": [
+          true
+        ],
+        "path": [
+          "accepted"
+        ],
+        "message": "Invalid input: expected true"
+      },
+      {
+        "code": "invalid_type",
+        "expected": "object",
+        "path": [
+          "status"
+        ],
+        "message": "Invalid input: expected object, received undefined"
+      },
+      {
+        "code": "unrecognized_keys",
+        "keys": [
+          "unexpected"
+        ],
+        "path": [],
+        "message": "Unrecognized key: \"unexpected\""
+      }
+    ]
+  }
+}

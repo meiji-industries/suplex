@@ -1,0 +1,9 @@
+{
+  "contract": "tasks.TaskAgentStatusSchema",
+  "case": "representative",
+  "input": "queued",
+  "expected": {
+    "accepted": true,
+    "value": "queued"
+  }
+}

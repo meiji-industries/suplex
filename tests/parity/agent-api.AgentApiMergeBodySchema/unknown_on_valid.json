@@ -1,0 +1,24 @@
+{
+  "contract": "agent-api.AgentApiMergeBodySchema",
+  "case": "unknown_on_valid",
+  "input": {
+    "pullRequestNumber": 1,
+    "expectedHeadSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "expectedBaseSha": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "approvalReceipt": "x",
+    "__parityUnknown": true
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "unrecognized_keys",
+        "keys": [
+          "__parityUnknown"
+        ],
+        "path": [],
+        "message": "Unrecognized key: \"__parityUnknown\""
+      }
+    ]
+  }
+}

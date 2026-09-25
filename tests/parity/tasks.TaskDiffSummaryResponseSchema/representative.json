@@ -1,0 +1,15 @@
+{
+  "contract": "tasks.TaskDiffSummaryResponseSchema",
+  "case": "representative",
+  "input": {
+    "available": true,
+    "files": 1
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "available": true,
+      "files": 1
+    }
+  }
+}

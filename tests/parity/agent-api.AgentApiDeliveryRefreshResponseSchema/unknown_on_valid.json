@@ -1,0 +1,18 @@
+{
+  "contract": "agent-api.AgentApiDeliveryRefreshResponseSchema",
+  "case": "unknown_on_valid",
+  "input": {
+    "taskId": "x",
+    "pullRequest": null,
+    "observation": null,
+    "__parityUnknown": true
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "taskId": "x",
+      "pullRequest": null,
+      "observation": null
+    }
+  }
+}

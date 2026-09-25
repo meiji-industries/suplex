@@ -1,0 +1,13 @@
+{
+  "contract": "avatars.AvatarDirectoryResponseSchema",
+  "case": "representative",
+  "input": {
+    "avatars": {}
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "avatars": {}
+    }
+  }
+}

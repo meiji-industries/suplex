@@ -1,0 +1,14 @@
+{
+  "contract": "agent-api.AgentApiMergeTrainResponseSchema",
+  "case": "unknown_on_valid",
+  "input": {
+    "entries": [],
+    "__parityUnknown": true
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "entries": []
+    }
+  }
+}

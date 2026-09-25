@@ -1,0 +1,15 @@
+{
+  "contract": "providers.ProviderConnectionSchema",
+  "case": "representative",
+  "input": {
+    "status": "connected",
+    "summary": "x"
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "status": "connected",
+      "summary": "x"
+    }
+  }
+}

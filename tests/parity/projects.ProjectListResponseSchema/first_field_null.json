@@ -1,0 +1,20 @@
+{
+  "contract": "projects.ProjectListResponseSchema",
+  "case": "first_field_null",
+  "input": {
+    "projects": null
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "expected": "array",
+        "code": "invalid_type",
+        "path": [
+          "projects"
+        ],
+        "message": "Invalid input: expected array, received null"
+      }
+    ]
+  }
+}

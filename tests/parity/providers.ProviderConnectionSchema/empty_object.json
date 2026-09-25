@@ -1,0 +1,30 @@
+{
+  "contract": "providers.ProviderConnectionSchema",
+  "case": "empty_object",
+  "input": {},
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid_value",
+        "values": [
+          "connected",
+          "not-connected",
+          "unknown"
+        ],
+        "path": [
+          "status"
+        ],
+        "message": "Invalid option: expected one of \"connected\"|\"not-connected\"|\"unknown\""
+      },
+      {
+        "expected": "string",
+        "code": "invalid_type",
+        "path": [
+          "summary"
+        ],
+        "message": "Invalid input: expected string, received undefined"
+      }
+    ]
+  }
+}

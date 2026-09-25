@@ -1,0 +1,34 @@
+{
+  "contract": "system-events.ClientLifecycleSchema",
+  "case": "first_field_missing",
+  "input": {
+    "tabId": "00000000-0000-4000-8000-000000000001",
+    "documentId": "00000000-0000-4000-8000-000000000001",
+    "clientTime": "2026-09-24T00:00:00.000Z",
+    "visible": true,
+    "online": true
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid_value",
+        "values": [
+          "startup",
+          "resumed",
+          "api_activity",
+          "pageshow",
+          "pagehide",
+          "visible",
+          "hidden",
+          "online",
+          "offline"
+        ],
+        "path": [
+          "state"
+        ],
+        "message": "Invalid option: expected one of \"startup\"|\"resumed\"|\"api_activity\"|\"pageshow\"|\"pagehide\"|\"visible\"|\"hidden\"|\"online\"|\"offline\""
+      }
+    ]
+  }
+}

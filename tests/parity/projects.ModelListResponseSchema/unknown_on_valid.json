@@ -1,0 +1,14 @@
+{
+  "contract": "projects.ModelListResponseSchema",
+  "case": "unknown_on_valid",
+  "input": {
+    "models": [],
+    "__parityUnknown": true
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "models": []
+    }
+  }
+}

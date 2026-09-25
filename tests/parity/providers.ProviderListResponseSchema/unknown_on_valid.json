@@ -1,0 +1,18 @@
+{
+  "contract": "providers.ProviderListResponseSchema",
+  "case": "unknown_on_valid",
+  "input": {
+    "directory": "x",
+    "observedAt": "x",
+    "providers": [],
+    "__parityUnknown": true
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "directory": "x",
+      "observedAt": "x",
+      "providers": []
+    }
+  }
+}

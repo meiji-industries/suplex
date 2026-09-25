@@ -1,0 +1,25 @@
+{
+  "contract": "projects.ProfileBodySchema",
+  "case": "representative",
+  "input": {
+    "provider": "opencode",
+    "model": "x",
+    "reasoningLevel": "low",
+    "serviceTier": "default",
+    "name": "x",
+    "role": "root",
+    "avatarSeed": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "provider": "opencode",
+      "model": "x",
+      "reasoningLevel": "low",
+      "serviceTier": "default",
+      "name": "x",
+      "role": "root",
+      "avatarSeed": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+    }
+  }
+}

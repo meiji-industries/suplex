@@ -1,0 +1,14 @@
+{
+  "contract": "github-triggers.GithubTriggerListSchema",
+  "case": "unknown_on_valid",
+  "input": {
+    "rules": [],
+    "__parityUnknown": true
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "rules": []
+    }
+  }
+}

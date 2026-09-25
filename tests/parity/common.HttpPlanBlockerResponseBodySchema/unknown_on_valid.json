@@ -1,0 +1,18 @@
+{
+  "contract": "common.HttpPlanBlockerResponseBodySchema",
+  "case": "unknown_on_valid",
+  "input": {
+    "expectedWorkflowRevision": 1,
+    "answer": "x",
+    "idempotencyKey": "xxxxxxxx",
+    "__parityUnknown": true
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "expectedWorkflowRevision": 1,
+      "answer": "x",
+      "idempotencyKey": "xxxxxxxx"
+    }
+  }
+}

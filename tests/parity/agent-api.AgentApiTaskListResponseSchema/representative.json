@@ -1,0 +1,15 @@
+{
+  "contract": "agent-api.AgentApiTaskListResponseSchema",
+  "case": "representative",
+  "input": {
+    "tasks": [],
+    "nextCursor": null
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "tasks": [],
+      "nextCursor": null
+    }
+  }
+}

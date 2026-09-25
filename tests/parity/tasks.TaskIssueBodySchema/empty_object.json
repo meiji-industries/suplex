@@ -1,0 +1,18 @@
+{
+  "contract": "tasks.TaskIssueBodySchema",
+  "case": "empty_object",
+  "input": {},
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid_type",
+        "expected": "object",
+        "path": [
+          "issue"
+        ],
+        "message": "Invalid input: expected object, received undefined"
+      }
+    ]
+  }
+}

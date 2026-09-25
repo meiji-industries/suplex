@@ -1,0 +1,60 @@
+{
+  "contract": "providers.NativeProviderSummarySchema",
+  "case": "unknown_field",
+  "input": {
+    "unexpected": true
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid_value",
+        "values": [
+          "opencode",
+          "claude-code",
+          "devin",
+          "codex"
+        ],
+        "path": [
+          "id"
+        ],
+        "message": "Invalid option: expected one of \"opencode\"|\"claude-code\"|\"devin\"|\"codex\""
+      },
+      {
+        "expected": "string",
+        "code": "invalid_type",
+        "path": [
+          "label"
+        ],
+        "message": "Invalid input: expected string, received undefined"
+      },
+      {
+        "expected": "number",
+        "code": "invalid_type",
+        "path": [
+          "modelCount"
+        ],
+        "message": "Invalid input: expected number, received undefined"
+      },
+      {
+        "expected": "array",
+        "code": "invalid_type",
+        "path": [
+          "models"
+        ],
+        "message": "Invalid input: expected array, received undefined"
+      },
+      {
+        "code": "invalid_value",
+        "values": [
+          "configured",
+          "missing"
+        ],
+        "path": [
+          "status"
+        ],
+        "message": "Invalid option: expected one of \"configured\"|\"missing\""
+      }
+    ]
+  }
+}

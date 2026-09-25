@@ -1,0 +1,34 @@
+{
+  "contract": "agent-api.AgentApiMergeResponseSchema",
+  "case": "empty_object",
+  "input": {},
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "expected": "string",
+        "code": "invalid_type",
+        "path": [
+          "taskId"
+        ],
+        "message": "Invalid input: expected string, received undefined"
+      },
+      {
+        "expected": "number",
+        "code": "invalid_type",
+        "path": [
+          "pullRequestNumber"
+        ],
+        "message": "Invalid input: expected number, received undefined"
+      },
+      {
+        "code": "invalid_type",
+        "expected": "nonoptional",
+        "path": [
+          "result"
+        ],
+        "message": "Invalid input: expected nonoptional, received undefined"
+      }
+    ]
+  }
+}

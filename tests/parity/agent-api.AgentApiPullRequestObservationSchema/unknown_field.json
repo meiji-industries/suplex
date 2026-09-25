@@ -1,0 +1,104 @@
+{
+  "contract": "agent-api.AgentApiPullRequestObservationSchema",
+  "case": "unknown_field",
+  "input": {
+    "unexpected": true
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "expected": "boolean",
+        "code": "invalid_type",
+        "path": [
+          "exists"
+        ],
+        "message": "Invalid input: expected boolean, received undefined"
+      },
+      {
+        "expected": "number",
+        "code": "invalid_type",
+        "path": [
+          "number"
+        ],
+        "message": "Invalid input: expected number, received undefined"
+      },
+      {
+        "expected": "string",
+        "code": "invalid_type",
+        "path": [
+          "url"
+        ],
+        "message": "Invalid input: expected string, received undefined"
+      },
+      {
+        "code": "invalid_value",
+        "values": [
+          "open",
+          "closed",
+          "merged"
+        ],
+        "path": [
+          "state"
+        ],
+        "message": "Invalid option: expected one of \"open\"|\"closed\"|\"merged\""
+      },
+      {
+        "expected": "boolean",
+        "code": "invalid_type",
+        "path": [
+          "isDraft"
+        ],
+        "message": "Invalid input: expected boolean, received undefined"
+      },
+      {
+        "expected": "string",
+        "code": "invalid_type",
+        "path": [
+          "headSha"
+        ],
+        "message": "Invalid input: expected string, received undefined"
+      },
+      {
+        "expected": "string",
+        "code": "invalid_type",
+        "path": [
+          "baseSha"
+        ],
+        "message": "Invalid input: expected string, received undefined"
+      },
+      {
+        "expected": "string",
+        "code": "invalid_type",
+        "path": [
+          "mergeable"
+        ],
+        "message": "Invalid input: expected string, received undefined"
+      },
+      {
+        "expected": "string",
+        "code": "invalid_type",
+        "path": [
+          "mergeStateStatus"
+        ],
+        "message": "Invalid input: expected string, received undefined"
+      },
+      {
+        "expected": "string",
+        "code": "invalid_type",
+        "path": [
+          "reviewDecision"
+        ],
+        "message": "Invalid input: expected string, received undefined"
+      },
+      {
+        "expected": "object",
+        "code": "invalid_type",
+        "path": [
+          "checks"
+        ],
+        "message": "Invalid input: expected object, received undefined"
+      }
+    ]
+  }
+}

@@ -1,0 +1,24 @@
+{
+  "contract": "tasks.TaskAgentStatusSchema",
+  "case": "empty_object",
+  "input": {},
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid_value",
+        "values": [
+          "queued",
+          "working",
+          "retrying",
+          "idle",
+          "waiting_human",
+          "stopped",
+          "unknown"
+        ],
+        "path": [],
+        "message": "Invalid option: expected one of \"queued\"|\"working\"|\"retrying\"|\"idle\"|\"waiting_human\"|\"stopped\"|\"unknown\""
+      }
+    ]
+  }
+}

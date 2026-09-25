@@ -1,0 +1,21 @@
+{
+  "contract": "common.CompanyStatusParamsSchema",
+  "case": "first_field_null",
+  "input": {
+    "companyId": null,
+    "status": "active"
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "expected": "string",
+        "code": "invalid_type",
+        "path": [
+          "companyId"
+        ],
+        "message": "Invalid input: expected string, received null"
+      }
+    ]
+  }
+}

@@ -1,0 +1,17 @@
+{
+  "contract": "tasks.TaskActivityResponseSchema",
+  "case": "representative",
+  "input": {
+    "sessions": [],
+    "turns": [],
+    "shellPaneId": null
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "sessions": [],
+      "turns": [],
+      "shellPaneId": null
+    }
+  }
+}

@@ -1,0 +1,26 @@
+{
+  "contract": "projects.ProjectAgentTaskPolicySchema",
+  "case": "first_field_missing",
+  "input": {
+    "defaultWorkflowId": "x",
+    "rootProfileIds": [
+      "x"
+    ],
+    "workerProfileIds": [
+      "x"
+    ]
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "expected": "array",
+        "code": "invalid_type",
+        "path": [
+          "workflowIds"
+        ],
+        "message": "Invalid input: expected array, received undefined"
+      }
+    ]
+  }
+}

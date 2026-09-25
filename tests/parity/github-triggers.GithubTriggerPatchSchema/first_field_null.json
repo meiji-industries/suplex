@@ -1,0 +1,20 @@
+{
+  "contract": "github-triggers.GithubTriggerPatchSchema",
+  "case": "first_field_null",
+  "input": {
+    "expectedRevision": null
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "expected": "number",
+        "code": "invalid_type",
+        "path": [
+          "expectedRevision"
+        ],
+        "message": "Invalid input: expected number, received null"
+      }
+    ]
+  }
+}

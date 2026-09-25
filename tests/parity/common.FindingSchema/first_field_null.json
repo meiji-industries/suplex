@@ -1,0 +1,22 @@
+{
+  "contract": "common.FindingSchema",
+  "case": "first_field_null",
+  "input": {
+    "code": null,
+    "field": "x",
+    "message": "x"
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "expected": "string",
+        "code": "invalid_type",
+        "path": [
+          "code"
+        ],
+        "message": "Invalid input: expected string, received null"
+      }
+    ]
+  }
+}

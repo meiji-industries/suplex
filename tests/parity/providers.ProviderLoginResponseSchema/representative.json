@@ -1,0 +1,13 @@
+{
+  "contract": "providers.ProviderLoginResponseSchema",
+  "case": "representative",
+  "input": {
+    "paneId": "x"
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "paneId": "x"
+    }
+  }
+}

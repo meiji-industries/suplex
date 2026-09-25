@@ -1,0 +1,21 @@
+{
+  "contract": "agent-api.AgentApiTaskCreateBodySchema",
+  "case": "unknown_on_valid",
+  "input": {
+    "projectId": "x",
+    "title": "x",
+    "idempotencyKey": "x",
+    "__parityUnknown": true
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "projectId": "x",
+      "title": "x",
+      "idempotencyKey": "x",
+      "images": [],
+      "advisorProfileIds": {},
+      "__parityUnknown": true
+    }
+  }
+}

@@ -1,0 +1,75 @@
+{
+  "contract": "agent-api.AgentApiTaskSummaryProjectionSchema",
+  "case": "unknown_field",
+  "input": {
+    "unexpected": true
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "expected": "string",
+        "code": "invalid_type",
+        "path": [
+          "id"
+        ],
+        "message": "Invalid input: expected string, received undefined"
+      },
+      {
+        "expected": "string",
+        "code": "invalid_type",
+        "path": [
+          "title"
+        ],
+        "message": "Invalid input: expected string, received undefined"
+      },
+      {
+        "code": "invalid_value",
+        "values": [
+          "backlog",
+          "queued",
+          "active",
+          "waiting_human",
+          "cancelled",
+          "delivered"
+        ],
+        "path": [
+          "status"
+        ],
+        "message": "Invalid option: expected one of \"backlog\"|\"queued\"|\"active\"|\"waiting_human\"|\"cancelled\"|\"delivered\""
+      },
+      {
+        "expected": "boolean",
+        "code": "invalid_type",
+        "path": [
+          "archived"
+        ],
+        "message": "Invalid input: expected boolean, received undefined"
+      },
+      {
+        "expected": "array",
+        "code": "invalid_type",
+        "path": [
+          "dependsOn"
+        ],
+        "message": "Invalid input: expected array, received undefined"
+      },
+      {
+        "expected": "string",
+        "code": "invalid_type",
+        "path": [
+          "updatedAt"
+        ],
+        "message": "Invalid input: expected string, received undefined"
+      },
+      {
+        "code": "unrecognized_keys",
+        "keys": [
+          "unexpected"
+        ],
+        "path": [],
+        "message": "Unrecognized key: \"unexpected\""
+      }
+    ]
+  }
+}

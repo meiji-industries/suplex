@@ -1,0 +1,20 @@
+{
+  "contract": "common.AuthStatusResponseSchema",
+  "case": "first_field_missing",
+  "input": {
+    "authenticated": true
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "expected": "boolean",
+        "code": "invalid_type",
+        "path": [
+          "required"
+        ],
+        "message": "Invalid input: expected boolean, received undefined"
+      }
+    ]
+  }
+}

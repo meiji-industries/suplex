@@ -1,0 +1,13 @@
+{
+  "contract": "task-templates.ProjectTaskTemplatesParamsSchema",
+  "case": "representative",
+  "input": {
+    "projectId": "x"
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "projectId": "x"
+    }
+  }
+}

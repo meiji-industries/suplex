@@ -1,0 +1,16 @@
+{
+  "contract": "agent-api.AgentApiAdminPairingCodeResponseSchema",
+  "case": "unknown_on_valid",
+  "input": {
+    "pairingCode": "x",
+    "expiresAt": "x",
+    "__parityUnknown": true
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "pairingCode": "x",
+      "expiresAt": "x"
+    }
+  }
+}

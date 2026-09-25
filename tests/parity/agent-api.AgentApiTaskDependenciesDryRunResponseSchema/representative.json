@@ -1,0 +1,19 @@
+{
+  "contract": "agent-api.AgentApiTaskDependenciesDryRunResponseSchema",
+  "case": "representative",
+  "input": {
+    "dryRun": true,
+    "dependsOn": [],
+    "wouldStart": "now",
+    "blockingPrerequisiteIds": []
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "dryRun": true,
+      "dependsOn": [],
+      "wouldStart": "now",
+      "blockingPrerequisiteIds": []
+    }
+  }
+}

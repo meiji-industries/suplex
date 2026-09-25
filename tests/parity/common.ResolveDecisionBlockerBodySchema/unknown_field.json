@@ -1,0 +1,29 @@
+{
+  "contract": "common.ResolveDecisionBlockerBodySchema",
+  "case": "unknown_field",
+  "input": {
+    "unexpected": true
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "expected": "number",
+        "code": "invalid_type",
+        "received": "NaN",
+        "path": [
+          "expectedRevision"
+        ],
+        "message": "Invalid input: expected number, received NaN"
+      },
+      {
+        "expected": "string",
+        "code": "invalid_type",
+        "path": [
+          "answer"
+        ],
+        "message": "Invalid input: expected string, received undefined"
+      }
+    ]
+  }
+}

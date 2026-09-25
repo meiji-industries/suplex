@@ -1,0 +1,9 @@
+{
+  "contract": "avatars.AvatarShapeSchema",
+  "case": "representative",
+  "input": "square",
+  "expected": {
+    "accepted": true,
+    "value": "square"
+  }
+}

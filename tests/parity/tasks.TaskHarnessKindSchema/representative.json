@@ -1,0 +1,9 @@
+{
+  "contract": "tasks.TaskHarnessKindSchema",
+  "case": "representative",
+  "input": "opencode",
+  "expected": {
+    "accepted": true,
+    "value": "opencode"
+  }
+}

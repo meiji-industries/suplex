@@ -1,0 +1,21 @@
+{
+  "contract": "agent-api.AgentApiDeliveryDecisionBodySchema",
+  "case": "empty_object",
+  "input": {},
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid_value",
+        "values": [
+          "wait_for_dependency",
+          "resume"
+        ],
+        "path": [
+          "decision"
+        ],
+        "message": "Invalid option: expected one of \"wait_for_dependency\"|\"resume\""
+      }
+    ]
+  }
+}

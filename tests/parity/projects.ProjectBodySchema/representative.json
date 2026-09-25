@@ -1,0 +1,29 @@
+{
+  "contract": "projects.ProjectBodySchema",
+  "case": "representative",
+  "input": {
+    "name": "x",
+    "repositoryPath": "x",
+    "worktreeRoot": "x",
+    "repository": "x",
+    "baseBranch": "x",
+    "setupCommand": "x",
+    "verificationCommand": "x",
+    "rootProfileId": "x",
+    "workerProfileId": "x"
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "name": "x",
+      "repositoryPath": "x",
+      "worktreeRoot": "x",
+      "repository": "x",
+      "baseBranch": "x",
+      "setupCommand": "x",
+      "verificationCommand": "x",
+      "rootProfileId": "x",
+      "workerProfileId": "x"
+    }
+  }
+}

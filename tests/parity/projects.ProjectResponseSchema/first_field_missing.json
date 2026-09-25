@@ -1,0 +1,30 @@
+{
+  "contract": "projects.ProjectResponseSchema",
+  "case": "first_field_missing",
+  "input": {
+    "repositoryPath": "x",
+    "worktreeRoot": "x",
+    "baseBranch": "x",
+    "setupCommand": "x",
+    "verificationCommand": "x",
+    "rootProfileId": "x",
+    "workerProfileId": "x",
+    "id": "x",
+    "companyId": "x",
+    "createdAt": "x",
+    "updatedAt": "x"
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "expected": "string",
+        "code": "invalid_type",
+        "path": [
+          "name"
+        ],
+        "message": "Invalid input: expected string, received undefined"
+      }
+    ]
+  }
+}

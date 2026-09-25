@@ -1,0 +1,28 @@
+{
+  "contract": "update.UpdateStatusSchema",
+  "case": "empty_object",
+  "input": {},
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid_union",
+        "errors": [],
+        "note": "No matching discriminator",
+        "discriminator": "kind",
+        "options": [
+          "idle",
+          "checking",
+          "current",
+          "available",
+          "applying",
+          "failed"
+        ],
+        "path": [
+          "kind"
+        ],
+        "message": "Invalid discriminator value. Expected 'idle' | 'checking' | 'current' | 'available' | 'applying' | 'failed'"
+      }
+    ]
+  }
+}

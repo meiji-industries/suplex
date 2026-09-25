@@ -1,0 +1,24 @@
+{
+  "contract": "common.CompanyResponseSchema",
+  "case": "first_field_null",
+  "input": {
+    "id": null,
+    "name": "x",
+    "status": "active",
+    "issueCode": null,
+    "createdAt": "x"
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "expected": "string",
+        "code": "invalid_type",
+        "path": [
+          "id"
+        ],
+        "message": "Invalid input: expected string, received null"
+      }
+    ]
+  }
+}

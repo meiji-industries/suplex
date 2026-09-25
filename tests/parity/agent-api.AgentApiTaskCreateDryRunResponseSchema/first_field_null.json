@@ -1,0 +1,95 @@
+{
+  "contract": "agent-api.AgentApiTaskCreateDryRunResponseSchema",
+  "case": "first_field_null",
+  "input": {
+    "dryRun": null,
+    "projectId": "x",
+    "project": {
+      "id": "x",
+      "name": "x"
+    },
+    "title": "x",
+    "workflow": {
+      "id": null,
+      "engine": "x",
+      "name": null
+    },
+    "templateId": null,
+    "deliveryTarget": "local_worktree",
+    "branch": "x",
+    "dependsOn": [],
+    "wouldStart": "now",
+    "blockingPrerequisiteIds": []
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid_union",
+        "errors": [
+          [
+            {
+              "code": "invalid_value",
+              "values": [
+                true
+              ],
+              "path": [
+                "dryRun"
+              ],
+              "message": "Invalid input: expected true"
+            }
+          ],
+          [
+            {
+              "code": "invalid_value",
+              "values": [
+                true
+              ],
+              "path": [
+                "dryRun"
+              ],
+              "message": "Invalid input: expected true"
+            },
+            {
+              "code": "invalid_value",
+              "values": [
+                200
+              ],
+              "path": [
+                "status"
+              ],
+              "message": "Invalid input: expected 200"
+            },
+            {
+              "expected": "string",
+              "code": "invalid_type",
+              "path": [
+                "existingTaskId"
+              ],
+              "message": "Invalid input: expected string, received undefined"
+            },
+            {
+              "code": "unrecognized_keys",
+              "keys": [
+                "projectId",
+                "project",
+                "title",
+                "workflow",
+                "templateId",
+                "deliveryTarget",
+                "branch",
+                "dependsOn",
+                "wouldStart",
+                "blockingPrerequisiteIds"
+              ],
+              "path": [],
+              "message": "Unrecognized keys: \"projectId\", \"project\", \"title\", \"workflow\", \"templateId\", \"deliveryTarget\", \"branch\", \"dependsOn\", \"wouldStart\", \"blockingPrerequisiteIds\""
+            }
+          ]
+        ],
+        "path": [],
+        "message": "Invalid input"
+      }
+    ]
+  }
+}

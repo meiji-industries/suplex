@@ -1,0 +1,18 @@
+{
+  "contract": "github-triggers.GithubTriggerPatchSchema",
+  "case": "first_field_missing",
+  "input": {},
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "expected": "number",
+        "code": "invalid_type",
+        "path": [
+          "expectedRevision"
+        ],
+        "message": "Invalid input: expected number, received undefined"
+      }
+    ]
+  }
+}

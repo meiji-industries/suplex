@@ -1,0 +1,13 @@
+{
+  "contract": "projects.ProfileListResponseSchema",
+  "case": "representative",
+  "input": {
+    "profiles": []
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "profiles": []
+    }
+  }
+}

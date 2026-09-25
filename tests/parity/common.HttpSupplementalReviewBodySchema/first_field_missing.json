@@ -1,0 +1,21 @@
+{
+  "contract": "common.HttpSupplementalReviewBodySchema",
+  "case": "first_field_missing",
+  "input": {
+    "idempotencyKey": "xxxxxxxx"
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "expected": "number",
+        "code": "invalid_type",
+        "received": "NaN",
+        "path": [
+          "expectedRevision"
+        ],
+        "message": "Invalid input: expected number, received NaN"
+      }
+    ]
+  }
+}

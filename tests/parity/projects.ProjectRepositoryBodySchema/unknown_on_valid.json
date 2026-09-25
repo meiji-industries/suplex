@@ -1,0 +1,21 @@
+{
+  "contract": "projects.ProjectRepositoryBodySchema",
+  "case": "unknown_on_valid",
+  "input": {
+    "repositoryUrl": "x",
+    "__parityUnknown": true
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "unrecognized_keys",
+        "keys": [
+          "__parityUnknown"
+        ],
+        "path": [],
+        "message": "Unrecognized key: \"__parityUnknown\""
+      }
+    ]
+  }
+}

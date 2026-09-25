@@ -1,0 +1,20 @@
+{
+  "contract": "task-templates.TaskTemplateListResponseSchema",
+  "case": "first_field_null",
+  "input": {
+    "templates": null
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "expected": "array",
+        "code": "invalid_type",
+        "path": [
+          "templates"
+        ],
+        "message": "Invalid input: expected array, received null"
+      }
+    ]
+  }
+}

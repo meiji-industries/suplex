@@ -1,0 +1,9 @@
+{
+  "contract": "agent-api.AgentApiTaskFilterSchema",
+  "case": "representative",
+  "input": "stale_delivery",
+  "expected": {
+    "accepted": true,
+    "value": "stale_delivery"
+  }
+}

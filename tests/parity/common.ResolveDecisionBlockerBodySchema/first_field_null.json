@@ -1,0 +1,15 @@
+{
+  "contract": "common.ResolveDecisionBlockerBodySchema",
+  "case": "first_field_null",
+  "input": {
+    "expectedRevision": null,
+    "answer": "x"
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "expectedRevision": 0,
+      "answer": "x"
+    }
+  }
+}

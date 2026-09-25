@@ -1,0 +1,13 @@
+{
+  "contract": "common.NotFoundResponseSchema",
+  "case": "representative",
+  "input": {
+    "error": "Not found"
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "error": "Not found"
+    }
+  }
+}

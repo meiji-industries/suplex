@@ -1,0 +1,17 @@
+{
+  "contract": "auth.ProfileBodySchema",
+  "case": "representative",
+  "input": {
+    "displayName": "x",
+    "username": "x",
+    "avatarSeed": "x"
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "displayName": "x",
+      "username": "x",
+      "avatarSeed": "x"
+    }
+  }
+}

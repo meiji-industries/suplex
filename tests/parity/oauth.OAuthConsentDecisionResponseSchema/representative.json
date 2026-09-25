@@ -1,0 +1,13 @@
+{
+  "contract": "oauth.OAuthConsentDecisionResponseSchema",
+  "case": "representative",
+  "input": {
+    "redirectTo": "x"
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "redirectTo": "x"
+    }
+  }
+}

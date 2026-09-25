@@ -1,0 +1,20 @@
+{
+  "contract": "tasks.TaskNoteBodySchema",
+  "case": "first_field_null",
+  "input": {
+    "note": null
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "expected": "string",
+        "code": "invalid_type",
+        "path": [
+          "note"
+        ],
+        "message": "Invalid input: expected string, received null"
+      }
+    ]
+  }
+}

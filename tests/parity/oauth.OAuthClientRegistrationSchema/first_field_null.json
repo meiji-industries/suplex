@@ -1,0 +1,21 @@
+{
+  "contract": "oauth.OAuthClientRegistrationSchema",
+  "case": "first_field_null",
+  "input": {
+    "client_name": null,
+    "redirect_uris": []
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "expected": "string",
+        "code": "invalid_type",
+        "path": [
+          "client_name"
+        ],
+        "message": "Invalid input: expected string, received null"
+      }
+    ]
+  }
+}

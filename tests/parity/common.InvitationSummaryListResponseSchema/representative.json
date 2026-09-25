@@ -1,0 +1,13 @@
+{
+  "contract": "common.InvitationSummaryListResponseSchema",
+  "case": "representative",
+  "input": {
+    "invitations": []
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "invitations": []
+    }
+  }
+}

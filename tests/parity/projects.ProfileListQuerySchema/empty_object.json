@@ -1,0 +1,9 @@
+{
+  "contract": "projects.ProfileListQuerySchema",
+  "case": "empty_object",
+  "input": {},
+  "expected": {
+    "accepted": true,
+    "value": {}
+  }
+}

@@ -1,0 +1,25 @@
+{
+  "contract": "agent-api.AgentApiTaskSummaryProjectionSchema",
+  "case": "first_field_null",
+  "input": {
+    "id": null,
+    "title": "x",
+    "status": "backlog",
+    "archived": true,
+    "dependsOn": [],
+    "updatedAt": "x"
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "expected": "string",
+        "code": "invalid_type",
+        "path": [
+          "id"
+        ],
+        "message": "Invalid input: expected string, received null"
+      }
+    ]
+  }
+}

@@ -1,0 +1,26 @@
+{
+  "contract": "avatars.AvatarImageBodySchema",
+  "case": "first_field_null",
+  "input": {
+    "mimeType": null,
+    "base64": "x"
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid_value",
+        "values": [
+          "image/png",
+          "image/jpeg",
+          "image/webp",
+          "image/gif"
+        ],
+        "path": [
+          "mimeType"
+        ],
+        "message": "Invalid option: expected one of \"image/png\"|\"image/jpeg\"|\"image/webp\"|\"image/gif\""
+      }
+    ]
+  }
+}

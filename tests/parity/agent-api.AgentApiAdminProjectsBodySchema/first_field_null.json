@@ -1,0 +1,20 @@
+{
+  "contract": "agent-api.AgentApiAdminProjectsBodySchema",
+  "case": "first_field_null",
+  "input": {
+    "projectIds": null
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "expected": "array",
+        "code": "invalid_type",
+        "path": [
+          "projectIds"
+        ],
+        "message": "Invalid input: expected array, received null"
+      }
+    ]
+  }
+}

@@ -1,0 +1,238 @@
+{
+  "contract": "agent-api.AgentApiSafeTaskProjectionSchema",
+  "case": "unknown_field",
+  "input": {
+    "unexpected": true
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "expected": "string",
+        "code": "invalid_type",
+        "path": [
+          "id"
+        ],
+        "message": "Invalid input: expected string, received undefined"
+      },
+      {
+        "expected": "string",
+        "code": "invalid_type",
+        "path": [
+          "issueKey"
+        ],
+        "message": "Invalid input: expected string, received undefined"
+      },
+      {
+        "expected": "string",
+        "code": "invalid_type",
+        "path": [
+          "projectId"
+        ],
+        "message": "Invalid input: expected string, received undefined"
+      },
+      {
+        "expected": "object",
+        "code": "invalid_type",
+        "path": [
+          "project"
+        ],
+        "message": "Invalid input: expected object, received undefined"
+      },
+      {
+        "expected": "string",
+        "code": "invalid_type",
+        "path": [
+          "title"
+        ],
+        "message": "Invalid input: expected string, received undefined"
+      },
+      {
+        "code": "invalid_union",
+        "errors": [
+          [
+            {
+              "code": "invalid_type",
+              "expected": "object",
+              "path": [],
+              "message": "Invalid input: expected object, received undefined"
+            }
+          ],
+          [
+            {
+              "expected": "null",
+              "code": "invalid_type",
+              "path": [],
+              "message": "Invalid input: expected null, received undefined"
+            }
+          ]
+        ],
+        "path": [
+          "source"
+        ],
+        "message": "Invalid input"
+      },
+      {
+        "code": "invalid_value",
+        "values": [
+          "backlog",
+          "queued",
+          "active",
+          "waiting_human",
+          "cancelled",
+          "delivered"
+        ],
+        "path": [
+          "status"
+        ],
+        "message": "Invalid option: expected one of \"backlog\"|\"queued\"|\"active\"|\"waiting_human\"|\"cancelled\"|\"delivered\""
+      },
+      {
+        "expected": "object",
+        "code": "invalid_type",
+        "path": [
+          "queue"
+        ],
+        "message": "Invalid input: expected object, received undefined"
+      },
+      {
+        "expected": "array",
+        "code": "invalid_type",
+        "path": [
+          "dependsOn"
+        ],
+        "message": "Invalid input: expected array, received undefined"
+      },
+      {
+        "expected": "array",
+        "code": "invalid_type",
+        "path": [
+          "blockedBy"
+        ],
+        "message": "Invalid input: expected array, received undefined"
+      },
+      {
+        "expected": "boolean",
+        "code": "invalid_type",
+        "path": [
+          "archived"
+        ],
+        "message": "Invalid input: expected boolean, received undefined"
+      },
+      {
+        "expected": "string",
+        "code": "invalid_type",
+        "path": [
+          "revision"
+        ],
+        "message": "Invalid input: expected string, received undefined"
+      },
+      {
+        "expected": "array",
+        "code": "invalid_type",
+        "path": [
+          "permittedCommands"
+        ],
+        "message": "Invalid input: expected array, received undefined"
+      },
+      {
+        "expected": "string",
+        "code": "invalid_type",
+        "path": [
+          "humanQuestion"
+        ],
+        "message": "Invalid input: expected string, received undefined"
+      },
+      {
+        "expected": "object",
+        "code": "invalid_type",
+        "path": [
+          "blocker"
+        ],
+        "message": "Invalid input: expected object, received undefined"
+      },
+      {
+        "expected": "string",
+        "code": "invalid_type",
+        "path": [
+          "workflowStage"
+        ],
+        "message": "Invalid input: expected string, received undefined"
+      },
+      {
+        "expected": "object",
+        "code": "invalid_type",
+        "path": [
+          "workflow"
+        ],
+        "message": "Invalid input: expected object, received undefined"
+      },
+      {
+        "expected": "string",
+        "code": "invalid_type",
+        "path": [
+          "templateId"
+        ],
+        "message": "Invalid input: expected string, received undefined"
+      },
+      {
+        "code": "invalid_value",
+        "values": [
+          "local_worktree",
+          "remote_branch",
+          "pull_request_draft",
+          "pull_request_ready",
+          "merged"
+        ],
+        "path": [
+          "deliveryTarget"
+        ],
+        "message": "Invalid option: expected one of \"local_worktree\"|\"remote_branch\"|\"pull_request_draft\"|\"pull_request_ready\"|\"merged\""
+      },
+      {
+        "expected": "boolean",
+        "code": "invalid_type",
+        "path": [
+          "runProjectTests"
+        ],
+        "message": "Invalid input: expected boolean, received undefined"
+      },
+      {
+        "code": "invalid_value",
+        "values": [
+          "off",
+          "capture",
+          "required"
+        ],
+        "path": [
+          "visualEvidence"
+        ],
+        "message": "Invalid option: expected one of \"off\"|\"capture\"|\"required\""
+      },
+      {
+        "expected": "object",
+        "code": "invalid_type",
+        "path": [
+          "delivery"
+        ],
+        "message": "Invalid input: expected object, received undefined"
+      },
+      {
+        "expected": "string",
+        "code": "invalid_type",
+        "path": [
+          "createdAt"
+        ],
+        "message": "Invalid input: expected string, received undefined"
+      },
+      {
+        "expected": "string",
+        "code": "invalid_type",
+        "path": [
+          "updatedAt"
+        ],
+        "message": "Invalid input: expected string, received undefined"
+      }
+    ]
+  }
+}

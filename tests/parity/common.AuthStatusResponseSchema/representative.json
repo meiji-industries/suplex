@@ -1,0 +1,15 @@
+{
+  "contract": "common.AuthStatusResponseSchema",
+  "case": "representative",
+  "input": {
+    "required": true,
+    "authenticated": true
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "required": true,
+      "authenticated": true
+    }
+  }
+}

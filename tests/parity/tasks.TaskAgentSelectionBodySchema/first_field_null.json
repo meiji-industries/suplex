@@ -1,0 +1,32 @@
+{
+  "contract": "tasks.TaskAgentSelectionBodySchema",
+  "case": "first_field_null",
+  "input": {
+    "role": null,
+    "expectedProfileId": "x",
+    "expectedSessionId": null,
+    "profileId": "x",
+    "direction": "x",
+    "resume": false
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid_value",
+        "values": [
+          "root",
+          "worker",
+          "reviewer",
+          "planner_a",
+          "planner_b",
+          "rater"
+        ],
+        "path": [
+          "role"
+        ],
+        "message": "Invalid option: expected one of \"root\"|\"worker\"|\"reviewer\"|\"planner_a\"|\"planner_b\"|\"rater\""
+      }
+    ]
+  }
+}

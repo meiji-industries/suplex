@@ -1,0 +1,16 @@
+{
+  "contract": "common.AuthOptionsResponseSchema",
+  "case": "unknown_on_valid",
+  "input": {
+    "challengeId": "x",
+    "options": null,
+    "__parityUnknown": true
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "challengeId": "x",
+      "options": null
+    }
+  }
+}

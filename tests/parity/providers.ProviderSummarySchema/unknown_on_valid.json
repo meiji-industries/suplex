@@ -1,0 +1,30 @@
+{
+  "contract": "providers.ProviderSummarySchema",
+  "case": "unknown_on_valid",
+  "input": {
+    "id": "opencode",
+    "label": "x",
+    "modelCount": 1,
+    "models": [],
+    "status": "configured",
+    "connection": {
+      "status": "connected",
+      "summary": "x"
+    },
+    "__parityUnknown": true
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "id": "opencode",
+      "label": "x",
+      "modelCount": 1,
+      "models": [],
+      "status": "configured",
+      "connection": {
+        "status": "connected",
+        "summary": "x"
+      }
+    }
+  }
+}

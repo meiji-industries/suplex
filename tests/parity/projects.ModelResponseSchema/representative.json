@@ -1,0 +1,21 @@
+{
+  "contract": "projects.ModelResponseSchema",
+  "case": "representative",
+  "input": {
+    "id": "x",
+    "provider": "opencode",
+    "providerLabel": "x",
+    "providerStatus": "configured",
+    "displayName": "x"
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "id": "x",
+      "provider": "opencode",
+      "providerLabel": "x",
+      "providerStatus": "configured",
+      "displayName": "x"
+    }
+  }
+}

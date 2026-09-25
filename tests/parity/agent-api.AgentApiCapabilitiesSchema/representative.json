@@ -1,0 +1,59 @@
+{
+  "contract": "agent-api.AgentApiCapabilitiesSchema",
+  "case": "representative",
+  "input": {
+    "apiVersion": "v1",
+    "capabilities": {
+      "read": {
+        "task": true,
+        "workflows": true,
+        "templates": true
+      },
+      "create": {
+        "backlogTask": true,
+        "queuedTask": true,
+        "deliveryTargets": []
+      },
+      "taskControl": true,
+      "delivery": true,
+      "merge": true,
+      "humanDecisions": false
+    },
+    "autonomousCommands": [],
+    "humanOnlyRecords": [],
+    "unavailableCommands": [],
+    "pagination": {
+      "supported": true,
+      "cursor": true
+    }
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "apiVersion": "v1",
+      "capabilities": {
+        "read": {
+          "task": true,
+          "workflows": true,
+          "templates": true
+        },
+        "create": {
+          "backlogTask": true,
+          "queuedTask": true,
+          "deliveryTargets": []
+        },
+        "taskControl": true,
+        "delivery": true,
+        "merge": true,
+        "humanDecisions": false
+      },
+      "autonomousCommands": [],
+      "humanOnlyRecords": [],
+      "unavailableCommands": [],
+      "pagination": {
+        "supported": true,
+        "cursor": true
+      }
+    }
+  }
+}

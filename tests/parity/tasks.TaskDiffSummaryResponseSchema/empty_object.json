@@ -1,0 +1,26 @@
+{
+  "contract": "tasks.TaskDiffSummaryResponseSchema",
+  "case": "empty_object",
+  "input": {},
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "expected": "boolean",
+        "code": "invalid_type",
+        "path": [
+          "available"
+        ],
+        "message": "Invalid input: expected boolean, received undefined"
+      },
+      {
+        "expected": "number",
+        "code": "invalid_type",
+        "path": [
+          "files"
+        ],
+        "message": "Invalid input: expected number, received undefined"
+      }
+    ]
+  }
+}

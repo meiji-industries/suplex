@@ -1,0 +1,13 @@
+{
+  "contract": "tasks.TaskAgentsBatchResponseSchema",
+  "case": "representative",
+  "input": {
+    "tasks": []
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "tasks": []
+    }
+  }
+}

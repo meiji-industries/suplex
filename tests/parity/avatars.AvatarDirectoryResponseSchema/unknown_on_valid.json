@@ -1,0 +1,14 @@
+{
+  "contract": "avatars.AvatarDirectoryResponseSchema",
+  "case": "unknown_on_valid",
+  "input": {
+    "avatars": {},
+    "__parityUnknown": true
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "avatars": {}
+    }
+  }
+}

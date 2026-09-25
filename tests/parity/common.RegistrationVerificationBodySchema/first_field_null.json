@@ -1,0 +1,15 @@
+{
+  "contract": "common.RegistrationVerificationBodySchema",
+  "case": "first_field_null",
+  "input": {
+    "response": null
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "token": "",
+      "challengeId": "",
+      "response": null
+    }
+  }
+}

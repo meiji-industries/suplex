@@ -1,0 +1,32 @@
+{
+  "contract": "common.CompanyStatusParamsSchema",
+  "case": "unknown_field",
+  "input": {
+    "unexpected": true
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "expected": "string",
+        "code": "invalid_type",
+        "path": [
+          "companyId"
+        ],
+        "message": "Invalid input: expected string, received undefined"
+      },
+      {
+        "code": "invalid_value",
+        "values": [
+          "active",
+          "paused",
+          "archived"
+        ],
+        "path": [
+          "status"
+        ],
+        "message": "Invalid option: expected one of \"active\"|\"paused\"|\"archived\""
+      }
+    ]
+  }
+}

@@ -1,0 +1,78 @@
+{
+  "contract": "system-events.ClientLifecycleSchema",
+  "case": "unknown_field",
+  "input": {
+    "unexpected": true
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid_value",
+        "values": [
+          "startup",
+          "resumed",
+          "api_activity",
+          "pageshow",
+          "pagehide",
+          "visible",
+          "hidden",
+          "online",
+          "offline"
+        ],
+        "path": [
+          "state"
+        ],
+        "message": "Invalid option: expected one of \"startup\"|\"resumed\"|\"api_activity\"|\"pageshow\"|\"pagehide\"|\"visible\"|\"hidden\"|\"online\"|\"offline\""
+      },
+      {
+        "expected": "string",
+        "code": "invalid_type",
+        "path": [
+          "tabId"
+        ],
+        "message": "Invalid input: expected string, received undefined"
+      },
+      {
+        "expected": "string",
+        "code": "invalid_type",
+        "path": [
+          "documentId"
+        ],
+        "message": "Invalid input: expected string, received undefined"
+      },
+      {
+        "expected": "string",
+        "code": "invalid_type",
+        "path": [
+          "clientTime"
+        ],
+        "message": "Invalid input: expected string, received undefined"
+      },
+      {
+        "expected": "boolean",
+        "code": "invalid_type",
+        "path": [
+          "visible"
+        ],
+        "message": "Invalid input: expected boolean, received undefined"
+      },
+      {
+        "expected": "boolean",
+        "code": "invalid_type",
+        "path": [
+          "online"
+        ],
+        "message": "Invalid input: expected boolean, received undefined"
+      },
+      {
+        "code": "unrecognized_keys",
+        "keys": [
+          "unexpected"
+        ],
+        "path": [],
+        "message": "Unrecognized key: \"unexpected\""
+      }
+    ]
+  }
+}

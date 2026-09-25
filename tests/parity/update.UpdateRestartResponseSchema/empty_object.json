@@ -1,0 +1,28 @@
+{
+  "contract": "update.UpdateRestartResponseSchema",
+  "case": "empty_object",
+  "input": {},
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid_value",
+        "values": [
+          true
+        ],
+        "path": [
+          "accepted"
+        ],
+        "message": "Invalid input: expected true"
+      },
+      {
+        "code": "invalid_type",
+        "expected": "object",
+        "path": [
+          "status"
+        ],
+        "message": "Invalid input: expected object, received undefined"
+      }
+    ]
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "contract": "agent-api.AgentApiTaskCommandSchema",
+  "case": "representative",
+  "input": "start_task",
+  "expected": {
+    "accepted": true,
+    "value": "start_task"
+  }
+}

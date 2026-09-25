@@ -1,0 +1,15 @@
+{
+  "contract": "projects.TaskSourceListResponseSchema",
+  "case": "representative",
+  "input": {
+    "available": true,
+    "sources": []
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "available": true,
+      "sources": []
+    }
+  }
+}

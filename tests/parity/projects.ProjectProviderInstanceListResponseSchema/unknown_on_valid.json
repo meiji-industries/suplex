@@ -1,0 +1,14 @@
+{
+  "contract": "projects.ProjectProviderInstanceListResponseSchema",
+  "case": "unknown_on_valid",
+  "input": {
+    "instances": [],
+    "__parityUnknown": true
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "instances": []
+    }
+  }
+}

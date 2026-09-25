@@ -1,0 +1,21 @@
+{
+  "contract": "common.ResolveDecisionBlockerBodySchema",
+  "case": "first_field_missing",
+  "input": {
+    "answer": "x"
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "expected": "number",
+        "code": "invalid_type",
+        "received": "NaN",
+        "path": [
+          "expectedRevision"
+        ],
+        "message": "Invalid input: expected number, received NaN"
+      }
+    ]
+  }
+}

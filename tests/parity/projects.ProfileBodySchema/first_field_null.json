@@ -1,0 +1,31 @@
+{
+  "contract": "projects.ProfileBodySchema",
+  "case": "first_field_null",
+  "input": {
+    "provider": null,
+    "model": "x",
+    "reasoningLevel": "low",
+    "serviceTier": "default",
+    "name": "x",
+    "role": "root",
+    "avatarSeed": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid_value",
+        "values": [
+          "opencode",
+          "claude-code",
+          "devin",
+          "codex"
+        ],
+        "path": [
+          "provider"
+        ],
+        "message": "Invalid option: expected one of \"opencode\"|\"claude-code\"|\"devin\"|\"codex\""
+      }
+    ]
+  }
+}

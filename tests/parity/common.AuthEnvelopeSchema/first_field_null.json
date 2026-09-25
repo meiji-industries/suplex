@@ -1,0 +1,20 @@
+{
+  "contract": "common.AuthEnvelopeSchema",
+  "case": "first_field_null",
+  "input": {
+    "user": null
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "expected": "object",
+        "code": "invalid_type",
+        "path": [
+          "user"
+        ],
+        "message": "Invalid input: expected object, received null"
+      }
+    ]
+  }
+}

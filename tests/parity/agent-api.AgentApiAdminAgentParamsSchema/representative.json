@@ -1,0 +1,13 @@
+{
+  "contract": "agent-api.AgentApiAdminAgentParamsSchema",
+  "case": "representative",
+  "input": {
+    "agentId": "x"
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "agentId": "x"
+    }
+  }
+}

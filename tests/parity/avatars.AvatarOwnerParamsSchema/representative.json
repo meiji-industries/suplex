@@ -1,0 +1,13 @@
+{
+  "contract": "avatars.AvatarOwnerParamsSchema",
+  "case": "representative",
+  "input": {
+    "ownerId": "x"
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "ownerId": "x"
+    }
+  }
+}

@@ -1,0 +1,26 @@
+{
+  "contract": "providers.ProviderInstanceCreateBodySchema",
+  "case": "first_field_null",
+  "input": {
+    "provider": null,
+    "label": "x"
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid_value",
+        "values": [
+          "opencode",
+          "claude-code",
+          "devin",
+          "codex"
+        ],
+        "path": [
+          "provider"
+        ],
+        "message": "Invalid option: expected one of \"opencode\"|\"claude-code\"|\"devin\"|\"codex\""
+      }
+    ]
+  }
+}

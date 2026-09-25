@@ -1,0 +1,11 @@
+{
+  "contract": "auth.DisplayNameBodySchema",
+  "case": "representative",
+  "input": {},
+  "expected": {
+    "accepted": true,
+    "value": {
+      "displayName": ""
+    }
+  }
+}

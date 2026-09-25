@@ -1,0 +1,23 @@
+{
+  "contract": "system-events.ClientLifecycleSchema",
+  "case": "representative",
+  "input": {
+    "state": "startup",
+    "tabId": "00000000-0000-4000-8000-000000000001",
+    "documentId": "00000000-0000-4000-8000-000000000001",
+    "clientTime": "2026-09-24T00:00:00.000Z",
+    "visible": true,
+    "online": true
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "state": "startup",
+      "tabId": "00000000-0000-4000-8000-000000000001",
+      "documentId": "00000000-0000-4000-8000-000000000001",
+      "clientTime": "2026-09-24T00:00:00.000Z",
+      "visible": true,
+      "online": true
+    }
+  }
+}

@@ -1,0 +1,18 @@
+{
+  "contract": "avatars.AvatarDirectoryResponseSchema",
+  "case": "first_field_missing",
+  "input": {},
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "expected": "record",
+        "code": "invalid_type",
+        "path": [
+          "avatars"
+        ],
+        "message": "Invalid input: expected record, received undefined"
+      }
+    ]
+  }
+}

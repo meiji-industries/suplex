@@ -1,0 +1,33 @@
+{
+  "contract": "projects.ProfileResponseSchema",
+  "case": "representative",
+  "input": {
+    "provider": "opencode",
+    "model": "x",
+    "reasoningLevel": "low",
+    "serviceTier": "default",
+    "name": "x",
+    "role": "root",
+    "avatarSeed": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+    "id": "x",
+    "archivedAt": null,
+    "createdAt": "x",
+    "updatedAt": "x"
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "provider": "opencode",
+      "model": "x",
+      "reasoningLevel": "low",
+      "serviceTier": "default",
+      "name": "x",
+      "role": "root",
+      "avatarSeed": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+      "id": "x",
+      "archivedAt": null,
+      "createdAt": "x",
+      "updatedAt": "x"
+    }
+  }
+}

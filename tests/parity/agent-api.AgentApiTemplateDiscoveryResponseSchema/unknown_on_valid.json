@@ -1,0 +1,14 @@
+{
+  "contract": "agent-api.AgentApiTemplateDiscoveryResponseSchema",
+  "case": "unknown_on_valid",
+  "input": {
+    "templates": [],
+    "__parityUnknown": true
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "templates": []
+    }
+  }
+}

@@ -1,0 +1,34 @@
+{
+  "contract": "agent-api.AgentApiAdminAgentSchema",
+  "case": "first_field_missing",
+  "input": {
+    "kind": "external",
+    "name": "x",
+    "avatarSeed": "x",
+    "companyId": "x",
+    "clientProfileId": null,
+    "status": "pending",
+    "projectIds": [],
+    "pairingExpiresAt": null,
+    "pairedAt": null,
+    "credentialCreatedAt": null,
+    "connectionKind": "oauth",
+    "lastUsedAt": null,
+    "revokedAt": null,
+    "createdAt": "x",
+    "updatedAt": "x"
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "expected": "string",
+        "code": "invalid_type",
+        "path": [
+          "id"
+        ],
+        "message": "Invalid input: expected string, received undefined"
+      }
+    ]
+  }
+}

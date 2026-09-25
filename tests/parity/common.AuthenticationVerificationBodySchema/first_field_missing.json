@@ -1,0 +1,18 @@
+{
+  "contract": "common.AuthenticationVerificationBodySchema",
+  "case": "first_field_missing",
+  "input": {},
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid_type",
+        "expected": "nonoptional",
+        "path": [
+          "response"
+        ],
+        "message": "Invalid input: expected nonoptional, received undefined"
+      }
+    ]
+  }
+}

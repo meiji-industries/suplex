@@ -1,0 +1,26 @@
+{
+  "contract": "tasks.TaskAgentSelectionBodySchema",
+  "case": "unknown_field",
+  "input": {
+    "unexpected": true
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid_union",
+        "errors": [],
+        "note": "No matching discriminator",
+        "discriminator": "resume",
+        "options": [
+          false,
+          true
+        ],
+        "path": [
+          "resume"
+        ],
+        "message": "Invalid discriminator value. Expected 'false' | 'true'"
+      }
+    ]
+  }
+}

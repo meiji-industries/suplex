@@ -1,0 +1,14 @@
+{
+  "contract": "projects.ProfileListResponseSchema",
+  "case": "unknown_on_valid",
+  "input": {
+    "profiles": [],
+    "__parityUnknown": true
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "profiles": []
+    }
+  }
+}

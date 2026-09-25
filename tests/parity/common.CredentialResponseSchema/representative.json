@@ -1,0 +1,19 @@
+{
+  "contract": "common.CredentialResponseSchema",
+  "case": "representative",
+  "input": {
+    "id": "x",
+    "userId": "x",
+    "credentialId": "x",
+    "createdAt": "x"
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "id": "x",
+      "userId": "x",
+      "credentialId": "x",
+      "createdAt": "x"
+    }
+  }
+}

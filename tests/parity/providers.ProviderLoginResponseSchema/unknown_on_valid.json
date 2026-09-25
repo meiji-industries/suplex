@@ -1,0 +1,14 @@
+{
+  "contract": "providers.ProviderLoginResponseSchema",
+  "case": "unknown_on_valid",
+  "input": {
+    "paneId": "x",
+    "__parityUnknown": true
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "paneId": "x"
+    }
+  }
+}

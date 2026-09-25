@@ -1,0 +1,7 @@
+{
+  "site": "src/tasks/tasks.ts:1050",
+  "inputJson": "{\"value\":{\"id\":\"task-1\",\"status\":\"backlog\",\"queue\":{\"waitingOn\":[]},\"title\":\"A task\",\"archived\":false},\"commandRevision\":3}",
+  "encoding": "base64url",
+  "bytes": "{\"value\":{\"id\":\"task-1\",\"status\":\"backlog\",\"queue\":{\"waitingOn\":[]},\"title\":\"A task\",\"archived\":false},\"commandRevision\":3}",
+  "digest": "mV4cCdSUknjc5u-g12BC7o8thkJCVEkuqBxT_nfrhj8"
+}

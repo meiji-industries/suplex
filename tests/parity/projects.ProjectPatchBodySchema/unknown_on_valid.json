@@ -1,0 +1,49 @@
+{
+  "contract": "projects.ProjectPatchBodySchema",
+  "case": "unknown_on_valid",
+  "input": {
+    "integration": {},
+    "execution": {
+      "instructions": "x",
+      "skillDirectories": [],
+      "environment": {},
+      "mcp": []
+    },
+    "name": "x",
+    "repositoryPath": "x",
+    "worktreeRoot": "x",
+    "repository": "x",
+    "baseBranch": "x",
+    "setupCommand": "x",
+    "verificationCommand": "x",
+    "rootProfileId": "x",
+    "workerProfileId": "x",
+    "agentTaskPolicy": {
+      "workflowIds": [
+        "x"
+      ],
+      "defaultWorkflowId": "x",
+      "rootProfileIds": [
+        "x"
+      ],
+      "workerProfileIds": [
+        "x"
+      ]
+    },
+    "providerPolicy": null,
+    "__parityUnknown": true
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "unrecognized_keys",
+        "keys": [
+          "__parityUnknown"
+        ],
+        "path": [],
+        "message": "Unrecognized key: \"__parityUnknown\""
+      }
+    ]
+  }
+}

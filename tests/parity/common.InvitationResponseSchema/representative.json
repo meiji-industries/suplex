@@ -1,0 +1,17 @@
+{
+  "contract": "common.InvitationResponseSchema",
+  "case": "representative",
+  "input": {
+    "token": "x",
+    "kind": "bootstrap",
+    "expiresAt": "x"
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "token": "x",
+      "kind": "bootstrap",
+      "expiresAt": "x"
+    }
+  }
+}

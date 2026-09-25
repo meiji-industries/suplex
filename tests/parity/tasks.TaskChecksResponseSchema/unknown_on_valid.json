@@ -1,0 +1,16 @@
+{
+  "contract": "tasks.TaskChecksResponseSchema",
+  "case": "unknown_on_valid",
+  "input": {
+    "available": true,
+    "runs": [],
+    "__parityUnknown": true
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "available": true,
+      "runs": []
+    }
+  }
+}

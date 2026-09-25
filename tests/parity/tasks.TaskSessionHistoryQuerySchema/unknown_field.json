@@ -1,0 +1,11 @@
+{
+  "contract": "tasks.TaskSessionHistoryQuerySchema",
+  "case": "unknown_field",
+  "input": {
+    "unexpected": true
+  },
+  "expected": {
+    "accepted": true,
+    "value": {}
+  }
+}

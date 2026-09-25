@@ -1,0 +1,18 @@
+{
+  "contract": "common.IdSchema",
+  "case": "unknown_field",
+  "input": {
+    "unexpected": true
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "expected": "string",
+        "code": "invalid_type",
+        "path": [],
+        "message": "Invalid input: expected string, received object"
+      }
+    ]
+  }
+}

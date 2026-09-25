@@ -1,0 +1,15 @@
+{
+  "contract": "auth.ProfileBodySchema",
+  "case": "empty_object",
+  "input": {},
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "custom",
+        "path": [],
+        "message": "Invalid input"
+      }
+    ]
+  }
+}

@@ -1,0 +1,23 @@
+{
+  "contract": "agent-api.AgentApiTaskFilterSchema",
+  "case": "empty_object",
+  "input": {},
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid_value",
+        "values": [
+          "stale_delivery",
+          "conflicting_pull_request",
+          "failed_checks",
+          "pending_review",
+          "blocked_by_dependency",
+          "not_integrated"
+        ],
+        "path": [],
+        "message": "Invalid option: expected one of \"stale_delivery\"|\"conflicting_pull_request\"|\"failed_checks\"|\"pending_review\"|\"blocked_by_dependency\"|\"not_integrated\""
+      }
+    ]
+  }
+}

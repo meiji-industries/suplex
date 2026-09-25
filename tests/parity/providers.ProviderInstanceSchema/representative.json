@@ -1,0 +1,23 @@
+{
+  "contract": "providers.ProviderInstanceSchema",
+  "case": "representative",
+  "input": {
+    "id": "x",
+    "provider": "opencode",
+    "label": "x",
+    "homeDirectory": "x",
+    "createdAt": "x",
+    "updatedAt": "x"
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "id": "x",
+      "provider": "opencode",
+      "label": "x",
+      "homeDirectory": "x",
+      "createdAt": "x",
+      "updatedAt": "x"
+    }
+  }
+}

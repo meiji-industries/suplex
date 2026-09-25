@@ -1,0 +1,36 @@
+{
+  "contract": "agent-api.AgentApiIdentityResponseSchema",
+  "case": "unknown_on_valid",
+  "input": {
+    "agent": {
+      "id": "x",
+      "name": "x",
+      "profileId": null
+    },
+    "capabilities": {
+      "taskDiscovery": true,
+      "taskRead": true,
+      "taskCreate": true,
+      "taskCommands": []
+    },
+    "projects": [],
+    "__parityUnknown": true
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "agent": {
+        "id": "x",
+        "name": "x",
+        "profileId": null
+      },
+      "capabilities": {
+        "taskDiscovery": true,
+        "taskRead": true,
+        "taskCreate": true,
+        "taskCommands": []
+      },
+      "projects": []
+    }
+  }
+}

@@ -1,0 +1,24 @@
+{
+  "contract": "agent-api.AgentApiTaskDependenciesDryRunResponseSchema",
+  "case": "first_field_missing",
+  "input": {
+    "dependsOn": [],
+    "wouldStart": "now",
+    "blockingPrerequisiteIds": []
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid_value",
+        "values": [
+          true
+        ],
+        "path": [
+          "dryRun"
+        ],
+        "message": "Invalid input: expected true"
+      }
+    ]
+  }
+}

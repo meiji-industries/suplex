@@ -1,0 +1,25 @@
+{
+  "contract": "agent-api.AgentApiMergeApprovalResponseSchema",
+  "case": "first_field_null",
+  "input": {
+    "taskId": null,
+    "receipt": "x",
+    "expiresAt": "x",
+    "pullRequestNumber": 1,
+    "headSha": null,
+    "baseSha": null
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "expected": "string",
+        "code": "invalid_type",
+        "path": [
+          "taskId"
+        ],
+        "message": "Invalid input: expected string, received null"
+      }
+    ]
+  }
+}

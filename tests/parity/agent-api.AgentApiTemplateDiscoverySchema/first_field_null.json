@@ -1,0 +1,23 @@
+{
+  "contract": "agent-api.AgentApiTemplateDiscoverySchema",
+  "case": "first_field_null",
+  "input": {
+    "id": null,
+    "name": "x",
+    "description": "x",
+    "permittedForAgentTaskCreation": true
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "expected": "string",
+        "code": "invalid_type",
+        "path": [
+          "id"
+        ],
+        "message": "Invalid input: expected string, received null"
+      }
+    ]
+  }
+}

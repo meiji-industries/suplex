@@ -1,0 +1,14 @@
+{
+  "contract": "oauth.OAuthConsentParamsSchema",
+  "case": "unknown_on_valid",
+  "input": {
+    "requestId": "x",
+    "__parityUnknown": true
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "requestId": "x"
+    }
+  }
+}

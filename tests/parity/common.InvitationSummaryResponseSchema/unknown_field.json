@@ -1,0 +1,69 @@
+{
+  "contract": "common.InvitationSummaryResponseSchema",
+  "case": "unknown_field",
+  "input": {
+    "unexpected": true
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "expected": "string",
+        "code": "invalid_type",
+        "path": [
+          "id"
+        ],
+        "message": "Invalid input: expected string, received undefined"
+      },
+      {
+        "code": "invalid_value",
+        "values": [
+          "bootstrap",
+          "user",
+          "recovery"
+        ],
+        "path": [
+          "kind"
+        ],
+        "message": "Invalid option: expected one of \"bootstrap\"|\"user\"|\"recovery\""
+      },
+      {
+        "expected": "string",
+        "code": "invalid_type",
+        "path": [
+          "displayName"
+        ],
+        "message": "Invalid input: expected string, received undefined"
+      },
+      {
+        "expected": "string",
+        "code": "invalid_type",
+        "path": [
+          "expiresAt"
+        ],
+        "message": "Invalid input: expected string, received undefined"
+      },
+      {
+        "code": "invalid_value",
+        "values": [
+          "active",
+          "expired",
+          "consumed",
+          "replaced"
+        ],
+        "path": [
+          "status"
+        ],
+        "message": "Invalid option: expected one of \"active\"|\"expired\"|\"consumed\"|\"replaced\""
+      },
+      {
+        "expected": "string",
+        "code": "invalid_type",
+        "path": [
+          "createdAt"
+        ],
+        "message": "Invalid input: expected string, received undefined"
+      }
+    ]
+  }
+}

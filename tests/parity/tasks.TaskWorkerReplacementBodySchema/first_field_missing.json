@@ -1,0 +1,20 @@
+{
+  "contract": "tasks.TaskWorkerReplacementBodySchema",
+  "case": "first_field_missing",
+  "input": {
+    "reason": "x"
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "expected": "string",
+        "code": "invalid_type",
+        "path": [
+          "sessionId"
+        ],
+        "message": "Invalid input: expected string, received undefined"
+      }
+    ]
+  }
+}

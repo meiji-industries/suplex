@@ -1,0 +1,20 @@
+{
+  "contract": "tasks.TaskAgentsResponseSchema",
+  "case": "first_field_null",
+  "input": {
+    "agents": null
+  },
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "expected": "array",
+        "code": "invalid_type",
+        "path": [
+          "agents"
+        ],
+        "message": "Invalid input: expected array, received null"
+      }
+    ]
+  }
+}

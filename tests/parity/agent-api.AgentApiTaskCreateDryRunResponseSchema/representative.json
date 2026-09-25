@@ -1,0 +1,47 @@
+{
+  "contract": "agent-api.AgentApiTaskCreateDryRunResponseSchema",
+  "case": "representative",
+  "input": {
+    "dryRun": true,
+    "projectId": "x",
+    "project": {
+      "id": "x",
+      "name": "x"
+    },
+    "title": "x",
+    "workflow": {
+      "id": null,
+      "engine": "x",
+      "name": null
+    },
+    "templateId": null,
+    "deliveryTarget": "local_worktree",
+    "branch": "x",
+    "dependsOn": [],
+    "wouldStart": "now",
+    "blockingPrerequisiteIds": []
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "dryRun": true,
+      "projectId": "x",
+      "project": {
+        "id": "x",
+        "name": "x"
+      },
+      "title": "x",
+      "workflow": {
+        "id": null,
+        "engine": "x",
+        "name": null
+      },
+      "templateId": null,
+      "deliveryTarget": "local_worktree",
+      "branch": "x",
+      "dependsOn": [],
+      "wouldStart": "now",
+      "blockingPrerequisiteIds": []
+    }
+  }
+}

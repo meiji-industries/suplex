@@ -1,0 +1,13 @@
+{
+  "contract": "github-triggers.GithubTriggerListSchema",
+  "case": "representative",
+  "input": {
+    "rules": []
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "rules": []
+    }
+  }
+}

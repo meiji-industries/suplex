@@ -1,0 +1,13 @@
+{
+  "contract": "auth.CompanyNameBodySchema",
+  "case": "unknown_field",
+  "input": {
+    "unexpected": true
+  },
+  "expected": {
+    "accepted": true,
+    "value": {
+      "name": ""
+    }
+  }
+}

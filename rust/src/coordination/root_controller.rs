@@ -13,7 +13,7 @@ use crate::{
         database::{DatabaseResult, OpenMode, SuplexDatabase},
     },
     runtimes::codex::{session_reader, tool_evidence},
-    tasks::worktree,
+    tasks::{commands::TaskFailure, worktree},
 };
 
 use super::{
@@ -48,6 +48,10 @@ pub fn prepare_root(database_path: &Path, task_id: &str) -> DatabaseResult<RootS
 
 fn invalid(message: &'static str) -> Box<dyn std::error::Error> {
     std::io::Error::other(message).into()
+}
+
+fn not_ported(message: &'static str) -> Box<dyn std::error::Error> {
+    Box::new(TaskFailure::not_ported(message))
 }
 
 fn completed_worker_turn<'a>(turns: &'a [Value], session_id: &str) -> Option<&'a Value> {
@@ -175,8 +179,8 @@ pub fn observe(database_path: &Path, root: &RootIdentity) -> DatabaseResult<Valu
     };
     if rows.control["workflow"] != "standard" || rows.control["deliveryTarget"] != "local_worktree"
     {
-        return Err(invalid(
-            "Only Standard local-worktree Root observation is implemented",
+        return Err(not_ported(
+            "Only Standard local-worktree Root observation is ported",
         ));
     }
     let worktree = match rows.control["worktree"]["path"].as_str() {
@@ -298,8 +302,8 @@ pub fn delegate_worker(
     assignment: &StandardWorkerAssignment,
 ) -> DatabaseResult<Value> {
     if assignment.purpose != "implementation" {
-        return Err(invalid(
-            "Only Standard implementation Worker delegation is implemented",
+        return Err(not_ported(
+            "Only Standard implementation Worker delegation is ported",
         ));
     }
     if assignment.plan.is_empty()
@@ -321,8 +325,8 @@ pub fn delegate_worker(
     if before.control["workflow"] != "standard"
         || before.control["deliveryTarget"] != "local_worktree"
     {
-        return Err(invalid(
-            "Only Standard local-worktree Worker delegation is implemented",
+        return Err(not_ported(
+            "Only Standard local-worktree Worker delegation is ported",
         ));
     }
     let visual_evidence = before.context["configuration"]["visualEvidence"]

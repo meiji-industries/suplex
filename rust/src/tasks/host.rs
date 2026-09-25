@@ -2,10 +2,10 @@
 //! and the outer task wake loop call this after durable task/root setup.
 
 use std::{
-    collections::{HashMap, HashSet},
+    collections::{BTreeSet, HashMap, HashSet},
     io,
     path::{Path, PathBuf},
-    sync::OnceLock,
+    sync::{Mutex, OnceLock, PoisonError},
 };
 
 use chrono::{DateTime, SecondsFormat, Utc};
@@ -37,6 +37,7 @@ use crate::{
     shared::js_json,
     tasks::{
         archive::processes,
+        commands::TaskFailure,
         worktree::{self, TaskWorktreeIntent, WorktreeReference},
     },
 };
@@ -181,6 +182,26 @@ fn current_owner_still_running(session: &RootSession) -> bool {
     inspect_process(pid).is_some_and(|observed| {
         session.launch_owner_start_time.as_deref() == Some(observed.start_time.as_str())
     })
+}
+
+/// Sessions whose unported provider was already reported. The sweep skips
+/// them before any claim, so it does not fail the task every second.
+// ponytail: process-local; a restart reports each unported session once more.
+static UNPORTED_SESSIONS: Mutex<BTreeSet<String>> = Mutex::new(BTreeSet::new());
+
+fn skip_unported(session_id: &str, message: &str) -> Option<PromptObservation> {
+    let failure = TaskFailure::not_ported(message);
+    if UNPORTED_SESSIONS
+        .lock()
+        .unwrap_or_else(PoisonError::into_inner)
+        .insert(session_id.to_owned())
+    {
+        eprintln!(
+            "warning: session {session_id} is skipped: {failure} ({})",
+            failure.code
+        );
+    }
+    None
 }
 
 fn dispatch_state(turn: &RootTurn) -> DispatchState {
@@ -637,6 +658,13 @@ fn recover_prepared_root_blocking(
     else {
         return Ok(None);
     };
+    let rows = root_session_store::root_observation_rows(&database, task_id)?;
+    if rows.control["rootProfile"]["provider"] != "codex" {
+        return Ok(skip_unported(
+            &session.id,
+            "Only Codex Standard Root execution is ported",
+        ));
+    }
     if current_owner_still_running(&session) {
         return Ok(None);
     }
@@ -680,15 +708,9 @@ fn recover_prepared_root_blocking(
             complete_root_if_terminal(&mut database, database_path, &session, &turn, &before)?;
             return Ok(before);
         }
-        let rows = root_session_store::root_observation_rows(&database, task_id)?;
         let worktree = rows.control["worktree"]["path"]
             .as_str()
             .ok_or_else(|| io::Error::other("Task worktree is not prepared"))?;
-        if rows.control["rootProfile"]["provider"] != "codex" {
-            return Err(
-                io::Error::other("Only Codex Standard Root execution is implemented").into(),
-            );
-        }
         let model = rows.control["rootProfile"]["model"]
             .as_str()
             .ok_or_else(|| io::Error::other("Root model is missing"))?;
@@ -797,6 +819,13 @@ fn recover_prepared_worker_blocking(
     if !root_session_store::worker_replacement_ready(&database, &session.id)? {
         return Ok(None);
     }
+    let rows = root_session_store::root_observation_rows(&database, task_id)?;
+    if rows.control["workerProfile"]["provider"] != "codex" {
+        return Ok(skip_unported(
+            &session.id,
+            "Only Codex Standard Worker execution is ported",
+        ));
+    }
     if current_owner_still_running(&session) {
         return Ok(None);
     }
@@ -827,7 +856,6 @@ fn recover_prepared_worker_blocking(
         )? {
             return Err(io::Error::other("Native Worker session changed before dispatch").into());
         }
-        let rows = root_session_store::root_observation_rows(&database, task_id)?;
         let worker = rows
             .worker
             .as_ref()
@@ -862,11 +890,6 @@ fn recover_prepared_worker_blocking(
             .as_str()
             .ok_or_else(|| io::Error::other("Task worktree is not prepared"))?;
         let profile = &rows.control["workerProfile"];
-        if profile["provider"] != "codex" {
-            return Err(
-                io::Error::other("Only Codex Standard Worker execution is implemented").into(),
-            );
-        }
         let model = profile["model"]
             .as_str()
             .ok_or_else(|| io::Error::other("Worker model is missing"))?;
@@ -1388,8 +1411,8 @@ mod tests {
         );
     }
 
-    #[tokio::test]
-    async fn empty_native_usage_is_incomplete_and_does_not_block_dispatch() {
+    /// A queued Standard local-worktree task with Codex profiles.
+    fn fixture_task() -> (PathBuf, PathBuf, String) {
         let base = std::env::temp_dir().join(format!("suplex-usage-{}", Uuid::new_v4()));
         fs::create_dir_all(&base).unwrap();
         let database_path = base.join("suplex.sqlite");
@@ -1425,6 +1448,13 @@ mod tests {
                 .task
                 .id
         };
+        (base, database_path, task_id)
+    }
+
+    #[tokio::test]
+    async fn empty_native_usage_is_incomplete_and_does_not_block_dispatch() {
+        let (base, database_path, task_id) = fixture_task();
+        let now = Utc::now();
         let root = root_controller::prepare_root(&database_path, &task_id).unwrap();
         let turn_id = {
             let mut database = SuplexDatabase::open(&database_path, OpenMode::ReadWrite).unwrap();
@@ -1458,6 +1488,46 @@ mod tests {
         );
         let observed = observed_usage(&database_path, &task_id).await.unwrap();
         assert_eq!(observed.estimated_cost_usd, Some(0.0));
+        fs::remove_dir_all(base).unwrap();
+    }
+
+    #[tokio::test]
+    async fn unported_workflows_report_501_and_the_sweep_skips_them() {
+        let (base, database_path, task_id) = fixture_task();
+        let root = root_controller::prepare_root(&database_path, &task_id).unwrap();
+        let identity = RootIdentity {
+            task_id: task_id.clone(),
+            session_id: root.id.clone(),
+            generation: root.generation,
+        };
+        {
+            let database = SuplexDatabase::open(&database_path, OpenMode::ReadWrite).unwrap();
+            database.connection().execute(
+                "UPDATE suplex_task_controls SET root_profile_json = json_set(root_profile_json,'$.provider','opencode'), workflow = 'competing_plans' WHERE task_id = ?1",
+                [&task_id],
+            ).unwrap();
+        }
+        let failure = root_controller::observe(&database_path, &identity).unwrap_err();
+        let failure = failure.downcast_ref::<TaskFailure>().unwrap();
+        assert_eq!(
+            (failure.status_code, failure.code),
+            (501, "experimental_not_ported")
+        );
+        let environment = HashMap::new();
+        for _ in 0..2 {
+            assert!(
+                recover_prepared_root(&database_path, &base, &task_id, None, &environment)
+                    .await
+                    .unwrap()
+                    .is_none()
+            );
+        }
+        let database = SuplexDatabase::open(&database_path, OpenMode::ReadOnly).unwrap();
+        let root = root_session_store::current_root(&database, &task_id)
+            .unwrap()
+            .unwrap();
+        assert!(root.native_session_id.is_none() && root.launch_owner.is_none());
+        assert!(UNPORTED_SESSIONS.lock().unwrap().contains(&root.id));
         fs::remove_dir_all(base).unwrap();
     }
 

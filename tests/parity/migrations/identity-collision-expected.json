@@ -1,0 +1,44 @@
+{
+  "migration": "20260814221033181_hermes_unified_agent_identity_and_attribution.sql",
+  "failure": true,
+  "tables": {
+    "suplex_agents": [
+      {
+        "id": "agent_collision",
+        "name": "Internal Collision",
+        "role": "analyst",
+        "avatar_seed": "seed_internal",
+        "profile_id": "profile_default_balanced",
+        "created_at": "2026-09-26T14:23:32.990Z",
+        "updated_at": "2026-09-26T14:23:32.990Z"
+      }
+    ],
+    "suplex_external_agents": [
+      {
+        "id": "agent_collision",
+        "name": "Hermes Collision",
+        "avatar_seed": "seed_hermes",
+        "company_id": "comp_collision",
+        "hermes_profile_id": null,
+        "status": "pending",
+        "paired_at": null,
+        "last_used_at": null,
+        "revoked_at": null,
+        "created_at": "2026-09-26T14:23:32.990Z",
+        "updated_at": "2026-09-26T14:23:32.990Z"
+      }
+    ],
+    "suplex_hermes_pairing_codes": [
+      {
+        "id": "pairing_collision",
+        "agent_id": "agent_collision",
+        "code_hash": "collision-hash",
+        "purpose": "initial",
+        "expires_at": "2099-01-01T00:00:00.000Z",
+        "consumed_at": null,
+        "replaced_at": null,
+        "created_at": "2026-09-26T14:23:32.990Z"
+      }
+    ]
+  }
+}

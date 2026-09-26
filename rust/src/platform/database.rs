@@ -109,7 +109,7 @@ impl SuplexDatabase {
         };
         if mode == OpenMode::Migrate {
             database.preflight_repository_identities()?;
-            database.apply_migrations()?;
+            database.apply_migrations(MIGRATIONS)?;
         }
         Ok(database)
     }
@@ -251,8 +251,8 @@ impl SuplexDatabase {
         })
     }
 
-    fn apply_migrations(&mut self) -> DatabaseResult<()> {
-        let migrations = read_migrations(MIGRATIONS)?;
+    fn apply_migrations(&mut self, files: &[EmbeddedFile]) -> DatabaseResult<()> {
+        let migrations = read_migrations(files)?;
         self.connection.execute_batch("CREATE TABLE IF NOT EXISTS __drizzle_migrations (\n    id SERIAL PRIMARY KEY,\n    hash text NOT NULL,\n    created_at numeric\n  )")?;
         let foreign_keys: i64 = self
             .connection
@@ -290,7 +290,7 @@ impl SuplexDatabase {
                     if by_timestamp.get(&migration.created_at) == Some(&migration.hash) {
                         continue;
                     }
-                    let sql = MIGRATIONS
+                    let sql = files
                         .iter()
                         .find(|file| file.name == format!("{}.sql", migration.tag))
                         .ok_or("embedded migration missing")?;
@@ -861,3 +861,6 @@ mod tests {
         let _ = fs::remove_file(to_rust);
     }
 }
+
+#[cfg(test)]
+include!("../../tests/platform/migrations.rs");

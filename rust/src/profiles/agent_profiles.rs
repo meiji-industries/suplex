@@ -699,6 +699,32 @@ mod tests {
     use super::*;
     use crate::{identity::auth, platform::database::OpenMode};
 
+    #[test]
+    fn provider_policy_selects_system_and_dedicated_logins_independently() {
+        let system: TaskProfile = serde_json::from_value(serde_json::json!({
+            "profileId":"system", "provider":"claude-code", "model":"haiku",
+            "reasoningLevel":"medium", "serviceTier":"default", "providerInstanceId":null
+        }))
+        .unwrap();
+        let dedicated: TaskProfile = serde_json::from_value(serde_json::json!({
+            "profileId":"dedicated", "provider":"claude-code", "model":"haiku",
+            "reasoningLevel":"medium", "serviceTier":"default", "providerInstanceId":"instance_a"
+        }))
+        .unwrap();
+        let providers = ProjectProviderPolicy {
+            allowed_providers: vec!["claude-code".into()],
+            allowed_instance_ids: vec![],
+        };
+        let instances = ProjectProviderPolicy {
+            allowed_providers: vec![],
+            allowed_instance_ids: vec!["instance_a".into()],
+        };
+        assert!(allowed_profile(Some(&providers), &system));
+        assert!(!allowed_profile(Some(&providers), &dedicated));
+        assert!(!allowed_profile(Some(&instances), &system));
+        assert!(allowed_profile(Some(&instances), &dedicated));
+    }
+
     #[cfg(unix)]
     #[test]
     fn executable_resolution_matches_override_path_and_home_precedence() {

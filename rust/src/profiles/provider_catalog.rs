@@ -222,6 +222,16 @@ mod tests {
             (StatusCode::OK, "private, no-store")
         );
         assert_eq!(json_body(&body)["providers"].as_array().unwrap().len(), 4);
+        for (method, path) in [
+            ("PUT", "/api/admin/providers/openrouter/credential"),
+            ("DELETE", "/api/admin/providers/openrouter/credential"),
+            ("POST", "/api/admin/providers/openrouter/test"),
+        ] {
+            assert_eq!(
+                call(&app, method, path, Some(&admin), None).await.0,
+                StatusCode::NOT_FOUND
+            );
+        }
         assert_eq!(
             call(&app, "GET", "/api/admin/providers", Some(&member), None)
                 .await

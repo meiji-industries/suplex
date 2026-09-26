@@ -244,3 +244,15 @@ The four one-shot TypeScript service oracle programs under `tests/support/task-{
 | `artifacts.test.ts` | `platform::artifacts::tests::task_image_file_and_row_share_commit_and_rollback_cleanup` covers company-scoped byte storage and rollback; Root MCP image interop checks content hash and foreign-task refusal. |
 | `discovery-artifacts.test.ts` | `routes::discovery::tests::public_artifacts_are_anonymous_secret_free_and_name_closed_runtime_routes` covers all public artifact and protected runtime route assertions. |
 | `git-test-environment.integration.test.ts` | `rust/examples/guarded-tests.rs::tests::test_environment_leaves_the_inherited_worker_guard_intact` plus native guarded test runner cover inherited guard persistence; active Git worktree materialization is exercised by `tasks::worktree` tests. |
+
+## Retired provider TypeScript tests
+
+| Removed TS test | Retained native assertion |
+| --- | --- |
+| `provider-policy.test.ts` | `profiles::agent_profiles::tests::provider_policy_selects_system_and_dedicated_logins_independently` checks separate system-provider and dedicated-instance allowlists. |
+| `provider-catalog.test.ts` | `profiles::provider_catalog::tests::codex_models_come_from_the_visible_cache_and_fall_back_to_the_static_list`, `providers_list_one_sorted_row_per_tool_and_models_flatten_them`, `profiles::provider_connection` tests, and `profiles::provider_readiness` tests cover catalog, authentication states, and failed observations. |
+| `provider-readiness.test.ts` | `profiles::provider_readiness` tests cover OpenCode, Claude Code, and Codex absent, signed-out, signed-in, unknown, account display, CLI probe, dedicated environment, and recovery. |
+| `provider-login-routes.test.ts` | `profiles::provider_login::tests::the_login_command_embeds_the_resolved_executable_and_falls_back_to_the_binary` and `routes::provider_login::tests::the_sign_in_terminal_is_admin_only_and_bridges_control_input` cover command quoting, WebSocket authorization, frame, and input semantics. |
+| `providers-api.test.ts` | `profiles::provider_catalog::tests::provider_routes_require_an_administrator_and_models_any_session` checks auth, private no-store response, model listing, and removed OpenRouter routes; `routes::provider_login::tests::provider_login_and_instance_routes_create_reuse_and_close_sign_in_panes` checks login reuse, instance creation, validation, and cleanup. Native provider enumeration reads local state and returns per-provider availability instead of an injected all-provider observation failure. |
+| `models-dev-catalog.test.ts` | `profiles::model_pricing::tests::parses_valid_prices_and_uses_source_cost_formula` and `catalog_read_shares_inflight_request_and_retries_failure` cover parsing, caching, invalid/unavailable data, and retry. |
+| `environment-settings-api.test.ts` | `routes::admin_platform::tests::environment_settings_default_and_persist_partial_administrator_updates` checks defaults, partial persistence, and administrator authority. |

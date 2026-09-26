@@ -2,13 +2,18 @@ use super::{config::Installation, supervisor};
 use serde_json::{Value, json};
 use std::sync::{LazyLock, Mutex};
 use std::{
-    fs, io,
+    fs,
+    io::{self, Read},
     path::{Path, PathBuf},
-    process::{Command, Stdio},
+    process::{Child, Command, Stdio},
+    thread,
+    time::{Duration, Instant},
 };
 
 const REPOSITORY: &str = "meiji-industries/suplex";
 static AVAILABLE: LazyLock<Mutex<Option<String>>> = LazyLock::new(|| Mutex::new(None));
+static ACTIVE_CHILD: LazyLock<Mutex<Option<Child>>> = LazyLock::new(|| Mutex::new(None));
+static REQUEST_LOCK: Mutex<()> = Mutex::new(());
 fn state_path(installation: &Installation) -> PathBuf {
     installation.runtime.join("update-status.json")
 }
@@ -24,17 +29,116 @@ fn read_state(installation: &Installation) -> Value {
         .and_then(|bytes| serde_json::from_slice(&bytes).ok())
         .unwrap_or(json!({"kind":"idle"}))
 }
+fn update_running(installation: &Installation) -> io::Result<bool> {
+    if let Ok(mut active) = ACTIVE_CHILD.lock() {
+        if let Some(child) = active.as_mut() {
+            if child.try_wait()?.is_none() {
+                return Ok(true);
+            }
+            *active = None;
+        }
+    }
+    let lock = fs::OpenOptions::new()
+        .create(true)
+        .write(true)
+        .open(installation.runtime.join("update.lock"))?;
+    #[cfg(unix)]
+    {
+        use std::os::fd::AsRawFd;
+        if unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) } == 0 {
+            let _ = unsafe { libc::flock(lock.as_raw_fd(), libc::LOCK_UN) };
+            return Ok(false);
+        }
+        let error = io::Error::last_os_error();
+        if error
+            .raw_os_error()
+            .is_some_and(|code| code == libc::EWOULDBLOCK || code == libc::EAGAIN)
+        {
+            return Ok(true);
+        }
+        return Err(error);
+    }
+    #[cfg(not(unix))]
+    {
+        Ok(false)
+    }
+}
 fn run(root: &Path, name: &str, args: &[&str]) -> Result<String, Box<dyn std::error::Error>> {
-    let output = Command::new(name).args(args).current_dir(root).output()?;
-    if !output.status.success() {
+    let mut command = Command::new(name);
+    command
+        .args(args)
+        .current_dir(root)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        unsafe {
+            command.pre_exec(|| {
+                if libc::setsid() < 0 {
+                    Err(io::Error::last_os_error())
+                } else {
+                    Ok(())
+                }
+            });
+        }
+    }
+    let mut child = command.spawn()?;
+    let mut stdout = child.stdout.take().ok_or("Missing command stdout")?;
+    let mut stderr = child.stderr.take().ok_or("Missing command stderr")?;
+    let read_out = thread::spawn(move || {
+        let mut bytes = Vec::new();
+        stdout.read_to_end(&mut bytes).map(|_| bytes)
+    });
+    let read_err = thread::spawn(move || {
+        let mut bytes = Vec::new();
+        stderr.read_to_end(&mut bytes).map(|_| bytes)
+    });
+    let deadline = Instant::now() + Duration::from_secs(300);
+    let mut cancelled = None;
+    let status = loop {
+        if let Some(status) = child.try_wait()? {
+            break status;
+        }
+        if !supervisor::inherited_supervisor_alive() {
+            cancelled = Some("The Suplex host stopped during the update");
+        } else if Instant::now() >= deadline {
+            cancelled = Some("The update command timed out");
+        }
+        if cancelled.is_some() {
+            #[cfg(unix)]
+            unsafe {
+                libc::kill(-(child.id() as i32), libc::SIGTERM);
+            }
+            thread::sleep(Duration::from_millis(250));
+            #[cfg(unix)]
+            unsafe {
+                libc::kill(-(child.id() as i32), libc::SIGKILL);
+            }
+            #[cfg(not(unix))]
+            let _ = child.kill();
+            break child.wait()?;
+        }
+        thread::sleep(Duration::from_millis(100));
+    };
+    let stdout = read_out
+        .join()
+        .map_err(|_| "Could not read command stdout")??;
+    let stderr = read_err
+        .join()
+        .map_err(|_| "Could not read command stderr")??;
+    if let Some(reason) = cancelled {
+        return Err(reason.into());
+    }
+    if !status.success() {
         return Err(format!(
             "{name} {} failed: {}",
             args.join(" "),
-            String::from_utf8_lossy(&output.stderr).trim()
+            String::from_utf8_lossy(&stderr).trim()
         )
         .into());
     }
-    Ok(String::from_utf8(output.stdout)?.trim().to_owned())
+    Ok(String::from_utf8(stdout)?.trim().to_owned())
 }
 fn git(root: &Path, args: &[&str]) -> Result<String, Box<dyn std::error::Error>> {
     run(root, "git", args)
@@ -157,11 +261,62 @@ fn applying(installation: &Installation, step: &str, message: &str) -> io::Resul
         json!({"kind":"applying","step":step,"message":message}),
     )
 }
+fn start_binary(
+    binary: &Path,
+    root: &Path,
+    installation: &Installation,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let output = Command::new(binary)
+        .arg("start")
+        .current_dir(root)
+        .output()?;
+    if !output.status.success() {
+        return Err(format!(
+            "Suplex restart failed: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        )
+        .into());
+    }
+    if !supervisor::host_running(installation) {
+        return Err("Suplex API did not report readiness".into());
+    }
+    Ok(())
+}
+fn start_with_recovery(
+    new_binary: &Path,
+    previous_binary: &Path,
+    mut start: impl FnMut(&Path) -> Result<(), String>,
+    mut cleanup: impl FnMut() -> Result<(), String>,
+) -> Result<(), String> {
+    match start(new_binary) {
+        Ok(()) => Ok(()),
+        Err(original) => match cleanup().and_then(|_| start(previous_binary)) {
+            Ok(()) => Err(original),
+            Err(recovery) => Err(format!(
+                "{original}\nSuplex could not restart the previous binary: {recovery}"
+            )),
+        },
+    }
+}
 
 pub fn snapshot(installation: &Installation, check: bool, admin: bool) -> Value {
     let current = env!("SUPLEX_RUST_REVISION");
     let mut status = read_state(installation);
+    if status["kind"] == "applying" && update_running(installation).is_ok_and(|running| !running) {
+        status = failure("apply", "The update process stopped before completion.");
+        let _ = write_state(installation, status.clone());
+    }
     let mut available = AVAILABLE.lock().ok().and_then(|value| value.clone());
+    if available.is_none()
+        && (status["kind"] == "available"
+            || (status["kind"] == "failed" && status["action"] == "apply"))
+    {
+        let root = std::env::current_dir().unwrap_or_default();
+        available = remote(&root)
+            .and_then(|name| git(&root, &["rev-parse", &format!("refs/remotes/{name}/main")]))
+            .ok()
+            .filter(|revision| valid_revision(revision) && revision != current);
+    }
     if packaged() && check {
         status = json!({"kind":"failed","action":"check","message":"Updates come with the desktop app.","error":"This Suplex ships inside Suplex.app; install the new app to update it."});
         let _ = write_state(installation, status.clone());
@@ -193,11 +348,17 @@ pub fn snapshot(installation: &Installation, check: bool, admin: bool) -> Value 
 }
 
 pub fn request_apply(installation: &Installation) -> Result<Value, Box<dyn std::error::Error>> {
+    let _request = REQUEST_LOCK
+        .lock()
+        .map_err(|_| "Update request lock was poisoned")?;
     if packaged() {
         return Err("Updates come with the desktop app.".into());
     }
     if !supervisor::current_is_supervised(installation) {
         return Err("Suplex update control is not available.".into());
+    }
+    if update_running(installation)? {
+        return Ok(json!({"accepted":true,"status":read_state(installation)}));
     }
     let status = json!({"kind":"applying","step":"fetch","message":"Suplex checks the update."});
     write_state(installation, status.clone())?;
@@ -224,7 +385,10 @@ pub fn request_apply(installation: &Installation) -> Result<Value, Box<dyn std::
             });
         }
     }
-    command.spawn()?;
+    let child = command.spawn()?;
+    if let Ok(mut active) = ACTIVE_CHILD.lock() {
+        *active = Some(child);
+    }
     Ok(json!({"accepted":true,"status":status}))
 }
 
@@ -243,6 +407,9 @@ pub fn apply() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
     let root = std::env::current_dir()?;
+    let rollback = installation.runtime.join("update-rollback-suplex");
+    let mut host_stopped = false;
+    let mut recovery_attempted = false;
     let result = (|| -> Result<(), Box<dyn std::error::Error>> {
         applying(&installation, "fetch", "Suplex checks the update.")?;
         let (head, available, remote_ref) = check_remote(&root)?;
@@ -252,6 +419,9 @@ pub fn apply() -> Result<(), Box<dyn std::error::Error>> {
         }
         applying(&installation, "install", "Suplex installs dependencies.")?;
         run(&root, "pnpm", &["install", "--frozen-lockfile"])?;
+        let current_binary = std::env::current_exe()?;
+        fs::copy(&current_binary, &rollback)?;
+        fs::set_permissions(&rollback, fs::metadata(&current_binary)?.permissions())?;
         applying(&installation, "build", "Suplex builds production assets.")?;
         run(&root, "mise", &["run", "build"])?;
         let target = std::env::var_os("CARGO_TARGET_DIR")
@@ -268,25 +438,41 @@ pub fn apply() -> Result<(), Box<dyn std::error::Error>> {
         }
         applying(&installation, "stop", "Suplex stops the host.")?;
         supervisor::stop(&installation)?;
+        host_stopped = true;
         applying(&installation, "start", "Suplex starts the host.")?;
-        let output = Command::new(binary)
-            .arg("start")
-            .current_dir(&root)
-            .output()?;
-        if !output.status.success() {
-            return Err(format!(
-                "Suplex restart failed: {}",
-                String::from_utf8_lossy(&output.stderr).trim()
-            )
-            .into());
-        }
+        recovery_attempted = true;
+        start_with_recovery(
+            &binary,
+            &rollback,
+            |candidate| {
+                start_binary(candidate, &root, &installation).map_err(|error| error.to_string())
+            },
+            || {
+                supervisor::stop(&installation)
+                    .map(|_| ())
+                    .map_err(|error| error.to_string())
+            },
+        )?;
         write_state(&installation, json!({"kind":"current"}))?;
         Ok(())
     })();
-    if let Err(error) = &result {
-        let _ = write_state(&installation, failure("apply", error));
+    if let Err(error) = result {
+        let mut message = error.to_string();
+        if host_stopped && !recovery_attempted {
+            let recovery = supervisor::stop(&installation)
+                .and_then(|_| start_binary(&rollback, &root, &installation));
+            if let Err(recovery_error) = recovery {
+                message.push_str(&format!(
+                    "\nSuplex could not restart the previous binary: {recovery_error}"
+                ));
+            }
+        }
+        let _ = write_state(&installation, failure("apply", &message));
+        let _ = fs::remove_file(&rollback);
+        return Err(message.into());
     }
-    result
+    let _ = fs::remove_file(&rollback);
+    Ok(())
 }
 
 #[cfg(test)]

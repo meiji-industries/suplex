@@ -69,6 +69,33 @@ pub fn current_is_supervised(installation: &Installation) -> bool {
         process.start_time == start && process.command.contains("start --foreground")
     }) && database_open_by(std::process::id(), installation)
 }
+pub fn inherited_supervisor_alive() -> bool {
+    let Ok(pid) = std::env::var("SUPLEX_SUPERVISOR_PID") else {
+        return true;
+    };
+    let Ok(pid) = pid.parse::<u32>() else {
+        return false;
+    };
+    let start = std::env::var("SUPLEX_SUPERVISOR_START").unwrap_or_default();
+    inspect(pid).is_some_and(|process| {
+        process.start_time == start && process.command.contains("start --foreground")
+    })
+}
+pub fn host_running(installation: &Installation) -> bool {
+    let recorded = read(&registry_path(installation)).ok().flatten();
+    let current = recorded
+        .filter(|record| {
+            record.ready
+                && matches(&record.process)
+                && record.child.as_ref().is_some_and(|child| {
+                    matches(child) && database_open_by(child.pid, installation)
+                })
+        })
+        .or_else(|| discover(installation));
+    current.is_some()
+        && std::net::TcpStream::connect((installation.bind_address.as_str(), installation.port))
+            .is_ok()
+}
 fn read(path: &Path) -> io::Result<Option<Registry>> {
     match fs::read(path) {
         Ok(bytes) => serde_json::from_slice(&bytes)

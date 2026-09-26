@@ -10,7 +10,7 @@ use rmcp::{
     },
     service::RequestContext,
 };
-use serde::{Deserialize, Deserializer, Serialize};
+use serde::{Deserialize, Deserializer};
 use serde_json::{Map, Value, json};
 
 use crate::{

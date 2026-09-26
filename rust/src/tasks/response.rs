@@ -272,7 +272,7 @@ fn dependency_projection(
             status: TaskStatus::Backlog,
             kind: Some(DependencyKind::PullRequest),
             number: Some(number),
-            state: Some(state.clone()),
+            state: Some(state),
             url: Some(url.clone()),
             observed_at: Some(observed_at),
         });

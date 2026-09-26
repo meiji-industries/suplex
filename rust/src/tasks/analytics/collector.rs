@@ -335,7 +335,14 @@ mod tests {
             };
             let observed =
                 crate::shared::time::rfc3339_millis(Utc::now() - chrono::Duration::seconds(1));
-            record(&mut database, "t", "s", std::slice::from_ref(&old), &observed).unwrap();
+            record(
+                &mut database,
+                "t",
+                "s",
+                std::slice::from_ref(&old),
+                &observed,
+            )
+            .unwrap();
             let refreshed = TaskUsage {
                 started_at: 100.0,
                 completed_at: Some(300.0),

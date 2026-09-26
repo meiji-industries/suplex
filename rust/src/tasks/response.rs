@@ -262,103 +262,6 @@ fn dependency_projection(
     Ok((depends_on, blocked_by, waiting_on))
 }
 
-#[cfg(test)]
-mod dependency_tests {
-    use super::*;
-
-    #[test]
-    fn queue_waits_explain_cancelled_human_archived_and_unobserved_merge_blockers() {
-        let rows = [
-            (
-                "cancelled",
-                "Cancelled",
-                "cancelled",
-                "local_worktree",
-                None,
-                None,
-            ),
-            (
-                "question",
-                "Question",
-                "waiting_human",
-                "local_worktree",
-                None,
-                None,
-            ),
-            (
-                "archived",
-                "Archived",
-                "backlog",
-                "local_worktree",
-                Some("2026-09-26"),
-                None,
-            ),
-            (
-                "unmerged",
-                "Unmerged",
-                "delivered",
-                "merged",
-                None,
-                Some("open"),
-            ),
-            (
-                "merged",
-                "Merged",
-                "delivered",
-                "merged",
-                None,
-                Some("merged"),
-            ),
-        ]
-        .into_iter()
-        .map(|(id, title, status, target, archived, pull)| {
-            (
-                id.to_owned(),
-                title.to_owned(),
-                status.to_owned(),
-                target.to_owned(),
-                archived.map(str::to_owned),
-                pull.map(str::to_owned),
-            )
-        })
-        .collect();
-        let (depends_on, blocked_by, waits) = dependency_projection(rows, vec![]).unwrap();
-        assert_eq!(depends_on.len(), 5);
-        assert_eq!(blocked_by.len(), 5);
-        assert_eq!(
-            waits
-                .iter()
-                .map(|wait| wait["reason"].as_str().unwrap())
-                .collect::<Vec<_>>(),
-            vec![
-                "prerequisite_cancelled",
-                "prerequisite_needs_human",
-                "prerequisite_archived",
-                "prerequisite_merge_unobserved"
-            ]
-        );
-        assert!(
-            waits[0]["summary"]
-                .as_str()
-                .unwrap()
-                .contains("Remove it from Blocked by")
-        );
-        assert!(waits[1]["summary"].as_str().unwrap().contains("Answer it"));
-        assert!(
-            waits[2]["summary"]
-                .as_str()
-                .unwrap()
-                .contains("open and deliver it")
-        );
-        assert!(
-            waits[3]["summary"]
-                .as_str()
-                .unwrap()
-                .contains("Suplex checks GitHub again")
-        );
-    }
-}
-
 pub fn get(database: &SuplexDatabase, task_id: &str) -> DatabaseResult<Option<TaskResponse>> {
     super::repository::task_response(database, task_id)
 }
@@ -494,4 +397,101 @@ pub(crate) fn from_row(row: &Row<'_>) -> DatabaseResult<TaskResponse> {
         status_changed_at: times.status_changed_at,
         archived_at: times.archived_at,
     })
+}
+
+#[cfg(test)]
+mod dependency_tests {
+    use super::*;
+
+    #[test]
+    fn queue_waits_explain_cancelled_human_archived_and_unobserved_merge_blockers() {
+        let rows = [
+            (
+                "cancelled",
+                "Cancelled",
+                "cancelled",
+                "local_worktree",
+                None,
+                None,
+            ),
+            (
+                "question",
+                "Question",
+                "waiting_human",
+                "local_worktree",
+                None,
+                None,
+            ),
+            (
+                "archived",
+                "Archived",
+                "backlog",
+                "local_worktree",
+                Some("2026-09-26"),
+                None,
+            ),
+            (
+                "unmerged",
+                "Unmerged",
+                "delivered",
+                "merged",
+                None,
+                Some("open"),
+            ),
+            (
+                "merged",
+                "Merged",
+                "delivered",
+                "merged",
+                None,
+                Some("merged"),
+            ),
+        ]
+        .into_iter()
+        .map(|(id, title, status, target, archived, pull)| {
+            (
+                id.to_owned(),
+                title.to_owned(),
+                status.to_owned(),
+                target.to_owned(),
+                archived.map(str::to_owned),
+                pull.map(str::to_owned),
+            )
+        })
+        .collect();
+        let (depends_on, blocked_by, waits) = dependency_projection(rows, vec![]).unwrap();
+        assert_eq!(depends_on.len(), 5);
+        assert_eq!(blocked_by.len(), 5);
+        assert_eq!(
+            waits
+                .iter()
+                .map(|wait| wait["reason"].as_str().unwrap())
+                .collect::<Vec<_>>(),
+            vec![
+                "prerequisite_cancelled",
+                "prerequisite_needs_human",
+                "prerequisite_archived",
+                "prerequisite_merge_unobserved"
+            ]
+        );
+        assert!(
+            waits[0]["summary"]
+                .as_str()
+                .unwrap()
+                .contains("Remove it from Blocked by")
+        );
+        assert!(waits[1]["summary"].as_str().unwrap().contains("Answer it"));
+        assert!(
+            waits[2]["summary"]
+                .as_str()
+                .unwrap()
+                .contains("open and deliver it")
+        );
+        assert!(
+            waits[3]["summary"]
+                .as_str()
+                .unwrap()
+                .contains("Suplex checks GitHub again")
+        );
+    }
 }

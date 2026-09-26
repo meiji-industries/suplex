@@ -28,3 +28,7 @@ Frozen parity inputs remain checked in and immutable. Rust tests consume the cap
 - `task-agent-selection-retirement.md` and `task-observation-retirement.md`: role selection, task reads, panes, worktrees, archive observation, and integration state.
 
 Local fixture results do not prove live provider, CI, deployment, or external-service behavior. Those remain separate opt-in verification layers.
+
+The Rust source-count baseline was refreshed after reviewing the added native
+CLI/lifecycle support and migrated regression checks. The scanner is unchanged;
+its counts include inline tests, including their database setup and JSON assertions.

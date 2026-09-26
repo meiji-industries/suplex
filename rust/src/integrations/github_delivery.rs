@@ -2267,4 +2267,80 @@ mod tests {
         );
         server.abort();
     }
+
+    #[tokio::test]
+    async fn exact_head_merge_queue_requires_explicit_permission_and_preserves_reviewed_head() {
+        let head = "a".repeat(40);
+        let (github, server) = fake_api(
+            vec![
+                ("/repos/owner/repo", 200, json!({"allow_squash_merge":true,"allow_merge_commit":false,"allow_rebase_merge":false})),
+                ("/repos/owner/repo/pulls/7/merge", 405, json!({"message":"Merge queue required"})),
+                ("/repos/owner/repo/rules/branches/main", 200, json!([{"type":"merge_queue"}])),
+            ],
+            vec![
+                ("mergeStateStatus", json!({"data":{"repository":{"pullRequest":{"id":"PR_7","headRefOid":head,"baseRefName":"main","mergeable":"MERGEABLE","mergeStateStatus":"BLOCKED"}}}})),
+                ("isRequired", json!({"data": {"repository": {"pullRequest": {"commits": {"nodes": [{"commit": {"statusCheckRollup": {"contexts": {"nodes": []}}}}]}}}}})),
+                ("enqueuePullRequest", json!({"data":{"enqueuePullRequest":{"mergeQueueEntry":{"id":"MQE_1"}}}})),
+            ],
+        ).await;
+        let direct = github
+            .merge_conditionally("owner/repo", 7, &head, false)
+            .await
+            .unwrap();
+        assert!(
+            matches!(direct, MergeResult::Disposition { disposition: "blocked", message } if message.contains("direct trigger merges cannot enter the queue"))
+        );
+        assert_eq!(
+            github
+                .merge_conditionally("owner/repo", 7, &head, true)
+                .await
+                .unwrap(),
+            MergeResult::Disposition {
+                disposition: "queued",
+                message: format!("GitHub added pull request 7 at {head} to the merge queue."),
+            }
+        );
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn transient_observations_retry_to_the_third_attempt_and_then_stop() {
+        use std::sync::{
+            Arc,
+            atomic::{AtomicUsize, Ordering},
+        };
+        let mut github = Github::new(Access::for_api("http://127.0.0.1:1", None).unwrap());
+        github.retry_pauses = vec![std::time::Duration::ZERO, std::time::Duration::ZERO];
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let recovered = github
+            .retry_transient(|| {
+                let attempt = attempts.fetch_add(1, Ordering::SeqCst) + 1;
+                async move {
+                    if attempt < 3 {
+                        Err(failure("provider-unavailable", "offline"))
+                    } else {
+                        Ok("observed")
+                    }
+                }
+            })
+            .await
+            .unwrap();
+        assert_eq!(recovered, "observed");
+        assert_eq!(attempts.load(Ordering::SeqCst), 3);
+
+        github.retry_pauses.truncate(1);
+        attempts.store(0, Ordering::SeqCst);
+        assert_eq!(
+            github
+                .retry_transient(|| {
+                    attempts.fetch_add(1, Ordering::SeqCst);
+                    async { Err::<(), _>(failure("provider-unavailable", "offline")) }
+                })
+                .await
+                .unwrap_err()
+                .code,
+            "provider-unavailable"
+        );
+        assert_eq!(attempts.load(Ordering::SeqCst), 2);
+    }
 }

@@ -1,7 +1,7 @@
 import { useEffect, useState, type ReactElement } from "react";
 import { ChevronRight, ClipboardCopy, X } from "lucide-react";
 import { Collapsible } from "../../components/ui/collapsible.js";
-import { type Task } from "../../contracts/tasks.js";
+import type { Task } from "../../contracts/tasks.js";
 import { TaskActivityResponseSchema } from "../../contracts/task-responses.js";
 import { readJson } from "../../lib/api.js";
 import { adminDate, type ApiProject } from "../../shell/view-shared.js";

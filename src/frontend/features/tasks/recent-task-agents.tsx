@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import type { z } from "zod";
-import { type TaskAgentsResponseSchema, type TaskAgentStatusSchema } from "../../contracts/task-responses.js";
+import type { TaskAgentsResponseSchema, TaskAgentStatusSchema } from "../../contracts/task-responses.js";
 import { readTaskAgentExpiry } from "./task-agent-expiry.js";
 import { roleLabel } from "./workflow-presentation.js";
 

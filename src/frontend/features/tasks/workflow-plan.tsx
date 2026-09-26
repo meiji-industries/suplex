@@ -1,5 +1,5 @@
 import { GitPullRequest, GitMerge, Route, Wrench } from "lucide-react";
-import { type Task } from "../../contracts/tasks.js";
+import type { Task } from "../../contracts/tasks.js";
 import { ADVISOR_LABELS, workflowDefinition } from "./workflow-presentation.js";
 import { taskDeliveryTargetOptions } from "./task-delivery-target.js";
 import { EntityAvatar } from "../../components/app/entity-avatar.js";

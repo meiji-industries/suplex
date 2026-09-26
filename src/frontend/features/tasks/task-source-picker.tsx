@@ -7,7 +7,7 @@ import { Input } from "../../components/ui/input.js";
 import { Spinner } from "../../components/ui/spinner.js";
 import { Tabs, TabsList, TabsTrigger } from "../../components/ui/tabs.js";
 import { readJson } from "../../lib/api.js";
-import { type IssueAssociation } from "../../contracts/issues.js";
+import type { IssueAssociation } from "../../contracts/issues.js";
 
 export type TaskSourceSummary =
   | { kind: "issue"; issue: IssueAssociation }

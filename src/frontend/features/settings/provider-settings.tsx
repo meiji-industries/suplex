@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useState, type ReactElement } from "react";
 import type { z } from "zod";
-import { type ProviderConnection, type ProviderInstanceListResponseSchema, type ProviderListResponse } from "../../contracts/providers.js";
+import type { ProviderConnection, ProviderInstanceListResponseSchema, ProviderListResponse } from "../../contracts/providers.js";
 import { Button } from "../../components/ui/button.js";
 import { Input } from "../../components/ui/input.js";
 import { NewButton } from "../../components/ui/new-button.js";

@@ -1,5 +1,5 @@
 import type { z } from "zod";
-import { type TaskChecksResponseSchema } from "../../contracts/task-responses.js";
+import type { TaskChecksResponseSchema } from "../../contracts/task-responses.js";
 import { TestResults, TestResultsHeader, TestResultsSummary, TestResultsContent, Test, TestName, TestStatus } from "../../components/ai-elements/test-results.js";
 
 const statuses = { successful: "passed", failing: "failed", pending: "running" } as const;

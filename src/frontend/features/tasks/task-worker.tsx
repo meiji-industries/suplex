@@ -1,4 +1,4 @@
-import { type Task } from "../../contracts/tasks.js";
+import type { Task } from "../../contracts/tasks.js";
 import type { TaskActivity } from "./task-work.js";
 import { Button } from "../../components/ui/button.js";
 

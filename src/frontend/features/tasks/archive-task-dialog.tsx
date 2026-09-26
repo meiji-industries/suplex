@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactElement } from "react";
-import { type Task } from "../../contracts/tasks.js";
+import type { Task } from "../../contracts/tasks.js";
 import { TaskArchiveResponseSchema } from "../../contracts/task-responses.js";
 import { readJson } from "../../lib/api.js";
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from "../../components/ui/alert-dialog.js";

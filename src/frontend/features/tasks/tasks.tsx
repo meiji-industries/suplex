@@ -11,7 +11,7 @@ import { Spinner } from "../../components/ui/spinner.js";
 import { Alert, AlertDescription } from "../../components/ui/alert.js";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../components/ui/select.js";
 import { readJson, withCompany } from "../../lib/api.js";
-import { type Task } from "../../contracts/tasks.js";
+import type { Task } from "../../contracts/tasks.js";
 import { TaskControlStatusSchema, type TaskControlStatus } from "../../contracts/task-control.js";
 import { requestNewTask } from "../../shell/global-new-task-dialog.js";
 import { useCommandKFocus } from "../../shell/shortcuts.js";

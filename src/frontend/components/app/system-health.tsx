@@ -1,7 +1,7 @@
 import { Activity, Bot, Check, CheckCircle2, ChevronRight, CircleAlert, Copy, Database, GitBranch, HardDrive, LayoutGrid, Network, Package, RefreshCw, ShieldCheck, SquareTerminal, Terminal, XCircle, type LucideIcon } from "lucide-react";
 import { createContext, useContext, useEffect, useId, useState, type ReactElement, type ReactNode } from "react";
 
-import { type HealthCheck, type HealthSnapshot } from "../../contracts/health.js";
+import type { HealthCheck, HealthSnapshot } from "../../contracts/health.js";
 import { isOwnedHealthCheck, isRequiredHealthCheck, type HealthCheckId } from "../../contracts/health-checks.js";
 import { HealthSnapshotSchema } from "../../contracts/health-schema.js";
 import { createHealthRefresher, healthContextQuery, type HealthContextSelector } from "../../lib/health-refresh.js";

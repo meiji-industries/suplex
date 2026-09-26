@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState, type ReactElement } from "react";
 import { Archive, ArchiveRestore, Check, CircleAlert, Ellipsis, Pencil, Power, PowerOff } from "lucide-react";
-import { type GithubTriggerActivity, type GithubTriggerRule } from "../../contracts/github-triggers.js";
+import type { GithubTriggerActivity, GithubTriggerRule } from "../../contracts/github-triggers.js";
 import type { ApiProject, ApiWorkflow } from "../../shell/view-shared.js";
 import { readJson, withCompany } from "../../lib/api.js";
 import { useCompanyContext } from "../../shell/company-context.js";

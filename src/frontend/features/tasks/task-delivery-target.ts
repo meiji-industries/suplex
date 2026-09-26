@@ -1,4 +1,4 @@
-import { type DeliveryTarget } from "../../contracts/tasks.js";
+import type { DeliveryTarget } from "../../contracts/tasks.js";
 
 export const taskDeliveryTargetOptions: Array<{ value: DeliveryTarget; label: string }> = [
   { value: "local_worktree", label: "Keep in worktree" },

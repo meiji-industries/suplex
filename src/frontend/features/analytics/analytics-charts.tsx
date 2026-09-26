@@ -1,5 +1,5 @@
 import { Area, AreaChart, CartesianGrid, Pie, PieChart, XAxis, YAxis } from "recharts";
-import { type TaskAnalytics } from "../../contracts/analytics.js";
+import type { TaskAnalytics } from "../../contracts/analytics.js";
 import { ChartContainer, ChartTooltip, ChartTooltipContent } from "../../components/ui/chart.js";
 import { taskStatusLabels } from "../tasks/task-status.js";
 import { compact, money } from "./lib/analytics.js";

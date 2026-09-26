@@ -1,9 +1,9 @@
 import { ArrowRight, Check, CheckCircle2, Copy, RefreshCw, Server, Terminal } from "lucide-react";
 import { useEffect, useMemo, useRef, useState, type ReactElement } from "react";
 
-import { type HealthCheck } from "../../contracts/health.js";
-import { type HealthCheckId } from "../../contracts/health-checks.js";
-import { type ProfileResponse, type ProjectResponse } from "../../contracts/projects.js";
+import type { HealthCheck } from "../../contracts/health.js";
+import type { HealthCheckId } from "../../contracts/health-checks.js";
+import type { ProfileResponse, ProjectResponse } from "../../contracts/projects.js";
 import { ApplicationFrame } from "../../shell/application-frame.js";
 import { CheckStatusIndicator, connectionRoute, HealthCheckIcon, healthCheckPurpose, healthFreshnessLabel, HealthTechnicalDetails, useSystemHealth, type HealthContextSelector } from "../../components/app/system-health.js";
 import { Alert, AlertDescription, AlertTitle } from "../../components/ui/alert.js";

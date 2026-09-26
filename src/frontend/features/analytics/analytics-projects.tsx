@@ -1,4 +1,4 @@
-import { type TaskAnalytics } from "../../contracts/analytics.js";
+import type { TaskAnalytics } from "../../contracts/analytics.js";
 import { usageMetrics } from "./lib/usage-metrics.js";
 import { Button } from "../../components/ui/button.js";
 import { CostValue } from "../../components/app/cost-value.js";

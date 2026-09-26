@@ -1,4 +1,4 @@
-import { type TimelineTask } from "../../contracts/timeline.js";
+import type { TimelineTask } from "../../contracts/timeline.js";
 import { addDays } from "./timeline-format.js";
 import type { ApiProject } from "../../shell/view-shared.js";
 

@@ -2,7 +2,7 @@ import { TaskWorker } from "./task-worker.js";
 import { useEffect, useRef, useState } from "react";
 import { z } from "zod";
 import { CircleDashed } from "lucide-react";
-import { type Task } from "../../contracts/tasks.js";
+import type { Task } from "../../contracts/tasks.js";
 import { type TaskActivityResponseSchema, TaskDiffResponseSchema, TaskDiffSummaryResponseSchema } from "../../contracts/task-responses.js";
 import { useTaskChecks } from "./lib/task-checks.js";
 import { readJson } from "../../lib/api.js";

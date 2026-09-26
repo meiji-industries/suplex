@@ -1,4 +1,4 @@
-import { type HealthSnapshot } from "../contracts/health.js";
+import type { HealthSnapshot } from "../contracts/health.js";
 
 export type HealthFreshness = "checking" | "current" | "stale";
 export type HealthContextSelector = { projectId: string } | { profileIds: readonly string[] } | undefined;

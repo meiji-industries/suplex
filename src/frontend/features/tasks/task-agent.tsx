@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
-import { type Task } from "../../contracts/tasks.js";
-import { type TaskAgentSelectionRequest } from "../../contracts/agent-selection.js";
+import type { Task } from "../../contracts/tasks.js";
+import type { TaskAgentSelectionRequest } from "../../contracts/agent-selection.js";
 import { ADVISOR_LABELS } from "./workflow-presentation.js";
 import { TaskActivityResponseSchema } from "../../contracts/task-responses.js";
 import { isProfileAllowed } from "../projects/lib/provider-policy.js";

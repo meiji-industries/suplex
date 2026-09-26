@@ -1,6 +1,6 @@
 import { useId } from "react";
 import { CheckCircle2, CircleDashed, CircleDotDashed, CircleHelp, CircleSlash, Clock } from "lucide-react";
-import { type PullRequestReference, type TaskControlStatus } from "../../contracts/task-control.js";
+import type { PullRequestReference, TaskControlStatus } from "../../contracts/task-control.js";
 import { Badge } from "../../components/ui/badge.js";
 import { withCompany } from "../../lib/api.js";
 

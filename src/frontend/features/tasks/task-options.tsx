@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Archive, ArchiveRestore, Copy, Ellipsis, Pencil, RefreshCw, Square } from "lucide-react";
-import { type Task } from "../../contracts/tasks.js";
+import type { Task } from "../../contracts/tasks.js";
 import { readJson, withCompany } from "../../lib/api.js";
 import { navigate } from "../../shell/navigation-state.js";
 import { duplicateTaskDraft, type NewTaskDraft } from "./lib/duplicate-task-prefill.js";

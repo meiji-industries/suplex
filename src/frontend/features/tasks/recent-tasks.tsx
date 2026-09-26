@@ -2,7 +2,7 @@ import { useState, type ReactElement } from "react";
 import { withCompany } from "../../lib/api.js";
 import { showRecentTasks } from "./lib/task-list.js";
 import { useTaskAgents, useTaskCache, useTaskData } from "./task-data.js";
-import { type Task } from "../../contracts/tasks.js";
+import type { Task } from "../../contracts/tasks.js";
 import { SidebarGroup, SidebarGroupContent, SidebarGroupLabel, SidebarMenu, SidebarMenuButton, SidebarMenuItem } from "../../components/ui/sidebar.js";
 import { useOptionalCompanyContext } from "../../shell/company-context.js";
 import { blockedByLabel, TaskStatusIcon, taskStatusLabel } from "./task-status.js";

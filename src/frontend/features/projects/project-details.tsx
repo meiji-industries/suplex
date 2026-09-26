@@ -4,7 +4,7 @@ import { ProjectExecutionSchema } from "../../contracts/project-execution.js";
 import { ProjectIntegrationSchema } from "../../contracts/project-integration.js";
 import { isProfileAllowed } from "./lib/provider-policy.js";
 import { HARNESS_KIND_IDS } from "../../contracts/harness-kind.js";
-import { type ProjectPatchBody, type ProjectProviderInstance } from "../../contracts/projects.js";
+import type { ProjectPatchBody, ProjectProviderInstance } from "../../contracts/projects.js";
 import { Alert, AlertDescription } from "../../components/ui/alert.js";
 import { Button } from "../../components/ui/button.js";
 import { Checkbox } from "../../components/ui/checkbox.js";

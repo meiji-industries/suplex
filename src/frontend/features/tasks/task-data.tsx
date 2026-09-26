@@ -1,6 +1,6 @@
 import { skipToken, useQuery, useQueryClient, type QueryClient, type UseQueryResult } from "@tanstack/react-query";
 import { createContext, useCallback, useContext, type ReactNode } from "react";
-import { type Task } from "../../contracts/tasks.js";
+import type { Task } from "../../contracts/tasks.js";
 import { TaskAgentsBatchResponseSchema } from "../../contracts/task-responses.js";
 import { readJson } from "../../lib/api.js";
 import { useCompanyContext } from "../../shell/company-context.js";

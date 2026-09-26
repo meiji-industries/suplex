@@ -186,13 +186,13 @@ async fn graphql(State(fake): State<Shared>, Json(body): Json<Value>) -> Respons
         let Some(pull) = fake.pulls.get(number.wrapping_sub(1)) else {
             return Json(json!({"data": {"repository": {"pullRequest": null}}})).into_response();
         };
-        let run = json!({"__typename": "CheckRun", "name": "unit", "status": "COMPLETED", "conclusion": "SUCCESS", "detailsUrl": "https://github.com/owner/repo/actions/runs/1", "startedAt": "2026-09-25T00:00:00Z", "completedAt": "2026-09-25T00:01:00Z", "workflowName": "CI"});
+        let run = json!({"__typename": "CheckRun", "name": "unit", "status": "COMPLETED", "conclusion": pull.get("checkConclusion").cloned().unwrap_or(json!("SUCCESS")), "detailsUrl": "https://github.com/owner/repo/actions/runs/1", "startedAt": "2026-09-25T00:00:00Z", "completedAt": "2026-09-25T00:01:00Z", "workflowName": "CI"});
         let rollup = json!({"statusCheckRollup": {"contexts": {"nodes": [run]}}});
         let pull = json!({
             "id": format!("PR_{number}"), "number": number, "url": format!("https://github.com/owner/repo/pull/{number}"),
             "state": gh_state(pull), "isDraft": pull["draft"], "headRefOid": pull["headSha"], "baseRefOid": pull["baseSha"],
-            "baseRefName": pull["base"], "mergeable": "MERGEABLE", "mergeStateStatus": "CLEAN", "autoMergeRequest": null,
-            "reviewDecision": "APPROVED", "author": {"login": "suplex", "avatarUrl": "https://avatars.githubusercontent.com/suplex"},
+            "baseRefName": pull["base"], "mergeable": pull.get("mergeable").cloned().unwrap_or(json!("MERGEABLE")), "mergeStateStatus": pull.get("mergeStateStatus").cloned().unwrap_or(json!("CLEAN")), "autoMergeRequest": null,
+            "reviewDecision": pull.get("reviewDecision").cloned().unwrap_or(json!("APPROVED")), "author": {"login": "suplex", "avatarUrl": "https://avatars.githubusercontent.com/suplex"},
             "changedFiles": 1, "additions": 1, "deletions": 0, "title": pull["title"],
             "commits": {"nodes": [{"commit": rollup}]},
         });
@@ -967,4 +967,255 @@ async fn delivered_pull_refresh_updates_only_current_facts_and_rediscovers_missi
     assert_eq!(serde_json::from_str::<Value>(&raw).unwrap(), observed_open);
     drop(database);
     std::fs::remove_dir_all(&fixture.base).unwrap();
+}
+
+#[tokio::test]
+async fn paired_agent_delivery_keeps_authority_dependencies_receipts_and_provenance() {
+    use super::agent_delivery::{AgentDelivery, AgentPrincipal};
+    let fixture = fixture("merged");
+    let (operations, fake) = operations(&fixture).await;
+    let (head, review) = reviewed(&operations, &fixture.root).await;
+    for operation in [
+        DeliveryOperation::PushBranch,
+        DeliveryOperation::CreateOrAdoptPullRequest,
+        DeliveryOperation::RequestReview,
+    ] {
+        operations
+            .execute(
+                &fixture.root,
+                None,
+                &DeliveryRequest {
+                    operation,
+                    expected_head: Some(&head),
+                    review: Some(&review),
+                    pull_request_title: Some("Agent delivery"),
+                    pull_request_body: Some(BODY),
+                },
+            )
+            .await
+            .unwrap();
+    }
+    let database = SuplexDatabase::open(&fixture.database_path, OpenMode::ReadWrite).unwrap();
+    database.connection().execute_batch("INSERT INTO suplex_agents (id,kind,name,avatar_seed,created_at,updated_at) VALUES ('train-agent','external','Train','seed','now','now'); INSERT INTO suplex_external_agents (id,company_id,status,created_at,updated_at) VALUES ('train-agent','delivery_company','paired','now','now');").unwrap();
+    database.connection().execute("UPDATE suplex_tasks SET creator_user_id=NULL,creator_agent_id='train-agent' WHERE id=?1", [&fixture.task_id]).unwrap();
+    database.connection().execute("UPDATE suplex_task_controls SET workflow_state_json=json_set(workflow_state_json,'$.acceptedDelivery',json(?1)) WHERE task_id=?2", rusqlite::params![serde_json::to_string(&review).unwrap(),fixture.task_id]).unwrap();
+    let delivery = AgentDelivery::with_operations(operations);
+    let principal = AgentPrincipal {
+        agent_id: "train-agent".into(),
+        company_id: "delivery_company".into(),
+    };
+    let foreign = AgentPrincipal {
+        agent_id: "another-agent".into(),
+        company_id: principal.company_id.clone(),
+    };
+    assert!(delivery.refresh(&foreign, &fixture.task_id).await.is_err());
+    assert!(
+        delivery
+            .request_reconciliation(&foreign, &fixture.task_id)
+            .await
+            .is_err()
+    );
+    assert!(
+        delivery
+            .issue_approval(&foreign, &fixture.task_id, 1, &head)
+            .await
+            .is_err()
+    );
+    assert!(
+        delivery
+            .request_reconciliation(&principal, &fixture.task_id)
+            .await
+            .is_err()
+    );
+    for (field, value, reason) in [
+        ("draft", json!(true), "draft"),
+        ("reviewDecision", Value::Null, "approved review"),
+        ("headSha", json!("f".repeat(40)), "not accepted"),
+        ("checkConclusion", json!("FAILURE"), "check failed"),
+        ("mergeable", json!("CONFLICTING"), "conflicts"),
+    ] {
+        let old = fake.lock().unwrap().pulls[0].get(field).cloned();
+        fake.lock().unwrap().pulls[0][field] = value;
+        let error = delivery
+            .issue_approval(&principal, &fixture.task_id, 1, &head)
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains(reason), "{field}: {error}");
+        if let Some(old) = old {
+            fake.lock().unwrap().pulls[0][field] = old;
+        } else {
+            fake.lock().unwrap().pulls[0]
+                .as_object_mut()
+                .unwrap()
+                .remove(field);
+        }
+    }
+    database.connection().execute("UPDATE suplex_task_controls SET workflow_state_json=json_set(workflow_state_json,'$.acceptedDelivery',NULL) WHERE task_id=?1", [&fixture.task_id]).unwrap();
+    assert!(
+        delivery
+            .issue_approval(&principal, &fixture.task_id, 1, &head)
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("not accepted")
+    );
+    database.connection().execute("UPDATE suplex_task_controls SET workflow_state_json=json_set(workflow_state_json,'$.acceptedDelivery',json(?1)) WHERE task_id=?2", rusqlite::params![serde_json::to_string(&review).unwrap(),fixture.task_id]).unwrap();
+    // The human dependency editor and paired API write the same dependency rows.
+    database.connection().execute("INSERT INTO suplex_tasks (id,company_id,project_id,title,description,configuration_json,idempotency_key,request_hash,creator_agent_id,created_at,updated_at) SELECT 'upstream',company_id,project_id,'Upstream',description,configuration_json,'upstream-key',request_hash,creator_agent_id,created_at,updated_at FROM suplex_tasks WHERE id=?1", [&fixture.task_id]).unwrap();
+    database.connection().execute("INSERT INTO suplex_task_controls (task_id,objective,delivery_target,delivery_intent_json,status,root_profile_json,worker_profile_json,workflow,advisor_profiles_json,workflow_state_json,status_changed_at,created_at,updated_at) SELECT 'upstream',objective,delivery_target,delivery_intent_json,'active',root_profile_json,worker_profile_json,workflow,advisor_profiles_json,workflow_state_json,status_changed_at,created_at,updated_at FROM suplex_task_controls WHERE task_id=?1", [&fixture.task_id]).unwrap();
+    database.connection().execute("INSERT INTO suplex_task_dependencies (task_id,depends_on_task_id,created_at) VALUES (?1,'upstream','now')", [&fixture.task_id]).unwrap();
+    assert_eq!(
+        delivery
+            .decide(&principal, &fixture.task_id, "wait_for_dependency")
+            .unwrap()["blockingTaskIds"],
+        json!(["upstream"])
+    );
+    assert!(
+        delivery
+            .decide(&principal, &fixture.task_id, "resume")
+            .is_err()
+    );
+    assert!(
+        delivery
+            .issue_approval(&principal, &fixture.task_id, 1, &head)
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("upstream")
+    );
+    assert!(
+        delivery
+            .request_reconciliation(&principal, &fixture.task_id)
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("upstream")
+    );
+    database
+        .connection()
+        .execute(
+            "UPDATE suplex_task_controls SET status='delivered' WHERE task_id='upstream'",
+            [],
+        )
+        .unwrap();
+    assert!(
+        delivery
+            .decide(&principal, &fixture.task_id, "wait_for_dependency")
+            .is_err()
+    );
+    assert_eq!(
+        delivery
+            .decide(&principal, &fixture.task_id, "resume")
+            .unwrap()["blockingTaskIds"],
+        json!([])
+    );
+    fake.lock().unwrap().pulls[0]["mergeable"] = json!("CONFLICTING");
+    let repair = delivery
+        .request_reconciliation(&principal, &fixture.task_id)
+        .await
+        .unwrap();
+    assert!(repair["attemptId"].as_str().unwrap().starts_with("dpr_"));
+    fake.lock().unwrap().pulls[0]["mergeable"] = json!("MERGEABLE");
+    let before = control(&fixture).status;
+    delivery
+        .refresh(&principal, &fixture.task_id)
+        .await
+        .unwrap();
+    assert_eq!(control(&fixture).status, before);
+    let provenance = delivery.provenance(&principal, &fixture.task_id).unwrap();
+    assert_eq!(
+        provenance
+            .iter()
+            .map(|row| row["kind"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        ["reconciliation", "observation"]
+    );
+    assert!(
+        database
+            .connection()
+            .execute(
+                "UPDATE suplex_delivery_provenance SET head_sha='changed' WHERE task_id=?1",
+                [&fixture.task_id]
+            )
+            .is_err()
+    );
+    let receipt = delivery
+        .issue_approval(&principal, &fixture.task_id, 1, &head)
+        .await
+        .unwrap()["receipt"]
+        .as_str()
+        .unwrap()
+        .to_owned();
+    for (number, expected, token) in [
+        (999, head.as_str(), receipt.as_str()),
+        (1, "stale-head", receipt.as_str()),
+        (
+            1,
+            head.as_str(),
+            "fma_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+        ),
+    ] {
+        assert!(
+            delivery
+                .merge(
+                    &principal,
+                    &fixture.task_id,
+                    number,
+                    expected,
+                    &review.base_sha,
+                    token
+                )
+                .await
+                .is_err()
+        );
+    }
+    let consumed: Option<String> = database
+        .connection()
+        .query_row(
+            "SELECT consumed_at FROM suplex_merge_approvals WHERE task_id=?1",
+            [&fixture.task_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert!(consumed.is_none());
+    delivery
+        .merge(
+            &principal,
+            &fixture.task_id,
+            1,
+            &head,
+            &review.base_sha,
+            &receipt,
+        )
+        .await
+        .unwrap();
+    assert_eq!(
+        control(&fixture).status,
+        crate::tasks::control::TaskStatus::Delivered
+    );
+    assert!(
+        delivery
+            .merge(
+                &principal,
+                &fixture.task_id,
+                1,
+                &head,
+                &review.base_sha,
+                &receipt
+            )
+            .await
+            .is_err()
+    );
+    let provenance = delivery.provenance(&principal, &fixture.task_id).unwrap();
+    assert_eq!(
+        provenance
+            .iter()
+            .map(|row| row["kind"].as_str().unwrap())
+            .collect::<Vec<_>>(),
+        ["reconciliation", "observation", "merge"]
+    );
+    let audit: i64 = database.connection().query_row("SELECT COUNT(*) FROM suplex_audit_events WHERE actor_agent_id='train-agent' AND action='agent_api_pull_request_merged'", [], |row| row.get(0)).unwrap();
+    assert_eq!(audit, 1);
+    drop(database);
+    std::fs::remove_dir_all(fixture.base).unwrap();
 }

@@ -170,6 +170,11 @@ pub struct AgentDelivery {
 }
 
 impl AgentDelivery {
+    #[cfg(test)]
+    pub(super) fn with_operations(operations: DeliveryOperations) -> Self {
+        Self { operations }
+    }
+
     pub fn new(database_path: &Path, artifact_root: &Path) -> Self {
         Self {
             operations: DeliveryOperations::new(database_path, artifact_root),

@@ -214,6 +214,17 @@ fn default_limits(database: &SuplexDatabase) -> DatabaseResult<TaskLimits> {
     })
 }
 
+/// The saved task-limit pause, in the TypeScript field order.
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LimitPause {
+    kind: &'static str,
+    reason: &'static str,
+    limits: TaskLimits,
+    usage: PersistedLimitUsage,
+    proposed_limits: TaskLimits,
+}
+
 /// A task limit the observed usage reached, with the limits Suplex proposes.
 struct LimitHit {
     reason: &'static str,
@@ -277,8 +288,14 @@ impl LimitHit {
         })
     }
 
-    fn pause(&self) -> serde_json::Value {
-        serde_json::json!({ "kind": "task_limit", "reason": self.reason, "limits": self.limits, "usage": self.observed, "proposedLimits": self.proposed })
+    fn pause(&self) -> LimitPause {
+        LimitPause {
+            kind: "task_limit",
+            reason: self.reason,
+            limits: self.limits,
+            usage: self.observed,
+            proposed_limits: self.proposed,
+        }
     }
 
     fn question(&self) -> String {
@@ -314,7 +331,7 @@ pub fn reconcile_task_limit_pause(
                 params![time, task_id, question_id],
             )? == 1);
         };
-        let pause = js_json::stringify(&hit.pause());
+        let pause = js_json::stringify(&serde_json::to_value(hit.pause())?);
         if pause != js_json::stringify(&serde_json::from_str(&raw_pause)?) {
             database.connection().execute(
                 "UPDATE suplex_task_controls SET limit_pause_json = ?1, human_question = ?2, updated_at = ?3 WHERE task_id = ?4 AND status = 'waiting_human' AND human_question_id = ?5",
@@ -379,7 +396,7 @@ pub(crate) fn check_admission(
         let time = rfc3339_millis(now);
         database.connection().execute(
                 "UPDATE suplex_task_controls SET status = 'waiting_human', limit_pause_json = ?1, human_question = ?2, human_question_options_json = '[]', human_question_id = ?3, wake_at = NULL, updated_at = ?4 WHERE task_id = ?5 AND status = 'active'",
-                params![hit.pause().to_string(), hit.question(), Uuid::new_v4().to_string(), time, task_id],
+                params![serde_json::to_string(&hit.pause())?, hit.question(), Uuid::new_v4().to_string(), time, task_id],
             )?;
         return Ok(Admission::Blocked);
     }

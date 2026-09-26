@@ -189,7 +189,7 @@ pub fn replace_worker(
             "INSERT INTO suplex_task_sessions (id,task_id,kind,generation,is_current,lifecycle,assignment_hash,delegate_slot,workflow_input_json,profile_json,replaces_session_id,replacement_reason,replacement_handoff,created_at,updated_at) VALUES (?1,?2,'worker',?3,1,'reserved',?4,'delegate',?5,?6,?7,?8,?9,?10,?10)",
             params![id, task_id, generation, hash, workflow_input, profile_json, request.session_id, request.reason, handoff, time],
         )?;
-        insert_pending_turn(database, &new_turn_id(now)?, task_id, &id, generation, Some(&hash), &prompt, workflow_input.as_deref(), &time)?;
+        insert_pending_turn(database, &NewTurn { id: &new_turn_id(now)?, task_id, session_id: &id, generation, assignment_hash: Some(&hash), prompt: &prompt, workflow_input: workflow_input.as_deref() }, &time)?;
         database.connection().execute(
             "UPDATE suplex_task_controls SET worker_session_id = ?1,worker_profile_json = ?2,wake_at = NULL,updated_at = ?3 WHERE task_id = ?4",
             params![id, profile_json, time, task_id],
@@ -573,13 +573,15 @@ fn install_coordinator(
     database.connection().execute("INSERT INTO suplex_task_sessions (id,task_id,kind,generation,is_current,lifecycle,profile_json,replaces_session_id,replacement_reason,replacement_handoff,created_at,updated_at) VALUES (?1,?2,'root',?3,1,'reserved',?4,?5,?6,?7,?8,?8)",params![id,task_id,generation,profile_json,request.session_id,reason,handoff,time])?;
     insert_pending_turn(
         database,
-        &new_turn_id(now)?,
-        task_id,
-        id,
-        *generation,
-        None,
-        prompt,
-        None,
+        &NewTurn {
+            id: &new_turn_id(now)?,
+            task_id,
+            session_id: id,
+            generation: *generation,
+            assignment_hash: None,
+            prompt,
+            workflow_input: None,
+        },
         &time,
     )?;
     database.connection().execute("UPDATE suplex_task_controls SET root_session_id = ?1,root_profile_json = ?2,status = CASE WHEN ?3 THEN 'active' ELSE status END,status_changed_at = CASE WHEN ?3 THEN ?4 ELSE status_changed_at END,human_question = CASE WHEN ?3 THEN NULL ELSE human_question END,human_question_id = CASE WHEN ?3 THEN NULL ELSE human_question_id END,human_question_options_json = CASE WHEN ?3 THEN '[]' ELSE human_question_options_json END,wake_at = CASE WHEN status = 'active' OR ?3 THEN ?4 ELSE wake_at END,updated_at = ?4 WHERE task_id = ?5",params![id,profile_json,request.resume,time,task_id])?;

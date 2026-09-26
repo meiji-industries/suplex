@@ -687,14 +687,17 @@ fn complete_root_if_terminal(
 /// here, and `session_recovery` records the workflow result and Coordinator wake.
 fn complete_worker_if_terminal(
     database: &mut SuplexDatabase,
-    database_path: &Path,
-    harness: &dyn TaskHarness,
-    session: &SessionRow,
-    native_id: &str,
+    bound: &BoundSession<'_>,
     turn: &TurnRow,
     observation: &PromptObservation,
     launch: &DelegateLaunch,
 ) -> DatabaseResult<bool> {
+    let (database_path, harness, session, native_id) = (
+        bound.host.database_path,
+        bound.launch.harness,
+        bound.launch.session,
+        bound.native_id,
+    );
     if !terminal(observation.state) || !observation.admission_observed {
         return Ok(false);
     }
@@ -847,16 +850,9 @@ impl BoundSession<'_> {
     ) -> DatabaseResult<bool> {
         let launch = self.launch;
         match launch.delegate {
-            Some(delegate) => complete_worker_if_terminal(
-                database,
-                self.host.database_path,
-                launch.harness,
-                launch.session,
-                self.native_id,
-                turn,
-                observation,
-                delegate,
-            ),
+            Some(delegate) => {
+                complete_worker_if_terminal(database, self, turn, observation, delegate)
+            }
             None => complete_root_if_terminal(
                 database,
                 self.host.database_path,
@@ -1034,14 +1030,10 @@ fn dispatch_claimed(
 
 fn recover_session_blocking(
     database: &mut SuplexDatabase,
-    database_path: &Path,
-    artifact_root: &Path,
-    task_id: &str,
-    executable: Option<&Path>,
-    inherited_environment: &HashMap<String, String>,
-    usage: TaskLimitUsage,
+    host: &RecoveryHost<'_>,
     plan: LaunchPlan<'_>,
 ) -> DatabaseResult<Option<PromptObservation>> {
+    let task_id = host.task_id;
     let Some((session, turn)) = recoverable_session(database, task_id, &plan)? else {
         return Ok(None);
     };
@@ -1059,14 +1051,6 @@ fn recover_session_blocking(
     let Some(owner) = claim_operation(database, &session)? else {
         return Ok(None);
     };
-    let host = RecoveryHost {
-        database_path,
-        artifact_root,
-        task_id,
-        executable,
-        inherited_environment,
-        usage,
-    };
     let launch = SessionLaunch {
         rows: &rows,
         session: &session,
@@ -1075,7 +1059,7 @@ fn recover_session_blocking(
         harness,
         owner: &owner,
     };
-    let result = dispatch_claimed(database, &host, &launch, turn);
+    let result = dispatch_claimed(database, host, &launch, turn);
     root_session_store::release_session_operation(database, &session.id, &owner, Utc::now())?;
     result.map(Some)
 }
@@ -1103,17 +1087,16 @@ pub async fn recover_prepared_root(
     let executable: Option<PathBuf> = executable.map(Path::to_path_buf);
     let inherited_environment = inherited_environment.clone();
     tokio::task::spawn_blocking(move || {
-        recover_session_blocking(
-            &mut database,
-            &database_path,
-            &artifact_root,
-            &task_id,
-            executable.as_deref(),
-            &inherited_environment,
+        let host = RecoveryHost {
+            database_path: &database_path,
+            artifact_root: &artifact_root,
+            task_id: &task_id,
+            executable: executable.as_deref(),
+            inherited_environment: &inherited_environment,
             usage,
-            LaunchPlan::Root,
-        )
-        .map_err(|error| error.to_string())
+        };
+        recover_session_blocking(&mut database, &host, LaunchPlan::Root)
+            .map_err(|error| error.to_string())
     })
     .await?
     .map_err(|error| TaskError::internal(error).into())
@@ -1180,19 +1163,19 @@ pub async fn recover_prepared_worker(
     // TypeScript `recover` resumes every current delegate: the serial Worker or
     // Advisor slot and both Combined planning slots.
     tokio::task::spawn_blocking(move || {
+        let host = RecoveryHost {
+            database_path: &database_path,
+            artifact_root: &artifact_root,
+            task_id: &task_id,
+            executable: executable.as_deref(),
+            inherited_environment: &inherited_environment,
+            usage,
+        };
         let mut first = None;
         for slot in ["delegate", "planner_a", "planner_b"] {
-            let observed = recover_session_blocking(
-                &mut database,
-                &database_path,
-                &artifact_root,
-                &task_id,
-                executable.as_deref(),
-                &inherited_environment,
-                usage,
-                LaunchPlan::Delegate(slot),
-            )
-            .map_err(|error| error.to_string())?;
+            let observed =
+                recover_session_blocking(&mut database, &host, LaunchPlan::Delegate(slot))
+                    .map_err(|error| error.to_string())?;
             first = first.or(observed);
         }
         Ok::<_, String>(first)

@@ -318,17 +318,31 @@ pub(crate) fn turn(row: &Row<'_>) -> rusqlite::Result<TurnRow> {
     })
 }
 
+/// One `pending_prompt` turn to insert for a session.
+pub struct NewTurn<'a> {
+    pub id: &'a str,
+    pub task_id: &'a str,
+    pub session_id: &'a str,
+    pub generation: i64,
+    pub assignment_hash: Option<&'a str>,
+    pub prompt: &'a str,
+    pub workflow_input: Option<&'a str>,
+}
+
 pub fn insert_pending_turn(
     database: &SuplexDatabase,
-    id: &str,
-    task_id: &str,
-    session_id: &str,
-    generation: i64,
-    assignment_hash: Option<&str>,
-    prompt: &str,
-    workflow_input: Option<&str>,
+    turn: &NewTurn<'_>,
     time: &str,
 ) -> DatabaseResult<()> {
+    let NewTurn {
+        id,
+        task_id,
+        session_id,
+        generation,
+        assignment_hash,
+        prompt,
+        workflow_input,
+    } = *turn;
     database.connection().execute(
         "INSERT INTO suplex_task_turns (id,task_id,session_id,generation,assignment_hash,prompt_hash,prompt_text,status,workflow_input_json,created_at,updated_at) VALUES (?1,?2,?3,?4,?5,?6,?7,'pending_prompt',?8,?9,?9)",
         params![id, task_id, session_id, generation, assignment_hash, sha256_hex(prompt.as_bytes()), prompt, workflow_input, time],

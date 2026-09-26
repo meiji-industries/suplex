@@ -441,15 +441,20 @@ mod host_tests {
     fn native_launch_refuses_a_missing_worktree() {
         let (base, database_path, task_id) = fixture_task();
         root_controller::prepare_root(&mut SuplexDatabase::open(&database_path, OpenMode::ReadWrite).unwrap(), &task_id).unwrap();
-        let error = recover_session_blocking(
-            &mut SuplexDatabase::open(&database_path, OpenMode::ReadWrite).unwrap(),            &database_path,
-            &base,
-            &task_id,
-            None,
-            &HashMap::new(),
-            TaskLimitUsage {
+        let inherited_environment = HashMap::new();
+        let host = RecoveryHost {
+            database_path: &database_path,
+            artifact_root: &base,
+            task_id: &task_id,
+            executable: None,
+            inherited_environment: &inherited_environment,
+            usage: TaskLimitUsage {
                 estimated_cost_usd: Some(0.0),
             },
+        };
+        let error = recover_session_blocking(
+            &mut SuplexDatabase::open(&database_path, OpenMode::ReadWrite).unwrap(),
+            &host,
             LaunchPlan::Root,
         )
         .unwrap_err();

@@ -410,7 +410,7 @@ pub fn answer_human(
         let prompt = js_json::stringify(&serde_json::json!({"question":question,"answer":answer}));
         let id = new_turn_id(now)?;
         let time = rfc3339_millis(now);
-        insert_pending_turn(database, &id, task_id, &root.id, root.generation, None, &prompt, None, &time)?;
+        insert_pending_turn(database, &NewTurn { id: &id, task_id, session_id: &root.id, generation: root.generation, assignment_hash: None, prompt: &prompt, workflow_input: None }, &time)?;
         database.connection().execute(
             "UPDATE suplex_task_controls SET status = 'active', human_question = NULL, human_question_id = NULL, recovery_turn_id = NULL, wake_at = ?1, updated_at = ?1 WHERE task_id = ?2",
             params![time, task_id],
@@ -604,7 +604,7 @@ fn launch_delegate(
             "UPDATE suplex_task_controls SET worker_session_id = ?1,updated_at = ?2 WHERE task_id = ?3 AND status = 'active'",
             params![id, time, task_id],
         )?;
-        insert_pending_turn(database, &new_turn_id(now)?, task_id, &id, generation, Some(&assignment_hash), prompt_text, workflow_json.as_deref(), &time)?;
+        insert_pending_turn(database, &NewTurn { id: &new_turn_id(now)?, task_id, session_id: &id, generation, assignment_hash: Some(&assignment_hash), prompt: prompt_text, workflow_input: workflow_json.as_deref() }, &time)?;
         Ok(())
     })?;
     root_observation_rows(database, task_id)?
@@ -687,7 +687,7 @@ pub fn launch_planner_pair(
                 "INSERT INTO suplex_task_sessions (id,task_id,kind,generation,is_current,lifecycle,assignment_hash,advisor_role,delegate_slot,workflow_input_json,profile_json,created_at,updated_at) VALUES (?1,?2,'worker',?3,1,'reserved',?4,?5,?5,?6,?7,?8,?8)",
                 params![id, task_id, generation, hash, role, input.to_string(), profile, time],
             )?;
-            insert_pending_turn(database, &new_turn_id(now)?, task_id, &id, generation, Some(&hash), prompt, None, &time)?;
+            insert_pending_turn(database, &NewTurn { id: &new_turn_id(now)?, task_id, session_id: &id, generation, assignment_hash: Some(&hash), prompt, workflow_input: None }, &time)?;
             ids.push(id);
         }
         database.connection().execute(
@@ -761,13 +761,15 @@ pub fn ensure_initial_prompt(
         let time = rfc3339_millis(now);
         insert_pending_turn(
             database,
-            &id,
-            &root.task_id,
-            &root.id,
-            root.generation,
-            None,
-            prompt,
-            None,
+            &NewTurn {
+                id: &id,
+                task_id: &root.task_id,
+                session_id: &root.id,
+                generation: root.generation,
+                assignment_hash: None,
+                prompt,
+                workflow_input: None,
+            },
             &time,
         )?;
         Ok(Some(database.connection().query_row(
@@ -861,7 +863,7 @@ pub fn send_labeled_note(
             format!("{label}:\n{note}")
         };
         let id = new_turn_id(now)?;
-        insert_pending_turn(database, &id, task_id, &root.id, root.generation, None, &prompt, None, &time)?;
+        insert_pending_turn(database, &NewTurn { id: &id, task_id, session_id: &root.id, generation: root.generation, assignment_hash: None, prompt: &prompt, workflow_input: None }, &time)?;
         database.connection().query_row("SELECT * FROM suplex_task_turns WHERE id = ?1", [&id], turn).map_err(Into::into)
     })?;
     observe_lifecycle(database, task_id)?;
@@ -1007,7 +1009,7 @@ pub fn complete_root_turn(
         }
         assert_current_root(database, &task_id, &session_id, generation)?;
         let id = new_turn_id(now)?;
-        insert_pending_turn(database, &id, &task_id, &session_id, generation, None, prompt, None, &time)?;
+        insert_pending_turn(database, &NewTurn { id: &id, task_id: &task_id, session_id: &session_id, generation, assignment_hash: None, prompt, workflow_input: None }, &time)?;
         Ok(true)
     })
 }
@@ -1068,13 +1070,15 @@ fn insert_root_wake(
     let wake_id = new_turn_id(now)?;
     insert_pending_turn(
         database,
-        &wake_id,
-        task_id,
-        &root.id,
-        root.generation,
-        None,
-        prompt,
-        None,
+        &NewTurn {
+            id: &wake_id,
+            task_id,
+            session_id: &root.id,
+            generation: root.generation,
+            assignment_hash: None,
+            prompt,
+            workflow_input: None,
+        },
         &time,
     )?;
     database.connection().execute(
@@ -1558,7 +1562,7 @@ pub fn wake_idle_root(
             [task_id], |row| Ok((row.get(0)?, row.get(1)?)),
         ).optional()?;
         let Some((session_id, generation)) = eligible else { return Ok(None); };
-        insert_pending_turn(database, &id, task_id, &session_id, generation, None, prompt, None, &time)?;
+        insert_pending_turn(database, &NewTurn { id: &id, task_id, session_id: &session_id, generation, assignment_hash: None, prompt, workflow_input: None }, &time)?;
         Ok(Some(database.connection().query_row(
             "SELECT * FROM suplex_task_turns WHERE id = ?1", [&id], turn,
         )?))
@@ -1783,13 +1787,15 @@ fn insert_selection_turn(
 ) -> DatabaseResult<()> {
     insert_pending_turn(
         database,
-        &new_turn_id(now)?,
-        task_id,
-        session_id,
-        generation,
-        None,
-        prompt,
-        None,
+        &NewTurn {
+            id: &new_turn_id(now)?,
+            task_id,
+            session_id,
+            generation,
+            assignment_hash: None,
+            prompt,
+            workflow_input: None,
+        },
         &rfc3339_millis(now),
     )
 }
@@ -2005,13 +2011,15 @@ fn replace_unfinished_delegate(
     )?;
     insert_pending_turn(
         database,
-        &new_turn_id(selection.now)?,
-        task_id,
-        &id,
-        generation,
-        Some(&hash),
-        &prompt,
-        input.as_deref(),
+        &NewTurn {
+            id: &new_turn_id(selection.now)?,
+            task_id,
+            session_id: &id,
+            generation,
+            assignment_hash: Some(&hash),
+            prompt: &prompt,
+            workflow_input: input.as_deref(),
+        },
         time,
     )?;
     if selection.advisor_role.is_none() || worker_session_id == Some(&current.id) {
@@ -2200,7 +2208,7 @@ pub fn continue_delivery(
             "question": format!("The user changed the delivery target from {previous_target} to {}. Continue this task toward the NEW target {}. Preserve the existing branch, pull request, sessions, and useful review evidence. Inspect current Git and GitHub facts, repair conflicts and failing checks, and request delivery explicitly when the new target is satisfied. Earlier completion is history.", delivery_target, delivery_target),
             "answer": format!("Continue delivery to {}.", delivery_target),
         }));
-        insert_pending_turn(database, &new_turn_id(Utc::now())?, task_id, &root.id, root.generation, None, &prompt, None, &time)?;
+        insert_pending_turn(database, &NewTurn { id: &new_turn_id(Utc::now())?, task_id, session_id: &root.id, generation: root.generation, assignment_hash: None, prompt: &prompt, workflow_input: None }, &time)?;
         observe_lifecycle(database, task_id)?;
         Ok(())
     })
@@ -2238,7 +2246,7 @@ pub fn reopen_delivered(
 pub(crate) use super::persistence::new_turn_id;
 
 pub use super::persistence::{
-    RootObservationRows, TaskArtifact, cancel_open_turns, insert_pending_turn,
+    NewTurn, RootObservationRows, TaskArtifact, cancel_open_turns, insert_pending_turn,
     root_observation_rows, task_artifact, task_control,
 };
 use super::persistence::{session, turn};

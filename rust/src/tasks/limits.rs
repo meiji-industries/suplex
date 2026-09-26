@@ -1,7 +1,7 @@
 //! Task limit admission, pause, and answer handling.
 use crate::coordination::{
     persistence::{new_turn_id, session},
-    root_session_store::{cancel_open_turns, insert_pending_turn, observe_lifecycle},
+    root_session_store::{NewTurn, cancel_open_turns, insert_pending_turn, observe_lifecycle},
 };
 use crate::{
     coordination::CoordinationError,
@@ -188,7 +188,7 @@ pub fn answer_task_limit(
         let root = decision_root(database, task_id, root_id)?;
         let prompt = js_json::stringify(&serde_json::json!({"question": question, "decision": decision}));
         let id = new_turn_id(now)?;
-        insert_pending_turn(database, &id, task_id, &root.id, root.generation, None, &prompt, None, &time)?;
+        insert_pending_turn(database, &NewTurn { id: &id, task_id, session_id: &root.id, generation: root.generation, assignment_hash: None, prompt: &prompt, workflow_input: None }, &time)?;
         database.connection().execute(
             "UPDATE suplex_task_controls SET status = 'active', budget_usd = ?1, max_turns = ?2, limit_pause_json = NULL, human_question = NULL, human_question_id = NULL, human_question_options_json = '[]', wake_at = ?3, updated_at = ?3 WHERE task_id = ?4",
             params![limits.budget_usd, limits.max_turns, time, task_id],

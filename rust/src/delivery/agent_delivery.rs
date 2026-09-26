@@ -272,7 +272,7 @@ impl AgentDelivery {
             ).optional()?;
             let (root_id, generation) = root.ok_or_else(|| TaskError::new("Coordinator is not ready. Retry the request.", 409))?;
             let time = now_millis_rfc3339();
-            crate::coordination::root_session_store::insert_pending_turn(database, &turn_id, task_id, &root_id, generation, None, prompt, None, &time)?;
+            crate::coordination::root_session_store::insert_pending_turn(database, &crate::coordination::root_session_store::NewTurn { id: &turn_id, task_id, session_id: &root_id, generation, assignment_hash: None, prompt, workflow_input: None }, &time)?;
             Ok(())
         })
     }

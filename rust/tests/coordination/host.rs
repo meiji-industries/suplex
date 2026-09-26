@@ -327,17 +327,15 @@ mod host_tests {
         assert_eq!(state(&failed), "open");
         assert_eq!(state(healthy), "merged");
         drop(database);
-        assert_eq!(
-            scheduled_task_ids(&database_path)
+        assert!(
+            !scheduled_task_ids(&database_path)
                 .unwrap()
-                .contains(&failed),
-            false
+                .contains(&failed)
         );
-        assert_eq!(
+        assert!(
             scheduled_task_ids(&database_path)
                 .unwrap()
-                .contains(&healthy.to_owned()),
-            true
+                .contains(&healthy.to_owned())
         );
         server.abort();
         fs::remove_dir_all(base).unwrap();

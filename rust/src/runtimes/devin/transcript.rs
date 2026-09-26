@@ -45,7 +45,7 @@ pub fn usage(turns: &[DevinTurn]) -> Vec<UsageEntry> {
             failed: turn.failed,
             tokens: UsageTokens::default(),
             cost_usd: 0.0,
-            subsidized: 0.0 > 0.0,
+            subsidized: false,
             summary: false,
             steps: 1.0,
             source: "message",

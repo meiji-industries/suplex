@@ -2544,6 +2544,71 @@ pub(crate) mod tests {
         );
     }
 
+    #[test]
+    fn pull_discovery_prefers_one_live_intent_match_and_never_uses_a_foreign_or_ambiguous_one() {
+        let control = TaskControlRow::fixture();
+        let pull = |number: u64, state: &str| PullRequest {
+            number,
+            url: format!("https://github.com/owner/repo/pull/{number}"),
+            repository: "owner/repo".into(),
+            head_branch: "task-branch".into(),
+            base_branch: "main".into(),
+            head_sha: "a".repeat(40),
+            base_sha: "b".repeat(40),
+            is_draft: false,
+            state: state.into(),
+            merged_at: None,
+            auto_merge_enabled: None,
+            title: None,
+            body: None,
+            author: None,
+            updated_at: None,
+            is_cross_repository: Some(false),
+            node_id: None,
+        };
+        let closed = pull(1, "closed");
+        let open = pull(2, "open");
+        assert_eq!(
+            select_discovered_pull(&control, vec![closed.clone(), open.clone()])
+                .unwrap()
+                .unwrap()
+                .number,
+            2
+        );
+        assert_eq!(
+            select_discovered_pull(&control, vec![closed.clone()])
+                .unwrap()
+                .unwrap()
+                .state,
+            "closed"
+        );
+        assert_eq!(
+            select_discovered_pull(&control, vec![open.clone(), pull(3, "open")])
+                .unwrap_err()
+                .downcast_ref::<DeliveryError>()
+                .and_then(DeliveryError::code),
+            Some("pull_request_ambiguous")
+        );
+        let mut foreign = open.clone();
+        foreign.is_cross_repository = Some(true);
+        assert!(
+            select_discovered_pull(&control, vec![foreign])
+                .unwrap()
+                .is_none()
+        );
+        let mut pinned = control.clone();
+        pinned.delivery_intent.pull_request_number = Some(2);
+        let mut retargeted = open.clone();
+        retargeted.base_branch = "release".into();
+        assert_eq!(
+            select_discovered_pull(&pinned, vec![retargeted])
+                .unwrap()
+                .unwrap()
+                .number,
+            2
+        );
+    }
+
     #[tokio::test]
     async fn delivery_observation_keeps_finished_pull_requests_without_github() {
         let mut local = TaskControlRow::fixture();

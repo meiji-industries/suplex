@@ -533,10 +533,7 @@ async fn observed_usage(
                 [task_id],
                 |row| Ok((row.get(0)?, row.get(1)?)),
             )?;
-        let (default_budget, default_turns): (f64, i64) = database.connection().query_row(
-            "SELECT default_budget_usd,default_max_turns FROM suplex_environment_settings WHERE id = 'host'",
-            [], |row| Ok((row.get(0)?, row.get(1)?)),
-        ).unwrap_or((15.0, 40));
+        let defaults = crate::platform::environment_settings::read(&database)?;
         let admitted_turns: i64 = database.connection().query_row(
             "SELECT COUNT(*) FROM suplex_task_turns WHERE task_id = ?1 AND prompted_at IS NOT NULL",
             [task_id],
@@ -557,8 +554,8 @@ async fn observed_usage(
             .collect::<rusqlite::Result<Vec<_>>>()?;
         (
             sessions,
-            budget_override.unwrap_or(default_budget),
-            turns_override.unwrap_or(default_turns),
+            budget_override.unwrap_or(defaults.default_budget_usd),
+            turns_override.unwrap_or(defaults.default_max_turns),
             admitted_turns,
         )
     };
@@ -820,7 +817,11 @@ fn recover_prepared_root_blocking(
                 ..WorkflowLaunch::default()
             },
             role: TaskRole::Root(&identity),
-            worktree: Path::new(worktree.unwrap_or_default()),
+            worktree: Path::new(worktree.ok_or_else(|| TaskError::Failure {
+                status: 409,
+                code: "worktree_missing",
+                message: "The task has no worktree".into(),
+            })?),
             model,
             reasoning_effort: reasoning,
             instance_home_directory: profile.instance_home_directory().map(Path::new),
@@ -1067,7 +1068,11 @@ fn recover_prepared_worker_blocking(
             native_session_id: &native_id,
             workflow: delegate.workflow,
             role: TaskRole::Worker(delegate.purpose),
-            worktree: Path::new(worktree.unwrap_or_default()),
+            worktree: Path::new(worktree.ok_or_else(|| TaskError::Failure {
+                status: 409,
+                code: "worktree_missing",
+                message: "The task has no worktree".into(),
+            })?),
             model,
             reasoning_effort: reasoning,
             instance_home_directory: profile.instance_home_directory().map(Path::new),
@@ -1489,16 +1494,42 @@ async fn sweep_task_once(
     if !active {
         return Ok(());
     }
-    if needs_worktree {
-        let prepared = prepare_task_worktree(database_path, task_id).await?;
-        let mut database = SuplexDatabase::open(database_path, OpenMode::ReadWrite)?;
-        root_session_store::set_worktree(&mut database, task_id, &prepared, Utc::now())?;
+    {
+        let prepared = async {
+            if needs_worktree {
+                let prepared = prepare_task_worktree(database_path, task_id).await?;
+                let mut database = SuplexDatabase::open(database_path, OpenMode::ReadWrite)?;
+                root_session_store::set_worktree(&mut database, task_id, &prepared, Utc::now())?;
+            }
+            if !super::issue_context::prepare_for_host(database_path, artifact_root, task_id)
+                .await?
+            {
+                return Ok(false);
+            }
+            crate::tasks::preparation::prepare_before_native_work(database_path, task_id).await?;
+            crate::coordination::root_controller::prepare_root(database_path, task_id)?;
+            Ok::<_, Box<dyn std::error::Error>>(true)
+        }
+        .await;
+        match prepared {
+            Ok(true) => {}
+            Ok(false) => return Ok(()),
+            Err(error) => {
+                crate::coordination::root_controller::prepare_root(database_path, task_id)?;
+                let mut database = SuplexDatabase::open(database_path, OpenMode::ReadWrite)?;
+                root_session_store::ask_human(
+                    &mut database,
+                    task_id,
+                    &format!(
+                        "Suplex could not prepare this task. {error}. Resolve the problem, then answer to retry."
+                    ),
+                    &serde_json::json!([]),
+                    Utc::now(),
+                )?;
+                return Ok(());
+            }
+        }
     }
-    if !super::issue_context::prepare_for_host(database_path, artifact_root, task_id).await? {
-        return Ok(());
-    }
-    crate::tasks::preparation::prepare_before_native_work(database_path, task_id).await?;
-    crate::coordination::root_controller::prepare_root(database_path, task_id)?;
     recover_prepared_worker(
         database_path,
         artifact_root,
@@ -1928,6 +1959,63 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn linked_issue_scope_failure_asks_for_tracker_access() {
+        let (base, database_path, task_id) = fixture_task();
+        {
+            let database = SuplexDatabase::open(&database_path, OpenMode::ReadWrite).unwrap();
+            database.connection().execute(
+                "UPDATE suplex_tasks SET configuration_json = json_set(configuration_json, '$.integration', json(?1)), issue_json = ?2 WHERE id = ?3",
+                rusqlite::params![serde_json::json!({"tracker":{"kind":"jira","site":"https://issues.example.test","project":"A","emailEnvironment":"SUPLEX_P3_MISSING_JIRA_EMAIL","tokenEnvironment":"SUPLEX_P3_MISSING_JIRA_TOKEN"}}).to_string(), serde_json::json!({"kind":"github","repository":"owner/repo","number":1}).to_string(), task_id],
+            ).unwrap();
+        }
+        assert!(
+            !super::super::issue_context::prepare_for_host(&database_path, &base, &task_id)
+                .await
+                .unwrap()
+        );
+        let database = SuplexDatabase::open(&database_path, OpenMode::ReadOnly).unwrap();
+        let control = root_session_store::task_control(&database, &task_id)
+            .unwrap()
+            .unwrap();
+        assert_eq!(control.status, TaskStatus::WaitingHuman);
+        assert!(
+            control
+                .human_question
+                .as_deref()
+                .unwrap()
+                .starts_with("Suplex cannot read the linked issue.")
+        );
+        assert!(control.human_question_id.is_some());
+        drop(database);
+        fs::remove_dir_all(base).unwrap();
+    }
+
+    #[test]
+    fn native_launch_refuses_a_missing_worktree() {
+        let (base, database_path, task_id) = fixture_task();
+        root_controller::prepare_root(&database_path, &task_id).unwrap();
+        let error = recover_prepared_root_blocking(
+            &database_path,
+            &base,
+            &task_id,
+            None,
+            &HashMap::new(),
+            TaskLimitUsage {
+                estimated_cost_usd: Some(0.0),
+            },
+        )
+        .unwrap_err();
+        assert!(matches!(
+            error.downcast_ref::<TaskError>(),
+            Some(TaskError::Failure {
+                code: "worktree_missing",
+                ..
+            })
+        ));
+        fs::remove_dir_all(base).unwrap();
+    }
+
+    #[tokio::test]
     async fn a_failing_sweep_waits_before_retrying_and_leaves_other_tasks_due() {
         let (base, database_path, failing) = fixture_task();
         let other = {
@@ -1978,8 +2066,29 @@ mod tests {
                 &HashMap::new()
             )
             .await
-            .is_err()
+            .is_ok()
         );
+        let database = SuplexDatabase::open(&database_path, OpenMode::ReadOnly).unwrap();
+        let control = root_session_store::task_control(&database, &failing)
+            .unwrap()
+            .unwrap();
+        assert_eq!(control.status, TaskStatus::WaitingHuman);
+        assert!(
+            control
+                .human_question
+                .as_deref()
+                .unwrap()
+                .starts_with("Suplex could not prepare this task.")
+        );
+        assert!(
+            control
+                .human_question
+                .as_deref()
+                .unwrap()
+                .ends_with("Resolve the problem, then answer to retry.")
+        );
+        assert!(control.root_session_id.is_some());
+        drop(database);
         let due = due_task_ids(&database_path).unwrap();
         assert!(
             !due.contains(&failing),

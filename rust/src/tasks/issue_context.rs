@@ -174,11 +174,16 @@ pub async fn prepare_for_host(
             .is_some_and(|failure| matches!(failure.status, 401 | 403 | 404));
     let now = Utc::now();
     let time = rfc3339_millis(now);
-    let database = SuplexDatabase::open(database_path, OpenMode::ReadWrite)?;
+    let mut database = SuplexDatabase::open(database_path, OpenMode::ReadWrite)?;
     if access {
-        database.connection().execute(
-            "UPDATE suplex_task_controls SET status = 'waiting_human', human_question = ?1, human_question_options_json = '[]', human_question_id = ?2, limit_pause_json = NULL, wake_at = NULL, workflow_state_json = json_set(workflow_state_json, '$.deliveryWait', json('null')), updated_at = ?3 WHERE task_id = ?4 AND status = 'active'",
-            params![format!("Suplex cannot read the linked issue. {error}. Check the issue and tracker access, then answer to retry."), uuid::Uuid::new_v4().to_string(), time, task_id],
+        crate::coordination::root_session_store::ask_human(
+            &mut database,
+            task_id,
+            &format!(
+                "Suplex cannot read the linked issue. {error}. Check the issue and tracker access, then answer to retry."
+            ),
+            &json!([]),
+            now,
         )?;
     } else {
         eprintln!("Issue context intake will be retried for {task_id}: {error}");

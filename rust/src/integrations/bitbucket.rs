@@ -5,13 +5,17 @@ use std::{collections::HashSet, path::Path, sync::LazyLock};
 
 use base64::{Engine, engine::general_purpose::STANDARD};
 use regex::Regex;
+use serde::{Deserialize, de::DeserializeOwned};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 
 use super::{
     github_delivery::{Checks, Github, GithubFailure, Observation, PullRequest, failure},
     issue_tracker::{BeforeWrite, environment_credential},
-    provider_http::{self, MAXIMUM_BYTES, ProviderHttpFailure, ProviderResult},
+    provider_http::{
+        self, MAXIMUM_BYTES, ProviderHttpFailure, ProviderResult, lenient, optional_metadata,
+        present_string,
+    },
 };
 use crate::shared::encode_uri_component;
 
@@ -33,88 +37,167 @@ fn malformed() -> Box<dyn std::error::Error + Send + Sync> {
     "Bitbucket returned a malformed response".into()
 }
 
-/// One Bitbucket pull request in the GitHub pull request shape.
-pub fn pull(value: &Value) -> ProviderResult<PullRequest> {
-    let text = |pointer: &str| value.pointer(pointer).and_then(Value::as_str);
-    let end_valid = |side: &str| {
-        text(&format!("/{side}/branch/name")).is_some()
-            && text(&format!("/{side}/commit/hash")).is_some_and(|hash| SHA.is_match(hash))
-            && text(&format!("/{side}/repository/full_name")).is_some()
-    };
-    let href = text("/links/html/href").filter(|href| {
-        url::Url::parse(href)
-            .is_ok_and(|url| url.origin().ascii_serialization() == "https://bitbucket.org")
-    });
-    let state = text("/state")
-        .filter(|state| matches!(*state, "OPEN" | "MERGED" | "DECLINED" | "SUPERSEDED"));
-    let description = match value.get("description") {
-        None => Some(""),
-        Some(Value::String(text)) => Some(text.as_str()),
-        Some(_) => None,
-    };
-    let (Some(number), Some(title), Some(description), Some(state), Some(href), Some(draft)) = (
-        value.get("id").and_then(Value::as_u64).filter(|id| *id > 0),
-        text("/title"),
-        description,
-        state,
-        href,
-        value.get("draft").and_then(Value::as_bool),
-    ) else {
-        return Err(malformed());
-    };
-    if !end_valid("source")
-        || !end_valid("destination")
-        || value
-            .get("updated_on")
-            .is_some_and(|value| !value.is_string())
-    {
-        return Err(malformed());
-    }
-    let destination = text("/destination/repository/full_name")
-        .unwrap_or_default()
-        .to_lowercase();
-    let merged = state == "MERGED";
-    Ok(PullRequest {
-        number,
-        url: href.to_owned(),
-        is_cross_repository: Some(
-            text("/source/repository/full_name")
-                .unwrap_or_default()
-                .to_lowercase()
-                != destination,
-        ),
-        repository: destination,
-        head_branch: text("/source/branch/name").unwrap_or_default().to_owned(),
-        base_branch: text("/destination/branch/name")
-            .unwrap_or_default()
-            .to_owned(),
-        head_sha: text("/source/commit/hash").unwrap_or_default().to_owned(),
-        base_sha: text("/destination/commit/hash")
-            .unwrap_or_default()
-            .to_owned(),
-        is_draft: draft,
-        state: match state {
-            "OPEN" => "open",
-            "MERGED" => "merged",
-            _ => "closed",
+#[derive(Deserialize)]
+struct Named {
+    name: String,
+}
+
+#[derive(Deserialize)]
+struct Commit {
+    hash: String,
+}
+
+#[derive(Deserialize)]
+struct FullName {
+    full_name: String,
+}
+
+#[derive(Deserialize)]
+struct Links {
+    html: Href,
+}
+
+#[derive(Deserialize)]
+struct Href {
+    href: String,
+}
+
+#[derive(Deserialize)]
+struct PullEnd {
+    branch: Named,
+    commit: Commit,
+    repository: FullName,
+}
+
+/// A Bitbucket pull request.
+#[derive(Deserialize)]
+struct BitbucketPull {
+    id: u64,
+    title: String,
+    #[serde(default)]
+    description: String,
+    state: String,
+    draft: bool,
+    source: PullEnd,
+    destination: PullEnd,
+    links: Links,
+    #[serde(default, deserialize_with = "present_string")]
+    updated_on: Option<String>,
+}
+
+impl TryFrom<BitbucketPull> for PullRequest {
+    type Error = Box<dyn std::error::Error + Send + Sync>;
+
+    /// One Bitbucket pull request in the GitHub pull request shape.
+    fn try_from(row: BitbucketPull) -> ProviderResult<Self> {
+        let web = url::Url::parse(&row.links.html.href)
+            .is_ok_and(|url| url.origin().ascii_serialization() == "https://bitbucket.org");
+        if row.id == 0
+            || !web
+            || !matches!(
+                row.state.as_str(),
+                "OPEN" | "MERGED" | "DECLINED" | "SUPERSEDED"
+            )
+            || !SHA.is_match(&row.source.commit.hash)
+            || !SHA.is_match(&row.destination.commit.hash)
+        {
+            return Err(malformed());
         }
-        .to_owned(),
-        merged_at: if merged {
-            text("/updated_on").map(str::to_owned)
-        } else {
-            None
-        },
-        auto_merge_enabled: None,
-        title: Some(title.to_owned()),
-        body: Some(description.to_owned()),
-        author: None,
-        updated_at: None,
-        node_id: None,
-    })
+        let destination = row.destination.repository.full_name.to_lowercase();
+        let merged = row.state == "MERGED";
+        Ok(PullRequest {
+            number: row.id,
+            url: row.links.html.href,
+            is_cross_repository: Some(
+                row.source.repository.full_name.to_lowercase() != destination,
+            ),
+            repository: destination,
+            head_branch: row.source.branch.name,
+            base_branch: row.destination.branch.name,
+            head_sha: row.source.commit.hash,
+            base_sha: row.destination.commit.hash,
+            is_draft: row.draft,
+            state: match row.state.as_str() {
+                "OPEN" => "open",
+                "MERGED" => "merged",
+                _ => "closed",
+            }
+            .to_owned(),
+            merged_at: if merged { row.updated_on } else { None },
+            auto_merge_enabled: None,
+            title: Some(row.title),
+            body: Some(row.description),
+            author: None,
+            updated_at: None,
+            node_id: None,
+        })
+    }
+}
+
+/// One Bitbucket pull request response in the GitHub pull request shape.
+pub fn pull(value: &Value) -> ProviderResult<PullRequest> {
+    decode::<BitbucketPull>(value)?.try_into()
+}
+
+fn decode<T: DeserializeOwned>(value: &Value) -> ProviderResult<T> {
+    T::deserialize(value).map_err(|_| malformed())
+}
+
+/// One page of a paginated Bitbucket list.
+#[derive(Deserialize)]
+struct Page<T> {
+    values: Vec<T>,
+    #[serde(default, deserialize_with = "present_string")]
+    next: Option<String>,
+}
+
+/// One Downloads page; an unreadable `next` ends the listing.
+#[derive(Deserialize)]
+struct DownloadsPage {
+    values: Vec<Download>,
+    #[serde(default, deserialize_with = "optional_metadata")]
+    next: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct Download {
+    name: String,
+    size: serde_json::Number,
+}
+
+#[derive(Deserialize)]
+struct CommitStatus {
+    name: String,
+    state: String,
+    #[serde(default, deserialize_with = "optional_metadata")]
+    url: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct BitbucketRepository {
+    full_name: String,
+    links: Links,
+}
+
+#[derive(Deserialize)]
+struct BranchRef {
+    target: Commit,
+}
+
+/// The project's `{kind: "bitbucket", tokenEnvironment, usernameEnvironment?}`.
+#[derive(Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct Connection {
+    #[serde(default, deserialize_with = "lenient")]
+    kind: String,
+    #[serde(default, deserialize_with = "lenient")]
+    token_environment: String,
+    #[serde(default, deserialize_with = "optional_metadata")]
+    username_environment: Option<String>,
 }
 
 pub struct BitbucketClient {
-    connection: Value,
+    connection: Connection,
     http: reqwest::Client,
     origin: String,
 }
@@ -127,19 +210,15 @@ impl BitbucketClient {
 
     pub(crate) fn with_origin(connection: &Value, origin: &str) -> Self {
         Self {
-            connection: connection.clone(),
+            connection: Connection::deserialize(connection).unwrap_or_default(),
             http: provider_http::client(),
             origin: origin.to_owned(),
         }
     }
 
     fn authorization(&self) -> ProviderResult<String> {
-        let token = environment_credential(
-            self.connection["tokenEnvironment"]
-                .as_str()
-                .unwrap_or_default(),
-        )?;
-        Ok(match self.connection["usernameEnvironment"].as_str() {
+        let token = environment_credential(&self.connection.token_environment)?;
+        Ok(match self.connection.username_environment.as_deref() {
             Some(username) => format!(
                 "Basic {}",
                 STANDARD.encode(format!("{}:{token}", environment_credential(username)?))
@@ -229,23 +308,22 @@ impl BitbucketClient {
 
     /// `repository`: the canonical name and web URL.
     pub async fn repository(&self, repository: &str) -> ProviderResult<(String, String)> {
-        let row = self.get(&coordinate(repository)?).await?;
-        let (Some(name), Some(href)) = (
-            row["full_name"].as_str(),
-            row.pointer("/links/html/href").and_then(Value::as_str),
-        ) else {
-            return Err(malformed());
-        };
-        let href_url = url::Url::parse(href).map_err(|_| malformed())?;
+        let row: BitbucketRepository = decode(&self.get(&coordinate(repository)?).await?)?;
+        let (name, href) = (row.full_name, row.links.html.href);
+        let href_url = url::Url::parse(&href).map_err(|_| malformed())?;
         if name.to_lowercase() != repository.to_lowercase()
             || href_url.origin().ascii_serialization() != "https://bitbucket.org"
         {
             return Err("Bitbucket returned another repository".into());
         }
-        Ok((name.to_owned(), href.to_owned()))
+        Ok((name, href))
     }
 
-    async fn pages(&self, first: String, message: &'static str) -> ProviderResult<Vec<Value>> {
+    async fn pages<T: DeserializeOwned>(
+        &self,
+        first: String,
+        message: &'static str,
+    ) -> ProviderResult<Vec<T>> {
         let mut next = Some(first);
         let mut seen = HashSet::new();
         let mut values = Vec::new();
@@ -254,21 +332,11 @@ impl BitbucketClient {
                 return Err(message.into());
             }
             seen.insert(path.clone());
-            let page = self.get(&path).await?;
-            values.extend(
-                page["values"]
-                    .as_array()
-                    .ok_or_else(malformed)?
-                    .iter()
-                    .cloned(),
-            );
-            next = match page.get("next") {
-                None => None,
-                Some(Value::String(next)) => Some(next.clone()),
-                Some(_) => return Err(malformed()),
-            };
+            let page: Page<Value> = decode(&self.get(&path).await?)?;
+            values.extend(page.values);
+            next = page.next;
         }
-        Ok(values)
+        values.iter().map(decode).collect()
     }
 
     /// `list`: every pull request, or those in one state.
@@ -281,7 +349,7 @@ impl BitbucketClient {
             "state=OPEN&state=MERGED&state=DECLINED&state=SUPERSEDED".into(),
             |state| format!("state={state}"),
         );
-        self.pages(
+        self.pages::<BitbucketPull>(
             format!(
                 "{}/pullrequests?pagelen=50&{states}",
                 coordinate(repository)?
@@ -289,8 +357,8 @@ impl BitbucketClient {
             "Bitbucket pagination did not complete",
         )
         .await?
-        .iter()
-        .map(pull)
+        .into_iter()
+        .map(PullRequest::try_from)
         .collect()
     }
 
@@ -314,16 +382,9 @@ impl BitbucketClient {
                     return Err("Bitbucket Downloads pagination did not complete".into());
                 }
                 seen.insert(path.clone());
-                let page = self.get(&path).await?;
-                let values = page["values"].as_array().ok_or_else(malformed)?;
-                if values
-                    .iter()
-                    .any(|item| !item["name"].is_string() || !item["size"].is_number())
-                {
-                    return Err(malformed());
-                }
-                if let Some(existing) = values.iter().find(|item| item["name"] == filename) {
-                    if existing["size"].as_u64() != Some(bytes.len() as u64) {
+                let page: DownloadsPage = decode(&self.get(&path).await?)?;
+                if let Some(existing) = page.values.iter().find(|item| item.name == filename) {
+                    if existing.size.as_u64() != Some(bytes.len() as u64) {
                         return Err("The existing evidence download has a different size".into());
                     }
                     let downloaded = self.download(repository, filename).await?;
@@ -334,7 +395,7 @@ impl BitbucketClient {
                     }
                     return Ok(true);
                 }
-                next = page["next"].as_str().map(str::to_owned);
+                next = page.next;
             }
             Ok::<bool, Box<dyn std::error::Error + Send + Sync>>(false)
         };
@@ -396,11 +457,11 @@ impl BitbucketClient {
             ))
             .await
         {
-            Ok(value) => value
-                .pointer("/target/hash")
-                .and_then(Value::as_str)
+            Ok(value) => decode::<BranchRef>(&value)
+                .ok()
+                .map(|branch| branch.target.hash)
                 .filter(|hash| SHA.is_match(hash))
-                .map(|hash| Some(hash.to_owned()))
+                .map(Some)
                 .ok_or_else(malformed),
             Err(error)
                 if error
@@ -515,7 +576,7 @@ impl BitbucketClient {
             return Ok(Observation::absent());
         };
         let statuses = self
-            .pages(
+            .pages::<CommitStatus>(
                 format!(
                     "{}/commit/{}/statuses?pagelen=100",
                     coordinate(repository)?,
@@ -524,20 +585,29 @@ impl BitbucketClient {
                 "Bitbucket checks pagination did not complete",
             )
             .await?;
-        let mut runs = Vec::new();
-        for status in statuses {
-            let (Some(name), Some(state)) = (status["name"].as_str(), status["state"].as_str())
-            else {
-                return Err(malformed());
-            };
-            let status_name = match state {
-                "SUCCESSFUL" => "successful",
-                "FAILED" | "STOPPED" => "failing",
-                _ => "pending",
-            };
-            runs.push(json!({"name": name, "status": status_name, "url": status.get("url").and_then(Value::as_str)}));
-        }
-        let count = |status: &str| runs.iter().filter(|run| run["status"] == status).count() as u64;
+        let statuses = statuses
+            .into_iter()
+            .map(|status| {
+                let status_name = match status.state.as_str() {
+                    "SUCCESSFUL" => "successful",
+                    "FAILED" | "STOPPED" => "failing",
+                    _ => "pending",
+                };
+                (status, status_name)
+            })
+            .collect::<Vec<_>>();
+        let count = |name: &str| {
+            statuses
+                .iter()
+                .filter(|(_, status)| *status == name)
+                .count() as u64
+        };
+        let (pending, failing, successful) =
+            (count("pending"), count("failing"), count("successful"));
+        let runs = statuses
+            .into_iter()
+            .map(|(status, status_name)| json!({"name": status.name, "status": status_name, "url": status.url}))
+            .collect::<Vec<_>>();
         Ok(Observation {
             exists: true,
             number: Some(row.number),
@@ -548,9 +618,9 @@ impl BitbucketClient {
             base_sha: Some(row.base_sha),
             checks: Checks {
                 total: runs.len() as u64,
-                pending: count("pending"),
-                failing: count("failing"),
-                successful: count("successful"),
+                pending,
+                failing,
+                successful,
                 runs,
             },
             auto_merge_enabled: Some(false),
@@ -583,7 +653,8 @@ fn port<T>(result: ProviderResult<T>) -> PortResult<T> {
 impl ReleasePort<'_> {
     /// The Bitbucket connection of a repository connection value, if it is one.
     pub fn bitbucket(connection: &Value) -> Option<BitbucketClient> {
-        (connection["kind"] == "bitbucket").then(|| BitbucketClient::new(connection))
+        Some(BitbucketClient::new(connection))
+            .filter(|client| client.connection.kind == "bitbucket")
     }
 
     pub fn github(&self) -> Option<&Github> {

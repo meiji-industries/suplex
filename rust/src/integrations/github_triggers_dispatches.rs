@@ -1,19 +1,27 @@
 //! Immutable trigger dispatch captures and their delivery policy
 //! (`src/integrations/github/trigger-dispatches.ts`, `trigger-delivery-policy.ts`).
 
-use std::{error::Error, sync::LazyLock};
+use std::{collections::BTreeMap, error::Error, sync::LazyLock};
 
 use regex::Regex;
 use rusqlite::{OptionalExtension, Row, params};
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::Value;
 
-use super::github_triggers_inspection::validate_protected_paths;
+use super::{
+    github_triggers::get_rule, github_triggers_inspection::validate_protected_paths,
+    provider_http::optional_metadata,
+};
 use crate::{
-    coordination::workflows::{ReviewRange, workflow_definition},
-    http::contracts::typed::tasks::{TaskCreateBody, parse_task_create},
+    coordination::{
+        advisor_bridge::AdvisorRole,
+        workflows::{ReviewRange, workflow_definition},
+    },
+    http::contracts::typed::tasks::{
+        AdvisorProfileIds, TaskCreateBody, TaskSource, parse_task_create,
+    },
     platform::database::{DatabaseResult, SuplexDatabase},
-    tasks::commands::task_request_hash,
+    tasks::{commands::task_request_hash, control::TaskProfile},
 };
 
 static SHA: LazyLock<Regex> = LazyLock::new(|| Regex::new(r"(?i)^[a-f0-9]{40,64}$").unwrap());
@@ -70,6 +78,88 @@ impl DispatchPolicy {
     }
 }
 
+/// `{root, worker, advisors}` task profile snapshots.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct DispatchProfiles {
+    pub root: TaskProfile,
+    pub worker: TaskProfile,
+    pub advisors: BTreeMap<AdvisorRole, TaskProfile>,
+}
+
+/// The fields a trigger reads from a captured workflow preset (`WorkflowRecord` JSON).
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Preset {
+    #[serde(default)]
+    pub id: String,
+    #[serde(default)]
+    pub engine: String,
+    pub root_profile_id: Option<String>,
+    pub worker_profile_id: Option<String>,
+    #[serde(default)]
+    pub advisor_profile_ids: BTreeMap<String, String>,
+    pub run_project_tests: Option<bool>,
+    pub visual_evidence: Option<String>,
+    pub archived_at: Option<String>,
+}
+
+impl Preset {
+    pub fn of(value: &Value) -> DatabaseResult<Self> {
+        Ok(Self::deserialize(value)?)
+    }
+}
+
+#[derive(Default, Deserialize)]
+struct SourceBinding {
+    #[serde(default, deserialize_with = "optional_metadata")]
+    kind: Option<String>,
+    #[serde(default, deserialize_with = "optional_metadata")]
+    number: Option<i64>,
+}
+
+/// The task configuration facts a trigger capture binds.
+#[derive(Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TaskBinding {
+    #[serde(default, deserialize_with = "optional_metadata")]
+    repository: Option<String>,
+    #[serde(default, deserialize_with = "optional_metadata")]
+    source: Option<SourceBinding>,
+    #[serde(default, deserialize_with = "optional_metadata")]
+    starting_sha: Option<String>,
+    #[serde(default, deserialize_with = "optional_metadata")]
+    baseline_sha: Option<String>,
+    #[serde(default, deserialize_with = "optional_metadata")]
+    branch: Option<String>,
+    #[serde(default, deserialize_with = "optional_metadata")]
+    base_branch: Option<String>,
+    #[serde(default, deserialize_with = "optional_metadata")]
+    run_project_tests: Option<bool>,
+    #[serde(default, deserialize_with = "optional_metadata")]
+    visual_evidence: Option<String>,
+}
+
+impl TaskBinding {
+    pub fn of(configuration: &Value) -> Self {
+        Self::deserialize(configuration).unwrap_or_default()
+    }
+
+    /// The pull request source and revisions are the captured ones.
+    pub fn matches(&self, number: i64, policy: &DispatchPolicy) -> bool {
+        self.source.as_ref().is_some_and(|source| {
+            source.kind.as_deref() == Some("pull_request") && source.number == Some(number)
+        }) && self.starting_sha.as_deref() == Some(policy.head_sha.as_str())
+            && self.baseline_sha.as_deref() == Some(policy.base_sha.as_str())
+            && self.branch.as_deref() == Some(policy.head_branch.as_str())
+            && self.base_branch.as_deref() == Some(policy.base_branch.as_str())
+    }
+
+    /// The configured repository, compared case-insensitively.
+    pub fn repository_is(&self, repository: &str) -> bool {
+        self.repository.as_deref().map(str::to_lowercase).as_deref() == Some(repository)
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct Dispatch {
     pub id: String,
@@ -80,21 +170,25 @@ pub struct Dispatch {
     pub repository_name: String,
     pub pull_request_number: i64,
     pub authority_user_id: String,
+    /// The captured task request, as stored.
     pub request: Value,
     pub policy: DispatchPolicy,
+    /// The captured workflow preset, as stored.
     pub preset: Value,
-    /// `{root, worker, advisors}` task profile snapshots.
-    pub profiles: Value,
+    pub profiles: DispatchProfiles,
     pub idempotency_key: String,
     pub task_id: Option<String>,
     pub created_at: String,
     pub updated_at: String,
 }
 
+fn request_body(request: &Value) -> DatabaseResult<TaskCreateBody> {
+    parse_task_create(Some(request)).map_err(|_| fail("GitHub trigger dispatch request is invalid"))
+}
+
 impl Dispatch {
     pub fn request_body(&self) -> DatabaseResult<TaskCreateBody> {
-        parse_task_create(Some(&self.request))
-            .map_err(|_| fail("GitHub trigger dispatch request is invalid"))
+        request_body(&self.request)
     }
 }
 
@@ -110,12 +204,32 @@ pub struct DispatchPrepare {
     pub request: Value,
     pub policy: DispatchPolicy,
     pub preset: Value,
-    pub profiles: Value,
+    pub profiles: DispatchProfiles,
 }
 
-fn dispatch(row: &Row<'_>) -> rusqlite::Result<(Dispatch, [String; 3])> {
-    Ok((
-        Dispatch {
+/// A dispatch row with its JSON columns still as text.
+struct StoredDispatch {
+    id: String,
+    rule_id: String,
+    company_id: String,
+    project_id: String,
+    repository_id: i64,
+    repository_name: String,
+    pull_request_number: i64,
+    authority_user_id: String,
+    request: String,
+    policy: String,
+    preset: String,
+    profiles: String,
+    idempotency_key: String,
+    task_id: Option<String>,
+    created_at: String,
+    updated_at: String,
+}
+
+impl StoredDispatch {
+    fn read(row: &Row<'_>) -> rusqlite::Result<Self> {
+        Ok(Self {
             id: row.get("id")?,
             rule_id: row.get("rule_id")?,
             company_id: row.get("company_id")?,
@@ -124,30 +238,43 @@ fn dispatch(row: &Row<'_>) -> rusqlite::Result<(Dispatch, [String; 3])> {
             repository_name: row.get("repository_name")?,
             pull_request_number: row.get("pull_request_number")?,
             authority_user_id: row.get("authority_user_id")?,
-            request: Value::Null,
-            policy: DispatchPolicy {
-                head_sha: String::new(),
-                base_sha: String::new(),
-                head_branch: String::new(),
-                base_branch: String::new(),
-                protected_paths: Vec::new(),
-                repository_id: 0,
-                repository_name: String::new(),
-                delivery_target: String::new(),
-            },
-            preset: Value::Null,
-            profiles: Value::Null,
+            request: row.get("request_json")?,
+            policy: row.get("policy_json")?,
+            preset: row.get("preset_json")?,
+            profiles: row.get("profiles_json")?,
             idempotency_key: row.get("idempotency_key")?,
             task_id: row.get("task_id")?,
             created_at: row.get("created_at")?,
             updated_at: row.get("updated_at")?,
-        },
-        [
-            row.get("request_json")?,
-            row.get("policy_json")?,
-            row.get("preset_json")?,
-        ],
-    ))
+        })
+    }
+}
+
+impl TryFrom<StoredDispatch> for Dispatch {
+    type Error = Box<dyn Error>;
+
+    fn try_from(row: StoredDispatch) -> DatabaseResult<Self> {
+        let request = serde_json::from_str(&row.request)?;
+        request_body(&request)?;
+        Ok(Self {
+            id: row.id,
+            rule_id: row.rule_id,
+            company_id: row.company_id,
+            project_id: row.project_id,
+            repository_id: row.repository_id,
+            repository_name: row.repository_name,
+            pull_request_number: row.pull_request_number,
+            authority_user_id: row.authority_user_id,
+            request,
+            policy: DispatchPolicy::parse(serde_json::from_str(&row.policy)?)?,
+            preset: serde_json::from_str(&row.preset)?,
+            profiles: serde_json::from_str(&row.profiles)?,
+            idempotency_key: row.idempotency_key,
+            task_id: row.task_id,
+            created_at: row.created_at,
+            updated_at: row.updated_at,
+        })
+    }
 }
 
 fn query(
@@ -157,21 +284,9 @@ fn query(
 ) -> DatabaseResult<Vec<Dispatch>> {
     let mut statement = database.connection().prepare(sql)?;
     let rows = statement
-        .query_map(values, |row| {
-            let (dispatch, texts) = dispatch(row)?;
-            Ok((dispatch, texts, row.get::<_, String>("profiles_json")?))
-        })?
+        .query_map(values, StoredDispatch::read)?
         .collect::<rusqlite::Result<Vec<_>>>()?;
-    rows.into_iter()
-        .map(|(mut value, [request, policy, preset], profiles)| {
-            value.request = serde_json::from_str(&request)?;
-            value.request_body()?;
-            value.policy = DispatchPolicy::parse(serde_json::from_str(&policy)?)?;
-            value.preset = serde_json::from_str(&preset)?;
-            value.profiles = serde_json::from_str(&profiles)?;
-            Ok(value)
-        })
-        .collect()
+    rows.into_iter().map(Dispatch::try_from).collect()
 }
 
 pub fn get(database: &SuplexDatabase, id: &str) -> DatabaseResult<Option<Dispatch>> {
@@ -224,13 +339,90 @@ pub fn previously_processed(
     )?)
 }
 
-fn sorted_keys(value: &Value) -> Vec<String> {
-    let mut keys = value
-        .as_object()
-        .map(|object| object.keys().cloned().collect::<Vec<_>>())
-        .unwrap_or_default();
-    keys.sort();
-    keys
+/// The rule still binds this capture: company, project, repository,
+/// authority, preset, delivery target, and protected paths.
+fn matches_rule(
+    database: &SuplexDatabase,
+    input: &DispatchPrepare,
+    policy: &DispatchPolicy,
+    preset: &Preset,
+) -> DatabaseResult<bool> {
+    let rule = get_rule(database, &input.company_id, &input.rule_id)?;
+    Ok(rule.is_some_and(|rule| {
+        rule.project_id == input.project_id
+            && rule.repository_id == input.repository_id
+            && rule.repository_name.to_lowercase() == input.repository_name.to_lowercase()
+            && rule.authority_user_id == input.authority_user_id
+            && preset.id == rule.workflow_id
+            && rule.delivery_target == policy.delivery_target
+            && rule.protected_paths == policy.protected_paths
+    }))
+}
+
+/// The request names the captured project, pull request, and delivery target.
+fn matches_capture(
+    body: &TaskCreateBody,
+    input: &DispatchPrepare,
+    policy: &DispatchPolicy,
+) -> bool {
+    policy.repository_id == input.repository_id
+        && policy.repository_name == input.repository_name.to_lowercase()
+        && body.delivery_target.as_str() == policy.delivery_target
+        && body.project_id == input.project_id
+        && matches!(body.source, Some(TaskSource::PullRequest { number })
+            if i64::try_from(number) == Ok(input.pull_request_number))
+}
+
+/// The request names the captured profiles and the preset engine.
+fn matches_profiles(body: &TaskCreateBody, profiles: &DispatchProfiles, preset: &Preset) -> bool {
+    body.root_profile_id.as_ref() == Some(&profiles.root.profile_id)
+        && body.worker_profile_id.as_ref() == Some(&profiles.worker.profile_id)
+        && preset.engine == body.workflow.as_str()
+}
+
+/// The request keeps every choice the preset made.
+fn matches_preset(body: &TaskCreateBody, preset: &Preset) -> bool {
+    let preset_allows = |chosen: &Option<String>, requested: &Option<String>| {
+        chosen.is_none() || chosen.as_ref() == requested.as_ref()
+    };
+    preset_allows(&preset.root_profile_id, &body.root_profile_id)
+        && preset_allows(&preset.worker_profile_id, &body.worker_profile_id)
+        && preset
+            .run_project_tests
+            .is_none_or(|run| run == body.run_project_tests)
+        && preset_allows(&preset.visual_evidence, &Some(body.visual_evidence.clone()))
+}
+
+fn requested_advisors(ids: &AdvisorProfileIds) -> BTreeMap<AdvisorRole, &str> {
+    [
+        (AdvisorRole::Reviewer, &ids.reviewer),
+        (AdvisorRole::PlannerA, &ids.planner_a),
+        (AdvisorRole::PlannerB, &ids.planner_b),
+        (AdvisorRole::Rater, &ids.rater),
+    ]
+    .into_iter()
+    .filter_map(|(role, id)| Some((role, id.as_deref()?)))
+    .collect()
+}
+
+/// Each workflow Advisor is requested, captured, and allowed by the preset.
+fn matches_advisors(body: &TaskCreateBody, profiles: &DispatchProfiles, preset: &Preset) -> bool {
+    let roles = workflow_definition(body.workflow.as_str())
+        .map_or(&[][..], |definition| definition.advisor_roles)
+        .iter()
+        .filter_map(|role| AdvisorRole::parse(role))
+        .collect::<Vec<_>>();
+    let requested = requested_advisors(&body.advisor_profile_ids);
+    requested.keys().eq(roles.iter())
+        && profiles.advisors.keys().eq(roles.iter())
+        && roles.iter().all(|role| {
+            let id = requested[role];
+            profiles.advisors[role].profile_id == id
+                && preset
+                    .advisor_profile_ids
+                    .get(role.as_str())
+                    .is_none_or(|chosen| chosen == id)
+        })
 }
 
 /// Capture a dispatch once per rule and pull request; a repeat returns the first capture.
@@ -247,84 +439,35 @@ pub fn prepare(database: &mut SuplexDatabase, input: DispatchPrepare) -> Databas
             return Ok(existing);
         }
         let policy = DispatchPolicy::parse(serde_json::to_value(&input.policy)?)?;
-        let preset = &input.preset;
-        let rule = database.connection().query_row(
-            "SELECT company_id, project_id, repository_id, repository_name, authority_user_id, workflow_id, delivery_target, protected_paths_json FROM suplex_github_trigger_rules WHERE id = ?1",
-            [&input.rule_id],
-            |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, i64>(2)?, row.get::<_, String>(3)?, row.get::<_, String>(4)?, row.get::<_, String>(5)?, row.get::<_, String>(6)?, row.get::<_, String>(7)?)),
-        ).optional()?;
-        let matches_rule = rule.is_some_and(|rule| {
-            rule.0 == input.company_id
-                && rule.1 == input.project_id
-                && rule.2 == input.repository_id
-                && rule.3.to_lowercase() == input.repository_name.to_lowercase()
-                && rule.4 == input.authority_user_id
-                && preset["id"] == rule.5.as_str()
-                && rule.6 == policy.delivery_target
-                && serde_json::from_str::<Value>(&rule.7).ok() == Some(json!(policy.protected_paths))
-        });
-        if !matches_rule {
+        let preset = Preset::of(&input.preset)?;
+        if !matches_rule(database, &input, &policy, &preset)? {
             return Err(fail("GitHub trigger dispatch does not match rule"));
         }
         validate_protected_paths(&policy.protected_paths)?;
-        let request = &input.request;
-        if policy.repository_id != input.repository_id
-            || policy.repository_name != input.repository_name.to_lowercase()
-            || request["deliveryTarget"] != policy.delivery_target.as_str()
-            || request["projectId"] != input.project_id.as_str()
-            || request["source"]["kind"] != "pull_request"
-            || request["source"]["number"] != input.pull_request_number
-        {
-            return Err(fail("GitHub trigger dispatch capture is contradictory"));
-        }
         let id = format!("github_trigger_dispatch_{}", uuid::Uuid::new_v4().simple());
         let key = format!("github-trigger:{id}");
-        let mut raw = request.clone();
-        raw["idempotencyKey"] = json!(key);
-        raw["startImmediately"] = json!(false);
-        let body = parse_task_create(Some(&raw))
-            .map_err(|_| fail("GitHub trigger dispatch request is invalid"))?;
-        let request = serde_json::to_value(&body)?;
-        let profiles = &input.profiles;
-        if profiles["root"]["profileId"] != request["rootProfileId"]
-            || profiles["worker"]["profileId"] != request["workerProfileId"]
-            || preset["engine"] != request["workflow"]
-        {
+        let mut raw = input.request.clone();
+        raw["idempotencyKey"] = Value::from(key.as_str());
+        raw["startImmediately"] = Value::from(false);
+        let body = request_body(&raw)?;
+        if !matches_capture(&body, &input, &policy) {
+            return Err(fail("GitHub trigger dispatch capture is contradictory"));
+        }
+        if !matches_profiles(&body, &input.profiles, &preset) {
             return Err(fail("GitHub trigger dispatch profiles do not match request"));
         }
-        for (field, value) in [
-            ("rootProfileId", &request["rootProfileId"]),
-            ("workerProfileId", &request["workerProfileId"]),
-            ("runProjectTests", &request["runProjectTests"]),
-            ("visualEvidence", &request["visualEvidence"]),
-        ] {
-            if !preset[field].is_null() && &preset[field] != value {
-                return Err(fail("GitHub trigger dispatch does not match preset"));
-            }
+        if !matches_preset(&body, &preset) {
+            return Err(fail("GitHub trigger dispatch does not match preset"));
         }
-        let mut roles = workflow_definition(body.workflow.as_str())
-            .map_or(&[][..], |definition| definition.advisor_roles)
-            .iter()
-            .map(|role| (*role).to_owned())
-            .collect::<Vec<_>>();
-        roles.sort();
-        let requested = &request["advisorProfileIds"];
-        if sorted_keys(requested) != roles
-            || sorted_keys(&profiles["advisors"]) != roles
-            || roles.iter().any(|role| {
-                requested[role] != profiles["advisors"][role]["profileId"]
-                    || !requested[role].is_string()
-                    || (!preset["advisorProfileIds"][role].is_null()
-                        && preset["advisorProfileIds"][role] != requested[role])
-            })
-        {
+        if !matches_advisors(&body, &input.profiles, &preset) {
             return Err(fail("GitHub trigger dispatch Advisors do not match request"));
         }
+        let request = serde_json::to_value(&body)?;
         let now = crate::shared::time::now_millis_rfc3339();
         let repository_name = input.repository_name.to_lowercase();
         database.connection().execute(
             "INSERT INTO suplex_github_trigger_dispatches (id, rule_id, company_id, project_id, repository_id, repository_name, pull_request_number, authority_user_id, request_json, policy_json, preset_json, profiles_json, idempotency_key, task_id, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, NULL, ?14, ?14)",
-            params![id, input.rule_id, input.company_id, input.project_id, input.repository_id, repository_name, input.pull_request_number, input.authority_user_id, request.to_string(), serde_json::to_string(&policy)?, preset.to_string(), profiles.to_string(), key, now],
+            params![id, input.rule_id, input.company_id, input.project_id, input.repository_id, repository_name, input.pull_request_number, input.authority_user_id, request.to_string(), serde_json::to_string(&policy)?, input.preset.to_string(), serde_json::to_string(&input.profiles)?, key, now],
         )?;
         Ok(Dispatch {
             id,
@@ -347,6 +490,79 @@ pub fn prepare(database: &mut SuplexDatabase, input: DispatchPrepare) -> Databas
     })
 }
 
+/// The task row a dispatch may link to.
+struct LinkedTask {
+    company_id: String,
+    project_id: String,
+    idempotency_key: String,
+    request_hash: String,
+    creator_user_id: Option<String>,
+    creator_agent_id: Option<String>,
+    configuration: String,
+    archived_at: Option<String>,
+    status: String,
+    delivery_target: String,
+    workflow: String,
+    root_profile: String,
+    worker_profile: String,
+    advisor_profiles: String,
+}
+
+impl LinkedTask {
+    fn read(database: &SuplexDatabase, task_id: &str) -> DatabaseResult<Option<Self>> {
+        Ok(database.connection().query_row(
+            "SELECT t.company_id, t.project_id, t.idempotency_key, t.request_hash, t.creator_user_id, t.creator_agent_id, t.configuration_json, t.archived_at, c.status, c.delivery_target, c.workflow, c.root_profile_json, c.worker_profile_json, c.advisor_profiles_json FROM suplex_tasks t JOIN suplex_task_controls c ON c.task_id = t.id WHERE t.id = ?1",
+            [task_id],
+            |row| Ok(Self {
+                company_id: row.get("company_id")?,
+                project_id: row.get("project_id")?,
+                idempotency_key: row.get("idempotency_key")?,
+                request_hash: row.get("request_hash")?,
+                creator_user_id: row.get("creator_user_id")?,
+                creator_agent_id: row.get("creator_agent_id")?,
+                configuration: row.get("configuration_json")?,
+                archived_at: row.get("archived_at")?,
+                status: row.get("status")?,
+                delivery_target: row.get("delivery_target")?,
+                workflow: row.get("workflow")?,
+                root_profile: row.get("root_profile_json")?,
+                worker_profile: row.get("worker_profile_json")?,
+                advisor_profiles: row.get("advisor_profiles_json")?,
+            }),
+        ).optional()?)
+    }
+
+    /// A live backlog task the authority created from this capture's request.
+    fn created_from(&self, dispatch: &Dispatch, hash: &str) -> bool {
+        self.archived_at.is_none()
+            && self.status == "backlog"
+            && self.company_id == dispatch.company_id
+            && self.project_id == dispatch.project_id
+            && self.idempotency_key == dispatch.idempotency_key
+            && self.creator_user_id.as_deref() == Some(dispatch.authority_user_id.as_str())
+            && self.creator_agent_id.is_none()
+            && self.request_hash == hash
+    }
+
+    fn configured_for(&self, dispatch: &Dispatch, body: &TaskCreateBody) -> DatabaseResult<bool> {
+        let binding = TaskBinding::of(&serde_json::from_str(&self.configuration)?);
+        Ok(binding.repository_is(&dispatch.repository_name)
+            && binding.matches(dispatch.pull_request_number, &dispatch.policy)
+            && binding.run_project_tests == Some(body.run_project_tests)
+            && binding.visual_evidence.as_ref() == Some(&body.visual_evidence)
+            && self.delivery_target == dispatch.policy.delivery_target
+            && body.workflow.as_str() == self.workflow)
+    }
+
+    fn profiles(&self) -> Option<DispatchProfiles> {
+        Some(DispatchProfiles {
+            root: serde_json::from_str(&self.root_profile).ok()?,
+            worker: serde_json::from_str(&self.worker_profile).ok()?,
+            advisors: serde_json::from_str(&self.advisor_profiles).ok()?,
+        })
+    }
+}
+
 /// Bind the dispatch to the task created from its exact capture.
 pub fn link_task(
     database: &mut SuplexDatabase,
@@ -362,54 +578,16 @@ pub fn link_task(
             }
             return Ok(current);
         }
-        let task = database.connection().query_row(
-            "SELECT t.company_id, t.project_id, t.idempotency_key, t.request_hash, t.creator_user_id, t.creator_agent_id, t.configuration_json, t.archived_at, c.status, c.delivery_target, c.workflow, c.root_profile_json, c.worker_profile_json, c.advisor_profiles_json FROM suplex_tasks t JOIN suplex_task_controls c ON c.task_id = t.id WHERE t.id = ?1",
-            [task_id],
-            |row| Ok((
-                [row.get::<_, String>(0)?, row.get(1)?, row.get(2)?, row.get(3)?],
-                row.get::<_, Option<String>>(4)?, row.get::<_, Option<String>>(5)?,
-                row.get::<_, String>(6)?, row.get::<_, Option<String>>(7)?,
-                [row.get::<_, String>(8)?, row.get(9)?, row.get(10)?, row.get(11)?, row.get(12)?, row.get(13)?],
-            )),
-        ).optional()?;
-        let hash = task_request_hash(&current.request_body()?, &current.authority_user_id)?;
-        let Some(([company, project, key, request_hash], creator_user, creator_agent, configuration, archived, [status, delivery_target, workflow, root, worker, advisors])) = task
-            .filter(|task| {
-                task.4.is_none()
-                    && task.5[0] == "backlog"
-                    && task.0[0] == current.company_id
-                    && task.0[1] == current.project_id
-                    && task.0[2] == current.idempotency_key
-                    && task.1.as_deref() == Some(current.authority_user_id.as_str())
-                    && task.2.is_none()
-                    && task.0[3] == hash
-            })
-        else {
+        let task = LinkedTask::read(database, task_id)?;
+        let body = current.request_body()?;
+        let hash = task_request_hash(&body, &current.authority_user_id)?;
+        let Some(task) = task.filter(|task| task.created_from(&current, &hash)) else {
             return Err(fail("Task does not match GitHub trigger dispatch"));
         };
-        let _ = (company, project, key, request_hash, creator_user, creator_agent, archived, status);
-        let config: Value = serde_json::from_str(&configuration)?;
-        let policy = &current.policy;
-        if config["repository"].as_str().map(str::to_lowercase).as_deref() != Some(current.repository_name.as_str())
-            || config["source"]["kind"] != "pull_request"
-            || config["source"]["number"] != current.pull_request_number
-            || config["startingSha"] != policy.head_sha.as_str()
-            || config["baselineSha"] != policy.base_sha.as_str()
-            || config["branch"] != policy.head_branch.as_str()
-            || config["baseBranch"] != policy.base_branch.as_str()
-            || config["runProjectTests"] != current.request["runProjectTests"]
-            || config["visualEvidence"] != current.request["visualEvidence"]
-            || delivery_target != policy.delivery_target
-            || current.request["workflow"] != workflow.as_str()
-        {
+        if !task.configured_for(&current, &body)? {
             return Err(fail("Task configuration does not match GitHub trigger dispatch"));
         }
-        let profiles = json!({
-            "root": serde_json::from_str::<Value>(&root)?,
-            "worker": serde_json::from_str::<Value>(&worker)?,
-            "advisors": serde_json::from_str::<Value>(&advisors)?,
-        });
-        if profiles != current.profiles {
+        if task.profiles().as_ref() != Some(&current.profiles) {
             return Err(fail("Task profiles do not match GitHub trigger dispatch"));
         }
         database.connection().execute(

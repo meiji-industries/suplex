@@ -23,14 +23,18 @@ use tokio::sync::watch;
 
 use super::{
     github_delivery::{Github, GithubFailure},
-    github_triggers_dispatches::{self as dispatches, Dispatch, DispatchPolicy, DispatchPrepare},
+    github_triggers_dispatches::{
+        self as dispatches, Dispatch, DispatchPolicy, DispatchPrepare, DispatchProfiles, Preset,
+        TaskBinding,
+    },
     github_triggers_inspection::{
         PullRequestInspection, inspect_pull_request, list_open_pull_requests_by_label,
-        matches_protected_paths, observe_repository, validate_label, validate_protected_paths,
+        observe_repository, validate_label, validate_protected_paths,
     },
 };
+use crate::http::contracts::typed::projects::RepositoryConnection;
 use crate::{
-    coordination::{workflow_records, workflows::workflow_definition},
+    coordination::{advisor_bridge::AdvisorRole, workflow_records, workflows::workflow_definition},
     http::{
         AppState,
         contracts::typed::github_triggers::{GithubTriggerCreate, GithubTriggerPatch},
@@ -41,7 +45,7 @@ use crate::{
         git,
         service::{self as projects, Project},
     },
-    tasks::{commands, repository::assert_pull_request_available, sources},
+    tasks::{commands, control::TaskProfile, repository::assert_pull_request_available, sources},
 };
 
 pub type Failure = Box<dyn Error + Send + Sync>;
@@ -228,7 +232,11 @@ pub fn list_rules(database: &SuplexDatabase, company_id: &str) -> DatabaseResult
         .collect::<rusqlite::Result<Vec<_>>>()?)
 }
 
-fn get_rule(database: &SuplexDatabase, company_id: &str, id: &str) -> DatabaseResult<Option<Rule>> {
+pub(super) fn get_rule(
+    database: &SuplexDatabase,
+    company_id: &str,
+    id: &str,
+) -> DatabaseResult<Option<Rule>> {
     Ok(database
         .connection()
         .query_row(
@@ -390,34 +398,39 @@ impl From<&Rule> for Config {
     }
 }
 
-/// Local facts a dispatch depends on; `dependencies` must not change before a write.
-#[derive(Clone, Debug)]
-pub struct Local {
+/// Local facts a dispatch depends on; they must not change before a write.
+#[derive(Clone, Debug, PartialEq)]
+struct Dependencies {
     repository: String,
+    repository_path: String,
+    worktree_root: String,
     base_branch: String,
-    preset: Value,
+    setup_command: String,
+    verification_command: String,
     engine: String,
     run_project_tests: bool,
     visual_evidence: String,
-    profiles: Vec<Value>,
-    dependencies: Value,
+    profiles: DispatchProfiles,
+}
+
+/// The local dependencies of a dispatch and the workflow preset it captures.
+#[derive(Clone, Debug)]
+pub struct Local {
+    dependencies: Dependencies,
+    preset: Value,
 }
 
 /// TypeScript `normalizeWorkflowInput` applied to a stored workflow preset.
 fn normalized_run_project_tests(
-    preset: &Value,
+    preset: &Preset,
     delivery_target: &str,
 ) -> Result<Option<bool>, String> {
-    let engine = preset["engine"].as_str().unwrap_or_default();
+    let engine = preset.engine.as_str();
     let definition = workflow_definition(engine).ok_or("The selected workflow does not exist")?;
-    let advisors = preset["advisorProfileIds"]
-        .as_object()
-        .cloned()
-        .unwrap_or_default();
     let extra = ["reviewer", "planner_a", "planner_b", "rater"]
         .iter()
         .filter(|role| {
-            advisors.get(**role).is_some_and(|value| !value.is_null())
+            preset.advisor_profile_ids.contains_key(**role)
                 && !definition.advisor_roles.contains(role)
         })
         .map(|role| crate::coordination::workflows::advisor_label(role))
@@ -429,7 +442,7 @@ fn normalized_run_project_tests(
             extra.join(", ")
         ));
     }
-    let run = preset["runProjectTests"].as_bool();
+    let run = preset.run_project_tests;
     if engine != "refine_pull_request" {
         return Ok(run);
     }
@@ -442,27 +455,71 @@ fn normalized_run_project_tests(
     Ok(Some(true))
 }
 
+fn local_failure(message: impl Into<String>, status: u16) -> Box<dyn Error> {
+    Box::new(TriggerFailure {
+        message: message.into(),
+        status,
+        retry_at: None,
+    })
+}
+
+/// The task profile snapshot of one live profile, or the unavailable-profile refusal.
+fn profile_snapshot(
+    database: &SuplexDatabase,
+    id: &str,
+    role: &str,
+) -> DatabaseResult<TaskProfile> {
+    database
+        .connection()
+        .query_row(
+            "SELECT id, provider, model, reasoning_level, service_tier FROM suplex_profiles WHERE id = ?1 AND role = ?2 AND archived_at IS NULL",
+            params![id, role],
+            |row| {
+                Ok(TaskProfile {
+                    profile_id: row.get(0)?,
+                    provider: row.get(1)?,
+                    model: row.get(2)?,
+                    reasoning_level: row.get(3)?,
+                    service_tier: row.get(4)?,
+                    provider_instance_id: None,
+                    instance_home_directory: None,
+                })
+            },
+        )
+        .optional()?
+        .ok_or_else(|| local_failure("Selected workflow profile is unavailable", 422))
+}
+
+/// The authority's workflow preset with this id, as stored and as read.
+fn workflow_preset(
+    database: &SuplexDatabase,
+    authority: &str,
+    workflow_id: &str,
+) -> DatabaseResult<(Value, Preset)> {
+    for record in workflow_records::list(database, authority, true)? {
+        let value = serde_json::to_value(record)?;
+        let preset = Preset::of(&value)?;
+        if preset.id == workflow_id {
+            return Ok((value, preset));
+        }
+    }
+    Err(local_failure("Not found", 404))
+}
+
 fn local(
     database: &SuplexDatabase,
     actor: &str,
     company_id: &str,
     config: &Config,
 ) -> DatabaseResult<Local> {
-    let failure = |message: String, status: u16| -> Box<dyn Error> {
-        Box::new(TriggerFailure {
-            message,
-            status,
-            retry_at: None,
-        })
-    };
     admin(database, actor, company_id)?;
     if active_role(database, &config.authority_user_id)?.as_deref() != Some("admin") {
-        return Err(failure("GitHub authority is unavailable".into(), 422));
+        return Err(local_failure("GitHub authority is unavailable", 422));
     }
     let company =
         companies::require_company_access(database, &config.authority_user_id, company_id)?;
     if company.status != "active" {
-        return Err(failure("Company is not active".into(), 409));
+        return Err(local_failure("Company is not active", 409));
     }
     let project = projects::get(database, &config.authority_user_id, &config.project_id)?;
     if project.company_id != company_id {
@@ -471,76 +528,58 @@ fn local(
     let repository = project
         .repository
         .clone()
-        .ok_or_else(|| failure("Project repository is not configured".into(), 422))?;
-    let preset = workflow_records::list(database, &config.authority_user_id, true)?
-        .into_iter()
-        .map(serde_json::to_value)
-        .collect::<Result<Vec<_>, _>>()?
-        .into_iter()
-        .find(|record| record["id"] == config.workflow_id.as_str())
-        .ok_or_else(|| failure("Not found".into(), 404))?;
-    if !preset["archivedAt"].is_null() {
-        return Err(failure("Selected workflow is archived".into(), 422));
+        .ok_or_else(|| local_failure("Project repository is not configured", 422))?;
+    let (preset, view) = workflow_preset(database, &config.authority_user_id, &config.workflow_id)?;
+    if view.archived_at.is_some() {
+        return Err(local_failure("Selected workflow is archived", 422));
     }
-    let run = normalized_run_project_tests(&preset, &config.delivery_target)
-        .map_err(|message| failure(message, 422))?;
-    let engine = preset["engine"].as_str().unwrap_or_default().to_owned();
-    let root_default = preset["rootProfileId"]
-        .as_str()
-        .unwrap_or(&project.root_profile_id)
-        .to_owned();
-    let mut ids = vec![
-        (root_default.clone(), "root"),
-        (
-            preset["workerProfileId"]
-                .as_str()
-                .unwrap_or(&project.worker_profile_id)
-                .to_owned(),
-            "worker",
-        ),
-    ];
-    for role in workflow_definition(&engine).map_or(&[][..], |definition| definition.advisor_roles)
+    let run = normalized_run_project_tests(&view, &config.delivery_target)
+        .map_err(|message| local_failure(message, 422))?;
+    let root_default = view
+        .root_profile_id
+        .as_deref()
+        .unwrap_or(&project.root_profile_id);
+    let root = profile_snapshot(database, root_default, "root")?;
+    let worker = profile_snapshot(
+        database,
+        view.worker_profile_id
+            .as_deref()
+            .unwrap_or(&project.worker_profile_id),
+        "worker",
+    )?;
+    let mut advisors = std::collections::BTreeMap::new();
+    for role in
+        workflow_definition(&view.engine).map_or(&[][..], |definition| definition.advisor_roles)
     {
-        ids.push((
-            preset["advisorProfileIds"][*role]
-                .as_str()
-                .unwrap_or(&root_default)
-                .to_owned(),
-            "root",
-        ));
-    }
-    let mut profiles = Vec::new();
-    for (id, role) in ids {
-        let profile = database.connection().query_row(
-            "SELECT id, provider, model, reasoning_level, service_tier FROM suplex_profiles WHERE id = ?1 AND role = ?2 AND archived_at IS NULL",
-            params![id, role],
-            |row| Ok(json!({"profileId": row.get::<_, String>(0)?, "provider": row.get::<_, String>(1)?, "model": row.get::<_, String>(2)?, "reasoningLevel": row.get::<_, String>(3)?, "serviceTier": row.get::<_, String>(4)?})),
-        ).optional()?;
-        profiles.push(
-            profile
-                .ok_or_else(|| failure("Selected workflow profile is unavailable".into(), 422))?,
-        );
+        let id = view
+            .advisor_profile_ids
+            .get(*role)
+            .map_or(root_default, String::as_str);
+        let profile = profile_snapshot(database, id, "root")?;
+        if let Some(role) = AdvisorRole::parse(role) {
+            advisors.insert(role, profile);
+        }
     }
     validate_protected_paths(&config.protected_paths)
-        .map_err(|_| failure("Protected paths are invalid".into(), 422))?;
-    let run_project_tests = run.unwrap_or(true);
-    let visual_evidence = preset["visualEvidence"]
-        .as_str()
-        .unwrap_or("off")
-        .to_owned();
+        .map_err(|_| local_failure("Protected paths are invalid", 422))?;
     Ok(Local {
-        dependencies: json!({
-            "project": {"repository": repository, "repositoryPath": project.repository_path, "worktreeRoot": project.worktree_root, "baseBranch": project.base_branch, "setupCommand": project.setup_command, "verificationCommand": project.verification_command},
-            "workflow": {"engine": engine, "runProjectTests": run_project_tests, "visualEvidence": visual_evidence},
-            "profiles": profiles,
-        }),
-        repository,
-        base_branch: project.base_branch,
+        dependencies: Dependencies {
+            repository,
+            repository_path: project.repository_path,
+            worktree_root: project.worktree_root,
+            base_branch: project.base_branch,
+            setup_command: project.setup_command,
+            verification_command: project.verification_command,
+            engine: view.engine,
+            run_project_tests: run.unwrap_or(true),
+            visual_evidence: view.visual_evidence.unwrap_or_else(|| "off".into()),
+            profiles: DispatchProfiles {
+                root,
+                worker,
+                advisors,
+            },
+        },
         preset,
-        engine,
-        run_project_tests,
-        visual_evidence,
-        profiles,
     })
 }
 
@@ -552,11 +591,7 @@ fn same_local(
     expected: &Local,
 ) -> DatabaseResult<()> {
     if local(database, actor, company_id, config)?.dependencies != expected.dependencies {
-        return Err(Box::new(TriggerFailure {
-            message: CHANGED.into(),
-            status: 409,
-            retry_at: None,
-        }));
+        return Err(local_failure(CHANGED, 409));
     }
     Ok(())
 }
@@ -696,7 +731,7 @@ pub async fn create<D: Db>(
         local(database, user_id, company_id, &config)
     })?;
     let (repository_id, repository_name) =
-        provider(github, &expected.repository, &config.label).await?;
+        provider(github, &expected.dependencies.repository, &config.label).await?;
     let time = now_millis_rfc3339();
     let created = Rule {
         id: format!("github_trigger_{}", uuid::Uuid::new_v4().simple()),
@@ -860,7 +895,7 @@ pub async fn update<D: Db>(
         local(database, user_id, company_id, &config)
     })?;
     let (repository_id, repository_name) =
-        provider(github, &expected.repository, &config.label).await?;
+        provider(github, &expected.dependencies.repository, &config.label).await?;
     let changed_binding =
         repository_id != current.repository_id || repository_name != current.repository_name;
     if current.enabled && changed_binding {
@@ -958,7 +993,8 @@ async fn preview<D: Db>(
     let expected = db(database, |database| {
         local(database, user_id, company_id, config)
     })?;
-    let (binding_id, binding_name) = provider(github, &expected.repository, &rule.label).await?;
+    let (binding_id, binding_name) =
+        provider(github, &expected.dependencies.repository, &rule.label).await?;
     if db(database, |database| {
         required_rule(database, company_id, &rule.id)
     })?
@@ -993,67 +1029,14 @@ async fn preview<D: Db>(
         list_open_pull_requests_by_label(github, &rule.repository_name, &rule.label).await?;
     let (mut candidate_failure, mut candidate_retry) = (false, None);
     for number in candidates {
-        let observed: Result<Activity, Failure> = async {
-            let pull = inspect_pull_request(github, &rule.repository_name, number).await?;
-            let matching_paths = pull.matching_paths(&rule.protected_paths);
-            let same = pull.base_repository.id == rule.repository_id
-                && pull.base_repository.id == binding_id
-                && pull.base_repository.full_name == rule.repository_name.to_lowercase()
-                && pull.base_repository.full_name == binding_name.to_lowercase();
-            let owned = db(database, |database| {
-                owns_pull_request(database, &rule.repository_name, pull.number)
-            })?;
-            let reason = if !same {
-                "The pull request repository does not match this rule."
-            } else if pull.state != "open" {
-                "The pull request is closed."
-            } else if pull.is_draft {
-                "The pull request is a draft."
-            } else if pull.is_cross_repository {
-                "The pull request comes from a fork."
-            } else if pull.base_branch != expected.base_branch {
-                "The pull request targets a different base branch."
-            } else if !pull.labels.contains(&rule.label) {
-                "The pull request does not have the required label."
-            } else if !matching_paths.is_empty() {
-                "The pull request changes a protected path."
-            } else if owned {
-                "A task already uses this pull request."
-            } else {
-                "Eligible."
-            };
-            let (dispatch, processed) = db(database, |database| {
-                Ok((
-                    dispatches::find(database, &rule.id, pull.base_repository.id, pull.number)?,
-                    dispatches::previously_processed(
-                        database,
-                        pull.base_repository.id,
-                        pull.number,
-                    )?,
-                ))
-            })?;
-            let task_id = dispatch.and_then(|dispatch| dispatch.task_id);
-            let task_status = match &task_id {
-                Some(task_id) => Some(task_status(database, &rule.authority_user_id, task_id)?),
-                None => None,
-            };
-            Ok(Activity {
-                matching_paths,
-                task_id,
-                task_status,
-                previously_processed: processed,
-                ..Activity::new(
-                    pull.number,
-                    Some(&pull.url),
-                    if reason == "Eligible." {
-                        "eligible"
-                    } else {
-                        "excluded"
-                    },
-                    reason,
-                )
-            })
-        }
+        let observed = preview_candidate(
+            database,
+            github,
+            rule,
+            &expected,
+            (binding_id, &binding_name),
+            number,
+        )
         .await;
         match observed {
             Ok(value) => activity.push(value),
@@ -1098,6 +1081,72 @@ async fn preview<D: Db>(
     Ok(std::mem::take(activity))
 }
 
+/// The preview activity of one labelled pull request.
+async fn preview_candidate<D: Db>(
+    database: &D,
+    github: &Github,
+    rule: &Rule,
+    expected: &Local,
+    (binding_id, binding_name): (i64, &str),
+    number: i64,
+) -> Result<Activity, Failure> {
+    let pull = inspect_pull_request(github, &rule.repository_name, number).await?;
+    let matching_paths = pull.matching_paths(&rule.protected_paths);
+    let same = pull.base_repository.id == rule.repository_id
+        && pull.base_repository.id == binding_id
+        && pull.base_repository.full_name == rule.repository_name.to_lowercase()
+        && pull.base_repository.full_name == binding_name.to_lowercase();
+    let owned = db(database, |database| {
+        owns_pull_request(database, &rule.repository_name, pull.number)
+    })?;
+    let reason = if !same {
+        "The pull request repository does not match this rule."
+    } else if pull.state != "open" {
+        "The pull request is closed."
+    } else if pull.is_draft {
+        "The pull request is a draft."
+    } else if pull.is_cross_repository {
+        "The pull request comes from a fork."
+    } else if pull.base_branch != expected.dependencies.base_branch {
+        "The pull request targets a different base branch."
+    } else if !pull.labels.contains(&rule.label) {
+        "The pull request does not have the required label."
+    } else if !matching_paths.is_empty() {
+        "The pull request changes a protected path."
+    } else if owned {
+        "A task already uses this pull request."
+    } else {
+        "Eligible."
+    };
+    let (dispatch, processed) = db(database, |database| {
+        Ok((
+            dispatches::find(database, &rule.id, pull.base_repository.id, pull.number)?,
+            dispatches::previously_processed(database, pull.base_repository.id, pull.number)?,
+        ))
+    })?;
+    let task_id = dispatch.and_then(|dispatch| dispatch.task_id);
+    let task_status = match &task_id {
+        Some(task_id) => Some(task_status(database, &rule.authority_user_id, task_id)?),
+        None => None,
+    };
+    Ok(Activity {
+        matching_paths,
+        task_id,
+        task_status,
+        previously_processed: processed,
+        ..Activity::new(
+            pull.number,
+            Some(&pull.url),
+            if reason == "Eligible." {
+                "eligible"
+            } else {
+                "excluded"
+            },
+            reason,
+        )
+    })
+}
+
 /// `eligible`: the exclusion reason for a pull request, if any.
 fn eligible(
     database: &SuplexDatabase,
@@ -1133,7 +1182,7 @@ fn eligible(
         Some("The pull request is a draft.")
     } else if pull.is_cross_repository {
         Some("The pull request comes from a fork.")
-    } else if pull.base_branch != local.base_branch {
+    } else if pull.base_branch != local.dependencies.base_branch {
         Some("The pull request targets a different base branch.")
     } else if !pull.labels.contains(&rule.label) {
         Some("The pull request does not have the required label.")
@@ -1234,7 +1283,8 @@ async fn admit<D: Db>(
     if !current.enabled || current.revision != rule.revision {
         return Ok(());
     }
-    let (binding_id, binding_name) = provider(github, &expected.repository, &rule.label).await?;
+    let (binding_id, binding_name) =
+        provider(github, &expected.dependencies.repository, &rule.label).await?;
     if binding_id != rule.repository_id || binding_name != rule.repository_name.to_lowercase() {
         let retry = rfc3339_millis(Utc::now() + chrono::Duration::seconds(60));
         db(database, |database| {
@@ -1251,178 +1301,303 @@ async fn admit<D: Db>(
         })?;
         return Ok(());
     }
-    let rule_current = |database: &SuplexDatabase| -> DatabaseResult<()> {
-        let current = required_rule(database, company, &rule.id)?;
-        if !current.enabled
-            || current.revision != rule.revision
-            || current.authority_user_id != rule.authority_user_id
-        {
-            return Err(Box::new(TriggerFailure {
-                message: CHANGED.into(),
-                status: 409,
-                retry_at: None,
-            }));
-        }
-        same_local(database, authority, company, &config, &expected)
+    let mut pass = Pass {
+        database,
+        github,
+        rule,
+        wake,
+        config,
+        expected,
+        activity,
+        failed: false,
+        provider_retry: None,
     };
-    let (mut failed, mut provider_retry) = (false, None);
-    let fail = |error: Failure,
-                number: i64,
-                task_id: Option<String>,
-                activity: &mut Vec<Activity>|
-     -> Option<String> {
+    pass.resume_pending().await?;
+    pass.start_linked().await?;
+    pass.admit_candidates().await?;
+    pass.finish()
+}
+
+/// The rule, its authority, and the local dependencies are still the ones this pass read.
+fn rule_current(
+    database: &SuplexDatabase,
+    rule: &Rule,
+    config: &Config,
+    expected: &Local,
+) -> DatabaseResult<()> {
+    let current = required_rule(database, &rule.company_id, &rule.id)?;
+    if !current.enabled
+        || current.revision != rule.revision
+        || current.authority_user_id != rule.authority_user_id
+    {
+        return Err(local_failure(CHANGED, 409));
+    }
+    same_local(
+        database,
+        &rule.authority_user_id,
+        &rule.company_id,
+        config,
+        expected,
+    )
+}
+
+/// One admission pass over a due rule. Each pull request failure becomes an
+/// activity row and a retry; the pass records its outcome once.
+struct Pass<'a, D: Db> {
+    database: &'a D,
+    github: &'a Github,
+    rule: &'a Rule,
+    wake: &'a (dyn Fn(String) + Sync),
+    config: Config,
+    expected: Local,
+    activity: &'a mut Vec<Activity>,
+    failed: bool,
+    provider_retry: Option<String>,
+}
+
+impl<D: Db> Pass<'_, D> {
+    /// Record a failed pull request; return the provider retry time it carries.
+    fn fail(&mut self, error: Failure, number: i64, task_id: Option<String>) -> Option<String> {
+        self.failed = true;
         let (text, retry) = message(error.as_ref());
-        activity.push(Activity {
+        self.activity.push(Activity {
             previously_processed: task_id.is_some(),
             task_status: task_id.as_ref().map(|_| "backlog".to_owned()),
             task_id,
             ..Activity::new(number, None, "error", &text)
         });
         retry
-    };
-    let pending = db(database, |database| dispatches::unfinished(database))?
-        .into_iter()
-        .filter(|value| value.rule_id == rule.id);
-    for pending in pending {
-        let result: Result<Option<Activity>, Failure> = async {
-            let pull = inspect_pull_request(
-                github,
-                &pending.repository_name,
-                pending.pull_request_number,
-            )
-            .await?;
-            let (reason, matching) = db(database, |database| {
-                eligible(database, rule, &expected, &pull, Some(&pending.policy))
-            })?;
-            if let Some(reason) = reason {
-                return Ok(Some(Activity {
-                    matching_paths: matching,
-                    ..Activity::new(pull.number, Some(&pull.url), "excluded", reason)
-                }));
-            }
-            db(database, |database| rule_current(database))?;
-            let (task_id, status) = create_task_from_trigger(database, &pending.id, wake).await?;
-            Ok(Some(Activity {
-                task_id: Some(task_id),
-                task_status: Some(status),
-                previously_processed: true,
-                ..Activity::new(
-                    pull.number,
-                    Some(&pull.url),
-                    "eligible",
-                    "Backlog task created.",
-                )
-            }))
-        }
-        .await;
+    }
+
+    fn outcome(&mut self, number: i64, result: Result<Activity, Failure>) {
         match result {
-            Ok(value) => activity.extend(value),
+            Ok(value) => self.activity.push(value),
             Err(error) => {
-                failed = true;
-                provider_retry = later(
-                    provider_retry,
-                    fail(error, pending.pull_request_number, None, activity),
-                );
+                let retry = self.fail(error, number, None);
+                self.provider_retry = later(self.provider_retry.take(), retry);
             }
         }
     }
-    for linked in db(database, |database| {
-        dispatches::list_by_rule(database, company, &rule.id)
-    })?
-    .into_iter()
-    .filter(|value| value.task_id.is_some())
-    {
-        if let Err(error) = start_task_from_trigger(database, github, &linked.id, wake).await {
-            // Start failures keep the provider retry of the next pass.
-            failed = true;
-            fail(
-                error,
-                linked.pull_request_number,
-                linked.task_id.clone(),
-                activity,
-            );
+
+    /// Create the task of each captured dispatch that has none yet.
+    async fn resume_pending(&mut self) -> Result<(), Failure> {
+        let rule = self.rule;
+        let pending = db(self.database, |database| dispatches::unfinished(database))?;
+        for pending in pending.iter().filter(|value| value.rule_id == rule.id) {
+            let result = self.resume(pending).await;
+            self.outcome(pending.pull_request_number, result);
         }
+        Ok(())
     }
-    for number in
-        list_open_pull_requests_by_label(github, &rule.repository_name, &rule.label).await?
-    {
-        let result: Result<Activity, Failure> = async {
-            let pull = inspect_pull_request(github, &rule.repository_name, number).await?;
-            let (reason, matching) = db(database, |database| eligible(database, rule, &expected, &pull, None))?;
-            let prior = db(database, |database| dispatches::find(database, &rule.id, pull.base_repository.id, pull.number))?;
-            if reason.is_some() || prior.is_some() {
-                let task_id = prior.as_ref().and_then(|prior| prior.task_id.clone());
-                let task_status = match &task_id { Some(id) => Some(task_status(database, authority, id)?), None => None };
-                let reason = if prior.is_some() { "This pull request was previously processed." } else { reason.unwrap_or_default() };
-                return Ok(Activity { matching_paths: matching, previously_processed: prior.is_some(), task_id, task_status, ..Activity::new(pull.number, Some(&pull.url), "excluded", reason) });
-            }
-            let last = inspect_pull_request(github, &rule.repository_name, pull.number).await?;
-            let (last_reason, _) = db(database, |database| eligible(database, rule, &expected, &last, None))?;
-            if last.head_sha != pull.head_sha || last.base_sha != pull.base_sha || last.head_branch != pull.head_branch || last.base_branch != pull.base_branch || last_reason.is_some() {
-                return Ok(Activity::new(pull.number, Some(&last.url), "excluded", "The pull request changed before admission."));
-            }
-            let roles = workflow_definition(&expected.engine).map_or(&[][..], |definition| definition.advisor_roles);
-            let advisors = roles.iter().enumerate().map(|(index, role)| ((*role).to_owned(), expected.profiles[index + 2].clone())).collect::<serde_json::Map<_, _>>();
-            let advisor_ids = advisors.iter().map(|(role, profile)| (role.clone(), profile["profileId"].clone())).collect::<serde_json::Map<_, _>>();
-            let request = json!({
-                "projectId": rule.project_id, "title": pull.title, "description": "Apply the selected workflow to this pull request.", "images": [],
-                "rootProfileId": expected.profiles[0]["profileId"], "workerProfileId": expected.profiles[1]["profileId"], "advisorProfileIds": advisor_ids,
-                "workflow": expected.engine, "deliveryTarget": rule.delivery_target, "runProjectTests": expected.run_project_tests, "visualEvidence": expected.visual_evidence,
-                "source": {"kind": "pull_request", "number": pull.number},
+
+    async fn resume(&self, pending: &Dispatch) -> Result<Activity, Failure> {
+        let (database, rule) = (self.database, self.rule);
+        let pull = inspect_pull_request(
+            self.github,
+            &pending.repository_name,
+            pending.pull_request_number,
+        )
+        .await?;
+        let (reason, matching) = db(database, |database| {
+            eligible(database, rule, &self.expected, &pull, Some(&pending.policy))
+        })?;
+        if let Some(reason) = reason {
+            return Ok(Activity {
+                matching_paths: matching,
+                ..Activity::new(pull.number, Some(&pull.url), "excluded", reason)
             });
-            let prepared = db(database, |database| database.transaction(true, |database| {
-                rule_current(database)?;
-                assert_pull_request_available(database, "", &rule.repository_name, pull.number)?;
-                dispatches::prepare(database, DispatchPrepare {
-                    rule_id: rule.id.clone(), company_id: company.to_owned(), project_id: rule.project_id.clone(),
-                    repository_id: rule.repository_id, repository_name: rule.repository_name.clone(), pull_request_number: pull.number,
-                    authority_user_id: authority.to_owned(), request,
-                    policy: DispatchPolicy { head_sha: pull.head_sha.clone(), base_sha: pull.base_sha.clone(), head_branch: pull.head_branch.clone(), base_branch: pull.base_branch.clone(), protected_paths: rule.protected_paths.clone(), repository_id: rule.repository_id, repository_name: rule.repository_name.clone(), delivery_target: rule.delivery_target.clone() },
-                    preset: expected.preset.clone(),
-                    profiles: json!({"root": expected.profiles[0], "worker": expected.profiles[1], "advisors": advisors}),
-                })
-            }))?;
-            create_task_from_trigger(database, &prepared.id, wake).await?;
-            let (task_id, status) = start_task_from_trigger(database, github, &prepared.id, wake).await?;
-            Ok(Activity { task_id: Some(task_id), task_status: Some(status), previously_processed: true, ..Activity::new(pull.number, Some(&pull.url), "eligible", "Task started.") })
-        }.await;
-        match result {
-            Ok(value) => activity.push(value),
-            Err(error) => {
-                failed = true;
-                provider_retry = later(provider_retry, fail(error, number, None, activity));
+        }
+        db(database, |database| {
+            rule_current(database, rule, &self.config, &self.expected)
+        })?;
+        let (task_id, status) = create_task_from_trigger(database, &pending.id, self.wake).await?;
+        Ok(Activity {
+            task_id: Some(task_id),
+            task_status: Some(status),
+            previously_processed: true,
+            ..Activity::new(
+                pull.number,
+                Some(&pull.url),
+                "eligible",
+                "Backlog task created.",
+            )
+        })
+    }
+
+    /// Start each linked task. A start failure keeps the provider retry of the next pass.
+    async fn start_linked(&mut self) -> Result<(), Failure> {
+        let (company, rule_id) = (self.rule.company_id.as_str(), self.rule.id.as_str());
+        let linked = db(self.database, |database| {
+            dispatches::list_by_rule(database, company, rule_id)
+        })?;
+        for linked in linked.into_iter().filter(|value| value.task_id.is_some()) {
+            if let Err(error) =
+                start_task_from_trigger(self.database, self.github, &linked.id, self.wake).await
+            {
+                self.fail(error, linked.pull_request_number, linked.task_id);
             }
         }
+        Ok(())
     }
-    if failed {
-        let retry = retry_after(rule.failure_count, provider_retry.as_deref());
-        db(database, |database| {
+
+    /// Admit each labelled pull request this rule has not processed.
+    async fn admit_candidates(&mut self) -> Result<(), Failure> {
+        let candidates = list_open_pull_requests_by_label(
+            self.github,
+            &self.rule.repository_name,
+            &self.rule.label,
+        )
+        .await?;
+        for number in candidates {
+            let result = self.candidate(number).await;
+            self.outcome(number, result);
+        }
+        Ok(())
+    }
+
+    async fn candidate(&self, number: i64) -> Result<Activity, Failure> {
+        let (database, rule, expected) = (self.database, self.rule, &self.expected);
+        let pull = inspect_pull_request(self.github, &rule.repository_name, number).await?;
+        let (reason, matching) = db(database, |database| {
+            eligible(database, rule, expected, &pull, None)
+        })?;
+        let prior = db(database, |database| {
+            dispatches::find(database, &rule.id, pull.base_repository.id, pull.number)
+        })?;
+        if reason.is_some() || prior.is_some() {
+            let task_id = prior.as_ref().and_then(|prior| prior.task_id.clone());
+            let task_status = task_id
+                .as_deref()
+                .map(|id| task_status(database, &rule.authority_user_id, id))
+                .transpose()?;
+            let reason = if prior.is_some() {
+                "This pull request was previously processed."
+            } else {
+                reason.unwrap_or_default()
+            };
+            return Ok(Activity {
+                matching_paths: matching,
+                previously_processed: prior.is_some(),
+                task_id,
+                task_status,
+                ..Activity::new(pull.number, Some(&pull.url), "excluded", reason)
+            });
+        }
+        let last = inspect_pull_request(self.github, &rule.repository_name, pull.number).await?;
+        let (last_reason, _) = db(database, |database| {
+            eligible(database, rule, expected, &last, None)
+        })?;
+        if last.head_sha != pull.head_sha
+            || last.base_sha != pull.base_sha
+            || last.head_branch != pull.head_branch
+            || last.base_branch != pull.base_branch
+            || last_reason.is_some()
+        {
+            return Ok(Activity::new(
+                pull.number,
+                Some(&last.url),
+                "excluded",
+                "The pull request changed before admission.",
+            ));
+        }
+        let prepared = db(database, |database| {
+            database.transaction(true, |database| {
+                rule_current(database, rule, &self.config, expected)?;
+                assert_pull_request_available(database, "", &rule.repository_name, pull.number)?;
+                dispatches::prepare(database, self.capture(&pull))
+            })
+        })?;
+        create_task_from_trigger(database, &prepared.id, self.wake).await?;
+        let (task_id, status) =
+            start_task_from_trigger(database, self.github, &prepared.id, self.wake).await?;
+        Ok(Activity {
+            task_id: Some(task_id),
+            task_status: Some(status),
+            previously_processed: true,
+            ..Activity::new(pull.number, Some(&pull.url), "eligible", "Task started.")
+        })
+    }
+
+    /// The dispatch capture of an eligible pull request.
+    fn capture(&self, pull: &PullRequestInspection) -> DispatchPrepare {
+        let (rule, local) = (self.rule, &self.expected.dependencies);
+        let profiles = &local.profiles;
+        let advisor_ids = profiles
+            .advisors
+            .iter()
+            .map(|(role, profile)| (*role, profile.profile_id.as_str()))
+            .collect::<std::collections::BTreeMap<_, _>>();
+        let request = json!({
+            "projectId": rule.project_id, "title": pull.title, "description": "Apply the selected workflow to this pull request.", "images": [],
+            "rootProfileId": profiles.root.profile_id, "workerProfileId": profiles.worker.profile_id, "advisorProfileIds": advisor_ids,
+            "workflow": local.engine, "deliveryTarget": rule.delivery_target, "runProjectTests": local.run_project_tests, "visualEvidence": local.visual_evidence,
+            "source": {"kind": "pull_request", "number": pull.number},
+        });
+        DispatchPrepare {
+            rule_id: rule.id.clone(),
+            company_id: rule.company_id.clone(),
+            project_id: rule.project_id.clone(),
+            repository_id: rule.repository_id,
+            repository_name: rule.repository_name.clone(),
+            pull_request_number: pull.number,
+            authority_user_id: rule.authority_user_id.clone(),
+            request,
+            policy: DispatchPolicy {
+                head_sha: pull.head_sha.clone(),
+                base_sha: pull.base_sha.clone(),
+                head_branch: pull.head_branch.clone(),
+                base_branch: pull.base_branch.clone(),
+                protected_paths: rule.protected_paths.clone(),
+                repository_id: rule.repository_id,
+                repository_name: rule.repository_name.clone(),
+                delivery_target: rule.delivery_target.clone(),
+            },
+            preset: self.expected.preset.clone(),
+            profiles: profiles.clone(),
+        }
+    }
+
+    /// Record the pass: a failure schedules a retry; success needs unchanged local facts.
+    fn finish(self) -> Result<(), Failure> {
+        let (database, rule, activity) = (self.database, self.rule, &*self.activity);
+        if self.failed {
+            let retry = retry_after(rule.failure_count, self.provider_retry.as_deref());
+            db(database, |database| {
+                record(
+                    database,
+                    rule,
+                    activity,
+                    false,
+                    Some(UNAVAILABLE),
+                    Some(&retry),
+                    false,
+                    |_| Ok(()),
+                )
+            })?;
+        } else if !db(database, |database| {
             record(
                 database,
                 rule,
                 activity,
+                true,
+                None,
+                None,
                 false,
-                Some(UNAVAILABLE),
-                Some(&retry),
-                false,
-                |_| Ok(()),
+                |database| {
+                    same_local(
+                        database,
+                        &rule.authority_user_id,
+                        &rule.company_id,
+                        &self.config,
+                        &self.expected,
+                    )
+                },
             )
-        })?;
-    } else if !db(database, |database| {
-        record(
-            database,
-            rule,
-            activity,
-            true,
-            None,
-            None,
-            false,
-            |database| same_local(database, authority, company, &config, &expected),
-        )
-    })? {
-        return Err(public(CHANGED, 409));
+        })? {
+            return Err(public(CHANGED, 409));
+        }
+        Ok(())
     }
-    Ok(())
 }
 
 /// `requireGithubTriggerAdmission`: live authority, rule, preset, and profiles.
@@ -1440,39 +1615,32 @@ fn require_admission(database: &SuplexDatabase, dispatch: &Dispatch) -> Database
     if company.status != "active" {
         return Err(failure("Company is not active", 409));
     }
-    let rule: bool = database.connection().query_row(
-        "SELECT EXISTS(SELECT 1 FROM suplex_github_trigger_rules WHERE id = ?1 AND company_id = ?2 AND project_id = ?3 AND repository_id = ?4 AND lower(repository_name) = lower(?5) AND authority_user_id = ?6 AND enabled = 1 AND archived_at IS NULL)",
-        params![dispatch.rule_id, dispatch.company_id, dispatch.project_id, dispatch.repository_id, dispatch.repository_name, dispatch.authority_user_id],
-        |row| row.get(0),
-    )?;
-    if !rule {
+    let rule = get_rule(database, &dispatch.company_id, &dispatch.rule_id)?.filter(|rule| {
+        rule.project_id == dispatch.project_id
+            && rule.repository_id == dispatch.repository_id
+            && rule.repository_name.to_lowercase() == dispatch.repository_name.to_lowercase()
+            && rule.authority_user_id == dispatch.authority_user_id
+            && rule.enabled
+            && rule.archived_at.is_none()
+    });
+    if rule.is_none() {
         return Err(failure("GitHub trigger rule is not available", 409));
     }
     let preset: bool = database.connection().query_row(
         "SELECT EXISTS(SELECT 1 FROM suplex_workflows WHERE id = ?1 AND archived_at IS NULL)",
-        [dispatch.preset["id"].as_str().unwrap_or_default()],
+        [Preset::of(&dispatch.preset)?.id],
         |row| row.get(0),
     )?;
     if !preset {
         return Err(failure("GitHub trigger preset is not available", 422));
     }
-    let advisors = dispatch.profiles["advisors"]
-        .as_object()
-        .cloned()
-        .unwrap_or_default();
-    for (profile, role) in [
-        (&dispatch.profiles["root"], "root"),
-        (&dispatch.profiles["worker"], "worker"),
-    ]
-    .into_iter()
-    .chain(advisors.values().map(|profile| (profile, "root")))
+    let profiles = &dispatch.profiles;
+    for (profile, role) in [(&profiles.root, "root"), (&profiles.worker, "worker")]
+        .into_iter()
+        .chain(profiles.advisors.values().map(|profile| (profile, "root")))
     {
-        if crate::profiles::agent_profiles::read_profile(
-            database,
-            profile["profileId"].as_str().unwrap_or_default(),
-            role,
-        )?
-        .is_none()
+        if crate::profiles::agent_profiles::read_profile(database, &profile.profile_id, role)?
+            .is_none()
         {
             return Err(failure("The selected agent profile does not exist", 422));
         }
@@ -1488,21 +1656,15 @@ pub async fn create_task_from_trigger<D: Db>(
 ) -> Result<(String, String), Failure> {
     let dispatch = db(database, |database| dispatches::get(database, dispatch_id))?
         .ok_or_else(|| task_failure("GitHub trigger dispatch was not found", 404))?;
-    if dispatch.request["startImmediately"] == true
-        || dispatch.request["images"]
-            .as_array()
-            .is_some_and(|images| !images.is_empty())
-    {
+    let body = dispatch.request_body().map_err(send)?;
+    if body.start_immediately || !body.images.is_empty() {
         return Err(task_failure("GitHub trigger dispatch is invalid", 422));
     }
     let authority = dispatch.authority_user_id.clone();
     if let Some(task_id) = &dispatch.task_id {
         return Ok((task_id.clone(), task_status(database, &authority, task_id)?));
     }
-    let body = db(database, |database| {
-        require_admission(database, &dispatch)?;
-        dispatch.request_body()
-    })?;
+    db(database, |database| require_admission(database, &dispatch))?;
     let hash = commands::task_request_hash(&body, &authority).map_err(send)?;
     let existing = db(database, |database| {
         commands::existing_user_task(
@@ -1542,12 +1704,12 @@ pub async fn create_task_from_trigger<D: Db>(
         PathBuf::from(&project.repository_path),
         project.base_branch.clone(),
     );
-    let host = match &project.integration {
-        Some(integration)
-            if serde_json::to_value(&integration.repository)?["kind"] == "bitbucket" =>
-        {
-            "bitbucket"
-        }
+    let host = match project
+        .integration
+        .as_ref()
+        .map(|integration| &integration.repository)
+    {
+        Some(RepositoryConnection::Bitbucket { .. }) => "bitbucket",
         _ => "github",
     };
     let base_sha = git::capture_local_task_heads(
@@ -1595,14 +1757,8 @@ fn create_captured(
         now,
     )?;
     sources::apply(&mut prepared, source)?;
-    let configuration = &prepared.configuration;
     let policy = &dispatch.policy;
-    if configuration["source"]["kind"] != "pull_request"
-        || configuration["source"]["number"] != dispatch.pull_request_number
-        || configuration["startingSha"] != policy.head_sha.as_str()
-        || configuration["baselineSha"] != policy.base_sha.as_str()
-        || configuration["branch"] != policy.head_branch.as_str()
-        || configuration["baseBranch"] != policy.base_branch.as_str()
+    if !TaskBinding::of(&prepared.configuration).matches(dispatch.pull_request_number, policy)
         || project
             .repository
             .as_deref()
@@ -1614,9 +1770,9 @@ fn create_captured(
         return Err(TaskError::new("GitHub trigger source changed", 409).into());
     }
     // TypeScript creates the task from the captured profile snapshots.
-    prepared.root_profile = serde_json::from_value(dispatch.profiles["root"].clone())?;
-    prepared.worker_profile = serde_json::from_value(dispatch.profiles["worker"].clone())?;
-    prepared.advisor_profiles = serde_json::from_value(dispatch.profiles["advisors"].clone())?;
+    prepared.root_profile = dispatch.profiles.root.clone();
+    prepared.worker_profile = dispatch.profiles.worker.clone();
+    prepared.advisor_profiles = dispatch.profiles.advisors.clone();
     let (sender, receiver) = std::sync::mpsc::channel();
     let task = database.transaction(true, |database| {
         require_admission(database, dispatch)?;
@@ -1644,58 +1800,22 @@ fn create_captured(
     Ok((task.id, task.status.to_string()))
 }
 
-/// `startTaskFromGithubTrigger`: start the linked task once the pull request still matches its capture.
-pub async fn start_task_from_trigger<D: Db>(
-    database: &D,
-    github: &Github,
-    dispatch_id: &str,
-    wake: &(dyn Fn(String) + Sync),
-) -> Result<(String, String), Failure> {
-    let not_linked = || task_failure("GitHub trigger dispatch is not linked to a task", 404);
-    let dispatch =
-        db(database, |database| dispatches::get(database, dispatch_id))?.ok_or_else(not_linked)?;
-    let task_id = dispatch.task_id.clone().ok_or_else(not_linked)?;
-    let authority = dispatch.authority_user_id.clone();
-    let startable = |database: &SuplexDatabase| -> DatabaseResult<(String, bool)> {
-        let status = database.connection().query_row(
-            "SELECT c.status, t.archived_at IS NULL FROM suplex_tasks t JOIN suplex_task_controls c ON c.task_id = t.id WHERE t.id = ?1",
-            [&task_id],
-            |row| Ok((row.get::<_, String>(0)?, row.get::<_, bool>(1)?)),
-        )?;
-        Ok((
-            status.0.clone(),
-            status.1 && matches!(status.0.as_str(), "backlog" | "queued"),
-        ))
-    };
-    let status = task_status(database, &authority, &task_id)?;
-    let (_, can_start) = db(database, |database| startable(database))?;
-    if !can_start {
-        return Ok((task_id, status));
-    }
-    db(database, |database| require_admission(database, &dispatch))?;
-    let pull = inspect_pull_request(
-        github,
-        &dispatch.repository_name,
-        dispatch.pull_request_number,
-    )
-    .await?;
-    let label: String = db(database, |database| {
-        Ok(database.connection().query_row(
-            "SELECT label FROM suplex_github_trigger_rules WHERE id = ?1",
-            [&dispatch.rule_id],
-            |row| row.get(0),
-        )?)
-    })?;
+/// The task status and whether a live backlog or queued task may start.
+fn startable(database: &SuplexDatabase, task_id: &str) -> DatabaseResult<(String, bool)> {
+    let (status, live) = database.connection().query_row(
+        "SELECT c.status, t.archived_at IS NULL FROM suplex_tasks t JOIN suplex_task_controls c ON c.task_id = t.id WHERE t.id = ?1",
+        [task_id],
+        |row| Ok((row.get::<_, String>(0)?, row.get::<_, bool>(1)?)),
+    )?;
+    let can_start = live && matches!(status.as_str(), "backlog" | "queued");
+    Ok((status, can_start))
+}
+
+/// The pull request still matches its capture, carries the label, and changes no protected path.
+fn still_eligible(dispatch: &Dispatch, pull: &PullRequestInspection, label: &str) -> bool {
     let policy = &dispatch.policy;
-    let protected = pull.files.iter().any(|file| {
-        std::iter::once(&file.filename)
-            .chain(&file.previous_filename)
-            .any(|path| {
-                matches_protected_paths(&policy.protected_paths, path, None).unwrap_or(false)
-            })
-    });
     let repository = dispatch.repository_name.as_str();
-    let valid = pull.number == dispatch.pull_request_number
+    pull.number == dispatch.pull_request_number
         && pull.state == "open"
         && !pull.is_draft
         && !pull.is_cross_repository
@@ -1709,9 +1829,77 @@ pub async fn start_task_from_trigger<D: Db>(
         && pull.base_sha == policy.base_sha
         && pull.head_branch == policy.head_branch
         && pull.base_branch == policy.base_branch
-        && pull.labels.contains(&label)
-        && !protected;
-    if !valid {
+        && pull.labels.iter().any(|value| value == label)
+        && pull.matching_paths(&policy.protected_paths).is_empty()
+}
+
+/// Start the linked task in one transaction once its captured source is unchanged.
+fn start_linked_task(
+    database: &mut SuplexDatabase,
+    dispatch_id: &str,
+    task_id: &str,
+    wake: impl FnOnce(String) + Send + 'static,
+) -> DatabaseResult<(String, String)> {
+    let current = dispatches::get(database, dispatch_id)?
+        .filter(|value| value.task_id.is_some())
+        .ok_or_else(|| -> Box<dyn Error> {
+            TaskError::new("GitHub trigger dispatch is not linked to a task", 404).into()
+        })?;
+    let (status, can_start) = startable(database, task_id)?;
+    if !can_start {
+        return Ok((task_id.to_owned(), status));
+    }
+    require_admission(database, &current)?;
+    let configuration: Value = serde_json::from_str(&database.connection().query_row(
+        "SELECT configuration_json FROM suplex_tasks WHERE id = ?1",
+        [task_id],
+        |row| row.get::<_, String>(0),
+    )?)?;
+    let binding = TaskBinding::of(&configuration);
+    if !binding.repository_is(&current.repository_name)
+        || !binding.matches(current.pull_request_number, &current.policy)
+    {
+        return Err(TaskError::new("GitHub trigger task source changed", 409).into());
+    }
+    let task = commands::start_user_task(
+        database,
+        &current.authority_user_id,
+        task_id,
+        Utc::now(),
+        wake,
+    )?;
+    Ok((task.id, task.status.to_string()))
+}
+
+/// `startTaskFromGithubTrigger`: start the linked task once the pull request still matches its capture.
+pub async fn start_task_from_trigger<D: Db>(
+    database: &D,
+    github: &Github,
+    dispatch_id: &str,
+    wake: &(dyn Fn(String) + Sync),
+) -> Result<(String, String), Failure> {
+    let not_linked = || task_failure("GitHub trigger dispatch is not linked to a task", 404);
+    let dispatch =
+        db(database, |database| dispatches::get(database, dispatch_id))?.ok_or_else(not_linked)?;
+    let task_id = dispatch.task_id.clone().ok_or_else(not_linked)?;
+    let status = task_status(database, &dispatch.authority_user_id, &task_id)?;
+    let (_, can_start) = db(database, |database| startable(database, &task_id))?;
+    if !can_start {
+        return Ok((task_id, status));
+    }
+    db(database, |database| require_admission(database, &dispatch))?;
+    let pull = inspect_pull_request(
+        github,
+        &dispatch.repository_name,
+        dispatch.pull_request_number,
+    )
+    .await?;
+    let label = db(database, |database| {
+        get_rule(database, &dispatch.company_id, &dispatch.rule_id)
+    })?
+    .map(|rule| rule.label)
+    .ok_or_else(|| task_failure("GitHub trigger rule is not available", 409))?;
+    if !still_eligible(&dispatch, &pull, &label) {
         return Err(task_failure(
             "GitHub trigger pull request is no longer eligible",
             409,
@@ -1720,46 +1908,9 @@ pub async fn start_task_from_trigger<D: Db>(
     let (sender, receiver) = std::sync::mpsc::channel();
     let started = db(database, |database| {
         database.transaction(true, |database| {
-            let current = dispatches::get(database, dispatch_id)?
-                .filter(|value| value.task_id.is_some())
-                .ok_or_else(|| -> Box<dyn Error> {
-                    TaskError::new("GitHub trigger dispatch is not linked to a task", 404).into()
-                })?;
-            let (status, can_start) = startable(database)?;
-            if !can_start {
-                return Ok((task_id.clone(), status));
-            }
-            require_admission(database, &current)?;
-            let configuration: Value = serde_json::from_str(&database.connection().query_row(
-                "SELECT configuration_json FROM suplex_tasks WHERE id = ?1",
-                [&task_id],
-                |row| row.get::<_, String>(0),
-            )?)?;
-            let policy = &current.policy;
-            if configuration["repository"]
-                .as_str()
-                .map(str::to_lowercase)
-                .as_deref()
-                != Some(current.repository_name.as_str())
-                || configuration["startingSha"] != policy.head_sha.as_str()
-                || configuration["baselineSha"] != policy.base_sha.as_str()
-                || configuration["branch"] != policy.head_branch.as_str()
-                || configuration["baseBranch"] != policy.base_branch.as_str()
-                || configuration["source"]["kind"] != "pull_request"
-                || configuration["source"]["number"] != current.pull_request_number
-            {
-                return Err(TaskError::new("GitHub trigger task source changed", 409).into());
-            }
-            let task = commands::start_user_task(
-                database,
-                &current.authority_user_id,
-                &task_id,
-                Utc::now(),
-                move |id| {
-                    let _ = sender.send(id);
-                },
-            )?;
-            Ok((task.id, task.status.to_string()))
+            start_linked_task(database, dispatch_id, &task_id, move |id| {
+                let _ = sender.send(id);
+            })
         })
     })?;
     if let Ok(id) = receiver.try_recv() {
@@ -2350,7 +2501,7 @@ mod tests {
                 delivery_target: "pull_request_draft".into(),
             },
             preset: expected.preset.clone(),
-            profiles: json!({"root": expected.profiles[0], "worker": expected.profiles[1], "advisors": {}}),
+            profiles: expected.dependencies.profiles.clone(),
         };
         let first = f
             .state
@@ -2365,7 +2516,7 @@ mod tests {
             first.idempotency_key,
             format!("github-trigger:{}", first.id)
         );
-        assert_eq!(first.request["startImmediately"], false);
+        assert!(!first.request_body().unwrap().start_immediately);
         let mut contradictory = input(8);
         contradictory.request["source"]["number"] = json!(9);
         assert_eq!(
@@ -2531,5 +2682,141 @@ mod tests {
             "GitHub trigger response is malformed: repository label"
         );
         server.abort();
+    }
+
+    #[tokio::test]
+    async fn admission_capture_stores_its_exact_request_and_profiles_and_links_its_task() {
+        let f = fixture();
+        let plans = f.state.with_database(|database| {
+            let values = json!({"name": "Plans", "description": "", "engine": "competing_plans",
+                "advisorProfileIds": {"planner_b": "profile_native_root"}});
+            workflow_records::create(database, &f.admin, values.as_object().unwrap().clone())
+                .map(|record| json!(record)["id"].as_str().unwrap().to_owned())
+                .unwrap()
+        });
+        let replies = replies(&[]);
+        replies.lock().unwrap().insert(
+            "/repos/owner/repo/pulls/7".into(),
+            (200, pull(7, "main", 1)),
+        );
+        replies.lock().unwrap().insert(
+            "/repos/owner/repo/pulls/7/files?per_page=100&page=1".into(),
+            (200, json!([{"sha": "c", "filename": "docs/a.md", "status": "modified", "additions": 1, "deletions": 0, "changes": 1,
+                "blob_url": "https://github.com/b", "raw_url": "https://github.com/r", "contents_url": "https://api.github.com/c"}])),
+        );
+        let (github, _, server) = fake_github(replies).await;
+        let rule = create(
+            &f.state,
+            &github,
+            &f.admin,
+            "c",
+            GithubTriggerCreate {
+                workflow_id: plans,
+                ..create_input(&[])
+            },
+        )
+        .await
+        .unwrap();
+        let rule = update(
+            &f.state,
+            &github,
+            &f.admin,
+            "c",
+            &rule.id,
+            GithubTriggerPatch {
+                enabled: Some(true),
+                ..patch(rule.revision)
+            },
+        )
+        .await
+        .unwrap();
+        let expected = f
+            .state
+            .with_database(|database| local(database, &f.admin, "c", &Config::from(&rule)))
+            .unwrap();
+        let pull = inspect_pull_request(&github, "owner/repo", 7)
+            .await
+            .unwrap();
+        let mut activity = Vec::new();
+        let pass = Pass {
+            database: &f.state,
+            github: &github,
+            rule: &rule,
+            wake: &|_| {},
+            config: Config::from(&rule),
+            expected,
+            activity: &mut activity,
+            failed: false,
+            provider_retry: None,
+        };
+        let dispatch = f
+            .state
+            .with_database(|database| dispatches::prepare(database, pass.capture(&pull)))
+            .unwrap();
+        let (request, profiles): (String, String) = f.state.with_database(|database| {
+            database.connection().query_row(
+                "SELECT request_json, profiles_json FROM suplex_github_trigger_dispatches WHERE id = ?1",
+                [&dispatch.id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+        }).unwrap();
+        // The stored bytes are the ones the untyped capture wrote.
+        assert_eq!(
+            request.replace(&dispatch.id, "ID"),
+            r#"{"projectId":"p","title":"Candidate","description":"Apply the selected workflow to this pull request.","idempotencyKey":"github-trigger:ID","images":[],"rootProfileId":"profile_native_root","workerProfileId":"profile_native_worker","startImmediately":false,"deliveryTarget":"pull_request_draft","runProjectTests":true,"visualEvidence":"off","source":{"kind":"pull_request","number":7},"workflow":"competing_plans","advisorProfileIds":{"planner_a":"profile_native_root","planner_b":"profile_native_root"},"dependsOn":[],"blockedByPullRequests":[]}"#
+        );
+        assert_eq!(
+            profiles,
+            r#"{"root":{"profileId":"profile_native_root","provider":"codex","model":"gpt-5.6-sol","reasoningLevel":"medium","serviceTier":"default"},"worker":{"profileId":"profile_native_worker","provider":"codex","model":"gpt-5.6-luna","reasoningLevel":"max","serviceTier":"priority"},"advisors":{"planner_a":{"profileId":"profile_native_root","provider":"codex","model":"gpt-5.6-sol","reasoningLevel":"medium","serviceTier":"default"},"planner_b":{"profileId":"profile_native_root","provider":"codex","model":"gpt-5.6-sol","reasoningLevel":"medium","serviceTier":"default"}}}"#
+        );
+        assert!(still_eligible(&dispatch, &pull, "ready"));
+        assert!(!still_eligible(&dispatch, &pull, "other"));
+        // A backlog task created from exactly this capture links; another profile does not.
+        let hash =
+            commands::task_request_hash(&dispatch.request_body().unwrap(), &f.admin).unwrap();
+        let insert = |id: &str, root: &TaskProfile| {
+            f.state.with_database(|database| {
+                let time = now_millis_rfc3339();
+                let configuration = json!({"repository": "Owner/Repo", "source": {"kind": "pull_request", "number": 7},
+                    "startingSha": "a".repeat(40), "baselineSha": "b".repeat(40), "branch": "feature", "baseBranch": "main",
+                    "runProjectTests": true, "visualEvidence": "off"});
+                database.connection().execute("INSERT INTO suplex_tasks (id,company_id,project_id,title,description,configuration_json,idempotency_key,request_hash,creator_user_id,created_at,updated_at) VALUES (?1,'c','p','T','',?2,?3,?4,?5,?6,?6)",
+                    params![id, configuration.to_string(), dispatch.idempotency_key, hash, f.admin, time]).unwrap();
+                database.connection().execute("INSERT INTO suplex_task_controls (task_id,objective,delivery_target,delivery_intent_json,status,root_profile_json,worker_profile_json,workflow,advisor_profiles_json,workflow_state_json,status_changed_at,created_at,updated_at) VALUES (?1,'T','pull_request_draft','{}','backlog',?2,?3,'competing_plans',?4,'{}',?5,?5,?5)",
+                    params![id, serde_json::to_string(root).unwrap(), serde_json::to_string(&dispatch.profiles.worker).unwrap(), serde_json::to_string(&dispatch.profiles.advisors).unwrap(), time]).unwrap();
+            })
+        };
+        let other = TaskProfile {
+            model: "other".into(),
+            ..dispatch.profiles.root.clone()
+        };
+        insert("task_other", &other);
+        assert_eq!(
+            f.state
+                .with_database(|database| dispatches::link_task(
+                    database,
+                    &dispatch.id,
+                    "task_other"
+                ))
+                .unwrap_err()
+                .to_string(),
+            "Task profiles do not match GitHub trigger dispatch"
+        );
+        f.state.with_database(|database| {
+            database
+                .connection()
+                .execute(
+                    "UPDATE suplex_task_controls SET root_profile_json = ?1 WHERE task_id = 'task_other'",
+                    [serde_json::to_string(&dispatch.profiles.root).unwrap()],
+                )
+                .unwrap();
+        });
+        let linked = f
+            .state
+            .with_database(|database| dispatches::link_task(database, &dispatch.id, "task_other"))
+            .unwrap();
+        assert_eq!(linked.task_id.as_deref(), Some("task_other"));
+        server.abort();
+        let _ = std::fs::remove_file(f.filename);
     }
 }

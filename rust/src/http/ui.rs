@@ -97,6 +97,23 @@ mod tests {
     use super::*;
 
     #[test]
+    fn theme_is_applied_before_assets_and_boot_status_survives_until_react_loads() {
+        for view in ["tasks", "health"] {
+            let html = application_page(view);
+            let bootstrap = html.find("localStorage.getItem(\"suplex.theme\")").unwrap();
+            for asset in ["/assets/suplex-ui.css", "/assets/suplex-ui.js"] {
+                assert!(bootstrap < html.find(asset).unwrap());
+            }
+            assert!(html.contains(
+                "const root = document.documentElement; root.classList.toggle(\"dark\", dark)"
+            ));
+            assert!(html.contains("content = dark ? \"#0a0a0a\" : \"#ffffff\""));
+            assert_eq!(html.matches("root.classList.toggle").count(), 1);
+            assert!(html.contains("<div id=\"suplex-app\"><div class=\"suplex-boot\" role=\"status\" aria-label=\"Suplex loads the app\"><span></span></div></div>"));
+        }
+    }
+
+    #[test]
     fn development_page_loads_vite_and_react_refresh_from_loopback() {
         let html = development_html(page_template(), Some("http://127.0.0.1:55013"));
         assert!(html.contains("http://127.0.0.1:55013/@vite/client"));

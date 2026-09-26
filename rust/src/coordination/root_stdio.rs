@@ -653,6 +653,67 @@ mod tests {
     use super::*;
 
     #[test]
+    fn evidence_queries_and_pull_request_text_reject_invalid_combinations() {
+        let parse = |value: Value| parse_call(value.as_object().unwrap().clone());
+        for invalid in [
+            json!({"kind":"read_worker_evidence","turnId":"turn_1","field":"input"}),
+            json!({"kind":"read_worker_evidence","turnId":"turn_1","toolId":"tool_1","cursor":"field:10"}),
+            json!({"kind":"read_worker_evidence","turnId":"turn_1","toolId":"tool_1","position":"head","cursor":"index:1"}),
+        ] {
+            assert!(parse(invalid.clone()).is_err(), "{invalid}");
+        }
+        let request = |title: &str| json!({"kind":"request_delivery","operation":"create_or_adopt_pull_request","pullRequestTitle":title});
+        assert!(parse(request("Create a pull request")).is_ok());
+        for title in [
+            " ",
+            "\nCreate a pull request",
+            "Create\na pull request",
+            "Create\u{1} a pull request",
+            &"a".repeat(121),
+        ] {
+            assert!(parse(request(title)).is_err(), "{title:?}");
+        }
+        assert!(parse(json!({"kind":"request_delivery","operation":"create_or_adopt_pull_request","pullRequestBody":"## Summary\n\n- Change\n\n## Validation\n\n- pnpm test (passed)\n\n## Review notes\n\nReview it."})).is_err());
+    }
+
+    #[test]
+    fn human_questions_require_distinct_choices_and_one_recommendation() {
+        let options = json!([
+            {"label":"Wait","description":"Wait for the prerequisite","recommended":true},
+            {"label":"Change scope","description":"Use published code","recommended":false}
+        ]);
+        let call = |options| {
+            parse_call(
+                json!({"kind":"ask_human","question":"Which base?","options":options})
+                    .as_object()
+                    .unwrap()
+                    .clone(),
+            )
+        };
+        assert!(call(options.clone()).is_ok());
+        for invalid in [
+            Value::Null,
+            json!([]),
+            json!([options[0]]),
+            json!([options[1], {"label":"Continue","description":"Use this base","recommended":false}]),
+            json!([options[0], {"label":"Continue","description":"Use this base","recommended":true}]),
+            json!([options[0], {"label":"Other","description":"Use this base","recommended":false}]),
+            json!([options[0], {"label":"Wait","description":"Use this base","recommended":false}]),
+        ] {
+            assert!(call(invalid.clone()).is_err(), "{invalid}");
+        }
+        assert!(
+            parse_call(
+                json!({"kind":"ask_human","question":"Which base?"})
+                    .as_object()
+                    .unwrap()
+                    .clone()
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
     fn advisor_and_planner_requests_follow_the_root_tool_contract() {
         let parse = |value: Value| parse_call(value.as_object().unwrap().clone());
         assert!(parse(json!({"kind":"delegate_advisor","role":"editor"})).is_err());

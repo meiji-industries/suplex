@@ -2,7 +2,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { expect, test } from "vitest";
 
-import type { Task } from "../src/tasks/contracts.js";
+import type { Task } from "../src/frontend/contracts/tasks.js";
 import { TaskRow } from "../src/frontend/features/tasks/tasks.js";
 
 const profile = { profileId: "profile", provider: "opencode", model: "model", reasoningLevel: "medium", serviceTier: "default" } as const;

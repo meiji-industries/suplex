@@ -413,6 +413,145 @@ pub fn prepare_local_task_worktree(
     observe(&path, &repository, intent)
 }
 
+fn canonical_or_absolute(path: &Path) -> io::Result<PathBuf> {
+    fs::canonicalize(path).or_else(|error| {
+        if error.kind() == io::ErrorKind::NotFound {
+            std::path::absolute(path)
+        } else {
+            Err(error)
+        }
+    })
+}
+
+/// The repository path and this task's worktree path under non-overlapping roots.
+fn cleanup_paths(intent: &TaskWorktreeIntent) -> WorktreeResult<(PathBuf, PathBuf)> {
+    if !valid_task_id(&intent.task_id)
+        || !intent.repository_path.is_absolute()
+        || !intent.worktree_root.is_absolute()
+    {
+        return Err(invalid("Invalid task worktree identity"));
+    }
+    let root = canonical_or_absolute(&intent.worktree_root)?;
+    let repository_path = canonical_or_absolute(&intent.repository_path)?;
+    if contains(&repository_path, &root) || contains(&root, &repository_path) {
+        return Err(invalid("Task worktree roots overlap"));
+    }
+    let path = root.join(&intent.task_id);
+    Ok((repository_path, path))
+}
+
+fn path_metadata(path: &Path) -> io::Result<Option<fs::Metadata>> {
+    match fs::symlink_metadata(path) {
+        Ok(metadata) => Ok(Some(metadata)),
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(error),
+    }
+}
+
+/// The project repository. None when both it and the task worktree are gone.
+fn open_cleanup_repository(
+    repository_path: &Path,
+    worktree_exists: bool,
+) -> WorktreeResult<Option<Repository>> {
+    match Repository::open(repository_path) {
+        Ok(repository) => Ok(Some(repository)),
+        Err(_) if !worktree_exists && !repository_path.exists() => Ok(None),
+        Err(error) => Err(error.into()),
+    }
+}
+
+/// The Git worktree registered at `path`, if any.
+fn registered_worktree(
+    repository: &Repository,
+    path: &Path,
+) -> WorktreeResult<Option<git2::Worktree>> {
+    for name in repository.worktrees()?.iter().flatten().flatten() {
+        let worktree = repository.find_worktree(name)?;
+        if worktree.path() == path {
+            return Ok(Some(worktree));
+        }
+    }
+    Ok(None)
+}
+
+/// No Git worktree is registered here: stop leftover processes and report it absent.
+fn stop_absent_worktree(
+    path: &Path,
+    authorize: impl Fn() -> WorktreeResult<()>,
+) -> WorktreeResult<WorktreeCleanup> {
+    authorize()?;
+    crate::tasks::archive::processes::stop_worktree_processes(path)?;
+    Ok(WorktreeCleanup::AlreadyAbsent)
+}
+
+/// Dirty files need the caller's confirmation before they are discarded.
+fn dirty_confirmation(
+    path: &Path,
+    confirm_discard_dirty: bool,
+) -> WorktreeResult<Option<WorktreeCleanup>> {
+    let dirty_file_paths = dirty_file_paths(path)?;
+    if !dirty_file_paths.is_empty() && !confirm_discard_dirty {
+        return Ok(Some(WorktreeCleanup::ConfirmationRequired {
+            dirty_file_paths,
+        }));
+    }
+    Ok(None)
+}
+
+/// An existing worktree directory must be this task's checkout; dirty files
+/// need confirmation before removal.
+fn inspect_existing(
+    metadata: &fs::Metadata,
+    path: &Path,
+    repository: &Repository,
+    intent: &TaskWorktreeIntent,
+    confirm_discard_dirty: bool,
+) -> WorktreeResult<Option<WorktreeCleanup>> {
+    if metadata.file_type().is_symlink() || !metadata.is_dir() {
+        return Err(invalid("Task worktree path has a conflicting owner"));
+    }
+    observe(path, repository, intent)?;
+    dirty_confirmation(path, confirm_discard_dirty)
+}
+
+/// After the processes stopped, the worktree may not have become dirty and may
+/// not hold populated submodules that pruning would discard.
+fn recheck_before_prune(path: &Path) -> WorktreeResult<Option<WorktreeCleanup>> {
+    if let Some(confirmation) = dirty_confirmation(path, false)? {
+        return Ok(Some(confirmation));
+    }
+    if has_populated_submodules(path)? {
+        return Err(invalid("Task worktree has populated submodules"));
+    }
+    Ok(None)
+}
+
+/// Prune the registered worktree and confirm Git removed both the directory
+/// and its registration.
+fn prune_registered(
+    repository: &Repository,
+    registered: &git2::Worktree,
+    path: &Path,
+) -> WorktreeResult<()> {
+    let mut options = WorktreePruneOptions::new();
+    options.valid(true).working_tree(true);
+    registered.prune(Some(&mut options))?;
+    let still_registered = repository
+        .worktrees()?
+        .iter()
+        .flatten()
+        .flatten()
+        .any(|name| {
+            repository
+                .find_worktree(name)
+                .is_ok_and(|worktree| worktree.path() == path)
+        });
+    if fs::symlink_metadata(path).is_ok() || still_registered {
+        return Err(invalid("Git did not remove the task worktree"));
+    }
+    Ok(())
+}
+
 /// Remove only the Git worktree registered at this task's path.
 /// A saved WorktreeReference is display state; live Git decides ownership.
 pub fn remove_local_task_worktree(
@@ -420,103 +559,33 @@ pub fn remove_local_task_worktree(
     confirm_discard_dirty: bool,
     authorize: impl Fn() -> WorktreeResult<()>,
 ) -> WorktreeResult<WorktreeCleanup> {
-    if !valid_task_id(&intent.task_id)
-        || !intent.repository_path.is_absolute()
-        || !intent.worktree_root.is_absolute()
-    {
-        return Err(invalid("Invalid task worktree identity"));
-    }
-    let root = fs::canonicalize(&intent.worktree_root).or_else(|error| {
-        if error.kind() == io::ErrorKind::NotFound {
-            std::path::absolute(&intent.worktree_root)
-        } else {
-            Err(error)
-        }
-    })?;
-    let repository_path = fs::canonicalize(&intent.repository_path).or_else(|error| {
-        if error.kind() == io::ErrorKind::NotFound {
-            std::path::absolute(&intent.repository_path)
-        } else {
-            Err(error)
-        }
-    })?;
-    if contains(&repository_path, &root) || contains(&root, &repository_path) {
-        return Err(invalid("Task worktree roots overlap"));
-    }
-    let path = root.join(&intent.task_id);
-    let existing = match fs::symlink_metadata(&path) {
-        Ok(metadata) => Some(metadata),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => None,
-        Err(error) => return Err(error.into()),
+    let (repository_path, path) = cleanup_paths(intent)?;
+    let existing = path_metadata(&path)?;
+    let Some(repository) = open_cleanup_repository(&repository_path, existing.is_some())? else {
+        return stop_absent_worktree(&path, authorize);
     };
-    let repository = match Repository::open(&repository_path) {
-        Ok(repository) => Some(repository),
-        Err(error) if existing.is_none() && !repository_path.exists() => None,
-        Err(error) => return Err(error.into()),
-    };
-    let Some(repository) = repository else {
-        authorize()?;
-        crate::tasks::archive::processes::stop_worktree_processes(&path)?;
-        return Ok(WorktreeCleanup::AlreadyAbsent);
-    };
-    let mut registered = None;
-    for name in repository.worktrees()?.iter().flatten().flatten() {
-        let worktree = repository.find_worktree(name)?;
-        if worktree.path() == path {
-            registered = Some(worktree);
-            break;
-        }
-    }
-    let Some(registered) = registered else {
+    let Some(registered) = registered_worktree(&repository, &path)? else {
         if existing.is_some() {
             return Err(invalid("Task worktree path has a conflicting owner"));
         }
-        authorize()?;
-        crate::tasks::archive::processes::stop_worktree_processes(&path)?;
-        return Ok(WorktreeCleanup::AlreadyAbsent);
+        return stop_absent_worktree(&path, authorize);
     };
-    if existing
-        .as_ref()
-        .is_some_and(|metadata| metadata.file_type().is_symlink() || !metadata.is_dir())
+    if let Some(metadata) = &existing
+        && let Some(confirmation) =
+            inspect_existing(metadata, &path, &repository, intent, confirm_discard_dirty)?
     {
-        return Err(invalid("Task worktree path has a conflicting owner"));
-    }
-    if existing.is_some() {
-        observe(&path, &repository, intent)?;
-        let dirty_file_paths = dirty_file_paths(&path)?;
-        if !dirty_file_paths.is_empty() && !confirm_discard_dirty {
-            return Ok(WorktreeCleanup::ConfirmationRequired { dirty_file_paths });
-        }
+        return Ok(confirmation);
     }
     authorize()?;
     crate::tasks::archive::processes::stop_worktree_processes(&path)?;
     authorize()?;
-    if existing.is_some() && !confirm_discard_dirty {
-        let dirty_file_paths = dirty_file_paths(&path)?;
-        if !dirty_file_paths.is_empty() {
-            return Ok(WorktreeCleanup::ConfirmationRequired { dirty_file_paths });
-        }
-        if has_populated_submodules(&path)? {
-            return Err(invalid("Task worktree has populated submodules"));
-        }
-    }
-    let mut options = WorktreePruneOptions::new();
-    options.valid(true).working_tree(true);
-    registered.prune(Some(&mut options))?;
-    if fs::symlink_metadata(&path).is_ok()
-        || repository
-            .worktrees()?
-            .iter()
-            .flatten()
-            .flatten()
-            .any(|name| {
-                repository
-                    .find_worktree(name)
-                    .is_ok_and(|worktree| worktree.path() == path)
-            })
+    if existing.is_some()
+        && !confirm_discard_dirty
+        && let Some(confirmation) = recheck_before_prune(&path)?
     {
-        return Err(invalid("Git did not remove the task worktree"));
+        return Ok(confirmation);
     }
+    prune_registered(&repository, &registered, &path)?;
     Ok(if existing.is_some() {
         WorktreeCleanup::Cleaned
     } else {

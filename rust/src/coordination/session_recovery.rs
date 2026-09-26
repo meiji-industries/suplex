@@ -805,16 +805,48 @@ enum LaunchPlan<'a> {
     Delegate(&'a str),
 }
 
-fn recover_session_blocking(
-    database: &mut SuplexDatabase,
-    database_path: &Path,
-    artifact_root: &Path,
-    task_id: &str,
-    executable: Option<&Path>,
-    inherited_environment: &HashMap<String, String>,
+/// The host inputs for recovering one task's native sessions.
+struct RecoveryHost<'a> {
+    database_path: &'a Path,
+    artifact_root: &'a Path,
+    task_id: &'a str,
+    executable: Option<&'a Path>,
+    inherited_environment: &'a HashMap<String, String>,
     usage: TaskLimitUsage,
-    plan: LaunchPlan<'_>,
-) -> DatabaseResult<Option<PromptObservation>> {
+}
+
+/// One session whose operation this host claimed, with its launch profile.
+struct SessionLaunch<'a> {
+    rows: &'a root_session_store::RootObservationRows,
+    session: &'a SessionRow,
+    delegate: Option<&'a DelegateLaunch>,
+    profile: &'a TaskProfile,
+    harness: &'a dyn TaskHarness,
+    owner: &'a str,
+}
+
+/// A claimed session bound to its native session.
+struct BoundSession<'a> {
+    host: &'a RecoveryHost<'a>,
+    launch: &'a SessionLaunch<'a>,
+    native_id: &'a str,
+}
+
+/// A pending turn after native observation.
+enum PendingTurn {
+    /// Native evidence settled the turn; nothing is dispatched.
+    Settled(PromptObservation),
+    /// Native evidence proves the turn was not admitted; it may be dispatched.
+    Dispatchable(PromptObservation, Box<TurnRow>),
+}
+
+/// The current session of the plan and its first pending turn, when the host
+/// may recover it now.
+fn recoverable_session(
+    database: &SuplexDatabase,
+    task_id: &str,
+    plan: &LaunchPlan<'_>,
+) -> DatabaseResult<Option<(SessionRow, TurnRow)>> {
     let root = matches!(plan, LaunchPlan::Root);
     let session = match plan {
         LaunchPlan::Root => root_session_store::current_root(database, task_id)?,
@@ -845,8 +877,243 @@ fn recover_session_blocking(
     if !root && !root_session_store::worker_replacement_ready(database, &session.id)? {
         return Ok(None);
     }
+    Ok(Some((session, turn)))
+}
+
+/// Claim the session operation for this process. None when another live
+/// owner runs it or this process cannot identify itself.
+fn claim_operation(
+    database: &mut SuplexDatabase,
+    session: &SessionRow,
+) -> DatabaseResult<Option<String>> {
+    if current_owner_still_running(session) {
+        return Ok(None);
+    }
+    let Some(self_identity) = inspect_process(std::process::id()) else {
+        return Ok(None);
+    };
+    let owner = Uuid::new_v4().to_string();
+    let claimed = root_session_store::claim_session_operation(
+        database,
+        session,
+        &owner,
+        i64::from(self_identity.pid),
+        &self_identity.start_time,
+        Utc::now(),
+    )?;
+    Ok(claimed.then_some(owner))
+}
+
+impl BoundSession<'_> {
+    fn complete(
+        &self,
+        database: &mut SuplexDatabase,
+        turn: &TurnRow,
+        observation: &PromptObservation,
+    ) -> DatabaseResult<bool> {
+        let launch = self.launch;
+        match launch.delegate {
+            Some(delegate) => complete_worker_if_terminal(
+                database,
+                self.host.database_path,
+                launch.harness,
+                launch.session,
+                self.native_id,
+                turn,
+                observation,
+                delegate,
+            ),
+            None => complete_root_if_terminal(
+                database,
+                self.host.database_path,
+                launch.harness,
+                launch.session,
+                turn,
+                observation,
+            ),
+        }
+    }
+
+    /// Record native admission and a terminal result.
+    fn record(
+        &self,
+        database: &mut SuplexDatabase,
+        turn: &TurnRow,
+        observation: PromptObservation,
+    ) -> DatabaseResult<PromptObservation> {
+        persist_native_admission(database, turn, &observation)?;
+        self.complete(database, turn, &observation)?;
+        Ok(observation)
+    }
+
+    /// Observe the pending turn. An unadmitted idle Root turn coalesces into
+    /// the next pending turn, which is observed in its place.
+    fn observe_pending(
+        &self,
+        database: &mut SuplexDatabase,
+        mut turn: TurnRow,
+    ) -> DatabaseResult<PendingTurn> {
+        let launch = self.launch;
+        loop {
+            let (before, replayable) = observe_or_recover_fenced(
+                database,
+                self.host.database_path,
+                launch.harness,
+                launch.session,
+                self.native_id,
+                &turn,
+                launch.owner,
+            )?;
+            if !before.retry_allowed || !replayable {
+                return Ok(PendingTurn::Settled(self.record(database, &turn, before)?));
+            }
+            if launch.delegate.is_some()
+                || !root_session_store::coalesce_unadmitted_idle_root_turn(
+                    database,
+                    &turn.id,
+                    Utc::now(),
+                )?
+            {
+                return Ok(PendingTurn::Dispatchable(before, Box::new(turn)));
+            }
+            let Some(next) = root_session_store::pending_turns(database, &launch.session.id)?
+                .into_iter()
+                .next()
+            else {
+                return Ok(PendingTurn::Settled(before));
+            };
+            turn = next;
+        }
+    }
+}
+
+/// Bind the native session, observe the pending turn, and dispatch it only
+/// when native evidence proves it was not admitted.
+fn dispatch_claimed(
+    database: &mut SuplexDatabase,
+    host: &RecoveryHost<'_>,
+    launch: &SessionLaunch<'_>,
+    turn: TurnRow,
+) -> DatabaseResult<PromptObservation> {
+    let (rows, session, profile, harness) =
+        (launch.rows, launch.session, launch.profile, launch.harness);
+    let (database_path, task_id) = (host.database_path, host.task_id);
+    let native_id = session
+        .native_session_id
+        .clone()
+        .unwrap_or_else(|| harness.new_session_id());
+    if !root_session_store::bind_native_session(database, session, &native_id, Utc::now())? {
+        return Err(TaskError::internal(if launch.delegate.is_none() {
+            "Native Root session changed before dispatch"
+        } else {
+            "Native Worker session changed before dispatch"
+        })
+        .into());
+    }
+    let bound = BoundSession {
+        host,
+        launch,
+        native_id: &native_id,
+    };
+    let worktree = rows.control.worktree_path();
+    let project_scope = project_launch_scope(
+        &rows.context["configuration"],
+        &rows.context["issueContext"],
+        database_path,
+        task_id,
+    );
+    let identity = RootIdentity {
+        task_id: task_id.to_owned(),
+        session_id: session.id.clone(),
+        generation: session.generation,
+    };
+    let scope = worktree.map(|worktree| TaskScope {
+        database_path,
+        artifact_root: host.artifact_root,
+        task_id,
+        session_id: &session.id,
+        native_session_id: &native_id,
+        workflow: launch.delegate.map_or(
+            WorkflowLaunch {
+                workflow_root: rows.control.workflow != Workflow::Standard,
+                ..WorkflowLaunch::default()
+            },
+            |delegate| delegate.workflow,
+        ),
+        role: launch
+            .delegate
+            .map_or(TaskRole::Root(&identity), |delegate| {
+                TaskRole::Worker(delegate.purpose)
+            }),
+        worktree: Path::new(worktree),
+        model: profile.model.as_str(),
+        reasoning_effort: profile.reasoning_level.as_str(),
+        instance_home_directory: profile.instance_home_directory().map(Path::new),
+        project_mcp: project_mcp(rows),
+        project_context_path: project_scope.context_path.as_deref(),
+        project_environment: &project_scope.environment,
+        excluded_environment_keys: &project_scope.excluded_keys,
+        executable: host.executable,
+        inherited_environment: host.inherited_environment,
+    });
+    // TypeScript `ensureSession`: a runtime restarts what it needs, such as a lost OpenCode server, before observation.
+    if let Some(scope) = &scope {
+        harness.ensure_session(scope)?;
+    }
+    let (before, turn) = match bound.observe_pending(database, turn)? {
+        PendingTurn::Settled(observation) => return Ok(observation),
+        PendingTurn::Dispatchable(before, turn) => (before, *turn),
+    };
+    if dependency_blocked(rows) {
+        return Ok(before);
+    }
+    let turn = match launch.delegate {
+        None => root_session_store::refresh_pending_root_dependency_context(
+            database,
+            &turn.id,
+            Utc::now(),
+        )?,
+        Some(_) => turn,
+    };
+    let scope = scope.ok_or_else(|| TaskError::Failure {
+        status: 409,
+        code: "worktree_missing",
+        message: "The task has no worktree".into(),
+    })?;
+    let prompt = task_context_prompt(
+        &turn.prompt_text,
+        project_scope.context.as_deref(),
+        project_scope.context_path.as_deref(),
+    );
+    let observation = harness.dispatch(&scope, &turn.id, &prompt, &mut |server_generation| {
+        root_session_store::claim_prompt(
+            database,
+            &turn,
+            launch.owner,
+            server_generation,
+            host.usage,
+            Utc::now(),
+        )
+    })?;
+    bound.record(database, &turn, observation)
+}
+
+fn recover_session_blocking(
+    database: &mut SuplexDatabase,
+    database_path: &Path,
+    artifact_root: &Path,
+    task_id: &str,
+    executable: Option<&Path>,
+    inherited_environment: &HashMap<String, String>,
+    usage: TaskLimitUsage,
+    plan: LaunchPlan<'_>,
+) -> DatabaseResult<Option<PromptObservation>> {
+    let Some((session, turn)) = recoverable_session(database, task_id, &plan)? else {
+        return Ok(None);
+    };
     let rows = root_session_store::root_observation_rows(database, task_id)?;
-    let delegate = (!root).then(|| delegate_launch(&rows, &session.id, &turn.id));
+    let delegate = matches!(plan, LaunchPlan::Delegate(_))
+        .then(|| delegate_launch(&rows, &session.id, &turn.id));
     let profile = delegate.as_ref().map_or_else(
         || selected_profile(&rows, "root"),
         |delegate| &delegate.profile,
@@ -855,176 +1122,26 @@ fn recover_session_blocking(
     // TypeScript `HarnessRouter.forScope`.
     let harness = task_harness_registry::for_profile(provider)
         .ok_or_else(|| TaskError::internal(format!("No task harness for {provider}")))?;
-    if current_owner_still_running(&session) {
-        return Ok(None);
-    }
-    let Some(self_identity) = inspect_process(std::process::id()) else {
+    let Some(owner) = claim_operation(database, &session)? else {
         return Ok(None);
     };
-    let owner = Uuid::new_v4().to_string();
-    if !root_session_store::claim_session_operation(
-        database,
-        &session,
-        &owner,
-        i64::from(self_identity.pid),
-        &self_identity.start_time,
-        Utc::now(),
-    )? {
-        return Ok(None);
-    }
-    let result = (|| -> DatabaseResult<PromptObservation> {
-        let native_id = session
-            .native_session_id
-            .clone()
-            .unwrap_or_else(|| harness.new_session_id());
-        if !root_session_store::bind_native_session(database, &session, &native_id, Utc::now())? {
-            return Err(TaskError::internal(if root {
-                "Native Root session changed before dispatch"
-            } else {
-                "Native Worker session changed before dispatch"
-            })
-            .into());
-        }
-        let worktree = rows.control.worktree_path();
-        let model = profile.model.as_str();
-        let reasoning = profile.reasoning_level.as_str();
-        let project_scope = project_launch_scope(
-            &rows.context["configuration"],
-            &rows.context["issueContext"],
-            database_path,
-            task_id,
-        );
-        let identity = RootIdentity {
-            task_id: task_id.to_owned(),
-            session_id: session.id.clone(),
-            generation: session.generation,
-        };
-        let scope = worktree.map(|worktree| TaskScope {
-            database_path,
-            artifact_root,
-            task_id,
-            session_id: &session.id,
-            native_session_id: &native_id,
-            workflow: delegate.as_ref().map_or(
-                WorkflowLaunch {
-                    workflow_root: rows.control.workflow != Workflow::Standard,
-                    ..WorkflowLaunch::default()
-                },
-                |delegate| delegate.workflow,
-            ),
-            role: delegate
-                .as_ref()
-                .map_or(TaskRole::Root(&identity), |delegate| {
-                    TaskRole::Worker(delegate.purpose)
-                }),
-            worktree: Path::new(worktree),
-            model,
-            reasoning_effort: reasoning,
-            instance_home_directory: profile.instance_home_directory().map(Path::new),
-            project_mcp: project_mcp(&rows),
-            project_context_path: project_scope.context_path.as_deref(),
-            project_environment: &project_scope.environment,
-            excluded_environment_keys: &project_scope.excluded_keys,
-            executable,
-            inherited_environment,
-        });
-        // TypeScript `ensureSession`: a runtime restarts what it needs, such as a lost OpenCode server, before observation.
-        if let Some(scope) = &scope {
-            harness.ensure_session(scope)?;
-        }
-        let complete =
-            |database: &mut SuplexDatabase, turn: &TurnRow, observation: &PromptObservation| {
-                match &delegate {
-                    Some(delegate) => complete_worker_if_terminal(
-                        database,
-                        database_path,
-                        harness,
-                        &session,
-                        &native_id,
-                        turn,
-                        observation,
-                        delegate,
-                    ),
-                    None => complete_root_if_terminal(
-                        database,
-                        database_path,
-                        harness,
-                        &session,
-                        turn,
-                        observation,
-                    ),
-                }
-            };
-        let mut turn = turn.clone();
-        let before = loop {
-            let (before, replayable) = observe_or_recover_fenced(
-                database,
-                database_path,
-                harness,
-                &session,
-                &native_id,
-                &turn,
-                &owner,
-            )?;
-            if !before.retry_allowed || !replayable {
-                persist_native_admission(database, &turn, &before)?;
-                complete(database, &turn, &before)?;
-                return Ok(before);
-            }
-            if !root
-                || !root_session_store::coalesce_unadmitted_idle_root_turn(
-                    database,
-                    &turn.id,
-                    Utc::now(),
-                )?
-            {
-                break before;
-            }
-            let Some(next) = root_session_store::pending_turns(database, &session.id)?
-                .into_iter()
-                .next()
-            else {
-                return Ok(before);
-            };
-            turn = next;
-        };
-        if dependency_blocked(&rows) {
-            return Ok(before);
-        }
-        let turn = if root {
-            root_session_store::refresh_pending_root_dependency_context(
-                database,
-                &turn.id,
-                Utc::now(),
-            )?
-        } else {
-            turn
-        };
-        let scope = scope.ok_or_else(|| TaskError::Failure {
-            status: 409,
-            code: "worktree_missing",
-            message: "The task has no worktree".into(),
-        })?;
-        let prompt = task_context_prompt(
-            &turn.prompt_text,
-            project_scope.context.as_deref(),
-            project_scope.context_path.as_deref(),
-        );
-        let observation =
-            harness.dispatch(&scope, &turn.id, &prompt, &mut |server_generation| {
-                root_session_store::claim_prompt(
-                    database,
-                    &turn,
-                    &owner,
-                    server_generation,
-                    usage,
-                    Utc::now(),
-                )
-            })?;
-        persist_native_admission(database, &turn, &observation)?;
-        complete(database, &turn, &observation)?;
-        Ok(observation)
-    })();
+    let host = RecoveryHost {
+        database_path,
+        artifact_root,
+        task_id,
+        executable,
+        inherited_environment,
+        usage,
+    };
+    let launch = SessionLaunch {
+        rows: &rows,
+        session: &session,
+        delegate: delegate.as_ref(),
+        profile,
+        harness,
+        owner: &owner,
+    };
+    let result = dispatch_claimed(database, &host, &launch, turn);
     root_session_store::release_session_operation(database, &session.id, &owner, Utc::now())?;
     result.map(Some)
 }
@@ -1150,48 +1267,82 @@ pub async fn recover_prepared_worker(
     .map_err(|error| TaskError::internal(error).into())
 }
 
+/// A session whose stop was requested and not yet observed: id, native id,
+/// and launch owner process id and start time.
+type RetiredSession = (String, Option<String>, Option<i64>, Option<String>);
+
+fn retired_sessions(
+    database: &SuplexDatabase,
+    task_id: &str,
+) -> DatabaseResult<Vec<RetiredSession>> {
+    Ok(database
+        .connection()
+        .prepare(
+            "SELECT id,native_session_id,launch_owner_pid,launch_owner_start_time FROM suplex_task_sessions WHERE task_id = ?1 AND stop_requested_at IS NOT NULL AND stopped_at IS NULL",
+        )?
+        .query_map([task_id], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, Option<String>>(1)?,
+                row.get::<_, Option<i64>>(2)?,
+                row.get::<_, Option<String>>(3)?,
+            ))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?)
+}
+
+/// Stop one retired session's native process. None when its launch owner may
+/// still own it; otherwise the native stop result.
+async fn stop_retired_session(
+    database_path: &Path,
+    session: RetiredSession,
+) -> DatabaseResult<Option<io::Result<()>>> {
+    let (session_id, native_id, owner_pid, owner_start) = session;
+    if let Some(pid) = owner_pid.and_then(|pid| u32::try_from(pid).ok())
+        && !retired_owner_can_stop(owner_start.as_deref(), observe_process_owner(pid))
+    {
+        return Ok(None);
+    }
+    let directory = session_reader::session_directory(database_path, &session_id)?;
+    let stopped = tokio::task::spawn_blocking(move || {
+        match task_harness_registry::for_session(native_id.as_deref()) {
+            Some(harness) => harness.stop(&directory, native_id.as_deref()),
+            // An unbound session never started a native process.
+            None if native_id.is_none() => Ok(()),
+            None => Err(io::Error::other("No task harness for session")),
+        }
+    })
+    .await?;
+    Ok(Some(stopped))
+}
+
+/// Record every session whose native stop Suplex observed.
+fn mark_sessions_stopped(database: &SuplexDatabase, stopped: Vec<String>) -> DatabaseResult<()> {
+    for session_id in stopped {
+        let time = now_millis_rfc3339();
+        database.connection().execute(
+            "UPDATE suplex_task_sessions SET stopped_at = ?1, launch_owner = NULL, launch_owner_pid = NULL, launch_owner_start_time = NULL, launch_claimed_at = NULL, updated_at = ?1 WHERE id = ?2 AND stop_requested_at IS NOT NULL AND stopped_at IS NULL",
+            rusqlite::params![time, session_id],
+        )?;
+    }
+    Ok(())
+}
+
 pub(crate) async fn stop_retired_sessions(
     database: &mut SuplexDatabase,
     database_path: &Path,
     task_id: &str,
 ) -> DatabaseResult<()> {
-    let sessions = {
-        let mut statement = database.connection().prepare(
-            "SELECT id,native_session_id,launch_owner_pid,launch_owner_start_time FROM suplex_task_sessions WHERE task_id = ?1 AND stop_requested_at IS NOT NULL AND stopped_at IS NULL",
-        )?;
-        statement
-            .query_map([task_id], |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, Option<String>>(1)?,
-                    row.get::<_, Option<i64>>(2)?,
-                    row.get::<_, Option<String>>(3)?,
-                ))
-            })?
-            .collect::<rusqlite::Result<Vec<_>>>()?
-    };
+    let sessions = retired_sessions(database, task_id)?;
     let outstanding_count = sessions.len();
     let mut stopped = Vec::new();
     let mut failures = Vec::new();
-    for (session_id, native_id, owner_pid, owner_start) in sessions {
-        if let Some(pid) = owner_pid.and_then(|pid| u32::try_from(pid).ok())
-            && !retired_owner_can_stop(owner_start.as_deref(), observe_process_owner(pid))
-        {
-            continue;
-        }
-        let directory = session_reader::session_directory(database_path, &session_id)?;
-        match tokio::task::spawn_blocking(move || {
-            match task_harness_registry::for_session(native_id.as_deref()) {
-                Some(harness) => harness.stop(&directory, native_id.as_deref()),
-                // An unbound session never started a native process.
-                None if native_id.is_none() => Ok(()),
-                None => Err(io::Error::other("No task harness for session")),
-            }
-        })
-        .await?
-        {
-            Ok(()) => stopped.push(session_id),
-            Err(error) => failures.push(error.to_string()),
+    for session in sessions {
+        let session_id = session.0.clone();
+        match stop_retired_session(database_path, session).await? {
+            Some(Ok(())) => stopped.push(session_id),
+            Some(Err(error)) => failures.push(error.to_string()),
+            None => {}
         }
     }
     let (status, worktree): (TaskStatus, Option<String>) = {
@@ -1209,13 +1360,7 @@ pub(crate) async fn stop_retired_sessions(
         tokio::task::spawn_blocking(move || processes::stop_worktree_processes(Path::new(&path)))
             .await??;
     }
-    for session_id in stopped {
-        let time = now_millis_rfc3339();
-        database.connection().execute(
-            "UPDATE suplex_task_sessions SET stopped_at = ?1, launch_owner = NULL, launch_owner_pid = NULL, launch_owner_start_time = NULL, launch_claimed_at = NULL, updated_at = ?1 WHERE id = ?2 AND stop_requested_at IS NOT NULL AND stopped_at IS NULL",
-            rusqlite::params![time, session_id],
-        )?;
-    }
+    mark_sessions_stopped(database, stopped)?;
     if !failures.is_empty() && matches!(status, TaskStatus::Cancelled | TaskStatus::Delivered) {
         return Err(TaskError::internal(format!(
             "Some agent sessions could not be stopped: {}",

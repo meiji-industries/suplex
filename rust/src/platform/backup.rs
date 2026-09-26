@@ -230,6 +230,216 @@ fn modified_iso(time: SystemTime) -> String {
     rfc3339_millis(DateTime::<Utc>::from(time))
 }
 
+/// A manifest string, or the JSON text of any other value.
+fn manifest_text(value: &Value) -> String {
+    match value {
+        Value::String(text) => text.clone(),
+        other => other.to_string(),
+    }
+}
+
+/// Extract the archive into `staging` after every listed name proved safe.
+fn extract_checked(archive: &Path, staging: &Path, errors: &mut Vec<String>) -> BackupResult<()> {
+    if !archive.exists() {
+        return Err(BackupFailure::Invalid.into());
+    }
+    let listing = tar(&["-tzf".as_ref(), archive.as_os_str()], 30)?;
+    if listing
+        .lines()
+        .filter(|line| !line.trim_end_matches('\r').is_empty())
+        .any(|name| !safe_archive_name(name.trim_end_matches('\r').trim_end_matches('/')))
+    {
+        errors.push("archive contains an unsafe path".into());
+        return Err(BackupFailure::Unsafe.into());
+    }
+    tar(
+        &[
+            "-xzf".as_ref(),
+            archive.as_os_str(),
+            "-C".as_ref(),
+            staging.as_os_str(),
+            "--no-same-owner".as_ref(),
+        ],
+        60,
+    )?;
+    Ok(())
+}
+
+/// The manifest lists every extracted file exactly once, with its size and hash.
+fn check_manifest_entries(
+    root: &Path,
+    manifest: &Value,
+    errors: &mut Vec<String>,
+) -> BackupResult<()> {
+    let empty = Vec::new();
+    let manifest_entries = manifest["entries"].as_array().unwrap_or(&empty);
+    let actual = files_under(root, "")?
+        .into_iter()
+        .filter(|entry| entry["path"] != "manifest.json")
+        .collect::<Vec<_>>();
+    let mut expected_paths = Vec::<String>::new();
+    for entry in manifest_entries {
+        let path = manifest_text(&entry["path"]);
+        if !safe_manifest_path(&path) {
+            errors.push(format!("unsafe manifest path: {path}"));
+            continue;
+        }
+        if expected_paths.contains(&path) {
+            errors.push(format!("duplicate manifest entry: {path}"));
+        } else {
+            expected_paths.push(path);
+        }
+    }
+    let actual_paths = actual
+        .iter()
+        .map(|entry| manifest_text(&entry["path"]))
+        .collect::<HashSet<_>>();
+    for path in &expected_paths {
+        if !actual_paths.contains(path) {
+            errors.push(format!("missing entry: {path}"));
+        }
+    }
+    let expected_set = expected_paths.iter().collect::<HashSet<_>>();
+    for entry in &actual {
+        let path = manifest_text(&entry["path"]);
+        if !expected_set.contains(&path) {
+            errors.push(format!("unexpected entry: {path}"));
+        }
+    }
+    for entry in manifest_entries {
+        let path = manifest_text(&entry["path"]);
+        if !safe_manifest_path(&path) {
+            continue;
+        }
+        match fs::read(root.join(&path)) {
+            Ok(bytes)
+                if Some(bytes.len() as u64) == entry["bytes"].as_u64()
+                    && entry["sha256"] == crate::shared::hash::sha256_hex(&bytes) => {}
+            Ok(_) => errors.push(format!("hash mismatch: {path}")),
+            Err(_) => errors.push(format!("missing entry: {path}")),
+        }
+    }
+    Ok(())
+}
+
+/// The configuration requires reauthentication and holds every required key.
+fn check_configuration(
+    root: &Path,
+    manifest: &Value,
+    errors: &mut Vec<String>,
+) -> BackupResult<()> {
+    let configuration: Value = serde_json::from_slice(&fs::read(root.join("config/config.json"))?)?;
+    if configuration["version"] != BACKUP_VERSION
+        || !configuration["requiresReauthentication"]
+            .as_bool()
+            .unwrap_or(false)
+    {
+        errors.push("required configuration is missing".into());
+    }
+    let empty = Vec::new();
+    for required in manifest["requiredConfiguration"]
+        .as_array()
+        .unwrap_or(&empty)
+    {
+        let key = manifest_text(required);
+        if configuration["config"].get(&key).is_none() {
+            errors.push(format!("missing configuration: {key}"));
+        }
+    }
+    Ok(())
+}
+
+/// The database passes its integrity check and every artifact it names has
+/// its recorded size and hash.
+fn check_database(root: &Path, manifest: &Value, errors: &mut Vec<String>) -> BackupResult<()> {
+    let database_path = manifest["database"]["path"]
+        .as_str()
+        .unwrap_or("app/suplex.sqlite");
+    if !safe_manifest_path(database_path) {
+        return Err(BackupFailure::Unsafe.into());
+    }
+    let database =
+        Connection::open_with_flags(root.join(database_path), OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+    let integrity: String = database.query_row("PRAGMA integrity_check", [], |row| row.get(0))?;
+    if integrity != "ok" {
+        errors.push("database integrity check failed".into());
+    }
+    let artifacts = database
+        .prepare("SELECT storage_path, byte_size, sha256 FROM suplex_artifacts")?
+        .query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, i64>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    for (storage_path, byte_size, digest) in artifacts {
+        let relative = format!("app/artifacts/{storage_path}");
+        if !safe_manifest_path(&relative) {
+            errors.push(format!("unsafe artifact path: {storage_path}"));
+            continue;
+        }
+        match fs::read(root.join(&relative)) {
+            Ok(bytes)
+                if bytes.len() as i64 == byte_size
+                    && crate::shared::hash::sha256_hex(&bytes) == digest => {}
+            Ok(_) => errors.push(format!("artifact hash mismatch: {storage_path}")),
+            Err(_) => errors.push(format!("missing artifact: {storage_path}")),
+        }
+    }
+    Ok(())
+}
+
+/// Copy the live users, passkeys, and sessions into the staged database in
+/// one transaction, so the administrator who restores stays signed in.
+fn keep_live_accounts(staged: &Connection, live_path: &Path) -> BackupResult<()> {
+    staged.pragma_update(None, "foreign_keys", "ON")?;
+    staged.execute("ATTACH DATABASE ?1 AS live", [live_path.to_string_lossy()])?;
+    let columns = |table: &str| -> rusqlite::Result<Vec<String>> {
+        staged
+            .prepare(&format!("SELECT name FROM pragma_table_info('{table}')"))?
+            .query_map([], |row| row.get::<_, String>(0))?
+            .map(|name| name.map(|name| format!("\"{name}\"")))
+            .collect()
+    };
+    staged.execute_batch("BEGIN")?;
+    let copied = (|| -> rusqlite::Result<()> {
+        staged.execute(
+            &format!(
+                "INSERT OR IGNORE INTO main.suplex_users SELECT {} FROM live.suplex_users",
+                columns("suplex_users")?.join(", ")
+            ),
+            [],
+        )?;
+        // A backup from another host can hold the same username under another id; passkeys follow the username.
+        for table in ["suplex_credentials", "suplex_sessions"] {
+            let names = columns(table)?;
+            let values = names
+                .iter()
+                .map(|name| {
+                    if name == "\"user_id\"" {
+                        "restored.id".to_owned()
+                    } else {
+                        format!("row.{name}")
+                    }
+                })
+                .collect::<Vec<_>>();
+            staged.execute(&format!("INSERT OR IGNORE INTO main.{table} ({}) SELECT {} FROM live.{table} row JOIN live.suplex_users current ON current.id = row.user_id JOIN main.suplex_users restored ON restored.username = current.username", names.join(", "), values.join(", ")), [])?;
+        }
+        Ok(())
+    })();
+    match copied {
+        Ok(()) => staged.execute_batch("COMMIT")?,
+        Err(error) => {
+            staged.execute_batch("ROLLBACK")?;
+            return Err(error.into());
+        }
+    }
+    staged.execute_batch("DETACH DATABASE live")?;
+    Ok(())
+}
+
 impl BackupService {
     pub fn directory(&self) -> PathBuf {
         self.data_root.join("backups")
@@ -285,6 +495,27 @@ impl BackupService {
         })
     }
 
+    /// Stage the database snapshot without authentication state, the
+    /// artifacts, and the configuration record under `root`.
+    fn stage_contents(&self, root: &Path) -> BackupResult<()> {
+        fs::create_dir_all(root.join("app"))?;
+        fs::create_dir_all(root.join("config"))?;
+        let snapshot = root.join("app/suplex.sqlite");
+        Connection::open_with_flags(&self.database_path, OpenFlags::SQLITE_OPEN_READ_ONLY)?
+            .backup(rusqlite::MAIN_DB, &snapshot, None)?;
+        remove_authentication_state(&snapshot)?;
+        copy_tree(&self.artifact_root, &root.join("app/artifacts"), false)?;
+        crate::shared::fs::write_private(
+            &root.join("config/config.json"),
+            &serde_json::to_vec_pretty(&json!({
+                "version": BACKUP_VERSION,
+                "config": self.configuration,
+                "requiresReauthentication": true,
+            }))?,
+        )?;
+        Ok(())
+    }
+
     pub fn create(&self, destination: &Path) -> BackupResult<Created> {
         let started = Instant::now();
         let destination = std::path::absolute(destination)?;
@@ -300,21 +531,7 @@ impl BackupService {
         let staging = staging("suplex-backup-create-")?;
         let result = (|| {
             let root = staging.join(BACKUP_ROOT);
-            fs::create_dir_all(root.join("app"))?;
-            fs::create_dir_all(root.join("config"))?;
-            let snapshot = root.join("app/suplex.sqlite");
-            Connection::open_with_flags(&self.database_path, OpenFlags::SQLITE_OPEN_READ_ONLY)?
-                .backup(rusqlite::MAIN_DB, &snapshot, None)?;
-            remove_authentication_state(&snapshot)?;
-            copy_tree(&self.artifact_root, &root.join("app/artifacts"), false)?;
-            crate::shared::fs::write_private(
-                &root.join("config/config.json"),
-                &serde_json::to_vec_pretty(&json!({
-                    "version": BACKUP_VERSION,
-                    "config": self.configuration,
-                    "requiresReauthentication": true,
-                }))?,
-            )?;
+            self.stage_contents(&root)?;
             let entries = files_under(&root, "")?;
             let manifest = json!({
                 "version": BACKUP_VERSION,
@@ -393,144 +610,16 @@ impl BackupService {
         errors: &mut Vec<String>,
         manifest_slot: &mut Option<Value>,
     ) -> BackupResult<()> {
-        if !archive.exists() {
-            return Err(BackupFailure::Invalid.into());
-        }
-        let listing = tar(&["-tzf".as_ref(), archive.as_os_str()], 30)?;
-        if listing
-            .lines()
-            .filter(|line| !line.trim_end_matches('\r').is_empty())
-            .any(|name| !safe_archive_name(name.trim_end_matches('\r').trim_end_matches('/')))
-        {
-            errors.push("archive contains an unsafe path".into());
-            return Err(BackupFailure::Unsafe.into());
-        }
-        tar(
-            &[
-                "-xzf".as_ref(),
-                archive.as_os_str(),
-                "-C".as_ref(),
-                staging.as_os_str(),
-                "--no-same-owner".as_ref(),
-            ],
-            60,
-        )?;
+        extract_checked(archive, staging, errors)?;
         let root = staging.join(BACKUP_ROOT);
         let manifest: Value = serde_json::from_slice(&fs::read(root.join("manifest.json"))?)?;
         *manifest_slot = Some(manifest.clone());
         if manifest["version"] != BACKUP_VERSION {
             errors.push("unsupported backup version".into());
         }
-        let empty = Vec::new();
-        let manifest_entries = manifest["entries"].as_array().unwrap_or(&empty);
-        let actual = files_under(&root, "")?
-            .into_iter()
-            .filter(|entry| entry["path"] != "manifest.json")
-            .collect::<Vec<_>>();
-        let mut expected_paths = Vec::<String>::new();
-        let text = |value: &Value| match value {
-            Value::String(text) => text.clone(),
-            other => other.to_string(),
-        };
-        for entry in manifest_entries {
-            let path = text(&entry["path"]);
-            if !safe_manifest_path(&path) {
-                errors.push(format!("unsafe manifest path: {path}"));
-                continue;
-            }
-            if expected_paths.contains(&path) {
-                errors.push(format!("duplicate manifest entry: {path}"));
-            } else {
-                expected_paths.push(path);
-            }
-        }
-        let actual_paths = actual
-            .iter()
-            .map(|entry| text(&entry["path"]))
-            .collect::<HashSet<_>>();
-        for path in &expected_paths {
-            if !actual_paths.contains(path) {
-                errors.push(format!("missing entry: {path}"));
-            }
-        }
-        let expected_set = expected_paths.iter().collect::<HashSet<_>>();
-        for entry in &actual {
-            let path = text(&entry["path"]);
-            if !expected_set.contains(&path) {
-                errors.push(format!("unexpected entry: {path}"));
-            }
-        }
-        for entry in manifest_entries {
-            let path = text(&entry["path"]);
-            if !safe_manifest_path(&path) {
-                continue;
-            }
-            match fs::read(root.join(&path)) {
-                Ok(bytes)
-                    if Some(bytes.len() as u64) == entry["bytes"].as_u64()
-                        && entry["sha256"] == crate::shared::hash::sha256_hex(&bytes) => {}
-                Ok(_) => errors.push(format!("hash mismatch: {path}")),
-                Err(_) => errors.push(format!("missing entry: {path}")),
-            }
-        }
-        let configuration: Value =
-            serde_json::from_slice(&fs::read(root.join("config/config.json"))?)?;
-        if configuration["version"] != BACKUP_VERSION
-            || !configuration["requiresReauthentication"]
-                .as_bool()
-                .unwrap_or(false)
-        {
-            errors.push("required configuration is missing".into());
-        }
-        for required in manifest["requiredConfiguration"]
-            .as_array()
-            .unwrap_or(&empty)
-        {
-            let key = text(required);
-            if configuration["config"].get(&key).is_none() {
-                errors.push(format!("missing configuration: {key}"));
-            }
-        }
-        let database_path = manifest["database"]["path"]
-            .as_str()
-            .unwrap_or("app/suplex.sqlite");
-        if !safe_manifest_path(database_path) {
-            return Err(BackupFailure::Unsafe.into());
-        }
-        let database = Connection::open_with_flags(
-            root.join(database_path),
-            OpenFlags::SQLITE_OPEN_READ_ONLY,
-        )?;
-        let integrity: String =
-            database.query_row("PRAGMA integrity_check", [], |row| row.get(0))?;
-        if integrity != "ok" {
-            errors.push("database integrity check failed".into());
-        }
-        let artifacts = database
-            .prepare("SELECT storage_path, byte_size, sha256 FROM suplex_artifacts")?
-            .query_map([], |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, i64>(1)?,
-                    row.get::<_, String>(2)?,
-                ))
-            })?
-            .collect::<Result<Vec<_>, _>>()?;
-        for (storage_path, byte_size, digest) in artifacts {
-            let relative = format!("app/artifacts/{storage_path}");
-            if !safe_manifest_path(&relative) {
-                errors.push(format!("unsafe artifact path: {storage_path}"));
-                continue;
-            }
-            match fs::read(root.join(&relative)) {
-                Ok(bytes)
-                    if bytes.len() as i64 == byte_size
-                        && crate::shared::hash::sha256_hex(&bytes) == digest => {}
-                Ok(_) => errors.push(format!("artifact hash mismatch: {storage_path}")),
-                Err(_) => errors.push(format!("missing artifact: {storage_path}")),
-            }
-        }
-        Ok(())
+        check_manifest_entries(&root, &manifest, errors)?;
+        check_configuration(&root, &manifest, errors)?;
+        check_database(&root, &manifest, errors)
     }
 
     pub fn restore(
@@ -576,52 +665,7 @@ impl BackupService {
                     .map_err(|error| error.to_string())?,
             );
             let staged = Connection::open(&staged_path)?;
-            staged.pragma_update(None, "foreign_keys", "ON")?;
-            staged.execute(
-                "ATTACH DATABASE ?1 AS live",
-                [self.database_path.to_string_lossy()],
-            )?;
-            let columns = |table: &str| -> rusqlite::Result<Vec<String>> {
-                staged
-                    .prepare(&format!("SELECT name FROM pragma_table_info('{table}')"))?
-                    .query_map([], |row| row.get::<_, String>(0))?
-                    .map(|name| name.map(|name| format!("\"{name}\"")))
-                    .collect()
-            };
-            staged.execute_batch("BEGIN")?;
-            let copied = (|| -> rusqlite::Result<()> {
-                staged.execute(
-                    &format!(
-                        "INSERT OR IGNORE INTO main.suplex_users SELECT {} FROM live.suplex_users",
-                        columns("suplex_users")?.join(", ")
-                    ),
-                    [],
-                )?;
-                // A backup from another host can hold the same username under another id; passkeys follow the username.
-                for table in ["suplex_credentials", "suplex_sessions"] {
-                    let names = columns(table)?;
-                    let values = names
-                        .iter()
-                        .map(|name| {
-                            if name == "\"user_id\"" {
-                                "restored.id".to_owned()
-                            } else {
-                                format!("row.{name}")
-                            }
-                        })
-                        .collect::<Vec<_>>();
-                    staged.execute(&format!("INSERT OR IGNORE INTO main.{table} ({}) SELECT {} FROM live.{table} row JOIN live.suplex_users current ON current.id = row.user_id JOIN main.suplex_users restored ON restored.username = current.username", names.join(", "), values.join(", ")), [])?;
-                }
-                Ok(())
-            })();
-            match copied {
-                Ok(()) => staged.execute_batch("COMMIT")?,
-                Err(error) => {
-                    staged.execute_batch("ROLLBACK")?;
-                    return Err(error.into());
-                }
-            }
-            staged.execute_batch("DETACH DATABASE live")?;
+            keep_live_accounts(&staged, &self.database_path)?;
             copy_tree(&root.join("app/artifacts"), &self.artifact_root, true)?;
             // SQLite's backup API swaps the pages under open connections, which see the restored data on their next read.
             staged.backup(rusqlite::MAIN_DB, &self.database_path, None)?;

@@ -227,3 +227,11 @@ The four one-shot TypeScript service oracle programs under `tests/support/task-{
 | Removed TS test | Retained native assertion |
 | --- | --- |
 | `company-issue-code.test.ts` | `identity::companies::tests::company_mutations_enforce_role_uniqueness_issue_lock_and_audit` and `routes::companies` company issue-code response tests cover normalization, allocation lock, role authorization, and audit. |
+
+## Retired task command TypeScript tests
+
+| Removed TS test | Retained native assertion |
+| --- | --- |
+| `tasks-api-creation.test.ts` | `routes::tasks::tests::local_backlog_create_fetches_git_and_returns_full_task_shape` covers create/replay, edit validation, Start/answer/limit answer, notes, cancel, archive, and live HTTP shape; `tasks::commands::tests::live_authority_and_after_commit_wake_follow_task_start` covers authorization and scheduling; the Rust browser task board/detail tests exercise create, start, answer, and edit as user journeys. |
+| `task-continue-delivery.test.ts` | `tasks::commands::tests::continue_delivery_resumes_the_coordinator_toward_the_new_target` covers same-task continuation, target/history preservation, invalid and competing transitions, and rollback. |
+| `task-blocked-by.test.ts` | `tasks::commands::tests::dependency_replacement_rejects_cycles_and_admits_a_released_queued_task`, `coordination::store::tests::lifecycle_events_follow_start_queue_wait_and_prerequisite_release`, and `coordination::host::tests::scheduler_tick_admits_a_queued_task_whose_blocker_cleared` cover multi-blocker admission, cycle rejection, and queue release. |

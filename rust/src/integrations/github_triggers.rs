@@ -1615,12 +1615,15 @@ fn require_admission(database: &SuplexDatabase, dispatch: &Dispatch) -> Database
     if company.status != "active" {
         return Err(failure("Company is not active", 409));
     }
-    let rule: bool = database.connection().query_row(
-        "SELECT EXISTS(SELECT 1 FROM suplex_github_trigger_rules WHERE id = ?1 AND company_id = ?2 AND project_id = ?3 AND repository_id = ?4 AND lower(repository_name) = lower(?5) AND authority_user_id = ?6 AND enabled = 1 AND archived_at IS NULL)",
-        params![dispatch.rule_id, dispatch.company_id, dispatch.project_id, dispatch.repository_id, dispatch.repository_name, dispatch.authority_user_id],
-        |row| row.get(0),
-    )?;
-    if !rule {
+    let rule = get_rule(database, &dispatch.company_id, &dispatch.rule_id)?.filter(|rule| {
+        rule.project_id == dispatch.project_id
+            && rule.repository_id == dispatch.repository_id
+            && rule.repository_name.to_lowercase() == dispatch.repository_name.to_lowercase()
+            && rule.authority_user_id == dispatch.authority_user_id
+            && rule.enabled
+            && rule.archived_at.is_none()
+    });
+    if rule.is_none() {
         return Err(failure("GitHub trigger rule is not available", 409));
     }
     let preset: bool = database.connection().query_row(
@@ -1891,13 +1894,11 @@ pub async fn start_task_from_trigger<D: Db>(
         dispatch.pull_request_number,
     )
     .await?;
-    let label: String = db(database, |database| {
-        Ok(database.connection().query_row(
-            "SELECT label FROM suplex_github_trigger_rules WHERE id = ?1",
-            [&dispatch.rule_id],
-            |row| row.get(0),
-        )?)
-    })?;
+    let label = db(database, |database| {
+        get_rule(database, &dispatch.company_id, &dispatch.rule_id)
+    })?
+    .map(|rule| rule.label)
+    .ok_or_else(|| task_failure("GitHub trigger rule is not available", 409))?;
     if !still_eligible(&dispatch, &pull, &label) {
         return Err(task_failure(
             "GitHub trigger pull request is no longer eligible",
@@ -2686,8 +2687,12 @@ mod tests {
     #[tokio::test]
     async fn admission_capture_stores_its_exact_request_and_profiles_and_links_its_task() {
         let f = fixture();
-        f.state.with_database(|database| {
-            database.connection().execute("INSERT INTO suplex_workflows (id,name,description,engine,configuration_json,created_at,updated_at) VALUES ('workflow_plans','Plans','','competing_plans','{\"advisorProfileIds\":{\"planner_b\":\"profile_native_root\"}}','2026-01-01T00:00:00.000Z','2026-01-01T00:00:00.000Z')", []).unwrap();
+        let plans = f.state.with_database(|database| {
+            let values = json!({"name": "Plans", "description": "", "engine": "competing_plans",
+                "advisorProfileIds": {"planner_b": "profile_native_root"}});
+            workflow_records::create(database, &f.admin, values.as_object().unwrap().clone())
+                .map(|record| json!(record)["id"].as_str().unwrap().to_owned())
+                .unwrap()
         });
         let replies = replies(&[]);
         replies.lock().unwrap().insert(
@@ -2706,7 +2711,7 @@ mod tests {
             &f.admin,
             "c",
             GithubTriggerCreate {
-                workflow_id: "workflow_plans".into(),
+                workflow_id: plans,
                 ..create_input(&[])
             },
         )
@@ -2801,21 +2806,16 @@ mod tests {
             database
                 .connection()
                 .execute(
-                    "DELETE FROM suplex_task_controls WHERE task_id = 'task_other'",
-                    [],
+                    "UPDATE suplex_task_controls SET root_profile_json = ?1 WHERE task_id = 'task_other'",
+                    [serde_json::to_string(&dispatch.profiles.root).unwrap()],
                 )
                 .unwrap();
-            database
-                .connection()
-                .execute("DELETE FROM suplex_tasks WHERE id = 'task_other'", [])
-                .unwrap();
         });
-        insert("task_exact", &dispatch.profiles.root);
         let linked = f
             .state
-            .with_database(|database| dispatches::link_task(database, &dispatch.id, "task_exact"))
+            .with_database(|database| dispatches::link_task(database, &dispatch.id, "task_other"))
             .unwrap();
-        assert_eq!(linked.task_id.as_deref(), Some("task_exact"));
+        assert_eq!(linked.task_id.as_deref(), Some("task_other"));
         server.abort();
         let _ = std::fs::remove_file(f.filename);
     }

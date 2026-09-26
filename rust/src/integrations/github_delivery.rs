@@ -11,7 +11,10 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use super::{github::Access, provider_http::optional_metadata};
+use super::{
+    github::Access,
+    provider_http::{lenient, optional_metadata},
+};
 use crate::{
     platform::redaction,
     tasks::worktree::{self, LocalRevisionObservation},
@@ -149,7 +152,7 @@ pub struct Observation {
     pub mergeable: Option<String>,
     pub merge_state_status: Option<String>,
     pub checks: Checks,
-    pub author: Option<Value>,
+    pub author: Option<ObservedAuthor>,
     pub changed_files: Option<u64>,
     pub additions: Option<u64>,
     pub deletions: Option<u64>,
@@ -157,6 +160,14 @@ pub struct Observation {
     pub review_decision: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub title: Option<String>,
+}
+
+/// The pull request author in the `gh pr view` shape.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ObservedAuthor {
+    pub login: String,
+    pub avatar_url: String,
 }
 
 impl Observation {
@@ -177,36 +188,6 @@ pub enum MergeResult {
         disposition: &'static str,
         message: String,
     },
-}
-
-fn string(value: &Value, key: &str) -> Option<String> {
-    value.get(key).and_then(Value::as_str).map(str::to_owned)
-}
-
-fn nonempty_bounded(value: &Value, key: &str) -> Option<String> {
-    string(value, key).filter(|text| (1..=256).contains(&text.chars().count()))
-}
-
-fn sha(value: &Value, key: &str) -> Option<String> {
-    string(value, key).filter(|text| valid_sha(text))
-}
-
-fn web_url(value: &Value, key: &str) -> Option<String> {
-    string(value, key).filter(|text| url::Url::parse(text).is_ok())
-}
-
-fn positive(value: &Value, key: &str) -> Option<u64> {
-    value.get(key).and_then(Value::as_u64).filter(|n| *n > 0)
-}
-
-fn iso_datetime(value: &Value, key: &str) -> Option<Option<String>> {
-    match value.get(key) {
-        None | Some(Value::Null) => Some(None),
-        Some(Value::String(text)) if DateTime::parse_from_rfc3339(text).is_ok() => {
-            Some(Some(text.clone()))
-        }
-        _ => None,
-    }
 }
 
 fn present_body<'de, D: serde::Deserializer<'de>>(
@@ -576,11 +557,11 @@ impl PullRequestObservation {
             ));
         }
         let checks = summarize_checks(&self.checks);
-        let author = self.author.map(|author| {
-            let avatar = author.avatar_url.unwrap_or_else(|| {
+        let author = self.author.map(|author| ObservedAuthor {
+            avatar_url: author.avatar_url.unwrap_or_else(|| {
                 format!("https://avatars.githubusercontent.com/{}", author.login)
-            });
-            json!({"login": author.login, "avatarUrl": avatar})
+            }),
+            login: author.login,
         });
         Ok(Observation {
             exists: true,
@@ -605,46 +586,263 @@ impl PullRequestObservation {
 }
 
 /// A pull request list row in the `gh pr list --json` shape.
-fn list_row(repository: &str, row: &Value) -> Option<PullRequest> {
-    let state = string(row, "state")
-        .filter(|state| matches!(state.as_str(), "OPEN" | "CLOSED" | "MERGED"))?;
-    let text_or_empty = |key: &str| match row.get(key) {
-        None | Some(Value::Null) => Some(String::new()),
-        Some(Value::String(text)) => Some(text.clone()),
-        _ => None,
-    };
-    let updated_at = match row.get("updatedAt") {
-        None | Some(Value::Null) => None,
-        Some(Value::String(text)) if DateTime::parse_from_rfc3339(text).is_ok() => {
-            Some(text.clone())
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ListRow {
+    number: u64,
+    url: String,
+    state: String,
+    is_draft: bool,
+    head_ref_name: String,
+    head_ref_oid: String,
+    base_ref_name: String,
+    base_ref_oid: String,
+    #[serde(default)]
+    title: Option<String>,
+    #[serde(default)]
+    body: Option<String>,
+    #[serde(default, deserialize_with = "optional_metadata")]
+    author: Option<Login>,
+    #[serde(default)]
+    updated_at: Option<String>,
+    is_cross_repository: bool,
+}
+
+impl ListRow {
+    fn normalize(self, repository: &str) -> Option<PullRequest> {
+        let bounded = |text: &str| (1..=256).contains(&text.chars().count());
+        let valid = self.number > 0
+            && url::Url::parse(&self.url).is_ok()
+            && matches!(self.state.as_str(), "OPEN" | "CLOSED" | "MERGED")
+            && bounded(&self.head_ref_name)
+            && bounded(&self.base_ref_name)
+            && valid_sha(&self.head_ref_oid)
+            && valid_sha(&self.base_ref_oid)
+            && self
+                .updated_at
+                .as_deref()
+                .is_none_or(|time| DateTime::parse_from_rfc3339(time).is_ok());
+        valid.then(|| PullRequest {
+            number: self.number,
+            url: self.url,
+            repository: repository.to_owned(),
+            head_branch: self.head_ref_name,
+            base_branch: self.base_ref_name,
+            head_sha: self.head_ref_oid,
+            base_sha: self.base_ref_oid,
+            is_draft: self.is_draft,
+            state: self.state.to_lowercase(),
+            merged_at: None,
+            auto_merge_enabled: None,
+            title: Some(self.title.unwrap_or_default()),
+            body: Some(self.body.unwrap_or_default()),
+            author: Some(self.author.map(|author| author.login).unwrap_or_default()),
+            updated_at: self.updated_at,
+            is_cross_repository: Some(self.is_cross_repository),
+            node_id: None,
+        })
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct Login {
+    login: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct Label {
+    name: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+struct Milestone {
+    title: String,
+}
+
+#[derive(Deserialize)]
+struct Nodes<T> {
+    nodes: Vec<T>,
+}
+
+fn graph_nodes<'de, D, T>(deserializer: D) -> Result<Vec<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    Nodes::deserialize(deserializer).map(|nodes| nodes.nodes)
+}
+
+/// One GitHub issue in the `gh issue view --json` shape. It decodes from
+/// the GraphQL issue node, whose lists are `{nodes}` connections.
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GithubIssue {
+    number: u64,
+    url: String,
+    title: String,
+    body: String,
+    author: Option<Login>,
+    state: String,
+    #[serde(deserialize_with = "graph_nodes")]
+    labels: Vec<Label>,
+    #[serde(deserialize_with = "graph_nodes")]
+    assignees: Vec<Login>,
+    milestone: Option<Milestone>,
+    updated_at: String,
+    #[serde(default, skip_serializing)]
+    comments: Vec<IssueComment>,
+}
+
+impl GithubIssue {
+    fn valid(&self) -> bool {
+        self.number > 0
+            && url::Url::parse(&self.url).is_ok()
+            && matches!(self.state.as_str(), "OPEN" | "CLOSED")
+    }
+}
+
+/// A GitHub REST issue.
+#[derive(Deserialize)]
+struct RestIssue {
+    number: u64,
+    html_url: String,
+    title: String,
+    #[serde(default, deserialize_with = "lenient")]
+    body: String,
+    #[serde(default, deserialize_with = "optional_metadata")]
+    user: Option<Login>,
+    #[serde(default, deserialize_with = "lenient")]
+    state: String,
+    labels: Vec<Label>,
+    assignees: Vec<Login>,
+    #[serde(default, deserialize_with = "optional_metadata")]
+    milestone: Option<Milestone>,
+    updated_at: String,
+}
+
+impl From<RestIssue> for GithubIssue {
+    fn from(row: RestIssue) -> Self {
+        Self {
+            number: row.number,
+            url: row.html_url,
+            title: row.title,
+            body: row.body,
+            author: row.user,
+            state: row.state.to_uppercase(),
+            labels: row.labels,
+            assignees: row.assignees,
+            milestone: row.milestone,
+            updated_at: row.updated_at,
+            comments: Vec::new(),
         }
-        _ => return None,
-    };
-    Some(PullRequest {
-        number: positive(row, "number")?,
-        url: web_url(row, "url")?,
-        repository: repository.to_owned(),
-        head_branch: nonempty_bounded(row, "headRefName")?,
-        base_branch: nonempty_bounded(row, "baseRefName")?,
-        head_sha: sha(row, "headRefOid")?,
-        base_sha: sha(row, "baseRefOid")?,
-        is_draft: row.get("isDraft")?.as_bool()?,
-        state: state.to_lowercase(),
-        merged_at: None,
-        auto_merge_enabled: None,
-        title: Some(text_or_empty("title")?),
-        body: Some(text_or_empty("body")?),
-        author: Some(
-            row.get("author")
-                .and_then(|author| author.get("login"))
-                .and_then(Value::as_str)
-                .unwrap_or("")
-                .to_owned(),
-        ),
-        updated_at,
-        is_cross_repository: Some(row.get("isCrossRepository")?.as_bool()?),
-        node_id: None,
-    })
+    }
+}
+
+#[derive(Debug, Deserialize)]
+struct IssueComment {
+    html_url: String,
+    body: String,
+    #[serde(default)]
+    user: Option<Login>,
+    created_at: String,
+}
+
+/// One `gh pr checks --required` row.
+struct RequiredCheck {
+    name: String,
+    bucket: &'static str,
+    state: String,
+    link: Option<String>,
+}
+
+/// A status context or check run of the required-check rollup.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct RequiredContext {
+    #[serde(default, deserialize_with = "lenient")]
+    is_required: bool,
+    #[serde(default, deserialize_with = "optional_metadata")]
+    context: Option<String>,
+    #[serde(default, deserialize_with = "optional_metadata")]
+    state: Option<String>,
+    #[serde(default, deserialize_with = "optional_metadata")]
+    target_url: Option<String>,
+    #[serde(default, deserialize_with = "optional_metadata")]
+    name: Option<String>,
+    #[serde(default, deserialize_with = "optional_metadata")]
+    status: Option<String>,
+    #[serde(default, deserialize_with = "optional_metadata")]
+    conclusion: Option<String>,
+    #[serde(default, deserialize_with = "optional_metadata")]
+    details_url: Option<String>,
+}
+
+impl RequiredContext {
+    fn check(self) -> RequiredCheck {
+        let (name, state, link) = match self.context {
+            Some(context) => (context, self.state.unwrap_or_default(), self.target_url),
+            None => {
+                let status = self.status.unwrap_or_default();
+                let state = if status == "COMPLETED" {
+                    self.conclusion.unwrap_or(status)
+                } else {
+                    status
+                };
+                (self.name.unwrap_or_default(), state, self.details_url)
+            }
+        };
+        let bucket = match state.as_str() {
+            "SUCCESS" | "NEUTRAL" => "pass",
+            "SKIPPED" => "skipping",
+            "CANCELLED" => "cancel",
+            "FAILURE" | "ERROR" | "TIMED_OUT" | "ACTION_REQUIRED" | "STARTUP_FAILURE" | "STALE" => {
+                "fail"
+            }
+            _ => "pending",
+        };
+        RequiredCheck {
+            name,
+            bucket,
+            state,
+            link,
+        }
+    }
+}
+
+#[derive(Deserialize)]
+struct BranchRule {
+    r#type: String,
+}
+
+#[derive(Deserialize)]
+struct BranchHead {
+    commit: BranchCommit,
+}
+
+#[derive(Deserialize)]
+struct BranchCommit {
+    sha: String,
+}
+
+/// One aliased pull request of a batched state read.
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PullState {
+    #[serde(default, deserialize_with = "optional_metadata")]
+    number: Option<u64>,
+    #[serde(default, deserialize_with = "optional_metadata")]
+    url: Option<String>,
+    #[serde(default, deserialize_with = "optional_metadata")]
+    head_ref_oid: Option<String>,
+    #[serde(default, deserialize_with = "optional_metadata")]
+    state: Option<String>,
+    #[serde(default)]
+    merged_at: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct Diagnostic {
+    message: String,
 }
 
 const PULL_LIST_FIELDS: &str = "number url isDraft state headRefName headRefOid baseRefName baseRefOid title body author { login } updatedAt isCrossRepository";
@@ -682,9 +880,8 @@ fn decode<T: serde::de::DeserializeOwned>(value: Value, message: &str) -> Github
 }
 
 fn diagnostic(body: &str) -> String {
-    let message = serde_json::from_str::<Value>(body)
-        .ok()
-        .and_then(|value| string(&value, "message"))
+    let message = serde_json::from_str::<Diagnostic>(body)
+        .map(|diagnostic| diagnostic.message)
         .unwrap_or_default();
     redact_summary(&message)
 }
@@ -952,7 +1149,10 @@ impl Github {
             .await?
         {
             Api::NotFound => Ok(None),
-            Api::Json(body) => sha(&parse_json(&body)?["commit"], "sha")
+            Api::Json(body) => serde_json::from_str::<BranchHead>(&body)
+                .ok()
+                .map(|head| head.commit.sha)
+                .filter(|sha| valid_sha(sha))
                 .map(Some)
                 .ok_or_else(|| {
                     failure(
@@ -1069,17 +1269,14 @@ impl Github {
         variables["owner"] = json!(owner);
         variables["name"] = json!(name);
         let value: Value = self.graphql(&query, variables, "pull request list").await?;
-        let rows = value["data"]["repository"]["pullRequests"]["nodes"]
-            .as_array()
-            .ok_or_else(|| {
-                failure(
-                    "invalid-provider-response",
-                    "GitHub pull request list could not be parsed",
-                )
-            })?;
-        rows.iter()
-            .map(|row| list_row(&repository, row))
-            .collect::<Option<Vec<_>>>()
+        value
+            .pointer("/data/repository/pullRequests/nodes")
+            .and_then(Value::as_array)
+            .and_then(|rows| {
+                rows.iter()
+                    .map(|row| ListRow::deserialize(row).ok()?.normalize(&repository))
+                    .collect::<Option<Vec<_>>>()
+            })
             .ok_or_else(|| {
                 failure(
                     "invalid-provider-response",
@@ -1170,7 +1367,7 @@ impl Github {
                 "GitHub pull request response is malformed",
             )
         })?;
-        self.graphql::<Value>(
+        self.graphql::<serde::de::IgnoredAny>(
             "mutation($id:ID!){markPullRequestReadyForReview(input:{pullRequestId:$id}){pullRequest{isDraft}}}",
             json!({"id": id}),
             "mark ready for review",
@@ -1205,7 +1402,11 @@ impl Github {
     }
 
     /// `gh pr checks --required`: required checks of the head commit in gh buckets.
-    async fn required_checks(&self, repository: &str, number: u64) -> GithubResult<Vec<Value>> {
+    async fn required_checks(
+        &self,
+        repository: &str,
+        number: u64,
+    ) -> GithubResult<Vec<RequiredCheck>> {
         let (owner, name) = repository.split_once('/').expect("normalized repository");
         let value: Value = self
             .graphql(
@@ -1214,45 +1415,15 @@ impl Github {
                 "required pull request checks",
             )
             .await?;
-        let nodes = value["data"]["repository"]["pullRequest"]["commits"]["nodes"][0]["commit"]
-            ["statusCheckRollup"]["contexts"]["nodes"]
-            .as_array()
-            .cloned()
-            .unwrap_or_default();
+        let nodes = value
+            .pointer("/data/repository/pullRequest/commits/nodes/0/commit/statusCheckRollup/contexts/nodes")
+            .and_then(Value::as_array)
+            .map_or(&[][..], Vec::as_slice);
         Ok(nodes
-            .into_iter()
-            .filter(|node| node["isRequired"] == true)
-            .map(|node| {
-                let (name, state, link) = match node.get("context") {
-                    Some(context) => (
-                        context.as_str().unwrap_or("").to_owned(),
-                        string(&node, "state").unwrap_or_default(),
-                        string(&node, "targetUrl"),
-                    ),
-                    None => {
-                        let status = string(&node, "status").unwrap_or_default();
-                        let state = if status == "COMPLETED" {
-                            string(&node, "conclusion").unwrap_or(status)
-                        } else {
-                            status
-                        };
-                        (
-                            string(&node, "name").unwrap_or_default(),
-                            state,
-                            string(&node, "detailsUrl"),
-                        )
-                    }
-                };
-                let bucket = match state.as_str() {
-                    "SUCCESS" | "NEUTRAL" => "pass",
-                    "SKIPPED" => "skipping",
-                    "CANCELLED" => "cancel",
-                    "FAILURE" | "ERROR" | "TIMED_OUT" | "ACTION_REQUIRED" | "STARTUP_FAILURE"
-                    | "STALE" => "fail",
-                    _ => "pending",
-                };
-                json!({"name": name, "bucket": bucket, "state": state, "link": link})
-            })
+            .iter()
+            .filter_map(|node| RequiredContext::deserialize(node).ok())
+            .filter(|node| node.is_required)
+            .map(RequiredContext::check)
             .collect())
     }
 
@@ -1347,17 +1518,14 @@ impl Github {
         let describe = |bucket: &[&str]| {
             checks
                 .iter()
-                .filter(|check| bucket.contains(&check["bucket"].as_str().unwrap_or("")))
+                .filter(|check| bucket.contains(&check.bucket))
                 .map(|check| {
-                    let link = check["link"]
-                        .as_str()
+                    let link = check
+                        .link
+                        .as_ref()
                         .map(|link| format!(", {link}"))
                         .unwrap_or_default();
-                    format!(
-                        "{} ({}{link})",
-                        check["name"].as_str().unwrap_or(""),
-                        check["state"].as_str().unwrap_or("")
-                    )
+                    format!("{} ({}{link})", check.name, check.state)
                 })
                 .collect::<Vec<_>>()
         };
@@ -1397,20 +1565,15 @@ impl Github {
         let rules_path = repo_route(&repository, &["rules", "branches", &base]);
         let rules = self
             .retry_transient(|| async {
-                let value = self.value("GET", &rules_path, None, "branch rules").await?;
-                value
-                    .as_array()
-                    .filter(|rules| rules.iter().all(|rule| rule["type"].is_string()))
-                    .cloned()
-                    .ok_or_else(|| {
-                        failure(
-                            "invalid-provider-response",
-                            "GitHub branch rules are malformed",
-                        )
-                    })
+                decode_response::<Vec<BranchRule>>(
+                    &self
+                        .response_body("GET", &rules_path, None, "branch rules")
+                        .await?,
+                    "GitHub branch rules are malformed",
+                )
             })
             .await?;
-        if rules.iter().any(|rule| rule["type"] == "merge_queue") {
+        if rules.iter().any(|rule| rule.r#type == "merge_queue") {
             if !allow_queue {
                 return Ok(blocked(format!(
                     "GitHub requires a merge queue for {base}, but direct trigger merges cannot enter the queue."
@@ -1423,8 +1586,9 @@ impl Github {
                     "merge queue enqueue",
                 )
                 .await?;
-            if value["data"]["enqueuePullRequest"]["mergeQueueEntry"]["id"]
-                .as_str()
+            if value
+                .pointer("/data/enqueuePullRequest/mergeQueueEntry/id")
+                .and_then(Value::as_str)
                 .is_none_or(str::is_empty)
             {
                 return Err(failure(
@@ -1493,7 +1657,7 @@ impl Github {
                 .await?;
             let value = parse_json(&reply.body)?;
             // A partial GraphQL error keeps every available observation.
-            if !value["data"].is_object() {
+            if !value.get("data").is_some_and(Value::is_object) {
                 return Err(failure(
                     "provider-unavailable",
                     if diagnostic(&reply.body).is_empty() {
@@ -1504,24 +1668,35 @@ impl Github {
                 ));
             }
             for (index, (repository, number)) in batch.iter().enumerate() {
-                let pull = &value["data"][format!("p{index}")]["pullRequest"];
-                if pull.is_null() {
+                let Some(pull) = value
+                    .pointer(&format!("/data/p{index}/pullRequest"))
+                    .filter(|pull| !pull.is_null())
+                else {
                     continue;
-                }
-                let state = string(pull, "state")
-                    .filter(|state| matches!(state.as_str(), "OPEN" | "CLOSED" | "MERGED"));
-                let (Some(found), Some(url), Some(head), Some(state), Some(merged_at)) = (
-                    positive(pull, "number"),
-                    web_url(pull, "url"),
-                    string(pull, "headRefOid").filter(|head| !head.is_empty()),
-                    state,
-                    iso_datetime(pull, "mergedAt"),
-                ) else {
-                    return Err(failure(
+                };
+                let malformed = || {
+                    failure(
                         "invalid-provider-response",
                         "GitHub pull request states are malformed",
-                    ));
+                    )
                 };
+                let pull = PullState::deserialize(pull).map_err(|_| malformed())?;
+                let (Some(found), Some(url), Some(head), Some(state)) = (
+                    pull.number.filter(|number| *number > 0),
+                    pull.url.filter(|url| url::Url::parse(url).is_ok()),
+                    pull.head_ref_oid.filter(|head| !head.is_empty()),
+                    pull.state
+                        .filter(|state| matches!(state.as_str(), "OPEN" | "CLOSED" | "MERGED")),
+                ) else {
+                    return Err(malformed());
+                };
+                let merged_at = pull.merged_at;
+                if merged_at
+                    .as_deref()
+                    .is_some_and(|time| DateTime::parse_from_rfc3339(time).is_err())
+                {
+                    return Err(malformed());
+                }
                 if found != *number {
                     return Err(failure(
                         "invalid-provider-response",
@@ -1548,110 +1723,78 @@ impl Github {
                 "issue list",
             )
             .await?;
-        value["data"]["repository"]["issues"]["nodes"]
-            .as_array()
-            .ok_or_else(|| {
-                failure(
-                    "invalid-provider-response",
-                    "GitHub issue list is malformed",
-                )
-            })?
+        let malformed = || {
+            failure(
+                "invalid-provider-response",
+                "GitHub issue list is malformed",
+            )
+        };
+        value
+            .pointer("/data/repository/issues/nodes")
+            .and_then(Value::as_array)
+            .ok_or_else(malformed)?
             .iter()
             .map(|node| {
-                let mut issue = node.clone();
-                issue["labels"] = node["labels"]["nodes"].clone();
-                issue["assignees"] = node["assignees"]["nodes"].clone();
-                valid_issue(&issue).then_some(issue).ok_or_else(|| {
-                    failure(
-                        "invalid-provider-response",
-                        "GitHub issue list is malformed",
-                    )
-                })
+                GithubIssue::deserialize(node)
+                    .ok()
+                    .filter(GithubIssue::valid)
+                    .map(|issue| json!(issue))
+                    .ok_or_else(malformed)
             })
             .collect()
     }
 
     /// One issue with every comment page.
-    pub async fn get_issue(&self, repository: &str, number: u64) -> GithubResult<Value> {
+    pub async fn get_issue(&self, repository: &str, number: u64) -> GithubResult<GithubIssue> {
         let path = repo_route(repository, &["issues", &number.to_string()]);
-        let row = self.value("GET", &path, None, "issue observation").await?;
-        let text = |value: &Value| value.as_str().map(str::to_owned);
-        let mut issue = json!({
-            "number": row["number"], "url": row["html_url"], "title": row["title"],
-            "body": text(&row["body"]).unwrap_or_default(),
-            "author": row["user"]["login"].as_str().map(|login| json!({"login": login})),
-            "state": row["state"].as_str().map(str::to_uppercase),
-            "labels": row["labels"].as_array().map(|labels| labels.iter().map(|label| json!({"name": label["name"]})).collect::<Vec<_>>()),
-            "assignees": row["assignees"].as_array().map(|users| users.iter().map(|user| json!({"login": user["login"]})).collect::<Vec<_>>()),
-            "milestone": row["milestone"]["title"].as_str().map(|title| json!({"title": title})),
-            "updatedAt": row["updated_at"],
-        });
-        if !valid_issue(&issue) {
-            return Err(failure(
-                "invalid-provider-response",
-                "GitHub issue is malformed",
-            ));
-        }
-        let mut comments = Vec::new();
+        let mut issue = decode_response::<RestIssue>(
+            &self
+                .response_body("GET", &path, None, "issue observation")
+                .await?,
+            "GitHub issue is malformed",
+        )
+        .map(GithubIssue::from)
+        .ok()
+        .filter(GithubIssue::valid)
+        .ok_or_else(|| failure("invalid-provider-response", "GitHub issue is malformed"))?;
         for page in 1.. {
             let path = format!("{path}/comments?per_page=100&page={page}");
-            let rows = self.value("GET", &path, None, "issue comments").await?;
-            let rows = rows
-                .as_array()
-                .filter(|rows| {
-                    rows.iter().all(|row| {
-                        web_url(row, "html_url").is_some()
-                            && row["body"].is_string()
-                            && (row["user"].is_null() || row["user"]["login"].is_string())
-                            && row["created_at"].is_string()
-                    })
-                })
-                .ok_or_else(|| {
-                    failure(
-                        "invalid-provider-response",
-                        "GitHub issue comments are malformed",
-                    )
-                })?;
-            comments.extend(rows.iter().map(|row| {
-                json!({"html_url": row["html_url"], "body": row["body"], "user": if row["user"].is_null() { Value::Null } else { json!({"login": row["user"]["login"]}) }, "created_at": row["created_at"]})
-            }));
-            if rows.len() < 100 {
+            let rows = decode_response::<Vec<IssueComment>>(
+                &self
+                    .response_body("GET", &path, None, "issue comments")
+                    .await?,
+                "GitHub issue comments are malformed",
+            )
+            .ok()
+            .filter(|rows| {
+                rows.iter()
+                    .all(|row| url::Url::parse(&row.html_url).is_ok())
+            })
+            .ok_or_else(|| {
+                failure(
+                    "invalid-provider-response",
+                    "GitHub issue comments are malformed",
+                )
+            })?;
+            let last = rows.len() < 100;
+            issue.comments.extend(rows);
+            if last {
                 break;
             }
         }
-        issue["comments"] = Value::Array(comments);
         Ok(issue)
     }
 }
 
-fn valid_issue(issue: &Value) -> bool {
-    positive(issue, "number").is_some()
-        && web_url(issue, "url").is_some()
-        && issue["title"].is_string()
-        && issue["body"].is_string()
-        && (issue["author"].is_null() || issue["author"]["login"].is_string())
-        && matches!(issue["state"].as_str(), Some("OPEN" | "CLOSED"))
-        && issue["labels"]
-            .as_array()
-            .is_some_and(|rows| rows.iter().all(|row| row["name"].is_string()))
-        && issue["assignees"]
-            .as_array()
-            .is_some_and(|rows| rows.iter().all(|row| row["login"].is_string()))
-        && (issue["milestone"].is_null() || issue["milestone"]["title"].is_string())
-        && issue["updatedAt"].is_string()
-}
-
 /// TypeScript `issueContext`: the Markdown snapshot of one GitHub issue.
-pub fn issue_context(issue: &Value) -> String {
-    let login = |value: &Value| value["login"].as_str().unwrap_or("deleted user").to_owned();
-    let list = |key: &str, field: &str| {
-        let items = issue[key]
-            .as_array()
-            .into_iter()
-            .flatten()
-            .filter_map(|item| item[field].as_str())
-            .collect::<Vec<_>>()
-            .join(", ");
+pub fn issue_context(issue: &GithubIssue) -> String {
+    let login = |user: &Option<Login>| {
+        user.as_ref()
+            .map_or("deleted user", |user| user.login.as_str())
+            .to_owned()
+    };
+    let list = |items: Vec<&str>| {
+        let items = items.join(", ");
         if items.is_empty() {
             "None".into()
         } else {
@@ -1659,33 +1802,50 @@ pub fn issue_context(issue: &Value) -> String {
         }
     };
     let mut parts = vec![
-        format!(
-            "## GitHub issue #{}: {}",
-            issue["number"],
-            issue["title"].as_str().unwrap_or("")
-        ),
-        issue["url"].as_str().unwrap_or("").to_owned(),
+        format!("## GitHub issue #{}: {}", issue.number, issue.title),
+        issue.url.clone(),
         format!(
             "Author: {} | State: {} | Updated: {}",
-            login(&issue["author"]),
-            issue["state"].as_str().unwrap_or(""),
-            issue["updatedAt"].as_str().unwrap_or("")
+            login(&issue.author),
+            issue.state,
+            issue.updated_at
         ),
-        format!("Labels: {}", list("labels", "name")),
-        format!("Assignees: {}", list("assignees", "login")),
+        format!(
+            "Labels: {}",
+            list(
+                issue
+                    .labels
+                    .iter()
+                    .map(|label| label.name.as_str())
+                    .collect()
+            )
+        ),
+        format!(
+            "Assignees: {}",
+            list(
+                issue
+                    .assignees
+                    .iter()
+                    .map(|user| user.login.as_str())
+                    .collect()
+            )
+        ),
         format!(
             "Milestone: {}",
-            issue["milestone"]["title"].as_str().unwrap_or("None")
+            issue
+                .milestone
+                .as_ref()
+                .map_or("None", |milestone| milestone.title.as_str())
         ),
-        issue["body"].as_str().unwrap_or("").to_owned(),
+        issue.body.clone(),
     ];
-    for comment in issue["comments"].as_array().into_iter().flatten() {
+    for comment in &issue.comments {
         parts.push(format!(
             "### {} · {}\n{}\n\n{}",
-            login(&comment["user"]),
-            comment["created_at"].as_str().unwrap_or(""),
-            comment["html_url"].as_str().unwrap_or(""),
-            comment["body"].as_str().unwrap_or("")
+            login(&comment.user),
+            comment.created_at,
+            comment.html_url,
+            comment.body
         ));
     }
     parts.join("\n\n")
@@ -1810,7 +1970,7 @@ mod tests {
         assert_eq!(observed.checks.runs[0]["workflow"], "CI");
         assert_eq!(observed.checks.runs[1]["url"], "https://example.com/deploy");
         assert_eq!(
-            observed.author.unwrap()["avatarUrl"],
+            observed.author.unwrap().avatar_url,
             "https://avatars.githubusercontent.com/octo"
         );
         assert_eq!(observed.auto_merge_enabled, Some(true));
@@ -1908,8 +2068,8 @@ mod tests {
 
     #[test]
     fn issue_context_lists_every_comment() {
-        let issue = json!({"number":42,"url":"https://github.com/owner/repo/issues/42","title":"Search","body":"","author":null,"state":"OPEN","labels":[],"assignees":[],"milestone":null,"updatedAt":"2026-09-07",
-            "comments":[{"html_url":"https://github.com/owner/repo/issues/42#issuecomment-1","body":"Detail","user":null,"created_at":"2026-09-07"}]});
+        let issue: GithubIssue = serde_json::from_value(json!({"number":42,"url":"https://github.com/owner/repo/issues/42","title":"Search","body":"","author":null,"state":"OPEN","labels":{"nodes":[]},"assignees":{"nodes":[]},"milestone":null,"updatedAt":"2026-09-07",
+            "comments":[{"html_url":"https://github.com/owner/repo/issues/42#issuecomment-1","body":"Detail","user":null,"created_at":"2026-09-07"}]})).unwrap();
         let text = issue_context(&issue);
         assert!(text.starts_with("## GitHub issue #42: Search\n\nhttps://github.com/owner/repo/issues/42\n\nAuthor: deleted user | State: OPEN"));
         assert!(text.ends_with("### deleted user · 2026-09-07\nhttps://github.com/owner/repo/issues/42#issuecomment-1\n\nDetail"));
@@ -1921,5 +2081,171 @@ mod tests {
             redact_summary("Bad ghp_ABCDEFGHIJ token\nsecond"),
             "Bad [redacted] token"
         );
+    }
+
+    /// A loopback GitHub answering REST paths from `rest` and GraphQL queries
+    /// by the first `graph` entry whose marker the query contains.
+    async fn fake_api(
+        rest: Vec<(&'static str, u16, Value)>,
+        graph: Vec<(&'static str, Value)>,
+    ) -> (Github, tokio::task::JoinHandle<()>) {
+        use axum::{
+            Json, Router,
+            http::{StatusCode, Uri},
+            response::IntoResponse,
+            routing::post,
+        };
+        let graph = std::sync::Arc::new(graph);
+        let rest = std::sync::Arc::new(rest);
+        let app = Router::new()
+            .route(
+                "/graphql",
+                post(move |Json(body): Json<Value>| {
+                    let graph = graph.clone();
+                    async move {
+                        let query = body["query"].as_str().unwrap_or_default().to_owned();
+                        let reply = graph
+                            .iter()
+                            .find(|(marker, _)| query.contains(marker))
+                            .map(|(_, reply)| reply.clone())
+                            .unwrap_or(Value::Null);
+                        Json(reply)
+                    }
+                }),
+            )
+            .fallback(move |uri: Uri| {
+                let rest = rest.clone();
+                async move {
+                    let key = uri.path_and_query().map_or("", |value| value.as_str());
+                    match rest.iter().find(|(path, _, _)| *path == key) {
+                        Some((_, status, body)) => {
+                            (StatusCode::from_u16(*status).unwrap(), Json(body.clone()))
+                                .into_response()
+                        }
+                        None => {
+                            (StatusCode::NOT_FOUND, Json(json!({"message": key}))).into_response()
+                        }
+                    }
+                }
+            });
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let mut github = Github::new(Access::for_api(&base, None).unwrap());
+        github.retry_pauses.clear();
+        (github, server)
+    }
+
+    #[tokio::test]
+    async fn issue_reads_keep_the_gh_issue_shape_and_context_text() {
+        let (github, server) = fake_api(
+            vec![
+                (
+                    "/repos/owner/repo/issues/42",
+                    200,
+                    json!({"number": 42, "html_url": "https://github.com/owner/repo/issues/42", "title": "Search", "body": null,
+                        "user": {"login": "octo", "id": 1}, "state": "open", "labels": [{"name": "bug", "color": "f00"}, {"name": ""}],
+                        "assignees": [{"login": "dev", "id": 2}], "milestone": {"title": "M1"}, "updated_at": "2026-09-07T00:00:00Z"}),
+                ),
+                (
+                    "/repos/owner/repo/issues/42/comments?per_page=100&page=1",
+                    200,
+                    json!([{"html_url": "https://github.com/owner/repo/issues/42#issuecomment-1", "body": "Detail", "user": null, "created_at": "2026-09-08T00:00:00Z"},
+                        {"html_url": "https://github.com/owner/repo/issues/42#issuecomment-2", "body": "More", "user": {"login": "dev"}, "created_at": "2026-09-09T00:00:00Z"}]),
+                ),
+            ],
+            vec![(
+                "issues(first",
+                json!({"data": {"repository": {"issues": {"nodes": [
+                    {"number": 3, "url": "https://github.com/owner/repo/issues/3", "title": "T", "body": "B", "author": {"login": "octo"}, "state": "OPEN",
+                        "labels": {"nodes": [{"name": "bug"}]}, "assignees": {"nodes": [{"login": "dev"}]}, "milestone": null, "updatedAt": "2026-09-07T00:00:00Z"},
+                    {"number": 4, "url": "https://github.com/owner/repo/issues/4", "title": "U", "body": "", "author": null, "state": "CLOSED",
+                        "labels": {"nodes": []}, "assignees": {"nodes": []}, "milestone": {"title": "M1"}, "updatedAt": "2026-09-08T00:00:00Z"}
+                ]}}}}),
+            )],
+        )
+        .await;
+        let issues = github.list_open_issues("owner/repo", 100).await.unwrap();
+        assert_eq!(
+            Value::Array(issues).to_string(),
+            json!([
+                {"number": 3, "url": "https://github.com/owner/repo/issues/3", "title": "T", "body": "B", "author": {"login": "octo"}, "state": "OPEN",
+                    "labels": [{"name": "bug"}], "assignees": [{"login": "dev"}], "milestone": null, "updatedAt": "2026-09-07T00:00:00Z"},
+                {"number": 4, "url": "https://github.com/owner/repo/issues/4", "title": "U", "body": "", "author": null, "state": "CLOSED",
+                    "labels": [], "assignees": [], "milestone": {"title": "M1"}, "updatedAt": "2026-09-08T00:00:00Z"}
+            ])
+            .to_string()
+        );
+        let issue = github.get_issue("owner/repo", 42).await.unwrap();
+        assert_eq!(
+            issue_context(&issue),
+            "## GitHub issue #42: Search\n\nhttps://github.com/owner/repo/issues/42\n\nAuthor: octo | State: OPEN | Updated: 2026-09-07T00:00:00Z\n\nLabels: bug, \n\nAssignees: dev\n\nMilestone: M1\n\n\n\n### deleted user · 2026-09-08T00:00:00Z\nhttps://github.com/owner/repo/issues/42#issuecomment-1\n\nDetail\n\n### dev · 2026-09-09T00:00:00Z\nhttps://github.com/owner/repo/issues/42#issuecomment-2\n\nMore"
+        );
+        assert_eq!(
+            github.get_issue("owner/repo", 43).await.unwrap_err().code,
+            "provider-unavailable"
+        );
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn batched_states_and_required_checks_read_typed_graphql_rows() {
+        let head = "a".repeat(40);
+        let (github, server) = fake_api(
+            vec![
+                (
+                    "/repos/owner/repo",
+                    200,
+                    json!({"allow_squash_merge": true, "allow_merge_commit": false, "allow_rebase_merge": false}),
+                ),
+                (
+                    "/repos/owner/repo/pulls/7/merge",
+                    405,
+                    json!({"message": "Required status check \"unit\" is failing."}),
+                ),
+            ],
+            vec![
+                (
+                    "p0: repository",
+                    json!({"data": {
+                        "p0": {"pullRequest": {"number": 7, "url": "https://github.com/owner/repo/pull/7", "headRefOid": head, "state": "MERGED", "mergedAt": "2026-09-01T00:00:00Z"}},
+                        "p1": {"pullRequest": null}
+                    }}),
+                ),
+                (
+                    "isRequired",
+                    json!({"data": {"repository": {"pullRequest": {"commits": {"nodes": [{"commit": {"statusCheckRollup": {"contexts": {"nodes": [
+                        {"__typename": "CheckRun", "name": "unit", "status": "COMPLETED", "conclusion": "FAILURE", "detailsUrl": "https://github.com/owner/repo/actions/runs/1", "isRequired": true},
+                        {"__typename": "StatusContext", "context": "deploy", "state": "ERROR", "targetUrl": null, "isRequired": true},
+                        {"__typename": "CheckRun", "name": "lint", "status": "COMPLETED", "conclusion": "FAILURE", "isRequired": false},
+                        null
+                    ]}}}}]}}}}}),
+                ),
+                (
+                    "mergeStateStatus",
+                    json!({"data": {"repository": {"pullRequest": {"id": "PR_7", "headRefOid": head, "baseRefName": "main", "mergeable": "MERGEABLE", "mergeStateStatus": "BLOCKED"}}}}),
+                ),
+            ],
+        )
+        .await;
+        let states = github
+            .pull_request_states(&[("Owner/Repo".into(), 7), ("owner/repo".into(), 8)])
+            .await
+            .unwrap();
+        assert_eq!(
+            Value::Array(states).to_string(),
+            json!([{"repository": "owner/repo", "number": 7, "url": "https://github.com/owner/repo/pull/7", "headSha": head, "state": "merged", "mergedAt": "2026-09-01T00:00:00Z"}]).to_string()
+        );
+        assert_eq!(
+            github
+                .merge_conditionally("owner/repo", 7, &head, false)
+                .await
+                .unwrap(),
+            MergeResult::Disposition {
+                disposition: "blocked",
+                message: "GitHub refused the merge because required checks failed: unit (FAILURE, https://github.com/owner/repo/actions/runs/1), deploy (ERROR). Required status check \"unit\" is failing.".into(),
+            }
+        );
+        server.abort();
     }
 }

@@ -1,7 +1,7 @@
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::projects::git as git;
+    use crate::projects::git;
 
     use crate::http::validation::{test_body, test_path};
     use axum::extract::Path;
@@ -80,7 +80,7 @@ mod tests {
     use axum::{body::to_bytes, http::HeaderValue};
     use std::{
         fs,
-        process::{Command, Stdio},
+        process::Command,
         task::{Context, Poll, Waker},
     };
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -98,56 +98,6 @@ mod tests {
             args,
             String::from_utf8_lossy(&output.stderr)
         );
-    }
-
-    fn assert_typescript_task_body(
-        database: &std::path::Path,
-        artifacts: &std::path::Path,
-        raw: &[u8],
-    ) {
-        if std::env::var_os("SUPLEX_TASK_RESPONSE_TS_ORACLE").is_none() {
-            return;
-        }
-        let script = r#"import {SuplexDatabase} from "./src/platform/database.ts"; import {ArtifactStore} from "./src/platform/artifacts.ts"; import {TaskRepository} from "./src/tasks/repository.ts"; const db = new SuplexDatabase(process.env.SUPLEX_ORACLE_DB!, {readOnly:true,migrate:false}); const repository = new TaskRepository(db, new ArtifactStore(process.env.SUPLEX_ORACLE_ARTIFACTS!)); const row = repository.row(process.env.SUPLEX_ORACLE_TASK!); if (!row) throw new Error("task missing"); process.stdout.write(JSON.stringify(repository.task(row))); db.close();"#;
-        let output = Command::new("node")
-            .args(["node_modules/tsx/dist/cli.mjs", "-e", script])
-            .current_dir(
-                std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                    .parent()
-                    .unwrap(),
-            )
-            .env("SUPLEX_ORACLE_DB", database)
-            .env("SUPLEX_ORACLE_ARTIFACTS", artifacts)
-            .env(
-                "SUPLEX_ORACLE_TASK",
-                serde_json::from_slice::<Value>(raw).unwrap()["id"]
-                    .as_str()
-                    .unwrap(),
-            )
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .output()
-            .unwrap();
-        assert!(
-            output.status.success(),
-            "{}",
-            String::from_utf8_lossy(&output.stderr)
-        );
-        let rust = std::str::from_utf8(raw).unwrap();
-        let typescript = std::str::from_utf8(&output.stdout).unwrap();
-        if rust != typescript {
-            let offset = rust
-                .bytes()
-                .zip(typescript.bytes())
-                .position(|(left, right)| left != right)
-                .unwrap_or(rust.len().min(typescript.len()));
-            panic!(
-                "full raw TaskResponse differs from TypeScript at byte {offset}\nRust: {}\nTS: {}",
-                &rust[offset.saturating_sub(80)..rust.len().min(offset + 240)],
-                &typescript[offset.saturating_sub(80)..typescript.len().min(offset + 240)],
-            );
-        }
     }
 
     #[tokio::test]
@@ -347,7 +297,6 @@ mod tests {
         let (head, wire_body) = wire.split_once("\r\n\r\n").unwrap();
         assert!(head.starts_with("HTTP/1.1 201"), "{head}\n{wire_body}");
         let raw = Bytes::copy_from_slice(wire_body.as_bytes());
-        assert_typescript_task_body(&db_path, &root.join("artifacts"), &raw);
         let value: Value = serde_json::from_slice(&raw).unwrap();
         let artifact_id = value["images"][0]["artifactId"].as_str().unwrap();
         let client = reqwest::Client::new();
@@ -557,7 +506,6 @@ mod tests {
         ).await;
         assert_eq!(edited.status(), StatusCode::OK);
         let edited_raw = to_bytes(edited.into_body(), 128 * 1024).await.unwrap();
-        assert_typescript_task_body(&db_path, &root.join("artifacts"), &edited_raw);
         let edited_value: Value = serde_json::from_slice(&edited_raw).unwrap();
         assert_eq!(edited_value["title"], "Edited objective");
         assert_eq!(
@@ -576,7 +524,9 @@ mod tests {
         let backlog_raw = to_bytes(backlog_renamed.into_body(), 128 * 1024)
             .await
             .unwrap();
-        assert_typescript_task_body(&db_path, &root.join("artifacts"), &backlog_raw);
+        let backlog_value: Value = serde_json::from_slice(&backlog_raw).unwrap();
+        assert_eq!(backlog_value["id"], task_id);
+        assert_eq!(backlog_value["title"], "Backlog name");
         let objective: String = state
             .with_database(|database| {
                 database.connection().query_row(
@@ -606,7 +556,6 @@ mod tests {
         let active_raw = to_bytes(active_renamed.into_body(), 128 * 1024)
             .await
             .unwrap();
-        assert_typescript_task_body(&db_path, &root.join("artifacts"), &active_raw);
         assert_eq!(
             serde_json::from_slice::<Value>(&active_raw).unwrap()["title"],
             "Active name"
@@ -675,7 +624,6 @@ mod tests {
         .await;
         assert_eq!(immediate.status(), StatusCode::CREATED);
         let immediate_raw = to_bytes(immediate.into_body(), 128 * 1024).await.unwrap();
-        assert_typescript_task_body(&db_path, &root.join("artifacts"), &immediate_raw);
         assert_eq!(
             serde_json::from_slice::<Value>(&immediate_raw).unwrap()["status"],
             "active"
@@ -769,7 +717,6 @@ mod tests {
         .await;
         assert_eq!(answered.status(), StatusCode::OK);
         let answered_raw = to_bytes(answered.into_body(), 128 * 1024).await.unwrap();
-        assert_typescript_task_body(&db_path, &root.join("artifacts"), &answered_raw);
         let answered_value: Value = serde_json::from_slice(&answered_raw).unwrap();
         assert_eq!(answered_value["status"], "active");
         assert!(answered_value["humanQuestion"].is_null());
@@ -790,7 +737,8 @@ mod tests {
         .await;
         assert_eq!(noted.status(), StatusCode::OK);
         let noted_raw = to_bytes(noted.into_body(), 128 * 1024).await.unwrap();
-        assert_typescript_task_body(&db_path, &root.join("artifacts"), &noted_raw);
+        let noted_value: Value = serde_json::from_slice(&noted_raw).unwrap();
+        assert_eq!(noted_value["id"], immediate_id);
         let (noted_root, noted_hash): (String, String) = state.with_database(|database| {
             database.connection().query_row(
                 "SELECT session_id,prompt_hash FROM suplex_task_turns WHERE task_id = ?1 AND prompt_text = 'Human note:' || char(10) || 'Check the current result.'",
@@ -822,7 +770,6 @@ mod tests {
         .await;
         assert_eq!(follow_up.status(), StatusCode::OK);
         let follow_up_raw = to_bytes(follow_up.into_body(), 128 * 1024).await.unwrap();
-        assert_typescript_task_body(&db_path, &root.join("artifacts"), &follow_up_raw);
         assert_eq!(
             serde_json::from_slice::<Value>(&follow_up_raw).unwrap()["status"],
             "active"
@@ -878,7 +825,6 @@ mod tests {
         .await;
         assert_eq!(replaced.status(), StatusCode::OK);
         let replaced_raw = to_bytes(replaced.into_body(), 128 * 1024).await.unwrap();
-        assert_typescript_task_body(&db_path, &root.join("artifacts"), &replaced_raw);
         let replacement_id = state.with_database(|database| {
             let worker =
                 crate::coordination::root_session_store::current_worker(database, &immediate_id)
@@ -947,7 +893,6 @@ mod tests {
         .await;
         assert_eq!(coordinator.status(), StatusCode::OK);
         let coordinator_raw = to_bytes(coordinator.into_body(), 128 * 1024).await.unwrap();
-        assert_typescript_task_body(&db_path, &root.join("artifacts"), &coordinator_raw);
         let new_root_id = state.with_database(|database| {
             let root =
                 crate::coordination::root_session_store::current_root(database, &immediate_id)
@@ -1011,7 +956,6 @@ mod tests {
         ).await;
         assert_eq!(resumed.status(), StatusCode::OK);
         let resumed_raw = to_bytes(resumed.into_body(), 128 * 1024).await.unwrap();
-        assert_typescript_task_body(&db_path, &root.join("artifacts"), &resumed_raw);
         assert_eq!(
             serde_json::from_slice::<Value>(&resumed_raw).unwrap()["status"],
             "active"
@@ -1051,7 +995,6 @@ mod tests {
         .await;
         assert_eq!(raised.status(), StatusCode::OK);
         let raised_raw = to_bytes(raised.into_body(), 128 * 1024).await.unwrap();
-        assert_typescript_task_body(&db_path, &root.join("artifacts"), &raised_raw);
         assert_eq!(
             serde_json::from_slice::<Value>(&raised_raw).unwrap()["limits"]["budgetUsd"],
             25
@@ -1074,7 +1017,6 @@ mod tests {
         .await;
         assert_eq!(stopped.status(), StatusCode::OK);
         let stopped_raw = to_bytes(stopped.into_body(), 128 * 1024).await.unwrap();
-        assert_typescript_task_body(&db_path, &root.join("artifacts"), &stopped_raw);
         assert_eq!(
             serde_json::from_slice::<Value>(&stopped_raw).unwrap()["status"],
             "cancelled"
@@ -1223,14 +1165,12 @@ mod tests {
         .await;
         assert_eq!(archived.status(), StatusCode::OK);
         let archived_raw = to_bytes(archived.into_body(), 128 * 1024).await.unwrap();
-        assert_typescript_task_body(&db_path, &root.join("artifacts"), &archived_raw);
         assert!(serde_json::from_slice::<Value>(&archived_raw).unwrap()["archivedAt"].is_string());
         assert!(!worktree.path.exists());
         let unarchived =
             unarchive_pending(State(state.clone()), Path(task_id.clone()), headers.clone()).await;
         assert_eq!(unarchived.status(), StatusCode::OK);
         let unarchived_raw = to_bytes(unarchived.into_body(), 128 * 1024).await.unwrap();
-        assert_typescript_task_body(&db_path, &root.join("artifacts"), &unarchived_raw);
         assert!(serde_json::from_slice::<Value>(&unarchived_raw).unwrap()["archivedAt"].is_null());
         let disconnected_configuration: Value = state.with_database(|database| {
             let configuration: String = database
@@ -1371,6 +1311,56 @@ mod tests {
         assert_eq!(revoked.status(), StatusCode::NOT_FOUND);
         server.abort();
         let _ = server.await;
+        drop(state);
+        fs::remove_dir_all(root).unwrap();
+    }
+    #[tokio::test]
+    async fn frozen_full_task_response_matches_typescript_source_revision() {
+        let root =
+            std::env::temp_dir().join(format!("suplex-task-response-parity-{}", Uuid::new_v4()));
+        fs::create_dir_all(&root).unwrap();
+        let database_path = root.join("suplex.sqlite");
+        fs::copy(
+            concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../tests/parity/task-response-native/database.sqlite"
+            ),
+            &database_path,
+        )
+        .unwrap();
+        let database = SuplexDatabase::open(&database_path, OpenMode::ReadWrite).unwrap();
+        let user_id: String = database
+            .connection()
+            .query_row("SELECT id FROM suplex_users LIMIT 1", [], |row| row.get(0))
+            .unwrap();
+        let token = identity_auth::create_session(&database, &user_id, Utc::now()).unwrap();
+        let state = AppState::new(
+            database,
+            crate::http::session::SessionConfig {
+                port: 4111,
+                reachable_address: "http://127.0.0.1:4111".into(),
+                tailscale_exposure: "none".into(),
+            },
+        );
+        let expected: Value = serde_json::from_str(include_str!(
+            "../../../tests/parity/task-response-native/expected.json"
+        ))
+        .unwrap();
+        let mut headers = HeaderMap::new();
+        headers.insert("host", HeaderValue::from_static("127.0.0.1:4111"));
+        headers.insert(
+            "cookie",
+            HeaderValue::from_str(&format!("sid_v1={token}")).unwrap(),
+        );
+        let response = get_one(
+            State(state.clone()),
+            Path(expected["taskId"].as_str().unwrap().to_owned()),
+            headers,
+        )
+        .await;
+        assert_eq!(response.status().as_u16(), expected["status"]);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        assert_eq!(body.as_ref(), expected["body"].as_str().unwrap().as_bytes());
         drop(state);
         fs::remove_dir_all(root).unwrap();
     }

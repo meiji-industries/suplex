@@ -1,4 +1,3 @@
-// eslint-disable-next-line no-restricted-imports -- this test kills the caller to verify an orphaned command retains its OS lock.
 import { spawn } from "node:child_process";
 import { mkdtemp, readFile, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";

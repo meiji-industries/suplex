@@ -127,6 +127,10 @@ a direct Tailscale HTTP bind and rejects public and LAN bindings. In local mode
 request from the loopback host is the built-in Operator administrator. Local
 administration and passkey recovery use `pnpm run suplex recover --confirm-recovery`.
 
+When switching from the retired TypeScript server, register passkeys again and
+sign in to GitHub again. Existing task data and the SQL migration history are
+preserved; credential formats are not shared between the two implementations.
+
 `pnpm run suplex install --manifest` lists the install stages the desktop app
 runs, and `pnpm run suplex install --stage <name> --json` runs one of them. Each
 stage is idempotent and prints one JSON result on stdout.

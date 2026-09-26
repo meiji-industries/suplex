@@ -125,7 +125,7 @@ jobs:
           pnpm exec vite build
           cargo build --manifest-path rust/Cargo.toml --bin suplex --features github-test-endpoint
 
-      - name: Unit and integration tests
+      - name: Frontend, desktop, and protocol tests
         run: pnpm test --maxWorkers "$TEST_WORKERS" --reporter=default --reporter=junit --outputFile=test-results/unit-integration.xml
 
       - name: Browser tests

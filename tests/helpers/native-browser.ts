@@ -1,17 +1,22 @@
-// eslint-disable-next-line no-restricted-imports -- The isolated Rust API is a long-running test process; runCommand waits for exit.
-import { spawn } from "node:child_process";
+// eslint-disable-next-line no-restricted-imports -- The Rust API is a long-running fixture process.
+import { execFile, spawn } from "node:child_process";
 import { appendFileSync } from "node:fs";
-import { stat } from "node:fs/promises";
+import { mkdtemp, rm, stat } from "node:fs/promises";
 import { createServer } from "node:net";
-import { resolve } from "node:path";
+import { tmpdir } from "node:os";
+import { join, resolve } from "node:path";
+import { DatabaseSync } from "node:sqlite";
+import { promisify } from "node:util";
 import { chromium } from "playwright";
-import { nativeApp } from "./native-app.js";
+import { TaskSchema } from "../../src/frontend/contracts/tasks.js";
+
+const git = promisify(execFile);
 
 async function loopbackPort(): Promise<number> {
   const server = createServer();
   await new Promise<void>((accept, reject) => server.once("error", reject).listen(0, "127.0.0.1", accept));
   const address = server.address();
-  if (!address || typeof address === "string") throw new Error("No Rust browser test port");
+  if (!address || typeof address === "string") throw new Error("No browser test port");
   await new Promise<void>((accept, reject) => server.close(error => error ? reject(error) : accept()));
   return address.port;
 }
@@ -20,20 +25,22 @@ async function startRustServer(root: string, port: number): Promise<() => Promis
   const executable = resolve(process.env.SUPLEX_RUST_BIN ?? "rust/target/debug/suplex");
   const assets = resolve(process.env.SUPLEX_RUST_ASSETS_DIR ?? "dist/web");
   await stat(executable);
-  await stat(resolve(assets, "suplex-ui.js"));
-  const child = spawn(executable, [], {
-    env: {
-      ...process.env,
-      SUPLEX_RUST_ROOT: root,
-      SUPLEX_RUST_PORT: String(port),
-      SUPLEX_RUST_ASSETS_DIR: assets,
-    },
-    stdio: ["ignore", "pipe", "pipe"],
-  });
+  await stat(join(assets, "suplex-ui.js"));
+  const data = join(root, "data");
+  const child = spawn(executable, [], { env: {
+    ...process.env,
+    SUPLEX_ENV_FILE: join(root, "suplex.env"), SUPLEX_RUST_ROOT: root,
+    SUPLEX_PORT: String(port), SUPLEX_RUST_PORT: String(port),
+    SUPLEX_ACCESS_MODE: "local", SUPLEX_BIND_ADDRESS: "127.0.0.1",
+    SUPLEX_DATA_ROOT: data, SUPLEX_DATABASE_PATH: join(data, "suplex.sqlite"),
+    SUPLEX_ARTIFACT_ROOT: join(data, "artifacts"), SUPLEX_RUNTIME_ROOT: join(data, "runtime"),
+    SUPLEX_REPOSITORY_ROOT: join(root, "repositories"), SUPLEX_WORKTREE_ROOT: join(root, "worktrees"),
+    SUPLEX_RUST_ASSETS_DIR: assets,
+    GH_CONFIG_DIR: join(root, "gh-config"), GH_TOKEN: "", GITHUB_TOKEN: "",
+  }, stdio: ["ignore", "pipe", "pipe"] });
   let output = "";
   let failure: Error | undefined;
   child.once("error", error => { failure = error; });
-  // Real-environment runs keep the full Rust output to search it for Keychain prompts.
   const outputFile = process.env.SUPLEX_RUST_OUTPUT_FILE;
   for (const stream of [child.stdout, child.stderr]) stream.on("data", chunk => { output = (output + String(chunk)).slice(-8_000); if (outputFile) appendFileSync(outputFile, chunk); });
   const exited = new Promise<void>(accept => child.once("close", () => accept()));
@@ -43,67 +50,74 @@ async function startRustServer(root: string, port: number): Promise<() => Promis
     stopped = true;
     if (child.exitCode === null && child.signalCode === null) child.kill("SIGTERM");
     await Promise.race([exited, new Promise<void>(accept => setTimeout(accept, 2_000))]);
-    if (child.exitCode === null && child.signalCode === null) {
-      child.kill("SIGKILL");
-      await exited;
-    }
+    if (child.exitCode === null && child.signalCode === null) { child.kill("SIGKILL"); await exited; }
   };
   try {
     const deadline = Date.now() + 15_000;
     while (Date.now() < deadline) {
-      if (failure || child.exitCode !== null || child.signalCode !== null) throw new Error(`Rust browser API exited during startup: ${failure?.message ?? output}`);
-      try {
-        const response = await fetch(`http://127.0.0.1:${port}/auth`, { signal: AbortSignal.timeout(500) });
-        if (response.ok) return stop;
-      } catch {
-        // The isolated listener has not bound yet.
-      }
+      if (failure || child.exitCode !== null || child.signalCode !== null) throw new Error(`Rust fixture exited: ${failure?.message ?? output}`);
+      try { if ((await fetch(`http://127.0.0.1:${port}/auth`, { signal: AbortSignal.timeout(500) })).ok) return stop; } catch { /* Waiting for the listener. */ }
       await new Promise(accept => setTimeout(accept, 100));
     }
-    throw new Error(`Rust browser API did not listen on ${port}: ${output}`);
-  } catch (error) {
-    await stop();
-    throw error;
-  }
+    throw new Error(`Rust fixture did not listen on ${port}: ${output}`);
+  } catch (error) { await stop(); throw error; }
 }
 
 export async function nativeBrowser(width = 1280, host = "127.0.0.1", reachableAddress?: string) {
-  const rust = process.env.SUPLEX_BROWSER_BACKEND === "rust";
-  if (rust && host !== "127.0.0.1") throw new Error("Rust browser fixtures require a direct loopback origin");
-  const port = rust ? (reachableAddress ? Number(new URL(reachableAddress).port) : await loopbackPort()) : undefined;
-  const value = await nativeApp(rust
-    ? { reachableAddress: `http://127.0.0.1:${port}`, rustLayout: true }
-    : reachableAddress ? { reachableAddress } : {});
-  let browser: Awaited<ReturnType<typeof chromium.launch>> | undefined;
+  if (host !== "127.0.0.1") throw new Error("Rust browser fixtures require loopback");
+  const directory = await mkdtemp(join(tmpdir(), "suplex-rust-browser-"));
+  const port = reachableAddress ? Number(new URL(reachableAddress).port) : await loopbackPort();
+  const base = `http://127.0.0.1:${port}`;
   let stopRust: (() => Promise<void>) | undefined;
+  let browser: Awaited<ReturnType<typeof chromium.launch>> | undefined;
+  let database: DatabaseSync | undefined;
   try {
-    browser = await chromium.launch({ headless: true, args: host === "127.0.0.1" ? [] : [`--host-resolver-rules=MAP ${host} 127.0.0.1`] });
-    if (rust) stopRust = await startRustServer(value.directory, port!);
-    else await value.app.listen({ host: "127.0.0.1", port: reachableAddress ? Number(new URL(reachableAddress).port) : 0 });
-    const address = rust ? port : value.app.server.address();
-    if (!address || typeof address === "string") throw new Error("No browser test address");
-    // Each fixture uses an isolated loopback origin and database.
-    value.config.port = typeof address === "number" ? address : address.port;
-    const base = `http://${host}:${value.config.port}`;
+    stopRust = await startRustServer(directory, port);
+    const signIn = await fetch(`${base}/api/auth/me`);
+    if (!signIn.ok) throw new Error(`Fixture sign-in failed: ${signIn.status} ${await signIn.text()}`);
+    const user = (await signIn.json() as { user: { id: string } }).user;
+    const cookies = signIn.headers.getSetCookie().map(value => value.split(";", 1)[0]!);
+    const headers = { cookie: cookies.join("; "), origin: base };
+    const api = async (method: string, path: string, body?: unknown) => {
+      const response = await fetch(`${base}${path}`, { method, headers: { ...headers, ...(body === undefined ? {} : { "content-type": "application/json" }) }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
+      return { status: response.status, headers: response.headers, body: await response.json().catch(() => null) };
+    };
+    const listed = await api("GET", "/api/companies");
+    if (listed.status !== 200) throw new Error(`Fixture company lookup failed: ${JSON.stringify(listed)}`);
+    const company = (listed.body as { companies: Array<{ id: string; name: string }> }).companies[0];
+    if (!company) throw new Error("Fixture has no company");
+    const createTask = async (input: Record<string, unknown>) => {
+      const created = await api("POST", `/api/companies/${company.id}/tasks`, { projectId: "project_browser", ...input });
+      if (created.status !== 201) throw new Error(`Fixture task creation failed: ${JSON.stringify(created.body)}`);
+      return TaskSchema.parse(created.body);
+    };
+    const databasePath = join(directory, "data", "suplex.sqlite");
+    const repositoryPath = join(directory, "repositories", "repo");
+    const worktreeRoot = join(directory, "worktrees", "repo");
+    const bare = join(directory, "origin.git");
+    await git("git", ["init", "--quiet", "--bare", "--initial-branch=main", bare]);
+    await git("git", ["init", "--quiet", "--initial-branch=main", repositoryPath]);
+    await git("git", ["-C", repositoryPath, "config", "user.name", "Suplex fixture"]);
+    await git("git", ["-C", repositoryPath, "config", "user.email", "fixture@example.invalid"]);
+    await git("git", ["-C", repositoryPath, "commit", "--quiet", "--allow-empty", "-m", "Fixture"]);
+    await git("git", ["-C", repositoryPath, "remote", "add", "origin", "https://github.com/owner/repo.git"]);
+    await git("git", ["-C", repositoryPath, "config", `url.file://${bare}.insteadOf`, "https://github.com/owner/repo.git"]);
+    await git("git", ["-C", repositoryPath, "push", "--quiet", "origin", "main"]);
+    database = new DatabaseSync(databasePath);
+    const project = { id: "project_browser", companyId: company.id, name: "Repository", repository: "owner/repo", repositoryPath, worktreeRoot, rootProfileId: "profile_native_root", workerProfileId: "profile_native_worker" };
+    const now = new Date().toISOString();
+    database.prepare("INSERT INTO suplex_projects (id,company_id,name,repository_path,worktree_root,repository_identity,base_branch,setup_command,verification_command,root_profile_id,worker_profile_id,agent_task_policy_json,created_at,updated_at) VALUES (?,?,?,?,?,?,'main','','',?,?,'{}',?,?)")
+      .run(project.id, company.id, project.name, repositoryPath, worktreeRoot, project.repository, project.rootProfileId, project.workerProfileId, now, now);
+    browser = await chromium.launch({ headless: true });
     const context = await browser.newContext({ viewport: { width, height: 844 } });
-    await context.addCookies(value.headers.cookie.split("; ").map(pair => {
-      const index = pair.indexOf("=");
-      return { name: pair.slice(0, index), value: pair.slice(index + 1), domain: host, path: "/" };
-    }));
+    await context.addCookies(cookies.map(pair => { const index = pair.indexOf("="); return { name: pair.slice(0, index), value: pair.slice(index + 1), domain: host, path: "/" }; }));
     const page = await context.newPage();
     const errors: string[] = [];
     page.on("pageerror", error => errors.push(error.message));
-    const openedBrowser = browser;
-    return { ...value, browser, page, base, errors, backend: rust ? "rust" as const : "typescript" as const,
-      async restartRust() {
-        if (!rust || !stopRust) throw new Error("A Rust browser listener is not running");
-        await stopRust();
-        stopRust = await startRustServer(value.directory, port!);
-      },
-      async close(options: { preserveData?: boolean } = {}) { try { await openedBrowser.close(); } finally { try { await stopRust?.(); } finally { await value.close(options); } } },
+    const openedBrowser = browser, openedDatabase = database;
+    return { directory, config: { port, databasePath, artifactRoot: join(directory, "data", "artifacts") }, database, userId: user.id, company, project, headers, api, createTask, browser, page, base, errors,
+      async restartRust() { await stopRust?.(); stopRust = await startRustServer(directory, port); },
+      async close(options: { preserveData?: boolean } = {}) { try { await openedBrowser.close(); } finally { openedDatabase.close(); await stopRust?.(); if (!options.preserveData) await rm(directory, { recursive: true, force: true }); } },
     };
-  } catch (error) {
-    try { await browser?.close(); } finally { try { await stopRust?.(); } finally { await value.close(); } }
-    throw error;
-  }
+  } catch (error) { await browser?.close(); database?.close(); await stopRust?.(); await rm(directory, { recursive: true, force: true }); throw error; }
 }

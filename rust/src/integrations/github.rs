@@ -537,7 +537,7 @@ impl Access {
                 )
                 .into());
             }
-            return Self::for_api(&base_uri, None);
+            return Self::for_api(&base_uri, Some("fixture-only-token".to_owned()));
         }
         if CREDENTIAL_FILE.get().is_some() && disconnected_path()?.try_exists()? {
             return Self::for_api("https://api.github.com", None);

@@ -2257,3 +2257,5 @@ pub use crate::tasks::limits::{TaskLimitUsage, answer_task_limit, reconcile_task
 
 #[cfg(test)]
 include!("../../tests/coordination/store.rs");
+#[cfg(test)]
+include!("../../tests/coordination/agent_selection.rs");

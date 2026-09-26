@@ -1,0 +1,5 @@
+# Task agent selection test retirement
+
+The 17 expanded cases in `tests/task-agent-selection.test.ts` used the retired TypeScript Root store. `rust/tests/coordination/agent_selection.rs` now tests the native selection transaction in a migrated disposable database. It covers initial Coordinator selection and retry identity, preserved direction, active Worker replacement across providers and active Reviewer replacement with preserved workflow input, assignments and retired-session fencing, completed Worker future-profile selection without replay, exact-question resume, and refusal to use role selection as a task-limit or cleanup decision. Existing native `coordination::root_session_store::tests` and `coordination::advisor_bridge` tests retain Worker/Advisor launch, planner pair, result/review, generation and native-session reuse behavior.
+
+The native checks read actual session rows, pending turns and task-control state after selection, rather than observing TypeScript controller mocks. No backend Node process is required.

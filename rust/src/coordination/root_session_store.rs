@@ -1621,7 +1621,11 @@ fn selection_question(control: &TaskControlRow) -> Option<String> {
         )
     })
 }
-fn next_generation(database: &SuplexDatabase, task_id: &str, kind: &str) -> DatabaseResult<i64> {
+pub(crate) fn next_generation(
+    database: &SuplexDatabase,
+    task_id: &str,
+    kind: &str,
+) -> DatabaseResult<i64> {
     Ok(database.connection().query_row("SELECT COALESCE(MAX(generation), 0) + 1 FROM suplex_task_sessions WHERE task_id = ?1 AND kind = ?2", params![task_id, kind], |row| row.get(0))?)
 }
 fn insert_selection_turn(
@@ -1711,6 +1715,227 @@ pub fn select_initial_root(
         finish_selection(database, task_id, request, state, &time)
     })
 }
+/// The Worker, or the Advisor of one role, that is current when the user selects a new agent.
+struct CurrentDelegate {
+    id: String,
+    generation: i64,
+    slot: Option<String>,
+    workflow_input: Option<String>,
+    inherited_handoff: Option<String>,
+}
+
+/// One user agent selection being applied to a delegate slot.
+struct DelegateSelection<'a> {
+    task_id: &'a str,
+    advisor_role: Option<&'a str>,
+    profile_json: String,
+    direction: Option<String>,
+    now: DateTime<Utc>,
+    time: String,
+}
+
+fn current_delegate_session(
+    database: &SuplexDatabase,
+    task_id: &str,
+    advisor_role: Option<&str>,
+) -> DatabaseResult<Option<CurrentDelegate>> {
+    Ok(database.connection().query_row(
+        "SELECT id, generation, delegate_slot, workflow_input_json, replacement_handoff FROM suplex_task_sessions WHERE task_id = ?1 AND kind = 'worker' AND advisor_role IS ?2 AND is_current = 1 ORDER BY generation DESC LIMIT 1",
+        params![task_id, advisor_role],
+        |row| Ok(CurrentDelegate { id: row.get(0)?, generation: row.get(1)?, slot: row.get(2)?, workflow_input: row.get(3)?, inherited_handoff: row.get(4)? }),
+    ).optional()?)
+}
+
+/// True when the same selection is already saved (an idempotent retry). A
+/// selection made against another agent than the current one is refused.
+fn selection_applied(
+    state: &WorkflowState,
+    request: &AgentSelection,
+    previous_profile: &TaskProfile,
+    current: Option<&CurrentDelegate>,
+) -> DatabaseResult<bool> {
+    let saved = state
+        .agent_selections
+        .as_ref()
+        .and_then(|selections| selections.get(&request.role));
+    if saved == Some(request) && previous_profile.profile_id == request.profile_id {
+        return Ok(true);
+    }
+    if previous_profile.profile_id != request.expected_profile_id
+        || current.map(|current| &current.id) != request.expected_session_id.as_ref()
+    {
+        return Err(TaskError::new(
+            "The agent changed. Read the current agent before selecting another.",
+            409,
+        )
+        .into());
+    }
+    Ok(false)
+}
+
+/// The role must be the Worker or an Advisor role of the task's workflow.
+fn check_selection_role(
+    control: &TaskControlRow,
+    advisor_role: Option<&str>,
+) -> DatabaseResult<()> {
+    let in_workflow = |role: &str| {
+        workflows::workflow_definition(control.workflow.as_str())
+            .is_some_and(|definition| definition.advisor_roles.contains(&role))
+    };
+    if advisor_role.is_some_and(|role| !in_workflow(role)) {
+        return Err(TaskError::new("The selected role is not in this workflow.", 409).into());
+    }
+    Ok(())
+}
+
+/// A delegate turn completed with a result; an Advisor turn also needs its report.
+fn delegate_turn_succeeded(
+    status: TurnStatus,
+    observation: Option<&str>,
+    advisor_role: Option<&str>,
+) -> bool {
+    let outcome = observation.and_then(|raw| serde_json::from_str::<Value>(raw).ok());
+    status == TurnStatus::Completed
+        && outcome.as_ref().is_some_and(|outcome| {
+            outcome["state"] == "completed"
+                && advisor_role.is_none_or(|role| {
+                    outcome["advisor"]["role"] == role && !outcome["advisor"]["result"].is_null()
+                })
+        })
+}
+
+/// The preserved assignment with a fresh handoff that carries the inherited
+/// handoff and the user's direction.
+fn fresh_delegate_prompt(
+    assignment: &str,
+    inherited: &str,
+    direction: Option<&String>,
+) -> (String, String) {
+    let suffix = format!("\n\nFresh Worker handoff:\n{inherited}");
+    let base = if !inherited.is_empty() {
+        assignment.strip_suffix(&suffix).unwrap_or(assignment)
+    } else {
+        assignment
+    };
+    let handoff = [Some(inherited.to_owned()).filter(|text| !text.is_empty()), direction.cloned(), Some("Continue the preserved assignment. Inspect current work and evidence before changing it.".to_owned())].into_iter().flatten().collect::<Vec<_>>().join("\n\n");
+    let prompt = format!("{base}\n\nFresh Worker handoff:\n{handoff}");
+    (handoff, prompt)
+}
+
+/// Replace a current delegate whose latest turn did not succeed, so the new
+/// profile continues its preserved assignment. Returns the replacement id.
+fn replace_unfinished_delegate(
+    database: &SuplexDatabase,
+    selection: &DelegateSelection<'_>,
+    current: &CurrentDelegate,
+    worker_session_id: Option<&String>,
+) -> DatabaseResult<Option<String>> {
+    let (task_id, time) = (selection.task_id, selection.time.as_str());
+    let latest = database.connection().query_row(
+        "SELECT status, terminal_observation, prompt_text, workflow_input_json FROM suplex_task_turns WHERE session_id = ?1 AND generation = ?2 ORDER BY created_at DESC, id DESC LIMIT 1",
+        params![current.id, current.generation],
+        |row| Ok((row.get::<_, TurnStatus>(0)?, row.get::<_, Option<String>>(1)?, row.get::<_, String>(2)?, row.get::<_, Option<String>>(3)?)),
+    ).optional()?;
+    let Some((turn_status, observation, assignment, turn_input)) = latest else {
+        return Ok(None);
+    };
+    if delegate_turn_succeeded(turn_status, observation.as_deref(), selection.advisor_role) {
+        return Ok(None);
+    }
+    let inherited = current.inherited_handoff.clone().unwrap_or_default();
+    let (handoff, prompt) =
+        fresh_delegate_prompt(&assignment, &inherited, selection.direction.as_ref());
+    let hash = sha256_hex(prompt.as_bytes());
+    let id = Uuid::new_v4().to_string();
+    let generation = next_generation(database, task_id, "worker")?;
+    let input = turn_input.or_else(|| current.workflow_input.clone());
+    database.connection().execute(
+        "UPDATE suplex_task_sessions SET is_current = 0, lifecycle = 'cancelled', stop_requested_at = ?1, stopped_at = NULL, updated_at = ?1 WHERE id = ?2",
+        params![time, current.id],
+    )?;
+    cancel_open_turns(database, task_id, Some(&current.id), time)?;
+    database.connection().execute(
+        "INSERT INTO suplex_task_sessions (id, task_id, kind, generation, is_current, lifecycle, assignment_hash, advisor_role, delegate_slot, workflow_input_json, profile_json, replaces_session_id, replacement_reason, replacement_handoff, created_at, updated_at) VALUES (?1, ?2, 'worker', ?3, 1, 'reserved', ?4, ?11, ?5, ?6, ?7, ?8, 'User selected a new agent', ?9, ?10, ?10)",
+        params![id, task_id, generation, hash, current.slot.as_deref().unwrap_or("delegate"), input, selection.profile_json, current.id, handoff, time, selection.advisor_role],
+    )?;
+    insert_pending_turn(
+        database,
+        &new_turn_id(selection.now)?,
+        task_id,
+        &id,
+        generation,
+        Some(&hash),
+        &prompt,
+        input.as_deref(),
+        time,
+    )?;
+    if selection.advisor_role.is_none() || worker_session_id == Some(&current.id) {
+        database.connection().execute(
+            "UPDATE suplex_task_controls SET worker_session_id = ?1 WHERE task_id = ?2",
+            params![id, task_id],
+        )?;
+    }
+    Ok(Some(id))
+}
+
+/// Save the selected profile as the control default for the Worker or Advisor role.
+fn save_delegate_profile(
+    database: &SuplexDatabase,
+    selection: &DelegateSelection<'_>,
+    control: &TaskControlRow,
+    profile: &TaskProfile,
+) -> DatabaseResult<()> {
+    match selection.advisor_role {
+        None => database.connection().execute(
+            "UPDATE suplex_task_controls SET worker_profile_json = ?1 WHERE task_id = ?2",
+            params![selection.profile_json, selection.task_id],
+        )?,
+        Some(role) => {
+            let mut advisors = serde_json::to_value(&control.advisor_profiles)?;
+            advisors[role] = serde_json::to_value(profile)?;
+            database.connection().execute(
+                "UPDATE suplex_task_controls SET advisor_profiles_json = ?1 WHERE task_id = ?2",
+                params![
+                    crate::shared::js_json::stringify(&advisors),
+                    selection.task_id
+                ],
+            )?
+        }
+    };
+    Ok(())
+}
+
+/// The current Root that receives the selection note, reserving one with its
+/// initial prompt when none is current.
+fn selection_root(
+    database: &SuplexDatabase,
+    selection: &DelegateSelection<'_>,
+    control: &TaskControlRow,
+    initial: &str,
+) -> DatabaseResult<(String, i64)> {
+    let task_id = selection.task_id;
+    let live_root = database.connection().query_row(
+        "SELECT id, generation FROM suplex_task_sessions WHERE id = ?1 AND task_id = ?2 AND kind = 'root' AND is_current = 1",
+        params![control.root_session_id, task_id],
+        |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
+    ).optional()?;
+    if let Some(root) = live_root {
+        return Ok(root);
+    }
+    let id = Uuid::new_v4().to_string();
+    let generation = next_generation(database, task_id, "root")?;
+    database.connection().execute(
+        "INSERT INTO suplex_task_sessions (id, task_id, kind, generation, is_current, lifecycle, profile_json, created_at, updated_at) VALUES (?1, ?2, 'root', ?3, 1, 'reserved', ?4, ?5, ?5)",
+        params![id, task_id, generation, serde_json::to_string(&control.root_profile)?, selection.time],
+    )?;
+    database.connection().execute(
+        "UPDATE suplex_task_controls SET root_session_id = ?1 WHERE task_id = ?2",
+        params![id, task_id],
+    )?;
+    insert_selection_turn(database, task_id, &id, generation, initial, selection.now)?;
+    Ok((id, generation))
+}
+
 pub fn select_delegate(
     database: &mut SuplexDatabase,
     task_id: &str,
@@ -1725,125 +1950,46 @@ pub fn select_delegate(
         let control = &rows.control;
         selection_available(database, task_id, control, "Only active or paused tasks can select an agent.")?;
         let advisor_role = (request.role != "worker").then_some(request.role.as_str());
-        if advisor_role.is_some_and(|role| !workflows::workflow_definition(control.workflow.as_str()).is_some_and(|definition| definition.advisor_roles.contains(&role))) {
-            return Err(TaskError::new("The selected role is not in this workflow.", 409).into());
-        }
+        check_selection_role(control, advisor_role)?;
         let state = control.workflow_state.clone();
-        let mut advisors = serde_json::to_value(&control.advisor_profiles)?;
         let previous_profile = match advisor_role {
             Some(role) => control.advisor_profiles.get(&AdvisorRole::parse(role).expect("validated role")).unwrap_or(&control.root_profile),
             None => &control.worker_profile,
         };
-        let current = database.connection().query_row(
-            "SELECT id, generation, delegate_slot, workflow_input_json, replacement_handoff FROM suplex_task_sessions WHERE task_id = ?1 AND kind = 'worker' AND advisor_role IS ?2 AND is_current = 1 ORDER BY generation DESC LIMIT 1",
-            params![task_id, advisor_role],
-            |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?, row.get::<_, Option<String>>(2)?, row.get::<_, Option<String>>(3)?, row.get::<_, Option<String>>(4)?)),
-        ).optional()?;
-        if state.agent_selections.as_ref().and_then(|selections| selections.get(&request.role)) == Some(request) && previous_profile.profile_id == request.profile_id { return Ok(()); }
-        if previous_profile.profile_id != request.expected_profile_id || current.as_ref().map(|current| &current.0) != request.expected_session_id.as_ref() {
-            return Err(TaskError::new("The agent changed. Read the current agent before selecting another.", 409).into());
+        let current = current_delegate_session(database, task_id, advisor_role)?;
+        if selection_applied(&state, request, previous_profile, current.as_ref())? {
+            return Ok(());
         }
         let profile = selection_profile(database, &rows, request, "The selected agent profile does not exist.")?;
-        let profile_json = serde_json::to_string(&profile)?;
-        let root_profile = serde_json::to_string(&control.root_profile)?;
-        let root_session_id = &control.root_session_id;
-        let worker_session_id = &control.worker_session_id;
-        let time = rfc3339_millis(now);
-        let hash = |text: &str| sha256_hex(text.as_bytes());
-        let direction = (!request.direction.is_empty()).then(|| format!("Additional direction from the user:\n{}", request.direction));
-        let pending_question = selection_question(control);
-        let mut replacement = None;
+        let selection = DelegateSelection {
+            task_id,
+            advisor_role,
+            profile_json: serde_json::to_string(&profile)?,
+            direction: (!request.direction.is_empty()).then(|| format!("Additional direction from the user:\n{}", request.direction)),
+            now,
+            time: rfc3339_millis(now),
+        };
         database.connection().execute(
             "UPDATE suplex_task_sessions SET profile_json = ?1 WHERE task_id = ?2 AND kind = 'worker' AND advisor_role IS ?3 AND profile_json IS NULL",
             params![serde_json::to_string(&previous_profile)?, task_id, advisor_role],
         )?;
-        if let Some((current_id, current_generation, slot, session_input, inherited)) = &current {
-            let latest = database.connection().query_row(
-                "SELECT status, terminal_observation, prompt_text, workflow_input_json FROM suplex_task_turns WHERE session_id = ?1 AND generation = ?2 ORDER BY created_at DESC, id DESC LIMIT 1",
-                params![current_id, current_generation],
-                |row| Ok((row.get::<_, TurnStatus>(0)?, row.get::<_, Option<String>>(1)?, row.get::<_, String>(2)?, row.get::<_, Option<String>>(3)?)),
-            ).optional()?;
-            if let Some((turn_status, observation, assignment, turn_input)) = latest {
-                let outcome = observation.as_deref().and_then(|raw| serde_json::from_str::<Value>(raw).ok());
-                let successful = turn_status == TurnStatus::Completed && outcome.as_ref().is_some_and(|outcome| {
-                    outcome["state"] == "completed"
-                        && advisor_role.is_none_or(|role| outcome["advisor"]["role"] == role && !outcome["advisor"]["result"].is_null())
-                });
-                if !successful {
-                    let inherited = inherited.clone().unwrap_or_default();
-                    let suffix = format!("\n\nFresh Worker handoff:\n{inherited}");
-                    let base = if !inherited.is_empty() { assignment.strip_suffix(&suffix).unwrap_or(&assignment) } else { &assignment };
-                    let handoff = [Some(inherited.clone()).filter(|text| !text.is_empty()), direction.clone(), Some("Continue the preserved assignment. Inspect current work and evidence before changing it.".to_owned())].into_iter().flatten().collect::<Vec<_>>().join("\n\n");
-                    let prompt = format!("{base}\n\nFresh Worker handoff:\n{handoff}");
-                    let id = Uuid::new_v4().to_string();
-                    let generation = next_generation(database, task_id, "worker")?;
-                    let input = turn_input.or_else(|| session_input.clone());
-                    database.connection().execute(
-                        "UPDATE suplex_task_sessions SET is_current = 0, lifecycle = 'cancelled', stop_requested_at = ?1, stopped_at = NULL, updated_at = ?1 WHERE id = ?2",
-                        params![time, current_id],
-                    )?;
-                    cancel_open_turns(database, task_id, Some(current_id), &time)?;
-                    database.connection().execute(
-                        "INSERT INTO suplex_task_sessions (id, task_id, kind, generation, is_current, lifecycle, assignment_hash, advisor_role, delegate_slot, workflow_input_json, profile_json, replaces_session_id, replacement_reason, replacement_handoff, created_at, updated_at) VALUES (?1, ?2, 'worker', ?3, 1, 'reserved', ?4, ?11, ?5, ?6, ?7, ?8, 'User selected a new agent', ?9, ?10, ?10)",
-                        params![id, task_id, generation, hash(&prompt), slot.as_deref().unwrap_or("delegate"), input, profile_json, current_id, handoff, time, advisor_role],
-                    )?;
-                    insert_pending_turn(database, &new_turn_id(now)?, task_id, &id, generation, Some(&hash(&prompt)), &prompt, input.as_deref(), &time)?;
-                    if advisor_role.is_none() || worker_session_id.as_ref() == Some(current_id) {
-                        database.connection().execute(
-                            "UPDATE suplex_task_controls SET worker_session_id = ?1 WHERE task_id = ?2",
-                            params![id, task_id],
-                        )?;
-                    }
-                    replacement = Some(id);
-                }
-            }
-        }
-        match advisor_role {
-            None => database.connection().execute(
-                "UPDATE suplex_task_controls SET worker_profile_json = ?1 WHERE task_id = ?2",
-                params![profile_json, task_id],
-            )?,
-            Some(role) => {
-                advisors[role] = serde_json::to_value(&profile)?;
-                database.connection().execute(
-                    "UPDATE suplex_task_controls SET advisor_profiles_json = ?1 WHERE task_id = ?2",
-                    params![crate::shared::js_json::stringify(&advisors), task_id],
-                )?
-            }
+        let replacement = match &current {
+            Some(current) => replace_unfinished_delegate(database, &selection, current, control.worker_session_id.as_ref())?,
+            None => None,
         };
-        let live_root = database.connection().query_row(
-            "SELECT id, generation FROM suplex_task_sessions WHERE id = ?1 AND task_id = ?2 AND kind = 'root' AND is_current = 1",
-            params![root_session_id, task_id],
-            |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
-        ).optional()?;
-        let (root_id, root_generation) = match live_root {
-            Some(root) => root,
-            None => {
-                let id = Uuid::new_v4().to_string();
-                let generation = next_generation(database, task_id, "root")?;
-                database.connection().execute(
-                    "INSERT INTO suplex_task_sessions (id, task_id, kind, generation, is_current, lifecycle, profile_json, created_at, updated_at) VALUES (?1, ?2, 'root', ?3, 1, 'reserved', ?4, ?5, ?5)",
-                    params![id, task_id, generation, root_profile, time],
-                )?;
-                database.connection().execute(
-                    "UPDATE suplex_task_controls SET root_session_id = ?1 WHERE task_id = ?2",
-                    params![id, task_id],
-                )?;
-                insert_selection_turn(database, task_id, &id, generation, &initial, now)?;
-                (id, generation)
-            }
-        };
+        save_delegate_profile(database, &selection, control, &profile)?;
+        let (root_id, root_generation) = selection_root(database, &selection, control, &initial)?;
         let note = [
             Some(format!("The user selected {} profile {}.", advisor_role.map_or("Worker", workflows::advisor_label), request.profile_id)),
-            direction.clone(),
-            pending_question.clone(),
+            selection.direction.clone(),
+            selection_question(control),
             Some(match &replacement {
                 Some(id) => format!("Continue with replacement session {id} and the preserved assignment."),
                 None => "Use this selection for future assignments. Do not repeat completed work.".to_owned(),
             }),
         ].into_iter().flatten().collect::<Vec<_>>().join("\n\n");
         insert_selection_turn(database, task_id, &root_id, root_generation, &format!("Human note:\n{note}"), now)?;
-        finish_selection(database, task_id, request, state, &time)
+        finish_selection(database, task_id, request, state, &selection.time)
     })
 }
 pub fn continue_delivery(

@@ -49,14 +49,6 @@ fn replacement_session(
         .ok_or_else(|| CoordinationError::refused("replacement_session_missing").into())
 }
 
-fn next_generation(database: &SuplexDatabase, task_id: &str, kind: &str) -> DatabaseResult<i64> {
-    Ok(database.connection().query_row(
-        "SELECT COALESCE(MAX(generation),0)+1 FROM suplex_task_sessions WHERE task_id = ?1 AND kind = ?2",
-        params![task_id, kind],
-        |row| row.get(0),
-    )?)
-}
-
 fn is_open(status: TaskStatus, archived_at: &Option<String>) -> bool {
     archived_at.is_none() && matches!(status, TaskStatus::Active | TaskStatus::WaitingHuman)
 }

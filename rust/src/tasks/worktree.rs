@@ -788,11 +788,62 @@ mod tests {
         let changed = prepare_local_task_worktree(&intent, None).unwrap();
         assert_eq!(changed.branch, intent.branch);
         assert_eq!(changed.head_sha, commit.to_string());
+        let other_checkout = root.join("other-checkout");
+        let occupied = Command::new("git")
+            .args([
+                "-C",
+                repository_path.to_str().unwrap(),
+                "worktree",
+                "add",
+                other_checkout.to_str().unwrap(),
+                "task-one",
+            ])
+            .output()
+            .unwrap();
+        assert!(occupied.status.success(), "{occupied:?}");
+        assert_eq!(prepare_local_task_worktree(&intent, None).unwrap(), changed);
+        assert_eq!(
+            observe_local_revision(&created.path).unwrap().branch,
+            "wrong-branch"
+        );
+        let removed = Command::new("git")
+            .args([
+                "-C",
+                repository_path.to_str().unwrap(),
+                "worktree",
+                "remove",
+                other_checkout.to_str().unwrap(),
+            ])
+            .output()
+            .unwrap();
+        assert!(removed.status.success(), "{removed:?}");
         let restored = Command::new("git")
             .args(["-C", created.path.to_str().unwrap(), "switch", "task-one"])
             .output()
             .unwrap();
         assert!(restored.status.success());
+        fs::write(created.path.join("committed.txt"), "out-of-band commit\n").unwrap();
+        let added = Command::new("git")
+            .args(["-C", created.path.to_str().unwrap(), "add", "committed.txt"])
+            .output()
+            .unwrap();
+        assert!(added.status.success());
+        let committed = Command::new("git")
+            .args([
+                "-C",
+                created.path.to_str().unwrap(),
+                "-c",
+                "user.name=Test",
+                "-c",
+                "user.email=test@example.test",
+                "commit",
+                "-qm",
+                "external",
+            ])
+            .output()
+            .unwrap();
+        assert!(committed.status.success());
+        let committed_head = observe_worktree(&created.path).unwrap().head_sha;
         fs::remove_dir_all(&created.path).unwrap();
         std::os::unix::fs::symlink(&repository_path, &created.path).unwrap();
         assert!(prepare_local_task_worktree(&intent, None).is_err());
@@ -803,7 +854,11 @@ mod tests {
         };
         assert!(prepare_local_task_worktree(&conflicting, None).is_err());
         let recovered = prepare_local_task_worktree(&intent, None).unwrap();
-        assert_eq!(recovered.head_sha, commit.to_string());
+        assert_eq!(recovered.head_sha, committed_head);
+        assert_eq!(
+            fs::read(recovered.path.join("committed.txt")).unwrap(),
+            b"out-of-band commit\n"
+        );
         assert!(!recovered.dirty);
         let other = TaskWorktreeIntent {
             task_id: "task_two".into(),

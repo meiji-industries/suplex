@@ -10,7 +10,7 @@ const task = {
   id: "task-1",
   companyId: "company-1",
   projectId: "project-1",
-  issueKey: "FOR-1",
+  issue: null, artifacts: [], issueKey: "FOR-1",
   title: "Repair task links",
   description: "Keep task and pull request navigation separate.",
   status: "active",

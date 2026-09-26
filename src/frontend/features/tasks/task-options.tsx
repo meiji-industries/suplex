@@ -1,7 +1,8 @@
+import { renameTask, runTaskAction } from "./lib/task-api.js";
 import { useState } from "react";
 import { Archive, ArchiveRestore, Copy, Ellipsis, Pencil, RefreshCw, Square } from "lucide-react";
 import type { Task } from "../../contracts/tasks.js";
-import { readJson, withCompany } from "../../lib/api.js";
+import { withCompany } from "../../lib/api.js";
 import { navigate } from "../../shell/navigation-state.js";
 import { duplicateTaskDraft, type NewTaskDraft } from "./lib/duplicate-task-prefill.js";
 import { ArchiveTaskDialog } from "./archive-task-dialog.js";
@@ -28,14 +29,14 @@ export function TaskOptions({ task, onChange, onError }: { task: Task; onChange:
   const rename = async () => {
     if (busy) return;
     setBusy(true); onError("");
-    try { onChange(await readJson<Task>(`/api/tasks/${task.id}/rename`, { method: "POST", body: JSON.stringify({ title }) })); setRenameOpen(false); }
+    try { onChange(await renameTask(task.id, title)); setRenameOpen(false); }
     catch (error) { onError(error instanceof Error ? error.message : "The task could not be renamed."); }
     finally { setBusy(false); }
   };
   const act = async (action: "refresh" | "cancel" | "unarchive") => {
     if (busy) return;
     setBusy(true); onError("");
-    try { onChange(await readJson<Task>(`/api/tasks/${task.id}/${action}`, { method: "POST" })); }
+    try { onChange(await runTaskAction(task.id, action)); }
     catch (error) { onError(error instanceof Error ? error.message : "The action failed"); }
     finally { setBusy(false); }
   };

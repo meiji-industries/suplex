@@ -1,4 +1,5 @@
 import { z } from "zod";
+import type { TaskResponse } from "./generated/TaskResponse.js";
 
 import { MAX_TASK_IMAGE_BASE64_LENGTH, MAX_TASK_IMAGES } from "./attachment-limits.js";
 
@@ -117,6 +118,7 @@ const TaskHumanQuestionSchema = z.discriminatedUnion("kind", [
   TaskQuestionBaseSchema.extend({ kind: z.literal("task_limit"), pause: TaskLimitPauseSchema }).strict(),
 ]);
 
+// Test-side validator of server output. Application code uses the generated Task type.
 export const TaskSchema = z.object({
   id, companyId: id, projectId: id,
   issueKey: z.string().nullable(),
@@ -144,4 +146,4 @@ export const TaskSchema = z.object({
   createdAt: z.string(), updatedAt: z.string(), statusChangedAt: z.string(), archivedAt: z.string().nullable(),
 }).strict();
 
-export type Task = z.infer<typeof TaskSchema>;
+export type Task = TaskResponse;

@@ -1,5 +1,5 @@
 import type { AdvisorRole } from "../../contracts/advisor-reports.js";
-import type { WorkflowId, ReviewRecord } from "../../contracts/workflows.js";
+import type { WorkflowId } from "../../contracts/workflows.js";
 
 export interface WorkflowDefinition {
   id: WorkflowId;
@@ -35,6 +35,6 @@ export function roleLabel(session: { kind: "root" | "worker"; advisorRole?: Advi
   return session.advisorRole ? ADVISOR_LABELS[session.advisorRole] : "Worker";
 }
 
-export function latestReview(reviews: ReviewRecord[], role: "reviewer" | "rater"): ReviewRecord | undefined {
+export function latestReview<T extends { role: string }>(reviews: T[], role: "reviewer" | "rater"): T | undefined {
   return reviews.filter(record => record.role === role).at(-1);
 }

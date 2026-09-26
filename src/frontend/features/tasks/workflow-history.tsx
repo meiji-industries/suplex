@@ -1,7 +1,8 @@
 import { z } from "zod";
 import type { Task } from "../../contracts/tasks.js";
 import { ADVISOR_LABELS, latestReview } from "./workflow-presentation.js";
-import type { ReviewRecord } from "../../contracts/workflows.js";
+import type { ReviewRecord } from "../../contracts/generated/ReviewRecord.js";
+import { ReviewerResultSchema, RaterResultSchema } from "../../contracts/advisor-reports.js";
 import type { TaskActivity } from "./task-work.js";
 import { Badge } from "../../components/ui/badge.js";
 import { Markdown } from "../../components/app/markdown.js";
@@ -16,10 +17,15 @@ function reportText(activity: TaskActivity, turnId: string): string {
   catch { return ""; }
 }
 
-function resultLabel(record: ReviewRecord): string {
-  if (!record.result) return "Invalid";
-  if (record.result.role === "rater") return `${record.result.rating}/10`;
-  return record.result.approved ? "Approved" : "Not approved";
+function reviewResult(record: ReviewRecord) {
+  const parsed = (record.role === "rater" ? RaterResultSchema : ReviewerResultSchema).safeParse(record.result);
+  return parsed.success ? parsed.data : null;
+}
+
+function resultLabel(result: ReturnType<typeof reviewResult>): string {
+  if (!result) return "Invalid";
+  if (result.role === "rater") return `${result.rating}/10`;
+  return result.approved ? "Approved" : "Not approved";
 }
 
 /** Compact status from known facts only: a rating is labeled with the revision it reviewed. */
@@ -27,6 +33,7 @@ export function WorkflowStatus({ task }: { task: Task }) {
   const state = task.workflowState;
   const role = task.workflow === "refine_pull_request" ? "rater" : task.workflow === "independent_review" ? "reviewer" : null;
   const latest = role ? latestReview(state.reviews, role) : undefined;
+  const result = latest ? reviewResult(latest) : null;
   const items: string[] = [];
   // Precedence: the observed endpoint decides. A workflow completion by itself is never evidence of a merge.
   if (state.completion?.kind === "external_merge") items.push("Merged externally", "Workflow verification incomplete");
@@ -35,10 +42,10 @@ export function WorkflowStatus({ task }: { task: Task }) {
   else if (state.deliveryWait?.reason === "merge_queue") items.push("Merge requested");
   else if (state.deliveryWait) items.push(state.deliveryWait.reason === "observation" ? "GitHub observation pending" : "CI pending");
   if (role) {
-    if (!latest || !latest.result) items.push(latest ? `${ADVISOR_LABELS[role]} report invalid` : "Not rated");
+    if (!latest || !result) items.push(latest ? `${ADVISOR_LABELS[role]} report invalid` : "Not rated");
     else {
       const stale = task.worktree && task.worktree.headSha !== latest.range.headSha;
-      items.push(`${resultLabel(latest)} for ${short(latest.range.headSha)}`);
+      items.push(`${resultLabel(result)} for ${short(latest.range.headSha)}`);
       if (stale && !state.completion) items.push("Review stale");
     }
   }
@@ -61,11 +68,12 @@ export function WorkflowHistory({ task, activity }: { task: Task; activity: Task
     <summary className="cursor-pointer font-medium">Review history <span className="text-muted-foreground">{reviews.length || planners.length}</span></summary>
     <ol className="mt-2 grid gap-2" aria-label="Review rounds">
       {reviews.map((record, index) => {
+        const result = reviewResult(record);
         const round = reviews.filter((candidate, position) => candidate.role === record.role && position <= index).length;
         return <li key={record.turnId} className="border-l-2 pl-3" data-review-round={record.role}>
-          <div className="flex flex-wrap items-center gap-2"><span className="font-medium">{ADVISOR_LABELS[record.role]} round {round}</span><Badge variant={record.result ? "secondary" : "destructive"}>{resultLabel(record)}</Badge><code className="text-muted-foreground" title={`${record.range.baseSha}..${record.range.headSha}`}>{short(record.range.baseSha)}..{short(record.range.headSha)}</code><time className="text-muted-foreground" dateTime={record.recordedAt}>{new Date(record.recordedAt).toLocaleString()}</time></div>
-          {record.result ? <p className="text-muted-foreground">{record.result.summary}{record.result.blockingFindings.length ? ` · ${record.result.blockingFindings.length} blocking finding(s)` : ""} · verification {record.result.verification}</p> : <p className="text-destructive">{record.invalidReason}</p>}
-          {record.result?.blockingFindings.length ? <ul className="list-disc pl-4 text-muted-foreground">{record.result.blockingFindings.map(finding => <li key={finding}>{finding}</li>)}</ul> : null}
+          <div className="flex flex-wrap items-center gap-2"><span className="font-medium">{ADVISOR_LABELS[record.role]} round {round}</span><Badge variant={result ? "secondary" : "destructive"}>{resultLabel(result)}</Badge><code className="text-muted-foreground" title={`${record.range.baseSha}..${record.range.headSha}`}>{short(record.range.baseSha)}..{short(record.range.headSha)}</code><time className="text-muted-foreground" dateTime={record.recordedAt}>{new Date(record.recordedAt).toLocaleString()}</time></div>
+          {result ? <p className="text-muted-foreground">{result.summary}{result.blockingFindings.length ? ` · ${result.blockingFindings.length} blocking finding(s)` : ""} · verification {result.verification}</p> : <p className="text-destructive">{record.invalidReason}</p>}
+          {result?.blockingFindings.length ? <ul className="list-disc pl-4 text-muted-foreground">{result.blockingFindings.map(finding => <li key={finding}>{finding}</li>)}</ul> : null}
           {reportText(activity, record.turnId) ? <details className="mt-1"><summary className="cursor-pointer text-muted-foreground">Full report and repair plan</summary><div className="mt-1"><Markdown source={reportText(activity, record.turnId)} /></div></details> : null}
         </li>;
       })}

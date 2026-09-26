@@ -1,14 +1,15 @@
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import { expect, test } from "vitest";
-import { TaskQueueSchema } from "../src/frontend/contracts/tasks.js";
+import { TaskQueueSchema, type Task } from "../src/frontend/contracts/tasks.js";
 import { TaskQueueWaits, backlogText } from "../src/frontend/features/tasks/task-details.js";
 import { TaskStatus, taskStatusLabel } from "../src/frontend/features/tasks/task-status.js";
 
-const queue = TaskQueueSchema.parse({ waitingOn: [{
-  id: "blocker", title: "Agent prerequisite", status: "backlog", deliveryTarget: "pull_request_draft",
+const queue: Task["queue"] = { waitingOn: [{
+  kind: "task", id: "blocker", title: "Agent prerequisite", status: "backlog", deliveryTarget: "pull_request_draft",
   reason: "prerequisite_not_started", summary: "Agent prerequisite. Start it to unblock this task.",
-}] });
+}] };
+TaskQueueSchema.parse(queue);
 
 test("queued task presentation links its blocker and explains the wait", () => {
   const task = { companyId: "company", status: "queued" as const, queue };

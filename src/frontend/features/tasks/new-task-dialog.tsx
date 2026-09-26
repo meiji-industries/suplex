@@ -1,3 +1,5 @@
+import { ProjectProviderPolicySchema } from "../../contracts/provider-policy.js";
+import { updateTask, createTask } from "./lib/task-api.js";
 import { useEffect, useRef, useState, type ReactElement } from "react";
 import { isProfileAllowed } from "../projects/lib/provider-policy.js";
 import { FileText, FolderKanban, MoreHorizontal, Workflow as WorkflowIcon, X } from "lucide-react";
@@ -186,14 +188,14 @@ export function NewTaskDialog({ open, onOpenChange, companyId, onCreated, initia
     setBusy(true); setError(""); setProjectFindings([]);
     try {
       if (editTask) {
-        const saved = await readJson<Task>(`/api/tasks/${editTask.id}`, { method: "PATCH", body: JSON.stringify({ title, description, deliveryTarget, runProjectTests, visualEvidence, workflow, advisorProfileIds: admittedAdvisors(workflow, advisorProfileIds), ...(rootProfileId ? { rootProfileId } : {}), ...(workerProfileId ? { workerProfileId } : {}) }) });
+        const saved = await updateTask(editTask.id, { title, description, deliveryTarget, runProjectTests, visualEvidence, workflow, advisorProfileIds: admittedAdvisors(workflow, advisorProfileIds), ...(rootProfileId ? { rootProfileId } : {}), ...(workerProfileId ? { workerProfileId } : {}) });
         onCreated(saved);
         return;
       }
       const body = { projectId, title, description, startImmediately, deliveryTarget, runProjectTests, visualEvidence, images, workflow, advisorProfileIds: admittedAdvisors(workflow, advisorProfileIds), ...(rootProfileId ? { rootProfileId } : {}), ...(workerProfileId ? { workerProfileId } : {}), ...(sourceSummary?.kind === "issue" ? { issue: sourceSummary.issue } : {}), ...(source ? { source } : {}), ...(blockedBy.length ? { dependsOn: blockedBy.map(prerequisite => prerequisite.id) } : {}) };
       const serialized = JSON.stringify(body);
       if (request.current?.body !== serialized) request.current = { body: serialized, key: crypto.randomUUID() };
-      const task = await readJson<Task>(`/api/companies/${companyId}/tasks`, { method: "POST", body: JSON.stringify({ ...body, idempotencyKey: request.current.key }) });
+      const task = await createTask(companyId, { ...body, idempotencyKey: request.current.key });
       request.current = null;
       setTitle(""); setDescription(""); setImages([]); setSource(undefined); setSourceSummary(undefined); setBlockedBy([]);
       cacheTask(task);
@@ -222,7 +224,7 @@ export function NewTaskDialog({ open, onOpenChange, companyId, onCreated, initia
     finally { if (imageRead.current.generation === generation) { imageRead.current.pending = false; setReadingImages(false); } }
   };
   const project = projects.find(project => project.id === projectId);
-  const eligibleProfiles = profiles.filter(profile => isProfileAllowed(editTask ? editTask.configuration.providerPolicy : project?.providerPolicy, profile));
+  const eligibleProfiles = profiles.filter(profile => isProfileAllowed(editTask ? ProjectProviderPolicySchema.nullish().parse(editTask.configuration.providerPolicy) : project?.providerPolicy, profile));
   const repositoryConnection = editTask ? editTask.configuration.integration?.repository : project?.integration?.repository;
   const deliveryOptions = taskDeliveryTargetOptions.filter(option => supportsDeliveryTarget(repositoryConnection, option.value));
   const unsupportedTarget = !supportsDeliveryTarget(repositoryConnection, deliveryTarget);

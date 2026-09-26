@@ -1,4 +1,4 @@
-import type { TaskLimitPause } from "../../../contracts/task-limits.js";
+import type { TaskLimitPause } from "../../../contracts/generated/TaskLimitPause.js";
 
 export function roundSuggestedBudget(proposedBudget: number, spent: number): number {
   return Math.max(Math.round(proposedBudget / 5) * 5, (Math.floor(spent / 5) + 1) * 5);

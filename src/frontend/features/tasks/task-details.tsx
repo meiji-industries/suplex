@@ -1,3 +1,4 @@
+import { setTaskDependencies, setTaskIssue, runTaskAction } from "./lib/task-api.js";
 import { useEffect, useState, type ReactElement } from "react";
 import { ChevronRight, ClipboardCopy, X } from "lucide-react";
 import { Collapsible } from "../../components/ui/collapsible.js";
@@ -60,7 +61,7 @@ export function TaskBlockedByProperty({ task, onChange }: { task: Pick<Task, "id
   const submit = async (dependsOn: string[], pullRequestNumbers = pullRequests.map(prerequisite => prerequisite.number!)) => {
     if (busy) return;
     setBusy(true); setError("");
-    try { onChange(await readJson<Task>(`/api/tasks/${task.id}/dependencies`, { method: "PUT", body: JSON.stringify({ dependsOn, blockedByPullRequests: pullRequestNumbers.map(number => ({ number })) }) })); }
+    try { onChange(await setTaskDependencies(task.id, dependsOn, pullRequestNumbers)); }
     catch (error) { setError(error instanceof Error ? error.message : "The Blocked by tasks could not be saved"); }
     finally { setBusy(false); }
   };
@@ -78,7 +79,7 @@ export function TaskDetailsPage({ task, project, onChange }: { task: Task; proje
   const [edit, setEdit] = useState<NewTaskDraft | null>(null);
   const [openWorkerSelection, setOpenWorkerSelection] = useState(0);
   const blockedBy = <TaskBlockedByProperty task={task} onChange={onChange} />;
-  const issue = <div className="space-y-1.5"><dt className="text-muted-foreground">Issue</dt><dd><IssuePicker projectId={task.projectId} issue={task.issue} onChange={async issue => onChange(await readJson<Task>(`/api/tasks/${task.id}/issue`, { method: "PATCH", body: JSON.stringify({ issue }) }))} /></dd></div>;
+  const issue = <div className="space-y-1.5"><dt className="text-muted-foreground">Issue</dt><dd><IssuePicker projectId={task.projectId} issue={task.issue} onChange={async issue => onChange(await setTaskIssue(task.id, issue))} /></dd></div>;
   const editable = ["backlog", "queued"].includes(task.status) && !task.archivedAt;
   useEffect(() => {
     let closed = false;
@@ -87,10 +88,10 @@ export function TaskDetailsPage({ task, project, onChange }: { task: Task; proje
     const timer = setInterval(() => void load(), 3000);
     return () => { closed = true; clearInterval(timer); };
   }, [task.id]);
-  const act = async (action: string, body?: unknown) => {
+  const act = async (action: Parameters<typeof runTaskAction>[1], body?: unknown) => {
     if (busy) return;
     setBusy(true); setError("");
-    try { onChange(await readJson<Task>(`/api/tasks/${task.id}/${action}`, { method: "POST", ...(body ? { body: JSON.stringify(body) } : {}) })); }
+    try { onChange(await runTaskAction(task.id, action, body)); }
     catch (error) { setError(error instanceof Error ? error.message : "The action failed"); }
     finally { setBusy(false); }
   };

@@ -1,3 +1,5 @@
+import { ProjectProviderPolicySchema } from "../../contracts/provider-policy.js";
+import { getTask, selectTaskAgent } from "./lib/task-api.js";
 import { useEffect, useState } from "react";
 import type { Task } from "../../contracts/tasks.js";
 import type { TaskAgentSelectionRequest } from "../../contracts/agent-selection.js";
@@ -46,12 +48,12 @@ export function TaskAgent({ task, role, onChange, onActivityChange, openRequest,
     void readJson<{ profiles: ApiProfile[] }>("/api/profiles").then(result => { if (!cancelled) setProfiles(result.profiles); }).catch(cause => { if (!cancelled) setError(cause instanceof Error ? cause.message : "Agent profiles are not available."); });
     return () => { cancelled = true; };
   }, [open]);
-  const allowed = profiles.filter(item => item.role === (role === "worker" ? "worker" : "root") && !item.archivedAt && isProfileAllowed(intent?.task.configuration.providerPolicy, item));
+  const allowed = profiles.filter(item => item.role === (role === "worker" ? "worker" : "root") && !item.archivedAt && isProfileAllowed(ProjectProviderPolicySchema.nullish().parse(intent?.task.configuration.providerPolicy), item));
   const openDialog = async () => {
     if (busy) return;
     setBusy(true); setError(""); setIntent(null);
     try {
-      const [freshTask, freshActivity] = await Promise.all([readJson<Task>(`/api/tasks/${task.id}`), readJson(`/api/tasks/${task.id}/activity`).then(value => TaskActivityResponseSchema.parse(value))]);
+      const [freshTask, freshActivity] = await Promise.all([getTask(task.id), readJson(`/api/tasks/${task.id}/activity`).then(value => TaskActivityResponseSchema.parse(value))]);
       onChange(freshTask); onActivityChange(freshActivity);
       setIntent({ task: freshTask, sessionId: roleSession(freshActivity, role)?.id ?? null });
       setProfileId(roleProfile(freshTask, role).profileId); setDirection(""); setResume(false);
@@ -66,7 +68,7 @@ export function TaskAgent({ task, role, onChange, onActivityChange, openRequest,
       const body: TaskAgentSelectionRequest = resume && question
         ? { role, expectedProfileId: roleProfile(intent.task, role).profileId, expectedSessionId: intent.sessionId, profileId: selected, direction, resume: true, questionId: question.id }
         : { role, expectedProfileId: roleProfile(intent.task, role).profileId, expectedSessionId: intent.sessionId, profileId: selected, direction, resume: false };
-      const updated = await readJson<Task>(`/api/tasks/${task.id}/select-agent`, { method: "POST", body: JSON.stringify(body) });
+      const updated = await selectTaskAgent(task.id, body);
       onChange(updated);
       await readJson(`/api/tasks/${task.id}/activity`).then(value => onActivityChange(TaskActivityResponseSchema.parse(value)), () => undefined);
       setOpen(false);

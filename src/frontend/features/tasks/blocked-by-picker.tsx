@@ -1,6 +1,6 @@
+import { listTasks } from "./lib/task-api.js";
 import { useEffect, useState, type ReactElement } from "react";
 import type { Task } from "../../contracts/tasks.js";
-import { readJson } from "../../lib/api.js";
 import { Button } from "../../components/ui/button.js";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "../../components/ui/dialog.js";
 import { Input } from "../../components/ui/input.js";
@@ -19,8 +19,8 @@ export function BlockedByPickerDialog({ open, onOpenChange, companyId, projectId
     if (!projectId) return;
     let cancelled = false;
     setLoading(true);
-    void readJson<{ tasks: Task[] }>(`/api/companies/${companyId}/tasks`).then(result => {
-      if (!cancelled) setTasks(result.tasks.filter(task => task.projectId === projectId && ["backlog", "queued", "active"].includes(task.status) && !task.archivedAt));
+    void listTasks(companyId).then(result => {
+      if (!cancelled) setTasks(result.filter(task => task.projectId === projectId && ["backlog", "queued", "active"].includes(task.status) && !task.archivedAt));
     }).catch(error => { if (!cancelled) onError?.(error instanceof Error ? error.message : "Tasks are not available"); }).finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
   }, [open, projectId, companyId, onError]);

@@ -18,7 +18,7 @@ import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { nativeBrowser } from "../helpers/native-browser.js";
 import { runCommand } from "../helpers/run-command.js";
-import { TaskSchema, type Task } from "../../src/frontend/contracts/tasks.js";
+import { TaskSchema } from "../../src/frontend/contracts/tasks.js";
 
 type Provider = "codex" | "claude-code" | "opencode" | "devin";
 const phase = process.env.SUPLEX_REAL_PHASE ?? "providers";
@@ -102,7 +102,7 @@ async function turnProcess(sessionId: string) {
   if (!record.pid) return null;
   try { process.kill(-record.pid, 0); return { pid: record.pid, alive: true }; } catch { return { pid: record.pid, alive: false }; }
 }
-async function createTaskInUi(title: string, description: string): Promise<Task> {
+async function createTaskInUi(title: string, description: string) {
   await fixture.page.goto(`${fixture.base}/tasks?company=${fixture.company.id}`);
   await fixture.page.getByRole("heading", { name: "Tasks", exact: true }).waitFor();
   await fixture.page.getByRole("button", { name: "New task", exact: true }).first().click();

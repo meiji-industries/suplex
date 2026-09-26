@@ -1,4 +1,5 @@
 import { z } from "zod";
+import type { TaskResponse } from "./generated/TaskResponse.js";
 
 import { TaskSchema } from "./tasks.js";
 
@@ -12,15 +13,10 @@ import { WorkerReplacementSchema } from "./worker-replacement.js";
 
 export const TaskResponseSchema = TaskSchema.strip();
 
-export type TaskResponse = z.infer<typeof TaskResponseSchema>;
+export type { TaskResponse } from "./generated/TaskResponse.js";
 
 export type TaskListTask = TaskResponse;
 
-export const TaskArchiveResponseSchema = z.union([TaskResponseSchema, z.object({
-  status: z.literal("confirmation_required"),
-  dirtyFileCount: z.number().int().nonnegative(),
-  dirtyFilePaths: z.array(z.string()),
-})]);
 
 export const TaskHarnessKindSchema = HarnessKindSchema;
 

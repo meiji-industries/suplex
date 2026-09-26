@@ -1,3 +1,4 @@
+import { addTaskNote } from "./lib/task-api.js";
 import { TaskWorker } from "./task-worker.js";
 import { useEffect, useRef, useState } from "react";
 import { z } from "zod";
@@ -103,7 +104,7 @@ export function TaskNoteInput({ task, onChange }: { task: Task; onChange: (task:
     const submittedRevision = revision.current;
     setSubmitting(true); setError("");
     try {
-      const next = await readJson<Task>(`/api/tasks/${submittedTaskId}/note`, { method: "POST", body: JSON.stringify({ note: submittedText }) });
+      const next = await addTaskNote(submittedTaskId, submittedText);
       if (!mounted.current || submittedTaskId !== currentTaskId.current) return;
       onChange(next);
       if (submittedRevision === revision.current) setText("");

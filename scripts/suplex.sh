@@ -7,4 +7,7 @@ esac
 cd rust
 unset RUSTUP_TOOLCHAIN
 cargo build --quiet --bin suplex
-exec "${CARGO_TARGET_DIR:-target}/debug/suplex" "$@"
+binary="${CARGO_TARGET_DIR:-$PWD/target}/debug/suplex"
+case "$binary" in /*) ;; *) binary="$PWD/$binary" ;; esac
+cd ..
+exec "$binary" "$@"

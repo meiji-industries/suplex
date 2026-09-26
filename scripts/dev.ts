@@ -1,5 +1,5 @@
 import { spawn, type ChildProcess } from "node:child_process";
-import { watch } from "node:fs";
+import { existsSync, watch } from "node:fs";
 import { resolve } from "node:path";
 import { createServer } from "vite";
 
@@ -37,8 +37,8 @@ async function build(): Promise<void> {
   }
 }
 
-await build();
 const command = process.argv[2];
+if (command !== "--stop" || !existsSync(binary)) await build();
 if (command === "--stop" || command === "--desktop" || command === "--migrate") {
   process.exit(await completed(spawn(binary, [command.slice(2)], { cwd: root, env: environment, stdio: "inherit" })));
 }

@@ -3,7 +3,7 @@ import { QueryClient, QueryClientProvider, focusManager, notifyManager, useQuery
 import { act } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
-import { TaskSchema } from "../src/tasks/contracts.js";
+import { TaskSchema } from "../src/frontend/contracts/tasks.js";
 import { ServerStateProvider, useSignOut } from "../src/frontend/shell/server-state.js";
 import { TaskDataProvider, taskListKey, updateTaskCache, useTaskAgents, useTaskData } from "../src/frontend/features/tasks/task-data.js";
 

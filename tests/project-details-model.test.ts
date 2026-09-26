@@ -2,7 +2,7 @@ import { expect, test } from "vitest";
 
 import type { ApiProfile } from "../src/frontend/shell/view-shared.js";
 import { agentsDraftFindings, agentsProjectPatch, generalProjectPatch, type AgentsDraft } from "../src/frontend/features/projects/project-details-model.js";
-import type { ProjectProviderPolicy } from "../src/projects/provider-policy.js";
+import type { ProjectProviderPolicy } from "../src/frontend/contracts/provider-policy.js";
 
 const profiles: ApiProfile[] = [
   { id: "root-claude-default", name: "Claude default", role: "root", provider: "claude-code", model: "claude-sonnet-4", reasoningLevel: "medium", serviceTier: "default", avatarSeed: "a".repeat(32), archivedAt: null, createdAt: "2026-01-01T00:00:00.000Z", updatedAt: "2026-01-01T00:00:00.000Z" },

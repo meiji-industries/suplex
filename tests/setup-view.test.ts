@@ -3,8 +3,8 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { expect, test } from "vitest";
 
 import { ProviderContextBar, SetupFooter, setupChecklist, setupContext } from "../src/frontend/features/settings/setup.js";
-import type { HealthCheck, HealthSnapshot } from "../src/platform/health.js";
-import type { ProfileResponse, ProjectResponse } from "../src/http/contracts/projects.js";
+import type { HealthCheck, HealthSnapshot } from "../src/frontend/contracts/health.js";
+import type { ProfileResponse, ProjectResponse } from "../src/frontend/contracts/projects.js";
 
 const check = (id: HealthCheck["id"], provider?: HealthCheck["provider"]): HealthCheck => ({ id, label: id, status: "unhealthy", summary: "Not available", details: {}, ...(provider ? { provider } : {}) });
 

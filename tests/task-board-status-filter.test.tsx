@@ -9,7 +9,7 @@ import { notifyManager } from "@tanstack/react-query";
 import { ServerStateProvider } from "../src/frontend/shell/server-state.js";
 import { TaskDataProvider } from "../src/frontend/features/tasks/task-data.js";
 
-import type { Task } from "../src/tasks/contracts.js";
+import type { Task } from "../src/frontend/contracts/tasks.js";
 
 const api = vi.hoisted(() => ({ readJson: vi.fn(), withCompany: (path: string) => path }));
 vi.mock("../src/frontend/lib/api.js", () => api);

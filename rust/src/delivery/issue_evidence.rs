@@ -789,6 +789,82 @@ mod tests {
     use super::*;
 
     #[test]
+    fn retained_manifest_survives_missing_generated_file_and_publication_keeps_captured_issue() {
+        let (directory, operations, task_id, head) =
+            crate::delivery::operations::tests::workflow_task("standard");
+        let generated = evidence_root(operations.database_path())
+            .join(&task_id)
+            .join("generated");
+        fs::create_dir_all(&generated).unwrap();
+        let evidence = json!({
+            "headSha":head,"summary":"Fix the button",
+            "before":[{"command":"test","output":"failed"}],
+            "after":[{"command":"test","output":"passed"}],
+            "howToVerify":["Click the button"]
+        });
+        let source = generated.join("delivery-evidence.json");
+        fs::write(&source, evidence.to_string()).unwrap();
+        let mut database =
+            SuplexDatabase::open(operations.database_path(), OpenMode::ReadWrite).unwrap();
+        assert_eq!(
+            manifest(&operations, &mut database, &task_id, &head).unwrap(),
+            parse_evidence(evidence.to_string().as_bytes()).unwrap()
+        );
+        let count: i64 = database
+            .connection()
+            .query_row(
+                "SELECT COUNT(*) FROM suplex_artifacts WHERE task_id = ?1",
+                [&task_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(count, 1);
+        fs::remove_file(&source).unwrap();
+        assert_eq!(
+            manifest(&operations, &mut database, &task_id, &head).unwrap(),
+            parse_evidence(evidence.to_string().as_bytes()).unwrap()
+        );
+        assert_eq!(
+            database
+                .connection()
+                .query_row::<i64, _, _>(
+                    "SELECT COUNT(*) FROM suplex_artifacts WHERE task_id = ?1",
+                    [&task_id],
+                    |row| row.get(0)
+                )
+                .unwrap(),
+            1
+        );
+
+        let issue =
+            json!({"kind":"jira","site":"https://example.atlassian.net","id":"42","key":"APP-42"});
+        let tracker = json!({"kind":"jira","site":"https://example.atlassian.net","project":"APP","emailEnvironment":"TEST_EMAIL","tokenEnvironment":"TEST_TOKEN"});
+        database.connection().execute(
+            "UPDATE suplex_task_controls SET delivery_target = 'pull_request_draft' WHERE task_id = ?1", [&task_id]
+        ).unwrap();
+        database.connection().execute(
+            "UPDATE suplex_tasks SET issue_json = ?1, configuration_json = json_set(configuration_json, '$.integration', json(?2)) WHERE id = ?3",
+            params![issue.to_string(), json!({"repository":{"kind":"github"},"tracker":tracker}).to_string(), task_id]
+        ).unwrap();
+        let (captured, _) = pending_publication(&database, &task_id, &head)
+            .unwrap()
+            .unwrap();
+        assert_eq!(captured.issue, issue);
+        save(&database, &task_id, &captured).unwrap();
+        database.connection().execute(
+            "UPDATE suplex_tasks SET issue_json = ?1 WHERE id = ?2",
+            params![json!({"kind":"jira","site":"https://example.atlassian.net","id":"99","key":"APP-99"}).to_string(), task_id]
+        ).unwrap();
+        let (retry, _) = pending_publication(&database, &task_id, &head)
+            .unwrap()
+            .unwrap();
+        assert_eq!(retry.issue, issue);
+        assert_eq!(retry.head_sha, head);
+        drop(database);
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
     fn generated_evidence_reads_current_bytes_but_never_follows_a_replaced_symlink() {
         let root =
             std::env::temp_dir().join(format!("suplex-evidence-read-{}", uuid::Uuid::new_v4()));

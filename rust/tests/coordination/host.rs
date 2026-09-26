@@ -381,7 +381,7 @@ mod host_tests {
             ).unwrap();
         }
         // Without complete native usage the pause stays and is observed again.
-        reconcile_limit_pause(&database_path, &task_id)
+        reconcile_limit_pause(&mut SuplexDatabase::open(&database_path, OpenMode::ReadWrite).unwrap(), &database_path, &task_id)
             .await
             .unwrap();
         let (status, wake_at) = control();
@@ -398,7 +398,7 @@ mod host_tests {
                 )
                 .unwrap();
         }
-        reconcile_limit_pause(&database_path, &task_id)
+        reconcile_limit_pause(&mut SuplexDatabase::open(&database_path, OpenMode::ReadWrite).unwrap(), &database_path, &task_id)
             .await
             .unwrap();
         assert_eq!(control().0, "active");
@@ -442,7 +442,7 @@ mod host_tests {
         let (base, database_path, task_id) = fixture_task();
         root_controller::prepare_root(&database_path, &task_id).unwrap();
         let error = recover_session_blocking(
-            &database_path,
+            &mut SuplexDatabase::open(&database_path, OpenMode::ReadWrite).unwrap(),            &database_path,
             &base,
             &task_id,
             None,
@@ -504,7 +504,7 @@ mod host_tests {
             ).unwrap();
             other
         };
-        assert!(due_task_ids(&database_path).unwrap().contains(&failing));
+        assert!(due_task_ids(&SuplexDatabase::open(&database_path, OpenMode::ReadOnly).unwrap()).unwrap().contains(&failing));
         assert!(
             sweep_task(
                 &database_path,
@@ -537,7 +537,7 @@ mod host_tests {
         );
         assert!(control.root_session_id.is_some());
         drop(database);
-        let due = due_task_ids(&database_path).unwrap();
+        let due = due_task_ids(&SuplexDatabase::open(&database_path, OpenMode::ReadOnly).unwrap()).unwrap();
         assert!(
             !due.contains(&failing),
             "a failed sweep is due again at once"
@@ -715,12 +715,12 @@ mod host_tests {
                 .unwrap()
                 .complete
         );
-        let observed = observed_usage(&database_path, &task_id, false)
+        let observed = observed_usage(&mut SuplexDatabase::open(&database_path, OpenMode::ReadWrite).unwrap(), &database_path, &task_id, false)
             .await
             .unwrap();
         assert_eq!(observed.estimated_cost_usd, None);
         assert_eq!(
-            observed_usage(&database_path, &task_id, true)
+            observed_usage(&mut SuplexDatabase::open(&database_path, OpenMode::ReadWrite).unwrap(), &database_path, &task_id, true)
                 .await
                 .unwrap()
                 .estimated_cost_usd,
@@ -755,7 +755,7 @@ mod host_tests {
             let database_path = database_path.clone();
             let task_id = task_id.clone();
             async move {
-                observed_usage(&database_path, &task_id, require)
+                observed_usage(&mut SuplexDatabase::open(&database_path, OpenMode::ReadWrite).unwrap(), &database_path, &task_id, require)
                     .await
                     .unwrap()
                     .estimated_cost_usd
@@ -815,7 +815,7 @@ mod host_tests {
         };
         let settle = |usage: Vec<UsageEntry>, pricing, require| {
             settle_usage(
-                &database_path,
+            &mut SuplexDatabase::open(&database_path, OpenMode::ReadWrite).unwrap(),
                 &task_id,
                 vec![(
                     "codex-limits".to_owned(),
@@ -1311,7 +1311,7 @@ mod host_tests {
             // partial observation; missing native usage never blocks dispatch.
             assert_eq!(
                 replace_observed_usage(
-                    &database_path,
+            &mut SuplexDatabase::open(&database_path, OpenMode::ReadWrite).unwrap(),
                     &task_id,
                     vec![(native_id.to_owned(), "root".into(), no_usage_event)],
                 )
@@ -1420,7 +1420,7 @@ mod host_tests {
                 .is_none()
         );
         assert_eq!(fs::read(&marker).unwrap(), b"xx");
-        stop_retired_sessions(&database_path, &task_id)
+        stop_retired_sessions(&mut SuplexDatabase::open(&database_path, OpenMode::ReadWrite).unwrap(), &database_path, &task_id)
             .await
             .unwrap();
         {
@@ -1473,7 +1473,7 @@ mod host_tests {
             },
         )]);
         let unpriced = replace_observed_usage(
-            &database_path,
+            &mut SuplexDatabase::open(&database_path, OpenMode::ReadWrite).unwrap(),
             &task_id,
             vec![(
                 root.native_session_id.clone().unwrap(),
@@ -1511,7 +1511,7 @@ mod host_tests {
         assert!(snapshot["completedAt"].is_null());
         drop(database);
         let cost = replace_observed_usage(
-            &database_path,
+            &mut SuplexDatabase::open(&database_path, OpenMode::ReadWrite).unwrap(),
             &task_id,
             vec![(root.native_session_id.clone().unwrap(), "root".into(), {
                 let mut timeline = NativeTimeline {
@@ -1607,11 +1607,11 @@ mod host_tests {
                 rusqlite::params![i64::from(std::process::id()), worker.id],
             ).unwrap();
         }
-        assert!(due_task_ids(&database_path).unwrap().contains(&task_id));
+        assert!(due_task_ids(&SuplexDatabase::open(&database_path, OpenMode::ReadOnly).unwrap()).unwrap().contains(&task_id));
         sweep_task(&database_path, &base, &task_id, Some(&codex), &environment)
             .await
             .unwrap();
-        assert!(!due_task_ids(&database_path).unwrap().contains(&task_id));
+        assert!(!due_task_ids(&SuplexDatabase::open(&database_path, OpenMode::ReadOnly).unwrap()).unwrap().contains(&task_id));
         {
             let database = SuplexDatabase::open(&database_path, OpenMode::ReadOnly).unwrap();
             let outstanding: i64 = database.connection().query_row(
@@ -1720,7 +1720,7 @@ mod host_tests {
             assert_eq!(pending, 0);
         }
         assert!(
-            due_task_ids(&database_path)
+            due_task_ids(&SuplexDatabase::open(&database_path, OpenMode::ReadOnly).unwrap())
                 .unwrap()
                 .contains(&failing_task)
         );
@@ -1734,7 +1734,7 @@ mod host_tests {
         .await
         .unwrap();
         assert!(
-            !due_task_ids(&database_path)
+            !due_task_ids(&SuplexDatabase::open(&database_path, OpenMode::ReadOnly).unwrap())
                 .unwrap()
                 .contains(&failing_task)
         );
@@ -1857,7 +1857,7 @@ mod host_tests {
             .is_none()
         );
         assert_eq!(fs::read(&marker).unwrap(), before);
-        stop_retired_sessions(&database_path, &replacement_task)
+        stop_retired_sessions(&mut SuplexDatabase::open(&database_path, OpenMode::ReadWrite).unwrap(), &database_path, &replacement_task)
             .await
             .unwrap();
         {

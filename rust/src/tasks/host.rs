@@ -128,8 +128,8 @@ pub fn spawn_task_host(database_path: PathBuf, artifact_root: PathBuf) -> TaskHo
 /// TypeScript `TaskHost.tick`: the queue sweep admits every ready queued
 /// task on each tick, starting with the immediate first tick at startup.
 pub(crate) fn scheduled_task_ids(database_path: &Path) -> DatabaseResult<Vec<String>> {
+    let mut database = SuplexDatabase::open(database_path, OpenMode::ReadWrite)?;
     {
-        let mut database = SuplexDatabase::open(database_path, OpenMode::ReadWrite)?;
         // A diagnostic read never changes queue admission.
         let queued = database
             .connection()
@@ -145,11 +145,10 @@ pub(crate) fn scheduled_task_ids(database_path: &Path) -> DatabaseResult<Vec<Str
         }
         root_session_store::admit_queued(&mut database, Utc::now())?;
     }
-    due_task_ids(database_path)
+    due_task_ids(&database)
 }
 
-pub(crate) fn due_task_ids(database_path: &Path) -> DatabaseResult<Vec<String>> {
-    let database = SuplexDatabase::open(database_path, OpenMode::ReadOnly)?;
+pub(crate) fn due_task_ids(database: &SuplexDatabase) -> DatabaseResult<Vec<String>> {
     let mut statement = database.connection().prepare(
         "SELECT c.task_id FROM suplex_task_controls c JOIN suplex_tasks t ON t.id = c.task_id WHERE (t.archived_at IS NULL AND c.status IN ('active','waiting_human') AND (c.wake_at IS NULL OR c.wake_at <= ?1)) OR (c.status = 'delivered' AND EXISTS (SELECT 1 FROM suplex_task_sessions s WHERE s.task_id = c.task_id AND s.stopped_at IS NULL)) OR EXISTS (SELECT 1 FROM suplex_task_sessions s WHERE s.task_id = c.task_id AND s.stop_requested_at IS NOT NULL AND s.stopped_at IS NULL) ORDER BY COALESCE(c.wake_at,c.created_at)",
     )?;
@@ -168,7 +167,9 @@ pub async fn sweep_task(
     executable: Option<&Path>,
     inherited_environment: &HashMap<String, String>,
 ) -> DatabaseResult<()> {
+    let mut database = SuplexDatabase::open(database_path, OpenMode::ReadWrite)?;
     let swept = sweep_task_once(
+        &mut database,
         database_path,
         artifact_root,
         task_id,
@@ -176,7 +177,6 @@ pub async fn sweep_task(
         inherited_environment,
     )
     .await;
-    let database = SuplexDatabase::open(database_path, OpenMode::ReadWrite)?;
     let now = Utc::now();
     let time = |seconds| rfc3339_millis(now + chrono::Duration::seconds(seconds));
     database.connection().execute(
@@ -187,6 +187,7 @@ pub async fn sweep_task(
 }
 
 async fn sweep_task_once(
+    database: &mut SuplexDatabase,
     database_path: &Path,
     artifact_root: &Path,
     task_id: &str,
@@ -194,15 +195,13 @@ async fn sweep_task_once(
     inherited_environment: &HashMap<String, String>,
 ) -> DatabaseResult<()> {
     {
-        let mut database = SuplexDatabase::open(database_path, OpenMode::ReadWrite)?;
-        root_session_store::retire_delivered_sessions(&mut database, task_id, Utc::now())?;
+        root_session_store::retire_delivered_sessions(database, task_id, Utc::now())?;
     }
-    stop_retired_sessions(database_path, task_id).await?;
-    reconcile_limit_pause(database_path, task_id).await?;
+    stop_retired_sessions(database, database_path, task_id).await?;
+    reconcile_limit_pause(database, database_path, task_id).await?;
     crate::delivery::operations::host_observation(database_path, artifact_root, task_id).await;
     let (active, needs_worktree) = {
-        let database = SuplexDatabase::open(database_path, OpenMode::ReadOnly)?;
-        let rows = root_session_store::root_observation_rows(&database, task_id)?;
+        let rows = root_session_store::root_observation_rows(database, task_id)?;
         (
             rows.control.status == TaskStatus::Active,
             rows.control.worktree.is_none(),
@@ -215,8 +214,7 @@ async fn sweep_task_once(
         let prepared = async {
             if needs_worktree {
                 let prepared = prepare_task_worktree(database_path, task_id).await?;
-                let mut database = SuplexDatabase::open(database_path, OpenMode::ReadWrite)?;
-                root_session_store::set_worktree(&mut database, task_id, &prepared, Utc::now())?;
+                root_session_store::set_worktree(database, task_id, &prepared, Utc::now())?;
             }
             if !super::issue_context::prepare_for_host(database_path, artifact_root, task_id)
                 .await?
@@ -233,9 +231,8 @@ async fn sweep_task_once(
             Ok(false) => return Ok(()),
             Err(error) => {
                 crate::coordination::root_controller::prepare_root(database_path, task_id)?;
-                let mut database = SuplexDatabase::open(database_path, OpenMode::ReadWrite)?;
                 root_session_store::ask_human(
-                    &mut database,
+                    database,
                     task_id,
                     &format!(
                         "Suplex could not prepare this task. {error}. Resolve the problem, then answer to retry."
@@ -264,13 +261,12 @@ async fn sweep_task_once(
     )
     .await?;
     {
-        let mut database = SuplexDatabase::open(database_path, OpenMode::ReadWrite)?;
-        let rows = root_session_store::root_observation_rows(&database, task_id)?;
+        let rows = root_session_store::root_observation_rows(database, task_id)?;
         let prompt = root_session_store::with_current_dependency_status(
             root_session_store::IDLE_ROOT_PROMPT,
             &rows.dependencies,
         );
-        root_session_store::wake_idle_root(&mut database, task_id, &prompt, Utc::now())?;
+        root_session_store::wake_idle_root(database, task_id, &prompt, Utc::now())?;
     }
     Ok(())
 }

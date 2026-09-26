@@ -22,3 +22,33 @@ where
             .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn completes_with_io_driver() {
+        assert_eq!(
+            block_on(|| async {
+                tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+                42
+            }),
+            42
+        );
+    }
+
+    #[test]
+    fn synchronous_caller() {
+        completes_with_io_driver();
+    }
+
+    #[tokio::test]
+    async fn current_thread_caller() {
+        completes_with_io_driver();
+    }
+
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+    async fn multi_thread_caller() {
+        completes_with_io_driver();
+    }
+}

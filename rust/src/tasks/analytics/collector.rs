@@ -206,7 +206,6 @@ pub fn spawn(database_path: PathBuf, mut shutdown: watch::Receiver<bool>) {
         loop {
             let path = database_path.clone();
             let reader = reader.clone();
-            let handle = tokio::runtime::Handle::current();
             let result = tokio::task::spawn_blocking(move || -> Result<(), String> {
                 let mut database =
                     SuplexDatabase::open(&path, OpenMode::ReadWrite).map_err(|e| e.to_string())?;
@@ -215,7 +214,7 @@ pub fn spawn(database_path: PathBuf, mut shutdown: watch::Receiver<bool>) {
                     let catalog = pricing.get_or_insert_with(|| {
                         reader
                             .as_ref()
-                            .and_then(|reader| handle.block_on(reader.read()))
+                            .and_then(|reader| crate::shared::blocking::block_on(|| reader.read()))
                     });
                     let home = instance_home(&path, &session.id);
                     read_native_usage(&path, session, home.as_deref(), catalog.as_deref())

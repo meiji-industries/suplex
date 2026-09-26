@@ -505,7 +505,6 @@ impl RootBridgeServer {
         let database_path = self.database_path.clone();
         let artifact_root = self.artifact_root.clone();
         let root = self.root.clone();
-        let runtime = tokio::runtime::Handle::current();
         // The blocking worker owns claim, operation, and release together. Dropping
         // the MCP request future cannot strand a token held by this live process.
         tokio::task::spawn_blocking(move || -> Result<Value, String> {
@@ -525,28 +524,19 @@ impl RootBridgeServer {
                     root_controller::read_worker_evidence(&database_path, &root, &request)
                         .map_err(|error| error.to_string())
                 }
-                RootCall::DelegateWorker(assignment) => runtime
-                    .block_on(root_controller::delegate_worker(&database_path, &root, &token, &assignment))
-                    .map_err(|error| error.to_string()),
-                RootCall::DelegateAdvisor { role, brief } => runtime
-                    .block_on(root_controller::delegate_advisor(&database_path, &artifact_root, &root, &token, &role, brief.as_deref()))
-                    .map_err(|error| error.to_string()),
-                RootCall::DelegatePlanners => runtime
-                    .block_on(root_controller::delegate_planners(&database_path, &artifact_root, &root, &token))
-                    .map_err(|error| error.to_string()),
+                RootCall::DelegateWorker(assignment) => crate::shared::blocking::block_on(|| async { root_controller::delegate_worker(&database_path, &root, &token, &assignment).await.map_err(|error| error.to_string()) }),
+                RootCall::DelegateAdvisor { role, brief } => crate::shared::blocking::block_on(|| async { root_controller::delegate_advisor(&database_path, &artifact_root, &root, &token, &role, brief.as_deref()).await.map_err(|error| error.to_string()) }),
+                RootCall::DelegatePlanners => crate::shared::blocking::block_on(|| async { root_controller::delegate_planners(&database_path, &artifact_root, &root, &token).await.map_err(|error| error.to_string()) }),
                 RootCall::RequestDelivery { operation: DeliveryOperation::InspectDeliveryDiff, .. }
                     if root_session_store::root_observation_rows(&database, &root.task_id)
                         .is_ok_and(|rows| rows.control.workflow != Workflow::Standard) =>
                 {
-                    runtime
-                        .block_on(root_controller::inspect_workflow_delivery_diff(&database_path, &artifact_root, &root, &token))
-                        .map_err(|error| error.to_string())
+                    crate::shared::blocking::block_on(|| async { root_controller::inspect_workflow_delivery_diff(&database_path, &artifact_root, &root, &token).await.map_err(|error| error.to_string()) })
                 }
                 RootCall::ReplaceWorker(request) => root_controller::replace_worker(
                     &database_path, &root, &token, &request,
                 ).map_err(|error| error.to_string()),
-                RootCall::RequestDelivery { operation, expected_head, review, pull_request_title, pull_request_body } => runtime
-                    .block_on(delivery::operations::DeliveryOperations::new(&database_path, &artifact_root).execute(
+                RootCall::RequestDelivery { operation, expected_head, review, pull_request_title, pull_request_body } => crate::shared::blocking::block_on(|| async { delivery::operations::DeliveryOperations::new(&database_path, &artifact_root).execute(
                         &root,
                         Some(&token),
                         operation,
@@ -554,8 +544,7 @@ impl RootBridgeServer {
                         review.as_ref(),
                         pull_request_title.as_deref(),
                         pull_request_body.as_deref(),
-                    ))
-                    .map_err(|error| error.to_string()),
+                    ).await.map_err(|error| error.to_string()) }),
                 RootCall::AskHuman { question, options } => {
                     root_controller::ask_human(&database_path, &root, &question, &options)
                         .map_err(|error| error.to_string())

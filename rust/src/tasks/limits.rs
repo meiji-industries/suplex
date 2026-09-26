@@ -341,7 +341,6 @@ pub(crate) fn check_admission(
 
 use crate::{
     coordination::root_session_store,
-    platform::database::OpenMode,
     profiles::model_pricing::ModelsDevCatalogReader,
     runtimes::{
         task_harness::{NativeTimeline, ReaderSession, UsageEntry},
@@ -354,19 +353,19 @@ use std::{path::Path, sync::OnceLock};
 /// TypeScript `observeTaskLimitUsage`. `require_complete` reports no cost
 /// unless every session has settled, fully priced usage.
 pub(crate) async fn observed_usage(
+    database: &mut SuplexDatabase,
     database_path: &Path,
     task_id: &str,
     require_complete: bool,
 ) -> DatabaseResult<TaskLimitUsage> {
     let (sessions, budget, max_turns, admitted_turns) = {
-        let database = SuplexDatabase::open(database_path, OpenMode::ReadOnly)?;
         let (budget_override, turns_override): (Option<f64>, Option<i64>) =
             database.connection().query_row(
                 "SELECT budget_usd,max_turns FROM suplex_task_controls WHERE task_id = ?1",
                 [task_id],
                 |row| Ok((row.get(0)?, row.get(1)?)),
             )?;
-        let defaults = crate::platform::environment_settings::read(&database)?;
+        let defaults = crate::platform::environment_settings::read(database)?;
         let admitted_turns: i64 = database.connection().query_row(
             "SELECT COUNT(*) FROM suplex_task_turns WHERE task_id = ?1 AND prompted_at IS NOT NULL",
             [task_id],
@@ -442,7 +441,7 @@ pub(crate) async fn observed_usage(
         None
     };
     settle_usage(
-        database_path,
+        database,
         task_id,
         observed,
         pricing.as_deref(),
@@ -453,7 +452,7 @@ pub(crate) async fn observed_usage(
 /// The rest of TypeScript `observeTaskLimitUsage` once native usage and, when
 /// some of it is unpriced, the pricing catalog have been read.
 pub(crate) fn settle_usage(
-    database_path: &Path,
+    database: &mut SuplexDatabase,
     task_id: &str,
     mut observed: Vec<(String, String, NativeTimeline)>,
     pricing: Option<&crate::profiles::model_pricing::ModelPricingCatalog>,
@@ -478,7 +477,7 @@ pub(crate) fn settle_usage(
         });
     }
     Ok(TaskLimitUsage {
-        estimated_cost_usd: replace_observed_usage(database_path, task_id, observed)?,
+        estimated_cost_usd: replace_observed_usage(database, task_id, observed)?,
     })
 }
 
@@ -506,7 +505,7 @@ pub(crate) fn estimate_unpriced_usage(
 /// Returns TypeScript `usageMetrics(usage).cost`: no cost when there is no
 /// usage, or when all usage is unpriced.
 pub(crate) fn replace_observed_usage(
-    database_path: &Path,
+    database: &mut SuplexDatabase,
     task_id: &str,
     observed: Vec<(String, String, NativeTimeline)>,
 ) -> DatabaseResult<Option<f64>> {
@@ -537,7 +536,6 @@ pub(crate) fn replace_observed_usage(
         .map(|(_, _, snapshot)| snapshot["cost"].as_f64().unwrap_or_default())
         .sum();
     let wholly_unpriced = cost <= 0.0 && snapshots.iter().any(|(_, unpriced, _)| *unpriced);
-    let mut database = SuplexDatabase::open(database_path, OpenMode::ReadWrite)?;
     database.transaction(false, |database| {
         for (session_id, _, _) in &snapshots {
             let belongs: bool = database.connection().query_row(
@@ -560,11 +558,10 @@ pub(crate) fn replace_observed_usage(
 }
 
 pub(crate) fn needs_admission_usage(
-    database_path: &Path,
+    database: &SuplexDatabase,
     task_id: &str,
     kind: &str,
 ) -> DatabaseResult<bool> {
-    let database = SuplexDatabase::open(database_path, OpenMode::ReadOnly)?;
     Ok(database.connection().query_row(
         "SELECT EXISTS(SELECT 1 FROM suplex_task_sessions s JOIN suplex_task_turns t ON t.session_id = s.id AND t.generation = s.generation WHERE s.task_id = ?1 AND s.kind = ?2 AND s.is_current = 1 AND t.status = 'pending_prompt' AND t.dispatch_attempt_json IS NULL)",
         rusqlite::params![task_id, kind], |row| row.get(0),
@@ -575,11 +572,11 @@ pub(crate) fn needs_admission_usage(
 /// once complete native usage is within the current limits. A paused task is
 /// observed again in 15 seconds either way.
 pub(crate) async fn reconcile_limit_pause(
+    database: &mut SuplexDatabase,
     database_path: &Path,
     task_id: &str,
 ) -> DatabaseResult<()> {
     let question_id: Option<String> = {
-        let database = SuplexDatabase::open(database_path, OpenMode::ReadOnly)?;
         database.connection().query_row(
             "SELECT human_question_id FROM suplex_task_controls WHERE task_id = ?1 AND status = 'waiting_human' AND limit_pause_json IS NOT NULL",
             [task_id], |row| row.get(0),
@@ -589,10 +586,9 @@ pub(crate) async fn reconcile_limit_pause(
         return Ok(());
     };
     let reconciled = async {
-        let usage = observed_usage(database_path, task_id, true).await?;
-        let mut database = SuplexDatabase::open(database_path, OpenMode::ReadWrite)?;
+        let usage = observed_usage(database, database_path, task_id, true).await?;
         root_session_store::reconcile_task_limit_pause(
-            &mut database,
+            database,
             task_id,
             &question_id,
             usage,
@@ -600,7 +596,6 @@ pub(crate) async fn reconcile_limit_pause(
         )
     }
     .await;
-    let database = SuplexDatabase::open(database_path, OpenMode::ReadWrite)?;
     let now = Utc::now();
     database.connection().execute(
         "UPDATE suplex_task_controls SET wake_at = ?1,updated_at = ?2 WHERE task_id = ?3 AND status = 'waiting_human'",

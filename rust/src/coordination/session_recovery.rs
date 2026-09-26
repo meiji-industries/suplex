@@ -806,6 +806,7 @@ enum LaunchPlan<'a> {
 }
 
 fn recover_session_blocking(
+    database: &mut SuplexDatabase,
     database_path: &Path,
     artifact_root: &Path,
     task_id: &str,
@@ -814,12 +815,11 @@ fn recover_session_blocking(
     usage: TaskLimitUsage,
     plan: LaunchPlan<'_>,
 ) -> DatabaseResult<Option<PromptObservation>> {
-    let mut database = SuplexDatabase::open(database_path, OpenMode::ReadWrite)?;
     let root = matches!(plan, LaunchPlan::Root);
     let session = match plan {
-        LaunchPlan::Root => root_session_store::current_root(&database, task_id)?,
+        LaunchPlan::Root => root_session_store::current_root(database, task_id)?,
         LaunchPlan::Delegate(slot) => {
-            root_session_store::current_delegate(&database, task_id, slot)?
+            root_session_store::current_delegate(database, task_id, slot)?
         }
     };
     let Some(session) = session else {
@@ -827,25 +827,25 @@ fn recover_session_blocking(
     };
     if root {
         root_session_store::assert_current_root(
-            &database,
+            database,
             task_id,
             &session.id,
             session.generation,
         )?;
-        if !root_session_store::worker_replacement_ready(&database, &session.id)? {
+        if !root_session_store::worker_replacement_ready(database, &session.id)? {
             return Ok(None);
         }
     }
-    let Some(turn) = root_session_store::pending_turns(&database, &session.id)?
+    let Some(turn) = root_session_store::pending_turns(database, &session.id)?
         .into_iter()
         .next()
     else {
         return Ok(None);
     };
-    if !root && !root_session_store::worker_replacement_ready(&database, &session.id)? {
+    if !root && !root_session_store::worker_replacement_ready(database, &session.id)? {
         return Ok(None);
     }
-    let rows = root_session_store::root_observation_rows(&database, task_id)?;
+    let rows = root_session_store::root_observation_rows(database, task_id)?;
     let delegate = (!root).then(|| delegate_launch(&rows, &session.id, &turn.id));
     let profile = delegate.as_ref().map_or_else(
         || selected_profile(&rows, "root"),
@@ -863,7 +863,7 @@ fn recover_session_blocking(
     };
     let owner = Uuid::new_v4().to_string();
     if !root_session_store::claim_session_operation(
-        &mut database,
+        database,
         &session,
         &owner,
         i64::from(self_identity.pid),
@@ -877,12 +877,7 @@ fn recover_session_blocking(
             .native_session_id
             .clone()
             .unwrap_or_else(|| harness.new_session_id());
-        if !root_session_store::bind_native_session(
-            &mut database,
-            &session,
-            &native_id,
-            Utc::now(),
-        )? {
+        if !root_session_store::bind_native_session(database, &session, &native_id, Utc::now())? {
             return Err(TaskError::internal(if root {
                 "Native Root session changed before dispatch"
             } else {
@@ -963,7 +958,7 @@ fn recover_session_blocking(
         let mut turn = turn.clone();
         let before = loop {
             let (before, replayable) = observe_or_recover_fenced(
-                &mut database,
+                database,
                 database_path,
                 harness,
                 &session,
@@ -972,20 +967,20 @@ fn recover_session_blocking(
                 &owner,
             )?;
             if !before.retry_allowed || !replayable {
-                persist_native_admission(&mut database, &turn, &before)?;
-                complete(&mut database, &turn, &before)?;
+                persist_native_admission(database, &turn, &before)?;
+                complete(database, &turn, &before)?;
                 return Ok(before);
             }
             if !root
                 || !root_session_store::coalesce_unadmitted_idle_root_turn(
-                    &mut database,
+                    database,
                     &turn.id,
                     Utc::now(),
                 )?
             {
                 break before;
             }
-            let Some(next) = root_session_store::pending_turns(&database, &session.id)?
+            let Some(next) = root_session_store::pending_turns(database, &session.id)?
                 .into_iter()
                 .next()
             else {
@@ -998,7 +993,7 @@ fn recover_session_blocking(
         }
         let turn = if root {
             root_session_store::refresh_pending_root_dependency_context(
-                &mut database,
+                database,
                 &turn.id,
                 Utc::now(),
             )?
@@ -1018,7 +1013,7 @@ fn recover_session_blocking(
         let observation =
             harness.dispatch(&scope, &turn.id, &prompt, &mut |server_generation| {
                 root_session_store::claim_prompt(
-                    &mut database,
+                    database,
                     &turn,
                     &owner,
                     server_generation,
@@ -1026,11 +1021,11 @@ fn recover_session_blocking(
                     Utc::now(),
                 )
             })?;
-        persist_native_admission(&mut database, &turn, &observation)?;
-        complete(&mut database, &turn, &observation)?;
+        persist_native_admission(database, &turn, &observation)?;
+        complete(database, &turn, &observation)?;
         Ok(observation)
     })();
-    root_session_store::release_session_operation(&mut database, &session.id, &owner, Utc::now())?;
+    root_session_store::release_session_operation(database, &session.id, &owner, Utc::now())?;
     result.map(Some)
 }
 
@@ -1043,8 +1038,9 @@ pub async fn recover_prepared_root(
     executable: Option<&Path>,
     inherited_environment: &HashMap<String, String>,
 ) -> DatabaseResult<Option<PromptObservation>> {
-    let usage = if needs_admission_usage(database_path, task_id, "root")? {
-        observed_usage(database_path, task_id, false).await?
+    let mut database = SuplexDatabase::open(database_path, OpenMode::ReadWrite)?;
+    let usage = if needs_admission_usage(&database, task_id, "root")? {
+        observed_usage(&mut database, database_path, task_id, false).await?
     } else {
         TaskLimitUsage {
             estimated_cost_usd: None,
@@ -1057,6 +1053,7 @@ pub async fn recover_prepared_root(
     let inherited_environment = inherited_environment.clone();
     tokio::task::spawn_blocking(move || {
         recover_session_blocking(
+            &mut database,
             &database_path,
             &artifact_root,
             &task_id,
@@ -1116,8 +1113,9 @@ pub async fn recover_prepared_worker(
     executable: Option<&Path>,
     inherited_environment: &HashMap<String, String>,
 ) -> DatabaseResult<Option<PromptObservation>> {
-    let usage = if needs_admission_usage(database_path, task_id, "worker")? {
-        observed_usage(database_path, task_id, false).await?
+    let mut database = SuplexDatabase::open(database_path, OpenMode::ReadWrite)?;
+    let usage = if needs_admission_usage(&database, task_id, "worker")? {
+        observed_usage(&mut database, database_path, task_id, false).await?
     } else {
         TaskLimitUsage {
             estimated_cost_usd: None,
@@ -1134,6 +1132,7 @@ pub async fn recover_prepared_worker(
         let mut first = None;
         for slot in ["delegate", "planner_a", "planner_b"] {
             let observed = recover_session_blocking(
+                &mut database,
                 &database_path,
                 &artifact_root,
                 &task_id,
@@ -1152,11 +1151,11 @@ pub async fn recover_prepared_worker(
 }
 
 pub(crate) async fn stop_retired_sessions(
+    database: &mut SuplexDatabase,
     database_path: &Path,
     task_id: &str,
 ) -> DatabaseResult<()> {
     let sessions = {
-        let database = SuplexDatabase::open(database_path, OpenMode::ReadOnly)?;
         let mut statement = database.connection().prepare(
             "SELECT id,native_session_id,launch_owner_pid,launch_owner_start_time FROM suplex_task_sessions WHERE task_id = ?1 AND stop_requested_at IS NOT NULL AND stopped_at IS NULL",
         )?;
@@ -1196,7 +1195,6 @@ pub(crate) async fn stop_retired_sessions(
         }
     }
     let (status, worktree): (TaskStatus, Option<String>) = {
-        let database = SuplexDatabase::open(database_path, OpenMode::ReadOnly)?;
         database.connection().query_row(
             "SELECT status,json_extract(worktree_json,'$.path') FROM suplex_task_controls WHERE task_id = ?1",
             [task_id], |row| Ok((row.get(0)?,row.get(1)?)),
@@ -1212,7 +1210,6 @@ pub(crate) async fn stop_retired_sessions(
             .await??;
     }
     for session_id in stopped {
-        let database = SuplexDatabase::open(database_path, OpenMode::ReadWrite)?;
         let time = now_millis_rfc3339();
         database.connection().execute(
             "UPDATE suplex_task_sessions SET stopped_at = ?1, launch_owner = NULL, launch_owner_pid = NULL, launch_owner_start_time = NULL, launch_claimed_at = NULL, updated_at = ?1 WHERE id = ?2 AND stop_requested_at IS NOT NULL AND stopped_at IS NULL",

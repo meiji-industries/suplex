@@ -5,8 +5,8 @@ use serde_json::Value;
 pub use super::ContractResult;
 use super::{
     ContractFailure, Field, Rule, delivery_target as valid_delivery_target, finding,
-    garde_findings, id_1_256 as profile_id, object, optional, parse_object, serialized,
-    visual_evidence as valid_visual_evidence,
+    garde_findings, id_1_256 as profile_id, object, optional, optional_nonnull, parse_object,
+    present_nullable, serialized, visual_evidence as valid_visual_evidence,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -292,22 +292,6 @@ pub struct ProjectResponse {
     pub updated_at: String,
 }
 
-fn present_nullable<'de, D, T>(deserializer: D) -> Result<Option<Option<T>>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-    T: Deserialize<'de>,
-{
-    Option::<T>::deserialize(deserializer).map(Some)
-}
-
-fn optional_nonnull<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-    T: Deserialize<'de>,
-{
-    T::deserialize(deserializer).map(Some)
-}
-
 fn issue(code: &str, path: &str) -> Value {
     serde_json::json!({"code": format!("invalid-{code}"), "field": path, "message": "Request value is invalid"})
 }
@@ -370,7 +354,7 @@ fn profile_array_errors(value: &Value, path: &str) -> Vec<Value> {
     errors
 }
 
-fn checked<T: serde::de::DeserializeOwned + Validate<Context = ()>>(
+fn checked<T: serde::de::DeserializeOwned + Serialize + Validate<Context = ()>>(
     input: &Value,
     errors: Vec<Value>,
 ) -> ContractResult<T> {
@@ -381,7 +365,7 @@ fn checked<T: serde::de::DeserializeOwned + Validate<Context = ()>>(
         .map_err(|_| ContractFailure::Issues(vec![issue("invalid_type", ".")]))?;
     value
         .validate()
-        .map_err(|report| ContractFailure::Issues(garde_findings(&report)))?;
+        .map_err(|report| ContractFailure::Issues(garde_findings(&report, &value)))?;
     Ok(value)
 }
 

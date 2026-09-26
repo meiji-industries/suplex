@@ -22,7 +22,7 @@ pub fn parse_device_poll(input: Option<&Value>) -> ContractResult<DevicePollBody
         let body: DevicePollBody = serde_json::from_value(Value::Object(typed_fields))
             .map_err(|_| ContractFailure::Issues(vec![finding("invalid_type", &[])]))?;
         if let Err(report) = body.validate() {
-            issues.extend(garde_findings(&report));
+            issues.extend(garde_findings(&report, &body));
         }
         Some(body)
     } else {

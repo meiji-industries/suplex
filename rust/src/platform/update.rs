@@ -436,6 +436,9 @@ pub fn apply() -> Result<(), Box<dyn std::error::Error>> {
         if !binary.is_file() {
             return Err(format!("Built Suplex binary is missing: {}", binary.display()).into());
         }
+        if !supervisor::inherited_supervisor_alive() {
+            return Err("The Suplex host stopped during the update".into());
+        }
         applying(&installation, "stop", "Suplex stops the host.")?;
         supervisor::stop(&installation)?;
         host_stopped = true;

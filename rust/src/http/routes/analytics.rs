@@ -1,5 +1,6 @@
 //! Company analytics, task costs, and timeline (`src/http/routes/tasks.ts`).
 
+use crate::http::error::ApiError;
 use crate::tasks::TaskError;
 use std::{error::Error, path::PathBuf};
 
@@ -58,7 +59,7 @@ fn respond(result: Result<Value, Box<dyn Error>>, cookies: Vec<String>) -> Respo
             js_json::stringify(&value),
         )
             .into_response(),
-        Err(error) => auth::service_error(error),
+        Err(error) => ApiError::response(error),
     };
     auth::append_cookies(&mut response, cookies);
     response

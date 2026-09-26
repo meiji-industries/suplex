@@ -1,3 +1,4 @@
+use crate::http::error::ApiError;
 use axum::{
     Json, Router,
     body::Bytes,
@@ -68,13 +69,13 @@ fn mutate(
         session::session_user(database, headers, Some(&state.session_config), Utc::now())
     }) {
         Ok(value) => value,
-        Err(error) => return auth::service_error(error),
+        Err(error) => return ApiError::response(error),
     };
     let mut response = match session.user {
         None => auth::error(StatusCode::UNAUTHORIZED, "Authentication required"),
         Some(user) => match state.with_database(|database| operation(database, &user.id, values)) {
             Ok(record) => (status, Json(record)).into_response(),
-            Err(error) => auth::service_error(error),
+            Err(error) => ApiError::response(error),
         },
     };
     auth::append_cookies(&mut response, session.set_cookies);
@@ -166,7 +167,7 @@ async fn list(
         session::session_user(database, &headers, Some(&state.session_config), Utc::now())
     }) {
         Ok(value) => value,
-        Err(error) => return auth::service_error(error),
+        Err(error) => return ApiError::response(error),
     };
     let Some(user) = session.user else {
         let mut response = auth::error(
@@ -180,7 +181,7 @@ async fn list(
         .with_database(|database| workflow_records::list(database, &user.id, include_archived))
     {
         Ok(workflows) => Json(WorkflowList { workflows }).into_response(),
-        Err(error) => auth::service_error(error),
+        Err(error) => ApiError::response(error),
     };
     auth::append_cookies(&mut response, session.set_cookies);
     response

@@ -1,6 +1,8 @@
 //! Local Git worktree facts for task execution. Git remains the authority for
 //! branch, repository, HEAD, and working-tree state.
 
+use crate::http::AppState;
+use crate::runtimes::task_display::{ShellPaneRequest, ensure_task_shell_pane};
 use std::error::Error;
 use std::fs;
 use std::io;
@@ -201,6 +203,51 @@ pub(crate) fn token_audience_matches(raw: &str) -> bool {
             && url.username().is_empty()
             && url.password().is_none()
     })
+}
+
+/// The pane id the task currently binds for `role`: the Shell binding, or the
+/// current session of that kind.
+pub(crate) fn bound_pane(
+    state: &AppState,
+    user_id: &str,
+    task_id: &str,
+    role: &str,
+) -> Result<Option<String>, Box<dyn Error>> {
+    state.with_database(|database| super::repository::bound_pane(database, user_id, task_id, role))
+}
+
+/// Resolves the task's Shell pane from Herdr, rediscovering it when the
+/// saved binding is stale. It never creates a workspace.
+pub(crate) fn task_shell_pane(
+    state: &AppState,
+    user_id: &str,
+    task_id: &str,
+) -> Result<Option<String>, Box<dyn Error>> {
+    let (shell, excluded, cwd) = state.with_database(|database| {
+        super::repository::shell_pane_context(database, user_id, task_id)
+    })?;
+    let cwd = cwd.unwrap_or_else(|| {
+        std::env::current_dir()
+            .map(|path| path.to_string_lossy().into_owned())
+            .unwrap_or_default()
+    });
+    let pane = ensure_task_shell_pane(
+        &state.herdr,
+        &ShellPaneRequest {
+            task_id,
+            cwd: &cwd,
+            pane_id: shell.as_deref(),
+            exclude_pane_ids: &excluded,
+            create: false,
+        },
+        &mut |pane_id| {
+            state.with_database(|database| {
+                super::repository::save_shell_pane(database, task_id, pane_id)
+            })?;
+            Ok(())
+        },
+    );
+    Ok(pane.ok().flatten().map(|pane| pane.pane_id))
 }
 
 #[cfg(test)]

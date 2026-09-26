@@ -1,5 +1,6 @@
 //! Project task templates: list, create, save from a task, edit, and delete.
 
+use crate::http::error::ApiError;
 use std::error::Error;
 
 use axum::{
@@ -66,7 +67,7 @@ fn admitted<T>(
         .with_database(|database| {
             session::session_user(database, headers, Some(&state.session_config), Utc::now())
         })
-        .map_err(|error| Box::new(auth::service_error(error)))?;
+        .map_err(|error| Box::new(ApiError::response(error)))?;
     match session.user {
         Some(user) => Ok((parsed, user.id, session.set_cookies)),
         None => {
@@ -86,7 +87,7 @@ fn respond<T: serde::Serialize>(
     let mut response = match state.with_database(operation) {
         Ok(_) if status == StatusCode::NO_CONTENT => status.into_response(),
         Ok(value) => (status, Json(value)).into_response(),
-        Err(error) => auth::service_error(error),
+        Err(error) => ApiError::response(error),
     };
     auth::append_cookies(&mut response, cookies);
     response
@@ -204,13 +205,13 @@ async fn list(
         session::session_user(database, &headers, Some(&state.session_config), Utc::now())
     }) {
         Ok(session) => session,
-        Err(error) => return auth::service_error(error),
+        Err(error) => return ApiError::response(error),
     };
     let mut response = match session.user {
         Some(user) => {
             match state.with_database(|database| templates::list(database, &user.id, &project_id)) {
                 Ok(templates) => Json(json!({"templates":templates})).into_response(),
-                Err(error) => auth::service_error(error),
+                Err(error) => ApiError::response(error),
             }
         }
         None => auth::error(StatusCode::UNAUTHORIZED, "Authentication required"),

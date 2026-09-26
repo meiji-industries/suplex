@@ -1,5 +1,7 @@
 //! Avatar directory, image, and update routes (`src/http/routes/avatars.ts`).
 
+use crate::http::access::with_cookies;
+use crate::http::error::ApiError;
 use std::error::Error;
 
 use axum::{
@@ -32,11 +34,6 @@ pub fn router() -> Router<AppState> {
     )
 }
 
-fn with_cookies(mut response: Response, cookies: Vec<String>) -> Response {
-    auth::append_cookies(&mut response, cookies);
-    response
-}
-
 fn owner_params(owner_id: &str) -> Result<(), Box<Response>> {
     match contracts::parse_owner_params(Some(&json!({"ownerId": owner_id}))) {
         Ok(_) => Ok(()),
@@ -57,7 +54,7 @@ async fn list(State(state): State<AppState>, headers: axum::http::HeaderMap) -> 
     };
     let response = match state.with_database(|database| avatars::list(database, &user_id)) {
         Ok(avatars) => Json(json!({"avatars": avatars})).into_response(),
-        Err(error) => auth::service_error(error),
+        Err(error) => ApiError::response(error),
     };
     with_cookies(response, cookies)
 }
@@ -94,7 +91,7 @@ async fn image(
     });
     let mut response = match result {
         Ok(response) => response,
-        Err(error) => auth::service_error(error),
+        Err(error) => ApiError::response(error),
     };
     let values = response.headers_mut();
     values.insert(
@@ -136,7 +133,7 @@ async fn update(
         .with_database(|database| avatars::update(database, &user_id, &owner_id, &patch))
     {
         Ok(record) => Json(record).into_response(),
-        Err(error) => auth::service_error(error),
+        Err(error) => ApiError::response(error),
     };
     with_cookies(response, cookies)
 }

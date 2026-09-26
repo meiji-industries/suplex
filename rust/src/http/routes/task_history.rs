@@ -1,5 +1,8 @@
 //! Native Codex session history with live, read-only observation.
 
+use crate::http::error::ApiError;
+
+use crate::http::access::authorize;
 use crate::tasks::TaskError;
 use std::{error::Error, io, path::PathBuf};
 
@@ -13,13 +16,12 @@ use axum::{
     response::{IntoResponse, Response},
     routing::get,
 };
-use chrono::Utc;
 use rusqlite::OptionalExtension;
 use serde_json::{Value, json};
 
 use crate::{
     coordination::root_session_store,
-    http::{AppState, contracts::typed::finding, session, validation},
+    http::{AppState, contracts::typed::finding, validation},
     identity::companies,
     platform::database::SuplexDatabase,
     runtimes::{task_harness::ReaderSession, task_harness_registry},
@@ -81,26 +83,6 @@ fn before_query(query: Option<&str>) -> Result<Option<String>, Box<Response>> {
         ])));
     }
     Ok(before.into_iter().next())
-}
-
-fn authorize(
-    state: &AppState,
-    headers: &HeaderMap,
-) -> Result<(String, Vec<String>), Box<Response>> {
-    let session = state
-        .with_database(|database| {
-            session::session_user(database, headers, Some(&state.session_config), Utc::now())
-        })
-        .map_err(auth::service_error)
-        .map_err(Box::new)?;
-    match session.user {
-        Some(user) => Ok((user.id, session.set_cookies)),
-        None => {
-            let mut response = auth::error(StatusCode::UNAUTHORIZED, "Authentication required");
-            auth::append_cookies(&mut response, session.set_cookies);
-            Err(Box::new(response))
-        }
-    }
 }
 
 #[derive(Clone)]
@@ -224,7 +206,7 @@ async fn history(
     {
         Ok(value) => value,
         Err(error) => {
-            let mut response = auth::service_error(error);
+            let mut response = ApiError::response(error);
             auth::append_cookies(&mut response, cookies);
             return response;
         }
@@ -257,7 +239,7 @@ async fn history(
             );
             response
         }
-        Err(error) => auth::service_error(error),
+        Err(error) => ApiError::response(error),
     };
     auth::append_cookies(&mut response, cookies);
     response
@@ -484,6 +466,7 @@ async fn live(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::http::session;
     use crate::platform::database::{OpenMode, SuplexDatabase};
     use axum::{body::to_bytes, http::HeaderValue};
     use std::{

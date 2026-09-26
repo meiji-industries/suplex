@@ -2,8 +2,7 @@
 //! the task Shell is interactive. Herdr owns the panes: a missing or recreated
 //! pane closes the socket, and the browser reconnects to the current pane.
 
-use crate::shared::time::now_millis_rfc3339;
-use std::{error::Error, time::Duration};
+use std::time::Duration;
 
 use axum::{
     Router,
@@ -15,21 +14,15 @@ use axum::{
     response::Response,
     routing::get,
 };
-use rusqlite::{OptionalExtension, params};
 use serde_json::{Value, json};
 use tokio::sync::mpsc::UnboundedReceiver;
 
 use crate::{
     http::{AppState, contracts::typed::finding, validation},
     integrations::herdr_bridge::{self, Bridge, BridgeEvent, Mode},
-    runtimes::task_display::{ShellPaneRequest, ensure_task_shell_pane},
 };
 
-use super::{
-    auth,
-    profiles::authorize,
-    task_worktree::{authorized_company, task_worktree, validated_task_id},
-};
+use super::{auth, profiles::authorize, task_worktree::validated_task_id};
 
 /// Close code for a terminal control bridge displaced by a newer controller.
 pub const TERMINAL_TAKEOVER_CLOSE_CODE: u16 = 4498;
@@ -199,87 +192,7 @@ pub(crate) async fn run_terminal(
     bridge.release();
 }
 
-/// The pane id the task currently binds for `role`: the Shell binding, or the
-/// current session of that kind.
-fn bound_pane(
-    state: &AppState,
-    user_id: &str,
-    task_id: &str,
-    role: &str,
-) -> Result<Option<String>, Box<dyn Error>> {
-    state.with_database(|database| {
-        authorized_company(database, user_id, task_id)?;
-        let pane = if role == "shell" {
-            database
-                .connection()
-                .query_row(
-                    "SELECT shell_pane_id FROM suplex_task_controls WHERE task_id = ?1",
-                    [task_id],
-                    |row| row.get::<_, Option<String>>(0),
-                )
-                .optional()?
-        } else {
-            database
-                .connection()
-                .query_row(
-                    "SELECT pane_id FROM suplex_task_sessions WHERE task_id = ?1 AND kind = ?2 AND is_current = 1 ORDER BY created_at, id LIMIT 1",
-                    params![task_id, role],
-                    |row| row.get::<_, Option<String>>(0),
-                )
-                .optional()?
-        };
-        Ok(pane.flatten())
-    })
-}
-
-/// Resolves the task's Shell pane from Herdr, rediscovering it when the
-/// saved binding is stale. It never creates a workspace.
-fn task_shell_pane(
-    state: &AppState,
-    user_id: &str,
-    task_id: &str,
-) -> Result<Option<String>, Box<dyn Error>> {
-    let (shell, excluded, cwd) = state.with_database(|database| -> Result<_, Box<dyn Error>> {
-        let (_, worktree) = task_worktree(database, user_id, task_id)?;
-        let shell = database.connection().query_row(
-            "SELECT shell_pane_id FROM suplex_task_controls WHERE task_id = ?1",
-            [task_id],
-            |row| row.get::<_, Option<String>>(0),
-        )?;
-        let mut statement = database.connection().prepare(
-            "SELECT pane_id FROM suplex_task_sessions WHERE task_id = ?1 ORDER BY created_at, id",
-        )?;
-        let excluded = statement
-            .query_map([task_id], |row| row.get::<_, Option<String>>(0))?
-            .collect::<rusqlite::Result<Vec<_>>>()?;
-        Ok((shell, excluded, worktree))
-    })?;
-    let cwd = cwd.unwrap_or_else(|| {
-        std::env::current_dir()
-            .map(|path| path.to_string_lossy().into_owned())
-            .unwrap_or_default()
-    });
-    let pane = ensure_task_shell_pane(
-        &state.herdr,
-        &ShellPaneRequest {
-            task_id,
-            cwd: &cwd,
-            pane_id: shell.as_deref(),
-            exclude_pane_ids: &excluded,
-            create: false,
-        },
-        &mut |pane_id| {
-            state.with_database(|database| {
-                database.connection().execute(
-                    "UPDATE suplex_task_controls SET shell_pane_id = ?1, updated_at = ?2 WHERE task_id = ?3",
-                    params![pane_id, now_millis_rfc3339(), task_id],
-                )
-            })?;
-            Ok(())
-        },
-    );
-    Ok(pane.ok().flatten().map(|pane| pane.pane_id))
-}
+use crate::tasks::worktree::{bound_pane, task_shell_pane};
 
 async fn terminal(
     State(state): State<AppState>,

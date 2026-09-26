@@ -1,5 +1,7 @@
 //! Provider instances and interactive provider sign-in panes.
 
+use crate::http::access::with_cookies;
+use crate::http::error::ApiError;
 use std::collections::HashMap;
 
 use axum::{
@@ -55,11 +57,6 @@ pub fn router() -> Router<AppState> {
         )
 }
 
-fn with_cookies(mut response: Response, cookies: Vec<String>) -> Response {
-    auth::append_cookies(&mut response, cookies);
-    response
-}
-
 async fn list_instances(State(state): State<AppState>, headers: HeaderMap) -> Response {
     let (user_id, cookies) = match authorize(&state, &headers, "GET", false) {
         Ok(value) => value,
@@ -67,7 +64,7 @@ async fn list_instances(State(state): State<AppState>, headers: HeaderMap) -> Re
     };
     let instances = state
         .with_database(|database| provider_instances::list(database, &user_id))
-        .map_err(auth::service_error);
+        .map_err(ApiError::response);
     let instances = match instances {
         Ok(instances) => instances,
         Err(response) => return with_cookies(response, cookies),
@@ -116,7 +113,7 @@ async fn create_instance(
             input["provider"].as_str().unwrap_or_default(),
             input["label"].as_str().unwrap_or_default(),
         )
-        .map_err(auth::service_error)
+        .map_err(ApiError::response)
     });
     let response = match created {
         Ok(instance) => (StatusCode::CREATED, Json(instance)).into_response(),
@@ -135,7 +132,7 @@ async fn delete_instance(
         Err(response) => return *response,
     };
     let response = match state.with_database(|database| {
-        provider_instances::delete(database, &user_id, &instance_id).map_err(auth::service_error)
+        provider_instances::delete(database, &user_id, &instance_id).map_err(ApiError::response)
     }) {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
         Err(response) => response,
@@ -214,7 +211,7 @@ async fn instance_login(
     };
     let instance = state
         .with_database(|database| provider_instances::list(database, &user_id))
-        .map_err(auth::service_error)
+        .map_err(ApiError::response)
         .map(|instances| {
             instances
                 .into_iter()

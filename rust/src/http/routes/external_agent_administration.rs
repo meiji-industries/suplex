@@ -15,7 +15,6 @@ use crate::{
     http::{
         AppState, agent_api_runtime,
         contracts::typed::{self, ContractResult, agent_api},
-        session,
     },
     identity::external_agents,
 };
@@ -64,31 +63,7 @@ fn body<T>(
 }
 
 /// The authenticated plugin: validation first, then origin, then the live session.
-fn session_user(
-    state: &AppState,
-    headers: &HeaderMap,
-    method: &str,
-) -> Result<(String, Vec<String>), Box<Response>> {
-    if !session::csrf_allowed(&state.session_config, headers, method, false) {
-        return Err(Box::new(auth::error(
-            StatusCode::FORBIDDEN,
-            "request_origin_invalid",
-        )));
-    }
-    let session = state
-        .with_database(|database| {
-            session::session_user(database, headers, Some(&state.session_config), Utc::now())
-        })
-        .map_err(|error| Box::new(auth::service_error(error)))?;
-    match session.user {
-        Some(user) => Ok((user.id, session.set_cookies)),
-        None => {
-            let mut response = auth::error(StatusCode::UNAUTHORIZED, "Authentication required");
-            auth::append_cookies(&mut response, session.set_cookies);
-            Err(Box::new(response))
-        }
-    }
-}
+use crate::http::access::authorize_method as session_user;
 
 fn respond(result: Result<Response, Box<dyn std::error::Error>>, cookies: Vec<String>) -> Response {
     let mut response = result.unwrap_or_else(|error| agent_api_runtime::failure(error, false));

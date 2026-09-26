@@ -3,6 +3,7 @@
 //! The `/oauth/*` protocol endpoints carry no board session authority, so they
 //! skip the board origin check (TypeScript `oauthProtocol`).
 
+use crate::http::access::with_cookies;
 use std::{
     collections::HashMap,
     net::SocketAddr,
@@ -228,11 +229,6 @@ fn session_user(
         session::session_user(database, headers, Some(&state.session_config), Utc::now())
     })?;
     Ok((session.user.map(|user| user.id), session.set_cookies))
-}
-
-fn with_cookies(mut response: Response, cookies: Vec<String>) -> Response {
-    auth::append_cookies(&mut response, cookies);
-    response
 }
 
 async fn authorize(

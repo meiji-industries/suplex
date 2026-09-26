@@ -1,9 +1,10 @@
 //! Opens a task worktree in a desktop application on the Suplex host. A remote
 //! browser can copy the path but can never cause a local desktop launch.
 
+use crate::http::access::with_cookies;
+use crate::http::error::ApiError;
 use crate::shared::time::now_millis_rfc3339;
-use crate::tasks::TaskError;
-use std::{error::Error, net::SocketAddr};
+use std::net::SocketAddr;
 
 use axum::{
     Json, Router,
@@ -13,7 +14,7 @@ use axum::{
     response::{IntoResponse, Response},
     routing::{get, post},
 };
-use rusqlite::{OptionalExtension, params};
+use rusqlite::params;
 use serde_json::{Value, json};
 
 use crate::{
@@ -22,8 +23,6 @@ use crate::{
         contracts::typed::{self, finding, tasks as task_contracts},
         session, validation,
     },
-    identity::companies,
-    platform::database::SuplexDatabase,
     tasks::worktree_open::{self, Launcher, WORKTREE_APP_IDS},
 };
 
@@ -48,43 +47,7 @@ pub(crate) fn validated_task_id(id: &str) -> Result<(), Box<Response>> {
     }
 }
 
-/// The authorized task's company and its current worktree path.
-pub(crate) fn task_worktree(
-    database: &SuplexDatabase,
-    user_id: &str,
-    task_id: &str,
-) -> Result<(String, Option<String>), Box<dyn Error>> {
-    let company_id = authorized_company(database, user_id, task_id)?;
-    let path = database
-        .connection()
-        .query_row(
-            "SELECT json_extract(worktree_json, '$.path') FROM suplex_task_controls WHERE task_id = ?1",
-            [task_id],
-            |row| row.get::<_, Option<String>>(0),
-        )
-        .optional()?
-        .flatten();
-    Ok((company_id, path))
-}
-
-/// The company of a task the user may access.
-pub(crate) fn authorized_company(
-    database: &SuplexDatabase,
-    user_id: &str,
-    task_id: &str,
-) -> Result<String, Box<dyn Error>> {
-    let company_id: String = database
-        .connection()
-        .query_row(
-            "SELECT company_id FROM suplex_tasks WHERE id = ?1",
-            [task_id],
-            |row| row.get(0),
-        )
-        .optional()?
-        .ok_or_else(TaskError::not_found)?;
-    companies::require_company_access(database, user_id, &company_id)?;
-    Ok(company_id)
-}
+pub(crate) use crate::tasks::repository::task_worktree;
 
 fn loopback_peer(extensions: &Extensions) -> bool {
     extensions
@@ -112,11 +75,6 @@ fn direct_loopback_request(state: &AppState, headers: &HeaderMap, extensions: &E
         && loopback_peer(extensions)
 }
 
-fn with_cookies(mut response: Response, cookies: Vec<String>) -> Response {
-    auth::append_cookies(&mut response, cookies);
-    response
-}
-
 async fn apps(
     State(state): State<AppState>,
     Path(task_id): Path<String>,
@@ -132,7 +90,7 @@ async fn apps(
     };
     let worktree = state
         .with_database(|database| task_worktree(database, &user_id, &task_id))
-        .map_err(auth::service_error);
+        .map_err(ApiError::response);
     let response = match worktree {
         Err(response) => response,
         Ok((_, None)) => auth::error(StatusCode::NOT_FOUND, "Worktree not found"),
@@ -209,7 +167,9 @@ pub(crate) async fn open_with(
                     cookies,
                 );
             }
-            Err(error) => return with_cookies(auth::service_error(error), cookies),
+            Err(error) => {
+                return with_cookies(ApiError::response(error), cookies);
+            }
         };
     if !direct_loopback_request(&state, &headers, &extensions) {
         return with_cookies(

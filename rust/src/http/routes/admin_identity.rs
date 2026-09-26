@@ -1,3 +1,5 @@
+use crate::http::access::with_cookies;
+use crate::http::error::ApiError;
 use axum::{
     Json, Router,
     body::Bytes,
@@ -15,10 +17,7 @@ use crate::{
     identity::admin,
 };
 
-use super::{
-    super::{AppState, session},
-    auth,
-};
+use super::{super::AppState, auth};
 
 #[derive(Serialize)]
 struct Invitations {
@@ -47,36 +46,7 @@ fn validation_params(contract: &str, params: Value) -> Result<(), Box<Response>>
     }
 }
 
-fn authenticated(
-    state: &AppState,
-    headers: &HeaderMap,
-    method: &str,
-) -> Result<(String, Vec<String>), Box<Response>> {
-    if !session::csrf_allowed(&state.session_config, headers, method, false) {
-        return Err(Box::new(auth::error(
-            StatusCode::FORBIDDEN,
-            "request_origin_invalid",
-        )));
-    }
-    let session = state
-        .with_database(|database| {
-            session::session_user(database, headers, Some(&state.session_config), Utc::now())
-        })
-        .map_err(auth::service_error)
-        .map_err(Box::new)?;
-    let Some(user) = session.user else {
-        return Err(Box::new(auth::error(
-            StatusCode::UNAUTHORIZED,
-            "Authentication required",
-        )));
-    };
-    Ok((user.id, session.set_cookies))
-}
-
-fn with_cookies(mut response: Response, cookies: Vec<String>) -> Response {
-    auth::append_cookies(&mut response, cookies);
-    response
-}
+use crate::http::access::authorize_method as authenticated;
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -108,7 +78,7 @@ async fn invite_user(State(state): State<AppState>, headers: HeaderMap, body: By
         admin::invite_user(database, &actor, &parsed.display_name, Utc::now())
     }) {
         Ok(invitation) => (StatusCode::CREATED, Json(invitation)).into_response(),
-        Err(error) => auth::service_error(error),
+        Err(error) => ApiError::response(error),
     };
     with_cookies(response, cookies)
 }
@@ -122,7 +92,7 @@ async fn list_invitations(State(state): State<AppState>, headers: HeaderMap) -> 
         .with_database(|database| admin::list_invitations(database, &actor, Utc::now()))
     {
         Ok(invitations) => Json(Invitations { invitations }).into_response(),
-        Err(error) => auth::service_error(error),
+        Err(error) => ApiError::response(error),
     };
     with_cookies(response, cookies)
 }
@@ -134,7 +104,7 @@ async fn list_users(State(state): State<AppState>, headers: HeaderMap) -> Respon
     };
     let response = match state.with_database(|database| admin::list_users(database, &actor)) {
         Ok(users) => Json(Users { users }).into_response(),
-        Err(error) => auth::service_error(error),
+        Err(error) => ApiError::response(error),
     };
     with_cookies(response, cookies)
 }
@@ -146,7 +116,7 @@ async fn list_credentials(State(state): State<AppState>, headers: HeaderMap) -> 
     };
     let response = match state.with_database(|database| admin::list_credentials(database, &actor)) {
         Ok(credentials) => Json(Credentials { credentials }).into_response(),
-        Err(error) => auth::service_error(error),
+        Err(error) => ApiError::response(error),
     };
     with_cookies(response, cookies)
 }
@@ -170,7 +140,7 @@ async fn revoke_credential(
         admin::revoke_credential(database, &actor, &credential_id, Utc::now())
     }) {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
-        Err(error) => auth::service_error(error),
+        Err(error) => ApiError::response(error),
     };
     with_cookies(response, cookies)
 }
@@ -191,7 +161,7 @@ async fn revoke_user(
         .with_database(|database| admin::revoke_user(database, &actor, &user_id, Utc::now()))
     {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
-        Err(error) => auth::service_error(error),
+        Err(error) => ApiError::response(error),
     };
     with_cookies(response, cookies)
 }
@@ -208,7 +178,7 @@ async fn list_audit(State(state): State<AppState>, headers: HeaderMap) -> Respon
             Json(AuditEvents { events }),
         )
             .into_response(),
-        Err(error) => auth::service_error(error),
+        Err(error) => ApiError::response(error),
     };
     with_cookies(response, cookies)
 }
@@ -216,6 +186,7 @@ async fn list_audit(State(state): State<AppState>, headers: HeaderMap) -> Respon
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::http::session;
     use crate::shared::time::now_millis_rfc3339;
     use crate::{
         identity::auth as identity_auth,

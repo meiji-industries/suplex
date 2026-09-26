@@ -1,5 +1,8 @@
 //! Read-only task details backed by saved intent and native observations.
 
+use crate::http::error::ApiError;
+
+use crate::http::access::authorize;
 use crate::tasks::TaskError;
 use std::{error::Error, path::PathBuf};
 
@@ -10,7 +13,6 @@ use axum::{
     response::{IntoResponse, Response},
     routing::get,
 };
-use chrono::Utc;
 use rusqlite::OptionalExtension;
 use serde_json::{Value, json};
 
@@ -19,7 +21,7 @@ use crate::{
     http::{
         AppState,
         contracts::typed::{self, tasks as task_contracts},
-        session, validation,
+        validation,
     },
     identity::companies,
     integrations::github::Access,
@@ -108,26 +110,6 @@ fn validated_task_id(id: &str) -> Result<(), Box<Response>> {
     }
 }
 
-fn authorize(
-    state: &AppState,
-    headers: &HeaderMap,
-) -> Result<(String, Vec<String>), Box<Response>> {
-    let session = state
-        .with_database(|database| {
-            session::session_user(database, headers, Some(&state.session_config), Utc::now())
-        })
-        .map_err(auth::service_error)
-        .map_err(Box::new)?;
-    match session.user {
-        Some(user) => Ok((user.id, session.set_cookies)),
-        None => {
-            let mut response = auth::error(StatusCode::UNAUTHORIZED, "Authentication required");
-            auth::append_cookies(&mut response, session.set_cookies);
-            Err(Box::new(response))
-        }
-    }
-}
-
 fn read_task(
     database: &SuplexDatabase,
     user_id: &str,
@@ -163,7 +145,7 @@ fn respond(result: Result<Value, Box<dyn Error>>, cookies: Vec<String>) -> Respo
             );
             response
         }
-        Err(error) => auth::service_error(error),
+        Err(error) => ApiError::response(error),
     };
     auth::append_cookies(&mut response, cookies);
     response
@@ -477,12 +459,14 @@ async fn read_diff(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::http::session;
     use crate::{
         identity::auth as identity_auth,
         platform::database::{OpenMode, SuplexDatabase},
         tasks::repository::{self, PreparedTask, TaskCreator},
     };
     use axum::{body::to_bytes, http::HeaderValue};
+    use chrono::Utc;
     use std::{
         fs,
         io::{BufRead, BufReader, Write},

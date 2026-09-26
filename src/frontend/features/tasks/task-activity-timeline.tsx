@@ -1,11 +1,11 @@
 import { useEffect, useState } from "react";
-import { TaskTimelineResponseSchema, type TimelineTask } from "../../../tasks/timeline/contracts.js";
+import { TaskTimelineResponseSchema, type TimelineTask } from "../../contracts/timeline.js";
 import { readJson } from "../../lib/api.js";
 import { taskTimelineDuration } from "../timeline/lib/task-timeline-duration.js";
 import { Alert, AlertDescription } from "../../components/ui/alert.js";
 import { TimelineAgentLabel } from "../timeline/timeline-agent-label.js";
 
-import { roleLabel } from "../../../coordination/workflows.js";
+import { roleLabel } from "./workflow-presentation.js";
 
 const statuses = { completed: "Completed", running: "In progress", failed: "Failed", interrupted: "Stopped" };
 const freshnessMs = 10_000;

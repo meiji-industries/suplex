@@ -2,7 +2,7 @@ import { createContext, useCallback, useContext, useEffect, useMemo, useState, t
 import { flushSync } from "react-dom";
 
 import { companySettingsPath, readJson, withCompany, type ApiCompany, type ApiUser, type CompanyStatus } from "../lib/api.js";
-import type { AvatarRecord, AvatarUpdateBody } from "../../http/contracts/avatars.js";
+import { type AvatarRecord, type AvatarUpdateBody } from "../contracts/avatars.js";
 import { navigate } from "./navigation-state.js";
 
 const activeCompanyStorageKey = "suplex.activeCompanyId";

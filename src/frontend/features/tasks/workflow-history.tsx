@@ -1,6 +1,7 @@
 import { z } from "zod";
-import type { Task } from "../../../tasks/contracts.js";
-import { ADVISOR_LABELS, latestReview, type ReviewRecord } from "../../../coordination/workflows.js";
+import { type Task } from "../../contracts/tasks.js";
+import { ADVISOR_LABELS, latestReview } from "./workflow-presentation.js";
+import { type ReviewRecord } from "../../contracts/workflows.js";
 import type { TaskActivity } from "./task-work.js";
 import { Badge } from "../../components/ui/badge.js";
 import { Markdown } from "../../components/app/markdown.js";

@@ -1,10 +1,10 @@
 import { Area, AreaChart, CartesianGrid, Pie, PieChart, XAxis, YAxis } from "recharts";
-import type { TaskAnalytics } from "../../../tasks/analytics/contracts.js";
+import { type TaskAnalytics } from "../../contracts/analytics.js";
 import { ChartContainer, ChartTooltip, ChartTooltipContent } from "../../components/ui/chart.js";
 import { taskStatusLabels } from "../tasks/task-status.js";
 import { compact, money } from "./lib/analytics.js";
-import { TaskControlStatusSchema } from "../../../tasks/control.js";
-import { usageIsUnpriced } from "../../../tasks/analytics/metrics.js";
+import { TaskControlStatusSchema } from "../../contracts/task-control.js";
+import { usageIsUnpriced } from "./lib/usage-metrics.js";
 
 const colors = { delivered: "#10b981", active: "#3b82f6", waiting_human: "#f59e0b", cancelled: "#ef4444", queued: "#0ea5e9", backlog: "#94a3b8" };
 const config = { root: { label: "Coordinator", color: "#3b82f6" }, worker: { label: "Delegated", color: "#8b5cf6" } };

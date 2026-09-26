@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState, type ReactElement } from "react";
 import { RefreshCw, Trash2 } from "lucide-react";
-import { ProjectRepositoryStatusSchema, type ProjectRepositoryStatus } from "../../../http/contracts/projects.js";
+import { ProjectRepositoryStatusSchema, type ProjectRepositoryStatus } from "../../contracts/projects.js";
 import { GithubDeviceSignIn } from "../../components/app/github-device-sign-in.js";
 import { StatusLight } from "../../components/app/status-light.js";
 import { Spinner } from "../../components/ui/spinner.js";

@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactElement } from "react";
-import type { IssueAssociation } from "../../../tasks/issue-association.js";
+import { type IssueAssociation } from "../../contracts/issues.js";
 import { readJson } from "../../lib/api.js";
 import { Button } from "../../components/ui/button.js";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "../../components/ui/dialog.js";

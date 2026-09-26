@@ -1,5 +1,5 @@
-import { duplicateTitle } from "../../../../tasks/duplicate-title.js";
-import { TaskImageInputSchema, type Task, type TaskInput } from "../../../../tasks/contracts.js";
+import { duplicateTitle } from "./duplicate-title.js";
+import { TaskImageInputSchema, type Task, type TaskInput } from "../../../contracts/tasks.js";
 import { issueTaskSource, type TaskSourceSummary } from "../task-source-picker.js";
 import { readJson } from "../../../lib/api.js";
 

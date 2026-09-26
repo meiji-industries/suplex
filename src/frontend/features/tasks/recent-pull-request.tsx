@@ -1,6 +1,6 @@
 import { useState } from "react";
 import { Archive, GitPullRequest } from "lucide-react";
-import type { Task } from "../../../tasks/contracts.js";
+import { type Task } from "../../contracts/tasks.js";
 import { useTaskChecks, type TaskChecks } from "./lib/task-checks.js";
 import { SidebarMenuAction } from "../../components/ui/sidebar.js";
 import { ArchiveTaskDialog } from "./archive-task-dialog.js";

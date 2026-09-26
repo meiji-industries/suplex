@@ -1,5 +1,5 @@
 import type { ReactElement, ReactNode } from "react";
-import type { ProjectIntegration } from "../../../projects/integration-configuration.js";
+import { type ProjectIntegration } from "../../contracts/project-integration.js";
 import { Field, FieldLabel, FieldSet } from "../../components/ui/field.js";
 import { Input } from "../../components/ui/input.js";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../components/ui/select.js";

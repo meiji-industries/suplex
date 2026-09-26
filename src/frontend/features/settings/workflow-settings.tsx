@@ -1,8 +1,10 @@
 import { useEffect, useMemo, useState, type ReactElement } from "react";
 import { Archive, ArchiveRestore, CirclePlus, Copy, Ellipsis, Pencil } from "lucide-react";
-import { DeliveryTargetSchema, VisualEvidenceSchema } from "../../../tasks/contracts.js";
-import type { WorkflowRecordInput } from "../../../http/contracts/workflows.js";
-import { ADVISOR_LABELS, WORKFLOWS, WorkflowIdSchema, workflowDefinition, type AdvisorRole } from "../../../coordination/workflows.js";
+import { DeliveryTargetSchema, VisualEvidenceSchema } from "../../contracts/tasks.js";
+import { type WorkflowRecordInput } from "../../contracts/workflow-presets.js";
+import { ADVISOR_LABELS, WORKFLOWS, workflowDefinition } from "../tasks/workflow-presentation.js";
+import { WorkflowIdSchema } from "../../contracts/workflows.js";
+import { type AdvisorRole } from "../../contracts/advisor-reports.js";
 import { SettingsContent, SettingsLayout } from "./settings-layout.js";
 import { SettingsDataTable, SettingsTableCell, SettingsTableEmpty, SettingsTableGroup, SettingsTableRow, SettingsToolbar, type SettingsTableColumn } from "../../components/app/settings-table.js";
 import { useCompanyContext } from "../../shell/company-context.js";

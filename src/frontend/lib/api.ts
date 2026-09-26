@@ -1,4 +1,4 @@
-import type { AuthUserResponse, CompanyResponse } from "../../http/contracts/common.js";
+import { type AuthUserResponse, type CompanyResponse } from "../contracts/common.js";
 import { clientTabId, reportApiActivity, reportAuthenticatedResume } from "../shell/client-lifecycle.js";
 
 export type ApiUser = AuthUserResponse;

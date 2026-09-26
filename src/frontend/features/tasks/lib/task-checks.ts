@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import type { z } from "zod";
-import { TaskChecksResponseSchema } from "../../../../http/contracts/tasks.js";
+import { TaskChecksResponseSchema } from "../../../contracts/task-responses.js";
 import { readJson } from "../../../lib/api.js";
 
 export type TaskChecks = z.infer<typeof TaskChecksResponseSchema>;

@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { ArrowDownToLine, BarChart3, RefreshCw } from "lucide-react";
-import { AnalyticsResponseSchema, type AnalyticsResponse } from "../../../tasks/analytics/contracts.js";
-import { percentile, usageMetrics } from "../../../tasks/analytics/metrics.js";
+import { AnalyticsResponseSchema, type AnalyticsResponse } from "../../contracts/analytics.js";
+import { percentile, usageMetrics } from "./lib/usage-metrics.js";
 import { ApplicationFrame } from "../../shell/application-frame.js";
 import { useCompanyContext } from "../../shell/company-context.js";
 import { CostValue } from "../../components/app/cost-value.js";

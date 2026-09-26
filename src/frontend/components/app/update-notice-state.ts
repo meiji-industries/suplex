@@ -1,4 +1,4 @@
-import type { UpdateResponse } from "../../../http/contracts/update.js";
+import { type UpdateResponse } from "../../contracts/updates.js";
 
 export type UpdateNoticeState =
   | { kind: "available"; message: string }

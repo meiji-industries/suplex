@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useState } from "react";
 
-import type { HealthCheck } from "../../../platform/health.js";
-import type { ProviderSummary, ProviderListResponse } from "../../../http/contracts/providers.js";
-import type { ProfileResponse, ProjectResponse } from "../../../http/contracts/projects.js";
+import { type HealthCheck } from "../../contracts/health.js";
+import { type ProviderSummary, type ProviderListResponse } from "../../contracts/providers.js";
+import { type ProfileResponse, type ProjectResponse } from "../../contracts/projects.js";
 import { useSystemHealth } from "../../components/app/system-health.js";
 import type { ToolIconId } from "../../components/app/tool-icons.js";
 import { readJson, withCompany, type ApiCompany } from "../../lib/api.js";

@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { TaskCostsResponseSchema } from "../../../../tasks/analytics/contracts.js";
+import { TaskCostsResponseSchema } from "../../../contracts/analytics.js";
 import { readJson } from "../../../lib/api.js";
 
 export function money(value: number | null): string {

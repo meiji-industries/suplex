@@ -1,7 +1,7 @@
 import { useEffect, useState, type ReactElement } from "react";
 import { CheckCircle2, CircleMinus, ExternalLink, GitMerge, GitPullRequest, LoaderCircle, XCircle } from "lucide-react";
-import type { Task } from "../../../tasks/contracts.js";
-import { supportsDeliveryTarget } from "../../../delivery/target-capabilities.js";
+import { type Task } from "../../contracts/tasks.js";
+import { supportsDeliveryTarget } from "./lib/delivery-target-capabilities.js";
 import { Badge } from "../../components/ui/badge.js";
 import { Button } from "../../components/ui/button.js";
 import { readJson } from "../../lib/api.js";

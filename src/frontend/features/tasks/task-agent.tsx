@@ -1,9 +1,9 @@
 import { useEffect, useState } from "react";
-import type { Task } from "../../../tasks/contracts.js";
-import type { TaskAgentSelectionRequest } from "../../../coordination/task-agent-selection-contracts.js";
-import { ADVISOR_LABELS } from "../../../coordination/workflows.js";
-import { TaskActivityResponseSchema } from "../../../http/contracts/tasks.js";
-import { isProfileAllowed } from "../../../projects/provider-policy.js";
+import { type Task } from "../../contracts/tasks.js";
+import { type TaskAgentSelectionRequest } from "../../contracts/agent-selection.js";
+import { ADVISOR_LABELS } from "./workflow-presentation.js";
+import { TaskActivityResponseSchema } from "../../contracts/task-responses.js";
+import { isProfileAllowed } from "../projects/lib/provider-policy.js";
 import type { ApiProfile } from "../../shell/view-shared.js";
 import { readJson } from "../../lib/api.js";
 import { EntityAvatar } from "../../components/app/entity-avatar.js";

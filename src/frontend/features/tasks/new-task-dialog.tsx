@@ -1,8 +1,10 @@
 import { useEffect, useRef, useState, type ReactElement } from "react";
-import { isProfileAllowed } from "../../../projects/provider-policy.js";
+import { isProfileAllowed } from "../projects/lib/provider-policy.js";
 import { FileText, FolderKanban, MoreHorizontal, Workflow as WorkflowIcon, X } from "lucide-react";
-import { TaskImageInputSchema, DeliveryTargetSchema, VisualEvidenceSchema, type Task, type TaskInput } from "../../../tasks/contracts.js";
-import { ADVISOR_LABELS, workflowDefinition, type AdvisorProfileIds, type AdvisorRole, type WorkflowId } from "../../../coordination/workflows.js";
+import { TaskImageInputSchema, DeliveryTargetSchema, VisualEvidenceSchema, type Task, type TaskInput } from "../../contracts/tasks.js";
+import { ADVISOR_LABELS, workflowDefinition } from "./workflow-presentation.js";
+import { type AdvisorProfileIds, type WorkflowId } from "../../contracts/workflows.js";
+import { type AdvisorRole } from "../../contracts/advisor-reports.js";
 import type { ApiProfile, ApiProject, ApiTaskTemplate, ApiWorkflow } from "../../shell/view-shared.js";
 import { ApiError, readJson, withCompany } from "../../lib/api.js";
 import { useTaskCache } from "./task-data.js";
@@ -24,7 +26,7 @@ import { BlockedByPickerDialog } from "./blocked-by-picker.js";
 import { taskDeliveryTargetOptions } from "./task-delivery-target.js";
 import { readNewTaskMemory, writeNewTaskMemory, type NewTaskMemory } from "./new-task-memory.js";
 import { TaskRoleSelector } from "./task-role-selectors.js";
-import { supportsDeliveryTarget } from "../../../delivery/target-capabilities.js";
+import { supportsDeliveryTarget } from "./lib/delivery-target-capabilities.js";
 import type { NewTaskDraft } from "./lib/duplicate-task-prefill.js";
 
 type Delivery = { deliveryTarget: NonNullable<TaskInput["deliveryTarget"]>; runProjectTests: boolean };

@@ -1,6 +1,6 @@
 import { useEffect, useState, type ReactElement } from "react";
 
-import { GitHubAuthStatusResponseSchema, GitHubDevicePollResponseSchema, GitHubDeviceStartResponseSchema, type GitHubDevicePollResponse, type GitHubDeviceStartResponse } from "../../../http/contracts/github-auth.js";
+import { GitHubAuthStatusResponseSchema, GitHubDevicePollResponseSchema, GitHubDeviceStartResponseSchema, type GitHubDevicePollResponse, type GitHubDeviceStartResponse } from "../../contracts/github-auth.js";
 import { readJson } from "../../lib/api.js";
 import { Button } from "../ui/button.js";
 import { Spinner } from "../ui/spinner.js";

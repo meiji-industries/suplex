@@ -1,8 +1,8 @@
 import { useEffect, useState, type ReactElement } from "react";
 import { ChevronRight, ClipboardCopy, X } from "lucide-react";
 import { Collapsible } from "../../components/ui/collapsible.js";
-import type { Task } from "../../../tasks/contracts.js";
-import { TaskActivityResponseSchema } from "../../../http/contracts/tasks.js";
+import { type Task } from "../../contracts/tasks.js";
+import { TaskActivityResponseSchema } from "../../contracts/task-responses.js";
 import { readJson } from "../../lib/api.js";
 import { adminDate, type ApiProject } from "../../shell/view-shared.js";
 import { Button } from "../../components/ui/button.js";
@@ -27,7 +27,7 @@ import { Progress, ProgressLabel, ProgressValue } from "../../components/ui/prog
 import { WorkflowHistory, WorkflowStatus } from "./workflow-history.js";
 import { TaskPullRequestCard } from "./pull-request-card.js";
 import { TaskWorktreeMenu } from "./task-worktree-menu.js";
-import { workflowDefinition } from "../../../coordination/workflows.js";
+import { workflowDefinition } from "./workflow-presentation.js";
 
 function CopyValue({ label, value, children }: { label: string; value: string; children: ReactElement }): ReactElement {
   const [copied, setCopied] = useState(false);

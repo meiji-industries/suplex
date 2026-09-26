@@ -1,11 +1,12 @@
 import { useState } from "react";
-import type { Task } from "../../../tasks/contracts.js";
+import { type Task } from "../../contracts/tasks.js";
 import { Questionnaire, QuestionnaireActions, QuestionnaireChoice, QuestionnaireChoiceDescription, QuestionnaireChoices, QuestionnaireDescription, QuestionnaireError, QuestionnaireInput, QuestionnaireItem, QuestionnaireSubmit, QuestionnaireTitle } from "../../components/ui/questionnaire.js";
 import { Badge } from "../../components/ui/badge.js";
 import { Checkbox } from "../../components/ui/checkbox.js";
 import { Button } from "../../components/ui/button.js";
 import { Input } from "../../components/ui/input.js";
-import { roundSuggestedBudget, taskLimitQuestion, type TaskLimitDecision } from "../../../tasks/limits/limits.js";
+import { roundSuggestedBudget, taskLimitQuestion } from "./lib/task-limit-presentation.js";
+import { type TaskLimitDecision } from "../../contracts/task-limits.js";
 
 export function TaskQuestion({ question, busy, onAnswer, onLimitDecision }: { question: NonNullable<Task["humanQuestion"]>; busy: boolean; onAnswer: (answer: { answer: string; confirmCommandsStopped: boolean }) => Promise<void>; onLimitDecision: (decision: TaskLimitDecision) => Promise<void> }) {
   const [answered, setAnswered] = useState(false);

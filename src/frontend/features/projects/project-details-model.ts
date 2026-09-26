@@ -1,8 +1,9 @@
-import type { ProjectExecution } from "../../../projects/execution-configuration.js";
-import type { ProjectIntegration } from "../../../projects/integration-configuration.js";
-import { isProfileAllowed, type ProjectProviderPolicy } from "../../../projects/provider-policy.js";
-import type { AgentProfile } from "../../../profiles/agent-profile-contracts.js";
-import type { ProjectPatchBody } from "../../../http/contracts/projects.js";
+import { type ProjectExecution } from "../../contracts/project-execution.js";
+import { type ProjectIntegration } from "../../contracts/project-integration.js";
+import { isProfileAllowed } from "./lib/provider-policy.js";
+import { type ProjectProviderPolicy } from "../../contracts/provider-policy.js";
+import { type AgentProfile } from "../../contracts/profiles.js";
+import { type ProjectPatchBody } from "../../contracts/projects.js";
 import type { ApiProject } from "../../shell/view-shared.js";
 
 export type ProjectSection = "general" | "agents" | "execution" | "connections";

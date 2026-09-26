@@ -31,10 +31,7 @@ import {
   type TimelineRange,
 } from "./timeline-model.js";
 import { readJson } from "../../lib/api.js";
-import {
-  TaskTimelineResponseSchema,
-  type TimelineTask,
-} from "../../../tasks/timeline/contracts.js";
+import { TaskTimelineResponseSchema, type TimelineTask } from "../../contracts/timeline.js";
 import type { ApiProject } from "../../shell/view-shared.js";
 import { addDays, formatDuration, titleCase } from "./timeline-format.js";
 

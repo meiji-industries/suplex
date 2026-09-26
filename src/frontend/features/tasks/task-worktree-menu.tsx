@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ReactElement } from "react";
 import { ChevronDown, Copy, FolderOpen } from "lucide-react";
-import { WorktreeAppsResponseSchema, type WorktreeAppSchema } from "../../../http/contracts/tasks.js";
+import { WorktreeAppsResponseSchema, type WorktreeAppSchema } from "../../contracts/task-responses.js";
 import { readJson } from "../../lib/api.js";
 import { Button } from "../../components/ui/button.js";
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from "../../components/ui/dropdown-menu.js";

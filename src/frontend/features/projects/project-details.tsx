@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useRef, useState, type ReactElement } from "react";
 
-import { ProjectExecutionSchema } from "../../../projects/execution-configuration.js";
-import { ProjectIntegrationSchema } from "../../../projects/integration-configuration.js";
-import { isProfileAllowed } from "../../../projects/provider-policy.js";
-import { HARNESS_KIND_IDS } from "../../../runtimes/harness-kind.js";
-import type { ProjectPatchBody, ProjectProviderInstance } from "../../../http/contracts/projects.js";
+import { ProjectExecutionSchema } from "../../contracts/project-execution.js";
+import { ProjectIntegrationSchema } from "../../contracts/project-integration.js";
+import { isProfileAllowed } from "./lib/provider-policy.js";
+import { HARNESS_KIND_IDS } from "../../contracts/harness-kind.js";
+import { type ProjectPatchBody, type ProjectProviderInstance } from "../../contracts/projects.js";
 import { Alert, AlertDescription } from "../../components/ui/alert.js";
 import { Button } from "../../components/ui/button.js";
 import { Checkbox } from "../../components/ui/checkbox.js";

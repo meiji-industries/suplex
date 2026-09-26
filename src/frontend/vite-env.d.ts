@@ -1,5 +1,5 @@
 /// <reference types="vite/client" />
-import type { HealthSnapshot } from "../platform/health.js";
+import { type HealthSnapshot } from "./contracts/health.js";
 
 declare global {
   interface Window {

@@ -1,6 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactElement, type ReactNode } from "react";
 
-import { UpdateRestartResponseSchema, UpdateResponseSchema, type UpdateResponse } from "../../../http/contracts/update.js";
+import { UpdateRestartResponseSchema, UpdateResponseSchema, type UpdateResponse } from "../../contracts/updates.js";
 import { readJson } from "../../lib/api.js";
 import { useOptionalCompanyContext } from "../../shell/company-context.js";
 import { observeRestart, selectUpdateNotice, type RestartAttempt, type UpdateNoticeState } from "./update-notice-state.js";

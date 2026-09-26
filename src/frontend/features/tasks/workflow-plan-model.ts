@@ -1,5 +1,5 @@
-import { REPAIR_RATING_TARGET, type AdvisorRole } from "../../../coordination/workflows.js";
-import type { Task } from "../../../tasks/contracts.js";
+import { REPAIR_RATING_TARGET, type AdvisorRole } from "../../contracts/advisor-reports.js";
+import { type Task } from "../../contracts/tasks.js";
 
 export type WorkflowStation = {
   id: string;

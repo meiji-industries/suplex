@@ -1,6 +1,6 @@
 import { useEffect, useState, type ReactElement } from "react";
 import type { ApiProfile, ApiModel } from "../../shell/view-shared.js";
-import type { ProviderInstanceSchema } from "../../../http/contracts/providers.js";
+import { type ProviderInstanceSchema } from "../../contracts/providers.js";
 import type { z } from "zod";
 import { readJson } from "../../lib/api.js";
 import { Alert, AlertDescription } from "../../components/ui/alert.js";

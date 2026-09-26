@@ -1,8 +1,8 @@
 import { useEffect, useState } from "react";
 import type { z } from "zod";
-import type { TaskAgentsResponseSchema, TaskAgentStatusSchema } from "../../../http/contracts/tasks.js";
+import { type TaskAgentsResponseSchema, type TaskAgentStatusSchema } from "../../contracts/task-responses.js";
 import { readTaskAgentExpiry } from "./task-agent-expiry.js";
-import { roleLabel } from "../../../coordination/workflows.js";
+import { roleLabel } from "./workflow-presentation.js";
 
 const labels = { queued: "Queued", working: "Working", retrying: "Retry", idle: "Idle", waiting_human: "Answer necessary", stopped: "Stopped", unknown: "Not available" } satisfies Record<z.infer<typeof TaskAgentStatusSchema>, string>;
 type TaskAgent = z.infer<typeof TaskAgentsResponseSchema>["agents"][number];

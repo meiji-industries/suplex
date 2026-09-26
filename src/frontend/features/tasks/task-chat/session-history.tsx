@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { ArrowDown } from "lucide-react";
-import { SessionHistoryLiveEventSchema, SessionHistoryPageSchema, type NativeHistoryMessage, type SessionHistoryLiveEvent } from "../../../../tasks/history/contracts.js";
+import { SessionHistoryLiveEventSchema, SessionHistoryPageSchema, type NativeHistoryMessage, type SessionHistoryLiveEvent } from "../../../contracts/history.js";
 import { readJson } from "../../../lib/api.js";
 import { clientTabId } from "../../../shell/client-lifecycle.js";
 import { Alert, AlertDescription } from "../../../components/ui/alert.js";

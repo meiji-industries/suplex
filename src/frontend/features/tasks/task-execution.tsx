@@ -1,11 +1,11 @@
 import { useEffect, useState } from "react";
 import { CheckCircle2, Circle, CircleDashed, CircleX } from "lucide-react";
-import { TaskExecutionResponseSchema, type TaskExecution } from "../../../tasks/execution/contracts.js";
+import { TaskExecutionResponseSchema, type TaskExecution } from "../../contracts/task-execution.js";
 import { readJson } from "../../lib/api.js";
 import { Plan, PlanHeader, PlanTitle, PlanDescription, PlanAction, PlanTrigger, PlanContent } from "../../components/ai-elements/plan.js";
 import { Tool, ToolHeader, ToolContent, ToolInput, ToolOutput, type ToolPart } from "../../components/ai-elements/tool.js";
 import { Alert, AlertDescription } from "../../components/ui/alert.js";
-import { roleLabel } from "../../../coordination/workflows.js";
+import { roleLabel } from "./workflow-presentation.js";
 
 const toolStates = { pending: "input-streaming", running: "input-available", completed: "output-available", error: "output-error" } satisfies Record<TaskExecution["sessions"][number]["tools"][number]["status"], ToolPart["state"]>;
 const planStates = { pending: "Pending", in_progress: "In progress", completed: "Completed", cancelled: "Cancelled" };

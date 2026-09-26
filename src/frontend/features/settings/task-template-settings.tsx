@@ -1,8 +1,10 @@
 import { useEffect, useState, type ReactElement } from "react";
 import { Pencil, Plus } from "lucide-react";
-import type { TaskTemplateInput } from "../../../tasks/templates.js";
-import { DeliveryTargetSchema, VisualEvidenceSchema } from "../../../tasks/contracts.js";
-import { ADVISOR_LABELS, WORKFLOWS, WorkflowIdSchema, workflowDefinition, type AdvisorRole } from "../../../coordination/workflows.js";
+import { type TaskTemplateInput } from "../../contracts/task-templates.js";
+import { DeliveryTargetSchema, VisualEvidenceSchema } from "../../contracts/tasks.js";
+import { ADVISOR_LABELS, WORKFLOWS, workflowDefinition } from "../tasks/workflow-presentation.js";
+import { WorkflowIdSchema } from "../../contracts/workflows.js";
+import { type AdvisorRole } from "../../contracts/advisor-reports.js";
 import { SettingRow, SettingsContent, SettingsLayout, SettingsSection } from "./settings-layout.js";
 import { ProjectDetailsLayout } from "../projects/project-details-layout.js";
 import { useCompanyContext } from "../../shell/company-context.js";

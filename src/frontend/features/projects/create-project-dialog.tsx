@@ -12,7 +12,7 @@ import { reconcileScopedNotFound, type ApiProject } from "../../shell/view-share
 import { ChevronDown } from "lucide-react";
 import { useEffect, useState, type FormEvent, type ReactElement } from "react";
 import { ProjectConnections, REPOSITORY_HOSTS, withRepositoryHost } from "./project-connections.js";
-import { ProjectIntegrationSchema, type ProjectIntegration } from "../../../projects/integration-configuration.js";
+import { ProjectIntegrationSchema, type ProjectIntegration } from "../../contracts/project-integration.js";
 
 /** A picker inside the repository field, in front of the text, like a URL protocol. */
 function AddonMenu({ label, value, options, onChange }: { label: string; value: string; options: ReadonlyArray<{ value: string; label: string }>; onChange: (value: string) => void }): ReactElement {

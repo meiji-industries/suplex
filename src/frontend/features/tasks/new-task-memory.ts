@@ -1,4 +1,4 @@
-import { TaskInputSchema } from "../../../tasks/contracts.js";
+import { TaskInputSchema } from "../../contracts/tasks.js";
 import type { z } from "zod";
 
 // Workflow and Advisor selections are never remembered: every ordinary fresh task opens as Standard.

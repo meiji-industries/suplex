@@ -5,7 +5,7 @@ import { Badge } from "../../components/ui/badge.js";
 import { Button } from "../../components/ui/button.js";
 import { useCompanyContext } from "../../shell/company-context.js";
 import { connectionRoute, getSystemHealthLevel, HealthCheckSections, useSystemHealth } from "../../components/app/system-health.js";
-import { isOwnedHealthCheck, isRequiredHealthCheck } from "../../../platform/health-contract.js";
+import { isOwnedHealthCheck, isRequiredHealthCheck } from "../../contracts/health-checks.js";
 import { SettingsLayout } from "../settings/settings-layout.js";
 import { UpdateSettings } from "../settings/update-settings.js";
 import { withCompany } from "../../lib/api.js";

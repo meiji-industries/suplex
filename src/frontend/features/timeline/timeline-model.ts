@@ -1,8 +1,8 @@
-import type { TimelineTask } from "../../../tasks/timeline/contracts.js";
+import { type TimelineTask } from "../../contracts/timeline.js";
 import { addDays } from "./timeline-format.js";
 import type { ApiProject } from "../../shell/view-shared.js";
 
-export type { TimelineTask } from "../../../tasks/timeline/contracts.js";
+export type { TimelineTask } from "../../contracts/timeline.js";
 export type AgentRole = "root" | "worker";
 export type TimelineRange = { start: number; end: number };
 

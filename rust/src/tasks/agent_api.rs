@@ -310,6 +310,36 @@ struct AgentTaskProjection<'a> {
     updated_at: &'a str,
 }
 
+/// The agent API workflow stage of a task.
+fn workflow_stage(status: &str, completion: &Value, question: bool, wait: &Value) -> String {
+    if status == "cancelled" {
+        "cancelled".to_owned()
+    } else if !completion.is_null() || status == "delivered" {
+        "completed".to_owned()
+    } else if question {
+        "waiting_human".to_owned()
+    } else if !wait.is_null() {
+        "waiting_delivery".to_owned()
+    } else if status == "active" {
+        "working".to_owned()
+    } else {
+        status.to_owned()
+    }
+}
+
+/// The pull request, delivery wait, and completion, or null when there is none.
+fn delivery_summary(pull: &Value, wait: &Value, completion: &Value) -> Value {
+    if pull.is_null() && wait.is_null() && completion.is_null() {
+        return Value::Null;
+    }
+    json!({
+        "pullRequest": if pull.is_null() { Value::Null } else { json!({"number": pull["number"], "url": pull["url"], "state": pull["state"], "mergedAt": pull.get("mergedAt").cloned().unwrap_or(Value::Null)}) },
+        "checks": null,
+        "waiting": if wait.is_null() { Value::Null } else { json!({"reason": wait["reason"], "since": wait["since"]}) },
+        "completion": if completion.is_null() { Value::Null } else { json!({"kind": completion["kind"], "pullRequestNumber": completion["pullRequestNumber"], "observedAt": completion["observedAt"]}) },
+    })
+}
+
 /// `agentApiProjection`: the stored-state projection and its revision.
 fn projection_of(
     database: &SuplexDatabase,
@@ -338,30 +368,8 @@ fn projection_of(
     } else {
         Value::Null
     };
-    let stage = if status == "cancelled" {
-        "cancelled".to_owned()
-    } else if !completion.is_null() || status == "delivered" {
-        "completed".to_owned()
-    } else if question.is_some() {
-        "waiting_human".to_owned()
-    } else if !wait.is_null() {
-        "waiting_delivery".to_owned()
-    } else if status == "active" {
-        "working".to_owned()
-    } else {
-        status.clone()
-    };
-    let pull = &task.pull_request;
-    let delivery = if !pull.is_null() || !wait.is_null() || !completion.is_null() {
-        json!({
-            "pullRequest": if pull.is_null() { Value::Null } else { json!({"number": pull["number"], "url": pull["url"], "state": pull["state"], "mergedAt": pull.get("mergedAt").cloned().unwrap_or(Value::Null)}) },
-            "checks": null,
-            "waiting": if wait.is_null() { Value::Null } else { json!({"reason": wait["reason"], "since": wait["since"]}) },
-            "completion": if completion.is_null() { Value::Null } else { json!({"kind": completion["kind"], "pullRequestNumber": completion["pullRequestNumber"], "observedAt": completion["observedAt"]}) },
-        })
-    } else {
-        Value::Null
-    };
+    let stage = workflow_stage(&status, completion, question.is_some(), wait);
+    let delivery = delivery_summary(&task.pull_request, wait, completion);
     let creator = row.creator_agent_id.as_deref() == Some(principal.agent_id.as_str());
     let (workflow_id, workflow_name, template_id) = selection(&task);
     let source = task
@@ -1678,34 +1686,44 @@ struct Pending {
     pull_requests: Vec<Value>,
 }
 
-/// Everything before the live Git capture: authority, idempotency, policy, and local-engine support.
-fn admit(
+/// The task an earlier identical request created, as an idempotent replay.
+fn replayed(
+    database: &SuplexDatabase,
+    principal: &Principal,
+    idempotency_key: &str,
+    hash: &str,
+) -> DatabaseResult<Option<Creation>> {
+    let Some(id) = existing(
+        database,
+        &principal.company_id,
+        idempotency_key,
+        hash,
+        &principal.agent_id,
+    )?
+    else {
+        return Ok(None);
+    };
+    let active = task_json(database, &id)?["status"] == "active";
+    Ok(Some(Creation::Task {
+        id,
+        created: false,
+        active,
+    }))
+}
+
+/// The task an earlier request with this idempotency key created. A legacy
+/// request also matches its legacy hash.
+fn existing_request(
     database: &SuplexDatabase,
     principal: &Principal,
     raw: &TaskCreateBody,
-) -> DatabaseResult<Admission> {
-    let dry_run = raw.dry_run == Some(true);
-    if raw
-        .extra
-        .keys()
-        .any(|name| !["companyId", "agentId", "startImmediately"].contains(&name.as_str()))
-    {
-        return Err(fail("Invalid request", 400, "request_invalid"));
-    }
-    let hash = request_hash(raw, &principal.agent_id)?;
-    require_scope(
-        database,
-        principal,
-        &principal.company_id,
-        &raw.project_id,
-        true,
-        Some(project_scope_failure(&raw.project_id)),
-    )?;
-    let found = match existing(
+    hash: &str,
+) -> DatabaseResult<Option<String>> {
+    match existing(
         database,
         &principal.company_id,
         &raw.idempotency_key,
-        &hash,
+        hash,
         &principal.agent_id,
     ) {
         Err(error)
@@ -1721,48 +1739,17 @@ fn admit(
                 &raw.idempotency_key,
                 &legacy,
                 &principal.agent_id,
-            )?
+            )
         }
-        other => other?,
-    };
-    if let Some(id) = found {
-        if dry_run {
-            return Ok(Admission::Done(Creation::DryRun(
-                json!({"dryRun": true, "status": 200, "existingTaskId": id}),
-            )));
-        }
-        let active = task_json(database, &id)?["status"] == "active";
-        return Ok(Admission::Done(Creation::Task {
-            id,
-            created: false,
-            active,
-        }));
+        other => other,
     }
-    let resolved = resolve(database, &principal.company_id, raw)?;
-    let request = &resolved.request;
-    require_scope(
-        database,
-        principal,
-        &principal.company_id,
-        &request.project_id,
-        true,
-        Some(project_scope_failure(&request.project_id)),
-    )?;
-    if let Some(id) = existing(
-        database,
-        &principal.company_id,
-        &request.idempotency_key,
-        &hash,
-        &principal.agent_id,
-    )? {
-        let active = task_json(database, &id)?["status"] == "active";
-        return Ok(Admission::Done(Creation::Task {
-            id,
-            created: false,
-            active,
-        }));
-    }
-    let project = projects::get_in_company(database, &principal.company_id, &request.project_id)?;
+}
+
+/// The project has a repository and supports the delivery target.
+fn check_project_delivery(
+    project: &Project,
+    request: &task_contracts::TaskCreateBody,
+) -> DatabaseResult<()> {
     let bitbucket = matches!(
         project
             .integration
@@ -1784,6 +1771,59 @@ fn admit(
             "task_failure",
         ));
     }
+    Ok(())
+}
+
+/// Everything before the live Git capture: authority, idempotency, policy, and local-engine support.
+fn admit(
+    database: &SuplexDatabase,
+    principal: &Principal,
+    raw: &TaskCreateBody,
+) -> DatabaseResult<Admission> {
+    if raw
+        .extra
+        .keys()
+        .any(|name| !["companyId", "agentId", "startImmediately"].contains(&name.as_str()))
+    {
+        return Err(fail("Invalid request", 400, "request_invalid"));
+    }
+    let hash = request_hash(raw, &principal.agent_id)?;
+    require_scope(
+        database,
+        principal,
+        &principal.company_id,
+        &raw.project_id,
+        true,
+        Some(project_scope_failure(&raw.project_id)),
+    )?;
+    if let Some(id) = existing_request(database, principal, raw, &hash)? {
+        if raw.dry_run == Some(true) {
+            return Ok(Admission::Done(Creation::DryRun(
+                json!({"dryRun": true, "status": 200, "existingTaskId": id}),
+            )));
+        }
+        let active = task_json(database, &id)?["status"] == "active";
+        return Ok(Admission::Done(Creation::Task {
+            id,
+            created: false,
+            active,
+        }));
+    }
+    let resolved = resolve(database, &principal.company_id, raw)?;
+    let request = &resolved.request;
+    require_scope(
+        database,
+        principal,
+        &principal.company_id,
+        &request.project_id,
+        true,
+        Some(project_scope_failure(&request.project_id)),
+    )?;
+    if let Some(creation) = replayed(database, principal, &request.idempotency_key, &hash)? {
+        return Ok(Admission::Done(creation));
+    }
+    let project = projects::get_in_company(database, &principal.company_id, &request.project_id)?;
+    check_project_delivery(&project, request)?;
     for dependency in &request.depends_on {
         task_row(database, dependency)?.ok_or_else(|| dependency_unavailable(dependency))?;
         require_readable(database, principal, dependency)
@@ -1804,6 +1844,146 @@ fn admit(
     })))
 }
 
+/// The local task the admission writes, marked as created by this agent.
+fn prepare_agent_task(
+    database: &SuplexDatabase,
+    principal: &Principal,
+    pending: &Pending,
+    base_sha: &str,
+    source: sources::CreationSource,
+    copied_from: Option<&str>,
+    now: DateTime<Utc>,
+) -> DatabaseResult<repository::PreparedTask> {
+    let request = &pending.resolved.request;
+    let profiles = commands::select_local_profiles(database, &pending.project, request)?;
+    let mut prepared = commands::prepare_local_user_task(
+        &principal.company_id,
+        &principal.agent_id,
+        &pending.project,
+        request,
+        profiles,
+        base_sha,
+        now,
+    )?;
+    sources::apply(&mut prepared, source)?;
+    prepared.creator = TaskCreator::Agent(principal.agent_id.clone());
+    prepared.pull_request_dependencies = pending.pull_requests.clone();
+    prepared.request_hash = pending.hash.clone();
+    prepared.copied_from_task_id = copied_from.map(str::to_owned);
+    if let Some(configuration) = prepared.configuration.as_object_mut() {
+        let source = configuration.remove("source").unwrap_or(Value::Null);
+        let captured = configuration.remove("capturedAt").unwrap_or(Value::Null);
+        configuration.insert("hermesSelection".into(), pending.resolved.selection.clone());
+        configuration.insert("source".into(), source);
+        configuration.insert("capturedAt".into(), captured);
+    }
+    Ok(prepared)
+}
+
+/// Inside the admission transaction: the project policy and agent profiles
+/// still match the captured snapshot, and every dependency stays readable.
+fn recheck_policy(
+    database: &SuplexDatabase,
+    principal: &Principal,
+    raw: &TaskCreateBody,
+    pending: &Pending,
+    prepared: &mut repository::PreparedTask,
+) -> DatabaseResult<Project> {
+    let request = &pending.resolved.request;
+    let current = resolve(database, &principal.company_id, raw)?;
+    let project = projects::get_in_company(database, &principal.company_id, &request.project_id)?;
+    if current.signature != pending.resolved.signature
+        || project_signature(&project) != project_signature(&pending.project)
+    {
+        return Err(fail(
+            "Project task configuration changed",
+            409,
+            "task_failure",
+        ));
+    }
+    prepared.root_profile = profile(
+        database,
+        current
+            .request
+            .root_profile_id
+            .as_deref()
+            .unwrap_or_default(),
+        "root",
+    )?;
+    prepared.worker_profile = profile(
+        database,
+        current
+            .request
+            .worker_profile_id
+            .as_deref()
+            .unwrap_or_default(),
+        "worker",
+    )?;
+    if [&prepared.root_profile, &prepared.worker_profile]
+        .iter()
+        .any(|profile| {
+            !crate::profiles::agent_profiles::allowed_profile(
+                project.provider_policy.as_ref(),
+                profile,
+            )
+        })
+    {
+        return Err(fail(
+            "Select agents with providers and logins allowed by this project",
+            422,
+            "task_failure",
+        ));
+    }
+    for dependency in &request.depends_on {
+        require_readable(database, principal, dependency)?;
+    }
+    Ok(project)
+}
+
+/// The dry-run response: what the admission would create and start.
+fn dry_run_preview(task: &Value, project: &Project, selection: &Value) -> Value {
+    merged(
+        json!({
+            "dryRun": true, "projectId": task["projectId"], "project": {"id": project.id, "name": project.name},
+            "title": task["title"],
+            "workflow": {"id": selection["workflowId"], "engine": task["workflow"], "name": selection["workflowName"]},
+            "templateId": selection["templateId"], "deliveryTarget": task["deliveryTarget"],
+            "branch": task["configuration"]["branch"], "dependsOn": task["dependsOn"],
+        }),
+        would_start(task),
+    )
+}
+
+/// Insert the task, with its images unless this is a dry run, and save a
+/// non-Standard workflow on its control.
+fn insert_agent_task(
+    database: &mut SuplexDatabase,
+    prepared: &repository::PreparedTask,
+    pending: &Pending,
+    artifact_root: Option<&std::path::Path>,
+    dry_run: bool,
+    now: DateTime<Utc>,
+    written: &mut Vec<artifacts::StoredArtifact>,
+) -> DatabaseResult<repository::TaskWrite> {
+    let result = match artifact_root {
+        Some(root) if !dry_run && !pending.images.is_empty() => {
+            repository::create_with_images(database, prepared, root, &pending.images, now, written)?
+        }
+        None if !dry_run && !pending.images.is_empty() => {
+            return Err("Artifact root is not configured".into());
+        }
+        _ => repository::create(database, prepared, now)?,
+    };
+    let workflow = pending.resolved.request.workflow;
+    if result.created && workflow != crate::coordination::workflows::Workflow::Standard {
+        database.connection().execute(
+            "UPDATE suplex_task_controls SET workflow = ?1 WHERE task_id = ?2",
+            params![workflow, result.task.id],
+        )?;
+    }
+    Ok(result)
+}
+
 /// The admission transaction: recheck authority and policy against the captured snapshot, then write once.
 fn write(
     database: &mut SuplexDatabase,
@@ -1818,79 +1998,50 @@ fn write(
 ) -> DatabaseResult<Creation> {
     let dry_run = raw.dry_run == Some(true);
     let request = &pending.resolved.request;
-    let mut prepared = {
-        let profiles = commands::select_local_profiles(database, &pending.project, request)?;
-        commands::prepare_local_user_task(
-            &principal.company_id,
-            &principal.agent_id,
-            &pending.project,
-            request,
-            profiles,
-            base_sha,
-            now,
-        )?
-    };
-    sources::apply(&mut prepared, source)?;
-    prepared.creator = TaskCreator::Agent(principal.agent_id.clone());
-    prepared.pull_request_dependencies = pending.pull_requests.clone();
-    prepared.request_hash = pending.hash.clone();
-    prepared.copied_from_task_id = copied_from.map(str::to_owned);
-    if let Some(configuration) = prepared.configuration.as_object_mut() {
-        let source = configuration.remove("source").unwrap_or(Value::Null);
-        let captured = configuration.remove("capturedAt").unwrap_or(Value::Null);
-        configuration.insert("hermesSelection".into(), pending.resolved.selection.clone());
-        configuration.insert("source".into(), source);
-        configuration.insert("capturedAt".into(), captured);
-    }
+    let mut prepared = prepare_agent_task(
+        database,
+        principal,
+        pending,
+        base_sha,
+        source,
+        copied_from,
+        now,
+    )?;
     let mut written = Vec::new();
     let result = database.transaction(true, |database| {
-        require_scope(database, principal, &principal.company_id, &request.project_id, true, None)?;
-        if let Some(id) = existing(database, &principal.company_id, &request.idempotency_key, &pending.hash, &principal.agent_id)? {
-            let task = task_json(database, &id)?;
-            let active = task["status"] == "active";
-            return Ok(Creation::Task { id, created: false, active });
+        require_scope(
+            database,
+            principal,
+            &principal.company_id,
+            &request.project_id,
+            true,
+            None,
+        )?;
+        if let Some(creation) =
+            replayed(database, principal, &request.idempotency_key, &pending.hash)?
+        {
+            return Ok(creation);
         }
-        let current = resolve(database, &principal.company_id, raw)?;
-        let project = projects::get_in_company(database, &principal.company_id, &request.project_id)?;
-        if current.signature != pending.resolved.signature || project_signature(&project) != project_signature(&pending.project) {
-            return Err(fail("Project task configuration changed", 409, "task_failure"));
-        }
-        prepared.root_profile = profile(database, current.request.root_profile_id.as_deref().unwrap_or_default(), "root")?;
-        prepared.worker_profile = profile(database, current.request.worker_profile_id.as_deref().unwrap_or_default(), "worker")?;
-        if [&prepared.root_profile, &prepared.worker_profile].iter().any(|profile| !crate::profiles::agent_profiles::allowed_profile(project.provider_policy.as_ref(), profile)) {
-            return Err(fail("Select agents with providers and logins allowed by this project", 422, "task_failure"));
-        }
-        for dependency in &request.depends_on {
-            require_readable(database, principal, dependency)?;
-        }
-        let result = match artifact_root {
-            Some(root) if !dry_run && !pending.images.is_empty() => {
-                repository::create_with_images(database, &prepared, root, &pending.images, now, &mut written)?
-            }
-            None if !dry_run && !pending.images.is_empty() => return Err("Artifact root is not configured".into()),
-            _ => repository::create(database, &prepared, now)?,
-        };
-        if result.created && request.workflow != crate::coordination::workflows::Workflow::Standard {
-            database.connection().execute(
-                "UPDATE suplex_task_controls SET workflow = ?1 WHERE task_id = ?2",
-                params![request.workflow, result.task.id],
-            )?;
-        }
+        let project = recheck_policy(database, principal, raw, pending, &mut prepared)?;
+        let result = insert_agent_task(
+            database,
+            &prepared,
+            pending,
+            artifact_root,
+            dry_run,
+            now,
+            &mut written,
+        )?;
         let task = task_json(database, &result.task.id)?;
         if dry_run {
-            let preview = merged(
-                json!({
-                    "dryRun": true, "projectId": task["projectId"], "project": {"id": project.id, "name": project.name},
-                    "title": task["title"],
-                    "workflow": {"id": pending.resolved.selection["workflowId"], "engine": task["workflow"], "name": pending.resolved.selection["workflowName"]},
-                    "templateId": pending.resolved.selection["templateId"], "deliveryTarget": task["deliveryTarget"],
-                    "branch": task["configuration"]["branch"], "dependsOn": task["dependsOn"],
-                }),
-                would_start(&task),
-            );
+            let preview = dry_run_preview(&task, &project, &pending.resolved.selection);
             return Err(Box::new(DryRunRollback(preview)));
         }
-        Ok(Creation::Task { id: result.task.id, created: result.created, active: task["status"] == "active" })
+        Ok(Creation::Task {
+            id: result.task.id,
+            created: result.created,
+            active: task["status"] == "active",
+        })
     });
     match result {
         Err(error) if error.is::<DryRunRollback>() => {

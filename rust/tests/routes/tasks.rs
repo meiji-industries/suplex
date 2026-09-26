@@ -816,6 +816,29 @@ mod tests {
         .await;
         assert_eq!(invalid_replacement.status(), StatusCode::BAD_REQUEST);
         let replacement_body = Bytes::from(json!({"sessionId":old_worker_id,"reason":"  Change strategy  ","handoff":"  Finish the checks  "}).to_string());
+        let replacement_pause = json!({
+            "kind":"task_limit", "reason":"budget",
+            "limits":{"budgetUsd":15,"maxTurns":40},
+            "usage":{"estimatedCostUsd":15,"admittedTurns":3},
+            "proposedLimits":{"budgetUsd":25,"maxTurns":40}
+        })
+        .to_string();
+        state.with_database(|database| {
+            database.connection().execute(
+                "UPDATE suplex_task_controls SET status = 'waiting_human', human_question = 'Raise limit?', human_question_id = 'replacement-limit', limit_pause_json = ?1 WHERE task_id = ?2",
+                rusqlite::params![replacement_pause, immediate_id],
+            )
+        }).unwrap();
+        let mut anonymous_headers = HeaderMap::new();
+        anonymous_headers.insert("content-type", "application/json".parse().unwrap());
+        let anonymous_replacement = replace_worker(
+            State(state.clone()),
+            Path(immediate_id.clone()),
+            anonymous_headers,
+            replacement_body.clone(),
+        )
+        .await;
+        assert_eq!(anonymous_replacement.status(), StatusCode::UNAUTHORIZED);
         let replaced = replace_worker(
             State(state.clone()),
             Path(immediate_id.clone()),
@@ -825,7 +848,19 @@ mod tests {
         .await;
         assert_eq!(replaced.status(), StatusCode::OK);
         let replaced_raw = to_bytes(replaced.into_body(), 128 * 1024).await.unwrap();
+        assert_eq!(
+            serde_json::from_slice::<Value>(&replaced_raw).unwrap()["status"],
+            "waiting_human"
+        );
         let replacement_id = state.with_database(|database| {
+            let control: (String, String, String) = database.connection().query_row(
+                "SELECT status,human_question_id,limit_pause_json FROM suplex_task_controls WHERE task_id = ?1",
+                [&immediate_id],
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+            ).unwrap();
+            assert_eq!(control.0, "waiting_human");
+            assert_eq!(control.1, "replacement-limit");
+            assert_eq!(control.2, replacement_pause);
             let worker =
                 crate::coordination::root_session_store::current_worker(database, &immediate_id)
                     .unwrap()
@@ -851,6 +886,12 @@ mod tests {
             to_bytes(replayed.into_body(), 128 * 1024).await.unwrap(),
             replaced_raw
         );
+        state.with_database(|database| {
+            database.connection().execute(
+                "UPDATE suplex_task_controls SET status = 'active', human_question = NULL, human_question_id = NULL, limit_pause_json = NULL WHERE task_id = ?1",
+                [&immediate_id],
+            )
+        }).unwrap();
         state
             .with_database(|database| {
                 database.connection().execute(

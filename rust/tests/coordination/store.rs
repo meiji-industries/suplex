@@ -333,6 +333,98 @@ mod tests {
             current_worker(&database, &task.id).unwrap().unwrap().id,
             second.id.as_str()
         );
+        database.connection().execute(
+            "INSERT INTO suplex_provider_instances (id,provider,label,home_directory,created_at,updated_at) VALUES ('client','claude-code','Client','/dedicated/client',?1,?1)",
+            [rfc3339_millis(now)],
+        ).unwrap();
+        database.connection().execute(
+            "INSERT INTO suplex_profiles (id,name,role,avatar_seed,provider,provider_instance_id,model,reasoning_level,service_tier,created_at,updated_at) VALUES ('client-worker','Client','worker','client','claude-code','client','sonnet','high','default',?1,?1)",
+            [rfc3339_millis(now)],
+        ).unwrap();
+        let policy =
+            serde_json::json!({"allowedProviders":["claude-code"],"allowedInstanceIds":["client"]})
+                .to_string();
+        database.connection().execute(
+            "UPDATE suplex_tasks SET configuration_json = json_set(configuration_json, '$.providerPolicy', json(?1)) WHERE id = ?2",
+            params![policy, task.id],
+        ).unwrap();
+        let denied = replace_worker(
+            &mut database,
+            &task.id,
+            &TaskWorkerReplacementBody {
+                session_id: second.id.clone(),
+                reason: "Try disallowed login".into(),
+                handoff: None,
+                worker_profile_id: Some("alternate-worker".into()),
+            },
+            now,
+        );
+        assert!(
+            denied
+                .unwrap_err()
+                .to_string()
+                .contains("allowed by this project")
+        );
+        let dedicated = replace_worker(
+            &mut database,
+            &task.id,
+            &TaskWorkerReplacementBody {
+                session_id: second.id.clone(),
+                reason: "Use client login".into(),
+                handoff: None,
+                worker_profile_id: Some("client-worker".into()),
+            },
+            now,
+        )
+        .unwrap();
+        assert_eq!(
+            dedicated.profile.as_ref().unwrap().provider_instance_id,
+            Some(Some("client".into()))
+        );
+        assert_eq!(
+            dedicated.profile.as_ref().unwrap().instance_home_directory,
+            Some(Some("/dedicated/client".into()))
+        );
+        let inherited = replace_worker(
+            &mut database,
+            &task.id,
+            &TaskWorkerReplacementBody {
+                session_id: dedicated.id.clone(),
+                reason: "Fresh native session".into(),
+                handoff: None,
+                worker_profile_id: None,
+            },
+            now,
+        )
+        .unwrap();
+        assert_eq!(inherited.profile, dedicated.profile);
+        database.connection().execute(
+            "UPDATE suplex_task_sessions SET stopped_at = ?1,lifecycle = 'stopped' WHERE id = ?2",
+            params![rfc3339_millis(now), inherited.id],
+        ).unwrap();
+        let inspect_again = replace_worker(
+            &mut database,
+            &task.id,
+            &TaskWorkerReplacementBody {
+                session_id: inherited.id.clone(),
+                reason: "Fresh native inspection".into(),
+                handoff: None,
+                worker_profile_id: None,
+            },
+            now,
+        )
+        .unwrap();
+        assert!(!worker_replacement_ready(&database, &inspect_again.id).unwrap());
+        let retired: (Option<String>, Option<String>) = database
+            .connection()
+            .query_row(
+                "SELECT stop_requested_at,stopped_at FROM suplex_task_sessions WHERE id = ?1",
+                [&inherited.id],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .unwrap();
+        assert!(retired.0.is_some());
+        assert!(retired.1.is_none());
         drop(database);
         let _ = std::fs::remove_file(&filename);
         let _ = std::fs::remove_file(filename.with_extension("sqlite-wal"));

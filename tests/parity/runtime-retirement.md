@@ -26,6 +26,8 @@ Source comparison revision: `6bb0a43f`. `cargo test --lib` runs the embedded Rus
 | `worker-environment.test.ts` | `runtimes/git_guard.rs`: read and mutation policy, atomic executable refresh, real task rebase and conflict abort, all blocked push forms against an unchanged remote | rebase and refresh ported |
 | `task-archive-displays.test.ts` | `tasks/archive/displays.rs`: workspace and pane discovery, live ownership, missing observations, shell cleanup, command termination and escalation, group refusal fallback and retry | direct; escalation and unowned process ported |
 | `task-archive-displays.real.test.ts` | Ignored `tasks/archive/displays.rs::archive_closes_a_real_owned_herdr_workspace_and_its_process`: isolated live workspace, two metadata-bound panes, real sleep process, workspace/pane closure, process death, idempotent close | native real proof ported; unrun here |
+| `worker-replacement.test.ts` | `coordination/root_session_store.rs` via `rust/tests/coordination/store.rs`: profile policy and dedicated login, saved handoff and native readiness, idempotency, reopen, repeated/stopped replacement and frozen Coordinator prompt hashes | policy and stopped-session cases ported |
+| `worker-replacement-api.test.ts` | `http/routes/tasks.rs` via `rust/tests/routes/tasks.rs`: authenticated route, durable replacement, status and budget pause preservation, idempotent response, cleanup readiness | auth and pause cases ported |
 
 The five Claude files above are retired. `cargo test --lib runtimes::claude_code` passed 25/25 on this checkout. The old live-history test also asserted the identity of a cached JavaScript array; Rust returns an owned value, while the observable completed-line behavior remains covered.
 
@@ -37,6 +39,8 @@ The Worker Git guard file is retired. `cargo test --lib runtimes::git_guard` pas
 
 The deterministic and real Herdr archive-display files are retired. `cargo test --lib tasks::archive::displays` passed 12 tests with one ignored live test. The live test compiles but was not run: `HERDR_ENV` is absent, and `HERDR.md` permits Herdr control only from a managed pane. Run its ignored Rust test from a Herdr-managed pane to renew the external proof.
 
+The Worker replacement service and API files are retired. `cargo test --lib worker_and_coordinator_replacement_preserve_handoffs_and_native_readiness` and `cargo test --lib local_backlog_create_fetches_git_and_returns_full_task_shape` both passed with the new policy, stopped-session, authenticated-route, and limit-pause assertions.
+
 ## Remaining assigned files under review
 
-`codex-runtime.test.ts`, `delivery-operations.test.ts`, `github-delivery.test.ts`, `root-bridge.test.ts`, `root-controller-delegation.test.ts`, `root-controller-lifecycle.test.ts`, `root-controller-limits.test.ts`, `root-controller-recovery.test.ts`, `task-host.test.ts`, `worker-replacement-api.test.ts`, `worker-replacement.test.ts`, `workflows-delegation.test.ts`, `workflows-delivery-repairs.test.ts`, `workflows-delivery.test.ts`, and `workflows-intake.test.ts`. These need a file-by-file coverage decision before deletion.
+`codex-runtime.test.ts`, `delivery-operations.test.ts`, `github-delivery.test.ts`, `root-bridge.test.ts`, `root-controller-delegation.test.ts`, `root-controller-lifecycle.test.ts`, `root-controller-limits.test.ts`, `root-controller-recovery.test.ts`, `task-host.test.ts`, `workflows-delegation.test.ts`, `workflows-delivery-repairs.test.ts`, `workflows-delivery.test.ts`, and `workflows-intake.test.ts`. These need a file-by-file coverage decision before deletion.

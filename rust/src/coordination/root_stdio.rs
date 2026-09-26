@@ -14,7 +14,7 @@ use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Map, Value, json};
 
 use crate::{
-    delivery,
+    delivery::{self, DeliveryOperation},
     http::contracts::typed::tasks::TaskWorkerReplacementBody,
     identity::auth::js_trim,
     platform::database::{OpenMode, SuplexDatabase},
@@ -45,7 +45,7 @@ enum RootCall {
     DelegatePlanners,
     ReplaceWorker(TaskWorkerReplacementBody),
     RequestDelivery {
-        operation: &'static str,
+        operation: DeliveryOperation,
         expected_head: Option<String>,
         review: Option<delivery::inspection::ReviewRange>,
         pull_request_title: Option<String>,
@@ -141,34 +141,6 @@ struct DeliveryInput {
     pull_request_title: Option<String>,
     #[serde(default, deserialize_with = "present")]
     pull_request_body: Option<String>,
-}
-
-#[derive(Deserialize)]
-#[serde(rename_all = "snake_case")]
-enum DeliveryOperation {
-    InspectDeliveryDiff,
-    CompleteLocalWork,
-    PushBranch,
-    CreateOrAdoptPullRequest,
-    ObservePullRequest,
-    ObserveChecks,
-    RequestReview,
-    MergePullRequest,
-}
-
-impl DeliveryOperation {
-    fn name(&self) -> &'static str {
-        match self {
-            Self::InspectDeliveryDiff => "inspect_delivery_diff",
-            Self::CompleteLocalWork => "complete_local_work",
-            Self::PushBranch => "push_branch",
-            Self::CreateOrAdoptPullRequest => "create_or_adopt_pull_request",
-            Self::ObservePullRequest => "observe_pull_request",
-            Self::ObserveChecks => "observe_checks",
-            Self::RequestReview => "request_review",
-            Self::MergePullRequest => "merge_pull_request",
-        }
-    }
 }
 
 #[derive(Deserialize)]
@@ -346,7 +318,7 @@ fn parse_call(mut input: Map<String, Value>) -> Result<RootCall, String> {
         WireCall::RequestDelivery(input) => {
             validate_delivery_extras(&input)?;
             Ok(RootCall::RequestDelivery {
-                operation: input.operation.name(),
+                operation: input.operation,
                 expected_head: input.expected_head,
                 review: input
                     .review
@@ -561,7 +533,7 @@ impl RootBridgeServer {
                 RootCall::DelegatePlanners => runtime
                     .block_on(root_controller::delegate_planners(&database_path, &artifact_root, &root, &token))
                     .map_err(|error| error.to_string()),
-                RootCall::RequestDelivery { operation: "inspect_delivery_diff", .. }
+                RootCall::RequestDelivery { operation: DeliveryOperation::InspectDeliveryDiff, .. }
                     if root_session_store::root_observation_rows(&database, &root.task_id)
                         .is_ok_and(|rows| rows.control["workflow"] != "standard") =>
                 {
@@ -780,7 +752,7 @@ mod tests {
                     .clone()
             ),
             Ok(RootCall::RequestDelivery {
-                operation: "inspect_delivery_diff",
+                operation: DeliveryOperation::InspectDeliveryDiff,
                 ..
             })
         ));
@@ -792,7 +764,7 @@ mod tests {
                     .clone()
             ),
             Ok(RootCall::RequestDelivery {
-                operation: "merge_pull_request",
+                operation: DeliveryOperation::MergePullRequest,
                 ..
             })
         ));

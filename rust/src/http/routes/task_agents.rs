@@ -2,6 +2,7 @@
 
 use crate::shared::time::rfc3339_millis;
 use crate::tasks::TaskError;
+use crate::tasks::control::TaskStatus;
 use std::{error::Error, path::PathBuf};
 
 use axum::{
@@ -139,7 +140,7 @@ fn respond(result: Result<Value, Box<dyn Error>>, cookies: Vec<String>) -> Respo
 
 struct AgentTask {
     id: String,
-    status: String,
+    status: TaskStatus,
     rows: RootObservationRows,
 }
 
@@ -224,27 +225,30 @@ fn agents(task: &AgentTask, database_path: &std::path::Path) -> Vec<Value> {
         .iter()
         .filter(|session| session["current"] == true)
         .map(|session| {
-            let (status, changed_at) =
-                if session["lifecycle"] == "stopped" || session["lifecycle"] == "cancelled" {
-                    let changed = if session["stoppedAt"].is_null() {
-                        session["stopRequestedAt"].clone()
-                    } else {
-                        session["stoppedAt"].clone()
-                    };
-                    ("stopped", changed)
-                } else if session["nativeSessionId"].is_null() {
-                    ("queued", Value::Null)
+            let (status, changed_at) = if session["lifecycle"] == "stopped"
+                || session["lifecycle"] == "cancelled"
+            {
+                let changed = if session["stoppedAt"].is_null() {
+                    session["stopRequestedAt"].clone()
                 } else {
-                    match native_status(database_path, session) {
-                        Some(("busy", _)) => ("working", Value::Null),
-                        Some(("retry", _)) => ("retrying", Value::Null),
-                        Some(_) if session["kind"] == "root" && task.status == "waiting_human" => {
-                            ("waiting_human", Value::Null)
-                        }
-                        Some((_, time)) => ("idle", iso_timestamp(time)),
-                        None => ("unknown", Value::Null),
-                    }
+                    session["stoppedAt"].clone()
                 };
+                ("stopped", changed)
+            } else if session["nativeSessionId"].is_null() {
+                ("queued", Value::Null)
+            } else {
+                match native_status(database_path, session) {
+                    Some(("busy", _)) => ("working", Value::Null),
+                    Some(("retry", _)) => ("retrying", Value::Null),
+                    Some(_)
+                        if session["kind"] == "root" && task.status == TaskStatus::WaitingHuman =>
+                    {
+                        ("waiting_human", Value::Null)
+                    }
+                    Some((_, time)) => ("idle", iso_timestamp(time)),
+                    None => ("unknown", Value::Null),
+                }
+            };
             json!({
                 "id":session["id"], "role":session["kind"],
                 "advisorRole":session["advisorRole"], "label":label(session),
@@ -392,7 +396,7 @@ mod tests {
         std::fs::write(runtime.join("server.json"), reference.to_string()).unwrap();
         let task = AgentTask {
             id: "task".into(),
-            status: "running".into(),
+            status: TaskStatus::Active,
             rows: RootObservationRows {
                 control: Value::Null,
                 context: Value::Null,

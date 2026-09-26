@@ -974,7 +974,7 @@ pub async fn inspect_workflow_delivery_diff(
         .execute(
             root,
             Some(owner_token),
-            "inspect_delivery_diff",
+            crate::delivery::DeliveryOperation::InspectDeliveryDiff,
             None,
             None,
             None,

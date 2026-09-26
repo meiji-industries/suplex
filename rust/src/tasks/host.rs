@@ -3,6 +3,7 @@
 
 use crate::shared::time::{now_millis_rfc3339, rfc3339_millis};
 use crate::tasks::TaskError;
+use crate::tasks::control::{TaskStatus, TurnStatus};
 use std::{
     collections::{HashMap, HashSet},
     io,
@@ -219,7 +220,7 @@ fn retired_owner_can_stop(saved_start: Option<&str>, observed: ProcessOwnerObser
 }
 
 fn dispatch_state(turn: &RootTurn) -> DispatchState {
-    if turn.status == "pending_prompt" && turn.dispatch_attempt.is_none() {
+    if turn.status == TurnStatus::PendingPrompt && turn.dispatch_attempt.is_none() {
         DispatchState::NotSubmitted
     } else {
         DispatchState::Ambiguous
@@ -236,14 +237,14 @@ fn observe_or_recover_fenced(
     owner: &str,
 ) -> DatabaseResult<(PromptObservation, bool)> {
     let observed = observe_turn(database_path, harness, session, native_id, turn)?;
-    if turn.status == "pending_prompt" && turn.dispatch_attempt.is_none() {
+    if turn.status == TurnStatus::PendingPrompt && turn.dispatch_attempt.is_none() {
         let replayable = observed.retry_allowed;
         return Ok((observed, replayable));
     }
     let Some(attempt) = turn.dispatch_attempt.as_ref() else {
         return Ok((observed, false));
     };
-    if turn.status != "unknown" || observed.admission_observed {
+    if turn.status != TurnStatus::Unknown || observed.admission_observed {
         return Ok((observed, false));
     }
     let claimed_at = DateTime::parse_from_rfc3339(&attempt.claimed_at)?;
@@ -1390,7 +1391,7 @@ async fn stop_retired_sessions(database_path: &Path, task_id: &str) -> DatabaseR
             Err(error) => failures.push(error.to_string()),
         }
     }
-    let (status, worktree): (String, Option<String>) = {
+    let (status, worktree): (TaskStatus, Option<String>) = {
         let database = SuplexDatabase::open(database_path, OpenMode::ReadOnly)?;
         database.connection().query_row(
             "SELECT status,json_extract(worktree_json,'$.path') FROM suplex_task_controls WHERE task_id = ?1",
@@ -1398,7 +1399,7 @@ async fn stop_retired_sessions(database_path: &Path, task_id: &str) -> DatabaseR
         )?
     };
     if failures.is_empty()
-        && status == "cancelled"
+        && status == TaskStatus::Cancelled
         && !stopped.is_empty()
         && outstanding_count == stopped.len()
         && let Some(path) = worktree
@@ -1414,7 +1415,7 @@ async fn stop_retired_sessions(database_path: &Path, task_id: &str) -> DatabaseR
             rusqlite::params![time, session_id],
         )?;
     }
-    if !failures.is_empty() && ["cancelled", "delivered"].contains(&status.as_str()) {
+    if !failures.is_empty() && matches!(status, TaskStatus::Cancelled | TaskStatus::Delivered) {
         return Err(TaskError::internal(format!(
             "Some agent sessions could not be stopped: {}",
             failures.join("; ")
@@ -1579,7 +1580,7 @@ mod tests {
             session_id: "session_one".into(),
             generation: 1,
             prompt_text: "Work".into(),
-            status: "pending_prompt".into(),
+            status: TurnStatus::PendingPrompt,
             dispatch_attempt: None,
             native_turn_id: None,
         };
@@ -1589,7 +1590,7 @@ mod tests {
             claimed_at: "now".into(),
         });
         assert_eq!(dispatch_state(&turn), DispatchState::Ambiguous);
-        turn.status = "unknown".into();
+        turn.status = TurnStatus::Unknown;
         assert_eq!(dispatch_state(&turn), DispatchState::Ambiguous);
     }
 
@@ -1634,7 +1635,7 @@ mod tests {
             session_id: "session-one".into(),
             generation: 1,
             prompt_text: String::new(),
-            status: "prompted".into(),
+            status: TurnStatus::Prompted,
             dispatch_attempt: Some(PromptDispatchAttempt {
                 server_generation: "database-attempt".into(),
                 claimed_at: "now".into(),
@@ -2702,7 +2703,7 @@ mod tests {
             let turn = root_session_store::pending_turns(&database, &root.id)
                 .unwrap()
                 .remove(0);
-            assert_eq!(turn.status, "pending_prompt");
+            assert_eq!(turn.status, TurnStatus::PendingPrompt);
             assert!(turn.dispatch_attempt.is_none());
         }
         let first =
@@ -3188,7 +3189,7 @@ mod tests {
                 |_| {},
             )
             .unwrap();
-            assert_eq!(cancelled.status, "cancelled");
+            assert_eq!(cancelled.status, TaskStatus::Cancelled);
             let pending: i64 = database.connection().query_row(
                 "SELECT COUNT(*) FROM suplex_task_turns WHERE task_id = ?1 AND status IN ('pending_prompt','prompted','unknown')",
                 [&failing_task], |row| row.get(0),

@@ -6,6 +6,20 @@ pub mod operations;
 #[cfg(test)]
 mod tests;
 
+crate::shared::wire_enum! {
+    /// TypeScript `DeliveryOperation`: the Coordinator's delivery requests.
+    pub enum DeliveryOperation {
+        InspectDeliveryDiff = "inspect_delivery_diff",
+        CompleteLocalWork = "complete_local_work",
+        PushBranch = "push_branch",
+        CreateOrAdoptPullRequest = "create_or_adopt_pull_request",
+        ObservePullRequest = "observe_pull_request",
+        ObserveChecks = "observe_checks",
+        RequestReview = "request_review",
+        MergePullRequest = "merge_pull_request",
+    }
+}
+
 /// Delivery refusals. They reach the Coordinator as tool text.
 #[derive(Debug, Eq, PartialEq, thiserror::Error)]
 pub enum DeliveryError {

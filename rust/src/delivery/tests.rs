@@ -16,7 +16,7 @@ use chrono::Utc;
 use git2::{Repository, Signature};
 use serde_json::{Value, json};
 
-use super::{inspection::ReviewRange, operations::DeliveryOperations};
+use super::{DeliveryOperation, inspection::ReviewRange, operations::DeliveryOperations};
 use crate::{
     coordination::{root_bridge::RootIdentity, root_session_store},
     identity::auth,
@@ -349,7 +349,15 @@ async fn operations(fixture: &Fixture) -> (DeliveryOperations, Shared) {
 
 async fn reviewed(operations: &DeliveryOperations, root: &RootIdentity) -> (String, ReviewRange) {
     let diff = operations
-        .execute(root, None, "inspect_delivery_diff", None, None, None, None)
+        .execute(
+            root,
+            None,
+            DeliveryOperation::InspectDeliveryDiff,
+            None,
+            None,
+            None,
+            None,
+        )
         .await
         .unwrap();
     assert_eq!(diff["files"], json!(["README.md"]));
@@ -369,7 +377,15 @@ async fn standard_task_pushes_and_opens_a_draft_pull_request() {
     let root = &fixture.root;
     let (head, review) = reviewed(&operations, root).await;
     let unreviewed = operations
-        .execute(root, None, "push_branch", Some(&head), None, None, None)
+        .execute(
+            root,
+            None,
+            DeliveryOperation::PushBranch,
+            Some(&head),
+            None,
+            None,
+            None,
+        )
         .await
         .unwrap_err();
     assert!(unreviewed.to_string().contains("inspect_delivery_diff"));
@@ -377,7 +393,7 @@ async fn standard_task_pushes_and_opens_a_draft_pull_request() {
         .execute(
             root,
             None,
-            "push_branch",
+            DeliveryOperation::PushBranch,
             Some(&head),
             Some(&review),
             None,
@@ -391,7 +407,7 @@ async fn standard_task_pushes_and_opens_a_draft_pull_request() {
         .execute(
             root,
             None,
-            "push_branch",
+            DeliveryOperation::PushBranch,
             Some(&head),
             Some(&review),
             None,
@@ -404,7 +420,7 @@ async fn standard_task_pushes_and_opens_a_draft_pull_request() {
         .execute(
             root,
             None,
-            "create_or_adopt_pull_request",
+            DeliveryOperation::CreateOrAdoptPullRequest,
             Some(&head),
             Some(&review),
             None,
@@ -417,7 +433,7 @@ async fn standard_task_pushes_and_opens_a_draft_pull_request() {
         .execute(
             root,
             None,
-            "create_or_adopt_pull_request",
+            DeliveryOperation::CreateOrAdoptPullRequest,
             Some(&head),
             Some(&review),
             Some("  Add a verified line  "),
@@ -452,7 +468,7 @@ async fn ready_and_merged_targets_complete_through_github_state() {
         .execute(
             root,
             None,
-            "push_branch",
+            DeliveryOperation::PushBranch,
             Some(&head),
             Some(&review),
             None,
@@ -464,7 +480,7 @@ async fn ready_and_merged_targets_complete_through_github_state() {
         .execute(
             root,
             None,
-            "create_or_adopt_pull_request",
+            DeliveryOperation::CreateOrAdoptPullRequest,
             Some(&head),
             Some(&review),
             Some("Add line"),
@@ -479,7 +495,15 @@ async fn ready_and_merged_targets_complete_through_github_state() {
         "an open draft does not reach the merged target"
     );
     let checks = operations
-        .execute(root, None, "observe_checks", None, None, None, None)
+        .execute(
+            root,
+            None,
+            DeliveryOperation::ObserveChecks,
+            None,
+            None,
+            None,
+            None,
+        )
         .await
         .unwrap();
     assert_eq!(checks["checkSummary"], "1 successful, 0 pending, 0 failing");
@@ -487,7 +511,7 @@ async fn ready_and_merged_targets_complete_through_github_state() {
         .execute(
             root,
             None,
-            "request_review",
+            DeliveryOperation::RequestReview,
             Some(&head),
             Some(&review),
             None,
@@ -502,7 +526,7 @@ async fn ready_and_merged_targets_complete_through_github_state() {
         .execute(
             root,
             None,
-            "merge_pull_request",
+            DeliveryOperation::MergePullRequest,
             Some(&head),
             Some(&review),
             None,
@@ -545,7 +569,7 @@ async fn direct_merge_completes_and_stale_local_pull_request_is_replaced() {
         .execute(
             root,
             None,
-            "push_branch",
+            DeliveryOperation::PushBranch,
             Some(&head),
             Some(&review),
             None,
@@ -557,7 +581,7 @@ async fn direct_merge_completes_and_stale_local_pull_request_is_replaced() {
         .execute(
             root,
             None,
-            "create_or_adopt_pull_request",
+            DeliveryOperation::CreateOrAdoptPullRequest,
             Some(&head),
             Some(&review),
             Some("Add line"),
@@ -574,7 +598,7 @@ async fn direct_merge_completes_and_stale_local_pull_request_is_replaced() {
         .execute(
             root,
             None,
-            "merge_pull_request",
+            DeliveryOperation::MergePullRequest,
             Some(&head),
             Some(&review),
             None,
@@ -638,7 +662,10 @@ async fn observing_a_pull_request_another_task_names_records_the_observation() {
     let (operations, _fake) = operations(&fixture).await;
     let root = &fixture.root;
     let (head, review) = reviewed(&operations, root).await;
-    for operation in ["push_branch", "create_or_adopt_pull_request"] {
+    for operation in [
+        DeliveryOperation::PushBranch,
+        DeliveryOperation::CreateOrAdoptPullRequest,
+    ] {
         operations
             .execute(
                 root,

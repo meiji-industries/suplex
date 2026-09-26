@@ -40,6 +40,23 @@ pub const WORKFLOWS: [WorkflowDefinition; 5] = [
     },
 ];
 
+crate::shared::wire_enum! {
+    /// TypeScript `WorkflowId`.
+    pub enum Workflow {
+        Standard = "standard",
+        DirectBuild = "direct_build",
+        IndependentReview = "independent_review",
+        CompetingPlans = "competing_plans",
+        RefinePullRequest = "refine_pull_request",
+    }
+}
+
+impl Workflow {
+    pub fn definition(self) -> &'static WorkflowDefinition {
+        workflow_definition(self.as_str()).expect("every workflow is in the catalog")
+    }
+}
+
 pub fn workflow_definition(workflow: &str) -> Option<&'static WorkflowDefinition> {
     WORKFLOWS
         .iter()

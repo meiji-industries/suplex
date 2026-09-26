@@ -1514,7 +1514,7 @@ pub async fn create_task_from_trigger<D: Db>(
                 dispatches::link_task(database, &dispatch.id, &task.id)
             })
         })?;
-        return Ok((task.id, task.status));
+        return Ok((task.id, task.status.to_string()));
     }
     let project = db(database, |database| {
         let project = projects::get(database, &authority, &dispatch.project_id)?;
@@ -1635,7 +1635,7 @@ fn create_captured(
     if let Ok(id) = receiver.try_recv() {
         wake(id);
     }
-    Ok((task.id, task.status))
+    Ok((task.id, task.status.to_string()))
 }
 
 /// `startTaskFromGithubTrigger`: start the linked task once the pull request still matches its capture.
@@ -1753,7 +1753,7 @@ pub async fn start_task_from_trigger<D: Db>(
                     let _ = sender.send(id);
                 },
             )?;
-            Ok((task.id, task.status))
+            Ok((task.id, task.status.to_string()))
         })
     })?;
     if let Ok(id) = receiver.try_recv() {

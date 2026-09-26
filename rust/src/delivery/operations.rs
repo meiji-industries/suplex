@@ -5,7 +5,7 @@
 //! range and fresh local facts. Bitbucket repositories deliver through the
 //! Bitbucket release port.
 
-use super::DeliveryError;
+use super::{DeliveryError, DeliveryOperation};
 use crate::shared::hash::sha256_hex;
 use crate::shared::time::{now_millis_rfc3339, rfc3339_millis};
 use std::{
@@ -36,6 +36,7 @@ use crate::{
     },
     platform::database::{DatabaseResult, OpenMode, SuplexDatabase},
     tasks::{
+        control::{DeliveryTarget, SessionLifecycle, TaskStatus},
         repository,
         worktree::{self, LocalRevisionObservation},
     },
@@ -230,9 +231,9 @@ pub fn check_summary(observed: &Observation) -> String {
 }
 
 /// TypeScript `supportsDeliveryTarget`.
-pub fn supports_delivery_target(connection: Option<&Value>, target: &str) -> bool {
+pub fn supports_delivery_target(connection: Option<&Value>, target: DeliveryTarget) -> bool {
     connection.and_then(|connection| connection["kind"].as_str()) != Some("bitbucket")
-        || (target != "pull_request_ready" && target != "merged")
+        || target.bitbucket_supports()
 }
 
 /// TypeScript `deliveryWaitFingerprint`.
@@ -611,12 +612,12 @@ impl DeliveryOperations {
             let row = database.connection().query_row(
                 "SELECT c.status, c.workflow_state_json, s.id, s.generation, s.lifecycle FROM suplex_task_controls c LEFT JOIN suplex_task_sessions s ON s.task_id = c.task_id AND s.kind = 'root' AND s.is_current = 1 WHERE c.task_id = ?1",
                 [task_id],
-                |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, Option<String>>(2)?, row.get::<_, Option<i64>>(3)?, row.get::<_, Option<String>>(4)?)),
+                |row| Ok((row.get::<_, TaskStatus>(0)?, row.get::<_, String>(1)?, row.get::<_, Option<String>>(2)?, row.get::<_, Option<i64>>(3)?, row.get::<_, Option<SessionLifecycle>>(4)?)),
             )?;
             let (status, state, root_id, generation, lifecycle) = row;
             let mut state: Value = serde_json::from_str(&state)?;
             let (Some(root_id), Some(generation)) = (root_id, generation) else { return Ok(false) };
-            if status != "active" || lifecycle.as_deref() == Some("cancelled") || !Self::same_wait(&state["deliveryWait"], expected) {
+            if status != TaskStatus::Active || lifecycle == Some(SessionLifecycle::Cancelled) || !Self::same_wait(&state["deliveryWait"], expected) {
                 return Ok(false);
             }
             state["deliveryWait"] = Value::Null;
@@ -1129,7 +1130,7 @@ impl DeliveryOperations {
         &self,
         root: &RootIdentity,
         owner_token: Option<&str>,
-        operation: &str,
+        operation: DeliveryOperation,
         expected_head: Option<&str>,
         review: Option<&ReviewRange>,
         pull_request_title: Option<&str>,
@@ -1142,7 +1143,7 @@ impl DeliveryOperations {
             owner_token: None,
         })?;
         let control = self.get(task_id)?;
-        if operation == "inspect_delivery_diff" {
+        if operation == DeliveryOperation::InspectDeliveryDiff {
             let path = control["worktree"]["path"]
                 .as_str()
                 .ok_or_else(|| delivery_failure("worktree_missing", "The task has no worktree"))?;
@@ -1152,7 +1153,7 @@ impl DeliveryOperations {
                 self.delivery_diff(&control, &local.head_sha).await?,
             )?);
         }
-        if operation == "complete_local_work" {
+        if operation == DeliveryOperation::CompleteLocalWork {
             let Some(token) = owner_token else {
                 return Err(DeliveryError::internal("task_tool_owner_lost").into());
             };
@@ -1164,7 +1165,7 @@ impl DeliveryOperations {
             }
             return complete_local_work(&self.database_path, root, token, expected_head).await;
         }
-        let known = if operation == "push_branch" {
+        let known = if operation == DeliveryOperation::PushBranch {
             Value::Null
         } else {
             self.observe_known_pull(
@@ -1217,10 +1218,10 @@ impl DeliveryOperations {
         }
         let mutation = matches!(
             operation,
-            "push_branch"
-                | "create_or_adopt_pull_request"
-                | "request_review"
-                | "merge_pull_request"
+            DeliveryOperation::PushBranch
+                | DeliveryOperation::CreateOrAdoptPullRequest
+                | DeliveryOperation::RequestReview
+                | DeliveryOperation::MergePullRequest
         );
         let mut actual = None;
         if mutation {
@@ -1234,7 +1235,7 @@ impl DeliveryOperations {
             let diff = match self.delivery_diff(&refreshed, &local.head_sha).await {
                 Ok(diff) => diff,
                 Err(error)
-                    if operation == "merge_pull_request"
+                    if operation == DeliveryOperation::MergePullRequest
                         && !refreshed["pullRequest"].is_null()
                         && Self::observation_unavailable(error.as_ref()) =>
                 {
@@ -1271,12 +1272,15 @@ impl DeliveryOperations {
                     head_sha: None,
                     clean: local.clean,
                 },
-                !matches!(operation, "push_branch" | "create_or_adopt_pull_request"),
+                !matches!(
+                    operation,
+                    DeliveryOperation::PushBranch | DeliveryOperation::CreateOrAdoptPullRequest
+                ),
             )?;
             self.recheck(&recheck)?;
             actual = Some(range);
         }
-        let pull = if operation == "push_branch" {
+        let pull = if operation == DeliveryOperation::PushBranch {
             Value::Null
         } else {
             self.observe_pull(&refreshed, &repository, &local.branch)
@@ -1305,8 +1309,8 @@ impl DeliveryOperations {
             self.update_workflow_state(task_id, |state| state["acceptedDelivery"] = accepted)?;
         }
         match operation {
-            "observe_pull_request" => Ok(pull),
-            "push_branch" => {
+            DeliveryOperation::ObservePullRequest => Ok(pull),
+            DeliveryOperation::PushBranch => {
                 self.push(
                     &recheck,
                     &refreshed,
@@ -1316,7 +1320,7 @@ impl DeliveryOperations {
                 )
                 .await
             }
-            "create_or_adopt_pull_request" => {
+            DeliveryOperation::CreateOrAdoptPullRequest => {
                 self.create_or_adopt(
                     &recheck,
                     &refreshed,
@@ -1329,8 +1333,10 @@ impl DeliveryOperations {
                 )
                 .await
             }
-            "observe_checks" => self.observe_checks(&refreshed, &repository, &local).await,
-            "request_review" => {
+            DeliveryOperation::ObserveChecks => {
+                self.observe_checks(&refreshed, &repository, &local).await
+            }
+            DeliveryOperation::RequestReview => {
                 self.request_review(
                     &recheck,
                     &refreshed,
@@ -1341,7 +1347,7 @@ impl DeliveryOperations {
                 )
                 .await
             }
-            "merge_pull_request" => {
+            DeliveryOperation::MergePullRequest => {
                 self.merge(
                     &recheck,
                     &refreshed,
@@ -1352,7 +1358,9 @@ impl DeliveryOperations {
                 )
                 .await
             }
-            _ => Err(DeliveryError::internal("delivery_operation_invalid").into()),
+            DeliveryOperation::InspectDeliveryDiff | DeliveryOperation::CompleteLocalWork => {
+                Err(DeliveryError::internal("delivery_operation_invalid").into())
+            }
         }
     }
 
@@ -2322,10 +2330,13 @@ pub(crate) mod tests {
         let bitbucket = json!({"kind":"bitbucket"});
         assert!(supports_delivery_target(
             Some(&bitbucket),
-            "pull_request_draft"
+            DeliveryTarget::PullRequestDraft
         ));
-        assert!(!supports_delivery_target(Some(&bitbucket), "merged"));
-        assert!(supports_delivery_target(None, "merged"));
+        assert!(!supports_delivery_target(
+            Some(&bitbucket),
+            DeliveryTarget::Merged
+        ));
+        assert!(supports_delivery_target(None, DeliveryTarget::Merged));
         assert!(valid_title("Add retries"));
         assert!(!valid_title("Two\nlines"));
         assert!(valid_body(

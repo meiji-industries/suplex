@@ -3,6 +3,7 @@
 
 use crate::shared::time::now_millis_rfc3339;
 use crate::tasks::TaskError;
+use crate::tasks::control::TaskStatus;
 use std::{
     collections::HashSet,
     path::{Path, PathBuf},
@@ -219,7 +220,13 @@ pub fn unarchive_task(
         if in_progress(task_id) {
             return Err(failure("Archive cleanup is in progress", 409));
         }
-        if ["backlog", "queued", "active", "waiting_human"].contains(&task.status.as_str()) {
+        if matches!(
+            task.status,
+            TaskStatus::Backlog
+                | TaskStatus::Queued
+                | TaskStatus::Active
+                | TaskStatus::WaitingHuman
+        ) {
             repository::assert_task_pull_requests_available(database, task_id)?;
         }
         let now = now_millis_rfc3339();
@@ -258,7 +265,7 @@ pub fn archive_task(
     if in_progress(task_id) {
         return Err(failure("Archive cleanup is in progress", 409));
     }
-    if !["backlog", "queued", "cancelled", "delivered"].contains(&task.status.as_str()) {
+    if !task.status.archivable() {
         return Err(failure("Cancel the task before archiving it", 409));
     }
     let _guard = ArchiveGuard::acquire(task_id)?;
@@ -299,7 +306,7 @@ pub fn archive_task(
     let mut database = SuplexDatabase::open(database_path, OpenMode::ReadWrite)?;
     database.transaction(true, |database| {
         let (current, _) = task_scope(database, authority, task_id)?;
-        if !["backlog", "queued", "cancelled", "delivered"].contains(&current.status.as_str()) {
+        if !current.status.archivable() {
             return Err(failure_code("The task changed while its worktree was removed", 409, "illegal_command"));
         }
         let now = now_millis_rfc3339();

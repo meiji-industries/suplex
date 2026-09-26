@@ -119,7 +119,7 @@ fn role_parts(
     match (role, workflow.advisor) {
         (TaskRole::Root(_), _) => (RoleKind::Root, "suplex-root", "Coordinator", prompt),
         (TaskRole::Worker(_), Some(advisor)) => {
-            let label = crate::coordination::workflows::advisor_label(advisor.label());
+            let label = crate::coordination::workflows::advisor_label(advisor.as_str());
             (RoleKind::Advisor, "suplex-advisor", label, prompt)
         }
         (TaskRole::Worker(_), None) => (RoleKind::Worker, "suplex-worker", "Worker", prompt),

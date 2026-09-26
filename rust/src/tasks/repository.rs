@@ -14,6 +14,7 @@ use crate::platform::{
     database::{DatabaseResult, SuplexDatabase},
 };
 
+use super::control::TaskStatus;
 use super::images::DecodedTaskImage;
 
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -53,7 +54,7 @@ pub struct TaskRecord {
     pub project_id: String,
     pub title: String,
     pub description: String,
-    pub status: String,
+    pub status: TaskStatus,
     pub created_at: String,
 }
 

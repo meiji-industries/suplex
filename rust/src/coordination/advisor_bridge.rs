@@ -16,23 +16,12 @@ use crate::identity::auth::js_trim;
 
 use super::bridge_auth::{self, ADVISOR_BINDING_ENV, ADVISOR_RESULT_ENV, ADVISOR_TOKEN_ENV};
 
-#[derive(Clone, Copy, Debug, Deserialize, Serialize, PartialEq, Eq)]
-#[serde(rename_all = "snake_case")]
-pub enum AdvisorRole {
-    Reviewer,
-    PlannerA,
-    PlannerB,
-    Rater,
-}
-
-impl AdvisorRole {
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Reviewer => "reviewer",
-            Self::PlannerA => "planner_a",
-            Self::PlannerB => "planner_b",
-            Self::Rater => "rater",
-        }
+crate::shared::wire_enum! {
+    pub enum AdvisorRole {
+        Reviewer = "reviewer",
+        PlannerA = "planner_a",
+        PlannerB = "planner_b",
+        Rater = "rater",
     }
 }
 
@@ -279,7 +268,7 @@ pub fn validate_report(
     };
     if reject_mismatched_role
         && let Some(submitted) = fields.get("role")
-        && submitted.as_str() != Some(role.label())
+        && submitted.as_str() != Some(role.as_str())
     {
         let submitted_text = submitted
             .as_str()
@@ -287,10 +276,10 @@ pub fn validate_report(
             .unwrap_or_else(|| submitted.to_string());
         return Err(format!(
             "The submitted report role {submitted_text} does not match the assigned role {}",
-            role.label()
+            role.as_str()
         ));
     }
-    fields.insert("role".into(), Value::String(role.label().into()));
+    fields.insert("role".into(), Value::String(role.as_str().into()));
     let allowed: &[&str] = match role {
         AdvisorRole::Reviewer => &[
             "approved",

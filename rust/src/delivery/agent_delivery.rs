@@ -631,7 +631,7 @@ impl AgentDelivery {
             .execute(
                 &identity,
                 None,
-                "merge_pull_request",
+                crate::delivery::DeliveryOperation::MergePullRequest,
                 Some(&accepted.head_sha),
                 Some(&accepted),
                 None,

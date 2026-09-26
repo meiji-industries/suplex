@@ -4,6 +4,7 @@ use super::CoordinationError;
 use crate::shared::hash::sha256_hex;
 use crate::shared::time::rfc3339_millis;
 use crate::tasks::TaskError;
+use crate::tasks::control::{SessionLifecycle, TaskStatus, TurnStatus};
 use chrono::{DateTime, Utc};
 use rusqlite::{OptionalExtension, Row, params};
 use serde::{Deserialize, Serialize};
@@ -13,6 +14,7 @@ use std::sync::{Mutex, PoisonError};
 use uuid::Uuid;
 
 use crate::coordination::root_prompts::{self, STANDARD_WORKER_RESULT_WAKE};
+use crate::coordination::workflows::Workflow;
 use crate::http::contracts::typed::projects::ProjectProviderPolicy;
 use crate::http::contracts::typed::task_answers::TaskLimitDecision;
 use crate::http::contracts::typed::tasks::{
@@ -31,7 +33,7 @@ pub struct RootSession {
     pub id: String,
     pub task_id: String,
     pub generation: i64,
-    pub lifecycle: String,
+    pub lifecycle: SessionLifecycle,
     pub native_session_id: Option<String>,
     pub launch_owner: Option<String>,
     pub launch_owner_pid: Option<i64>,
@@ -52,7 +54,7 @@ pub struct RootTurn {
     pub session_id: String,
     pub generation: i64,
     pub prompt_text: String,
-    pub status: String,
+    pub status: TurnStatus,
     pub dispatch_attempt: Option<PromptDispatchAttempt>,
     pub native_turn_id: Option<String>,
 }
@@ -416,7 +418,9 @@ pub fn assert_current_root(
     )?;
     if !active
         || !current.is_some_and(|root| {
-            root.id == session_id && root.generation == generation && root.lifecycle != "cancelled"
+            root.id == session_id
+                && root.generation == generation
+                && root.lifecycle != SessionLifecycle::Cancelled
         })
     {
         return Err(CoordinationError::refused("root_identity_mismatch").into());
@@ -1022,12 +1026,12 @@ pub fn launch_planner_pair(
     let time = rfc3339_millis(now);
     let ids = database.transaction(true, |database| {
         assert_current_root(database, task_id, &root.id, root.generation)?;
-        let workflow: String = database.connection().query_row(
+        let workflow: Workflow = database.connection().query_row(
             "SELECT workflow FROM suplex_task_controls WHERE task_id = ?1",
             [task_id],
             |row| row.get(0),
         )?;
-        if workflow != "competing_plans" {
+        if workflow != Workflow::CompetingPlans {
             return Err(CoordinationError::refused("planner_pair_requires_combined_workflow").into());
         }
         let busy: bool = database.connection().query_row(
@@ -1091,7 +1095,7 @@ pub fn replace_worker(
 ) -> DatabaseResult<Value> {
     let time = rfc3339_millis(now);
     database.transaction(true, |database| {
-        let task: Option<(String, Option<String>, String, String)> = database.connection().query_row(
+        let task: Option<(TaskStatus, Option<String>, String, String)> = database.connection().query_row(
             "SELECT c.status,t.archived_at,t.configuration_json,c.worker_profile_json FROM suplex_task_controls c JOIN suplex_tasks t ON t.id = c.task_id WHERE c.task_id = ?1",
             [task_id],
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
@@ -1099,7 +1103,7 @@ pub fn replace_worker(
         let Some((status, archived_at, configuration_json, control_profile)) = task else {
             return Err(CoordinationError::refused("Only active or paused tasks can replace a Worker.").into());
         };
-        if archived_at.is_some() || !matches!(status.as_str(), "active" | "waiting_human") {
+        if archived_at.is_some() || !matches!(status, TaskStatus::Active | TaskStatus::WaitingHuman) {
             return Err(CoordinationError::refused("Only active or paused tasks can replace a Worker.").into());
         }
         let previous: Option<(i64, Option<String>, Option<String>)> = database.connection().query_row(
@@ -1242,7 +1246,7 @@ fn outcome_text_owned(observation: &str) -> String {
 }
 
 struct CoordinatorControlRow {
-    status: String,
+    status: TaskStatus,
     archived_at: Option<String>,
     configuration_json: String,
     current_root_id: Option<String>,
@@ -1281,7 +1285,7 @@ pub fn replace_coordinator(
         let Some(CoordinatorControlRow {status,archived_at,configuration_json,current_root_id,question_id,question,question_options,limit_pause,recovery_turn,control_profile,worktree,pull_request,workflow_state}) = task else {
             return Err(CoordinationError::refused("Only active or paused tasks can select a Coordinator.").into());
         };
-        if archived_at.is_some() || !matches!(status.as_str(), "active" | "waiting_human") {
+        if archived_at.is_some() || !matches!(status, TaskStatus::Active | TaskStatus::WaitingHuman) {
             return Err(CoordinationError::refused("Only active or paused tasks can select a Coordinator.").into());
         }
         let previous: Option<(i64, Option<String>)> = database.connection().query_row(
@@ -1313,7 +1317,7 @@ pub fn replace_coordinator(
             return Err(CoordinationError::refused("The Coordinator changed. Read the current Coordinator before selecting another.").into());
         }
         if request.resume {
-            if status != "waiting_human" || question_id != request.question_id {
+            if status != TaskStatus::WaitingHuman || question_id != request.question_id {
                 return Err(CoordinationError::refused("The current question changed. Read it before resuming.").into());
             }
             if limit_pause.is_some() || recovery_turn.is_some() {
@@ -1400,7 +1404,7 @@ pub fn replace_coordinator(
         let pending_question = if unanswered.is_empty() { String::new() } else {
             let items = unanswered.iter().map(|(id,text,options)| format!("Question {id}:\n{text}\nOptions: {}",js_json::stringify(options))).collect::<Vec<_>>().join("\n\n");
             let guidance = if request.resume { "The user authorized resuming with a new Coordinator. Resolve a provider failure if possible; ask the user if a real decision is still necessary." }
-                else if status == "waiting_human" { "The task stays paused until the user answers its current decision." }
+                else if status == TaskStatus::WaitingHuman { "The task stays paused until the user answers its current decision." }
                 else { "The task is active. Reassess these questions and ask the user if a decision is still necessary." };
             format!("Questions without an accepted answer:\n{items}\nThese questions have NOT been answered. {guidance}")
         };
@@ -1525,15 +1529,15 @@ pub fn send_labeled_note(
         return Err(CoordinationError::refused("note_invalid").into());
     }
     let turn = database.transaction(true, |database| {
-        let (status, archived, root_session_id, workflow_state): (String, bool, Option<String>, String) = database.connection().query_row(
+        let (status, archived, root_session_id, workflow_state): (TaskStatus, bool, Option<String>, String) = database.connection().query_row(
             "SELECT c.status,t.archived_at IS NOT NULL,c.root_session_id,c.workflow_state_json FROM suplex_task_controls c JOIN suplex_tasks t ON t.id = c.task_id WHERE c.task_id = ?1",
             [task_id],
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
         )?;
-        if archived || !matches!(status.as_str(), "active" | "delivered") {
+        if archived || !matches!(status, TaskStatus::Active | TaskStatus::Delivered) {
             return Err(CoordinationError::refused("task_note_unavailable").into());
         }
-        let resuming = status == "delivered";
+        let resuming = status == TaskStatus::Delivered;
         let time = rfc3339_millis(now);
         if resuming {
             repository::assert_task_pull_requests_available(database, task_id)?;
@@ -1663,10 +1667,10 @@ pub fn claim_prompt(
         let control = database.connection().query_row(
             "SELECT status, budget_usd, max_turns FROM suplex_task_controls WHERE task_id = ?1",
             [&turn.task_id],
-            |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<f64>>(1)?, row.get::<_, Option<i64>>(2)?)),
+            |row| Ok((row.get::<_, TaskStatus>(0)?, row.get::<_, Option<f64>>(1)?, row.get::<_, Option<i64>>(2)?)),
         ).optional()?;
         let Some((status, budget_usd, max_turns)) = control else { return Ok(false); };
-        if status != "active" { return Ok(false); }
+        if status != TaskStatus::Active { return Ok(false); }
         let dependency_blocked: bool = database.connection().query_row(
             "SELECT EXISTS(SELECT 1 FROM suplex_task_dependencies d JOIN suplex_tasks t ON t.id = d.depends_on_task_id LEFT JOIN suplex_task_controls c ON c.task_id = t.id WHERE d.task_id = ?1 AND COALESCE(c.status, 'backlog') <> 'delivered')",
             [&turn.task_id], |row| row.get(0),
@@ -1879,7 +1883,7 @@ pub fn record_standard_worker_result_and_wake(
         review,
     } = *input;
     database.transaction(false, |database| {
-        let worker_turn: Option<(String, String, Option<String>, Option<String>)> = database.connection().query_row(
+        let worker_turn: Option<(String, TurnStatus, Option<String>, Option<String>)> = database.connection().query_row(
             "SELECT id,status,result_receipt_id,workflow_input_json FROM suplex_task_turns WHERE task_id = ?1 AND session_id = ?2 AND generation = ?3 ORDER BY created_at DESC LIMIT 1",
             params![task_id, session_id, generation],
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
@@ -1892,10 +1896,10 @@ pub fn record_standard_worker_result_and_wake(
             params![session_id, task_id, generation],
             |row| Ok((row.get(0)?, row.get(1)?)),
         ).optional()?;
-        let Some((advisor_role, session_input)) = current.filter(|_| status != "cancelled") else {
+        let Some((advisor_role, session_input)) = current.filter(|_| status != TurnStatus::Cancelled) else {
             return Err(CoordinationError::refused("stale_generation").into());
         };
-        if status == "completed" {
+        if status == TurnStatus::Completed {
             if prior_receipt.as_deref() == Some(receipt_id) {
                 return Ok(None);
             }
@@ -2043,12 +2047,12 @@ pub fn record_workflow_outcome(
         state["deliveryWait"] = Value::Null;
         state["completion"] = completion.clone();
         write_workflow_state(database, task_id, &state, now)?;
-        let status: String = database.connection().query_row(
+        let status: TaskStatus = database.connection().query_row(
             "SELECT status FROM suplex_task_controls WHERE task_id = ?1",
             [task_id],
             |row| row.get(0),
         )?;
-        if matches!(status.as_str(), "active" | "waiting_human") {
+        if matches!(status, TaskStatus::Active | TaskStatus::WaitingHuman) {
             mark_delivered(database, task_id, now)?;
         }
         Ok(true)
@@ -2088,7 +2092,7 @@ pub fn resume_delivery_wait(
     now: DateTime<Utc>,
 ) -> DatabaseResult<bool> {
     database.transaction(true, |database| {
-        let status: String = database.connection().query_row(
+        let status: TaskStatus = database.connection().query_row(
             "SELECT status FROM suplex_task_controls WHERE task_id = ?1",
             [task_id],
             |row| row.get(0),
@@ -2096,8 +2100,8 @@ pub fn resume_delivery_wait(
         let root = current_root(database, task_id)?;
         let mut state = workflow_state(database, task_id)?;
         let Some(root) = root.filter(|root| {
-            status == "active"
-                && root.lifecycle != "cancelled"
+            status == TaskStatus::Active
+                && root.lifecycle != SessionLifecycle::Cancelled
                 && same_wait(&state["deliveryWait"], expected)
         }) else {
             return Ok(false);
@@ -3061,7 +3065,7 @@ mod tests {
         };
         let created = repository::create(&mut database, &prepared, now).unwrap();
         assert!(created.created);
-        assert_eq!(created.task.status, "active");
+        assert_eq!(created.task.status, TaskStatus::Active);
         let repeated = repository::create(&mut database, &prepared, now).unwrap();
         assert!(!repeated.created);
         assert_eq!(created.task.id, repeated.task.id);
@@ -3075,7 +3079,7 @@ mod tests {
             ..prepared.clone()
         };
         let blocked = repository::create(&mut database, &blocked_input, now).unwrap();
-        assert_eq!(blocked.task.status, "queued");
+        assert_eq!(blocked.task.status, TaskStatus::Queued);
         let backlog_input = PreparedTask {
             id: repository::new_task_id(),
             title: "Manual task".into(),
@@ -3085,13 +3089,13 @@ mod tests {
             ..prepared.clone()
         };
         let backlog = repository::create(&mut database, &backlog_input, now).unwrap();
-        assert_eq!(backlog.task.status, "backlog");
+        assert_eq!(backlog.task.status, TaskStatus::Backlog);
         assert_eq!(
             repository::start(&mut database, &backlog.task.id, now)
                 .unwrap()
                 .unwrap()
                 .status,
-            "active"
+            TaskStatus::Active
         );
         let pull_request_input = PreparedTask {
             id: repository::new_task_id(),
@@ -3124,7 +3128,7 @@ mod tests {
                 .unwrap()
                 .unwrap()
                 .status,
-            "active"
+            TaskStatus::Active
         );
         database
             .connection()
@@ -3276,7 +3280,7 @@ mod tests {
         assert_eq!(std::fs::read_to_string(&exit_file).unwrap().trim(), "0");
         let pending = pending_turns(&database, &root.id).unwrap();
         assert_eq!(pending.len(), 1);
-        assert_eq!(pending[0].status, "unknown");
+        assert_eq!(pending[0].status, TurnStatus::Unknown);
         assert_eq!(
             pending[0]
                 .dispatch_attempt
@@ -3424,7 +3428,7 @@ mod tests {
             ..prepared.clone()
         };
         let waiting = repository::create(&mut database, &waiting_input, now).unwrap();
-        assert_eq!(waiting.task.status, "queued");
+        assert_eq!(waiting.task.status, TaskStatus::Queued);
         set_worktree(
             &mut database,
             &created.task.id,
@@ -3444,7 +3448,7 @@ mod tests {
                 .unwrap()
                 .unwrap()
                 .status,
-            "active"
+            TaskStatus::Active
         );
         // As in TypeScript, the released dependent is woken by its committed
         // wake_at; the host's scheduled scan admits it without a notification.
@@ -3629,7 +3633,7 @@ mod tests {
                 .unwrap()
                 .unwrap()
                 .status,
-            "active"
+            TaskStatus::Active
         );
         let pause = serde_json::json!({
             "kind":"task_limit", "reason":"budget",
@@ -3719,7 +3723,7 @@ mod tests {
                 .unwrap()
                 .unwrap()
                 .status,
-            "cancelled"
+            TaskStatus::Cancelled
         );
         let outstanding: i64 = database.connection().query_row(
             "SELECT COUNT(*) FROM suplex_task_turns WHERE task_id = ?1 AND status IN ('pending_prompt','prompted','unknown')",

@@ -7,6 +7,7 @@ use crate::projects::ProjectError;
 use crate::shared::hash::sha256_hex;
 use crate::shared::time::rfc3339_millis;
 use crate::tasks::TaskError;
+use crate::tasks::control::DeliveryTarget;
 use std::{
     collections::HashSet,
     error::Error,
@@ -1684,10 +1685,8 @@ fn admit(
         Some(crate::http::contracts::typed::projects::RepositoryConnection::Bitbucket { .. })
     );
     if bitbucket
-        && matches!(
-            request.delivery_target.as_str(),
-            "pull_request_ready" | "merged"
-        )
+        && DeliveryTarget::parse(&request.delivery_target)
+            .is_some_and(|target| !target.bitbucket_supports())
     {
         return Err(fail(
             "Bitbucket supports draft pull requests. Select a supported delivery target.",

@@ -5,11 +5,13 @@
 use serde_json::{Value, json};
 
 use crate::integrations::github_delivery::Observation;
-
-const PULL_REQUEST_TARGETS: [&str; 3] = ["pull_request_draft", "pull_request_ready", "merged"];
+use crate::tasks::control::DeliveryTarget;
 
 pub fn requires_pull_request(task: &Value) -> bool {
-    PULL_REQUEST_TARGETS.contains(&task["deliveryTarget"].as_str().unwrap_or(""))
+    task["deliveryTarget"]
+        .as_str()
+        .and_then(DeliveryTarget::parse)
+        .is_some_and(DeliveryTarget::uses_pull_request)
 }
 
 /// GitHub is only asked once a task has a pull request or delivered to a pull request target.

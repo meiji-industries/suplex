@@ -3,6 +3,7 @@
 use crate::shared::hash::sha256_hex;
 use crate::shared::time::rfc3339_millis;
 use crate::tasks::TaskError;
+use crate::tasks::control::{DeliveryTarget, TaskStatus};
 use std::path::Path;
 
 use chrono::{DateTime, Utc};
@@ -493,7 +494,7 @@ fn create_user_task_inner(
             return Err(TaskError::not_found().into());
         }
         if let Some(task) = repository::existing(database, prepared)? {
-            if task.status == "active" {
+            if task.status == TaskStatus::Active {
                 let id = task.id.clone();
                 database.after_commit(move || wake(id));
             }
@@ -526,7 +527,7 @@ fn create_user_task_inner(
                 params![workflow, result.task.id],
             )?;
         }
-        if result.task.status == "active" {
+        if result.task.status == TaskStatus::Active {
             let id = result.task.id.clone();
             database.after_commit(move || wake(id));
         }
@@ -569,7 +570,7 @@ pub fn start_user_task(
         }
         let task = repository::start(database, task_id, now)?
             .ok_or_else(|| TaskError::new("This task cannot be started", 409))?;
-        if task.status == "active" {
+        if task.status == TaskStatus::Active {
             let id = task.id.clone();
             database.after_commit(move || wake(id));
         }
@@ -647,29 +648,20 @@ pub fn continue_user_delivery(
             ).into());
         }
         let order = |target: &str| {
-            [
-                "local_worktree",
-                "remote_branch",
-                "pull_request_draft",
-                "pull_request_ready",
-                "merged",
-            ]
-            .iter()
-            .position(|known| *known == target)
-            .ok_or_else(|| conflict("Invalid delivery target"))
+            DeliveryTarget::parse(target).ok_or_else(|| conflict("Invalid delivery target"))
         };
         let (next, previous) = (order(&request.delivery_target)?, order(&previous_target)?);
         if next < previous {
             return Err(conflict("The delivery target cannot move backward."));
         }
-        if next == previous && matches!(task.status.as_str(), "active" | "delivered") {
-            if task.status == "active" {
+        if next == previous && matches!(task.status, TaskStatus::Active | TaskStatus::Delivered) {
+            if task.status == TaskStatus::Active {
                 let id = task.id.clone();
                 database.after_commit(move || wake(id));
             }
             return Ok(task);
         }
-        if task.status != "delivered" || previous < order("pull_request_draft")? {
+        if task.status != TaskStatus::Delivered || !previous.uses_pull_request() {
             return Err(conflict(
                 "Only delivered pull request tasks can continue delivery.",
             ));
@@ -773,7 +765,7 @@ pub fn select_user_task_agent(
             "SELECT c.status, t.archived_at IS NOT NULL, c.workflow, c.delivery_target, c.workflow_state_json, c.root_session_id, c.root_profile_json, c.worker_profile_json, t.configuration_json, c.human_question_id, c.human_question, c.human_question_options_json, c.limit_pause_json IS NOT NULL OR c.recovery_turn_id IS NOT NULL, c.advisor_profiles_json, c.worker_session_id FROM suplex_task_controls c JOIN suplex_tasks t ON t.id = c.task_id WHERE c.task_id = ?1",
             [task_id],
             |row| Ok((
-                row.get::<_, String>(0)?, row.get::<_, bool>(1)?, row.get::<_, String>(2)?,
+                row.get::<_, TaskStatus>(0)?, row.get::<_, bool>(1)?, row.get::<_, String>(2)?,
                 row.get::<_, String>(3)?, row.get::<_, String>(4)?, row.get::<_, Option<String>>(5)?,
                 row.get::<_, String>(6)?, row.get::<_, String>(7)?, row.get::<_, String>(8)?,
                 row.get::<_, Option<String>>(9)?, row.get::<_, Option<String>>(10)?,
@@ -783,7 +775,7 @@ pub fn select_user_task_agent(
         ).optional()?;
         let root = request.role == "root";
         let Some((status, _archived, workflow, _delivery_target, state, root_session_id, root_profile, worker_profile, configuration, question_id, question, question_options, pending_decision, advisor_profiles, worker_session_id)) = row
-            .filter(|row| !row.1 && matches!(row.0.as_str(), "active" | "waiting_human"))
+            .filter(|row| !row.1 && matches!(row.0, TaskStatus::Active | TaskStatus::WaitingHuman))
         else {
             return Err(conflict(if root { coordinator_changed } else { "Only active or paused tasks can select an agent." }));
         };
@@ -829,7 +821,7 @@ pub fn select_user_task_agent(
         if !root && (previous_profile["profileId"] != request.expected_profile_id.as_str() || current.as_ref().map(|current| &current.0) != request.expected_session_id.as_ref()) {
             return Err(conflict("The agent changed. Read the current agent before selecting another."));
         }
-        if request.resume && (status != "waiting_human" || question_id != request.question_id || pending_decision) {
+        if request.resume && (status != TaskStatus::WaitingHuman || question_id != request.question_id || pending_decision) {
             return Err(conflict("Answer the current task decision before resuming."));
         }
         let profile = read_profile(database, &request.profile_id, if request.role == "worker" { "worker" } else { "root" })?
@@ -1129,7 +1121,7 @@ pub fn set_user_task_issue(
             [task_id],
             |row| row.get(0),
         )?;
-        if matches!(current.status.as_str(), "backlog" | "queued") && !started {
+        if matches!(current.status, TaskStatus::Backlog | TaskStatus::Queued) && !started {
             database.connection().execute(
                 "UPDATE suplex_tasks SET issue_context_json = NULL WHERE id = ?1",
                 [task_id],
@@ -1151,7 +1143,7 @@ pub fn cancel_user_task(
     let cancelled = database.transaction(true, |database| {
         let task = repository::task_by_id(database, task_id)?.ok_or_else(TaskError::not_found)?;
         companies::require_company_access(database, actor_user_id, &task.company_id)?;
-        if task.status == "delivered" {
+        if task.status == TaskStatus::Delivered {
             return Err(TaskError::new("Delivered tasks cannot be cancelled", 409).into());
         }
         if !root_session_store::cancel_task(database, task_id, now)? {
@@ -1185,7 +1177,7 @@ pub fn send_user_note(
             [task_id],
             |row| row.get(0),
         )?;
-        if archived || !matches!(task.status.as_str(), "active" | "delivered") {
+        if archived || !matches!(task.status, TaskStatus::Active | TaskStatus::Delivered) {
             return Err(TaskError::new(
                 "Start the task or answer its current decision before you send a message.",
                 409,
@@ -1325,7 +1317,7 @@ pub fn answer_user_task_limit(
         let task = repository::task_by_id(database, task_id)?
             .ok_or_else(TaskError::not_found)?;
         companies::require_company_access(database, actor_user_id, &task.company_id)?;
-        let (archived, status, question, has_limit_pause): (bool, String, Option<String>, bool) = database
+        let (archived, status, question, has_limit_pause): (bool, TaskStatus, Option<String>, bool) = database
             .connection()
             .query_row(
                 "SELECT t.archived_at IS NOT NULL,c.status,c.human_question_id,c.limit_pause_json IS NOT NULL FROM suplex_tasks t JOIN suplex_task_controls c ON c.task_id = t.id WHERE t.id = ?1",
@@ -1333,7 +1325,7 @@ pub fn answer_user_task_limit(
                 |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
             )?;
         if archived
-            || status != "waiting_human"
+            || status != TaskStatus::WaitingHuman
             || question.as_deref() != Some(answer.question_id.as_str())
             || !has_limit_pause
         {
@@ -1500,7 +1492,8 @@ pub fn update_user_task_details(
             .pointer("/integration/repository/kind")
             .and_then(Value::as_str)
             == Some("bitbucket")
-            && ["pull_request_ready", "merged"].contains(&delivery_target)
+            && DeliveryTarget::parse(delivery_target)
+                .is_some_and(|target| !target.bitbucket_supports())
         {
             return Err(TaskError::new(
                 "Bitbucket supports draft pull requests. Select a supported delivery target.",
@@ -1652,19 +1645,19 @@ mod tests {
         let queued = repository::create(&mut database, &queued_input, now)
             .unwrap()
             .task;
-        assert_eq!(queued.status, "queued");
+        assert_eq!(queued.status, TaskStatus::Queued);
         assert!(disarm_user_task(&mut database, "missing-user", &queued.id, now).is_err());
         assert_eq!(
             disarm_user_task(&mut database, &user, &queued.id, now)
                 .unwrap()
                 .status,
-            "backlog"
+            TaskStatus::Backlog
         );
         assert_eq!(
             disarm_user_task(&mut database, &user, &queued.id, now)
                 .unwrap()
                 .status,
-            "backlog"
+            TaskStatus::Backlog
         );
         let audits: i64 = database
             .connection()
@@ -1730,7 +1723,10 @@ mod tests {
                 [&task.id],
             )
             .unwrap();
-        assert_eq!(run(&mut database, "merged").unwrap().status, "active");
+        assert_eq!(
+            run(&mut database, "merged").unwrap().status,
+            TaskStatus::Active
+        );
         assert_eq!(wakes.load(Ordering::SeqCst), 1);
         let rows = root_session_store::root_observation_rows(&database, &task.id).unwrap();
         assert_eq!(rows.control["deliveryTarget"], "merged");
@@ -1752,7 +1748,10 @@ mod tests {
                 .contains("from pull_request_draft to merged")
         }));
         assert!(rows.root.is_some());
-        assert_eq!(run(&mut database, "merged").unwrap().status, "active");
+        assert_eq!(
+            run(&mut database, "merged").unwrap().status,
+            TaskStatus::Active
+        );
         assert_eq!(wakes.load(Ordering::SeqCst), 2);
         assert_eq!(
             failure(run(&mut database, "pull_request_ready").unwrap_err()),
@@ -1850,7 +1849,7 @@ mod tests {
         let second = repository::create(&mut database, &second_input, now)
             .unwrap()
             .task;
-        assert_eq!(second.status, "queued");
+        assert_eq!(second.status, TaskStatus::Queued);
         let body = |depends_on: Vec<String>, pull_requests: Value| {
             tasks::parse_task_dependencies(Some(
                 &json!({"dependsOn": depends_on, "blockedByPullRequests": pull_requests}),
@@ -1896,7 +1895,7 @@ mod tests {
             now,
         )
         .unwrap();
-        assert_eq!(blocked.status, "queued");
+        assert_eq!(blocked.status, TaskStatus::Queued);
         assert_eq!(
             database
                 .connection()
@@ -1932,7 +1931,7 @@ mod tests {
             now,
         )
         .unwrap();
-        assert_eq!(released.status, "active");
+        assert_eq!(released.status, TaskStatus::Active);
         let (edges, audits): (i64, i64) = database
             .connection()
             .query_row(
@@ -1967,7 +1966,7 @@ mod tests {
         let task = repository::create(&mut database, &active, now)
             .unwrap()
             .task;
-        assert_eq!(task.status, "active");
+        assert_eq!(task.status, TaskStatus::Active);
         let wakes = Arc::new(AtomicUsize::new(0));
         let select = |database: &mut SuplexDatabase, body: Value| {
             let request = tasks::parse_task_agent_selection(Some(&body)).unwrap();
@@ -2209,7 +2208,7 @@ mod tests {
         )
         .unwrap();
         assert!(created.created);
-        assert_eq!(created.task.status, "backlog");
+        assert_eq!(created.task.status, TaskStatus::Backlog);
         assert_eq!(wakes.load(Ordering::SeqCst), 0);
         let count = Arc::clone(&wakes);
         assert!(
@@ -2230,7 +2229,7 @@ mod tests {
             count.fetch_add(1, Ordering::SeqCst);
         })
         .unwrap();
-        assert_eq!(started.status, "active");
+        assert_eq!(started.status, TaskStatus::Active);
         assert_eq!(wakes.load(Ordering::SeqCst), 1);
         let body =
             serde_json::to_string(&response::get(&database, &created.task.id).unwrap().unwrap())
@@ -2431,7 +2430,7 @@ mod tests {
                 assert_eq!(persisted, 1);
                 count.fetch_add(1, Ordering::SeqCst);
             },
-        ).unwrap().status, "active");
+        ).unwrap().status, TaskStatus::Active);
         assert_eq!(wakes.load(Ordering::SeqCst), 4);
         let note_audits: i64 = database
             .connection()
@@ -2485,7 +2484,7 @@ mod tests {
             )
             .unwrap()
             .status,
-            "cancelled"
+            TaskStatus::Cancelled
         );
         assert_eq!(wakes.load(Ordering::SeqCst), 5);
         let audited: String = database.connection().query_row(

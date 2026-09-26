@@ -3,6 +3,7 @@
 use crate::identity::IdentityError;
 use crate::shared::PublicFailure;
 use crate::tasks::TaskError;
+use crate::tasks::control::TaskStatus;
 use std::{error::Error, path::PathBuf};
 
 use axum::{
@@ -508,7 +509,7 @@ async fn create(
         }
     };
     if let Some((status, id, snapshot)) = existing {
-        if status == "active"
+        if status == TaskStatus::Active
             && let Some(host) = &state.task_host
         {
             host.wake(id);

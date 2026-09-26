@@ -1,0 +1,38 @@
+[
+  {
+    "projectId": "project_79099e7e99dbf781c0ba0df4",
+    "status": 200,
+    "body": {
+      "templates": [
+        {
+          "description": "",
+          "deliveryTarget": "local_worktree",
+          "runProjectTests": false,
+          "visualEvidence": "off",
+          "workflow": "standard",
+          "advisorProfileIds": {},
+          "name": "alpha",
+          "id": "template_a",
+          "projectId": "project_79099e7e99dbf781c0ba0df4",
+          "createdAt": "2026-09-25T12:00:00.000Z",
+          "updatedAt": "2026-09-25T12:00:00.000Z"
+        },
+        {
+          "description": "Read source",
+          "deliveryTarget": "pull_request_draft",
+          "runProjectTests": true,
+          "visualEvidence": "off",
+          "workflow": "standard",
+          "advisorProfileIds": {
+            "reviewer": "reviewer-profile"
+          },
+          "name": "Zebra",
+          "id": "template_z",
+          "projectId": "project_79099e7e99dbf781c0ba0df4",
+          "createdAt": "2026-09-25T12:00:00.000Z",
+          "updatedAt": "2026-09-25T12:00:00.000Z"
+        }
+      ]
+    }
+  }
+]

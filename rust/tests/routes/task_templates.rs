@@ -12,10 +12,7 @@ mod tests {
     use crate::platform::database::{OpenMode, SuplexDatabase};
     use axum::{body::to_bytes, http::HeaderValue};
     use serde_json::Value;
-    use std::{
-        io::{BufRead, BufReader, Write},
-        process::{Command, Stdio},
-    };
+    use std::fs;
 
     #[tokio::test]
     async fn templates_use_profile_defaults_support_reset_and_delete() {
@@ -237,61 +234,57 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "requires Node and the TypeScript native-app fixture"]
-    async fn same_database_template_list_matches_typescript() {
-        let repository = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .unwrap();
-        let mut oracle = Command::new("node")
-            .args([
-                "node_modules/tsx/dist/cli.mjs",
-                "tests/support/task-template-read-interop.ts",
-            ])
-            .current_dir(repository)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .unwrap();
-        let mut line = String::new();
-        BufReader::new(oracle.stdout.take().unwrap())
-            .read_line(&mut line)
-            .unwrap();
-        assert!(!line.is_empty(), "TypeScript fixture produced no response");
-        let expected: Value = serde_json::from_str(&line).unwrap();
-        let database = SuplexDatabase::open(
-            std::path::Path::new(expected["databasePath"].as_str().unwrap()),
-            OpenMode::ReadWrite,
+    async fn frozen_template_list_response_matches_typescript_source_revision() {
+        let root =
+            std::env::temp_dir().join(format!("suplex-template-parity-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&root).unwrap();
+        let database_path = root.join("suplex.sqlite");
+        fs::copy(
+            concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../tests/parity/task-template-native/database.sqlite"
+            ),
+            &database_path,
         )
         .unwrap();
+        let database = SuplexDatabase::open(&database_path, OpenMode::ReadWrite).unwrap();
+        let user_id: String = database
+            .connection()
+            .query_row("SELECT id FROM suplex_users LIMIT 1", [], |row| row.get(0))
+            .unwrap();
+        let token = crate::identity::auth::create_session(&database, &user_id, Utc::now()).unwrap();
         let state = AppState::new(
             database,
-            session::SessionConfig {
+            crate::http::session::SessionConfig {
                 port: 4111,
                 reachable_address: "http://127.0.0.1:4111".into(),
                 tailscale_exposure: "none".into(),
             },
         );
+        let expected: Value = serde_json::from_str(include_str!(
+            "../../../tests/parity/task-template-native/expected.json"
+        ))
+        .unwrap();
+        let case = &expected[0];
         let mut headers = HeaderMap::new();
         headers.insert("host", HeaderValue::from_static("127.0.0.1:4111"));
         headers.insert(
             "cookie",
-            HeaderValue::from_str(expected["cookie"].as_str().unwrap()).unwrap(),
+            HeaderValue::from_str(&format!("sid_v1={token}")).unwrap(),
         );
         let response = list(
             State(state.clone()),
-            Path(expected["projectId"].as_str().unwrap().to_owned()),
+            Path(case["projectId"].as_str().unwrap().to_owned()),
             headers,
         )
         .await;
-        assert_eq!(response.status().as_u16(), expected["status"]);
+        assert_eq!(response.status().as_u16(), case["status"]);
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         assert_eq!(
             serde_json::from_slice::<Value>(&body).unwrap(),
-            expected["body"]
+            case["body"]
         );
         drop(state);
-        oracle.stdin.as_mut().unwrap().write_all(b"\n").unwrap();
-        assert!(oracle.wait().unwrap().success());
+        fs::remove_dir_all(root).unwrap();
     }
 }

@@ -864,6 +864,130 @@ mod tests {
         fs::remove_dir_all(directory).unwrap();
     }
 
+    #[tokio::test]
+    async fn pull_evidence_uses_live_title_and_preserves_human_body_edits_on_retry() {
+        use axum::{
+            body::Bytes,
+            http::{Method, StatusCode, Uri},
+        };
+        use std::sync::atomic::{AtomicUsize, Ordering};
+        let (directory, operations, task_id, head) =
+            crate::delivery::operations::tests::workflow_task("standard");
+        let database =
+            SuplexDatabase::open(operations.database_path(), OpenMode::ReadWrite).unwrap();
+        database.connection().execute(
+            "UPDATE suplex_task_controls SET status = 'active', delivery_target = 'pull_request_draft', workflow_state_json = json_set(workflow_state_json, '$.acceptedDelivery', json(?1)) WHERE task_id = ?2",
+            params![json!({"baseSha":head,"headSha":head,"files":[],"commits":[]}).to_string(), task_id]
+        ).unwrap();
+        let pull = Arc::new(Mutex::new(json!({
+            "number":7,"html_url":"https://github.com/owner/repo/pull/7","state":"open",
+            "draft":true,"merged_at":null,"title":"Human title","body":"Human body added during inspection",
+            "head":{"ref":"task-flow","sha":head,"repo":{"full_name":"owner/repo"}},
+            "base":{"ref":"main","sha":head,"repo":{"full_name":"owner/repo"}}
+        })));
+        let patches = Arc::new(AtomicUsize::new(0));
+        let app = axum::Router::new().fallback({
+            let pull = pull.clone();
+            let patches = patches.clone();
+            move |method: Method, uri: Uri, bytes: Bytes| {
+                let pull = pull.clone();
+                let patches = patches.clone();
+                async move {
+                    if uri.path() != "/repos/owner/repo/pulls/7" {
+                        return (StatusCode::NOT_FOUND, String::new());
+                    }
+                    if method == Method::PATCH {
+                        let input: Value = serde_json::from_slice(&bytes).unwrap();
+                        let mut stored = pull.lock().unwrap();
+                        stored["title"] = input["title"].clone();
+                        stored["body"] = input["body"].clone();
+                        patches.fetch_add(1, Ordering::SeqCst);
+                        return (StatusCode::OK, stored.to_string());
+                    }
+                    (StatusCode::OK, pull.lock().unwrap().to_string())
+                }
+            }
+        });
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}/", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let access =
+            crate::integrations::github::Access::for_api(&base, Some("fixture".into())).unwrap();
+        let github = github_delivery::Github::new(access);
+        let publisher = Publisher {
+            operations: &operations,
+            task_id: &task_id,
+            number: 7,
+            head_sha: &head,
+            recheck: None,
+            repository: "owner/repo".into(),
+            configuration: json!({}),
+            github: ReleasePort::Github(&github),
+            database: Mutex::new(database),
+        };
+        let first = publisher
+            .splice_pull_request("Native evidence")
+            .await
+            .unwrap();
+        assert_eq!(first.title.as_deref(), Some("Human title"));
+        assert!(
+            first
+                .body
+                .as_deref()
+                .unwrap()
+                .starts_with("Human body added during inspection")
+        );
+        assert_eq!(patches.load(Ordering::SeqCst), 1);
+        pull.lock().unwrap()["body"] = json!(format!(
+            "{}\n\nHuman follow-up",
+            first.body.as_deref().unwrap()
+        ));
+        let second = publisher
+            .splice_pull_request("Native evidence")
+            .await
+            .unwrap();
+        assert!(second.body.as_deref().unwrap().ends_with("Human follow-up"));
+        assert_eq!(patches.load(Ordering::SeqCst), 1);
+        publisher
+            .database()
+            .connection()
+            .execute(
+                "UPDATE suplex_task_controls SET status = 'cancelled' WHERE task_id = ?1",
+                [&task_id],
+            )
+            .unwrap();
+        assert!(
+            publisher
+                .splice_pull_request("Another update")
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("authorization changed")
+        );
+        assert_eq!(patches.load(Ordering::SeqCst), 1);
+        publisher
+            .database()
+            .connection()
+            .execute(
+                "UPDATE suplex_task_controls SET status = 'active' WHERE task_id = ?1",
+                [&task_id],
+            )
+            .unwrap();
+        pull.lock().unwrap()["head"]["sha"] = json!("b".repeat(40));
+        assert!(
+            publisher
+                .splice_pull_request("Another update")
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("pull request changed")
+        );
+        assert_eq!(patches.load(Ordering::SeqCst), 1);
+        drop(publisher);
+        server.abort();
+        fs::remove_dir_all(directory).unwrap();
+    }
+
     #[test]
     fn generated_evidence_reads_current_bytes_but_never_follows_a_replaced_symlink() {
         let root =

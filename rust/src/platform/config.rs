@@ -48,8 +48,7 @@ impl Installation {
                 return Err(format!("{key} must not be empty").into());
             }
         }
-        let experimental =
-            value("SUPLEX_RUST_ROOT").map(|root| absolute(&current, Path::new(&root)));
+        let experimental = value("SUPLEX_ROOT").map(|root| absolute(&current, Path::new(&root)));
         let default_root = experimental
             .clone()
             .unwrap_or_else(|| current.join(".suplex"));
@@ -67,7 +66,7 @@ impl Installation {
         } else {
             "4111".into()
         };
-        let configured_port = value("SUPLEX_PORT").or_else(|| value("SUPLEX_RUST_PORT"));
+        let configured_port = value("SUPLEX_PORT");
         let port = parse_port(&configured_port.unwrap_or(default_port))?;
         let access_mode = value("SUPLEX_ACCESS_MODE").unwrap_or_else(|| {
             if experimental.is_some() {

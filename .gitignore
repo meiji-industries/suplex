@@ -2,6 +2,7 @@ node_modules/
 dist/
 .suplex
 .suplex/
+# Legacy development installation; never commit it.
 .suplex-rust/
 rust/target/
 .scratch/

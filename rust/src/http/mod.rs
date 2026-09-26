@@ -263,7 +263,7 @@ mod tests {
     async fn development_assets_refresh_without_restarting_the_server() {
         static NEXT_DIRECTORY: AtomicU64 = AtomicU64::new(0);
         let directory = std::env::temp_dir().join(format!(
-            "suplex-rust-assets-{}-{}",
+            "suplex-assets-{}-{}",
             std::process::id(),
             NEXT_DIRECTORY.fetch_add(1, Ordering::Relaxed)
         ));
@@ -299,7 +299,7 @@ mod tests {
     fn committed_callback_can_reenter_shared_database() {
         static NEXT_DATABASE: AtomicU64 = AtomicU64::new(0);
         let path = std::env::temp_dir().join(format!(
-            "suplex-rust-http-{}-{}.sqlite",
+            "suplex-http-{}-{}.sqlite",
             std::process::id(),
             NEXT_DATABASE.fetch_add(1, Ordering::Relaxed)
         ));

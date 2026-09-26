@@ -54,7 +54,7 @@ try {
   fixture.database.prepare("UPDATE suplex_task_controls SET worktree_json = ? WHERE task_id = ?")
     .run(JSON.stringify({ path: worktree, branch, baseSha: "0".repeat(40), headSha: "f".repeat(40), dirty: true }), task.id);
   const call = async () => {
-    const result = await runMcpProcess(server, { ...process.env, ...server.environment, SUPLEX_RUST_TEST_GITHUB_API: githubApi }, [
+    const result = await runMcpProcess(server, { ...process.env, ...server.environment, SUPLEX_TEST_GITHUB_API: githubApi }, [
       ...initializeAndList,
       { jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "suplex_root", arguments: { kind: "request_delivery", operation: "inspect_delivery_diff" } } },
     ]);

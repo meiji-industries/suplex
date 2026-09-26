@@ -1,7 +1,7 @@
 # CI performance
 
 Historical measurements of the September 2026 TypeScript-backed workflow. The
-current native Rust CI gate and test counts must be read from `.github/workflows/ci.yml`.
+current native CI gate and test counts must be read from `.github/workflows/ci.yml`.
 
 Measured on Blacksmith Ubuntu 24.04 on 2026-09-07. At the time, the workflow kept the `Test suite` check and ran lint, TypeScript, the production build, unit/integration tests, and browser tests.
 

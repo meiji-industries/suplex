@@ -489,13 +489,13 @@ fn backup_service(installation: &Installation) -> BackupService {
     }
 }
 
-/// A stable installation identity from the database path; the Rust binary has
+/// A stable installation identity from the database path; the native binary has
 /// no `SUPLEX_INSTALLATION_ID`.
 pub fn installation_id(database_path: &Path) -> String {
     use sha2::Digest;
     let digest = sha2::Sha256::digest(database_path.as_os_str().as_encoded_bytes());
     format!(
-        "rust-{}",
+        "local-{}",
         digest[..6]
             .iter()
             .map(|byte| format!("{byte:02x}"))

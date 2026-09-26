@@ -3,7 +3,7 @@ import { createTypeScriptImportResolver } from "eslint-import-resolver-typescrip
 import { importX } from "eslint-plugin-import-x";
 
 export default tseslint.config({
-  ignores: ["dist/**", "src/frontend/contracts/generated/**", "node_modules/**", ".context/**", ".suplex/**", ".suplex-rust/**", ".scratch/**", "coverage/**", "rust/target/**", "desktop/**"],
+  ignores: ["dist/**", "src/frontend/contracts/generated/**", "node_modules/**", ".context/**", ".suplex/**", ".suplex/**", ".scratch/**", "coverage/**", "rust/target/**", "desktop/**"],
 }, {
   files: ["src/frontend/**/*.{ts,tsx}", "tests/**/*.{ts,tsx}"],
   plugins: { "@typescript-eslint": tseslint.plugin },

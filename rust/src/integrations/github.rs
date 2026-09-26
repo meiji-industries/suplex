@@ -526,7 +526,7 @@ impl Access {
         // The explicit interop build can use an isolated loopback API without
         // consulting a user's keychain.
         #[cfg(feature = "github-test-endpoint")]
-        if let Ok(base_uri) = std::env::var("SUPLEX_RUST_TEST_GITHUB_API") {
+        if let Ok(base_uri) = std::env::var("SUPLEX_TEST_GITHUB_API") {
             let parsed = url::Url::parse(&base_uri)?;
             if parsed.scheme() != "http"
                 || !matches!(parsed.host_str(), Some("127.0.0.1" | "localhost" | "[::1]"))

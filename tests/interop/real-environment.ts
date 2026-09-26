@@ -1,6 +1,6 @@
 // Real-environment verification of the Rust backend with real provider CLIs and the real GitHub account.
 // It is not part of any default suite: it spends model tokens and, in the github phase, creates a real repository.
-// Set SUPLEX_RUST_BIN, SUPLEX_RUST_ASSETS_DIR, and TMPDIR to an isolated directory.
+// Set SUPLEX_BIN, SUPLEX_ASSETS_DIR, and TMPDIR to an isolated directory.
 // SUPLEX_REAL_PHASE=providers: for each provider in SUPLEX_REAL_PROVIDERS, create a Standard task in the UI,
 //   restart Rust during the Worker turn, and cancel the task in the UI.
 // SUPLEX_REAL_PHASE=github: create the private repository SUPLEX_REAL_GITHUB_NEW_REPOSITORY through the Rust
@@ -28,8 +28,8 @@ const defaultModels: Record<Provider, string> = { "codex": "gpt-5.6-luna", "clau
 const modelFor = (provider: Provider) => process.env[`SUPLEX_REAL_MODEL_${provider.replace("-", "_").toUpperCase()}`] ?? defaultModels[provider];
 const proof = resolve(process.env.SUPLEX_REAL_PROOF_DIR ?? ".context/real-environment");
 await mkdir(proof, { recursive: true });
-const outputFile = process.env.SUPLEX_RUST_OUTPUT_FILE ?? join(proof, `rust-${phase}.log`);
-process.env.SUPLEX_RUST_OUTPUT_FILE = outputFile;
+const outputFile = process.env.SUPLEX_OUTPUT_FILE ?? join(proof, `rust-${phase}.log`);
+process.env.SUPLEX_OUTPUT_FILE = outputFile;
 await writeFile(outputFile, "");
 const log = (message: string) => console.error(`[real ${phase}] ${new Date().toISOString()} ${message}`);
 const git = async (...args: string[]) => runCommand({ taskId: null, stepId: null, command: "git", args });
@@ -39,7 +39,7 @@ const localTime = (date: Date) => new Date(date.getTime() - date.getTimezoneOffs
 async function keychainDialogs(start: Date, end: Date) {
   const result = await runCommand({ taskId: null, stepId: null, command: "/usr/bin/log", args: ["show", "--start", localTime(start), "--end", localTime(new Date(end.getTime() + 1_000)), "--style", "compact", "--predicate", "process == \"SecurityAgent\" OR (process == \"securityd\" AND eventMessage BEGINSWITH \"Keychain query for process\")"], expectNonZero: true });
   const lines = result.stdout.split("\n").filter(line => /SecurityAgent\[|Keychain query for process/.test(line));
-  const deniedInRust = await runCommand({ taskId: null, stepId: null, command: "/usr/bin/log", args: ["show", "--start", localTime(start), "--end", localTime(new Date(end.getTime() + 1_000)), "--style", "compact", "--predicate", `process == "${basenameOf(process.env.SUPLEX_RUST_BIN ?? "suplex")}" AND category == "security_exception"`], expectNonZero: true });
+  const deniedInRust = await runCommand({ taskId: null, stepId: null, command: "/usr/bin/log", args: ["show", "--start", localTime(start), "--end", localTime(new Date(end.getTime() + 1_000)), "--style", "compact", "--predicate", `process == "${basenameOf(process.env.SUPLEX_BIN ?? "suplex")}" AND category == "security_exception"`], expectNonZero: true });
   return { securityAgentLines: lines.length, securityAgentSample: lines.slice(0, 5), rustKeychainDenials: deniedInRust.stdout.split("\n").filter(line => line.includes("AUTH_DENIED")).length };
 }
 function basenameOf(path: string) { return path.split("/").at(-1)!; }

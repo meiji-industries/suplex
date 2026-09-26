@@ -32,7 +32,6 @@ fn run(binary: &Path, root: &Path, port: u16, arguments: &[&str]) -> Output {
         .env("SUPLEX_REPOSITORY_ROOT", root.join("custom/repos"))
         .env("SUPLEX_WORKTREE_ROOT", root.join("custom/worktrees"))
         .env("SUPLEX_PORT", port.to_string())
-        .env("SUPLEX_RUST_PORT", (port + 1).to_string())
         .env("SUPLEX_TAILSCALE_EXPOSURE", "serve")
         .env("SUPLEX_TAILSCALE_COMMAND", "/missing/tailscale")
         .output()

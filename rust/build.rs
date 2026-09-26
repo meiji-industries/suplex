@@ -75,7 +75,7 @@ fn main() {
     .expect("write bundle index");
 
     let revision = git(&manifest, &["rev-parse", "HEAD"]).unwrap_or_else(|| "unknown".to_owned());
-    println!("cargo:rustc-env=SUPLEX_RUST_REVISION={revision}");
+    println!("cargo:rustc-env=SUPLEX_REVISION={revision}");
     if let Some(head) = git(&manifest, &["rev-parse", "--git-path", "HEAD"]) {
         println!("cargo:rerun-if-changed={head}");
     }

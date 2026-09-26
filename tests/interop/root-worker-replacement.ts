@@ -1,4 +1,4 @@
-// Run with a tested Rust binary in SUPLEX_RUST_BIN.
+// Run with a tested Rust binary in SUPLEX_BIN.
 import { createHash, randomUUID } from "node:crypto";
 import { deepStrictEqual, equal, match, notEqual } from "node:assert/strict";
 import { nativeFixture } from "../helpers/native-browser.js";

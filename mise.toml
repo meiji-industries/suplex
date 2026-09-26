@@ -63,7 +63,7 @@ run = '''
 set -e
 [ -f dist/web/suplex-ui.js ] || pnpm exec vite build
 (cd rust && unset RUSTUP_TOOLCHAIN && cargo build --bin suplex --features github-test-endpoint)
-export SUPLEX_RUST_BIN="${CARGO_TARGET_DIR:-$PWD/rust/target}/debug/suplex"
+export SUPLEX_BIN="${CARGO_TARGET_DIR:-$PWD/rust/target}/debug/suplex"
 export SUPLEX_DETERMINISTIC_CODEX_RUN=1
 for phase in deliver deliver_pr answer restart cancel deliver_claude direct_build independent_review competing_plans refine_pull_request; do
   SUPLEX_DETERMINISTIC_PHASE=$phase pnpm exec tsx tests/interop/real-codex-standard.ts
@@ -76,7 +76,7 @@ run = '''
 set -e
 [ -f dist/web/suplex-ui.js ] || pnpm exec vite build
 (cd rust && unset RUSTUP_TOOLCHAIN && cargo build --bin suplex --features github-test-endpoint)
-export SUPLEX_RUST_BIN="${CARGO_TARGET_DIR:-$PWD/rust/target}/debug/suplex"
+export SUPLEX_BIN="${CARGO_TARGET_DIR:-$PWD/rust/target}/debug/suplex"
 for script in root-delivery-inspection root-image root-worker-evidence root-worker-replacement task-timeline; do
   echo "[interop] $script" >&2
   pnpm exec tsx --import ./tests/helpers/interop-deadline.ts tests/interop/$script.ts
@@ -89,7 +89,7 @@ run = "pnpm exec tsx scripts/dev.ts --stop"
 
 [tasks."dev:status"]
 run = '''
-port=${SUPLEX_PORT:-${SUPLEX_RUST_PORT:-$((${CONDUCTOR_PORT:-4111} + 2))}}
+port=${SUPLEX_PORT:-$((${CONDUCTOR_PORT:-4111} + 2))}
 lsof -nP -iTCP:$port -sTCP:LISTEN || echo "dev stack not running (port $port free)"
 '''
 

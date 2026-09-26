@@ -1,7 +1,7 @@
 # Codex Node version
 
 This records a historical environment issue from the TypeScript backend.
-The current Suplex server is a native Rust binary; Node and pnpm remain build
+The current Suplex server is a native binary; Node and pnpm remain build
 and development tools.
 
 ## Symptom

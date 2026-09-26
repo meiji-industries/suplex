@@ -807,7 +807,7 @@ mod tests {
     fn default_selection_only_changes_untouched_fresh_install_profiles() {
         static NEXT_DATABASE: AtomicU64 = AtomicU64::new(10_000);
         let path = std::env::temp_dir().join(format!(
-            "suplex-rust-profile-defaults-{}-{}.sqlite",
+            "suplex-profile-defaults-{}-{}.sqlite",
             std::process::id(),
             NEXT_DATABASE.fetch_add(1, Ordering::Relaxed)
         ));
@@ -866,7 +866,7 @@ mod tests {
     fn profile_commands_keep_role_visibility_references_and_audit_atomic() {
         static NEXT_DATABASE: AtomicU64 = AtomicU64::new(0);
         let path = std::env::temp_dir().join(format!(
-            "suplex-rust-profiles-{}-{}.sqlite",
+            "suplex-profiles-{}-{}.sqlite",
             std::process::id(),
             NEXT_DATABASE.fetch_add(1, Ordering::Relaxed)
         ));

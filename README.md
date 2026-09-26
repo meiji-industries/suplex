@@ -28,7 +28,7 @@ grants, and verify an agent integration after an upgrade.
 | GitHub | Remote branches, pull requests, checks, reviews, and merges |
 | Herdr | The visible attachment to a native session |
 
-Suplex runs a native Rust API and task host beside a SQLite database. There is no
+Suplex runs a native API and task host beside a SQLite database. There is no
 phase engine, Temporal history, separate integrator agent, or completion-file
 protocol. Database records preserve Suplex-owned intent and correlate native
 observations. They do not require a second copy of GitHub progress.
@@ -90,7 +90,7 @@ mise run dev
 ```
 
 Reuse an existing stack when `dev:status` reports one. Frontend changes use Vite
-HMR. Rust changes require a restart under `mise run dev`; `mise run dev:watch`
+HMR. Native host changes require a restart under `mise run dev`; `mise run dev:watch`
 rebuilds and restarts the native host on changes. `mise run down` stops this
 checkout's owned development processes. The default development port is 4113.
 
@@ -103,7 +103,7 @@ for this checkout.
 The simplest install is the desktop app: open `Suplex-<version>-arm64.dmg`
 (Apple silicon) or `Suplex-<version>-x64.dmg` (Intel),
 drag Suplex to Applications, and choose **Run locally**. The app
-ships the native Rust server and web assets inside the bundle. It
+ships the native server and web assets inside the bundle. It
 checks the Mac, installs Apple's developer tools (for git) and Herdr if they
 are missing, prepares a database under `~/Library/Application Support/Suplex`,
 and starts Suplex on `127.0.0.1`. No git, Homebrew, GitHub account, or
@@ -200,7 +200,7 @@ pnpm run suplex restart
 Lifecycle commands inspect recorded process identities before signaling them.
 They do not kill processes by broad name or port. `/health` reports host checks.
 Checkout installations use the native supervisor. Restart the development
-stack after Rust changes; the runtime recovers native session work from its
+stack after native host changes; the runtime recovers native session work from its
 own evidence.
 
 ## Back up and restore
@@ -243,13 +243,13 @@ guard and confirms that the guard remains active after the suite exits.
 pnpm verify
 ```
 
-Verification runs typecheck, lint, TypeScript and Rust tests, a production frontend build, a native test build, and Playwright
+Verification runs typecheck, lint, TypeScript and native tests, a production frontend build, a native test build, and Playwright
 browser smoke tests for session setup, project creation, and the task lifecycle.
 Task creation and start run at desktop and narrow widths. Follow the
 [browser test budget](AGENTS.md#browser-test-budget) when adding coverage or
 choosing which browser tests to run during development.
 
-The Rust tests and deterministic interop journeys exercise native session and
+The native tests and deterministic interop journeys exercise native session and
 delivery behavior. Real provider sign-in, installed services, GitHub writes,
 and packaged desktop behavior require separate verification.
 Database migrations are append-only. Follow [the migration guide](docs/database-migrations.md).

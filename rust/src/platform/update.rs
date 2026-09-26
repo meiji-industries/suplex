@@ -301,7 +301,7 @@ fn start_with_recovery(
 }
 
 pub fn snapshot(installation: &Installation, check: bool, admin: bool) -> Value {
-    let current = env!("SUPLEX_RUST_REVISION");
+    let current = env!("SUPLEX_REVISION");
     let mut status = read_state(installation);
     if status["kind"] == "applying" && update_running(installation).is_ok_and(|running| !running) {
         status = failure("apply", "The update process stopped before completion.");

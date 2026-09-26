@@ -361,7 +361,7 @@ fn stale_apply_is_recoverable_and_running_revision_survives_checkout_advance() {
         remote_revision
     );
     let checked = fixture.update(true);
-    assert_eq!(checked["currentRevision"], env!("SUPLEX_RUST_REVISION"));
+    assert_eq!(checked["currentRevision"], env!("SUPLEX_REVISION"));
     assert_eq!(checked["availableRevision"], remote_revision);
     assert_eq!(checked["status"]["kind"], "available");
     fs::write(

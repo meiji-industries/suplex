@@ -21,8 +21,8 @@ test("projects desktop flow creates a project and opens its configuration", { ti
   await new Promise<void>(accept => github.listen(0, "127.0.0.1", accept));
   const address = github.address();
   if (!address || typeof address === "string") throw new Error("Fake GitHub did not listen");
-  const previousGithubApi = process.env.SUPLEX_RUST_TEST_GITHUB_API;
-  process.env.SUPLEX_RUST_TEST_GITHUB_API = `http://127.0.0.1:${address.port}`;
+  const previousGithubApi = process.env.SUPLEX_TEST_GITHUB_API;
+  process.env.SUPLEX_TEST_GITHUB_API = `http://127.0.0.1:${address.port}`;
   const fixture = await nativeBrowser();
   try {
     // An existing checkout exercises native project admission without network credentials.
@@ -59,8 +59,8 @@ test("projects desktop flow creates a project and opens its configuration", { ti
     expect(fixture.errors).toEqual([]);
   } finally {
     await fixture.close();
-    if (previousGithubApi === undefined) delete process.env.SUPLEX_RUST_TEST_GITHUB_API;
-    else process.env.SUPLEX_RUST_TEST_GITHUB_API = previousGithubApi;
+    if (previousGithubApi === undefined) delete process.env.SUPLEX_TEST_GITHUB_API;
+    else process.env.SUPLEX_TEST_GITHUB_API = previousGithubApi;
     await new Promise<void>(accept => github.close(() => accept()));
   }
 });

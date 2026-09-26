@@ -16,8 +16,8 @@ test("native fixtures block Herdr even when provider commands are inherited", as
     await writeFile(join(root, "suplex"), '#!/bin/sh\nherdr workspace list\nprintf "%s\\n" "$?" "$SUPLEX_CODEX_COMMAND" > "$SUPLEX_TEST_PROBE_OUTPUT"\nexit 73\n', { mode: 0o700 });
     await writeFile(join(root, "suplex-ui.js"), "");
     vi.stubEnv("PATH", `${root}:${process.env.PATH ?? "/usr/bin:/bin"}`);
-    vi.stubEnv("SUPLEX_RUST_BIN", join(root, "suplex"));
-    vi.stubEnv("SUPLEX_RUST_ASSETS_DIR", root);
+    vi.stubEnv("SUPLEX_BIN", join(root, "suplex"));
+    vi.stubEnv("SUPLEX_ASSETS_DIR", root);
     vi.stubEnv("SUPLEX_CODEX_COMMAND", "inherited-codex");
     vi.stubEnv("SUPLEX_TEST_HERDR_MARKER", marker);
     vi.stubEnv("SUPLEX_TEST_PROBE_OUTPUT", output);

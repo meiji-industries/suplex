@@ -71,7 +71,7 @@ fn finish(mut response: Response, cookies: Vec<String>) -> Response {
 }
 
 pub fn current_revision() -> Option<&'static str> {
-    let revision = env!("SUPLEX_RUST_REVISION");
+    let revision = env!("SUPLEX_REVISION");
     (revision.len() == 40
         && revision
             .bytes()

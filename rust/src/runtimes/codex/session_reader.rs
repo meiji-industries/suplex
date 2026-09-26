@@ -75,10 +75,10 @@ mod tests {
 
     #[test]
     fn session_path_rejects_traversal_and_uses_database_installation() {
-        let database = Path::new("/tmp/suplex/.suplex-rust/suplex.db");
+        let database = Path::new("/tmp/suplex/.suplex/suplex.db");
         assert_eq!(
             session_directory(database, "session:1").unwrap(),
-            Path::new("/tmp/suplex/.suplex-rust/runtime/task-sessions/session:1")
+            Path::new("/tmp/suplex/.suplex/runtime/task-sessions/session:1")
         );
         assert!(session_directory(database, "../outside").is_err());
         assert!(session_directory(database, "").is_err());

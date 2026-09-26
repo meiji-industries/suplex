@@ -70,7 +70,7 @@ jobs:
     env:
       CI: "true"
       TEST_WORKERS: ${{ inputs.workers || '8' }}
-      SUPLEX_RUST_BIN: ${{ github.workspace }}/rust/target/debug/suplex
+      SUPLEX_BIN: ${{ github.workspace }}/rust/target/debug/suplex
     steps:
       - uses: actions/checkout@v5
 

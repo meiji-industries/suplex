@@ -23,8 +23,8 @@ async function loopbackPort(): Promise<number> {
 type FixtureOptions = { providerMode?: "isolated" | "inherited" };
 
 async function startRustServer(root: string, port: number, options: FixtureOptions): Promise<() => Promise<void>> {
-  const executable = resolve(process.env.SUPLEX_RUST_BIN ?? "rust/target/debug/suplex");
-  const assets = resolve(process.env.SUPLEX_RUST_ASSETS_DIR ?? "dist/web");
+  const executable = resolve(process.env.SUPLEX_BIN ?? "rust/target/debug/suplex");
+  const assets = resolve(process.env.SUPLEX_ASSETS_DIR ?? "dist/web");
   await stat(executable);
   await stat(join(assets, "suplex-ui.js"));
   const isolated = options.providerMode !== "inherited";
@@ -41,19 +41,19 @@ async function startRustServer(root: string, port: number, options: FixtureOptio
       SUPLEX_CODEX_COMMAND: "/usr/bin/false", SUPLEX_CLAUDE_COMMAND: "/usr/bin/false",
       SUPLEX_OPENCODE_COMMAND: "/usr/bin/false", SUPLEX_DEVIN_COMMAND: "/usr/bin/false",
     } : {}),
-    SUPLEX_ENV_FILE: join(root, "suplex.env"), SUPLEX_RUST_ROOT: root,
-    SUPLEX_PORT: String(port), SUPLEX_RUST_PORT: String(port),
+    SUPLEX_ENV_FILE: join(root, "suplex.env"), SUPLEX_ROOT: root,
+    SUPLEX_PORT: String(port),
     SUPLEX_ACCESS_MODE: "local", SUPLEX_BIND_ADDRESS: "127.0.0.1",
     SUPLEX_DATA_ROOT: data, SUPLEX_DATABASE_PATH: join(data, "suplex.sqlite"),
     SUPLEX_ARTIFACT_ROOT: join(data, "artifacts"), SUPLEX_RUNTIME_ROOT: join(data, "runtime"),
     SUPLEX_REPOSITORY_ROOT: join(root, "repositories"), SUPLEX_WORKTREE_ROOT: join(root, "worktrees"),
-    SUPLEX_RUST_ASSETS_DIR: assets,
+    SUPLEX_ASSETS_DIR: assets,
     GH_CONFIG_DIR: join(root, "gh-config"), GH_TOKEN: "", GITHUB_TOKEN: "",
   }, stdio: ["ignore", "pipe", "pipe"] });
   let output = "";
   let failure: Error | undefined;
   child.once("error", error => { failure = error; });
-  const outputFile = process.env.SUPLEX_RUST_OUTPUT_FILE;
+  const outputFile = process.env.SUPLEX_OUTPUT_FILE;
   for (const stream of [child.stdout, child.stderr]) stream.on("data", chunk => { output = (output + String(chunk)).slice(-8_000); if (outputFile) appendFileSync(outputFile, chunk); });
   const exited = new Promise<void>(accept => child.once("close", () => accept()));
   let stopped = false;
@@ -85,7 +85,7 @@ async function startRustServer(root: string, port: number, options: FixtureOptio
 
 export async function nativeFixture(host = "127.0.0.1", reachableAddress?: string, options: FixtureOptions = {}) {
   if (host !== "127.0.0.1") throw new Error("Rust browser fixtures require loopback");
-  const directory = await mkdtemp(join(tmpdir(), "suplex-rust-browser-"));
+  const directory = await mkdtemp(join(tmpdir(), "suplex-browser-"));
   const port = reachableAddress ? Number(new URL(reachableAddress).port) : await loopbackPort();
   const base = `http://127.0.0.1:${port}`;
   let stopRust: (() => Promise<void>) | undefined;

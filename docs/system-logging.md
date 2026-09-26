@@ -1,6 +1,6 @@
 # System event log
 
-The native host writes lifecycle observations to `system.log`. An installed checkout uses `.suplex/logs/system.log`; a development checkout uses `.suplex-rust/logs/system.log`. Each line is one JSON object. Native agent transcripts remain in the provider's own storage. A Coordinator bridge sends selected events to the host over a local socket. If the host is absent, the bridge continues its tool call and drops the event.
+The native host writes lifecycle observations to `system.log`. A checkout uses `.suplex/logs/system.log`. Each line is one JSON object. Native agent transcripts remain in the provider's own storage. A Coordinator bridge sends selected events to the host over a local socket. If the host is absent, the bridge continues its tool call and drops the event.
 
 ## Record fields
 
@@ -18,7 +18,7 @@ If `system.log` ends with a partial line after a crash or starts with a malforme
 
 ## Reconstruct a task timeline
 
-Run this command from the repository root of an installed checkout. Replace `TASK_ID` with the task ID; substitute `.suplex-rust` for `.suplex` in a development checkout.
+Run this command from the repository root of the checkout. Replace `TASK_ID` with the task ID.
 
 ```bash
 jq -c 'select(.taskId == "TASK_ID" or .prerequisiteTaskId == "TASK_ID") | {time, type, state, taskId, prerequisiteTaskId, source, trigger, requestId, clientId, causeEventId, eventId, reason}' .suplex/logs/system*.log

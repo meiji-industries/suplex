@@ -149,7 +149,7 @@ if (phase === "deliver_pr" || workflowPhase) {
   await new Promise<void>(accept => githubApi!.listen(0, "127.0.0.1", accept));
   const address = githubApi.address();
   if (!address || typeof address === "string") throw new Error("The loopback GitHub API did not bind");
-  process.env.SUPLEX_RUST_TEST_GITHUB_API = `http://127.0.0.1:${address.port}`;
+  process.env.SUPLEX_TEST_GITHUB_API = `http://127.0.0.1:${address.port}`;
   progress(`loopback GitHub API on ${address.port}`);
 }
 const controlDirectory = deterministic && ["restart", "cancel"].includes(phase) ? await mkdtemp(join(tmpdir(), "suplex-codex-control-")) : null;

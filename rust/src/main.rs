@@ -101,7 +101,7 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
         installation.database.clone(),
         installation.artifacts.clone(),
     );
-    println!("Suplex Rust revision: {}", env!("SUPLEX_RUST_REVISION"));
+    println!("Suplex revision: {}", env!("SUPLEX_REVISION"));
     println!("URL: {}", installation.reachable_address);
     println!("Installation: {}", installation.root.display());
     println!(
@@ -125,7 +125,7 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
     .with_artifact_root(installation.artifacts.clone())
     .with_task_host(task_host.clone());
     #[cfg(debug_assertions)]
-    let state = match std::env::var_os("SUPLEX_RUST_ASSETS_DIR") {
+    let state = match std::env::var_os("SUPLEX_ASSETS_DIR") {
         Some(directory) => state.with_dev_assets_dir(directory.into()),
         None => state,
     };

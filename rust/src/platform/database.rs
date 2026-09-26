@@ -608,7 +608,7 @@ mod tests {
     fn temporary_database() -> std::path::PathBuf {
         static NEXT_DATABASE: AtomicU64 = AtomicU64::new(0);
         std::env::temp_dir().join(format!(
-            "suplex-rust-db-{}-{}-{}.sqlite",
+            "suplex-db-{}-{}-{}.sqlite",
             std::process::id(),
             NEXT_DATABASE.fetch_add(1, Ordering::Relaxed),
             SystemTime::now()

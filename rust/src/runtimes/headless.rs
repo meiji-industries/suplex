@@ -248,12 +248,22 @@ fn group_alive(record: &HeadlessTurnRecord) -> io::Result<bool> {
     }
 }
 
+/// `compare_identity` checks pid, process group, and start time before the
+/// executable and argv. Past those three it is the recorded process, even when
+/// the launch record captured it mid-exec (for example as `(sh)`).
+fn same_process(identity: IdentityMatch) -> bool {
+    matches!(
+        identity,
+        IdentityMatch::Exact | IdentityMatch::WrongExecutable | IdentityMatch::WrongArgv
+    )
+}
+
 pub fn running(record: &HeadlessTurnRecord) -> io::Result<bool> {
     match compare_identity(
         &record.owned_identity(),
         inspect_process(record.pid).as_ref(),
     ) {
-        IdentityMatch::Exact => Ok(true),
+        identity if same_process(identity) => Ok(true),
         IdentityMatch::OwnerUncertain | IdentityMatch::NotRunning => group_alive(record),
         // TypeScript `headlessTurnRunning`: another process now holds the pid, so the recorded one is gone.
         _ => Ok(false),
@@ -265,7 +275,9 @@ fn signal_owned(record: &HeadlessTurnRecord, signal: Signal) -> io::Result<()> {
         &record.owned_identity(),
         inspect_process(record.pid).as_ref(),
     ) {
-        IdentityMatch::Exact => Some(record.process_identity.process_group == record.pid),
+        identity if same_process(identity) => {
+            Some(record.process_identity.process_group == record.pid)
+        }
         IdentityMatch::NotRunning if group_alive(record)? => Some(true),
         IdentityMatch::NotRunning => None,
         other => {
@@ -673,6 +685,43 @@ mod tests {
         );
         stop_session(&directory, Some("codex-session-2")).unwrap();
         assert!(!running(&record).unwrap());
+        fs::remove_dir_all(directory).unwrap();
+    }
+
+    /// The launch record can capture the shell mid-exec as `(sh)`. The same pid,
+    /// process group, and start time are still the same process: it runs and
+    /// stops, and is never reported gone while it works.
+    #[test]
+    fn a_record_captured_mid_exec_still_owns_the_running_process() {
+        let mut suffix = [0_u8; 8];
+        getrandom::fill(&mut suffix).unwrap();
+        let directory = std::env::temp_dir().join(format!(
+            "suplex-headless-exec-{}",
+            u64::from_ne_bytes(suffix)
+        ));
+        let args = vec!["-c".to_owned(), "sleep 10".to_owned()];
+        let environment = HashMap::new();
+        let mut record = dispatch(
+            DispatchInput {
+                directory: &directory,
+                worktree: Path::new("/tmp"),
+                session_id: "claude-session-exec",
+                turn_id: "message-exec",
+                executable: Path::new("/bin/sh"),
+                args: &args,
+                prompt: "keep running\n",
+                environment: &environment,
+            },
+            |_| Ok(true),
+        )
+        .unwrap();
+        record.process_identity.command = "(sh)".to_owned();
+        record.process_identity.executable = "(sh)".to_owned();
+        record.process_identity.argv = vec!["(sh)".to_owned()];
+        write_record(&directory.join("turn.json"), &record).unwrap();
+        assert!(running(&record).unwrap());
+        stop_session(&directory, Some("claude-session-exec")).unwrap();
+        assert!(inspect_process(record.pid).is_none() || !group_alive(&record).unwrap());
         fs::remove_dir_all(directory).unwrap();
     }
 

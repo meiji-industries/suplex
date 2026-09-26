@@ -1,0 +1,15 @@
+{
+  "contract": "projects.ProjectRepositoryStatusSchema",
+  "case": "null",
+  "input": null,
+  "expected": {
+    "accepted": false,
+    "error": [
+      {
+        "code": "invalid-invalid_type",
+        "field": ".",
+        "message": "Request value is invalid"
+      }
+    ]
+  }
+}

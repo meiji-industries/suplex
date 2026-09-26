@@ -237,7 +237,6 @@ impl AgentDelivery {
         ).optional()?)
     }
 
-    #[allow(clippy::too_many_arguments)]
     fn insert_provenance(
         &self,
         id: Option<&str>,

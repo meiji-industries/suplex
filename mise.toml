@@ -75,6 +75,9 @@ cargo test
 
 [tasks."test:parity"]
 run = '''
+set -e
+pnpm exec tsx scripts/rust-ratchet.ts --self-test
+pnpm exec tsx scripts/rust-ratchet.ts
 pnpm exec tsx scripts/rust-route-coverage.ts
 pnpm exec tsx tests/parity/generate.ts
 pnpm exec tsx tests/parity/hash-bytes/generate.ts

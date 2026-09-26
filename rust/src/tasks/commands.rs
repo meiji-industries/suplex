@@ -443,7 +443,6 @@ pub fn create_user_task(
     )
 }
 
-#[allow(clippy::too_many_arguments)]
 pub fn create_user_task_with_images(
     database: &mut SuplexDatabase,
     actor_user_id: &str,
@@ -471,7 +470,6 @@ pub struct ImageFiles<'a> {
     pub images: &'a [DecodedTaskImage],
 }
 
-#[allow(clippy::too_many_arguments)]
 fn create_user_task_inner(
     database: &mut SuplexDatabase,
     actor_user_id: &str,

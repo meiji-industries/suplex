@@ -49,6 +49,8 @@ jobs:
           cache: pnpm
           cache-dependency-path: pnpm-lock.yaml
       - run: pnpm install --frozen-lockfile
+      - run: pnpm exec tsx scripts/rust-ratchet.ts --self-test
+      - run: pnpm exec tsx scripts/rust-ratchet.ts
       - name: Generate contract parity fixtures from current Zod schemas
         run: |
           pnpm exec tsx tests/parity/generate.ts

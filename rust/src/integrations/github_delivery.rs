@@ -642,7 +642,6 @@ impl Github {
     }
 
     /// TypeScript `api`: one GitHub request with the source's failure classes.
-    #[allow(clippy::too_many_arguments)]
     async fn api(
         &self,
         method: &str,

@@ -12,6 +12,9 @@ try {
   const task = await fixture.createTask({ title: "Inspect attached design", idempotencyKey: "root-image-interop-1", startImmediately: false, images: [image] });
   const foreign = await fixture.createTask({ title: "Foreign attachment", idempotencyKey: "root-image-interop-2", startImmediately: false, images: [image] });
   const { server } = await nativeRootBridge(fixture, task.id);
+  const denied = await runMcpProcess(server, { ...process.env, ...server.environment, SUPLEX_ROOT_TOKEN: "invalid-token" }, initializeAndList);
+  equal(denied.responses.some((candidate) => typeof candidate === "object" && candidate !== null && "id" in candidate && candidate.id === 1), false);
+  equal(denied.exitCode === 0, false);
   const call = async (artifactId: string) => {
     const result = await runMcpProcess(server, { ...process.env, ...server.environment }, [
       ...initializeAndList,

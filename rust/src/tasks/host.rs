@@ -806,7 +806,7 @@ fn recover_prepared_root_blocking(
             session_id: session.id.clone(),
             generation: session.generation,
         };
-        let scope = TaskScope {
+        let scope = worktree.map(|worktree| TaskScope {
             database_path,
             artifact_root,
             task_id,
@@ -817,11 +817,7 @@ fn recover_prepared_root_blocking(
                 ..WorkflowLaunch::default()
             },
             role: TaskRole::Root(&identity),
-            worktree: Path::new(worktree.ok_or_else(|| TaskError::Failure {
-                status: 409,
-                code: "worktree_missing",
-                message: "The task has no worktree".into(),
-            })?),
+            worktree: Path::new(worktree),
             model,
             reasoning_effort: reasoning,
             instance_home_directory: profile.instance_home_directory().map(Path::new),
@@ -831,10 +827,10 @@ fn recover_prepared_root_blocking(
             excluded_environment_keys: &project_scope.excluded_keys,
             executable,
             inherited_environment,
-        };
+        });
         // TypeScript `ensureSession`: a runtime restarts what it needs, such as a lost OpenCode server, before observation.
-        if worktree.is_some() {
-            harness.ensure_session(&scope)?;
+        if let Some(scope) = &scope {
+            harness.ensure_session(scope)?;
         }
         let mut turn = turn.clone();
         let before = loop {
@@ -882,9 +878,11 @@ fn recover_prepared_root_blocking(
             &turn.id,
             Utc::now(),
         )?;
-        if worktree.is_none() {
-            return Err(TaskError::internal("Task worktree is not prepared").into());
-        }
+        let scope = scope.ok_or_else(|| TaskError::Failure {
+            status: 409,
+            code: "worktree_missing",
+            message: "The task has no worktree".into(),
+        })?;
         let prompt = task_context_prompt(
             &turn.prompt_text,
             project_scope.context.as_deref(),
@@ -1060,7 +1058,7 @@ fn recover_prepared_worker_blocking(
             database_path,
             task_id,
         );
-        let scope = TaskScope {
+        let scope = worktree.map(|worktree| TaskScope {
             database_path,
             artifact_root,
             task_id,
@@ -1068,11 +1066,7 @@ fn recover_prepared_worker_blocking(
             native_session_id: &native_id,
             workflow: delegate.workflow,
             role: TaskRole::Worker(delegate.purpose),
-            worktree: Path::new(worktree.ok_or_else(|| TaskError::Failure {
-                status: 409,
-                code: "worktree_missing",
-                message: "The task has no worktree".into(),
-            })?),
+            worktree: Path::new(worktree),
             model,
             reasoning_effort: reasoning,
             instance_home_directory: profile.instance_home_directory().map(Path::new),
@@ -1082,9 +1076,9 @@ fn recover_prepared_worker_blocking(
             excluded_environment_keys: &project_scope.excluded_keys,
             executable,
             inherited_environment,
-        };
-        if worktree.is_some() {
-            harness.ensure_session(&scope)?;
+        });
+        if let Some(scope) = &scope {
+            harness.ensure_session(scope)?;
         }
         let (before, replayable) = observe_or_recover_fenced(
             &mut database,
@@ -1112,9 +1106,11 @@ fn recover_prepared_worker_blocking(
         if dependency_blocked(&rows) {
             return Ok(before);
         }
-        if worktree.is_none() {
-            return Err(TaskError::internal("Task worktree is not prepared").into());
-        }
+        let scope = scope.ok_or_else(|| TaskError::Failure {
+            status: 409,
+            code: "worktree_missing",
+            message: "The task has no worktree".into(),
+        })?;
         let prompt = task_context_prompt(
             &turn.prompt_text,
             project_scope.context.as_deref(),
@@ -2476,7 +2472,7 @@ mod tests {
         let error = recover_prepared_root(&database_path, &base, &task_id, None, &environment)
             .await
             .unwrap_err();
-        assert_eq!(error.to_string(), "Task worktree is not prepared");
+        assert_eq!(error.to_string(), "The task has no worktree");
         fs::remove_dir_all(base).unwrap();
     }
 

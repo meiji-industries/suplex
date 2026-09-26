@@ -1,5 +1,9 @@
 {
   "serde_json_value": 167,
   "io_error_other": 95,
-  "sql_outside_storage": 704
+  "sql_outside_storage": 704,
+  "json_field_index": 1683,
+  "empty_string_default": 51,
+  "block_on_outside_shared": 15,
+  "database_open": 109
 }

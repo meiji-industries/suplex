@@ -64,10 +64,6 @@ fn authorize(
     }
 }
 
-fn not_found() -> Box<dyn Error> {
-    TaskError::not_found().into()
-}
-
 fn scoped(
     database: &SuplexDatabase,
     user_id: &str,
@@ -81,9 +77,9 @@ fn scoped(
             |row| row.get(0),
         )
         .optional()?;
-    let company_id = company_id.ok_or_else(not_found)?;
+    let company_id = company_id.ok_or_else(TaskError::not_found)?;
     companies::require_company_access(database, user_id, &company_id)?;
-    let saved = timeline::read_saved(database, task_id)?.ok_or_else(not_found)?;
+    let saved = timeline::read_saved(database, task_id)?.ok_or_else(TaskError::not_found)?;
     let database_path = PathBuf::from(
         database
             .connection()
@@ -102,7 +98,11 @@ fn recheck(database: &SuplexDatabase, user_id: &str, task_id: &str) -> Result<()
             |row| row.get(0),
         )
         .optional()?;
-    companies::require_company_access(database, user_id, &company_id.ok_or_else(not_found)?)?;
+    companies::require_company_access(
+        database,
+        user_id,
+        &company_id.ok_or_else(TaskError::not_found)?,
+    )?;
     Ok(())
 }
 

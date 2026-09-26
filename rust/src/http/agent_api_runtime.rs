@@ -151,9 +151,6 @@ pub(crate) fn failure(error: Box<dyn Error>, runtime: bool) -> Response {
     };
     if let Some((status_code, code, details)) = task {
         let message = error.to_string();
-        if code == "experimental_not_ported" {
-            return auth::not_ported();
-        }
         let mut body = Map::new();
         body.insert("error".into(), json!(message));
         if runtime {

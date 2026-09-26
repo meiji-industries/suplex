@@ -128,10 +128,6 @@ fn authorize(
     }
 }
 
-fn not_found() -> Box<dyn Error> {
-    TaskError::not_found().into()
-}
-
 fn read_task(
     database: &SuplexDatabase,
     user_id: &str,
@@ -145,7 +141,7 @@ fn read_task(
             |row| row.get(0),
         )
         .optional()?;
-    let company_id = company_id.ok_or_else(not_found)?;
+    let company_id = company_id.ok_or_else(TaskError::not_found)?;
     companies::require_company_access(database, user_id, &company_id)?;
     let rows = root_session_store::root_observation_rows(database, task_id)?;
     let database_path = PathBuf::from(

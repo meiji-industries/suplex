@@ -121,10 +121,6 @@ fn authorize(
     }
 }
 
-fn not_found() -> Box<dyn Error> {
-    TaskError::not_found().into()
-}
-
 fn respond(result: Result<Value, Box<dyn Error>>, cookies: Vec<String>) -> Response {
     let mut response = match result {
         Ok(value) => {
@@ -152,7 +148,7 @@ fn task(
     user_id: &str,
     task_id: &str,
 ) -> Result<AgentTask, Box<dyn Error>> {
-    let record = repository::task_by_id(database, task_id)?.ok_or_else(not_found)?;
+    let record = repository::task_by_id(database, task_id)?.ok_or_else(TaskError::not_found)?;
     companies::require_company_access(database, user_id, &record.company_id)?;
     Ok(AgentTask {
         id: record.id,

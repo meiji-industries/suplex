@@ -50,10 +50,6 @@ fn params(task_id: &str, artifact_id: &str) -> Result<(), Box<Response>> {
     }
 }
 
-fn not_found() -> Box<dyn Error> {
-    TaskError::not_found().into()
-}
-
 fn scoped_artifact(
     state: &AppState,
     user_id: &str,
@@ -69,9 +65,10 @@ fn scoped_artifact(
                 |row| row.get(0),
             )
             .optional()?;
-        let company_id = company_id.ok_or_else(not_found)?;
+        let company_id = company_id.ok_or_else(TaskError::not_found)?;
         companies::require_company_access(database, user_id, &company_id)?;
-        root_session_store::task_artifact(database, task_id, artifact_id)?.ok_or_else(not_found)
+        root_session_store::task_artifact(database, task_id, artifact_id)?
+            .ok_or_else(|| TaskError::not_found().into())
     })
 }
 
@@ -85,7 +82,11 @@ fn reauthorize(state: &AppState, user_id: &str, task_id: &str) -> Result<(), Box
                 |row| row.get(0),
             )
             .optional()?;
-        companies::require_company_access(database, user_id, &company_id.ok_or_else(not_found)?)?;
+        companies::require_company_access(
+            database,
+            user_id,
+            &company_id.ok_or_else(TaskError::not_found)?,
+        )?;
         Ok(())
     })
 }

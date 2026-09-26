@@ -29,10 +29,6 @@ pub struct AgentPrincipal {
     pub company_id: String,
 }
 
-fn failure(message: impl Into<String>, status_code: u16) -> Box<dyn std::error::Error> {
-    TaskError::new(message, status_code).into()
-}
-
 /// TypeScript `mergeBlocker`: the single reason this pull request cannot merge now.
 pub fn merge_blocker(
     observation: Option<&Observation>,
@@ -179,7 +175,7 @@ impl AgentDelivery {
             params![task_id, principal.company_id, principal.agent_id],
             |row| Ok((row.get(0)?, row.get(1)?)),
         ).optional()?;
-        row.ok_or_else(|| failure("Not found", 404))
+        Ok(row.ok_or_else(TaskError::not_found)?)
     }
 
     fn control(&self, task_id: &str) -> DatabaseResult<Value> {
@@ -273,7 +269,7 @@ impl AgentDelivery {
                 "SELECT id, generation FROM suplex_task_sessions WHERE task_id = ?1 AND kind = 'root' AND is_current = 1",
                 [task_id], |row| Ok((row.get(0)?, row.get(1)?)),
             ).optional()?;
-            let (root_id, generation) = root.ok_or_else(|| failure("Coordinator is not ready. Retry the request.", 409))?;
+            let (root_id, generation) = root.ok_or_else(|| TaskError::new("Coordinator is not ready. Retry the request.", 409))?;
             let time = now_millis_rfc3339();
             database.connection().execute(
                 "INSERT INTO suplex_task_turns (id, task_id, session_id, generation, prompt_hash, prompt_text, status, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'pending_prompt', ?7, ?7)",
@@ -331,28 +327,28 @@ impl AgentDelivery {
         let (company, _) = self.task(principal, task_id)?;
         let control = self.control(task_id)?;
         if control["status"] != "active" {
-            return Err(failure(
-                "Start the task before you request delivery repair.",
-                409,
-            ));
+            return Err(
+                TaskError::new("Start the task before you request delivery repair.", 409).into(),
+            );
         }
         if let Some(blocking) = self.blocking_dependencies(task_id)?.first() {
-            return Err(failure(
+            return Err(TaskError::new(
                 format!(
                     "Task {blocking} is not delivered. Wait for its delivery instead of a delivery repair."
                 ),
                 409,
-            ));
+            ).into());
         }
         let observation = self.operations.checks_observation(task_id).await?;
         let Some(observed) = observation.filter(|o| o.exists && o.number.is_some()) else {
-            return Err(failure("The task has no pull request.", 409));
+            return Err(TaskError::new("The task has no pull request.", 409).into());
         };
         if !needs_reconciliation(Some(&observed)) {
-            return Err(failure(
+            return Err(TaskError::new(
                 "GitHub reports no delivery problem for this pull request.",
                 409,
-            ));
+            )
+            .into());
         }
         let attempt = format!("dpr_{}", uuid::Uuid::new_v4().simple());
         self.wake_root(
@@ -396,21 +392,23 @@ impl AgentDelivery {
         let (company, _) = self.task(principal, task_id)?;
         let blocking = self.blocking_dependencies(task_id)?;
         if decision == "wait_for_dependency" && blocking.is_empty() {
-            return Err(failure(
+            return Err(TaskError::new(
                 "Every dependency of this task is delivered. Resume the task.",
                 409,
-            ));
+            )
+            .into());
         }
         if decision == "resume" {
             if let Some(first) = blocking.first() {
-                return Err(failure(
+                return Err(TaskError::new(
                     format!("Task {first} is not delivered. Wait for its delivery."),
                     409,
-                ));
+                )
+                .into());
             }
             let control = self.control(task_id)?;
             if control["status"] != "active" {
-                return Err(failure("Start the task before you resume it.", 409));
+                return Err(TaskError::new("Start the task before you resume it.", 409).into());
             }
             self.wake_root(
                 task_id,
@@ -513,16 +511,15 @@ impl AgentDelivery {
             .checks_observation(task_id)
             .await?
             .ok_or_else(|| {
-                failure(
+                TaskError::new(
                     "GitHub did not return the pull request. Retry the request.",
                     409,
                 )
             })?;
         if observation.number != Some(number) {
-            return Err(failure(
-                "The pull request number does not match this task.",
-                422,
-            ));
+            return Err(
+                TaskError::new("The pull request number does not match this task.", 422).into(),
+            );
         }
         let blocking = self.blocking_dependencies(task_id)?;
         let accepted = self.accepted(task_id)?;
@@ -531,15 +528,16 @@ impl AgentDelivery {
             blocking.first().map(String::as_str),
             accepted.as_ref().map(|a| a.head_sha.as_str()),
         ) {
-            return Err(failure(blocker, 409));
+            return Err(TaskError::new(blocker, 409).into());
         }
         // A moved base is not an authorization failure: `execute` checks the
         // review against the current base.
         if observation.head_sha.as_deref() != Some(head_sha) {
-            return Err(failure(
+            return Err(TaskError::new(
                 "GitHub reports a different head. Refresh the observation before you merge.",
                 409,
-            ));
+            )
+            .into());
         }
         Ok(observation)
     }
@@ -594,10 +592,10 @@ impl AgentDelivery {
                     .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
         });
         if !valid_receipt {
-            return Err(failure("The approval receipt is not valid.", 403));
+            return Err(TaskError::new("The approval receipt is not valid.", 403).into());
         }
         if self.control(task_id)?["status"] != "active" {
-            return Err(failure("The task is not active.", 409));
+            return Err(TaskError::new("The task is not active.", 409).into());
         }
         let observation = self
             .require_eligible(task_id, number, expected_head_sha)
@@ -608,7 +606,7 @@ impl AgentDelivery {
             params![time, receipt_hash(approval_receipt), task_id, principal.agent_id, number as i64, expected_head_sha],
         )?;
         if consumed != 1 {
-            return Err(failure("The approval receipt is not valid.", 403));
+            return Err(TaskError::new("The approval receipt is not valid.", 403).into());
         }
         let control = self.control(task_id)?;
         let root_id = control["rootSessionId"].as_str().map(str::to_owned);
@@ -616,13 +614,13 @@ impl AgentDelivery {
             "SELECT id, generation FROM suplex_task_sessions WHERE task_id = ?1 AND kind = 'root' AND is_current = 1",
             [task_id], |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
         ).optional()?.filter(|(id, _)| root_id.as_deref().is_none_or(|root| root == id));
-        let (session_id, generation) =
-            root.ok_or_else(|| failure("Coordinator is not ready. Retry the request.", 409))?;
+        let (session_id, generation) = root
+            .ok_or_else(|| TaskError::new("Coordinator is not ready. Retry the request.", 409))?;
         // The accepted range is the Coordinator's own review. Suplex never rebuilds it for the agent.
         let accepted = self
             .accepted(task_id)?
             .filter(|accepted| Some(accepted.head_sha.as_str()) == observation.head_sha.as_deref())
-            .ok_or_else(|| failure(HEAD_NOT_ACCEPTED, 409))?;
+            .ok_or_else(|| TaskError::new(HEAD_NOT_ACCEPTED, 409))?;
         let identity = RootIdentity {
             task_id: task_id.to_owned(),
             session_id,

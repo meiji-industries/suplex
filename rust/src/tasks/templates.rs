@@ -17,10 +17,6 @@ use crate::{
 
 use super::response;
 
-fn failure(message: impl Into<String>, status_code: u16) -> Box<dyn Error> {
-    TaskError::new(message, status_code).into()
-}
-
 fn require_project(
     database: &SuplexDatabase,
     user_id: &str,
@@ -34,7 +30,7 @@ fn require_project(
             |row| row.get(0),
         )
         .optional()?;
-    let company_id = company_id.ok_or_else(|| failure("Not found", 404))?;
+    let company_id = company_id.ok_or_else(TaskError::not_found)?;
     companies::require_company_access(database, user_id, &company_id)?;
     Ok(())
 }
@@ -83,7 +79,7 @@ pub fn list(
 
 /// Apply workflow defaults, then the create schema.
 fn normalized(mut input: Map<String, Value>) -> Result<TemplateConfiguration, Box<dyn Error>> {
-    normalize_workflow_input(&mut input, false).map_err(|message| failure(message, 422))?;
+    normalize_workflow_input(&mut input, false).map_err(|message| TaskError::new(message, 422))?;
     Ok(task_templates::parse_stored_configuration(Value::Object(
         input,
     ))?)
@@ -101,7 +97,7 @@ fn assert_name(
         |row| row.get(0),
     )?;
     if taken {
-        return Err(failure("This template name is already in use", 409));
+        return Err(TaskError::new("This template name is already in use", 409).into());
     }
     Ok(())
 }
@@ -151,11 +147,10 @@ pub fn create_from_task(
     companies::require_company_access(
         database,
         user_id,
-        &company_id.ok_or_else(|| failure("Not found", 404))?,
+        &company_id.ok_or_else(TaskError::not_found)?,
     )?;
-    let task = serde_json::to_value(
-        response::get(database, task_id)?.ok_or_else(|| failure("Not found", 404))?,
-    )?;
+    let task =
+        serde_json::to_value(response::get(database, task_id)?.ok_or_else(TaskError::not_found)?)?;
     let advisor_profile_ids = task["advisorProfiles"]
         .as_object()
         .map(|profiles| {
@@ -191,7 +186,7 @@ fn get(
         .connection()
         .query_row(&format!("{COLUMNS} WHERE id = ?1"), [template_id], row)
         .optional()?
-        .ok_or_else(|| failure("Not found", 404))?;
+        .ok_or_else(TaskError::not_found)?;
     let current = template(stored)?;
     require_project(database, user_id, &current.project_id)?;
     Ok(current)

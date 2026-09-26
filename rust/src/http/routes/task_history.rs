@@ -103,10 +103,6 @@ fn authorize(
     }
 }
 
-fn not_found() -> Box<dyn Error> {
-    TaskError::not_found().into()
-}
-
 #[derive(Clone)]
 struct ScopedSession {
     database_path: PathBuf,
@@ -130,13 +126,17 @@ fn scoped_session(
             |row| row.get(0),
         )
         .optional()?;
-    companies::require_company_access(database, user_id, &company.ok_or_else(not_found)?)?;
+    companies::require_company_access(
+        database,
+        user_id,
+        &company.ok_or_else(TaskError::not_found)?,
+    )?;
     let rows = root_session_store::root_observation_rows(database, task_id)?;
     let session = rows
         .sessions
         .iter()
         .find(|value| value["id"] == session_id)
-        .ok_or_else(not_found)?;
+        .ok_or_else(TaskError::not_found)?;
     let fallback = if session["kind"] == "root" {
         &rows.control["rootProfile"]
     } else if let Some(role) = session["advisorRole"].as_str() {

@@ -83,10 +83,6 @@ fn record(row: &Row<'_>) -> rusqlite::Result<WorkflowRecord> {
     })
 }
 
-fn failure(message: impl Into<String>, status_code: u16) -> Box<dyn std::error::Error> {
-    TaskError::new(message, status_code).into()
-}
-
 /// TypeScript `normalizeWorkflowInput`: apply workflow defaults before schema
 /// defaults can erase whether a caller supplied a field.
 pub fn normalize_workflow_input(
@@ -237,7 +233,7 @@ fn validate(database: &SuplexDatabase, values: &Map<String, Value>) -> DatabaseR
             input.insert(to.into(), value.clone());
         }
     }
-    normalize_workflow_input(&mut input, false).map_err(|message| failure(message, 422))?;
+    normalize_workflow_input(&mut input, false).map_err(|message| TaskError::new(message, 422))?;
     let engine = values["engine"].as_str().unwrap_or_default();
     let mut checks = vec![
         (values.get("rootProfileId"), "root", "Coordinator"),
@@ -259,10 +255,9 @@ fn validate(database: &SuplexDatabase, values: &Map<String, Value>) -> DatabaseR
             |row| row.get(0),
         )?;
         if !exists {
-            return Err(failure(
-                format!("The selected {label} agent does not exist"),
-                422,
-            ));
+            return Err(
+                TaskError::new(format!("The selected {label} agent does not exist"), 422).into(),
+            );
         }
     }
     Ok(())

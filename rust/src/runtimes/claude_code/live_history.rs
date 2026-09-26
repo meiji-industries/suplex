@@ -469,4 +469,25 @@ mod tests {
         );
         fs::remove_dir_all(directory).unwrap();
     }
+
+    #[test]
+    fn live_history_waits_for_the_rest_of_a_split_utf8_character() {
+        let directory = directory();
+        let path = directory.join("turn-one.jsonl");
+        let entry = json!({"type":"assistant","uuid":"utf8-entry","message":{"id":"utf8-message","role":"assistant","content":[{"type":"text","text":"split 🥔"}]}}).to_string() + "\n";
+        let bytes = entry.as_bytes();
+        let split = bytes
+            .windows(4)
+            .position(|window| window == "🥔".as_bytes())
+            .unwrap()
+            + 1;
+        fs::write(&path, &bytes[..split]).unwrap();
+        assert!(read(&directory, None).unwrap().is_empty());
+        fs::write(&path, bytes).unwrap();
+        assert_eq!(
+            read(&directory, None).unwrap()[0]["content"][0]["text"],
+            "split 🥔"
+        );
+        fs::remove_dir_all(directory).unwrap();
+    }
 }

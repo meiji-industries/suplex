@@ -79,4 +79,3 @@ test("workflow and UI strings avoid proof-language that users cannot act on", ()
 
   expect(findings, `Rewrite user-facing string text without banned proof-language:\n${describe(findings)}`).toEqual([]);
 });
-

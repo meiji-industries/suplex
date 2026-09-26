@@ -133,3 +133,140 @@ async fn observe_group(
         Ok(())
     })
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::integrations::{bitbucket::BitbucketClient, github::Access};
+    use axum::{
+        Json, Router,
+        routing::{get, post},
+    };
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+
+    #[tokio::test]
+    async fn batched_partial_observations_keep_identical_coordinates_on_distinct_hosts_separate() {
+        let calls = Arc::new(AtomicUsize::new(0));
+        let counted = calls.clone();
+        let app = Router::new()
+            .route("/graphql", post(move |Json(body): Json<Value>| {
+                counted.fetch_add(1, Ordering::SeqCst);
+                async move {
+                    let query = body["query"].as_str().unwrap();
+                    let pattern = regex::Regex::new(r#"p(\d+): repository\(owner: "([^"]+)", name: "([^"]+)"\) \{ pullRequest\(number: (\d+)\)"#).unwrap();
+                    let data = pattern.captures_iter(query).map(|capture| {
+                        let number: u64 = capture[4].parse().unwrap();
+                        let value = if &capture[2] == "missing" { Value::Null } else {
+                            json!({"pullRequest":{"number":number,"url":format!("https://github.com/{}/{}/pull/{number}", &capture[2], &capture[3]),"headRefOid":"a".repeat(40),"state":"MERGED","mergedAt":"2026-09-10T02:32:47Z"}})
+                        };
+                        (format!("p{}", &capture[1]), value)
+                    }).collect::<serde_json::Map<String, Value>>();
+                    Json(json!({"data":data,"errors":[{"message":"A repository is unavailable"}]}))
+                }
+            }))
+            .route("/2.0/repositories/owner/repo/pullrequests/42", get(|| async {
+                let end = |branch| json!({"branch":{"name":branch},"commit":{"hash":"b".repeat(40)},"repository":{"full_name":"owner/repo"}});
+                Json(json!({"id":42,"title":"Review","state":"DECLINED","draft":false,"source":end("task"),"destination":end("main"),"links":{"html":{"href":"https://bitbucket.org/owner/repo/pull-requests/42"}}}))
+            }));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let origin = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let github = Github::new(Access::for_api(&origin, None).unwrap());
+        let mut identities = (1..=51)
+            .map(|number| {
+                (
+                    format!("owner/{}", if number % 2 == 0 { "one" } else { "two" }),
+                    number,
+                )
+            })
+            .collect::<Vec<_>>();
+        identities.push(("OWNER/TWO".into(), 1));
+        let observed = github.pull_request_states(&identities).await.unwrap();
+        assert_eq!((observed.len(), calls.load(Ordering::SeqCst)), (51, 2));
+        assert!(observed.iter().any(|pull| pull["repository"] == "owner/two"
+            && pull["number"] == 1
+            && pull["state"] == "merged"));
+        assert!(github.pull_request_states(&[]).await.unwrap().is_empty());
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+        let partial = github
+            .pull_request_states(&[("missing/repo".into(), 1), ("owner/repo".into(), 2)])
+            .await
+            .unwrap();
+        assert_eq!(partial.len(), 1);
+        assert_eq!(partial[0]["number"], 2);
+
+        let root =
+            std::env::temp_dir().join(format!("suplex-completed-hosts-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&root).unwrap();
+        let path = root.join("suplex.sqlite");
+        std::fs::copy(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../tests/parity/task-agents-native/database.sqlite"),
+            &path,
+        )
+        .unwrap();
+        let mut database = SuplexDatabase::open(&path, OpenMode::ReadWrite).unwrap();
+        database
+            .connection()
+            .execute("UPDATE suplex_task_controls SET status='cancelled'", [])
+            .unwrap();
+        let github_id = "task_1bfa5d693de94807ba20b6dd0f5218e5";
+        let bitbucket_id = "task_db685ad6da4d48309e3f7cce3127578b";
+        // SAFETY: this credential name belongs only to this test.
+        unsafe {
+            std::env::set_var("SUPLEX_TEST_COMPLETED_BITBUCKET_TOKEN", "fixture");
+        }
+        let bitbucket_connection =
+            json!({"kind":"bitbucket","tokenEnvironment":"SUPLEX_TEST_COMPLETED_BITBUCKET_TOKEN"});
+        for (task, host, connection) in [
+            (github_id, "github.com", json!({"kind":"github"})),
+            (bitbucket_id, "bitbucket.org", bitbucket_connection.clone()),
+        ] {
+            database.connection().execute("UPDATE suplex_tasks SET configuration_json=json_set(configuration_json, '$.integration.repository', json(?1)) WHERE id=?2", params![connection.to_string(),task]).unwrap();
+            let pull = json!({"repository":"owner/repo","number":42,"url":format!("https://{host}/owner/repo/pull/42"),"headSha":"a".repeat(40),"state":"open","mergedAt":null});
+            database.connection().execute("UPDATE suplex_task_controls SET status='delivered',pull_request_json=?1 WHERE task_id=?2", params![pull.to_string(),task]).unwrap();
+        }
+        let candidates = candidates(&database).unwrap();
+        assert_eq!(candidates.len(), 2);
+        for candidate in &candidates {
+            let port = if candidate.connection["kind"] == "bitbucket" {
+                ReleasePort::Bitbucket(BitbucketClient::with_origin(&candidate.connection, &origin))
+            } else {
+                ReleasePort::Github(&github)
+            };
+            observe_group(&mut database, &port, &[candidate])
+                .await
+                .unwrap();
+        }
+        for (task, host, expected) in [
+            (github_id, "github.com", "merged"),
+            (bitbucket_id, "bitbucket.org", "closed"),
+        ] {
+            let (status, raw): (String, String) = database
+                .connection()
+                .query_row(
+                    "SELECT status,pull_request_json FROM suplex_task_controls WHERE task_id=?1",
+                    [task],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .unwrap();
+            let pull: Value = serde_json::from_str(&raw).unwrap();
+            assert_eq!(
+                (status.as_str(), pull["state"].as_str().unwrap()),
+                ("delivered", expected)
+            );
+            assert!(
+                pull["url"]
+                    .as_str()
+                    .unwrap()
+                    .starts_with(&format!("https://{host}/"))
+            );
+        }
+        drop(database);
+        server.abort();
+        std::fs::remove_dir_all(root).unwrap();
+    }
+}

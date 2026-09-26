@@ -259,6 +259,44 @@ mod migration_regressions {
     }
 
     #[test]
+    fn legacy_vendor_profile_snapshots_become_opencode_models() {
+        let upgrade = MIGRATIONS
+            .iter()
+            .find(|file| file.name.ends_with("_upgrade_legacy_vendor_profile_snapshots.sql"))
+            .unwrap();
+        let legacy = r#"{"profileId":"p","provider":"openai","model":"gpt-5"}"#;
+        let current = r#"{"profileId":"p","provider":"codex","model":"gpt-5"}"#;
+        let seed = format!(
+            "CREATE TABLE suplex_task_controls (task_id text, root_profile_json text, worker_profile_json text, advisor_profiles_json text);
+            CREATE TABLE suplex_task_sessions (profile_json text);
+            CREATE TABLE suplex_github_trigger_dispatches (profiles_json text);
+            INSERT INTO suplex_task_controls VALUES ('legacy', '{legacy}', '{current}', '{{\"rater\":{legacy},\"reviewer\":{current}}}'), ('current', '{current}', '{current}', '{{}}');
+            INSERT INTO suplex_task_sessions VALUES ('{legacy}'), (NULL);
+            INSERT INTO suplex_github_trigger_dispatches VALUES ('{{\"root\":{current},\"worker\":{legacy},\"advisors\":{{\"rater\":{legacy}}}}}');"
+        );
+        let files = [
+            EmbeddedFile { name: "20260101000000000_seed.sql", bytes: Box::leak(seed.into_boxed_str()).as_bytes() },
+            EmbeddedFile { name: upgrade.name, bytes: upgrade.bytes },
+        ];
+        let mut database = memory_database();
+        database.apply_migrations(&files).unwrap();
+        let upgraded = json!({"profileId":"p","provider":"opencode","model":"openai/gpt-5"});
+        let current = json!({"profileId":"p","provider":"codex","model":"gpt-5"});
+        let parse = |value: &Value| serde_json::from_str::<Value>(value.as_str().unwrap()).unwrap();
+        let controls = rows(&database, "SELECT root_profile_json AS root, worker_profile_json AS worker, advisor_profiles_json AS advisors FROM suplex_task_controls ORDER BY task_id DESC");
+        assert_eq!(parse(&controls[0]["root"]), upgraded);
+        assert_eq!(parse(&controls[0]["worker"]), current);
+        assert_eq!(parse(&controls[0]["advisors"]), json!({"rater": upgraded, "reviewer": current}));
+        assert_eq!(parse(&controls[1]["root"]), current);
+        assert_eq!(parse(&controls[1]["advisors"]), json!({}));
+        let sessions = rows(&database, "SELECT profile_json AS profile FROM suplex_task_sessions ORDER BY profile_json IS NULL");
+        assert_eq!(parse(&sessions[0]["profile"]), upgraded);
+        assert_eq!(sessions[1]["profile"], Value::Null);
+        let dispatch = rows(&database, "SELECT profiles_json AS profiles FROM suplex_github_trigger_dispatches");
+        assert_eq!(parse(&dispatch[0]["profiles"]), json!({"root": current, "worker": upgraded, "advisors": {"rater": upgraded}}));
+    }
+
+    #[test]
     fn full_chain_preserves_foreign_keys_default_profiles_and_audit_constraints() {
         let mut database = memory_database();
         database.apply_migrations(MIGRATIONS).unwrap();

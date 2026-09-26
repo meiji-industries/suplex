@@ -27,11 +27,7 @@ mod tests {
     };
     use axum::{body::to_bytes, http::HeaderValue};
     use chrono::Utc;
-    use std::{
-        fs,
-        io::{BufRead, BufReader, Write},
-        process::{Command, Stdio},
-    };
+    use std::{fs, process::Command};
 
     fn git(args: &[&str], cwd: &std::path::Path) -> String {
         let output = Command::new("git")
@@ -585,32 +581,38 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "requires Node and the TypeScript native-app fixture"]
-    async fn same_database_task_detail_http_responses_match_typescript() {
-        let repository = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .unwrap();
-        let mut oracle = Command::new("node")
-            .args([
-                "node_modules/tsx/dist/cli.mjs",
-                "tests/support/task-ui-read-interop.ts",
-            ])
-            .current_dir(repository)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .unwrap();
-        let stdout = oracle.stdout.take().unwrap();
-        let mut line = String::new();
-        BufReader::new(stdout).read_line(&mut line).unwrap();
-        assert!(!line.is_empty(), "TypeScript fixture produced no response");
-        let expected: Value = serde_json::from_str(&line).unwrap();
-        let database_path = expected["databasePath"].as_str().unwrap();
-        let task_id = expected["taskId"].as_str().unwrap().to_owned();
-        let cookie = expected["cookie"].as_str().unwrap();
-        let database =
-            SuplexDatabase::open(std::path::Path::new(database_path), OpenMode::ReadWrite).unwrap();
+    async fn frozen_typescript_task_detail_responses_remain_compatible() {
+        let root = std::env::temp_dir().join(format!("suplex-ui-parity-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&root).unwrap();
+        let database_path = root.join("suplex.sqlite");
+        fs::copy(
+            concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../tests/parity/task-detail-database.sqlite"
+            ),
+            &database_path,
+        )
+        .unwrap();
+        let database = SuplexDatabase::open(&database_path, OpenMode::ReadWrite).unwrap();
+        let (task_id, session_id, user_id): (String, String, String) = database.connection().query_row(
+            "SELECT s.task_id, s.id, t.creator_user_id FROM suplex_task_sessions s JOIN suplex_tasks t ON t.id = s.task_id LIMIT 1",
+            [], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        ).unwrap();
+        let runtime = crate::runtimes::task_harness::task_session_runtime_directory(
+            &database_path,
+            &session_id,
+        )
+        .unwrap();
+        fs::create_dir_all(&runtime).unwrap();
+        fs::copy(
+            concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../tests/parity/task-detail-runtime/turn-msg_ui_read.jsonl"
+            ),
+            runtime.join("turn-msg_ui_read.jsonl"),
+        )
+        .unwrap();
+        let token = identity_auth::create_session(&database, &user_id, Utc::now()).unwrap();
         let state = AppState::new(
             database,
             session::SessionConfig {
@@ -621,8 +623,14 @@ mod tests {
         );
         let mut headers = HeaderMap::new();
         headers.insert("host", HeaderValue::from_static("127.0.0.1:4111"));
-        headers.insert("cookie", HeaderValue::from_str(cookie).unwrap());
-        for case in expected["responses"].as_array().unwrap() {
+        headers.insert(
+            "cookie",
+            HeaderValue::from_str(&format!("sid_v1={token}")).unwrap(),
+        );
+        let fixture = include_str!("../../../tests/parity/task-detail-read.json")
+            .replace("$SESSION", &session_id);
+        let expected: Value = serde_json::from_str(&fixture).unwrap();
+        for case in expected.as_array().unwrap() {
             let response = match case["path"].as_str().unwrap() {
                 "activity" => {
                     activity(State(state.clone()), Path(task_id.clone()), headers.clone()).await
@@ -633,7 +641,7 @@ mod tests {
                 "diff/summary" => {
                     diff_summary(State(state.clone()), Path(task_id.clone()), headers.clone()).await
                 }
-                path => panic!("Unexpected route: {path}"),
+                path => panic!("Unexpected frozen route: {path}"),
             };
             assert_eq!(
                 response.status().as_u16(),
@@ -644,16 +652,17 @@ mod tests {
                     .headers()
                     .get(CACHE_CONTROL)
                     .and_then(|value| value.to_str().ok()),
-                case["cacheControl"].as_str(),
+                case["cacheControl"].as_str()
             );
             let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
             assert_eq!(
                 serde_json::from_slice::<Value>(&body).unwrap(),
-                case["body"]
+                case["body"],
+                "{}",
+                case["path"]
             );
         }
         drop(state);
-        oracle.stdin.as_mut().unwrap().write_all(b"\n").unwrap();
-        assert!(oracle.wait().unwrap().success());
+        fs::remove_dir_all(root).unwrap();
     }
 }

@@ -1,12 +1,14 @@
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::http::session;
     use crate::{
         identity::auth as identity_auth,
         platform::database::OpenMode,
         tasks::repository::{self, PreparedTask, TaskCreator},
     };
     use axum::{body::to_bytes, http::HeaderValue};
+    use chrono::Utc;
 
     #[tokio::test]
     async fn saved_timeline_obeys_live_company_membership_and_session_scope() {

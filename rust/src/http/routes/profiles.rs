@@ -1,3 +1,6 @@
+pub(crate) use crate::http::access::authorize_profile as authorize;
+use crate::http::access::with_cookies;
+use crate::http::error::ApiError;
 use axum::{
     Json, Router,
     body::Bytes,
@@ -10,7 +13,7 @@ use chrono::Utc;
 use serde_json::{Map, Value, json};
 
 use crate::{
-    http::{AppState, contracts, session},
+    http::{AppState, contracts},
     profiles::agent_profiles::{self, ProfileInput, ProfilePatch},
 };
 
@@ -26,45 +29,6 @@ pub fn router() -> Router<AppState> {
             axum::routing::patch(update).delete(delete),
         )
         .route("/api/admin/profiles/{agent_id}/duplicate", post(duplicate))
-}
-
-fn response_with_cookies(response: Response, cookies: Vec<String>) -> Response {
-    let mut response = response;
-    auth::append_cookies(&mut response, cookies);
-    response
-}
-
-pub(crate) fn authorize(
-    state: &AppState,
-    headers: &HeaderMap,
-    method: &str,
-    admin: bool,
-) -> Result<(String, Vec<String>), Box<Response>> {
-    if !session::csrf_allowed(&state.session_config, headers, method, false) {
-        return Err(Box::new(auth::error(
-            StatusCode::FORBIDDEN,
-            "request_origin_invalid",
-        )));
-    }
-    let session = state
-        .with_database(|database| {
-            session::session_user(database, headers, Some(&state.session_config), Utc::now())
-        })
-        .map_err(auth::service_error)
-        .map_err(Box::new)?;
-    let Some(user) = session.user else {
-        return Err(Box::new(auth::error(
-            StatusCode::UNAUTHORIZED,
-            "Authentication required",
-        )));
-    };
-    if admin && user.role != "admin" {
-        return Err(Box::new(response_with_cookies(
-            auth::error(StatusCode::FORBIDDEN, "Administrator access required"),
-            session.set_cookies,
-        )));
-    }
-    Ok((user.id, session.set_cookies))
 }
 
 fn validated_response(contract: &str, value: Value, status: StatusCode) -> Response {
@@ -117,9 +81,9 @@ async fn list(
             json!({ "profiles": profiles }),
             StatusCode::OK,
         ),
-        Err(error) => auth::service_error(error),
+        Err(error) => ApiError::response(error),
     };
-    response_with_cookies(response, cookies)
+    with_cookies(response, cookies)
 }
 
 async fn create(State(state): State<AppState>, headers: HeaderMap, body: Bytes) -> Response {
@@ -143,9 +107,9 @@ async fn create(State(state): State<AppState>, headers: HeaderMap, body: Bytes) 
             json!(profile),
             StatusCode::CREATED,
         ),
-        Err(error) => auth::service_error(error),
+        Err(error) => ApiError::response(error),
     };
-    response_with_cookies(response, cookies)
+    with_cookies(response, cookies)
 }
 
 async fn update(
@@ -174,9 +138,9 @@ async fn update(
             json!(profile),
             StatusCode::OK,
         ),
-        Err(error) => auth::service_error(error),
+        Err(error) => ApiError::response(error),
     };
-    response_with_cookies(response, cookies)
+    with_cookies(response, cookies)
 }
 
 async fn duplicate(
@@ -196,9 +160,9 @@ async fn duplicate(
             json!(profile),
             StatusCode::CREATED,
         ),
-        Err(error) => auth::service_error(error),
+        Err(error) => ApiError::response(error),
     };
-    response_with_cookies(response, cookies)
+    with_cookies(response, cookies)
 }
 
 async fn delete(
@@ -214,9 +178,9 @@ async fn delete(
         .with_database(|database| agent_profiles::delete(database, &user_id, &agent_id, Utc::now()))
     {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
-        Err(error) => auth::service_error(error),
+        Err(error) => ApiError::response(error),
     };
-    response_with_cookies(response, cookies)
+    with_cookies(response, cookies)
 }
 
 async fn choose_defaults(State(state): State<AppState>, headers: HeaderMap) -> Response {
@@ -233,9 +197,9 @@ async fn choose_defaults(State(state): State<AppState>, headers: HeaderMap) -> R
         )
     }) {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
-        Err(error) => auth::service_error(error),
+        Err(error) => ApiError::response(error),
     };
-    response_with_cookies(response, cookies)
+    with_cookies(response, cookies)
 }
 
 #[cfg(test)]

@@ -1,5 +1,8 @@
 //! Task reads and local backlog creation. Native wake is connected separately.
 
+use crate::http::access::authorize;
+use crate::http::access::with_cookies;
+use crate::http::error::ApiError;
 use crate::identity::IdentityError;
 use crate::shared::PublicFailure;
 use crate::tasks::TaskError;
@@ -28,15 +31,9 @@ use crate::{
         session, validation,
     },
     identity::companies,
-    projects::{
-        repository as git,
-        service::{self as projects},
-    },
     tasks::{
         archive::operations::{self as archive, ArchiveOutcome},
-        commands,
-        images::{self, DecodedTaskImage},
-        response as task_response,
+        commands, images, response as task_response,
     },
 };
 
@@ -132,7 +129,7 @@ async fn refresh(
             }
             with_cookies(Json(task).into_response(), cookies)
         }
-        Err(error) => with_cookies(auth::service_error(error), cookies),
+        Err(error) => with_cookies(ApiError::response(error), cookies),
     }
 }
 
@@ -157,7 +154,7 @@ async fn unarchive_pending(
     });
     match result {
         Ok(task) => with_cookies(Json(task).into_response(), cookies),
-        Err(error) => with_cookies(auth::service_error(error), cookies),
+        Err(error) => with_cookies(ApiError::response(error), cookies),
     }
 }
 
@@ -244,7 +241,7 @@ async fn archive_pending(
             });
             match result {
                 Ok(task) => with_cookies(Json(task).into_response(), cookies),
-                Err(error) => with_cookies(auth::service_error(error), cookies),
+                Err(error) => with_cookies(ApiError::response(error), cookies),
             }
         }
         Err(failure) => with_cookies(failure.into_response(), cookies),
@@ -276,31 +273,6 @@ fn validated_task_id(id: &str) -> Result<(), Box<Response>> {
             "Internal server error",
         ))),
     }
-}
-
-fn authorize(
-    state: &AppState,
-    headers: &HeaderMap,
-) -> Result<(String, Vec<String>), Box<Response>> {
-    let session = state
-        .with_database(|database| {
-            session::session_user(database, headers, Some(&state.session_config), Utc::now())
-        })
-        .map_err(auth::service_error)
-        .map_err(Box::new)?;
-    match session.user {
-        Some(user) => Ok((user.id, session.set_cookies)),
-        None => {
-            let mut response = auth::error(StatusCode::UNAUTHORIZED, "Authentication required");
-            auth::append_cookies(&mut response, session.set_cookies);
-            Err(Box::new(response))
-        }
-    }
-}
-
-fn with_cookies(mut response: Response, cookies: Vec<String>) -> Response {
-    auth::append_cookies(&mut response, cookies);
-    response
 }
 
 fn normalize_workflow(value: &mut Value) -> Result<(), Box<Response>> {
@@ -474,245 +446,20 @@ async fn create(
         Ok(value) => value,
         Err(response) => return *response,
     };
-    let (project, existing) = {
-        let admission = state.with_database(|database| -> Result<_, Box<dyn Error>> {
-            let company = companies::require_company_access(database, &user_id, &company_id)?;
-            if company.status != "active" {
-                return Err(TaskError::new("The company is not active", 409).into());
-            }
-            let project = projects::get(database, &user_id, &request.project_id)?;
-            if project.company_id != company_id {
-                return Err(TaskError::not_found().into());
-            }
-            let hash = commands::task_request_hash(&request, &user_id)?;
-            if let Some(existing) = commands::existing_user_task(
-                database,
-                &company_id,
-                &request.idempotency_key,
-                &hash,
-                &user_id,
-            )? {
-                return Ok((
-                    None,
-                    Some((
-                        existing.status,
-                        existing.id.clone(),
-                        task_response::get(database, &existing.id)?
-                            .ok_or("existing task disappeared")?,
-                    )),
-                ));
-            }
-            Ok((Some(project), None))
-        });
-        match admission {
-            Ok(value) => value,
-            Err(error) => return with_cookies(auth::service_error(error), cookies),
-        }
-    };
-    if let Some((status, id, snapshot)) = existing {
-        if status == "active"
-            && let Some(host) = &state.task_host
-        {
-            host.wake(id);
-        }
-        return with_cookies(Json(snapshot).into_response(), cookies);
-    }
-    let Some(project) = project else {
-        return with_cookies(
-            auth::error(StatusCode::INTERNAL_SERVER_ERROR, "Internal server error"),
-            cookies,
-        );
-    };
-    let Some(repository) = project.repository.clone() else {
-        return with_cookies(
-            auth::error(
-                StatusCode::UNPROCESSABLE_ENTITY,
-                "Configure the project repository before creating a task",
-            ),
-            cookies,
-        );
-    };
-    let numbers = request
-        .blocked_by_pull_requests
-        .iter()
-        .map(|dependency| dependency.number)
-        .collect::<Vec<_>>();
-    let pull_requests =
-        match crate::tasks::pull_request_dependencies::observe(&repository, &numbers).await {
-            Ok(pull_requests) => pull_requests,
-            Err(rejection) => {
-                return with_cookies(
-                    auth::service_error(Box::new(commands::pull_request_rejection(rejection))),
-                    cookies,
-                );
-            }
-        };
-    let profiles = {
-        let selected = state.with_database(|database| {
-            commands::select_local_profiles(database, &project, &request)
-        });
-        match selected {
-            Ok(profiles) => profiles,
-            Err(error) => return with_cookies(auth::service_error(error), cookies),
-        }
-    };
-    let decoded_images = match request
-        .images
-        .iter()
-        .map(images::decode_task_image)
-        .collect::<Result<Vec<_>, _>>()
-    {
-        Ok(images) => images,
-        Err(failure) => return with_cookies(auth::service_error(Box::new(failure)), cookies),
-    };
-    let operation = tokio::spawn(finish_admitted_create(
-        state,
-        AdmittedCreate {
-            company_id,
-            user_id,
-            cookies,
-            project,
-            request,
-            profiles,
-            decoded_images,
-            pull_requests,
-        },
-    ));
-    match operation.await {
-        Ok(response) => response,
-        Err(_) => auth::error(StatusCode::INTERNAL_SERVER_ERROR, "Internal server error"),
-    }
-}
-
-/// Once authorization and policy admit creation, the Git fetch and database
-/// transaction keep running even if the HTTP waiter goes away.
-struct AdmittedCreate {
-    company_id: String,
-    user_id: String,
-    cookies: Vec<String>,
-    project: projects::Project,
-    request: task_contracts::TaskCreateBody,
-    profiles: commands::LocalProfiles,
-    decoded_images: Vec<DecodedTaskImage>,
-    pull_requests: Vec<Value>,
-}
-
-async fn finish_admitted_create(state: AppState, admitted: AdmittedCreate) -> Response {
-    let AdmittedCreate {
-        company_id,
-        user_id,
-        cookies,
-        project,
-        request,
-        profiles,
-        decoded_images,
-        pull_requests,
-    } = admitted;
-    let source = request
-        .source
-        .as_ref()
-        .map(serde_json::to_value)
-        .transpose();
-    let issue = request
-        .issue
-        .as_ref()
-        .map(|issue| issue.as_ref().map(serde_json::to_value).transpose())
-        .transpose();
-    let (Ok(source), Ok(issue)) = (source, issue) else {
-        return with_cookies(
-            auth::error(StatusCode::INTERNAL_SERVER_ERROR, "Internal server error"),
-            cookies,
-        );
-    };
-    let pinned = match crate::tasks::sources::creation_source(
-        &project,
-        &request.title,
-        &request.description,
-        source.as_ref(),
-        issue.as_ref().map(Option::as_ref),
-    )
-    .await
-    {
-        Ok(pinned) => pinned,
-        Err(error) => return with_cookies(auth::service_error(error), cookies),
-    };
-    let repository_path = PathBuf::from(&project.repository_path);
-    let base_branch = project.base_branch.clone();
-    let host = match project
-        .integration
-        .as_ref()
-        .map(|integration| &integration.repository)
-    {
-        Some(crate::http::contracts::typed::projects::RepositoryConnection::Bitbucket {
-            ..
-        }) => "bitbucket",
-        _ => "github",
-    }
-    .to_owned();
-    let captured =
-        git::capture_local_task_heads(&state.project_github, &repository_path, &base_branch, &host)
-            .await;
-    let base_sha = match captured {
-        Ok(sha) => sha,
-        Err(findings) => return with_cookies((
-            StatusCode::UNPROCESSABLE_ENTITY,
-            Json(json!({"error":"Project configuration could not be captured","findings":findings})),
-        ).into_response(), cookies),
-    };
-    let now = Utc::now();
-    let host = state.task_host.clone();
-    let written = state.with_database(|database| -> Result<_, Box<dyn Error>> {
-        let mut prepared = commands::prepare_local_user_task(
-            &company_id,
-            &user_id,
-            &project,
-            &request,
-            profiles,
-            &base_sha,
-            now,
-        )?;
-        crate::tasks::sources::apply(&mut prepared, pinned);
-        prepared.pull_request_dependencies = pull_requests;
-        let artifact_root = state
-            .artifact_root
-            .as_deref()
-            .ok_or("Artifact root is not configured")?;
-        let result = commands::create_user_task_with_images(
-            database,
-            &user_id,
-            &project,
-            &prepared,
-            commands::ImageFiles {
-                root: artifact_root,
-                images: &decoded_images,
+    let result = crate::tasks::creation::create_browser(state, company_id, user_id, request).await;
+    let response = match result {
+        Ok((created, snapshot)) => (
+            if created {
+                StatusCode::CREATED
+            } else {
+                StatusCode::OK
             },
-            &request.workflow,
-            now,
-            move |id| {
-                if let Some(host) = host {
-                    host.wake(id);
-                }
-            },
-        )?;
-        let snapshot =
-            task_response::get(database, &result.task.id)?.ok_or("created task disappeared")?;
-        Ok((result.created, snapshot))
-    });
-    match written {
-        Ok((created, snapshot)) => with_cookies(
-            (
-                if created {
-                    StatusCode::CREATED
-                } else {
-                    StatusCode::OK
-                },
-                Json(snapshot),
-            )
-                .into_response(),
-            cookies,
-        ),
-        Err(error) => with_cookies(auth::service_error(error), cookies),
-    }
+            Json(snapshot),
+        )
+            .into_response(),
+        Err(error) => error.into_response(),
+    };
+    with_cookies(response, cookies)
 }
 
 fn list_for(
@@ -725,28 +472,12 @@ fn list_for(
         Ok(value) => value,
         Err(response) => return *response,
     };
-    let result = state.with_database(|database| -> Result<_, Box<dyn Error>> {
-        let visible = companies::list_visible_companies(database, &user_id)?;
-        if company_id.as_deref().is_some_and(|id| !visible.iter().any(|company| company.id == id)) {
-            return Err(TaskError::not_found().into())
-        }
-        let mut statement = database.connection().prepare(
-            "SELECT t.id, t.company_id FROM suplex_tasks t JOIN suplex_task_controls c ON c.task_id = t.id WHERE (t.archived_at IS NOT NULL) = ?1 ORDER BY julianday(CASE WHEN julianday(t.updated_at) >= julianday(c.updated_at) THEN t.updated_at ELSE c.updated_at END) DESC, t.id"
-        )?;
-        let rows = statement.query_map([archived], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))?
-            .collect::<rusqlite::Result<Vec<_>>>()?;
-        let mut tasks = Vec::new();
-        for (id, company) in rows {
-            if visible.iter().any(|item| item.id == company)
-                && company_id.as_deref().is_none_or(|wanted| wanted == company)
-                && let Some(snapshot) = task_response::get(database, &id)?
-            { tasks.push(snapshot) }
-        }
-        Ok(tasks)
+    let result = state.with_database(|database| {
+        crate::tasks::repository::list_visible(database, &user_id, company_id.as_deref(), archived)
     });
     match result {
         Ok(tasks) => with_cookies(Json(json!({"tasks": tasks})).into_response(), cookies),
-        Err(error) => with_cookies(auth::service_error(error), cookies),
+        Err(error) => with_cookies(ApiError::response(error), cookies),
     }
 }
 
@@ -805,7 +536,7 @@ async fn get_one(
     });
     let mut response = match result {
         Ok(task) => Json(task).into_response(),
-        Err(error) => auth::service_error(error),
+        Err(error) => ApiError::response(error),
     };
     response
         .headers_mut()
@@ -842,7 +573,7 @@ async fn update_details(
     );
     match result {
         Ok(task) => with_cookies(Json(task).into_response(), cookies),
-        Err(error) => with_cookies(auth::service_error(error), cookies),
+        Err(error) => with_cookies(ApiError::response(error), cookies),
     }
 }
 
@@ -875,7 +606,7 @@ async fn rename(
     );
     match result {
         Ok(task) => with_cookies(Json(task).into_response(), cookies),
-        Err(error) => with_cookies(auth::service_error(error), cookies),
+        Err(error) => with_cookies(ApiError::response(error), cookies),
     }
 }
 
@@ -908,7 +639,7 @@ async fn start_pending(
         Ok(())
     });
     if let Err(error) = access {
-        return with_cookies(auth::service_error(error), cookies);
+        return with_cookies(ApiError::response(error), cookies);
     }
     let host = state.task_host.clone();
     let started = state.with_database(
@@ -923,7 +654,7 @@ async fn start_pending(
     );
     match started {
         Ok(task) => with_cookies(Json(task).into_response(), cookies),
-        Err(error) => with_cookies(auth::service_error(error), cookies),
+        Err(error) => with_cookies(ApiError::response(error), cookies),
     }
 }
 
@@ -955,7 +686,7 @@ async fn cancel_pending(
     );
     match cancelled {
         Ok(task) => with_cookies(Json(task).into_response(), cookies),
-        Err(error) => with_cookies(auth::service_error(error), cookies),
+        Err(error) => with_cookies(ApiError::response(error), cookies),
     }
 }
 
@@ -982,7 +713,7 @@ async fn disarm_pending(
     );
     match disarmed {
         Ok(task) => with_cookies(Json(task).into_response(), cookies),
-        Err(error) => with_cookies(auth::service_error(error), cookies),
+        Err(error) => with_cookies(ApiError::response(error), cookies),
     }
 }
 
@@ -1024,7 +755,9 @@ async fn set_dependencies(
         });
         match repository {
             Ok(repository) => repository,
-            Err(error) => return with_cookies(auth::service_error(error), cookies),
+            Err(error) => {
+                return with_cookies(ApiError::response(error), cookies);
+            }
         }
     };
     let numbers = request
@@ -1037,7 +770,7 @@ async fn set_dependencies(
             Ok(pull_requests) => pull_requests,
             Err(rejection) => {
                 return with_cookies(
-                    auth::service_error(Box::new(commands::pull_request_rejection(rejection))),
+                    ApiError::response(Box::new(commands::pull_request_rejection(rejection))),
                     cookies,
                 );
             }
@@ -1057,7 +790,7 @@ async fn set_dependencies(
     );
     match result {
         Ok(task) => with_cookies(Json(task).into_response(), cookies),
-        Err(error) => with_cookies(auth::service_error(error), cookies),
+        Err(error) => with_cookies(ApiError::response(error), cookies),
     }
 }
 
@@ -1101,7 +834,9 @@ async fn set_issue(
             };
             match read.await {
                 Ok(issue) => Some(issue),
-                Err(error) => return with_cookies(auth::service_error(error), cookies),
+                Err(error) => {
+                    return with_cookies(ApiError::response(error), cookies);
+                }
             }
         }
     };
@@ -1113,7 +848,7 @@ async fn set_issue(
     );
     match result {
         Ok(task) => with_cookies(Json(task).into_response(), cookies),
-        Err(error) => with_cookies(auth::service_error(error), cookies),
+        Err(error) => with_cookies(ApiError::response(error), cookies),
     }
 }
 
@@ -1161,7 +896,7 @@ async fn select_agent(
     );
     match result {
         Ok(task) => with_cookies(Json(task).into_response(), cookies),
-        Err(error) => with_cookies(auth::service_error(error), cookies),
+        Err(error) => with_cookies(ApiError::response(error), cookies),
     }
 }
 
@@ -1202,7 +937,7 @@ async fn continue_delivery(
     );
     match result {
         Ok(task) => with_cookies(Json(task).into_response(), cookies),
-        Err(error) => with_cookies(auth::service_error(error), cookies),
+        Err(error) => with_cookies(ApiError::response(error), cookies),
     }
 }
 
@@ -1240,7 +975,7 @@ async fn send_note(
     );
     match result {
         Ok(task) => with_cookies(Json(task).into_response(), cookies),
-        Err(error) => with_cookies(auth::service_error(error), cookies),
+        Err(error) => with_cookies(ApiError::response(error), cookies),
     }
 }
 
@@ -1293,7 +1028,7 @@ async fn answer_pending(
     );
     match answered {
         Ok(task) => with_cookies(Json(task).into_response(), cookies),
-        Err(error) => with_cookies(auth::service_error(error), cookies),
+        Err(error) => with_cookies(ApiError::response(error), cookies),
     }
 }
 
@@ -1341,7 +1076,7 @@ async fn replace_worker(
     );
     match result {
         Ok(task) => with_cookies(Json(task).into_response(), cookies),
-        Err(error) => with_cookies(auth::service_error(error), cookies),
+        Err(error) => with_cookies(ApiError::response(error), cookies),
     }
 }
 
@@ -1389,7 +1124,7 @@ async fn replace_coordinator(
     );
     match result {
         Ok(task) => with_cookies(Json(task).into_response(), cookies),
-        Err(error) => with_cookies(auth::service_error(error), cookies),
+        Err(error) => with_cookies(ApiError::response(error), cookies),
     }
 }
 

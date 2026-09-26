@@ -1,8 +1,21 @@
 #[cfg(test)]
 pub(crate) mod tests {
+    use crate::http::error::public_failure;
     use std::sync::atomic::{AtomicU64, Ordering};
 
     use super::*;
+    use axum::http::HeaderValue;
+
+    async fn request_me(State(state): State<AppState>, headers: HeaderMap) -> Response {
+        use axum::extract::FromRequestParts;
+        let mut request = axum::http::Request::new(());
+        *request.headers_mut() = headers;
+        let (mut parts, _) = request.into_parts();
+        match crate::http::access::SessionUser::from_request_parts(&mut parts, &state).await {
+            Ok(user) => me(user).await,
+            Err(error) => error.into_response(),
+        }
+    }
 
     #[test]
     fn service_failures_share_one_browser_envelope() {
@@ -88,7 +101,7 @@ pub(crate) mod tests {
         assert_eq!(without_cookie.status(), StatusCode::UNAUTHORIZED);
         let session_cookie = cookies[0].split(';').next().unwrap();
         headers.insert("cookie", HeaderValue::from_str(session_cookie).unwrap());
-        let current = me(State(state.clone()), headers.clone()).await;
+        let current = request_me(State(state.clone()), headers.clone()).await;
         let current_body = to_bytes(current.into_body(), 4096).await.unwrap();
         assert_eq!(
             current_body,
@@ -111,7 +124,7 @@ pub(crate) mod tests {
             3
         );
         headers.insert("host", HeaderValue::from_static("suplex.example.test:4111"));
-        let after = me(State(state.clone()), headers).await;
+        let after = request_me(State(state.clone()), headers).await;
         assert_eq!(after.status(), StatusCode::UNAUTHORIZED);
         drop(state);
         let _ = std::fs::remove_file(&filename);
@@ -150,7 +163,7 @@ pub(crate) mod tests {
         )
         .await;
         assert_eq!(csrf.status(), StatusCode::FORBIDDEN);
-        let no_credentials = authentication_options(State(state.clone()), HeaderMap::new()).await;
+        let no_credentials = authentication_options(State(state.clone())).await;
         assert_eq!(no_credentials.status(), StatusCode::BAD_REQUEST);
         let no_credentials_body = to_bytes(no_credentials.into_body(), 1024).await.unwrap();
         assert_eq!(no_credentials_body, r#"{"error":"No passkey is enrolled"}"#);

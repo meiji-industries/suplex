@@ -1,5 +1,6 @@
 //! Environment, backup and factory reset routes from `http/routes/administration.ts`.
 
+use crate::http::error::ApiError;
 use crate::shared::time::now_millis_rfc3339;
 use std::path::PathBuf;
 
@@ -91,7 +92,7 @@ pub(crate) fn administrator(
         .with_database(|database| {
             session::session_user(database, headers, Some(&state.session_config), Utc::now())
         })
-        .map_err(|error| Box::new(auth::service_error(error)))?;
+        .map_err(|error| Box::new(ApiError::response(error)))?;
     let Some(user) = session.user else {
         return Err(Box::new(auth::error(
             StatusCode::UNAUTHORIZED,

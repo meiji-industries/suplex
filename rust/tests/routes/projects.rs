@@ -1,5 +1,6 @@
 #[cfg(test)]
 mod tests {
+    use chrono::Utc;
     use std::{
         fs,
         path::Path as FilePath,

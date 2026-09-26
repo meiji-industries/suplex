@@ -1,3 +1,4 @@
+use crate::http::error::ApiError;
 use axum::{
     Json, Router,
     body::Bytes,
@@ -12,7 +13,7 @@ use serde_json::{Value, json};
 
 use crate::{
     http::contracts::{self, typed},
-    identity::{auth::AuthUser, companies},
+    identity::companies,
 };
 
 use super::{
@@ -63,30 +64,9 @@ pub fn router() -> Router<AppState> {
         )
 }
 
-fn authenticated(
-    state: &AppState,
-    headers: &HeaderMap,
-) -> Result<(AuthUser, Vec<String>), Box<Response>> {
-    let session = state
-        .with_database(|database| {
-            session::session_user(database, headers, Some(&state.session_config), Utc::now())
-        })
-        .map_err(auth_routes::service_error)
-        .map_err(Box::new)?;
-    let Some(user) = session.user else {
-        return Err(Box::new(auth_routes::error(
-            StatusCode::UNAUTHORIZED,
-            "Authentication required",
-        )));
-    };
-    Ok((user, session.set_cookies))
-}
+use crate::http::access::authenticated;
 
-fn respond_with_cookies(response: Response, cookies: Vec<String>) -> Response {
-    let mut response = response;
-    auth_routes::append_cookies(&mut response, cookies);
-    response
-}
+use crate::http::access::with_cookies as respond_with_cookies;
 
 fn csrf_failure(state: &AppState, headers: &HeaderMap, method: &str) -> Option<Response> {
     (!session::csrf_allowed(&state.session_config, headers, method, false))
@@ -102,7 +82,7 @@ async fn list(State(state): State<AppState>, headers: HeaderMap) -> Response {
         .with_database(|database| companies::list_visible_companies(database, &user.id))
     {
         Ok(companies) => Json(CompanyList { companies }).into_response(),
-        Err(error) => auth_routes::service_error(error),
+        Err(error) => ApiError::response(error),
     };
     respond_with_cookies(response, cookies)
 }
@@ -126,7 +106,7 @@ async fn get_company(
         companies::require_company_access(database, &user.id, &company_id)
     }) {
         Ok(company) => Json(company).into_response(),
-        Err(error) => auth_routes::service_error(error),
+        Err(error) => ApiError::response(error),
     };
     respond_with_cookies(response, cookies)
 }
@@ -149,7 +129,7 @@ async fn create(State(state): State<AppState>, headers: HeaderMap, body: Bytes) 
         .with_database(|database| companies::create_company(database, &user.id, name, Utc::now()))
     {
         Ok(company) => (StatusCode::CREATED, Json(company)).into_response(),
-        Err(error) => auth_routes::service_error(error),
+        Err(error) => ApiError::response(error),
     };
     respond_with_cookies(response, cookies)
 }
@@ -182,7 +162,7 @@ async fn rename(
         companies::rename_company(database, &user.id, &company_id, &parsed.name, Utc::now())
     }) {
         Ok(company) => Json(company).into_response(),
-        Err(error) => auth_routes::service_error(error),
+        Err(error) => ApiError::response(error),
     };
     respond_with_cookies(response, cookies)
 }
@@ -224,7 +204,7 @@ async fn issue_code(
         )
     }) {
         Ok(company) => Json(company).into_response(),
-        Err(error) => auth_routes::service_error(error),
+        Err(error) => ApiError::response(error),
     };
     respond_with_cookies(response, cookies)
 }
@@ -251,7 +231,7 @@ async fn status(
         companies::set_company_status(database, &user.id, &company_id, &status, Utc::now())
     }) {
         Ok(company) => Json(company).into_response(),
-        Err(error) => auth_routes::service_error(error),
+        Err(error) => ApiError::response(error),
     };
     respond_with_cookies(response, cookies)
 }
@@ -284,7 +264,7 @@ async fn add_membership(
         companies::add_membership(database, &user.id, &parsed.user_id, &company_id, Utc::now())
     }) {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
-        Err(error) => auth_routes::service_error(error),
+        Err(error) => ApiError::response(error),
     };
     respond_with_cookies(response, cookies)
 }
@@ -316,7 +296,7 @@ async fn remove_membership(
         companies::remove_membership(database, &user.id, &user_id, &company_id, Utc::now())
     }) {
         Ok(()) => StatusCode::NO_CONTENT.into_response(),
-        Err(error) => auth_routes::service_error(error),
+        Err(error) => ApiError::response(error),
     };
     respond_with_cookies(response, cookies)
 }

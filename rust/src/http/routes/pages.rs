@@ -1,3 +1,5 @@
+use crate::http::access::with_cookies;
+use crate::http::error::ApiError;
 use axum::{
     Router,
     extract::{Path, RawQuery, State},
@@ -65,11 +67,6 @@ fn page(view: &str, cookies: Vec<String>) -> Response {
     response
 }
 
-fn with_cookies(mut response: Response, cookies: Vec<String>) -> Response {
-    auth::append_cookies(&mut response, cookies);
-    response
-}
-
 fn page_user(
     state: &AppState,
     headers: &HeaderMap,
@@ -78,7 +75,7 @@ fn page_user(
         .with_database(|database| {
             session::session_user(database, headers, Some(&state.session_config), Utc::now())
         })
-        .map_err(auth::service_error)
+        .map_err(ApiError::response)
         .map_err(Box::new)?;
     match session.user {
         Some(user) => Ok((user, session.set_cookies)),
@@ -102,7 +99,9 @@ async fn root(State(state): State<AppState>, headers: HeaderMap) -> Response {
     {
         Ok(projects) if projects.is_empty() => "/onboarding",
         Ok(_) => "/tasks",
-        Err(source) => return with_cookies(auth::service_error(source), cookies),
+        Err(source) => {
+            return with_cookies(ApiError::response(source), cookies);
+        }
     };
     let mut response = redirect(destination);
     auth::append_cookies(&mut response, cookies);

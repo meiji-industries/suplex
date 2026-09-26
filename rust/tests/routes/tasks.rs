@@ -1,6 +1,7 @@
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::projects::repository as git;
 
     async fn create(
         state: State<AppState>,

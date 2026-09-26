@@ -1,6 +1,7 @@
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::platform::health::{check, tailscale_hostname};
     use crate::{
         http::session::SessionConfig,
         platform::database::{OpenMode, SuplexDatabase},

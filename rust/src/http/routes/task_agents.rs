@@ -1,5 +1,8 @@
 //! Current task-agent rows use saved session intent and live native process observation.
 
+use crate::http::error::ApiError;
+
+use crate::http::access::authorize;
 use crate::shared::time::rfc3339_millis;
 use crate::tasks::TaskError;
 use std::{error::Error, path::PathBuf};
@@ -20,7 +23,7 @@ use crate::{
     http::{
         AppState,
         contracts::typed::{self, finding, tasks as task_contracts},
-        session, validation,
+        validation,
     },
     identity::companies,
     platform::database::SuplexDatabase,
@@ -101,26 +104,6 @@ fn task_ids(query: Option<&str>) -> Result<Vec<String>, Box<Response>> {
     Ok(ids)
 }
 
-fn authorize(
-    state: &AppState,
-    headers: &HeaderMap,
-) -> Result<(String, Vec<String>), Box<Response>> {
-    let session = state
-        .with_database(|database| {
-            session::session_user(database, headers, Some(&state.session_config), Utc::now())
-        })
-        .map_err(auth::service_error)
-        .map_err(Box::new)?;
-    match session.user {
-        Some(user) => Ok((user.id, session.set_cookies)),
-        None => {
-            let mut response = auth::error(StatusCode::UNAUTHORIZED, "Authentication required");
-            auth::append_cookies(&mut response, session.set_cookies);
-            Err(Box::new(response))
-        }
-    }
-}
-
 fn respond(result: Result<Value, Box<dyn Error>>, cookies: Vec<String>) -> Response {
     let mut response = match result {
         Ok(value) => {
@@ -131,7 +114,7 @@ fn respond(result: Result<Value, Box<dyn Error>>, cookies: Vec<String>) -> Respo
             );
             response
         }
-        Err(error) => auth::service_error(error),
+        Err(error) => ApiError::response(error),
     };
     auth::append_cookies(&mut response, cookies);
     response

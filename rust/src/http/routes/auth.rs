@@ -1,11 +1,11 @@
-use crate::identity::IdentityError;
+use crate::http::error::ApiError;
 use std::error::Error;
 
 use axum::{
     Json, Router,
     body::Bytes,
     extract::State,
-    http::{HeaderMap, HeaderValue, StatusCode, header},
+    http::{HeaderMap, StatusCode, header},
     response::{IntoResponse, Response},
     routing::{get, post},
 };
@@ -19,12 +19,6 @@ use crate::{
         auth::{self, AuthUser, ProfileUpdate},
         ceremony::{self, PreparedCredential, WebAuthnSite},
     },
-    integrations::github_triggers::TriggerFailure,
-    platform::PlatformError,
-    profiles::agent_profiles::ProfileFailure,
-    projects::ProjectError,
-    shared::PublicFailure,
-    tasks::TaskError,
 };
 
 use super::super::{AppState, session, validation};
@@ -40,7 +34,7 @@ struct AuthStatus {
     authenticated: bool,
 }
 
-pub fn router() -> Router<AppState> {
+pub fn router(state: &AppState) -> Router<AppState> {
     Router::new()
         .route("/api/auth/status", get(status))
         .route("/api/auth/bootstrap/options", post(bootstrap_options))
@@ -49,7 +43,13 @@ pub fn router() -> Router<AppState> {
         .route("/api/auth/bootstrap/verify", post(bootstrap_verify))
         .route("/api/auth/invitation/verify", post(invitation_verify))
         .route("/api/auth/recovery/verify", post(recovery_verify))
-        .route("/api/auth/options", post(authentication_options))
+        .route(
+            "/api/auth/options",
+            post(authentication_options).layer(axum::middleware::from_fn_with_state(
+                state.clone(),
+                crate::http::access::csrf_layer,
+            )),
+        )
         .route("/api/auth/verify", post(authentication_verify))
         .route("/api/auth/me", get(me).patch(update_me))
         .route("/api/auth/sign-out", post(sign_out))
@@ -97,7 +97,7 @@ async fn registration_options(
     });
     match result {
         Ok(options) => Json(options).into_response(),
-        Err(error) => service_error(error),
+        Err(error) => ApiError::response(error),
     }
 }
 
@@ -176,7 +176,7 @@ fn run_registration_ceremony(attempt: RegistrationAttempt) -> Response {
         )
     }) {
         Ok(challenge) => challenge,
-        Err(error) => return service_error(error),
+        Err(error) => return ApiError::response(error),
     };
     let verified = match ceremony::verify_consumed_registration(
         &response,
@@ -187,7 +187,7 @@ fn run_registration_ceremony(attempt: RegistrationAttempt) -> Response {
         },
     ) {
         Ok(verified) => verified,
-        Err(error) => return service_error(error),
+        Err(error) => return ApiError::response(error),
     };
     let result = state.with_database(|database| {
         ceremony::finish_registration(database, kind, &token, verified, Utc::now())
@@ -206,10 +206,10 @@ fn auth_result(state: &AppState, result: Result<auth::AuthResult, Box<dyn Error>
                     append_cookies(&mut response, cookies);
                     response
                 }
-                Err(error) => service_error(error),
+                Err(error) => ApiError::response(error),
             }
         }
-        Err(error) => service_error(error),
+        Err(error) => ApiError::response(error),
     }
 }
 
@@ -261,10 +261,7 @@ async fn recovery_verify(
     registration_verify(state, headers, body, "recovery").await
 }
 
-async fn authentication_options(State(state): State<AppState>, headers: HeaderMap) -> Response {
-    if !session::csrf_allowed(&state.session_config, &headers, "POST", false) {
-        return error(StatusCode::FORBIDDEN, "request_origin_invalid");
-    }
+async fn authentication_options(State(state): State<AppState>) -> Response {
     let reachable = match site(&state.session_config) {
         Ok(reachable) => reachable,
         Err(response) => return *response,
@@ -282,7 +279,7 @@ async fn authentication_options(State(state): State<AppState>, headers: HeaderMa
     });
     match result {
         Ok(options) => Json(options).into_response(),
-        Err(error) => service_error(error),
+        Err(error) => ApiError::response(error),
     }
 }
 
@@ -337,41 +334,7 @@ pub(crate) fn not_ported() -> Response {
         .into_response()
 }
 
-/// The browser envelope of a service failure, as the TypeScript
-/// `installHttpErrorHandlers`; an unknown error is a server error.
-pub(crate) fn service_error(error: Box<dyn Error>) -> Response {
-    public_failure(error).into_response()
-}
-
-pub(crate) fn public_failure(error: Box<dyn Error>) -> PublicFailure {
-    macro_rules! public {
-        ($error:ident, $($kind:ty),+) => {$(
-            let $error = match $error.downcast::<$kind>() {
-                Ok(failure) => return (*failure).into(),
-                Err(error) => error,
-            };
-        )+};
-    }
-    public!(
-        error,
-        TaskError,
-        IdentityError,
-        ProjectError,
-        PlatformError,
-        ProfileFailure,
-        TriggerFailure
-    );
-    drop(error);
-    PublicFailure::internal()
-}
-
-pub(crate) fn append_cookies(response: &mut Response, cookies: Vec<String>) {
-    for cookie in cookies {
-        if let Ok(value) = HeaderValue::from_str(&cookie) {
-            response.headers_mut().append(header::SET_COOKIE, value);
-        }
-    }
-}
+pub(crate) use crate::http::access::append_cookies;
 
 pub(crate) fn validation_error(issues: Vec<serde_json::Value>) -> Response {
     validation::validation_error(issues)
@@ -472,25 +435,12 @@ async fn status(State(state): State<AppState>, headers: HeaderMap) -> Response {
             append_cookies(&mut response, session.set_cookies);
             response
         }
-        Err(error) => service_error(error),
+        Err(error) => ApiError::response(error),
     }
 }
 
-async fn me(State(state): State<AppState>, headers: HeaderMap) -> Response {
-    let result = state.with_database(|database| {
-        session::session_user(database, &headers, Some(&state.session_config), Utc::now())
-    });
-    match result {
-        Ok(session) => {
-            let Some(user) = session.user else {
-                return error(StatusCode::UNAUTHORIZED, "Authentication required");
-            };
-            let mut response = Json(AuthEnvelope { user }).into_response();
-            append_cookies(&mut response, session.set_cookies);
-            response
-        }
-        Err(error) => service_error(error),
-    }
+async fn me(crate::http::access::SessionUser(user): crate::http::access::SessionUser) -> Response {
+    Json(AuthEnvelope { user }).into_response()
 }
 
 async fn update_me(State(state): State<AppState>, headers: HeaderMap, body: Bytes) -> Response {
@@ -523,7 +473,7 @@ async fn update_me(State(state): State<AppState>, headers: HeaderMap, body: Byte
             let user = match user {
                 Ok(user) => user,
                 Err(failure) => {
-                    let mut response = service_error(failure);
+                    let mut response = ApiError::response(failure);
                     append_cookies(&mut response, cookies);
                     return response;
                 }
@@ -532,7 +482,7 @@ async fn update_me(State(state): State<AppState>, headers: HeaderMap, body: Byte
             append_cookies(&mut response, cookies);
             response
         }
-        Err(error) => service_error(error),
+        Err(error) => ApiError::response(error),
     }
 }
 
@@ -558,7 +508,7 @@ async fn sign_out(State(state): State<AppState>, headers: HeaderMap) -> Response
             append_cookies(&mut response, session::clear_session_cookies());
             response
         }
-        Err(error) => service_error(error),
+        Err(error) => ApiError::response(error),
     }
 }
 

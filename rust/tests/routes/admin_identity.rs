@@ -1,6 +1,7 @@
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::http::session;
     use crate::shared::time::now_millis_rfc3339;
     use crate::{
         identity::auth as identity_auth,

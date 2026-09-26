@@ -1,3 +1,4 @@
+use crate::http::error::ApiError;
 use axum::{
     Router,
     extract::State,
@@ -64,7 +65,7 @@ fn guarded(state: &AppState, headers: &HeaderMap, method: &Method, access: Acces
         session::session_user(database, headers, Some(&state.session_config), Utc::now())
     }) {
         Ok(session) => session,
-        Err(error) => return auth::service_error(error),
+        Err(error) => return ApiError::response(error),
     };
     let response = match session.user {
         None => auth::error(StatusCode::UNAUTHORIZED, "Authentication required"),

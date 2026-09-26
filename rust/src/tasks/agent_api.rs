@@ -38,10 +38,7 @@ use crate::{
         artifacts,
         database::{DatabaseResult, SuplexDatabase},
     },
-    projects::{
-        repository as git,
-        service::{self as projects, Project},
-    },
+    projects::service::{self as projects, Project},
 };
 
 use super::{
@@ -1852,43 +1849,13 @@ pub async fn create(
     pending.pull_requests = pull_request_dependencies::observe(&repository, &numbers)
         .await
         .map_err(pull_request_unavailable)?;
-    let request = &pending.resolved.request;
-    let selector = request
-        .source
-        .as_ref()
-        .map(serde_json::to_value)
-        .transpose()?;
-    let source = match sources::creation_source(
+    let (source, base_sha) = super::creation::capture(
+        state,
         &pending.project,
-        &request.title,
-        &request.description,
-        selector.as_ref(),
-        None,
+        &pending.resolved.request,
+        source_rejection,
     )
-    .await
-    {
-        Ok(source) => source,
-        Err(error) => return Err(source_rejection(error, selector.as_ref())),
-    };
-    let repository_path = PathBuf::from(&pending.project.repository_path);
-    let base_branch = pending.project.base_branch.clone();
-    let host = match pending
-        .project
-        .integration
-        .as_ref()
-        .map(|integration| &integration.repository)
-    {
-        Some(crate::http::contracts::typed::projects::RepositoryConnection::Bitbucket {
-            ..
-        }) => "bitbucket",
-        _ => "github",
-    };
-    let captured =
-        git::capture_local_task_heads(&state.project_github, &repository_path, &base_branch, host)
-            .await;
-    let base_sha = captured.map_err(|findings| {
-        ProjectError::new("Project configuration could not be captured", 422, findings)
-    })?;
+    .await?;
     let artifact_root = state.artifact_root.clone();
     state.with_database(|database| {
         write(

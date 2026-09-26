@@ -1,5 +1,6 @@
 //! GitHub trigger rule routes (`src/http/routes/github-triggers.ts`).
 
+use crate::http::error::ApiError;
 use axum::{
     Json, Router,
     body::Bytes,
@@ -81,7 +82,7 @@ fn params(company_id: &str, rule_id: Option<&str>) -> Result<(), Box<Response>> 
 fn respond(result: Result<Value, Failure>, status: StatusCode, cookies: Vec<String>) -> Response {
     let mut response = match result {
         Ok(value) => (status, Json(value)).into_response(),
-        Err(error) => auth::service_error(error),
+        Err(error) => ApiError::response(error),
     };
     auth::append_cookies(&mut response, cookies);
     response

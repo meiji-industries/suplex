@@ -1,6 +1,7 @@
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::http::session;
     use crate::platform::database::OpenMode;
     use axum::{body::to_bytes, http::HeaderValue};
     use std::{

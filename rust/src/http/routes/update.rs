@@ -2,6 +2,7 @@
 //! `http/routes/authenticated.ts`. The Rust binary runs without the Node
 //! supervisor, so it reports its own build as current and cannot restart.
 
+use crate::http::error::ApiError;
 use std::sync::LazyLock;
 
 use axum::{
@@ -52,7 +53,7 @@ fn user(
         .with_database(|database| {
             session::session_user(database, headers, Some(&state.session_config), Utc::now())
         })
-        .map_err(|error| Box::new(auth::service_error(error)))?;
+        .map_err(|error| Box::new(ApiError::response(error)))?;
     match session.user {
         Some(user) => Ok((user, session.set_cookies)),
         None => Err(Box::new(auth::error(

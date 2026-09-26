@@ -6,7 +6,7 @@ pub mod ids;
 pub mod js_json;
 pub mod time;
 
-pub use failure::PublicFailure;
+pub use failure::{PublicFailure, public_failure};
 
 /// JavaScript `encodeURIComponent`.
 pub fn encode_uri_component(value: &str) -> String {

@@ -1,5 +1,8 @@
 //! Task timeline reads saved usage and current native execution evidence.
 
+use crate::http::error::ApiError;
+
+use crate::http::access::authorize;
 use crate::tasks::TaskError;
 use std::{error::Error, path::PathBuf};
 
@@ -10,7 +13,6 @@ use axum::{
     response::{IntoResponse, Response},
     routing::get,
 };
-use chrono::Utc;
 use rusqlite::OptionalExtension;
 use serde_json::json;
 
@@ -18,7 +20,7 @@ use crate::{
     http::{
         AppState,
         contracts::typed::{self, tasks as task_contracts},
-        session, validation,
+        validation,
     },
     identity::companies,
     platform::database::SuplexDatabase,
@@ -41,26 +43,6 @@ fn validate_task_id(task_id: &str) -> Result<(), Box<Response>> {
             StatusCode::INTERNAL_SERVER_ERROR,
             "Internal server error",
         ))),
-    }
-}
-
-fn authorize(
-    state: &AppState,
-    headers: &HeaderMap,
-) -> Result<(String, Vec<String>), Box<Response>> {
-    let session = state
-        .with_database(|database| {
-            session::session_user(database, headers, Some(&state.session_config), Utc::now())
-        })
-        .map_err(auth::service_error)
-        .map_err(Box::new)?;
-    match session.user {
-        Some(user) => Ok((user.id, session.set_cookies)),
-        None => {
-            let mut response = auth::error(StatusCode::UNAUTHORIZED, "Authentication required");
-            auth::append_cookies(&mut response, session.set_cookies);
-            Err(Box::new(response))
-        }
     }
 }
 
@@ -116,7 +98,7 @@ fn respond(result: Result<TimelineResponse, Box<dyn Error>>, cookies: Vec<String
             );
             response
         }
-        Err(error) => auth::service_error(error),
+        Err(error) => ApiError::response(error),
     };
     auth::append_cookies(&mut response, cookies);
     response

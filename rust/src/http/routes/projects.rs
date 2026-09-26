@@ -1,4 +1,6 @@
-use crate::projects::ProjectError;
+use crate::http::access::authorize;
+use crate::http::access::with_cookies;
+use crate::http::error::ApiError;
 use std::error::Error;
 
 use axum::{
@@ -9,19 +11,18 @@ use axum::{
     response::{IntoResponse, Response},
     routing::get,
 };
-use chrono::Utc;
-use serde_json::json;
+use serde_json::{Value, json};
 
 use crate::{
     http::{
         AppState,
         contracts::{
             self,
-            typed::projects::{self as project_contracts, ProjectCreateBody, RepositoryConnection},
+            typed::projects::{self as project_contracts},
         },
         session,
     },
-    projects::{provisioning, repository, service},
+    projects::{provisioning, service},
 };
 
 use super::auth;
@@ -74,7 +75,9 @@ async fn repository_status(
     let project =
         match state.with_database(|database| service::get(database, &user_id, &project_id)) {
             Ok(project) => project,
-            Err(error) => return with_cookies(auth::service_error(error), cookies),
+            Err(error) => {
+                return with_cookies(ApiError::response(error), cookies);
+            }
         };
     let result = tokio::time::timeout(
         std::time::Duration::from_secs(20),
@@ -89,7 +92,7 @@ async fn repository_status(
     if let Err(error) =
         state.with_database(|database| service::get(database, &user_id, &project_id))
     {
-        return with_cookies(auth::service_error(error), cookies);
+        return with_cookies(ApiError::response(error), cookies);
     }
     let response = match result {
         Ok(result) => axum::Json(result).into_response(),
@@ -104,8 +107,8 @@ async fn repository_status(
 }
 
 /// Query pairs as a JSON object; a repeated key keeps its last value.
-fn query_object(uri: &axum::http::Uri) -> serde_json::Value {
-    serde_json::Value::Object(
+fn query_object(uri: &axum::http::Uri) -> Value {
+    Value::Object(
         url::form_urlencoded::parse(uri.query().unwrap_or("").as_bytes())
             .map(|(key, value)| (key.into_owned(), json!(value.into_owned())))
             .collect(),
@@ -137,12 +140,14 @@ async fn issues(
     let project =
         match state.with_database(|database| service::get(database, &user_id, &project_id)) {
             Ok(project) => project,
-            Err(source) => return with_cookies(auth::service_error(source), cookies),
+            Err(source) => {
+                return with_cookies(ApiError::response(source), cookies);
+            }
         };
     let tracker = match &project.integration {
         Some(integration) => serde_json::to_value(&integration.tracker).unwrap_or_default(),
         None => project.repository.as_ref().map_or(
-            serde_json::Value::Null,
+            Value::Null,
             |repository| json!({"kind": "github", "repository": repository}),
         ),
     };
@@ -157,7 +162,7 @@ async fn issues(
     };
     let response = match found.await {
         Ok(issues) => axum::Json(json!({"issues": issues})).into_response(),
-        Err(error) => auth::service_error(error.to_string().into()),
+        Err(error) => ApiError::response(error.to_string().into()),
     };
     with_cookies(response, cookies)
 }
@@ -187,11 +192,13 @@ async fn task_sources(
     let project =
         match state.with_database(|database| service::get(database, &user_id, &project_id)) {
             Ok(project) => project,
-            Err(source) => return with_cookies(auth::service_error(source), cookies),
+            Err(source) => {
+                return with_cookies(ApiError::response(source), cookies);
+            }
         };
     let response = match crate::tasks::sources::discover(&project, &kind).await {
         Ok(sources) => axum::Json(sources).into_response(),
-        Err(error) => auth::service_error(error),
+        Err(error) => ApiError::response(error),
     };
     with_cookies(response, cookies)
 }
@@ -199,7 +206,7 @@ async fn task_sources(
 fn validated_path(contract: &str, name: &str, value: &str) -> Result<(), Box<Response>> {
     let mut path = serde_json::Map::new();
     path.insert(name.to_owned(), json!(value));
-    match contracts::validate(contract, Some(&serde_json::Value::Object(path))) {
+    match contracts::validate(contract, Some(&Value::Object(path))) {
         Some(Ok(_)) => Ok(()),
         Some(Err(issues)) => Err(Box::new(auth::validation_error(issues))),
         None => Err(Box::new(auth::error(
@@ -207,18 +214,6 @@ fn validated_path(contract: &str, name: &str, value: &str) -> Result<(), Box<Res
             "Internal server error",
         ))),
     }
-}
-
-fn bitbucket_connection(body: &ProjectCreateBody) -> bool {
-    let integration = match body {
-        ProjectCreateBody::Local(value) => value.integration.as_ref(),
-        ProjectCreateBody::ExistingRepository(value) => value.integration.as_ref(),
-        ProjectCreateBody::NewRepository(value) => value.integration.as_ref(),
-    };
-    matches!(
-        integration.map(|value| &value.repository),
-        Some(RepositoryConnection::Bitbucket { .. })
-    )
 }
 
 async fn create(
@@ -245,319 +240,26 @@ async fn create(
     let Some(roots) = state.project_roots.clone() else {
         return auth::error(StatusCode::INTERNAL_SERVER_ERROR, "Internal server error");
     };
-    let admission = state
-        .with_database(|database| {
-            crate::identity::companies::require_company_access(database, &user_id, &company_id)
-        })
-        .map_err(auth::service_error);
-    match admission {
-        Ok(company) if company.status != "active" => {
-            return with_cookies(
-                auth::service_error(
-                    ProjectError::Rejected {
-                        message: "Company is not active",
-                        status: 409,
-                        findings: vec![repository::Finding {
-                            code: "company-inactive".to_owned(),
-                            field: "companyId".to_owned(),
-                            message: "Project configuration requires an active company".to_owned(),
-                        }],
-                    }
-                    .into(),
-                ),
-                cookies,
-            );
-        }
-        Err(response) => return with_cookies(response, cookies),
-        Ok(_) => {}
+    if let Err(error) = state
+        .with_database(|database| service::admit_configuration(database, &user_id, &company_id))
+    {
+        return with_cookies(ApiError::response(error), cookies);
     }
-    if bitbucket_connection(&body) {
-        return with_cookies(auth::not_ported(), cookies);
-    }
-    let (sender, receiver) = tokio::sync::oneshot::channel();
-    tokio::spawn(async move {
-        let response = match &body {
-            ProjectCreateBody::ExistingRepository(value) => {
-                create_from_repository(
-                    &state,
-                    &roots,
-                    &user_id,
-                    &company_id,
-                    &body,
-                    &value.repository_url,
-                    value.base_branch.as_deref(),
+    let operation = tokio::spawn(async move {
+        let response =
+            match service::create_project(&state, &roots, &user_id, &company_id, &body).await {
+                Ok(project) => (
+                    StatusCode::CREATED,
+                    axum::Json(service::response_project(&project)),
                 )
-                .await
-            }
-            ProjectCreateBody::NewRepository(value) => {
-                create_with_new_repository(
-                    &state,
-                    &roots,
-                    &user_id,
-                    &company_id,
-                    &body,
-                    &value.repository_name,
-                    value.base_branch.as_deref(),
-                )
-                .await
-            }
-            ProjectCreateBody::Local(value) => {
-                let fields = [
-                    value.name.clone(),
-                    value.repository_path.clone(),
-                    value.worktree_root.clone(),
-                    value.repository.clone(),
-                    value.base_branch.clone(),
-                    value.setup_command.clone(),
-                    value.verification_command.clone(),
-                    value.root_profile_id.clone(),
-                    value.worker_profile_id.clone(),
-                ];
-                finish_local_project(&state, &roots, &user_id, &company_id, &body, &fields).await
-            }
-        };
-        let _ = sender.send(with_cookies(response, cookies));
+                    .into_response(),
+                Err(error) => ApiError::response(error),
+            };
+        with_cookies(response, cookies)
     });
-    receiver
+    operation
         .await
         .unwrap_or_else(|_| auth::error(StatusCode::INTERNAL_SERVER_ERROR, "Internal server error"))
-}
-
-async fn finish_local_project(
-    state: &AppState,
-    roots: &crate::http::ProjectRoots,
-    user_id: &str,
-    company_id: &str,
-    body: &ProjectCreateBody,
-    fields: &[String; 9],
-) -> Response {
-    let input = repository::LocalProjectInput {
-        name: &fields[0],
-        repository_path: &fields[1],
-        worktree_root: &fields[2],
-        repository: &fields[3],
-        base_branch: &fields[4],
-        setup_command: &fields[5],
-        verification_command: &fields[6],
-    };
-    match repository::prepare_local_project(
-        &state.project_github,
-        &roots.repositories,
-        &roots.worktrees,
-        &input,
-    )
-    .await
-    {
-        Ok(prepared) => match state.with_database(|database| {
-            service::create_local(
-                database,
-                user_id,
-                company_id,
-                &prepared,
-                service::CreateLocalOptions {
-                    root_profile_id: &fields[7],
-                    worker_profile_id: &fields[8],
-                    configuration: Some(body),
-                    now: Utc::now(),
-                },
-            )
-        }) {
-            Ok(project) => (
-                StatusCode::CREATED,
-                axum::Json(service::response_project(&project)),
-            )
-                .into_response(),
-            Err(source) => auth::service_error(source),
-        },
-        Err(findings) => auth::service_error(
-            ProjectError::Rejected {
-                message: "Project configuration is invalid",
-                status: 422,
-                findings,
-            }
-            .into(),
-        ),
-    }
-}
-
-async fn create_from_repository(
-    state: &AppState,
-    roots: &crate::http::ProjectRoots,
-    user_id: &str,
-    company_id: &str,
-    body: &ProjectCreateBody,
-    raw_url: &str,
-    requested_base_branch: Option<&str>,
-) -> Response {
-    let Some(coordinate) = repository::repository_coordinate(raw_url) else {
-        return auth::service_error(
-            ProjectError::new("Repository URL is invalid", 422, Vec::new()).into(),
-        );
-    };
-    if coordinate.host != "github" {
-        return auth::service_error(
-            ProjectError::new(
-                "Select the repository host and its credentials",
-                422,
-                Vec::new(),
-            )
-            .into(),
-        );
-    }
-    let base_branch = requested_base_branch.unwrap_or("main").to_owned();
-    create_coordinate(
-        state,
-        roots,
-        user_id,
-        company_id,
-        body,
-        coordinate,
-        base_branch,
-    )
-    .await
-}
-
-async fn create_coordinate(
-    state: &AppState,
-    roots: &crate::http::ProjectRoots,
-    user_id: &str,
-    company_id: &str,
-    body: &ProjectCreateBody,
-    coordinate: repository::Coordinate,
-    base_branch: String,
-) -> Response {
-    let mut parts = coordinate.repository.split('/');
-    let owner = parts.next().expect("validated coordinate owner");
-    let name = parts.next().expect("validated coordinate name");
-    let repository_path = roots.repositories.join(owner).join(name);
-    let worktree_root = roots.worktrees.join(owner).join(name);
-    if let Err(error) = provisioning::ensure(
-        &state.project_github,
-        &coordinate.clone_url,
-        &coordinate.repository,
-        &repository_path,
-        &worktree_root,
-    )
-    .await
-    {
-        return auth::service_error(Box::new(error));
-    }
-    let (setup, verification) = provisioning::infer_commands(&repository_path);
-    let fields = [
-        coordinate.name,
-        repository_path.to_string_lossy().into_owned(),
-        worktree_root.to_string_lossy().into_owned(),
-        coordinate.repository,
-        base_branch,
-        setup,
-        verification,
-        "profile_native_root".to_owned(),
-        "profile_native_worker".to_owned(),
-    ];
-    finish_local_project(state, roots, user_id, company_id, body, &fields).await
-}
-
-async fn create_with_new_repository(
-    state: &AppState,
-    roots: &crate::http::ProjectRoots,
-    user_id: &str,
-    company_id: &str,
-    body: &ProjectCreateBody,
-    repository_name: &str,
-    requested_base_branch: Option<&str>,
-) -> Response {
-    let mut parts = repository_name.trim().split('/');
-    let first = parts.next().unwrap_or_default();
-    let second = parts.next();
-    let owner = if second.is_some() {
-        first.to_owned()
-    } else {
-        match provisioning::github_owners(&state.project_github).await {
-            Ok(owners) => owners.into_iter().next().unwrap_or_default(),
-            Err(error) => return auth::service_error(Box::new(error)),
-        }
-    };
-    if owner.is_empty() {
-        return auth::service_error(
-            ProjectError::Rejected {
-                message: "Repository name is invalid",
-                status: 422,
-                findings: vec![repository::Finding {
-                    code: "repository-name".to_owned(),
-                    field: "repositoryName".to_owned(),
-                    message: "Use workspace/name for a Bitbucket repository".to_owned(),
-                }],
-            }
-            .into(),
-        );
-    }
-    let name = second.unwrap_or(first);
-    let coordinate =
-        repository::repository_coordinate(&format!("https://github.com/{owner}/{name}"));
-    let base_branch = requested_base_branch.unwrap_or("main").to_owned();
-    let Some(coordinate) = coordinate.filter(|_| repository::valid_branch(&base_branch)) else {
-        return auth::service_error(
-            ProjectError::Rejected {
-                message: "Repository name is invalid",
-                status: 422,
-                findings: vec![repository::Finding {
-                    code: "repository-name".to_owned(),
-                    field: "repositoryName".to_owned(),
-                    message: "Use letters, numbers, dots, dashes, and underscores".to_owned(),
-                }],
-            }
-            .into(),
-        );
-    };
-    let mut parts = coordinate.repository.split('/');
-    let owner = parts.next().expect("validated coordinate owner");
-    let name = parts.next().expect("validated coordinate name");
-    let repository_path = roots.repositories.join(owner).join(name);
-    if let Err(error) = provisioning::create(
-        &state.project_github,
-        &coordinate,
-        &coordinate.clone_url,
-        &repository_path,
-        &base_branch,
-    )
-    .await
-    {
-        return auth::service_error(Box::new(error));
-    }
-    create_coordinate(
-        state,
-        roots,
-        user_id,
-        company_id,
-        body,
-        coordinate,
-        base_branch,
-    )
-    .await
-}
-
-fn authorize(
-    state: &AppState,
-    headers: &HeaderMap,
-) -> Result<(String, Vec<String>), Box<Response>> {
-    let session = state
-        .with_database(|database| {
-            session::session_user(database, headers, Some(&state.session_config), Utc::now())
-        })
-        .map_err(auth::service_error)
-        .map_err(Box::new)?;
-    match session.user {
-        Some(user) => Ok((user.id, session.set_cookies)),
-        None => Err(Box::new(auth::error(
-            StatusCode::UNAUTHORIZED,
-            "Authentication required",
-        ))),
-    }
-}
-
-fn with_cookies(mut response: Response, cookies: Vec<String>) -> Response {
-    auth::append_cookies(&mut response, cookies);
-    response
 }
 
 fn list_for(state: AppState, headers: HeaderMap, company_id: Option<String>) -> Response {
@@ -569,7 +271,7 @@ fn list_for(state: AppState, headers: HeaderMap, company_id: Option<String>) -> 
         state.with_database(|database| service::list(database, &user_id, company_id.as_deref()));
     let response = match result {
         Ok(projects) => axum::Json(json!({"projects": projects.iter().map(service::response_project).collect::<Vec<_>>() })).into_response(),
-        Err(source) => auth::service_error(source),
+        Err(source) => ApiError::response(source),
     };
     with_cookies(response, cookies)
 }
@@ -606,20 +308,9 @@ async fn get_one(
     let response =
         match state.with_database(|database| service::get(database, &user_id, &project_id)) {
             Ok(project) => axum::Json(service::response_project(&project)).into_response(),
-            Err(source) => auth::service_error(source),
+            Err(source) => ApiError::response(source),
         };
     with_cookies(response, cookies)
-}
-
-fn invalid(findings: Vec<repository::Finding>) -> Response {
-    auth::service_error(
-        ProjectError::Rejected {
-            message: "Project configuration is invalid",
-            status: 422,
-            findings,
-        }
-        .into(),
-    )
 }
 
 /// A full project body replaces the configuration; any other body patches the
@@ -660,127 +351,24 @@ async fn update(
     };
     let existing = match state.with_database(|database| {
         let existing = service::get(database, &user_id, &project_id)?;
-        let company = crate::identity::companies::require_company_access(
-            database,
-            &user_id,
-            &existing.company_id,
-        )?;
-        Ok::<_, Box<dyn Error>>((existing, company.status == "active"))
+        service::admit_configuration(database, &user_id, &existing.company_id)?;
+        Ok::<_, Box<dyn Error>>(existing)
     }) {
-        Ok((existing, true)) => existing,
-        Ok((_, false)) => {
-            return with_cookies(
-                auth::service_error(
-                    ProjectError::Rejected {
-                        message: "Company is not active",
-                        status: 409,
-                        findings: vec![repository::Finding {
-                            code: "company-inactive".to_owned(),
-                            field: "companyId".to_owned(),
-                            message: "Project configuration requires an active company".to_owned(),
-                        }],
-                    }
-                    .into(),
-                ),
-                cookies,
-            );
+        Ok(existing) => existing,
+        Err(error) => {
+            return with_cookies(ApiError::response(error), cookies);
         }
-        Err(source) => return with_cookies(auth::service_error(source), cookies),
     };
     let response = if let Ok(full) = project_contracts::parse_body(parsed.as_ref()) {
-        replace_project(&state, &roots, &user_id, &existing, &full).await
+        service::replace_project(&state, &roots, &user_id, &existing, &full).await
     } else {
-        patch_project(&state, &roots, &user_id, &existing, &patch).await
+        service::patch_project(&state, &roots, &user_id, &existing, &patch).await
+    };
+    let response = match response {
+        Ok(project) => axum::Json(service::response_project(&project)).into_response(),
+        Err(error) => ApiError::response(error),
     };
     with_cookies(response, cookies)
-}
-
-async fn replace_project(
-    state: &AppState,
-    roots: &crate::http::ProjectRoots,
-    user_id: &str,
-    existing: &service::Project,
-    body: &project_contracts::LocalProjectCreate,
-) -> Response {
-    let integration = body.integration.as_ref().or(existing.integration.as_ref());
-    if matches!(
-        integration.map(|value| &value.repository),
-        Some(RepositoryConnection::Bitbucket { .. })
-    ) {
-        return auth::not_ported();
-    }
-    let input = repository::LocalProjectInput {
-        name: &body.name,
-        repository_path: &body.repository_path,
-        worktree_root: &body.worktree_root,
-        repository: &body.repository,
-        base_branch: &body.base_branch,
-        setup_command: &body.setup_command,
-        verification_command: &body.verification_command,
-    };
-    let prepared = match repository::prepare_local_project(
-        &state.project_github,
-        &roots.repositories,
-        &roots.worktrees,
-        &input,
-    )
-    .await
-    {
-        Ok(prepared) => prepared,
-        Err(findings) => return invalid(findings),
-    };
-    match state.with_database(|database| {
-        service::update_local(database, user_id, existing, &prepared, body, Utc::now())
-    }) {
-        Ok(project) => axum::Json(service::response_project(&project)).into_response(),
-        Err(source) => auth::service_error(source),
-    }
-}
-
-async fn patch_project(
-    state: &AppState,
-    roots: &crate::http::ProjectRoots,
-    user_id: &str,
-    existing: &service::Project,
-    patch: &project_contracts::ProjectPatch,
-) -> Response {
-    let plan = service::plan_patch(existing, patch);
-    let mut findings = plan.findings;
-    let mut paths = (
-        plan.candidate.repository_path.clone(),
-        plan.candidate.worktree_root.clone(),
-    );
-    if plan.repository_changed {
-        let Some((repository_path, worktree_root, errors)) = service::validate_patched_repository(
-            &state.project_github,
-            (&roots.repositories, &roots.worktrees),
-            &plan.candidate,
-            patch.worktree_root.is_some(),
-            plan.remote_changed,
-        )
-        .await
-        else {
-            return auth::not_ported();
-        };
-        paths = (repository_path, worktree_root);
-        findings.extend(errors);
-    }
-    if !findings.is_empty() {
-        return invalid(findings);
-    }
-    match state.with_database(|database| {
-        service::apply_patch(
-            database,
-            user_id,
-            existing,
-            patch,
-            (&paths.0, &paths.1),
-            Utc::now(),
-        )
-    }) {
-        Ok(project) => axum::Json(service::response_project(&project)).into_response(),
-        Err(source) => auth::service_error(source),
-    }
 }
 
 async fn repository_defaults(
@@ -807,7 +395,7 @@ async fn repository_defaults(
                 }))
                 .into_response()
             }
-            Err(source) => auth::service_error(source),
+            Err(source) => ApiError::response(source),
         };
     with_cookies(response, cookies)
 }
@@ -829,7 +417,7 @@ async fn provider_instances(
         .with_database(|database| service::list_provider_instances(database, &user_id, &project_id))
     {
         Ok(instances) => axum::Json(json!({"instances": instances})).into_response(),
-        Err(source) => auth::service_error(source),
+        Err(source) => ApiError::response(source),
     };
     with_cookies(response, cookies)
 }
@@ -852,14 +440,14 @@ async fn repository_owners(
             crate::identity::companies::require_company_access(database, &user_id, &company_id)
         })
         .map(|_| ())
-        .map_err(auth::service_error)
+        .map_err(ApiError::response)
     {
         return with_cookies(response, cookies);
     }
     let result = provisioning::github_owners(&state.project_github).await;
     let response = match result {
         Ok(owners) => axum::Json(json!({"owners": owners})).into_response(),
-        Err(error) => auth::service_error(Box::new(error)),
+        Err(error) => ApiError::response(Box::new(error)),
     };
     with_cookies(response, cookies)
 }
@@ -905,14 +493,14 @@ async fn owner_repositories(
             crate::identity::companies::require_company_access(database, &user_id, &company_id)
         })
         .map(|_| ())
-        .map_err(auth::service_error)
+        .map_err(ApiError::response)
     {
         return with_cookies(response, cookies);
     }
     let result = provisioning::github_repositories(&state.project_github, &owner).await;
     let response = match result {
         Ok(repositories) => axum::Json(json!({"repositories": repositories})).into_response(),
-        Err(error) => auth::service_error(Box::new(error)),
+        Err(error) => ApiError::response(Box::new(error)),
     };
     with_cookies(response, cookies)
 }

@@ -448,6 +448,39 @@ pub struct ImageFiles<'a> {
     pub images: &'a [DecodedTaskImage],
 }
 
+/// The actor belongs to the active company and is the task's creator.
+fn require_creator_scope(
+    database: &SuplexDatabase,
+    actor_user_id: &str,
+    prepared: &PreparedTask,
+) -> DatabaseResult<()> {
+    let company = companies::require_company_access(database, actor_user_id, &prepared.company_id)?;
+    if company.status != "active" {
+        return Err(TaskError::new("The company is not active", 409).into());
+    }
+    if prepared.creator != TaskCreator::User(actor_user_id.to_owned()) {
+        return Err(TaskError::not_found().into());
+    }
+    Ok(())
+}
+
+/// The project still belongs to the company and has the configuration the task captured.
+fn require_unchanged_project(
+    database: &SuplexDatabase,
+    actor_user_id: &str,
+    prepared: &PreparedTask,
+    expected_project: &Project,
+) -> DatabaseResult<()> {
+    let current_project = service::get(database, actor_user_id, &prepared.project_id)?;
+    if current_project.company_id != prepared.company_id {
+        return Err(TaskError::not_found().into());
+    }
+    if project_signature(&current_project) != project_signature(expected_project) {
+        return Err(TaskError::new("Project configuration changed", 409).into());
+    }
+    Ok(())
+}
+
 fn create_user_task_inner(
     database: &mut SuplexDatabase,
     actor_user_id: &str,
@@ -460,14 +493,7 @@ fn create_user_task_inner(
 ) -> DatabaseResult<TaskWrite> {
     let mut written = Vec::new();
     let result = database.transaction(true, |database| {
-        let company =
-            companies::require_company_access(database, actor_user_id, &prepared.company_id)?;
-        if company.status != "active" {
-            return Err(TaskError::new("The company is not active", 409).into());
-        }
-        if prepared.creator != TaskCreator::User(actor_user_id.to_owned()) {
-            return Err(TaskError::not_found().into());
-        }
+        require_creator_scope(database, actor_user_id, prepared)?;
         if let Some(task) = repository::existing(database, prepared)? {
             if task.status == TaskStatus::Active {
                 let id = task.id.clone();
@@ -478,13 +504,7 @@ fn create_user_task_inner(
                 created: false,
             });
         }
-        let current_project = service::get(database, actor_user_id, &prepared.project_id)?;
-        if current_project.company_id != prepared.company_id {
-            return Err(TaskError::not_found().into());
-        }
-        if project_signature(&current_project) != project_signature(expected_project) {
-            return Err(TaskError::new("Project configuration changed", 409).into());
-        }
+        require_unchanged_project(database, actor_user_id, prepared, expected_project)?;
         let result = match images {
             Some((artifact_root, images)) => repository::create_with_images(
                 database,
@@ -829,6 +849,43 @@ pub fn send_user_note(
 }
 
 /// Answer the current question and wake only after the durable answer commit.
+/// The answer names the current question of an open task, no limit decision
+/// is pending, and interrupted commands are confirmed stopped.
+fn require_answerable(
+    database: &SuplexDatabase,
+    task_id: &str,
+    answer: &AnswerBody,
+) -> DatabaseResult<()> {
+    let (archived, question, limit_pause, recovery_turn): (bool, Option<String>, bool, bool) = database
+        .connection()
+        .query_row(
+            "SELECT t.archived_at IS NOT NULL,c.human_question_id,c.limit_pause_json IS NOT NULL,c.recovery_turn_id IS NOT NULL FROM suplex_tasks t JOIN suplex_task_controls c ON c.task_id = t.id WHERE t.id = ?1",
+            [task_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+        )?;
+    if archived
+        || question.as_deref() != Some(answer.question_id.as_str())
+        || answer.answer.trim().is_empty()
+    {
+        return Err(TaskError::new(
+            "The question changed. Read the current question before answering",
+            409,
+        )
+        .into());
+    }
+    if limit_pause {
+        return Err(TaskError::new("Select a task limit action before you continue", 409).into());
+    }
+    if recovery_turn && !answer.confirm_commands_stopped.unwrap_or(false) {
+        return Err(TaskError::new(
+            "Confirm that the commands have stopped before you continue",
+            409,
+        )
+        .into());
+    }
+    Ok(())
+}
+
 pub fn answer_user_task(
     database: &mut SuplexDatabase,
     actor_user_id: &str,
@@ -838,37 +895,9 @@ pub fn answer_user_task(
     wake: impl FnOnce(String) + Send + 'static,
 ) -> DatabaseResult<TaskRecord> {
     let answered = database.transaction(true, |database| {
-        let task = repository::task_by_id(database, task_id)?
-            .ok_or_else(TaskError::not_found)?;
+        let task = repository::task_by_id(database, task_id)?.ok_or_else(TaskError::not_found)?;
         companies::require_company_access(database, actor_user_id, &task.company_id)?;
-        let (archived, question, limit_pause, recovery_turn): (bool, Option<String>, bool, bool) = database
-            .connection()
-            .query_row(
-                "SELECT t.archived_at IS NOT NULL,c.human_question_id,c.limit_pause_json IS NOT NULL,c.recovery_turn_id IS NOT NULL FROM suplex_tasks t JOIN suplex_task_controls c ON c.task_id = t.id WHERE t.id = ?1",
-                [task_id],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
-            )?;
-        if archived
-            || question.as_deref() != Some(answer.question_id.as_str())
-            || answer.answer.trim().is_empty()
-        {
-            return Err(TaskError::new(
-                "The question changed. Read the current question before answering",
-                409,
-            ).into());
-        }
-        if limit_pause {
-            return Err(TaskError::new(
-                "Select a task limit action before you continue",
-                409,
-            ).into());
-        }
-        if recovery_turn && !answer.confirm_commands_stopped.unwrap_or(false) {
-            return Err(TaskError::new(
-                "Confirm that the commands have stopped before you continue",
-                409,
-            ).into());
-        }
+        require_answerable(database, task_id, answer)?;
         root_session_store::answer_human(
             database,
             task_id,
@@ -877,8 +906,8 @@ pub fn answer_user_task(
             answer.confirm_commands_stopped.unwrap_or(false),
             now,
         )?;
-        let answered = repository::task_by_id(database, task_id)?
-            .ok_or_else(TaskError::not_found)?;
+        let answered =
+            repository::task_by_id(database, task_id)?.ok_or_else(TaskError::not_found)?;
         let id = task_id.to_owned();
         database.after_commit(move || wake(id));
         Ok(answered)
@@ -1003,6 +1032,146 @@ fn edit_profile(
         .ok_or_else(|| TaskError::new("The selected agent profile does not exist", 422).into())
 }
 
+/// The edit names at least one setting.
+fn has_detail_edits(input: &TaskDetailsBody) -> bool {
+    input.title.is_some()
+        || input.description.is_some()
+        || input.root_profile_id.is_some()
+        || input.worker_profile_id.is_some()
+        || input.delivery_target.is_some()
+        || input.run_project_tests.is_some()
+        || input.visual_evidence.is_some()
+        || input.workflow.is_some()
+        || input.advisor_profile_ids.is_some()
+}
+
+/// The workflow input the edit states, normalized by the workflow rules. The
+/// task keeps the source it was created from, so the rules judge the edit
+/// against that source.
+fn normalized_edit(
+    input: &TaskDetailsBody,
+    current: &repository::TaskEditSnapshot,
+) -> DatabaseResult<Map<String, Value>> {
+    let mut normalized = Map::new();
+    normalized.insert(
+        "workflow".into(),
+        json!(
+            input
+                .workflow
+                .map(|workflow| workflow.as_str())
+                .unwrap_or(&current.workflow)
+        ),
+    );
+    normalized.insert(
+        "advisorProfileIds".into(),
+        serde_json::to_value(input.advisor_profile_ids.clone().unwrap_or_default())?,
+    );
+    if let Some(source) = current
+        .configuration
+        .get("source")
+        .filter(|source| !source.is_null())
+    {
+        normalized.insert("source".into(), source.clone());
+    }
+    if let Some(target) = &input.delivery_target {
+        normalized.insert("deliveryTarget".into(), json!(target));
+    }
+    if let Some(tests) = input.run_project_tests {
+        normalized.insert("runProjectTests".into(), json!(tests));
+    }
+    crate::coordination::workflow_records::normalize_workflow_input(&mut normalized, true)
+        .map_err(|message| TaskError::new(message, 422))?;
+    Ok(normalized)
+}
+
+/// The Advisor profiles of the edited workflow. A request that names its
+/// Advisors states them all; only a request without any Advisor selection
+/// keeps the stored ones. An unnamed role follows the Coordinator profile.
+fn edited_advisor_profiles(
+    database: &SuplexDatabase,
+    input: &TaskDetailsBody,
+    current: &repository::TaskEditSnapshot,
+    normalized: &Map<String, Value>,
+    root_profile: &TaskProfile,
+) -> DatabaseResult<BTreeMap<AdvisorRole, TaskProfile>> {
+    let workflow = normalized["workflow"].as_str().unwrap_or("standard");
+    let mut advisor_profiles = BTreeMap::new();
+    for role in workflows::advisor_roles(workflow) {
+        let stored_profile = current.advisor_profiles.get(&role);
+        let stored = input
+            .advisor_profile_ids
+            .is_none()
+            .then(|| stored_profile.map(|profile| profile.profile_id.as_str()))
+            .flatten();
+        let id = normalized["advisorProfileIds"][role.as_str()]
+            .as_str()
+            .or(stored)
+            .unwrap_or(&root_profile.profile_id);
+        let profile = if root_profile.profile_id == id {
+            root_profile.clone()
+        } else {
+            edit_profile(database, id, stored_profile, "root")?
+        };
+        advisor_profiles.insert(role, profile);
+    }
+    Ok(advisor_profiles)
+}
+
+/// The project's provider policy allows every edited agent, and a Bitbucket
+/// repository supports the edited delivery target.
+fn check_edit_policy(
+    current: &repository::TaskEditSnapshot,
+    profiles: &[&TaskProfile],
+    delivery_target: &str,
+) -> DatabaseResult<()> {
+    let policy: Option<ProjectProviderPolicy> = current
+        .configuration
+        .get("providerPolicy")
+        .filter(|value| !value.is_null())
+        .cloned()
+        .map(serde_json::from_value)
+        .transpose()?;
+    if profiles
+        .iter()
+        .any(|profile| !allowed_profile(policy.as_ref(), profile))
+    {
+        return Err(TaskError::new(
+            "Select agents with providers and logins allowed by this project",
+            422,
+        )
+        .into());
+    }
+    if current
+        .configuration
+        .pointer("/integration/repository/kind")
+        .and_then(Value::as_str)
+        == Some("bitbucket")
+        && DeliveryTarget::parse(delivery_target).is_some_and(|target| !target.bitbucket_supports())
+    {
+        return Err(TaskError::new(
+            "Bitbucket supports draft pull requests. Select a supported delivery target.",
+            422,
+        )
+        .into());
+    }
+    Ok(())
+}
+
+/// The stored test and visual evidence choices an edit keeps when it omits them.
+fn stored_choices(current: &repository::TaskEditSnapshot) -> DatabaseResult<(bool, &str)> {
+    let stored_tests = current
+        .configuration
+        .get("runProjectTests")
+        .and_then(Value::as_bool)
+        .ok_or("Stored task test choice is missing")?;
+    let stored_visual = current
+        .configuration
+        .get("visualEvidence")
+        .and_then(Value::as_str)
+        .ok_or("Stored task visual evidence choice is missing")?;
+    Ok((stored_tests, stored_visual))
+}
+
 /// The UI edit resolves a full settings snapshot against the stored task.
 pub fn update_user_task_details(
     database: &mut SuplexDatabase,
@@ -1011,16 +1180,7 @@ pub fn update_user_task_details(
     input: &TaskDetailsBody,
     now: DateTime<Utc>,
 ) -> DatabaseResult<TaskRecord> {
-    if input.title.is_none()
-        && input.description.is_none()
-        && input.root_profile_id.is_none()
-        && input.worker_profile_id.is_none()
-        && input.delivery_target.is_none()
-        && input.run_project_tests.is_none()
-        && input.visual_evidence.is_none()
-        && input.workflow.is_none()
-        && input.advisor_profile_ids.is_none()
-    {
+    if !has_detail_edits(input) {
         // The HTTP schema accepts {}, but the TypeScript service refinement throws.
         return Err(TaskError::internal("Internal server error").into());
     }
@@ -1029,36 +1189,7 @@ pub fn update_user_task_details(
         companies::require_company_access(database, actor_user_id, &scope.company_id)?;
         let current =
             repository::edit_snapshot(database, task_id)?.ok_or_else(TaskError::not_found)?;
-        // The task keeps the source it was created from, so the workflow rules judge the edit against that source.
-        let mut normalized = Map::new();
-        normalized.insert(
-            "workflow".into(),
-            json!(
-                input
-                    .workflow
-                    .map(|workflow| workflow.as_str())
-                    .unwrap_or(&current.workflow)
-            ),
-        );
-        normalized.insert(
-            "advisorProfileIds".into(),
-            serde_json::to_value(input.advisor_profile_ids.clone().unwrap_or_default())?,
-        );
-        if let Some(source) = current
-            .configuration
-            .get("source")
-            .filter(|source| !source.is_null())
-        {
-            normalized.insert("source".into(), source.clone());
-        }
-        if let Some(target) = &input.delivery_target {
-            normalized.insert("deliveryTarget".into(), json!(target));
-        }
-        if let Some(tests) = input.run_project_tests {
-            normalized.insert("runProjectTests".into(), json!(tests));
-        }
-        crate::coordination::workflow_records::normalize_workflow_input(&mut normalized, true)
-            .map_err(|message| TaskError::new(message, 422))?;
+        let normalized = normalized_edit(input, &current)?;
         let workflow = normalized["workflow"].as_str().unwrap_or("standard");
         let root_id = input
             .root_profile_id
@@ -1071,72 +1202,18 @@ pub fn update_user_task_details(
         let root_profile = edit_profile(database, root_id, Some(&current.root_profile), "root")?;
         let worker_profile =
             edit_profile(database, worker_id, Some(&current.worker_profile), "worker")?;
-        // A request that names its Advisors states them all; only a request without any Advisor selection keeps the stored ones.
-        let mut advisor_profiles = BTreeMap::new();
-        for role in workflows::advisor_roles(workflow) {
-            let stored_profile = current.advisor_profiles.get(&role);
-            let stored = input
-                .advisor_profile_ids
-                .is_none()
-                .then(|| stored_profile.map(|profile| profile.profile_id.as_str()))
-                .flatten();
-            let id = normalized["advisorProfileIds"][role.as_str()]
-                .as_str()
-                .or(stored)
-                .unwrap_or(&root_profile.profile_id);
-            let profile = if root_profile.profile_id == id {
-                root_profile.clone()
-            } else {
-                edit_profile(database, id, stored_profile, "root")?
-            };
-            advisor_profiles.insert(role, profile);
-        }
-        let policy: Option<ProjectProviderPolicy> = current
-            .configuration
-            .get("providerPolicy")
-            .filter(|value| !value.is_null())
-            .cloned()
-            .map(serde_json::from_value)
-            .transpose()?;
-        if [&root_profile, &worker_profile]
-            .into_iter()
-            .chain(advisor_profiles.values())
-            .any(|profile| !allowed_profile(policy.as_ref(), profile))
-        {
-            return Err(TaskError::new(
-                "Select agents with providers and logins allowed by this project",
-                422,
-            )
-            .into());
-        }
+        let advisor_profiles =
+            edited_advisor_profiles(database, input, &current, &normalized, &root_profile)?;
         let delivery_target = normalized
             .get("deliveryTarget")
             .and_then(Value::as_str)
             .unwrap_or(&current.delivery_target);
-        if current
-            .configuration
-            .pointer("/integration/repository/kind")
-            .and_then(Value::as_str)
-            == Some("bitbucket")
-            && DeliveryTarget::parse(delivery_target)
-                .is_some_and(|target| !target.bitbucket_supports())
-        {
-            return Err(TaskError::new(
-                "Bitbucket supports draft pull requests. Select a supported delivery target.",
-                422,
-            )
-            .into());
-        }
-        let stored_tests = current
-            .configuration
-            .get("runProjectTests")
-            .and_then(Value::as_bool)
-            .ok_or("Stored task test choice is missing")?;
-        let stored_visual = current
-            .configuration
-            .get("visualEvidence")
-            .and_then(Value::as_str)
-            .ok_or("Stored task visual evidence choice is missing")?;
+        let profiles = [&root_profile, &worker_profile]
+            .into_iter()
+            .chain(advisor_profiles.values())
+            .collect::<Vec<_>>();
+        check_edit_policy(&current, &profiles, delivery_target)?;
+        let (stored_tests, stored_visual) = stored_choices(&current)?;
         let details = TaskDetailsWrite {
             title: input
                 .title

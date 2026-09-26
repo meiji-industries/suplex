@@ -323,17 +323,6 @@ pub(crate) fn error(status: StatusCode, message: &str) -> Response {
     (status, Json(json!({ "error": message }))).into_response()
 }
 
-pub(crate) fn not_ported() -> Response {
-    (
-        StatusCode::NOT_IMPLEMENTED,
-        Json(json!({
-            "error": "Experimental Rust backend has not ported this route",
-            "code": "experimental_not_ported",
-        })),
-    )
-        .into_response()
-}
-
 pub(crate) use crate::http::access::append_cookies;
 
 pub(crate) fn validation_error(issues: Vec<serde_json::Value>) -> Response {

@@ -619,10 +619,9 @@ pub fn create_local(
             "UPDATE suplex_projects SET integration_json = ?1, execution_json = ?2 WHERE id = ?3",
             params![integration_json, execution_json, id],
         )?;
-        database.connection().execute(
-            "INSERT INTO suplex_audit_events (id, actor_user_id, actor_agent_id, action, target_user_id, company_id, metadata_json, created_at) VALUES (?1, ?2, NULL, 'project_created', NULL, ?3, ?4, ?5)",
-            params![audit_id, actor_user_id, company_id, crate::shared::js_json::stringify(&json!({"projectId": id})), stamp],
-        )?;
+        crate::identity::audit::record(
+database, &audit_id, (Some(actor_user_id), None), "project_created", None, Some(company_id), &crate::shared::js_json::stringify(&json!({"projectId": id})), &stamp
+)?;
         database.connection().execute(
             "UPDATE suplex_projects SET provider_policy_json = ?1 WHERE id = ?2",
             params![provider_policy_json, id],
@@ -757,9 +756,15 @@ fn audit_update(
     project_id: &str,
     stamp: &str,
 ) -> DatabaseResult<()> {
-    database.connection().execute(
-        "INSERT INTO suplex_audit_events (id, actor_user_id, actor_agent_id, action, target_user_id, company_id, metadata_json, created_at) VALUES (?1, ?2, NULL, 'project_updated', NULL, ?3, ?4, ?5)",
-        params![random_hex_id("audit")?, actor_user_id, company_id, crate::shared::js_json::stringify(&json!({"projectId": project_id})), stamp],
+    crate::identity::audit::record(
+        database,
+        &random_hex_id("audit")?,
+        (Some(actor_user_id), None),
+        "project_updated",
+        None,
+        Some(company_id),
+        &crate::shared::js_json::stringify(&json!({"projectId": project_id})),
+        stamp,
     )?;
     Ok(())
 }
@@ -946,15 +951,14 @@ pub fn plan_patch(existing: &Project, patch: &ProjectPatch) -> PatchPlan {
     }
 }
 
-/// TypeScript `validatePatchedRepository`. `None` means the repository host
-/// needs a Bitbucket check that the Rust backend has not ported.
+/// TypeScript `validatePatchedRepository`.
 pub async fn validate_patched_repository(
     github: &super::repository::Github,
     roots: (&std::path::Path, &std::path::Path),
     candidate: &Project,
     validate_worktree_write: bool,
     validate_remote: bool,
-) -> Option<(String, String, Vec<Finding>)> {
+) -> (String, String, Vec<Finding>) {
     use super::repository as checks;
     let repository =
         checks::canonical_directory(&candidate.repository_path, roots.0, "repositoryPath");
@@ -1024,7 +1028,11 @@ pub async fn validate_patched_repository(
     let mut access = None;
     if findings.is_empty() {
         let host = if bitbucket { "bitbucket" } else { "github" };
-        access = github.access().await.ok();
+        access = if bitbucket {
+            None
+        } else {
+            github.access().await.ok()
+        };
         match checks::inspect_with(access.as_ref(), &repository_path, base_branch, host).await {
             Err(errors) => findings.extend(errors),
             Ok(inspection) => {
@@ -1060,18 +1068,28 @@ pub async fn validate_patched_repository(
         }
     }
     if validate_remote && findings.is_empty() {
-        if bitbucket {
-            return None;
-        }
-        if let Err(error) = checks::verify_github(access.as_ref(), &identity).await {
+        let verified = if bitbucket {
+            let connection = &candidate
+                .integration
+                .as_ref()
+                .expect("Bitbucket integration")
+                .repository;
+            let client = crate::integrations::bitbucket::BitbucketClient::new(
+                &serde_json::to_value(connection).expect("repository connection serializes"),
+            );
+            verify_bitbucket(&client, &identity).await
+        } else {
+            checks::verify_github(access.as_ref(), &identity).await
+        };
+        if let Err(error) = verified {
             findings.push(error);
         }
     }
-    Some((
+    (
         repository_path.to_string_lossy().into_owned(),
         worktree_root.to_string_lossy().into_owned(),
         findings,
-    ))
+    )
 }
 
 /// TypeScript `patchProject` after its repository checks: write only the
@@ -1228,16 +1246,82 @@ fn patch_agent_configuration(
     Ok(())
 }
 
-fn bitbucket_connection(body: &ProjectCreateBody) -> bool {
-    let integration = match body {
+fn repository_connection(body: &ProjectCreateBody) -> Option<&RepositoryConnection> {
+    match body {
         ProjectCreateBody::Local(value) => value.integration.as_ref(),
         ProjectCreateBody::ExistingRepository(value) => value.integration.as_ref(),
         ProjectCreateBody::NewRepository(value) => value.integration.as_ref(),
-    };
-    matches!(
-        integration.map(|value| &value.repository),
-        Some(RepositoryConnection::Bitbucket { .. })
+    }
+    .map(|integration| &integration.repository)
+}
+fn repository_host(connection: Option<&RepositoryConnection>) -> &'static str {
+    if matches!(connection, Some(RepositoryConnection::Bitbucket { .. })) {
+        "bitbucket"
+    } else {
+        "github"
+    }
+}
+async fn verify_bitbucket(
+    client: &crate::integrations::bitbucket::BitbucketClient,
+    identity: &str,
+) -> Result<(), Finding> {
+    let (_, href) = client.repository(identity).await.map_err(|_| {
+        finding(
+            "github-repository-unavailable",
+            "repository",
+            "GitHub repository identity could not be verified",
+        )
+    })?;
+    let url = url::Url::parse(&href).map_err(|_| {
+        finding(
+            "provider-host",
+            "repository",
+            "GitHub provider returned a URL outside github.com",
+        )
+    })?;
+    if !url.username().is_empty()
+        || url.password().is_some()
+        || url.query().is_some()
+        || url.fragment().is_some()
+        || url
+            .path()
+            .trim_end_matches('/')
+            .trim_end_matches(".git")
+            .trim_start_matches('/')
+            .to_lowercase()
+            != identity
+    {
+        return Err(finding(
+            "provider-path",
+            "repository",
+            "GitHub provider URL does not match configured repository identity",
+        ));
+    }
+    Ok(())
+}
+async fn prepare_local_project(
+    github: &repository::Github,
+    roots: &crate::http::ProjectRoots,
+    input: &repository::LocalProjectInput<'_>,
+    connection: Option<&RepositoryConnection>,
+) -> Result<PreparedLocalProject, Vec<Finding>> {
+    let prepared = repository::prepare_local_project(
+        github,
+        &roots.repositories,
+        &roots.worktrees,
+        input,
+        repository_host(connection),
     )
+    .await?;
+    if let Some(connection @ RepositoryConnection::Bitbucket { .. }) = connection {
+        let client = crate::integrations::bitbucket::BitbucketClient::new(
+            &serde_json::to_value(connection).expect("repository connection serializes"),
+        );
+        verify_bitbucket(&client, &prepared.repository)
+            .await
+            .map_err(|error| vec![error])?;
+    }
+    Ok(prepared)
 }
 
 pub async fn create_project(
@@ -1247,9 +1331,6 @@ pub async fn create_project(
     company_id: &str,
     body: &ProjectCreateBody,
 ) -> DatabaseResult<Project> {
-    if bitbucket_connection(body) {
-        return Err(not_ported());
-    }
     match body {
         ProjectCreateBody::ExistingRepository(value) => {
             create_from_repository(
@@ -1313,11 +1394,6 @@ pub(crate) fn admit_configuration(
     Ok(())
 }
 
-fn not_ported() -> Box<dyn Error> {
-    crate::shared::PublicFailure::new(501, "Experimental Rust backend has not ported this route")
-        .with_code("experimental_not_ported")
-        .into()
-}
 async fn finish_local_project(
     state: &AppState,
     roots: &crate::http::ProjectRoots,
@@ -1335,11 +1411,11 @@ async fn finish_local_project(
         setup_command: &fields[5],
         verification_command: &fields[6],
     };
-    let prepared = repository::prepare_local_project(
+    let prepared = prepare_local_project(
         &state.project_github,
-        &roots.repositories,
-        &roots.worktrees,
+        roots,
         &input,
+        repository_connection(body),
     )
     .await
     .map_err(|findings| ProjectError::new("Project configuration is invalid", 422, findings))?;
@@ -1371,7 +1447,7 @@ async fn create_from_repository(
     let Some(coordinate) = repository::repository_coordinate(raw_url) else {
         return Err(ProjectError::new("Repository URL is invalid", 422, Vec::new()).into());
     };
-    if coordinate.host != "github" {
+    if coordinate.host != repository_host(repository_connection(body)) {
         return Err(ProjectError::new(
             "Select the repository host and its credentials",
             422,
@@ -1444,8 +1520,11 @@ async fn create_with_new_repository(
     let mut parts = repository_name.trim().split('/');
     let first = parts.next().unwrap_or_default();
     let second = parts.next();
+    let bitbucket = repository_host(repository_connection(body)) == "bitbucket";
     let owner = if second.is_some() {
         first.to_owned()
+    } else if bitbucket {
+        String::new()
     } else {
         match provisioning::github_owners(&state.project_github).await {
             Ok(owners) => owners.into_iter().next().unwrap_or_default(),
@@ -1465,8 +1544,14 @@ async fn create_with_new_repository(
         .into());
     }
     let name = second.unwrap_or(first);
-    let coordinate =
-        repository::repository_coordinate(&format!("https://github.com/{owner}/{name}"));
+    let coordinate = repository::repository_coordinate(&format!(
+        "https://{}/{owner}/{name}",
+        if bitbucket {
+            "bitbucket.org"
+        } else {
+            "github.com"
+        }
+    ));
     let base_branch = requested_base_branch.unwrap_or("main").to_owned();
     let Some(coordinate) = coordinate.filter(|_| repository::valid_branch(&base_branch)) else {
         return Err(ProjectError::Rejected {
@@ -1490,6 +1575,7 @@ async fn create_with_new_repository(
         &coordinate.clone_url,
         &repository_path,
         &base_branch,
+        repository_connection(body),
     )
     .await
     {
@@ -1515,12 +1601,6 @@ pub async fn replace_project(
     body: &project_contracts::LocalProjectCreate,
 ) -> DatabaseResult<Project> {
     let integration = body.integration.as_ref().or(existing.integration.as_ref());
-    if matches!(
-        integration.map(|value| &value.repository),
-        Some(RepositoryConnection::Bitbucket { .. })
-    ) {
-        return Err(not_ported());
-    }
     let input = repository::LocalProjectInput {
         name: &body.name,
         repository_path: &body.repository_path,
@@ -1530,11 +1610,11 @@ pub async fn replace_project(
         setup_command: &body.setup_command,
         verification_command: &body.verification_command,
     };
-    let prepared = match repository::prepare_local_project(
+    let prepared = match prepare_local_project(
         &state.project_github,
-        &roots.repositories,
-        &roots.worktrees,
+        roots,
         &input,
+        integration.map(|integration| &integration.repository),
     )
     .await
     {
@@ -1564,17 +1644,14 @@ pub async fn patch_project(
         plan.candidate.worktree_root.clone(),
     );
     if plan.repository_changed {
-        let Some((repository_path, worktree_root, errors)) = validate_patched_repository(
+        let (repository_path, worktree_root, errors) = validate_patched_repository(
             &state.project_github,
             (&roots.repositories, &roots.worktrees),
             &plan.candidate,
             patch.worktree_root.is_some(),
             plan.remote_changed,
         )
-        .await
-        else {
-            return Err(not_ported());
-        };
+        .await;
         paths = (repository_path, worktree_root);
         findings.extend(errors);
     }
@@ -1600,6 +1677,87 @@ mod tests {
     use crate::platform::database::OpenMode;
 
     use super::*;
+
+    #[tokio::test]
+    async fn bitbucket_repository_validation_uses_provider_identity_and_reports_access_failures() {
+        use crate::integrations::bitbucket::BitbucketClient;
+        use axum::{
+            Json, Router, extract::Path, http::StatusCode, response::IntoResponse, routing::get,
+        };
+        let app = Router::new().route("/2.0/repositories/team/{name}", get(|Path(name): Path<String>| async move {
+            if name == "denied" { return StatusCode::FORBIDDEN.into_response(); }
+            let path = if name == "wrong_path" { "other" } else { &name };
+            Json(json!({"full_name":format!("team/{name}"),"links":{"html":{"href":format!("https://bitbucket.org/team/{path}")}}})).into_response()
+        }));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let origin = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        // This credential name belongs only to this test.
+        unsafe { std::env::set_var("SUPLEX_P3_BITBUCKET_VALIDATION_TOKEN", "fixture") };
+        let client = BitbucketClient::with_origin(
+            &json!({"tokenEnvironment":"SUPLEX_P3_BITBUCKET_VALIDATION_TOKEN"}),
+            &origin,
+        );
+        verify_bitbucket(&client, "team/repo").await.unwrap();
+        assert_eq!(
+            verify_bitbucket(&client, "team/wrong_path")
+                .await
+                .unwrap_err()
+                .code,
+            "provider-path"
+        );
+        assert_eq!(
+            verify_bitbucket(&client, "team/denied")
+                .await
+                .unwrap_err()
+                .code,
+            "github-repository-unavailable"
+        );
+        use repository::fixtures::{github_checkout, temporary};
+        let root = temporary("suplex-bitbucket-project");
+        let local = root.join("repo");
+        let bare = root.join("bare");
+        let checkout = github_checkout(&local, &bare, "team/repo");
+        let origin = "https://bitbucket.org/team/repo.git";
+        checkout.remote_set_url("origin", origin).unwrap();
+        checkout
+            .config()
+            .unwrap()
+            .set_str(&format!("url.file://{}.insteadOf", bare.display()), origin)
+            .unwrap();
+        let worktrees = root.join("worktrees");
+        std::fs::create_dir_all(&worktrees).unwrap();
+        let input = repository::LocalProjectInput {
+            name: "Bitbucket",
+            repository_path: local.to_str().unwrap(),
+            worktree_root: worktrees.to_str().unwrap(),
+            repository: "team/repo",
+            base_branch: "main",
+            setup_command: "true",
+            verification_command: "true",
+        };
+        let github = repository::Github::default();
+        let prepared =
+            repository::prepare_local_project(&github, &root, &root, &input, "bitbucket")
+                .await
+                .unwrap();
+        assert_eq!(prepared.repository, "team/repo");
+        let roots = crate::http::ProjectRoots {
+            repositories: root.clone(),
+            worktrees: root.clone(),
+        };
+        let connection = serde_json::from_value(
+            json!({"kind":"bitbucket", "tokenEnvironment":"SUPLEX_P3_BITBUCKET_MISSING_TOKEN"}),
+        )
+        .unwrap();
+        let findings = prepare_local_project(&github, &roots, &input, Some(&connection))
+            .await
+            .unwrap_err();
+        assert_eq!(findings[0].code, "github-repository-unavailable");
+        drop(checkout);
+        std::fs::remove_dir_all(root).unwrap();
+        server.abort();
+    }
 
     fn local_configuration(fields: Value) -> ProjectCreateBody {
         let mut base = json!({

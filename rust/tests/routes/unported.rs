@@ -11,7 +11,7 @@ mod tests {
     };
 
     #[tokio::test]
-    async fn registered_admin_stub_checks_session_role_and_csrf_before_501() {
+    async fn retired_stub_checks_session_role_and_csrf_before_not_found() {
         static NEXT_DATABASE: AtomicU64 = AtomicU64::new(0);
         let path = std::env::temp_dir().join(format!(
             "suplex-unported-route-{}-{}.sqlite",
@@ -54,7 +54,7 @@ mod tests {
         );
         assert_eq!(
             guarded(&state, &headers, &Method::GET, Access::Authenticated).status(),
-            StatusCode::NOT_IMPLEMENTED
+            StatusCode::NOT_FOUND
         );
         headers.insert(
             "cookie",
@@ -69,11 +69,11 @@ mod tests {
             HeaderValue::from_static("https://suplex.example.test:4113"),
         );
         let response = guarded(&state, &headers, &Method::POST, Access::Administrator);
-        assert_eq!(response.status(), StatusCode::NOT_IMPLEMENTED);
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
         let body = to_bytes(response.into_body(), 1024).await.unwrap();
         assert_eq!(
-            serde_json::from_slice::<serde_json::Value>(&body).unwrap()["code"],
-            "experimental_not_ported"
+            serde_json::from_slice::<serde_json::Value>(&body).unwrap()["error"],
+            "Not found"
         );
         drop(state);
         let _ = std::fs::remove_file(&path);
@@ -113,7 +113,7 @@ mod tests {
             let signed_in = request(Some(&cookie)).send().await.unwrap();
             assert_eq!(
                 signed_in.status(),
-                StatusCode::NOT_IMPLEMENTED,
+                StatusCode::NOT_FOUND,
                 "{method} {path}"
             );
             assert_eq!(

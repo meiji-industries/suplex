@@ -1,62 +1,33 @@
+use crate::http::AppState;
+#[cfg(test)]
 use crate::http::error::ApiError;
+use axum::Router;
+#[cfg(test)]
 use axum::{
-    Router,
-    extract::State,
     http::{HeaderMap, Method, StatusCode},
     response::Response,
-    routing::{MethodFilter, on},
 };
+#[cfg(test)]
 use chrono::Utc;
 
-use crate::http::{AppState, session};
+#[cfg(test)]
+use crate::http::session;
 
+#[cfg(test)]
 use super::auth;
 
-use Access::{Administrator, Authenticated};
-
-// Routes the TypeScript backend registers that Rust has not ported yet. Keep
-// this list explicit so an unknown path still receives the normal 404 response.
-// WebSocket routes are plain GET handlers here: they answer 501 before any
-// upgrade. `scripts/rust-route-coverage.ts` checks this list stays complete.
-const ROUTES: &[(Method, &str, Access)] = &[];
-
 pub fn router() -> Router<AppState> {
-    ROUTES
-        .iter()
-        .fold(Router::new(), |router, (method, path, access)| {
-            let filter = MethodFilter::try_from(method.clone()).expect("stub method");
-            router.route(
-                path,
-                match access {
-                    Authenticated => on(filter, authenticated),
-                    Administrator => on(filter, administrator),
-                },
-            )
-        })
+    Router::new()
 }
 
+#[cfg(test)]
 #[derive(Clone, Copy)]
 enum Access {
     Authenticated,
     Administrator,
 }
 
-async fn authenticated(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    method: Method,
-) -> Response {
-    guarded(&state, &headers, &method, Access::Authenticated)
-}
-
-async fn administrator(
-    State(state): State<AppState>,
-    headers: HeaderMap,
-    method: Method,
-) -> Response {
-    guarded(&state, &headers, &method, Access::Administrator)
-}
-
+#[cfg(test)]
 fn guarded(state: &AppState, headers: &HeaderMap, method: &Method, access: Access) -> Response {
     if !session::csrf_allowed(&state.session_config, headers, method.as_str(), false) {
         return auth::error(StatusCode::FORBIDDEN, "request_origin_invalid");
@@ -72,12 +43,15 @@ fn guarded(state: &AppState, headers: &HeaderMap, method: &Method, access: Acces
         Some(user) if matches!(access, Access::Administrator) && user.role != "admin" => {
             auth::error(StatusCode::FORBIDDEN, "Administrator access required")
         }
-        Some(_) => auth::not_ported(),
+        Some(_) => auth::error(StatusCode::NOT_FOUND, "Not found"),
     };
     let mut response = response;
     auth::append_cookies(&mut response, session.set_cookies);
     response
 }
+
+#[cfg(test)]
+const ROUTES: &[(Method, &str, Access)] = &[];
 
 #[cfg(test)]
 include!("../../../tests/routes/unported.rs");

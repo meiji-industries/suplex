@@ -413,6 +413,7 @@ pub async fn prepare_local_project(
     repository_root: &Path,
     worktree_root: &Path,
     input: &LocalProjectInput<'_>,
+    host: &str,
 ) -> Result<PreparedLocalProject, Vec<Finding>> {
     let repository_path =
         canonical_directory(input.repository_path, repository_root, "repositoryPath");
@@ -491,8 +492,12 @@ pub async fn prepare_local_project(
     let worktree_path = worktree_path.expect("checked worktree path");
     // A failed credential load leaves Git to try the SSH agent; GitHub
     // verification then reports the missing authentication.
-    let access = github.access().await.ok();
-    let inspection = inspect_with(access.as_ref(), &repository_path, base_branch, "github").await?;
+    let access = if host == "github" {
+        github.access().await.ok()
+    } else {
+        None
+    };
+    let inspection = inspect_with(access.as_ref(), &repository_path, base_branch, host).await?;
     if inspection.canonical_path != repository_path {
         findings.push(finding(
             "repository-path-mismatch",
@@ -507,7 +512,15 @@ pub async fn prepare_local_project(
             "Configured branches must resolve to commits",
         ));
     }
-    if let Err(error) =
+    if host == "bitbucket" {
+        if inspection.remote_repository != repository {
+            findings.push(finding(
+                "repository-mismatch",
+                "repository",
+                "Local origin does not match configured repository identity",
+            ));
+        }
+    } else if let Err(error) =
         verify_origin(access.as_ref(), &inspection.remote_repository, &repository).await
     {
         findings.push(error);
@@ -515,9 +528,11 @@ pub async fn prepare_local_project(
     if !findings.is_empty() {
         return Err(findings);
     }
-    verify_github(access.as_ref(), &repository)
-        .await
-        .map_err(|error| vec![error])?;
+    if host == "github" {
+        verify_github(access.as_ref(), &repository)
+            .await
+            .map_err(|error| vec![error])?;
+    }
     Ok(PreparedLocalProject {
         name: name.to_owned(),
         repository_path,
@@ -1170,7 +1185,7 @@ mod tests {
             setup_command: " pnpm install ",
             verification_command: " pnpm test ",
         };
-        let prepared = prepare_local_project(&github, &root, &root, &input)
+        let prepared = prepare_local_project(&github, &root, &root, &input, "github")
             .await
             .unwrap();
         assert_eq!(prepared.name, "Local project");
@@ -1211,7 +1226,7 @@ mod tests {
             ..input
         };
         assert_eq!(
-            prepare_local_project(&github, &root, &root, &mismatch)
+            prepare_local_project(&github, &root, &root, &mismatch, "github")
                 .await
                 .unwrap_err()[0]
                 .code,

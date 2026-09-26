@@ -259,7 +259,13 @@ pub async fn ensure(
                 finding("repository-unavailable", "repositoryUrl", error.to_string()),
             )
         })?;
-        let token = github.token().await;
+        let token = if repository::repository_coordinate(clone_url)
+            .is_some_and(|coordinate| coordinate.host == "github")
+        {
+            github.token().await
+        } else {
+            None
+        };
         let (github, url, target) = (github.clone(), clone_url.to_owned(), temporary.clone());
         let cloned =
             tokio::task::spawn_blocking(move || clone(&github, &url, &target, token.as_deref()))
@@ -348,6 +354,7 @@ pub async fn create(
     clone_url: &str,
     repository_path: &Path,
     base_branch: &str,
+    connection: Option<&crate::http::contracts::typed::projects::RepositoryConnection>,
 ) -> Result<(), ProjectError> {
     let parent = repository_path
         .parent()
@@ -391,32 +398,53 @@ pub async fn create(
             .await
             .map_err(|error| error.to_string())?
             .map_err(|error| error.message().to_owned())?;
-        if coordinate.host != "github" {
-            return Err("Bitbucket repository creation is not yet connected".to_owned());
-        }
-        let access = github
-            .access()
-            .await
-            .map_err(|error| github_reason(&*error))?;
-        let login = access
-            .current_user_login()
-            .await
-            .map_err(|error| github_reason(&*error))?;
-        let (owner, name) = coordinate
-            .repository
-            .split_once('/')
-            .expect("validated coordinate");
-        let route = if owner.eq_ignore_ascii_case(&login) {
-            "/user/repos".to_owned()
+        let token = if let Some(
+            connection @ crate::http::contracts::typed::projects::RepositoryConnection::Bitbucket {
+                ..
+            },
+        ) = connection
+        {
+            let client = crate::integrations::bitbucket::BitbucketClient::new(
+                &serde_json::to_value(connection).map_err(|error| error.to_string())?,
+            );
+            client
+                .api(
+                    &format!("/2.0/repositories/{}", coordinate.repository),
+                    "POST",
+                    Some((
+                        serde_json::to_vec(&json!({"scm":"git", "is_private":true}))
+                            .map_err(|error| error.to_string())?,
+                        "application/json".into(),
+                    )),
+                )
+                .await
+                .map_err(|error| error.to_string())?;
+            None
         } else {
-            format!("/orgs/{owner}/repos")
+            let access = github
+                .access()
+                .await
+                .map_err(|error| github_reason(&*error))?;
+            let login = access
+                .current_user_login()
+                .await
+                .map_err(|error| github_reason(&*error))?;
+            let (owner, name) = coordinate
+                .repository
+                .split_once('/')
+                .expect("validated coordinate");
+            let route = if owner.eq_ignore_ascii_case(&login) {
+                "/user/repos".to_owned()
+            } else {
+                format!("/orgs/{owner}/repos")
+            };
+            access
+                .client()
+                .post::<_, Value>(route, Some(&json!({"name": name, "private": true})))
+                .await
+                .map_err(|error| github_reason(&error))?;
+            access.token().map(str::to_owned)
         };
-        access
-            .client()
-            .post::<_, Value>(route, Some(&json!({"name": name, "private": true})))
-            .await
-            .map_err(|error| github_reason(&error))?;
-        let token = access.token().map(str::to_owned);
         let (github, target, url, branch) = (
             github.clone(),
             temporary.clone(),
@@ -755,9 +783,16 @@ mod tests {
 
         let fresh = repository::repository_coordinate("https://github.com/acme/fresh").unwrap();
         let fresh_path = repositories.join("acme/fresh");
-        create(&github, &fresh, &fresh.clone_url, &fresh_path, "trunk")
-            .await
-            .unwrap();
+        create(
+            &github,
+            &fresh,
+            &fresh.clone_url,
+            &fresh_path,
+            "trunk",
+            None,
+        )
+        .await
+        .unwrap();
         assert_eq!(
             created.lock().unwrap().as_slice(),
             &[(
@@ -778,9 +813,16 @@ mod tests {
             config.get_string("remote.origin.url").unwrap(),
             "https://github.com/acme/fresh.git"
         );
-        let exists = create(&github, &fresh, &fresh.clone_url, &fresh_path, "trunk")
-            .await
-            .unwrap_err();
+        let exists = create(
+            &github,
+            &fresh,
+            &fresh.clone_url,
+            &fresh_path,
+            "trunk",
+            None,
+        )
+        .await
+        .unwrap_err();
         assert_eq!(
             (exists.status(), exists.findings()[0].code.as_str()),
             (409, "repository-conflict")
@@ -793,6 +835,7 @@ mod tests {
             &organization.clone_url,
             &repositories.join("meiji/fresh"),
             "main",
+            None,
         )
         .await
         .unwrap_err();

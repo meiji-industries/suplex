@@ -1,9 +1,10 @@
 //! Opens a task worktree in a desktop application on the Suplex host. A remote
 //! browser can copy the path but can never cause a local desktop launch.
 
+use crate::http::access::with_cookies;
+use crate::http::error::ApiError;
 use crate::shared::time::now_millis_rfc3339;
-use crate::tasks::TaskError;
-use std::{error::Error, net::SocketAddr};
+use std::net::SocketAddr;
 
 use axum::{
     Json, Router,
@@ -13,7 +14,7 @@ use axum::{
     response::{IntoResponse, Response},
     routing::{get, post},
 };
-use rusqlite::{OptionalExtension, params};
+use rusqlite::params;
 use serde_json::{Value, json};
 
 use crate::{
@@ -22,8 +23,6 @@ use crate::{
         contracts::typed::{self, finding, tasks as task_contracts},
         session, validation,
     },
-    identity::companies,
-    platform::database::SuplexDatabase,
     tasks::worktree_open::{self, Launcher, WORKTREE_APP_IDS},
 };
 
@@ -48,43 +47,7 @@ pub(crate) fn validated_task_id(id: &str) -> Result<(), Box<Response>> {
     }
 }
 
-/// The authorized task's company and its current worktree path.
-pub(crate) fn task_worktree(
-    database: &SuplexDatabase,
-    user_id: &str,
-    task_id: &str,
-) -> Result<(String, Option<String>), Box<dyn Error>> {
-    let company_id = authorized_company(database, user_id, task_id)?;
-    let path = database
-        .connection()
-        .query_row(
-            "SELECT json_extract(worktree_json, '$.path') FROM suplex_task_controls WHERE task_id = ?1",
-            [task_id],
-            |row| row.get::<_, Option<String>>(0),
-        )
-        .optional()?
-        .flatten();
-    Ok((company_id, path))
-}
-
-/// The company of a task the user may access.
-pub(crate) fn authorized_company(
-    database: &SuplexDatabase,
-    user_id: &str,
-    task_id: &str,
-) -> Result<String, Box<dyn Error>> {
-    let company_id: String = database
-        .connection()
-        .query_row(
-            "SELECT company_id FROM suplex_tasks WHERE id = ?1",
-            [task_id],
-            |row| row.get(0),
-        )
-        .optional()?
-        .ok_or_else(TaskError::not_found)?;
-    companies::require_company_access(database, user_id, &company_id)?;
-    Ok(company_id)
-}
+pub(crate) use crate::tasks::repository::task_worktree;
 
 fn loopback_peer(extensions: &Extensions) -> bool {
     extensions
@@ -112,11 +75,6 @@ fn direct_loopback_request(state: &AppState, headers: &HeaderMap, extensions: &E
         && loopback_peer(extensions)
 }
 
-fn with_cookies(mut response: Response, cookies: Vec<String>) -> Response {
-    auth::append_cookies(&mut response, cookies);
-    response
-}
-
 async fn apps(
     State(state): State<AppState>,
     Path(task_id): Path<String>,
@@ -132,7 +90,7 @@ async fn apps(
     };
     let worktree = state
         .with_database(|database| task_worktree(database, &user_id, &task_id))
-        .map_err(auth::service_error);
+        .map_err(ApiError::response);
     let response = match worktree {
         Err(response) => response,
         Ok((_, None)) => auth::error(StatusCode::NOT_FOUND, "Worktree not found"),
@@ -209,7 +167,9 @@ pub(crate) async fn open_with(
                     cookies,
                 );
             }
-            Err(error) => return with_cookies(auth::service_error(error), cookies),
+            Err(error) => {
+                return with_cookies(ApiError::response(error), cookies);
+            }
         };
     if !direct_loopback_request(&state, &headers, &extensions) {
         return with_cookies(
@@ -275,183 +235,4 @@ pub(crate) async fn open_with(
 }
 
 #[cfg(test)]
-mod tests {
-    use std::sync::Arc;
-
-    use super::*;
-    use crate::http::routes::task_pane::tests::fixture;
-
-    fn fake_launchers() -> (Vec<Launcher>, Option<Launcher>) {
-        let launcher = |id, command: &str, cwd_is_path| Launcher {
-            id,
-            label: "Fake",
-            command: command.into(),
-            args: Arc::new(|path: &str| {
-                vec![
-                    "-c".into(),
-                    "test \"$0\" = /tmp || { echo failed >&2; exit 3; }".into(),
-                    path.into(),
-                ]
-            }),
-            cwd_is_path,
-        };
-        (
-            vec![
-                launcher("finder", "/bin/sh", false),
-                launcher("terminal", "/nonexistent/suplex-terminal", true),
-            ],
-            Some(launcher("editor", "/bin/sh", false)),
-        )
-    }
-
-    fn loopback() -> Extensions {
-        let mut extensions = Extensions::new();
-        extensions.insert(ConnectInfo(SocketAddr::from(([127, 0, 0, 1], 50_000))));
-        extensions
-    }
-
-    #[tokio::test]
-    async fn worktree_routes_require_a_direct_loopback_peer_and_the_configured_host() {
-        let fixture = fixture();
-        let address = fixture.serve().await;
-        let client = reqwest::Client::new();
-        let apps = format!(
-            "http://{address}/api/tasks/{}/worktree/apps",
-            fixture.task_id
-        );
-        let open = format!(
-            "http://{address}/api/tasks/{}/worktree/open",
-            fixture.task_id
-        );
-        let get = |host: &'static str| {
-            client
-                .get(&apps)
-                .header("host", host)
-                .header("cookie", &fixture.cookie)
-        };
-        let missing = get("127.0.0.1:4113").send().await.unwrap();
-        assert_eq!(missing.status(), 404);
-        assert_eq!(
-            missing.json::<Value>().await.unwrap(),
-            json!({"error":"Worktree not found"})
-        );
-        let worktree = json!({"path":"/tmp","branch":"task"}).to_string();
-        fixture.execute(
-            "UPDATE suplex_task_controls SET worktree_json = ?1 WHERE task_id = ?2",
-            &[&worktree, &fixture.task_id],
-        );
-        let local: Value = get("127.0.0.1:4113")
-            .send()
-            .await
-            .unwrap()
-            .json()
-            .await
-            .unwrap();
-        assert!(local["apps"].is_array());
-        let remote: Value = get("suplex.tailnet.ts.net:4113")
-            .send()
-            .await
-            .unwrap()
-            .json()
-            .await
-            .unwrap();
-        assert_eq!(remote, json!({"apps":[]}));
-        let forwarded: Value = get("127.0.0.1:4113")
-            .header("x-forwarded-for", "127.0.0.1")
-            .send()
-            .await
-            .unwrap()
-            .json()
-            .await
-            .unwrap();
-        assert_eq!(forwarded, json!({"apps":[]}));
-        let post = |host: &'static str, body: Value| {
-            client
-                .post(&open)
-                .header("host", host)
-                .header("origin", "http://127.0.0.1:4113")
-                .header("cookie", &fixture.cookie)
-                .json(&body)
-                .send()
-        };
-        let remote = post("suplex.tailnet.ts.net:4113", json!({"app":"finder"}))
-            .await
-            .unwrap();
-        assert_eq!(remote.status(), 403);
-        assert_eq!(
-            remote.json::<Value>().await.unwrap(),
-            json!({"ok":false,"error":"Opening a worktree is available only from the Suplex host"})
-        );
-        let invalid = post("127.0.0.1:4113", json!({"app":"not-an-app"}))
-            .await
-            .unwrap();
-        assert_eq!(invalid.status(), 400);
-        assert_eq!(
-            invalid.json::<Value>().await.unwrap()["findings"][0]["field"],
-            ".app"
-        );
-        let anonymous = client
-            .get(&apps)
-            .header("host", "suplex.tailnet.ts.net:4113")
-            .send()
-            .await
-            .unwrap();
-        assert_eq!(anonymous.status(), 401);
-        let _ = std::fs::remove_dir_all(&fixture.root);
-    }
-
-    #[tokio::test]
-    async fn opening_runs_the_resolved_launcher_and_audits_only_successful_launches() {
-        let fixture = fixture();
-        let worktree = json!({"path":"/tmp","branch":"task"}).to_string();
-        fixture.execute(
-            "UPDATE suplex_task_controls SET worktree_json = ?1 WHERE task_id = ?2",
-            &[&worktree, &fixture.task_id],
-        );
-        let mut headers = HeaderMap::new();
-        headers.insert("host", "127.0.0.1:4113".parse().unwrap());
-        headers.insert("origin", "http://127.0.0.1:4113".parse().unwrap());
-        headers.insert("cookie", fixture.cookie.parse().unwrap());
-        headers.insert("content-type", "application/json".parse().unwrap());
-        let open = |app: &str, extensions: Extensions| {
-            open_with(
-                fixture.state.clone(),
-                fixture.task_id.clone(),
-                headers.clone(),
-                extensions,
-                Bytes::from(json!({"app": app}).to_string()),
-                fake_launchers,
-            )
-        };
-        async fn body(response: Response) -> Value {
-            serde_json::from_slice(
-                &axum::body::to_bytes(response.into_body(), 4096)
-                    .await
-                    .unwrap(),
-            )
-            .unwrap()
-        }
-        let audits = || {
-            fixture.state.with_database(|database| {
-                database
-                    .connection()
-                    .query_row(
-                        "SELECT COUNT(*) FROM suplex_audit_events WHERE action = 'worktree_opened'",
-                        [],
-                        |row| row.get::<_, i64>(0),
-                    )
-                    .unwrap()
-            })
-        };
-        assert_eq!(open("ghostty", loopback()).await.status(), 501);
-        assert_eq!(body(open("terminal", loopback()).await).await["ok"], false);
-        assert_eq!(audits(), 0);
-        assert_eq!(open("editor", Extensions::new()).await.status(), 403);
-        assert_eq!(
-            body(open("editor", loopback()).await).await,
-            json!({"ok": true})
-        );
-        assert_eq!(audits(), 1);
-        let _ = std::fs::remove_dir_all(&fixture.root);
-    }
-}
+include!("../../../tests/routes/task_worktree.rs");

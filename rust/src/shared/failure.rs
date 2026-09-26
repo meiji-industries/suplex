@@ -58,6 +58,35 @@ impl IntoResponse for PublicFailure {
     }
 }
 
+use crate::{
+    identity::IdentityError, integrations::github_triggers::TriggerFailure,
+    platform::PlatformError, profiles::agent_profiles::ProfileFailure, projects::ProjectError,
+    tasks::TaskError,
+};
+use std::error::Error;
+pub fn public_failure(error: Box<dyn Error>) -> PublicFailure {
+    macro_rules! public {
+        ($error:ident, $($kind:ty),+) => {$(
+            let $error = match $error.downcast::<$kind>() {
+                Ok(failure) => return (*failure).into(),
+                Err(error) => error,
+            };
+        )+};
+    }
+    public!(
+        error,
+        PublicFailure,
+        TaskError,
+        IdentityError,
+        ProjectError,
+        PlatformError,
+        ProfileFailure,
+        TriggerFailure
+    );
+    drop(error);
+    PublicFailure::internal()
+}
+
 #[cfg(test)]
 mod tests {
     use axum::response::IntoResponse;

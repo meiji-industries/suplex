@@ -489,3 +489,190 @@ pub fn start(
         task_by_id(database, task_id)
     })
 }
+
+const TASK_RESPONSE_SELECT: &str = r#"SELECT t.id AS id, t.company_id AS company_id, t.project_id AS project_id, t.issue_json, t.issue_number, cpy.issue_code, t.title, t.description, c.status AS status, c.delivery_target AS delivery_target, c.root_profile_json, c.worker_profile_json, c.workflow, c.advisor_profiles_json, c.workflow_state_json, t.configuration_json, c.worktree_json, c.pull_request_json, c.human_question, c.human_question_id, c.limit_pause_json, c.human_question_options_json, c.recovery_turn_id, c.wake_at, t.created_at, CASE WHEN julianday(t.updated_at) >= julianday(COALESCE(c.updated_at, t.updated_at)) THEN t.updated_at ELSE c.updated_at END AS updated_at, c.status_changed_at, t.archived_at, c.budget_usd, c.max_turns,
+    COALESCE((SELECT default_budget_usd FROM suplex_environment_settings WHERE id = 'host'), 15.0) AS default_budget,
+    COALESCE((SELECT default_max_turns FROM suplex_environment_settings WHERE id = 'host'), 40) AS default_turns,
+    (SELECT COUNT(*) FROM suplex_task_turns WHERE task_id = t.id AND prompted_at IS NOT NULL) AS admitted_turns,
+    (SELECT json_group_array(json_array(id, title, status, delivery_target, archived_at, pull_state)) FROM (
+        SELECT dep.id, dep.title, control.status, control.delivery_target, dep.archived_at, json_extract(control.pull_request_json, '$.state') AS pull_state
+        FROM suplex_task_dependencies d JOIN suplex_tasks dep ON dep.id = d.depends_on_task_id JOIN suplex_task_controls control ON control.task_id = dep.id WHERE d.task_id = t.id ORDER BY dep.id
+    )) AS dependencies,
+    (SELECT json_group_array(json_array(pull_request_number, state, title, url, observed_at)) FROM (
+        SELECT pull_request_number, state, title, url, observed_at FROM suplex_task_pull_request_dependencies WHERE task_id = t.id ORDER BY pull_request_number
+    )) AS pr_dependencies,
+    (SELECT json_group_array(json_object('artifactId', id, 'filename', filename, 'mimeType', mime_type, 'byteSize', byte_size)) FROM (
+        SELECT id, filename, mime_type, byte_size FROM suplex_artifacts WHERE task_id = t.id AND company_id = t.company_id AND kind = 'task-image' ORDER BY created_at, id
+    )) AS images,
+    (SELECT json_group_array(json_object('artifactId', id, 'filename', filename, 'mimeType', mime_type, 'byteSize', byte_size)) FROM (
+        SELECT id, filename, mime_type, byte_size FROM suplex_artifacts WHERE task_id = t.id AND company_id = t.company_id AND kind LIKE 'delivery-%' ORDER BY created_at, id
+    )) AS artifacts
+ FROM suplex_tasks t JOIN suplex_companies cpy ON cpy.id = t.company_id JOIN suplex_task_controls c ON c.task_id = t.id"#;
+
+pub fn task_response(
+    database: &SuplexDatabase,
+    task_id: &str,
+) -> DatabaseResult<Option<super::response::TaskResponse>> {
+    let mut statement = database
+        .connection()
+        .prepare(&format!("{TASK_RESPONSE_SELECT} WHERE t.id = ?1"))?;
+    let mut rows = statement.query([task_id])?;
+    rows.next()?.map(super::response::from_row).transpose()
+}
+
+pub fn list_visible(
+    database: &SuplexDatabase,
+    user_id: &str,
+    company_id: Option<&str>,
+    archived: bool,
+) -> DatabaseResult<Vec<super::response::TaskResponse>> {
+    let visible = crate::identity::companies::list_visible_companies(database, user_id)?;
+    if company_id.is_some_and(|id| !visible.iter().any(|company| company.id == id)) {
+        return Err(TaskError::not_found().into());
+    }
+    let companies = serde_json::to_string(
+        &visible
+            .iter()
+            .map(|company| &company.id)
+            .collect::<Vec<_>>(),
+    )?;
+    let mut statement = database.connection().prepare(&format!("{TASK_RESPONSE_SELECT} WHERE (t.archived_at IS NOT NULL) = ?1 AND t.company_id IN (SELECT value FROM json_each(?2)) AND (?3 IS NULL OR t.company_id = ?3) ORDER BY julianday(CASE WHEN julianday(t.updated_at) >= julianday(c.updated_at) THEN t.updated_at ELSE c.updated_at END) DESC, t.id"))?;
+    let mut rows = statement.query(params![archived, companies, company_id])?;
+    let mut tasks = Vec::new();
+    while let Some(row) = rows.next()? {
+        tasks.push(super::response::from_row(row)?);
+    }
+    Ok(tasks)
+}
+
+/// The authorized task's company and its current worktree path.
+pub(crate) fn task_worktree(
+    database: &SuplexDatabase,
+    user_id: &str,
+    task_id: &str,
+) -> Result<(String, Option<String>), Box<dyn std::error::Error>> {
+    let company_id = authorized_company(database, user_id, task_id)?;
+    let path = database
+        .connection()
+        .query_row(
+            "SELECT json_extract(worktree_json, '$.path') FROM suplex_task_controls WHERE task_id = ?1",
+            [task_id],
+            |row| row.get::<_, Option<String>>(0),
+        )
+        .optional()?
+        .flatten();
+    Ok((company_id, path))
+}
+
+/// The company of a task the user may access.
+pub(crate) fn authorized_company(
+    database: &SuplexDatabase,
+    user_id: &str,
+    task_id: &str,
+) -> Result<String, Box<dyn std::error::Error>> {
+    let company_id: String = database
+        .connection()
+        .query_row(
+            "SELECT company_id FROM suplex_tasks WHERE id = ?1",
+            [task_id],
+            |row| row.get(0),
+        )
+        .optional()?
+        .ok_or_else(TaskError::not_found)?;
+    crate::identity::companies::require_company_access(database, user_id, &company_id)?;
+    Ok(company_id)
+}
+
+pub(crate) fn bound_pane(
+    database: &SuplexDatabase,
+    user_id: &str,
+    task_id: &str,
+    role: &str,
+) -> DatabaseResult<Option<String>> {
+    authorized_company(database, user_id, task_id)?;
+    let pane = if role == "shell" {
+        database
+            .connection()
+            .query_row(
+                "SELECT shell_pane_id FROM suplex_task_controls WHERE task_id = ?1",
+                [task_id],
+                |row| row.get::<_, Option<String>>(0),
+            )
+            .optional()?
+    } else {
+        database
+                .connection()
+                .query_row(
+                    "SELECT pane_id FROM suplex_task_sessions WHERE task_id = ?1 AND kind = ?2 AND is_current = 1 ORDER BY created_at, id LIMIT 1",
+                    params![task_id, role],
+                    |row| row.get::<_, Option<String>>(0),
+                )
+                .optional()?
+    };
+    Ok(pane.flatten())
+}
+
+type ShellPaneContext = (Option<String>, Vec<Option<String>>, Option<String>);
+
+pub(crate) fn shell_pane_context(
+    database: &SuplexDatabase,
+    user_id: &str,
+    task_id: &str,
+) -> DatabaseResult<ShellPaneContext> {
+    let (_, worktree) = task_worktree(database, user_id, task_id)?;
+    let shell = database.connection().query_row(
+        "SELECT shell_pane_id FROM suplex_task_controls WHERE task_id = ?1",
+        [task_id],
+        |row| row.get::<_, Option<String>>(0),
+    )?;
+    let mut statement = database.connection().prepare(
+        "SELECT pane_id FROM suplex_task_sessions WHERE task_id = ?1 ORDER BY created_at, id",
+    )?;
+    let excluded = statement
+        .query_map([task_id], |row| row.get::<_, Option<String>>(0))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok((shell, excluded, worktree))
+}
+
+pub(crate) fn save_shell_pane(
+    database: &SuplexDatabase,
+    task_id: &str,
+    pane_id: &str,
+) -> DatabaseResult<()> {
+    database.connection().execute(
+        "UPDATE suplex_task_controls SET shell_pane_id = ?1, updated_at = ?2 WHERE task_id = ?3",
+        params![pane_id, crate::shared::time::now_millis_rfc3339(), task_id],
+    )?;
+    Ok(())
+}
+
+#[cfg(test)]
+mod list_tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn list_snapshots_keep_scope_dependencies_and_archive_filtering() {
+        let fixture = crate::http::routes::task_pane::tests::fixture();
+        fixture.state.with_database(|database| {
+            let tasks = list_visible(database, "user_development", Some("pane_company"), false).unwrap();
+            assert_eq!(tasks.len(), 1);
+            let task = serde_json::to_value(&tasks[0]).unwrap();
+            assert_eq!(task["id"], fixture.task_id);
+            assert_eq!(task["title"], "Terminal");
+            assert_eq!(task["images"], json!([]));
+            assert_eq!(task["dependsOn"], json!([]));
+            assert_eq!(task["limits"]["admittedTurns"], 0);
+            assert!(list_visible(database, "user_development", Some("missing"), false).is_err());
+            database.connection().execute("INSERT INTO suplex_task_pull_request_dependencies (task_id, pull_request_number, state, title, url, observed_at) VALUES (?1, 17, 'open', 'Prerequisite', 'https://example.test/pr/17', '2026-09-25T00:00:00.000Z')", [&fixture.task_id]).unwrap();
+            let tasks = list_visible(database, "user_development", None, false).unwrap();
+            let task = serde_json::to_value(&tasks[0]).unwrap();
+            assert_eq!(task["blockedBy"][0]["number"], 17);
+            assert_eq!(task["blockedBy"][0]["title"], "Prerequisite");
+            database.connection().execute("UPDATE suplex_tasks SET archived_at = '2026-09-25T00:00:00.000Z' WHERE id = ?1", [&fixture.task_id]).unwrap();
+            assert!(list_visible(database, "user_development", None, false).unwrap().is_empty());
+            assert_eq!(list_visible(database, "user_development", None, true).unwrap().len(), 1);
+        });
+        let _ = std::fs::remove_dir_all(&fixture.root);
+    }
+}

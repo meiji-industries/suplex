@@ -4,7 +4,8 @@ use serde_json::{Map, Value};
 
 use super::{
     ContractFailure, ContractResult, delivery_target as check_delivery_target, finding,
-    garde_findings, id_1_256 as check_task_id, object, visual_evidence as check_visual_evidence,
+    garde_findings, id_1_256 as check_task_id, object, optional_nonnull, present_nullable,
+    visual_evidence as check_visual_evidence,
 };
 
 const MAX_TASK_IMAGES: usize = 8;
@@ -285,22 +286,6 @@ where
     trimmed(deserializer).map(Some)
 }
 
-pub(crate) fn optional_nonnull<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
-where
-    D: Deserializer<'de>,
-    T: Deserialize<'de>,
-{
-    T::deserialize(deserializer).map(Some)
-}
-
-fn present_nullable<'de, D, T>(deserializer: D) -> Result<Option<Option<T>>, D::Error>
-where
-    D: Deserializer<'de>,
-    T: Deserialize<'de>,
-{
-    Option::<T>::deserialize(deserializer).map(Some)
-}
-
 fn safe_positive_integer(number: &serde_json::Number) -> Option<u64> {
     let value = number.as_f64()?;
     if value.is_finite() && value.fract() == 0.0 && (0.0..=9_007_199_254_740_991.0).contains(&value)
@@ -409,7 +394,7 @@ pub fn parse_task_create(input: Option<&Value>) -> ContractResult<TaskCreateBody
         })?;
     parsed
         .validate()
-        .map_err(|report| ContractFailure::Issues(garde_findings(&report)))?;
+        .map_err(|report| ContractFailure::Issues(garde_findings(&report, &parsed)))?;
     Ok(parsed)
 }
 
@@ -777,7 +762,7 @@ pub fn parse_task_id_params(input: Option<&Value>) -> ContractResult<TaskIdParam
         })?;
     parsed
         .validate()
-        .map_err(|report| ContractFailure::Issues(garde_findings(&report)))?;
+        .map_err(|report| ContractFailure::Issues(garde_findings(&report, &parsed)))?;
     Ok(parsed)
 }
 
@@ -869,20 +854,9 @@ pub fn parse_task_details(input: Option<&Value>) -> ContractResult<TaskDetailsBo
             &[Value::String(error.path().to_string())],
         )])
     })?;
-    parsed.validate().map_err(|report| {
-        let mut findings = garde_findings(&report);
-        for finding in &mut findings {
-            if let Some(field) = finding
-                .get("field")
-                .and_then(Value::as_str)
-                .map(str::to_owned)
-                && let Some(field) = field.strip_suffix('.')
-            {
-                finding["field"] = Value::String(field.to_owned());
-            }
-        }
-        ContractFailure::Issues(findings)
-    })?;
+    parsed
+        .validate()
+        .map_err(|report| ContractFailure::Issues(garde_findings(&report, &parsed)))?;
     Ok(parsed)
 }
 
@@ -907,7 +881,7 @@ pub fn parse_task_rename(input: Option<&Value>) -> ContractResult<TaskRenameBody
         .map_err(|_| ContractFailure::Unhandled)?;
     parsed
         .validate()
-        .map_err(|report| ContractFailure::Issues(garde_findings(&report)))?;
+        .map_err(|report| ContractFailure::Issues(garde_findings(&report, &parsed)))?;
     Ok(parsed)
 }
 
@@ -1040,7 +1014,7 @@ pub fn parse_task_coordinator_replacement(
             .map_err(|_| ContractFailure::Unhandled)?;
     parsed
         .validate()
-        .map_err(|report| ContractFailure::Issues(garde_findings(&report)))?;
+        .map_err(|report| ContractFailure::Issues(garde_findings(&report, &parsed)))?;
     Ok(parsed)
 }
 
@@ -1089,7 +1063,7 @@ pub fn parse_task_worker_replacement(
         .map_err(|_| ContractFailure::Unhandled)?;
     parsed
         .validate()
-        .map_err(|report| ContractFailure::Issues(garde_findings(&report)))?;
+        .map_err(|report| ContractFailure::Issues(garde_findings(&report, &parsed)))?;
     Ok(parsed)
 }
 
@@ -1211,7 +1185,7 @@ pub fn parse_task_dependencies(input: Option<&Value>) -> ContractResult<TaskDepe
         .map_err(|_| ContractFailure::Unhandled)?;
     parsed
         .validate()
-        .map_err(|report| ContractFailure::Issues(garde_findings(&report)))?;
+        .map_err(|report| ContractFailure::Issues(garde_findings(&report, &parsed)))?;
     Ok(parsed)
 }
 

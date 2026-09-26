@@ -469,7 +469,6 @@ fn complete_root_if_terminal(
 
 /// TypeScript `finishTurn` for a Worker or Advisor: the native evidence is read
 /// here, and `session_recovery` records the workflow result and Coordinator wake.
-#[allow(clippy::too_many_arguments)]
 fn complete_worker_if_terminal(
     database: &mut SuplexDatabase,
     database_path: &Path,

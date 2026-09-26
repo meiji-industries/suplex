@@ -6,7 +6,7 @@ pub mod ids;
 pub mod js_json;
 pub mod time;
 
-pub use failure::PublicFailure;
+pub use failure::{PublicFailure, public_failure};
 
 /// A closed set of persisted snake_case strings: serde, SQLite, and
 /// `as_str` all use the one spelling. Variants order as declared.

@@ -1,8 +1,8 @@
 //! Public task snapshot in the same field order as the TypeScript response schema.
 
 use crate::tasks::TaskError;
-use rusqlite::{OptionalExtension, Row, params};
-use serde::{Serialize, Serializer};
+use rusqlite::Row;
+use serde::{Deserialize, Serialize, Serializer};
 use serde_json::Value;
 
 use crate::platform::database::{DatabaseResult, SuplexDatabase};
@@ -74,39 +74,13 @@ fn serialize_js_number<S: Serializer>(value: &f64, serializer: S) -> Result<S::O
     }
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct TaskImage {
     artifact_id: String,
     filename: String,
     mime_type: String,
     byte_size: i64,
-}
-
-fn image(row: &Row<'_>) -> rusqlite::Result<TaskImage> {
-    Ok(TaskImage {
-        artifact_id: row.get("artifactId")?,
-        filename: row.get("filename")?,
-        mime_type: row.get("mimeType")?,
-        byte_size: row.get("byteSize")?,
-    })
-}
-
-fn images(
-    database: &SuplexDatabase,
-    task_id: &str,
-    company_id: &str,
-    kind: &str,
-) -> DatabaseResult<Vec<TaskImage>> {
-    let sql = if kind == "task-image" {
-        "SELECT id AS artifactId, filename, mime_type AS mimeType, byte_size AS byteSize FROM suplex_artifacts WHERE task_id = ?1 AND company_id = ?2 AND kind = 'task-image' ORDER BY created_at, id"
-    } else {
-        "SELECT id AS artifactId, filename, mime_type AS mimeType, byte_size AS byteSize FROM suplex_artifacts WHERE task_id = ?1 AND company_id = ?2 AND kind LIKE 'delivery-%' ORDER BY created_at, id"
-    };
-    let mut statement = database.connection().prepare(sql)?;
-    Ok(statement
-        .query_map(params![task_id, company_id], image)?
-        .collect::<rusqlite::Result<Vec<_>>>()?)
 }
 
 fn parse_json(raw: &str) -> DatabaseResult<Value> {
@@ -173,6 +147,37 @@ pub(crate) fn task_dependencies(
             ))
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
+    let mut statement = database.connection().prepare(
+        "SELECT pull_request_number, state, title, url, observed_at FROM suplex_task_pull_request_dependencies WHERE task_id = ?1 ORDER BY pull_request_number",
+    )?;
+    let pull_requests = statement
+        .query_map([task_id], |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+                row.get::<_, String>(4)?,
+            ))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    dependency_projection(rows, pull_requests)
+}
+
+type TaskDependency = (
+    String,
+    String,
+    String,
+    String,
+    Option<String>,
+    Option<String>,
+);
+type PullRequestDependency = (i64, String, String, String, String);
+
+fn dependency_projection(
+    rows: Vec<TaskDependency>,
+    pull_requests: Vec<PullRequestDependency>,
+) -> DatabaseResult<(Vec<String>, Vec<Value>, Vec<Value>)> {
     let mut depends_on = Vec::with_capacity(rows.len());
     let mut blocked_by = Vec::with_capacity(rows.len());
     let mut waiting_on = Vec::new();
@@ -228,20 +233,6 @@ pub(crate) fn task_dependencies(
             waiting_on.push(serde_json::json!({"kind": "task", "id": id, "title": title, "status": status, "deliveryTarget": delivery_target, "reason": reason, "summary": summary}));
         }
     }
-    let mut statement = database.connection().prepare(
-        "SELECT pull_request_number, state, title, url, observed_at FROM suplex_task_pull_request_dependencies WHERE task_id = ?1 ORDER BY pull_request_number",
-    )?;
-    let pull_requests = statement
-        .query_map([task_id], |row| {
-            Ok((
-                row.get::<_, i64>(0)?,
-                row.get::<_, String>(1)?,
-                row.get::<_, String>(2)?,
-                row.get::<_, String>(3)?,
-                row.get::<_, String>(4)?,
-            ))
-        })?
-        .collect::<rusqlite::Result<Vec<_>>>()?;
     for (number, state, title, url, observed_at) in pull_requests {
         let id = format!("pull_request:{number}");
         blocked_by.push(serde_json::json!({
@@ -272,65 +263,50 @@ pub(crate) fn task_dependencies(
 }
 
 pub fn get(database: &SuplexDatabase, task_id: &str) -> DatabaseResult<Option<TaskResponse>> {
-    let raw = database.connection().query_row(
-        "SELECT t.id, t.company_id, t.project_id, t.issue_json, t.issue_number, cpy.issue_code, t.title, t.description, c.status, c.delivery_target, c.root_profile_json, c.worker_profile_json, c.workflow, c.advisor_profiles_json, c.workflow_state_json, t.configuration_json, c.worktree_json, c.pull_request_json, c.human_question, c.human_question_id, c.limit_pause_json, c.human_question_options_json, c.recovery_turn_id, c.wake_at, t.created_at, CASE WHEN julianday(t.updated_at) >= julianday(COALESCE(c.updated_at, t.updated_at)) THEN t.updated_at ELSE c.updated_at END, c.status_changed_at, t.archived_at, c.budget_usd, c.max_turns FROM suplex_tasks t JOIN suplex_companies cpy ON cpy.id = t.company_id JOIN suplex_task_controls c ON c.task_id = t.id WHERE t.id = ?1",
-        [task_id], |row| {
-            Ok((
-                row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, String>(2)?, row.get::<_, Option<String>>(3)?, row.get::<_, Option<i64>>(4)?, row.get::<_, Option<String>>(5)?,
-                row.get::<_, String>(6)?, row.get::<_, String>(7)?, row.get::<_, String>(8)?, row.get::<_, String>(9)?, row.get::<_, String>(10)?, row.get::<_, String>(11)?, row.get::<_, String>(12)?, row.get::<_, String>(13)?, row.get::<_, String>(14)?, row.get::<_, String>(15)?,
-                row.get::<_, Option<String>>(16)?, row.get::<_, Option<String>>(17)?, row.get::<_, Option<String>>(18)?, row.get::<_, Option<String>>(19)?, row.get::<_, Option<String>>(20)?, row.get::<_, String>(21)?, row.get::<_, Option<String>>(22)?, row.get::<_, Option<String>>(23)?, row.get::<_, String>(24)?, row.get::<_, String>(25)?, row.get::<_, String>(26)?, row.get::<_, Option<String>>(27)?, row.get::<_, Option<f64>>(28)?, row.get::<_, Option<i64>>(29)?
-            ))
-        },
-    ).optional()?;
-    let Some((
-        id,
-        company_id,
-        project_id,
-        issue_json,
-        issue_number,
-        issue_code,
-        title,
-        description,
-        status,
-        delivery_target,
-        root_profile,
-        worker_profile,
-        workflow,
-        advisor_profiles,
-        state,
-        configuration,
-        worktree,
-        pull_request,
-        human_question,
-        human_question_id,
-        limit_pause,
-        question_options,
-        recovery_turn_id,
-        wake_at,
-        created_at,
-        updated_at,
-        status_changed_at,
-        archived_at,
-        budget_usd,
-        max_turns,
-    )) = raw
-    else {
-        return Ok(None);
-    };
-    let (depends_on, blocked_by, waiting_on) = task_dependencies(database, &id)?;
-    let defaults = database.connection().query_row(
-        "SELECT default_budget_usd, default_max_turns FROM suplex_environment_settings WHERE id = 'host'",
-        [], |row| Ok((row.get::<_, f64>(0)?, row.get::<_, i64>(1)?)),
-    ).optional()?.unwrap_or((15.0, 40));
-    let admitted_turns: i64 = database.connection().query_row(
-        "SELECT COUNT(*) FROM suplex_task_turns WHERE task_id = ?1 AND prompted_at IS NOT NULL",
-        [&id],
-        |row| row.get(0),
+    super::repository::task_response(database, task_id)
+}
+
+pub(crate) fn from_row(row: &Row<'_>) -> DatabaseResult<TaskResponse> {
+    let id: String = row.get("id")?;
+    let company_id: String = row.get("company_id")?;
+    let project_id: String = row.get("project_id")?;
+    let issue_json: Option<String> = row.get("issue_json")?;
+    let issue_number: Option<i64> = row.get("issue_number")?;
+    let issue_code: Option<String> = row.get("issue_code")?;
+    let title: String = row.get("title")?;
+    let description: String = row.get("description")?;
+    let status: String = row.get("status")?;
+    let delivery_target: String = row.get("delivery_target")?;
+    let root_profile: String = row.get("root_profile_json")?;
+    let worker_profile: String = row.get("worker_profile_json")?;
+    let workflow: String = row.get("workflow")?;
+    let advisor_profiles: String = row.get("advisor_profiles_json")?;
+    let state: String = row.get("workflow_state_json")?;
+    let configuration: String = row.get("configuration_json")?;
+    let worktree: Option<String> = row.get("worktree_json")?;
+    let pull_request: Option<String> = row.get("pull_request_json")?;
+    let human_question: Option<String> = row.get("human_question")?;
+    let human_question_id: Option<String> = row.get("human_question_id")?;
+    let limit_pause: Option<String> = row.get("limit_pause_json")?;
+    let question_options: String = row.get("human_question_options_json")?;
+    let recovery_turn_id: Option<String> = row.get("recovery_turn_id")?;
+    let wake_at: Option<String> = row.get("wake_at")?;
+    let created_at: String = row.get("created_at")?;
+    let updated_at: String = row.get("updated_at")?;
+    let status_changed_at: String = row.get("status_changed_at")?;
+    let archived_at: Option<String> = row.get("archived_at")?;
+    let budget_usd: Option<f64> = row.get("budget_usd")?;
+    let max_turns: Option<i64> = row.get("max_turns")?;
+    let (depends_on, blocked_by, waiting_on) = dependency_projection(
+        serde_json::from_str(&row.get::<_, String>("dependencies")?)?,
+        serde_json::from_str(&row.get::<_, String>("pr_dependencies")?)?,
     )?;
+    let defaults: (f64, i64) = (row.get("default_budget")?, row.get("default_turns")?);
+    let admitted_turns: i64 = row.get("admitted_turns")?;
     let issue_key = issue_code
         .zip(issue_number)
         .map(|(code, number)| format!("{code}-{number}"));
-    Ok(Some(TaskResponse {
+    Ok(TaskResponse {
         id: id.clone(),
         company_id: company_id.clone(),
         project_id,
@@ -382,11 +358,11 @@ pub fn get(database: &SuplexDatabase, task_id: &str) -> DatabaseResult<Option<Ta
             admitted_turns,
         },
         wake_at,
-        images: images(database, &id, &company_id, "task-image")?,
-        artifacts: images(database, &id, &company_id, "delivery")?,
+        images: serde_json::from_str(&row.get::<_, String>("images")?)?,
+        artifacts: serde_json::from_str(&row.get::<_, String>("artifacts")?)?,
         created_at,
         updated_at,
         status_changed_at,
         archived_at,
-    }))
+    })
 }

@@ -1,5 +1,7 @@
 //! Authenticated bytes for task-owned artifacts, including image previews.
 
+use crate::http::access::with_cookies;
+use crate::http::error::ApiError;
 use crate::shared::hash::sha256_hex;
 use crate::tasks::TaskError;
 use std::error::Error;
@@ -91,11 +93,6 @@ fn reauthorize(state: &AppState, user_id: &str, task_id: &str) -> Result<(), Box
     })
 }
 
-fn with_cookies(mut response: Response, cookies: Vec<String>) -> Response {
-    auth::append_cookies(&mut response, cookies);
-    response
-}
-
 async fn read(
     State(state): State<AppState>,
     Path((task_id, artifact_id)): Path<(String, String)>,
@@ -108,7 +105,7 @@ async fn read(
         session::session_user(database, &headers, Some(&state.session_config), Utc::now())
     }) {
         Ok(session) => session,
-        Err(error) => return auth::service_error(error),
+        Err(error) => return ApiError::response(error),
     };
     let Some(user) = session.user else {
         return with_cookies(
@@ -119,7 +116,9 @@ async fn read(
     let cookies = session.set_cookies;
     let artifact = match scoped_artifact(&state, &user.id, &task_id, &artifact_id) {
         Ok(artifact) => artifact,
-        Err(error) => return with_cookies(auth::service_error(error), cookies),
+        Err(error) => {
+            return with_cookies(ApiError::response(error), cookies);
+        }
     };
     let Some(root) = state.artifact_root.clone() else {
         return with_cookies(
@@ -130,12 +129,15 @@ async fn read(
     let company_id = artifact.company_id.clone();
     let storage_path = artifact.storage_path.clone();
     let bytes = tokio::task::spawn_blocking(move || {
-        artifacts::read(&root, &company_id, &storage_path).map_err(auth::public_failure)
+        artifacts::read(&root, &company_id, &storage_path)
+            .map_err(crate::http::error::public_failure)
     })
     .await;
     let bytes = match bytes {
         Ok(Ok(bytes)) => bytes,
-        Ok(Err(failure)) => return with_cookies(failure.into_response(), cookies),
+        Ok(Err(failure)) => {
+            return with_cookies(failure.into_response(), cookies);
+        }
         Err(_) => {
             return with_cookies(
                 auth::error(StatusCode::INTERNAL_SERVER_ERROR, "Internal server error"),
@@ -144,7 +146,7 @@ async fn read(
         }
     };
     if let Err(error) = reauthorize(&state, &user.id, &task_id) {
-        return with_cookies(auth::service_error(error), cookies);
+        return with_cookies(ApiError::response(error), cookies);
     }
     if sha256_hex(&bytes) != artifact.sha256 {
         return with_cookies(

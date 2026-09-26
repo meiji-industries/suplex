@@ -17,8 +17,10 @@ use crate::profiles::provider_login::ProviderLogins;
 use crate::projects::repository::Github;
 use crate::tasks::host::TaskHostHandle;
 
+pub mod access;
 pub mod agent_api_runtime;
 pub mod contracts;
+pub mod error;
 pub mod routes {
     pub mod admin_identity;
     pub mod admin_platform;
@@ -154,7 +156,7 @@ pub fn router(state: AppState) -> Router {
         .merge(routes::external_agent_administration::router())
         .merge(routes::admin_platform::router())
         .merge(routes::analytics::router())
-        .merge(routes::auth::router())
+        .merge(routes::auth::router(&state))
         .merge(routes::avatars::router())
         .merge(routes::mcp::router())
         .merge(routes::oauth::router())
@@ -184,6 +186,7 @@ pub fn router(state: AppState) -> Router {
         .route("/assets/{filename}", get(asset))
         .method_not_allowed_fallback(not_found)
         .fallback(not_found)
+        .layer(axum::middleware::from_fn(access::cookie_refresh))
         .with_state(state)
 }
 

@@ -21,14 +21,14 @@ pub struct TemplateConfiguration {
     pub description: String,
     #[serde(
         default,
-        deserialize_with = "tasks::optional_nonnull",
+        deserialize_with = "super::optional_nonnull",
         skip_serializing_if = "Option::is_none"
     )]
     #[garde(inner(custom(id_1_256)))]
     pub root_profile_id: Option<String>,
     #[serde(
         default,
-        deserialize_with = "tasks::optional_nonnull",
+        deserialize_with = "super::optional_nonnull",
         skip_serializing_if = "Option::is_none"
     )]
     #[garde(inner(custom(id_1_256)))]

@@ -1,3 +1,5 @@
+use super::{provisioning, repository};
+use crate::http::{AppState, contracts::typed::projects::RepositoryConnection};
 use crate::identity::IdentityError;
 use crate::projects::ProjectError;
 use crate::shared::ids::random_hex_id;
@@ -1224,6 +1226,371 @@ fn patch_agent_configuration(
         )?;
     }
     Ok(())
+}
+
+fn bitbucket_connection(body: &ProjectCreateBody) -> bool {
+    let integration = match body {
+        ProjectCreateBody::Local(value) => value.integration.as_ref(),
+        ProjectCreateBody::ExistingRepository(value) => value.integration.as_ref(),
+        ProjectCreateBody::NewRepository(value) => value.integration.as_ref(),
+    };
+    matches!(
+        integration.map(|value| &value.repository),
+        Some(RepositoryConnection::Bitbucket { .. })
+    )
+}
+
+pub async fn create_project(
+    state: &crate::http::AppState,
+    roots: &crate::http::ProjectRoots,
+    user_id: &str,
+    company_id: &str,
+    body: &ProjectCreateBody,
+) -> DatabaseResult<Project> {
+    if bitbucket_connection(body) {
+        return Err(not_ported());
+    }
+    match body {
+        ProjectCreateBody::ExistingRepository(value) => {
+            create_from_repository(
+                state,
+                roots,
+                user_id,
+                company_id,
+                body,
+                &value.repository_url,
+                value.base_branch.as_deref(),
+            )
+            .await
+        }
+        ProjectCreateBody::NewRepository(value) => {
+            create_with_new_repository(
+                state,
+                roots,
+                user_id,
+                company_id,
+                body,
+                &value.repository_name,
+                value.base_branch.as_deref(),
+            )
+            .await
+        }
+        ProjectCreateBody::Local(value) => {
+            let fields = [
+                value.name.clone(),
+                value.repository_path.clone(),
+                value.worktree_root.clone(),
+                value.repository.clone(),
+                value.base_branch.clone(),
+                value.setup_command.clone(),
+                value.verification_command.clone(),
+                value.root_profile_id.clone(),
+                value.worker_profile_id.clone(),
+            ];
+            finish_local_project(state, roots, user_id, company_id, body, &fields).await
+        }
+    }
+}
+
+pub(crate) fn admit_configuration(
+    database: &SuplexDatabase,
+    user_id: &str,
+    company_id: &str,
+) -> DatabaseResult<()> {
+    let company = companies::require_company_access(database, user_id, company_id)?;
+    if company.status != "active" {
+        return Err(ProjectError::new(
+            "Company is not active",
+            409,
+            vec![finding(
+                "company-inactive",
+                "companyId",
+                "Project configuration requires an active company",
+            )],
+        )
+        .into());
+    }
+    Ok(())
+}
+
+fn not_ported() -> Box<dyn Error> {
+    crate::shared::PublicFailure::new(501, "Experimental Rust backend has not ported this route")
+        .with_code("experimental_not_ported")
+        .into()
+}
+async fn finish_local_project(
+    state: &AppState,
+    roots: &crate::http::ProjectRoots,
+    user_id: &str,
+    company_id: &str,
+    body: &ProjectCreateBody,
+    fields: &[String; 9],
+) -> DatabaseResult<Project> {
+    let input = repository::LocalProjectInput {
+        name: &fields[0],
+        repository_path: &fields[1],
+        worktree_root: &fields[2],
+        repository: &fields[3],
+        base_branch: &fields[4],
+        setup_command: &fields[5],
+        verification_command: &fields[6],
+    };
+    let prepared = repository::prepare_local_project(
+        &state.project_github,
+        &roots.repositories,
+        &roots.worktrees,
+        &input,
+    )
+    .await
+    .map_err(|findings| ProjectError::new("Project configuration is invalid", 422, findings))?;
+    state.with_database(|database| {
+        create_local(
+            database,
+            user_id,
+            company_id,
+            &prepared,
+            CreateLocalOptions {
+                root_profile_id: &fields[7],
+                worker_profile_id: &fields[8],
+                configuration: Some(body),
+                now: Utc::now(),
+            },
+        )
+    })
+}
+
+async fn create_from_repository(
+    state: &AppState,
+    roots: &crate::http::ProjectRoots,
+    user_id: &str,
+    company_id: &str,
+    body: &ProjectCreateBody,
+    raw_url: &str,
+    requested_base_branch: Option<&str>,
+) -> DatabaseResult<Project> {
+    let Some(coordinate) = repository::repository_coordinate(raw_url) else {
+        return Err(ProjectError::new("Repository URL is invalid", 422, Vec::new()).into());
+    };
+    if coordinate.host != "github" {
+        return Err(ProjectError::new(
+            "Select the repository host and its credentials",
+            422,
+            Vec::new(),
+        )
+        .into());
+    }
+    let base_branch = requested_base_branch.unwrap_or("main").to_owned();
+    create_coordinate(
+        state,
+        roots,
+        user_id,
+        company_id,
+        body,
+        coordinate,
+        base_branch,
+    )
+    .await
+}
+
+async fn create_coordinate(
+    state: &AppState,
+    roots: &crate::http::ProjectRoots,
+    user_id: &str,
+    company_id: &str,
+    body: &ProjectCreateBody,
+    coordinate: repository::Coordinate,
+    base_branch: String,
+) -> DatabaseResult<Project> {
+    let mut parts = coordinate.repository.split('/');
+    let owner = parts.next().expect("validated coordinate owner");
+    let name = parts.next().expect("validated coordinate name");
+    let repository_path = roots.repositories.join(owner).join(name);
+    let worktree_root = roots.worktrees.join(owner).join(name);
+    if let Err(error) = provisioning::ensure(
+        &state.project_github,
+        &coordinate.clone_url,
+        &coordinate.repository,
+        &repository_path,
+        &worktree_root,
+    )
+    .await
+    {
+        return Err(Box::new(error));
+    }
+    let (setup, verification) = provisioning::infer_commands(&repository_path);
+    let fields = [
+        coordinate.name,
+        repository_path.to_string_lossy().into_owned(),
+        worktree_root.to_string_lossy().into_owned(),
+        coordinate.repository,
+        base_branch,
+        setup,
+        verification,
+        "profile_native_root".to_owned(),
+        "profile_native_worker".to_owned(),
+    ];
+    finish_local_project(state, roots, user_id, company_id, body, &fields).await
+}
+
+async fn create_with_new_repository(
+    state: &AppState,
+    roots: &crate::http::ProjectRoots,
+    user_id: &str,
+    company_id: &str,
+    body: &ProjectCreateBody,
+    repository_name: &str,
+    requested_base_branch: Option<&str>,
+) -> DatabaseResult<Project> {
+    let mut parts = repository_name.trim().split('/');
+    let first = parts.next().unwrap_or_default();
+    let second = parts.next();
+    let owner = if second.is_some() {
+        first.to_owned()
+    } else {
+        match provisioning::github_owners(&state.project_github).await {
+            Ok(owners) => owners.into_iter().next().unwrap_or_default(),
+            Err(error) => return Err(Box::new(error)),
+        }
+    };
+    if owner.is_empty() {
+        return Err(ProjectError::Rejected {
+            message: "Repository name is invalid",
+            status: 422,
+            findings: vec![repository::Finding {
+                code: "repository-name".to_owned(),
+                field: "repositoryName".to_owned(),
+                message: "Use workspace/name for a Bitbucket repository".to_owned(),
+            }],
+        }
+        .into());
+    }
+    let name = second.unwrap_or(first);
+    let coordinate =
+        repository::repository_coordinate(&format!("https://github.com/{owner}/{name}"));
+    let base_branch = requested_base_branch.unwrap_or("main").to_owned();
+    let Some(coordinate) = coordinate.filter(|_| repository::valid_branch(&base_branch)) else {
+        return Err(ProjectError::Rejected {
+            message: "Repository name is invalid",
+            status: 422,
+            findings: vec![repository::Finding {
+                code: "repository-name".to_owned(),
+                field: "repositoryName".to_owned(),
+                message: "Use letters, numbers, dots, dashes, and underscores".to_owned(),
+            }],
+        }
+        .into());
+    };
+    let mut parts = coordinate.repository.split('/');
+    let owner = parts.next().expect("validated coordinate owner");
+    let name = parts.next().expect("validated coordinate name");
+    let repository_path = roots.repositories.join(owner).join(name);
+    if let Err(error) = provisioning::create(
+        &state.project_github,
+        &coordinate,
+        &coordinate.clone_url,
+        &repository_path,
+        &base_branch,
+    )
+    .await
+    {
+        return Err(Box::new(error));
+    }
+    create_coordinate(
+        state,
+        roots,
+        user_id,
+        company_id,
+        body,
+        coordinate,
+        base_branch,
+    )
+    .await
+}
+
+pub async fn replace_project(
+    state: &AppState,
+    roots: &crate::http::ProjectRoots,
+    user_id: &str,
+    existing: &Project,
+    body: &project_contracts::LocalProjectCreate,
+) -> DatabaseResult<Project> {
+    let integration = body.integration.as_ref().or(existing.integration.as_ref());
+    if matches!(
+        integration.map(|value| &value.repository),
+        Some(RepositoryConnection::Bitbucket { .. })
+    ) {
+        return Err(not_ported());
+    }
+    let input = repository::LocalProjectInput {
+        name: &body.name,
+        repository_path: &body.repository_path,
+        worktree_root: &body.worktree_root,
+        repository: &body.repository,
+        base_branch: &body.base_branch,
+        setup_command: &body.setup_command,
+        verification_command: &body.verification_command,
+    };
+    let prepared = match repository::prepare_local_project(
+        &state.project_github,
+        &roots.repositories,
+        &roots.worktrees,
+        &input,
+    )
+    .await
+    {
+        Ok(prepared) => prepared,
+        Err(findings) => {
+            return Err(
+                ProjectError::new("Project configuration is invalid", 422, findings).into(),
+            );
+        }
+    };
+    state.with_database(|database| {
+        update_local(database, user_id, existing, &prepared, body, Utc::now())
+    })
+}
+
+pub async fn patch_project(
+    state: &AppState,
+    roots: &crate::http::ProjectRoots,
+    user_id: &str,
+    existing: &Project,
+    patch: &project_contracts::ProjectPatch,
+) -> DatabaseResult<Project> {
+    let plan = plan_patch(existing, patch);
+    let mut findings = plan.findings;
+    let mut paths = (
+        plan.candidate.repository_path.clone(),
+        plan.candidate.worktree_root.clone(),
+    );
+    if plan.repository_changed {
+        let Some((repository_path, worktree_root, errors)) = validate_patched_repository(
+            &state.project_github,
+            (&roots.repositories, &roots.worktrees),
+            &plan.candidate,
+            patch.worktree_root.is_some(),
+            plan.remote_changed,
+        )
+        .await
+        else {
+            return Err(not_ported());
+        };
+        paths = (repository_path, worktree_root);
+        findings.extend(errors);
+    }
+    if !findings.is_empty() {
+        return Err(ProjectError::new("Project configuration is invalid", 422, findings).into());
+    }
+    state.with_database(|database| {
+        apply_patch(
+            database,
+            user_id,
+            existing,
+            patch,
+            (&paths.0, &paths.1),
+            Utc::now(),
+        )
+    })
 }
 
 #[cfg(test)]

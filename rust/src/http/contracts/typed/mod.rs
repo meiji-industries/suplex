@@ -1,4 +1,4 @@
-use serde::{Serialize, de::DeserializeOwned};
+use serde::{Deserialize, Deserializer, Serialize, de::DeserializeOwned};
 use serde_json::{Map, Value, json};
 
 pub mod agent_api;
@@ -22,6 +22,23 @@ pub enum ContractFailure {
 }
 
 pub type ContractResult<T> = Result<T, ContractFailure>;
+
+pub(crate) fn optional_nonnull<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    D: Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    T::deserialize(deserializer).map(Some)
+}
+
+/// With `serde(default)`, omission is None and explicit null is Some(None).
+pub(crate) fn present_nullable<'de, D, T>(deserializer: D) -> Result<Option<Option<T>>, D::Error>
+where
+    D: Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    Option::<T>::deserialize(deserializer).map(Some)
+}
 
 pub(crate) fn id_1_256(value: &str, _: &()) -> garde::Result {
     match value.encode_utf16().count() {
@@ -72,48 +89,36 @@ pub(crate) fn finding(code: &str, path: &[Value]) -> Value {
     json!({"code":format!("invalid-{code}"),"field":format!(".{field}"),"message":"Request value is invalid"})
 }
 
-pub(crate) fn garde_findings(report: &garde::Report) -> Vec<Value> {
+pub(crate) fn garde_findings(report: &garde::Report, request: &impl Serialize) -> Vec<Value> {
+    let input =
+        serde_json::to_value(request).expect("request contracts contain JSON-compatible fields");
     report.iter().map(|(path, error)| {
-        let mut field = String::from(".");
-        let mut parent = "";
-        for (index, (_, segment)) in path.__iter().rev().enumerate() {
-            if index > 0 { field.push('.'); }
-            // Only serde-renamed struct fields change spelling. Record keys and
-            // array indices must retain their exact source spelling.
-            let name = if matches!(parent, "environment" | "env" | "headers") {
-                segment.as_str()
-            } else { match segment.as_str() {
-                "workflow_ids" => "workflowIds",
-                "default_workflow_id" => "defaultWorkflowId",
-                "template_ids" => "templateIds",
-                "root_profile_ids" => "rootProfileIds",
-                "worker_profile_ids" => "workerProfileIds",
-                "advisor_profile_ids" => "advisorProfileIds",
-                "delivery_target" => "deliveryTarget",
-                "run_project_tests" => "runProjectTests",
-                "visual_evidence" => "visualEvidence",
-                "allowed_providers" => "allowedProviders",
-                "allowed_instance_ids" => "allowedInstanceIds",
-                "repository_url" => "repositoryUrl",
-                "project_id" => "projectId",
-                "repository_name" => "repositoryName",
-                "base_branch" => "baseBranch",
-                "repository_path" => "repositoryPath",
-                "worktree_root" => "worktreeRoot",
-                "root_profile_id" => "rootProfileId",
-                "worker_profile_id" => "workerProfileId",
-                "skill_directories" => "skillDirectories",
-                "idempotency_key" => "idempotencyKey",
-                "flow_id" => "flowId",
-                "mime_type" => "mimeType",
-                "start_immediately" => "startImmediately",
-                "depends_on" => "dependsOn",
-                "blocked_by_pull_requests" => "blockedByPullRequests",
-                other => other,
-            }};
-            field.push_str(name);
-            parent = name;
+        let mut value = Some(&input);
+        let mut names = Vec::new();
+        for (kind, segment) in path.__iter().rev() {
+            if kind == garde::error::Kind::None {
+                continue;
+            }
+            let raw = segment.as_str();
+            let mut name = raw.to_owned();
+            if value.is_some_and(|value| value.is_object() && value.get(raw).is_none()) {
+                let mut parts = raw.split('_');
+                name = parts.next().unwrap_or_default().to_owned();
+                for part in parts {
+                    let mut chars = part.chars();
+                    if let Some(first) = chars.next() {
+                        name.extend(first.to_uppercase());
+                        name.extend(chars);
+                    }
+                }
+            }
+            value = value.and_then(|value| match value {
+                Value::Array(items) => raw.parse::<usize>().ok().and_then(|index| items.get(index)),
+                _ => value.get(&name),
+            });
+            names.push(name);
         }
+        let field = format!(".{}", names.join("."));
         let message = error.message();
         let code = if message == "too_small" || message.contains("lower than") { "too_small" }
             else if message == "too_big" || message.contains("greater than") { "too_big" }
@@ -352,6 +357,62 @@ mod tests {
     use super::*;
 
     #[test]
+    fn patch_fields_distinguish_omission_null_and_value() {
+        #[derive(Debug, Deserialize, PartialEq)]
+        struct Patch {
+            #[serde(default, deserialize_with = "present_nullable")]
+            nullable: Option<Option<String>>,
+            #[serde(default, deserialize_with = "optional_nonnull")]
+            nonnull: Option<String>,
+        }
+        let parse = |value| serde_json::from_value::<Patch>(value);
+        assert_eq!(
+            parse(json!({})).unwrap(),
+            Patch {
+                nullable: None,
+                nonnull: None
+            }
+        );
+        assert_eq!(
+            parse(json!({"nullable": null})).unwrap().nullable,
+            Some(None)
+        );
+        let patch = parse(json!({"nullable": "x", "nonnull": "y"})).unwrap();
+        assert_eq!(patch.nullable, Some(Some("x".into())));
+        assert_eq!(patch.nonnull, Some("y".into()));
+        assert!(parse(json!({"nonnull": null})).is_err());
+        assert!(parse(json!({"nullable": false})).is_err());
+    }
+
+    #[test]
+    fn garde_paths_use_request_field_names() {
+        use garde::Validate;
+
+        let body: tasks::TaskCreateBody = serde_json::from_value(json!({
+            "projectId": "", "title": "Build", "idempotencyKey": "sample-001",
+            "advisorProfileIds": {"planner_a": ""},
+            "images": [{"filename": "image.png", "mimeType": "text/plain", "base64": "YQ=="}],
+            "blockedByPullRequests": [{"number": 1}]
+        }))
+        .unwrap();
+        let findings = garde_findings(&body.validate().unwrap_err(), &body);
+        assert_eq!(
+            findings,
+            vec![
+                finding(
+                    "too_small",
+                    &[json!("advisorProfileIds"), json!("planner_a")]
+                ),
+                finding(
+                    "invalid_value",
+                    &[json!("images"), json!(0), json!("mimeType")]
+                ),
+                finding("too_small", &[json!("projectId")]),
+            ]
+        );
+    }
+
+    #[test]
     fn garde_paths_preserve_dynamic_record_keys() {
         let mut report = garde::Report::new();
         report.append(
@@ -367,7 +428,10 @@ mod tests {
             garde::Error::new("too_small"),
         );
         assert_eq!(
-            garde_findings(&report),
+            garde_findings(
+                &report,
+                &json!({"environment":{"FOO_BAR":"", "workflow_ids":""}, "workflowIds":["a", "b", ""]})
+            ),
             vec![
                 json!({"code":"invalid-invalid_format","field":".environment.FOO_BAR","message":"Request value is invalid"}),
                 json!({"code":"invalid-invalid_format","field":".environment.workflow_ids","message":"Request value is invalid"}),

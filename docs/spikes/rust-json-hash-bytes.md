@@ -1,5 +1,8 @@
 # Rust JSON byte spike (2026-09-24)
 
+Historical port investigation. Source locations, fixture counts, and remaining
+work below describe the 2026-09-24 snapshot, not the current Rust release state.
+
 The four persisted SHA-256 inputs are `src/tasks/repository.ts:38` and
 `src/tasks/tasks.ts:383,984,1050`. The first three store hex digests; the task
 revision at line 1050 uses base64url. The fixtures in

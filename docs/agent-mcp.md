@@ -70,4 +70,4 @@ Never pass the credential as a command-line argument. Register the local bridge 
 
 From a source checkout, use `pnpm` as the command. Set the arguments to `["--dir", "/absolute/path/to/suplex", "run", "suplex", "mcp"]`.
 
-The stdio bridge maps tools to `/api/agent/*`. Suplex keeps task rules, project grants, idempotency, and revisions in `TaskService` for both transports.
+The stdio bridge maps tools to `/api/agent/*`. The native task and agent routes enforce task rules, project grants, idempotency, and revisions for both transports.

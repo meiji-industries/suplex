@@ -31,13 +31,14 @@ idempotency keys, because those are facts Suplex owns.
 - The fix for a parked task is a restart, a retry click, or a database edit, while `git status`,
   `gh pr view`, and `herdr agent get` all say the work is fine.
 
-**Shapes seen so far.**
+**Historical shapes seen during the TypeScript engine.** The paths and
+functions in this table describe past fixes, not the current Rust source tree.
 
 | Copy that gated | Owner that was right | Fix |
 | --- | --- | --- |
-| `suplex_developer_executions.status` and `result_commit` before a release | git had the reviewed commit clean at HEAD | Prove the revision in git; rows narrow the lookup (`src/engine/activities/git-proof.ts`) |
+| `suplex_developer_executions.status` and `result_commit` before a release | git had the reviewed commit clean at HEAD | Prove the revision in git; rows narrow the lookup |
 | Forward-merge lineage chain across three base moves | git had the merge commit with the base as an ancestor | Same proof in the no-drift path of `target-base.ts` |
-| PR base observation vs reviewed base | Git integration result on the authoritative base | Digest-aware `sameRange` in `src/workflows.ts` and review equivalence in `src/delivery-review.ts` |
+| PR base observation vs reviewed base | Git integration result on the authoritative base | Compare the reviewed change and actual integration result |
 | A workflow state field pointing at an execution id that was never inserted | nothing owned it | Keep the prior id until the activity returns a persisted row |
 | `suplex_herdr_turns.status = 'waiting'` treated as a live turn | Herdr showed the pane idle and the result file present | Parse the result with the turn's schema, then ask Herdr; a `dispatching` turn gets a bounded grace |
 | A prompt acknowledgement timeout treated as a failed turn | Herdr showed the agent working | Read `herdr agent get` after the timeout |

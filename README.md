@@ -9,8 +9,7 @@ Root session plans and reviews the work. A scoped Worker edits, verifies, and
 commits in the task worktree. Herdr displays those native sessions.
 
 The [product guide](docs/product.md) describes the workflow. [CONTEXT.md](CONTEXT.md)
-defines its terms. The [cutover plan](docs/plans/2026-09-04-resumable-delivery.md)
-records the architecture decisions and verification.
+defines its terms. [Architecture decisions](docs/adr/) record the history.
 
 An agent that never opens the web application starts at
 [machine discovery and the operator handoff](docs/agents/machine-discovery.md).
@@ -29,7 +28,7 @@ grants, and verify an agent integration after an upgrade.
 | GitHub | Remote branches, pull requests, checks, reviews, and merges |
 | Herdr | The visible attachment to a native session |
 
-Suplex runs a Fastify API and a task host beside a SQLite database. There is no
+Suplex runs a native Rust API and task host beside a SQLite database. There is no
 phase engine, Temporal history, separate integrator agent, or completion-file
 protocol. Database records preserve Suplex-owned intent and correlate native
 observations. They do not require a second copy of GitHub progress.
@@ -91,10 +90,9 @@ mise run dev
 ```
 
 Reuse an existing stack when `dev:status` reports one. Frontend changes use Vite
-HMR. Backend changes require a restart under `mise run dev`. `mise run dev:watch`
-restarts the backend on changes. Both commands keep a stable supervisor alive so
-Suplex can update without stopping native agent sessions. `mise run down` stops
-this checkout's stack.
+HMR. Rust changes require a restart under `mise run dev`; `mise run dev:watch`
+rebuilds and restarts the native host on changes. `mise run down` stops this
+checkout's owned development processes. The default development port is 4113.
 
 Loopback and tailnet requests receive the Operator administrator session.
 An empty development database receives a company, native profiles, and a project
@@ -105,7 +103,7 @@ for this checkout.
 The simplest install is the desktop app: open `Suplex-<version>-arm64.dmg`
 (Apple silicon) or `Suplex-<version>-x64.dmg` (Intel),
 drag Suplex to Applications, and choose **Run locally**. The app
-ships the server, its dependencies, and Node 26.7.0 inside the bundle. It
+ships the native Rust server and web assets inside the bundle. It
 checks the Mac, installs Apple's developer tools (for git) and Herdr if they
 are missing, prepares a database under `~/Library/Application Support/Suplex`,
 and starts Suplex on `127.0.0.1`. No git, Homebrew, GitHub account, or
@@ -127,23 +125,11 @@ one-time passkey enrollment URL; the service supports Tailscale Serve HTTPS or
 a direct Tailscale HTTP bind and rejects public and LAN bindings. In local mode
 (`SUPLEX_ACCESS_MODE=local`) the service binds only `127.0.0.1` and every
 request from the loopback host is the built-in Operator administrator. Local
-administration and passkey recovery use `pnpm run suplex recover`.
+administration and passkey recovery use `pnpm run suplex recover --confirm-recovery`.
 
 `pnpm run suplex install --manifest` lists the install stages the desktop app
 runs, and `pnpm run suplex install --stage <name> --json` runs one of them. Each
-stage is idempotent and prints one JSON frame on its last stdout line.
-
-### Upgrade from Forge
-
-Suplex was called Forge. To keep the data of a Forge installation, stop it,
-then run `bin/upgrade-from-forge.ts` from the Suplex checkout. It moves
-`./.forge` and `~/Library/Application Support/Forge` to their Suplex names,
-renames the database schema, the stored paths, and the `FORGE_*` settings, and
-keeps `~/forge/repos` and `~/forge/worktrees` in place. It also points projects
-and git remotes for `meiji-industries/forge` at `meiji-industries/suplex`. Give
-a path to upgrade a different `.forge` folder. Finish or archive running tasks
-first: native sessions that started under Forge use the old tool names. Do not
-use the in-app update for this release.
+stage is idempotent and prints one JSON result on stdout.
 
 Configure companies, projects, and native profiles in the web application.
 Project creation copies a GitHub repository into the configured repository root.
@@ -209,10 +195,9 @@ pnpm run suplex restart
 
 Lifecycle commands inspect recorded process identities before signaling them.
 They do not kill processes by broad name or port. `/health` reports host checks.
-After adopting this release, restart an older registry-owned installation once
-with `pnpm run suplex restart`. For an existing `mise run dev` process, press
-Ctrl-C and run `mise run dev` once. Future host updates keep the stable
-supervisor, terminal, and native agent sessions active.
+Checkout installations use the native supervisor. Restart the development
+stack after Rust changes; the runtime recovers native session work from its
+own evidence.
 
 ## Back up and restore
 
@@ -230,10 +215,11 @@ backup alone cannot restore missing native sessions or repository contents.
 
 ## Verify changes
 
-Run all unit and Git-backed integration tests with:
+Run the TypeScript unit and Git-backed integration tests with:
 
 ```sh
 pnpm test
+pnpm run test:rust
 ```
 
 Use the narrower projects when you need them:
@@ -254,16 +240,13 @@ guard and confirms that the guard remains active after the suite exits.
 pnpm verify
 ```
 
-Verification runs typecheck, lint, unit tests, a production build, and Playwright
+Verification runs typecheck, lint, TypeScript and Rust tests, a production build, and Playwright
 browser smoke tests for session setup, project creation, and the task lifecycle.
 Task creation and start run at desktop and narrow widths. Follow the
 [browser test budget](AGENTS.md#browser-test-budget) when adding coverage or
 choosing which browser tests to run during development.
 
-Installed-runtime probes live in
-`scripts/probe-opencode-runtime.ts`, `scripts/probe-opencode-attachment.ts`, and
-`scripts/probe-opencode-delivery.ts`. Read each script for its arguments.
-
-The delivery probe consumes model capacity and creates visible Herdr panes.
-It verifies a local commit and completion without writing to GitHub.
+The Rust tests and deterministic interop journeys exercise native session and
+delivery behavior. Real provider sign-in, installed services, GitHub writes,
+and packaged desktop behavior require separate verification.
 Database migrations are append-only. Follow [the migration guide](docs/database-migrations.md).

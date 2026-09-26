@@ -1,5 +1,5 @@
 import { EventEmitter } from "node:events";
-import { mkdtempSync, readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { createServer } from "node:net";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -37,13 +37,24 @@ beforeEach(() => {
   healthy.mockResolvedValue(false);
 });
 
-test("a server already answering on the port is adopted, never spawned and never signalled", async () => {
-  healthy.mockResolvedValue(true);
-  const runtime = subject();
+const installed = (id: string): string => {
+  const userData = mkdtempSync(join(tmpdir(), "suplex-desktop-local-"));
+  writeFileSync(join(userData, "installation-id"), `${id}\n`);
+  return userData;
+};
+
+test("a server of this installation already answering on the port is adopted, never spawned and never signalled", async () => {
+  const runtime = createLocalRuntime({ runtime: FIXTURE, userData: installed("ours"), port: 4111, base: { HOME: "/Users/ada" }, ports: { spawn, kill, wait, healthy, servedInstallation: async () => "ours", freePort: async (preferred) => preferred } });
   expect(await runtime.start()).toEqual({ port: 4111, adopted: true });
   expect(spawn).not.toHaveBeenCalled();
   await runtime.stop();
   expect(kill).not.toHaveBeenCalled();
+});
+
+test("a server of another installation on the port is left alone and ours starts on a free port", async () => {
+  const runtime = createLocalRuntime({ runtime: FIXTURE, userData: installed("ours"), port: 4111, base: { HOME: "/Users/ada" }, ports: { spawn, kill, wait, healthy: async (origin: string) => origin === "http://127.0.0.1:4222", servedInstallation: async () => "deleted-folder", freePort: async () => 4222 } });
+  expect(await runtime.start()).toEqual({ port: 4222, adopted: false });
+  expect(spawn.mock.lastCall?.[2].env.SUPLEX_PORT).toBe("4222");
 });
 
 test("the native server is spawned detached with its foreground command, cwd, and environment", async () => {

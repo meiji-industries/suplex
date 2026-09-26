@@ -210,7 +210,7 @@ async fn health(State(state): State<AppState>, headers: HeaderMap) -> Response {
         Err(response) => return *response,
     };
     let snapshot = super::health::snapshot(&state, Vec::new(), None).await;
-    let response = (
+    let mut response = (
         [
             (header::CONTENT_TYPE, "text/html; charset=utf-8"),
             (header::CACHE_CONTROL, "no-store"),
@@ -218,6 +218,16 @@ async fn health(State(state): State<AppState>, headers: HeaderMap) -> Response {
         super::health::health_page(&snapshot),
     )
         .into_response();
+    // The desktop adopts a running server only when it serves the desktop's own installation.
+    if let Some(id) = state
+        .installation
+        .as_ref()
+        .and_then(|installation| header::HeaderValue::from_str(&installation.installation_id).ok())
+    {
+        response
+            .headers_mut()
+            .insert("x-suplex-installation-id", id);
+    }
     with_cookies(response, cookies)
 }
 

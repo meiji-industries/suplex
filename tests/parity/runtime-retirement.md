@@ -25,6 +25,8 @@ Source comparison revision: `6bb0a43f`. `cargo test --lib` runs the embedded Rus
 
 The five Claude files above are retired. `cargo test --lib runtimes::claude_code` passed 25/25 on this checkout. The old live-history test also asserted the identity of a cached JavaScript array; Rust returns an owned value, while the observable completed-line behavior remains covered.
 
+The Codex analytics/transcript, Devin, OpenCode, and Worker evidence files in the table are also retired. `cargo test --lib runtimes::` passed 156/156 native runtime tests on this checkout; the file-by-file mapping above identifies the corresponding assertions. `codex-runtime.test.ts` remains under review because its headless lifecycle cases are broader than the direct native runtime tests.
+
 ## Remaining assigned files under review
 
 `codex-runtime.test.ts`, `delivery-operations.test.ts`, `github-delivery.test.ts`, `root-bridge.test.ts`, `root-controller-delegation.test.ts`, `root-controller-lifecycle.test.ts`, `root-controller-limits.test.ts`, `root-controller-recovery.test.ts`, `task-archive-displays.real.test.ts`, `task-archive-displays.test.ts`, `task-archive-sessions.test.ts`, `task-host.test.ts`, `worker-environment.test.ts`, `worker-replacement-api.test.ts`, `worker-replacement.test.ts`, `workflows-delegation.test.ts`, `workflows-delivery-repairs.test.ts`, `workflows-delivery.test.ts`, and `workflows-intake.test.ts`. These need a file-by-file coverage decision before deletion. The real Herdr test requires a separate native real-environment equivalent; fake Rust tests do not claim it.

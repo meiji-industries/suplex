@@ -1,3 +1,4 @@
+import type { PullRequestState } from "../../contracts/generated/PullRequestState.js";
 import { useId } from "react";
 import { CheckCircle2, CircleDashed, CircleDotDashed, CircleHelp, CircleSlash, Clock } from "lucide-react";
 import type { PullRequestReference, TaskControlStatus } from "../../contracts/task-control.js";
@@ -44,12 +45,12 @@ export function TaskStatus({ status, pullRequestState }: TaskStatusProps) {
 }
 
 /** "Blocked by First · Active, Second · Backlog", or null when the task has no prerequisites. */
-type PullRequestBlockerState = "open" | "closed" | "merged";
-type BlockedByLabelInput = { title: string; status: TaskControlStatus; kind?: "task" | "pull_request" | undefined; number?: number | undefined; state?: string | undefined };
+type PullRequestBlockerState = PullRequestState;
+type BlockedByLabelInput = { title: string; status: TaskControlStatus; kind?: "task" | "pull_request" | undefined; number?: number | undefined; state?: PullRequestBlockerState | undefined };
 const pullRequestBlockerStateLabels = { open: "Open", closed: "Closed", merged: "Merged" } satisfies Record<PullRequestBlockerState, string>;
 
 function isPullRequestBlocker(value: BlockedByLabelInput): value is BlockedByLabelInput & { kind: "pull_request"; number: number; state: PullRequestBlockerState } {
-  return value.kind === "pull_request" && typeof value.number === "number" && (value.state === "open" || value.state === "closed" || value.state === "merged");
+  return value.kind === "pull_request" && typeof value.number === "number" && value.state !== undefined;
 }
 
 export function blockedByLabel(blockedBy: ReadonlyArray<BlockedByLabelInput>): string | null {

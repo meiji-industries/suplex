@@ -1,6 +1,6 @@
 import { listTasks } from "./task-api.js";
 import { duplicateTitle } from "./duplicate-title.js";
-import { TaskImageInputSchema, VisualEvidenceSchema, type Task, type TaskInput } from "../../../contracts/tasks.js";
+import { TaskImageInputSchema, type Task, type TaskInput } from "../../../contracts/tasks.js";
 import { issueTaskSource, type TaskSourceSummary } from "../task-source-picker.js";
 import { readJson } from "../../../lib/api.js";
 
@@ -40,7 +40,7 @@ export function taskDraftFields(task: Task): Omit<NewTaskDraft, "title" | "idemp
     projectId: task.projectId, description: task.description,
     ...(task.issue ? { issue: task.issue } : {}),
     rootProfileId: task.rootProfile.profileId, workerProfileId: task.workerProfile.profileId,
-    deliveryTarget: task.deliveryTarget, runProjectTests: task.configuration.runProjectTests, visualEvidence: VisualEvidenceSchema.parse(task.configuration.visualEvidence),
+    deliveryTarget: task.deliveryTarget, runProjectTests: task.configuration.runProjectTests, visualEvidence: task.configuration.visualEvidence,
     workflow: task.workflow, advisorProfileIds: Object.fromEntries(Object.entries(task.advisorProfiles).map(([role, profile]) => [role, profile.profileId])),
   };
 }

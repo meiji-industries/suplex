@@ -4,7 +4,7 @@ import type { TaskAgentSelectionRequest } from "../../../contracts/agent-selecti
 import type { IssueAssociation } from "../../../contracts/issues.js";
 import type { ArchiveConfirmation } from "../../../contracts/generated/ArchiveConfirmation.js";
 
-type TaskAction = "refresh" | "cancel" | "unarchive" | "disarm" | "start" | "answer";
+export type TaskAction = "refresh" | "cancel" | "unarchive" | "disarm" | "start" | "answer";
 
 const taskPath = (taskId: string, suffix = ""): string =>
   `/api/tasks/${encodeURIComponent(taskId)}${suffix}`;

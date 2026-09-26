@@ -1,4 +1,3 @@
-import { ProjectProviderPolicySchema } from "../../contracts/provider-policy.js";
 import { updateTask, createTask } from "./lib/task-api.js";
 import { useEffect, useRef, useState, type ReactElement } from "react";
 import { isProfileAllowed } from "../projects/lib/provider-policy.js";
@@ -224,7 +223,7 @@ export function NewTaskDialog({ open, onOpenChange, companyId, onCreated, initia
     finally { if (imageRead.current.generation === generation) { imageRead.current.pending = false; setReadingImages(false); } }
   };
   const project = projects.find(project => project.id === projectId);
-  const eligibleProfiles = profiles.filter(profile => isProfileAllowed(editTask ? ProjectProviderPolicySchema.nullish().parse(editTask.configuration.providerPolicy) : project?.providerPolicy, profile));
+  const eligibleProfiles = profiles.filter(profile => isProfileAllowed(editTask ? editTask.configuration.providerPolicy : project?.providerPolicy, profile));
   const repositoryConnection = editTask ? editTask.configuration.integration?.repository : project?.integration?.repository;
   const deliveryOptions = taskDeliveryTargetOptions.filter(option => supportsDeliveryTarget(repositoryConnection, option.value));
   const unsupportedTarget = !supportsDeliveryTarget(repositoryConnection, deliveryTarget);

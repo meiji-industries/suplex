@@ -1,5 +1,5 @@
-import type { ProjectProviderPolicy } from "../../../contracts/provider-policy.js";
-import type { HarnessKind } from "../../../contracts/harness-kind.js";
+import type { HarnessKind } from "../../../contracts/generated/HarnessKind.js";
+import type { ProjectProviderPolicy } from "../../../contracts/generated/ProjectProviderPolicy.js";
 
 export function isProfileAllowed(policy: ProjectProviderPolicy | null | undefined, profile: { provider: HarnessKind; providerInstanceId?: string | null | undefined }): boolean {
   if (!policy) return true;

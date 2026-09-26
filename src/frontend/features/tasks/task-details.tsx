@@ -1,4 +1,4 @@
-import { setTaskDependencies, setTaskIssue, runTaskAction } from "./lib/task-api.js";
+import { setTaskDependencies, setTaskIssue, runTaskAction, type TaskAction } from "./lib/task-api.js";
 import { useEffect, useState, type ReactElement } from "react";
 import { ChevronRight, ClipboardCopy, X } from "lucide-react";
 import { Collapsible } from "../../components/ui/collapsible.js";
@@ -88,7 +88,7 @@ export function TaskDetailsPage({ task, project, onChange }: { task: Task; proje
     const timer = setInterval(() => void load(), 3000);
     return () => { closed = true; clearInterval(timer); };
   }, [task.id]);
-  const act = async (action: Parameters<typeof runTaskAction>[1], body?: unknown) => {
+  const act = async (action: TaskAction, body?: unknown) => {
     if (busy) return;
     setBusy(true); setError("");
     try { onChange(await runTaskAction(task.id, action, body)); }

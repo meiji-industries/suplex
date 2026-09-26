@@ -1,4 +1,3 @@
-import { ProjectProviderPolicySchema } from "../../contracts/provider-policy.js";
 import { getTask, selectTaskAgent } from "./lib/task-api.js";
 import { useEffect, useState } from "react";
 import type { Task } from "../../contracts/tasks.js";
@@ -48,7 +47,7 @@ export function TaskAgent({ task, role, onChange, onActivityChange, openRequest,
     void readJson<{ profiles: ApiProfile[] }>("/api/profiles").then(result => { if (!cancelled) setProfiles(result.profiles); }).catch(cause => { if (!cancelled) setError(cause instanceof Error ? cause.message : "Agent profiles are not available."); });
     return () => { cancelled = true; };
   }, [open]);
-  const allowed = profiles.filter(item => item.role === (role === "worker" ? "worker" : "root") && !item.archivedAt && isProfileAllowed(ProjectProviderPolicySchema.nullish().parse(intent?.task.configuration.providerPolicy), item));
+  const allowed = profiles.filter(item => item.role === (role === "worker" ? "worker" : "root") && !item.archivedAt && isProfileAllowed(intent?.task.configuration.providerPolicy, item));
   const openDialog = async () => {
     if (busy) return;
     setBusy(true); setError(""); setIntent(null);

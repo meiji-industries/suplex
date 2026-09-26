@@ -87,8 +87,8 @@ fn parse_json(raw: &str) -> DatabaseResult<Value> {
     Ok(serde_json::from_str(raw)?)
 }
 
-fn workflow_state(raw: &str) -> DatabaseResult<PublicWorkflowState> {
-    let value = parse_json(raw)?;
+fn workflow_state(row: &Row<'_>) -> DatabaseResult<PublicWorkflowState> {
+    let value = json_column(row, "workflow_state_json")?;
     Ok(PublicWorkflowState {
         version: value
             .get("version")
@@ -266,103 +266,135 @@ pub fn get(database: &SuplexDatabase, task_id: &str) -> DatabaseResult<Option<Ta
     super::repository::task_response(database, task_id)
 }
 
-pub(crate) fn from_row(row: &Row<'_>) -> DatabaseResult<TaskResponse> {
-    let id: String = row.get("id")?;
-    let company_id: String = row.get("company_id")?;
-    let project_id: String = row.get("project_id")?;
-    let issue_json: Option<String> = row.get("issue_json")?;
-    let issue_number: Option<i64> = row.get("issue_number")?;
-    let issue_code: Option<String> = row.get("issue_code")?;
-    let title: String = row.get("title")?;
-    let description: String = row.get("description")?;
-    let status: String = row.get("status")?;
-    let delivery_target: String = row.get("delivery_target")?;
-    let root_profile: String = row.get("root_profile_json")?;
-    let worker_profile: String = row.get("worker_profile_json")?;
-    let workflow: String = row.get("workflow")?;
-    let advisor_profiles: String = row.get("advisor_profiles_json")?;
-    let state: String = row.get("workflow_state_json")?;
-    let configuration: String = row.get("configuration_json")?;
-    let worktree: Option<String> = row.get("worktree_json")?;
-    let pull_request: Option<String> = row.get("pull_request_json")?;
-    let human_question: Option<String> = row.get("human_question")?;
-    let human_question_id: Option<String> = row.get("human_question_id")?;
-    let limit_pause: Option<String> = row.get("limit_pause_json")?;
-    let question_options: String = row.get("human_question_options_json")?;
-    let recovery_turn_id: Option<String> = row.get("recovery_turn_id")?;
-    let wake_at: Option<String> = row.get("wake_at")?;
-    let created_at: String = row.get("created_at")?;
-    let updated_at: String = row.get("updated_at")?;
-    let status_changed_at: String = row.get("status_changed_at")?;
-    let archived_at: Option<String> = row.get("archived_at")?;
+fn json_column(row: &Row<'_>, column: &str) -> DatabaseResult<Value> {
+    parse_json(&row.get::<_, String>(column)?)
+}
+
+/// A nullable JSON text column; SQL NULL reads as JSON null.
+fn nullable_json_column(row: &Row<'_>, column: &str) -> DatabaseResult<Value> {
+    match row.get::<_, Option<String>>(column)? {
+        Some(raw) => parse_json(&raw),
+        None => Ok(Value::Null),
+    }
+}
+
+/// The issue key, such as `SUP-12`, and the linked issue.
+fn issue_from_row(row: &Row<'_>) -> DatabaseResult<(Option<String>, Value)> {
+    let code: Option<String> = row.get("issue_code")?;
+    let number: Option<i64> = row.get("issue_number")?;
+    let key = code
+        .zip(number)
+        .map(|(code, number)| format!("{code}-{number}"));
+    Ok((key, nullable_json_column(row, "issue_json")?))
+}
+
+fn question_from_row(row: &Row<'_>) -> DatabaseResult<Value> {
+    task_question(
+        row.get("human_question")?,
+        row.get("human_question_id")?,
+        row.get("limit_pause_json")?,
+        row.get("human_question_options_json")?,
+        row.get("recovery_turn_id")?,
+    )
+}
+
+/// The task limits, with the company defaults where the task sets none.
+fn limits_from_row(row: &Row<'_>) -> DatabaseResult<TaskLimits> {
     let budget_usd: Option<f64> = row.get("budget_usd")?;
     let max_turns: Option<i64> = row.get("max_turns")?;
+    let defaults: (f64, i64) = (row.get("default_budget")?, row.get("default_turns")?);
+    Ok(TaskLimits {
+        budget_usd: budget_usd.unwrap_or(defaults.0),
+        max_turns: max_turns.unwrap_or(defaults.1),
+        admitted_turns: row.get("admitted_turns")?,
+    })
+}
+
+/// Dependency ids, the Blocked by list, and the queue. Only a backlog or
+/// queued task shows what it waits on.
+fn dependencies_from_row(
+    row: &Row<'_>,
+    status: &str,
+) -> DatabaseResult<(Vec<String>, Vec<Value>, TaskQueue)> {
     let (depends_on, blocked_by, waiting_on) = dependency_projection(
         serde_json::from_str(&row.get::<_, String>("dependencies")?)?,
         serde_json::from_str(&row.get::<_, String>("pr_dependencies")?)?,
     )?;
-    let defaults: (f64, i64) = (row.get("default_budget")?, row.get("default_turns")?);
-    let admitted_turns: i64 = row.get("admitted_turns")?;
-    let issue_key = issue_code
-        .zip(issue_number)
-        .map(|(code, number)| format!("{code}-{number}"));
+    let waiting_on = if status == "backlog" || status == "queued" {
+        waiting_on
+    } else {
+        vec![]
+    };
+    Ok((depends_on, blocked_by, TaskQueue { waiting_on }))
+}
+
+fn images_column(row: &Row<'_>, column: &str) -> DatabaseResult<Vec<TaskImage>> {
+    Ok(serde_json::from_str(&row.get::<_, String>(column)?)?)
+}
+
+/// The Coordinator, Worker, and Advisor profiles.
+fn profiles_from_row(row: &Row<'_>) -> DatabaseResult<(Value, Value, Value)> {
+    Ok((
+        json_column(row, "root_profile_json")?,
+        json_column(row, "worker_profile_json")?,
+        json_column(row, "advisor_profiles_json")?,
+    ))
+}
+
+/// The task's own timestamps.
+struct TaskTimes {
+    wake_at: Option<String>,
+    created_at: String,
+    updated_at: String,
+    status_changed_at: String,
+    archived_at: Option<String>,
+}
+
+fn times_from_row(row: &Row<'_>) -> DatabaseResult<TaskTimes> {
+    Ok(TaskTimes {
+        wake_at: row.get("wake_at")?,
+        created_at: row.get("created_at")?,
+        updated_at: row.get("updated_at")?,
+        status_changed_at: row.get("status_changed_at")?,
+        archived_at: row.get("archived_at")?,
+    })
+}
+
+pub(crate) fn from_row(row: &Row<'_>) -> DatabaseResult<TaskResponse> {
+    let status: String = row.get("status")?;
+    let (depends_on, blocked_by, queue) = dependencies_from_row(row, &status)?;
+    let (root_profile, worker_profile, advisor_profiles) = profiles_from_row(row)?;
+    let times = times_from_row(row)?;
+    let (issue_key, issue) = issue_from_row(row)?;
     Ok(TaskResponse {
-        id: id.clone(),
-        company_id: company_id.clone(),
-        project_id,
+        id: row.get("id")?,
+        company_id: row.get("company_id")?,
+        project_id: row.get("project_id")?,
         issue_key,
-        issue: issue_json
-            .as_deref()
-            .map(parse_json)
-            .transpose()?
-            .unwrap_or(Value::Null),
-        title,
-        description,
-        status: status.clone(),
-        delivery_target,
-        root_profile: parse_json(&root_profile)?,
-        worker_profile: parse_json(&worker_profile)?,
-        workflow,
-        advisor_profiles: parse_json(&advisor_profiles)?,
-        workflow_state: workflow_state(&state)?,
+        issue,
+        title: row.get("title")?,
+        description: row.get("description")?,
+        status,
+        delivery_target: row.get("delivery_target")?,
+        root_profile,
+        worker_profile,
+        workflow: row.get("workflow")?,
+        advisor_profiles,
+        workflow_state: workflow_state(row)?,
         depends_on,
-        configuration: parse_json(&configuration)?,
-        worktree: worktree
-            .as_deref()
-            .map(parse_json)
-            .transpose()?
-            .unwrap_or(Value::Null),
-        pull_request: pull_request
-            .as_deref()
-            .map(parse_json)
-            .transpose()?
-            .unwrap_or(Value::Null),
-        human_question: task_question(
-            human_question,
-            human_question_id,
-            limit_pause,
-            question_options,
-            recovery_turn_id,
-        )?,
+        configuration: json_column(row, "configuration_json")?,
+        worktree: nullable_json_column(row, "worktree_json")?,
+        pull_request: nullable_json_column(row, "pull_request_json")?,
+        human_question: question_from_row(row)?,
         blocked_by,
-        queue: TaskQueue {
-            waiting_on: if status == "backlog" || status == "queued" {
-                waiting_on
-            } else {
-                vec![]
-            },
-        },
-        limits: TaskLimits {
-            budget_usd: budget_usd.unwrap_or(defaults.0),
-            max_turns: max_turns.unwrap_or(defaults.1),
-            admitted_turns,
-        },
-        wake_at,
-        images: serde_json::from_str(&row.get::<_, String>("images")?)?,
-        artifacts: serde_json::from_str(&row.get::<_, String>("artifacts")?)?,
-        created_at,
-        updated_at,
-        status_changed_at,
-        archived_at,
+        queue,
+        limits: limits_from_row(row)?,
+        wake_at: times.wake_at,
+        images: images_column(row, "images")?,
+        artifacts: images_column(row, "artifacts")?,
+        created_at: times.created_at,
+        updated_at: times.updated_at,
+        status_changed_at: times.status_changed_at,
+        archived_at: times.archived_at,
     })
 }

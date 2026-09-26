@@ -13,8 +13,11 @@ use std::collections::HashMap;
 use std::sync::{Mutex, PoisonError};
 use uuid::Uuid;
 
+use crate::coordination::advisor_bridge::AdvisorRole;
 use crate::coordination::root_prompts::{self, STANDARD_WORKER_RESULT_WAKE};
-use crate::coordination::workflows::Workflow;
+use crate::coordination::workflows::{
+    Completion, DeliveryWait, ReviewRecord, Workflow, WorkflowState,
+};
 use crate::http::contracts::typed::projects::ProjectProviderPolicy;
 use crate::http::contracts::typed::task_answers::TaskLimitDecision;
 use crate::http::contracts::typed::tasks::{
@@ -1831,12 +1834,9 @@ pub struct StandardWorkerResult<'a> {
     pub review: Option<&'a Value>,
 }
 
-pub fn empty_workflow_state() -> Value {
-    json!({"version":1,"reviews":[],"acceptedDelivery":null,"deliveryWait":null,"completion":null,"toolOwner":null})
-}
-
-/// TypeScript `workflowStateRow`: an unreadable state is the empty state.
-pub fn workflow_state(database: &SuplexDatabase, task_id: &str) -> DatabaseResult<Value> {
+/// TypeScript `workflowStateRow`: a task without a control row has the empty
+/// state; a stored state that does not parse is an error, never a reset.
+pub fn workflow_state(database: &SuplexDatabase, task_id: &str) -> DatabaseResult<WorkflowState> {
     let raw: Option<String> = database
         .connection()
         .query_row(
@@ -1846,20 +1846,20 @@ pub fn workflow_state(database: &SuplexDatabase, task_id: &str) -> DatabaseResul
         )
         .optional()?;
     Ok(raw
-        .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
-        .filter(|state| state["version"] == 1 && state["reviews"].is_array())
-        .unwrap_or_else(empty_workflow_state))
+        .map(|raw| serde_json::from_str(&raw))
+        .transpose()?
+        .unwrap_or_default())
 }
 
 pub fn write_workflow_state(
     database: &SuplexDatabase,
     task_id: &str,
-    state: &Value,
+    state: &WorkflowState,
     now: DateTime<Utc>,
 ) -> DatabaseResult<()> {
     database.connection().execute(
         "UPDATE suplex_task_controls SET workflow_state_json = ?1, updated_at = ?2 WHERE task_id = ?3",
-        params![state.to_string(), rfc3339_millis(now), task_id],
+        params![serde_json::to_string(state)?, rfc3339_millis(now), task_id],
     )?;
     Ok(())
 }
@@ -1916,7 +1916,7 @@ pub fn record_standard_worker_result_and_wake(
         let Some((worker_turn_id, status, prior_receipt, turn_input)) = worker_turn else {
             return Err(CoordinationError::refused("stale_generation").into());
         };
-        let current: Option<(Option<String>, Option<String>)> = database.connection().query_row(
+        let current: Option<(Option<AdvisorRole>, Option<String>)> = database.connection().query_row(
             "SELECT advisor_role,workflow_input_json FROM suplex_task_sessions WHERE id = ?1 AND task_id = ?2 AND kind = 'worker' AND is_current = 1 AND generation = ?3 AND lifecycle <> 'cancelled'",
             params![session_id, task_id, generation],
             |row| Ok((row.get(0)?, row.get(1)?)),
@@ -1941,25 +1941,28 @@ pub fn record_standard_worker_result_and_wake(
             .or(session_input)
             .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
             .unwrap_or(Value::Null);
-        if let Some(role @ ("reviewer" | "rater")) = advisor_role.as_deref()
+        if let Some(role @ (AdvisorRole::Reviewer | AdvisorRole::Rater)) = advisor_role
             && workflow_input["kind"] == "advisor"
         {
             let incomplete = json!({"result":null,"invalidReason":"The Advisor turn did not complete"});
             let review = review.unwrap_or(&incomplete);
-            let result = review["result"].clone();
-            let result = if result["role"] == role { result } else { Value::Null };
-            let invalid_reason = if result.is_null() {
+            let result = Some(review["result"].clone()).filter(|result| result["role"] == role.as_str());
+            let invalid_reason = result.is_none().then(|| {
                 review["invalidReason"]
                     .as_str()
-                    .map_or(json!("The Advisor result does not match its role"), |reason| json!(reason))
-            } else {
-                Value::Null
-            };
+                    .unwrap_or("The Advisor result does not match its role")
+                    .to_owned()
+            });
             let mut state = workflow_state(database, task_id)?;
-            state["reviews"].as_array_mut().expect("reviews array").push(json!({
-                "sessionId":session_id, "turnId":worker_turn_id, "role":role, "range":workflow_input["range"],
-                "result":result, "invalidReason":invalid_reason, "recordedAt":time,
-            }));
+            state.reviews.push(ReviewRecord {
+                session_id: session_id.to_owned(),
+                turn_id: worker_turn_id.clone(),
+                role,
+                range: serde_json::from_value(workflow_input["range"].clone())?,
+                result,
+                invalid_reason,
+                recorded_at: time.clone(),
+            });
             write_workflow_state(database, task_id, &state, now)?;
         }
         if let Some(pair_id) = workflow_input["plannerPairId"].as_str() {
@@ -2039,17 +2042,16 @@ pub fn reconcile_advisor_result(
             "UPDATE suplex_task_turns SET terminal_observation = ?1, updated_at = ?2 WHERE id = ?3",
             params![Value::Object(base).to_string(), rfc3339_millis(now), turn_id],
         )?;
-        if matches!(role.as_str(), "reviewer" | "rater") {
+        if let Some(role @ (AdvisorRole::Reviewer | AdvisorRole::Rater)) = AdvisorRole::parse(&role) {
             let mut state = workflow_state(database, task_id)?;
-            let review = state["reviews"]
-                .as_array_mut()
-                .expect("reviews array")
+            let review = state
+                .reviews
                 .iter_mut()
-                .find(|review| review["sessionId"] == session_id && review["turnId"] == turn_id && review["role"] == role.as_str())
-                .filter(|review| review["result"].is_null())
+                .find(|review| review.session_id == session_id && review.turn_id == turn_id && review.role == role)
+                .filter(|review| review.result.is_none())
                 .ok_or_else(|| CoordinationError::refused("advisor_review_not_reconcilable"))?;
-            review["result"] = result.clone();
-            review["invalidReason"] = Value::Null;
+            review.result = Some(result.clone());
+            review.invalid_reason = None;
             write_workflow_state(database, task_id, &state, now)?;
         }
         Ok(())
@@ -2061,16 +2063,16 @@ pub fn reconcile_advisor_result(
 pub fn record_workflow_outcome(
     database: &mut SuplexDatabase,
     task_id: &str,
-    completion: &Value,
+    completion: &Completion,
     now: DateTime<Utc>,
 ) -> DatabaseResult<bool> {
     let recorded = database.transaction(true, |database| {
         let mut state = workflow_state(database, task_id)?;
-        if !state["completion"].is_null() {
+        if state.completion.is_some() {
             return Ok(false);
         }
-        state["deliveryWait"] = Value::Null;
-        state["completion"] = completion.clone();
+        state.delivery_wait = None;
+        state.completion = Some(completion.clone());
         write_workflow_state(database, task_id, &state, now)?;
         let status: TaskStatus = database.connection().query_row(
             "SELECT status FROM suplex_task_controls WHERE task_id = ?1",
@@ -2090,8 +2092,8 @@ pub fn update_workflow_state(
     database: &mut SuplexDatabase,
     task_id: &str,
     now: DateTime<Utc>,
-    mutate: impl FnOnce(&mut Value),
-) -> DatabaseResult<Value> {
+    mutate: impl FnOnce(&mut WorkflowState),
+) -> DatabaseResult<WorkflowState> {
     database.transaction(true, |database| {
         let mut state = workflow_state(database, task_id)?;
         mutate(&mut state);
@@ -2100,19 +2102,12 @@ pub fn update_workflow_state(
     })
 }
 
-fn same_wait(current: &Value, expected: &Value) -> bool {
-    !current.is_null()
-        && ["headSha", "fingerprint", "since", "reason"]
-            .iter()
-            .all(|key| current[key] == expected[key])
-}
-
 /// TypeScript `resumeDeliveryWait`: consumes exactly the expected wait and
 /// inserts one Coordinator continuation in the same transaction.
 pub fn resume_delivery_wait(
     database: &mut SuplexDatabase,
     task_id: &str,
-    expected: &Value,
+    expected: &DeliveryWait,
     prompt: &str,
     now: DateTime<Utc>,
 ) -> DatabaseResult<bool> {
@@ -2127,11 +2122,11 @@ pub fn resume_delivery_wait(
         let Some(root) = root.filter(|root| {
             status == TaskStatus::Active
                 && root.lifecycle != SessionLifecycle::Cancelled
-                && same_wait(&state["deliveryWait"], expected)
+                && state.delivery_wait.as_ref() == Some(expected)
         }) else {
             return Ok(false);
         };
-        state["deliveryWait"] = Value::Null;
+        state.delivery_wait = None;
         write_workflow_state(database, task_id, &state, now)?;
         insert_root_wake(database, task_id, &root, prompt, now)?;
         Ok(true)
@@ -2142,15 +2137,15 @@ pub fn resume_delivery_wait(
 pub fn clear_delivery_wait(
     database: &mut SuplexDatabase,
     task_id: &str,
-    expected: &Value,
+    expected: &DeliveryWait,
     now: DateTime<Utc>,
 ) -> DatabaseResult<bool> {
     database.transaction(true, |database| {
         let mut state = workflow_state(database, task_id)?;
-        if !same_wait(&state["deliveryWait"], expected) {
+        if state.delivery_wait.as_ref() != Some(expected) {
             return Ok(false);
         }
-        state["deliveryWait"] = Value::Null;
+        state.delivery_wait = None;
         write_workflow_state(database, task_id, &state, now)?;
         Ok(true)
     })
@@ -2161,7 +2156,7 @@ pub fn clear_delivery_wait(
 pub fn fail_delivery_wait(
     database: &mut SuplexDatabase,
     task_id: &str,
-    expected: &Value,
+    expected: &DeliveryWait,
     question: &str,
     options: &Value,
     now: DateTime<Utc>,
@@ -2172,7 +2167,7 @@ pub fn fail_delivery_wait(
     }
     let asked = database.transaction(true, |database| {
         let state = workflow_state(database, task_id)?;
-        if !same_wait(&state["deliveryWait"], expected) {
+        if state.delivery_wait.as_ref() != Some(expected) {
             return Ok(false);
         }
         let changed = database.connection().execute(

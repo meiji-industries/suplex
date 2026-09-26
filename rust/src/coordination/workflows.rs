@@ -2,6 +2,9 @@
 //! the pure delivery policy over Suplex-owned review records. Sessions, turns,
 //! and review records use their persisted JSON shapes.
 
+use std::collections::BTreeMap;
+
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use super::advisor_bridge::AdvisorRole;
@@ -99,6 +102,111 @@ impl ReviewRange {
     }
 }
 
+/// TypeScript `WorkflowState`: the Suplex-owned review and delivery record of
+/// one task. Fields after `tool_owner` are private bookkeeping that the public
+/// state omits.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkflowState {
+    pub version: u8,
+    pub reviews: Vec<ReviewRecord>,
+    pub accepted_delivery: Option<ReviewRange>,
+    pub delivery_wait: Option<DeliveryWait>,
+    pub completion: Option<Completion>,
+    #[serde(default)]
+    pub tool_owner: Option<ToolOwner>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub follow_up: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delivery_history: Option<Vec<DeliveryHistoryEntry>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent_selections: Option<BTreeMap<String, AgentSelection>>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub initial_root_selection_session_id: Option<String>,
+}
+
+impl Default for WorkflowState {
+    fn default() -> Self {
+        Self {
+            version: 1,
+            reviews: Vec::new(),
+            accepted_delivery: None,
+            delivery_wait: None,
+            completion: None,
+            tool_owner: None,
+            follow_up: None,
+            delivery_history: None,
+            agent_selections: None,
+            initial_root_selection_session_id: None,
+        }
+    }
+}
+
+/// One Reviewer or Rater outcome, pinned to the range it assessed.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ReviewRecord {
+    pub session_id: String,
+    pub turn_id: String,
+    pub role: AdvisorRole,
+    pub range: ReviewRange,
+    pub result: Option<Value>,
+    pub invalid_reason: Option<String>,
+    pub recorded_at: String,
+}
+
+/// TypeScript `DeliveryWait`: one persisted wait on GitHub delivery state.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeliveryWait {
+    pub head_sha: String,
+    pub fingerprint: String,
+    pub since: String,
+    pub reason: String,
+}
+
+/// TypeScript `WorkflowCompletion`: the recorded end of delivery.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Completion {
+    pub kind: String,
+    pub reviewed_head: Option<String>,
+    pub pull_request_number: Option<u64>,
+    pub observed_at: String,
+}
+
+/// The Root MCP bridge process that owns the task's delivery tools.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ToolOwner {
+    pub token: String,
+    pub pid: u32,
+    pub process_start_time: String,
+}
+
+/// The delivery a follow-up replaced when a delivered task resumed.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct DeliveryHistoryEntry {
+    pub resumed_at: String,
+    pub accepted_delivery: Option<ReviewRange>,
+    pub completion: Option<Completion>,
+}
+
+/// TypeScript `AgentSelectionIntent`: a user's agent choice, kept so a retry
+/// of the same choice is idempotent.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct AgentSelection {
+    pub role: String,
+    pub expected_profile_id: String,
+    pub expected_session_id: Option<String>,
+    pub profile_id: String,
+    pub direction: String,
+    pub resume: bool,
+    pub question_id: Option<String>,
+}
+
 fn short(sha: &str) -> &str {
     &sha[..sha.len().min(12)]
 }
@@ -160,33 +268,35 @@ fn advisor_has_result(outcome: &TurnOutcome, role: &str) -> bool {
         .is_some_and(|advisor| !advisor["result"].is_null() && advisor["role"] == role)
 }
 
-pub fn latest_review<'a>(reviews: &'a [Value], role: &str) -> Option<&'a Value> {
-    reviews.iter().rev().find(|record| record["role"] == role)
+/// The latest Reviewer or Rater record of one role.
+pub fn latest_review(reviews: &[ReviewRecord], role: AdvisorRole) -> Option<&ReviewRecord> {
+    reviews.iter().rev().find(|record| record.role == role)
 }
 
 /// Pure gate over the latest Reviewer or Rater record; a newer invalid or
 /// negative record supersedes an earlier positive one.
-pub fn review_gate(workflow: &str, reviews: &[Value], actual: &ReviewRange) -> Result<(), String> {
-    let role = match workflow {
-        "independent_review" => "reviewer",
-        "refine_pull_request" => "rater",
-        _ => return Ok(()),
+pub fn review_gate(
+    workflow: &str,
+    reviews: &[ReviewRecord],
+    actual: &ReviewRange,
+) -> Result<(), String> {
+    let Some(role) = review_role(workflow) else {
+        return Ok(());
     };
-    let label = advisor_label(role);
+    let label = advisor_label(role.as_str());
     let Some(latest) = latest_review(reviews, role) else {
         return Err(format!(
             "No {label} result exists yet. Request {label} for the current range."
         ));
     };
-    let result = &latest["result"];
-    if result.is_null() {
+    let Some(result) = &latest.result else {
         return Err(format!(
             "The latest {label} result is invalid: {}. Request a new {label} assessment.",
-            latest["invalidReason"].as_str().unwrap_or("unknown")
+            latest.invalid_reason.as_deref().unwrap_or("unknown")
         ));
-    }
-    let range = ReviewRange::from_value(&latest["range"]).unwrap_or_default();
-    if !same_range(&range, actual) {
+    };
+    let range = &latest.range;
+    if !same_range(range, actual) {
         return Err(format!(
             "The latest {label} result reviewed {}..{}, not the current range. Request a new {label} assessment.",
             short(&range.base_sha),
@@ -301,7 +411,7 @@ pub fn worker_candidate_reports(input: &Value) -> Option<[Value; 2]> {
 /// Whether the workflow's obligations for the actual range are complete.
 pub fn workflow_ready_for_delivery(
     workflow: &str,
-    reviews: &[Value],
+    reviews: &[ReviewRecord],
     sessions: &[Value],
     turns: &[Value],
     actual: &ReviewRange,
@@ -378,10 +488,10 @@ pub struct DeliveryRefusal {
     pub reason: String,
 }
 
-pub fn review_role(workflow: &str) -> Option<&'static str> {
+pub fn review_role(workflow: &str) -> Option<AdvisorRole> {
     match workflow {
-        "refine_pull_request" => Some("rater"),
-        "independent_review" => Some("reviewer"),
+        "refine_pull_request" => Some(AdvisorRole::Rater),
+        "independent_review" => Some(AdvisorRole::Reviewer),
         _ => None,
     }
 }
@@ -390,7 +500,7 @@ pub fn fresh_review_hint(workflow: &str) -> String {
     match review_role(workflow) {
         Some(role) => format!(
             " Inspect the new range and request a new {} assessment.",
-            advisor_label(role)
+            advisor_label(role.as_str())
         ),
         None => " Inspect the new range and review it again.".into(),
     }
@@ -472,11 +582,9 @@ pub fn delivery_decision(
     if !require_review {
         return Ok(());
     }
-    let reviews = control["workflowState"]["reviews"]
-        .as_array()
-        .map(Vec::as_slice)
-        .unwrap_or_default();
-    workflow_ready_for_delivery(workflow, reviews, sessions, turns, range).map_err(|reason| {
+    let reviews: Vec<ReviewRecord> =
+        serde_json::from_value(control["workflowState"]["reviews"].clone()).unwrap_or_default();
+    workflow_ready_for_delivery(workflow, &reviews, sessions, turns, range).map_err(|reason| {
         DeliveryRefusal {
             code: "workflow_review_required",
             reason,
@@ -584,10 +692,13 @@ mod tests {
         }
     }
 
-    fn record(role: &str, result: Value, range: &ReviewRange) -> Value {
-        json!({"sessionId":"s","turnId":"t","role":role,"range":range,"result":result,
+    fn record(role: &str, result: Value, range: &ReviewRange) -> ReviewRecord {
+        serde_json::from_value(
+            json!({"sessionId":"s","turnId":"t","role":role,"range":range,"result":result,
             "invalidReason": if result.is_null() { json!("malformed") } else { Value::Null },
-            "recordedAt":"2026-09-06T00:00:00.000Z"})
+            "recordedAt":"2026-09-06T00:00:00.000Z"}),
+        )
+        .unwrap()
     }
 
     #[test]

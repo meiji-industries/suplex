@@ -26,7 +26,7 @@ use crate::{
     coordination::{
         root_bridge::RootIdentity,
         root_session_store,
-        workflows::{self, DeliveryRefusal, LocalSourceFacts},
+        workflows::{self, Completion, DeliveryRefusal, LocalSourceFacts},
     },
     integrations::{
         bitbucket::ReleasePort,
@@ -146,26 +146,25 @@ pub fn complete_workflow_delivery(
     task_id: &str,
     range: &crate::coordination::workflows::ReviewRange,
     local: &LocalRevisionObservation,
-    pull_request_number: Option<i64>,
+    pull_request_number: Option<u64>,
     require_accepted: bool,
     recheck: impl FnOnce(&SuplexDatabase) -> DatabaseResult<()>,
 ) -> DatabaseResult<WorkflowCompletion> {
-    use crate::coordination::workflows::{self, LocalSourceFacts, ReviewRange};
+    use crate::coordination::workflows::{self, LocalSourceFacts};
     database.transaction(true, |database| {
         let rows = root_session_store::root_observation_rows(database, task_id)?;
         let control = &rows.control;
         if control["status"] == "cancelled" {
             return Ok(WorkflowCompletion::Cancelled);
         }
-        let state = root_session_store::workflow_state(database, task_id)?;
-        if !state["completion"].is_null() || control["status"] == "delivered" {
+        let mut state = root_session_store::workflow_state(database, task_id)?;
+        if state.completion.is_some() || control["status"] == "delivered" {
             if control["status"] != "delivered" {
                 root_session_store::mark_delivered(database, task_id, Utc::now())?;
             }
             return Ok(WorkflowCompletion::Already);
         }
-        let accepted = ReviewRange::from_value(&state["acceptedDelivery"]);
-        if require_accepted && accepted.is_none_or(|accepted| !workflows::same_range(&accepted, range)) {
+        if require_accepted && state.accepted_delivery.as_ref().is_none_or(|accepted| !workflows::same_range(accepted, range)) {
             return Ok(WorkflowCompletion::Declined {
                 code: "workflow_review_required",
                 reason: "No accepted delivery decision matches this range. Complete the workflow's review and request delivery.".into(),
@@ -183,12 +182,13 @@ pub fn complete_workflow_delivery(
             });
         }
         recheck(database)?;
-        let mut state = state;
-        state["acceptedDelivery"] = json!(range);
-        state["deliveryWait"] = Value::Null;
-        state["completion"] = json!({
-            "kind":"workflow","reviewedHead":range.head_sha,"pullRequestNumber":pull_request_number,
-            "observedAt":now_millis_rfc3339(),
+        state.accepted_delivery = Some(range.clone());
+        state.delivery_wait = None;
+        state.completion = Some(Completion {
+            kind: "workflow".into(),
+            reviewed_head: Some(range.head_sha.clone()),
+            pull_request_number,
+            observed_at: now_millis_rfc3339(),
         });
         root_session_store::write_workflow_state(database, task_id, &state, Utc::now())?;
         root_session_store::mark_delivered(database, task_id, Utc::now())?;
@@ -947,7 +947,11 @@ impl DeliveryOperations {
         .await?)
     }
 
-    fn record_workflow_outcome(&self, task_id: &str, completion: &Value) -> DatabaseResult<()> {
+    fn record_workflow_outcome(
+        &self,
+        task_id: &str,
+        completion: &Completion,
+    ) -> DatabaseResult<()> {
         root_session_store::record_workflow_outcome(
             &mut self.open(OpenMode::ReadWrite)?,
             task_id,
@@ -991,7 +995,7 @@ impl DeliveryOperations {
             task_id,
             range,
             &local,
-            pull_request_number.map(|number| number as i64),
+            pull_request_number,
             require_accepted,
             |database| match recheck {
                 Some(recheck) => recheck_in(database, recheck),
@@ -1029,21 +1033,19 @@ impl DeliveryOperations {
     }
 
     /// TypeScript `externalCompletion`: the latest valid review's head is kept, never relabeled.
-    fn external_completion(current: &Value, pull_request_number: &Value) -> Value {
+    fn external_completion(current: &Value, pull_request_number: Option<u64>) -> Completion {
+        let reviews: Vec<workflows::ReviewRecord> =
+            serde_json::from_value(current["workflowState"]["reviews"].clone()).unwrap_or_default();
         let reviewed_head = workflows::review_role(current["workflow"].as_str().unwrap_or(""))
-            .and_then(|role| {
-                workflows::latest_review(
-                    current["workflowState"]["reviews"]
-                        .as_array()
-                        .map(Vec::as_slice)
-                        .unwrap_or_default(),
-                    role,
-                )
-            })
-            .filter(|latest| !latest["result"].is_null())
-            .map(|latest| latest["range"]["headSha"].clone())
-            .unwrap_or(Value::Null);
-        json!({"kind": "external_merge", "reviewedHead": reviewed_head, "pullRequestNumber": pull_request_number, "observedAt": crate::shared::time::now_millis_rfc3339()})
+            .and_then(|role| workflows::latest_review(&reviews, role))
+            .filter(|latest| latest.result.is_some())
+            .map(|latest| latest.range.head_sha.clone());
+        Completion {
+            kind: "external_merge".into(),
+            reviewed_head,
+            pull_request_number,
+            observed_at: crate::shared::time::now_millis_rfc3339(),
+        }
     }
 
     /// TypeScript `cancelledOutcome`.
@@ -1051,12 +1053,15 @@ impl DeliveryOperations {
         current: &Value,
         pull: &Value,
         validated_range: Option<&ReviewRange>,
-    ) -> Value {
+    ) -> Completion {
         match validated_range {
-            Some(range) if pull["headSha"] == range.head_sha.as_str() => {
-                json!({"kind": "workflow", "reviewedHead": range.head_sha, "pullRequestNumber": pull["number"], "observedAt": crate::shared::time::now_millis_rfc3339()})
-            }
-            _ => Self::external_completion(current, &pull["number"]),
+            Some(range) if pull["headSha"] == range.head_sha.as_str() => Completion {
+                kind: "workflow".into(),
+                reviewed_head: Some(range.head_sha.clone()),
+                pull_request_number: pull["number"].as_u64(),
+                observed_at: crate::shared::time::now_millis_rfc3339(),
+            },
+            _ => Self::external_completion(current, pull["number"].as_u64()),
         }
     }
 
@@ -1552,7 +1557,7 @@ impl DeliveryOperations {
                     )?,
                     Commit::Declined(..) => self.record_workflow_outcome(
                         task_id,
-                        &Self::external_completion(&self.get(task_id)?, &pull["number"]),
+                        &Self::external_completion(&self.get(task_id)?, pull["number"].as_u64()),
                     )?,
                 }
                 return Ok(pull);

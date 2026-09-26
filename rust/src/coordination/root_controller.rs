@@ -19,14 +19,15 @@ use crate::{
 };
 
 use super::{
+    advisor_bridge::AdvisorRole,
     advisor_evidence,
     root_bridge::RootIdentity,
     root_prompts::{self, WorkerAssignmentText},
     root_session_store::{self, RootObservationRows, RootSession},
     worker_evidence::{self, EvidenceQuery},
     workflows::{
-        ReviewRange, advisor_label, latest_review, same_range, turn_outcome, turn_workflow_input,
-        workflow_definition,
+        ReviewRange, WorkflowState, advisor_label, latest_review, same_range, turn_outcome,
+        turn_workflow_input, workflow_definition,
     },
 };
 
@@ -638,18 +639,15 @@ pub async fn delegate_worker(
     if workflow == "refine_pull_request" && purpose == "implementation" {
         let requested = assignment.advisor_turn_id.as_deref().or(assignment.advisor_session_id.as_deref())
             .ok_or_else(|| invalid("Pull request repair implementation requires advisorSessionId or advisorTurnId for the latest valid Rater report."))?;
-        let reviews = rows.control["workflowState"]["reviews"]
-            .as_array()
-            .map(Vec::as_slice)
-            .unwrap_or_default();
-        let latest = latest_review(reviews, "rater")
+        let state: WorkflowState = serde_json::from_value(rows.control["workflowState"].clone())?;
+        let latest = latest_review(&state.reviews, AdvisorRole::Rater)
             .filter(|latest| {
                 let field = if assignment.advisor_turn_id.is_some() {
-                    "turnId"
+                    &latest.turn_id
                 } else {
-                    "sessionId"
+                    &latest.session_id
                 };
-                latest[field] == requested && !latest["result"].is_null()
+                field == requested && latest.result.is_some()
             })
             .ok_or_else(|| {
                 invalid("advisorTurnId must be the latest valid Rater report for this task.")
@@ -658,8 +656,8 @@ pub async fn delegate_worker(
             .turns
             .iter()
             .find(|turn| {
-                turn["id"] == latest["turnId"]
-                    && turn["sessionId"] == latest["sessionId"]
+                turn["id"] == latest.turn_id.as_str()
+                    && turn["sessionId"] == latest.session_id.as_str()
                     && turn["status"] == "completed"
             })
             .ok_or_else(|| invalid("The latest Rater report turn is missing."))?;
@@ -668,7 +666,7 @@ pub async fn delegate_worker(
                 .text
                 .unwrap_or_default(),
         );
-        advisor_reference = json!({"sessionId":latest["sessionId"],"turnId":latest["turnId"]});
+        advisor_reference = json!({"sessionId":latest.session_id,"turnId":latest.turn_id});
     } else if assignment.advisor_turn_id.is_some() || assignment.advisor_session_id.is_some() {
         let report = find_advisor_report(
             &rows,
@@ -804,15 +802,12 @@ pub async fn delegate_advisor(
         ));
     }
     let (observed, rows, evidence) = advisor_source(database_path, artifact_root, root, owner_token, "The worktree has uncommitted changes. Commit or discard them before requesting an Advisor; Advisors review committed source only.").await?;
-    let reviews = rows.control["workflowState"]["reviews"]
-        .as_array()
-        .map(Vec::as_slice)
-        .unwrap_or_default();
+    let state: WorkflowState = serde_json::from_value(rows.control["workflowState"].clone())?;
     let previous = (role == "rater")
-        .then(|| latest_review(reviews, "rater"))
+        .then(|| latest_review(&state.reviews, AdvisorRole::Rater))
         .flatten();
     let prior_findings = previous
-        .and_then(|previous| previous["result"]["blockingFindings"].as_array())
+        .and_then(|previous| previous.result.as_ref()?["blockingFindings"].as_array())
         .map(|findings| {
             findings
                 .iter()
@@ -824,7 +819,7 @@ pub async fn delegate_advisor(
         let index = rows
             .turns
             .iter()
-            .position(|turn| turn["id"] == previous["turnId"]);
+            .position(|turn| turn["id"] == previous.turn_id.as_str());
         advisor_evidence::completed_worker_turns(&rows)
             .into_iter()
             .filter(|(turn, _)| {

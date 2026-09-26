@@ -12,7 +12,11 @@ use serde_json::{Map, Value, json};
 use uuid::Uuid;
 
 use crate::{
-    coordination::{advisor_bridge::AdvisorRole, root_prompts, root_session_store, workflows},
+    coordination::{
+        advisor_bridge::AdvisorRole,
+        root_prompts, root_session_store,
+        workflows::{self, AgentSelection, DeliveryHistoryEntry, WorkflowState},
+    },
     http::contracts::typed::{
         projects::ProjectProviderPolicy,
         task_answers::{AnswerBody, LimitDecisionBody, TaskLimitDecision},
@@ -672,17 +676,18 @@ pub fn continue_user_delivery(
             .map_err(|error| conflict(&error.to_string()))?;
         let time = crate::shared::time::now_millis_rfc3339();
         let rows = root_session_store::root_observation_rows(database, task_id)?;
-        let mut state = rows.control["workflowState"].clone();
-        let mut history = state["deliveryHistory"].as_array().cloned().unwrap_or_default();
-        history.push(json!({"resumedAt": time, "acceptedDelivery": state["acceptedDelivery"], "completion": state["completion"]}));
-        state["acceptedDelivery"] = Value::Null;
-        state["completion"] = Value::Null;
-        state["deliveryWait"] = Value::Null;
-        state["followUp"] = json!(true);
-        state["deliveryHistory"] = Value::Array(history);
+        let mut state: WorkflowState = serde_json::from_value(rows.control["workflowState"].clone())?;
+        let resumed = DeliveryHistoryEntry {
+            resumed_at: time.clone(),
+            accepted_delivery: state.accepted_delivery.take(),
+            completion: state.completion.take(),
+        };
+        state.delivery_wait = None;
+        state.follow_up = Some(true);
+        state.delivery_history.get_or_insert_default().push(resumed);
         database.connection().execute(
             "UPDATE suplex_task_controls SET workflow_state_json = ?1, delivery_target = ?2, status = 'active', wake_at = ?3, updated_at = ?3 WHERE task_id = ?4 AND status = 'delivered'",
-            params![crate::shared::js_json::stringify(&state), request.delivery_target, time, task_id],
+            params![crate::shared::js_json::stringify(&serde_json::to_value(&state)?), request.delivery_target, time, task_id],
         )?;
         if let Some(root_id) = rows.control["rootSessionId"].as_str() {
             database.connection().execute(
@@ -788,13 +793,16 @@ pub fn select_user_task_agent(
         }) {
             return Err(conflict("The selected role is not in this workflow."));
         }
-        let mut state: Value = serde_json::from_str(&state)?;
-        let intent = json!({
-            "role": request.role, "expectedProfileId": request.expected_profile_id,
-            "expectedSessionId": request.expected_session_id, "profileId": request.profile_id,
-            "direction": request.direction, "resume": request.resume,
-            "questionId": if request.resume { request.question_id.as_deref() } else { None },
-        });
+        let mut state: WorkflowState = serde_json::from_str(&state)?;
+        let intent = AgentSelection {
+            role: request.role.clone(),
+            expected_profile_id: request.expected_profile_id.clone(),
+            expected_session_id: request.expected_session_id.clone(),
+            profile_id: request.profile_id.clone(),
+            direction: request.direction.clone(),
+            resume: request.resume,
+            question_id: request.question_id.clone().filter(|_| request.resume),
+        };
         let mut advisors: Value = serde_json::from_str(&advisor_profiles)?;
         let previous_profile: TaskProfile = match advisor_role {
             Some(role) if !advisors[role].is_null() => serde_json::from_value(advisors[role].clone())?,
@@ -810,8 +818,8 @@ pub fn select_user_task_agent(
                 |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?, row.get::<_, Option<String>>(2)?, row.get::<_, Option<String>>(3)?, row.get::<_, Option<String>>(4)?)),
             ).optional()?
         };
-        let repeated = state["agentSelections"][&request.role] == intent;
-        if root && repeated && root_session_id.is_some() && state["initialRootSelectionSessionId"].as_str() == root_session_id.as_deref() {
+        let repeated = state.agent_selections.as_ref().and_then(|selections| selections.get(&request.role)) == Some(&intent);
+        if root && repeated && root_session_id.is_some() && state.initial_root_selection_session_id == root_session_id {
             return Ok(());
         }
         if !root && repeated && previous_profile.profile_id == request.profile_id {
@@ -867,7 +875,7 @@ pub fn select_user_task_agent(
                 "UPDATE suplex_task_controls SET root_session_id = ?1, root_profile_json = ?2 WHERE task_id = ?3",
                 params![id, profile_json, task_id],
             )?;
-            state["initialRootSelectionSessionId"] = json!(id);
+            state.initial_root_selection_session_id = Some(id.clone());
             let prompt = match &direction {
                 Some(direction) => format!("{initial}\n\n{direction}"),
                 None => initial.clone(),
@@ -975,10 +983,10 @@ pub fn select_user_task_agent(
             ].into_iter().flatten().collect::<Vec<_>>().join("\n\n");
             insert_turn(database, &root_id, root_generation, &format!("Human note:\n{note}"))?;
         }
-        state["agentSelections"][&request.role] = intent;
+        state.agent_selections.get_or_insert_default().insert(request.role.clone(), intent);
         database.connection().execute(
             "UPDATE suplex_task_controls SET workflow_state_json = ?1, status = CASE WHEN ?2 THEN 'active' ELSE status END, status_changed_at = CASE WHEN ?2 THEN ?3 ELSE status_changed_at END, human_question = CASE WHEN ?2 THEN NULL ELSE human_question END, human_question_id = CASE WHEN ?2 THEN NULL ELSE human_question_id END, human_question_options_json = CASE WHEN ?2 THEN '[]' ELSE human_question_options_json END, wake_at = CASE WHEN ?2 OR status = 'active' THEN ?3 ELSE wake_at END, updated_at = ?3 WHERE task_id = ?4",
-            params![crate::shared::js_json::stringify(&state), request.resume, time, task_id],
+            params![crate::shared::js_json::stringify(&serde_json::to_value(&state)?), request.resume, time, task_id],
         )?;
         Ok(())
     })?;
@@ -1708,7 +1716,7 @@ mod tests {
         database
             .connection()
             .execute(
-                "UPDATE suplex_task_controls SET workflow_state_json = json_set(workflow_state_json, '$.acceptedDelivery', json('{\"headSha\":\"a\"}')) WHERE task_id = ?1",
+                "UPDATE suplex_task_controls SET workflow_state_json = json_set(workflow_state_json, '$.acceptedDelivery', json('{\"baseSha\":\"b\",\"headSha\":\"a\",\"files\":[],\"commits\":[]}')) WHERE task_id = ?1",
                 [&task.id],
             )
             .unwrap();

@@ -574,9 +574,11 @@ mod tests {
             )
             .is_none()
         );
-        let state =
+        let state = serde_json::to_value(
             root_session_store::workflow_state(&database, rater["taskId"].as_str().unwrap())
-                .unwrap();
+                .unwrap(),
+        )
+        .unwrap();
         let reviews = state["reviews"].as_array().unwrap();
         assert_eq!(reviews.len(), 1);
         assert_eq!(
@@ -594,7 +596,9 @@ mod tests {
             Utc::now(),
         )
         .unwrap();
-        let state = root_session_store::workflow_state(&database, task_id).unwrap();
+        let state =
+            serde_json::to_value(root_session_store::workflow_state(&database, task_id).unwrap())
+                .unwrap();
         assert_eq!(
             (
                 state["reviews"][0]["result"]["rating"].clone(),
@@ -651,7 +655,10 @@ mod tests {
             )
             .unwrap()
         );
-        let state = root_session_store::workflow_state(&database, &root.task_id).unwrap();
+        let state = serde_json::to_value(
+            root_session_store::workflow_state(&database, &root.task_id).unwrap(),
+        )
+        .unwrap();
         assert_eq!(
             state["reviews"][0]["invalidReason"],
             "The Reviewer turn ended with state error (native_error)"
@@ -720,7 +727,7 @@ mod tests {
             }
         ));
         root_session_store::update_workflow_state(&mut database, &root.task_id, Utc::now(), |state| {
-            state["reviews"] = json!([{"sessionId":"s","turnId":"t","role":"reviewer","range":range(),"result":{"role":"reviewer","approved":true,"blockingFindings":[],"verification":"passed","verificationSummary":"ok","summary":"ok"},"invalidReason":null,"recordedAt":"2026-09-25T00:00:00.000Z"}]);
+            state.reviews = serde_json::from_value(json!([{"sessionId":"s","turnId":"t","role":"reviewer","range":range(),"result":{"role":"reviewer","approved":true,"blockingFindings":[],"verification":"passed","verificationSummary":"ok","summary":"ok"},"invalidReason":null,"recordedAt":"2026-09-25T00:00:00.000Z"}])).unwrap();
         }).unwrap();
         assert!(
             operations::complete_workflow_delivery(

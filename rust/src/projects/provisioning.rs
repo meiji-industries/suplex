@@ -11,7 +11,7 @@ use git2::{
 use serde::Serialize;
 use serde_json::{Value, json};
 
-use super::repository::{self, Finding, Github, remote_callbacks};
+use super::git::{self, Finding, Github, remote_callbacks};
 
 fn finding(code: &str, field: &str, message: impl Into<String>) -> Finding {
     Finding {
@@ -197,7 +197,7 @@ fn clone(
     target: &Path,
     token: Option<&str>,
 ) -> Result<(), git2::Error> {
-    let transport_url = repository::github_transport_url(url, token);
+    let transport_url = git::github_transport_url(url, token);
     let url = transport_url.as_deref().unwrap_or(url);
     let mut options = FetchOptions::new();
     options.remote_callbacks(remote_callbacks(token));
@@ -232,10 +232,10 @@ pub async fn ensure(
         // The configured origin, not a URL rewritten by `insteadOf`.
         let remote = Repository::open(repository_path)
             .and_then(|checkout| checkout.config()?.get_string("remote.origin.url"));
-        let expected = repository::repository_coordinate(clone_url);
+        let expected = git::repository_coordinate(clone_url);
         if !remote
             .ok()
-            .and_then(|value| repository::repository_coordinate(&value))
+            .and_then(|value| git::repository_coordinate(&value))
             .zip(expected)
             .is_some_and(|(actual, expected)| {
                 actual.repository == repository && actual.host == expected.host
@@ -259,7 +259,7 @@ pub async fn ensure(
                 finding("repository-unavailable", "repositoryUrl", error.to_string()),
             )
         })?;
-        let token = if repository::repository_coordinate(clone_url)
+        let token = if git::repository_coordinate(clone_url)
             .is_some_and(|coordinate| coordinate.host == "github")
         {
             github.token().await
@@ -327,7 +327,7 @@ fn publish(
     let repository = Repository::open(path)?;
     github.route_git(&repository)?;
     repository.remote("origin", url)?;
-    let mut origin = repository::origin_remote(&repository, git2::Direction::Push, token)?;
+    let mut origin = git::origin_remote(&repository, git2::Direction::Push, token)?;
     let mut callbacks = remote_callbacks(token);
     callbacks.push_update_reference(|_, status| match status {
         Some(status) => Err(git2::Error::from_str(status)),
@@ -350,7 +350,7 @@ fn publish(
 
 pub async fn create(
     github: &Github,
-    coordinate: &repository::Coordinate,
+    coordinate: &git::Coordinate,
     clone_url: &str,
     repository_path: &Path,
     base_branch: &str,
@@ -601,7 +601,7 @@ pub fn infer_commands(repository_path: &Path) -> (String, String) {
 mod tests {
     use axum::{Json, Router, routing::post};
 
-    use super::{super::repository::fixtures::*, *};
+    use super::{super::git::fixtures::*, *};
 
     #[test]
     fn oauth_clones_and_publishes_ssh_github_urls_over_https() {
@@ -738,7 +738,7 @@ mod tests {
         assert!(checkout.find_reference("refs/remotes/origin/main").is_ok());
         assert!(worktrees.is_dir());
         assert_eq!(
-            repository::inspect(&clone_path, "main", "github", None)
+            git::inspect(&clone_path, "main", "github", None)
                 .unwrap()
                 .remote_repository,
             "acme/repo"
@@ -781,7 +781,7 @@ mod tests {
             "a failed clone leaves no directory"
         );
 
-        let fresh = repository::repository_coordinate("https://github.com/acme/fresh").unwrap();
+        let fresh = git::repository_coordinate("https://github.com/acme/fresh").unwrap();
         let fresh_path = repositories.join("acme/fresh");
         create(
             &github,
@@ -828,7 +828,7 @@ mod tests {
             (409, "repository-conflict")
         );
         let organization =
-            repository::repository_coordinate("https://github.com/meiji/fresh").unwrap();
+            git::repository_coordinate("https://github.com/meiji/fresh").unwrap();
         let refused = create(
             &github,
             &organization,

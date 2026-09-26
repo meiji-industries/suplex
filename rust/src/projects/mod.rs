@@ -1,10 +1,10 @@
 pub mod connection;
 pub mod provisioning;
-pub mod repository;
+pub mod git;
 pub mod service;
 
 use crate::shared::PublicFailure;
-use repository::Finding;
+use git::Finding;
 
 /// Project command refusals.
 #[derive(Debug, thiserror::Error)]

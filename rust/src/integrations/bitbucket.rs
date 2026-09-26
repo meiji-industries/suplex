@@ -763,7 +763,7 @@ pub fn remote_repository(cwd: &Path) -> Result<String, GithubFailure> {
     let wrong = || failure("wrong-remote", "Git origin is not a Bitbucket repository");
     let repository = git2::Repository::open(cwd).map_err(|_| wrong())?;
     let remote = repository.find_remote("origin").map_err(|_| wrong())?;
-    crate::projects::repository::repository_coordinate(remote.url().unwrap_or_default())
+    crate::projects::git::repository_coordinate(remote.url().unwrap_or_default())
         .filter(|coordinate| coordinate.host == "bitbucket")
         .map(|coordinate| coordinate.repository)
         .ok_or_else(wrong)

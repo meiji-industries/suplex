@@ -38,7 +38,7 @@ use crate::{
     identity::companies,
     platform::database::{DatabaseResult, OpenMode, SuplexDatabase},
     projects::{
-        repository as git,
+        git,
         service::{self as projects, Project},
     },
     tasks::{commands, repository::assert_pull_request_available, sources},

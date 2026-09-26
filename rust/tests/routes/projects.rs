@@ -292,7 +292,7 @@ mod tests {
             },
         )
         .with_project_roots(repositories, worktrees)
-        .with_project_github(crate::projects::repository::Github {
+        .with_project_github(crate::projects::git::Github {
             api: Some((api_base, "fixture-token".to_owned())),
             git: Some(format!("file://{}/", root.display())),
         });
@@ -639,7 +639,7 @@ mod tests {
             ],
             &repository,
         );
-        let api_base = crate::projects::repository::fixtures::github_api(
+        let api_base = crate::projects::git::fixtures::github_api(
             axum::Router::new()
                 .route(
                     "/user",
@@ -690,7 +690,7 @@ mod tests {
             },
         )
         .with_project_roots(repositories, worktrees)
-        .with_project_github(crate::projects::repository::Github {
+        .with_project_github(crate::projects::git::Github {
             api: Some((api_base, "fixture-token".to_owned())),
             git: None,
         });

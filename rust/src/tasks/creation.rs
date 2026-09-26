@@ -2,7 +2,7 @@
 use crate::{
     http::{AppState, contracts::typed::tasks as task_contracts},
     identity::companies,
-    projects::{repository as git, service as projects},
+    projects::{git, service as projects},
     shared::{PublicFailure, public_failure},
     tasks::{
         TaskError, commands,

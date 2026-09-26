@@ -179,12 +179,12 @@ pub fn published_base_commit(
     github_token: Option<&str>,
 ) -> WorktreeResult<git2::Oid> {
     if repository.find_commit(published_sha).is_err() {
-        let mut origin = crate::projects::repository::origin_remote(
+        let mut origin = crate::projects::git::origin_remote(
             repository,
             git2::Direction::Fetch,
             github_token,
         )?;
-        let callbacks = crate::projects::repository::remote_callbacks(github_token);
+        let callbacks = crate::projects::git::remote_callbacks(github_token);
         let mut options = FetchOptions::new();
         options
             .download_tags(AutotagOption::None)

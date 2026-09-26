@@ -80,8 +80,8 @@ fn fetch(
     token: Option<&str>,
 ) -> Result<(), git2::Error> {
     let mut origin =
-        crate::projects::repository::origin_remote(repository, git2::Direction::Fetch, token)?;
-    let callbacks = crate::projects::repository::remote_callbacks(token);
+        crate::projects::git::origin_remote(repository, git2::Direction::Fetch, token)?;
+    let callbacks = crate::projects::git::remote_callbacks(token);
     let mut options = FetchOptions::new();
     options
         .download_tags(AutotagOption::None)

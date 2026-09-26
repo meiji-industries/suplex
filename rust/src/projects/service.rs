@@ -1,4 +1,4 @@
-use super::{provisioning, repository};
+use super::{provisioning, git};
 use crate::http::{AppState, contracts::typed::projects::RepositoryConnection};
 use crate::identity::IdentityError;
 use crate::projects::ProjectError;
@@ -20,7 +20,7 @@ use crate::{
     platform::database::{DatabaseResult, SuplexDatabase},
 };
 
-use super::repository::{Finding, PreparedLocalProject};
+use super::git::{Finding, PreparedLocalProject};
 
 fn failure(message: &'static str, status: u16, findings: Vec<Finding>) -> Box<ProjectError> {
     ProjectError::new(message, status, findings).into()
@@ -898,7 +898,7 @@ pub fn plan_patch(existing: &Project, patch: &ProjectPatch) -> PatchPlan {
     if patch
         .name
         .as_deref()
-        .is_some_and(|name| !super::repository::valid_name(auth::js_trim(name)))
+        .is_some_and(|name| !super::git::valid_name(auth::js_trim(name)))
     {
         findings.push(finding("invalid-name", "name", "Project name is invalid"));
     }
@@ -908,7 +908,7 @@ pub fn plan_patch(existing: &Project, patch: &ProjectPatch) -> PatchPlan {
     ] {
         if command
             .as_deref()
-            .is_some_and(|command| !super::repository::valid_command(command))
+            .is_some_and(|command| !super::git::valid_command(command))
         {
             findings.push(finding(
                 "unapproved-command",
@@ -953,13 +953,13 @@ pub fn plan_patch(existing: &Project, patch: &ProjectPatch) -> PatchPlan {
 
 /// TypeScript `validatePatchedRepository`.
 pub async fn validate_patched_repository(
-    github: &super::repository::Github,
+    github: &super::git::Github,
     roots: (&std::path::Path, &std::path::Path),
     candidate: &Project,
     validate_worktree_write: bool,
     validate_remote: bool,
 ) -> (String, String, Vec<Finding>) {
-    use super::repository as checks;
+    use super::git as checks;
     let repository =
         checks::canonical_directory(&candidate.repository_path, roots.0, "repositoryPath");
     let worktree = checks::canonical_directory(&candidate.worktree_root, roots.1, "worktreeRoot");
@@ -1300,12 +1300,12 @@ async fn verify_bitbucket(
     Ok(())
 }
 async fn prepare_local_project(
-    github: &repository::Github,
+    github: &git::Github,
     roots: &crate::http::ProjectRoots,
-    input: &repository::LocalProjectInput<'_>,
+    input: &git::LocalProjectInput<'_>,
     connection: Option<&RepositoryConnection>,
 ) -> Result<PreparedLocalProject, Vec<Finding>> {
-    let prepared = repository::prepare_local_project(
+    let prepared = git::prepare_local_project(
         github,
         &roots.repositories,
         &roots.worktrees,
@@ -1402,7 +1402,7 @@ async fn finish_local_project(
     body: &ProjectCreateBody,
     fields: &[String; 9],
 ) -> DatabaseResult<Project> {
-    let input = repository::LocalProjectInput {
+    let input = git::LocalProjectInput {
         name: &fields[0],
         repository_path: &fields[1],
         worktree_root: &fields[2],
@@ -1444,7 +1444,7 @@ async fn create_from_repository(
     raw_url: &str,
     requested_base_branch: Option<&str>,
 ) -> DatabaseResult<Project> {
-    let Some(coordinate) = repository::repository_coordinate(raw_url) else {
+    let Some(coordinate) = git::repository_coordinate(raw_url) else {
         return Err(ProjectError::new("Repository URL is invalid", 422, Vec::new()).into());
     };
     if coordinate.host != repository_host(repository_connection(body)) {
@@ -1474,7 +1474,7 @@ async fn create_coordinate(
     user_id: &str,
     company_id: &str,
     body: &ProjectCreateBody,
-    coordinate: repository::Coordinate,
+    coordinate: git::Coordinate,
     base_branch: String,
 ) -> DatabaseResult<Project> {
     let mut parts = coordinate.repository.split('/');
@@ -1535,7 +1535,7 @@ async fn create_with_new_repository(
         return Err(ProjectError::Rejected {
             message: "Repository name is invalid",
             status: 422,
-            findings: vec![repository::Finding {
+            findings: vec![git::Finding {
                 code: "repository-name".to_owned(),
                 field: "repositoryName".to_owned(),
                 message: "Use workspace/name for a Bitbucket repository".to_owned(),
@@ -1544,7 +1544,7 @@ async fn create_with_new_repository(
         .into());
     }
     let name = second.unwrap_or(first);
-    let coordinate = repository::repository_coordinate(&format!(
+    let coordinate = git::repository_coordinate(&format!(
         "https://{}/{owner}/{name}",
         if bitbucket {
             "bitbucket.org"
@@ -1553,11 +1553,11 @@ async fn create_with_new_repository(
         }
     ));
     let base_branch = requested_base_branch.unwrap_or("main").to_owned();
-    let Some(coordinate) = coordinate.filter(|_| repository::valid_branch(&base_branch)) else {
+    let Some(coordinate) = coordinate.filter(|_| git::valid_branch(&base_branch)) else {
         return Err(ProjectError::Rejected {
             message: "Repository name is invalid",
             status: 422,
-            findings: vec![repository::Finding {
+            findings: vec![git::Finding {
                 code: "repository-name".to_owned(),
                 field: "repositoryName".to_owned(),
                 message: "Use letters, numbers, dots, dashes, and underscores".to_owned(),
@@ -1601,7 +1601,7 @@ pub async fn replace_project(
     body: &project_contracts::LocalProjectCreate,
 ) -> DatabaseResult<Project> {
     let integration = body.integration.as_ref().or(existing.integration.as_ref());
-    let input = repository::LocalProjectInput {
+    let input = git::LocalProjectInput {
         name: &body.name,
         repository_path: &body.repository_path,
         worktree_root: &body.worktree_root,
@@ -1713,7 +1713,7 @@ mod tests {
                 .code,
             "github-repository-unavailable"
         );
-        use repository::fixtures::{github_checkout, temporary};
+        use git::fixtures::{github_checkout, temporary};
         let root = temporary("suplex-bitbucket-project");
         let local = root.join("repo");
         let bare = root.join("bare");
@@ -1727,7 +1727,7 @@ mod tests {
             .unwrap();
         let worktrees = root.join("worktrees");
         std::fs::create_dir_all(&worktrees).unwrap();
-        let input = repository::LocalProjectInput {
+        let input = git::LocalProjectInput {
             name: "Bitbucket",
             repository_path: local.to_str().unwrap(),
             worktree_root: worktrees.to_str().unwrap(),
@@ -1736,9 +1736,9 @@ mod tests {
             setup_command: "true",
             verification_command: "true",
         };
-        let github = repository::Github::default();
+        let github = git::Github::default();
         let prepared =
-            repository::prepare_local_project(&github, &root, &root, &input, "bitbucket")
+            git::prepare_local_project(&github, &root, &root, &input, "bitbucket")
                 .await
                 .unwrap();
         assert_eq!(prepared.repository, "team/repo");

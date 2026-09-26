@@ -1,6 +1,6 @@
 use serde::{Deserialize, Serialize};
 
-use super::repository::{Github, github_status, repository_coordinate, valid_repository};
+use super::git::{Github, github_status, repository_coordinate, valid_repository};
 use crate::integrations::github::Access;
 
 #[derive(Serialize)]
@@ -139,7 +139,7 @@ pub async fn check(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::projects::repository::fixtures::{github_api, init, temporary};
+    use crate::projects::git::fixtures::{github_api, init, temporary};
     use axum::{Json, Router, extract::Path, http::StatusCode, routing::get};
     use serde_json::json;
 

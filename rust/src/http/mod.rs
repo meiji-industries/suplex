@@ -14,7 +14,7 @@ use tokio_util::sync::CancellationToken;
 use crate::integrations::{github_device::DeviceAuth, herdr::Herdr};
 use crate::platform::{database::SuplexDatabase, embedded};
 use crate::profiles::provider_login::ProviderLogins;
-use crate::projects::repository::Github;
+use crate::projects::git::Github;
 use crate::tasks::host::TaskHostHandle;
 
 pub mod access;

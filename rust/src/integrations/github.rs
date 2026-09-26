@@ -632,7 +632,7 @@ impl Access {
         base_branch: &str,
     ) -> AccessResult<git2::Oid> {
         let canonical = format!("https://{HOST}/{configured_repository}.git");
-        let coordinate = crate::projects::repository::repository_coordinate(&canonical)
+        let coordinate = crate::projects::git::repository_coordinate(&canonical)
             .filter(|coordinate| coordinate.host == "github")
             .ok_or_else(|| {
                 io::Error::new(

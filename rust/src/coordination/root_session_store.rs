@@ -319,6 +319,49 @@ pub fn cancel_task(
     Ok(cancelled)
 }
 
+/// The operator confirmed the interrupted turn's commands stopped: record the
+/// turn as interrupted, and wake the Coordinator for a Worker turn.
+fn record_confirmed_interruption(
+    database: &mut SuplexDatabase,
+    task_id: &str,
+    recovery_turn_id: &str,
+    question_id: &str,
+    answer: &str,
+    now: DateTime<Utc>,
+) -> DatabaseResult<()> {
+    let recovered: (String, i64, SessionKind) = database.connection().query_row(
+        "SELECT t.session_id,t.generation,s.kind FROM suplex_task_turns t JOIN suplex_task_sessions s ON s.id = t.session_id WHERE t.id = ?1 AND t.task_id = ?2",
+        params![recovery_turn_id, task_id],
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+    )?;
+    let evidence = js_json::stringify(&serde_json::json!({
+        "state":"interrupted", "reason":"operator_confirmed_commands_stopped",
+        "questionId":question_id, "answer":answer, "turnId":recovery_turn_id
+    }));
+    if recovered.2 != SessionKind::Worker {
+        complete_root_turn(database, recovery_turn_id, &evidence, None, now)?;
+        return Ok(());
+    }
+    let receipt = format!("cleanup:{question_id}");
+    let wake_prompt =
+        format!("Worker result receipt {receipt}. {STANDARD_WORKER_RESULT_WAKE}\n\n{evidence}");
+    record_standard_worker_result_and_wake(
+        database,
+        &StandardWorkerResult {
+            task_id,
+            session_id: &recovered.0,
+            generation: recovered.1,
+            receipt_id: &receipt,
+            observation: &evidence,
+            native_turn_id: None,
+            wake_prompt: &wake_prompt,
+            review: None,
+        },
+        now,
+    )?;
+    Ok(())
+}
+
 /// Answer only the current human question. Confirmed interrupted native work
 /// is recorded before the answer prompt, all in the same durable transaction.
 pub fn answer_human(
@@ -362,37 +405,7 @@ pub fn answer_human(
             return Err(CoordinationError::refused("command_cleanup_confirmation_required").into());
         }
         if let Some(recovery_turn_id) = recovery_turn_id {
-            let recovered: (String, i64, SessionKind) = database.connection().query_row(
-                "SELECT t.session_id,t.generation,s.kind FROM suplex_task_turns t JOIN suplex_task_sessions s ON s.id = t.session_id WHERE t.id = ?1 AND t.task_id = ?2",
-                params![recovery_turn_id, task_id],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-            )?;
-            let evidence = js_json::stringify(&serde_json::json!({
-                "state":"interrupted", "reason":"operator_confirmed_commands_stopped",
-                "questionId":question_id, "answer":answer, "turnId":recovery_turn_id
-            }));
-            if recovered.2 == SessionKind::Worker {
-                let receipt = format!("cleanup:{question_id}");
-                let wake_prompt = format!(
-                    "Worker result receipt {receipt}. {STANDARD_WORKER_RESULT_WAKE}\n\n{evidence}"
-                );
-                record_standard_worker_result_and_wake(
-                    database,
-                    &StandardWorkerResult {
-                        task_id,
-                        session_id: &recovered.0,
-                        generation: recovered.1,
-                        receipt_id: &receipt,
-                        observation: &evidence,
-                        native_turn_id: None,
-                        wake_prompt: &wake_prompt,
-                        review: None,
-                    },
-                    now,
-                )?;
-            } else {
-                complete_root_turn(database, &recovery_turn_id, &evidence, None, now)?;
-            }
+            record_confirmed_interruption(database, task_id, &recovery_turn_id, question_id, answer, now)?;
         }
         let prompt = js_json::stringify(&serde_json::json!({"question":question,"answer":answer}));
         let id = new_turn_id(now)?;
@@ -461,6 +474,90 @@ fn delegate_profile(
         .map_or(root, Value::to_string))
 }
 
+/// The serial Worker has no open turn and the slot's current session is
+/// neither stopping nor launching. Returns that current session.
+fn free_delegate_slot(
+    database: &SuplexDatabase,
+    task_id: &str,
+    slot: &str,
+) -> DatabaseResult<Option<(String, i64)>> {
+    let active_turn: bool = database.connection().query_row(
+        "SELECT EXISTS(SELECT 1 FROM suplex_task_sessions s JOIN suplex_task_turns t ON t.session_id = s.id AND t.generation = s.generation WHERE s.task_id = ?1 AND s.kind = 'worker' AND s.is_current = 1 AND t.status IN ('pending_prompt','prompted','unknown'))",
+        [task_id],
+        |row| row.get(0),
+    )?;
+    if active_turn {
+        return Err(CoordinationError::refused("worker_already_assigned").into());
+    }
+    let current: Option<(String, i64, bool, bool)> = database.connection().query_row(
+        "SELECT id,generation,stop_requested_at IS NOT NULL AND stopped_at IS NULL,launch_owner IS NOT NULL AND stopped_at IS NULL FROM suplex_task_sessions WHERE task_id = ?1 AND kind = 'worker' AND delegate_slot = ?2 AND is_current = 1",
+        params![task_id, slot],
+        |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?)),
+    ).optional()?;
+    match current {
+        Some((_, _, stopping, launching)) if stopping || launching => {
+            Err(CoordinationError::refused("worker_already_assigned").into())
+        }
+        current => Ok(current.map(|(id, generation, _, _)| (id, generation))),
+    }
+}
+
+/// The latest non-cancelled delegate of this role with a compatible profile,
+/// which a new assignment reuses. A stopping one refuses the assignment.
+fn compatible_delegate(
+    database: &SuplexDatabase,
+    task_id: &str,
+    profile: &str,
+    advisor_role: Option<&str>,
+) -> DatabaseResult<Option<String>> {
+    let compatible: Option<(String, bool)> = database.connection().query_row(
+        "SELECT id,stop_requested_at IS NOT NULL AND stopped_at IS NULL FROM suplex_task_sessions WHERE task_id = ?1 AND kind = 'worker' AND advisor_role IS ?3 AND lifecycle <> 'cancelled' AND (profile_json IS NULL OR json(profile_json) = json(?2)) ORDER BY generation DESC,created_at DESC,id DESC LIMIT 1",
+        params![task_id, profile, advisor_role],
+        |row| Ok((row.get(0)?,row.get(1)?)),
+    ).optional()?;
+    match compatible {
+        Some((_, true)) => Err(CoordinationError::refused("worker_already_assigned").into()),
+        compatible => Ok(compatible.map(|(id, _)| id)),
+    }
+}
+
+/// The slot's current session stops being current when another session takes the assignment.
+fn retire_other_slot_session(
+    database: &SuplexDatabase,
+    current: Option<&(String, i64)>,
+    id: &str,
+    time: &str,
+) -> DatabaseResult<()> {
+    if let Some((current_id, _)) = current
+        && current_id != id
+    {
+        database.connection().execute(
+            "UPDATE suplex_task_sessions SET is_current = 0,updated_at = ?1 WHERE id = ?2 AND is_current = 1",
+            params![time, current_id],
+        )?;
+    }
+    Ok(())
+}
+
+/// Reuse an idle compatible delegate session for the next generation.
+fn reactivate_delegate(
+    database: &SuplexDatabase,
+    id: &str,
+    generation: i64,
+    assignment_hash: &str,
+    profile: &str,
+    time: &str,
+) -> DatabaseResult<()> {
+    let changed = database.connection().execute(
+        "UPDATE suplex_task_sessions SET generation = ?1,is_current = 1,lifecycle = CASE WHEN lifecycle = 'stopped' THEN 'reserved' ELSE lifecycle END,assignment_hash = ?2,profile_json = COALESCE(profile_json,?3),launch_owner = NULL,launch_owner_pid = NULL,launch_owner_start_time = NULL,launch_claimed_at = NULL,stop_requested_at = NULL,stopped_at = NULL,updated_at = ?4 WHERE id = ?5 AND lifecycle IN ('reserved','live','stopped') AND (launch_owner IS NULL OR stopped_at IS NOT NULL) AND (stop_requested_at IS NULL OR stopped_at IS NOT NULL) AND NOT EXISTS (SELECT 1 FROM suplex_task_turns t WHERE t.session_id = suplex_task_sessions.id AND t.generation = suplex_task_sessions.generation AND t.status IN ('pending_prompt','prompted','unknown'))",
+        params![generation, assignment_hash, profile, time, id],
+    )?;
+    if changed != 1 {
+        return Err(CoordinationError::refused("worker_already_assigned").into());
+    }
+    Ok(())
+}
+
 fn launch_delegate(
     database: &mut SuplexDatabase,
     root: &SessionRow,
@@ -481,57 +578,18 @@ fn launch_delegate(
     let time = rfc3339_millis(now);
     database.transaction(true, |database| {
         assert_current_root(database, task_id, root_session_id, root_generation)?;
-        let active_turn: bool = database.connection().query_row(
-            "SELECT EXISTS(SELECT 1 FROM suplex_task_sessions s JOIN suplex_task_turns t ON t.session_id = s.id AND t.generation = s.generation WHERE s.task_id = ?1 AND s.kind = 'worker' AND s.is_current = 1 AND t.status IN ('pending_prompt','prompted','unknown'))",
-            [task_id],
-            |row| row.get(0),
-        )?;
-        if active_turn {
-            return Err(CoordinationError::refused("worker_already_assigned").into());
-        }
-        let current: Option<(String, i64, bool, bool)> = database.connection().query_row(
-            "SELECT id,generation,stop_requested_at IS NOT NULL AND stopped_at IS NULL,launch_owner IS NOT NULL AND stopped_at IS NULL FROM suplex_task_sessions WHERE task_id = ?1 AND kind = 'worker' AND delegate_slot = ?2 AND is_current = 1",
-            params![task_id, slot],
-            |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?)),
-        ).optional()?;
-        if current.as_ref().is_some_and(|(_, _, stopping, launching)| *stopping || *launching) {
-            return Err(CoordinationError::refused("worker_already_assigned").into());
-        }
-        let generation: i64 = database.connection().query_row(
-            "SELECT COALESCE(MAX(generation),0)+1 FROM suplex_task_sessions WHERE task_id = ?1 AND kind = 'worker'",
-            [task_id], |row| row.get(0),
-        )?;
+        let current = free_delegate_slot(database, task_id, slot)?;
+        let generation = next_generation(database, task_id, "worker")?;
         let profile = delegate_profile(database, task_id, advisor_role)?;
-        let compatible: Option<(String, bool)> = database.connection().query_row(
-            "SELECT id,stop_requested_at IS NOT NULL AND stopped_at IS NULL FROM suplex_task_sessions WHERE task_id = ?1 AND kind = 'worker' AND advisor_role IS ?3 AND lifecycle <> 'cancelled' AND (profile_json IS NULL OR json(profile_json) = json(?2)) ORDER BY generation DESC,created_at DESC,id DESC LIMIT 1",
-            params![task_id, profile, advisor_role],
-            |row| Ok((row.get(0)?,row.get(1)?)),
-        ).optional()?;
-        if compatible.as_ref().is_some_and(|(_, stopping)| *stopping) {
-            return Err(CoordinationError::refused("worker_already_assigned").into());
-        }
+        let compatible = compatible_delegate(database, task_id, &profile, advisor_role)?;
         let id = compatible
-            .as_ref()
-            .map(|(id, _)| id.clone())
+            .clone()
             .unwrap_or_else(|| Uuid::new_v4().to_string());
-        if let Some((current_id, _, _, _)) = &current
-            && current_id != &id
-        {
-            database.connection().execute(
-                "UPDATE suplex_task_sessions SET is_current = 0,updated_at = ?1 WHERE id = ?2 AND is_current = 1",
-                params![time, current_id],
-            )?;
-        }
+        retire_other_slot_session(database, current.as_ref(), &id, &time)?;
         if compatible.is_some() {
-            let changed = database.connection().execute(
-                "UPDATE suplex_task_sessions SET generation = ?1,is_current = 1,lifecycle = CASE WHEN lifecycle = 'stopped' THEN 'reserved' ELSE lifecycle END,assignment_hash = ?2,profile_json = COALESCE(profile_json,?3),launch_owner = NULL,launch_owner_pid = NULL,launch_owner_start_time = NULL,launch_claimed_at = NULL,stop_requested_at = NULL,stopped_at = NULL,updated_at = ?4 WHERE id = ?5 AND lifecycle IN ('reserved','live','stopped') AND (launch_owner IS NULL OR stopped_at IS NOT NULL) AND (stop_requested_at IS NULL OR stopped_at IS NOT NULL) AND NOT EXISTS (SELECT 1 FROM suplex_task_turns t WHERE t.session_id = suplex_task_sessions.id AND t.generation = suplex_task_sessions.generation AND t.status IN ('pending_prompt','prompted','unknown'))",
-                params![generation, assignment_hash, profile, time, id],
-            )?;
-            if changed != 1 {
-                return Err(CoordinationError::refused("worker_already_assigned").into());
-            }
+            reactivate_delegate(database, &id, generation, &assignment_hash, &profile, &time)?;
         } else {
-            if let Some((current_id, current_generation, _, _)) = &current {
+            if let Some((current_id, current_generation)) = &current {
                 database.connection().execute(
                     "UPDATE suplex_task_sessions SET is_current = 0,updated_at = ?1 WHERE id = ?2 AND generation = ?3 AND is_current = 1",
                     params![time, current_id, current_generation],
@@ -554,6 +612,44 @@ fn launch_delegate(
         .ok_or_else(|| CoordinationError::refused("worker_session_missing").into())
 }
 
+/// Plan A and Plan B inputs of one pair, pinned to the same range and evidence.
+fn valid_planner_pair(pair_id: &str, input_a: &Value, input_b: &Value) -> bool {
+    let (Some(a), Some(b)) = (
+        super::workflows::ReviewRange::from_value(&input_a["range"]),
+        super::workflows::ReviewRange::from_value(&input_b["range"]),
+    ) else {
+        return false;
+    };
+    input_a["role"] == "planner_a"
+        && input_b["role"] == "planner_b"
+        && input_a["plannerPairId"] == pair_id
+        && input_b["plannerPairId"] == pair_id
+        && super::workflows::same_range(&a, &b)
+        && input_a["evidenceDirectory"] == input_b["evidenceDirectory"]
+        && input_a["evidenceSha256"] == input_b["evidenceSha256"]
+}
+
+/// A planner pair needs Combined planning and no busy current delegate.
+fn require_planner_slots_free(database: &SuplexDatabase, task_id: &str) -> DatabaseResult<()> {
+    let workflow: Workflow = database.connection().query_row(
+        "SELECT workflow FROM suplex_task_controls WHERE task_id = ?1",
+        [task_id],
+        |row| row.get(0),
+    )?;
+    if workflow != Workflow::CompetingPlans {
+        return Err(CoordinationError::refused("planner_pair_requires_combined_workflow").into());
+    }
+    let busy: bool = database.connection().query_row(
+        "SELECT EXISTS(SELECT 1 FROM suplex_task_sessions s WHERE s.task_id = ?1 AND s.kind = 'worker' AND s.is_current = 1 AND (s.launch_owner IS NOT NULL AND s.stopped_at IS NULL OR s.stop_requested_at IS NOT NULL AND s.stopped_at IS NULL OR EXISTS (SELECT 1 FROM suplex_task_turns t WHERE t.session_id = s.id AND t.generation = s.generation AND t.status IN ('pending_prompt','prompted','unknown'))))",
+        [task_id],
+        |row| row.get(0),
+    )?;
+    if busy {
+        return Err(CoordinationError::refused("worker_already_assigned").into());
+    }
+    Ok(())
+}
+
 /// TypeScript `launchPlannerPair`: Plan A and Plan B are reserved together
 /// on one pinned input, each in its own delegate slot.
 pub fn launch_planner_pair(
@@ -565,44 +661,13 @@ pub fn launch_planner_pair(
 ) -> DatabaseResult<[SessionRow; 2]> {
     let task_id = root.task_id.as_str();
     let [(prompt_a, input_a), (prompt_b, input_b)] = planners;
-    let same_input = |left: &Value, right: &Value| {
-        let (Some(a), Some(b)) = (
-            super::workflows::ReviewRange::from_value(&left["range"]),
-            super::workflows::ReviewRange::from_value(&right["range"]),
-        ) else {
-            return false;
-        };
-        super::workflows::same_range(&a, &b)
-            && left["evidenceDirectory"] == right["evidenceDirectory"]
-            && left["evidenceSha256"] == right["evidenceSha256"]
-    };
-    if input_a["role"] != "planner_a"
-        || input_b["role"] != "planner_b"
-        || input_a["plannerPairId"] != pair_id
-        || input_b["plannerPairId"] != pair_id
-        || !same_input(input_a, input_b)
-    {
+    if !valid_planner_pair(pair_id, input_a, input_b) {
         return Err(CoordinationError::refused("invalid_planner_pair").into());
     }
     let time = rfc3339_millis(now);
     let ids = database.transaction(true, |database| {
         assert_current_root(database, task_id, &root.id, root.generation)?;
-        let workflow: Workflow = database.connection().query_row(
-            "SELECT workflow FROM suplex_task_controls WHERE task_id = ?1",
-            [task_id],
-            |row| row.get(0),
-        )?;
-        if workflow != Workflow::CompetingPlans {
-            return Err(CoordinationError::refused("planner_pair_requires_combined_workflow").into());
-        }
-        let busy: bool = database.connection().query_row(
-            "SELECT EXISTS(SELECT 1 FROM suplex_task_sessions s WHERE s.task_id = ?1 AND s.kind = 'worker' AND s.is_current = 1 AND (s.launch_owner IS NOT NULL AND s.stopped_at IS NULL OR s.stop_requested_at IS NOT NULL AND s.stopped_at IS NULL OR EXISTS (SELECT 1 FROM suplex_task_turns t WHERE t.session_id = s.id AND t.generation = s.generation AND t.status IN ('pending_prompt','prompted','unknown'))))",
-            [task_id],
-            |row| row.get(0),
-        )?;
-        if busy {
-            return Err(CoordinationError::refused("worker_already_assigned").into());
-        }
+        require_planner_slots_free(database, task_id)?;
         database.connection().execute(
             "UPDATE suplex_task_sessions SET is_current = 0,updated_at = ?1 WHERE task_id = ?2 AND kind = 'worker' AND is_current = 1 AND delegate_slot IN ('planner_a','planner_b')",
             params![time, task_id],
@@ -725,6 +790,47 @@ pub fn send_note(
 }
 
 /// A paired agent's note carries its own label, `Agent note (<agentId>)`.
+/// The current Root, or a newly reserved Root with its initial prompt. The
+/// initial prompt lists live dependencies only when `with_dependencies` is set.
+fn current_or_reserved_root(
+    database: &mut SuplexDatabase,
+    task_id: &str,
+    with_dependencies: bool,
+    now: DateTime<Utc>,
+) -> DatabaseResult<SessionRow> {
+    if let Some(root) = current_root(database, task_id)? {
+        return Ok(root);
+    }
+    let root = reserve_root(database, task_id, now)?;
+    let rows = root_observation_rows(database, task_id)?;
+    let dependencies: &[crate::tasks::control::DependencyRow] = if with_dependencies {
+        &rows.dependencies
+    } else {
+        &[]
+    };
+    let initial =
+        root_prompts::initial_coordinator_prompt(&rows.control, &rows.context, dependencies);
+    ensure_initial_prompt(database, &root, &initial, now)?;
+    Ok(root)
+}
+
+/// An open active or delivered task accepts a note. Returns its status,
+/// Root session, and workflow state.
+fn note_target(
+    database: &SuplexDatabase,
+    task_id: &str,
+) -> DatabaseResult<(TaskStatus, Option<String>, String)> {
+    let (status, archived, root_session_id, workflow_state): (TaskStatus, bool, Option<String>, String) = database.connection().query_row(
+        "SELECT c.status,t.archived_at IS NOT NULL,c.root_session_id,c.workflow_state_json FROM suplex_task_controls c JOIN suplex_tasks t ON t.id = c.task_id WHERE c.task_id = ?1",
+        [task_id],
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+    )?;
+    if archived || !matches!(status, TaskStatus::Active | TaskStatus::Delivered) {
+        return Err(CoordinationError::refused("task_note_unavailable").into());
+    }
+    Ok((status, root_session_id, workflow_state))
+}
+
 pub fn send_labeled_note(
     database: &mut SuplexDatabase,
     task_id: &str,
@@ -737,31 +843,14 @@ pub fn send_labeled_note(
         return Err(CoordinationError::refused("note_invalid").into());
     }
     let turn = database.transaction(true, |database| {
-        let (status, archived, root_session_id, workflow_state): (TaskStatus, bool, Option<String>, String) = database.connection().query_row(
-            "SELECT c.status,t.archived_at IS NOT NULL,c.root_session_id,c.workflow_state_json FROM suplex_task_controls c JOIN suplex_tasks t ON t.id = c.task_id WHERE c.task_id = ?1",
-            [task_id],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
-        )?;
-        if archived || !matches!(status, TaskStatus::Active | TaskStatus::Delivered) {
-            return Err(CoordinationError::refused("task_note_unavailable").into());
-        }
+        let (status, root_session_id, workflow_state) = note_target(database, task_id)?;
         let resuming = status == TaskStatus::Delivered;
         let time = rfc3339_millis(now);
         if resuming {
             repository::assert_task_pull_requests_available(database, task_id)?;
             reopen_delivered(database, task_id, root_session_id.as_deref(), &serde_json::from_str(&workflow_state)?, &time)?;
         }
-        let existing = current_root(database, task_id)?;
-        let root = match existing {
-            Some(root) => root,
-            None => {
-                let root = reserve_root(database, task_id, now)?;
-                let rows = root_observation_rows(database, task_id)?;
-                let initial = root_prompts::initial_coordinator_prompt(&rows.control, &rows.context, &[]);
-                ensure_initial_prompt(database, &root, &initial, now)?;
-                root
-            }
-        };
+        let root = current_or_reserved_root(database, task_id, false, now)?;
         assert_current_root(database, task_id, &root.id, root.generation)?;
         let prompt = if resuming {
             js_json::stringify(&serde_json::json!({
@@ -1002,6 +1091,125 @@ fn insert_root_wake(
 /// TypeScript `recordWorkerResultAndWake`: completes the delegate turn, appends
 /// a Reviewer or Rater record from its immutable turn input, and wakes
 /// Coordinator once. A planner pair wakes Coordinator only when both settle.
+/// Record a Reviewer or Rater outcome in the workflow state; a missing or
+/// mismatched result is kept with its invalid reason.
+fn record_advisor_review(
+    database: &SuplexDatabase,
+    input: &StandardWorkerResult<'_>,
+    worker_turn_id: &str,
+    role: AdvisorRole,
+    workflow_input: &Value,
+    now: DateTime<Utc>,
+) -> DatabaseResult<()> {
+    let incomplete = json!({"result":null,"invalidReason":"The Advisor turn did not complete"});
+    let review = input.review.unwrap_or(&incomplete);
+    let result = Some(review["result"].clone()).filter(|result| result["role"] == role.as_str());
+    let invalid_reason = result.is_none().then(|| {
+        review["invalidReason"]
+            .as_str()
+            .unwrap_or("The Advisor result does not match its role")
+            .to_owned()
+    });
+    let mut state = workflow_state(database, input.task_id)?;
+    state.reviews.push(ReviewRecord {
+        session_id: input.session_id.to_owned(),
+        turn_id: worker_turn_id.to_owned(),
+        role,
+        range: serde_json::from_value(workflow_input["range"].clone())?,
+        result,
+        invalid_reason,
+        recorded_at: rfc3339_millis(now),
+    });
+    write_workflow_state(database, input.task_id, &state, now)
+}
+
+/// Stop this planner session. When both planners of the pair completed,
+/// return the Coordinator prompt that reconciles their reports.
+fn planner_pair_prompt(
+    database: &SuplexDatabase,
+    input: &StandardWorkerResult<'_>,
+    pair_id: &str,
+    time: &str,
+) -> DatabaseResult<Option<String>> {
+    database.connection().execute(
+        "UPDATE suplex_task_sessions SET lifecycle = 'stopped', stop_requested_at = ?1, updated_at = ?1 WHERE id = ?2 AND generation = ?3 AND is_current = 1",
+        params![time, input.session_id, input.generation],
+    )?;
+    let pair = database
+        .connection()
+        .prepare(
+            "SELECT s.id,(SELECT t.terminal_observation FROM suplex_task_turns t WHERE t.session_id = s.id AND t.generation = s.generation AND t.status = 'completed' LIMIT 1),EXISTS(SELECT 1 FROM suplex_task_turns t WHERE t.session_id = s.id AND t.generation = s.generation AND t.status = 'completed') FROM suplex_task_sessions s WHERE s.task_id = ?1 AND s.kind = 'worker' AND s.is_current = 1 AND json_extract(s.workflow_input_json,'$.plannerPairId') = ?2 ORDER BY CASE s.advisor_role WHEN 'planner_a' THEN 0 ELSE 1 END",
+        )?
+        .query_map(params![input.task_id, pair_id], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?, row.get::<_, bool>(2)?))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    if pair.len() != 2 || !pair.iter().all(|(_, _, completed)| *completed) {
+        return Ok(None);
+    }
+    let valid = pair.iter().all(|(_, observation, _)| {
+        super::workflows::turn_outcome(observation.as_deref())
+            .advisor
+            .is_some_and(|advisor| !advisor["result"].is_null())
+    });
+    let next = if valid {
+        "Both reports are valid. Reconcile them into one plan, then delegate Worker with those IDs."
+    } else {
+        "One or both reports are invalid. Retry only each invalid planner role with delegate_advisor, then reconcile a valid Plan A and Plan B. Do not delegate Worker until both reports are valid."
+    };
+    let text = |index: usize| pair[index].1.clone().unwrap_or_else(|| "null".into());
+    Ok(Some(format!(
+        "Combined planning pair {pair_id} completed. Plan A session {} and Plan B session {} are ordered candidateSessionIds. Read both full observations and their validation outcomes. {next}\n\nPlan A:\n{}\n\nPlan B:\n{}",
+        pair[0].0,
+        pair[1].0,
+        text(0),
+        text(1)
+    )))
+}
+
+/// The delegate turn a result completes, with the session's Advisor role and
+/// saved workflow input. A stale generation or cancelled turn is refused.
+struct ResultTarget {
+    turn_id: String,
+    status: TurnStatus,
+    prior_receipt: Option<String>,
+    turn_input: Option<String>,
+    advisor_role: Option<AdvisorRole>,
+    session_input: Option<String>,
+}
+
+fn result_target(
+    database: &SuplexDatabase,
+    input: &StandardWorkerResult<'_>,
+) -> DatabaseResult<ResultTarget> {
+    let (task_id, session_id, generation) = (input.task_id, input.session_id, input.generation);
+    let worker_turn: Option<(String, TurnStatus, Option<String>, Option<String>)> = database.connection().query_row(
+        "SELECT id,status,result_receipt_id,workflow_input_json FROM suplex_task_turns WHERE task_id = ?1 AND session_id = ?2 AND generation = ?3 ORDER BY created_at DESC LIMIT 1",
+        params![task_id, session_id, generation],
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+    ).optional()?;
+    let Some((turn_id, status, prior_receipt, turn_input)) = worker_turn else {
+        return Err(CoordinationError::refused("stale_generation").into());
+    };
+    let current: Option<(Option<AdvisorRole>, Option<String>)> = database.connection().query_row(
+        "SELECT advisor_role,workflow_input_json FROM suplex_task_sessions WHERE id = ?1 AND task_id = ?2 AND kind = 'worker' AND is_current = 1 AND generation = ?3 AND lifecycle <> 'cancelled'",
+        params![session_id, task_id, generation],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    ).optional()?;
+    let Some((advisor_role, session_input)) = current.filter(|_| status != TurnStatus::Cancelled)
+    else {
+        return Err(CoordinationError::refused("stale_generation").into());
+    };
+    Ok(ResultTarget {
+        turn_id,
+        status,
+        prior_receipt,
+        turn_input,
+        advisor_role,
+        session_input,
+    })
+}
+
 pub fn record_standard_worker_result_and_wake(
     database: &mut SuplexDatabase,
     input: &StandardWorkerResult<'_>,
@@ -1009,33 +1217,16 @@ pub fn record_standard_worker_result_and_wake(
 ) -> DatabaseResult<Option<TurnRow>> {
     let StandardWorkerResult {
         task_id,
-        session_id,
-        generation,
         receipt_id,
         observation,
         native_turn_id,
         wake_prompt,
-        review,
+        ..
     } = *input;
     database.transaction(false, |database| {
-        let worker_turn: Option<(String, TurnStatus, Option<String>, Option<String>)> = database.connection().query_row(
-            "SELECT id,status,result_receipt_id,workflow_input_json FROM suplex_task_turns WHERE task_id = ?1 AND session_id = ?2 AND generation = ?3 ORDER BY created_at DESC LIMIT 1",
-            params![task_id, session_id, generation],
-            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
-        ).optional()?;
-        let Some((worker_turn_id, status, prior_receipt, turn_input)) = worker_turn else {
-            return Err(CoordinationError::refused("stale_generation").into());
-        };
-        let current: Option<(Option<AdvisorRole>, Option<String>)> = database.connection().query_row(
-            "SELECT advisor_role,workflow_input_json FROM suplex_task_sessions WHERE id = ?1 AND task_id = ?2 AND kind = 'worker' AND is_current = 1 AND generation = ?3 AND lifecycle <> 'cancelled'",
-            params![session_id, task_id, generation],
-            |row| Ok((row.get(0)?, row.get(1)?)),
-        ).optional()?;
-        let Some((advisor_role, session_input)) = current.filter(|_| status != TurnStatus::Cancelled) else {
-            return Err(CoordinationError::refused("stale_generation").into());
-        };
-        if status == TurnStatus::Completed {
-            if prior_receipt.as_deref() == Some(receipt_id) {
+        let target = result_target(database, input)?;
+        if target.status == TurnStatus::Completed {
+            if target.prior_receipt.as_deref() == Some(receipt_id) {
                 return Ok(None);
             }
             return Err(CoordinationError::refused("stale_receipt").into());
@@ -1045,71 +1236,25 @@ pub fn record_standard_worker_result_and_wake(
         let time = rfc3339_millis(now);
         database.connection().execute(
             "UPDATE suplex_task_turns SET status = 'completed', result_receipt_id = ?1, terminal_observation = ?2, native_turn_id = ?3, completed_at = ?4, updated_at = ?4 WHERE id = ?5",
-            params![receipt_id, observation, native_turn_id, time, worker_turn_id],
+            params![receipt_id, observation, native_turn_id, time, target.turn_id],
         )?;
-        let workflow_input = turn_input
-            .or(session_input)
+        let workflow_input = target
+            .turn_input
+            .or(target.session_input)
             .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
             .unwrap_or(Value::Null);
-        if let Some(role @ (AdvisorRole::Reviewer | AdvisorRole::Rater)) = advisor_role
+        if let Some(role @ (AdvisorRole::Reviewer | AdvisorRole::Rater)) = target.advisor_role
             && workflow_input["kind"] == "advisor"
         {
-            let incomplete = json!({"result":null,"invalidReason":"The Advisor turn did not complete"});
-            let review = review.unwrap_or(&incomplete);
-            let result = Some(review["result"].clone()).filter(|result| result["role"] == role.as_str());
-            let invalid_reason = result.is_none().then(|| {
-                review["invalidReason"]
-                    .as_str()
-                    .unwrap_or("The Advisor result does not match its role")
-                    .to_owned()
-            });
-            let mut state = workflow_state(database, task_id)?;
-            state.reviews.push(ReviewRecord {
-                session_id: session_id.to_owned(),
-                turn_id: worker_turn_id.clone(),
-                role,
-                range: serde_json::from_value(workflow_input["range"].clone())?,
-                result,
-                invalid_reason,
-                recorded_at: time.clone(),
-            });
-            write_workflow_state(database, task_id, &state, now)?;
+            record_advisor_review(database, input, &target.turn_id, role, &workflow_input, now)?;
         }
-        if let Some(pair_id) = workflow_input["plannerPairId"].as_str() {
-            database.connection().execute(
-                "UPDATE suplex_task_sessions SET lifecycle = 'stopped', stop_requested_at = ?1, updated_at = ?1 WHERE id = ?2 AND generation = ?3 AND is_current = 1",
-                params![time, session_id, generation],
-            )?;
-            let mut statement = database.connection().prepare(
-                "SELECT s.id,(SELECT t.terminal_observation FROM suplex_task_turns t WHERE t.session_id = s.id AND t.generation = s.generation AND t.status = 'completed' LIMIT 1),EXISTS(SELECT 1 FROM suplex_task_turns t WHERE t.session_id = s.id AND t.generation = s.generation AND t.status = 'completed') FROM suplex_task_sessions s WHERE s.task_id = ?1 AND s.kind = 'worker' AND s.is_current = 1 AND json_extract(s.workflow_input_json,'$.plannerPairId') = ?2 ORDER BY CASE s.advisor_role WHEN 'planner_a' THEN 0 ELSE 1 END",
-            )?;
-            let pair = statement
-                .query_map(params![task_id, pair_id], |row| {
-                    Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?, row.get::<_, bool>(2)?))
-                })?
-                .collect::<rusqlite::Result<Vec<_>>>()?;
-            drop(statement);
-            if pair.len() != 2 || !pair.iter().all(|(_, _, completed)| *completed) {
-                return Ok(None);
-            }
-            let valid = pair.iter().all(|(_, observation, _)| {
-                super::workflows::turn_outcome(observation.as_deref())
-                    .advisor
-                    .is_some_and(|advisor| !advisor["result"].is_null())
-            });
-            let next = if valid {
-                "Both reports are valid. Reconcile them into one plan, then delegate Worker with those IDs."
-            } else {
-                "One or both reports are invalid. Retry only each invalid planner role with delegate_advisor, then reconcile a valid Plan A and Plan B. Do not delegate Worker until both reports are valid."
-            };
-            let text = |index: usize| pair[index].1.clone().unwrap_or_else(|| "null".into());
-            let prompt = format!(
-                "Combined planning pair {pair_id} completed. Plan A session {} and Plan B session {} are ordered candidateSessionIds. Read both full observations and their validation outcomes. {next}\n\nPlan A:\n{}\n\nPlan B:\n{}",
-                pair[0].0, pair[1].0, text(0), text(1)
-            );
-            return insert_root_wake(database, task_id, &root, &prompt, now).map(Some);
+        let Some(pair_id) = workflow_input["plannerPairId"].as_str() else {
+            return insert_root_wake(database, task_id, &root, wake_prompt, now).map(Some);
+        };
+        match planner_pair_prompt(database, input, pair_id, &time)? {
+            Some(prompt) => insert_root_wake(database, task_id, &root, &prompt, now).map(Some),
+            None => Ok(None),
         }
-        insert_root_wake(database, task_id, &root, wake_prompt, now).map(Some)
     })
 }
 
@@ -1992,63 +2137,65 @@ pub fn select_delegate(
         finish_selection(database, task_id, request, state, &selection.time)
     })
 }
+/// Check that a delivered pull request task may continue to `next`. Returns
+/// the previous target, or None when the task already works toward `next`.
+fn delivery_continuation(
+    database: &SuplexDatabase,
+    task_id: &str,
+    next: DeliveryTarget,
+) -> DatabaseResult<Option<String>> {
+    let task = repository::task_by_id(database, task_id)?.ok_or_else(TaskError::not_found)?;
+    let (archived, repository_kind, previous_target): (bool, Option<String>, String) =
+        database.connection().query_row(
+            "SELECT t.archived_at IS NOT NULL, json_extract(t.configuration_json, '$.integration.repository.kind'), c.delivery_target FROM suplex_tasks t JOIN suplex_task_controls c ON c.task_id = t.id WHERE t.id = ?1",
+            [task_id],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )?;
+    let conflict = |message: &str| TaskError::new(message, 409).into();
+    if archived {
+        return Err(conflict(
+            "Open the archived task before you continue delivery.",
+        ));
+    }
+    if repository_kind.as_deref() == Some("bitbucket") {
+        return Err(TaskError::new(
+            "Bitbucket supports draft pull requests. Select a supported delivery target.",
+            422,
+        )
+        .into());
+    }
+    let previous = DeliveryTarget::parse(&previous_target)
+        .ok_or_else(|| conflict("Invalid delivery target"))?;
+    if next < previous {
+        return Err(conflict("The delivery target cannot move backward."));
+    }
+    if next == previous && matches!(task.status, TaskStatus::Active | TaskStatus::Delivered) {
+        return Ok(None);
+    }
+    if task.status != TaskStatus::Delivered || !previous.uses_pull_request() {
+        return Err(conflict(
+            "Only delivered pull request tasks can continue delivery.",
+        ));
+    }
+    repository::assert_task_pull_requests_available(database, task_id)
+        .map_err(|error| conflict(&error.to_string()))?;
+    Ok(Some(previous_target))
+}
+
 pub fn continue_delivery(
     database: &mut SuplexDatabase,
     task_id: &str,
     delivery_target: DeliveryTarget,
 ) -> DatabaseResult<()> {
     database.transaction(true, |database| {
-        let task = repository::task_by_id(database, task_id)?.ok_or_else(TaskError::not_found)?;
-        let (archived, repository_kind, previous_target): (bool, Option<String>, String) =
-            database.connection().query_row(
-                "SELECT t.archived_at IS NOT NULL, json_extract(t.configuration_json, '$.integration.repository.kind'), c.delivery_target FROM suplex_tasks t JOIN suplex_task_controls c ON c.task_id = t.id WHERE t.id = ?1",
-                [task_id],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-            )?;
-        let conflict = |message: &str| TaskError::new(message, 409).into();
-        if archived {
-            return Err(conflict(
-                "Open the archived task before you continue delivery.",
-            ));
-        }
-        if repository_kind.as_deref() == Some("bitbucket") {
-            return Err(TaskError::new(
-                "Bitbucket supports draft pull requests. Select a supported delivery target.",
-                422,
-            ).into());
-        }
-        let order = |target: &str| {
-            DeliveryTarget::parse(target).ok_or_else(|| conflict("Invalid delivery target"))
-        };
-        let (next, previous) = (delivery_target, order(&previous_target)?);
-        if next < previous {
-            return Err(conflict("The delivery target cannot move backward."));
-        }
-        if next == previous && matches!(task.status, TaskStatus::Active | TaskStatus::Delivered) {
+        let Some(previous_target) = delivery_continuation(database, task_id, delivery_target)? else {
             return Ok(());
-        }
-        if task.status != TaskStatus::Delivered || !previous.uses_pull_request() {
-            return Err(conflict(
-                "Only delivered pull request tasks can continue delivery.",
-            ));
-        }
-        repository::assert_task_pull_requests_available(database, task_id)
-            .map_err(|error| conflict(&error.to_string()))?;
+        };
         let time = crate::shared::time::now_millis_rfc3339();
         let rows = root_observation_rows(database, task_id)?;
         reopen_delivered(database, task_id, rows.control.root_session_id.as_deref(), &rows.control.workflow_state, &time)?;
         database.connection().execute("UPDATE suplex_task_controls SET delivery_target = ?1 WHERE task_id = ?2", params![delivery_target, task_id])?;
-        let existing = current_root(database, task_id)?;
-        let root = match existing {
-            Some(root) => root,
-            None => {
-                let root = reserve_root(database, task_id, Utc::now())?;
-                let rows = root_observation_rows(database, task_id)?;
-                let initial = root_prompts::initial_coordinator_prompt(&rows.control, &rows.context, &rows.dependencies);
-                ensure_initial_prompt(database, &root, &initial, Utc::now())?;
-                root
-            }
-        };
+        let root = current_or_reserved_root(database, task_id, true, Utc::now())?;
         let prompt = crate::shared::js_json::stringify(&json!({
             "question": format!("The user changed the delivery target from {previous_target} to {}. Continue this task toward the NEW target {}. Preserve the existing branch, pull request, sessions, and useful review evidence. Inspect current Git and GitHub facts, repair conflicts and failing checks, and request delivery explicitly when the new target is satisfied. Earlier completion is history.", delivery_target, delivery_target),
             "answer": format!("Continue delivery to {}.", delivery_target),

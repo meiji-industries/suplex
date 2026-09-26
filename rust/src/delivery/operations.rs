@@ -2786,6 +2786,104 @@ pub(crate) mod tests {
         std::fs::remove_dir_all(directory).unwrap();
     }
 
+    #[test]
+    fn final_workflow_commit_reloads_review_delegate_and_cancellation_state() {
+        let (directory, operations, task_id, head) = workflow_task("independent_review");
+        let range = ReviewRange {
+            base_sha: "a".repeat(40),
+            head_sha: head.clone(),
+            files: vec!["a.txt".into()],
+            commits: vec![head.clone()],
+            patch_digest: Some("d".repeat(64)),
+        };
+        let local = LocalRevisionObservation {
+            branch: "task-flow".into(),
+            head_sha: head.clone(),
+            tree_sha: "c".repeat(40),
+            clean: true,
+        };
+        let review = |approved: bool| {
+            json!({
+                "sessionId":"reviewer", "turnId":"review-turn", "role":"reviewer", "range":range,
+                "result":{"role":"reviewer","approved":approved,"blockingFindings":if approved { vec![] } else { vec!["needs repair"] },"verification":"passed","verificationSummary":"checked","summary":"reviewed"},
+                "invalidReason":null,"recordedAt":"2026-09-25T00:00:00.000Z"
+            })
+        };
+        operations
+            .update_workflow_state(&task_id, |state| {
+                state.accepted_delivery = Some(range.clone());
+                state.reviews =
+                    serde_json::from_value(json!([review(true), review(false)])).unwrap();
+            })
+            .unwrap();
+        let commit = |operations: &DeliveryOperations| {
+            complete_workflow_delivery(
+                &mut operations.open(OpenMode::ReadWrite).unwrap(),
+                &task_id,
+                &range,
+                &local,
+                None,
+                true,
+                |_| Ok(()),
+            )
+            .unwrap()
+        };
+        assert!(matches!(
+            commit(&operations),
+            WorkflowCompletion::Declined {
+                code: "workflow_review_required",
+                ..
+            }
+        ));
+        operations
+            .update_workflow_state(&task_id, |state| {
+                state.reviews = serde_json::from_value(json!([review(true)])).unwrap();
+            })
+            .unwrap();
+        operations.open(OpenMode::ReadWrite).unwrap().connection().execute(
+            "INSERT INTO suplex_task_sessions (id,task_id,kind,generation,is_current,lifecycle,launch_owner,created_at,updated_at) VALUES ('active-reviewer',?1,'worker',1,1,'live','owner','2026-09-25T00:00:00.000Z','2026-09-25T00:00:00.000Z')",
+            [&task_id],
+        ).unwrap();
+        assert!(matches!(
+            commit(&operations),
+            WorkflowCompletion::Declined {
+                code: "delegate_active",
+                ..
+            }
+        ));
+        operations
+            .open(OpenMode::ReadWrite)
+            .unwrap()
+            .connection()
+            .execute(
+                "DELETE FROM suplex_task_sessions WHERE id = 'active-reviewer'",
+                [],
+            )
+            .unwrap();
+        operations
+            .open(OpenMode::ReadWrite)
+            .unwrap()
+            .connection()
+            .execute(
+                "UPDATE suplex_task_controls SET status = 'cancelled' WHERE task_id = ?1",
+                [&task_id],
+            )
+            .unwrap();
+        assert_eq!(commit(&operations), WorkflowCompletion::Cancelled);
+        operations
+            .open(OpenMode::ReadWrite)
+            .unwrap()
+            .connection()
+            .execute(
+                "UPDATE suplex_task_controls SET status = 'active' WHERE task_id = ?1",
+                [&task_id],
+            )
+            .unwrap();
+        assert_eq!(commit(&operations), WorkflowCompletion::Completed);
+        assert_eq!(commit(&operations), WorkflowCompletion::Already);
+        std::fs::remove_dir_all(directory).unwrap();
+    }
+
     /// A loopback GitHub REST API answering each path and query from `replies`.
     pub(crate) async fn loopback_github(replies: Vec<(&'static str, Value)>) -> Github {
         use axum::{Json, Router, extract::OriginalUri, http::StatusCode, response::IntoResponse};

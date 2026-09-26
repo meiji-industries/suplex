@@ -217,12 +217,12 @@ fn task_json(database: &SuplexDatabase, task_id: &str) -> DatabaseResult<Value> 
     Ok(serde_json::to_value(task)?)
 }
 
-fn permitted_commands(task: &Value, creator: bool) -> Vec<&'static str> {
+fn permitted_commands(task: &response::TaskResponse, creator: bool) -> Vec<&'static str> {
     if !creator {
         return Vec::new();
     }
-    let archived = !task["archivedAt"].is_null();
-    let status = task["status"].as_str().unwrap_or_default();
+    let archived = task.archived_at.is_some();
+    let status = task.status.as_str();
     let mut commands: Vec<&'static str> = if archived {
         vec!["unarchive_task"]
     } else {
@@ -245,14 +245,14 @@ fn permitted_commands(task: &Value, creator: bool) -> Vec<&'static str> {
             _ => vec!["duplicate_task"],
         }
     };
-    if !archived && !task["workflowState"]["deliveryWait"].is_null() && status == "active" {
+    if !archived && !task.workflow_state.delivery_wait.is_null() && status == "active" {
         commands.push("recheck_delivery_wait");
     }
     commands
 }
 
-fn selection(task: &Value) -> (Value, Value, Value) {
-    let selection = &task["configuration"]["hermesSelection"];
+fn selection(task: &response::TaskResponse) -> (Value, Value, Value) {
+    let selection = &task.configuration["hermesSelection"];
     let pick = |name: &str| selection.get(name).cloned().unwrap_or(Value::Null);
     (pick("workflowId"), pick("workflowName"), pick("templateId"))
 }
@@ -280,13 +280,43 @@ fn response_blocker(item: &Value) -> Value {
     Value::Object(ordered)
 }
 
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AgentTaskProjection<'a> {
+    id: &'a str,
+    issue_key: Option<&'a str>,
+    project_id: &'a str,
+    project: Value,
+    title: &'a str,
+    source: Value,
+    status: &'a str,
+    queue: &'a response::TaskQueue,
+    depends_on: &'a [String],
+    blocked_by: Vec<Value>,
+    archived: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    revision: Option<String>,
+    permitted_commands: Vec<&'static str>,
+    human_question: Option<String>,
+    blocker: Value,
+    workflow_stage: String,
+    workflow: Value,
+    template_id: Value,
+    delivery_target: &'a str,
+    run_project_tests: &'a Value,
+    visual_evidence: &'a Value,
+    delivery: Value,
+    created_at: &'a str,
+    updated_at: &'a str,
+}
+
 /// `agentApiProjection`: the stored-state projection and its revision.
 fn projection_of(
     database: &SuplexDatabase,
     row: &Row,
     principal: &Principal,
 ) -> DatabaseResult<Value> {
-    let task = task_json(database, &row.id)?;
+    let task = response::get(database, &row.id)?.ok_or_else(not_found)?;
     let project: Option<(String, String)> = database
         .connection()
         .query_row(
@@ -297,10 +327,10 @@ fn projection_of(
         .optional()?;
     let (project_id, project_name) =
         project.ok_or_else(|| fail("Not found", 404, "task_failure"))?;
-    let question = task["humanQuestion"]["text"].as_str().map(str::to_owned);
-    let wait = &task["workflowState"]["deliveryWait"];
-    let completion = &task["workflowState"]["completion"];
-    let status = task["status"].as_str().unwrap_or_default().to_owned();
+    let question = task.human_question["text"].as_str().map(str::to_owned);
+    let wait = &task.workflow_state.delivery_wait;
+    let completion = &task.workflow_state.completion;
+    let status = task.status.clone();
     let blocker = if question.is_some() {
         json!({"kind": "human_question"})
     } else if !wait.is_null() {
@@ -321,7 +351,7 @@ fn projection_of(
     } else {
         status.clone()
     };
-    let pull = &task["pullRequest"];
+    let pull = &task.pull_request;
     let delivery = if !pull.is_null() || !wait.is_null() || !completion.is_null() {
         json!({
             "pullRequest": if pull.is_null() { Value::Null } else { json!({"number": pull["number"], "url": pull["url"], "state": pull["state"], "mergedAt": pull.get("mergedAt").cloned().unwrap_or(Value::Null)}) },
@@ -334,76 +364,45 @@ fn projection_of(
     };
     let creator = row.creator_agent_id.as_deref() == Some(principal.agent_id.as_str());
     let (workflow_id, workflow_name, template_id) = selection(&task);
-    let source = task["configuration"]
+    let source = task
+        .configuration
         .get("source")
         .cloned()
         .unwrap_or(Value::Null);
-    let archived = !task["archivedAt"].is_null();
+    let archived = task.archived_at.is_some();
     let permitted = permitted_commands(&task, creator);
-    let fields: Vec<(&str, Value)> = vec![
-        ("id", task["id"].clone()),
-        ("issueKey", task["issueKey"].clone()),
-        ("projectId", task["projectId"].clone()),
-        ("project", json!({"id": project_id, "name": project_name})),
-        ("title", task["title"].clone()),
-        ("source", source),
-        ("status", json!(status)),
-        ("queue", task["queue"].clone()),
-        ("dependsOn", task["dependsOn"].clone()),
-        ("blockedBy", task["blockedBy"].clone()),
-        ("archived", json!(archived)),
-        ("permittedCommands", json!(permitted)),
-        ("humanQuestion", json!(question)),
-        ("blocker", blocker),
-        ("workflowStage", json!(stage)),
-        (
-            "workflow",
-            json!({"id": workflow_id, "engine": task["workflow"], "name": workflow_name}),
-        ),
-        ("templateId", template_id),
-        ("deliveryTarget", task["deliveryTarget"].clone()),
-        (
-            "runProjectTests",
-            task["configuration"]["runProjectTests"].clone(),
-        ),
-        (
-            "visualEvidence",
-            task["configuration"]["visualEvidence"].clone(),
-        ),
-        ("delivery", delivery),
-        ("createdAt", task["createdAt"].clone()),
-        ("updatedAt", task["updatedAt"].clone()),
-    ];
-    let value = Value::Object(
-        fields
-            .iter()
-            .map(|(name, value)| ((*name).to_owned(), value.clone()))
-            .collect(),
-    );
+    let mut value = AgentTaskProjection {
+        id: &task.id,
+        issue_key: task.issue_key.as_deref(),
+        project_id: &task.project_id,
+        project: json!({"id": project_id, "name": project_name}),
+        title: &task.title,
+        source,
+        status: &status,
+        queue: &task.queue,
+        depends_on: &task.depends_on,
+        blocked_by: task.blocked_by.clone(),
+        archived,
+        revision: None,
+        permitted_commands: permitted,
+        human_question: question,
+        blocker,
+        workflow_stage: stage,
+        workflow: json!({"id": workflow_id, "engine": task.workflow, "name": workflow_name}),
+        template_id,
+        delivery_target: &task.delivery_target,
+        run_project_tests: &task.configuration["runProjectTests"],
+        visual_evidence: &task.configuration["visualEvidence"],
+        delivery,
+        created_at: &task.created_at,
+        updated_at: &task.updated_at,
+    };
     let hashed = crate::shared::js_json::stringify(
         &json!({"value": value, "commandRevision": row.command_revision}),
     );
-    let revision = URL_SAFE_NO_PAD.encode(Sha256::digest(hashed.as_bytes()));
-    let mut ordered = Map::new();
-    for (name, value) in fields {
-        let value = if name == "blockedBy" {
-            Value::Array(
-                value
-                    .as_array()
-                    .into_iter()
-                    .flatten()
-                    .map(response_blocker)
-                    .collect(),
-            )
-        } else {
-            value
-        };
-        ordered.insert(name.to_owned(), value);
-        if name == "archived" {
-            ordered.insert("revision".into(), json!(revision));
-        }
-    }
-    Ok(Value::Object(ordered))
+    value.revision = Some(URL_SAFE_NO_PAD.encode(Sha256::digest(hashed.as_bytes())));
+    value.blocked_by = value.blocked_by.iter().map(response_blocker).collect();
+    Ok(serde_json::to_value(value)?)
 }
 
 /// `getAgentApiTask`: any task in a granted project.
@@ -988,6 +987,75 @@ fn workflow_input_failure(message: &str) -> Box<dyn Error> {
 }
 
 /// `normalizeWorkflowInput(raw, { requireSource: true })`.
+fn validate_advisors(advisors: &Value) -> DatabaseResult<()> {
+    let valid = advisors.as_object().is_some_and(|ids| {
+        ids.iter().all(|(role, id)| {
+            ADVISOR_ROLES.contains(&role.as_str())
+                && id
+                    .as_str()
+                    .is_some_and(|id| (1..=256).contains(&id.encode_utf16().count()))
+        })
+    });
+    if !valid {
+        return Err(workflow_input_failure(
+            "The Advisor profile selection is not valid",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_workflow(
+    workflow: &str,
+    advisors: &Value,
+    delivery_target: Option<&Value>,
+    run_project_tests: Option<&Value>,
+    has_pull_request: bool,
+) -> DatabaseResult<()> {
+    validate_advisors(advisors)?;
+    let allowed = advisor_roles(workflow);
+    let extra = ADVISOR_ROLES
+        .into_iter()
+        .filter(|role| advisors.get(*role).is_some() && !allowed.contains(role))
+        .map(|role| match role {
+            "reviewer" => "Reviewer",
+            "planner_a" => "Plan A",
+            "planner_b" => "Plan B",
+            _ => "Rater",
+        })
+        .collect::<Vec<_>>();
+    if !extra.is_empty() {
+        let name = match workflow {
+            "standard" => "Standard",
+            "direct_build" => "Direct build",
+            "independent_review" => "Second opinion",
+            "competing_plans" => "Combined planning",
+            _ => "Pull request repair",
+        };
+        return Err(workflow_input_failure(&format!(
+            "The {name} workflow has no {} Advisor",
+            extra.join(", ")
+        )));
+    }
+    if workflow == "refine_pull_request" {
+        if delivery_target.is_some_and(|value| value != "merged") {
+            return Err(workflow_input_failure(
+                "Pull request repair always delivers a merged pull request",
+            ));
+        }
+        if run_project_tests.is_some_and(|value| value != true) {
+            return Err(workflow_input_failure(
+                "Pull request repair always runs the project tests",
+            ));
+        }
+        if !has_pull_request {
+            return Err(workflow_input_failure(
+                "Select a pull request source for Pull request repair",
+            ));
+        }
+    }
+    Ok(())
+}
+
 fn normalize_workflow(fields: &mut Map<String, Value>) -> DatabaseResult<()> {
     let workflow = fields
         .get("workflow")
@@ -1011,69 +1079,16 @@ fn normalize_workflow(fields: &mut Map<String, Value>) -> DatabaseResult<()> {
         .get("advisorProfileIds")
         .cloned()
         .unwrap_or_else(|| json!({}));
-    let valid = advisors.as_object().is_some_and(|ids| {
-        ids.iter().all(|(role, id)| {
-            ADVISOR_ROLES.contains(&role.as_str())
-                && id
-                    .as_str()
-                    .is_some_and(|id| (1..=256).contains(&id.encode_utf16().count()))
-        })
-    });
-    if !valid {
-        return Err(workflow_input_failure(
-            "The Advisor profile selection is not valid",
-        ));
-    }
-    let allowed = advisor_roles(&workflow);
-    let extra = ADVISOR_ROLES
-        .into_iter()
-        .filter(|role| advisors.get(*role).is_some() && !allowed.contains(role))
-        .map(|role| match role {
-            "reviewer" => "Reviewer",
-            "planner_a" => "Plan A",
-            "planner_b" => "Plan B",
-            _ => "Rater",
-        })
-        .collect::<Vec<_>>();
-    if !extra.is_empty() {
-        let name = match workflow.as_str() {
-            "standard" => "Standard",
-            "direct_build" => "Direct build",
-            "independent_review" => "Second opinion",
-            "competing_plans" => "Combined planning",
-            _ => "Pull request repair",
-        };
-        return Err(workflow_input_failure(&format!(
-            "The {name} workflow has no {} Advisor",
-            extra.join(", ")
-        )));
-    }
+    validate_workflow(
+        &workflow,
+        &advisors,
+        fields.get("deliveryTarget"),
+        fields.get("runProjectTests"),
+        fields.get("source").and_then(|source| source.get("kind")) == Some(&json!("pull_request")),
+    )?;
     fields.insert("workflow".into(), json!(workflow));
     fields.insert("advisorProfileIds".into(), advisors);
     if workflow == "refine_pull_request" {
-        if fields
-            .get("deliveryTarget")
-            .is_some_and(|value| value != "merged")
-        {
-            return Err(workflow_input_failure(
-                "Pull request repair always delivers a merged pull request",
-            ));
-        }
-        if fields
-            .get("runProjectTests")
-            .is_some_and(|value| value != true)
-        {
-            return Err(workflow_input_failure(
-                "Pull request repair always runs the project tests",
-            ));
-        }
-        if fields.get("source").and_then(|source| source.get("kind"))
-            != Some(&json!("pull_request"))
-        {
-            return Err(workflow_input_failure(
-                "Select a pull request source for Pull request repair",
-            ));
-        }
         fields.insert("deliveryTarget".into(), json!("merged"));
         fields.insert("runProjectTests".into(), json!(true));
     }
@@ -1277,7 +1292,27 @@ fn resolve(
 ) -> DatabaseResult<Resolved> {
     let project = projects::get_in_company(database, company_id, &raw.project_id)?;
     let policy = &project.agent_task_policy;
-    let mut selected = Map::new();
+    let mut request = task_contracts::TaskCreateBody {
+        project_id: raw.project_id.clone(),
+        title: raw.title.clone(),
+        description: raw.description.clone().unwrap_or_default(),
+        idempotency_key: raw.idempotency_key.clone(),
+        images: raw.images.clone(),
+        root_profile_id: raw.root_profile_id.clone(),
+        worker_profile_id: raw.worker_profile_id.clone(),
+        start_immediately: raw.queue.unwrap_or(false),
+        delivery_target: policy.delivery_target,
+        run_project_tests: policy.run_project_tests,
+        visual_evidence: policy.visual_evidence.clone(),
+        source: raw.source.clone(),
+        issue: None,
+        workflow: crate::coordination::workflows::Workflow::Standard,
+        advisor_profile_ids: raw.advisor_profile_ids.clone(),
+        depends_on: raw.depends_on.clone().unwrap_or_default(),
+        blocked_by_pull_requests: raw.blocked_by_pull_requests.clone().unwrap_or_default(),
+    };
+    let raw_advisors = serde_json::to_value(&raw.advisor_profile_ids)?;
+    let has_advisors = raw_advisors.as_object().is_some_and(|ids| !ids.is_empty());
     let selection;
     if let Some(template_id) = &raw.template_id {
         let details = |reason: &str| json!({"field": "templateId", "value": template_id, "reason": reason, "permittedTemplateIds": policy.template_ids});
@@ -1306,10 +1341,19 @@ fn resolve(
             ));
         }
         let template = task_templates::parse_stored_configuration(serde_json::from_str(&stored)?)?;
-        selected = serde_json::to_value(&template)?
-            .as_object()
-            .cloned()
-            .unwrap_or_default();
+        request.workflow = template.workflow;
+        if raw.description.is_none() {
+            request.description = template.description;
+        }
+        if request.root_profile_id.is_none() {
+            request.root_profile_id = template.root_profile_id;
+        }
+        if request.worker_profile_id.is_none() {
+            request.worker_profile_id = template.worker_profile_id;
+        }
+        if !has_advisors {
+            request.advisor_profile_ids = template.advisor_profile_ids;
+        }
         selection = json!({"workflowId": null, "workflowName": null, "templateId": template_id});
     } else {
         let workflow_id = raw
@@ -1342,84 +1386,52 @@ fn resolve(
             ));
         }
         let configuration: Value = serde_json::from_str(&configuration)?;
-        selected.insert("workflow".into(), json!(engine));
-        selected.insert(
-            "advisorProfileIds".into(),
-            configuration
+        request.workflow = crate::coordination::workflows::Workflow::parse(&engine)
+            .ok_or_else(|| workflow_input_failure("The selected workflow does not exist"))?;
+        if !has_advisors {
+            let advisors = configuration
                 .get("advisorProfileIds")
                 .cloned()
-                .unwrap_or_else(|| json!({})),
-        );
-        for name in ["rootProfileId", "workerProfileId"] {
-            if let Some(id) = configuration
+                .unwrap_or_else(|| json!({}));
+            validate_advisors(&advisors)?;
+            request.advisor_profile_ids = serde_json::from_value(advisors)?;
+        }
+        let selected_profile = |name: &str| {
+            configuration
                 .get(name)
                 .and_then(Value::as_str)
                 .filter(|id| !id.is_empty())
-            {
-                selected.insert(name.into(), json!(id));
-            }
+                .map(str::to_owned)
+        };
+        if request.root_profile_id.is_none() {
+            request.root_profile_id = selected_profile("rootProfileId");
+        }
+        if request.worker_profile_id.is_none() {
+            request.worker_profile_id = selected_profile("workerProfileId");
         }
         let name = crate::identity::auth::js_trim(&name).to_owned();
         selection = json!({"workflowId": workflow_id, "workflowName": name, "templateId": null});
     }
-    let mut fields = Map::new();
-    fields.insert("projectId".into(), json!(raw.project_id));
-    fields.insert("title".into(), json!(raw.title));
-    let description = raw
-        .description
-        .clone()
-        .map(Value::String)
-        .or_else(|| selected.get("description").cloned())
-        .unwrap_or_else(|| json!(""));
-    fields.insert("description".into(), description);
-    fields.insert("idempotencyKey".into(), json!(raw.idempotency_key));
-    fields.insert("images".into(), serde_json::to_value(&raw.images)?);
-    if let Some(source) = &raw.source {
-        fields.insert("source".into(), serde_json::to_value(source)?);
-    }
-    if let Some(depends_on) = &raw.depends_on {
-        fields.insert("dependsOn".into(), json!(depends_on));
-    }
-    if let Some(pull_requests) = &raw.blocked_by_pull_requests {
-        fields.insert(
-            "blockedByPullRequests".into(),
-            serde_json::to_value(pull_requests)?,
-        );
-    }
-    fields.insert(
-        "workflow".into(),
-        selected
-            .get("workflow")
-            .cloned()
-            .unwrap_or_else(|| json!("standard")),
-    );
-    for (name, value) in [
-        ("rootProfileId", &raw.root_profile_id),
-        ("workerProfileId", &raw.worker_profile_id),
-    ] {
-        if let Some(value) = value
-            .clone()
-            .map(Value::String)
-            .or_else(|| selected.get(name).cloned())
-        {
-            fields.insert(name.into(), value);
-        }
-    }
-    let raw_advisors = serde_json::to_value(&raw.advisor_profile_ids)?;
-    let advisors = if raw_advisors.as_object().is_some_and(|ids| !ids.is_empty()) {
-        raw_advisors.clone()
-    } else {
-        selected
-            .get("advisorProfileIds")
-            .cloned()
-            .unwrap_or_else(|| json!({}))
-    };
-    fields.insert("advisorProfileIds".into(), advisors);
-    fields.insert("deliveryTarget".into(), json!(policy.delivery_target));
-    fields.insert("runProjectTests".into(), json!(policy.run_project_tests));
-    fields.insert("visualEvidence".into(), json!(policy.visual_evidence));
-    fields.insert("startImmediately".into(), json!(raw.queue.unwrap_or(false)));
-    let mut request = task_input(fields)?;
+    request.title = crate::identity::auth::js_trim(&request.title).to_owned();
+    request.description = crate::identity::auth::js_trim(&request.description).to_owned();
+    let advisors = serde_json::to_value(&request.advisor_profile_ids)?;
+    validate_workflow(
+        request.workflow.as_str(),
+        &advisors,
+        Some(&json!(request.delivery_target)),
+        Some(&json!(request.run_project_tests)),
+        request
+            .source
+            .as_ref()
+            .is_some_and(|source| matches!(source, task_contracts::TaskSource::PullRequest { .. })),
+    )?;
+    use garde::Validate;
+    request.validate().map_err(|report| {
+        TaskError::internal(format!(
+            "task input is invalid: {:?}",
+            crate::http::contracts::typed::garde_findings(&report, &request)
+        ))
+    })?;
     if raw
         .delivery_target
         .as_ref()

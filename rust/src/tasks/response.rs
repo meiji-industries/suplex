@@ -10,50 +10,50 @@ use crate::platform::database::{DatabaseResult, SuplexDatabase};
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TaskResponse {
-    id: String,
+    pub(super) id: String,
     company_id: String,
-    project_id: String,
-    issue_key: Option<String>,
+    pub(super) project_id: String,
+    pub(super) issue_key: Option<String>,
     issue: Value,
-    title: String,
+    pub(super) title: String,
     description: String,
-    status: String,
-    delivery_target: String,
+    pub(super) status: String,
+    pub(super) delivery_target: String,
     root_profile: Value,
     worker_profile: Value,
-    workflow: String,
+    pub(super) workflow: String,
     advisor_profiles: Value,
-    workflow_state: PublicWorkflowState,
-    depends_on: Vec<String>,
-    configuration: Value,
+    pub(super) workflow_state: PublicWorkflowState,
+    pub(super) depends_on: Vec<String>,
+    pub(super) configuration: Value,
     worktree: Value,
-    pull_request: Value,
-    human_question: Value,
-    blocked_by: Vec<Value>,
-    queue: TaskQueue,
+    pub(super) pull_request: Value,
+    pub(super) human_question: Value,
+    pub(super) blocked_by: Vec<Value>,
+    pub(super) queue: TaskQueue,
     limits: TaskLimits,
     wake_at: Option<String>,
     images: Vec<TaskImage>,
     artifacts: Vec<TaskImage>,
-    created_at: String,
-    updated_at: String,
+    pub(super) created_at: String,
+    pub(super) updated_at: String,
     status_changed_at: String,
-    archived_at: Option<String>,
+    pub(super) archived_at: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct PublicWorkflowState {
+pub(super) struct PublicWorkflowState {
     version: i64,
     reviews: Value,
     accepted_delivery: Value,
-    delivery_wait: Value,
-    completion: Value,
+    pub(super) delivery_wait: Value,
+    pub(super) completion: Value,
 }
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct TaskQueue {
+pub(super) struct TaskQueue {
     waiting_on: Vec<Value>,
 }
 

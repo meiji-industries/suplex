@@ -924,7 +924,29 @@ mod tests {
         )
         .await;
         assert_eq!(invalid_coordinator.status(), StatusCode::BAD_REQUEST);
-        let coordinator_body = Bytes::from(json!({"sessionId":root_session,"rootProfileId":"replacement-root","resume":false,"handoff":"  Continue the task  "}).to_string());
+        let long_handoff = format!("Earlier work: {}", "x".repeat(20_000));
+        let coordinator_body = Bytes::from(json!({"sessionId":root_session,"rootProfileId":"replacement-root","resume":false,"handoff":long_handoff}).to_string());
+        let mut anonymous_coordinator_headers = HeaderMap::new();
+        anonymous_coordinator_headers.insert("content-type", "application/json".parse().unwrap());
+        let unauthorized_coordinator = replace_coordinator(
+            State(state.clone()),
+            Path(immediate_id.clone()),
+            anonymous_coordinator_headers,
+            coordinator_body.clone(),
+        )
+        .await;
+        assert_eq!(unauthorized_coordinator.status(), StatusCode::UNAUTHORIZED);
+        let stale_coordinator = replace_coordinator(
+            State(state.clone()),
+            Path(immediate_id.clone()),
+            headers.clone(),
+            Bytes::from(
+                json!({"sessionId":"unrelated","rootProfileId":"replacement-root","resume":false})
+                    .to_string(),
+            ),
+        )
+        .await;
+        assert_eq!(stale_coordinator.status(), StatusCode::CONFLICT);
         let coordinator = replace_coordinator(
             State(state.clone()),
             Path(immediate_id.clone()),
@@ -945,6 +967,12 @@ mod tests {
                     database, &root.id
                 )
                 .unwrap()
+            );
+            assert!(
+                crate::coordination::root_session_store::pending_turns(database, &root.id)
+                    .unwrap()
+                    .iter()
+                    .any(|turn| turn.prompt_text.contains(&long_handoff))
             );
             assert_eq!(
                 crate::coordination::root_session_store::current_worker(database, &immediate_id)
@@ -969,6 +997,14 @@ mod tests {
                 .unwrap(),
             coordinator_raw
         );
+        let changed_coordinator = replace_coordinator(
+            State(state.clone()),
+            Path(immediate_id.clone()),
+            headers.clone(),
+            Bytes::from(json!({"sessionId":root_session,"rootProfileId":"replacement-root","resume":false,"handoff":"Different direction"}).to_string()),
+        )
+        .await;
+        assert_eq!(changed_coordinator.status(), StatusCode::CONFLICT);
         state
             .with_database(|database| {
                 database.connection().execute(

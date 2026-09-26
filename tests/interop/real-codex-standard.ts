@@ -195,6 +195,7 @@ closeOnTimeout = async () => {
 progress(`Rust listening on port ${fixture.config.port}`);
 let preserveData = false;
 try {
+  await rm(fixture.project.repositoryPath, { recursive: true, force: true });
   await git("clone", origin, fixture.project.repositoryPath);
   const canonicalOrigin = `https://github.com/${fixture.project.repository}.git`;
   await git("-C", fixture.project.repositoryPath, "remote", "set-url", "origin", canonicalOrigin);

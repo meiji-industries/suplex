@@ -11,7 +11,7 @@
 // searches the Rust output for Keychain prompts, and stops every process that names the fixture directory.
 import { equal, ok } from "node:assert/strict";
 import { rmSync } from "node:fs";
-import { access, mkdir, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { setTimeout } from "node:timers/promises";
 import { dirname, join, resolve } from "node:path";
@@ -158,6 +158,7 @@ try {
 
   if (phase === "providers") {
     const origin = await seedOrigin();
+    await rm(fixture.project.repositoryPath, { recursive: true, force: true });
     await git("clone", origin, fixture.project.repositoryPath);
     const canonicalOrigin = `https://github.com/${fixture.project.repository}.git`;
     await git("-C", fixture.project.repositoryPath, "remote", "set-url", "origin", canonicalOrigin);

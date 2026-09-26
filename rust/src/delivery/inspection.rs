@@ -87,7 +87,7 @@ pub fn inspect_revisions(
         ))
     })?;
     inspect_git_range(
-        path,
+        &repository,
         head,
         git2::Oid::from_str(base_sha)?,
         github_token,
@@ -117,11 +117,10 @@ pub fn review_equivalence(
         worktree::published_base_commit(&repository, oid, github_token)
             .map_err(|_| format!("Git could not obtain reviewed revision {}", &sha[..12]))?;
     }
-    let reviewed = inspect_revisions(
-        path,
-        &accepted.base_sha,
-        &accepted.head_sha,
-        github_token,
+    let reviewed = inspect_loaded_range(
+        &repository,
+        git2::Oid::from_str(&accepted.head_sha).map_err(|error| error.to_string())?,
+        git2::Oid::from_str(&accepted.base_sha).map_err(|error| error.to_string())?,
         "",
     )
     .map_err(|error| error.to_string())?;
@@ -159,8 +158,13 @@ pub fn review_equivalence(
             }
         ));
     }
-    let fresh = inspect_revisions(path, base_sha, &accepted.head_sha, github_token, "")
-        .map_err(|error| error.to_string())?;
+    let fresh = inspect_loaded_range(
+        &repository,
+        git2::Oid::from_str(&accepted.head_sha).map_err(|error| error.to_string())?,
+        git2::Oid::from_str(base_sha).map_err(|error| error.to_string())?,
+        "",
+    )
+    .map_err(|error| error.to_string())?;
     let fresh = ReviewRange::from(&fresh);
     if !same_range(&reviewed, &fresh) {
         return Err(format!(
@@ -198,14 +202,22 @@ fn patch_display(patch: &str) -> (String, bool) {
 /// Git's no-rename three-dot patch is the review evidence. The complete text
 /// is hashed before the display is truncated to the source's UTF-16 limit.
 pub fn inspect_git_range(
-    path: &Path,
+    repository: &Repository,
     head: git2::Oid,
     published_base: git2::Oid,
     github_token: Option<&str>,
     base_branch: &str,
 ) -> Result<DeliveryDiff, Box<dyn Error>> {
-    let repository = Repository::open(path)?;
-    let base = worktree::published_base_commit(&repository, published_base, github_token)?;
+    let base = worktree::published_base_commit(repository, published_base, github_token)?;
+    inspect_loaded_range(repository, head, base, base_branch)
+}
+
+fn inspect_loaded_range(
+    repository: &Repository,
+    head: git2::Oid,
+    base: git2::Oid,
+    base_branch: &str,
+) -> Result<DeliveryDiff, Box<dyn Error>> {
     let merge_base = repository.merge_base(base, head)?;
     let base_tree = repository.find_commit(merge_base)?.tree()?;
     let head_tree = repository.find_commit(head)?.tree()?;

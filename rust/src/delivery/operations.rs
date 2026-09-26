@@ -1949,7 +1949,7 @@ impl DeliveryOperations {
                 .merge_conditionally(repository, requested, &head, false)
                 .await?
             {
-                MergeResult::Merged { .. } => (None, String::new()),
+                MergeResult::Merged => (None, String::new()),
                 MergeResult::NotMerged => (Some(""), "GitHub has not completed the merge".into()),
                 MergeResult::Disposition {
                     disposition,

@@ -8,7 +8,7 @@ use std::{error::Error, fmt, path::Path, sync::LazyLock, time::Duration};
 use chrono::{DateTime, Utc};
 use git2::{PushOptions, Repository};
 use regex::Regex;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use super::github::Access;
@@ -171,9 +171,7 @@ impl Observation {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum MergeResult {
-    Merged {
-        sha: String,
-    },
+    Merged,
     NotMerged,
     Disposition {
         disposition: &'static str,
@@ -211,83 +209,273 @@ fn iso_datetime(value: &Value, key: &str) -> Option<Option<String>> {
     }
 }
 
-/// TypeScript `normalizeGithubPull` for a REST pull request object.
-pub fn normalize_pull(value: &Value) -> GithubResult<PullRequest> {
-    let malformed = || {
-        failure(
-            "invalid-provider-response",
-            "GitHub pull request response is malformed",
-        )
-    };
-    let side = |key: &str| -> Option<(String, String, String)> {
-        let side = value.get(key)?;
-        let repository = side.get("repo")?.get("full_name")?.as_str()?;
-        if !REPOSITORY.is_match(repository) {
-            return None;
-        }
-        Some((
-            nonempty_bounded(side, "ref")?,
-            sha(side, "sha")?,
-            repository.to_lowercase(),
-        ))
-    };
-    let number = positive(value, "number").ok_or_else(malformed)?;
-    let url = web_url(value, "html_url").ok_or_else(malformed)?;
-    let state = string(value, "state")
-        .filter(|state| state == "open" || state == "closed")
-        .ok_or_else(malformed)?;
-    let draft = value
-        .get("draft")
-        .and_then(Value::as_bool)
-        .ok_or_else(malformed)?;
-    let merged_at = iso_datetime(value, "merged_at").ok_or_else(malformed)?;
-    let (head_branch, head_sha, head_repository) = side("head").ok_or_else(malformed)?;
-    let (base_branch, base_sha, base_repository) = side("base").ok_or_else(malformed)?;
-    if value.get("title").is_some_and(|title| !title.is_string())
-        || value
-            .get("body")
-            .is_some_and(|body| !body.is_string() && !body.is_null())
-    {
-        return Err(malformed());
-    }
-    let state = if state == "closed" && merged_at.is_some() {
-        "merged".to_owned()
-    } else {
-        state
-    };
-    Ok(PullRequest {
-        number,
-        url,
-        is_cross_repository: Some(head_repository != base_repository),
-        repository: head_repository,
-        head_branch,
-        base_branch,
-        head_sha,
-        base_sha,
-        is_draft: draft,
-        state,
-        merged_at,
-        auto_merge_enabled: value
-            .get("auto_merge")
-            .is_some_and(|auto| auto.is_object())
-            .then_some(true),
-        title: string(value, "title"),
-        body: value
-            .get("body")
-            .map(|body| body.as_str().unwrap_or("").to_owned()),
-        author: value
-            .get("user")
-            .and_then(|user| user.get("login"))
-            .and_then(Value::as_str)
-            .map(str::to_owned),
-        updated_at: string(value, "updated_at"),
-        node_id: string(value, "node_id"),
-    })
+// Optional provider metadata used to ignore values of the wrong type.
+fn optional_metadata<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: serde::de::DeserializeOwned,
+{
+    Ok(serde_json::from_value(Value::deserialize(deserializer)?).ok())
 }
 
-fn check_timestamp(value: &Value) -> Value {
+fn present_body<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<Option<String>>, D::Error> {
+    Option::<String>::deserialize(deserializer).map(Some)
+}
+
+fn present_title<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<String>, D::Error> {
+    String::deserialize(deserializer).map(Some)
+}
+
+fn object_present<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<bool, D::Error> {
+    Ok(Value::deserialize(deserializer)?.is_object())
+}
+
+#[derive(Deserialize)]
+struct RestPullRequest {
+    number: u64,
+    html_url: String,
+    state: String,
+    draft: bool,
+    merged_at: Option<String>,
+    head: RestPullSide,
+    base: RestPullSide,
+    #[serde(default, deserialize_with = "object_present")]
+    auto_merge: bool,
+    #[serde(default, deserialize_with = "present_title")]
+    title: Option<String>,
+    #[serde(default, deserialize_with = "present_body")]
+    body: Option<Option<String>>,
+    #[serde(default, deserialize_with = "optional_metadata")]
+    user: Option<RestAuthor>,
+    #[serde(default, deserialize_with = "optional_metadata")]
+    updated_at: Option<String>,
+    #[serde(default, deserialize_with = "optional_metadata")]
+    node_id: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct RestAuthor {
+    login: String,
+}
+
+#[derive(Deserialize)]
+struct RestPullSide {
+    r#ref: String,
+    sha: String,
+    repo: RestRepository,
+}
+
+#[derive(Deserialize)]
+struct RestRepository {
+    full_name: String,
+}
+
+impl RestPullRequest {
+    fn normalize(self) -> GithubResult<PullRequest> {
+        let side_valid = |side: &RestPullSide| {
+            (1..=256).contains(&side.r#ref.chars().count())
+                && valid_sha(&side.sha)
+                && REPOSITORY.is_match(&side.repo.full_name)
+        };
+        if self.number == 0
+            || url::Url::parse(&self.html_url).is_err()
+            || !matches!(self.state.as_str(), "open" | "closed")
+            || !side_valid(&self.head)
+            || !side_valid(&self.base)
+            || self
+                .merged_at
+                .as_ref()
+                .is_some_and(|time| DateTime::parse_from_rfc3339(time).is_err())
+        {
+            return Err(failure(
+                "invalid-provider-response",
+                "GitHub pull request response is malformed",
+            ));
+        }
+        let head_repository = self.head.repo.full_name.to_lowercase();
+        let base_repository = self.base.repo.full_name.to_lowercase();
+        Ok(PullRequest {
+            number: self.number,
+            url: self.html_url,
+            is_cross_repository: Some(head_repository != base_repository),
+            repository: head_repository,
+            head_branch: self.head.r#ref,
+            base_branch: self.base.r#ref,
+            head_sha: self.head.sha,
+            base_sha: self.base.sha,
+            is_draft: self.draft,
+            state: if self.state == "closed" && self.merged_at.is_some() {
+                "merged".into()
+            } else {
+                self.state
+            },
+            merged_at: self.merged_at,
+            auto_merge_enabled: self.auto_merge.then_some(true),
+            title: self.title,
+            body: self.body.map(Option::unwrap_or_default),
+            author: self.user.map(|user| user.login),
+            updated_at: self.updated_at,
+            node_id: self.node_id,
+        })
+    }
+}
+
+#[derive(Deserialize)]
+struct GraphObservation<T = PullRequestObservation> {
+    data: Option<GraphRepository<T>>,
+}
+#[derive(Deserialize)]
+struct GraphRepository<T> {
+    repository: Option<GraphPull<T>>,
+}
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GraphPull<T> {
+    pull_request: Option<T>,
+}
+
+impl<T> GraphObservation<T> {
+    fn pull(self) -> Option<T> {
+        self.data
+            .and_then(|data| data.repository)
+            .and_then(|repo| repo.pull_request)
+    }
+}
+
+#[derive(Deserialize)]
+struct MergeSettings {
+    allow_squash_merge: bool,
+    allow_merge_commit: bool,
+    allow_rebase_merge: bool,
+}
+#[derive(Deserialize)]
+struct ConditionalMerge {
+    merged: bool,
+    message: String,
+    #[serde(default, deserialize_with = "optional_metadata")]
+    sha: Option<String>,
+}
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct MergeContext {
+    id: String,
+    head_ref_oid: String,
+    base_ref_name: String,
+    #[serde(default, deserialize_with = "optional_metadata")]
+    mergeable: Option<String>,
+    #[serde(default, deserialize_with = "optional_metadata")]
+    merge_state_status: Option<String>,
+}
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct PullRequestObservation {
+    number: u64,
+    url: String,
+    state: String,
+    is_draft: bool,
+    head_ref_oid: String,
+    base_ref_oid: String,
+    #[serde(deserialize_with = "Deserialize::deserialize")]
+    mergeable: Option<String>,
+    merge_state_status: Option<String>,
+    #[serde(deserialize_with = "Deserialize::deserialize")]
+    auto_merge_request: Option<serde_json::Map<String, Value>>,
+    #[serde(deserialize_with = "Deserialize::deserialize")]
+    review_decision: Option<String>,
+    #[serde(deserialize_with = "Deserialize::deserialize")]
+    author: Option<GraphAuthor>,
+    changed_files: u64,
+    additions: u64,
+    deletions: u64,
+    #[serde(default, deserialize_with = "optional_metadata")]
+    title: Option<String>,
+    #[serde(default, rename = "commits", deserialize_with = "commit_checks")]
+    checks: Vec<CheckContext>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct GraphAuthor {
+    login: String,
+    #[serde(default, deserialize_with = "optional_metadata")]
+    avatar_url: Option<String>,
+}
+fn commit_checks<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Vec<CheckContext>, D::Error> {
+    let commits = Value::deserialize(deserializer)?;
+    match commits
+        .pointer("/nodes/0/commit/statusCheckRollup/contexts/nodes")
+        .and_then(Value::as_array)
+    {
+        Some(nodes) if nodes.iter().all(Value::is_object) => nodes
+            .iter()
+            .cloned()
+            .map(serde_json::from_value)
+            .collect::<Result<_, _>>()
+            .map_err(serde::de::Error::custom),
+        Some(_) => Err(serde::de::Error::custom("Invalid check context")),
+        None => Ok(Vec::new()),
+    }
+}
+
+#[derive(Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CheckContext {
+    #[serde(default, deserialize_with = "optional_metadata")]
+    name: Option<String>,
+    #[serde(default, deserialize_with = "optional_metadata")]
+    context: Option<String>,
+    #[serde(default, deserialize_with = "optional_metadata")]
+    conclusion: Option<String>,
+    #[serde(default, deserialize_with = "check_status")]
+    status: Option<Option<String>>,
+    #[serde(default, deserialize_with = "optional_metadata")]
+    state: Option<String>,
+    #[serde(default, deserialize_with = "check_link")]
+    details_url: Option<Option<String>>,
+    #[serde(default, deserialize_with = "optional_metadata")]
+    target_url: Option<String>,
+    #[serde(default, deserialize_with = "optional_metadata")]
+    started_at: Option<String>,
+    #[serde(default, deserialize_with = "optional_metadata")]
+    completed_at: Option<String>,
+    #[serde(default, deserialize_with = "optional_metadata")]
+    check_suite: Option<CheckSuite>,
+    #[serde(default, deserialize_with = "optional_metadata")]
+    workflow_name: Option<String>,
+}
+fn check_status<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<Option<String>>, D::Error> {
+    optional_metadata(deserializer).map(Some)
+}
+fn check_link<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<Option<String>>, D::Error> {
+    let value = Value::deserialize(deserializer)?;
+    Ok((!value.is_null()).then(|| value.as_str().map(str::to_owned)))
+}
+#[derive(Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct CheckSuite {
+    workflow_run: Option<WorkflowRun>,
+}
+#[derive(Clone, Deserialize)]
+struct WorkflowRun {
+    workflow: Option<WorkflowName>,
+}
+#[derive(Clone, Deserialize)]
+struct WorkflowName {
+    name: String,
+}
+
+fn check_timestamp(value: Option<&str>) -> Value {
     value
-        .as_str()
         .and_then(|text| DateTime::parse_from_rfc3339(text).ok())
         .filter(|time| time.timestamp_millis() > 0)
         .map_or(Value::Null, |time| {
@@ -296,15 +484,20 @@ fn check_timestamp(value: &Value) -> Value {
 }
 
 /// TypeScript `summarizeChecks`: the latest run per name, in first-seen order.
-fn summarize_checks(checks: Option<&Vec<Value>>) -> Checks {
-    let mut latest: Vec<(String, Value, Option<String>)> = Vec::new();
-    for (index, check) in checks.into_iter().flatten().enumerate() {
-        let name = string(check, "name")
-            .or_else(|| string(check, "context"))
+fn summarize_checks(checks: &[CheckContext]) -> Checks {
+    let mut latest: Vec<(String, &CheckContext, Option<&str>)> = Vec::new();
+    for (index, check) in checks.iter().enumerate() {
+        let name = check
+            .name
+            .clone()
+            .or_else(|| check.context.clone())
             .unwrap_or_else(|| index.to_string());
-        let completed_at = string(check, "completedAt").or_else(|| string(check, "startedAt"));
+        let completed_at = check
+            .completed_at
+            .as_deref()
+            .or(check.started_at.as_deref());
         match latest.iter_mut().find(|(known, _, _)| *known == name) {
-            None => latest.push((name, check.clone(), completed_at)),
+            None => latest.push((name, check, completed_at)),
             Some(previous) => {
                 let newer = match (&completed_at, &previous.2) {
                     (Some(current), Some(before)) => current >= before,
@@ -313,7 +506,7 @@ fn summarize_checks(checks: Option<&Vec<Value>>) -> Checks {
                     (None, Some(_)) => false,
                 };
                 if newer {
-                    previous.1 = check.clone();
+                    previous.1 = check;
                     previous.2 = completed_at;
                 }
             }
@@ -322,21 +515,15 @@ fn summarize_checks(checks: Option<&Vec<Value>>) -> Checks {
     let mut summary = Checks::default();
     for (name, check, _) in latest {
         summary.total += 1;
-        let conclusion = string(&check, "conclusion");
-        let status = match check.get("status") {
-            None => match check.get("state").and_then(Value::as_str) {
+        let conclusion = check.conclusion.as_deref();
+        let status = match &check.status {
+            None => match check.state.as_deref() {
                 Some("SUCCESS") => "successful",
                 Some("FAILURE" | "ERROR") => "failing",
                 _ => "pending",
             },
-            Some(status) if status != "COMPLETED" => "pending",
-            _ if matches!(
-                conclusion.as_deref(),
-                Some("SUCCESS" | "NEUTRAL" | "SKIPPED")
-            ) =>
-            {
-                "successful"
-            }
+            Some(status) if status.as_deref() != Some("COMPLETED") => "pending",
+            _ if matches!(conclusion, Some("SUCCESS" | "NEUTRAL" | "SKIPPED")) => "successful",
             _ => "failing",
         };
         match status {
@@ -345,11 +532,17 @@ fn summarize_checks(checks: Option<&Vec<Value>>) -> Checks {
             _ => summary.pending += 1,
         }
         let link = check
-            .get("detailsUrl")
-            .filter(|value| !value.is_null())
-            .or_else(|| check.get("targetUrl"))
-            .and_then(Value::as_str)
+            .details_url
+            .as_ref()
+            .map_or(check.target_url.as_deref(), |link| link.as_deref())
             .filter(|text| url::Url::parse(text).is_ok());
+        let workflow = check
+            .check_suite
+            .as_ref()
+            .and_then(|suite| suite.workflow_run.as_ref())
+            .and_then(|run| run.workflow.as_ref())
+            .map(|workflow| workflow.name.as_str())
+            .or(check.workflow_name.as_deref());
         let mut run = serde_json::Map::new();
         run.insert("name".into(), json!(name));
         run.insert("status".into(), json!(status));
@@ -359,91 +552,65 @@ fn summarize_checks(checks: Option<&Vec<Value>>) -> Checks {
         }
         run.insert(
             "workflow".into(),
-            json!(string(&check, "workflowName").filter(|text| !text.is_empty())),
+            json!(workflow.filter(|text| !text.is_empty())),
         );
         run.insert(
             "startedAt".into(),
-            check_timestamp(check.get("startedAt").unwrap_or(&Value::Null)),
+            check_timestamp(check.started_at.as_deref()),
         );
         run.insert(
             "completedAt".into(),
-            check_timestamp(check.get("completedAt").unwrap_or(&Value::Null)),
+            check_timestamp(check.completed_at.as_deref()),
         );
         summary.runs.push(Value::Object(run));
     }
     summary
 }
 
-/// TypeScript `mapGithubPullRequestObservation` for the `gh pr view` shape.
-pub fn map_observation(value: &Value) -> GithubResult<Observation> {
-    let malformed = || {
-        failure(
-            "invalid-provider-response",
-            "GitHub pull request observation is malformed",
-        )
-    };
-    let nullable_string = |key: &str| -> Option<Option<String>> {
-        match value.get(key) {
-            Some(Value::Null) => Some(None),
-            Some(Value::String(text)) => Some(Some(text.clone())),
-            _ => None,
+impl PullRequestObservation {
+    fn normalize(self) -> GithubResult<Observation> {
+        if self.number == 0
+            || url::Url::parse(&self.url).is_err()
+            || !matches!(self.state.as_str(), "OPEN" | "CLOSED" | "MERGED")
+            || !valid_sha(&self.head_ref_oid)
+            || !valid_sha(&self.base_ref_oid)
+            || self
+                .author
+                .as_ref()
+                .is_some_and(|author| author.login.is_empty())
+        {
+            return Err(failure(
+                "invalid-provider-response",
+                "GitHub pull request observation is malformed",
+            ));
         }
-    };
-    let count = |key: &str| value.get(key).and_then(Value::as_u64);
-    let state = string(value, "state")
-        .filter(|state| matches!(state.as_str(), "OPEN" | "CLOSED" | "MERGED"))
-        .ok_or_else(malformed)?;
-    let author = match value.get("author") {
-        Some(Value::Null) => None,
-        Some(author) => {
-            let login = string(author, "login")
-                .filter(|login| !login.is_empty())
-                .ok_or_else(malformed)?;
-            let avatar = string(author, "avatarUrl")
-                .unwrap_or_else(|| format!("https://avatars.githubusercontent.com/{login}"));
-            Some(json!({"login": login, "avatarUrl": avatar}))
-        }
-        None => return Err(malformed()),
-    };
-    let rollup = match value.get("statusCheckRollup") {
-        Some(Value::Array(rows)) if rows.iter().all(Value::is_object) => Some(rows),
-        Some(Value::Null) => None,
-        _ => return Err(malformed()),
-    };
-    if !value
-        .get("autoMergeRequest")
-        .is_some_and(|auto| auto.is_null() || auto.is_object())
-    {
-        return Err(malformed());
+        let checks = summarize_checks(&self.checks);
+        let author = self.author.map(|author| {
+            let avatar = author.avatar_url.unwrap_or_else(|| {
+                format!("https://avatars.githubusercontent.com/{}", author.login)
+            });
+            json!({"login": author.login, "avatarUrl": avatar})
+        });
+        Ok(Observation {
+            exists: true,
+            number: Some(self.number),
+            url: Some(self.url),
+            state: Some(self.state.to_lowercase()),
+            is_draft: Some(self.is_draft),
+            head_sha: Some(self.head_ref_oid),
+            base_sha: Some(self.base_ref_oid),
+            mergeable: self.mergeable,
+            merge_state_status: self.merge_state_status,
+            checks,
+            author,
+            changed_files: Some(self.changed_files),
+            additions: Some(self.additions),
+            deletions: Some(self.deletions),
+            auto_merge_enabled: Some(self.auto_merge_request.is_some()),
+            review_decision: self.review_decision,
+            title: self.title,
+        })
     }
-    let merge_state_status = match value.get("mergeStateStatus") {
-        None => None,
-        Some(_) => nullable_string("mergeStateStatus").ok_or_else(malformed)?,
-    };
-    Ok(Observation {
-        exists: true,
-        number: Some(positive(value, "number").ok_or_else(malformed)?),
-        url: Some(web_url(value, "url").ok_or_else(malformed)?),
-        state: Some(state.to_lowercase()),
-        is_draft: Some(
-            value
-                .get("isDraft")
-                .and_then(Value::as_bool)
-                .ok_or_else(malformed)?,
-        ),
-        head_sha: Some(sha(value, "headRefOid").ok_or_else(malformed)?),
-        base_sha: Some(sha(value, "baseRefOid").ok_or_else(malformed)?),
-        mergeable: nullable_string("mergeable").ok_or_else(malformed)?,
-        merge_state_status,
-        checks: summarize_checks(rollup),
-        author,
-        changed_files: Some(count("changedFiles").ok_or_else(malformed)?),
-        additions: Some(count("additions").ok_or_else(malformed)?),
-        deletions: Some(count("deletions").ok_or_else(malformed)?),
-        auto_merge_enabled: Some(!value["autoMergeRequest"].is_null()),
-        review_decision: nullable_string("reviewDecision").ok_or_else(malformed)?,
-        title: string(value, "title"),
-    })
 }
 
 /// A pull request list row in the `gh pr list --json` shape.
@@ -494,34 +661,6 @@ const PULL_LIST_FIELDS: &str = "number url isDraft state headRefName headRefOid 
 /// The `gh pr view` observation fields, with the latest commit's check rollup.
 const OBSERVATION_QUERY: &str = "query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){number url state isDraft headRefOid baseRefOid mergeable mergeStateStatus autoMergeRequest{enabledAt} reviewDecision author{login avatarUrl} changedFiles additions deletions title commits(last:1){nodes{commit{statusCheckRollup{contexts(first:100){nodes{__typename ...on StatusContext{context state targetUrl startedAt:createdAt} ...on CheckRun{name status conclusion startedAt completedAt detailsUrl checkSuite{workflowRun{workflow{name}}}}}}}}}}}}}";
 
-/// Flatten GraphQL check contexts to the `gh pr view --json statusCheckRollup` shape.
-fn flatten_rollup(pull: &mut Value) {
-    let contexts = pull["commits"]["nodes"][0]["commit"]["statusCheckRollup"]["contexts"]["nodes"]
-        .as_array()
-        .cloned();
-    let rollup = contexts.map(|rows| {
-        rows.into_iter()
-            .map(|mut row| {
-                if let Some(name) = row["checkSuite"]["workflowRun"]["workflow"]["name"].as_str() {
-                    row["workflowName"] = json!(name);
-                }
-                if let Some(object) = row.as_object_mut() {
-                    object.remove("checkSuite");
-                    object.remove("__typename");
-                }
-                row
-            })
-            .collect::<Vec<_>>()
-    });
-    if let Some(object) = pull.as_object_mut() {
-        object.remove("commits");
-        object.insert(
-            "statusCheckRollup".into(),
-            rollup.map_or(Value::Array(Vec::new()), Value::Array),
-        );
-    }
-}
-
 struct Reply {
     status: u16,
     reset: Option<i64>,
@@ -529,7 +668,7 @@ struct Reply {
 }
 
 enum Api {
-    Value(Value),
+    Json(String),
     NotFound,
     Accepted { message: String },
 }
@@ -540,6 +679,15 @@ fn parse_json(body: &str) -> GithubResult<Value> {
     }
     serde_json::from_str(body)
         .map_err(|_| failure("invalid-provider-response", "GitHub returned invalid JSON"))
+}
+
+fn decode_response<T: serde::de::DeserializeOwned>(body: &str, message: &str) -> GithubResult<T> {
+    serde_json::from_str(body).map_err(|_| failure("invalid-provider-response", message))
+}
+
+#[cfg(test)]
+fn decode<T: serde::de::DeserializeOwned>(value: Value, message: &str) -> GithubResult<T> {
+    serde_json::from_value(value).map_err(|_| failure("invalid-provider-response", message))
 }
 
 fn diagnostic(body: &str) -> String {
@@ -654,7 +802,15 @@ impl Github {
     ) -> GithubResult<Api> {
         let reply = self.send(method, path, body, operation).await?;
         if (200..300).contains(&reply.status) {
-            return parse_json(&reply.body).map(Api::Value);
+            let body = if reply.body.trim().is_empty() {
+                "null".to_owned()
+            } else {
+                reply.body
+            };
+            serde_json::from_str::<serde::de::IgnoredAny>(&body).map_err(|_| {
+                failure("invalid-provider-response", "GitHub returned invalid JSON")
+            })?;
+            return Ok(Api::Json(body));
         }
         let diagnostic = diagnostic(&reply.body);
         if accepted.contains(&reply.status) {
@@ -718,6 +874,22 @@ impl Github {
         ))
     }
 
+    async fn response_body(
+        &self,
+        method: &str,
+        path: &str,
+        body: Option<&Value>,
+        operation: &str,
+    ) -> GithubResult<String> {
+        match self
+            .api(method, path, body, operation, false, None, &[])
+            .await?
+        {
+            Api::Json(body) => Ok(body),
+            _ => Err(failure("provider-unavailable", operation.to_owned())),
+        }
+    }
+
     async fn value(
         &self,
         method: &str,
@@ -725,33 +897,37 @@ impl Github {
         body: Option<&Value>,
         operation: &str,
     ) -> GithubResult<Value> {
-        match self
-            .api(method, path, body, operation, false, None, &[])
-            .await?
-        {
-            Api::Value(value) => Ok(value),
-            _ => Err(failure("provider-unavailable", operation.to_owned())),
-        }
+        parse_json(&self.response_body(method, path, body, operation).await?)
     }
 
     /// POST one GraphQL document. A response with errors and no data fails.
-    async fn graphql(&self, query: &str, variables: Value, operation: &str) -> GithubResult<Value> {
+    async fn graphql<T: serde::de::DeserializeOwned>(
+        &self,
+        query: &str,
+        variables: Value,
+        operation: &str,
+    ) -> GithubResult<T> {
         let body = json!({"query": query, "variables": variables});
-        let value = self
-            .value("POST", "/graphql", Some(&body), operation)
+        let response = self
+            .response_body("POST", "/graphql", Some(&body), operation)
             .await?;
-        let errors = value["errors"]
-            .as_array()
-            .filter(|errors| !errors.is_empty());
-        if let Some(errors) = errors
-            && value["data"].is_null()
+        // Check errors without parsing the successful response into an untyped document.
+        #[derive(Deserialize)]
+        struct Errors {
+            #[serde(default, deserialize_with = "optional_metadata")]
+            errors: Option<Vec<Value>>,
+            data: Option<serde::de::IgnoredAny>,
+        }
+        let envelope: Errors = decode_response(&response, "GitHub returned invalid JSON")?;
+        if let Some(errors) = envelope.errors.filter(|errors| !errors.is_empty())
+            && envelope.data.is_none()
         {
             return Err(failure(
                 "provider-unavailable",
                 redact_summary(errors[0]["message"].as_str().unwrap_or(operation)),
             ));
         }
-        Ok(value)
+        decode_response(&response, &format!("GitHub {operation} is malformed"))
     }
 
     async fn retry_transient<T, F, Fut>(&self, mut observe: F) -> GithubResult<T>
@@ -785,12 +961,14 @@ impl Github {
             .await?
         {
             Api::NotFound => Ok(None),
-            Api::Value(value) => sha(&value["commit"], "sha").map(Some).ok_or_else(|| {
-                failure(
-                    "invalid-provider-response",
-                    "GitHub branch response is malformed",
-                )
-            }),
+            Api::Json(body) => sha(&parse_json(&body)?["commit"], "sha")
+                .map(Some)
+                .ok_or_else(|| {
+                    failure(
+                        "invalid-provider-response",
+                        "GitHub branch response is malformed",
+                    )
+                }),
             Api::Accepted { .. } => unreachable!("no accepted statuses"),
         }
     }
@@ -801,11 +979,13 @@ impl Github {
         number: u64,
     ) -> GithubResult<PullRequest> {
         let path = repo_route(repository, &["pulls", &number.to_string()]);
-        normalize_pull(
+        decode_response::<RestPullRequest>(
             &self
-                .value("GET", &path, None, "pull request observation")
+                .response_body("GET", &path, None, "pull request observation")
                 .await?,
-        )
+            "GitHub pull request response is malformed",
+        )?
+        .normalize()
     }
 
     pub async fn create_draft_pull_request(
@@ -830,7 +1010,11 @@ impl Github {
             )
             .await?
         {
-            Api::Value(value) => normalize_pull(&value),
+            Api::Json(body) => decode_response::<RestPullRequest>(
+                &body,
+                "GitHub pull request response is malformed",
+            )?
+            .normalize(),
             _ => Err(failure("provider-unavailable", summary)),
         }
     }
@@ -842,22 +1026,31 @@ impl Github {
         title: &str,
         body: &str,
     ) -> GithubResult<PullRequest> {
-        let value = self
-            .value(
+        let response = self
+            .response_body(
                 "PATCH",
                 &repo_route(repository, &["pulls", &number.to_string()]),
                 Some(&json!({"title": title, "body": body})),
                 "draft pull request metadata update",
             )
             .await?;
-        let pull = normalize_pull(&value);
-        match pull {
-            Ok(pull)
-                if value["title"].as_str() == Some(title)
-                    && value["body"].as_str() == Some(body) =>
+        let pull = decode_response::<RestPullRequest>(
+            &response,
+            "GitHub pull request response is malformed",
+        )
+        .and_then(|pull| {
+            if pull.title.as_deref() != Some(title)
+                || pull.body.as_ref().and_then(|body| body.as_deref()) != Some(body)
             {
-                Ok(pull)
+                return Err(failure(
+                    "invalid-provider-response",
+                    "GitHub did not confirm the updated pull request metadata",
+                ));
             }
+            pull.normalize()
+        });
+        match pull {
+            Ok(pull) => Ok(pull),
             _ => Err(failure(
                 "invalid-provider-response",
                 "GitHub did not confirm the updated pull request metadata",
@@ -884,7 +1077,7 @@ impl Github {
         let mut variables = variables;
         variables["owner"] = json!(owner);
         variables["name"] = json!(name);
-        let value = self.graphql(&query, variables, "pull request list").await?;
+        let value: Value = self.graphql(&query, variables, "pull request list").await?;
         let rows = value["data"]["repository"]["pullRequests"]["nodes"]
             .as_array()
             .ok_or_else(|| {
@@ -949,7 +1142,7 @@ impl Github {
             .split_once('/')
             .ok_or_else(|| failure("wrong-remote", "Repository identity is invalid"))?;
         let value = self
-            .graphql(
+            .graphql::<GraphObservation>(
                 OBSERVATION_QUERY,
                 json!({"owner": owner, "name": name, "number": number}),
                 "pull request observation",
@@ -962,12 +1155,11 @@ impl Github {
             }
             Err(error) => return Err(error),
         };
-        let mut pull = value["data"]["repository"]["pullRequest"].clone();
-        if pull.is_null() {
-            return Ok(Observation::absent());
+        let response = value;
+        match response.pull() {
+            Some(pull) => pull.normalize(),
+            None => Ok(Observation::absent()),
         }
-        flatten_rollup(&mut pull);
-        map_observation(&pull)
     }
 
     pub async fn mark_ready_for_review(&self, repository: &str, number: u64) -> GithubResult<()> {
@@ -987,7 +1179,7 @@ impl Github {
                 "GitHub pull request response is malformed",
             )
         })?;
-        self.graphql(
+        self.graphql::<Value>(
             "mutation($id:ID!){markPullRequestReadyForReview(input:{pullRequestId:$id}){pullRequest{isDraft}}}",
             json!({"id": id}),
             "mark ready for review",
@@ -996,24 +1188,27 @@ impl Github {
         Ok(())
     }
 
-    async fn merge_context(&self, repository: &str, number: u64) -> GithubResult<Value> {
+    async fn merge_context(&self, repository: &str, number: u64) -> GithubResult<MergeContext> {
         let (owner, name) = repository.split_once('/').expect("normalized repository");
-        let value = self
+        let value: GraphObservation<MergeContext> = self
             .graphql(
                 "query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){id headRefOid baseRefName mergeable mergeStateStatus}}}",
                 json!({"owner": owner, "name": name, "number": number}),
                 "pull request merge observation",
             )
             .await?;
-        let context = value["data"]["repository"]["pullRequest"].clone();
-        if string(&context, "id").is_none_or(|id| id.is_empty())
-            || sha(&context, "headRefOid").is_none()
-            || string(&context, "baseRefName").is_none_or(|name| name.is_empty())
-        {
-            return Err(failure(
+        let malformed = || {
+            failure(
                 "invalid-provider-response",
                 "GitHub pull request merge observation is malformed",
-            ));
+            )
+        };
+        let context = value.pull().ok_or_else(malformed)?;
+        if context.id.is_empty()
+            || !valid_sha(&context.head_ref_oid)
+            || context.base_ref_name.is_empty()
+        {
+            return Err(malformed());
         }
         Ok(context)
     }
@@ -1021,7 +1216,7 @@ impl Github {
     /// `gh pr checks --required`: required checks of the head commit in gh buckets.
     async fn required_checks(&self, repository: &str, number: u64) -> GithubResult<Vec<Value>> {
         let (owner, name) = repository.split_once('/').expect("normalized repository");
-        let value = self
+        let value: Value = self
             .graphql(
                 "query($owner:String!,$name:String!,$number:Int!){repository(owner:$owner,name:$name){pullRequest(number:$number){commits(last:1){nodes{commit{statusCheckRollup{contexts(first:100){nodes{__typename ...on StatusContext{context state targetUrl isRequired(pullRequestNumber:$number)} ...on CheckRun{name status conclusion detailsUrl isRequired(pullRequestNumber:$number)}}}}}}}}}}",
                 json!({"owner": owner, "name": name, "number": number}),
@@ -1085,30 +1280,22 @@ impl Github {
             ));
         }
         let repository = normalize_repository(repository)?;
-        let settings = self
-            .value(
-                "GET",
-                &repo_route(&repository, &[]),
-                None,
-                "repository settings",
-            )
-            .await?;
-        let allowed = |key: &str| settings[key].as_bool();
-        let (Some(squash), Some(merge), Some(rebase)) = (
-            allowed("allow_squash_merge"),
-            allowed("allow_merge_commit"),
-            allowed("allow_rebase_merge"),
-        ) else {
-            return Err(failure(
-                "invalid-provider-response",
-                "GitHub repository settings are malformed",
-            ));
-        };
-        let method = if squash {
+        let settings: MergeSettings = decode_response(
+            &self
+                .response_body(
+                    "GET",
+                    &repo_route(&repository, &[]),
+                    None,
+                    "repository settings",
+                )
+                .await?,
+            "GitHub repository settings are malformed",
+        )?;
+        let method = if settings.allow_squash_merge {
             "squash"
-        } else if merge {
+        } else if settings.allow_merge_commit {
             "merge"
-        } else if rebase {
+        } else if settings.allow_rebase_merge {
             "rebase"
         } else {
             return Err(failure(
@@ -1129,16 +1316,23 @@ impl Github {
             .await?;
         let refused = match outcome {
             Api::Accepted { message } => message,
-            Api::Value(value) => {
-                let merged = value["merged"].as_bool();
-                let sha = value["sha"].as_str().filter(|sha| valid_sha(sha));
-                return match (merged, value["message"].is_string(), sha) {
-                    (Some(true), true, Some(sha)) => Ok(MergeResult::Merged { sha: sha.into() }),
-                    (Some(false), true, _) => Ok(MergeResult::NotMerged),
-                    _ => Err(failure(
+            Api::Json(body) => {
+                let result: ConditionalMerge =
+                    decode_response(&body, "GitHub did not confirm the conditional merge result")?;
+                let ConditionalMerge {
+                    merged,
+                    sha,
+                    message: _message,
+                } = result;
+                return if !merged {
+                    Ok(MergeResult::NotMerged)
+                } else if sha.as_deref().is_some_and(valid_sha) {
+                    Ok(MergeResult::Merged)
+                } else {
+                    Err(failure(
                         "invalid-provider-response",
                         "GitHub did not confirm the conditional merge result",
-                    )),
+                    ))
                 };
             }
             Api::NotFound => unreachable!("not found is a failure"),
@@ -1150,7 +1344,7 @@ impl Github {
         let context = self
             .retry_transient(|| self.merge_context(&repository, number))
             .await?;
-        let head = context["headRefOid"].as_str().unwrap_or("");
+        let head = context.head_ref_oid.as_str();
         if head != head_sha {
             return Ok(blocked(format!(
                 "GitHub refused the exact-head merge because the pull request head changed from {head_sha} to {head}. {refused}"
@@ -1193,8 +1387,8 @@ impl Github {
                 ),
             });
         }
-        let mergeable = context["mergeable"].as_str();
-        let merge_state = context["mergeStateStatus"].as_str();
+        let mergeable = context.mergeable.as_deref();
+        let merge_state = context.merge_state_status.as_deref();
         if mergeable == Some("CONFLICTING") || merge_state == Some("DIRTY") {
             return Ok(blocked(format!(
                 "GitHub refused the merge because the pull request has merge conflicts ({}/{}). {refused}",
@@ -1208,7 +1402,7 @@ impl Github {
                 message: format!("GitHub is still computing mergeability. {refused}"),
             });
         }
-        let base = context["baseRefName"].as_str().unwrap_or("").to_owned();
+        let base = context.base_ref_name;
         let rules_path = repo_route(&repository, &["rules", "branches", &base]);
         let rules = self
             .retry_transient(|| async {
@@ -1231,10 +1425,10 @@ impl Github {
                     "GitHub requires a merge queue for {base}, but direct trigger merges cannot enter the queue."
                 )));
             }
-            let value = self
+            let value: Value = self
                 .graphql(
                     "mutation($pullRequestId:ID!,$expectedHeadOid:GitObjectID!){enqueuePullRequest(input:{pullRequestId:$pullRequestId,expectedHeadOid:$expectedHeadOid}){mergeQueueEntry{id}}}",
-                    json!({"pullRequestId": context["id"], "expectedHeadOid": head_sha}),
+                    json!({"pullRequestId": context.id, "expectedHeadOid": head_sha}),
                     "merge queue enqueue",
                 )
                 .await?;
@@ -1356,7 +1550,7 @@ impl Github {
     pub async fn list_open_issues(&self, repository: &str, limit: u64) -> GithubResult<Vec<Value>> {
         let repository = normalize_repository(repository)?;
         let (owner, name) = repository.split_once('/').expect("normalized repository");
-        let value = self
+        let value: Value = self
             .graphql(
                 "query($owner:String!,$name:String!,$first:Int!){repository(owner:$owner,name:$name){issues(first:$first,states:[OPEN],orderBy:{field:CREATED_AT,direction:DESC}){nodes{number url title body author{login} state labels(first:100){nodes{name}} assignees(first:100){nodes{login}} milestone{title} updatedAt}}}}",
                 json!({"owner": owner, "name": name, "first": limit.clamp(1, 100)}),
@@ -1591,6 +1785,92 @@ pub fn push_normal(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn graphql_observation_reads_native_checks_and_preserves_missing_rollups() {
+        let mut pull = json!({"number": 7, "url":"https://github.com/owner/repo/pull/7", "state":"OPEN", "isDraft":false,
+        "headRefOid":"a".repeat(40), "baseRefOid":"b".repeat(40), "mergeable":null,
+        "autoMergeRequest":{}, "reviewDecision":null, "author":{"login":"octo"}, "changedFiles":1, "additions":1,"deletions":0,
+        "commits":{"nodes":[{"commit":{"statusCheckRollup":{"contexts":{"nodes":[
+            {"name":"unit","status":"COMPLETED","conclusion":"FAILURE","completedAt":"2026-09-01T00:00:00Z"},
+            {"context":"deploy","state":"PENDING","targetUrl":"https://example.com/deploy"},
+            {"name":"unit","status":"COMPLETED","conclusion":"SUCCESS","completedAt":"2026-09-02T00:00:00Z","checkSuite":{"workflowRun":{"workflow":{"name":"CI"}}}}
+        ]}}}}]}});
+        let read = |pull: &Value| {
+            decode_response::<GraphObservation>(
+                &json!({"data":{"repository":{"pullRequest":pull}}}).to_string(),
+                "GitHub pull request observation is malformed",
+            )?
+            .pull()
+            .unwrap()
+            .normalize()
+        };
+        let observed = read(&pull).unwrap();
+        assert_eq!(
+            (
+                observed.checks.total,
+                observed.checks.successful,
+                observed.checks.pending,
+                observed.checks.failing
+            ),
+            (2, 1, 1, 0)
+        );
+        assert_eq!(observed.checks.runs[0]["name"], "unit");
+        assert_eq!(observed.checks.runs[0]["workflow"], "CI");
+        assert_eq!(observed.checks.runs[1]["url"], "https://example.com/deploy");
+        assert_eq!(
+            observed.author.unwrap()["avatarUrl"],
+            "https://avatars.githubusercontent.com/octo"
+        );
+        assert_eq!(observed.auto_merge_enabled, Some(true));
+        pull["commits"]["nodes"][0]["commit"]["statusCheckRollup"]["contexts"]["nodes"] =
+            json!([null]);
+        assert_eq!(read(&pull).unwrap_err().code, "invalid-provider-response");
+        pull.as_object_mut().unwrap().remove("commits");
+        assert_eq!(read(&pull).unwrap().checks, Checks::default());
+        pull.as_object_mut().unwrap().remove("mergeable");
+        assert_eq!(
+            read(&pull).unwrap_err().summary,
+            "GitHub pull request observation is malformed"
+        );
+    }
+
+    #[test]
+    fn rest_optional_metadata_preserves_absence_null_and_invalid_values() {
+        let mut pull = json!({"number":3,"html_url":"https://github.com/a/b/pull/3","state":"open","draft":false,
+            "head":{"ref":"task","sha":"a".repeat(40),"repo":{"full_name":"a/b"}},
+            "base":{"ref":"main","sha":"b".repeat(40),"repo":{"full_name":"a/b"}}});
+        assert_eq!(normalize_pull(&pull).unwrap().body, None);
+        pull["body"] = Value::Null;
+        pull["auto_merge"] = json!(false);
+        pull["user"] = json!({"login":42});
+        let normalized = normalize_pull(&pull).unwrap();
+        assert_eq!(normalized.body.as_deref(), Some(""));
+        assert_eq!(normalized.author, None);
+        assert_eq!(normalized.auto_merge_enabled, None);
+        pull["title"] = Value::Null;
+        assert_eq!(
+            normalize_pull(&pull).unwrap_err().code,
+            "invalid-provider-response"
+        );
+    }
+
+    fn normalize_pull(value: &Value) -> GithubResult<PullRequest> {
+        decode::<RestPullRequest>(value.clone(), "GitHub pull request response is malformed")?
+            .normalize()
+    }
+
+    fn map_observation(value: &Value) -> GithubResult<Observation> {
+        let mut observation = decode::<PullRequestObservation>(
+            value.clone(),
+            "GitHub pull request observation is malformed",
+        )?
+        .normalize()?;
+        let checks: Vec<CheckContext> =
+            decode(value["statusCheckRollup"].clone(), "Invalid checks")?;
+        observation.checks = summarize_checks(&checks);
+        Ok(observation)
+    }
 
     #[test]
     fn check_observations_retain_actionable_ci_names_and_log_links() {

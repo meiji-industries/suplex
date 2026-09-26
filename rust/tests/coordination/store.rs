@@ -71,6 +71,40 @@ mod tests {
         )
         .unwrap();
         let old_id = old.id.as_str().to_owned();
+        let delegate_profile = delegate_profile(&database, &task.id, None).unwrap();
+        database.connection().execute(
+            "UPDATE suplex_task_sessions SET is_current = 0, updated_at = '2099-01-01T00:00:00.000Z' WHERE id = ?1",
+            [&old_id],
+        ).unwrap();
+        database.connection().execute(
+            "INSERT INTO suplex_task_sessions (id,task_id,kind,generation,is_current,lifecycle,profile_json,delegate_slot,created_at,updated_at) VALUES ('newer-worker',?1,'worker',2,1,'live',?2,'delegate','2026-01-01T00:00:00.000Z','2026-01-01T00:00:00.000Z')",
+            params![task.id, delegate_profile],
+        ).unwrap();
+        assert_eq!(
+            compatible_delegate(&database, &task.id, &delegate_profile, None)
+                .unwrap()
+                .as_deref(),
+            Some("newer-worker")
+        );
+        database.connection().execute("UPDATE suplex_task_sessions SET stop_requested_at = created_at WHERE id = 'newer-worker'", []).unwrap();
+        assert!(
+            compatible_delegate(&database, &task.id, &delegate_profile, None).is_err(),
+            "an older session cannot bypass cleanup of the newest conversation"
+        );
+        database
+            .connection()
+            .execute(
+                "DELETE FROM suplex_task_sessions WHERE id = 'newer-worker'",
+                [],
+            )
+            .unwrap();
+        database
+            .connection()
+            .execute(
+                "UPDATE suplex_task_sessions SET is_current = 1 WHERE id = ?1",
+                [&old_id],
+            )
+            .unwrap();
         database
             .connection()
             .execute(

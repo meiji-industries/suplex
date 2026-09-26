@@ -1869,6 +1869,21 @@ mod tests {
     }
 
     #[test]
+    fn task_branch_names_preserve_frozen_typescript_title_rules() {
+        let id = "task_e37a6f28b1dd43d1ac46fc97357d3d7f";
+        for (title, expected) in [
+            ("Fix search", "fix/search-7d3d7f"),
+            ("Bump dependencies", "chore/dependencies-7d3d7f"),
+            ("Better branch names", "feature/better-branch-names-7d3d7f"),
+            ("Show error toast on failed save", "feature/show-error-toast-failed-7d3d7f"),
+            ("Use the new task branch name for every worktree", "feature/new-task-branch-name-7d3d7f"),
+            ("--- !!! ---", "feature/task-7d3d7f"),
+        ] {
+            assert_eq!(task_branch_name(title, id), expected);
+        }
+    }
+
+    #[test]
     fn live_authority_and_after_commit_wake_follow_task_start() {
         let filename =
             std::env::temp_dir().join(format!("suplex_task_command_{}.sqlite", Uuid::new_v4()));

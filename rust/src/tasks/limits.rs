@@ -683,3 +683,35 @@ pub(crate) async fn reconcile_limit_pause(
     )?;
     reconciled.map(|_| ())
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn budget_and_turn_limits_match_frozen_typescript_cases() {
+        let limits = |budget_usd, max_turns| TaskLimits { budget_usd, max_turns };
+        let evaluate = |current, cost, turns| {
+            LimitHit::evaluate(
+                current,
+                limits(15.0, 40),
+                TaskLimitUsage { estimated_cost_usd: cost },
+                turns,
+            )
+        };
+        assert!(evaluate(limits(15.0, 40), Some(14.99), 39).is_none());
+        let budget = evaluate(limits(15.0, 0), Some(15.0), 400).unwrap();
+        assert_eq!(budget.reason, "budget");
+        assert_eq!(budget.proposed.budget_usd, 30.0);
+        assert_eq!(budget.proposed.max_turns, 0);
+        let turns = evaluate(limits(0.0, 40), Some(100.0), 40).unwrap();
+        assert_eq!(turns.reason, "turns");
+        assert_eq!(turns.proposed.budget_usd, 0.0);
+        assert_eq!(turns.proposed.max_turns, 80);
+        assert!(evaluate(limits(0.0, 0), Some(100.0), 400).is_none());
+        let unknown_cost = evaluate(limits(15.0, 40), None, 40).unwrap();
+        assert_eq!(unknown_cost.reason, "turns");
+        assert_eq!(unknown_cost.proposed.budget_usd, 15.0);
+        assert_eq!(unknown_cost.proposed.max_turns, 80);
+    }
+}

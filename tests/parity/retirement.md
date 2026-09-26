@@ -32,3 +32,5 @@ Local fixture results do not prove live provider, CI, deployment, or external-se
 The Rust source-count baseline was refreshed after reviewing the added native
 CLI/lifecycle support and migrated regression checks. The scanner is unchanged;
 its counts include inline tests, including their database setup and JSON assertions.
+
+Final local verification (2026-09-26): TypeScript typecheck and lint passed; 344 TypeScript tests, 728 Rust all-target tests (three intentional ignores), 11 browser tests, and all ten deterministic workflow journeys passed. Rust formatting, clippy with warnings denied, source-count checks, and the 222-route inventory passed. Both unsigned macOS architectures passed packaged launch/URL checks and disposable install/migrate/start/HTTP/stop checks; see `../../.context/typescript-retirement/packaging_verification.md`. The SQL migrations are byte-identical to the pre-retirement revision `6bb0a43f`.

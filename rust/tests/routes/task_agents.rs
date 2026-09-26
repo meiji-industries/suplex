@@ -57,6 +57,92 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn batch_authority_is_rechecked_after_native_observation() {
+        for change in ["archive", "revoke", "database"] {
+            let root =
+                std::env::temp_dir().join(format!("suplex-agent-race-{}", uuid::Uuid::new_v4()));
+            fs::create_dir_all(&root).unwrap();
+            let path = root.join("suplex.sqlite");
+            fs::copy(
+                concat!(
+                    env!("CARGO_MANIFEST_DIR"),
+                    "/../tests/parity/task-agents-native/database.sqlite"
+                ),
+                &path,
+            )
+            .unwrap();
+            let mut database = SuplexDatabase::open(&path, OpenMode::ReadWrite).unwrap();
+            let admin =
+                crate::identity::auth::development_sign_in(&mut database, Utc::now()).unwrap();
+            let (session_id, task_id, company_id): (String,String,String) = database.connection().query_row("SELECT s.id,s.task_id,t.company_id FROM suplex_task_sessions s JOIN suplex_tasks t ON t.id=s.task_id WHERE s.native_session_id='codex-idle'", [], |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?))).unwrap();
+            database
+                .connection()
+                .execute(
+                    "UPDATE suplex_task_sessions SET native_session_id='ses_live' WHERE id=?1",
+                    [&session_id],
+                )
+                .unwrap();
+            let state = AppState::new(
+                database,
+                session::SessionConfig {
+                    port: 4113,
+                    reachable_address: "https://remote.test:4113".into(),
+                    tailscale_exposure: "serve".into(),
+                },
+            );
+            let observed_state = state.clone();
+            let observed_task = task_id.clone();
+            let user_id = admin.user.id;
+            let (url, _) = crate::runtimes::opencode::client::fake::serve(move |request| {
+                match request.path.as_str() {
+                    "/session/ses_live" => (200, json!({"id":"ses_live","projectID":"p","directory":"/repo","title":"t","version":"1","time":{"created":1,"updated":9}}).to_string()),
+                    "/session/status" => {
+                        observed_state.with_database(|database| match change {
+                            "archive" => database.connection().execute("UPDATE suplex_tasks SET archived_at='now' WHERE id=?1", [&observed_task]).unwrap(),
+                            "revoke" => database.connection().execute("UPDATE suplex_users SET status='revoked' WHERE id=?1", [&user_id]).unwrap(),
+                            _ => database.connection().execute("ALTER TABLE suplex_companies RENAME TO unavailable_companies", []).unwrap(),
+                        });
+                        (200, json!({"ses_live":{"type":"busy"}}).to_string())
+                    },
+                    _ => (404, "{}".into()),
+                }
+            }).await;
+            let runtime =
+                crate::runtimes::task_harness::task_session_runtime_directory(&path, &session_id)
+                    .unwrap();
+            fs::create_dir_all(&runtime).unwrap();
+            fs::write(runtime.join("server.json"), json!({"pid":4321,"baseUrl":url,"password":"a".repeat(64),"directory":"/repo","executable":"/bin/opencode","generation":"b775df17-718a-4cb2-8e23-6912b8aa0d39","configHash":"a".repeat(64),"processIdentity":{"command":"opencode serve","executable":"/bin/opencode","argv":["opencode","serve"],"processGroup":4321,"startTime":"start","ownerUid":501}}).to_string()).unwrap();
+            let mut headers = HeaderMap::new();
+            headers.insert("host", HeaderValue::from_static("remote.test:4113"));
+            headers.insert(
+                "cookie",
+                format!("sid_v1={}", admin.session_token).parse().unwrap(),
+            );
+            let response = company_task_agents(
+                State(state),
+                Path(company_id),
+                RawQuery(Some(format!("taskId={task_id}"))),
+                headers,
+            )
+            .await;
+            let value = response_value(response).await;
+            assert_eq!(
+                value["status"],
+                match change {
+                    "archive" => 200,
+                    "revoke" => 401,
+                    _ => 500,
+                },
+                "{change}: {value}"
+            );
+            if change == "archive" {
+                assert_eq!(value["body"], json!({"tasks":[]}));
+            }
+            fs::remove_dir_all(root).unwrap();
+        }
+    }
+
+    #[tokio::test]
     async fn an_opencode_session_reports_its_native_busy_status() {
         let root =
             std::env::temp_dir().join(format!("suplex-task-agents-{}", uuid::Uuid::new_v4()));

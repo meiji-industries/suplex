@@ -1,0 +1,15 @@
+# Task observation test retirement
+
+The native checks replace the backend assertions below. The frontend activity decoder stays in `task-activity.test.ts` and imports only browser contracts.
+
+| Retired TypeScript suite | Executable native coverage |
+| --- | --- |
+| `advisor-report` | Seven `coordination::advisor_bridge` tests cover scoped tokens/result paths, atomic latest submission, transport discovery/calls, role/schema validation, raw/fenced/truncated reports, correction ordering and error envelopes. `native_lifecycle::advisor_stdio_refuses_missing_or_incorrect_credentials_before_initialization` invokes the actual executable for missing/wrong credentials. |
+| `task-role-prompt` | `coordination::root_prompts::tests::role_prompts_allow_branch_progress_and_preserve_worker_check_time` checks both Git roles and all planned/direct implementation/verification combinations. Frozen prompt bytes retain the complete text. |
+| `task-display-metadata` | Eight `runtimes::task_display` tests cover unchanged attachments, field repair/retry, failed metadata publication, distinct native sessions, shell rediscovery and missing panes. Display observations do not gate native attachment. |
+| `task-pane-layout` | Five `tasks::pane_layout` tests cover tallest/shallowest selection, ratios, sequential updates, missing observations and failed-split queue continuation. |
+| `task-agent-status` | Four `http::routes::task_agents` tests cover frozen individual/batch response bytes, busy status, unknown/error observations, scoping and revocation. The new asynchronous race test archives the task, revokes access or removes the schema during native observation and checks the resulting authoritative response. |
+| Backend portion of `task-activity` | `http::routes::task_reads` observes native session completion/prompt state for all four provider profiles, including missing and stale pane observations. |
+| `task-usage` | Eleven `tasks::analytics` checks cover legacy snapshots, turn/interval union, billed versus estimated costs, native reader/store integration, session replacement, final timing, first-pass Codex/Devin refresh, missing history backoff/recovery and storage failure isolation. `opencode_usage_keeps_estimates_steps_and_summary_through_both_stores` preserves unique step totals, estimated/billed/unpriced entries, unfinished messages and summary provenance in both analytics and limit snapshots. OpenCode reader and native limit tests cover absent pricing and authoritative native costs; the analytics HTTP test covers company authority, saved usage, archived tasks and cost responses. |
+
+Verification: analytics 11, advisor bridge 7, display 8, pane layout 5, role prompt 1, agent routes 4, task activity 1 and executable advisor authentication 1 passed. The retained frontend activity decoder passed separately. No provider service, live account or live task data was used.

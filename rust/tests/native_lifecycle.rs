@@ -186,3 +186,27 @@ fn administrator_invitation_replaces_prior_token_and_preserves_recovery_metadata
     drop(database);
     let _ = fs::remove_file(filename);
 }
+
+#[test]
+fn advisor_stdio_refuses_missing_or_incorrect_credentials_before_initialization() {
+    use suplex::coordination::advisor_bridge::{AdvisorRole, write_binding};
+    let root = std::env::temp_dir().join(format!("suplex-advisor-auth-{}", uuid::Uuid::new_v4()));
+    let binding = write_binding(&root, AdvisorRole::Rater, env!("CARGO_BIN_EXE_suplex")).unwrap();
+    for token in [None, Some("00000000-0000-4000-8000-000000000000")] {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_suplex"));
+        command
+            .args(["mcp", "advisor"])
+            .env_clear()
+            .env("SUPLEX_ADVISOR_BINDING", &binding.binding_path)
+            .env("SUPLEX_ADVISOR_RESULT", root.join("result.json"));
+        if let Some(token) = token {
+            command.env("SUPLEX_ADVISOR_TOKEN", token);
+        }
+        let output = command.output().unwrap();
+        assert!(!output.status.success());
+        assert!(output.stdout.is_empty());
+        assert!(String::from_utf8_lossy(&output.stderr).contains("authentication failed"));
+        assert!(!root.join("result.json").exists());
+    }
+    fs::remove_dir_all(root).unwrap();
+}

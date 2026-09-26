@@ -579,6 +579,52 @@ mod tests {
     use serde_json::json;
 
     #[test]
+    fn role_prompts_allow_branch_progress_and_preserve_worker_check_time() {
+        use crate::runtimes::{
+            codex::role_prompt,
+            task_harness::{TaskRole, WorkerPurpose, WorkflowLaunch},
+        };
+        for prompt in [
+            role_prompt::ROOT_STANDARD,
+            role_prompt::worker_standard_role(WorkerPurpose::Implementation),
+        ] {
+            assert!(prompt.contains("captured starting SHA records provenance; it does not permanently freeze the branch"));
+            assert!(
+                !prompt.contains("Work only on the captured task branch and starting revision")
+            );
+            assert!(
+                prompt.contains("Never force-push the main or base branch, or any shared branch")
+            );
+        }
+        for direct in [false, true] {
+            for purpose in [WorkerPurpose::Implementation, WorkerPurpose::Verification] {
+                let prompt = WorkflowLaunch {
+                    direct,
+                    ..Default::default()
+                }
+                .role_prompt(TaskRole::Worker(purpose));
+                assert_eq!(prompt.matches("For configured verification commands, set a 30-minute shell timeout, or the tool maximum if lower. Normal completion ends the command immediately.").count(), 1);
+                if purpose == WorkerPurpose::Implementation {
+                    for text in [
+                        "own the design and implementation choices within that assignment",
+                        "routine internal seams, fixture corrections, and tests",
+                        "Continue until the complete assignment and its necessary checks are done",
+                    ] {
+                        assert!(prompt.contains(text));
+                    }
+                    for text in [
+                        "Return missing design decisions",
+                        "Coordinator owns planning, design decisions",
+                        "Do not take over planning",
+                    ] {
+                        assert!(!prompt.contains(text));
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
     fn standard_prompt_includes_intent_and_live_dependencies() {
         let mut control = TaskControlRow::fixture();
         control.objective = "Complete the change".into();

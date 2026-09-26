@@ -128,6 +128,46 @@ mod tests {
         assert_eq!(document["sessions"][0]["nativeSessionId"], Value::Null);
         assert_eq!(document["turns"][0]["prompt"], "Inspect");
         assert_eq!(document["shellPaneId"], Value::Null);
+        for (provider, pane) in [
+            ("opencode", None),
+            ("claude-code", Some("stale-claude")),
+            ("codex", None),
+            ("devin", Some("stale-devin")),
+        ] {
+            state.with_database(|database| {
+                database.connection().execute("UPDATE suplex_task_sessions SET profile_json=json_set((SELECT root_profile_json FROM suplex_task_controls WHERE task_id=suplex_task_sessions.task_id),'$.provider',?1),pane_id=?2 WHERE id=?3", rusqlite::params![provider,pane,root_session.id]).unwrap();
+                database.connection().execute("UPDATE suplex_task_controls SET root_profile_json=json_set(root_profile_json,'$.provider','opencode') WHERE task_id=?1", [&task.id]).unwrap();
+            });
+            let response =
+                activity(State(state.clone()), Path(task.id.clone()), headers.clone()).await;
+            let value: Value =
+                serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap())
+                    .unwrap();
+            assert_eq!(value["sessions"][0]["harness"], provider);
+            assert_eq!(value["sessions"][0]["paneId"], json!(pane));
+        }
+        state.with_database(|database| {
+            database.connection().execute("UPDATE suplex_task_turns SET status='completed',prompted_at='2026-09-21T10:00:00.000Z',completed_at='2026-09-21T10:05:23.000Z' WHERE task_id=?1", [&task.id]).unwrap();
+            database.connection().execute("INSERT INTO suplex_task_turns (id,task_id,session_id,generation,prompt_hash,prompt_text,status,created_at,updated_at) SELECT 'pending-turn',task_id,session_id,generation,'pending','Pending','pending_prompt',created_at,updated_at FROM suplex_task_turns WHERE task_id=?1 LIMIT 1", [&task.id]).unwrap();
+        });
+        let response = activity(State(state.clone()), Path(task.id.clone()), headers.clone()).await;
+        let value: Value =
+            serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap())
+                .unwrap();
+        let turns = value["turns"].as_array().unwrap();
+        let completed = turns
+            .iter()
+            .find(|turn| turn["id"] != "pending-turn")
+            .unwrap();
+        let pending = turns
+            .iter()
+            .find(|turn| turn["id"] == "pending-turn")
+            .unwrap();
+        assert_eq!(completed["promptedAt"], "2026-09-21T10:00:00.000Z");
+        assert_eq!(completed["completedAt"], "2026-09-21T10:05:23.000Z");
+        assert_eq!(pending["promptedAt"], Value::Null);
+        assert_eq!(pending["completedAt"], Value::Null);
+
         let execution_response =
             execution(State(state.clone()), Path(task.id.clone()), headers.clone()).await;
         assert_eq!(execution_response.status(), StatusCode::OK);

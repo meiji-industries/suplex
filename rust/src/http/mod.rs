@@ -12,7 +12,7 @@ use axum::{
 use tokio_util::sync::CancellationToken;
 
 use crate::integrations::{github_device::DeviceAuth, herdr::Herdr};
-use crate::platform::{database::SuplexDatabase, embedded};
+use crate::platform::{config::Installation, database::SuplexDatabase, embedded};
 use crate::profiles::provider_login::ProviderLogins;
 use crate::projects::git::Github;
 use crate::tasks::host::TaskHostHandle;
@@ -50,7 +50,6 @@ pub mod routes {
     pub mod task_timeline;
     pub mod task_worktree;
     pub mod tasks;
-    pub mod unported;
     pub mod update;
     pub mod workflows;
 }
@@ -67,6 +66,7 @@ pub struct ProjectRoots {
 pub struct AppState {
     database: Arc<Mutex<SuplexDatabase>>,
     pub session_config: session::SessionConfig,
+    pub installation: Option<Installation>,
     pub project_roots: Option<ProjectRoots>,
     pub artifact_root: Option<PathBuf>,
     pub project_github: Github,
@@ -88,6 +88,7 @@ impl AppState {
         Self {
             database: Arc::new(Mutex::new(database)),
             session_config,
+            installation: None,
             project_roots: None,
             artifact_root: None,
             project_github: Github::default(),
@@ -106,6 +107,11 @@ impl AppState {
             repositories,
             worktrees,
         });
+        self
+    }
+
+    pub fn with_installation(mut self, installation: Installation) -> Self {
+        self.installation = Some(installation);
         self
     }
 
@@ -181,7 +187,6 @@ pub fn router(state: AppState) -> Router {
         .merge(routes::tasks::router())
         .merge(routes::workflows::router())
         .merge(routes::update::router())
-        .merge(routes::unported::router())
         .route("/auth", get(auth_page))
         .route("/assets/{filename}", get(asset))
         .method_not_allowed_fallback(not_found)
@@ -305,6 +310,7 @@ mod tests {
                 reachable_address: "http://127.0.0.1:4113".to_owned(),
                 tailscale_exposure: "off".to_owned(),
             },
+            installation: None,
             project_roots: None,
             artifact_root: None,
             project_github: Github::default(),

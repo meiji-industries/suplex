@@ -1,7 +1,4 @@
-//! Diagnostic and maintenance commands from `cli.ts`, `platform/diagnostics/*`
-//! and the backup commands. Supervisor commands (`start`, `stop`, `restart`,
-//! `setup`, `install`, `desktop`) belong to the Node launcher, which starts
-//! this binary as a single foreground server.
+//! Standalone commands and diagnostic maintenance.
 
 use crate::shared::time::now_millis_rfc3339;
 use std::{
@@ -18,14 +15,13 @@ use crate::{
         backup::BackupService,
         config::Installation,
         database::{OpenMode, SchemaState, SuplexDatabase},
-        log_viewer,
+        install, log_viewer, setup, supervisor,
     },
 };
 
 pub type CliResult = Result<i32, Box<dyn std::error::Error>>;
 
-const USAGE: &str =
-    "Usage: suplex <serve|migrate|doctor|task|backup|verify-backup|restore|logs|mcp> [options]\n";
+const USAGE: &str = "Usage: suplex <setup [--local]|onboard|install|recover|start|stop|restart|desktop|serve|migrate|doctor|task|backup|verify-backup|restore|logs|mcp> [options]\n";
 
 /// Runs a command other than `serve` and `mcp`. Returns the exit code.
 pub async fn run(command: &str, arguments: &[String]) -> CliResult {
@@ -35,12 +31,81 @@ pub async fn run(command: &str, arguments: &[String]) -> CliResult {
             Ok(0)
         }
         "logs" => logs(arguments),
+        "setup" | "onboard" => {
+            setup::run(arguments.iter().any(|arg| arg == "--local"))?;
+            Ok(0)
+        }
+        "recover" => recover(arguments),
+        "desktop" => desktop(),
+        "install" => Ok(install::run(arguments).await),
+        "start" => {
+            let installation = Installation::load()?;
+            let pid = supervisor::start(&installation)?;
+            println!(
+                "Suplex started at {}; owned processes: server#{pid}",
+                installation.reachable_address
+            );
+            Ok(0)
+        }
+        "stop" => {
+            let installation = Installation::load()?;
+            println!("{}", supervisor::stop(&installation)?);
+            Ok(0)
+        }
+        "restart" => {
+            let installation = Installation::load()?;
+            println!("{}", supervisor::stop(&installation)?);
+            let pid = supervisor::start(&installation)?;
+            println!(
+                "Suplex restarted at {}; owned processes: 1 (server#{pid})",
+                installation.reachable_address
+            );
+            Ok(0)
+        }
         "migrate" => migrate(),
         "doctor" => doctor(arguments).await,
         "task" => task(arguments),
         "backup" | "verify-backup" | "restore" => backup(command, arguments),
         _ => Err(format!("Unknown Suplex command: {command}").into()),
     }
+}
+
+fn recover(arguments: &[String]) -> CliResult {
+    if !arguments.iter().any(|arg| arg == "--confirm-recovery") {
+        return Err("recover requires --confirm-recovery".into());
+    }
+    let installation = Installation::load()?;
+    let mut database = SuplexDatabase::open(&installation.database, OpenMode::Migrate)?;
+    let metadata = json!({"initiationMethod":"local-cli","installationId":installation.installation_id,"confirmedAt":Utc::now().to_rfc3339()}).to_string();
+    let token = crate::identity::auth::issue_administrator_invitation(
+        &mut database,
+        "recovery",
+        &metadata,
+        Utc::now(),
+    )?
+    .ok_or("Recovery invitation was not created")?;
+    println!(
+        "Recovery enrollment (showing once): {}/auth?mode=recovery&invite={token}",
+        installation.reachable_address
+    );
+    Ok(0)
+}
+
+fn desktop() -> CliResult {
+    let installation = Installation::load()?;
+    let url = format!("http://localhost:{}", installation.port);
+    let output = std::process::Command::new("open")
+        .args(["-na", "Suplex", "--args", &format!("--url={url}")])
+        .output()?;
+    if !output.status.success() {
+        return Err(format!(
+            "Suplex.app did not open: {}",
+            String::from_utf8_lossy(&output.stderr).trim()
+        )
+        .into());
+    }
+    println!("Suplex.app opened at {url}");
+    Ok(0)
 }
 
 fn state_label(state: SchemaState) -> String {
@@ -239,8 +304,8 @@ fn diagnostic_state(installation: &Installation, database: SuplexDatabase) -> Ap
         database,
         SessionConfig {
             port: installation.port,
-            reachable_address: format!("http://127.0.0.1:{}", installation.port),
-            tailscale_exposure: "off".to_owned(),
+            reachable_address: installation.reachable_address.clone(),
+            tailscale_exposure: installation.tailscale_exposure.clone(),
         },
     )
     .with_project_roots(
@@ -400,13 +465,10 @@ fn task(arguments: &[String]) -> CliResult {
 fn backup_service(installation: &Installation) -> BackupService {
     let mut configuration = Map::new();
     for (key, value) in [
-        ("accessMode", json!("local")),
-        ("tailscaleExposure", json!("off")),
-        ("bindAddress", json!("127.0.0.1")),
-        (
-            "reachableAddress",
-            json!(format!("http://127.0.0.1:{}", installation.port)),
-        ),
+        ("accessMode", json!(installation.access_mode)),
+        ("tailscaleExposure", json!(installation.tailscale_exposure)),
+        ("bindAddress", json!(installation.bind_address)),
+        ("reachableAddress", json!(installation.reachable_address)),
         ("port", json!(installation.port)),
         ("dataRoot", json!(installation.data)),
         ("databasePath", json!(installation.database)),
@@ -414,10 +476,7 @@ fn backup_service(installation: &Installation) -> BackupService {
         ("runtimeRoot", json!(installation.runtime)),
         ("repositoryRoot", json!(installation.repositories)),
         ("worktreeRoot", json!(installation.worktrees)),
-        (
-            "installationId",
-            json!(installation_id(&installation.database)),
-        ),
+        ("installationId", json!(installation.installation_id)),
     ] {
         configuration.insert(key.into(), value);
     }

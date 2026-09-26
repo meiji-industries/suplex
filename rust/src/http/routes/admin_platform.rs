@@ -205,8 +205,7 @@ async fn update_environment(
     finish(response, cookies)
 }
 
-/// The backup service for this installation. The Rust binary has no
-/// `SuplexConfig`, so the configuration record comes from its live paths.
+/// The backup service for this installation.
 fn backups(state: &AppState) -> Option<BackupService> {
     let database_path = state.with_database(|database| {
         database
@@ -217,14 +216,31 @@ fn backups(state: &AppState) -> Option<BackupService> {
     })?;
     let data_root = database_path.parent()?.to_path_buf();
     let artifact_root = state.artifact_root.clone()?;
-    let installation_id = crate::cli::installation_id(&database_path);
+    let installation = state.installation.as_ref();
+    let installation_id = installation
+        .map(|value| value.installation_id.clone())
+        .unwrap_or_else(|| crate::cli::installation_id(&database_path));
     let mut configuration = Map::new();
-    configuration.insert("accessMode".into(), json!("local"));
+    configuration.insert(
+        "accessMode".into(),
+        json!(
+            installation
+                .map(|value| value.access_mode.as_str())
+                .unwrap_or("local")
+        ),
+    );
     configuration.insert(
         "tailscaleExposure".into(),
         json!(state.session_config.tailscale_exposure),
     );
-    configuration.insert("bindAddress".into(), json!("127.0.0.1"));
+    configuration.insert(
+        "bindAddress".into(),
+        json!(
+            installation
+                .map(|value| value.bind_address.as_str())
+                .unwrap_or("127.0.0.1")
+        ),
+    );
     configuration.insert(
         "reachableAddress".into(),
         json!(state.session_config.reachable_address),
@@ -233,7 +249,14 @@ fn backups(state: &AppState) -> Option<BackupService> {
     configuration.insert("dataRoot".into(), json!(data_root));
     configuration.insert("databasePath".into(), json!(database_path));
     configuration.insert("artifactRoot".into(), json!(artifact_root));
-    configuration.insert("runtimeRoot".into(), json!(data_root.join("runtime")));
+    configuration.insert(
+        "runtimeRoot".into(),
+        json!(
+            installation
+                .map(|value| value.runtime.clone())
+                .unwrap_or_else(|| data_root.join("runtime"))
+        ),
+    );
     if let Some(roots) = &state.project_roots {
         configuration.insert("repositoryRoot".into(), json!(roots.repositories));
         configuration.insert("worktreeRoot".into(), json!(roots.worktrees));

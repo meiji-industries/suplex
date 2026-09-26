@@ -7,10 +7,14 @@ pub mod embedded;
 pub mod environment_settings;
 pub mod factory_reset;
 pub mod health;
+pub mod install;
 pub mod log_viewer;
 pub mod redaction;
+pub mod setup;
+pub mod supervisor;
 pub mod system_event_transport;
 pub mod system_events;
+pub mod update;
 
 use crate::shared::PublicFailure;
 

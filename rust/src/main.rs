@@ -23,6 +23,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     if command == ["mcp", "advisor"] {
         return suplex::coordination::advisor_bridge::serve_from_environment().await;
     }
+    if command == ["update-apply"] {
+        return suplex::platform::update::apply();
+    }
     if let [subcommand, directory] = command.as_slice()
         && subcommand == suplex::runtimes::codex::display::SUBCOMMAND
     {
@@ -52,6 +55,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     match command.first().map(String::as_str) {
         None | Some("serve") => serve().await,
+        Some("start") if command.iter().any(|arg| arg == "--foreground") => {
+            suplex::platform::supervisor::run_foreground().await
+        }
         Some(name) => match suplex::cli::run(name, &command[1..]).await {
             Ok(code) => std::process::exit(code),
             Err(error) => {
@@ -78,7 +84,9 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
     system_events::install(installation.logs.clone());
     let mut database = SuplexDatabase::open(&installation.database, OpenMode::Migrate)?;
     suplex::identity::auth::normalize_legacy_users(&database)?;
-    development::seed_development_data(&mut database, chrono::Utc::now())?;
+    if installation.development_auto_login || installation.access_mode == "local" {
+        development::seed_development_data(&mut database, chrono::Utc::now())?;
+    }
     std::fs::create_dir_all(&installation.artifacts)?;
     std::fs::create_dir_all(&installation.worktrees)?;
     std::fs::create_dir_all(&installation.runtime)?;
@@ -86,13 +94,15 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
         system_event_transport::start_receiver(&installation.database, system_events::forward)
             .await;
     server_event("starting", json!({}));
-    let listener = TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, installation.port)).await?;
+    let listener =
+        TcpListener::bind((installation.bind_address.as_str(), installation.port)).await?;
+    suplex::platform::supervisor::configure_foreground(&installation)?;
     let task_host = suplex::tasks::host::spawn_task_host(
         installation.database.clone(),
         installation.artifacts.clone(),
     );
     println!("Suplex Rust revision: {}", env!("SUPLEX_RUST_REVISION"));
-    println!("URL: http://127.0.0.1:{}", installation.port);
+    println!("URL: {}", installation.reachable_address);
     println!("Installation: {}", installation.root.display());
     println!(
         "Bundle: {} migrations, {} frontend assets",
@@ -103,10 +113,11 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
         database,
         SessionConfig {
             port: installation.port,
-            reachable_address: format!("http://127.0.0.1:{}", installation.port),
-            tailscale_exposure: "off".to_owned(),
+            reachable_address: installation.reachable_address.clone(),
+            tailscale_exposure: installation.tailscale_exposure.clone(),
         },
     )
+    .with_installation(installation.clone())
     .with_project_roots(
         installation.repositories.clone(),
         installation.worktrees.clone(),
@@ -118,7 +129,6 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
         Some(directory) => state.with_dev_assets_dir(directory.into()),
         None => state,
     };
-    println!("Experimental API routes are still being ported.");
     server_event("listening", json!({}));
     let heartbeat = tokio::spawn(async {
         let mut last_wall = chrono::Utc::now();
@@ -147,8 +157,14 @@ async fn serve() -> Result<(), Box<dyn std::error::Error>> {
     let app = http::router(state).into_make_service_with_connect_info::<std::net::SocketAddr>();
     let result = axum::serve(listener, app)
         .with_graceful_shutdown(async move {
-            let _ = tokio::signal::ctrl_c().await;
-            server_event("shutdown_requested", json!({"reason": "SIGINT"}));
+            #[cfg(unix)]
+            let reason = {
+                let mut terminate = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()).expect("SIGTERM handler");
+                tokio::select! { _ = tokio::signal::ctrl_c() => "SIGINT", _ = terminate.recv() => "SIGTERM" }
+            };
+            #[cfg(not(unix))]
+            let reason = { let _ = tokio::signal::ctrl_c().await; "SIGINT" };
+            server_event("shutdown_requested", json!({"reason": reason}));
             shutdown_state.shutdown_history();
         })
         .await;

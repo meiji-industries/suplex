@@ -1,5 +1,5 @@
-//! `platform/development.ts`: the Rust binary always runs in local loopback
-//! mode, so the Operator exists and has a first company on every start.
+//! `platform/development.ts`: local mode and explicit development auto-login
+//! seed the Operator's first company at startup.
 
 use crate::identity::IdentityError;
 use crate::shared::time::rfc3339_millis;

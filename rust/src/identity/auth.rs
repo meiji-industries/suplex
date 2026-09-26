@@ -150,6 +150,41 @@ pub fn bootstrap_required(database: &SuplexDatabase) -> DatabaseResult<bool> {
     Ok(active_admins == 0)
 }
 
+/// Issue the same single-use administrator enrollment token as the standalone CLI.
+pub fn issue_administrator_invitation(
+    database: &mut SuplexDatabase,
+    kind: &str,
+    metadata: &str,
+    now: DateTime<Utc>,
+) -> DatabaseResult<Option<String>> {
+    if kind == "bootstrap" && !bootstrap_required(database)? {
+        return Ok(None);
+    }
+    if !matches!(kind, "bootstrap" | "recovery") {
+        return Err("Invalid administrator invitation kind".into());
+    }
+    database.transaction(true, |database| {
+        let now_iso = rfc3339_millis(now);
+        database.connection().execute(
+            "UPDATE suplex_invitations SET replaced_at = ?1 WHERE kind = ?2 AND consumed_at IS NULL AND replaced_at IS NULL",
+            params![now_iso, kind],
+        )?;
+        let token = crate::shared::ids::random_secret(&format!("invite_v1_{kind}"))?;
+        let invitation_id = random_hex_id("invitation")?;
+        let display = if kind == "bootstrap" { "Suplex administrator" } else { "Administrator recovery" };
+        database.connection().execute(
+            "INSERT INTO suplex_invitations (id, token_hash, kind, display_name, user_id, expires_at, consumed_at, replaced_at, created_at, metadata_json) VALUES (?1, ?2, ?3, ?4, NULL, ?5, NULL, NULL, ?6, ?7)",
+            params![invitation_id, sha256_hex(&token), kind, display, rfc3339_millis(now + Duration::hours(72)), now_iso, metadata],
+        )?;
+        crate::identity::audit::record(database, &crate::identity::audit::AuditEvent {
+            id: &random_hex_id("audit")?, actor_user_id: None, actor_agent_id: None,
+            action: if kind == "bootstrap" { "bootstrap_invitation_created" } else { "recovery_invitation_created" },
+            target_user_id: None, company_id: None, metadata_json: metadata, created_at: &now_iso,
+        })?;
+        Ok(Some(token))
+    })
+}
+
 pub(crate) fn create_session(
     database: &SuplexDatabase,
     user_id: &str,

@@ -1,6 +1,4 @@
-//! `http/routes/update.ts` and the client lifecycle report from
-//! `http/routes/authenticated.ts`. The Rust binary runs without the Node
-//! supervisor, so it reports its own build as current and cannot restart.
+//! Native update control and client lifecycle report.
 
 use crate::http::error::ApiError;
 use std::sync::LazyLock;
@@ -27,7 +25,7 @@ use crate::{
         validation::{body_contract, valid},
     },
     identity::auth::AuthUser,
-    platform::system_events,
+    platform::{system_events, update},
 };
 
 use super::auth;
@@ -89,15 +87,32 @@ async fn read_update(
     if let Err(response) = valid::<UpdateQuery>(query_object(query.as_deref())) {
         return *response;
     }
-    let (_, cookies) = match user(&state, &headers, &Method::GET) {
+    let (authenticated, cookies) = match user(&state, &headers, &Method::GET) {
         Ok(value) => value,
         Err(response) => return *response,
     };
-    let mut body = json!({ "status": { "kind": "current" } });
-    if let Some(revision) = current_revision() {
-        body["currentRevision"] = json!(revision);
-    }
-    body["canRestart"] = json!(false);
+    let check = query
+        .as_deref()
+        .unwrap_or_default()
+        .split('&')
+        .any(|item| item == "check=1");
+    let mut body = match state.installation.clone() {
+        Some(installation) => match tokio::task::spawn_blocking(move || {
+            update::snapshot(&installation, check, authenticated.role == "admin")
+        })
+        .await
+        {
+            Ok(value) => value,
+            Err(error) => return auth::error(StatusCode::SERVICE_UNAVAILABLE, &error.to_string()),
+        },
+        None => {
+            let mut body = json!({"status":{"kind":"current"},"canRestart":false});
+            if let Some(revision) = current_revision() {
+                body["currentRevision"] = json!(revision);
+            }
+            body
+        }
+    };
     body["instanceId"] = json!(*INSTANCE_ID);
     let mut response = Json(body).into_response();
     response.headers_mut().insert(
@@ -115,10 +130,14 @@ async fn restart(State(state): State<AppState>, headers: HeaderMap) -> Response 
     let response = if user.role != "admin" {
         auth::error(StatusCode::FORBIDDEN, "Administrator access necessary")
     } else {
-        auth::error(
-            StatusCode::SERVICE_UNAVAILABLE,
-            "Suplex update control is not available.",
-        )
+        match state.installation.as_ref().map(update::request_apply) {
+            Some(Ok(value)) => (StatusCode::ACCEPTED, Json(value)).into_response(),
+            Some(Err(error)) => auth::error(StatusCode::SERVICE_UNAVAILABLE, &error.to_string()),
+            None => auth::error(
+                StatusCode::SERVICE_UNAVAILABLE,
+                "Suplex update control is not available.",
+            ),
+        }
     };
     finish(response, cookies)
 }

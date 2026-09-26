@@ -70,30 +70,28 @@ export function next(state: BootState, event: BootEvent): BootState {
   }
 }
 
-/** The install record wins over a remembered remote target; a runtime that no longer matches sends the user back to the choice screen. */
+/** A local install resumes locally. A new bundle runs its idempotent install stages before starting. */
 export function resolveBoot(input: { readonly record: InstallRecord | null; readonly stamp: string | null; readonly remote: string | null }): BootState {
-  if (input.record !== null && input.stamp !== null && input.record.runtimeStamp === input.stamp) return { name: "starting" };
+  if (input.record !== null) return input.stamp !== null && input.record.runtimeStamp !== input.stamp ? { name: "installing", from: null } : { name: "starting" };
   if (input.remote !== null) return { name: "connecting-remote", url: input.remote };
   return { name: "bootstrap-needed" };
 }
 
-export type RuntimePaths = { readonly node: string; readonly app: string; readonly cli: string; readonly supervisor: string };
+export type RuntimePaths = { readonly binary: string; readonly directory: string };
 
-/** Packaged builds carry the runtime in Resources/runtime. The overrides point dev at the pinned node and the checkout, with no symlinked layout in between. */
+/** Packaged builds carry the native runtime in Resources/runtime. Dev points at its Rust build. */
 export function runtimePaths(environment: NodeJS.ProcessEnv, resourcesPath: string): RuntimePaths {
-  const app = environment.SUPLEX_DESKTOP_APP ?? join(resourcesPath, "runtime", "app");
+  const directory = environment.SUPLEX_DESKTOP_RUNTIME ?? join(resourcesPath, "runtime");
   return {
-    node: environment.SUPLEX_DESKTOP_NODE ?? join(resourcesPath, "runtime", "node", "bin", "node"),
-    app,
-    cli: join(app, "dist", "src", "cli.js"),
-    supervisor: join(app, "dist", "src", "platform", "updates", "supervisor.js"),
+    binary: environment.SUPLEX_DESKTOP_BINARY ?? join(directory, "bin", "suplex"),
+    directory,
   };
 }
 
 /** Identifies the runtime shipped in this bundle, so a desktop update reruns the install stages. */
-export async function runtimeStamp(app: string): Promise<string | null> {
+export async function runtimeStamp(directory: string): Promise<string | null> {
   try {
-    const manifest = JSON.parse(await readFile(join(app, "package.json"), "utf8")) as { version?: unknown };
+    const manifest = JSON.parse(await readFile(join(directory, "manifest.json"), "utf8")) as { version?: unknown };
     return typeof manifest.version === "string" ? manifest.version : null;
   } catch {
     return null;

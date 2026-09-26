@@ -17,13 +17,13 @@ if [ ! -d "$app" ] || [ "$(cat .electron-dev/source 2>/dev/null)" != "$stock" ];
   echo "$stock" > .electron-dev/source
 fi
 
-# Packaged builds carry the runtime in Contents/Resources/runtime. Dev runs the checkout with the pinned
-# node instead (see runtimePaths in src/boot.ts), so "Run locally" runs the current server code, and keeps
-# its data, single-instance lock, and port apart from the installed Suplex.app.
-node_bin="$(mise where node)/bin/node"  # the pinned node, as scripts/bundle-runtime.sh bundles
-(cd .. && PATH="$(dirname "$node_bin"):$PATH" pnpm build)
-export SUPLEX_DESKTOP_NODE="${SUPLEX_DESKTOP_NODE:-$node_bin}"
-export SUPLEX_DESKTOP_APP="${SUPLEX_DESKTOP_APP:-$(cd .. && pwd)}"
+# Dev uses the current native build and a local manifest. Its data, single-instance lock,
+# and port stay apart from the installed Suplex.app.
+(cd .. && pnpm exec vite build && (cd rust && unset RUSTUP_TOOLCHAIN && cargo build --bin suplex))
+mkdir -p runtime
+node -e 'const fs = require("node:fs"); fs.writeFileSync("runtime/manifest.json", JSON.stringify({ version: require("./package.json").version }))'
+export SUPLEX_DESKTOP_RUNTIME="${SUPLEX_DESKTOP_RUNTIME:-$(pwd)/runtime}"
+export SUPLEX_DESKTOP_BINARY="${SUPLEX_DESKTOP_BINARY:-$(cd .. && pwd)/rust/target/debug/suplex}"
 export SUPLEX_DESKTOP_USER_DATA="${SUPLEX_DESKTOP_USER_DATA:-$HOME/Library/Application Support/Suplex Dev}"
 export SUPLEX_DESKTOP_PORT="${SUPLEX_DESKTOP_PORT:-4121}"
 

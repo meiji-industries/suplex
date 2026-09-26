@@ -89,8 +89,8 @@ export function createLocalRuntime(options: {
       await mkdir(join(options.userData, "logs"), { recursive: true });
       const log = createWriteStream(join(options.userData, "logs", "server.log"), { flags: "a" });
       exited = null;
-      child = spawn(paths.node, [paths.supervisor], {
-        cwd: paths.app,
+      child = spawn(paths.binary, ["start", "--foreground"], {
+        cwd: paths.directory,
         env: runtimeEnvironment({ userData: options.userData, port, base: options.base }),
         detached: true,
         stdio: ["ignore", "pipe", "pipe"],

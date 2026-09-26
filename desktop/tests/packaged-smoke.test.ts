@@ -1,5 +1,5 @@
 import { execFileSync, spawnSync } from "node:child_process";
-import { existsSync, readFileSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 import { beforeAll, describe, expect, test } from "vitest";
 
@@ -7,6 +7,7 @@ const ARCH = process.env.SUPLEX_DESKTOP_ARCH ?? "arm64";
 const APP = join(__dirname, "..", "release", ARCH, ARCH === "arm64" ? "mac-arm64" : "mac", "Suplex.app");
 const BINARY = join(APP, "Contents", "MacOS", "Suplex");
 const SMOKE_URL = process.env.SUPLEX_DESKTOP_SMOKE_URL;
+const VERSION = (JSON.parse(readFileSync(join(__dirname, "..", "package.json"), "utf8")) as { version: string }).version;
 
 /** Lists the paths inside an asar archive by reading its JSON header (no dependency). */
 function asarPaths(archive: string): string[] {
@@ -34,10 +35,14 @@ describe("packaged Suplex.app", () => {
     expect(paths.some((path) => path.startsWith("dist/src/") && /server|database|coordination|runtimes/.test(path))).toBe(false);
     expect(paths.some((path) => path.includes("better-sqlite3"))).toBe(false);
   });
-  // The backend ships only in Resources/runtime (see scripts/bundle-runtime.sh); _CodeSignature lists that folder's files by name.
-  test("keeps the Suplex backend, database, and better-sqlite3 inside Resources/runtime", () => {
-    const result = spawnSync("grep", ["-rl", "--exclude-dir=runtime", "--exclude-dir=_CodeSignature", "-e", "better_sqlite3", "-e", "better-sqlite3", "-e", "suplex.sqlite", join(APP, "Contents")], { encoding: "utf8" });
-    expect(result.stdout.trim()).toBe("");
+  test("bundles one native runtime and a version manifest", () => {
+    const runtime = join(APP, "Contents", "Resources", "runtime");
+    const binary = join(runtime, "bin", "suplex");
+    expect(readdirSync(runtime).sort()).toEqual(["bin", "manifest.json"]);
+    expect(readdirSync(join(runtime, "bin"))).toEqual(["suplex"]);
+    expect(JSON.parse(readFileSync(join(runtime, "manifest.json"), "utf8"))).toEqual({ version: VERSION });
+    const architecture = ARCH === "arm64" ? "arm64" : "x86_64";
+    expect(execFileSync("file", [binary], { encoding: "utf8" })).toContain(architecture);
   });
   test.skipIf(SMOKE_URL === undefined)("loads from the exact configured origin", () => {
     const stdout = execFileSync(BINARY, ["--url", SMOKE_URL ?? ""], { env: { ...process.env, SUPLEX_DESKTOP_PROBE: "1" }, encoding: "utf8", timeout: 60_000 });

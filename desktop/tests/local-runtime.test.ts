@@ -46,15 +46,15 @@ test("a server already answering on the port is adopted, never spawned and never
   expect(kill).not.toHaveBeenCalled();
 });
 
-test("the supervisor is spawned detached with C2's entry point, cwd, and environment", async () => {
+test("the native server is spawned detached with its foreground command, cwd, and environment", async () => {
   healthy.mockResolvedValueOnce(false).mockResolvedValue(true);
   const userData = mkdtempSync(join(tmpdir(), "suplex-desktop-local-"));
   const runtime = createLocalRuntime({ runtime: FIXTURE, userData, port: 4111, base: { HOME: "/Users/ada" }, ports: { spawn, kill, wait, healthy, freePort: async (preferred) => preferred } });
   expect(await runtime.start()).toEqual({ port: 4111, adopted: false });
   expect(spawn).toHaveBeenCalledWith(
-    FIXTURE.node,
-    [FIXTURE.supervisor],
-    expect.objectContaining({ cwd: FIXTURE.app, detached: true, stdio: ["ignore", "pipe", "pipe"] }),
+    FIXTURE.binary,
+    ["start", "--foreground"],
+    expect.objectContaining({ cwd: FIXTURE.directory, detached: true, stdio: ["ignore", "pipe", "pipe"] }),
   );
   expect(spawn.mock.lastCall?.[2].env).toMatchObject({ SUPLEX_PACKAGED: "1", SUPLEX_ACCESS_MODE: "local", SUPLEX_BIND_ADDRESS: "127.0.0.1", SUPLEX_PORT: "4111", SUPLEX_DATA_ROOT: join(userData, "data") });
   expect(wait).toHaveBeenCalledWith(500);

@@ -216,7 +216,7 @@ export async function runSuplexDesktop(input: { readonly argv: readonly string[]
     const outcome = await installer.run(from, emit);
     if (outcome === "cancelled") { state = { name: "choosing" }; await enter(); return; }
     if (outcome !== "complete") return;
-    await writeInstallRecord(installFile(), { completedAt: new Date().toISOString(), runtimeStamp: (await runtimeStamp(runtime.app)) ?? "", port: record?.port ?? defaultPort });
+    await writeInstallRecord(installFile(), { completedAt: new Date().toISOString(), runtimeStamp: (await runtimeStamp(runtime.directory)) ?? "", port: record?.port ?? defaultPort });
     go({ name: "installed" });
   };
   const startLocal = async (): Promise<void> => {
@@ -406,7 +406,7 @@ export async function runSuplexDesktop(input: { readonly argv: readonly string[]
     } else if (probe) {
       await showConnectPage(win);
     } else {
-      state = resolveBoot({ record: await readInstallRecord(installFile()), stamp: await runtimeStamp(runtime.app), remote: registry.current?.url ?? null });
+      state = resolveBoot({ record: await readInstallRecord(installFile()), stamp: await runtimeStamp(runtime.directory), remote: registry.current?.url ?? null });
       await enter();
     }
     if (probe) await runProbe(win);

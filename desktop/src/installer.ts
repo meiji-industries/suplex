@@ -21,7 +21,7 @@ export type Installer = {
   cancel(): void;
 };
 
-type Frame = { ok?: unknown; stage?: unknown; skipped?: unknown; reason?: unknown; remedy?: unknown; stages?: unknown };
+type Frame = { protocolVersion?: unknown; ok?: unknown; stage?: unknown; skipped?: unknown; reason?: unknown; remedy?: unknown; stages?: unknown };
 
 function lastJsonLine(stdout: string): Frame | null {
   const lines = stdout.split("\n").map((line) => line.trim()).filter((line) => line.startsWith("{"));
@@ -34,7 +34,7 @@ function lastJsonLine(stdout: string): Frame | null {
   }
 }
 
-/** Runs C3's stages, one child process each, and stops on the first failure. */
+/** Runs the native install stages, one child process each, and stops on the first failure. */
 export function createInstaller(options: {
   readonly runtime: RuntimePaths;
   readonly userData: string;
@@ -49,8 +49,8 @@ export function createInstaller(options: {
 
   const child = (args: readonly string[], onLine: (line: string) => void): Promise<{ code: number; stdout: string; stderr: string }> =>
     new Promise((resolve) => {
-      const process_ = spawn(paths.node, [paths.cli, ...args], {
-        cwd: paths.app,
+      const process_ = spawn(paths.binary, args, {
+        cwd: paths.directory,
         env: runtimeEnvironment({ userData: options.userData, port: options.port ?? DEFAULT_PORT, base: options.base }),
         detached: true,
         stdio: ["ignore", "pipe", "pipe"],
@@ -91,7 +91,7 @@ export function createInstaller(options: {
         const manifest = await child(["install", "--manifest"], record);
         if (cancelled) return "cancelled";
         const parsed = lastJsonLine(manifest.stdout);
-        const listed: unknown[] = parsed !== null && Array.isArray(parsed.stages) ? parsed.stages : [];
+        const listed: unknown[] = manifest.code === 0 && parsed?.protocolVersion === 1 && Array.isArray(parsed.stages) ? parsed.stages : [];
         const stages: InstallStage[] = listed.flatMap((entry) => {
           const stage = entry as { name?: unknown; title?: unknown };
           return typeof stage.name === "string" && typeof stage.title === "string" ? [{ name: stage.name, title: stage.title }] : [];
@@ -105,7 +105,7 @@ export function createInstaller(options: {
           const result = await child(["install", "--stage", stage.name, "--json"], record);
           if (cancelled) return "cancelled";
           const frame = lastJsonLine(result.stdout);
-          if (frame === null || frame.ok !== true) {
+          if (result.code !== 0 || frame?.ok !== true || frame.stage !== stage.name) {
             const reason = typeof frame?.reason === "string" ? frame.reason : `The step ended unexpectedly (exit ${result.code}).`;
             return fail(stage.name, stage.title, reason, typeof frame?.remedy === "string" ? frame.remedy : null);
           }

@@ -216,9 +216,7 @@ async fn sweep_task_once(
                 let prepared = prepare_task_worktree(database_path, task_id).await?;
                 root_session_store::set_worktree(database, task_id, &prepared, Utc::now())?;
             }
-            if !super::issue_context::prepare_for_host(database_path, artifact_root, task_id)
-                .await?
-            {
+            if !super::issue_context::prepare_for_host(database, artifact_root, task_id).await? {
                 return Ok(false);
             }
             crate::tasks::preparation::prepare_before_native_work(database_path, task_id).await?;

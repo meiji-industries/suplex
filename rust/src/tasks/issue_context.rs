@@ -12,7 +12,7 @@ use crate::{
     integrations::issue_tracker::{IssueTracker, TrackerResult},
     platform::{
         artifacts::{self, ArtifactInput, StoredArtifact},
-        database::{DatabaseResult, OpenMode, SuplexDatabase},
+        database::{DatabaseResult, SuplexDatabase},
     },
     tasks::images::MAX_TASK_IMAGES,
 };
@@ -47,46 +47,34 @@ fn image_count(database: &SuplexDatabase, task_id: &str) -> DatabaseResult<usize
 
 /// TypeScript `prepareIssueContext`.
 pub async fn prepare_issue_context(
-    database_path: &Path,
+    database: &mut SuplexDatabase,
     artifact_root: &Path,
     task_id: &str,
 ) -> TrackerResult<()> {
-    let row = {
-        let database = SuplexDatabase::open(database_path, OpenMode::ReadOnly)
-            .map_err(|error| error.to_string())?;
-        let row = database
-            .connection()
-            .query_row(
-                "SELECT configuration_json, issue_json, issue_context_json FROM suplex_tasks WHERE id = ?1",
-                [task_id],
-                |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?, row.get::<_, Option<String>>(2)?)),
-            )
-            .map_err(|error| error.to_string())?;
-        if row.1.is_none()
-            || row.2.is_some()
-            || has_started_native_work(&database, task_id).map_err(|error| error.to_string())?
-        {
-            return Ok(());
-        }
-        row
-    };
-    let (configuration, Some(issue_json), _) = row else {
+    let (configuration, issue_json, issue_context) = database
+        .connection()
+        .query_row(
+            "SELECT configuration_json, issue_json, issue_context_json FROM suplex_tasks WHERE id = ?1",
+            [task_id],
+            |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?, row.get::<_, Option<String>>(2)?)),
+        )
+        .map_err(|error| error.to_string())?;
+    let Some(issue_json) = issue_json else {
         return Ok(());
     };
+    if issue_context.is_some()
+        || has_started_native_work(database, task_id).map_err(|error| error.to_string())?
+    {
+        return Ok(());
+    }
     let configuration: Value = serde_json::from_str(&configuration)?;
     let issue: Value = serde_json::from_str(&issue_json)?;
     let tracker = IssueTracker::new(&task_tracker(&configuration)?).await?;
     let mut context = tracker.read(&issue).await?;
-    let count = {
-        let database = SuplexDatabase::open(database_path, OpenMode::ReadOnly)
-            .map_err(|error| error.to_string())?;
-        image_count(&database, task_id).map_err(|error| error.to_string())?
-    };
+    let count = image_count(database, task_id).map_err(|error| error.to_string())?;
     let intake = tracker
         .images(&context["issue"], MAX_TASK_IMAGES.saturating_sub(count))
         .await?;
-    let mut database = SuplexDatabase::open(database_path, OpenMode::ReadWrite)
-        .map_err(|error| error.to_string())?;
     let mut written: Vec<StoredArtifact> = Vec::new();
     let result = database.transaction(true, |database| {
         if has_started_native_work(database, task_id)? {
@@ -151,17 +139,14 @@ pub async fn prepare_issue_context(
 /// TypeScript `TaskHost.recoverOne` issue intake: an access failure asks the
 /// human; any other failure retries in 15 seconds. Returns whether to continue.
 pub async fn prepare_for_host(
-    database_path: &Path,
+    database: &mut SuplexDatabase,
     artifact_root: &Path,
     task_id: &str,
 ) -> DatabaseResult<bool> {
-    {
-        let database = SuplexDatabase::open(database_path, OpenMode::ReadOnly)?;
-        if has_started_native_work(&database, task_id)? {
-            return Ok(true);
-        }
+    if has_started_native_work(database, task_id)? {
+        return Ok(true);
     }
-    let Err(error) = prepare_issue_context(database_path, artifact_root, task_id).await else {
+    let Err(error) = prepare_issue_context(database, artifact_root, task_id).await else {
         return Ok(true);
     };
     use crate::integrations::issue_tracker::{
@@ -174,10 +159,9 @@ pub async fn prepare_for_host(
             .is_some_and(|failure| matches!(failure.status, 401 | 403 | 404));
     let now = Utc::now();
     let time = rfc3339_millis(now);
-    let mut database = SuplexDatabase::open(database_path, OpenMode::ReadWrite)?;
     if access {
         crate::coordination::root_session_store::ask_human(
-            &mut database,
+            database,
             task_id,
             &format!(
                 "Suplex cannot read the linked issue. {error}. Check the issue and tracker access, then answer to retry."

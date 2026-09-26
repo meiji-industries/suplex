@@ -416,7 +416,7 @@ mod host_tests {
             ).unwrap();
         }
         assert!(
-            !crate::tasks::issue_context::prepare_for_host(&database_path, &base, &task_id)
+            !crate::tasks::issue_context::prepare_for_host(&mut SuplexDatabase::open(&database_path, OpenMode::ReadWrite).unwrap(), &base, &task_id)
                 .await
                 .unwrap()
         );

@@ -213,3 +213,13 @@ The following backend-only tests were removed after their distinct assertions we
 | `task-worktree-routes.test.ts` | `routes::task_worktree::tests::worktree_routes_require_a_direct_loopback_peer_and_the_configured_host` and `opening_runs_the_resolved_launcher_and_audits_only_successful_launches` cover peer/host authority, launcher errors, and audit success only. |
 
 The four one-shot TypeScript service oracle programs under `tests/support/task-{ui,agents,history,template}-read-interop.ts` were captured before deletion. Their checked-in SQLite/runtime inputs and exact normalized outputs are exercised by native Rust task-read, agent, history, and template tests under `rust/tests/routes/`; fixture provenance is adjacent to each `tests/parity/` corpus. No Rust test starts these programs.
+
+## Retired project and profile TypeScript tests
+
+| Removed TS test | Retained native assertion |
+| --- | --- |
+| `projects.test.ts`, `projects-api.test.ts` | `projects::git` coordinate/path/fetch/provider identity tests; `projects::provisioning` clone/create/command inference tests; `projects::service::tests::local_create_audits_once_and_reads_follow_live_membership` and `stored_configuration_contracts_normalize_defaults_and_unknown_fields`; `routes::projects` create, read/scope, issue/source, and atomic patch tests; `projects.browser.test.ts` exercises create and edit through Rust HTTP with a loopback provider. |
+| `projects.real.test.ts` | The opt-in `tests/interop/real-environment.ts` GitHub phase exercises real native project creation and task delivery; no real-provider result is claimed by local tests. |
+| `project-integrations.test.ts` | `integrations::issue_tracker::tests::jira_read_snapshots_fields_attachments_links_and_comments`, `integrations::bitbucket::tests::release_port_reads_pages_statuses_and_classifies_failures` and `release_port_maps_delivery_calls_to_bitbucket_and_stops_at_drafts`, plus `projects::service::tests::bitbucket_repository_validation_uses_provider_identity_and_reports_access_failures`. |
+| `project-mcp.test.ts` | `runtimes::project_mcp::tests::mcp_grants_are_exact_and_role_scoped`, `runtimes::claude_code::task_runtime::tests::mcp_worker_grants_never_run_with_permission_bypass`, and provider readiness environment tests. |
+| `agent-profiles.test.ts` | `profiles::agent_profiles` tests cover default selection, executable precedence, role/reference/audit atomicity and policy pruning; `routes::profiles` tests cover response and validation ordering; `projects::service` tests cover saved profile defaults and provider policy. |

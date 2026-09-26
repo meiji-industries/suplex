@@ -197,6 +197,52 @@ fn bitbucket(project: &Project) -> Result<Option<BitbucketClient>, Box<dyn Error
     })
 }
 
+fn present_pull_requests(pulls: &[github_delivery::PullRequest], base_branch: &str) -> Value {
+    json!({"available": true, "sources": pulls.iter().filter(|pull| pull.is_cross_repository != Some(true) && pull.state == "open" && pull.head_branch != base_branch).map(|pull| {
+        let mut source = json!({
+            "kind": "pull_request", "number": pull.number, "url": pull.url,
+            "title": pull.title.clone().unwrap_or_else(|| format!("Pull request #{}", pull.number)),
+            "body": pull.body.clone().unwrap_or_default(), "author": pull.author.clone().unwrap_or_default(),
+            "headBranch": pull.head_branch, "baseBranch": pull.base_branch, "headSha": pull.head_sha,
+        });
+        if let Some(updated) = &pull.updated_at { source["updatedAt"] = json!(updated); }
+        source["isDraft"] = json!(pull.is_draft);
+        source
+    }).collect::<Vec<_>>()})
+}
+
+async fn discover_pull_requests(
+    repository: &str,
+    base_branch: &str,
+    port: &ReleasePort<'_>,
+) -> Value {
+    match port.list_open_pull_requests(repository, 100).await {
+        Ok(pulls) => present_pull_requests(&pulls, base_branch),
+        Err(_) => {
+            json!({"available": false, "reason": "Pull requests are temporarily unavailable", "sources": []})
+        }
+    }
+}
+
+async fn resolve_pull_request(
+    repository: &str,
+    base_branch: &str,
+    number: u64,
+    port: &ReleasePort<'_>,
+) -> Result<Value, Box<dyn Error>> {
+    let pull = port
+        .get_pull_request(repository, number)
+        .await
+        .map_err(|_| {
+            failure(
+                "source-provider-unavailable",
+                "The pull request provider is temporarily unavailable",
+                503,
+            )
+        })?;
+    pinned_pull_request(repository, base_branch, &pull)
+}
+
 /// TypeScript `ProjectService.discoverTaskSources` and `TaskSourceService.discover`.
 pub async fn discover(project: &Project, kind: &str) -> Result<Value, Box<dyn Error>> {
     let tracker = project
@@ -246,24 +292,7 @@ pub async fn discover(project: &Project, kind: &str) -> Result<Value, Box<dyn Er
                     json!({"available": false, "reason": "Pull request provider unavailable", "sources": []}),
                 );
             };
-            match port.list_open_pull_requests(repository, 100).await {
-                Ok(pulls) => Ok(
-                    json!({"available": true, "sources": pulls.iter().filter(|pull| pull.is_cross_repository != Some(true) && pull.state == "open" && pull.head_branch != project.base_branch).map(|pull| {
-                    let mut source = json!({
-                        "kind": "pull_request", "number": pull.number, "url": pull.url,
-                        "title": pull.title.clone().unwrap_or_else(|| format!("Pull request #{}", pull.number)),
-                        "body": pull.body.clone().unwrap_or_default(), "author": pull.author.clone().unwrap_or_default(),
-                        "headBranch": pull.head_branch, "baseBranch": pull.base_branch, "headSha": pull.head_sha,
-                    });
-                    if let Some(updated) = &pull.updated_at { source["updatedAt"] = json!(updated); }
-                    source["isDraft"] = json!(pull.is_draft);
-                    source
-                }).collect::<Vec<_>>()}),
-                ),
-                Err(_) => Ok(
-                    json!({"available": false, "reason": "Pull requests are temporarily unavailable", "sources": []}),
-                ),
-            }
+            Ok(discover_pull_requests(repository, &project.base_branch, port).await)
         }
         _ => {
             let path = project.repository_path.clone();
@@ -332,26 +361,21 @@ pub async fn resolve(project: &Project, selector: &Value) -> Result<Value, Box<d
                     503,
                 ));
             };
-            let provider = || {
-                failure(
-                    "source-provider-unavailable",
-                    "The pull request provider is temporarily unavailable",
-                    503,
-                )
-            };
             let github;
             let port = match bitbucket {
                 Some(client) => ReleasePort::Bitbucket(client),
                 None => {
-                    github = Github::load().await.map_err(|_| provider())?;
+                    github = Github::load().await.map_err(|_| {
+                        failure(
+                            "source-provider-unavailable",
+                            "The pull request provider is temporarily unavailable",
+                            503,
+                        )
+                    })?;
                     ReleasePort::Github(&github)
                 }
             };
-            let pull = port
-                .get_pull_request(repository, number)
-                .await
-                .map_err(|_| provider())?;
-            pinned_pull_request(repository, &project.base_branch, &pull)
+            resolve_pull_request(repository, &project.base_branch, number, &port).await
         }
         _ => {
             let branch = selector["branch"].as_str().unwrap_or("").to_owned();
@@ -485,20 +509,8 @@ pub fn apply(prepared: &mut PreparedTask, created: CreationSource) -> serde_json
 mod tests {
     use super::*;
 
-    #[test]
-    fn repair_pull_request_rejects_closed_and_foreign_sources_and_pins_the_open_head() {
-        let code = |error: Box<dyn Error>| match error
-            .downcast::<super::super::TaskError>()
-            .unwrap()
-            .as_ref()
-        {
-            super::super::TaskError::Source { code, status, .. } => {
-                assert_eq!(*status, 422);
-                *code
-            }
-            other => panic!("unexpected source error: {other:?}"),
-        };
-        let pull = github_delivery::PullRequest {
+    fn fixture_pull() -> github_delivery::PullRequest {
+        github_delivery::PullRequest {
             number: 7,
             url: "https://github.com/owner/repo/pull/7".into(),
             repository: "owner/repo".into(),
@@ -516,7 +528,89 @@ mod tests {
             updated_at: None,
             is_cross_repository: None,
             node_id: None,
+        }
+    }
+
+    #[test]
+    fn pull_request_discovery_shapes_open_same_repository_sources_only() {
+        let mut fork = fixture_pull();
+        fork.is_cross_repository = Some(true);
+        let mut base = fixture_pull();
+        base.head_branch = "main".into();
+        let mut closed = fixture_pull();
+        closed.state = "closed".into();
+        let mut open = fixture_pull();
+        open.title = Some("Feature".into());
+        open.body = Some("Body".into());
+        open.author = Some("octo".into());
+        open.updated_at = Some("2026-09-26T00:00:00Z".into());
+        assert_eq!(
+            present_pull_requests(&[fork, base, closed, open], "main"),
+            json!({
+                "available": true,
+                "sources": [{"kind":"pull_request","number":7,"url":"https://github.com/owner/repo/pull/7","title":"Feature","body":"Body","author":"octo","headBranch":"feature","baseBranch":"main","headSha":"b".repeat(40),"updatedAt":"2026-09-26T00:00:00Z","isDraft":true}]
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn pull_request_provider_failures_do_not_expose_provider_text() {
+        use axum::{Router, http::StatusCode};
+        let app = Router::new()
+            .fallback(|| async { (StatusCode::SERVICE_UNAVAILABLE, "token ghp_secret leaked") });
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}/", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let access =
+            crate::integrations::github::Access::for_api(&base, Some("test-token".into())).unwrap();
+        let mut github = Github::new(access);
+        github.retry_pauses.clear();
+        let port = ReleasePort::Github(&github);
+        assert_eq!(
+            discover_pull_requests("owner/repo", "main", &port).await,
+            json!({"available":false,"reason":"Pull requests are temporarily unavailable","sources":[]})
+        );
+        let error = resolve_pull_request("owner/repo", "main", 7, &port)
+            .await
+            .unwrap_err();
+        match error
+            .downcast::<super::super::TaskError>()
+            .unwrap()
+            .as_ref()
+        {
+            super::super::TaskError::Source {
+                code,
+                message,
+                status,
+            } => {
+                assert_eq!(
+                    (*code, *message, *status),
+                    (
+                        "source-provider-unavailable",
+                        "The pull request provider is temporarily unavailable",
+                        503
+                    )
+                );
+            }
+            other => panic!("unexpected source error: {other:?}"),
+        }
+        server.abort();
+    }
+
+    #[test]
+    fn repair_pull_request_rejects_closed_and_foreign_sources_and_pins_the_open_head() {
+        let code = |error: Box<dyn Error>| match error
+            .downcast::<super::super::TaskError>()
+            .unwrap()
+            .as_ref()
+        {
+            super::super::TaskError::Source { code, status, .. } => {
+                assert_eq!(*status, 422);
+                *code
+            }
+            other => panic!("unexpected source error: {other:?}"),
         };
+        let pull = fixture_pull();
         let pinned = pinned_pull_request("owner/repo", "main", &pull).unwrap();
         assert_eq!(
             pinned,

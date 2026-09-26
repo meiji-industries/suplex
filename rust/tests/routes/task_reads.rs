@@ -178,6 +178,34 @@ mod tests {
             serde_json::from_slice::<Value>(&body).unwrap(),
             json!({"sessions":[]})
         );
+        state.with_database(|database| {
+            database
+                .connection()
+                .execute(
+                    "UPDATE suplex_task_sessions SET native_session_id='ses_missing' WHERE id=?1",
+                    [&root_session.id],
+                )
+                .unwrap();
+        });
+        let saved_intent = || {
+            state.with_database(|database| {
+            let connection = database.connection();
+            let controls: String = connection.query_row("SELECT status || ':' || updated_at FROM suplex_task_controls WHERE task_id=?1", [&task.id], |row| row.get(0)).unwrap();
+            let turns: i64 = connection.query_row("SELECT count(*) FROM suplex_task_turns WHERE task_id=?1", [&task.id], |row| row.get(0)).unwrap();
+            (controls, turns)
+        })
+        };
+        let before = saved_intent();
+        let response =
+            execution(State(state.clone()), Path(task.id.clone()), headers.clone()).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let unavailable: Value =
+            serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap())
+                .unwrap();
+        assert_eq!(unavailable["sessions"][0]["available"], false);
+        assert_eq!(unavailable["sessions"][0]["plan"], Value::Null);
+        assert_eq!(unavailable["sessions"][0]["tools"], json!([]));
+        assert_eq!(saved_intent(), before);
         let diff_response =
             diff_summary(State(state.clone()), Path(task.id.clone()), headers.clone()).await;
         assert_eq!(diff_response.status(), StatusCode::OK);

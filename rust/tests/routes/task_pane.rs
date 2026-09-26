@@ -228,7 +228,7 @@ pub(crate) mod tests {
     }
 
     #[tokio::test]
-    async fn observers_are_read_only_and_close_when_the_pane_binding_changes() {
+    async fn observers_are_independent_read_only_and_close_on_binding_or_access_changes() {
         let mut fixture = fixture();
         let script = fake_terminal(&fixture.root.join("herdr"), &[&json!({"type":"terminal.frame","seq":1,"full":false,"width":100,"height":30,"bytes":base64::Engine::encode(&base64::engine::general_purpose::STANDARD, "live output")}).to_string()]);
         fixture.state.herdr = Herdr::with_runner(
@@ -257,6 +257,9 @@ pub(crate) mod tests {
         assert_eq!(status, 401);
         let (status, mut observer) = connect(address, &path, &[("cookie", &fixture.cookie)]).await;
         assert_eq!(status, 101);
+        let (_, mut independent) = connect(address, &path, &[("cookie", &fixture.cookie)]).await;
+        assert!(matches!(independent.next().await, Frame::Text(_)));
+        independent.send(8, &1000_u16.to_be_bytes()).await;
         let Frame::Text(opened) = observer.next().await else {
             panic!("open message")
         };
@@ -307,6 +310,16 @@ pub(crate) mod tests {
         )
         .await;
         assert_eq!(status, 400);
+        let (_, mut revoked) = connect(address, &path, &[("cookie", &fixture.cookie)]).await;
+        assert!(matches!(revoked.next().await, Frame::Text(_)));
+        fixture.execute("UPDATE suplex_users SET role = 'member'", &[]);
+        fixture.execute("DELETE FROM suplex_memberships", &[]);
+        loop {
+            if let Frame::Close(code, reason) = revoked.next().await {
+                assert_eq!((code, reason.as_str()), (4403, "access revoked"));
+                break;
+            }
+        }
         let _ = std::fs::remove_dir_all(&fixture.root);
     }
 

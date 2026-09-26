@@ -542,7 +542,10 @@ mod tests {
         let later = assistant(
             "msg_b",
             20,
-            json!([{"type":"tool","callID":"plan","tool":"todowrite","state":{"status":"completed","input":{"todos":[{"content":"Ship","status":"in_progress","extra":1}]}}}]),
+            json!([
+                {"type":"tool","callID":"plan","tool":"todowrite","state":{"status":"completed","input":{"todos":[{"content":"Ship","status":"in_progress","extra":1}]}}},
+                {"type":"tool","callID":"failed-plan","tool":"todowrite","state":{"status":"error","input":{"todos":[{"content":"Do not publish","status":"pending"}]},"error":"write failed"}}
+            ]),
         );
         let earlier = assistant(
             "msg_a",
@@ -556,7 +559,7 @@ mod tests {
                 .iter()
                 .map(|tool| tool.id.as_str())
                 .collect::<Vec<_>>(),
-            ["msg_a:run", "msg_b:plan"]
+            ["msg_a:run", "msg_b:plan", "msg_b:failed-plan"]
         );
         assert_eq!(execution.tools[0].error.as_deref(), Some("exit 1"));
         assert_eq!(

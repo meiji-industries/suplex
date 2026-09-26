@@ -223,3 +223,7 @@ The four one-shot TypeScript service oracle programs under `tests/support/task-{
 | `project-integrations.test.ts` | `integrations::issue_tracker::tests::jira_read_snapshots_fields_attachments_links_and_comments`, `integrations::bitbucket::tests::release_port_reads_pages_statuses_and_classifies_failures` and `release_port_maps_delivery_calls_to_bitbucket_and_stops_at_drafts`, plus `projects::service::tests::bitbucket_repository_validation_uses_provider_identity_and_reports_access_failures`. |
 | `project-mcp.test.ts` | `runtimes::project_mcp::tests::mcp_grants_are_exact_and_role_scoped`, `runtimes::claude_code::task_runtime::tests::mcp_worker_grants_never_run_with_permission_bypass`, and provider readiness environment tests. |
 | `agent-profiles.test.ts` | `profiles::agent_profiles` tests cover default selection, executable precedence, role/reference/audit atomicity and policy pruning; `routes::profiles` tests cover response and validation ordering; `projects::service` tests cover saved profile defaults and provider policy. |
+
+| Removed TS test | Retained native assertion |
+| --- | --- |
+| `company-issue-code.test.ts` | `identity::companies::tests::company_mutations_enforce_role_uniqueness_issue_lock_and_audit` and `routes::companies` company issue-code response tests cover normalization, allocation lock, role authorization, and audit. |

@@ -131,4 +131,3 @@ export async function nativeBrowser(width = 1280, host = "127.0.0.1", reachableA
     };
   } catch (error) { await browser?.close(); await fixture.close(); throw error; }
 }
-

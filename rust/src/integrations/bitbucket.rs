@@ -855,6 +855,142 @@ mod tests {
             "links": {"html": {"href": format!("https://bitbucket.org/team/repo/pull-requests/{id}")}}, "updated_on": "2026-01-01T00:00:00Z"})
     }
 
+    #[tokio::test]
+    async fn evidence_upload_recovers_lost_response_and_rejects_altered_or_redirected_bytes() {
+        use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
+        let uploaded = Arc::new(AtomicBool::new(false));
+        let altered = Arc::new(AtomicBool::new(false));
+        let redirected = Arc::new(AtomicBool::new(false));
+        let writes = Arc::new(AtomicUsize::new(0));
+        let app = Router::new().fallback({
+            let uploaded = uploaded.clone();
+            let altered = altered.clone();
+            let redirected = redirected.clone();
+            let writes = writes.clone();
+            move |method: axum::http::Method, OriginalUri(uri): OriginalUri| {
+                let uploaded = uploaded.clone();
+                let altered = altered.clone();
+                let redirected = redirected.clone();
+                let writes = writes.clone();
+                async move {
+                    let path = uri.path_and_query().map_or("", |part| part.as_str());
+                    if path == "/2.0/repositories/owner/repo/downloads?pagelen=100" {
+                        let values = if uploaded.load(Ordering::SeqCst) {
+                            json!([{"name":"suplex-task.png","size":5}])
+                        } else {
+                            json!([])
+                        };
+                        return Json(json!({"values":values})).into_response();
+                    }
+                    if path == "/2.0/repositories/owner/repo/downloads/suplex-task.png" {
+                        if redirected.load(Ordering::SeqCst) {
+                            return (
+                                StatusCode::FOUND,
+                                [("location", "https://attacker.example/object")],
+                            )
+                                .into_response();
+                        }
+                        return (
+                            StatusCode::OK,
+                            if altered.load(Ordering::SeqCst) {
+                                "imago"
+                            } else {
+                                "image"
+                            },
+                        )
+                            .into_response();
+                    }
+                    if method == axum::http::Method::POST
+                        && path == "/2.0/repositories/owner/repo/downloads"
+                    {
+                        uploaded.store(true, Ordering::SeqCst);
+                        writes.fetch_add(1, Ordering::SeqCst);
+                        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+                    }
+                    StatusCode::NOT_FOUND.into_response()
+                }
+            }
+        });
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let origin = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        // SAFETY: private fixture credential name.
+        unsafe { std::env::set_var("SUPLEX_TEST_BITBUCKET_UPLOAD_TOKEN", "fixture") };
+        let client = BitbucketClient::with_origin(
+            &json!({"kind":"bitbucket","tokenEnvironment":"SUPLEX_TEST_BITBUCKET_UPLOAD_TOKEN"}),
+            &origin,
+        );
+        let allow: BeforeWrite<'_> = &|| Box::pin(async { Ok(()) });
+        let deny: BeforeWrite<'_> = &|| Box::pin(async { Err("cancelled".into()) });
+        assert_eq!(
+            client
+                .upload("owner/repo", "suplex-task.png", b"image", "image/png", deny)
+                .await
+                .unwrap_err()
+                .to_string(),
+            "cancelled"
+        );
+        assert_eq!(writes.load(Ordering::SeqCst), 0);
+        assert!(
+            client
+                .upload(
+                    "owner/repo",
+                    "suplex-task.png",
+                    b"image",
+                    "image/png",
+                    allow
+                )
+                .await
+                .is_err()
+        );
+        assert_eq!(
+            client
+                .upload(
+                    "owner/repo",
+                    "suplex-task.png",
+                    b"image",
+                    "image/png",
+                    allow
+                )
+                .await
+                .unwrap(),
+            "https://bitbucket.org/owner/repo/downloads/suplex-task.png"
+        );
+        assert_eq!(writes.load(Ordering::SeqCst), 1);
+        altered.store(true, Ordering::SeqCst);
+        assert!(
+            client
+                .upload(
+                    "owner/repo",
+                    "suplex-task.png",
+                    b"image",
+                    "image/png",
+                    allow
+                )
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("does not match")
+        );
+        altered.store(false, Ordering::SeqCst);
+        redirected.store(true, Ordering::SeqCst);
+        assert!(
+            client
+                .upload(
+                    "owner/repo",
+                    "suplex-task.png",
+                    b"image",
+                    "image/png",
+                    allow
+                )
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("unsafe download URL")
+        );
+        server.abort();
+    }
+
     #[test]
     fn pull_requests_map_to_the_github_shape() {
         let open = pull(&bitbucket_pull(3, "OPEN")).unwrap();

@@ -1501,6 +1501,15 @@ mod tests {
             "01bccddaaae04b2b221a6ae690313c8054b2d22cddfd8bbcca7ef3a6ac5a5578"
         );
         assert_eq!((changed.2, changed.3), (30.0, 60));
+        let cancelled_worker = launch_standard_worker(
+            &mut database,
+            &answer_root,
+            "Finish remaining work",
+            "Worker assignment: Finish remaining work",
+            None,
+            now,
+        )
+        .unwrap();
         database.connection().execute(
             "UPDATE suplex_task_controls SET status = 'waiting_human', human_question = 'Cancel?', human_question_id = 'limit-cancel', limit_pause_json = ?1 WHERE task_id = ?2",
             params![pause.to_string(), answer_task.id],
@@ -1525,6 +1534,26 @@ mod tests {
             [&answer_task.id], |row| row.get(0),
         ).unwrap();
         assert_eq!(outstanding, 0);
+        let late_result = StandardWorkerResult {
+            task_id: &answer_task.id,
+            session_id: &cancelled_worker.id,
+            generation: cancelled_worker.generation,
+            receipt_id: "native:late-worker:completed",
+            observation: "{\"state\":\"completed\"}",
+            native_turn_id: Some("late-native-turn"),
+            wake_prompt: "Review a cancelled Worker result",
+            review: None,
+        };
+        assert!(record_standard_worker_result_and_wake(&mut database, &late_result, now).is_err());
+        let late_wakes: i64 = database
+            .connection()
+            .query_row(
+                "SELECT COUNT(*) FROM suplex_task_turns WHERE task_id = ?1 AND prompt_text = ?2",
+                params![answer_task.id, late_result.wake_prompt],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(late_wakes, 0);
         drop(database);
         let _ = std::fs::remove_file(&filename);
         let _ = std::fs::remove_file(filename.with_extension("sqlite-wal"));

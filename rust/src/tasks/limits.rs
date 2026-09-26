@@ -36,11 +36,20 @@ pub(crate) struct TaskLimitUsage {
 #[derive(Debug, Deserialize, Serialize, TS)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub(crate) struct TaskLimitPause {
+    #[ts(type = "\"task_limit\"")]
     pub(crate) kind: String,
-    pub(crate) reason: String,
+    pub(crate) reason: TaskLimitReason,
     pub(crate) limits: TaskLimits,
     pub(crate) usage: TaskLimitUsage,
     pub(crate) proposed_limits: TaskLimits,
+}
+
+crate::shared::wire_enum! {
+    pub enum TaskLimitReason {
+        Budget = "budget",
+        Turns = "turns",
+        BudgetAndTurns = "budget_and_turns",
+    }
 }
 
 pub(crate) fn suggested_budget(proposed: f64, spent: f64) -> f64 {
@@ -51,15 +60,15 @@ pub(crate) fn suggested_budget(proposed: f64, spent: f64) -> f64 {
 }
 
 fn task_limit_question(
-    reason: &str,
+    reason: TaskLimitReason,
     limits: TaskLimits,
     proposed: TaskLimits,
     usage: TaskLimitUsage,
 ) -> String {
     let reached = match reason {
-        "budget" => "estimated spend budget",
-        "turns" => "turn limit",
-        _ => "estimated spend budget and turn limit",
+        TaskLimitReason::Budget => "estimated spend budget",
+        TaskLimitReason::Turns => "turn limit",
+        TaskLimitReason::BudgetAndTurns => "estimated spend budget and turn limit",
     };
     let spend = match usage.estimated_cost_usd {
         None => "Estimated spend is not available.".to_owned(),
@@ -82,7 +91,7 @@ fn task_limit_question(
             usage.admitted_turns, limits.max_turns
         )
     };
-    let budget = if reason == "turns" {
+    let budget = if reason == TaskLimitReason::Turns {
         proposed.budget_usd
     } else {
         suggested_budget(proposed.budget_usd, usage.estimated_cost_usd.unwrap_or(0.0))
@@ -108,10 +117,6 @@ fn valid_pause(pause: &TaskLimitPause) -> bool {
         limits.budget_usd.is_finite() && limits.budget_usd >= 0.0 && limits.max_turns >= 0
     };
     pause.kind == "task_limit"
-        && matches!(
-            pause.reason.as_str(),
-            "budget" | "turns" | "budget_and_turns"
-        )
         && valid_limits(&pause.limits)
         && !pause
             .usage
@@ -220,7 +225,7 @@ fn default_limits(database: &SuplexDatabase) -> DatabaseResult<TaskLimits> {
 #[serde(rename_all = "camelCase")]
 struct LimitPause {
     kind: &'static str,
-    reason: &'static str,
+    reason: TaskLimitReason,
     limits: TaskLimits,
     usage: TaskLimitUsage,
     proposed_limits: TaskLimits,
@@ -228,7 +233,7 @@ struct LimitPause {
 
 /// A task limit the observed usage reached, with the limits Suplex proposes.
 struct LimitHit {
-    reason: &'static str,
+    reason: TaskLimitReason,
     limits: TaskLimits,
     proposed: TaskLimits,
     observed: TaskLimitUsage,
@@ -249,9 +254,9 @@ impl LimitHit {
                 .is_some_and(|cost| cost >= limits.budget_usd);
         let hit_turns = limits.max_turns > 0 && admitted_turns >= limits.max_turns;
         let reason = match (hit_budget, hit_turns) {
-            (true, true) => "budget_and_turns",
-            (true, false) => "budget",
-            (false, true) => "turns",
+            (true, true) => TaskLimitReason::BudgetAndTurns,
+            (true, false) => TaskLimitReason::Budget,
+            (false, true) => TaskLimitReason::Turns,
             (false, false) => return None,
         };
         let budget_allowance = if defaults.budget_usd > 0.0 {
@@ -708,16 +713,16 @@ mod tests {
         };
         assert!(evaluate(limits(15.0, 40), Some(14.99), 39).is_none());
         let budget = evaluate(limits(15.0, 0), Some(15.0), 400).unwrap();
-        assert_eq!(budget.reason, "budget");
+        assert_eq!(budget.reason, TaskLimitReason::Budget);
         assert_eq!(budget.proposed.budget_usd, 30.0);
         assert_eq!(budget.proposed.max_turns, 0);
         let turns = evaluate(limits(0.0, 40), Some(100.0), 40).unwrap();
-        assert_eq!(turns.reason, "turns");
+        assert_eq!(turns.reason, TaskLimitReason::Turns);
         assert_eq!(turns.proposed.budget_usd, 0.0);
         assert_eq!(turns.proposed.max_turns, 80);
         assert!(evaluate(limits(0.0, 0), Some(100.0), 400).is_none());
         let unknown_cost = evaluate(limits(15.0, 40), None, 40).unwrap();
-        assert_eq!(unknown_cost.reason, "turns");
+        assert_eq!(unknown_cost.reason, TaskLimitReason::Turns);
         assert_eq!(unknown_cost.proposed.budget_usd, 15.0);
         assert_eq!(unknown_cost.proposed.max_turns, 80);
     }

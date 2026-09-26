@@ -27,8 +27,8 @@ use crate::{
         root_bridge::RootIdentity,
         root_session_store,
         workflows::{
-            self, Completion, DeliveryRefusal, DeliveryWait, LocalSourceFacts, Workflow,
-            WorkflowState,
+            self, Completion, CompletionKind, DeliveryRefusal, DeliveryWait, DeliveryWaitReason,
+            LocalSourceFacts, Workflow, WorkflowState,
         },
     },
     integrations::{
@@ -194,7 +194,7 @@ pub fn complete_workflow_delivery(
         state.accepted_delivery = Some(range.clone());
         state.delivery_wait = None;
         state.completion = Some(Completion {
-            kind: "workflow".into(),
+            kind: CompletionKind::Workflow,
             reviewed_head: Some(range.head_sha.clone()),
             pull_request_number,
             observed_at: now_millis_rfc3339(),
@@ -698,7 +698,7 @@ impl DeliveryOperations {
             self.clear_delivery_wait(task_id, &wait)?;
             return Ok("finished");
         }
-        let prompt = if wait.reason == "observation" {
+        let prompt = if wait.reason == DeliveryWaitReason::Observation {
             let (branch, sha) = self.resolve_delivery_base(&control).await?;
             if sha.is_none() {
                 return Ok("unchanged");
@@ -840,7 +840,7 @@ impl DeliveryOperations {
             head_sha: head_sha.to_owned(),
             fingerprint: format!("observation:{evidence}"),
             since: crate::shared::time::now_millis_rfc3339(),
-            reason: "observation".into(),
+            reason: DeliveryWaitReason::Observation,
         };
         self.update_workflow_state(task_id, |state| state.delivery_wait = Some(wait.clone()))?;
         self.schedule_wake(task_id, 30)?;
@@ -1018,7 +1018,7 @@ impl DeliveryOperations {
             .filter(|latest| latest.result.is_some())
             .map(|latest| latest.range.head_sha.clone());
         Completion {
-            kind: "external_merge".into(),
+            kind: CompletionKind::ExternalMerge,
             reviewed_head,
             pull_request_number,
             observed_at: crate::shared::time::now_millis_rfc3339(),
@@ -1033,7 +1033,7 @@ impl DeliveryOperations {
     ) -> Completion {
         match validated_range {
             Some(range) if pull["headSha"] == range.head_sha.as_str() => Completion {
-                kind: "workflow".into(),
+                kind: CompletionKind::Workflow,
                 reviewed_head: Some(range.head_sha.clone()),
                 pull_request_number: pull["number"].as_u64(),
                 observed_at: crate::shared::time::now_millis_rfc3339(),
@@ -1904,7 +1904,7 @@ impl DeliveryOperations {
             let fingerprint = delivery_wait_fingerprint(&observed);
             let current = self.get(task_id)?.workflow_state.delivery_wait;
             let wait = match current.filter(|current| {
-                current.reason == "checks"
+                current.reason == DeliveryWaitReason::Checks
                     && current.head_sha == local.head_sha
                     && current.fingerprint == fingerprint
             }) {
@@ -1913,7 +1913,7 @@ impl DeliveryOperations {
                     head_sha: local.head_sha.clone(),
                     fingerprint,
                     since: crate::shared::time::now_millis_rfc3339(),
-                    reason: "checks".into(),
+                    reason: DeliveryWaitReason::Checks,
                 },
             };
             self.update_workflow_state(task_id, |state| state.delivery_wait = Some(wait.clone()))?;
@@ -2111,13 +2111,13 @@ impl DeliveryOperations {
         task_id: &str,
         head: &str,
         observed: &Observation,
-        reason: &str,
+        reason: DeliveryWaitReason,
     ) -> DatabaseResult<DeliveryWait> {
         let wait = DeliveryWait {
             head_sha: head.to_owned(),
             fingerprint: delivery_wait_fingerprint(observed),
             since: crate::shared::time::now_millis_rfc3339(),
-            reason: reason.into(),
+            reason,
         };
         self.update_workflow_state(task_id, |state| state.delivery_wait = Some(wait.clone()))?;
         self.schedule_wake(task_id, 30)?;
@@ -2166,9 +2166,9 @@ impl DeliveryOperations {
             return Err(delivery_failure("merge_not_eligible", message));
         }
         let reason = if disposition == "waiting" {
-            "checks"
+            DeliveryWaitReason::Checks
         } else {
-            "merge_queue"
+            DeliveryWaitReason::MergeQueue
         };
         let wait = self.wait_for_merge(control.task_id.as_str(), head, observed, reason)?;
         Ok(Some(if disposition == "queued" {
@@ -2257,7 +2257,8 @@ impl DeliveryOperations {
         }
         let last = github.get_pull_request(repository, requested).await?;
         if last.state != "merged" {
-            let wait = self.wait_for_merge(task_id, &head, &observed, "merge_queue")?;
+            let wait =
+                self.wait_for_merge(task_id, &head, &observed, DeliveryWaitReason::MergeQueue)?;
             return Ok(
                 json!({"kind": "merge_requested", "pullRequest": last.reference(), "checkSummary": check_summary(&observed), "wait": wait, "next": DELIVERY_WAIT_NEXT}),
             );

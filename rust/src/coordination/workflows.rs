@@ -158,6 +158,22 @@ pub struct ReviewRecord {
     pub recorded_at: String,
 }
 
+crate::shared::wire_enum! {
+    pub enum DeliveryWaitReason {
+        Checks = "checks",
+        Mergeability = "mergeability",
+        MergeQueue = "merge_queue",
+        Observation = "observation",
+    }
+}
+
+crate::shared::wire_enum! {
+    pub enum CompletionKind {
+        Workflow = "workflow",
+        ExternalMerge = "external_merge",
+    }
+}
+
 /// TypeScript `DeliveryWait`: one persisted wait on GitHub delivery state.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
@@ -165,14 +181,14 @@ pub struct DeliveryWait {
     pub head_sha: String,
     pub fingerprint: String,
     pub since: String,
-    pub reason: String,
+    pub reason: DeliveryWaitReason,
 }
 
 /// TypeScript `WorkflowCompletion`: the recorded end of delivery.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct Completion {
-    pub kind: String,
+    pub kind: CompletionKind,
     pub reviewed_head: Option<String>,
     pub pull_request_number: Option<u64>,
     pub observed_at: String,

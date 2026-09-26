@@ -22,55 +22,26 @@ alias = "worktree"
 run = "mise install && pnpm exec playwright install chromium"
 
 [tasks.dev]
-description = "Run the Suplex supervisor, API, worker host, and Vite HMR"
-env = { SUPLEX_PRETTY_LOGS = "1", SUPLEX_FRONTEND_DEV_SERVER = "1", SUPLEX_DEVELOPMENT_AUTO_LOGIN = "1" }
-run = '''
-export PATH="$(dirname "$(mise which node)"):$PATH"
-[ -r "${NODE_EXTRA_CA_CERTS:-}" ] || unset NODE_EXTRA_CA_CERTS
-export SUPLEX_PORT=${CONDUCTOR_PORT:-4111}
-exec node src/platform/updates/supervisor.ts
-'''
+description = "Run the native supervisor and Vite HMR using the existing Rust development installation"
+run = "pnpm run dev"
 
 [tasks."dev:watch"]
-description = "Run the Suplex supervisor with backend reloads"
-env = { SUPLEX_PRETTY_LOGS = "1", SUPLEX_FRONTEND_DEV_SERVER = "1", SUPLEX_DEVELOPMENT_AUTO_LOGIN = "1" }
-run = '''
-export PATH="$(dirname "$(mise which node)"):$PATH"
-[ -r "${NODE_EXTRA_CA_CERTS:-}" ] || unset NODE_EXTRA_CA_CERTS
-export SUPLEX_PORT=${CONDUCTOR_PORT:-4111}
-exec node src/platform/updates/supervisor.ts --watch
-'''
+description = "Run native Suplex with Rust rebuilds and Vite HMR"
+run = "pnpm run dev:watch"
 
 [tasks."dev:rust"]
-description = "Build the frontend and run the isolated experimental Rust backend"
-run = '''
-pnpm exec vite build
-export SUPLEX_RUST_ASSETS_DIR="$PWD/dist/web"
-export SUPLEX_RUST_ROOT="$PWD/.suplex-rust"
-cd rust
-unset RUSTUP_TOOLCHAIN
-cargo build --bin suplex
-binary="${CARGO_TARGET_DIR:-$PWD/target}/debug/suplex"
-# A stable signature keeps the Keychain grant across rebuilds.
-[ -z "$SUPLEX_CODESIGN_IDENTITY" ] || codesign --force --sign "$SUPLEX_CODESIGN_IDENTITY" "$binary"
-exec "$binary"
-'''
+description = "Alias for the native development stack"
+run = "mise run dev"
 
 [tasks."build:rust"]
-description = "Build the experimental Rust binary with frontend assets and migrations"
-run = '''
-pnpm exec vite build
-cd rust
-unset RUSTUP_TOOLCHAIN
-cargo build --release --bin suplex
-[ -z "$SUPLEX_CODESIGN_IDENTITY" ] || codesign --force --sign "$SUPLEX_CODESIGN_IDENTITY" "${CARGO_TARGET_DIR:-$PWD/target}/release/suplex"
-'''
+description = "Build the native binary with frontend assets and migrations"
+run = "pnpm run build"
 
 [tasks."test:rust"]
 run = '''
 cd rust
 unset RUSTUP_TOOLCHAIN
-cargo test
+cargo test --all-targets
 '''
 
 [tasks."test:parity"]
@@ -79,8 +50,6 @@ set -e
 pnpm exec tsx scripts/rust-ratchet.ts --self-test
 pnpm exec tsx scripts/rust-ratchet.ts
 pnpm exec tsx scripts/rust-route-coverage.ts
-pnpm exec tsx tests/parity/generate.ts
-pnpm exec tsx tests/parity/hash-bytes/generate.ts
 cd rust
 unset RUSTUP_TOOLCHAIN
 cargo test --test contract_parity --test hash_bytes --test project_dependency_parity
@@ -95,7 +64,7 @@ set -e
 [ -f dist/web/suplex-ui.js ] || pnpm exec vite build
 (cd rust && unset RUSTUP_TOOLCHAIN && cargo build --bin suplex --features github-test-endpoint)
 export SUPLEX_RUST_BIN="${CARGO_TARGET_DIR:-$PWD/rust/target}/debug/suplex"
-export SUPLEX_BROWSER_BACKEND=rust SUPLEX_DETERMINISTIC_CODEX_RUN=1
+export SUPLEX_DETERMINISTIC_CODEX_RUN=1
 for phase in deliver deliver_pr answer restart cancel deliver_claude direct_build independent_review competing_plans refine_pull_request; do
   SUPLEX_DETERMINISTIC_PHASE=$phase pnpm exec tsx tests/interop/real-codex-standard.ts
 done
@@ -108,7 +77,6 @@ set -e
 [ -f dist/web/suplex-ui.js ] || pnpm exec vite build
 (cd rust && unset RUSTUP_TOOLCHAIN && cargo build --bin suplex --features github-test-endpoint)
 export SUPLEX_RUST_BIN="${CARGO_TARGET_DIR:-$PWD/rust/target}/debug/suplex"
-export SUPLEX_BROWSER_BACKEND=rust
 for script in root-delivery-inspection root-image root-worker-evidence root-worker-replacement task-timeline; do
   echo "[interop] $script" >&2
   pnpm exec tsx --import ./tests/helpers/interop-deadline.ts tests/interop/$script.ts
@@ -116,34 +84,23 @@ done
 '''
 
 [tasks.down]
-description = "Stop this checkout's dev stack"
-run = '''
-FP=${CONDUCTOR_PORT:-4111}
-PIDS=$(lsof -ti:$FP 2>/dev/null | sort -u)
-if [ -z "$PIDS" ]; then echo "nothing listening on $FP"; exit 0; fi
-for p in $PIDS; do g=$(ps -o pgid= -p "$p" | tr -d ' '); [ -n "$g" ] && kill -TERM -"$g" 2>/dev/null; done
-echo "sent SIGTERM to dev stack"
-'''
+description = "Stop this checkout's owned native development processes"
+run = "pnpm exec tsx scripts/dev.ts --stop"
 
 [tasks."dev:status"]
 run = '''
-FP=${CONDUCTOR_PORT:-4111}
-lsof -nP -iTCP:$FP -sTCP:LISTEN || echo "dev stack not running (port $FP free)"
+port=${SUPLEX_PORT:-${SUPLEX_RUST_PORT:-$((${CONDUCTOR_PORT:-4111} + 2))}}
+lsof -nP -iTCP:$port -sTCP:LISTEN || echo "dev stack not running (port $port free)"
 '''
 
 [tasks."dev:recover"]
-run = '''
-FP=${CONDUCTOR_PORT:-4111}
-PIDS=$(lsof -ti:$FP 2>/dev/null | sort -u)
-if [ -z "$PIDS" ]; then echo "nothing listening on $FP"; exit 0; fi
-for p in $PIDS; do g=$(ps -o pgid= -p "$p" | tr -d ' '); [ -n "$g" ] && kill -KILL -"$g" 2>/dev/null; done
-echo "force-killed dev stack"
-'''
+description = "Stop owned native development processes, escalating if needed"
+run = "pnpm exec tsx scripts/dev.ts --stop"
 
 [tasks."db:migrate"]
-run = "mise exec -- node --import tsx src/cli.ts migrate"
+run = "pnpm exec tsx scripts/dev.ts --migrate"
 [tasks.build]
-run = "export PATH=\"$(dirname \"$(mise which node)\"):$PATH\" && pnpm run build"
+run = "pnpm run build"
 [tasks.typecheck]
 run = "export PATH=\"$(dirname \"$(mise which node)\"):$PATH\" && pnpm run typecheck"
 [tasks.test]
@@ -197,9 +154,11 @@ node --input-type=module <<'NODE'
 import { readFile, writeFile } from "node:fs/promises";
 
 const files = ["package.json", "desktop/package.json"];
+const rustFiles = ["rust/Cargo.toml", "rust/Cargo.lock"];
+const rustPackages = await Promise.all(rustFiles.map(async (file) => ({ file, text: await readFile(file, "utf8") })));
 const packages = await Promise.all(files.map(async (file) => ({ file, value: JSON.parse(await readFile(file, "utf8")) })));
 const current = packages[0].value.version;
-if (!packages.every(({ value }) => value.version === current)) throw new Error("Desktop and runtime versions must match before release.");
+if (!packages.every(({ value }) => value.version === current) || !rustPackages.every(({ text }) => text.includes(`name = "suplex"\nversion = "${current}"`))) throw new Error("Desktop, frontend, and native versions must match before release.");
 const match = /^(\d+)\.(\d+)\.(\d+)$/.exec(current);
 if (!match) throw new Error(`Expected a semantic version, got ${current}.`);
 const [major, minor, patch] = match.slice(1).map(Number);
@@ -208,6 +167,7 @@ const next = process.env.RELEASE_BUMP === "major" ? `${major + 1}.0.0`
   : process.env.RELEASE_BUMP === "patch" ? `${major}.${minor}.${patch + 1}`
   : (() => { throw new Error("RELEASE_BUMP must be major, minor, or patch."); })();
 await Promise.all(packages.map(({ file, value }) => writeFile(file, `${JSON.stringify({ ...value, version: next }, null, 2)}\n`)));
+await Promise.all(rustPackages.map(({ file, text }) => writeFile(file, text.replace(`name = "suplex"\nversion = "${current}"`, `name = "suplex"\nversion = "${next}"`))));
 console.log(`${current} -> ${next}`);
 NODE
 '''
@@ -226,7 +186,7 @@ hide = true
 description = "Commit, tag, and push the released desktop version"
 run = '''
 version="$(node -p "require('./package.json').version")"
-git add package.json desktop/package.json
+git add package.json desktop/package.json rust/Cargo.toml rust/Cargo.lock
 git commit -m "release: v$version"
 git tag "v$version"
 git push
@@ -246,12 +206,8 @@ run = "RELEASE_BUMP=minor mise run _release:run"
 description = "Bump, sign, notarize, commit, tag, push, and publish the next patch desktop release"
 run = "RELEASE_BUMP=patch mise run _release:run"
 [tasks."desktop:open"]
-description = "Open the installed Suplex.app at this checkout's dev stack (http://localhost:<port>)"
-run = '''
-export PATH="$(dirname "$(mise which node)"):$PATH"
-export SUPLEX_PORT=${CONDUCTOR_PORT:-4111}
-exec tsx src/cli.ts desktop
-'''
+description = "Open the installed Suplex.app at this checkout's native development stack"
+run = "pnpm exec tsx scripts/dev.ts --desktop"
 [tasks."desktop:pages"]
 description = "Serve the desktop setup pages for browser preview"
 run = '''

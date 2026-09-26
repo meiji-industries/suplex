@@ -2,127 +2,29 @@ import tseslint from "typescript-eslint";
 import { createTypeScriptImportResolver } from "eslint-import-resolver-typescript";
 import { importX } from "eslint-plugin-import-x";
 
-const droppedTables = [
-  "suplex_developer_execution_leases",
-  "suplex_developer_execution_truth",
-  "suplex_plan_authorizations",
-  "suplex_issue_governance",
-  "suplex_projection_integrity_findings",
-  "suplex_projection_invalidations",
-  "suplex_project_revisions",
-  "suplex_issue_outputs",
-].join("|");
-
 export default tseslint.config({
-  ignores: ["dist/**", "node_modules/**", ".suplex/**", ".scratch/**", "coverage/**", "bb/**", "orca/**", "meiji-industries/**", "references/**", "desktop/**"],
+  ignores: ["dist/**", "node_modules/**", ".context/**", ".suplex/**", ".suplex-rust/**", ".scratch/**", "coverage/**", "rust/target/**", "desktop/**"],
 }, {
-  files: ["src/**/*.{ts,tsx}", "tests/**/*.{ts,tsx}"],
-  plugins: {
-    "@typescript-eslint": tseslint.plugin,
-  },
+  files: ["src/frontend/**/*.{ts,tsx}", "tests/**/*.{ts,tsx}"],
+  plugins: { "@typescript-eslint": tseslint.plugin },
   languageOptions: {
     parser: tseslint.parser,
-    parserOptions: {
-      projectService: true,
-      tsconfigRootDir: import.meta.dirname,
-    },
+    parserOptions: { projectService: true, tsconfigRootDir: import.meta.dirname },
   },
   rules: {
-    "no-restricted-imports": ["error", { paths: [
-      { name: "node:child_process", message: "Run external commands through runCommand in command-runner.ts." },
-      { name: "child_process", message: "Run external commands through runCommand in command-runner.ts." },
-    ] }],
     "@typescript-eslint/no-floating-promises": "error",
     "@typescript-eslint/no-unused-vars": ["error", { argsIgnorePattern: "^_", caughtErrors: "all" }],
     "@typescript-eslint/consistent-type-imports": ["error", { prefer: "type-imports", fixStyle: "inline-type-imports" }],
     "@typescript-eslint/no-import-type-side-effects": "error",
-    "@typescript-eslint/switch-exhaustiveness-check": ["error", {
-      considerDefaultExhaustiveForUnions: false,
-      requireDefaultForNonUnion: true,
-    }],
-    "no-restricted-syntax": ["error",
-      {
-        selector: "CallExpression[callee.object.name='JSON'][callee.property.name='parse']",
-        message: "Use the json() helper from task-utils.ts instead of JSON.parse().",
-      },
-      {
-        selector: `CallExpression[callee.object.name='db'][callee.property.name='prepare'][arguments.0.value=/${droppedTables}/]`,
-        message: "Do not query a table removed by a migration.",
-      },
-    ],
-  },
-}, {
-  files: ["src/**/*.{ts,tsx}", "tests/**/*.{ts,tsx}"],
-  rules: {
-    "no-restricted-syntax": ["error", {
-      selector: "TSEnumDeclaration",
-      message: "Use an `as const` tuple and derive the type (see DEFINITIONS.md).",
-    }],
-  },
-}, {
-  files: ["src/**/*.ts"],
-  plugins: {
-    "import-x": importX,
-  },
-  settings: {
-    "import-x/resolver-next": [createTypeScriptImportResolver()],
-  },
-  rules: {
-    "import-x/no-cycle": ["error", { maxDepth: Infinity }],
-  },
-}, {
-  files: [
-    "src/platform/backup.ts",
-    "src/codex-lead.ts",
-    "src/platform/command-runner.ts",
-    "src/forward-merge.ts",
-    "src/integrations/github/client.ts",
-    "src/runtimes/opencode/server.ts",
-    "src/runtimes/claude-code/task-runtime.ts",
-    "src/platform/process-manager.ts",
-    "src/profiles/provider-readiness.ts",
-    "src/platform/runtime.ts",
-    "src/platform/updates/self-update.ts",
-    "src/platform/tailscale.ts",
-    "src/tasks/sources.ts",
-    "src/coordination/workflow-evidence.ts",
-    "tests/ci-repair-rollback.test.ts",
-    "tests/github-release.real.test.ts",
-    "tests/hermes-agents.browser.test.ts",
-    "tests/hermes-agents.test.ts",
-    "tests/hermes-tasks-api.test.ts",
-    "tests/projects.browser.test.ts",
-    "tests/projects.real.test.ts",
-    "tests/target-base-reconciliation.real.test.ts",
-    "tests/task-sources.test.ts",
-  ],
-  rules: {
-    "no-restricted-imports": "off",
+    "@typescript-eslint/switch-exhaustiveness-check": ["error", { considerDefaultExhaustiveForUnions: false, requireDefaultForNonUnion: true }],
+    "no-restricted-syntax": ["error", { selector: "TSEnumDeclaration", message: "Use an as const tuple and derive the type (see DEFINITIONS.md)." }],
   },
 }, {
   files: ["src/frontend/**/*.{ts,tsx}"],
+  plugins: { "import-x": importX },
+  settings: { "import-x/resolver-next": [createTypeScriptImportResolver()] },
   rules: {
-    "no-restricted-syntax": "off",
-  },
-}, {
-  files: ["tests/**/*.{ts,tsx}"],
-  rules: {
-    "no-restricted-syntax": "off",
-  },
-}, {
-  files: ["src/task-utils.ts"],
-  rules: {
-    "no-restricted-syntax": ["error", {
-      selector: `CallExpression[callee.object.name='db'][callee.property.name='prepare'][arguments.0.value=/${droppedTables}/]`,
-      message: "Do not query a table removed by a migration.",
-    }],
-  },
-}, {
-  files: ["src/**/*.{ts,tsx}", "tests/**/*.{ts,tsx}"],
-  rules: {
-    "no-restricted-syntax": ["error", {
-      selector: "TSEnumDeclaration",
-      message: "Use an `as const` tuple and derive the type (see DEFINITIONS.md).",
-    }],
+    "import-x/no-cycle": ["error", { maxDepth: Infinity }],
+    "no-restricted-imports": ["error", { patterns: [{ group: ["node:*"], message: "Frontend code consumes HTTP contracts and browser helpers; native execution belongs to Rust." }] }],
   },
 });

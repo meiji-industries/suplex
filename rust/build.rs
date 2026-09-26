@@ -57,6 +57,14 @@ fn main() {
     let manifest = PathBuf::from(env::var("CARGO_MANIFEST_DIR").expect("Cargo manifest directory"));
     let migrations = embedded_files(&manifest.join("../drizzle"), Some("sql"));
     let frontend = embedded_files(&manifest.join("../dist/web"), None);
+    if env::var("PROFILE").as_deref() == Ok("release") {
+        for asset in ["suplex-ui.js", "suplex-ui.css"] {
+            assert!(
+                manifest.join("../dist/web").join(asset).is_file(),
+                "Missing frontend asset {asset}; run pnpm build to build the native bundle"
+            );
+        }
+    }
     let output = format!(
         "pub static MIGRATIONS: &[EmbeddedFile] = &[{migrations}];\npub static FRONTEND: &[EmbeddedFile] = &[{frontend}];\n"
     );

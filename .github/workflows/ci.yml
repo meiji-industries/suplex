@@ -51,13 +51,11 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm exec tsx scripts/rust-ratchet.ts --self-test
       - run: pnpm exec tsx scripts/rust-ratchet.ts
-      - name: Generate contract parity fixtures from current Zod schemas
-        run: |
-          pnpm exec tsx tests/parity/generate.ts
-          pnpm exec tsx tests/parity/hash-bytes/generate.ts
+      - run: pnpm exec tsx scripts/rust-route-coverage.ts
+      - run: pnpm exec vite build
       - run: cargo fmt --manifest-path rust/Cargo.toml --check
       - run: cargo clippy --manifest-path rust/Cargo.toml --all-targets -- -D warnings
-      - run: cargo test --manifest-path rust/Cargo.toml
+      - run: cargo test --manifest-path rust/Cargo.toml --all-targets
       - run: cargo test --manifest-path rust/Cargo.toml --lib signed_fresh_passkey_survives_reopen_and_updates_counter -- --ignored --nocapture
       - run: cargo test --manifest-path rust/Cargo.toml --lib signed_fresh_passkey_over_isolated_tcp_listener -- --ignored --nocapture
 
@@ -68,8 +66,16 @@ jobs:
     env:
       CI: "true"
       TEST_WORKERS: ${{ inputs.workers || '8' }}
+      SUPLEX_RUST_BIN: ${{ github.workspace }}/rust/target/debug/suplex
     steps:
       - uses: actions/checkout@v5
+
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: 1.93.1
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust
 
       - uses: pnpm/action-setup@v4
 
@@ -110,16 +116,23 @@ jobs:
           key: ${{ steps.browsers.outputs.cache-primary-key }}
           path: ~/.cache/ms-playwright
 
-      # The build runs the same TypeScript check as typecheck, then emits the app.
-      - name: Lint, typecheck and build
+      - name: Lint, typecheck and build the native test server
         run: |
-          pnpm lint &
-          lint_pid=$!
-          pnpm build
-          wait "$lint_pid"
+          pnpm lint
+          pnpm typecheck
+          pnpm exec vite build
+          cargo build --manifest-path rust/Cargo.toml --bin suplex --features github-test-endpoint
 
       - name: Unit and integration tests
         run: pnpm test --maxWorkers "$TEST_WORKERS" --reporter=default --reporter=junit --outputFile=test-results/unit-integration.xml
 
       - name: Browser tests
         run: pnpm exec vitest run --config vitest.browser.config.ts --maxWorkers "$TEST_WORKERS" --reporter=default --reporter=junit --outputFile=test-results/browser.xml
+
+      - name: Native workflow journeys
+        env:
+          SUPLEX_DETERMINISTIC_CODEX_RUN: "1"
+        run: |
+          for phase in deliver deliver_pr answer restart cancel deliver_claude direct_build independent_review competing_plans refine_pull_request; do
+            SUPLEX_DETERMINISTIC_PHASE=$phase pnpm exec tsx tests/interop/real-codex-standard.ts
+          done

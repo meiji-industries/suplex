@@ -4,36 +4,25 @@
   "private": true,
   "type": "module",
   "packageManager": "pnpm@11.22.0",
-  "bin": {
-    "suplex": "dist/src/cli.js"
-  },
-  "files": [
-    "dist",
-    "skills",
-    "drizzle",
-    "README.md",
-    "components.json",
-    "scripts/shared-resource-command.py"
-  ],
   "engines": {
     "node": "26.7.0"
   },
   "scripts": {
-    "suplex": "tsx src/cli.ts",
-    "build": "tsc && vite build",
-    "dev": "tsx src/cli.ts start --foreground",
+    "suplex": "sh scripts/suplex.sh",
+    "build": "sh scripts/build.sh",
+    "dev": "tsx scripts/dev.ts",
     "migration:new": "tsx scripts/create-migration.ts",
     "smoke": "tsx scripts/probe-opencode-delivery.ts",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
-    "check": "pnpm run typecheck && pnpm run lint && pnpm run test",
+    "check": "pnpm run typecheck && pnpm run lint && pnpm run test && pnpm run test:rust",
     "check:full": "pnpm run check && pnpm run test:browser",
     "test": "vitest run --project unit --project integration",
-    "test:guarded": "tsx scripts/run-guarded-tests.ts",
+    "test:guarded": "env -u RUSTUP_TOOLCHAIN cargo run --quiet --manifest-path rust/Cargo.toml --example guarded-tests --",
     "test:integration": "vitest run --project integration",
     "test:real": "vitest run --project real",
     "test:packaged": "vitest run --project packaged",
-    "test:browser": "pnpm run build && vitest run --config vitest.browser.config.ts",
+    "test:browser": "pnpm exec vite build && env -u RUSTUP_TOOLCHAIN cargo build --manifest-path rust/Cargo.toml --bin suplex && vitest run --config vitest.browser.config.ts",
     "verify": "pnpm run check:full",
     "test:all": "pnpm run check:full",
     "desktop:dev": "pnpm --filter suplex-desktop dev",
@@ -42,7 +31,9 @@
     "desktop:typecheck": "pnpm --filter suplex-desktop typecheck",
     "desktop:test": "vitest run --project unit desktop/tests",
     "desktop:dist:signed": "pnpm --filter suplex-desktop dist:signed",
-    "desktop:publish": "bash scripts/publish-desktop-release.sh"
+    "desktop:publish": "bash scripts/publish-desktop-release.sh",
+    "dev:watch": "tsx scripts/dev.ts --watch",
+    "test:rust": "env -u RUSTUP_TOOLCHAIN cargo test --manifest-path rust/Cargo.toml --all-targets"
   },
   "dependencies": {
     "@base-ui/react": "^1.7.0",

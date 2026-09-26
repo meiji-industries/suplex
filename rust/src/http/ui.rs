@@ -1,4 +1,4 @@
-pub fn auth_page() -> &'static str {
+fn page_template() -> &'static str {
     r##"<!doctype html>
 <html lang="en">
   <head>
@@ -17,6 +17,49 @@ pub fn auth_page() -> &'static str {
     <script type="module" src="/assets/suplex-ui.js"></script>
   </body>
 </html>"##
+}
+
+pub fn auth_page() -> String {
+    development_html(
+        page_template(),
+        std::env::var("SUPLEX_FRONTEND_DEV_URL").ok().as_deref(),
+    )
+}
+
+fn development_html(html: &str, dev_url: Option<&str>) -> String {
+    let Some(url) = dev_url
+        .and_then(|value| url::Url::parse(value).ok())
+        .filter(|url| {
+            url.scheme() == "http"
+                && matches!(url.host_str(), Some("127.0.0.1" | "localhost" | "[::1]"))
+                && url.username().is_empty()
+                && url.password().is_none()
+                && url.path() == "/"
+                && url.query().is_none()
+                && url.fragment().is_none()
+        })
+    else {
+        return html.to_owned();
+    };
+    let origin = url.origin().ascii_serialization();
+    html.replace(
+        "    <link rel=\"stylesheet\" href=\"/assets/suplex-ui.css\">\n",
+        "",
+    )
+    .replace(
+        "<script type=\"module\" src=\"/assets/suplex-ui.js\"></script>",
+        &format!(
+            r#"<script type="module">
+import RefreshRuntime from "{origin}/@react-refresh";
+RefreshRuntime.injectIntoGlobalHook(window);
+window.$RefreshReg$ = () => {{}};
+window.$RefreshSig$ = () => (type) => type;
+window.__vite_plugin_react_preamble_installed__ = true;
+</script>
+    <script type="module" src="{origin}/@vite/client"></script>
+    <script type="module" src="{origin}/src/frontend/main.tsx"></script>"#
+        ),
+    )
 }
 
 pub fn application_page(view: &str) -> String {
@@ -47,4 +90,30 @@ pub fn application_page(view: &str) -> String {
             &format!("window.__SUPLEX_VIEW__ = \"{view}\";"),
             1,
         )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn development_page_loads_vite_and_react_refresh_from_loopback() {
+        let html = development_html(page_template(), Some("http://127.0.0.1:55013"));
+        assert!(html.contains("http://127.0.0.1:55013/@vite/client"));
+        assert!(html.contains("http://127.0.0.1:55013/src/frontend/main.tsx"));
+        assert!(html.contains("__vite_plugin_react_preamble_installed__"));
+        assert!(!html.contains("/assets/suplex-ui"));
+        for invalid in [
+            "https://example.com",
+            "http://localhost:1234/injected",
+            "http://user@localhost:1234",
+            "bad",
+        ] {
+            assert_eq!(
+                development_html(page_template(), Some(invalid)),
+                page_template()
+            );
+        }
+        assert_eq!(development_html(page_template(), None), page_template());
+    }
 }

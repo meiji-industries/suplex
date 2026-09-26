@@ -659,3 +659,143 @@ mod dependency_tests {
         assert!(waits[3].summary.contains("Suplex checks GitHub again"));
     }
 }
+#[cfg(test)]
+mod fixture_tests {
+    use super::*;
+
+    #[test]
+    fn populated_task_matches_shared_fixture() {
+        let timestamp = "2026-09-26T12:00:00.000Z";
+        let sha = "0123456789abcdef0123456789abcdef01234567";
+        let response = TaskResponse {
+            id: "task_01".into(),
+            company_id: "company_01".into(),
+            project_id: "project_01".into(),
+            issue_key: Some("SUP-12".into()),
+            issue: Some(IssueAssociation::Github {
+                repository: "meiji-industries/suplex".into(),
+                number: 12,
+                id: "I_kwDOexample".into(),
+                key: "SUP-12".into(),
+                title: "Typed contracts".into(),
+                url: "https://github.com/meiji-industries/suplex/issues/12".into(),
+            }),
+            title: "Typed contracts".into(),
+            description: "Generate the browser task contract from Rust.".into(),
+            status: TaskStatus::Queued,
+            delivery_target: DeliveryTarget::PullRequestDraft,
+            root_profile: TaskProfile {
+                profile_id: "profile_root".into(),
+                provider: "codex".into(),
+                model: "gpt-5".into(),
+                reasoning_level: "high".into(),
+                service_tier: "default".into(),
+                provider_instance_id: None,
+                instance_home_directory: None,
+            },
+            worker_profile: TaskProfile {
+                profile_id: "profile_worker".into(),
+                provider: "claude-code".into(),
+                model: "claude-opus-5-5".into(),
+                reasoning_level: "medium".into(),
+                service_tier: "default".into(),
+                provider_instance_id: Some(None),
+                instance_home_directory: None,
+            },
+            workflow: Workflow::Standard,
+            advisor_profiles: BTreeMap::from([(
+                AdvisorRole::Reviewer,
+                TaskProfile {
+                    profile_id: "profile_reviewer".into(),
+                    provider: "claude-code".into(),
+                    model: "claude-sonnet-5".into(),
+                    reasoning_level: "medium".into(),
+                    service_tier: "default".into(),
+                    provider_instance_id: None,
+                    instance_home_directory: None,
+                },
+            )]),
+            workflow_state: PublicWorkflowState {
+                version: 1,
+                reviews: vec![],
+                accepted_delivery: None,
+                delivery_wait: None,
+                completion: None,
+            },
+            depends_on: vec!["task_00".into()],
+            configuration: TaskConfiguration {
+                provider_policy: None,
+                integration: None,
+                execution: None,
+                repository: "meiji-industries/suplex".into(),
+                repository_path: "/repo/suplex".into(),
+                worktree_root: "/repo/suplex/.worktrees".into(),
+                branch: "task/typed-contracts-task-01".into(),
+                base_branch: "main".into(),
+                baseline_sha: sha.into(),
+                starting_sha: sha.into(),
+                setup_command: "pnpm install".into(),
+                verification_command: "pnpm check".into(),
+                run_project_tests: true,
+                visual_evidence: "off".into(),
+                hermes_selection: None,
+                source: None,
+                captured_at: timestamp.into(),
+            },
+            worktree: None,
+            pull_request: None,
+            human_question: Some(TaskHumanQuestion::Question {
+                id: "question_01".into(),
+                text: "Merge now?".into(),
+                options: vec![HumanQuestionOption {
+                    label: "Yes".into(),
+                    description: "Merge the pull request.".into(),
+                    recommended: true,
+                }],
+                requires_command_cleanup: false,
+            }),
+            blocked_by: vec![TaskBlockedBy {
+                id: "task_00".into(),
+                title: "Prerequisite".into(),
+                status: TaskStatus::Active,
+                kind: None,
+                number: None,
+                state: None,
+                url: None,
+                observed_at: None,
+            }],
+            queue: TaskQueue {
+                waiting_on: vec![TaskQueueWait {
+                    kind: DependencyKind::Task,
+                    id: "task_00".into(),
+                    title: "Prerequisite".into(),
+                    status: TaskStatus::Active,
+                    delivery_target: DeliveryTarget::Merged,
+                    number: None,
+                    state: None,
+                    url: None,
+                    reason: TaskQueueWaitReason::PrerequisiteRunning,
+                    summary:
+                        "Prerequisite is running. This task starts when its pull request merges."
+                            .into(),
+                }],
+            },
+            limits: TaskLimitSummary {
+                budget_usd: 25.0,
+                max_turns: 40,
+                admitted_turns: 3,
+            },
+            wake_at: None,
+            images: vec![],
+            artifacts: vec![],
+            created_at: timestamp.into(),
+            updated_at: timestamp.into(),
+            status_changed_at: timestamp.into(),
+            archived_at: None,
+        };
+        let expected: serde_json::Value =
+            serde_json::from_str(include_str!("../../../tests/fixtures/task-response.json"))
+                .unwrap();
+        assert_eq!(serde_json::to_value(&response).unwrap(), expected);
+    }
+}

@@ -1,0 +1,102 @@
+{
+  "id": "task_01",
+  "companyId": "company_01",
+  "projectId": "project_01",
+  "issueKey": "SUP-12",
+  "issue": {
+    "kind": "github",
+    "repository": "meiji-industries/suplex",
+    "number": 12,
+    "id": "I_kwDOexample",
+    "key": "SUP-12",
+    "title": "Typed contracts",
+    "url": "https://github.com/meiji-industries/suplex/issues/12"
+  },
+  "title": "Typed contracts",
+  "description": "Generate the browser task contract from Rust.",
+  "status": "queued",
+  "deliveryTarget": "pull_request_draft",
+  "rootProfile": {
+    "profileId": "profile_root",
+    "provider": "codex",
+    "model": "gpt-5",
+    "reasoningLevel": "high",
+    "serviceTier": "default"
+  },
+  "workerProfile": {
+    "profileId": "profile_worker",
+    "provider": "claude-code",
+    "model": "claude-opus-5-5",
+    "reasoningLevel": "medium",
+    "serviceTier": "default",
+    "providerInstanceId": null
+  },
+  "workflow": "standard",
+  "advisorProfiles": {
+    "reviewer": {
+      "profileId": "profile_reviewer",
+      "provider": "claude-code",
+      "model": "claude-sonnet-5",
+      "reasoningLevel": "medium",
+      "serviceTier": "default"
+    }
+  },
+  "workflowState": {
+    "version": 1,
+    "reviews": [],
+    "acceptedDelivery": null,
+    "deliveryWait": null,
+    "completion": null
+  },
+  "dependsOn": ["task_00"],
+  "configuration": {
+    "repository": "meiji-industries/suplex",
+    "repositoryPath": "/repo/suplex",
+    "worktreeRoot": "/repo/suplex/.worktrees",
+    "branch": "task/typed-contracts-task-01",
+    "baseBranch": "main",
+    "baselineSha": "0123456789abcdef0123456789abcdef01234567",
+    "startingSha": "0123456789abcdef0123456789abcdef01234567",
+    "setupCommand": "pnpm install",
+    "verificationCommand": "pnpm check",
+    "runProjectTests": true,
+    "visualEvidence": "off",
+    "source": null,
+    "capturedAt": "2026-09-26T12:00:00.000Z"
+  },
+  "worktree": null,
+  "pullRequest": null,
+  "humanQuestion": {
+    "kind": "question",
+    "id": "question_01",
+    "text": "Merge now?",
+    "options": [
+      { "label": "Yes", "description": "Merge the pull request.", "recommended": true }
+    ],
+    "requiresCommandCleanup": false
+  },
+  "blockedBy": [
+    { "id": "task_00", "title": "Prerequisite", "status": "active" }
+  ],
+  "queue": {
+    "waitingOn": [
+      {
+        "kind": "task",
+        "id": "task_00",
+        "title": "Prerequisite",
+        "status": "active",
+        "deliveryTarget": "merged",
+        "reason": "prerequisite_running",
+        "summary": "Prerequisite is running. This task starts when its pull request merges."
+      }
+    ]
+  },
+  "limits": { "budgetUsd": 25, "maxTurns": 40, "admittedTurns": 3 },
+  "wakeAt": null,
+  "images": [],
+  "artifacts": [],
+  "createdAt": "2026-09-26T12:00:00.000Z",
+  "updatedAt": "2026-09-26T12:00:00.000Z",
+  "statusChangedAt": "2026-09-26T12:00:00.000Z",
+  "archivedAt": null
+}

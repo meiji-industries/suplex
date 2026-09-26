@@ -101,6 +101,57 @@ fn task_limit_question(
     )
 }
 
+/// The saved pause is a well-formed task-limit pause.
+fn valid_pause(pause: &PersistedLimitPause) -> bool {
+    let valid_limits = |limits: &TaskLimits| {
+        limits.budget_usd.is_finite() && limits.budget_usd >= 0.0 && limits.max_turns >= 0
+    };
+    pause.kind == "task_limit"
+        && matches!(
+            pause.reason.as_str(),
+            "budget" | "turns" | "budget_and_turns"
+        )
+        && valid_limits(&pause.limits)
+        && !pause
+            .usage
+            .estimated_cost_usd
+            .is_some_and(|cost| !cost.is_finite() || cost < 0.0)
+        && pause.usage.admitted_turns >= 0
+        && valid_limits(&pause.proposed_limits)
+}
+
+/// Cancel the task from its limit decision and stop its sessions.
+fn cancel_for_limit(database: &SuplexDatabase, task_id: &str, time: &str) -> DatabaseResult<()> {
+    database.connection().execute(
+        "UPDATE suplex_task_controls SET status = 'cancelled', wake_at = NULL, human_question = NULL, human_question_id = NULL, limit_pause_json = NULL, workflow_state_json = json_set(workflow_state_json, '$.deliveryWait', json('null')), updated_at = ?1 WHERE task_id = ?2",
+        params![time, task_id],
+    )?;
+    database.connection().execute(
+        "UPDATE suplex_task_sessions SET is_current = 0, lifecycle = 'cancelled', stop_requested_at = COALESCE(stop_requested_at, ?1), updated_at = ?1 WHERE task_id = ?2 AND stopped_at IS NULL",
+        params![time, task_id],
+    )?;
+    cancel_open_turns(database, task_id, None, time)
+}
+
+/// The current Root that receives the limit decision.
+fn decision_root(
+    database: &SuplexDatabase,
+    task_id: &str,
+    root_id: Option<String>,
+) -> DatabaseResult<SessionRow> {
+    let root_id =
+        root_id.ok_or_else(|| CoordinationError::refused("root_notification_unavailable"))?;
+    database
+        .connection()
+        .query_row(
+            "SELECT * FROM suplex_task_sessions WHERE id = ?1 AND task_id = ?2 AND kind = 'root' AND is_current = 1 AND lifecycle <> 'cancelled'",
+            params![root_id, task_id],
+            session,
+        )
+        .optional()?
+        .ok_or_else(|| CoordinationError::refused("root_notification_unavailable").into())
+}
+
 /// Apply the current task-limit decision as one durable control and prompt update.
 pub fn answer_task_limit(
     database: &mut SuplexDatabase,
@@ -122,50 +173,19 @@ pub fn answer_task_limit(
             return Err(CoordinationError::refused("question_identity_mismatch").into());
         };
         let pause: PersistedLimitPause = serde_json::from_str(&raw_pause)?;
-        if pause.kind != "task_limit"
-            || !matches!(pause.reason.as_str(), "budget" | "turns" | "budget_and_turns")
-            || !pause.limits.budget_usd.is_finite()
-            || pause.limits.budget_usd < 0.0
-            || pause.limits.max_turns < 0
-            || pause.usage.estimated_cost_usd.is_some_and(|cost| !cost.is_finite() || cost < 0.0)
-            || pause.usage.admitted_turns < 0
-            || !pause.proposed_limits.budget_usd.is_finite()
-            || pause.proposed_limits.budget_usd < 0.0
-            || pause.proposed_limits.max_turns < 0
-        {
+        if !valid_pause(&pause) {
             return Err(CoordinationError::refused("invalid_task_limit_pause").into());
         }
         let time = rfc3339_millis(now);
-        if matches!(decision, TaskLimitDecision::CancelTask) {
-            database.connection().execute(
-                "UPDATE suplex_task_controls SET status = 'cancelled', wake_at = NULL, human_question = NULL, human_question_id = NULL, limit_pause_json = NULL, workflow_state_json = json_set(workflow_state_json, '$.deliveryWait', json('null')), updated_at = ?1 WHERE task_id = ?2",
-                params![time, task_id],
-            )?;
-            database.connection().execute(
-                "UPDATE suplex_task_sessions SET is_current = 0, lifecycle = 'cancelled', stop_requested_at = COALESCE(stop_requested_at, ?1), updated_at = ?1 WHERE task_id = ?2 AND stopped_at IS NULL",
-                params![time, task_id],
-            )?;
-            cancel_open_turns(database, task_id, None, &time)?;
-            return Ok(());
-        }
-        let root_id = root_id.ok_or_else(|| CoordinationError::refused("root_notification_unavailable"))?;
-        let root = database
-            .connection()
-            .query_row(
-                "SELECT * FROM suplex_task_sessions WHERE id = ?1 AND task_id = ?2 AND kind = 'root' AND is_current = 1 AND lifecycle <> 'cancelled'",
-                params![root_id, task_id],
-                session,
-            )
-            .optional()?
-            .ok_or_else(|| CoordinationError::refused("root_notification_unavailable"))?;
         let limits = match decision {
+            TaskLimitDecision::CancelTask => return cancel_for_limit(database, task_id, &time),
             TaskLimitDecision::AddAllowance => pause.proposed_limits,
             TaskLimitDecision::ChangeLimits { limits } => TaskLimits {
                 budget_usd: limits.budget_usd,
                 max_turns: limits.max_turns as i64,
             },
-            TaskLimitDecision::CancelTask => unreachable!(),
         };
+        let root = decision_root(database, task_id, root_id)?;
         let prompt = js_json::stringify(&serde_json::json!({"question": question, "decision": decision}));
         let id = new_turn_id(now)?;
         insert_pending_turn(database, &id, task_id, &root.id, root.generation, None, &prompt, None, &time)?;
@@ -176,6 +196,94 @@ pub fn answer_task_limit(
         Ok(())
     })?;
     observe_lifecycle(database, task_id)
+}
+
+fn admitted_turn_count(database: &SuplexDatabase, task_id: &str) -> DatabaseResult<i64> {
+    Ok(database.connection().query_row(
+        "SELECT COUNT(*) FROM suplex_task_turns WHERE task_id = ?1 AND prompted_at IS NOT NULL",
+        [task_id],
+        |row| row.get(0),
+    )?)
+}
+
+fn default_limits(database: &SuplexDatabase) -> DatabaseResult<TaskLimits> {
+    let settings = crate::platform::environment_settings::read(database)?;
+    Ok(TaskLimits {
+        budget_usd: settings.default_budget_usd,
+        max_turns: settings.default_max_turns,
+    })
+}
+
+/// A task limit the observed usage reached, with the limits Suplex proposes.
+struct LimitHit {
+    reason: &'static str,
+    limits: TaskLimits,
+    proposed: TaskLimits,
+    observed: PersistedLimitUsage,
+}
+
+impl LimitHit {
+    /// Which limit the usage reached. The proposal adds one default allowance
+    /// (or the current limit when the default is disabled) to each reached limit.
+    fn evaluate(
+        limits: TaskLimits,
+        defaults: TaskLimits,
+        usage: TaskLimitUsage,
+        admitted_turns: i64,
+    ) -> Option<Self> {
+        let hit_budget = limits.budget_usd > 0.0
+            && usage
+                .estimated_cost_usd
+                .is_some_and(|cost| cost >= limits.budget_usd);
+        let hit_turns = limits.max_turns > 0 && admitted_turns >= limits.max_turns;
+        let reason = match (hit_budget, hit_turns) {
+            (true, true) => "budget_and_turns",
+            (true, false) => "budget",
+            (false, true) => "turns",
+            (false, false) => return None,
+        };
+        let budget_allowance = if defaults.budget_usd > 0.0 {
+            defaults.budget_usd
+        } else {
+            limits.budget_usd
+        };
+        let turn_allowance = if defaults.max_turns > 0 {
+            defaults.max_turns
+        } else {
+            limits.max_turns
+        };
+        let spent = usage.estimated_cost_usd.unwrap_or(0.0);
+        let proposed = TaskLimits {
+            budget_usd: if hit_budget {
+                suggested_budget(spent + budget_allowance, spent)
+            } else {
+                limits.budget_usd
+            },
+            max_turns: if hit_turns {
+                admitted_turns + turn_allowance
+            } else {
+                limits.max_turns
+            },
+        };
+        let observed = PersistedLimitUsage {
+            estimated_cost_usd: usage.estimated_cost_usd,
+            admitted_turns,
+        };
+        Some(Self {
+            reason,
+            limits,
+            proposed,
+            observed,
+        })
+    }
+
+    fn pause(&self) -> serde_json::Value {
+        serde_json::json!({ "kind": "task_limit", "reason": self.reason, "limits": self.limits, "usage": self.observed, "proposedLimits": self.proposed })
+    }
+
+    fn question(&self) -> String {
+        task_limit_question(self.reason, self.limits, self.proposed, self.observed)
+    }
 }
 
 /// TypeScript `TaskLimitStore.reconcilePause`: resume a limit-paused task
@@ -195,37 +303,22 @@ pub fn reconcile_task_limit_pause(
         ).optional()?;
         let Some((budget_usd, max_turns, raw_pause)) = row else { return Ok(false); };
         let _: PersistedLimitPause = serde_json::from_str(&raw_pause)?;
-        let settings = crate::platform::environment_settings::read(database)?;
-        let defaults = TaskLimits { budget_usd: settings.default_budget_usd, max_turns: settings.default_max_turns };
+        let defaults = default_limits(database)?;
         let limits = TaskLimits { budget_usd: budget_usd.unwrap_or(defaults.budget_usd), max_turns: max_turns.unwrap_or(defaults.max_turns) };
         if limits.budget_usd > 0.0 && usage.estimated_cost_usd.is_none() { return Ok(false); }
-        let admitted_turns: i64 = database.connection().query_row(
-            "SELECT COUNT(*) FROM suplex_task_turns WHERE task_id = ?1 AND prompted_at IS NOT NULL",
-            [task_id], |row| row.get(0),
-        )?;
+        let admitted_turns = admitted_turn_count(database, task_id)?;
         let time = rfc3339_millis(now);
-        let hit_budget = limits.budget_usd > 0.0 && usage.estimated_cost_usd.is_some_and(|cost| cost >= limits.budget_usd);
-        let hit_turns = limits.max_turns > 0 && admitted_turns >= limits.max_turns;
-        if !hit_budget && !hit_turns {
+        let Some(hit) = LimitHit::evaluate(limits, defaults, usage, admitted_turns) else {
             return Ok(database.connection().execute(
                 "UPDATE suplex_task_controls SET status = 'active', limit_pause_json = NULL, human_question = NULL, human_question_id = NULL, human_question_options_json = '[]', wake_at = ?1, updated_at = ?1 WHERE task_id = ?2 AND status = 'waiting_human' AND human_question_id = ?3",
                 params![time, task_id, question_id],
             )? == 1);
-        }
-        // ponytail: same evaluation as `claim_prompt`; share one helper once both packages merge.
-        let reason = match (hit_budget, hit_turns) { (true, true) => "budget_and_turns", (true, false) => "budget", _ => "turns" };
-        let budget_allowance = if defaults.budget_usd > 0.0 { defaults.budget_usd } else { limits.budget_usd };
-        let turn_allowance = if defaults.max_turns > 0 { defaults.max_turns } else { limits.max_turns };
-        let proposed = TaskLimits {
-            budget_usd: if hit_budget { suggested_budget(usage.estimated_cost_usd.unwrap_or(0.0) + budget_allowance, usage.estimated_cost_usd.unwrap_or(0.0)) } else { limits.budget_usd },
-            max_turns: if hit_turns { admitted_turns + turn_allowance } else { limits.max_turns },
         };
-        let observed = PersistedLimitUsage { estimated_cost_usd: usage.estimated_cost_usd, admitted_turns };
-        let pause = js_json::stringify(&serde_json::json!({ "kind": "task_limit", "reason": reason, "limits": limits, "usage": observed, "proposedLimits": proposed }));
+        let pause = js_json::stringify(&hit.pause());
         if pause != js_json::stringify(&serde_json::from_str(&raw_pause)?) {
             database.connection().execute(
                 "UPDATE suplex_task_controls SET limit_pause_json = ?1, human_question = ?2, updated_at = ?3 WHERE task_id = ?4 AND status = 'waiting_human' AND human_question_id = ?5",
-                params![pause, task_limit_question(reason, limits, proposed, observed), time, task_id, question_id],
+                params![pause, hit.question(), time, task_id, question_id],
             )?;
         }
         Ok(false)
@@ -237,13 +330,12 @@ pub(crate) enum Admission {
     Blocked,
 }
 
-pub(crate) fn check_admission(
+/// The task's status and saved limit overrides.
+fn admission_control(
     database: &SuplexDatabase,
     task_id: &str,
-    usage: TaskLimitUsage,
-    now: DateTime<Utc>,
-) -> DatabaseResult<Admission> {
-    let control = database
+) -> DatabaseResult<Option<(TaskStatus, Option<f64>, Option<i64>)>> {
+    Ok(database
         .connection()
         .query_row(
             "SELECT status, budget_usd, max_turns FROM suplex_task_controls WHERE task_id = ?1",
@@ -256,80 +348,36 @@ pub(crate) fn check_admission(
                 ))
             },
         )
-        .optional()?;
-    let Some((status, budget_usd, max_turns)) = control else {
+        .optional()?)
+}
+
+pub(crate) fn check_admission(
+    database: &SuplexDatabase,
+    task_id: &str,
+    usage: TaskLimitUsage,
+    now: DateTime<Utc>,
+) -> DatabaseResult<Admission> {
+    let Some((status, budget_usd, max_turns)) = admission_control(database, task_id)? else {
         return Ok(Admission::Blocked);
     };
-    if status != TaskStatus::Active {
+    if status != TaskStatus::Active || crate::tasks::dependencies::blocked(database, task_id)? {
         return Ok(Admission::Blocked);
     }
-    let dependency_blocked = crate::tasks::dependencies::blocked(database, task_id)?;
-    if dependency_blocked {
-        return Ok(Admission::Blocked);
-    }
-    let settings = crate::platform::environment_settings::read(database)?;
-    let defaults = TaskLimits {
-        budget_usd: settings.default_budget_usd,
-        max_turns: settings.default_max_turns,
-    };
+    let defaults = default_limits(database)?;
     let limits = TaskLimits {
         budget_usd: budget_usd.unwrap_or(defaults.budget_usd),
         max_turns: max_turns.unwrap_or(defaults.max_turns),
     };
-    let admitted_turns: i64 = database.connection().query_row(
-        "SELECT COUNT(*) FROM suplex_task_turns WHERE task_id = ?1 AND prompted_at IS NOT NULL",
-        [task_id],
-        |row| row.get(0),
-    )?;
+    let admitted_turns = admitted_turn_count(database, task_id)?;
     let reservations: i64 = database.connection().query_row(
             "SELECT COUNT(*) FROM suplex_task_turns WHERE task_id = ?1 AND status = 'unknown' AND prompted_at IS NULL",
             [task_id], |row| row.get(0),
         )?;
-    let hit_budget = limits.budget_usd > 0.0
-        && usage
-            .estimated_cost_usd
-            .is_some_and(|cost| cost >= limits.budget_usd);
-    let hit_turns = limits.max_turns > 0 && admitted_turns >= limits.max_turns;
-    if hit_budget || hit_turns {
-        let reason = match (hit_budget, hit_turns) {
-            (true, true) => "budget_and_turns",
-            (true, false) => "budget",
-            _ => "turns",
-        };
-        let budget_allowance = if defaults.budget_usd > 0.0 {
-            defaults.budget_usd
-        } else {
-            limits.budget_usd
-        };
-        let turn_allowance = if defaults.max_turns > 0 {
-            defaults.max_turns
-        } else {
-            limits.max_turns
-        };
-        let proposed = TaskLimits {
-            budget_usd: if hit_budget {
-                suggested_budget(
-                    usage.estimated_cost_usd.unwrap_or(0.0) + budget_allowance,
-                    usage.estimated_cost_usd.unwrap_or(0.0),
-                )
-            } else {
-                limits.budget_usd
-            },
-            max_turns: if hit_turns {
-                admitted_turns + turn_allowance
-            } else {
-                limits.max_turns
-            },
-        };
-        let observed = PersistedLimitUsage {
-            estimated_cost_usd: usage.estimated_cost_usd,
-            admitted_turns,
-        };
-        let pause = serde_json::json!({ "kind": "task_limit", "reason": reason, "limits": limits, "usage": observed, "proposedLimits": proposed });
+    if let Some(hit) = LimitHit::evaluate(limits, defaults, usage, admitted_turns) {
         let time = rfc3339_millis(now);
         database.connection().execute(
                 "UPDATE suplex_task_controls SET status = 'waiting_human', limit_pause_json = ?1, human_question = ?2, human_question_options_json = '[]', human_question_id = ?3, wake_at = NULL, updated_at = ?4 WHERE task_id = ?5 AND status = 'active'",
-                params![pause.to_string(), task_limit_question(reason, limits, proposed, observed), Uuid::new_v4().to_string(), time, task_id],
+                params![hit.pause().to_string(), hit.question(), Uuid::new_v4().to_string(), time, task_id],
             )?;
         return Ok(Admission::Blocked);
     }
@@ -338,7 +386,6 @@ pub(crate) fn check_admission(
     }
     Ok(Admission::Allowed)
 }
-
 use crate::{
     coordination::root_session_store,
     profiles::model_pricing::ModelsDevCatalogReader,
@@ -350,6 +397,65 @@ use crate::{
     tasks::TaskError,
 };
 use std::{path::Path, sync::OnceLock};
+/// A native session whose usage counts toward the task limits: Suplex id,
+/// native id, kind, and instance home directory.
+type UsageSession = (String, String, String, Option<String>);
+
+/// The sessions with admitted turns, the effective budget and turn limit, and
+/// the admitted turn count.
+fn usage_scope(
+    database: &SuplexDatabase,
+    task_id: &str,
+) -> DatabaseResult<(Vec<UsageSession>, f64, i64, i64)> {
+    let (budget_override, turns_override): (Option<f64>, Option<i64>) =
+        database.connection().query_row(
+            "SELECT budget_usd,max_turns FROM suplex_task_controls WHERE task_id = ?1",
+            [task_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )?;
+    let defaults = default_limits(database)?;
+    let admitted_turns = admitted_turn_count(database, task_id)?;
+    let sessions = database
+        .connection()
+        .prepare(
+            "SELECT DISTINCT s.id,s.native_session_id,s.kind,json_extract(s.profile_json,'$.instanceHomeDirectory') FROM suplex_task_sessions s JOIN suplex_task_turns t ON t.session_id = s.id WHERE s.task_id = ?1 AND s.native_session_id IS NOT NULL AND (t.prompted_at IS NOT NULL OR t.status = 'unknown') ORDER BY s.created_at,s.id",
+        )?
+        .query_map([task_id], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, Option<String>>(3)?,
+            ))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok((
+        sessions,
+        budget_override.unwrap_or(defaults.budget_usd),
+        turns_override.unwrap_or(defaults.max_turns),
+        admitted_turns,
+    ))
+}
+
+/// The pricing catalog, read only when some observed usage is unpriced.
+async fn pricing_for_unpriced(
+    observed: &[(String, String, NativeTimeline)],
+) -> Option<std::sync::Arc<crate::profiles::model_pricing::ModelPricingCatalog>> {
+    static PRICING: OnceLock<Result<ModelsDevCatalogReader, String>> = OnceLock::new();
+    if !observed
+        .iter()
+        .any(|(_, _, timeline)| timeline.usage.iter().any(unpriced))
+    {
+        return None;
+    }
+    let reader =
+        PRICING.get_or_init(|| ModelsDevCatalogReader::new().map_err(|error| error.to_string()));
+    match reader {
+        Ok(reader) => reader.read().await,
+        Err(_) => None,
+    }
+}
+
 /// TypeScript `observeTaskLimitUsage`. `require_complete` reports no cost
 /// unless every session has settled, fully priced usage.
 pub(crate) async fn observed_usage(
@@ -358,39 +464,7 @@ pub(crate) async fn observed_usage(
     task_id: &str,
     require_complete: bool,
 ) -> DatabaseResult<TaskLimitUsage> {
-    let (sessions, budget, max_turns, admitted_turns) = {
-        let (budget_override, turns_override): (Option<f64>, Option<i64>) =
-            database.connection().query_row(
-                "SELECT budget_usd,max_turns FROM suplex_task_controls WHERE task_id = ?1",
-                [task_id],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            )?;
-        let defaults = crate::platform::environment_settings::read(database)?;
-        let admitted_turns: i64 = database.connection().query_row(
-            "SELECT COUNT(*) FROM suplex_task_turns WHERE task_id = ?1 AND prompted_at IS NOT NULL",
-            [task_id],
-            |row| row.get(0),
-        )?;
-        let mut statement = database.connection().prepare(
-            "SELECT DISTINCT s.id,s.native_session_id,s.kind,json_extract(s.profile_json,'$.instanceHomeDirectory') FROM suplex_task_sessions s JOIN suplex_task_turns t ON t.session_id = s.id WHERE s.task_id = ?1 AND s.native_session_id IS NOT NULL AND (t.prompted_at IS NOT NULL OR t.status = 'unknown') ORDER BY s.created_at,s.id",
-        )?;
-        let sessions = statement
-            .query_map([task_id], |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, String>(1)?,
-                    row.get::<_, String>(2)?,
-                    row.get::<_, Option<String>>(3)?,
-                ))
-            })?
-            .collect::<rusqlite::Result<Vec<_>>>()?;
-        (
-            sessions,
-            budget_override.unwrap_or(defaults.default_budget_usd),
-            turns_override.unwrap_or(defaults.default_max_turns),
-            admitted_turns,
-        )
-    };
+    let (sessions, budget, max_turns, admitted_turns) = usage_scope(database, task_id)?;
     if (max_turns > 0 && admitted_turns >= max_turns) || budget == 0.0 {
         return Ok(TaskLimitUsage {
             estimated_cost_usd: None,
@@ -426,20 +500,7 @@ pub(crate) async fn observed_usage(
     .await??;
     // TypeScript `observeTaskLimitUsage`: a session without usage leaves the
     // observation incomplete; dispatch continues with the partial cost.
-    static PRICING: OnceLock<Result<ModelsDevCatalogReader, String>> = OnceLock::new();
-    let pricing = if observed
-        .iter()
-        .any(|(_, _, timeline)| timeline.usage.iter().any(unpriced))
-    {
-        let reader = PRICING
-            .get_or_init(|| ModelsDevCatalogReader::new().map_err(|error| error.to_string()));
-        match reader {
-            Ok(reader) => reader.read().await,
-            Err(_) => None,
-        }
-    } else {
-        None
-    };
+    let pricing = pricing_for_unpriced(&observed).await;
     settle_usage(
         database,
         task_id,

@@ -2738,3 +2738,339 @@ fn uncrossed(error: Crossed) -> Box<dyn Error> {
         Crossed::Other(message) => fail(&message, 409, "task_failure"),
     }
 }
+
+#[cfg(test)]
+mod retirement_admission_tests {
+    use super::*;
+    use crate::http::routes::agent_api::tests::agent;
+
+    fn request(key: &str) -> TaskCreateBody {
+        serde_json::from_value(json!({
+            "projectId": "project_api", "title": "Admission boundary", "idempotencyKey": key,
+            "images": [], "advisorProfileIds": {}
+        }))
+        .unwrap()
+    }
+
+    fn pending(state: &AppState, principal: &Principal, raw: &TaskCreateBody) -> Box<Pending> {
+        match state
+            .with_database(|database| admit(database, principal, raw))
+            .unwrap()
+        {
+            Admission::Capture(pending) => pending,
+            Admission::Done(_) => panic!("new request must enter capture"),
+        }
+    }
+
+    async fn captured(
+        pending: &Pending,
+        raw: &TaskCreateBody,
+    ) -> (sources::CreationSource, String) {
+        let source = sources::creation_source(
+            &pending.project,
+            &raw.title,
+            raw.description.as_deref().unwrap_or_default(),
+            None,
+            None,
+        )
+        .await
+        .unwrap();
+        let repository = git2::Repository::open(&pending.project.repository_path).unwrap();
+        let base = repository.head().unwrap().target().unwrap().to_string();
+        (source, base)
+    }
+
+    fn count(state: &AppState, table: &str) -> i64 {
+        state.with_database(|database| {
+            database
+                .connection()
+                .query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
+                    row.get(0)
+                })
+                .unwrap()
+        })
+    }
+
+    #[tokio::test]
+    async fn pre_feature_request_hash_replays_only_the_original_payload() {
+        let fixture = agent().await;
+        let raw: TaskCreateBody = serde_json::from_value(json!({
+            "projectId": "project_api", "title": "Legacy hash", "description": "Original",
+            "idempotencyKey": "legacy-hash-001", "images": [], "advisorProfileIds": {}
+        }))
+        .unwrap();
+        let (status, created) = fixture
+            .call(
+                reqwest::Method::POST,
+                "/api/agent/tasks",
+                Some(serde_json::to_value(&raw).unwrap()),
+            )
+            .await;
+        assert_eq!(status, 201, "{created}");
+        let hash = legacy_hash(&raw, &fixture.agent_id).unwrap();
+        fixture.server.state.with_database(|database| {
+            database
+                .connection()
+                .execute(
+                    "UPDATE suplex_tasks SET request_hash = ?1 WHERE id = ?2",
+                    rusqlite::params![hash, created["id"].as_str().unwrap()],
+                )
+                .unwrap();
+        });
+        let (status, replay) = fixture
+            .call(
+                reqwest::Method::POST,
+                "/api/agent/tasks",
+                Some(serde_json::to_value(&raw).unwrap()),
+            )
+            .await;
+        assert_eq!((status, replay["id"].clone()), (200, created["id"].clone()));
+        let mut changed = serde_json::to_value(&raw).unwrap();
+        changed["description"] = json!("Changed");
+        let (status, conflict) = fixture
+            .call(reqwest::Method::POST, "/api/agent/tasks", Some(changed))
+            .await;
+        assert_eq!(status, 409, "{conflict}");
+        assert_eq!(count(&fixture.server.state, "suplex_tasks"), 1);
+    }
+
+    #[tokio::test]
+    async fn admission_rechecks_live_grants_profile_and_project_configuration_after_capture() {
+        let fixture = agent().await;
+        let state = &fixture.server.state;
+        let principal = state.with_database(|database| {
+            external_agents::authenticate(database, &fixture.credential, Utc::now()).unwrap()
+        });
+        let artifact_root = state.artifact_root.as_deref();
+        let baseline = (
+            count(state, "suplex_tasks"),
+            count(state, "suplex_task_controls"),
+            count(state, "suplex_artifacts"),
+        );
+
+        let raw = request("delayed-grant-001");
+        let snapshot = pending(state, &principal, &raw);
+        let source = captured(&snapshot, &raw).await;
+        state.with_database(|database| {
+            database
+                .connection()
+                .execute(
+                    "DELETE FROM suplex_external_agent_project_grants WHERE agent_id = ?1",
+                    [&fixture.agent_id],
+                )
+                .unwrap()
+        });
+        assert!(
+            state
+                .with_database(|database| write(
+                    database,
+                    &principal,
+                    &raw,
+                    &snapshot,
+                    source,
+                    None,
+                    artifact_root
+                ))
+                .is_err()
+        );
+        assert_eq!(
+            (
+                count(state, "suplex_tasks"),
+                count(state, "suplex_task_controls"),
+                count(state, "suplex_artifacts")
+            ),
+            baseline
+        );
+        state.with_database(|database| database.connection().execute("INSERT INTO suplex_external_agent_project_grants (agent_id, company_id, project_id, created_at) VALUES (?1, 'company_api', 'project_api', ?2)", rusqlite::params![fixture.agent_id, rfc3339_millis(Utc::now())]).unwrap());
+
+        let raw = request("delayed-profile-001");
+        let snapshot = pending(state, &principal, &raw);
+        let source = captured(&snapshot, &raw).await;
+        state.with_database(|database| {
+            database
+                .connection()
+                .execute(
+                    "UPDATE suplex_profiles SET archived_at = ?1 WHERE id = 'profile_native_root'",
+                    [rfc3339_millis(Utc::now())],
+                )
+                .unwrap()
+        });
+        assert!(
+            state
+                .with_database(|database| write(
+                    database,
+                    &principal,
+                    &raw,
+                    &snapshot,
+                    source,
+                    None,
+                    artifact_root
+                ))
+                .is_err()
+        );
+        assert_eq!(
+            (
+                count(state, "suplex_tasks"),
+                count(state, "suplex_task_controls"),
+                count(state, "suplex_artifacts")
+            ),
+            baseline
+        );
+        state.with_database(|database| database.connection().execute("UPDATE suplex_profiles SET archived_at = NULL WHERE id = 'profile_native_root'", []).unwrap());
+
+        for (key, update) in [
+            (
+                "delayed-setup-001",
+                "UPDATE suplex_projects SET setup_command = 'changed' WHERE id = 'project_api'",
+            ),
+            (
+                "delayed-verification-001",
+                "UPDATE suplex_projects SET verification_command = 'changed' WHERE id = 'project_api'",
+            ),
+            (
+                "delayed-repository-001",
+                "UPDATE suplex_projects SET repository_identity = 'acme/changed' WHERE id = 'project_api'",
+            ),
+        ] {
+            let raw = request(key);
+            let snapshot = pending(state, &principal, &raw);
+            let source = captured(&snapshot, &raw).await;
+            state.with_database(|database| database.connection().execute(update, []).unwrap());
+            assert!(
+                state
+                    .with_database(|database| write(
+                        database,
+                        &principal,
+                        &raw,
+                        &snapshot,
+                        source,
+                        None,
+                        artifact_root
+                    ))
+                    .is_err(),
+                "{key}"
+            );
+            assert_eq!(
+                (
+                    count(state, "suplex_tasks"),
+                    count(state, "suplex_task_controls"),
+                    count(state, "suplex_artifacts")
+                ),
+                baseline,
+                "{key}"
+            );
+            state.with_database(|database| database.connection().execute("UPDATE suplex_projects SET setup_command = '', verification_command = '', repository_identity = 'acme/demo' WHERE id = 'project_api'", []).unwrap());
+        }
+
+        let raw = request("delayed-metadata-001");
+        let snapshot = pending(state, &principal, &raw);
+        let source = captured(&snapshot, &raw).await;
+        state.with_database(|database| {
+            database
+                .connection()
+                .execute(
+                    "UPDATE suplex_projects SET name = 'Renamed project' WHERE id = 'project_api'",
+                    [],
+                )
+                .unwrap()
+        });
+        let created = state
+            .with_database(|database| {
+                write(
+                    database,
+                    &principal,
+                    &raw,
+                    &snapshot,
+                    source,
+                    None,
+                    artifact_root,
+                )
+            })
+            .unwrap();
+        assert!(matches!(created, Creation::Task { created: true, .. }));
+        assert_eq!(count(state, "suplex_tasks"), baseline.0 + 1);
+    }
+
+    #[tokio::test]
+    async fn paused_retry_replays_concurrent_winner_before_policy_recheck() {
+        let fixture = agent().await;
+        let state = &fixture.server.state;
+        let principal = state.with_database(|database| {
+            external_agents::authenticate(database, &fixture.credential, Utc::now()).unwrap()
+        });
+        let raw = request("delayed-retry-001");
+        let snapshot = pending(state, &principal, &raw);
+        let source = captured(&snapshot, &raw).await;
+        let winner = fixture
+            .create("Admission boundary", "delayed-retry-001")
+            .await;
+        state.with_database(|database| database.connection().execute("UPDATE suplex_projects SET setup_command = 'changed after winner' WHERE id = 'project_api'", []).unwrap());
+        let replay = state
+            .with_database(|database| {
+                write(
+                    database,
+                    &principal,
+                    &raw,
+                    &snapshot,
+                    source,
+                    None,
+                    state.artifact_root.as_deref(),
+                )
+            })
+            .unwrap();
+        assert!(
+            matches!(replay, Creation::Task { created: false, ref id, .. } if id == winner["id"].as_str().unwrap())
+        );
+        assert_eq!(count(state, "suplex_tasks"), 1);
+    }
+
+    #[tokio::test]
+    async fn in_flight_command_replay_is_held_and_other_key_loses_revision() {
+        let fixture = agent().await;
+        let task = fixture
+            .create("In flight command", "in-flight-create-001")
+            .await;
+        let id = task["id"].as_str().unwrap();
+        let principal = fixture.server.state.with_database(|database| {
+            external_agents::authenticate(database, &fixture.credential, Utc::now()).unwrap()
+        });
+        let command: TaskCommandBody = serde_json::from_value(json!({"command":"cancel_task", "revision":task["revision"], "idempotencyKey":"in-flight-cancel-001"})).unwrap();
+        let first = fixture
+            .server
+            .state
+            .with_database(|database| claim(database, &principal, id, &command))
+            .unwrap();
+        assert!(matches!(first, Claim::Claimed { .. }));
+        let replay = match fixture
+            .server
+            .state
+            .with_database(|database| claim(database, &principal, id, &command))
+        {
+            Ok(_) => panic!("same key admitted twice"),
+            Err(error) => error,
+        };
+        assert!(replay.to_string().contains("still being processed"));
+        let other: TaskCommandBody = serde_json::from_value(json!({"command":"cancel_task", "revision":task["revision"], "idempotencyKey":"in-flight-other-001"})).unwrap();
+        let loser = match fixture
+            .server
+            .state
+            .with_database(|database| claim(database, &principal, id, &other))
+        {
+            Ok(_) => panic!("stale revision admitted"),
+            Err(error) => error,
+        };
+        assert!(loser.to_string().contains("revision is stale"));
+        let count: i64 = fixture.server.state.with_database(|database| {
+            database
+                .connection()
+                .query_row(
+                    "SELECT COUNT(*) FROM suplex_hermes_task_command_receipts WHERE task_id = ?1",
+                    [id],
+                    |row| row.get(0),
+                )
+                .unwrap()
+        });
+        assert_eq!(count, 0);
+        drop(first);
+    }
+}

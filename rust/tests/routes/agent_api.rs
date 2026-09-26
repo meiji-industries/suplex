@@ -947,4 +947,198 @@ pub(crate) mod tests {
             (400, Some("request_invalid"))
         );
     }
+
+    #[tokio::test]
+    async fn concurrent_creation_replays_one_effect_after_project_policy_changes() {
+        let agent = agent().await;
+        let body = json!({"projectId":"project_api", "title":"Concurrent admission", "idempotencyKey":"agent-concurrent-create-001"});
+        let (a, b, c, d) = tokio::join!(
+            agent.call(
+                reqwest::Method::POST,
+                "/api/agent/tasks",
+                Some(body.clone())
+            ),
+            agent.call(
+                reqwest::Method::POST,
+                "/api/agent/tasks",
+                Some(body.clone())
+            ),
+            agent.call(
+                reqwest::Method::POST,
+                "/api/agent/tasks",
+                Some(body.clone())
+            ),
+            agent.call(
+                reqwest::Method::POST,
+                "/api/agent/tasks",
+                Some(body.clone())
+            ),
+        );
+        let responses = [a, b, c, d];
+        let mut statuses = responses
+            .iter()
+            .map(|(status, _)| *status)
+            .collect::<Vec<_>>();
+        statuses.sort();
+        assert_eq!(statuses, [200, 200, 200, 201], "{responses:?}");
+        let id = responses[0].1["id"].as_str().unwrap();
+        assert!(responses.iter().all(|(_, body)| body["id"] == id));
+        agent.server.state.with_database(|database| {
+            database.connection().execute("UPDATE suplex_projects SET setup_command = 'changed after create' WHERE id = 'project_api'", []).unwrap();
+        });
+        let (status, replay) = agent
+            .call(
+                reqwest::Method::POST,
+                "/api/agent/tasks",
+                Some(body.clone()),
+            )
+            .await;
+        assert_eq!((status, replay["id"].as_str()), (200, Some(id)));
+        let (status, conflict) = agent.call(reqwest::Method::POST, "/api/agent/tasks", Some(json!({"projectId":"project_api", "title":"Different", "idempotencyKey":"agent-concurrent-create-001"}))).await;
+        assert_eq!(
+            (status, conflict["code"].as_str()),
+            (409, Some("idempotency_conflict"))
+        );
+        let counts: (i64, i64, i64) = agent.server.state.with_database(|database| {
+            database.connection().query_row("SELECT (SELECT COUNT(*) FROM suplex_tasks WHERE creator_agent_id = ?1), (SELECT COUNT(*) FROM suplex_task_controls WHERE task_id = ?2), (SELECT COUNT(*) FROM suplex_audit_events WHERE action = 'task_created' AND actor_agent_id = ?1)", rusqlite::params![agent.agent_id, id], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?))).unwrap()
+        });
+        assert_eq!(counts, (1, 1, 1));
+    }
+
+    #[tokio::test]
+    async fn completed_command_receipt_replays_on_stale_revision_without_another_effect() {
+        let agent = agent().await;
+        let task = agent
+            .create("Receipt replay", "agent-command-receipt-001")
+            .await;
+        let id = task["id"].as_str().unwrap();
+        let revision = task["revision"].as_str().unwrap();
+        let path = format!("/api/agent/tasks/{id}/commands");
+        let body = json!({"command":"cancel_task", "revision":revision, "idempotencyKey":"agent-cancel-receipt-001"});
+        let (status, first) = agent
+            .call(reqwest::Method::POST, &path, Some(body.clone()))
+            .await;
+        assert_eq!(status, 200, "{first}");
+        let before: (i64, i64, i64) = agent.server.state.with_database(|database| database.connection().query_row("SELECT command_revision, (SELECT COUNT(*) FROM suplex_hermes_task_command_receipts WHERE task_id = ?1), (SELECT COUNT(*) FROM suplex_audit_events WHERE action = 'task_cancelled' AND actor_agent_id = ?2) FROM suplex_tasks WHERE id = ?1", rusqlite::params![id, agent.agent_id], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?))).unwrap());
+        assert_eq!(
+            agent
+                .call(reqwest::Method::POST, &path, Some(body.clone()))
+                .await,
+            (200, first)
+        );
+        let (status, stale) = agent.call(reqwest::Method::POST, &path, Some(json!({"command":"cancel_task", "revision":revision, "idempotencyKey":"other-cancel"}))).await;
+        assert_eq!(
+            (status, stale["code"].as_str()),
+            (412, Some("revision_stale"))
+        );
+        let (status, conflict) = agent.call(reqwest::Method::POST, &path, Some(json!({"command":"archive_task", "revision":revision, "idempotencyKey":"agent-cancel-receipt-001"}))).await;
+        assert_eq!(
+            (status, conflict["code"].as_str()),
+            (409, Some("idempotency_conflict"))
+        );
+        let after: (i64, i64, i64) = agent.server.state.with_database(|database| database.connection().query_row("SELECT command_revision, (SELECT COUNT(*) FROM suplex_hermes_task_command_receipts WHERE task_id = ?1), (SELECT COUNT(*) FROM suplex_audit_events WHERE action = 'task_cancelled' AND actor_agent_id = ?2) FROM suplex_tasks WHERE id = ?1", rusqlite::params![id, agent.agent_id], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?))).unwrap());
+        assert_eq!(before, after);
+        assert_eq!(after.1, 1);
+        assert_eq!(after.2, 1);
+    }
+
+    #[tokio::test]
+    async fn template_description_omission_and_explicit_empty_value_remain_distinct_requests() {
+        let agent = agent().await;
+        let template = "agent_description_template";
+        let now = Utc::now().to_rfc3339();
+        let policy = json!({"workflowIds":["workflow_native_standard"], "defaultWorkflowId":"workflow_native_standard", "templateIds":[template], "rootProfileIds":["profile_native_root"], "workerProfileIds":["profile_native_worker"], "deliveryTarget":"local_worktree"});
+        agent.server.state.with_database(|database| {
+            database.connection().execute("INSERT INTO suplex_task_templates (id, project_id, name, configuration_json, created_at, updated_at) VALUES (?1, 'project_api', 'Description', ?2, ?3, ?3)", rusqlite::params![template, json!({"name":"Description", "description":"Template brief", "workflow":"standard", "advisorProfileIds":{}}).to_string(), now]).unwrap();
+            database.connection().execute("UPDATE suplex_projects SET agent_task_policy_json = ?1 WHERE id = 'project_api'", [policy.to_string()]).unwrap();
+        });
+        let create = |title: &str, key: &str, description: Option<&str>| {
+            let mut body = json!({"projectId":"project_api", "title":title, "idempotencyKey":key, "templateId":template});
+            if let Some(description) = description {
+                body["description"] = json!(description);
+            }
+            body
+        };
+        let mut ids = Vec::new();
+        for (title, key, description) in [
+            ("Omitted description", "template-omitted-001", None),
+            ("Empty description", "template-empty-001", Some("")),
+            (
+                "Caller description",
+                "template-explicit-001",
+                Some("Caller brief"),
+            ),
+        ] {
+            let (status, task) = agent
+                .call(
+                    reqwest::Method::POST,
+                    "/api/agent/tasks",
+                    Some(create(title, key, description)),
+                )
+                .await;
+            assert_eq!(status, 201, "{task}");
+            ids.push(task["id"].as_str().unwrap().to_owned());
+        }
+        let descriptions = agent.server.state.with_database(|database| {
+            ids.iter()
+                .map(|id| {
+                    database
+                        .connection()
+                        .query_row(
+                            "SELECT description FROM suplex_tasks WHERE id = ?1",
+                            [id],
+                            |row| row.get::<_, String>(0),
+                        )
+                        .unwrap()
+                })
+                .collect::<Vec<_>>()
+        });
+        assert_eq!(descriptions, ["Template brief", "", "Caller brief"]);
+        let body = create("Hash omission", "template-hash-001", None);
+        assert_eq!(
+            agent
+                .call(
+                    reqwest::Method::POST,
+                    "/api/agent/tasks",
+                    Some(body.clone())
+                )
+                .await
+                .0,
+            201
+        );
+        let mut changed = body;
+        changed["description"] = json!("");
+        let (status, conflict) = agent
+            .call(reqwest::Method::POST, "/api/agent/tasks", Some(changed))
+            .await;
+        assert_eq!(
+            (status, conflict["code"].as_str()),
+            (409, Some("idempotency_conflict"))
+        );
+    }
+
+    #[tokio::test]
+    async fn hundred_task_summary_stays_under_twenty_kibibytes() {
+        let agent = agent().await;
+        for index in 0..100 {
+            let title = format!("Compact task {index}");
+            let key = format!("compact-task-{index:03}");
+            agent.create(&title, &key).await;
+        }
+        let bearer = format!("Bearer {}", agent.credential);
+        let response = agent
+            .server
+            .request(
+                reqwest::Method::GET,
+                "/api/agent/tasks?view=summary&limit=100",
+                &[("authorization", bearer.as_str())],
+                None,
+            )
+            .await;
+        assert_eq!(response.status(), 200);
+        let bytes = response.bytes().await.unwrap();
+        let body: Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(body["tasks"].as_array().unwrap().len(), 100);
+        assert!(bytes.len() < 20 * 1024, "{} bytes", bytes.len());
+    }
 }

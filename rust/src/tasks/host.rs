@@ -11,7 +11,9 @@ use crate::{
 use chrono::Utc;
 use std::{
     collections::{HashMap, HashSet},
+    future::Future,
     path::{Path, PathBuf},
+    time::Duration,
 };
 use tokio::{
     sync::{mpsc, watch},
@@ -72,6 +74,15 @@ pub fn spawn_task_host(database_path: PathBuf, artifact_root: PathBuf) -> TaskHo
             }
         }
     });
+    let completed_path = database_path.clone();
+    tokio::spawn(poll_completed_pull_requests(
+        Duration::from_secs(60),
+        shutdown_rx.clone(),
+        move || {
+            let path = completed_path.clone();
+            async move { crate::delivery::completed_pull_requests::refresh(&path, None).await }
+        },
+    ));
     tokio::spawn(async move {
         let environment = std::env::vars().collect::<HashMap<_, _>>();
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(1));
@@ -123,6 +134,29 @@ pub fn spawn_task_host(database_path: PathBuf, artifact_root: PathBuf) -> TaskHo
         let _ = finished_tx.send(true);
     });
     handle
+}
+
+async fn poll_completed_pull_requests<F, Fut>(
+    period: Duration,
+    mut shutdown: watch::Receiver<bool>,
+    mut refresh: F,
+) where
+    F: FnMut() -> Fut,
+    Fut: Future<Output = DatabaseResult<()>>,
+{
+    let mut interval = tokio::time::interval(period);
+    loop {
+        tokio::select! {
+            result = shutdown.changed() => {
+                if result.is_err() || *shutdown.borrow() { break; }
+            },
+            _ = interval.tick() => {
+                if let Err(error) = refresh().await {
+                    eprintln!("Delivered pull request refresh will be retried: {error}");
+                }
+            },
+        }
+    }
 }
 
 /// TypeScript `TaskHost.tick`: the queue sweep admits every ready queued
@@ -267,4 +301,52 @@ async fn sweep_task_once(
         root_session_store::wake_idle_root(database, task_id, &prompt, Utc::now())?;
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+
+    #[tokio::test]
+    async fn delivered_pull_refresh_starts_immediately_retries_and_stops_with_host() {
+        let (shutdown_tx, shutdown_rx) = watch::channel(false);
+        let (observed_tx, mut observed_rx) = mpsc::unbounded_channel();
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let task = tokio::spawn(poll_completed_pull_requests(
+            Duration::from_millis(25),
+            shutdown_rx,
+            move || {
+                let attempt = attempts.fetch_add(1, Ordering::SeqCst) + 1;
+                observed_tx.send(attempt).unwrap();
+                async move {
+                    if attempt == 1 {
+                        Err(std::io::Error::other("provider offline").into())
+                    } else {
+                        Ok(())
+                    }
+                }
+            },
+        ));
+        assert_eq!(
+            tokio::time::timeout(Duration::from_secs(5), observed_rx.recv())
+                .await
+                .unwrap(),
+            Some(1)
+        );
+        assert_eq!(
+            tokio::time::timeout(Duration::from_secs(5), observed_rx.recv())
+                .await
+                .unwrap(),
+            Some(2)
+        );
+        shutdown_tx.send(true).unwrap();
+        tokio::time::timeout(Duration::from_secs(5), task)
+            .await
+            .unwrap()
+            .unwrap();
+    }
 }

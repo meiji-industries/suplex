@@ -72,6 +72,39 @@ fn safe_branch(project: &Project, branch: &str) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
+fn pinned_pull_request(
+    repository: &str,
+    base_branch: &str,
+    pull: &github_delivery::PullRequest,
+) -> Result<Value, Box<dyn Error>> {
+    if pull.state != "open" {
+        return Err(failure(
+            "source-pull-request-closed",
+            "The pull request is not open",
+            422,
+        ));
+    }
+    if pull.is_cross_repository == Some(true) || pull.repository != repository.to_lowercase() {
+        return Err(failure(
+            "source-unsupported-fork",
+            "Fork pull requests cannot be used as task sources",
+            422,
+        ));
+    }
+    safe_ref(&pull.head_branch)?;
+    if pull.head_branch == base_branch {
+        return Err(failure(
+            "source-base-branch",
+            "The configured base branch cannot be used as a task source",
+            422,
+        ));
+    }
+    safe_ref(&pull.base_branch)?;
+    Ok(
+        json!({"kind": "pull_request", "number": pull.number, "url": pull.url, "headBranch": pull.head_branch, "baseBranch": pull.base_branch, "headSha": pull.head_sha, "baseSha": pull.base_sha}),
+    )
+}
+
 /// Fetch origin refs with the same credential audience as other Git reads.
 fn fetch(
     repository: &Repository,
@@ -318,27 +351,7 @@ pub async fn resolve(project: &Project, selector: &Value) -> Result<Value, Box<d
                 .get_pull_request(repository, number)
                 .await
                 .map_err(|_| provider())?;
-            if pull.state != "open" {
-                return Err(failure(
-                    "source-pull-request-closed",
-                    "The pull request is not open",
-                    422,
-                ));
-            }
-            if pull.is_cross_repository == Some(true)
-                || pull.repository != repository.to_lowercase()
-            {
-                return Err(failure(
-                    "source-unsupported-fork",
-                    "Fork pull requests cannot be used as task sources",
-                    422,
-                ));
-            }
-            safe_branch(project, &pull.head_branch)?;
-            safe_ref(&pull.base_branch)?;
-            Ok(
-                json!({"kind": "pull_request", "number": pull.number, "url": pull.url, "headBranch": pull.head_branch, "baseBranch": pull.base_branch, "headSha": pull.head_sha, "baseSha": pull.base_sha}),
-            )
+            pinned_pull_request(repository, &project.base_branch, &pull)
         }
         _ => {
             let branch = selector["branch"].as_str().unwrap_or("").to_owned();
@@ -471,6 +484,72 @@ pub fn apply(prepared: &mut PreparedTask, created: CreationSource) -> serde_json
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn repair_pull_request_rejects_closed_and_foreign_sources_and_pins_the_open_head() {
+        let code = |error: Box<dyn Error>| match error
+            .downcast::<super::super::TaskError>()
+            .unwrap()
+            .as_ref()
+        {
+            super::super::TaskError::Source { code, status, .. } => {
+                assert_eq!(*status, 422);
+                *code
+            }
+            other => panic!("unexpected source error: {other:?}"),
+        };
+        let pull = github_delivery::PullRequest {
+            number: 7,
+            url: "https://github.com/owner/repo/pull/7".into(),
+            repository: "owner/repo".into(),
+            head_branch: "feature".into(),
+            base_branch: "main".into(),
+            head_sha: "b".repeat(40),
+            base_sha: "a".repeat(40),
+            is_draft: true,
+            state: "open".into(),
+            merged_at: None,
+            auto_merge_enabled: None,
+            title: None,
+            body: None,
+            author: None,
+            updated_at: None,
+            is_cross_repository: None,
+            node_id: None,
+        };
+        let pinned = pinned_pull_request("owner/repo", "main", &pull).unwrap();
+        assert_eq!(
+            pinned,
+            json!({
+                "kind":"pull_request", "number":7, "url":"https://github.com/owner/repo/pull/7",
+                "headBranch":"feature", "baseBranch":"main", "headSha":"b".repeat(40), "baseSha":"a".repeat(40)
+            })
+        );
+        let mut closed = pull.clone();
+        closed.state = "closed".into();
+        assert_eq!(
+            code(pinned_pull_request("owner/repo", "main", &closed).unwrap_err()),
+            "source-pull-request-closed"
+        );
+        let mut fork = pull.clone();
+        fork.is_cross_repository = Some(true);
+        assert_eq!(
+            code(pinned_pull_request("owner/repo", "main", &fork).unwrap_err()),
+            "source-unsupported-fork"
+        );
+        let mut other_repository = pull.clone();
+        other_repository.repository = "other/repo".into();
+        assert_eq!(
+            code(pinned_pull_request("owner/repo", "main", &other_repository).unwrap_err()),
+            "source-unsupported-fork"
+        );
+        let mut base = pull.clone();
+        base.head_branch = "main".into();
+        assert_eq!(
+            code(pinned_pull_request("owner/repo", "main", &base).unwrap_err()),
+            "source-base-branch"
+        );
+    }
 
     #[test]
     fn branch_pattern_matches_the_source_rules() {

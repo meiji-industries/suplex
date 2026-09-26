@@ -8,7 +8,10 @@ use crate::{
     tasks::control::*,
 };
 use crate::{
-    coordination::{advisor_bridge::AdvisorRole, root_prompts::without_current_dependency_status},
+    coordination::{
+        advisor_bridge::AdvisorRole,
+        root_prompts::{self, PendingQuestion, without_current_dependency_status},
+    },
     profiles::agent_profiles::{allowed_profile, read_profile},
     projects::ProjectProviderPolicy,
 };
@@ -83,23 +86,7 @@ pub fn replace_worker(
             "SELECT terminal_observation FROM suplex_task_turns WHERE session_id = ?1 AND terminal_observation IS NOT NULL ORDER BY created_at DESC,id DESC LIMIT 1",
             [&request.session_id], |row| row.get(0),
         ).optional()?;
-        let result = latest_result.as_deref()
-            .and_then(|raw| serde_json::from_str::<Value>(raw).ok())
-            .and_then(|value| value["text"].as_str().map(ToOwned::to_owned))
-            .unwrap_or_else(|| if latest_result.is_some() { String::new() } else { "No completed Worker result exists.".into() });
-        let result_units = result.encode_utf16().collect::<Vec<_>>();
-        let excerpt = String::from_utf16_lossy(&result_units[result_units.len().saturating_sub(12_000)..]);
-        let handoff = [
-            format!("Reason for replacement: {}", request.reason),
-            request.handoff.as_ref().filter(|text| !text.is_empty()).map(|text| format!("Additional direction:\n{text}")).unwrap_or_default(),
-            format!("Latest Worker result (verify its claims against source and command evidence):\n{excerpt}"),
-            "Inspect the preserved worktree, branch, and current Git status. Preserve existing commits and uncommitted work. Finish the remaining assignment and its checks. Report exact verification and the resulting commit. Use a different approach if the previous attempts did not advance the assignment.".into(),
-        ].into_iter().filter(|text| !text.is_empty()).collect::<Vec<_>>().join("\n\n");
-        let previous_suffix = previous_handoff.map(|text| format!("\n\nFresh Worker handoff:\n{text}"));
-        let saved_assignment = previous_suffix.as_deref()
-            .and_then(|suffix| assignment_prompt.strip_suffix(suffix))
-            .unwrap_or(&assignment_prompt);
-        let prompt = format!("{saved_assignment}\n\nFresh Worker handoff:\n{handoff}");
+        let (handoff, prompt) = root_prompts::worker_replacement_prompt(&request.reason, request.handoff.as_ref(), latest_result.as_deref(), previous_handoff.as_deref(), &assignment_prompt);
         let hash = sha256_hex(prompt.as_bytes());
         let generation: i64 = database.connection().query_row(
             "SELECT COALESCE(MAX(generation),0)+1 FROM suplex_task_sessions WHERE task_id = ?1 AND kind = 'worker'",
@@ -141,23 +128,6 @@ pub fn worker_replacement_ready(
     Ok(!outstanding)
 }
 
-fn js_suffix(text: &str, size: usize) -> String {
-    let units = text.encode_utf16().collect::<Vec<_>>();
-    String::from_utf16_lossy(&units[units.len().saturating_sub(size)..])
-}
-
-fn outcome_text_owned(observation: &str) -> String {
-    serde_json::from_str::<Value>(observation)
-        .ok()
-        .and_then(|value| {
-            value
-                .get("text")
-                .and_then(Value::as_str)
-                .map(ToOwned::to_owned)
-        })
-        .unwrap_or_else(|| observation.to_owned())
-}
-
 /// TypeScript `replacementIntent`: the selection a Coordinator successor saves.
 /// Older intents may omit the question fields.
 #[derive(Debug, Serialize, Deserialize)]
@@ -170,13 +140,6 @@ struct ReplacementIntent {
     question_id: Option<String>,
     #[serde(default)]
     pending_question: Option<PendingQuestion>,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-struct PendingQuestion {
-    id: String,
-    text: String,
-    options: Value,
 }
 
 struct CoordinatorControlRow {
@@ -336,36 +299,13 @@ pub fn replace_coordinator(
             question_id: question_intent.map(str::to_owned),
             pending_question: current_question,
         })?);
-        let pending_question = if unanswered.is_empty() { String::new() } else {
-            let items = unanswered.iter().map(|pending| format!("Question {}:\n{}\nOptions: {}",pending.id,pending.text,js_json::stringify(&pending.options))).collect::<Vec<_>>().join("\n\n");
-            let guidance = if request.resume { "The user authorized resuming with a new Coordinator. Resolve a provider failure if possible; ask the user if a real decision is still necessary." }
-                else if status == TaskStatus::WaitingHuman { "The task stays paused until the user answers its current decision." }
-                else { "The task is active. Reassess these questions and ask the user if a decision is still necessary." };
-            format!("Questions without an accepted answer:\n{items}\nThese questions have NOT been answered. {guidance}")
-        };
-        let delegates = rows.sessions.iter().filter(|session| session.kind == SessionKind::Worker && session.current).map(|session| {
-            let id = &session.id;
-            // TypeScript `ORDER BY created_at DESC, id DESC LIMIT 1`; the rows are in that order ascending.
-            let latest = rows.turns.iter().rfind(|turn| turn.session_id == *id);
-            let assignment = latest.map_or("", |turn| turn.prompt_text.as_str());
-            let result = latest.and_then(|turn| turn.terminal_observation.as_deref());
-            format!("Session {id}, {}, {}. Latest assignment/turn {} ({}):\n{}\nLatest result: {}",
-                session.advisor_role.map_or("Worker", AdvisorRole::as_str),session.lifecycle,
-                latest.map_or("none", |turn| turn.id.as_str()),latest.map_or("none", |turn| turn.status.as_str()),
-                js_suffix(assignment,5000),result.map(|raw| js_suffix(&outcome_text_owned(raw),4000)).unwrap_or_else(|| "pending".into()))
-        }).collect::<Vec<_>>().join("\n\n");
-        let outcomes = root_turns.iter().filter_map(|(id,_,observation,_,_)| observation.as_deref().map(|raw| format!("Coordinator turn {id}: {}",js_suffix(&outcome_text_owned(raw),3000)))).rev().take(4).collect::<Vec<_>>().into_iter().rev().collect::<Vec<_>>().join("\n\n");
-        let handoff_text = [
-            "Fresh Coordinator handoff. Continue this task from current authoritative Git, GitHub, native session, and task state. Do not replay an admitted old turn. Continue existing delegates and do not repeat completed assignments.".into(),
-            format!("Current task state: {status}. Worktree: {}. Pull request: {}. Workflow state: {}.",worktree.as_deref().unwrap_or("none"),pull_request.as_deref().unwrap_or("none"),workflow_state),
-            pending_question,
-            format!("Previously accepted human answers and notes, in order:\n{}",if messages.is_empty() { "None recorded.".into() } else { messages.join("\n\n") }),
-            format!("Earlier additional directions from the user, in order:\n{}",if earlier_directions.is_empty() { "None recorded.".into() } else { earlier_directions }),
-            format!("Current delegate assignments and results:\n{}",if delegates.is_empty() { "No current delegates.".into() } else { delegates }),
-            format!("Recent Coordinator outcomes:\n{}",if outcomes.is_empty() { "None recorded.".into() } else { outcomes }),
-            if handoff.is_empty() { String::new() } else { format!("Additional direction from the user:\n{handoff}") },
-        ].into_iter().filter(|part| !part.is_empty()).collect::<Vec<_>>().join("\n\n");
-        let prompt = format!("{initial_prompt}\n\n{handoff_text}");
+        let pending_question = root_prompts::pending_replacement_questions(&unanswered, request.resume, status);
+        let delegates = root_prompts::replacement_delegates(&rows);
+        let outcomes = root_turns.iter().filter_map(|(id,_,observation,_,_)| observation.as_deref().map(|raw| format!("Coordinator turn {id}: {}",root_prompts::replacement_outcome(raw)))).rev().take(4).collect::<Vec<_>>().into_iter().rev().collect::<Vec<_>>().join("\n\n");
+        let (handoff_text, prompt) = root_prompts::coordinator_replacement_prompt(initial_prompt, root_prompts::CoordinatorHandoff {
+            status, worktree: worktree.as_deref(), pull_request: pull_request.as_deref(), workflow_state: &workflow_state,
+            pending_question, messages: &messages, earlier_directions, delegates, outcomes, handoff,
+        });
         let generation: i64 = database.connection().query_row("SELECT COALESCE(MAX(generation),0)+1 FROM suplex_task_sessions WHERE task_id = ?1 AND kind = 'root'",[task_id],|row| row.get(0))?;
         let id = Uuid::new_v4().to_string();
         database.connection().execute("UPDATE suplex_task_sessions SET profile_json = ?1 WHERE task_id = ?2 AND kind = 'root' AND advisor_role IS NULL AND profile_json IS NULL",params![old_profile_json,task_id])?;

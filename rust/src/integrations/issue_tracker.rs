@@ -431,6 +431,7 @@ pub struct IssueTracker {
     connection: Connection,
     github: Option<Github>,
     http: reqwest::Client,
+    gh_command: String,
 }
 
 pub struct IssueImages {
@@ -452,6 +453,7 @@ impl IssueTracker {
             connection: Connection::deserialize(connection).unwrap_or_default(),
             github,
             http: provider_http::client(),
+            gh_command: std::env::var("SUPLEX_GH_COMMAND").unwrap_or_else(|_| "gh".into()),
         }
     }
 
@@ -1030,7 +1032,7 @@ impl IssueTracker {
                 .find(|row| row.owned(&actor) && issue_text(&row.body).contains(&marker));
             if existing.is_none() {
                 upload_github_media(
-                    &std::env::var("SUPLEX_GH_COMMAND").unwrap_or_else(|_| "gh".into()),
+                    &self.gh_command,
                     &issue.repository,
                     &issue.number,
                     filename,
@@ -1337,6 +1339,206 @@ exit 1
             assert!(!std::path::Path::new(path).exists());
         }
         std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn github_media_recovers_the_owned_comment_after_cli_response_loss() {
+        use axum::http::{StatusCode, Uri};
+        use std::os::unix::fs::PermissionsExt;
+        let root =
+            std::env::temp_dir().join(format!("suplex-gh-media-retry-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&root).unwrap();
+        let row_path = root.join("comment.json");
+        let writes = root.join("writes");
+        let command = root.join("gh");
+        let bytes = b"fixture-image";
+        let filename = format!("suplex-task_one-{}.png", sha256_hex(bytes));
+        let marker = format!("[Suplex attachment {filename}]");
+        let body = format!(
+            "{marker}\n\n![{filename}](https://github.com/user-attachments/assets/fixture)"
+        );
+        let row = json!({"id":9,"body":body,"user":{"id":4}});
+        std::fs::write(
+            &command,
+            format!(
+                r#"#!/bin/sh
+if [ "$3" = "--help" ]; then echo '--attach file'; exit 0; fi
+body=''; attachment=''
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --body-file) shift; body="$1" ;;
+    --attach) shift; attachment="$1" ;;
+  esac
+  shift
+done
+test "$(cat "$body")" = '{marker}' || exit 24
+test "$(cat "$attachment")" = 'fixture-image' || exit 25
+printf '%s' '{}' > '{}'
+echo write >> '{}'
+exit 1
+"#,
+                row,
+                row_path.display(),
+                writes.display()
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&command, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let app = axum::Router::new().fallback({
+            let row_path = row_path.clone();
+            move |uri: Uri| {
+                let row_path = row_path.clone();
+                async move {
+                    let path = uri.path_and_query().map_or("", |part| part.as_str());
+                    if path == "/user" {
+                        return (StatusCode::OK, json!({"id":4}).to_string());
+                    }
+                    if path == "/repos/owner/repo/issues/42/comments?per_page=100&page=1" {
+                        let rows: Vec<Value> = std::fs::read_to_string(row_path)
+                            .ok()
+                            .and_then(|bytes| serde_json::from_str(&bytes).ok())
+                            .into_iter()
+                            .collect();
+                        return (StatusCode::OK, json!(rows).to_string());
+                    }
+                    (StatusCode::NOT_FOUND, String::new())
+                }
+            }
+        });
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}/", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let access =
+            crate::integrations::github::Access::for_api(&base, Some("fixture".into())).unwrap();
+        let mut tracker = IssueTracker::with_github(
+            &json!({"kind":"github","repository":"owner/repo"}),
+            Some(Github::new(access)),
+        );
+        tracker.gh_command = command.to_string_lossy().into_owned();
+        let issue =
+            json!({"kind":"github","repository":"owner/repo","id":"42","number":42,"key":"#42"});
+        let allow: BeforeWrite<'_> = &|| Box::pin(async { Ok(()) });
+        assert_eq!(
+            tracker
+                .upload(&issue, &filename, bytes, "image/png", allow)
+                .await
+                .unwrap_err()
+                .to_string(),
+            "GitHub could not upload issue evidence"
+        );
+        assert_eq!(
+            tracker
+                .upload(&issue, &filename, bytes, "image/png", allow)
+                .await
+                .unwrap(),
+            "https://github.com/user-attachments/assets/fixture"
+        );
+        assert_eq!(std::fs::read_to_string(&writes).unwrap().lines().count(), 1);
+        server.abort();
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[tokio::test]
+    async fn github_publication_ignores_foreign_markers_and_recovers_a_known_comment() {
+        use axum::{
+            body::Bytes,
+            http::{Method, StatusCode, Uri},
+        };
+        use std::sync::{
+            Arc, Mutex,
+            atomic::{AtomicBool, AtomicUsize, Ordering},
+        };
+        let comments = Arc::new(Mutex::new(vec![
+            json!({"id":8,"body":"Other author's work\n\n[Suplex task task_one]","user":{"id":5}}),
+            json!({"id":7,"body":"My note quotes [Suplex task task_one] but is not evidence","user":{"id":4}}),
+        ]));
+        let writes = Arc::new(AtomicUsize::new(0));
+        let lose_patch = Arc::new(AtomicBool::new(true));
+        let app = axum::Router::new().fallback({
+            let comments = comments.clone();
+            let writes = writes.clone();
+            let lose_patch = lose_patch.clone();
+            move |method: Method, uri: Uri, bytes: Bytes| {
+                let comments = comments.clone();
+                let writes = writes.clone();
+                let lose_patch = lose_patch.clone();
+                async move {
+                    let path = uri.path_and_query().map_or("", |part| part.as_str());
+                    if path == "/user" {
+                        return (StatusCode::OK, json!({"id":4}).to_string());
+                    }
+                    if path == "/repos/owner/repo/issues/42/comments?per_page=100&page=1" {
+                        return (
+                            StatusCode::OK,
+                            json!(comments.lock().unwrap().clone()).to_string(),
+                        );
+                    }
+                    if (method == Method::POST && path == "/repos/owner/repo/issues/42/comments")
+                        || (method == Method::PATCH
+                            && path == "/repos/owner/repo/issues/comments/9")
+                    {
+                        let input: Value = serde_json::from_slice(&bytes).unwrap();
+                        let row = json!({"id":9,"body":input["body"],"user":{"id":4}});
+                        let mut rows = comments.lock().unwrap();
+                        if let Some(index) = rows.iter().position(|value| value["id"] == 9) {
+                            rows[index] = row.clone();
+                        } else {
+                            rows.push(row.clone());
+                        }
+                        writes.fetch_add(1, Ordering::SeqCst);
+                        if method == Method::PATCH && lose_patch.swap(false, Ordering::SeqCst) {
+                            return (StatusCode::INTERNAL_SERVER_ERROR, String::new());
+                        }
+                        return (StatusCode::OK, row.to_string());
+                    }
+                    (StatusCode::NOT_FOUND, String::new())
+                }
+            }
+        });
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}/", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let access =
+            crate::integrations::github::Access::for_api(&base, Some("fixture".into())).unwrap();
+        let tracker = IssueTracker::with_github(
+            &json!({"kind":"github","repository":"owner/repo"}),
+            Some(Github::new(access)),
+        );
+        let issue =
+            json!({"kind":"github","repository":"owner/repo","id":"42","number":42,"key":"#42"});
+        let allow: BeforeWrite<'_> = &|| Box::pin(async { Ok(()) });
+        assert_eq!(
+            tracker
+                .publish(&issue, "task_one", "Evidence", allow, None)
+                .await
+                .unwrap(),
+            "9"
+        );
+        assert_eq!(
+            tracker
+                .publish(&issue, "task_one", "Evidence", allow, Some("9"))
+                .await
+                .unwrap(),
+            "9"
+        );
+        assert_eq!(writes.load(Ordering::SeqCst), 1);
+        assert!(
+            tracker
+                .publish(&issue, "task_one", "New evidence", allow, Some("9"))
+                .await
+                .is_err()
+        );
+        assert_eq!(
+            tracker
+                .publish(&issue, "task_one", "New evidence", allow, Some("9"))
+                .await
+                .unwrap(),
+            "9"
+        );
+        assert_eq!(writes.load(Ordering::SeqCst), 2);
+        assert_eq!(comments.lock().unwrap()[0]["id"], 8);
+        assert_eq!(comments.lock().unwrap()[1]["id"], 7);
+        server.abort();
     }
 
     #[test]

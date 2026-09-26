@@ -1334,6 +1334,112 @@ mod tests {
     }
 
     #[test]
+    fn concurrent_pull_request_admissions_persist_only_one_owner() {
+        let (filename, database, _, mut prepared) = command_fixture();
+        prepared.configuration["source"] = json!({"kind":"pull_request","number":7});
+        prepared.delivery_intent.pull_request_number = Some(7);
+        let second = another(&prepared, "owner-race-two");
+        drop(database);
+        let gate = Arc::new(std::sync::Barrier::new(2));
+        let pending = [prepared, second]
+            .into_iter()
+            .map(|input| {
+                let filename = filename.clone();
+                let gate = gate.clone();
+                std::thread::spawn(move || {
+                    let mut database =
+                        SuplexDatabase::open(&filename, OpenMode::ReadWrite).unwrap();
+                    gate.wait();
+                    repository::create(&mut database, &input, Utc::now())
+                        .map(|result| result.task.id)
+                        .map_err(|error| TaskError::is_pull_request_owned(&*error))
+                })
+            })
+            .collect::<Vec<_>>();
+        let outcomes = pending
+            .into_iter()
+            .map(|thread| thread.join().unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(outcomes.iter().filter(|result| result.is_ok()).count(), 1);
+        assert_eq!(
+            outcomes
+                .iter()
+                .filter(|result| matches!(result, Err(true)))
+                .count(),
+            1
+        );
+        let database = SuplexDatabase::open(&filename, OpenMode::ReadOnly).unwrap();
+        assert_eq!(
+            database
+                .connection()
+                .query_row::<i64, _, _>("SELECT COUNT(*) FROM suplex_tasks", [], |row| row.get(0))
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            database
+                .connection()
+                .query_row::<i64, _, _>("SELECT COUNT(*) FROM suplex_task_controls", [], |row| row
+                    .get(0))
+                .unwrap(),
+            1
+        );
+        drop(database);
+        std::fs::remove_file(filename).unwrap();
+    }
+
+    #[test]
+    fn pull_request_owner_follows_repository_rename_aliases() {
+        let (filename, mut database, user, mut prepared) = command_fixture();
+        let now = rfc3339_millis(Utc::now());
+        database.connection().execute(
+            "INSERT INTO suplex_workflows (id, name, description, engine, configuration_json, created_at, updated_at) VALUES ('alias_workflow', 'Alias', '', 'standard', '{}', ?1, ?1)",
+            [&now],
+        ).unwrap();
+        for (id, name) in [("old_alias", "old/repo"), ("new_alias", "new/repo")] {
+            database.connection().execute(
+                "INSERT INTO suplex_github_trigger_rules (id, company_id, project_id, name, label, workflow_id, delivery_target, protected_paths_json, repository_id, repository_name, authority_user_id, created_at, updated_at) VALUES (?1, 'command_company', 'command_project', ?2, 'ready', 'alias_workflow', 'pull_request_draft', '[]', 42, ?2, ?3, ?4, ?4)",
+                params![id, name, user, now],
+            ).unwrap();
+        }
+        prepared.configuration["repository"] = json!("old/repo");
+        prepared.configuration["source"] = json!({"kind":"pull_request","number":7});
+        prepared.delivery_intent.repository = "old/repo".into();
+        prepared.delivery_intent.pull_request_number = Some(7);
+        let owner = repository::create(&mut database, &prepared, Utc::now())
+            .unwrap()
+            .task;
+        assert!(TaskError::is_pull_request_owned(
+            &*repository::assert_pull_request_available(&database, "candidate", "new/repo", 7)
+                .unwrap_err()
+        ));
+        repository::assert_pull_request_available(&database, "candidate", "other/repo", 7).unwrap();
+        repository::assert_pull_request_available(&database, &owner.id, "new/repo", 7).unwrap();
+        drop(database);
+        std::fs::remove_file(filename).unwrap();
+    }
+
+    #[test]
+    fn branch_source_starts_without_claiming_a_pull_request() {
+        let (filename, mut database, user, mut prepared) = command_fixture();
+        prepared.configuration["source"] = json!({"kind":"branch","branch":"feature"});
+        let task = repository::create(&mut database, &prepared, Utc::now())
+            .unwrap()
+            .task;
+        let started = start_user_task(&mut database, &user, &task.id, Utc::now(), |_| {}).unwrap();
+        assert_eq!(started.status, TaskStatus::Active);
+        let (source, number): (String, Option<i64>) = database.connection().query_row(
+            "SELECT json_extract(t.configuration_json, '$.source.kind'), json_extract(c.delivery_intent_json, '$.pullRequestNumber') FROM suplex_tasks t JOIN suplex_task_controls c ON c.task_id = t.id WHERE t.id = ?1",
+            [&task.id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        ).unwrap();
+        assert_eq!(source, "branch");
+        assert_eq!(number, None);
+        drop(database);
+        std::fs::remove_file(filename).unwrap();
+    }
+
+    #[test]
     fn disarm_returns_only_a_queued_task_to_the_backlog() {
         let (filename, mut database, user, prepared) = command_fixture();
         let now = Utc::now();
@@ -1875,8 +1981,14 @@ mod tests {
             ("Fix search", "fix/search-7d3d7f"),
             ("Bump dependencies", "chore/dependencies-7d3d7f"),
             ("Better branch names", "feature/better-branch-names-7d3d7f"),
-            ("Show error toast on failed save", "feature/show-error-toast-failed-7d3d7f"),
-            ("Use the new task branch name for every worktree", "feature/new-task-branch-name-7d3d7f"),
+            (
+                "Show error toast on failed save",
+                "feature/show-error-toast-failed-7d3d7f",
+            ),
+            (
+                "Use the new task branch name for every worktree",
+                "feature/new-task-branch-name-7d3d7f",
+            ),
             ("--- !!! ---", "feature/task-7d3d7f"),
         ] {
             assert_eq!(task_branch_name(title, id), expected);

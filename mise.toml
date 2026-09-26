@@ -177,9 +177,13 @@ description = "Verify the checkout is ready for a desktop release"
 run = '''
 git --no-pager diff --check
 [[ -z "$(git status --porcelain)" ]] || { echo "Commit or remove working-tree changes before releasing." >&2; exit 1; }
-root_version="$(node -p "require('./package.json').version")"
-desktop_version="$(node -p "require('./desktop/package.json').version")"
-[[ "$root_version" == "$desktop_version" ]] || { echo "Desktop and runtime versions must match before release." >&2; exit 1; }
+node --input-type=module <<'NODE'
+import { readFileSync } from "node:fs";
+const version = JSON.parse(readFileSync("package.json", "utf8")).version;
+const desktop = JSON.parse(readFileSync("desktop/package.json", "utf8")).version;
+const native = ["rust/Cargo.toml", "rust/Cargo.lock"].every(file => readFileSync(file, "utf8").includes(`name = "suplex"\nversion = "${version}"`));
+if (desktop !== version || !native) throw new Error("Desktop, frontend, and native versions must match before release.");
+NODE
 '''
 [tasks."_release:commit"]
 hide = true

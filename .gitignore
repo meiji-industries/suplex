@@ -24,4 +24,3 @@ desktop/.electron-dev/
 /.opencode/bun.lock
 /.opencode/bun.lockb
 __pycache__/
-!desktop/tests/fixtures/runtime/app/dist/

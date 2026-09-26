@@ -154,6 +154,17 @@ pub fn topological_order(entries: Vec<(String, Vec<String>)>) -> Vec<(String, Ve
     ordered
 }
 
+/// One `suplex_delivery_provenance` observation of a pull request.
+struct Provenance<'a> {
+    kind: &'a str,
+    number: Option<u64>,
+    original: Option<&'a str>,
+    head: Option<&'a str>,
+    base: Option<&'a str>,
+    checks: Option<Value>,
+    merge: Option<&'a Value>,
+}
+
 pub struct AgentDelivery {
     operations: DeliveryOperations,
 }
@@ -245,12 +256,17 @@ impl AgentDelivery {
         task_id: &str,
         attempt_id: Option<&str>,
         agent_id: &str,
-        kind: &str,
-        observed: (Option<u64>, Option<&str>, Option<&str>, Option<&str>),
-        checks: Option<Value>,
-        merge: Option<&Value>,
+        row: Provenance<'_>,
     ) -> DatabaseResult<()> {
-        let (number, original, head, base) = observed;
+        let Provenance {
+            kind,
+            number,
+            original,
+            head,
+            base,
+            checks,
+            merge,
+        } = row;
         let id = id
             .map(str::to_owned)
             .unwrap_or_else(|| format!("dpv_{}", uuid::Uuid::new_v4().simple()));
@@ -294,15 +310,15 @@ impl AgentDelivery {
                 task_id,
                 Some(&attempt),
                 &principal.agent_id,
-                "observation",
-                (
-                    observed.number,
-                    original.as_deref(),
-                    observed.head_sha.as_deref(),
-                    observed.base_sha.as_deref(),
-                ),
-                Some(serde_json::to_value(&observed.checks)?),
-                None,
+                Provenance {
+                    kind: "observation",
+                    number: observed.number,
+                    original: original.as_deref(),
+                    head: observed.head_sha.as_deref(),
+                    base: observed.base_sha.as_deref(),
+                    checks: Some(serde_json::to_value(&observed.checks)?),
+                    merge: None,
+                },
             )?;
         }
         let observed = observation.as_ref();
@@ -358,15 +374,15 @@ impl AgentDelivery {
             task_id,
             Some(&attempt),
             &principal.agent_id,
-            "reconciliation",
-            (
-                observed.number,
-                observed.head_sha.as_deref(),
-                observed.head_sha.as_deref(),
-                observed.base_sha.as_deref(),
-            ),
-            Some(serde_json::to_value(&observed.checks)?),
-            None,
+            Provenance {
+                kind: "reconciliation",
+                number: observed.number,
+                original: observed.head_sha.as_deref(),
+                head: observed.head_sha.as_deref(),
+                base: observed.base_sha.as_deref(),
+                checks: Some(serde_json::to_value(&observed.checks)?),
+                merge: None,
+            },
         )?;
         self.audit(principal, &company, Some(task_id), "agent_api_delivery_repair_requested", json!({
             "attemptId": attempt, "pullRequestNumber": observed.number.unwrap_or(0).to_string(),
@@ -620,11 +636,13 @@ impl AgentDelivery {
             .execute(
                 &identity,
                 None,
-                crate::delivery::DeliveryOperation::MergePullRequest,
-                Some(&accepted.head_sha),
-                Some(&accepted),
-                None,
-                None,
+                &crate::delivery::operations::DeliveryRequest {
+                    operation: crate::delivery::DeliveryOperation::MergePullRequest,
+                    expected_head: Some(&accepted.head_sha),
+                    review: Some(&accepted),
+                    pull_request_title: None,
+                    pull_request_body: None,
+                },
             )
             .await?;
         let merged = self.operations.checks_observation(task_id).await?;
@@ -634,28 +652,28 @@ impl AgentDelivery {
             task_id,
             attempt.as_deref(),
             &principal.agent_id,
-            "merge",
-            (
-                Some(number),
-                Some(expected_head_sha),
-                Some(
+            Provenance {
+                kind: "merge",
+                number: Some(number),
+                original: Some(expected_head_sha),
+                head: Some(
                     merged
                         .as_ref()
                         .and_then(|m| m.head_sha.as_deref())
                         .unwrap_or(expected_head_sha),
                 ),
-                Some(
+                base: Some(
                     merged
                         .as_ref()
                         .and_then(|m| m.base_sha.as_deref())
                         .unwrap_or(expected_base_sha),
                 ),
-            ),
-            merged
-                .as_ref()
-                .map(|m| serde_json::to_value(&m.checks))
-                .transpose()?,
-            Some(&result),
+                checks: merged
+                    .as_ref()
+                    .map(|m| serde_json::to_value(&m.checks))
+                    .transpose()?,
+                merge: Some(&result),
+            },
         )?;
         self.audit(principal, &company, Some(task_id), "agent_api_pull_request_merged", json!({"pullRequestNumber": number.to_string(), "headSha": expected_head_sha, "baseSha": expected_base_sha}))?;
         Ok(json!({"taskId": task_id, "pullRequestNumber": number, "result": result}))

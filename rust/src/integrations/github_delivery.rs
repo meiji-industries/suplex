@@ -850,6 +850,14 @@ struct Reply {
     body: String,
 }
 
+/// How `api` treats a 404 and other statuses the caller handles itself.
+#[derive(Default)]
+struct StatusHandling<'a> {
+    allow_not_found: bool,
+    not_found_summary: Option<&'a str>,
+    accepted: &'a [u16],
+}
+
 enum Api {
     Json(String),
     NotFound,
@@ -978,10 +986,13 @@ impl Github {
         path: &str,
         body: Option<&Value>,
         operation: &str,
-        allow_not_found: bool,
-        not_found_summary: Option<&str>,
-        accepted: &[u16],
+        handling: StatusHandling<'_>,
     ) -> GithubResult<Api> {
+        let StatusHandling {
+            allow_not_found,
+            not_found_summary,
+            accepted,
+        } = handling;
         let reply = self.send(method, path, body, operation).await?;
         if (200..300).contains(&reply.status) {
             let body = if reply.body.trim().is_empty() {
@@ -1064,7 +1075,7 @@ impl Github {
         operation: &str,
     ) -> GithubResult<String> {
         match self
-            .api(method, path, body, operation, false, None, &[])
+            .api(method, path, body, operation, StatusHandling::default())
             .await?
         {
             Api::Json(body) => Ok(body),
@@ -1142,7 +1153,16 @@ impl Github {
     ) -> GithubResult<Option<String>> {
         let path = repo_route(repository, &["branches", branch]);
         match self
-            .api("GET", &path, None, "branch observation", true, None, &[])
+            .api(
+                "GET",
+                &path,
+                None,
+                "branch observation",
+                StatusHandling {
+                    allow_not_found: true,
+                    ..StatusHandling::default()
+                },
+            )
             .await?
         {
             Api::NotFound => Ok(None),
@@ -1192,9 +1212,10 @@ impl Github {
                 &repo_route(repository, &["pulls"]),
                 Some(&request),
                 "draft pull request creation",
-                false,
-                Some(&summary),
-                &[],
+                StatusHandling {
+                    not_found_summary: Some(&summary),
+                    ..StatusHandling::default()
+                },
             )
             .await?
         {
@@ -1468,9 +1489,10 @@ impl Github {
                 &repo_route(&repository, &["pulls", &number.to_string(), "merge"]),
                 Some(&json!({"sha": head_sha, "merge_method": method})),
                 "conditional pull request merge",
-                false,
-                None,
-                &[405],
+                StatusHandling {
+                    accepted: &[405],
+                    ..StatusHandling::default()
+                },
             )
             .await?;
         let refused = match outcome {

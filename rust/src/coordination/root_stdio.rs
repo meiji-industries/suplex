@@ -548,11 +548,13 @@ impl RootBridgeServer {
                             .execute(
                                 &root,
                                 Some(&token),
-                                operation,
-                                expected_head.as_deref(),
-                                review.as_ref(),
-                                pull_request_title.as_deref(),
-                                pull_request_body.as_deref(),
+                                &delivery::operations::DeliveryRequest {
+                                    operation,
+                                    expected_head: expected_head.as_deref(),
+                                    review: review.as_ref(),
+                                    pull_request_title: pull_request_title.as_deref(),
+                                    pull_request_body: pull_request_body.as_deref(),
+                                },
                             )
                             .await
                     }

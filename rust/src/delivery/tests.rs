@@ -16,7 +16,11 @@ use chrono::Utc;
 use git2::{Repository, Signature};
 use serde_json::{Value, json};
 
-use super::{DeliveryOperation, inspection::ReviewRange, operations::DeliveryOperations};
+use super::{
+    DeliveryOperation,
+    inspection::ReviewRange,
+    operations::{DeliveryOperations, DeliveryRequest},
+};
 use crate::{
     coordination::{root_bridge::RootIdentity, root_session_store},
     identity::auth,
@@ -352,11 +356,13 @@ async fn reviewed(operations: &DeliveryOperations, root: &RootIdentity) -> (Stri
         .execute(
             root,
             None,
-            DeliveryOperation::InspectDeliveryDiff,
-            None,
-            None,
-            None,
-            None,
+            &DeliveryRequest {
+                operation: DeliveryOperation::InspectDeliveryDiff,
+                expected_head: None,
+                review: None,
+                pull_request_title: None,
+                pull_request_body: None,
+            },
         )
         .await
         .unwrap();
@@ -380,11 +386,13 @@ async fn standard_task_pushes_and_opens_a_draft_pull_request() {
         .execute(
             root,
             None,
-            DeliveryOperation::PushBranch,
-            Some(&head),
-            None,
-            None,
-            None,
+            &DeliveryRequest {
+                operation: DeliveryOperation::PushBranch,
+                expected_head: Some(&head),
+                review: None,
+                pull_request_title: None,
+                pull_request_body: None,
+            },
         )
         .await
         .unwrap_err();
@@ -393,11 +401,13 @@ async fn standard_task_pushes_and_opens_a_draft_pull_request() {
         .execute(
             root,
             None,
-            DeliveryOperation::PushBranch,
-            Some(&head),
-            Some(&review),
-            None,
-            None,
+            &DeliveryRequest {
+                operation: DeliveryOperation::PushBranch,
+                expected_head: Some(&head),
+                review: Some(&review),
+                pull_request_title: None,
+                pull_request_body: None,
+            },
         )
         .await
         .unwrap();
@@ -407,11 +417,13 @@ async fn standard_task_pushes_and_opens_a_draft_pull_request() {
         .execute(
             root,
             None,
-            DeliveryOperation::PushBranch,
-            Some(&head),
-            Some(&review),
-            None,
-            None,
+            &DeliveryRequest {
+                operation: DeliveryOperation::PushBranch,
+                expected_head: Some(&head),
+                review: Some(&review),
+                pull_request_title: None,
+                pull_request_body: None,
+            },
         )
         .await
         .unwrap();
@@ -420,11 +432,13 @@ async fn standard_task_pushes_and_opens_a_draft_pull_request() {
         .execute(
             root,
             None,
-            DeliveryOperation::CreateOrAdoptPullRequest,
-            Some(&head),
-            Some(&review),
-            None,
-            Some(BODY),
+            &DeliveryRequest {
+                operation: DeliveryOperation::CreateOrAdoptPullRequest,
+                expected_head: Some(&head),
+                review: Some(&review),
+                pull_request_title: None,
+                pull_request_body: Some(BODY),
+            },
         )
         .await
         .unwrap_err();
@@ -433,11 +447,13 @@ async fn standard_task_pushes_and_opens_a_draft_pull_request() {
         .execute(
             root,
             None,
-            DeliveryOperation::CreateOrAdoptPullRequest,
-            Some(&head),
-            Some(&review),
-            Some("  Add a verified line  "),
-            Some(BODY),
+            &DeliveryRequest {
+                operation: DeliveryOperation::CreateOrAdoptPullRequest,
+                expected_head: Some(&head),
+                review: Some(&review),
+                pull_request_title: Some("  Add a verified line  "),
+                pull_request_body: Some(BODY),
+            },
         )
         .await
         .unwrap();
@@ -468,11 +484,13 @@ async fn ready_and_merged_targets_complete_through_github_state() {
         .execute(
             root,
             None,
-            DeliveryOperation::PushBranch,
-            Some(&head),
-            Some(&review),
-            None,
-            None,
+            &DeliveryRequest {
+                operation: DeliveryOperation::PushBranch,
+                expected_head: Some(&head),
+                review: Some(&review),
+                pull_request_title: None,
+                pull_request_body: None,
+            },
         )
         .await
         .unwrap();
@@ -480,11 +498,13 @@ async fn ready_and_merged_targets_complete_through_github_state() {
         .execute(
             root,
             None,
-            DeliveryOperation::CreateOrAdoptPullRequest,
-            Some(&head),
-            Some(&review),
-            Some("Add line"),
-            Some(BODY),
+            &DeliveryRequest {
+                operation: DeliveryOperation::CreateOrAdoptPullRequest,
+                expected_head: Some(&head),
+                review: Some(&review),
+                pull_request_title: Some("Add line"),
+                pull_request_body: Some(BODY),
+            },
         )
         .await
         .unwrap();
@@ -498,11 +518,13 @@ async fn ready_and_merged_targets_complete_through_github_state() {
         .execute(
             root,
             None,
-            DeliveryOperation::ObserveChecks,
-            None,
-            None,
-            None,
-            None,
+            &DeliveryRequest {
+                operation: DeliveryOperation::ObserveChecks,
+                expected_head: None,
+                review: None,
+                pull_request_title: None,
+                pull_request_body: None,
+            },
         )
         .await
         .unwrap();
@@ -511,11 +533,13 @@ async fn ready_and_merged_targets_complete_through_github_state() {
         .execute(
             root,
             None,
-            DeliveryOperation::RequestReview,
-            Some(&head),
-            Some(&review),
-            None,
-            None,
+            &DeliveryRequest {
+                operation: DeliveryOperation::RequestReview,
+                expected_head: Some(&head),
+                review: Some(&review),
+                pull_request_title: None,
+                pull_request_body: None,
+            },
         )
         .await
         .unwrap();
@@ -526,11 +550,13 @@ async fn ready_and_merged_targets_complete_through_github_state() {
         .execute(
             root,
             None,
-            DeliveryOperation::MergePullRequest,
-            Some(&head),
-            Some(&review),
-            None,
-            None,
+            &DeliveryRequest {
+                operation: DeliveryOperation::MergePullRequest,
+                expected_head: Some(&head),
+                review: Some(&review),
+                pull_request_title: None,
+                pull_request_body: None,
+            },
         )
         .await
         .unwrap();
@@ -569,11 +595,13 @@ async fn direct_merge_completes_and_stale_local_pull_request_is_replaced() {
         .execute(
             root,
             None,
-            DeliveryOperation::PushBranch,
-            Some(&head),
-            Some(&review),
-            None,
-            None,
+            &DeliveryRequest {
+                operation: DeliveryOperation::PushBranch,
+                expected_head: Some(&head),
+                review: Some(&review),
+                pull_request_title: None,
+                pull_request_body: None,
+            },
         )
         .await
         .unwrap();
@@ -581,11 +609,13 @@ async fn direct_merge_completes_and_stale_local_pull_request_is_replaced() {
         .execute(
             root,
             None,
-            DeliveryOperation::CreateOrAdoptPullRequest,
-            Some(&head),
-            Some(&review),
-            Some("Add line"),
-            Some(BODY),
+            &DeliveryRequest {
+                operation: DeliveryOperation::CreateOrAdoptPullRequest,
+                expected_head: Some(&head),
+                review: Some(&review),
+                pull_request_title: Some("Add line"),
+                pull_request_body: Some(BODY),
+            },
         )
         .await
         .unwrap();
@@ -598,11 +628,13 @@ async fn direct_merge_completes_and_stale_local_pull_request_is_replaced() {
         .execute(
             root,
             None,
-            DeliveryOperation::MergePullRequest,
-            Some(&head),
-            Some(&review),
-            None,
-            None,
+            &DeliveryRequest {
+                operation: DeliveryOperation::MergePullRequest,
+                expected_head: Some(&head),
+                review: Some(&review),
+                pull_request_title: None,
+                pull_request_body: None,
+            },
         )
         .await
         .unwrap();
@@ -673,11 +705,13 @@ async fn observing_a_pull_request_another_task_names_records_the_observation() {
             .execute(
                 root,
                 None,
-                operation,
-                Some(&head),
-                Some(&review),
-                Some("Add line"),
-                Some(BODY),
+                &DeliveryRequest {
+                    operation,
+                    expected_head: Some(&head),
+                    review: Some(&review),
+                    pull_request_title: Some("Add line"),
+                    pull_request_body: Some(BODY),
+                },
             )
             .await
             .unwrap();

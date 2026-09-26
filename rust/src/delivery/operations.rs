@@ -400,6 +400,16 @@ struct Adoption<'a> {
     validated_range: Option<&'a ReviewRange>,
 }
 
+/// One Coordinator delivery request and its arguments.
+#[derive(Clone, Copy)]
+pub struct DeliveryRequest<'a> {
+    pub operation: DeliveryOperation,
+    pub expected_head: Option<&'a str>,
+    pub review: Option<&'a ReviewRange>,
+    pub pull_request_title: Option<&'a str>,
+    pub pull_request_body: Option<&'a str>,
+}
+
 /// The Root and tool-owner assertions TypeScript runs as `recheck`.
 pub struct Recheck<'a> {
     pub root: &'a RootIdentity,
@@ -1202,14 +1212,18 @@ impl DeliveryOperations {
     /// a merge cannot observe the delivery base.
     async fn reviewed_range(
         &self,
-        operation: DeliveryOperation,
+        request: &DeliveryRequest<'_>,
         control: &TaskControlRow,
         path: &Path,
         local: &LocalRevisionObservation,
-        review: Option<&ReviewRange>,
-        expected_head: Option<&str>,
         recheck: &Recheck<'_>,
     ) -> DatabaseResult<ControlFlow<Value, Option<ReviewRange>>> {
+        let DeliveryRequest {
+            operation,
+            expected_head,
+            review,
+            ..
+        } = *request;
         let mutation = matches!(
             operation,
             DeliveryOperation::PushBranch
@@ -1310,12 +1324,14 @@ impl DeliveryOperations {
         &self,
         root: &RootIdentity,
         owner_token: Option<&str>,
-        operation: DeliveryOperation,
-        expected_head: Option<&str>,
-        review: Option<&ReviewRange>,
-        pull_request_title: Option<&str>,
-        pull_request_body: Option<&str>,
+        request: &DeliveryRequest<'_>,
     ) -> DatabaseResult<Value> {
+        let DeliveryRequest {
+            operation,
+            expected_head,
+            review,
+            ..
+        } = *request;
         let recheck = Recheck { root, owner_token };
         let task_id = root.task_id.as_str();
         self.recheck(&Recheck {
@@ -1347,15 +1363,7 @@ impl DeliveryOperations {
         let github = self.for_task(task_id).await?;
         Self::require_task_remote(&github, &path, &repository).await?;
         let actual = match self
-            .reviewed_range(
-                operation,
-                &refreshed,
-                &path,
-                &local,
-                review,
-                expected_head,
-                &recheck,
-            )
+            .reviewed_range(request, &refreshed, &path, &local, &recheck)
             .await?
         {
             ControlFlow::Break(wait) => return Ok(wait),
@@ -1384,17 +1392,8 @@ impl DeliveryOperations {
                     .await
             }
             DeliveryOperation::CreateOrAdoptPullRequest => {
-                self.create_or_adopt(
-                    &recheck,
-                    &refreshed,
-                    &repository,
-                    &local,
-                    &pull,
-                    reviewed(),
-                    pull_request_title,
-                    pull_request_body,
-                )
-                .await
+                self.create_or_adopt(&recheck, &refreshed, &local, &pull, reviewed(), request)
+                    .await
             }
             DeliveryOperation::ObserveChecks => {
                 self.observe_checks(&refreshed, &repository, &local).await
@@ -1751,14 +1750,14 @@ impl DeliveryOperations {
         &self,
         recheck: &Recheck<'_>,
         control: &TaskControlRow,
-        repository: &str,
         local: &LocalRevisionObservation,
         pull: &Value,
         actual: &ReviewRange,
-        title: Option<&str>,
-        body: Option<&str>,
+        request: &DeliveryRequest<'_>,
     ) -> DatabaseResult<Value> {
         let task_id = control.task_id.as_str();
+        let repository = control.delivery_intent.repository.as_str();
+        let (title, body) = (request.pull_request_title, request.pull_request_body);
         let github = self.for_task(task_id).await?;
         let adopt = Adoption {
             publication: true,

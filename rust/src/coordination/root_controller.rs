@@ -1034,11 +1034,13 @@ pub async fn inspect_workflow_delivery_diff(
         .execute(
             root,
             Some(owner_token),
-            crate::delivery::DeliveryOperation::InspectDeliveryDiff,
-            None,
-            None,
-            None,
-            None,
+            &crate::delivery::operations::DeliveryRequest {
+                operation: crate::delivery::DeliveryOperation::InspectDeliveryDiff,
+                expected_head: None,
+                review: None,
+                pull_request_title: None,
+                pull_request_body: None,
+            },
         )
         .await?;
     let rows = open_root(database, root)?;

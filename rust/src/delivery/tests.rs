@@ -37,6 +37,7 @@ struct Fake {
     origin: PathBuf,
     pulls: Vec<Value>,
     merge_refusal: bool,
+    observation_gate: Option<Arc<tokio::sync::Barrier>>,
 }
 
 type Shared = Arc<Mutex<Fake>>;
@@ -135,8 +136,15 @@ async fn merge_pull(
 }
 
 async fn graphql(State(fake): State<Shared>, Json(body): Json<Value>) -> Response {
-    let mut fake = fake.lock().unwrap();
     let query = body["query"].as_str().unwrap_or("");
+    if query.contains("p0: repository") {
+        let gate = fake.lock().unwrap().observation_gate.clone();
+        if let Some(gate) = gate {
+            gate.wait().await;
+            gate.wait().await;
+        }
+    }
+    let mut fake = fake.lock().unwrap();
     let variables = &body["variables"];
     let number = variables["number"].as_u64().unwrap_or(0) as usize;
     let data = if query.contains("markPullRequestReadyForReview") {
@@ -148,6 +156,21 @@ async fn graphql(State(fake): State<Shared>, Json(body): Json<Value>) -> Respons
             .unwrap();
         pull["draft"] = json!(false);
         json!({"markPullRequestReadyForReview": {"pullRequest": {"isDraft": false}}})
+    } else if query.contains("p0: repository") {
+        let mut aliases = serde_json::Map::new();
+        for (index, pull) in fake.pulls.iter().enumerate() {
+            aliases.insert(
+                format!("p{index}"),
+                json!({"pullRequest": {
+                    "number": pull["number"],
+                    "url": format!("https://github.com/owner/repo/pull/{}", pull["number"]),
+                    "headRefOid": pull["headSha"],
+                    "state": gh_state(pull),
+                    "mergedAt": pull["mergedAt"],
+                }}),
+            );
+        }
+        Value::Object(aliases)
     } else if query.contains("pullRequests(") {
         let head = variables["head"].as_str();
         let nodes = fake.pulls.iter().filter(|pull| head.is_none_or(|head| pull["head"] == head)).map(|pull| json!({
@@ -767,5 +790,181 @@ async fn observing_a_pull_request_another_task_names_records_the_observation() {
     let observed = operations.observe(&fixture.task_id).await.unwrap();
     assert_eq!(observed["number"], 1);
     assert_eq!(control(&fixture).pull_request.unwrap().number, 1);
+    std::fs::remove_dir_all(&fixture.base).unwrap();
+}
+
+#[tokio::test]
+async fn delivered_pull_refresh_updates_only_current_facts_and_rediscovers_missing_receipts() {
+    let fixture = fixture("merged");
+    let (api, fake) = fake_github(fixture.origin.clone()).await;
+    let head = Repository::open(fixture.base.join("work"))
+        .unwrap()
+        .head()
+        .unwrap()
+        .peel_to_commit()
+        .unwrap()
+        .id()
+        .to_string();
+    let base = branch_sha(&fixture.origin, "main").unwrap();
+    let pull = json!({
+        "number": 1, "state": "open", "draft": false, "mergedAt": null,
+        "head": "task-merged", "headSha": head, "base": "main", "baseSha": base,
+        "title": "Delivered", "body": "Reviewed",
+    });
+    fake.lock().unwrap().pulls.push(pull);
+    let github = Github::new(Access::for_api(&api, None).unwrap());
+    let observed_open = json!({
+        "repository": "owner/repo", "number": 1,
+        "url": "https://github.com/owner/repo/pull/1",
+        "headSha": head, "state": "open", "mergedAt": null,
+    });
+    let database = SuplexDatabase::open(&fixture.database_path, OpenMode::ReadWrite).unwrap();
+    database.connection().execute(
+        "UPDATE suplex_task_controls SET status = 'delivered', pull_request_json = ?1, delivery_intent_json = json_set(delivery_intent_json, '$.pullRequestNumber', 1) WHERE task_id = ?2",
+        rusqlite::params![crate::shared::js_json::stringify(&observed_open), fixture.task_id],
+    ).unwrap();
+    drop(database);
+    fake.lock().unwrap().pulls[0]["state"] = json!("closed");
+    super::completed_pull_requests::refresh(&fixture.database_path, Some(&github))
+        .await
+        .unwrap();
+    let read_state = || {
+        let database = SuplexDatabase::open(&fixture.database_path, OpenMode::ReadOnly).unwrap();
+        let raw: String = database
+            .connection()
+            .query_row(
+                "SELECT pull_request_json FROM suplex_task_controls WHERE task_id = ?1",
+                [&fixture.task_id],
+                |row| row.get(0),
+            )
+            .unwrap();
+        serde_json::from_str::<Value>(&raw).unwrap()["state"].clone()
+    };
+    assert_eq!(read_state(), "closed");
+    fake.lock().unwrap().pulls[0]["state"] = json!("open");
+    super::completed_pull_requests::refresh(&fixture.database_path, Some(&github))
+        .await
+        .unwrap();
+    assert_eq!(read_state(), "open");
+    fake.lock().unwrap().pulls[0]["state"] = json!("closed");
+    fake.lock().unwrap().pulls[0]["mergedAt"] = json!("2026-09-25T01:00:00Z");
+    super::completed_pull_requests::refresh(&fixture.database_path, Some(&github))
+        .await
+        .unwrap();
+    let database = SuplexDatabase::open(&fixture.database_path, OpenMode::ReadWrite).unwrap();
+    let (status, raw): (String, Option<String>) = database
+        .connection()
+        .query_row(
+            "SELECT status,pull_request_json FROM suplex_task_controls WHERE task_id = ?1",
+            [&fixture.task_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(status, "delivered");
+    let merged: Value = serde_json::from_str(raw.as_deref().unwrap()).unwrap();
+    assert_eq!(merged["state"], "merged");
+    assert_eq!(merged["headSha"], head);
+    database
+        .connection()
+        .execute(
+            "UPDATE suplex_task_controls SET pull_request_json = NULL WHERE task_id = ?1",
+            [&fixture.task_id],
+        )
+        .unwrap();
+    drop(database);
+    super::completed_pull_requests::refresh(&fixture.database_path, Some(&github))
+        .await
+        .unwrap();
+    let database = SuplexDatabase::open(&fixture.database_path, OpenMode::ReadWrite).unwrap();
+    let rediscovered: String = database
+        .connection()
+        .query_row(
+            "SELECT pull_request_json FROM suplex_task_controls WHERE task_id = ?1",
+            [&fixture.task_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        serde_json::from_str::<Value>(&rediscovered).unwrap(),
+        merged
+    );
+    database
+        .connection()
+        .execute(
+            "UPDATE suplex_task_controls SET pull_request_json = ?1 WHERE task_id = ?2",
+            rusqlite::params![
+                crate::shared::js_json::stringify(&observed_open),
+                fixture.task_id
+            ],
+        )
+        .unwrap();
+    drop(database);
+    fake.lock().unwrap().pulls.clear();
+    super::completed_pull_requests::refresh(&fixture.database_path, Some(&github))
+        .await
+        .unwrap();
+    let database = SuplexDatabase::open(&fixture.database_path, OpenMode::ReadOnly).unwrap();
+    let preserved: String = database
+        .connection()
+        .query_row(
+            "SELECT pull_request_json FROM suplex_task_controls WHERE task_id = ?1",
+            [&fixture.task_id],
+            |row| row.get(0),
+        )
+        .unwrap();
+    assert_eq!(
+        serde_json::from_str::<Value>(&preserved).unwrap(),
+        observed_open
+    );
+    drop(database);
+    let gate = Arc::new(tokio::sync::Barrier::new(2));
+    {
+        let mut fake = fake.lock().unwrap();
+        fake.pulls.push(json!({
+            "number": 1, "state": "closed", "draft": false,
+            "mergedAt": "2026-09-25T01:00:00Z", "head": "task-merged",
+            "headSha": head, "base": "main", "baseSha": base,
+            "title": "Delivered", "body": "Reviewed",
+        }));
+        fake.observation_gate = Some(gate.clone());
+    }
+    let race_path = fixture.database_path.clone();
+    let race_github = Github::new(Access::for_api(&api, None).unwrap());
+    let pending = tokio::task::spawn_blocking(move || {
+        crate::shared::blocking::block_on(|| async move {
+            super::completed_pull_requests::refresh(&race_path, Some(&race_github))
+                .await
+                .map_err(|error| error.to_string())
+        })
+    });
+    tokio::time::timeout(std::time::Duration::from_secs(10), gate.wait())
+        .await
+        .unwrap();
+    let database = SuplexDatabase::open(&fixture.database_path, OpenMode::ReadWrite).unwrap();
+    database
+        .connection()
+        .execute(
+            "UPDATE suplex_task_controls SET status = 'active' WHERE task_id = ?1",
+            [&fixture.task_id],
+        )
+        .unwrap();
+    drop(database);
+    tokio::time::timeout(std::time::Duration::from_secs(10), gate.wait())
+        .await
+        .unwrap();
+    pending.await.unwrap().unwrap();
+    fake.lock().unwrap().observation_gate = None;
+    let database = SuplexDatabase::open(&fixture.database_path, OpenMode::ReadOnly).unwrap();
+    let (status, raw): (String, String) = database
+        .connection()
+        .query_row(
+            "SELECT status,pull_request_json FROM suplex_task_controls WHERE task_id = ?1",
+            [&fixture.task_id],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(status, "active");
+    assert_eq!(serde_json::from_str::<Value>(&raw).unwrap(), observed_open);
+    drop(database);
     std::fs::remove_dir_all(&fixture.base).unwrap();
 }

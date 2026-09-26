@@ -352,6 +352,36 @@ mod tests {
             ),
             (Some(200), Some("AgentApi Bot"))
         );
+        agent.server.state.with_database(|database| {
+            database
+                .connection()
+                .execute(
+                    "UPDATE suplex_external_agents SET client_profile_id=NULL WHERE id=?1",
+                    [&agent.agent_id],
+                )
+                .unwrap();
+        });
+        let recreated = call("suplex_whoami", json!({})).await;
+        assert_eq!(recreated["body"]["agent"]["profileId"], Value::Null);
+        assert_eq!(recreated["body"]["projects"], whoami["body"]["projects"]);
+        let python = tokio::process::Command::new("/usr/bin/python3")
+            .arg("-c")
+            .arg("import importlib.util,json; spec=importlib.util.spec_from_file_location('suplex_client','skills/suplex/suplex_client.py'); module=importlib.util.module_from_spec(spec); spec.loader.exec_module(module); body=module.SuplexClient().call('GET','/api/hermes/me'); print(json.dumps({'id':body['agent']['id'],'profileId':body['agent']['profileId']}))")
+            .current_dir(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap())
+            .env("SUPLEX_BASE_URL", &agent.server.base)
+            .env("SUPLEX_AGENT_CREDENTIAL", &agent.credential)
+            .output().await.unwrap();
+        assert!(
+            python.status.success(),
+            "{}",
+            String::from_utf8_lossy(&python.stderr)
+        );
+        assert_eq!(
+            serde_json::from_slice::<Value>(&python.stdout).unwrap(),
+            json!({"id":agent.agent_id,"profileId":null})
+        );
+        assert!(!String::from_utf8_lossy(&python.stdout).contains(&agent.credential));
+
         assert_eq!(
             call("suplex_list_templates", json!({"projectId": "project_api"})).await,
             json!({"status": 200, "body": {"templates": []}})

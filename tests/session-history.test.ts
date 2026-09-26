@@ -1,21 +1,8 @@
 import { expect, test } from "vitest";
-import type { NativeHistoryMessage } from "../src/tasks/history/contracts.js";
-import { pageSessionHistory, SessionHistoryCursorError } from "../src/tasks/history/history.js";
+import type { NativeHistoryMessage } from "../src/frontend/contracts/history.js";
 import { anchoredScrollTop, historyAtBottom, mergeNativeHistory, readLatestHistory, readSnapshotHistory, reconcileLiveHistory, sessionHistoryLabels } from "../src/frontend/features/tasks/task-chat/session-history-state.js";
 
 const message = (id: string, text = id): NativeHistoryMessage => ({ id, role: "assistant", createdAt: null, content: [{ id: `${id}-text`, type: "text", text }] });
-
-test("history pages newest-first by cursor while each page remains in native order", () => {
-  const messages = Array.from({ length: 95 }, (_, index) => message(`message-${index}`));
-  const newest = pageSessionHistory(messages);
-  expect(newest.messages.map(item => item.id)).toEqual(messages.slice(55).map(item => item.id));
-  expect(newest.olderCursor).toBe("message-55");
-  const earlier = pageSessionHistory(messages, newest.olderCursor!);
-  expect(earlier.messages.map(item => item.id)).toEqual(messages.slice(15, 55).map(item => item.id));
-  expect(earlier.olderCursor).toBe("message-15");
-  expect(() => pageSessionHistory(messages, "missing")).toThrow(SessionHistoryCursorError);
-  expect(pageSessionHistory([message("one"), message("two", "partial"), message("two", "complete")]).messages).toEqual([message("one"), message("two", "complete")]);
-});
 
 test("polling replaces evolving messages without dropping loaded history", () => {
   const loaded = [message("old"), message("live", "partial")];

@@ -1,7 +1,7 @@
 import { expect, test } from "vitest";
 
 import { clampTimelineRange, trimTimelineRange, summarizeAgentTime } from "../src/frontend/features/timeline/timeline-model.js";
-import type { TimelineTask } from "../src/tasks/timeline/contracts.js";
+import type { TimelineTask } from "../src/frontend/contracts/timeline.js";
 
 function at(day: number, hour: number, minute = 0): string {
   return new Date(2026, 7, day, hour, minute).toISOString();

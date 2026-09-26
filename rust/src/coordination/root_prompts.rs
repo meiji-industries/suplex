@@ -618,3 +618,35 @@ mod tests {
         }
     }
 }
+
+pub(crate) fn without_current_dependency_status(prompt: &str) -> &str {
+    const PREFIX: &str = "\n\n[Suplex prerequisite status]\nCurrent prerequisites: ";
+    const SUFFIX: &str = ". Prerequisites constrain delivery ordering. Suplex resumes native work when all are delivered. Observe actual Git and GitHub state before integration.\n[/Suplex prerequisite status]";
+    let Some(start) = prompt.rfind(PREFIX) else {
+        return prompt;
+    };
+    let generated = &prompt[start + PREFIX.len()..];
+    if generated.len() > SUFFIX.len() && generated.ends_with(SUFFIX) {
+        &prompt[..start]
+    } else {
+        prompt
+    }
+}
+
+pub const IDLE_ROOT_PROMPT: &str = "Observe the current task, worktree, and GitHub state and continue toward the delivery target. Adopt out-of-band progress. If checks or another external operation are pending, report what you are waiting for. Ask a specific human question only if a necessary decision or external failure requires it.";
+
+/// TypeScript `withCurrentDependencyStatus`.
+pub fn with_current_dependency_status(prompt: &str, dependencies: &[DependencyRow]) -> String {
+    let base = without_current_dependency_status(prompt);
+    if dependencies.is_empty() {
+        return base.to_owned();
+    }
+    let list = dependencies
+        .iter()
+        .map(DependencyRow::describe)
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!(
+        "{base}\n\n[Suplex prerequisite status]\nCurrent prerequisites: {list}. Prerequisites constrain delivery ordering. Suplex resumes native work when all are delivered. Observe actual Git and GitHub state before integration.\n[/Suplex prerequisite status]"
+    )
+}

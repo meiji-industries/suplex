@@ -2287,7 +2287,7 @@ mod tests {
             (30.0, 1.0, 35.0),
         ] {
             assert_eq!(
-                root_session_store::suggested_budget(spend + allowance, spend),
+                crate::tasks::limits::suggested_budget(spend + allowance, spend),
                 expected
             );
         }

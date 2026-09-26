@@ -10,6 +10,7 @@ pub mod host;
 pub mod images;
 pub mod integration;
 pub mod issue_context;
+pub mod limits;
 pub mod pane_layout;
 pub mod preparation;
 pub mod pull_request_dependencies;

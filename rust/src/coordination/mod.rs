@@ -1,6 +1,8 @@
 pub mod advisor_bridge;
 pub mod advisor_evidence;
 pub mod bridge_auth;
+pub mod persistence;
+pub mod replacement;
 pub mod root_bridge;
 pub mod root_controller;
 pub mod root_prompts;

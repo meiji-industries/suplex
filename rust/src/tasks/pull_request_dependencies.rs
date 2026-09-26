@@ -88,6 +88,13 @@ pub fn replace(
 /// pull request prerequisites of queued tasks. A failed observation is retried
 /// on the next pass and never changes a stored prerequisite.
 pub async fn refresh(database_path: &Path) -> DatabaseResult<()> {
+    refresh_with(database_path, None).await
+}
+
+pub(crate) async fn refresh_with(
+    database_path: &Path,
+    supplied_github: Option<&Github>,
+) -> DatabaseResult<()> {
     let database = SuplexDatabase::open(database_path, OpenMode::ReadWrite)?;
     let rows = {
         let mut statement = database.connection().prepare(
@@ -107,7 +114,14 @@ pub async fn refresh(database_path: &Path) -> DatabaseResult<()> {
     if rows.is_empty() {
         return Ok(());
     }
-    let github = Github::load().await?;
+    let loaded_github;
+    let github = match supplied_github {
+        Some(github) => github,
+        None => {
+            loaded_github = Github::load().await?;
+            &loaded_github
+        }
+    };
     for (task_id, number, title, repository) in rows {
         let observed = github
             .observe_pull_request(repository.as_deref().unwrap_or(""), "", Some(number as u64))

@@ -57,27 +57,21 @@ pub fn spawn_task_host(database_path: PathBuf, artifact_root: PathBuf) -> TaskHo
         shutdown_rx.clone(),
     );
     // TypeScript `refreshPullRequestPrerequisites`: GitHub is re-read every minute; the next queue sweep admits.
-    let (prerequisites_path, mut prerequisites_shutdown) =
-        (database_path.clone(), shutdown_rx.clone());
-    tokio::spawn(async move {
-        let mut interval = tokio::time::interval(std::time::Duration::from_secs(60));
-        loop {
-            tokio::select! {
-                result = prerequisites_shutdown.changed() => {
-                    if result.is_err() || *prerequisites_shutdown.borrow() { break; }
-                },
-                _ = interval.tick() => {
-                    if let Err(error) = crate::tasks::pull_request_dependencies::refresh(&prerequisites_path).await {
-                        eprintln!("Pull request prerequisite refresh will be retried: {error}");
-                    }
-                },
-            }
-        }
-    });
-    let completed_path = database_path.clone();
-    tokio::spawn(poll_completed_pull_requests(
+    let prerequisites_path = database_path.clone();
+    tokio::spawn(poll_periodically(
         Duration::from_secs(60),
         shutdown_rx.clone(),
+        "Pull request prerequisite",
+        move || {
+            let path = prerequisites_path.clone();
+            async move { crate::tasks::pull_request_dependencies::refresh(&path).await }
+        },
+    ));
+    let completed_path = database_path.clone();
+    tokio::spawn(poll_periodically(
+        Duration::from_secs(60),
+        shutdown_rx.clone(),
+        "Delivered pull request",
         move || {
             let path = completed_path.clone();
             async move { crate::delivery::completed_pull_requests::refresh(&path, None).await }
@@ -136,9 +130,10 @@ pub fn spawn_task_host(database_path: PathBuf, artifact_root: PathBuf) -> TaskHo
     handle
 }
 
-async fn poll_completed_pull_requests<F, Fut>(
+async fn poll_periodically<F, Fut>(
     period: Duration,
     mut shutdown: watch::Receiver<bool>,
+    subject: &'static str,
     mut refresh: F,
 ) where
     F: FnMut() -> Fut,
@@ -152,7 +147,7 @@ async fn poll_completed_pull_requests<F, Fut>(
             },
             _ = interval.tick() => {
                 if let Err(error) = refresh().await {
-                    eprintln!("Delivered pull request refresh will be retried: {error}");
+                    eprintln!("{subject} refresh will be retried: {error}");
                 }
             },
         }
@@ -316,9 +311,10 @@ mod tests {
         let (shutdown_tx, shutdown_rx) = watch::channel(false);
         let (observed_tx, mut observed_rx) = mpsc::unbounded_channel();
         let attempts = Arc::new(AtomicUsize::new(0));
-        let task = tokio::spawn(poll_completed_pull_requests(
+        let task = tokio::spawn(poll_periodically(
             Duration::from_millis(25),
             shutdown_rx,
+            "Delivered pull request",
             move || {
                 let attempt = attempts.fetch_add(1, Ordering::SeqCst) + 1;
                 observed_tx.send(attempt).unwrap();
@@ -343,6 +339,50 @@ mod tests {
                 .unwrap(),
             Some(2)
         );
+        shutdown_tx.send(true).unwrap();
+        tokio::time::timeout(Duration::from_secs(5), task)
+            .await
+            .unwrap()
+            .unwrap();
+    }
+
+    #[tokio::test]
+    async fn prerequisite_refresh_never_overlaps_a_slow_observation() {
+        let (shutdown_tx, shutdown_rx) = watch::channel(false);
+        let (entered_tx, mut entered_rx) = mpsc::unbounded_channel();
+        let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+        let mut first = Some(release_rx);
+        let active = Arc::new(AtomicUsize::new(0));
+        let task = tokio::spawn(poll_periodically(
+            Duration::from_millis(20),
+            shutdown_rx,
+            "Pull request prerequisite",
+            move || {
+                let first = first.take();
+                let active = active.clone();
+                let entered = entered_tx.clone();
+                async move {
+                    assert_eq!(active.fetch_add(1, Ordering::SeqCst), 0);
+                    entered.send(()).unwrap();
+                    if let Some(first) = first {
+                        first.await.unwrap();
+                    }
+                    active.fetch_sub(1, Ordering::SeqCst);
+                    Ok(())
+                }
+            },
+        ));
+        tokio::time::timeout(Duration::from_secs(5), entered_rx.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        tokio::time::sleep(Duration::from_millis(80)).await;
+        assert!(entered_rx.try_recv().is_err());
+        release_tx.send(()).unwrap();
+        tokio::time::timeout(Duration::from_secs(5), entered_rx.recv())
+            .await
+            .unwrap()
+            .unwrap();
         shutdown_tx.send(true).unwrap();
         tokio::time::timeout(Duration::from_secs(5), task)
             .await

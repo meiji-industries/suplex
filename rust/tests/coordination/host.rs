@@ -272,6 +272,77 @@ mod host_tests {
         fs::remove_dir_all(base).unwrap();
     }
 
+    #[tokio::test]
+    async fn prerequisite_refresh_retries_one_failed_row_without_blocking_another() {
+        use axum::{Json, Router, http::StatusCode};
+        let (base, database_path, failed) = fixture_task();
+        let healthy = "healthy_prerequisite";
+        {
+            let database = SuplexDatabase::open(&database_path, OpenMode::ReadWrite).unwrap();
+            database.connection().execute_batch(&format!(
+                "CREATE TEMP TABLE copied_task AS SELECT * FROM suplex_tasks WHERE id = '{failed}';
+                 UPDATE copied_task SET id = '{healthy}', idempotency_key = 'healthy-key', issue_number = issue_number + 1;
+                 INSERT INTO suplex_tasks SELECT * FROM copied_task;
+                 CREATE TEMP TABLE copied_control AS SELECT * FROM suplex_task_controls WHERE task_id = '{failed}';
+                 UPDATE copied_control SET task_id = '{healthy}';
+                 INSERT INTO suplex_task_controls SELECT * FROM copied_control;
+                 UPDATE suplex_task_controls SET status = 'queued', wake_at = NULL WHERE task_id IN ('{failed}', '{healthy}');
+                 INSERT INTO suplex_task_pull_request_dependencies (task_id,pull_request_number,state,title,url,observed_at) VALUES
+                   ('{failed}',47,'open','Failed','https://github.com/owner/repo/pull/47','2026-09-26T00:00:00Z'),
+                   ('{healthy}',48,'open','Healthy','https://github.com/owner/repo/pull/48','2026-09-26T00:00:00Z');"
+            )).unwrap();
+        }
+        let app = Router::new().fallback(|Json(request): Json<serde_json::Value>| async move {
+            if request["variables"]["number"] == 47 {
+                return (StatusCode::SERVICE_UNAVAILABLE, Json(serde_json::json!({"message":"offline"})));
+            }
+            (StatusCode::OK, Json(serde_json::json!({"data":{"repository":{"pullRequest":{
+                "number":48,"url":"https://github.com/owner/repo/pull/48","state":"MERGED","isDraft":false,
+                "headRefOid":"a".repeat(40),"baseRefOid":"b".repeat(40),"mergeable":"UNKNOWN","mergeStateStatus":"UNKNOWN",
+                "autoMergeRequest":null,"reviewDecision":null,"author":{"login":"octo","avatarUrl":"https://avatars.githubusercontent.com/octo"},
+                "changedFiles":1,"additions":1,"deletions":0,"title":"Healthy","commits":{"nodes":[{"commit":{"statusCheckRollup":null}}]}
+            }}}})))
+        });
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let api = format!("http://{}/", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let access =
+            crate::integrations::github::Access::for_api(&api, Some("test-token".into())).unwrap();
+        let mut github = crate::integrations::github_delivery::Github::new(access);
+        github.retry_pauses.clear();
+        crate::tasks::pull_request_dependencies::refresh_with(&database_path, Some(&github))
+            .await
+            .unwrap();
+        let database = SuplexDatabase::open(&database_path, OpenMode::ReadOnly).unwrap();
+        let state = |task_id: &str| -> String {
+            database
+                .connection()
+                .query_row(
+                    "SELECT state FROM suplex_task_pull_request_dependencies WHERE task_id = ?1",
+                    [task_id],
+                    |row| row.get(0),
+                )
+                .unwrap()
+        };
+        assert_eq!(state(&failed), "open");
+        assert_eq!(state(healthy), "merged");
+        drop(database);
+        assert_eq!(
+            scheduled_task_ids(&database_path)
+                .unwrap()
+                .contains(&failed),
+            false
+        );
+        assert_eq!(
+            scheduled_task_ids(&database_path)
+                .unwrap()
+                .contains(&healthy.to_owned()),
+            true
+        );
+        server.abort();
+        fs::remove_dir_all(base).unwrap();
+    }
+
     #[test]
     fn scheduler_tick_reports_admission_and_queue_wait() {
         let logs = crate::platform::system_events::install_for_test();

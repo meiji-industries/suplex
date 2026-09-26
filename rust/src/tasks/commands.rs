@@ -1765,6 +1765,58 @@ mod tests {
     }
 
     #[test]
+    fn pull_request_prerequisite_states_control_initial_admission_and_wait_reason() {
+        let (filename, mut database, _, prepared) = command_fixture();
+        let observed = |number: i64, state: &str| json!({"number":number,"state":state,"title":format!("Pull {number}"),"url":format!("https://github.com/owner/repo/pull/{number}"),"observedAt":"2026-09-26T00:00:00.000Z"});
+        for (key, number, state, expected_status, reason) in [
+            ("merged", 41, "merged", TaskStatus::Active, None),
+            (
+                "open",
+                42,
+                "open",
+                TaskStatus::Queued,
+                Some("prerequisite_pull_request_open"),
+            ),
+            (
+                "closed",
+                43,
+                "closed",
+                TaskStatus::Queued,
+                Some("prerequisite_pull_request_closed"),
+            ),
+        ] {
+            let input = PreparedTask {
+                start_queued: true,
+                pull_request_dependencies: vec![observed(number, state)],
+                ..another(&prepared, key)
+            };
+            let task = repository::create(&mut database, &input, Utc::now())
+                .unwrap()
+                .task;
+            assert_eq!(task.status, expected_status);
+            let response = serde_json::to_value(
+                repository::task_response(&database, &task.id)
+                    .unwrap()
+                    .unwrap(),
+            )
+            .unwrap();
+            assert_eq!(response["blockedBy"][0]["state"], state);
+            if let Some(reason) = reason {
+                assert_eq!(response["queue"]["waitingOn"][0]["reason"], reason);
+            } else {
+                assert_eq!(response["queue"]["waitingOn"], json!([]));
+            }
+        }
+        assert_eq!(
+            pull_request_rejection(pull_request_dependencies::Rejection::Unobservable(45))
+                .to_string(),
+            "Suplex cannot observe pull request #45. Try again when GitHub is available."
+        );
+        drop(database);
+        std::fs::remove_file(filename).unwrap();
+    }
+
+    #[test]
     fn agent_selection_starts_a_coordinator_and_records_a_worker_profile() {
         let (filename, mut database, user, prepared) = command_fixture();
         let now = Utc::now();

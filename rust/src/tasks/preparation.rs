@@ -274,8 +274,12 @@ pub async fn prepare_before_native_work(database_path: &Path, task_id: &str) -> 
             started,
         )
     };
-    let scope =
-        super::host::project_launch_scope(&configuration, &issue_context, database_path, task_id);
+    let scope = crate::coordination::session_recovery::project_launch_scope(
+        &configuration,
+        &issue_context,
+        database_path,
+        task_id,
+    );
     let Some(worktree) = worktree.filter(|_| !started && scope.context_path.is_some()) else {
         return Ok(());
     };

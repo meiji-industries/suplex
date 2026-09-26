@@ -37,7 +37,7 @@ fn credential_lock_path() -> AccessResult<PathBuf> {
         use std::{ffi::CStr, mem::MaybeUninit, os::unix::ffi::OsStrExt};
         let mut entry = MaybeUninit::<libc::passwd>::uninit();
         let mut result = std::ptr::null_mut();
-        let mut buffer = vec![0_i8; 16_384];
+        let mut buffer: Vec<libc::c_char> = vec![0; 16_384];
         let status = unsafe {
             libc::getpwuid_r(
                 libc::geteuid(),

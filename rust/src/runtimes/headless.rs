@@ -374,7 +374,7 @@ pub(crate) fn discovered_process_ids(key: &str, directory: &Path) -> io::Result<
                 found.push(pid);
             }
         }
-        return Ok(found);
+        Ok(found)
     }
     #[cfg(target_os = "macos")]
     {

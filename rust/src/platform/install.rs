@@ -27,6 +27,8 @@ fn failure(reason: impl Into<String>, remedy: impl Into<String>) -> Value {
 fn command(name: &str, args: &[&str]) -> std::io::Result<std::process::Output> {
     Command::new(name).args(args).output()
 }
+// statvfs block counts are u32 on macOS and u64 on Linux.
+#[allow(clippy::unnecessary_cast)]
 fn free_bytes(path: &Path) -> u64 {
     use std::os::unix::ffi::OsStrExt;
     let mut current = path.to_path_buf();

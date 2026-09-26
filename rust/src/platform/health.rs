@@ -66,6 +66,8 @@ pub(crate) fn database_check(health: DatabaseHealth) -> Value {
     )
 }
 
+// statvfs block counts are u32 on macOS and u64 on Linux.
+#[allow(clippy::unnecessary_cast)]
 fn filesystem_bytes(path: &Path) -> Option<(u64, u64)> {
     let path = CString::new(path.as_os_str().as_bytes()).ok()?;
     let mut result = std::mem::MaybeUninit::<libc::statvfs>::uninit();

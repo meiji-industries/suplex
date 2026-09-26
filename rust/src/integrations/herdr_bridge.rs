@@ -680,4 +680,151 @@ pub(crate) mod tests {
         assert!(std::fs::read_to_string(directory.join("stdin")).is_err());
         let _ = std::fs::remove_dir_all(directory);
     }
+
+    #[tokio::test]
+    async fn observation_replaces_its_child_when_the_native_viewport_grows() {
+        let directory =
+            std::env::temp_dir().join(format!("suplex-bridge-{}", uuid::Uuid::new_v4()));
+        let script = fake_terminal(&directory, &[&frame("live")]);
+        let reads = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let herdr = Herdr::with_runner(script.to_string_lossy(), {
+            let reads = reads.clone();
+            std::sync::Arc::new(move |args: &[String]| match args[1].as_str() {
+                "get" => {
+                    fake::envelope(json!({"pane":{"pane_id":"pane","scroll":{"viewport_rows":49}}}))
+                }
+                "layout" => fake::failed(json!({"error":{"code":"unavailable"}})),
+                _ => {
+                    let wider = reads.fetch_add(1, std::sync::atomic::Ordering::SeqCst) > 0;
+                    Ok(RunOutput {
+                        status: Some(0),
+                        stdout: if wider {
+                            format!("top\n{}界\nnew bottom reply", "b".repeat(139))
+                        } else {
+                            "top\nbottom reply".into()
+                        },
+                        stderr: String::new(),
+                    })
+                }
+            })
+        });
+        let (bridge, mut events) = open(herdr, "pane".into(), None, None, Mode::Observe);
+        assert!(matches!(
+            next(&mut events).await,
+            BridgeEvent::Frame {
+                width: 12,
+                height: 49,
+                ..
+            }
+        ));
+        assert_eq!(file_lines(&directory.join("argv"), 2).await.len(), 2);
+        let widened = tokio::time::timeout(Duration::from_secs(5), async {
+            loop {
+                match events.recv().await {
+                    Some(BridgeEvent::Frame {
+                        full: true,
+                        width: 141,
+                        bytes,
+                        ..
+                    }) => break bytes,
+                    Some(_) => continue,
+                    None => panic!("observer closed"),
+                }
+            }
+        })
+        .await
+        .unwrap();
+        assert!(
+            String::from_utf8(widened)
+                .unwrap()
+                .contains("new bottom reply")
+        );
+        bridge.release();
+        let _ = std::fs::remove_dir_all(directory);
+    }
+
+    #[tokio::test]
+    async fn an_observer_exit_restarts_without_closing_the_read_only_bridge() {
+        let directory =
+            std::env::temp_dir().join(format!("suplex-bridge-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let script = directory.join("herdr");
+        std::fs::write(
+            &script,
+            format!(
+                "#!/bin/sh\necho \"$@\" >> '{}/argv'\nexit 0\n",
+                directory.display()
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let herdr = Herdr::with_runner(
+            script.to_string_lossy(),
+            std::sync::Arc::new(|args: &[String]| match args[1].as_str() {
+                "get" => {
+                    fake::envelope(json!({"pane":{"pane_id":"pane","scroll":{"viewport_rows":24}}}))
+                }
+                "layout" => fake::failed(json!({"error":{"code":"unavailable"}})),
+                _ => Ok(RunOutput {
+                    status: Some(0),
+                    stdout: "screen".into(),
+                    stderr: String::new(),
+                }),
+            }),
+        );
+        let (bridge, mut events) = open(herdr, "pane".into(), None, None, Mode::Observe);
+        assert!(matches!(
+            next(&mut events).await,
+            BridgeEvent::Frame { full: true, .. }
+        ));
+        assert_eq!(file_lines(&directory.join("argv"), 2).await.len(), 2);
+        while let Ok(event) = events.try_recv() {
+            assert!(!matches!(event, BridgeEvent::Closed(_)));
+        }
+        bridge.release();
+        let _ = std::fs::remove_dir_all(directory);
+    }
+
+    #[tokio::test]
+    async fn release_during_viewport_discovery_cannot_spawn_a_late_observer() {
+        let directory =
+            std::env::temp_dir().join(format!("suplex-bridge-{}", uuid::Uuid::new_v4()));
+        let script = fake_terminal(&directory, &[]);
+        let (started, entered) = std::sync::mpsc::channel();
+        let (continue_probe, resume) = std::sync::mpsc::channel();
+        let resume = std::sync::Arc::new(std::sync::Mutex::new(resume));
+        let herdr = Herdr::with_runner(
+            script.to_string_lossy(),
+            std::sync::Arc::new(move |args: &[String]| {
+                if args[1] == "get" {
+                    started.send(()).unwrap();
+                    resume.lock().unwrap().recv().unwrap();
+                    fake::envelope(json!({"pane":{"pane_id":"pane","scroll":{"viewport_rows":24}}}))
+                } else if args[1] == "layout" {
+                    fake::failed(json!({"error":{"code":"unavailable"}}))
+                } else {
+                    Ok(RunOutput {
+                        status: Some(0),
+                        stdout: "screen".into(),
+                        stderr: String::new(),
+                    })
+                }
+            }),
+        );
+        let (bridge, mut events) = open(herdr, "pane".into(), None, None, Mode::Observe);
+        tokio::time::timeout(
+            Duration::from_secs(5),
+            tokio::task::spawn_blocking(move || entered.recv()),
+        )
+        .await
+        .unwrap()
+        .unwrap()
+        .unwrap();
+        bridge.release();
+        continue_probe.send(()).unwrap();
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        assert!(std::fs::read_to_string(directory.join("argv")).is_err());
+        assert!(events.try_recv().is_err());
+        let _ = std::fs::remove_dir_all(directory);
+    }
 }

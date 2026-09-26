@@ -1723,7 +1723,6 @@ fn admit(
 }
 
 /// The admission transaction: recheck authority and policy against the captured snapshot, then write once.
-#[allow(clippy::too_many_arguments)]
 fn write(
     database: &mut SuplexDatabase,
     principal: &Principal,

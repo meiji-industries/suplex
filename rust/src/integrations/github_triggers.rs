@@ -312,7 +312,6 @@ fn update_rule(
 }
 
 /// `GithubTriggerRepository.record`: append activity and the check outcome.
-#[allow(clippy::too_many_arguments)]
 fn record(
     database: &mut SuplexDatabase,
     rule: &Rule,

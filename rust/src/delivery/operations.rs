@@ -1124,7 +1124,6 @@ impl DeliveryOperations {
     }
 
     /// The whole TypeScript `execute` for the Standard workflow.
-    #[allow(clippy::too_many_arguments)]
     pub async fn execute(
         &self,
         root: &RootIdentity,
@@ -1638,7 +1637,6 @@ impl DeliveryOperations {
     }
 
     /// TypeScript `createOrAdoptPublication`.
-    #[allow(clippy::too_many_arguments)]
     async fn create_or_adopt(
         &self,
         recheck: &Recheck<'_>,

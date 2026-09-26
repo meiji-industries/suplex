@@ -1,4 +1,3 @@
-// eslint-disable-next-line no-restricted-imports -- The Rust API is a long-running fixture process.
 import { execFile, spawn } from "node:child_process";
 import { appendFileSync } from "node:fs";
 import { chmod, mkdir, mkdtemp, rm, stat, writeFile } from "node:fs/promises";
@@ -30,17 +29,15 @@ async function startRustServer(root: string, port: number, options: FixtureOptio
   await stat(join(assets, "suplex-ui.js"));
   const isolated = options.providerMode !== "inherited";
   const fixtureBin = join(root, "fixture-bin");
-  if (isolated) {
-    await mkdir(fixtureBin, { recursive: true });
-    const unavailableHerdr = join(fixtureBin, "herdr");
-    await writeFile(unavailableHerdr, "#!/bin/sh\nexit 127\n");
-    await chmod(unavailableHerdr, 0o700);
-  }
+  await mkdir(fixtureBin, { recursive: true });
+  const unavailableHerdr = join(fixtureBin, "herdr");
+  await writeFile(unavailableHerdr, "#!/bin/sh\nexit 127\n");
+  await chmod(unavailableHerdr, 0o700);
   const data = join(root, "data");
   const child = spawn(executable, [], { detached: isolated, env: {
     ...process.env,
+    PATH: `${fixtureBin}:${process.env.PATH ?? "/usr/bin:/bin"}`,
     ...(isolated ? {
-      PATH: `${fixtureBin}:${process.env.PATH ?? "/usr/bin:/bin"}`,
       SUPLEX_CODEX_COMMAND: "/usr/bin/false", SUPLEX_CLAUDE_COMMAND: "/usr/bin/false",
       SUPLEX_OPENCODE_COMMAND: "/usr/bin/false", SUPLEX_DEVIN_COMMAND: "/usr/bin/false",
     } : {}),

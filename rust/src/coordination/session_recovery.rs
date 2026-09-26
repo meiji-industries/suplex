@@ -7,7 +7,7 @@ use serde_json::{Value, json};
 use crate::{
     platform::database::{DatabaseResult, OpenMode, SuplexDatabase},
     runtimes::{task_harness::ReaderSession, task_harness_registry},
-    tasks::control::{SessionKind, SessionRow, TaskProfile, TurnRow, TurnStatus},
+    tasks::control::{SessionRow, TaskProfile, TurnRow, TurnStatus},
 };
 
 use super::{
@@ -263,77 +263,6 @@ pub fn finish_delegate_turn(
         &purpose,
     );
     record(database, &base.to_string(), &wake, None)
-}
-
-/// TypeScript `reconcileCompletedAdvisorReport`: revalidates one retained
-/// invalid Advisor turn without launching or resuming an agent.
-pub async fn reconcile_completed_advisor_report(
-    database_path: &Path,
-    task_id: &str,
-    turn_id: &str,
-) -> DatabaseResult<AdvisorReportOutcome> {
-    let rows = {
-        let database = SuplexDatabase::open(database_path, OpenMode::ReadOnly)?;
-        root_session_store::root_observation_rows(&database, task_id)?
-    };
-    let turn = rows.turns.iter().find(|turn| turn.id == turn_id);
-    let session = turn.and_then(|turn| rows.session(&turn.session_id));
-    let (Some(turn), Some(session), Some(role)) = (
-        turn.filter(|turn| turn.status == TurnStatus::Completed),
-        session.filter(|session| session.kind == SessionKind::Worker),
-        session.and_then(|session| session.advisor_role),
-    ) else {
-        return Ok(Err(
-            "The retained Advisor turn does not exist or is not complete".into(),
-        ));
-    };
-    let input = turn_workflow_input(&rows.sessions, turn)
-        .cloned()
-        .unwrap_or(Value::Null);
-    if input["kind"] != "advisor" || input["role"] != role.as_str() {
-        return Ok(Err(
-            "The retained Advisor turn has no matching assignment".into()
-        ));
-    }
-    let stored = turn
-        .terminal_observation
-        .as_deref()
-        .and_then(|raw| serde_json::from_str::<Value>(raw).ok())
-        .filter(|value| {
-            value.is_object() && (value.get("text").is_none() || value["text"].is_string())
-        });
-    let Some(stored) = stored else {
-        return Ok(Err("The retained Advisor observation is invalid".into()));
-    };
-    let session_id = session.id.as_str();
-    let tools = native_tools(database_path, session, turn_id).unwrap_or_default();
-    let outcome = advisor_bridge::advisor_report_from_turn(
-        role,
-        &tools,
-        stored["text"].as_str().unwrap_or_default(),
-    );
-    let outcome = {
-        let input = input.clone();
-        let database_path = database_path.to_owned();
-        let task_id = task_id.to_owned();
-        tokio::task::spawn_blocking(move || {
-            verify_advisor_outcome(&database_path, &task_id, &input, outcome)
-                .map_err(|error| error.to_string())
-        })
-        .await??
-    };
-    if let Ok(result) = &outcome {
-        let mut database = SuplexDatabase::open(database_path, OpenMode::ReadWrite)?;
-        root_session_store::reconcile_advisor_result(
-            &mut database,
-            task_id,
-            session_id,
-            turn_id,
-            result,
-            Utc::now(),
-        )?;
-    }
-    Ok(outcome)
 }
 
 use crate::shared::time::now_millis_rfc3339;

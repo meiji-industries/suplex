@@ -4,7 +4,14 @@
 
 use crate::shared::hash::sha256_hex;
 use crate::shared::time::now_millis_rfc3339;
-use std::{error::Error, fmt, sync::LazyLock};
+use std::{
+    error::Error,
+    fmt,
+    io::Write,
+    os::unix::fs::{DirBuilderExt, OpenOptionsExt},
+    sync::LazyLock,
+    time::Duration,
+};
 
 use base64::{Engine, engine::general_purpose::STANDARD};
 use regex::Regex;
@@ -67,6 +74,78 @@ impl Error for MissingIntegrationCredential {}
 
 fn fail(message: &str) -> Box<dyn Error + Send + Sync> {
     message.into()
+}
+
+async fn github_cli(command: &str, args: &[&str]) -> TrackerResult<String> {
+    let mut process = tokio::process::Command::new(command);
+    process.args(args).kill_on_drop(true);
+    let output = tokio::time::timeout(Duration::from_secs(30), process.output())
+        .await
+        .map_err(|_| fail("GitHub CLI timed out"))??;
+    if output.stdout.len() > 8 * 1024 * 1024 || output.stderr.len() > 8 * 1024 * 1024 {
+        return Err(fail("GitHub CLI output is too large"));
+    }
+    if !output.status.success() {
+        return Err(fail("GitHub could not upload issue evidence"));
+    }
+    Ok(String::from_utf8(output.stdout)?)
+}
+
+async fn upload_github_media(
+    command: &str,
+    repository: &str,
+    number: &str,
+    filename: &str,
+    bytes: &[u8],
+    marker: &str,
+    before_write: BeforeWrite<'_>,
+) -> TrackerResult<()> {
+    if !github_cli(command, &["issue", "comment", "--help"])
+        .await?
+        .contains("--attach")
+    {
+        return Err(fail(
+            "Update GitHub CLI to a version supporting issue comment --attach",
+        ));
+    }
+    let directory =
+        std::env::temp_dir().join(format!("suplex-evidence-upload-{}", uuid::Uuid::new_v4()));
+    std::fs::DirBuilder::new().mode(0o700).create(&directory)?;
+    let result = async {
+        let attachment = directory.join(filename);
+        let body = directory.join("body.md");
+        for (path, contents) in [(&attachment, bytes), (&body, marker.as_bytes())] {
+            let mut file = std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .mode(0o600)
+                .open(path)?;
+            file.write_all(contents)?;
+        }
+        before_write().await?;
+        github_cli(
+            command,
+            &[
+                "issue",
+                "comment",
+                number,
+                "--repo",
+                repository,
+                "--body-file",
+                body.to_str()
+                    .ok_or_else(|| fail("Evidence path is invalid"))?,
+                "--attach",
+                attachment
+                    .to_str()
+                    .ok_or_else(|| fail("Evidence path is invalid"))?,
+            ],
+        )
+        .await?;
+        Ok::<(), Box<dyn Error + Send + Sync>>(())
+    }
+    .await;
+    let _ = std::fs::remove_dir_all(directory);
+    result
 }
 
 pub fn environment_credential(name: &str) -> TrackerResult<String> {
@@ -922,7 +1001,7 @@ impl IssueTracker {
     }
 
     /// TypeScript `upload`: a hash-named evidence file on the tracker. GitHub
-    /// media needs the GitHub CLI `--attach` upload, which Rust does not run.
+    /// media uses the GitHub CLI `--attach` upload and verifies the owned comment.
     pub async fn upload(
         &self,
         issue: &Value,
@@ -944,14 +1023,31 @@ impl IssueTracker {
             // A response lost after an earlier upload is recovered from the
             // owned marker comment. A new GitHub media upload needs the CLI.
             let marker = format!("[Suplex attachment {filename}]");
-            let existing = self
+            let mut existing = self
                 .comments(&issue)
                 .await?
                 .into_iter()
                 .find(|row| row.owned(&actor) && issue_text(&row.body).contains(&marker));
+            if existing.is_none() {
+                upload_github_media(
+                    &std::env::var("SUPLEX_GH_COMMAND").unwrap_or_else(|_| "gh".into()),
+                    &issue.repository,
+                    &issue.number,
+                    filename,
+                    bytes,
+                    &marker,
+                    before_write,
+                )
+                .await?;
+                existing = self
+                    .comments(&issue)
+                    .await?
+                    .into_iter()
+                    .find(|row| row.owned(&actor) && issue_text(&row.body).contains(&marker));
+            }
             let Some(existing) = existing else {
                 return Err(fail(
-                    "Update GitHub CLI to a version supporting issue comment --attach",
+                    "GitHub has not confirmed the uploaded evidence reference",
                 ));
             };
             return github_image_reference(&issue_text(&existing.body))
@@ -1166,6 +1262,82 @@ pub fn github_image_reference(body: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn github_media_uses_supported_cli_with_private_files_and_cleans_after_lost_response() {
+        use std::os::unix::fs::PermissionsExt;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let root = std::env::temp_dir().join(format!("suplex-gh-media-{}", uuid::Uuid::new_v4()));
+        std::fs::create_dir(&root).unwrap();
+        let command = root.join("gh");
+        let log = root.join("paths");
+        let old_command = root.join("old-gh");
+        std::fs::write(&old_command, "#!/bin/sh\necho '--body-file file'\n").unwrap();
+        std::fs::set_permissions(&old_command, std::fs::Permissions::from_mode(0o700)).unwrap();
+        std::fs::write(
+            &command,
+            format!(
+                r#"#!/bin/sh
+if [ "$3" = "--help" ]; then echo '--attach file'; exit 0; fi
+body=''; attachment=''
+while [ "$#" -gt 0 ]; do
+  case "$1" in
+    --body-file) shift; body="$1" ;;
+    --attach) shift; attachment="$1" ;;
+  esac
+  shift
+done
+test "$(cat "$body")" = '[Suplex attachment suplex-task.png]' || exit 24
+test "$(cat "$attachment")" = 'image' || exit 25
+printf '%s\n%s\n' "$body" "$attachment" > '{}'
+exit 1
+"#,
+                log.display()
+            ),
+        )
+        .unwrap();
+        std::fs::set_permissions(&command, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let checks = AtomicUsize::new(0);
+        let before: BeforeWrite<'_> = &|| {
+            checks.fetch_add(1, Ordering::SeqCst);
+            Box::pin(async { Ok(()) })
+        };
+        assert_eq!(
+            upload_github_media(
+                old_command.to_str().unwrap(),
+                "owner/repo",
+                "42",
+                "suplex-task.png",
+                b"image",
+                "[Suplex attachment suplex-task.png]",
+                before
+            )
+            .await
+            .unwrap_err()
+            .to_string(),
+            "Update GitHub CLI to a version supporting issue comment --attach"
+        );
+        assert_eq!(checks.load(Ordering::SeqCst), 0);
+        let failed = upload_github_media(
+            command.to_str().unwrap(),
+            "owner/repo",
+            "42",
+            "suplex-task.png",
+            b"image",
+            "[Suplex attachment suplex-task.png]",
+            before,
+        )
+        .await
+        .unwrap_err();
+        assert_eq!(failed.to_string(), "GitHub could not upload issue evidence");
+        assert_eq!(checks.load(Ordering::SeqCst), 1);
+        let paths = std::fs::read_to_string(&log).unwrap();
+        for path in paths.lines() {
+            assert!(!std::path::Path::new(path).exists());
+        }
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn jira_evidence_links_stay_clickable_without_changing_read_back_text() {
@@ -1390,6 +1562,183 @@ mod tests {
                 .unwrap_err()
                 .is::<IssueTrackerScopeFailure>()
         );
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn jira_evidence_publication_rechecks_scope_and_confirms_owned_remote_text() {
+        use axum::{
+            body::Bytes,
+            http::{Method, StatusCode, Uri},
+        };
+        use std::sync::{
+            Arc, Mutex,
+            atomic::{AtomicBool, AtomicUsize, Ordering},
+        };
+
+        // SAFETY: private fixture credential names.
+        unsafe {
+            std::env::set_var("SUPLEX_TEST_JIRA_PUBLISH_EMAIL", "me@example.com");
+            std::env::set_var("SUPLEX_TEST_JIRA_PUBLISH_TOKEN", "secret");
+        }
+        let moved = Arc::new(AtomicBool::new(false));
+        let writes = Arc::new(AtomicUsize::new(0));
+        let comment = Arc::new(Mutex::new(None::<Value>));
+        let app = axum::Router::new().fallback({
+            let moved = moved.clone();
+            let writes = writes.clone();
+            let comment = comment.clone();
+            move |method: Method, uri: Uri, body: Bytes| {
+                let moved = moved.clone();
+                let writes = writes.clone();
+                let comment = comment.clone();
+                async move {
+                    let path = uri.path_and_query().map_or("", |part| part.as_str());
+                    if path == "/rest/api/3/myself" {
+                        return (StatusCode::OK, json!({"accountId":"me"}).to_string());
+                    }
+                    if path == "/rest/api/3/issue/42/comment?maxResults=100&startAt=0" {
+                        let rows = comment
+                            .lock()
+                            .unwrap()
+                            .clone()
+                            .into_iter()
+                            .collect::<Vec<_>>();
+                        return (
+                            StatusCode::OK,
+                            json!({"comments":rows,"total":rows.len(),"startAt":0}).to_string(),
+                        );
+                    }
+                    if path == "/rest/api/3/issue/42?fields=summary" {
+                        let key = if moved.load(Ordering::SeqCst) {
+                            "OTHER-42"
+                        } else {
+                            "APP-42"
+                        };
+                        return (
+                            StatusCode::OK,
+                            json!({"id":"42","key":key,"fields":{"summary":"Fix"}}).to_string(),
+                        );
+                    }
+                    if (method == Method::POST && path == "/rest/api/3/issue/42/comment")
+                        || (method == Method::PUT && path == "/rest/api/3/issue/42/comment/9")
+                    {
+                        writes.fetch_add(1, Ordering::SeqCst);
+                        let input: Value = serde_json::from_slice(&body).unwrap();
+                        let row =
+                            json!({"id":"9","author":{"accountId":"me"},"body":input["body"]});
+                        *comment.lock().unwrap() = Some(row);
+                        return (StatusCode::OK, json!({"id":"9"}).to_string());
+                    }
+                    (StatusCode::NOT_FOUND, String::new())
+                }
+            }
+        });
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let tracker = IssueTracker::with_github(
+            &json!({
+                "kind":"jira","site":base,"project":"APP",
+                "emailEnvironment":"SUPLEX_TEST_JIRA_PUBLISH_EMAIL",
+                "tokenEnvironment":"SUPLEX_TEST_JIRA_PUBLISH_TOKEN"
+            }),
+            None,
+        );
+        let issue = json!({"kind":"jira","site":base,"id":"42","key":"APP-42"});
+        let allow: BeforeWrite<'_> = &|| Box::pin(async { Ok(()) });
+        let deny: BeforeWrite<'_> = &|| Box::pin(async { Err("cancelled".into()) });
+        assert_eq!(
+            tracker
+                .publish(&issue, "task_one", "Evidence", deny, None)
+                .await
+                .unwrap_err()
+                .to_string(),
+            "cancelled"
+        );
+        assert_eq!(writes.load(Ordering::SeqCst), 0);
+        moved.store(true, Ordering::SeqCst);
+        assert!(
+            tracker
+                .publish(&issue, "task_one", "Evidence", allow, None)
+                .await
+                .unwrap_err()
+                .is::<IssueTrackerScopeFailure>()
+        );
+        assert_eq!(writes.load(Ordering::SeqCst), 0);
+        moved.store(false, Ordering::SeqCst);
+        assert_eq!(
+            tracker
+                .publish(&issue, "task_one", "Evidence", allow, None)
+                .await
+                .unwrap(),
+            "9"
+        );
+        assert_eq!(
+            tracker
+                .publish(&issue, "task_one", "Evidence", allow, Some("9"))
+                .await
+                .unwrap(),
+            "9"
+        );
+        assert_eq!(writes.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            tracker
+                .publish(&issue, "task_one", "New evidence", allow, Some("9"))
+                .await
+                .unwrap(),
+            "9"
+        );
+        assert_eq!(writes.load(Ordering::SeqCst), 2);
+        server.abort();
+    }
+
+    #[tokio::test]
+    async fn jira_image_intake_limits_and_verifies_downloads_before_import() {
+        use axum::http::{StatusCode, Uri};
+        // SAFETY: private fixture credential names.
+        unsafe {
+            std::env::set_var("SUPLEX_TEST_JIRA_IMAGES_EMAIL", "me@example.com");
+            std::env::set_var("SUPLEX_TEST_JIRA_IMAGES_TOKEN", "secret");
+        }
+        let png = [0x89, b'P', b'N', b'G', 0x0d, 0x0a, 0x1a, 0x0a];
+        let app = axum::Router::new().fallback(move |uri: Uri| async move {
+            let path = uri.path_and_query().map_or("", |part| part.as_str());
+            if path == "/rest/api/3/attachment/content/1?redirect=false" {
+                return (StatusCode::OK, png.to_vec());
+            }
+            if path == "/rest/api/3/issue/42?fields=summary,attachment" {
+                return (
+                    StatusCode::OK,
+                    json!({"id":"42","key":"APP-42","fields":{"summary":"Fix","attachment":[
+                        {"id":"1","filename":"../before.png","size":8,"mimeType":"image/png"},
+                        {"id":"2","filename":"after.png","size":8,"mimeType":"image/png"},
+                        {"id":"3","filename":"details.pdf","size":8,"mimeType":"application/pdf"}
+                    ]}})
+                    .to_string()
+                    .into_bytes(),
+                );
+            }
+            (StatusCode::NOT_FOUND, Vec::new())
+        });
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let tracker = IssueTracker::with_github(
+            &json!({
+                "kind":"jira","site":base,"project":"APP",
+                "emailEnvironment":"SUPLEX_TEST_JIRA_IMAGES_EMAIL",
+                "tokenEnvironment":"SUPLEX_TEST_JIRA_IMAGES_TOKEN"
+            }),
+            None,
+        );
+        let issue = json!({"kind":"jira","site":base,"id":"42","key":"APP-42"});
+        let images = tracker.images(&issue, 1).await.unwrap();
+        assert_eq!(
+            images.images,
+            vec![(".._before.png".into(), "image/png".into(), png.to_vec())]
+        );
+        assert!(images.notes.join(" ").contains("after.png was not loaded"));
         server.abort();
     }
 }

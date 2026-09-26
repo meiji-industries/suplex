@@ -27,8 +27,8 @@ mod tests {
     use crate::platform::database::{OpenMode, SuplexDatabase};
     use axum::{body::to_bytes, http::HeaderValue};
     use std::{
-        io::{BufRead, BufReader, Write},
-        process::{Command, Stdio},
+        fs,
+        time::{Duration, SystemTime},
     };
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
@@ -174,35 +174,63 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore = "requires Node and the TypeScript native-app fixture"]
-    async fn same_database_history_page_and_live_snapshot_match_typescript() {
-        let repository = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .unwrap();
-        let mut oracle = Command::new("node")
-            .args([
-                "node_modules/tsx/dist/cli.mjs",
-                "tests/support/task-history-read-interop.ts",
-            ])
-            .current_dir(repository)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .spawn()
-            .unwrap();
-        let mut line = String::new();
-        let mut oracle_output = BufReader::new(oracle.stdout.take().unwrap());
-        oracle_output.read_line(&mut line).unwrap();
-        assert!(
-            !line.is_empty(),
-            "TypeScript history fixture produced no response"
-        );
-        let expected: Value = serde_json::from_str(&line).unwrap();
-        let database = SuplexDatabase::open(
-            std::path::Path::new(expected["databasePath"].as_str().unwrap()),
-            OpenMode::ReadWrite,
+    async fn frozen_history_page_live_update_and_reconnect_match_typescript_source_revision() {
+        let root =
+            std::env::temp_dir().join(format!("suplex-history-parity-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&root).unwrap();
+        let database_path = root.join("suplex.sqlite");
+        fs::copy(
+            concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../tests/parity/task-history-native/database.sqlite"
+            ),
+            &database_path,
         )
         .unwrap();
+        let expected: Value = serde_json::from_str(include_str!(
+            "../../../tests/parity/task-history-native/expected.json"
+        ))
+        .unwrap();
+        let initial = &expected[0];
+        let database = SuplexDatabase::open(&database_path, OpenMode::ReadWrite).unwrap();
+        let user_id: String = database
+            .connection()
+            .query_row("SELECT id FROM suplex_users LIMIT 1", [], |row| row.get(0))
+            .unwrap();
+        let token =
+            crate::identity::auth::create_session(&database, &user_id, chrono::Utc::now()).unwrap();
+        let session_id = initial["sessionId"].as_str().unwrap().to_owned();
+        let runtime = crate::runtimes::task_harness::task_session_runtime_directory(
+            &database_path,
+            &session_id,
+        )
+        .unwrap();
+        fs::create_dir_all(&runtime).unwrap();
+        for (name, message) in [
+            (
+                "turn-msg_history.jsonl",
+                &initial["page"]["body"]["messages"][0],
+            ),
+            (
+                "turn-msg_second.jsonl",
+                &initial["page"]["body"]["messages"][1],
+            ),
+        ] {
+            let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../tests/parity/task-history-native/runtime")
+                .join(&session_id)
+                .join(name);
+            let target = runtime.join(name);
+            fs::copy(source, &target).unwrap();
+            let millis = message["createdAt"].as_u64().unwrap();
+            fs::File::open(target)
+                .unwrap()
+                .set_times(
+                    fs::FileTimes::new()
+                        .set_modified(SystemTime::UNIX_EPOCH + Duration::from_millis(millis)),
+                )
+                .unwrap();
+        }
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let address = listener.local_addr().unwrap();
         let state = AppState::new(
@@ -223,10 +251,10 @@ mod tests {
         headers.insert("host", HeaderValue::from_str(&address.to_string()).unwrap());
         headers.insert(
             "cookie",
-            HeaderValue::from_str(expected["cookie"].as_str().unwrap()).unwrap(),
+            HeaderValue::from_str(&format!("sid_v1={token}")).unwrap(),
         );
-        let task_id = expected["taskId"].as_str().unwrap().to_owned();
-        let session_id = expected["sessionId"].as_str().unwrap().to_owned();
+        let task_id = initial["taskId"].as_str().unwrap().to_owned();
+        let session_id = initial["sessionId"].as_str().unwrap().to_owned();
         let response = history(
             State(state.clone()),
             Path((task_id.clone(), session_id.clone())),
@@ -234,44 +262,44 @@ mod tests {
             headers,
         )
         .await;
-        assert_eq!(response.status().as_u16(), expected["page"]["status"]);
+        assert_eq!(response.status().as_u16(), initial["page"]["status"]);
         assert_eq!(
             response
                 .headers()
                 .get(CACHE_CONTROL)
                 .and_then(|value| value.to_str().ok()),
-            expected["page"]["cacheControl"].as_str()
+            initial["page"]["cacheControl"].as_str()
         );
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
         assert_eq!(
             serde_json::from_slice::<Value>(&body).unwrap(),
-            expected["page"]["body"]
+            initial["page"]["body"]
         );
-        let (mut live, snapshot) = open_live(
-            address,
-            &task_id,
-            &session_id,
-            expected["cookie"].as_str().unwrap(),
+        let (mut live, snapshot) =
+            open_live(address, &task_id, &session_id, &format!("sid_v1={token}")).await;
+        assert_eq!(snapshot, initial["live"]);
+        let next_expected = &expected[1];
+        let next_message = &next_expected["update"]["messages"][0];
+        let third = runtime.join("turn-msg_third.jsonl");
+        fs::copy(
+            concat!(
+                env!("CARGO_MANIFEST_DIR"),
+                "/../tests/parity/task-history-native/turn-msg_third.jsonl"
+            ),
+            &third,
         )
-        .await;
-        assert_eq!(snapshot, expected["live"]);
-        oracle
-            .stdin
-            .as_mut()
+        .unwrap();
+        let millis = next_message["createdAt"].as_u64().unwrap();
+        fs::File::open(third)
             .unwrap()
-            .write_all(b"advance\n")
+            .set_times(
+                fs::FileTimes::new()
+                    .set_modified(SystemTime::UNIX_EPOCH + Duration::from_millis(millis)),
+            )
             .unwrap();
-        let mut next_line = String::new();
-        oracle_output.read_line(&mut next_line).unwrap();
-        let next_expected: Value = serde_json::from_str(&next_line).unwrap();
         assert_eq!(live.json().await, next_expected["update"]);
-        let (mut reconnected, resumed) = open_live(
-            address,
-            &task_id,
-            &session_id,
-            expected["cookie"].as_str().unwrap(),
-        )
-        .await;
+        let (mut reconnected, resumed) =
+            open_live(address, &task_id, &session_id, &format!("sid_v1={token}")).await;
         assert_eq!(resumed, next_expected["reconnect"]);
         state.shutdown_history();
         for client in [&mut live, &mut reconnected] {
@@ -281,12 +309,7 @@ mod tests {
             assert_eq!(&payload[2..], b"server closing");
         }
         server.abort();
-        oracle
-            .stdin
-            .as_mut()
-            .unwrap()
-            .write_all(b"close\n")
-            .unwrap();
-        assert!(oracle.wait().unwrap().success());
+        drop(state);
+        fs::remove_dir_all(root).unwrap();
     }
 }

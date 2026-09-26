@@ -1,0 +1,149 @@
+[
+  {
+    "taskId": "task_1cfe9fe621b1438f98700cced1b02893",
+    "sessionId": "9ea54b37-9c6d-43af-b4bf-c989163cfdba",
+    "page": {
+      "status": 200,
+      "body": {
+        "messages": [
+          {
+            "id": "msg_history",
+            "role": "assistant",
+            "createdAt": 1790337630000,
+            "content": [
+              {
+                "id": "msg_history:text",
+                "type": "text",
+                "text": "The local task is ready."
+              }
+            ]
+          },
+          {
+            "id": "msg_second",
+            "role": "assistant",
+            "createdAt": 1790432156476,
+            "content": [
+              {
+                "id": "msg_second:text",
+                "type": "text",
+                "text": "A second native turn."
+              }
+            ]
+          }
+        ],
+        "olderCursor": null
+      },
+      "cacheControl": "private, no-store"
+    },
+    "live": {
+      "type": "snapshot",
+      "page": {
+        "messages": [
+          {
+            "id": "msg_history",
+            "role": "assistant",
+            "createdAt": 1790337630000,
+            "content": [
+              {
+                "id": "msg_history:text",
+                "type": "text",
+                "text": "The local task is ready."
+              }
+            ]
+          },
+          {
+            "id": "msg_second",
+            "role": "assistant",
+            "createdAt": 1790432156476,
+            "content": [
+              {
+                "id": "msg_second:text",
+                "type": "text",
+                "text": "A second native turn."
+              }
+            ]
+          }
+        ],
+        "olderCursor": null
+      },
+      "order": [
+        "msg_history",
+        "msg_second"
+      ]
+    }
+  },
+  {
+    "update": {
+      "type": "update",
+      "messages": [
+        {
+          "id": "msg_third",
+          "role": "assistant",
+          "createdAt": 1790432156745,
+          "content": [
+            {
+              "id": "msg_third:text",
+              "type": "text",
+              "text": "The follow-up is ready."
+            }
+          ]
+        }
+      ],
+      "removedIds": [],
+      "order": [
+        "msg_history",
+        "msg_second",
+        "msg_third"
+      ]
+    },
+    "reconnect": {
+      "type": "snapshot",
+      "page": {
+        "messages": [
+          {
+            "id": "msg_history",
+            "role": "assistant",
+            "createdAt": 1790337630000,
+            "content": [
+              {
+                "id": "msg_history:text",
+                "type": "text",
+                "text": "The local task is ready."
+              }
+            ]
+          },
+          {
+            "id": "msg_second",
+            "role": "assistant",
+            "createdAt": 1790432156476,
+            "content": [
+              {
+                "id": "msg_second:text",
+                "type": "text",
+                "text": "A second native turn."
+              }
+            ]
+          },
+          {
+            "id": "msg_third",
+            "role": "assistant",
+            "createdAt": 1790432156745,
+            "content": [
+              {
+                "id": "msg_third:text",
+                "type": "text",
+                "text": "The follow-up is ready."
+              }
+            ]
+          }
+        ],
+        "olderCursor": null
+      },
+      "order": [
+        "msg_history",
+        "msg_second",
+        "msg_third"
+      ]
+    }
+  }
+]

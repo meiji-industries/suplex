@@ -1488,6 +1488,125 @@ impl DeliveryOperations {
         Ok(pull.unwrap_or(Value::Null))
     }
 
+    /// Proof that a merged pull request carries the reviewed head: the
+    /// validated range of this merge, or else the accepted delivery.
+    fn merged_head_proof(
+        validated_range: Option<&ReviewRange>,
+        accepted: Option<&ReviewRange>,
+        head: &str,
+    ) -> Commit {
+        match (validated_range, accepted) {
+            (Some(range), _) if head != range.head_sha => Commit::Declined(
+                "head_diverged",
+                format!(
+                    "GitHub reports the merged pull request head {}, not the reviewed head {}.",
+                    short(head),
+                    short(&range.head_sha)
+                ),
+            ),
+            (Some(_), _) => Commit::Done,
+            (None, None) => Commit::Declined(
+                "workflow_review_required",
+                "No accepted delivery decision exists for this pull request.".into(),
+            ),
+            (None, Some(accepted)) if accepted.head_sha != head => Commit::Declined(
+                "head_diverged",
+                format!(
+                    "The merged head {} is not the accepted head {}.",
+                    short(head),
+                    short(&accepted.head_sha)
+                ),
+            ),
+            (None, Some(_)) => Commit::Done,
+        }
+    }
+
+    /// A non-Standard merge completes the workflow when the reviewed head
+    /// merged; otherwise it records the external merge truthfully.
+    async fn complete_merged_workflow(
+        &self,
+        current: &TaskControlRow,
+        pull: &Value,
+        options: Adoption<'_>,
+    ) -> DatabaseResult<()> {
+        let task_id = current.task_id.as_str();
+        let accepted = current.workflow_state.accepted_delivery.clone();
+        let head = pull["headSha"].as_str().unwrap_or("");
+        let proof = Self::merged_head_proof(options.validated_range, accepted.as_ref(), head);
+        let decision = match (proof, options.validated_range.or(accepted.as_ref())) {
+            (Commit::Done, Some(range)) => {
+                self.commit_completion(
+                    current,
+                    range,
+                    pull["number"].as_u64(),
+                    options.validated_range.is_none(),
+                    options.recheck,
+                )
+                .await?
+            }
+            (proof, _) => proof,
+        };
+        match decision {
+            Commit::Done => Ok(()),
+            Commit::Cancelled => self.record_workflow_outcome(
+                task_id,
+                &Self::cancelled_outcome(&self.get(task_id)?, pull, options.validated_range),
+            ),
+            Commit::Declined(..) => self.record_workflow_outcome(
+                task_id,
+                &Self::external_completion(&self.get(task_id)?, pull["number"].as_u64()),
+            ),
+        }
+    }
+
+    /// A non-Standard open pull request completes only through the accepted
+    /// delivery decision. An explicit request reports why it did not.
+    async fn complete_open_workflow(
+        &self,
+        current: &TaskControlRow,
+        pull: &Value,
+        options: Adoption<'_>,
+    ) -> DatabaseResult<()> {
+        let decision = self
+            .open_completion_decision(current, pull, options.recheck)
+            .await?;
+        if options.explicit && !options.publication && !matches!(decision, Commit::Done) {
+            return Err(match decision {
+                Commit::Declined(code, reason) => delivery_failure(code, reason),
+                _ => delivery_failure(
+                    "workflow_review_required",
+                    "The task was cancelled; Suplex recorded no workflow completion.",
+                ),
+            });
+        }
+        Ok(())
+    }
+
+    /// Standard delivery publishes issue evidence and marks the task delivered
+    /// unless it was cancelled.
+    async fn complete_standard(
+        &self,
+        task_id: &str,
+        pull: &Value,
+        recheck: Option<&Recheck<'_>>,
+    ) -> DatabaseResult<()> {
+        issue_evidence::complete(
+            self,
+            task_id,
+            pull["number"].as_u64().unwrap_or(0),
+            pull["headSha"].as_str().unwrap_or(""),
+            recheck,
+        )
+        .await?;
+        if let Some(recheck) = recheck {
+            self.recheck(recheck)?;
+        }
+        if self.get(task_id)?.status != TaskStatus::Cancelled {
+            self.mark_delivered(task_id)?;
+        }
+        Ok(())
+    }
+
     /// TypeScript `completeIfTargetMatches`: Standard completes on a matching
     /// endpoint; other workflows complete only through the final boundary, or
     /// record an external merge truthfully.
@@ -1527,97 +1646,19 @@ impl DeliveryOperations {
         {
             return Ok(pull);
         }
-        if !standard {
-            if current.workflow_state.completion.is_some() {
-                if current.status != TaskStatus::Delivered {
-                    self.mark_delivered(task_id)?;
-                }
-                return Ok(pull);
-            }
-            if pull["state"] == "merged" {
-                let accepted = current.workflow_state.accepted_delivery.clone();
-                let head = pull["headSha"].as_str().unwrap_or("");
-                let proof = match (options.validated_range, &accepted) {
-                    (Some(range), _) if head != range.head_sha => Commit::Declined(
-                        "head_diverged",
-                        format!(
-                            "GitHub reports the merged pull request head {}, not the reviewed head {}.",
-                            short(head),
-                            short(&range.head_sha)
-                        ),
-                    ),
-                    (Some(_), _) => Commit::Done,
-                    (None, None) => Commit::Declined(
-                        "workflow_review_required",
-                        "No accepted delivery decision exists for this pull request.".into(),
-                    ),
-                    (None, Some(accepted)) if accepted.head_sha != head => Commit::Declined(
-                        "head_diverged",
-                        format!(
-                            "The merged head {} is not the accepted head {}.",
-                            short(head),
-                            short(&accepted.head_sha)
-                        ),
-                    ),
-                    (None, Some(_)) => Commit::Done,
-                };
-                let decision = match (proof, options.validated_range.or(accepted.as_ref())) {
-                    (Commit::Done, Some(range)) => {
-                        self.commit_completion(
-                            &current,
-                            range,
-                            pull["number"].as_u64(),
-                            options.validated_range.is_none(),
-                            options.recheck,
-                        )
-                        .await?
-                    }
-                    (proof, _) => proof,
-                };
-                match decision {
-                    Commit::Done => {}
-                    Commit::Cancelled => self.record_workflow_outcome(
-                        task_id,
-                        &Self::cancelled_outcome(
-                            &self.get(task_id)?,
-                            &pull,
-                            options.validated_range,
-                        ),
-                    )?,
-                    Commit::Declined(..) => self.record_workflow_outcome(
-                        task_id,
-                        &Self::external_completion(&self.get(task_id)?, pull["number"].as_u64()),
-                    )?,
-                }
-                return Ok(pull);
-            }
-            let decision = self
-                .open_completion_decision(&current, &pull, options.recheck)
+        if standard {
+            self.complete_standard(task_id, &pull, options.recheck)
                 .await?;
-            if options.explicit && !options.publication && !matches!(decision, Commit::Done) {
-                return Err(match decision {
-                    Commit::Declined(code, reason) => delivery_failure(code, reason),
-                    _ => delivery_failure(
-                        "workflow_review_required",
-                        "The task was cancelled; Suplex recorded no workflow completion.",
-                    ),
-                });
+        } else if current.workflow_state.completion.is_some() {
+            if current.status != TaskStatus::Delivered {
+                self.mark_delivered(task_id)?;
             }
-            return Ok(pull);
-        }
-        issue_evidence::complete(
-            self,
-            task_id,
-            pull["number"].as_u64().unwrap_or(0),
-            pull["headSha"].as_str().unwrap_or(""),
-            options.recheck,
-        )
-        .await?;
-        if let Some(recheck) = options.recheck {
-            self.recheck(recheck)?;
-        }
-        if self.get(task_id)?.status != TaskStatus::Cancelled {
-            self.mark_delivered(task_id)?;
+        } else if pull["state"] == "merged" {
+            self.complete_merged_workflow(&current, &pull, options)
+                .await?;
+        } else {
+            self.complete_open_workflow(&current, &pull, options)
+                .await?;
         }
         Ok(pull)
     }

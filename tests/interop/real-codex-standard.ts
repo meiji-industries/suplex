@@ -52,6 +52,7 @@ if (seedDirectory) {
   const work = join(seedDirectory, "work");
   await git("init", "-b", "main", work);
   await writeFile(join(work, "README.md"), "# Seed\n");
+  await writeFile(join(work, ".gitignore"), "node_modules/\npnpm-lock.yaml\n");
   await writeFile(join(work, "package.json"), `${JSON.stringify({ name: "seed", private: true, scripts: { test: "node -e \"process.exit(0)\"" } })}\n`);
   await git("-C", work, "add", ".");
   await git("-C", work, "-c", "user.name=Suplex fixture", "-c", "user.email=suplex-fixture@example.invalid", "-c", "commit.gpgsign=false", "commit", "-m", "Seed");

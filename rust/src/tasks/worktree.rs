@@ -321,6 +321,30 @@ pub fn prepare_local_task_worktree(
     intent: &TaskWorktreeIntent,
     github_token: Option<&str>,
 ) -> WorktreeResult<WorktreeReference> {
+    let task_path = intent.worktree_root.join(&intent.task_id);
+    let initially_absent = fs::symlink_metadata(&task_path).is_err();
+    for attempt in 0..20 {
+        match prepare_local_task_worktree_once(intent, github_token) {
+            Err(error)
+                if initially_absent
+                    && attempt < 19
+                    && (error
+                        .downcast_ref::<git2::Error>()
+                        .is_some_and(|git| git.code() == git2::ErrorCode::Locked)
+                        || fs::symlink_metadata(&task_path).is_ok()) =>
+            {
+                std::thread::sleep(std::time::Duration::from_millis(25));
+            }
+            result => return result,
+        }
+    }
+    unreachable!("the final attempt returns")
+}
+
+fn prepare_local_task_worktree_once(
+    intent: &TaskWorktreeIntent,
+    github_token: Option<&str>,
+) -> WorktreeResult<WorktreeReference> {
     if !valid_task_id(&intent.task_id) || !valid_starting_sha(&intent.starting_sha) {
         return Err(invalid("Invalid task worktree identity"));
     }
@@ -1012,7 +1036,15 @@ mod tests {
         run(&repository_path, &["add", "conflict.txt"], true);
         run(
             &repository_path,
-            &["-c", "user.name=Test", "-c", "user.email=test@example.test", "commit", "-qm", "initial"],
+            &[
+                "-c",
+                "user.name=Test",
+                "-c",
+                "user.email=test@example.test",
+                "commit",
+                "-qm",
+                "initial",
+            ],
             true,
         );
         let starting_sha = run(&repository_path, &["rev-parse", "HEAD"], true);
@@ -1026,26 +1058,125 @@ mod tests {
         let worktree = prepare_local_task_worktree(&intent, None).unwrap().path;
         fs::write(worktree.join("conflict.txt"), "task\n").unwrap();
         run(&worktree, &["add", "conflict.txt"], true);
-        run(&worktree, &["-c", "user.name=Test", "-c", "user.email=test@example.test", "commit", "-qm", "task"], true);
+        run(
+            &worktree,
+            &[
+                "-c",
+                "user.name=Test",
+                "-c",
+                "user.email=test@example.test",
+                "commit",
+                "-qm",
+                "task",
+            ],
+            true,
+        );
         fs::write(repository_path.join("conflict.txt"), "main\n").unwrap();
         run(&repository_path, &["add", "conflict.txt"], true);
-        run(&repository_path, &["-c", "user.name=Test", "-c", "user.email=test@example.test", "commit", "-qm", "main"], true);
+        run(
+            &repository_path,
+            &[
+                "-c",
+                "user.name=Test",
+                "-c",
+                "user.email=test@example.test",
+                "commit",
+                "-qm",
+                "main",
+            ],
+            true,
+        );
         fs::write(worktree.join("preserved.txt"), "Preserve me\n").unwrap();
         run(&worktree, &["rebase", "main"], false);
         let head_before = run(&worktree, &["rev-parse", "HEAD"], true);
         let status_before = run(&worktree, &["status", "--porcelain=v1"], true);
         let conflict_before = fs::read(worktree.join("conflict.txt")).unwrap();
-        let rebase_head = run(&worktree, &["rev-parse", "--path-format=absolute", "--git-path", "rebase-merge/head-name"], true);
+        let rebase_head = run(
+            &worktree,
+            &[
+                "rev-parse",
+                "--path-format=absolute",
+                "--git-path",
+                "rebase-merge/head-name",
+            ],
+            true,
+        );
         let rebase_before = fs::read(&rebase_head).unwrap();
 
         let observed = prepare_local_task_worktree(&intent, None).unwrap();
         assert_eq!(observed.branch, intent.branch);
         assert_eq!(observed.head_sha, head_before);
         assert!(observed.dirty);
-        assert_eq!(run(&worktree, &["status", "--porcelain=v1"], true), status_before);
-        assert_eq!(fs::read(worktree.join("conflict.txt")).unwrap(), conflict_before);
-        assert_eq!(fs::read(worktree.join("preserved.txt")).unwrap(), b"Preserve me\n");
+        assert_eq!(
+            run(&worktree, &["status", "--porcelain=v1"], true),
+            status_before
+        );
+        assert_eq!(
+            fs::read(worktree.join("conflict.txt")).unwrap(),
+            conflict_before
+        );
+        assert_eq!(
+            fs::read(worktree.join("preserved.txt")).unwrap(),
+            b"Preserve me\n"
+        );
         assert_eq!(fs::read(&rebase_head).unwrap(), rebase_before);
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn materialization_rejects_foreign_paths_and_converges_concurrent_creation() {
+        let root =
+            std::env::temp_dir().join(format!("suplex-worktree-owner-{}", uuid::Uuid::new_v4()));
+        let repository_path = root.join("repository");
+        fs::create_dir_all(&repository_path).unwrap();
+        let repository = Repository::init(&repository_path).unwrap();
+        let signature = Signature::now("Suplex test", "suplex@example.test").unwrap();
+        let tree = repository
+            .find_tree(repository.index().unwrap().write_tree().unwrap())
+            .unwrap();
+        let starting_sha = repository
+            .commit(Some("HEAD"), &signature, &signature, "Initial", &tree, &[])
+            .unwrap()
+            .to_string();
+        let intent = TaskWorktreeIntent {
+            task_id: "task_owner".into(),
+            repository_path: repository_path.clone(),
+            worktree_root: root.join("worktrees"),
+            branch: "task-owner".into(),
+            starting_sha,
+        };
+        let path = intent.worktree_root.join(&intent.task_id);
+        fs::create_dir_all(&intent.worktree_root).unwrap();
+        fs::create_dir(&path).unwrap();
+        fs::write(path.join("preserved.txt"), "unrelated directory\n").unwrap();
+        assert!(prepare_local_task_worktree(&intent, None).is_err());
+        assert_eq!(
+            fs::read(path.join("preserved.txt")).unwrap(),
+            b"unrelated directory\n"
+        );
+        fs::remove_dir_all(&path).unwrap();
+
+        Repository::init(&path).unwrap();
+        fs::write(path.join("preserved.txt"), "foreign repository\n").unwrap();
+        assert!(prepare_local_task_worktree(&intent, None).is_err());
+        assert_eq!(
+            fs::read(path.join("preserved.txt")).unwrap(),
+            b"foreign repository\n"
+        );
+        fs::remove_dir_all(&path).unwrap();
+
+        let (first, second) = std::thread::scope(|scope| {
+            let first = scope.spawn(|| {
+                prepare_local_task_worktree(&intent, None).map_err(|error| error.to_string())
+            });
+            let second = scope.spawn(|| {
+                prepare_local_task_worktree(&intent, None).map_err(|error| error.to_string())
+            });
+            (first.join().unwrap(), second.join().unwrap())
+        });
+        assert_eq!(first.unwrap(), second.unwrap());
+        drop(tree);
+        drop(repository);
         fs::remove_dir_all(root).unwrap();
     }
 }

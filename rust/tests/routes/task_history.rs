@@ -43,6 +43,22 @@ mod tests {
         let earlier = page(&messages, Some("msg_5")).unwrap();
         assert_eq!(earlier["messages"].as_array().unwrap().len(), 5);
         assert!(page(&messages, Some("missing")).is_err());
+        let duplicate = page(
+            &[
+                json!({"id":"same","text":"old"}),
+                json!({"id":"other","text":"other"}),
+                json!({"id":"same","text":"latest"}),
+            ],
+            None,
+        )
+        .unwrap();
+        assert_eq!(
+            duplicate["messages"],
+            json!([
+                {"id":"same","text":"latest"},
+                {"id":"other","text":"other"}
+            ])
+        );
         let next = vec![messages[0].clone(), json!({"id":"msg_1","text":"changed"})];
         let change = live_change(&messages[..2], &next).unwrap();
         assert_eq!(change["messages"], json!([next[1]]));

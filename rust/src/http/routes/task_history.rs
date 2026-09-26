@@ -4,7 +4,7 @@ use crate::http::error::ApiError;
 
 use crate::http::access::authorize;
 use crate::tasks::TaskError;
-use std::{error::Error, io, path::PathBuf};
+use std::{collections::HashMap, error::Error, io, path::PathBuf};
 
 use axum::{
     Json, Router,
@@ -103,9 +103,23 @@ fn native_history(scoped: &ScopedSession) -> io::Result<Vec<Value>> {
 }
 
 fn page(messages: &[Value], before: Option<&str>) -> Result<Value, TaskError> {
+    let mut ordered = Vec::new();
+    let mut slots = HashMap::new();
+    for message in messages {
+        match slots
+            .get(message["id"].as_str().unwrap_or_default())
+            .copied()
+        {
+            Some(index) => ordered[index] = message,
+            None => {
+                slots.insert(message["id"].as_str().unwrap_or_default(), ordered.len());
+                ordered.push(message);
+            }
+        }
+    }
     let end = match before {
-        None => messages.len(),
-        Some(before) => messages
+        None => ordered.len(),
+        Some(before) => ordered
             .iter()
             .position(|message| message["id"] == before)
             .ok_or_else(|| TaskError::Failure {
@@ -116,8 +130,8 @@ fn page(messages: &[Value], before: Option<&str>) -> Result<Value, TaskError> {
     };
     let start = end.saturating_sub(PAGE_SIZE);
     Ok(json!({
-        "messages": &messages[start..end],
-        "olderCursor": (start > 0).then(|| messages[start]["id"].clone()),
+        "messages": &ordered[start..end],
+        "olderCursor": (start > 0).then(|| ordered[start]["id"].clone()),
     }))
 }
 

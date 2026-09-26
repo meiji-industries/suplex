@@ -2343,4 +2343,25 @@ mod tests {
         );
         assert_eq!(attempts.load(Ordering::SeqCst), 2);
     }
+
+    #[tokio::test]
+    async fn branch_absence_requires_an_explicit_not_found_response() {
+        for (status, expected) in [(404, None), (503, Some("provider-unavailable"))] {
+            let (github, server) = fake_api(
+                vec![(
+                    "/repos/owner/repo/branches/task",
+                    status,
+                    json!({"message": "branch unavailable"}),
+                )],
+                vec![],
+            )
+            .await;
+            let result = github.get_branch_head("owner/repo", "task").await;
+            match expected {
+                None => assert_eq!(result.unwrap(), None),
+                Some(code) => assert_eq!(result.unwrap_err().code, code),
+            }
+            server.abort();
+        }
+    }
 }

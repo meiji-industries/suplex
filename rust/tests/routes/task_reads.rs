@@ -352,38 +352,43 @@ mod tests {
         assert!(patch["patch"].as_str().unwrap().len() > 8192);
         assert!(patch["patch"].as_str().unwrap().contains("[REDACTED]"));
         assert!(!patch["patch"].as_str().unwrap().contains("UNTRACKED.md"));
-        if std::env::var_os("SUPLEX_TASK_DIFF_TS_ORACLE").is_some() {
-            let script = r#"import {readTaskDiff} from './src/tasks/inspection.ts'; const task=JSON.parse(process.env.SUPLEX_DIFF_TASK); const published=process.env.SUPLEX_DIFF_BASE; readTaskDiff(task,{getBranchHead:async()=>published,getPullRequest:async()=>{throw new Error('Unexpected PR lookup')}}).then(value=>process.stdout.write(JSON.stringify(value))).catch(error=>{console.error(error);process.exitCode=1});"#;
-            let output = Command::new("node")
-                .args(["node_modules/tsx/dist/cli.mjs", "-e", script])
-                .current_dir(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap())
-                .env("SUPLEX_DIFF_TASK", json!({"configuration":{"repository":"acme/demo","baseBranch":"main","source":null},"worktree":{"path":local},"pullRequest":null}).to_string())
-                .env("SUPLEX_DIFF_BASE", &published)
-                .output()
+        let merge_base = git(&["merge-base", &published, "HEAD"], &local);
+        let source = Command::new("git")
+            .args([
+                "diff",
+                "--no-ext-diff",
+                "--no-textconv",
+                "--no-color",
+                &merge_base,
+                "--",
+            ])
+            .current_dir(&local)
+            .output()
+            .unwrap();
+        assert!(source.status.success());
+        let expected_patch =
+            crate::platform::redaction::command_output(&String::from_utf8(source.stdout).unwrap());
+        let expected_body =
+            serde_json::to_vec(&json!({"available":true,"patch":expected_patch,"truncated":false}))
                 .unwrap();
-            assert!(
-                output.status.success(),
-                "{}",
-                String::from_utf8_lossy(&output.stderr)
+        if patch_body.as_ref() != expected_body.as_slice() {
+            let offset = patch_body
+                .iter()
+                .zip(&expected_body)
+                .position(|(left, right)| left != right)
+                .unwrap_or(patch_body.len().min(expected_body.len()));
+            panic!(
+                "raw diff response differs at byte {offset}: actual {} bytes, expected {} bytes; actual {:?}, expected {:?}",
+                patch_body.len(),
+                expected_body.len(),
+                &patch_body[offset.saturating_sub(80)..patch_body.len().min(offset + 160)],
+                &expected_body[offset.saturating_sub(80)..expected_body.len().min(offset + 160)]
             );
-            assert_eq!(patch_body.as_ref(), output.stdout);
         }
-        if std::env::var_os("SUPLEX_TASK_DIFF_TS_ORACLE").is_some() {
-            let script = r#"import {readTaskDiffSummary} from './src/tasks/inspection.ts'; const task=JSON.parse(process.env.SUPLEX_DIFF_TASK); const published=process.env.SUPLEX_DIFF_BASE; readTaskDiffSummary(task,{getBranchHead:async()=>published,getPullRequest:async()=>{throw new Error('Unexpected PR lookup')}}).then(value=>process.stdout.write(JSON.stringify(value))).catch(error=>{console.error(error);process.exitCode=1});"#;
-            let output = Command::new("node")
-                .args(["node_modules/tsx/dist/cli.mjs", "-e", script])
-                .current_dir(std::path::Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap())
-                .env("SUPLEX_DIFF_TASK", json!({"configuration":{"repository":"acme/demo","baseBranch":"main","source":null},"worktree":{"path":local},"pullRequest":null}).to_string())
-                .env("SUPLEX_DIFF_BASE", &published)
-                .output()
-                .unwrap();
-            assert!(
-                output.status.success(),
-                "{}",
-                String::from_utf8_lossy(&output.stderr)
-            );
-            assert_eq!(summary_body.as_ref(), output.stdout);
-        }
+        assert_eq!(
+            summary_body.as_ref(),
+            include_bytes!("../../../tests/parity/task-diff-native/summary.json")
+        );
         git(&["restore", "--staged", "--worktree", "README.md"], &local);
         git(&["mv", "README.md", "MOVED.md"], &local);
         git(&["config", "diff.renames", "false"], &local);

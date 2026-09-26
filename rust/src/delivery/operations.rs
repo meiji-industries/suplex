@@ -688,38 +688,39 @@ impl DeliveryOperations {
             self.clear_delivery_wait(task_id, &wait)?;
             return Ok("finished");
         }
-        if wait.reason == "observation" {
+        let prompt = if wait.reason == "observation" {
             let (branch, sha) = self.resolve_delivery_base(&control).await?;
             if sha.is_none() {
                 return Ok("unchanged");
             }
-            let prompt = format!(
+            format!(
                 "GitHub evidence is available again (the head of {branch}). Retry the delivery operation with your current review; no source change is needed."
-            );
-            return Ok(if self.resume_delivery_wait(task_id, &wait, &prompt)? {
-                "changed"
-            } else {
-                "none"
-            });
-        }
-        if observed.exists && same_delivery_wait_fingerprint(&wait.fingerprint, &observed) {
-            return Ok("unchanged");
-        }
+            )
+        } else {
+            if observed.exists && same_delivery_wait_fingerprint(&wait.fingerprint, &observed) {
+                return Ok("unchanged");
+            }
+            Self::changed_delivery_prompt(&wait, &observed)
+        };
+        Ok(if self.resume_delivery_wait(task_id, &wait, &prompt)? {
+            "changed"
+        } else {
+            "none"
+        })
+    }
+
+    /// The Coordinator prompt for a delivery state that changed during a wait.
+    fn changed_delivery_prompt(wait: &DeliveryWait, observed: &Observation) -> String {
         let summary = crate::shared::js_json::stringify(&json!({
             "exists": observed.exists, "state": observed.state, "headSha": observed.head_sha,
             "isDraft": observed.is_draft, "mergeable": observed.mergeable,
             "mergeStateStatus": observed.merge_state_status, "reviewDecision": observed.review_decision,
             "checks": observed.checks,
         }));
-        let prompt = format!(
+        format!(
             "Delivery state changed while Suplex waited ({}). Current observation: {summary}. If checks failed, obtain their evidence and continue the workflow; if the pull request is eligible, request merge_pull_request with your current review; otherwise observe_checks again.",
             wait.reason
-        );
-        Ok(if self.resume_delivery_wait(task_id, &wait, &prompt)? {
-            "changed"
-        } else {
-            "none"
-        })
+        )
     }
 
     /// TypeScript `checksObservation`: null without a pull request or when GitHub cannot answer.
@@ -1197,7 +1198,7 @@ impl DeliveryOperations {
     }
 
     /// A mutation needs the Coordinator's review of the current local head and
-    /// delivery range, gated by the workflow. Breaks with a wait response when
+    /// delivery range, gated by the workflow; other operations carry none. Breaks with a wait response when
     /// a merge cannot observe the delivery base.
     async fn reviewed_range(
         &self,
@@ -1208,7 +1209,17 @@ impl DeliveryOperations {
         review: Option<&ReviewRange>,
         expected_head: Option<&str>,
         recheck: &Recheck<'_>,
-    ) -> DatabaseResult<ControlFlow<Value, ReviewRange>> {
+    ) -> DatabaseResult<ControlFlow<Value, Option<ReviewRange>>> {
+        let mutation = matches!(
+            operation,
+            DeliveryOperation::PushBranch
+                | DeliveryOperation::CreateOrAdoptPullRequest
+                | DeliveryOperation::RequestReview
+                | DeliveryOperation::MergePullRequest
+        );
+        if !mutation {
+            return Ok(ControlFlow::Continue(None));
+        }
         let task_id = control.task_id.as_str();
         let Some(review) = review.filter(|_| expected_head == Some(local.head_sha.as_str())) else {
             return Err(delivery_failure(
@@ -1246,7 +1257,52 @@ impl DeliveryOperations {
             ),
         )?;
         self.recheck(recheck)?;
-        Ok(ControlFlow::Continue(range))
+        Ok(ControlFlow::Continue(Some(range)))
+    }
+
+    /// Adopt the task's known pull request first (except for a push). Returns
+    /// it when the task is delivered or the pull request merged.
+    async fn finished_delivery(
+        &self,
+        push: bool,
+        control: &TaskControlRow,
+        recheck: &Recheck<'_>,
+        reviewed: bool,
+    ) -> DatabaseResult<Option<Value>> {
+        let known = if push {
+            Value::Null
+        } else {
+            self.observe_known_pull(
+                control,
+                Adoption {
+                    recheck: Some(recheck),
+                    defer_completion: reviewed,
+                    ..Adoption::default()
+                },
+            )
+            .await?
+        };
+        let delivered = self.get(control.task_id.as_str())?.status == TaskStatus::Delivered;
+        Ok((delivered || known["state"] == "merged").then_some(known))
+    }
+
+    /// Save the reviewed range as the accepted delivery when the workflow
+    /// policy accepts it with a review.
+    fn accept_if_eligible(
+        &self,
+        task_id: &str,
+        actual: &ReviewRange,
+        local: &LocalRevisionObservation,
+    ) -> DatabaseResult<()> {
+        if self
+            .workflow_decision(task_id, actual, &facts(local), true)?
+            .is_ok()
+        {
+            self.update_workflow_state(task_id, |state| {
+                state.accepted_delivery = Some(actual.clone())
+            })?;
+        }
+        Ok(())
     }
 
     /// The whole TypeScript `execute` for the Standard workflow.
@@ -1279,20 +1335,10 @@ impl DeliveryOperations {
             _ => {}
         }
         let push = operation == DeliveryOperation::PushBranch;
-        let known = if push {
-            Value::Null
-        } else {
-            self.observe_known_pull(
-                &control,
-                Adoption {
-                    recheck: Some(&recheck),
-                    defer_completion: review.is_some(),
-                    ..Adoption::default()
-                },
-            )
+        if let Some(known) = self
+            .finished_delivery(push, &control, &recheck, review.is_some())
             .await?
-        };
-        if self.get(task_id)?.status == TaskStatus::Delivered || known["state"] == "merged" {
+        {
             return Ok(known);
         }
         let (path, local) = self.observe_task_worktree(&control)?;
@@ -1300,31 +1346,20 @@ impl DeliveryOperations {
         let repository = refreshed.delivery_intent.repository.as_str().to_owned();
         let github = self.for_task(task_id).await?;
         Self::require_task_remote(&github, &path, &repository).await?;
-        let mutation = matches!(
-            operation,
-            DeliveryOperation::PushBranch
-                | DeliveryOperation::CreateOrAdoptPullRequest
-                | DeliveryOperation::RequestReview
-                | DeliveryOperation::MergePullRequest
-        );
-        let actual = if mutation {
-            match self
-                .reviewed_range(
-                    operation,
-                    &refreshed,
-                    &path,
-                    &local,
-                    review,
-                    expected_head,
-                    &recheck,
-                )
-                .await?
-            {
-                ControlFlow::Break(wait) => return Ok(wait),
-                ControlFlow::Continue(range) => Some(range),
-            }
-        } else {
-            None
+        let actual = match self
+            .reviewed_range(
+                operation,
+                &refreshed,
+                &path,
+                &local,
+                review,
+                expected_head,
+                &recheck,
+            )
+            .await?
+        {
+            ControlFlow::Break(wait) => return Ok(wait),
+            ControlFlow::Continue(range) => range,
         };
         let pull = if push {
             Value::Null
@@ -1334,26 +1369,12 @@ impl DeliveryOperations {
         };
         if pull["state"] == "merged" {
             let number = pull["number"].as_u64().unwrap_or(0);
-            let full = github.get_pull_request(&repository, number).await?;
             return self
-                .adopt_known_pull(
-                    &refreshed,
-                    &full,
-                    Adoption {
-                        recheck: Some(&recheck),
-                        ..Adoption::default()
-                    },
-                )
+                .adopt_pull_number(&github, &refreshed, &repository, number, &recheck)
                 .await;
         }
-        if let Some(actual) = &actual
-            && self
-                .workflow_decision(task_id, actual, &facts(&local), true)?
-                .is_ok()
-        {
-            self.update_workflow_state(task_id, |state| {
-                state.accepted_delivery = Some(actual.clone())
-            })?;
+        if let Some(actual) = &actual {
+            self.accept_if_eligible(task_id, actual, &local)?;
         }
         let reviewed = || actual.as_ref().expect("reviewed");
         match operation {
@@ -1618,13 +1639,7 @@ impl DeliveryOperations {
     ) -> DatabaseResult<Value> {
         let task_id = control.task_id.as_str();
         self.set_pull_request(task_id, Some(&pull), options.recheck.is_some())?;
-        let target = control.delivery_target;
-        let reached = pull["state"] == "merged"
-            || (pull["state"] == "open"
-                && (target == DeliveryTarget::PullRequestDraft
-                    || (target == DeliveryTarget::PullRequestReady
-                        && options.is_draft == Some(false))));
-        if !reached {
+        if !target_reached(control.delivery_target, &pull, options.is_draft) {
             return Ok(pull);
         }
         let current = self.get(task_id)?;
@@ -1684,6 +1699,32 @@ impl DeliveryOperations {
             }
             return Ok(json!({"kind": "adopted", "headSha": local.head_sha}));
         }
+        let observed = Self::push_head(&github, control, repository, local).await?;
+        if let Some((policy, pull)) = &trigger {
+            github_triggers_dispatches::record_trigger_push(
+                &mut self.open(OpenMode::ReadWrite)?,
+                task_id,
+                &policy.dispatch_id,
+                remote_head.as_deref().unwrap_or(&pull.head_sha),
+                &local.head_sha,
+                &serde_json::to_value(actual)?,
+            )?;
+        }
+        self.recheck(recheck)?;
+        if control.delivery_target == DeliveryTarget::RemoteBranch {
+            self.complete_remote_branch(control, actual, recheck)
+                .await?;
+        }
+        Ok(json!({"kind": "pushed", "headSha": observed}))
+    }
+
+    /// Push the local head without force and confirm the remote branch now has it.
+    async fn push_head(
+        github: &ReleasePort<'_>,
+        control: &TaskControlRow,
+        repository: &str,
+        local: &LocalRevisionObservation,
+    ) -> DatabaseResult<Option<String>> {
         let (path, branch, head, token) = (
             PathBuf::from(required_worktree(control)?),
             local.branch.clone(),
@@ -1702,22 +1743,7 @@ impl DeliveryOperations {
                 "The remote branch does not match the observed worktree head",
             ));
         }
-        if let Some((policy, pull)) = &trigger {
-            github_triggers_dispatches::record_trigger_push(
-                &mut self.open(OpenMode::ReadWrite)?,
-                task_id,
-                &policy.dispatch_id,
-                remote_head.as_deref().unwrap_or(&pull.head_sha),
-                &local.head_sha,
-                &serde_json::to_value(actual)?,
-            )?;
-        }
-        self.recheck(recheck)?;
-        if control.delivery_target == DeliveryTarget::RemoteBranch {
-            self.complete_remote_branch(control, actual, recheck)
-                .await?;
-        }
-        Ok(json!({"kind": "pushed", "headSha": observed}))
+        Ok(observed)
     }
 
     /// TypeScript `createOrAdoptPublication`.
@@ -1962,6 +1988,27 @@ impl DeliveryOperations {
             .to_value())
     }
 
+    /// Read the numbered pull request and adopt it under the recheck.
+    async fn adopt_pull_number(
+        &self,
+        github: &ReleasePort<'_>,
+        control: &TaskControlRow,
+        repository: &str,
+        number: u64,
+        recheck: &Recheck<'_>,
+    ) -> DatabaseResult<Value> {
+        let pull = github.get_pull_request(repository, number).await?;
+        self.adopt_known_pull(
+            control,
+            &pull,
+            Adoption {
+                recheck: Some(recheck),
+                ..Adoption::default()
+            },
+        )
+        .await
+    }
+
     /// The pull request head is the observed worktree head the Coordinator reviewed.
     fn require_reviewed_head(
         control: &TaskControlRow,
@@ -2025,6 +2072,18 @@ impl DeliveryOperations {
         Ok(None)
     }
 
+    /// The final local recheck, delivered prerequisites, and a fresh Root recheck.
+    async fn recheck_before_merge(
+        &self,
+        control: &TaskControlRow,
+        actual: &ReviewRange,
+        recheck: &Recheck<'_>,
+    ) -> DatabaseResult<()> {
+        self.final_recheck(control, actual, recheck, true).await?;
+        self.require_prerequisites_delivered(control.task_id.as_str())?;
+        self.recheck(recheck)
+    }
+
     /// Every prerequisite task is delivered before a merge.
     fn require_prerequisites_delivered(&self, task_id: &str) -> DatabaseResult<()> {
         let rows =
@@ -2066,16 +2125,26 @@ impl DeliveryOperations {
         Ok(wait)
     }
 
-    /// TypeScript `mergePullRequestDirect`: a trigger merge reports its
-    /// conditional result. Returns the wait response when GitHub has not merged.
-    async fn merge_trigger(
+    /// Request the merge. TypeScript `mergePullRequest` discards the
+    /// conditional result and observes the pull request afterwards;
+    /// `mergePullRequestDirect` (a trigger merge) reports it, and returns the
+    /// wait response when GitHub has not merged.
+    async fn request_merge(
         &self,
         control: &TaskControlRow,
         github: &ReleasePort<'_>,
         repository: &str,
         head: &str,
         observed: &Observation,
+        trigger: bool,
     ) -> DatabaseResult<Option<Value>> {
+        let requested = observed.number.unwrap_or(0);
+        if !trigger {
+            github
+                .merge_conditionally(repository, requested, head, true)
+                .await?;
+            return Ok(None);
+        }
         if observed.auto_merge_enabled == Some(true) {
             return Err(self.trigger_blocked(
                 control,
@@ -2083,7 +2152,6 @@ impl DeliveryOperations {
                 "merge_not_eligible",
             )?);
         }
-        let requested = observed.number.unwrap_or(0);
         let (disposition, message) = match github
             .merge_conditionally(repository, requested, head, false)
             .await?
@@ -2159,16 +2227,8 @@ impl DeliveryOperations {
         if observed.state.as_deref() == Some("merged")
             && let Some(number) = observed.number
         {
-            let pull = github.get_pull_request(repository, number).await?;
             return self
-                .adopt_known_pull(
-                    control,
-                    &pull,
-                    Adoption {
-                        recheck: Some(recheck),
-                        ..Adoption::default()
-                    },
-                )
+                .adopt_pull_number(&github, control, repository, number, recheck)
                 .await;
         }
         let head = observed.head_sha.clone().unwrap_or_default();
@@ -2181,22 +2241,20 @@ impl DeliveryOperations {
         {
             return Ok(wait);
         }
-        self.final_recheck(control, actual, recheck, true).await?;
-        self.require_prerequisites_delivered(task_id)?;
-        self.recheck(recheck)?;
+        self.recheck_before_merge(control, actual, recheck).await?;
         let requested = observed.number.unwrap_or(0);
-        if trigger.is_some() {
-            if let Some(wait) = self
-                .merge_trigger(control, &github, repository, &head, &observed)
-                .await?
-            {
-                return Ok(wait);
-            }
-        } else {
-            // TypeScript `mergePullRequest` discards the conditional result and observes the pull request.
-            github
-                .merge_conditionally(repository, requested, &head, true)
-                .await?;
+        if let Some(wait) = self
+            .request_merge(
+                control,
+                &github,
+                repository,
+                &head,
+                &observed,
+                trigger.is_some(),
+            )
+            .await?
+        {
+            return Ok(wait);
         }
         let last = github.get_pull_request(repository, requested).await?;
         if last.state != "merged" {
@@ -2265,19 +2323,7 @@ impl DeliveryOperations {
         )
         .await
         .map_err(|_| uninspectable())?;
-        let same_repository = |repository: &github_triggers_inspection::Repository| {
-            repository.id == policy.repository_id
-                && repository.full_name.to_lowercase() == policy.repository_name
-        };
-        let valid = pull.number == policy.pull_request_number
-            && pull.state == "open"
-            && !pull.is_draft
-            && !pull.is_cross_repository
-            && same_repository(&pull.base_repository)
-            && pull.head_repository.as_ref().is_some_and(same_repository)
-            && pull.head_branch == policy.head_branch
-            && pull.base_branch == policy.base_branch;
-        if !valid {
+        if !trigger_identity_holds(&policy, &pull) {
             return Err(self.trigger_blocked(
                 control,
                 "The trigger pull request identity or open reviewable state changed. Review delivery manually.",
@@ -2299,6 +2345,32 @@ impl DeliveryOperations {
         }
         Ok(Some((policy, pull)))
     }
+}
+
+/// The pull request reached the delivery target: merged, or open as the
+/// target's draft or ready state.
+fn target_reached(target: DeliveryTarget, pull: &Value, is_draft: Option<bool>) -> bool {
+    pull["state"] == "merged"
+        || (pull["state"] == "open"
+            && (target == DeliveryTarget::PullRequestDraft
+                || (target == DeliveryTarget::PullRequestReady && is_draft == Some(false))))
+}
+
+/// The trigger pull request is still the open, reviewable, same-repository
+/// pull request the dispatch recorded.
+fn trigger_identity_holds(policy: &DeliveryPolicy, pull: &PullRequestInspection) -> bool {
+    let same_repository = |repository: &github_triggers_inspection::Repository| {
+        repository.id == policy.repository_id
+            && repository.full_name.to_lowercase() == policy.repository_name
+    };
+    pull.number == policy.pull_request_number
+        && pull.state == "open"
+        && !pull.is_draft
+        && !pull.is_cross_repository
+        && same_repository(&pull.base_repository)
+        && pull.head_repository.as_ref().is_some_and(same_repository)
+        && pull.head_branch == policy.head_branch
+        && pull.base_branch == policy.base_branch
 }
 
 /// TypeScript `PullRequestTitleSchema` after trimming.

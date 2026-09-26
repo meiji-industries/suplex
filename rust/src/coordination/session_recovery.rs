@@ -65,6 +65,19 @@ pub fn native_tools(
     read().map_err(|error| format!("Native tool evidence could not be read: {error}"))
 }
 
+/// `root_controller::source_still_matches` for the synchronous recovery path.
+fn source_still_matches(
+    database_path: &Path,
+    task_id: &str,
+    pinned: &ReviewRange,
+    activity: &str,
+) -> Result<ReviewRange, Box<root_controller::SourceMismatch>> {
+    crate::shared::blocking::block_on(|| {
+        root_controller::source_still_matches(database_path, task_id, pinned, activity)
+    })
+    .map_err(Box::new)
+}
+
 /// TypeScript `verifyAdvisorOutcome`: a valid report stays valid only while
 /// its pinned evidence files and committed source are unchanged.
 fn verify_advisor_outcome(
@@ -87,11 +100,9 @@ fn verify_advisor_outcome(
         advisor_label(input["role"].as_str().unwrap_or_default())
     );
     Ok(
-        match crate::shared::blocking::block_on(|| {
-            root_controller::source_still_matches(database_path, task_id, &range, &activity)
-        }) {
+        match source_still_matches(database_path, task_id, &range, &activity) {
             Ok(_) => outcome,
-            Err((reason, _, _)) => Err(format!("{reason}. Request a new assessment.")),
+            Err(mismatch) => Err(format!("{}. Request a new assessment.", mismatch.0)),
         },
     )
 }
@@ -217,18 +228,12 @@ pub fn finish_delegate_turn(
     if purpose == "verification" && input["kind"] == "worker" {
         let before = ReviewRange::from_value(&input["range"]).unwrap_or_default();
         verification_range = Some(
-            match crate::shared::blocking::block_on(|| {
-                root_controller::source_still_matches(
-                    database_path,
-                    &session.task_id,
-                    &before,
-                    "check",
-                )
-            }) {
+            match source_still_matches(database_path, &session.task_id, &before, "check") {
                 Ok(after) => {
                     json!({"before":before,"after":after,"cleanAfter":true,"valid":true,"invalidReason":null})
                 }
-                Err((reason, after, clean)) => {
+                Err(mismatch) => {
+                    let (reason, after, clean) = *mismatch;
                     json!({"before":before,"after":after,"cleanAfter":clean,"valid":false,"invalidReason":reason})
                 }
             },

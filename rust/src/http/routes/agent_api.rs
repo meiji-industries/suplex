@@ -514,11 +514,12 @@ fn delivery_task(
 }
 
 /// Some delivery operations hold non-`Send` errors across awaits; run them on their own thread.
-async fn detached<F>(operation: F) -> Response
+async fn detached<F, Fut>(operation: F) -> Response
 where
-    F: FnOnce() -> Response + Send + 'static,
+    F: FnOnce() -> Fut + Send + 'static,
+    Fut: std::future::Future<Output = Response>,
 {
-    tokio::task::spawn_blocking(operation)
+    tokio::task::spawn_blocking(move || crate::shared::blocking::block_on(operation))
         .await
         .unwrap_or_else(|_| agent_api_runtime::failure("delivery failed".into(), false))
 }
@@ -529,14 +530,12 @@ async fn delivery_refresh(
     headers: HeaderMap,
 ) -> Response {
     let (delivery, principal, id) = attempt!(delivery_task(&state, &headers, &id));
-    detached(move || {
-        crate::shared::blocking::block_on(|| async {
-            respond(
-                delivery.refresh(&principal, &id).await,
-                StatusCode::OK,
-                false,
-            )
-        })
+    detached(move || async move {
+        respond(
+            delivery.refresh(&principal, &id).await,
+            StatusCode::OK,
+            false,
+        )
     })
     .await
 }
@@ -608,20 +607,18 @@ async fn delivery_merge(
     let body = attempt!(parsed_body(&headers, body, false));
     let request = attempt!(validated(contracts::MergeBody::parse(body.as_ref()), false));
     let (delivery, principal, id) = attempt!(delivery_task(&state, &headers, &id));
-    detached(move || {
-        crate::shared::blocking::block_on(|| async {
-            let result = delivery
-                .merge(
-                    &principal,
-                    &id,
-                    request.pull_request_number,
-                    &request.expected_head_sha,
-                    &request.expected_base_sha,
-                    &request.approval_receipt,
-                )
-                .await;
-            respond(result, StatusCode::OK, false)
-        })
+    detached(move || async move {
+        let result = delivery
+            .merge(
+                &principal,
+                &id,
+                request.pull_request_number,
+                &request.expected_head_sha,
+                &request.expected_base_sha,
+                &request.approval_receipt,
+            )
+            .await;
+        respond(result, StatusCode::OK, false)
     })
     .await
 }

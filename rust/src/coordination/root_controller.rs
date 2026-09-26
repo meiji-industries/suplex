@@ -356,6 +356,10 @@ pub async fn current_range(database_path: &Path, task_id: &str) -> DatabaseResul
     })
 }
 
+/// Why the live source no longer matches a pinned range: the reason, the
+/// observed range when known, and whether the worktree was clean.
+pub type SourceMismatch = (String, Option<ReviewRange>, Option<bool>);
+
 /// Compares the live committed source with a pinned range; any observation
 /// failure is a concrete reason, never an approval.
 pub async fn source_still_matches(
@@ -363,7 +367,7 @@ pub async fn source_still_matches(
     task_id: &str,
     pinned: &ReviewRange,
     activity: &str,
-) -> Result<ReviewRange, (String, Option<ReviewRange>, Option<bool>)> {
+) -> Result<ReviewRange, SourceMismatch> {
     let observed = match current_range(database_path, task_id).await {
         Ok(observed) => observed,
         Err(error) => {

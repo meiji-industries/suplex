@@ -745,8 +745,7 @@ impl TaskHarness for OpenCodeTaskRuntime {
             &serde_json::to_vec(&reference)?,
         )?;
         let client = server::client(&reference)?;
-        if crate::shared::blocking::block_on(|| reconcile(&client, &intent)).retry != Retry::Allowed
-        {
+        if run(async { Ok(reconcile(&client, &intent).await) })?.retry != Retry::Allowed {
             return Err(
                 ReplayBlocked("OpenCode prompt was not proven absent; replay is blocked").into(),
             );
@@ -759,7 +758,7 @@ impl TaskHarness for OpenCodeTaskRuntime {
             dispatch: Dispatch::Ambiguous,
             ..intent
         };
-        let observed = crate::shared::blocking::block_on(|| reconcile(&client, &ambiguous));
+        let observed = run(async { Ok(reconcile(&client, &ambiguous).await) })?;
         Ok(shared(&observed))
     }
 

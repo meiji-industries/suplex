@@ -461,6 +461,7 @@ pub async fn inspect_pull_request(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     fn paths(values: &[&str]) -> Vec<String> {
         values.iter().map(|value| (*value).to_owned()).collect()
@@ -496,5 +497,40 @@ mod tests {
         assert!(validate_repository_filename("dir/").is_err());
         assert!(validate_repository_filename("dir/file.rs").is_ok());
         assert!(matches_protected_paths(&paths(&["a"]), "../a", None).is_err());
+    }
+
+    #[test]
+    fn pull_recheck_uses_immutable_identity_and_revision_but_returns_current_metadata() {
+        let base = json!({
+            "number":7,"html_url":"https://github.com/owner/repo/pull/7","state":"open","draft":false,
+            "changed_files":1,"labels":[{"name":"ready"}],"title":"Before",
+            "head":{"ref":"feature","sha":"a".repeat(40),"repo":{"id":9,"full_name":"owner/repo"}},
+            "base":{"ref":"main","sha":"b".repeat(40),"repo":{"id":9,"full_name":"owner/repo"}}
+        });
+        let before = pull(base.clone()).unwrap();
+        for (field, value) in [
+            ("number", json!(8)),
+            ("changed_files", json!(2)),
+            ("head.sha", json!("c".repeat(40))),
+            ("base.sha", json!("d".repeat(40))),
+            ("head.ref", json!("other")),
+            ("base.ref", json!("release")),
+            ("head.repo.id", json!(10)),
+            ("base.repo.full_name", json!("other/repo")),
+        ] {
+            let mut changed = base.clone();
+            let mut target = &mut changed;
+            for part in field.split('.') {
+                target = &mut target[part];
+            }
+            *target = value;
+            assert!(!stable(&before, &pull(changed).unwrap()), "{field}");
+        }
+        let mut metadata = base;
+        metadata["state"] = json!("closed");
+        metadata["draft"] = json!(true);
+        metadata["labels"] = json!([]);
+        metadata["title"] = json!("Closed now");
+        assert!(stable(&before, &pull(metadata).unwrap()));
     }
 }

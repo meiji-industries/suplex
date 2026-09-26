@@ -417,6 +417,22 @@ pub struct CreationSource {
     description: Option<String>,
 }
 
+#[cfg(test)]
+pub(crate) fn captured_pull_request_for_test(
+    number: i64,
+    head_sha: &str,
+    base_sha: &str,
+) -> CreationSource {
+    CreationSource {
+        pinned: Some(
+            json!({"kind":"pull_request","number":number,"url":format!("https://github.com/owner/repo/pull/{number}"),"headBranch":"feature","baseBranch":"main","headSha":head_sha,"baseSha":base_sha}),
+        ),
+        selector: Some(json!({"kind":"pull_request","number":number})),
+        issue: None,
+        description: None,
+    }
+}
+
 /// Resolve the source selector and the linked issue before the task is written.
 pub async fn creation_source(
     project: &Project,

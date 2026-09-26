@@ -1902,32 +1902,46 @@ pub async fn start_task_from_trigger<D: Db>(
 }
 
 /// Run `processEnabledRules` now and one minute after each pass ends.
+async fn poller_loop<F, Fut>(mut pass: F, mut shutdown: watch::Receiver<bool>, period: Duration)
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = Result<(), Failure>>,
+{
+    loop {
+        if let Err(error) = pass().await {
+            eprintln!("GitHub trigger poll failed: {error}");
+        }
+        tokio::select! {
+            changed = shutdown.changed() => if changed.is_err() || *shutdown.borrow() { return; },
+            () = tokio::time::sleep(period) => {},
+        }
+    }
+}
+
 pub fn spawn_poller(
     database_path: PathBuf,
     wake: impl Fn(String) + Send + Sync + 'static,
-    mut shutdown: watch::Receiver<bool>,
+    shutdown: watch::Receiver<bool>,
 ) {
-    tokio::spawn(async move {
-        loop {
-            let pass = async {
+    let wake: std::sync::Arc<dyn Fn(String) + Send + Sync> = std::sync::Arc::new(wake);
+    tokio::spawn(poller_loop(
+        move || {
+            let database_path = database_path.clone();
+            let wake = wake.clone();
+            async move {
                 let database = Mutex::new(
                     SuplexDatabase::open(&database_path, OpenMode::ReadWrite).map_err(send)?,
                 );
                 match Github::load().await {
-                    Ok(github) => process_enabled_rules(&database, &github, &wake).await,
+                    Ok(github) => process_enabled_rules(&database, &github, wake.as_ref()).await,
                     Err(error) => record_provider_unavailable(&database, &error).await,
                 }
-                Ok::<(), Failure>(())
-            };
-            if let Err(error) = pass.await {
-                eprintln!("GitHub trigger poll failed: {error}");
+                Ok(())
             }
-            tokio::select! {
-                changed = shutdown.changed() => if changed.is_err() || *shutdown.borrow() { return; },
-                () = tokio::time::sleep(Duration::from_secs(60)) => {},
-            }
-        }
-    });
+        },
+        shutdown,
+        Duration::from_secs(60),
+    ));
 }
 
 #[cfg(test)]
@@ -2076,6 +2090,172 @@ mod tests {
                 .query_row("SELECT count(*) FROM suplex_tasks", [], |row| row.get(0))
                 .unwrap()
         })
+    }
+
+    #[test]
+    fn captured_local_authority_ignores_display_metadata_but_rechecks_execution_facts() {
+        let f = fixture();
+        let config = Config {
+            project_id: "p".into(),
+            name: "Ready".into(),
+            label: "ready".into(),
+            workflow_id: "workflow_native_standard".into(),
+            delivery_target: "pull_request_draft".into(),
+            protected_paths: vec![],
+            authority_user_id: f.admin.clone(),
+        };
+        let captured = f
+            .state
+            .with_database(|database| local(database, &f.admin, "c", &config))
+            .unwrap();
+        f.state.with_database(|database| {
+            for sql in [
+                "UPDATE suplex_users SET display_name = 'Renamed user' WHERE id = ?1",
+                "UPDATE suplex_companies SET name = 'Renamed company' WHERE id = 'c'",
+                "UPDATE suplex_projects SET name = 'Renamed project' WHERE id = 'p'",
+                "UPDATE suplex_profiles SET updated_at = 'later' WHERE id = 'profile_native_root'",
+            ] {
+                if sql.contains("?1") {
+                    database.connection().execute(sql, [&f.admin]).unwrap();
+                } else {
+                    database.connection().execute(sql, []).unwrap();
+                }
+            }
+            same_local(database, &f.admin, "c", &config, &captured).unwrap();
+        });
+        for (change, restore) in [
+            (
+                "UPDATE suplex_projects SET base_branch = 'release' WHERE id = 'p'",
+                "UPDATE suplex_projects SET base_branch = 'main' WHERE id = 'p'",
+            ),
+            (
+                "UPDATE suplex_projects SET repository_identity = 'owner/other' WHERE id = 'p'",
+                "UPDATE suplex_projects SET repository_identity = 'owner/repo' WHERE id = 'p'",
+            ),
+            (
+                "UPDATE suplex_profiles SET model = 'changed' WHERE id = 'profile_native_root'",
+                "UPDATE suplex_profiles SET model = 'gpt-5.6-sol' WHERE id = 'profile_native_root'",
+            ),
+            (
+                "UPDATE suplex_companies SET status = 'paused' WHERE id = 'c'",
+                "UPDATE suplex_companies SET status = 'active' WHERE id = 'c'",
+            ),
+            (
+                "UPDATE suplex_users SET status = 'revoked' WHERE id = ?1",
+                "UPDATE suplex_users SET status = 'active' WHERE id = ?1",
+            ),
+        ] {
+            f.state.with_database(|database| {
+                if change.contains("?1") {
+                    database.connection().execute(change, [&f.admin]).unwrap();
+                } else {
+                    database.connection().execute(change, []).unwrap();
+                }
+                assert!(
+                    same_local(database, &f.admin, "c", &config, &captured).is_err(),
+                    "{change}"
+                );
+                if restore.contains("?1") {
+                    database.connection().execute(restore, [&f.admin]).unwrap();
+                } else {
+                    database.connection().execute(restore, []).unwrap();
+                }
+                same_local(database, &f.admin, "c", &config, &captured).unwrap();
+            });
+        }
+        let _ = std::fs::remove_file(f.filename);
+    }
+
+    #[tokio::test]
+    async fn poller_waits_after_each_pass_and_stops_after_an_in_flight_pass() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let calls = Arc::new(AtomicUsize::new(0));
+        let first = Arc::new(tokio::sync::Notify::new());
+        let second = Arc::new(tokio::sync::Notify::new());
+        let (stop, shutdown) = watch::channel(false);
+        let running = tokio::spawn(poller_loop(
+            {
+                let calls = calls.clone();
+                let first = first.clone();
+                let second = second.clone();
+                move || {
+                    let number = calls.fetch_add(1, Ordering::SeqCst) + 1;
+                    let first = first.clone();
+                    let second = second.clone();
+                    async move {
+                        match number {
+                            1 => first.notified().await,
+                            2 => second.notified().await,
+                            _ => {}
+                        }
+                        Ok(())
+                    }
+                }
+            },
+            shutdown,
+            Duration::from_millis(20),
+        ));
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while calls.load(Ordering::SeqCst) == 0 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        tokio::time::sleep(Duration::from_millis(60)).await;
+        assert_eq!(calls.load(Ordering::SeqCst), 1);
+        first.notify_one();
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while calls.load(Ordering::SeqCst) < 2 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        stop.send(true).unwrap();
+        second.notify_one();
+        tokio::time::timeout(Duration::from_secs(1), running)
+            .await
+            .unwrap()
+            .unwrap();
+        tokio::time::sleep(Duration::from_millis(60)).await;
+        assert_eq!(calls.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn poller_retries_after_a_failed_pass() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let calls = Arc::new(AtomicUsize::new(0));
+        let (stop, shutdown) = watch::channel(false);
+        let running = tokio::spawn(poller_loop(
+            {
+                let calls = calls.clone();
+                move || {
+                    let number = calls.fetch_add(1, Ordering::SeqCst) + 1;
+                    async move {
+                        if number == 1 {
+                            Err(public("offline", 503))
+                        } else {
+                            Ok(())
+                        }
+                    }
+                }
+            },
+            shutdown,
+            Duration::from_millis(20),
+        ));
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while calls.load(Ordering::SeqCst) < 2 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        stop.send(true).unwrap();
+        running.await.unwrap();
+        assert!(calls.load(Ordering::SeqCst) >= 2);
     }
 
     #[tokio::test]
@@ -2494,6 +2674,14 @@ mod tests {
             .with_database(|database| dispatches::prepare(database, input(7)))
             .unwrap();
         assert_eq!(first, again);
+        let mut changed_retry = input(7);
+        changed_retry.request["title"] = json!("Changed since capture");
+        changed_retry.preset["visualEvidence"] = json!("required");
+        let replay = f
+            .state
+            .with_database(|database| dispatches::prepare(database, changed_retry))
+            .unwrap();
+        assert_eq!(replay, first);
         assert_eq!(
             first.idempotency_key,
             format!("github-trigger:{}", first.id)
@@ -2667,6 +2855,76 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn inspection_reads_every_file_page_through_the_three_thousand_file_limit() {
+        for count in [101, 3000] {
+            let replies = replies(&[]);
+            replies.lock().unwrap().insert(
+                "/repos/owner/repo/pulls/7".into(),
+                (200, pull(7, "main", count)),
+            );
+            for page in 1..=((count + 99) / 100) {
+                let start = (page - 1) * 100;
+                let files = (start..(start + 100).min(count))
+                    .map(|index| {
+                        let mut file = renamed_file();
+                        file["status"] = json!("modified");
+                        file.as_object_mut().unwrap().remove("previous_filename");
+                        file["filename"] = json!(format!("src/{index}.ts"));
+                        file
+                    })
+                    .collect::<Vec<_>>();
+                replies.lock().unwrap().insert(
+                    format!("/repos/owner/repo/pulls/7/files?per_page=100&page={page}"),
+                    (200, json!(files)),
+                );
+            }
+            let (github, _, server) = fake_github(replies).await;
+            let inspected = inspect_pull_request(&github, "owner/repo", 7)
+                .await
+                .unwrap();
+            assert_eq!(inspected.files.len(), count as usize);
+            server.abort();
+        }
+    }
+
+    #[tokio::test]
+    async fn labelled_issue_pages_keep_only_pull_requests_and_reject_later_failures() {
+        let replies = replies(&[]);
+        let first = (1..=100)
+            .map(|number| json!({"number": number, "pull_request": {}}))
+            .collect::<Vec<_>>();
+        let path = "/repos/owner/repo/issues?state=open&labels=ready&per_page=100&page=";
+        replies
+            .lock()
+            .unwrap()
+            .insert(format!("{path}1"), (200, json!(first)));
+        replies.lock().unwrap().insert(
+            format!("{path}2"),
+            (
+                200,
+                json!([{"number":101,"pull_request":{}},{"number":102}]),
+            ),
+        );
+        let (github, _, server) = fake_github(replies.clone()).await;
+        assert_eq!(
+            list_open_pull_requests_by_label(&github, "owner/repo", "ready")
+                .await
+                .unwrap(),
+            (1..=101).collect::<Vec<_>>()
+        );
+        replies
+            .lock()
+            .unwrap()
+            .insert(format!("{path}2"), (500, json!({"message":"offline"})));
+        assert!(
+            list_open_pull_requests_by_label(&github, "owner/repo", "ready")
+                .await
+                .is_err()
+        );
+        server.abort();
+    }
+
+    #[tokio::test]
     async fn admission_capture_stores_its_exact_request_and_profiles_and_links_its_task() {
         let f = fixture();
         let plans = f.state.with_database(|database| {
@@ -2773,6 +3031,110 @@ mod tests {
             ..dispatch.profiles.root.clone()
         };
         insert("task_other", &other);
+        let project = f
+            .state
+            .with_database(|database| projects::get(database, &f.admin, "p"))
+            .unwrap();
+        let body = dispatch.request_body().unwrap();
+        let before: (i64, i64, i64) = f.state.with_database(|database| database.connection().query_row(
+            "SELECT (SELECT count(*) FROM suplex_tasks), (SELECT next_issue_number FROM suplex_companies WHERE id = 'c'), (SELECT count(*) FROM suplex_audit_events WHERE action = 'task_created')",
+            [], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+        ).unwrap());
+        let drift = sources::captured_pull_request_for_test(7, &"d".repeat(40), &"b".repeat(40));
+        assert!(
+            f.state
+                .with_database(|database| create_captured(
+                    database,
+                    &dispatch,
+                    &project,
+                    &body,
+                    drift,
+                    &"b".repeat(40),
+                    &|_| {}
+                ))
+                .is_err()
+        );
+        // A concurrent linkage failure must roll the entire task write back.
+        f.state.with_database(|database| {
+            database.connection().execute("UPDATE suplex_tasks SET configuration_json = json_set(configuration_json, '$.source.number', 8) WHERE id = 'task_other'", []).unwrap();
+            database.connection().execute("UPDATE suplex_tasks SET idempotency_key = 'unrelated-task' WHERE id = 'task_other'", []).unwrap();
+            database.connection().execute("UPDATE suplex_github_trigger_dispatches SET task_id = 'task_other' WHERE id = ?1", [&dispatch.id]).unwrap();
+        });
+        let captured = sources::captured_pull_request_for_test(7, &"a".repeat(40), &"b".repeat(40));
+        assert_eq!(
+            f.state
+                .with_database(|database| create_captured(
+                    database,
+                    &dispatch,
+                    &project,
+                    &body,
+                    captured,
+                    &"b".repeat(40),
+                    &|_| {}
+                ))
+                .unwrap_err()
+                .to_string(),
+            "GitHub trigger dispatch already links another task"
+        );
+        let after: (i64, i64, i64) = f.state.with_database(|database| database.connection().query_row(
+            "SELECT (SELECT count(*) FROM suplex_tasks), (SELECT next_issue_number FROM suplex_companies WHERE id = 'c'), (SELECT count(*) FROM suplex_audit_events WHERE action = 'task_created')",
+            [], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?))
+        ).unwrap());
+        assert_eq!(after, before);
+        f.state.with_database(|database| {
+            database.connection().execute("UPDATE suplex_github_trigger_dispatches SET task_id = NULL WHERE id = ?1", [&dispatch.id]).unwrap();
+            database.connection().execute("UPDATE suplex_tasks SET configuration_json = json_set(configuration_json, '$.source.number', 7) WHERE id = 'task_other'", []).unwrap();
+            database.connection().execute("UPDATE suplex_tasks SET idempotency_key = ?1 WHERE id = 'task_other'", [&dispatch.idempotency_key]).unwrap();
+            database.connection().execute("INSERT INTO suplex_users (id,display_name,username,role,status,created_at,updated_at,identity_version) SELECT 'other_creator',display_name,'other_creator',role,status,created_at,updated_at,identity_version FROM suplex_users WHERE id = ?1", [&f.admin]).unwrap();
+        });
+        for (change, restore, original) in [
+            (
+                "UPDATE suplex_tasks SET configuration_json = json_set(configuration_json, '$.startingSha', 'wrong') WHERE id = 'task_other'",
+                "UPDATE suplex_tasks SET configuration_json = json_set(configuration_json, '$.startingSha', 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa') WHERE id = 'task_other'",
+                None,
+            ),
+            (
+                "UPDATE suplex_tasks SET configuration_json = json_set(configuration_json, '$.baselineSha', 'wrong') WHERE id = 'task_other'",
+                "UPDATE suplex_tasks SET configuration_json = json_set(configuration_json, '$.baselineSha', 'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb') WHERE id = 'task_other'",
+                None,
+            ),
+            (
+                "UPDATE suplex_task_controls SET delivery_target = 'local_worktree' WHERE task_id = 'task_other'",
+                "UPDATE suplex_task_controls SET delivery_target = 'pull_request_draft' WHERE task_id = 'task_other'",
+                None,
+            ),
+            (
+                "UPDATE suplex_tasks SET request_hash = 'wrong' WHERE id = 'task_other'",
+                "UPDATE suplex_tasks SET request_hash = ?1 WHERE id = 'task_other'",
+                Some(hash.as_str()),
+            ),
+            (
+                "UPDATE suplex_tasks SET creator_user_id = 'other_creator' WHERE id = 'task_other'",
+                "UPDATE suplex_tasks SET creator_user_id = ?1 WHERE id = 'task_other'",
+                Some(f.admin.as_str()),
+            ),
+            (
+                "UPDATE suplex_task_controls SET status = 'active' WHERE task_id = 'task_other'",
+                "UPDATE suplex_task_controls SET status = 'backlog' WHERE task_id = 'task_other'",
+                None,
+            ),
+        ] {
+            f.state.with_database(|database| {
+                database.connection().execute(change, []).unwrap();
+                assert!(dispatches::link_task(database, &dispatch.id, "task_other").is_err());
+                assert!(
+                    dispatches::get(database, &dispatch.id)
+                        .unwrap()
+                        .unwrap()
+                        .task_id
+                        .is_none()
+                );
+                match original {
+                    Some(value) => database.connection().execute(restore, [value]).unwrap(),
+                    None => database.connection().execute(restore, []).unwrap(),
+                };
+            });
+        }
         assert_eq!(
             f.state
                 .with_database(|database| dispatches::link_task(
@@ -2798,6 +3160,11 @@ mod tests {
             .with_database(|database| dispatches::link_task(database, &dispatch.id, "task_other"))
             .unwrap();
         assert_eq!(linked.task_id.as_deref(), Some("task_other"));
+        let replay = f
+            .state
+            .with_database(|database| dispatches::link_task(database, &dispatch.id, "task_other"))
+            .unwrap();
+        assert_eq!(replay, linked);
         server.abort();
         let _ = std::fs::remove_file(f.filename);
     }

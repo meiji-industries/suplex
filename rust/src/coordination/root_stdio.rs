@@ -3,7 +3,7 @@
 use std::{collections::HashSet, path::PathBuf};
 
 use rmcp::{
-    ErrorData as McpError, RoleServer, ServerHandler, ServiceExt,
+    ErrorData as McpError, RoleServer, ServerHandler,
     model::{
         CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, ListToolsResult,
         PaginatedRequestParams, ServerConfig, Tool,
@@ -650,9 +650,8 @@ pub async fn serve_from_environment() -> Result<(), Box<dyn std::error::Error>> 
         database_path: binding.database_path,
         artifact_root: binding.artifact_root,
     };
-    server
-        .serve(rmcp::transport::stdio())
-        .await?
+    // See session_protocol_versions: skip rmcp's handshake so a discover probe cannot fix the lifecycle.
+    rmcp::service::serve_directly(server, rmcp::transport::stdio(), None)
         .waiting()
         .await?;
     Ok(())

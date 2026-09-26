@@ -4,7 +4,7 @@
 use std::collections::HashMap;
 
 use rmcp::{
-    ErrorData as McpError, RoleServer, ServerHandler, ServiceExt,
+    ErrorData as McpError, RoleServer, ServerHandler,
     model::{
         CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, ListToolsResult,
         PaginatedRequestParams, ServerConfig, Tool,
@@ -322,9 +322,8 @@ impl ServerHandler for Bridge {
 pub async fn serve_from_environment() -> Result<(), Box<dyn std::error::Error>> {
     let environment = std::env::vars().collect::<HashMap<_, _>>();
     let settings = settings(&environment)?;
-    Bridge::new(settings)
-        .serve(rmcp::transport::stdio())
-        .await?
+    // See session_protocol_versions: skip rmcp's handshake so a discover probe cannot fix the lifecycle.
+    rmcp::service::serve_directly(Bridge::new(settings), rmcp::transport::stdio(), None)
         .waiting()
         .await?;
     Ok(())

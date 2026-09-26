@@ -2,7 +2,7 @@ use super::CoordinationError;
 use std::{io, path::PathBuf};
 
 use rmcp::{
-    ErrorData as McpError, RoleServer, ServerHandler, ServiceExt,
+    ErrorData as McpError, RoleServer, ServerHandler,
     model::{
         CallToolRequestParams, CallToolResponse, CallToolResult, ContentBlock, ListToolsResult,
         PaginatedRequestParams, ServerConfig, Tool,
@@ -521,9 +521,8 @@ pub async fn serve_from_environment() -> Result<(), Box<dyn std::error::Error>> 
             .filter(|value| !value.is_empty())
             .map(PathBuf::from),
     };
-    server
-        .serve(rmcp::transport::stdio())
-        .await?
+    // See session_protocol_versions: skip rmcp's handshake so a discover probe cannot fix the lifecycle.
+    rmcp::service::serve_directly(server, rmcp::transport::stdio(), None)
         .waiting()
         .await?;
     Ok(())
@@ -647,13 +646,14 @@ mod tests {
         let (client, server) = tokio::io::duplex(8192);
         let (server_reader, server_writer) = tokio::io::split(server);
         let task = tokio::spawn(async move {
-            AdvisorBridge {
-                role: AdvisorRole::PlannerA,
-                result_path: None,
-            }
-            .serve((server_reader, server_writer))
-            .await
-            .unwrap()
+            rmcp::service::serve_directly(
+                AdvisorBridge {
+                    role: AdvisorRole::PlannerA,
+                    result_path: None,
+                },
+                (server_reader, server_writer),
+                None,
+            )
             .waiting()
             .await
             .unwrap();
@@ -680,6 +680,14 @@ mod tests {
             .unwrap();
             serde_json::from_str(&line).unwrap()
         }
+        // Claude Code 2.1.283 opens with a 2026-07-28 discover probe; it must fall back to initialize.
+        let discover = exchange(&mut writer, &mut reader, json!({
+            "jsonrpc":"2.0","id":"server-discover-probe-1","method":"server/discover","params":{"_meta":{
+                "io.modelcontextprotocol/protocolVersion":"2026-07-28",
+                "io.modelcontextprotocol/clientInfo":{"name":"claude-code","version":"2.1.283"},
+                "io.modelcontextprotocol/clientCapabilities":{}
+        }}})).await;
+        assert_eq!(discover["error"]["code"], -32022);
         let initialized = exchange(&mut writer, &mut reader, json!({
             "jsonrpc":"2.0","id":1,"method":"initialize","params":{
                 "protocolVersion":"2025-03-26","capabilities":{},"clientInfo":{"name":"probe","version":"1"}

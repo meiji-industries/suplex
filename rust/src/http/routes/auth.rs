@@ -580,6 +580,17 @@ pub(crate) mod tests {
             PublicFailure::new(409, "Busy")
         );
         assert_eq!(
+            public(
+                TaskError::Failure {
+                    status: 400,
+                    code: "cursor_invalid",
+                    message: "Bad cursor".into(),
+                }
+                .into()
+            ),
+            PublicFailure::new(400, "Bad cursor").with_code("cursor_invalid")
+        );
+        assert_eq!(
             public(TaskError::Conflict.into()),
             PublicFailure::new(409, "This idempotency key belongs to a different request")
         );

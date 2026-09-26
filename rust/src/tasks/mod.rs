@@ -83,15 +83,19 @@ impl From<TaskError> for PublicFailure {
     fn from(error: TaskError) -> Self {
         let message = error.to_string();
         match error {
-            TaskError::Failure { status, .. } => PublicFailure::new(status, message),
+            // TypeScript `sendDomainFailure` shows every task code except `task_failure`.
+            TaskError::Failure { status, code, .. } | TaskError::Agent { status, code, .. }
+                if code != "task_failure" =>
+            {
+                PublicFailure::new(status, message).with_code(code)
+            }
+            TaskError::Failure { status, .. } | TaskError::Agent { status, .. } => {
+                PublicFailure::new(status, message)
+            }
             TaskError::Conflict => PublicFailure::new(409, message),
             TaskError::Source { status, code, .. } => {
                 PublicFailure::new(status, message).with_code(code)
             }
-            TaskError::Agent { status, code, .. } if code != "task_failure" => {
-                PublicFailure::new(status, message).with_code(code)
-            }
-            TaskError::Agent { status, .. } => PublicFailure::new(status, message),
             TaskError::PullRequestOwned | TaskError::Internal(_) => PublicFailure::internal(),
         }
     }

@@ -169,16 +169,14 @@ struct ArchiveConfirmation {
     dirty_file_paths: Vec<String>,
 }
 
-/// Archive keeps the status of task and access failures; any other failure is a 409.
-fn archive_error(error: &(dyn Error + 'static)) -> PublicFailure {
-    let status = if let Some(TaskError::Failure { status, .. }) = error.downcast_ref() {
-        *status
-    } else if let Some(IdentityError::Auth { status, .. }) = error.downcast_ref() {
-        *status
-    } else {
-        409
-    };
-    PublicFailure::new(status, error.to_string())
+/// Archive keeps the envelope of task and access failures; any other failure is a 409.
+fn archive_error(error: Box<dyn Error>) -> PublicFailure {
+    if matches!(error.downcast_ref(), Some(TaskError::Failure { .. }))
+        || matches!(error.downcast_ref(), Some(IdentityError::Auth { .. }))
+    {
+        return auth::public_failure(error);
+    }
+    PublicFailure::new(409, error.to_string())
 }
 
 async fn archive_pending(
@@ -215,7 +213,7 @@ async fn archive_pending(
     // guard, even if the HTTP waiter disconnects before Git cleanup finishes.
     let operation = tokio::task::spawn_blocking(move || {
         archive::archive_local_task(&database_path, &user_id, &id, request.confirm_discard_dirty)
-            .map_err(|error| archive_error(error.as_ref()))
+            .map_err(archive_error)
     });
     let result = match operation.await {
         Ok(result) => result,

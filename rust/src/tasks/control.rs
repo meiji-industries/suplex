@@ -96,6 +96,33 @@ where
     T::deserialize(deserializer).map(Some)
 }
 
+wire_enum! {
+    /// TypeScript `HarnessKind`: the agent provider a profile runs on.
+    pub enum HarnessKind {
+        Opencode = "opencode",
+        ClaudeCode = "claude-code",
+        Devin = "devin",
+        Codex = "codex",
+    }
+}
+
+wire_enum! {
+    pub enum ReasoningLevel {
+        Low = "low",
+        Medium = "medium",
+        High = "high",
+        Xhigh = "xhigh",
+        Max = "max",
+    }
+}
+
+wire_enum! {
+    pub enum ServiceTier {
+        Default = "default",
+        Priority = "priority",
+    }
+}
+
 /// TypeScript `TaskProfile`: the agent profile a task or session captured.
 /// The instance fields are optional in older snapshots, and a snapshot
 /// serializes with exactly the fields it was saved with.
@@ -103,10 +130,10 @@ where
 #[serde(rename_all = "camelCase")]
 pub struct TaskProfile {
     pub profile_id: String,
-    pub provider: String,
+    pub provider: HarnessKind,
     pub model: String,
-    pub reasoning_level: String,
-    pub service_tier: String,
+    pub reasoning_level: ReasoningLevel,
+    pub service_tier: ServiceTier,
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
@@ -178,10 +205,10 @@ impl TaskControlRow {
     pub fn fixture() -> Self {
         let profile = |id: &str| TaskProfile {
             profile_id: id.into(),
-            provider: "codex".into(),
+            provider: crate::tasks::control::HarnessKind::Codex,
             model: "gpt-6-sol".into(),
-            reasoning_level: "medium".into(),
-            service_tier: "default".into(),
+            reasoning_level: crate::tasks::control::ReasoningLevel::Medium,
+            service_tier: crate::tasks::control::ServiceTier::Default,
             provider_instance_id: None,
             instance_home_directory: None,
         };
@@ -379,6 +406,16 @@ pub struct PromptDispatchAttempt {
     pub claimed_at: String,
 }
 
+wire_enum! {
+    /// The pull request state Suplex records: GitHub's `open` or `closed`,
+    /// with `closed` plus a merge time recorded as `merged`.
+    pub enum PullRequestState {
+        Open = "open",
+        Closed = "closed",
+        Merged = "merged",
+    }
+}
+
 /// TypeScript `PullRequestReference`: the pull request GitHub last reported.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
@@ -387,12 +424,26 @@ pub struct PullRequestReference {
     pub number: u64,
     pub url: String,
     pub head_sha: String,
-    pub state: String,
+    pub state: PullRequestState,
     pub merged_at: Option<String>,
 }
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn harness_kind_matches_the_request_validator_list() {
+        let wire: Vec<&str> = [
+            HarnessKind::Opencode,
+            HarnessKind::ClaudeCode,
+            HarnessKind::Devin,
+            HarnessKind::Codex,
+        ]
+        .into_iter()
+        .map(HarnessKind::as_str)
+        .collect();
+        assert_eq!(wire, crate::http::contracts::typed::projects::HARNESSES);
+    }
+
     use super::*;
 
     #[test]

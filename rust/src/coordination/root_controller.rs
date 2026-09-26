@@ -271,7 +271,7 @@ pub fn read_worker_evidence(
         .and_then(task_harness_registry::native_session_reader)
         .or_else(|| {
             task_harness_registry::for_profile(
-                provider.unwrap_or(&rows.control.worker_profile.provider),
+                provider.unwrap_or(rows.control.worker_profile.provider.as_str()),
             )
         });
     let evidence = reader

@@ -197,7 +197,12 @@ fn validate_provider_policy(
                 )
             })?;
         let allowed = instance.as_ref().map_or_else(
-            || policy.allowed_providers.contains(&provider),
+            || {
+                policy
+                    .allowed_providers
+                    .iter()
+                    .any(|allowed| allowed.as_str() == provider)
+            },
             |instance| policy.allowed_instance_ids.contains(instance),
         );
         if !allowed {

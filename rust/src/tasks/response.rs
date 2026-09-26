@@ -10,7 +10,9 @@ use crate::http::contracts::typed::{
     tasks::{IssueAssociation, TaskSource},
 };
 use crate::projects::ProjectProviderPolicy;
-use crate::tasks::control::{DeliveryTarget, PullRequestReference, TaskProfile, TaskStatus};
+use crate::tasks::control::{
+    DeliveryTarget, PullRequestReference, PullRequestState, TaskProfile, TaskStatus,
+};
 use crate::tasks::{limits::TaskLimitPause, worktree::WorktreeReference};
 use rusqlite::Row;
 use serde::{Deserialize, Serialize, Serializer};
@@ -150,7 +152,7 @@ pub(crate) fn task_dependencies(
                 row.get::<_, TaskStatus>(2)?,
                 row.get::<_, DeliveryTarget>(3)?,
                 row.get::<_, Option<String>>(4)?,
-                row.get::<_, Option<String>>(5)?,
+                row.get::<_, Option<PullRequestState>>(5)?,
             ))
         })?
         .collect::<rusqlite::Result<Vec<_>>>()?;
@@ -161,7 +163,7 @@ pub(crate) fn task_dependencies(
         .query_map([task_id], |row| {
             Ok((
                 row.get::<_, i64>(0)?,
-                row.get::<_, String>(1)?,
+                row.get::<_, PullRequestState>(1)?,
                 row.get::<_, String>(2)?,
                 row.get::<_, String>(3)?,
                 row.get::<_, String>(4)?,
@@ -177,9 +179,9 @@ type TaskDependency = (
     TaskStatus,
     DeliveryTarget,
     Option<String>,
-    Option<String>,
+    Option<PullRequestState>,
 );
-type PullRequestDependency = (i64, String, String, String, String);
+type PullRequestDependency = (i64, PullRequestState, String, String, String);
 
 fn dependency_projection(
     rows: Vec<TaskDependency>,
@@ -203,7 +205,7 @@ fn dependency_projection(
         let reason = match status {
             TaskStatus::Delivered => {
                 if delivery_target == DeliveryTarget::Merged
-                    && pull_state.as_deref() != Some("merged")
+                    && pull_state != Some(PullRequestState::Merged)
                 {
                     Some(TaskQueueWaitReason::PrerequisiteMergeUnobserved)
                 } else {
@@ -274,13 +276,13 @@ fn dependency_projection(
             url: Some(url.clone()),
             observed_at: Some(observed_at),
         });
-        if state != "merged" {
-            let reason = if state == "closed" {
+        if state != PullRequestState::Merged {
+            let reason = if state == PullRequestState::Closed {
                 TaskQueueWaitReason::PrerequisitePullRequestClosed
             } else {
                 TaskQueueWaitReason::PrerequisitePullRequestOpen
             };
-            let summary = if state == "closed" {
+            let summary = if state == PullRequestState::Closed {
                 format!(
                     "Pull request #{number} is closed without merging. Reopen and merge it, or remove it from Blocked by."
                 )
@@ -498,7 +500,7 @@ pub struct TaskBlockedBy {
     pub number: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
-    pub state: Option<String>,
+    pub state: Option<PullRequestState>,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub url: Option<String>,
@@ -521,7 +523,7 @@ pub struct TaskQueueWait {
     pub number: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
-    pub state: Option<String>,
+    pub state: Option<PullRequestState>,
     #[serde(skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub url: Option<String>,
@@ -536,6 +538,14 @@ pub struct HermesSelection {
     pub workflow_id: Option<String>,
     pub workflow_name: Option<String>,
     pub template_id: Option<String>,
+}
+
+crate::shared::wire_enum! {
+    pub enum VisualEvidence {
+        Off = "off",
+        Capture = "capture",
+        Required = "required",
+    }
 }
 
 /// The project and delivery settings captured when the task was created.
@@ -565,7 +575,7 @@ pub struct TaskConfiguration {
     #[serde(default = "default_true")]
     pub run_project_tests: bool,
     #[serde(default = "default_visual_evidence")]
-    pub visual_evidence: String,
+    pub visual_evidence: VisualEvidence,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     #[ts(optional)]
     pub hermes_selection: Option<HermesSelection>,
@@ -577,8 +587,8 @@ fn default_true() -> bool {
     true
 }
 
-fn default_visual_evidence() -> String {
-    "off".into()
+fn default_visual_evidence() -> VisualEvidence {
+    VisualEvidence::Off
 }
 
 #[cfg(test)]
@@ -618,7 +628,7 @@ mod dependency_tests {
                 TaskStatus::Delivered,
                 DeliveryTarget::Merged,
                 None,
-                Some("open"),
+                Some(PullRequestState::Open),
             ),
             (
                 "merged",
@@ -626,7 +636,7 @@ mod dependency_tests {
                 TaskStatus::Delivered,
                 DeliveryTarget::Merged,
                 None,
-                Some("merged"),
+                Some(PullRequestState::Merged),
             ),
         ]
         .into_iter()
@@ -637,7 +647,7 @@ mod dependency_tests {
                 status,
                 target,
                 archived.map(str::to_owned),
-                pull.map(str::to_owned),
+                pull,
             )
         })
         .collect();
@@ -686,19 +696,19 @@ mod fixture_tests {
             delivery_target: DeliveryTarget::PullRequestDraft,
             root_profile: TaskProfile {
                 profile_id: "profile_root".into(),
-                provider: "codex".into(),
+                provider: crate::tasks::control::HarnessKind::Codex,
                 model: "gpt-5".into(),
-                reasoning_level: "high".into(),
-                service_tier: "default".into(),
+                reasoning_level: crate::tasks::control::ReasoningLevel::High,
+                service_tier: crate::tasks::control::ServiceTier::Default,
                 provider_instance_id: None,
                 instance_home_directory: None,
             },
             worker_profile: TaskProfile {
                 profile_id: "profile_worker".into(),
-                provider: "claude-code".into(),
+                provider: crate::tasks::control::HarnessKind::ClaudeCode,
                 model: "claude-opus-5-5".into(),
-                reasoning_level: "medium".into(),
-                service_tier: "default".into(),
+                reasoning_level: crate::tasks::control::ReasoningLevel::Medium,
+                service_tier: crate::tasks::control::ServiceTier::Default,
                 provider_instance_id: Some(None),
                 instance_home_directory: None,
             },
@@ -707,10 +717,10 @@ mod fixture_tests {
                 AdvisorRole::Reviewer,
                 TaskProfile {
                     profile_id: "profile_reviewer".into(),
-                    provider: "claude-code".into(),
+                    provider: crate::tasks::control::HarnessKind::ClaudeCode,
                     model: "claude-sonnet-5".into(),
-                    reasoning_level: "medium".into(),
-                    service_tier: "default".into(),
+                    reasoning_level: crate::tasks::control::ReasoningLevel::Medium,
+                    service_tier: crate::tasks::control::ServiceTier::Default,
                     provider_instance_id: None,
                     instance_home_directory: None,
                 },
@@ -737,7 +747,7 @@ mod fixture_tests {
                 setup_command: "pnpm install".into(),
                 verification_command: "pnpm check".into(),
                 run_project_tests: true,
-                visual_evidence: "off".into(),
+                visual_evidence: VisualEvidence::Off,
                 hermes_selection: None,
                 source: None,
                 captured_at: timestamp.into(),

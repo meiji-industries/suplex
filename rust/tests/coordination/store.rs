@@ -174,7 +174,7 @@ mod tests {
             second.profile.as_ref().unwrap().profile_id,
             "alternate-worker"
         );
-        assert_eq!(second.profile.as_ref().unwrap().reasoning_level, "high");
+        assert_eq!(second.profile.as_ref().unwrap().reasoning_level, crate::tasks::control::ReasoningLevel::High);
         assert_eq!(next.profile, old.profile);
         let latest: String = database
             .connection()

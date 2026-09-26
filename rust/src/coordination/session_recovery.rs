@@ -608,7 +608,7 @@ fn native_observation(
     turn: &TurnRow,
 ) -> DatabaseResult<serde_json::Value> {
     let profile = selected_profile(rows, kind);
-    let provider = task_harness_registry::profile_harness(&profile.provider);
+    let provider = task_harness_registry::profile_harness(profile.provider.as_str());
     let agent = format!("suplex-{kind}");
     Ok(harness.native(
         directory,

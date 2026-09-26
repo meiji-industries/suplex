@@ -147,7 +147,7 @@ mod agent_selection_tests {
         select_delegate(&mut f.database, &f.task_id, &selected, f.now).unwrap();
         let next = current_worker(&f.database, &f.task_id).unwrap().unwrap();
         assert_ne!(next.id, old.id);
-        assert_eq!(next.profile.as_ref().unwrap().provider, "opencode");
+        assert_eq!(next.profile.as_ref().unwrap().provider, crate::tasks::control::HarnessKind::Opencode);
         assert!(turns(&f, &next.id).join("\n").contains("Build the change"));
         assert!(
             turns(&f, &next.id)

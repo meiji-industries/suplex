@@ -17,7 +17,7 @@ pub use crate::profiles::agent_profiles::{
     ProfileInput as ProfileBody, ProfilePatch as ProfilePatchBody,
 };
 
-const HARNESSES: &[&str] = &["opencode", "claude-code", "devin", "codex"];
+pub(crate) const HARNESSES: &[&str] = &["opencode", "claude-code", "devin", "codex"];
 const ADVISOR_ROLES: [&str; 4] = ["reviewer", "planner_a", "planner_b", "rater"];
 
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]

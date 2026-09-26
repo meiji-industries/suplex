@@ -2617,7 +2617,7 @@ pub(crate) mod tests {
             number: 7,
             url: "https://github.com/owner/repo/pull/7".into(),
             head_sha: "head".into(),
-            state: "open".into(),
+            state: crate::tasks::control::PullRequestState::Open,
             merged_at: None,
         });
         assert_eq!(

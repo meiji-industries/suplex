@@ -1,3 +1,4 @@
+use crate::tasks::control::HarnessKind;
 use ts_rs::TS;
 pub mod connection;
 pub mod git;
@@ -52,15 +53,7 @@ use serde::{Deserialize, Serialize};
 #[garde(allow_unvalidated)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ProjectProviderPolicy {
-    #[garde(inner(custom(provider)))]
-    pub allowed_providers: Vec<String>,
+    pub allowed_providers: Vec<HarnessKind>,
     #[garde(inner(length(min = 1)))]
     pub allowed_instance_ids: Vec<String>,
-}
-fn provider(value: &str, _: &()) -> garde::Result {
-    if ["opencode", "claude-code", "devin", "codex"].contains(&value) {
-        Ok(())
-    } else {
-        Err(garde::Error::new("invalid_value"))
-    }
 }

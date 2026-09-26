@@ -417,7 +417,7 @@ fn projection_of(
         template_id,
         delivery_target: task.delivery_target.as_str(),
         run_project_tests: task.configuration.run_project_tests,
-        visual_evidence: &task.configuration.visual_evidence,
+        visual_evidence: task.configuration.visual_evidence.as_str(),
         delivery,
         created_at: &task.created_at,
         updated_at: &task.updated_at,

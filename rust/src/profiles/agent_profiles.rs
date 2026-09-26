@@ -712,7 +712,7 @@ mod tests {
         }))
         .unwrap();
         let providers = ProjectProviderPolicy {
-            allowed_providers: vec!["claude-code".into()],
+            allowed_providers: vec![crate::tasks::control::HarnessKind::ClaudeCode],
             allowed_instance_ids: vec![],
         };
         let instances = ProjectProviderPolicy {

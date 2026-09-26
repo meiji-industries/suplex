@@ -296,19 +296,17 @@ export async function runSuplexDesktop(input: { readonly argv: readonly string[]
       click: () => { if (window) void switchTo(window, target); },
     }));
     Menu.setApplicationMenu(Menu.buildFromTemplate([
-      { label: "Suplex", submenu: [{ role: "about" }, { type: "separator" }, { role: "services" }, { type: "separator" }, { role: "hide" }, { role: "hideOthers" }, { role: "unhide" }, { type: "separator" }, desktopUpdater.menuItem(), { type: "separator" }, { role: "quit" }] },
+      { label: "Suplex", submenu: [{ role: "about" }, { type: "separator" },
+        { label: "Settings", submenu: [
+          ...targets,
+          ...(targets.length > 0 ? [{ type: "separator" as const }] : []),
+          { label: "Add a Suplex URL", click: () => { if (window) void showConnectPage(window); } },
+          { label: "Forget this Suplex", enabled: origin !== null && origin !== localOrigin, click: () => { void forgetCurrent(); } },
+        ] },
+        { type: "separator" }, { role: "services" }, { type: "separator" }, { role: "hide" }, { role: "hideOthers" }, { role: "unhide" }, { type: "separator" }, desktopUpdater.menuItem(), { type: "separator" }, { role: "quit" }] },
       { role: "editMenu" },
       { role: "viewMenu" },
       { role: "windowMenu" },
-      { label: "Navigate", submenu: [
-        { label: "Back", accelerator: "CmdOrCtrl+[", click: () => window?.webContents.goBack() },
-        { label: "Forward", accelerator: "CmdOrCtrl+]", click: () => window?.webContents.goForward() },
-        { type: "separator" },
-        ...targets,
-        ...(targets.length > 0 ? [{ type: "separator" as const }] : []),
-        { label: "Add a Suplex URL", click: () => { if (window) void showConnectPage(window); } },
-        { label: "Forget this Suplex", enabled: origin !== null && origin !== localOrigin, click: () => { void forgetCurrent(); } },
-      ] },
     ]));
   };
   const runProbe = async (win: BrowserWindow): Promise<void> => {

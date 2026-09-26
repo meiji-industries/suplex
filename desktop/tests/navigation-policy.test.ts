@@ -17,8 +17,6 @@ class FakeWebContents extends EventEmitter {
   async loadURL(url: string): Promise<void> { this.url = url; }
   getURL(): string { return this.url; }
   async executeJavaScript(): Promise<[boolean, boolean]> { return [true, false]; }
-  goBack(): void {}
-  goForward(): void {}
 }
 class FakeWindow extends EventEmitter {
   static all: FakeWindow[] = [];
@@ -91,8 +89,8 @@ const exit = vi.spyOn(fake.app, "exit");
 const preventable = (): { preventDefault: ReturnType<typeof vi.fn> } => ({ preventDefault: vi.fn() });
 type MenuEntry = { label?: string; type?: string; checked?: boolean; enabled?: boolean; click?: () => void; submenu?: MenuEntry[] };
 const setApplicationMenu = vi.spyOn(fake.Menu, "setApplicationMenu");
-const navigateMenu = (): MenuEntry[] => (setApplicationMenu.mock.lastCall?.[0] as unknown as MenuEntry[]).find((entry) => entry.label === "Navigate")!.submenu!;
-const menuItem = (label: string): MenuEntry => navigateMenu().find((entry) => entry.label === label)!;
+const settingsMenu = (): MenuEntry[] => (setApplicationMenu.mock.lastCall?.[0] as unknown as MenuEntry[]).find((entry) => entry.label === "Suplex")!.submenu!.find((entry) => entry.label === "Settings")!.submenu!;
+const menuItem = (label: string): MenuEntry => settingsMenu().find((entry) => entry.label === label)!;
 const ORIGIN = "https://suplex.tail1234.ts.net";
 
 beforeEach(() => {
@@ -199,7 +197,7 @@ describe("remembered targets", () => {
     await runSuplexDesktop({ argv: [], environment: {} });
     const win = fake.FakeWindow.all[0]!;
     expect(win.webContents.url).toBe(`${OTHER}/`);
-    expect(navigateMenu().filter((entry) => entry.type === "radio").map((entry) => [entry.label, entry.checked])).toEqual([["meiji.tail1234.ts.net:4111", true], ["localhost:4211", false]]);
+    expect(settingsMenu().filter((entry) => entry.type === "radio").map((entry) => [entry.label, entry.checked])).toEqual([["meiji.tail1234.ts.net:4111", true], ["localhost:4211", false]]);
     menuItem("localhost:4211").click!();
     await vi.waitFor(() => expect(win.webContents.url).toBe("http://localhost:4211/"));
     expect(menuItem("localhost:4211").checked).toBe(true);

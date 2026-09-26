@@ -74,7 +74,8 @@ fn candidates(database: &SuplexDatabase) -> DatabaseResult<Vec<Candidate>> {
 
 /// One refresh pass: each repository connection reads its own provider.
 pub async fn refresh(database_path: &Path, github: Option<&Github>) -> DatabaseResult<()> {
-    let candidates = candidates(&SuplexDatabase::open(database_path, OpenMode::ReadOnly)?)?;
+    let mut database = SuplexDatabase::open(database_path, OpenMode::ReadWrite)?;
+    let candidates = candidates(&database)?;
     let mut groups: Vec<(&Value, Vec<&Candidate>)> = Vec::new();
     for candidate in &candidates {
         match groups
@@ -95,13 +96,13 @@ pub async fn refresh(database_path: &Path, github: Option<&Github>) -> DatabaseR
             Some(client) => ReleasePort::Bitbucket(client),
             None => ReleasePort::Github(github.or(loaded.as_ref()).expect("loaded GitHub")),
         };
-        observe_group(database_path, &port, &group).await?;
+        observe_group(&mut database, &port, &group).await?;
     }
     Ok(())
 }
 
 async fn observe_group(
-    database_path: &Path,
+    database: &mut SuplexDatabase,
     port: &ReleasePort<'_>,
     candidates: &[&Candidate],
 ) -> DatabaseResult<()> {
@@ -110,7 +111,6 @@ async fn observe_group(
         .map(|candidate| (candidate.repository.clone(), candidate.number))
         .collect::<Vec<_>>();
     let observed = port.pull_request_states(&identities).await?;
-    let mut database = SuplexDatabase::open(database_path, OpenMode::ReadWrite)?;
     database.transaction(true, |database| {
         for candidate in candidates {
             let Some(pull) = observed.iter().find(|pull| {

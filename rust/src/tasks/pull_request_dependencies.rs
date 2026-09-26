@@ -88,8 +88,8 @@ pub fn replace(
 /// pull request prerequisites of queued tasks. A failed observation is retried
 /// on the next pass and never changes a stored prerequisite.
 pub async fn refresh(database_path: &Path) -> DatabaseResult<()> {
+    let database = SuplexDatabase::open(database_path, OpenMode::ReadWrite)?;
     let rows = {
-        let database = SuplexDatabase::open(database_path, OpenMode::ReadOnly)?;
         let mut statement = database.connection().prepare(
             "SELECT d.task_id, d.pull_request_number, d.title, json_extract(t.configuration_json, '$.repository') FROM suplex_task_pull_request_dependencies d JOIN suplex_tasks t ON t.id = d.task_id JOIN suplex_task_controls c ON c.task_id = t.id WHERE t.archived_at IS NULL AND c.status = 'queued' ORDER BY d.task_id, d.pull_request_number",
         )?;
@@ -124,7 +124,7 @@ pub async fn refresh(database_path: &Path) -> DatabaseResult<()> {
         let (true, Some(state), Some(url)) = (observed.exists, observed.state, observed.url) else {
             continue;
         };
-        SuplexDatabase::open(database_path, OpenMode::ReadWrite)?.connection().execute(
+        database.connection().execute(
             "UPDATE suplex_task_pull_request_dependencies SET state = ?1, title = ?2, url = ?3, observed_at = ?4 WHERE task_id = ?5 AND pull_request_number = ?6",
             params![state, observed.title.unwrap_or(title), url, now_millis_rfc3339(), task_id, number],
         )?;

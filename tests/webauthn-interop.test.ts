@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { expect, test } from 'vitest';
-import { runCommand } from '../src/platform/command-runner.js';
+import { runCommand } from './helpers/run-command.js';
 import {
   verifyAuthenticationResponse,
   verifyRegistrationResponse,

@@ -76,6 +76,32 @@ mod tests {
                 >= 2
         );
 
+        let signed_in = state.with_database(|database| {
+            crate::identity::auth::development_sign_in(database, Utc::now()).unwrap()
+        });
+        let cookie = format!("sid_v1={}", signed_in.session_token);
+        // A database file cannot be an artifact directory. Broken optional host
+        // resources must not redirect authenticated application pages to setup.
+        let app = crate::http::router(state.clone().with_artifact_root(path.clone()));
+        for uri in [
+            "/tasks",
+            "/tasks/task-test",
+            "/projects",
+            "/board",
+            "/timeline",
+            "/analytics",
+            "/admin",
+            "/admin/profiles",
+            "/profile",
+            "/templates",
+            "/setup",
+        ] {
+            let (status, headers, _) =
+                super::super::avatars::tests::call(&app, "GET", uri, Some(&cookie), None).await;
+            assert_eq!(status, StatusCode::OK, "{uri}");
+            assert!(!headers.contains_key(header::LOCATION), "{uri}");
+        }
+
         let projects = projects(State(state.clone()), loopback).await;
         assert_eq!(projects.status(), StatusCode::OK);
         let body = to_bytes(projects.into_body(), 32_768).await.unwrap();

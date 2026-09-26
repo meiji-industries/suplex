@@ -263,3 +263,4 @@ The four one-shot TypeScript service oracle programs under `tests/support/task-{
 | --- | --- |
 | `bitbucket-evidence-upload.test.ts` | `integrations::bitbucket::tests::evidence_upload_recovers_lost_response_and_rejects_altered_or_redirected_bytes` checks retry without another write, exact byte hash, and refusal of an untrusted redirect. |
 | `issue-evidence-write-guards.test.ts` | `integrations::issue_tracker::tests::jira_evidence_upload_recovers_a_lost_response_only_after_hash_verification` and `jira_evidence_publication_rechecks_scope_and_confirms_owned_remote_text` check cancellation and current Jira scope before a write; the Bitbucket evidence test checks cancellation after discovery. |
+| `issue-image-intake.test.ts` | `integrations::issue_tracker::tests::jira_image_intake_limits_and_verifies_downloads_before_import` checks bounded PNG intake, filename sanitization, and the skipped-image note. |

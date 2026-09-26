@@ -473,6 +473,247 @@ fn find_advisor_report<'a>(
     })
 }
 
+const DIRTY_CHECK_SOURCE: &str = "The worktree has uncommitted changes. A check-only assignment needs a committed source; commit or discard the changes first.";
+
+/// Direct mode belongs to Direct build; planned mode needs the plan.
+fn check_assignment_mode(assignment: &WorkerAssignment, workflow: Workflow) -> DatabaseResult<()> {
+    if assignment.mode == "direct" && workflow != Workflow::DirectBuild {
+        return Err(invalid(
+            "Direct mode is legal only for the Direct build workflow. Supply a plan in planned mode.",
+        ));
+    }
+    if assignment.mode == "planned" && assignment.plan.as_deref().is_none_or(str::is_empty) {
+        return Err(invalid(
+            "A planned assignment requires the Coordinator's plan.",
+        ));
+    }
+    Ok(())
+}
+
+/// A check-only assignment needs a committed source.
+fn require_committed(observed: &ObservedRange) -> DatabaseResult<()> {
+    if !observed.clean {
+        return Err(delivery_failure("worktree_dirty", DIRTY_CHECK_SOURCE));
+    }
+    Ok(())
+}
+
+/// One Coordinator assignment rendered as Worker text and workflow input.
+struct AssignmentDraft<'a> {
+    assignment: &'a WorkerAssignment,
+    visual_evidence: String,
+}
+
+impl AssignmentDraft<'_> {
+    fn text(
+        &self,
+        range: Option<&ReviewRange>,
+        advisor_report: Option<(&str, &str)>,
+    ) -> DatabaseResult<String> {
+        let assignment = self.assignment;
+        Ok(
+            root_prompts::compose_worker_assignment(&WorkerAssignmentText {
+                mode: &assignment.mode,
+                purpose: &assignment.purpose,
+                plan: assignment.plan.as_deref(),
+                acceptance_criteria: &assignment.acceptance_criteria,
+                instruction: &assignment.instruction,
+                visual_evidence: &self.visual_evidence,
+                verification_range: range
+                    .map(|range| (range.base_sha.as_str(), range.head_sha.as_str())),
+                advisor_report,
+            })
+            .map_err(std::io::Error::other)?,
+        )
+    }
+
+    fn input(&self, range: &ReviewRange, advisor_report: Value, candidate_reports: Value) -> Value {
+        let assignment = self.assignment;
+        json!({"kind":"worker","version":2,"mode":assignment.mode,"purpose":assignment.purpose,"range":range,"plan":assignment.plan,
+            "acceptanceCriteria":assignment.acceptance_criteria,"instruction":assignment.instruction,
+            "advisorReport":advisor_report,"candidateReports":candidate_reports})
+    }
+}
+
+/// Launch the standard Worker for the current Root with the saved assignment.
+fn launch_worker(
+    database_path: &Path,
+    root: &RootIdentity,
+    assignment: &WorkerAssignment,
+    text: &str,
+    workflow_input: Option<&Value>,
+) -> DatabaseResult<Value> {
+    let prompt = root_prompts::worker_prompt(&assignment.mode, &assignment.purpose, text)?;
+    let mut database = SuplexDatabase::open(database_path, OpenMode::ReadWrite)?;
+    let current_root = root_session_store::current_root(&database, &root.task_id)?
+        .ok_or_else(|| invalid("root_identity_mismatch"))?;
+    let worker = root_session_store::launch_standard_worker(
+        &mut database,
+        &current_root,
+        text,
+        &prompt,
+        workflow_input,
+        chrono::Utc::now(),
+    )?;
+    launched_worker(&database, &root.task_id, worker)
+}
+
+/// A plain Worker already completed an implementation for this task.
+fn implementation_built(rows: &RootObservationRows) -> bool {
+    rows.turns.iter().any(|turn| {
+        let input = turn_workflow_input(&rows.sessions, turn);
+        rows.session(&turn.session_id)
+            .is_some_and(SessionRow::is_plain_worker)
+            && input.is_some_and(|input| {
+                input["kind"] == "worker" && input["purpose"] == "implementation"
+            })
+            && turn.status == TurnStatus::Completed
+            && turn_outcome(turn.terminal_observation.as_deref())
+                .state
+                .as_deref()
+                == Some("completed")
+    })
+}
+
+/// The named Planner report, which must be valid and planned against `range`.
+fn planner_report(
+    rows: &RootObservationRows,
+    id: &str,
+    role: AdvisorRole,
+    by_turn: bool,
+    range: &ReviewRange,
+) -> DatabaseResult<Value> {
+    let label = advisor_label(role.as_str());
+    let report = if by_turn {
+        find_advisor_report(rows, Some(id), None)
+    } else {
+        find_advisor_report(rows, None, Some(id))
+    }
+    .filter(|(session, _, input)| {
+        session.advisor_role == Some(role) && input["role"] == role.as_str()
+    })
+    .ok_or_else(|| {
+        CoordinationError::refused(format!(
+            "{label} session {id} is not a completed valid {label} report for this task."
+        ))
+    })?;
+    let planned = ReviewRange::from_value(&report.2["range"]).unwrap_or_default();
+    if !same_range(&planned, range) {
+        return Err(CoordinationError::refused(format!("{label} planned against a different source range. Request new plans for the current range.")).into());
+    }
+    Ok(json!({"sessionId":report.0.id,"turnId":report.1.id}))
+}
+
+/// Combined planning: the first implementation names the Plan A and Plan B
+/// reports it combines. Every other assignment carries none.
+fn candidate_plan_reports(
+    rows: &RootObservationRows,
+    workflow: Workflow,
+    assignment: &WorkerAssignment,
+    range: &ReviewRange,
+) -> DatabaseResult<Value> {
+    if workflow != Workflow::CompetingPlans {
+        if assignment.candidate_turn_ids.is_some() || assignment.candidate_session_ids.is_some() {
+            return Err(invalid("candidateTurnIds apply only to Combined planning."));
+        }
+        return Ok(Value::Null);
+    }
+    if assignment.purpose != "implementation" || implementation_built(rows) {
+        return Ok(Value::Null);
+    }
+    let by_turn = assignment.candidate_turn_ids.is_some();
+    let Some([a, b]) = assignment
+        .candidate_turn_ids
+        .as_ref()
+        .or(assignment.candidate_session_ids.as_ref())
+    else {
+        return Err(invalid(
+            "Combined planning requires candidateSessionIds or candidateTurnIds [Plan A, Plan B] for the first implementation.",
+        ));
+    };
+    if a == b {
+        return Err(invalid(
+            "candidateSessionIds must name two distinct Advisor sessions.",
+        ));
+    }
+    let reports = [(a, AdvisorRole::PlannerA), (b, AdvisorRole::PlannerB)]
+        .into_iter()
+        .map(|(id, role)| planner_report(rows, id, role, by_turn, range))
+        .collect::<DatabaseResult<Vec<_>>>()?;
+    Ok(Value::Array(reports))
+}
+
+/// Pull request repair: the implementation carries the latest valid Rater
+/// report text and its reference.
+fn rater_reference(
+    rows: &RootObservationRows,
+    assignment: &WorkerAssignment,
+) -> DatabaseResult<(String, Value)> {
+    let requested = assignment.advisor_turn_id.as_deref().or(assignment.advisor_session_id.as_deref())
+        .ok_or_else(|| invalid("Pull request repair implementation requires advisorSessionId or advisorTurnId for the latest valid Rater report."))?;
+    let latest = latest_review(&rows.control.workflow_state.reviews, AdvisorRole::Rater)
+        .filter(|latest| {
+            let field = if assignment.advisor_turn_id.is_some() {
+                &latest.turn_id
+            } else {
+                &latest.session_id
+            };
+            field == requested && latest.result.is_some()
+        })
+        .ok_or_else(|| {
+            invalid("advisorTurnId must be the latest valid Rater report for this task.")
+        })?;
+    let report = rows
+        .turns
+        .iter()
+        .find(|turn| {
+            turn.id == latest.turn_id
+                && turn.session_id == latest.session_id
+                && turn.status == TurnStatus::Completed
+        })
+        .ok_or_else(|| invalid("The latest Rater report turn is missing."))?;
+    let text = turn_outcome(report.terminal_observation.as_deref())
+        .text
+        .unwrap_or_default();
+    Ok((
+        text,
+        json!({"sessionId":latest.session_id,"turnId":latest.turn_id}),
+    ))
+}
+
+/// An optional Advisor report reference outside pull request repair.
+fn advisor_reference(
+    rows: &RootObservationRows,
+    assignment: &WorkerAssignment,
+) -> DatabaseResult<Value> {
+    if assignment.advisor_turn_id.is_none() && assignment.advisor_session_id.is_none() {
+        return Ok(Value::Null);
+    }
+    let report = find_advisor_report(
+        rows,
+        assignment.advisor_turn_id.as_deref(),
+        assignment.advisor_session_id.as_deref(),
+    )
+    .ok_or_else(|| {
+        invalid("The Advisor reference does not name a completed report for this task.")
+    })?;
+    Ok(json!({"sessionId":report.0.id,"turnId":report.1.id}))
+}
+
+/// The Rater report text and reference for pull request repair, or any other
+/// named Advisor reference.
+fn advisor_references(
+    rows: &RootObservationRows,
+    workflow: Workflow,
+    assignment: &WorkerAssignment,
+) -> DatabaseResult<(Option<String>, Value)> {
+    if workflow == Workflow::RefinePullRequest && assignment.purpose == "implementation" {
+        let (text, reference) = rater_reference(rows, assignment)?;
+        return Ok((Some(text), reference));
+    }
+    Ok((None, advisor_reference(rows, assignment)?))
+}
+
 /// TypeScript `delegateWorker`. Standard implementation keeps its unpinned
 /// assignment; every other assignment is pinned to the committed live range.
 pub async fn delegate_worker(
@@ -483,75 +724,22 @@ pub async fn delegate_worker(
 ) -> DatabaseResult<Value> {
     let (_, rows) = open_root(database_path, root)?;
     let workflow = rows.control.workflow;
-    let (mode, purpose) = (assignment.mode.as_str(), assignment.purpose.as_str());
-    if mode == "direct" && workflow != Workflow::DirectBuild {
-        return Err(invalid(
-            "Direct mode is legal only for the Direct build workflow. Supply a plan in planned mode.",
-        ));
-    }
-    if mode == "planned" && assignment.plan.as_deref().is_none_or(str::is_empty) {
-        return Err(invalid(
-            "A planned assignment requires the Coordinator's plan.",
-        ));
-    }
-    let visual_evidence = rows.context["configuration"]["visualEvidence"]
-        .as_str()
-        .unwrap_or("required")
-        .to_owned();
-    let compose = |range: Option<&ReviewRange>, advisor_report: Option<(&str, &str)>| {
-        root_prompts::compose_worker_assignment(&WorkerAssignmentText {
-            mode,
-            purpose,
-            plan: assignment.plan.as_deref(),
-            acceptance_criteria: &assignment.acceptance_criteria,
-            instruction: &assignment.instruction,
-            visual_evidence: &visual_evidence,
-            verification_range: range
-                .map(|range| (range.base_sha.as_str(), range.head_sha.as_str())),
-            advisor_report,
-        })
-        .map_err(std::io::Error::other)
+    check_assignment_mode(assignment, workflow)?;
+    let draft = AssignmentDraft {
+        assignment,
+        visual_evidence: rows.context["configuration"]["visualEvidence"]
+            .as_str()
+            .unwrap_or("required")
+            .to_owned(),
     };
-    let input = |range: &ReviewRange, advisor_report: Value, candidate_reports: Value| {
-        json!({"kind":"worker","version":2,"mode":mode,"purpose":purpose,"range":range,"plan":assignment.plan,
-            "acceptanceCriteria":assignment.acceptance_criteria,"instruction":assignment.instruction,
-            "advisorReport":advisor_report,"candidateReports":candidate_reports})
-    };
-    let launch = |text: &str, workflow_input: Option<&Value>| -> DatabaseResult<Value> {
-        let prompt = root_prompts::worker_prompt(mode, purpose, text)?;
-        let mut database = SuplexDatabase::open(database_path, OpenMode::ReadWrite)?;
-        let current_root = root_session_store::current_root(&database, &root.task_id)?
-            .ok_or_else(|| invalid("root_identity_mismatch"))?;
-        let worker = root_session_store::launch_standard_worker(
-            &mut database,
-            &current_root,
-            text,
-            &prompt,
-            workflow_input,
-            chrono::Utc::now(),
-        )?;
-        launched_worker(&database, &root.task_id, worker)
-    };
-    if workflow == Workflow::Standard {
-        if purpose != "verification" {
-            return launch(&compose(None, None)?, None);
-        }
-        recheck(
-            &SuplexDatabase::open(database_path, OpenMode::ReadOnly)?,
+    let verification = assignment.purpose == "verification";
+    if workflow == Workflow::Standard && !verification {
+        return launch_worker(
+            database_path,
             root,
-            owner_token,
-        )?;
-        let observed = current_range(database_path, &root.task_id).await?;
-        if !observed.clean {
-            return Err(delivery_failure(
-                "worktree_dirty",
-                "The worktree has uncommitted changes. A check-only assignment needs a committed source; commit or discard the changes first.",
-            ));
-        }
-        let workflow_input = input(&observed.range, Value::Null, Value::Null);
-        return launch(
-            &compose(Some(&observed.range), None)?,
-            Some(&workflow_input),
+            assignment,
+            &draft.text(None, None)?,
+            None,
         );
     }
     recheck(
@@ -560,117 +748,38 @@ pub async fn delegate_worker(
         owner_token,
     )?;
     let observed = current_range(database_path, &root.task_id).await?;
-    if purpose == "verification" && !observed.clean {
-        return Err(delivery_failure(
-            "worktree_dirty",
-            "The worktree has uncommitted changes. A check-only assignment needs a committed source; commit or discard the changes first.",
-        ));
+    if verification {
+        require_committed(&observed)?;
     }
     let range = observed.range;
+    if workflow == Workflow::Standard {
+        let workflow_input = draft.input(&range, Value::Null, Value::Null);
+        return launch_worker(
+            database_path,
+            root,
+            assignment,
+            &draft.text(Some(&range), None)?,
+            Some(&workflow_input),
+        );
+    }
     let rows = {
         let database = SuplexDatabase::open(database_path, OpenMode::ReadOnly)?;
         root_session_store::root_observation_rows(&database, &root.task_id)?
     };
-    let mut candidate_reports = Value::Null;
-    if workflow == Workflow::CompetingPlans && purpose == "implementation" {
-        let built = rows.turns.iter().any(|turn| {
-            let input = turn_workflow_input(&rows.sessions, turn);
-            rows.session(&turn.session_id)
-                .is_some_and(SessionRow::is_plain_worker)
-                && input.is_some_and(|input| {
-                    input["kind"] == "worker" && input["purpose"] == "implementation"
-                })
-                && turn.status == TurnStatus::Completed
-                && turn_outcome(turn.terminal_observation.as_deref())
-                    .state
-                    .as_deref()
-                    == Some("completed")
-        });
-        if !built {
-            let by_turn = assignment.candidate_turn_ids.is_some();
-            let Some([a, b]) = assignment
-                .candidate_turn_ids
-                .as_ref()
-                .or(assignment.candidate_session_ids.as_ref())
-            else {
-                return Err(invalid(
-                    "Combined planning requires candidateSessionIds or candidateTurnIds [Plan A, Plan B] for the first implementation.",
-                ));
-            };
-            if a == b {
-                return Err(invalid(
-                    "candidateSessionIds must name two distinct Advisor sessions.",
-                ));
-            }
-            let mut reports = Vec::new();
-            for (id, role) in [(a, AdvisorRole::PlannerA), (b, AdvisorRole::PlannerB)] {
-                let label = advisor_label(role.as_str());
-                let report = if by_turn { find_advisor_report(&rows, Some(id), None) } else { find_advisor_report(&rows, None, Some(id)) }
-                    .filter(|(session, _, input)| session.advisor_role == Some(role) && input["role"] == role.as_str())
-                    .ok_or_else(|| CoordinationError::refused(format!("{label} session {id} is not a completed valid {label} report for this task.")))?;
-                let planned = ReviewRange::from_value(&report.2["range"]).unwrap_or_default();
-                if !same_range(&planned, &range) {
-                    return Err(CoordinationError::refused(format!("{label} planned against a different source range. Request new plans for the current range.")).into());
-                }
-                reports.push(json!({"sessionId":report.0.id,"turnId":report.1.id}));
-            }
-            candidate_reports = Value::Array(reports);
-        }
-    }
-    if (assignment.candidate_turn_ids.is_some() || assignment.candidate_session_ids.is_some())
-        && workflow != Workflow::CompetingPlans
-    {
-        return Err(invalid("candidateTurnIds apply only to Combined planning."));
-    }
-    let mut advisor_report = None;
-    let mut advisor_reference = Value::Null;
-    if workflow == Workflow::RefinePullRequest && purpose == "implementation" {
-        let requested = assignment.advisor_turn_id.as_deref().or(assignment.advisor_session_id.as_deref())
-            .ok_or_else(|| invalid("Pull request repair implementation requires advisorSessionId or advisorTurnId for the latest valid Rater report."))?;
-        let latest = latest_review(&rows.control.workflow_state.reviews, AdvisorRole::Rater)
-            .filter(|latest| {
-                let field = if assignment.advisor_turn_id.is_some() {
-                    &latest.turn_id
-                } else {
-                    &latest.session_id
-                };
-                field == requested && latest.result.is_some()
-            })
-            .ok_or_else(|| {
-                invalid("advisorTurnId must be the latest valid Rater report for this task.")
-            })?;
-        let report = rows
-            .turns
-            .iter()
-            .find(|turn| {
-                turn.id == latest.turn_id
-                    && turn.session_id == latest.session_id
-                    && turn.status == TurnStatus::Completed
-            })
-            .ok_or_else(|| invalid("The latest Rater report turn is missing."))?;
-        advisor_report = Some(
-            turn_outcome(report.terminal_observation.as_deref())
-                .text
-                .unwrap_or_default(),
-        );
-        advisor_reference = json!({"sessionId":latest.session_id,"turnId":latest.turn_id});
-    } else if assignment.advisor_turn_id.is_some() || assignment.advisor_session_id.is_some() {
-        let report = find_advisor_report(
-            &rows,
-            assignment.advisor_turn_id.as_deref(),
-            assignment.advisor_session_id.as_deref(),
-        )
-        .ok_or_else(|| {
-            invalid("The Advisor reference does not name a completed report for this task.")
-        })?;
-        advisor_reference = json!({"sessionId":report.0.id,"turnId":report.1.id});
-    }
-    let text = compose(
+    let candidate_reports = candidate_plan_reports(&rows, workflow, assignment, &range)?;
+    let (advisor_report, advisor_reference) = advisor_references(&rows, workflow, assignment)?;
+    let text = draft.text(
         Some(&range),
         advisor_report.as_deref().map(|text| ("Rater", text)),
     )?;
-    let workflow_input = input(&range, advisor_reference, candidate_reports);
-    launch(&text, Some(&workflow_input))
+    let workflow_input = draft.input(&range, advisor_reference, candidate_reports);
+    launch_worker(
+        database_path,
+        root,
+        assignment,
+        &text,
+        Some(&workflow_input),
+    )
 }
 
 const ADVISOR_NEXT: &str = "End this Coordinator turn now. Suplex will send the Advisor's native report as a new turn on this same session. Do not poll or wait inside this turn.";

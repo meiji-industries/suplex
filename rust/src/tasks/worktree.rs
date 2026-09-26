@@ -991,4 +991,61 @@ mod tests {
         drop(local);
         fs::remove_dir_all(root).unwrap();
     }
+
+    #[test]
+    fn preparation_reobserves_a_conflicted_rebase_without_changing_user_work() {
+        let root = std::env::temp_dir().join(format!("suplex-rebase-{}", uuid::Uuid::new_v4()));
+        let repository_path = root.join("repo");
+        fs::create_dir_all(&repository_path).unwrap();
+        let run = |cwd: &Path, args: &[&str], success: bool| {
+            let output = Command::new("git")
+                .arg("-C")
+                .arg(cwd)
+                .args(args)
+                .output()
+                .unwrap();
+            assert_eq!(output.status.success(), success, "{output:?}");
+            String::from_utf8(output.stdout).unwrap().trim().to_owned()
+        };
+        run(&repository_path, &["init", "-q", "-b", "main"], true);
+        fs::write(repository_path.join("conflict.txt"), "initial\n").unwrap();
+        run(&repository_path, &["add", "conflict.txt"], true);
+        run(
+            &repository_path,
+            &["-c", "user.name=Test", "-c", "user.email=test@example.test", "commit", "-qm", "initial"],
+            true,
+        );
+        let starting_sha = run(&repository_path, &["rev-parse", "HEAD"], true);
+        let intent = TaskWorktreeIntent {
+            task_id: "task_rebase".into(),
+            repository_path: repository_path.clone(),
+            worktree_root: root.join("worktrees"),
+            branch: "task-rebase".into(),
+            starting_sha,
+        };
+        let worktree = prepare_local_task_worktree(&intent, None).unwrap().path;
+        fs::write(worktree.join("conflict.txt"), "task\n").unwrap();
+        run(&worktree, &["add", "conflict.txt"], true);
+        run(&worktree, &["-c", "user.name=Test", "-c", "user.email=test@example.test", "commit", "-qm", "task"], true);
+        fs::write(repository_path.join("conflict.txt"), "main\n").unwrap();
+        run(&repository_path, &["add", "conflict.txt"], true);
+        run(&repository_path, &["-c", "user.name=Test", "-c", "user.email=test@example.test", "commit", "-qm", "main"], true);
+        fs::write(worktree.join("preserved.txt"), "Preserve me\n").unwrap();
+        run(&worktree, &["rebase", "main"], false);
+        let head_before = run(&worktree, &["rev-parse", "HEAD"], true);
+        let status_before = run(&worktree, &["status", "--porcelain=v1"], true);
+        let conflict_before = fs::read(worktree.join("conflict.txt")).unwrap();
+        let rebase_head = run(&worktree, &["rev-parse", "--path-format=absolute", "--git-path", "rebase-merge/head-name"], true);
+        let rebase_before = fs::read(&rebase_head).unwrap();
+
+        let observed = prepare_local_task_worktree(&intent, None).unwrap();
+        assert_eq!(observed.branch, intent.branch);
+        assert_eq!(observed.head_sha, head_before);
+        assert!(observed.dirty);
+        assert_eq!(run(&worktree, &["status", "--porcelain=v1"], true), status_before);
+        assert_eq!(fs::read(worktree.join("conflict.txt")).unwrap(), conflict_before);
+        assert_eq!(fs::read(worktree.join("preserved.txt")).unwrap(), b"Preserve me\n");
+        assert_eq!(fs::read(&rebase_head).unwrap(), rebase_before);
+        fs::remove_dir_all(root).unwrap();
+    }
 }

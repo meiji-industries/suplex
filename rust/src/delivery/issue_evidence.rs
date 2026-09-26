@@ -2,6 +2,7 @@
 //! to the pull request and its linked issue for an issue-backed draft task.
 //! The manifest and screenshot bytes are retained as task artifacts.
 
+use crate::shared::hash::sha256_hex;
 use std::{
     collections::HashMap,
     error::Error,
@@ -16,7 +17,6 @@ use std::{
 use chrono::Utc;
 use rusqlite::params;
 use serde_json::{Value, json};
-use sha2::{Digest, Sha256};
 
 use super::operations::{DeliveryOperations, Recheck, delivery_failure};
 use crate::{
@@ -36,7 +36,7 @@ static MUTATIONS: LazyLock<Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>> 
     LazyLock::new(Mutex::default);
 
 fn hash(bytes: &[u8]) -> String {
-    format!("{:x}", Sha256::digest(bytes))
+    sha256_hex(bytes)
 }
 
 fn valid_filename(value: &str) -> bool {

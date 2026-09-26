@@ -1,5 +1,6 @@
 //! Public task snapshot in the same field order as the TypeScript response schema.
 
+use crate::tasks::TaskError;
 use rusqlite::{OptionalExtension, Row, params};
 use serde::{Serialize, Serializer};
 use serde_json::Value;
@@ -192,7 +193,7 @@ pub(crate) fn task_dependencies(
                 "active" => "prerequisite_running",
                 "waiting_human" => "prerequisite_needs_human",
                 "cancelled" => "prerequisite_cancelled",
-                _ => return Err(std::io::Error::other("invalid prerequisite status").into()),
+                _ => return Err(TaskError::internal("invalid prerequisite status").into()),
             })
         };
         if let Some(reason) = reason {

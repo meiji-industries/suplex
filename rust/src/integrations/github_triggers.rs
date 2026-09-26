@@ -2,14 +2,19 @@
 //! (`src/integrations/github/triggers.ts`, `trigger-repository.ts`,
 //! `trigger-poller.ts`, and the trigger admission paths of `tasks/tasks.ts`).
 
+use crate::identity::IdentityError;
+use crate::platform::PlatformError;
+use crate::projects::ProjectError;
+use crate::shared::ids::random_hex_id;
+use crate::tasks::TaskError;
 use std::{
     error::Error,
-    fmt, io,
     path::{Path, PathBuf},
     sync::Mutex,
     time::Duration,
 };
 
+use crate::shared::time::{now_millis_rfc3339, rfc3339_millis};
 use chrono::{DateTime, Utc};
 use rusqlite::{OptionalExtension, Row, params};
 use serde::{Deserialize, Serialize};
@@ -30,40 +35,31 @@ use crate::{
         AppState,
         contracts::typed::github_triggers::{GithubTriggerCreate, GithubTriggerPatch},
     },
-    identity::{auth::AuthFailure, companies},
-    platform::{
-        artifacts::ArtifactFailure,
-        database::{DatabaseResult, OpenMode, SuplexDatabase},
-    },
+    identity::companies,
+    platform::database::{DatabaseResult, OpenMode, SuplexDatabase},
     projects::{
         repository as git,
-        service::{self as projects, Project, ProjectFailure},
+        service::{self as projects, Project},
     },
-    tasks::{
-        analytics::timestamp,
-        commands::{self, TaskFailure},
-        repository::{PullRequestOwned, assert_pull_request_available},
-        sources::{self, TaskSourceFailure},
-    },
+    tasks::{commands, repository::assert_pull_request_available, sources},
 };
 
 pub type Failure = Box<dyn Error + Send + Sync>;
 
 /// A public trigger rejection (`AuthFailure` and `PreviewFailure` in TypeScript).
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+#[error("{message}")]
 pub struct TriggerFailure {
     pub message: String,
     pub status: u16,
     pub retry_at: Option<String>,
 }
 
-impl fmt::Display for TriggerFailure {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(&self.message)
+impl From<TriggerFailure> for crate::shared::PublicFailure {
+    fn from(failure: TriggerFailure) -> Self {
+        Self::new(failure.status, failure.message)
     }
 }
-
-impl Error for TriggerFailure {}
 
 fn public(message: impl Into<String>, status: u16) -> Failure {
     Box::new(TriggerFailure {
@@ -74,11 +70,7 @@ fn public(message: impl Into<String>, status: u16) -> Failure {
 }
 
 fn task_failure(message: &str, status: u16) -> Failure {
-    Box::new(TaskFailure {
-        public_message: message.into(),
-        status_code: status,
-        code: "task_failure",
-    })
+    TaskError::new(message, status).into()
 }
 
 const CHANGED: &str = "This GitHub rule changed. Refresh and try again.";
@@ -94,20 +86,25 @@ pub fn send(error: Box<dyn Error>) -> Failure {
             };
         )*};
     }
-    if error.is::<PullRequestOwned>() {
-        return public("A task already uses this pull request.", 409);
-    }
+    let error: Box<dyn Error> = match error.downcast::<TaskError>() {
+        Ok(task) if matches!(*task, TaskError::Failure { .. } | TaskError::Source { .. }) => {
+            return task;
+        }
+        Ok(task) if matches!(*task, TaskError::PullRequestOwned) => {
+            return public("A task already uses this pull request.", 409);
+        }
+        Ok(task) => task,
+        Err(error) => error,
+    };
     keep!(
         error,
         TriggerFailure,
-        AuthFailure,
-        TaskFailure,
-        ProjectFailure,
+        IdentityError,
+        ProjectError,
         GithubFailure,
-        TaskSourceFailure,
-        ArtifactFailure
+        PlatformError
     );
-    Box::new(io::Error::other(error.to_string()))
+    error.to_string().into()
 }
 
 /// Database access for the HTTP state and the host poller.
@@ -179,7 +176,7 @@ pub struct Activity {
 impl Activity {
     fn new(number: i64, url: Option<&str>, outcome: &str, reason: &str) -> Self {
         Self {
-            at: timestamp(Utc::now()),
+            at: now_millis_rfc3339(),
             pull_request_number: Some(number),
             url: url.map(str::to_owned),
             outcome: outcome.into(),
@@ -255,7 +252,7 @@ fn required_rule(database: &SuplexDatabase, company_id: &str, id: &str) -> Datab
 fn enabled_due(database: &SuplexDatabase) -> DatabaseResult<Vec<Rule>> {
     let mut statement = database.connection().prepare("SELECT r.* FROM suplex_github_trigger_rules r JOIN suplex_companies c ON c.id = r.company_id WHERE r.enabled = 1 AND r.archived_at IS NULL AND c.status = 'active' AND (r.next_retry_at IS NULL OR r.next_retry_at <= ?1) ORDER BY r.created_at, r.id")?;
     Ok(statement
-        .query_map([timestamp(Utc::now())], rule)?
+        .query_map([now_millis_rfc3339()], rule)?
         .collect::<rusqlite::Result<Vec<_>>>()?)
 }
 
@@ -285,7 +282,7 @@ fn owns_pull_request(
 ) -> DatabaseResult<bool> {
     match assert_pull_request_available(database, "", repository, number) {
         Ok(()) => Ok(false),
-        Err(error) if error.is::<PullRequestOwned>() => Ok(true),
+        Err(error) if TaskError::is_pull_request_owned(&*error) => Ok(true),
         Err(error) => Err(error),
     }
 }
@@ -298,7 +295,7 @@ fn audit(
 ) -> DatabaseResult<()> {
     database.connection().execute(
         "INSERT INTO suplex_audit_events (id, actor_user_id, actor_agent_id, action, target_user_id, company_id, metadata_json, created_at) VALUES (?1, ?2, NULL, ?3, NULL, ?4, ?5, ?6)",
-        params![crate::identity::auth::random_hex_id("audit")?, user_id, action, rule.company_id, json!({"ruleId": rule.id}).to_string(), timestamp(Utc::now())],
+        params![random_hex_id("audit")?, user_id, action, rule.company_id, json!({"ruleId": rule.id}).to_string(), now_millis_rfc3339()],
     )?;
     Ok(())
 }
@@ -331,7 +328,7 @@ fn record(
         let mut all = stored_activity(database, &rule.company_id, &rule.id)?;
         all.extend_from_slice(activity);
         let recent = &all[all.len().saturating_sub(100)..];
-        let now = timestamp(Utc::now());
+        let now = now_millis_rfc3339();
         Ok(database.connection().execute(
             "UPDATE suplex_github_trigger_rules SET recent_activity_json=?1, enabled=?2, last_successful_check_at=?3, latest_error=?4, next_retry_at=?5, failure_count=?6, updated_at=?7 WHERE id=?8 AND company_id=?9 AND revision=?10",
             params![serde_json::to_string(recent)?, i64::from(!disable && rule.enabled), if success { Some(now.clone()) } else { rule.last_successful_check_at.clone() }, error, next_retry_at, if success { 0 } else { rule.failure_count + 1 }, now, rule.id, rule.company_id, rule.revision],
@@ -464,11 +461,7 @@ fn local(
     }
     let project = projects::get(database, &config.authority_user_id, &config.project_id)?;
     if project.company_id != company_id {
-        return Err(Box::new(ProjectFailure {
-            message: "Not found",
-            status_code: 404,
-            findings: vec![],
-        }));
+        return Err(ProjectError::new("Not found", 404, vec![]).into());
     }
     let repository = project
         .repository
@@ -586,8 +579,8 @@ fn message(error: &(dyn Error + 'static)) -> (String, Option<String>) {
         };
         return (text.into(), failure.retry_at.clone());
     }
-    if let Some(failure) = error.downcast_ref::<AuthFailure>() {
-        return (failure.message.into(), None);
+    if let Some(IdentityError::Auth { message, .. }) = error.downcast_ref() {
+        return ((*message).into(), None);
     }
     (UNAVAILABLE.into(), None)
 }
@@ -611,7 +604,7 @@ fn retry_after(failure_count: i64, provider: Option<&str>) -> String {
     let now = Utc::now().timestamp_millis();
     match provider {
         Some(value) if millis(value) > now + delay => value.to_owned(),
-        _ => timestamp(DateTime::from_timestamp_millis(now + delay).expect("retry time")),
+        _ => rfc3339_millis(DateTime::from_timestamp_millis(now + delay).expect("retry time")),
     }
 }
 
@@ -622,13 +615,7 @@ fn task_status<D: Db>(database: &D, user_id: &str, task_id: &str) -> Result<Stri
             [task_id],
             |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)),
         ).optional()?;
-        let (company, status) = row.ok_or_else(|| {
-            Box::new(TaskFailure {
-                public_message: "Not found".into(),
-                status_code: 404,
-                code: "task_failure",
-            }) as Box<dyn Error>
-        })?;
+        let (company, status) = row.ok_or_else(TaskError::not_found)?;
         companies::require_company_access(database, user_id, &company)?;
         Ok(status)
     })
@@ -705,7 +692,7 @@ pub async fn create<D: Db>(
     })?;
     let (repository_id, repository_name) =
         provider(github, &expected.repository, &config.label).await?;
-    let time = timestamp(Utc::now());
+    let time = now_millis_rfc3339();
     let created = Rule {
         id: format!("github_trigger_{}", uuid::Uuid::new_v4().simple()),
         company_id: company_id.to_owned(),
@@ -812,7 +799,7 @@ pub async fn update<D: Db>(
         || patch.workflow_id.is_some()
         || patch.delivery_target.is_some()
         || patch.protected_paths.is_some();
-    let time = timestamp(Utc::now());
+    let time = now_millis_rfc3339();
     if patch.enabled == Some(false) || patch.archived == Some(true) {
         if configures || patch.archived == Some(false) {
             return Err(public(
@@ -894,7 +881,7 @@ pub async fn update<D: Db>(
         repository_name,
         enabled: patch.enabled.unwrap_or(current.enabled),
         revision: current.revision + 1,
-        updated_at: timestamp(Utc::now()),
+        updated_at: now_millis_rfc3339(),
         ..current.clone()
     };
     write(
@@ -975,7 +962,7 @@ async fn preview<D: Db>(
         return Err(public(CHANGED, 409));
     }
     if binding_id != rule.repository_id || binding_name != rule.repository_name {
-        let retry = timestamp(Utc::now() + chrono::Duration::seconds(60));
+        let retry = rfc3339_millis(Utc::now() + chrono::Duration::seconds(60));
         let recorded = db(database, |database| {
             record(
                 database,
@@ -1193,7 +1180,7 @@ fn record_failure<D: Db>(
     error: &(dyn Error + 'static),
 ) {
     let (text, retry) = message(error);
-    let retry = retry.unwrap_or_else(|| timestamp(Utc::now() + chrono::Duration::seconds(60)));
+    let retry = retry.unwrap_or_else(|| rfc3339_millis(Utc::now() + chrono::Duration::seconds(60)));
     let _ = database.run(|database| {
         record(
             database,
@@ -1243,7 +1230,7 @@ async fn admit<D: Db>(
     }
     let (binding_id, binding_name) = provider(github, &expected.repository, &rule.label).await?;
     if binding_id != rule.repository_id || binding_name != rule.repository_name.to_lowercase() {
-        let retry = timestamp(Utc::now() + chrono::Duration::seconds(60));
+        let retry = rfc3339_millis(Utc::now() + chrono::Duration::seconds(60));
         db(database, |database| {
             record(
                 database,
@@ -1434,13 +1421,8 @@ async fn admit<D: Db>(
 
 /// `requireGithubTriggerAdmission`: live authority, rule, preset, and profiles.
 fn require_admission(database: &SuplexDatabase, dispatch: &Dispatch) -> DatabaseResult<()> {
-    let failure = |message: &str, status: u16| -> Box<dyn Error> {
-        Box::new(TaskFailure {
-            public_message: message.into(),
-            status_code: status,
-            code: "task_failure",
-        })
-    };
+    let failure =
+        |message: &str, status: u16| -> Box<dyn Error> { TaskError::new(message, status).into() };
     if active_role(database, &dispatch.authority_user_id)?.as_deref() != Some("admin") {
         return Err(failure("GitHub trigger authority is not available", 422));
     }
@@ -1537,11 +1519,7 @@ pub async fn create_task_from_trigger<D: Db>(
     let project = db(database, |database| {
         let project = projects::get(database, &authority, &dispatch.project_id)?;
         if project.company_id != dispatch.company_id {
-            return Err(Box::new(ProjectFailure {
-                message: "Not found",
-                status_code: 404,
-                findings: vec![],
-            }) as Box<dyn Error>);
+            return Err(ProjectError::new("Not found", 404, vec![]).into());
         }
         Ok(project)
     })?;
@@ -1574,11 +1552,12 @@ pub async fn create_task_from_trigger<D: Db>(
     )
     .await
     .map_err(|findings| -> Failure {
-        Box::new(ProjectFailure {
+        ProjectError::Rejected {
             message: "Project configuration could not be captured",
-            status_code: 422,
+            status: 422,
             findings,
-        })
+        }
+        .into()
     })?;
     let created = db(database, |database| {
         create_captured(
@@ -1626,11 +1605,7 @@ fn create_captured(
             != Some(dispatch.repository_name.as_str())
         || project.base_branch != policy.base_branch
     {
-        return Err(Box::new(TaskFailure {
-            public_message: "GitHub trigger source changed".into(),
-            status_code: 409,
-            code: "task_failure",
-        }));
+        return Err(TaskError::new("GitHub trigger source changed", 409).into());
     }
     // TypeScript creates the task from the captured profile snapshots.
     prepared.root_profile = dispatch.profiles["root"].clone();
@@ -1742,11 +1717,7 @@ pub async fn start_task_from_trigger<D: Db>(
             let current = dispatches::get(database, dispatch_id)?
                 .filter(|value| value.task_id.is_some())
                 .ok_or_else(|| -> Box<dyn Error> {
-                    Box::new(TaskFailure {
-                        public_message: "GitHub trigger dispatch is not linked to a task".into(),
-                        status_code: 404,
-                        code: "task_failure",
-                    })
+                    TaskError::new("GitHub trigger dispatch is not linked to a task", 404).into()
                 })?;
             let (status, can_start) = startable(database)?;
             if !can_start {
@@ -1771,11 +1742,7 @@ pub async fn start_task_from_trigger<D: Db>(
                 || configuration["source"]["kind"] != "pull_request"
                 || configuration["source"]["number"] != current.pull_request_number
             {
-                return Err(Box::new(TaskFailure {
-                    public_message: "GitHub trigger task source changed".into(),
-                    status_code: 409,
-                    code: "task_failure",
-                }));
+                return Err(TaskError::new("GitHub trigger task source changed", 409).into());
             }
             let task = commands::start_user_task(
                 database,
@@ -1932,7 +1899,7 @@ mod tests {
             .with_database(|database| identity_auth::development_sign_in(database, now))
             .unwrap();
         state.with_database(|database| {
-            let time = timestamp(now);
+            let time = rfc3339_millis(now);
             let connection = database.connection();
             connection.execute("INSERT INTO suplex_companies (id,name,status,created_at) VALUES ('c','C','active',?1)", [&time]).unwrap();
             connection.execute("INSERT INTO suplex_projects (id,company_id,name,repository_path,worktree_root,repository_identity,base_branch,setup_command,verification_command,root_profile_id,worker_profile_id,agent_task_policy_json,created_at,updated_at) VALUES ('p','c','P','/tmp/trigger-repo','/tmp/trigger-worktrees','owner/repo','main','','','profile_native_root','profile_native_worker','{}',?1,?1)", [&time]).unwrap();
@@ -2120,8 +2087,8 @@ mod tests {
             StatusCode::UNAUTHORIZED
         );
         let member = f.state.with_database(|database| {
-            database.connection().execute("INSERT INTO suplex_users (id, display_name, username, role, status, created_at, updated_at, identity_version) VALUES ('member', 'M', 'member', 'member', 'active', ?1, ?1, 1)", [timestamp(Utc::now())]).unwrap();
-            database.connection().execute("INSERT INTO suplex_memberships (company_id, user_id, created_at) VALUES ('c', 'member', ?1)", [timestamp(Utc::now())]).unwrap();
+            database.connection().execute("INSERT INTO suplex_users (id, display_name, username, role, status, created_at, updated_at, identity_version) VALUES ('member', 'M', 'member', 'member', 'active', ?1, ?1, 1)", [now_millis_rfc3339()]).unwrap();
+            database.connection().execute("INSERT INTO suplex_memberships (company_id, user_id, created_at) VALUES ('c', 'member', ?1)", [now_millis_rfc3339()]).unwrap();
             identity_auth::create_session(database, "member", Utc::now()).unwrap()
         });
         let (status, _, body) = call(
@@ -2418,7 +2385,7 @@ mod tests {
         );
         // The task host admits only enabled rules; the linked dispatch appears in activity.
         f.state.with_database(|database| {
-            let time = timestamp(Utc::now());
+            let time = now_millis_rfc3339();
             database.connection().execute("INSERT INTO suplex_tasks (id,company_id,project_id,title,description,configuration_json,idempotency_key,request_hash,creator_user_id,created_at,updated_at) VALUES ('task_x','c','p','T','','{}','k','h',?1,?2,?2)", params![f.admin, time]).unwrap();
             database.connection().execute("INSERT INTO suplex_task_controls (task_id,objective,delivery_target,delivery_intent_json,status,root_profile_json,worker_profile_json,workflow,advisor_profiles_json,workflow_state_json,status_changed_at,created_at,updated_at) VALUES ('task_x','T','pull_request_draft','{}','backlog','{}','{}','standard','{}','{}',?1,?1,?1)", [&time]).unwrap();
             database.connection().execute("UPDATE suplex_github_trigger_dispatches SET task_id = 'task_x' WHERE id = ?1", [&first.id]).unwrap();

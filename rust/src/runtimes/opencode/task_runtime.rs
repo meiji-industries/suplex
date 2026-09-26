@@ -5,6 +5,7 @@
 //! `opencode-…` identity and records the pairing in the session runtime
 //! directory, next to `server.json`. Native `ses…` identities are used as is.
 
+use crate::shared::hash::sha256_hex;
 use std::{
     error::Error,
     fs,
@@ -15,7 +16,6 @@ use std::{
 };
 
 use serde_json::{Value, json};
-use sha2::{Digest, Sha256};
 
 use super::{
     client::CreateSessionInput,
@@ -34,10 +34,7 @@ use super::{
 use crate::{
     coordination::{
         advisor_bridge,
-        bridge_auth::{
-            ADVISOR_BINDING_ENV, ADVISOR_TOKEN_ENV, ROOT_BINDING_ENV, ROOT_TOKEN_ENV,
-            atomic_write_private,
-        },
+        bridge_auth::{ADVISOR_BINDING_ENV, ADVISOR_TOKEN_ENV, ROOT_BINDING_ENV, ROOT_TOKEN_ENV},
         root_bridge,
     },
     profiles::model_pricing::ModelPricingCatalog,
@@ -56,32 +53,12 @@ const SESSION_BINDING: &str = "opencode-session.json";
 
 pub struct OpenCodeTaskRuntime;
 
-/// Runs one native read on its own thread, so sync harness callers work from
-/// blocking workers and async handlers alike.
-fn block<F>(future: F) -> io::Result<F::Output>
-where
-    F: Future + Send,
-    F::Output: Send,
-{
-    std::thread::scope(|scope| {
-        scope
-            .spawn(move || {
-                tokio::runtime::Builder::new_current_thread()
-                    .enable_all()
-                    .build()
-                    .map(|runtime| runtime.block_on(future))
-            })
-            .join()
-            .unwrap_or_else(|panic| std::panic::resume_unwind(panic))
-    })
-}
-
 fn io_error(error: BoxError) -> io::Error {
     io::Error::other(error.to_string())
 }
 
 fn run<T: Send, F: Future<Output = Result<T, BoxError>> + Send>(future: F) -> io::Result<T> {
-    block(future)?.map_err(io_error)
+    crate::shared::blocking::block_on(|| future).map_err(io_error)
 }
 
 /// The native OpenCode session for a Suplex identity: itself when native, else the recorded pairing.
@@ -278,7 +255,7 @@ pub async fn ensure_session(scope: &TaskScope<'_>) -> Result<String, BoxError> {
             metadata: None,
         })
         .await?;
-    atomic_write_private(
+    crate::shared::fs::write_private(
         &runtime.join(SESSION_BINDING),
         json!({"reserved":scope.native_session_id,"sessionID":native.id})
             .to_string()
@@ -321,7 +298,7 @@ async fn turn_context(
                 session_id,
                 message_id: turn_id.to_owned(),
                 directory: reference.directory.clone(),
-                prompt_hash: format!("{:x}", Sha256::digest(prompt.as_bytes())),
+                prompt_hash: sha256_hex(prompt.as_bytes()),
                 prompt,
                 system: None,
                 model: open_code_model("unknown/unknown")?,
@@ -750,24 +727,25 @@ impl TaskHarness for OpenCodeTaskRuntime {
             directory: scope.worktree.to_string_lossy().into_owned(),
             prompt: prompt.to_owned(),
             system: Some(system.to_owned()),
-            prompt_hash: format!("{:x}", Sha256::digest(prompt.as_bytes())),
+            prompt_hash: sha256_hex(prompt.as_bytes()),
             model: open_code_model(scope.model)?,
             agent: agent.to_owned(),
             variant: scope.reasoning_effort.to_owned(),
             dispatch: Dispatch::NotSubmitted,
         };
-        atomic_write_private(
+        crate::shared::fs::write_private(
             &intent_path(&directory, turn_id)?,
             &serde_json::to_vec(&intent)?,
         )?;
         let reference =
             server::read_server(&directory)?.ok_or("OpenCode server reference is missing")?;
-        atomic_write_private(
+        crate::shared::fs::write_private(
             &directory.join(format!("dispatch-server-{}.json", reference.generation)),
             &serde_json::to_vec(&reference)?,
         )?;
         let client = server::client(&reference)?;
-        if block(reconcile(&client, &intent))?.retry != Retry::Allowed {
+        if crate::shared::blocking::block_on(|| reconcile(&client, &intent)).retry != Retry::Allowed
+        {
             return Err(
                 ReplayBlocked("OpenCode prompt was not proven absent; replay is blocked").into(),
             );
@@ -776,13 +754,11 @@ impl TaskHarness for OpenCodeTaskRuntime {
             return Err(ReplayBlocked("OpenCode prompt replay claim was not acquired").into());
         }
         run(async { PromptPort::prompt_async(&client, &intent).await })?;
-        let observed = block(reconcile(
-            &client,
-            &PromptIntent {
-                dispatch: Dispatch::Ambiguous,
-                ..intent
-            },
-        ))?;
+        let ambiguous = PromptIntent {
+            dispatch: Dispatch::Ambiguous,
+            ..intent
+        };
+        let observed = crate::shared::blocking::block_on(|| reconcile(&client, &ambiguous));
         Ok(shared(&observed))
     }
 

@@ -1,5 +1,7 @@
 //! Current task-agent rows use saved session intent and live native process observation.
 
+use crate::shared::time::rfc3339_millis;
+use crate::tasks::TaskError;
 use std::{error::Error, path::PathBuf};
 
 use axum::{
@@ -9,7 +11,7 @@ use axum::{
     response::{IntoResponse, Response},
     routing::get,
 };
-use chrono::{DateTime, SecondsFormat, Utc};
+use chrono::{DateTime, Utc};
 use rusqlite::OptionalExtension;
 use serde_json::{Value, json};
 
@@ -23,7 +25,7 @@ use crate::{
     identity::companies,
     platform::database::SuplexDatabase,
     runtimes::{task_harness::ReaderSession, task_harness_registry},
-    tasks::{commands::TaskFailure, repository},
+    tasks::repository,
 };
 
 use super::auth;
@@ -119,24 +121,6 @@ fn authorize(
     }
 }
 
-fn not_found() -> Box<dyn Error> {
-    Box::new(TaskFailure {
-        public_message: "Not found".into(),
-        status_code: 404,
-        code: "task_failure",
-    })
-}
-
-fn service_error(error: Box<dyn Error>) -> Response {
-    match error.downcast::<TaskFailure>() {
-        Ok(failure) => auth::error(
-            StatusCode::from_u16(failure.status_code).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
-            &failure.public_message,
-        ),
-        Err(error) => auth::service_error(error),
-    }
-}
-
 fn respond(result: Result<Value, Box<dyn Error>>, cookies: Vec<String>) -> Response {
     let mut response = match result {
         Ok(value) => {
@@ -147,7 +131,7 @@ fn respond(result: Result<Value, Box<dyn Error>>, cookies: Vec<String>) -> Respo
             );
             response
         }
-        Err(error) => service_error(error),
+        Err(error) => auth::service_error(error),
     };
     auth::append_cookies(&mut response, cookies);
     response
@@ -164,7 +148,7 @@ fn task(
     user_id: &str,
     task_id: &str,
 ) -> Result<AgentTask, Box<dyn Error>> {
-    let record = repository::task_by_id(database, task_id)?.ok_or_else(not_found)?;
+    let record = repository::task_by_id(database, task_id)?.ok_or_else(TaskError::not_found)?;
     companies::require_company_access(database, user_id, &record.company_id)?;
     Ok(AgentTask {
         id: record.id,
@@ -231,9 +215,7 @@ fn native_status(database_path: &std::path::Path, session: &Value) -> Option<(&'
 fn iso_timestamp(value: f64) -> Value {
     DateTime::<Utc>::from_timestamp_millis(value as i64)
         .filter(|_| value.is_finite())
-        .map_or(Value::Null, |time| {
-            json!(time.to_rfc3339_opts(SecondsFormat::Millis, true))
-        })
+        .map_or(Value::Null, |time| json!(rfc3339_millis(time)))
 }
 
 fn agents(task: &AgentTask, database_path: &std::path::Path) -> Vec<Value> {

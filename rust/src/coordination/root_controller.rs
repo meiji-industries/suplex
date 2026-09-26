@@ -1,10 +1,11 @@
 //! TypeScript `RootController`: Root operations for every workflow.
 
+use super::CoordinationError;
+use crate::shared::hash::sha256_hex;
 use std::path::Path;
 
 use base64::{Engine, engine::general_purpose::STANDARD};
 use serde_json::{Map, Value, json};
-use sha2::{Digest, Sha256};
 
 use crate::{
     delivery::operations::DeliveryOperations,
@@ -52,14 +53,13 @@ pub fn prepare_root(database_path: &Path, task_id: &str) -> DatabaseResult<RootS
     let root = root_session_store::reserve_root(&mut database, task_id, chrono::Utc::now())?;
     let rows = root_session_store::root_observation_rows(&database, task_id)?;
     let prompt =
-        root_prompts::initial_coordinator_prompt(&rows.control, &rows.context, &rows.dependencies)
-            .map_err(std::io::Error::other)?;
+        root_prompts::initial_coordinator_prompt(&rows.control, &rows.context, &rows.dependencies)?;
     root_session_store::ensure_initial_prompt(&mut database, &root, &prompt, chrono::Utc::now())?;
     Ok(root)
 }
 
 fn invalid(message: &'static str) -> Box<dyn std::error::Error> {
-    std::io::Error::other(message).into()
+    CoordinationError::refused(message).into()
 }
 
 fn completed_worker_turn<'a>(turns: &'a [Value], session_id: &str) -> Option<&'a Value> {
@@ -236,7 +236,7 @@ pub fn read_image(
         &root.session_id,
         root.generation,
     )?;
-    if format!("{:x}", Sha256::digest(&bytes)) != artifact.sha256 {
+    if sha256_hex(&bytes) != artifact.sha256 {
         return Err(invalid("The task image changed in storage"));
     }
     Ok(
@@ -310,7 +310,7 @@ pub fn read_worker_evidence(
         Some(tools) => (tools, Value::Null),
         None => (Vec::new(), json!("The native turn log is missing")),
     };
-    let result = worker_evidence::read(&tools, &request.query).map_err(std::io::Error::other)?;
+    let result = worker_evidence::read(&tools, &request.query)?;
     let mut output = result
         .as_object()
         .cloned()
@@ -346,10 +346,7 @@ fn recheck(
 }
 
 fn delivery_failure(code: &'static str, message: &'static str) -> Box<dyn std::error::Error> {
-    Box::new(crate::delivery::operations::DeliveryOperationFailure {
-        code,
-        message: message.to_owned(),
-    })
+    crate::delivery::DeliveryError::operation(code, message).into()
 }
 
 pub struct ObservedRange {
@@ -529,8 +526,7 @@ pub async fn delegate_worker(
             "advisorReport":advisor_report,"candidateReports":candidate_reports})
     };
     let launch = |text: &str, workflow_input: Option<&Value>| -> DatabaseResult<Value> {
-        let prompt =
-            root_prompts::worker_prompt(mode, purpose, text).map_err(std::io::Error::other)?;
+        let prompt = root_prompts::worker_prompt(mode, purpose, text)?;
         let mut database = SuplexDatabase::open(database_path, OpenMode::ReadWrite)?;
         let current_root = root_session_store::current_root(&database, &root.task_id)?
             .ok_or_else(|| invalid("root_identity_mismatch"))?;
@@ -622,10 +618,10 @@ pub async fn delegate_worker(
                 let label = advisor_label(role);
                 let report = if by_turn { find_advisor_report(&rows, Some(id), None) } else { find_advisor_report(&rows, None, Some(id)) }
                     .filter(|(session, _, input)| session["advisorRole"] == role && input["role"] == role)
-                    .ok_or_else(|| std::io::Error::other(format!("{label} session {id} is not a completed valid {label} report for this task.")))?;
+                    .ok_or_else(|| CoordinationError::refused(format!("{label} session {id} is not a completed valid {label} report for this task.")))?;
                 let planned = ReviewRange::from_value(&report.2["range"]).unwrap_or_default();
                 if !same_range(&planned, &range) {
-                    return Err(std::io::Error::other(format!("{label} planned against a different source range. Request new plans for the current range.")).into());
+                    return Err(CoordinationError::refused(format!("{label} planned against a different source range. Request new plans for the current range.")).into());
                 }
                 reports.push(json!({"sessionId":report.0["id"],"turnId":report.1["id"]}));
             }
@@ -790,14 +786,14 @@ pub async fn delegate_advisor(
         workflow_definition(workflow).ok_or_else(|| invalid("The task workflow is invalid"))?;
     let label = advisor_label(role);
     if !definition.advisor_roles.contains(&role) {
-        return Err(std::io::Error::other(format!(
+        return Err(CoordinationError::refused(format!(
             "The {} workflow has no {label} Advisor.",
             definition.name
         ))
         .into());
     }
     if brief.is_some() && role != "reviewer" {
-        return Err(std::io::Error::other(format!(
+        return Err(CoordinationError::refused(format!(
             "Suplex composes the {label} input; a brief is accepted only for Reviewer."
         ))
         .into());
@@ -925,7 +921,7 @@ pub async fn complete_workflow_local_work(
     let range = current_range(database_path, &root.task_id).await?.range;
     // TypeScript `commitCompletion`: one last local observation after every await.
     let local = worktree::observe_local_revision(Path::new(&path)).map_err(|error| {
-        std::io::Error::other(format!("The local source could not be observed: {error}"))
+        CoordinationError::refused(format!("The local source could not be observed: {error}"))
     })?;
     let mut database = SuplexDatabase::open(database_path, OpenMode::ReadWrite)?;
     let current = root_session_store::root_observation_rows(&database, &root.task_id)?.control;
@@ -960,7 +956,9 @@ pub async fn complete_workflow_local_work(
                 "The task was cancelled; Suplex recorded no workflow completion.",
             ))
         }
-        WorkflowCompletion::Declined { reason, .. } => Err(std::io::Error::other(reason).into()),
+        WorkflowCompletion::Declined { reason, .. } => {
+            Err(CoordinationError::refused(reason).into())
+        }
     }
 }
 

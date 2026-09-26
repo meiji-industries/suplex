@@ -3,7 +3,6 @@
 
 use std::{error::Error, sync::LazyLock};
 
-use chrono::Utc;
 use regex::Regex;
 use rusqlite::{OptionalExtension, Row, params};
 use serde::{Deserialize, Serialize};
@@ -321,7 +320,7 @@ pub fn prepare(database: &mut SuplexDatabase, input: DispatchPrepare) -> Databas
         {
             return Err(fail("GitHub trigger dispatch Advisors do not match request"));
         }
-        let now = crate::tasks::analytics::timestamp(Utc::now());
+        let now = crate::shared::time::now_millis_rfc3339();
         let repository_name = input.repository_name.to_lowercase();
         database.connection().execute(
             "INSERT INTO suplex_github_trigger_dispatches (id, rule_id, company_id, project_id, repository_id, repository_name, pull_request_number, authority_user_id, request_json, policy_json, preset_json, profiles_json, idempotency_key, task_id, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, NULL, ?14, ?14)",
@@ -415,7 +414,7 @@ pub fn link_task(
         }
         database.connection().execute(
             "UPDATE suplex_github_trigger_dispatches SET task_id = ?1, updated_at = ?2 WHERE id = ?3 AND (task_id IS NULL OR task_id = ?1)",
-            params![task_id, crate::tasks::analytics::timestamp(Utc::now()), dispatch_id],
+            params![task_id, crate::shared::time::now_millis_rfc3339(), dispatch_id],
         )?;
         get(database, dispatch_id)?.ok_or_else(|| fail("GitHub trigger dispatch was not found"))
     })
@@ -517,7 +516,7 @@ pub fn record_trigger_push(
         }
         database.connection().execute(
             "INSERT INTO suplex_github_trigger_delivery_operations (id, task_id, dispatch_id, from_head_sha, to_head_sha, review_json, confirmed_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
-            params![format!("github_trigger_delivery_{}", uuid::Uuid::new_v4().simple()), task_id, dispatch_id, from_head_sha, to_head_sha, review_json, crate::tasks::analytics::timestamp(Utc::now())],
+            params![format!("github_trigger_delivery_{}", uuid::Uuid::new_v4().simple()), task_id, dispatch_id, from_head_sha, to_head_sha, review_json, crate::shared::time::now_millis_rfc3339()],
         )?;
         Ok(())
     })

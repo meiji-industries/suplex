@@ -249,9 +249,10 @@ async fn revoke(
 
 #[cfg(test)]
 pub(crate) mod tests {
+    use crate::shared::hash::sha256_hex;
+    use crate::shared::time::rfc3339_millis;
     use rusqlite::params;
     use serde_json::{Value, json};
-    use sha2::{Digest, Sha256};
 
     use crate::{
         http::{AppState, routes::auth},
@@ -284,14 +285,14 @@ pub(crate) mod tests {
     pub(crate) async fn server(state: Option<(AppState, std::path::PathBuf)>) -> Server {
         let (state, path) = state.unwrap_or_else(auth::tests::state);
         let now = chrono::Utc::now();
-        let stamp = now.to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+        let stamp = rfc3339_millis(now);
         let admin = state
             .with_database(|database| identity_auth::development_sign_in(database, now))
             .unwrap();
         state.with_database(|database| {
             let connection = database.connection();
             connection.execute("INSERT INTO suplex_users (id, display_name, username, role, status, created_at, updated_at, identity_version) VALUES ('member_user', 'Member', 'user_v1_member_user', 'member', 'active', ?1, ?1, 1)", [&stamp]).unwrap();
-            let hash = format!("{:x}", Sha256::digest(b"member_session_token"));
+            let hash = sha256_hex(b"member_session_token");
             connection.execute("INSERT INTO suplex_sessions (id, token_hash, user_id, expires_at, created_at, token_version) VALUES ('member_session', ?1, 'member_user', ?2, ?3, 1)", params![hash, (now + chrono::Duration::days(1)).to_rfc3339(), stamp]).unwrap();
             connection.execute("INSERT INTO suplex_companies (id, name, status, created_at) VALUES ('company_api', 'Agent API Company', 'active', ?1)", [&stamp]).unwrap();
             for (id, name) in [("project_api", "API Project"), ("project_api_2", "API Project 2")] {

@@ -1,6 +1,7 @@
 //! TypeScript `tasks/issue-context.ts`: capture the linked issue once, before
 //! native work starts, together with its image attachments.
 
+use crate::shared::time::rfc3339_millis;
 use std::path::Path;
 
 use chrono::Utc;
@@ -172,7 +173,7 @@ pub async fn prepare_for_host(
             .downcast_ref::<ProviderHttpFailure>()
             .is_some_and(|failure| matches!(failure.status, 401 | 403 | 404));
     let now = Utc::now();
-    let time = now.to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
+    let time = rfc3339_millis(now);
     let database = SuplexDatabase::open(database_path, OpenMode::ReadWrite)?;
     if access {
         database.connection().execute(
@@ -184,8 +185,7 @@ pub async fn prepare_for_host(
         database.connection().execute(
             "UPDATE suplex_task_controls SET wake_at = ?1, updated_at = ?2 WHERE task_id = ?3",
             params![
-                (now + chrono::Duration::seconds(15))
-                    .to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+                rfc3339_millis(now + chrono::Duration::seconds(15)),
                 time,
                 task_id
             ],

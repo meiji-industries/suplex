@@ -1,11 +1,13 @@
 //! User task commands keep authorization, intent, audit, and wake admission together.
 
-use std::{error::Error, fmt, path::Path};
+use crate::shared::hash::sha256_hex;
+use crate::shared::time::rfc3339_millis;
+use crate::tasks::TaskError;
+use std::path::Path;
 
-use chrono::{DateTime, SecondsFormat, Utc};
+use chrono::{DateTime, Utc};
 use rusqlite::{OptionalExtension, params};
 use serde_json::{Map, Value, json};
-use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
 use crate::{
@@ -32,31 +34,6 @@ use super::images::DecodedTaskImage;
 use super::pull_request_dependencies;
 use super::repository::{self, PreparedTask, TaskCreator, TaskDetailsWrite, TaskRecord, TaskWrite};
 
-#[derive(Debug)]
-pub struct TaskFailure {
-    pub public_message: String,
-    pub status_code: u16,
-    pub code: &'static str,
-}
-
-impl TaskFailure {
-    fn new(public_message: impl Into<String>, status_code: u16) -> Self {
-        Self {
-            public_message: public_message.into(),
-            status_code,
-            code: "task_failure",
-        }
-    }
-}
-
-impl fmt::Display for TaskFailure {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(&self.public_message)
-    }
-}
-
-impl Error for TaskFailure {}
-
 fn project_signature(project: &Project) -> Value {
     json!({
         "repository": project.repository,
@@ -69,10 +46,6 @@ fn project_signature(project: &Project) -> Value {
         "integration": project.integration,
         "execution": project.execution,
     })
-}
-
-fn timestamp(now: DateTime<Utc>) -> String {
-    now.to_rfc3339_opts(SecondsFormat::Millis, true)
 }
 
 /// Hash the parsed request in the same field order as TaskInputSchema. Standard
@@ -140,8 +113,9 @@ pub fn task_request_hash(input: &TaskCreateBody, creator_user_id: &str) -> Datab
     }
     let payload =
         json!({"input": Value::Object(fields), "creator": {"kind": "user", "id": creator_user_id}});
-    let digest = Sha256::digest(crate::shared::js_json::stringify(&payload).as_bytes());
-    Ok(digest.iter().map(|byte| format!("{byte:02x}")).collect())
+    Ok(sha256_hex(
+        crate::shared::js_json::stringify(&payload).as_bytes(),
+    ))
 }
 
 /// Check the idempotency key before an external Git fetch. A retry is answered
@@ -162,10 +136,9 @@ pub fn existing_user_task(
         return Ok(None);
     };
     if hash != request_hash || creator.as_deref() != Some(user_id) {
-        return Err(Box::new(TaskFailure::new(
-            "This idempotency key belongs to a different request",
-            409,
-        )));
+        return Err(
+            TaskError::new("This idempotency key belongs to a different request", 409).into(),
+        );
     }
     repository::task_by_id(database, &task_id)
 }
@@ -214,20 +187,17 @@ fn selected_profile(
     role: &str,
 ) -> DatabaseResult<Value> {
     let id = selected.unwrap_or(default_id);
-    let profile = read_profile(database, id, role)?.ok_or_else(|| {
-        Box::new(TaskFailure::new(
-            "The selected agent profile does not exist",
-            422,
-        )) as Box<dyn Error>
-    })?;
+    let profile = read_profile(database, id, role)?
+        .ok_or_else(|| TaskError::new("The selected agent profile does not exist", 422))?;
     if allowed_profile(project.provider_policy.as_ref(), &profile) {
         return Ok(profile);
     }
     if selected.is_some() {
-        return Err(Box::new(TaskFailure::new(
+        return Err(TaskError::new(
             "Select agents with providers and logins allowed by this project",
             422,
-        )));
+        )
+        .into());
     }
     let mut statement = database.connection().prepare(
         "SELECT id FROM suplex_profiles WHERE role = ?1 AND archived_at IS NULL ORDER BY created_at, id",
@@ -242,10 +212,11 @@ fn selected_profile(
             return Ok(candidate);
         }
     }
-    Err(Box::new(TaskFailure::new(
+    Err(TaskError::new(
         "Create an agent with a provider and login allowed by this project",
         422,
-    )))
+    )
+    .into())
 }
 
 fn task_branch_name(title: &str, task_id: &str) -> String {
@@ -374,10 +345,10 @@ pub fn prepare_local_user_task(
     now: DateTime<Utc>,
 ) -> DatabaseResult<PreparedTask> {
     let repository = project.repository.as_deref().ok_or_else(|| {
-        Box::new(TaskFailure::new(
+        TaskError::new(
             "Configure the project repository before creating a task",
             422,
-        )) as Box<dyn Error>
+        )
     })?;
     let id = repository::new_task_id();
     let branch = task_branch_name(&input.title, &id);
@@ -404,7 +375,7 @@ pub fn prepare_local_user_task(
         ("runProjectTests", json!(input.run_project_tests)),
         ("visualEvidence", json!(input.visual_evidence)),
         ("source", Value::Null),
-        ("capturedAt", json!(timestamp(now))),
+        ("capturedAt", json!(rfc3339_millis(now))),
     ] {
         configuration.insert(key.to_owned(), value);
     }
@@ -446,7 +417,7 @@ fn audit(
     let resulting_state = json!({"status": task.status, "archived": archived}).to_string();
     database.connection().execute(
         "INSERT INTO suplex_audit_events (id, actor_user_id, actor_agent_id, action, target_user_id, company_id, metadata_json, created_at) VALUES (?1, ?2, NULL, ?3, NULL, ?4, ?5, ?6)",
-        params![format!("audit_{}", Uuid::new_v4().simple()), actor_user_id, action, task.company_id, json!({"taskId": task.id, "resultingState": resulting_state}).to_string(), timestamp(now)],
+        params![format!("audit_{}", Uuid::new_v4().simple()), actor_user_id, action, task.company_id, json!({"taskId": task.id, "resultingState": resulting_state}).to_string(), rfc3339_millis(now)],
     )?;
     Ok(())
 }
@@ -516,10 +487,10 @@ fn create_user_task_inner(
         let company =
             companies::require_company_access(database, actor_user_id, &prepared.company_id)?;
         if company.status != "active" {
-            return Err(Box::new(TaskFailure::new("The company is not active", 409)));
+            return Err(TaskError::new("The company is not active", 409).into());
         }
         if prepared.creator != TaskCreator::User(actor_user_id.to_owned()) {
-            return Err(Box::new(TaskFailure::new("Not found", 404)));
+            return Err(TaskError::not_found().into());
         }
         if let Some(task) = repository::existing(database, prepared)? {
             if task.status == "active" {
@@ -533,13 +504,10 @@ fn create_user_task_inner(
         }
         let current_project = service::get(database, actor_user_id, &prepared.project_id)?;
         if current_project.company_id != prepared.company_id {
-            return Err(Box::new(TaskFailure::new("Not found", 404)));
+            return Err(TaskError::not_found().into());
         }
         if project_signature(&current_project) != project_signature(expected_project) {
-            return Err(Box::new(TaskFailure::new(
-                "Project configuration changed",
-                409,
-            )));
+            return Err(TaskError::new("Project configuration changed", 409).into());
         }
         let result = match images {
             Some((artifact_root, images)) => repository::create_with_images(
@@ -591,23 +559,16 @@ pub fn start_user_task(
                 |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?)),
             )
             .optional()?
-            .ok_or_else(|| Box::new(TaskFailure::new("Not found", 404)) as Box<dyn Error>)?;
+            .ok_or_else(TaskError::not_found)?;
         companies::require_company_access(database, actor_user_id, &scope.0)?;
         if archive::in_progress(task_id) {
-            return Err(Box::new(TaskFailure::new(
-                "Archive cleanup is in progress",
-                409,
-            )));
+            return Err(TaskError::new("Archive cleanup is in progress", 409).into());
         }
         if scope.1.is_some() {
-            return Err(Box::new(TaskFailure::new(
-                "This task cannot be started",
-                409,
-            )));
+            return Err(TaskError::new("This task cannot be started", 409).into());
         }
-        let task = repository::start(database, task_id, now)?.ok_or_else(|| {
-            Box::new(TaskFailure::new("This task cannot be started", 409)) as Box<dyn Error>
-        })?;
+        let task = repository::start(database, task_id, now)?
+            .ok_or_else(|| TaskError::new("This task cannot be started", 409))?;
         if task.status == "active" {
             let id = task.id.clone();
             database.after_commit(move || wake(id));
@@ -624,8 +585,7 @@ fn require_user_task(
     actor_user_id: &str,
     task_id: &str,
 ) -> DatabaseResult<TaskRecord> {
-    let task = repository::task_by_id(database, task_id)?
-        .ok_or_else(|| Box::new(TaskFailure::new("Not found", 404)) as Box<dyn Error>)?;
+    let task = repository::task_by_id(database, task_id)?.ok_or_else(TaskError::not_found)?;
     companies::require_company_access(database, actor_user_id, &task.company_id)?;
     Ok(task)
 }
@@ -644,10 +604,7 @@ pub fn disarm_user_task(
         |row| row.get(0),
     )?;
     if archived || !repository::disarm(database, task_id, now)? {
-        return Err(Box::new(TaskFailure::new(
-            "Only a task in the backlog can be disarmed",
-            409,
-        )));
+        return Err(TaskError::new("Only a task in the backlog can be disarmed", 409).into());
     }
     let task = repository::task_by_id(database, task_id)?.unwrap_or(task);
     audit(database, actor_user_id, "task_disarmed", &task, now)?;
@@ -666,10 +623,10 @@ pub fn continue_user_delivery(
     database.transaction(true, |database| {
         let task = require_user_task(database, actor_user_id, task_id)?;
         if archive::in_progress(task_id) {
-            return Err(Box::new(TaskFailure::new(
+            return Err(TaskError::new(
                 "Archive cleanup is in progress",
                 409,
-            )));
+            ).into());
         }
         let (archived, repository_kind, previous_target): (bool, Option<String>, String) =
             database.connection().query_row(
@@ -677,17 +634,17 @@ pub fn continue_user_delivery(
                 [task_id],
                 |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
             )?;
-        let conflict = |message: &str| Box::new(TaskFailure::new(message, 409)) as Box<dyn Error>;
+        let conflict = |message: &str| TaskError::new(message, 409).into();
         if archived {
             return Err(conflict(
                 "Open the archived task before you continue delivery.",
             ));
         }
         if repository_kind.as_deref() == Some("bitbucket") {
-            return Err(Box::new(TaskFailure::new(
+            return Err(TaskError::new(
                 "Bitbucket supports draft pull requests. Select a supported delivery target.",
                 422,
-            )));
+            ).into());
         }
         let order = |target: &str| {
             [
@@ -719,7 +676,7 @@ pub fn continue_user_delivery(
         }
         repository::assert_task_pull_requests_available(database, task_id)
             .map_err(|error| conflict(&error.to_string()))?;
-        let time = timestamp(Utc::now());
+        let time = crate::shared::time::now_millis_rfc3339();
         let rows = root_session_store::root_observation_rows(database, task_id)?;
         let mut state = rows.control["workflowState"].clone();
         let mut history = state["deliveryHistory"].as_array().cloned().unwrap_or_default();
@@ -746,7 +703,7 @@ pub fn continue_user_delivery(
                 let root = root_session_store::reserve_root(database, task_id, Utc::now())?;
                 let rows = root_session_store::root_observation_rows(database, task_id)?;
                 let initial = root_prompts::initial_coordinator_prompt(&rows.control, &rows.context, &rows.dependencies)
-                    .map_err(|message| Box::new(TaskFailure::new(message, 409)) as Box<dyn Error>)?;
+                    .map_err(|message| TaskError::new(message, 409))?;
                 root_session_store::ensure_initial_prompt(database, &root, &initial, Utc::now())?;
                 root
             }
@@ -757,7 +714,7 @@ pub fn continue_user_delivery(
         }));
         database.connection().execute(
             "INSERT INTO suplex_task_turns (id, task_id, session_id, generation, prompt_hash, prompt_text, status, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'pending_prompt', ?7, ?7)",
-            params![root_session_store::new_turn_id(Utc::now())?, task_id, root.id, root.generation, format!("{:x}", Sha256::digest(prompt.as_bytes())), prompt, time],
+            params![root_session_store::new_turn_id(Utc::now())?, task_id, root.id, root.generation, sha256_hex(prompt.as_bytes()), prompt, time],
         )?;
         root_session_store::observe_lifecycle(database, task_id)?;
         let id = task_id.to_owned();
@@ -778,7 +735,7 @@ pub fn select_user_task_agent(
     wake: impl FnOnce(String) + Send + 'static,
 ) -> DatabaseResult<TaskRecord> {
     require_user_task(database, actor_user_id, task_id)?;
-    let conflict = |message: &str| Box::new(TaskFailure::new(message, 409)) as Box<dyn Error>;
+    let conflict = |message: &str| TaskError::new(message, 409).into();
     let coordinator_changed =
         "The Coordinator changed. Read the current Coordinator before selecting another.";
     if request.role == "root"
@@ -808,9 +765,9 @@ pub fn select_user_task_agent(
     let rows = root_session_store::root_observation_rows(database, task_id)?;
     let initial =
         root_prompts::initial_coordinator_prompt(&rows.control, &rows.context, &rows.dependencies)
-            .map_err(|message| Box::new(TaskFailure::new(message, 501)) as Box<dyn Error>)?;
-    let hash = |text: &str| format!("{:x}", Sha256::digest(text.as_bytes()));
-    let time = timestamp(now);
+            .map_err(|message| TaskError::new(message, 501))?;
+    let hash = |text: &str| sha256_hex(text.as_bytes());
+    let time = rfc3339_millis(now);
     database.transaction(true, |database| {
         let row = database.connection().query_row(
             "SELECT c.status, t.archived_at IS NOT NULL, c.workflow, c.delivery_target, c.workflow_state_json, c.root_session_id, c.root_profile_json, c.worker_profile_json, t.configuration_json, c.human_question_id, c.human_question, c.human_question_options_json, c.limit_pause_json IS NOT NULL OR c.recovery_turn_id IS NOT NULL, c.advisor_profiles_json, c.worker_session_id FROM suplex_task_controls c JOIN suplex_tasks t ON t.id = c.task_id WHERE c.task_id = ?1",
@@ -1037,16 +994,16 @@ pub fn select_user_task_agent(
 }
 
 /// TypeScript `observePullRequestDependencies` failures for a user command.
-pub fn pull_request_rejection(rejection: pull_request_dependencies::Rejection) -> TaskFailure {
+pub fn pull_request_rejection(rejection: pull_request_dependencies::Rejection) -> TaskError {
     match rejection {
-        pull_request_dependencies::Rejection::Unobservable(number) => TaskFailure::new(
+        pull_request_dependencies::Rejection::Unobservable(number) => TaskError::new(
             format!(
                 "Suplex cannot observe pull request #{number}. Try again when GitHub is available."
             ),
             422,
         ),
         pull_request_dependencies::Rejection::NotFound(number) => {
-            TaskFailure::new(format!("Pull request #{number} was not found"), 422)
+            TaskError::new(format!("Pull request #{number} was not found"), 422)
         }
     }
 }
@@ -1069,12 +1026,9 @@ pub fn set_user_task_dependencies(
     depends_on.sort();
     depends_on.dedup();
     if depends_on.iter().any(|dependency| dependency == task_id) {
-        return Err(Box::new(TaskFailure::new(
-            "A task cannot depend on itself",
-            422,
-        )));
+        return Err(TaskError::new("A task cannot depend on itself", 422).into());
     }
-    let time = timestamp(now);
+    let time = rfc3339_millis(now);
     database.transaction(true, |database| {
         for dependency in &depends_on {
             let company: Option<String> = database
@@ -1086,10 +1040,10 @@ pub fn set_user_task_dependencies(
                 )
                 .optional()?;
             if company.as_deref() != Some(task.company_id.as_str()) {
-                return Err(Box::new(TaskFailure::new(
+                return Err(TaskError::new(
                     "A dependency task is not available",
                     404,
-                )));
+                ).into());
             }
         }
         database.connection().execute(
@@ -1107,10 +1061,10 @@ pub fn set_user_task_dependencies(
         let mut queue = depends_on.clone();
         while let Some(next) = queue.pop() {
             if next == task_id {
-                return Err(Box::new(TaskFailure::new(
+                return Err(TaskError::new(
                     "The dependency creates a cycle",
                     422,
-                )));
+                ).into());
             }
             if !seen.insert(next.clone()) {
                 continue;
@@ -1168,7 +1122,7 @@ pub fn set_user_task_issue(
         let current = require_user_task(database, actor_user_id, task_id)?;
         database.connection().execute(
             "UPDATE suplex_tasks SET issue_json = ?1, updated_at = ?2 WHERE id = ?3",
-            params![resolved.map(crate::shared::js_json::stringify), timestamp(now), task_id],
+            params![resolved.map(crate::shared::js_json::stringify), rfc3339_millis(now), task_id],
         )?;
         let started: bool = database.connection().query_row(
             "SELECT EXISTS(SELECT 1 FROM suplex_task_sessions WHERE task_id = ?1 AND native_session_id IS NOT NULL UNION ALL SELECT 1 FROM suplex_task_turns WHERE task_id = ?1 AND status IN ('prompted', 'unknown', 'completed'))",
@@ -1195,23 +1149,16 @@ pub fn cancel_user_task(
     wake: impl FnOnce(String) + Send + 'static,
 ) -> DatabaseResult<TaskRecord> {
     let cancelled = database.transaction(true, |database| {
-        let task = repository::task_by_id(database, task_id)?
-            .ok_or_else(|| Box::new(TaskFailure::new("Not found", 404)) as Box<dyn Error>)?;
+        let task = repository::task_by_id(database, task_id)?.ok_or_else(TaskError::not_found)?;
         companies::require_company_access(database, actor_user_id, &task.company_id)?;
         if task.status == "delivered" {
-            return Err(Box::new(TaskFailure::new(
-                "Delivered tasks cannot be cancelled",
-                409,
-            )));
+            return Err(TaskError::new("Delivered tasks cannot be cancelled", 409).into());
         }
         if !root_session_store::cancel_task(database, task_id, now)? {
-            return Err(Box::new(TaskFailure::new(
-                "This task cannot be cancelled",
-                409,
-            )));
+            return Err(TaskError::new("This task cannot be cancelled", 409).into());
         }
-        let cancelled = repository::task_by_id(database, task_id)?
-            .ok_or_else(|| Box::new(TaskFailure::new("Not found", 404)) as Box<dyn Error>)?;
+        let cancelled =
+            repository::task_by_id(database, task_id)?.ok_or_else(TaskError::not_found)?;
         let id = task_id.to_owned();
         database.after_commit(move || wake(id));
         Ok(cancelled)
@@ -1231,8 +1178,7 @@ pub fn send_user_note(
     wake: impl FnOnce(String) + Send + 'static,
 ) -> DatabaseResult<TaskRecord> {
     database.transaction(true, |database| {
-        let task = repository::task_by_id(database, task_id)?
-            .ok_or_else(|| Box::new(TaskFailure::new("Not found", 404)) as Box<dyn Error>)?;
+        let task = repository::task_by_id(database, task_id)?.ok_or_else(TaskError::not_found)?;
         companies::require_company_access(database, actor_user_id, &task.company_id)?;
         let archived: bool = database.connection().query_row(
             "SELECT archived_at IS NOT NULL FROM suplex_tasks WHERE id = ?1",
@@ -1240,14 +1186,15 @@ pub fn send_user_note(
             |row| row.get(0),
         )?;
         if archived || !matches!(task.status.as_str(), "active" | "delivered") {
-            return Err(Box::new(TaskFailure::new(
+            return Err(TaskError::new(
                 "Start the task or answer its current decision before you send a message.",
                 409,
-            )));
+            )
+            .into());
         }
         root_session_store::send_note(database, task_id, &request.note, now)?;
-        let updated = repository::task_by_id(database, task_id)?
-            .ok_or_else(|| Box::new(TaskFailure::new("Not found", 404)) as Box<dyn Error>)?;
+        let updated =
+            repository::task_by_id(database, task_id)?.ok_or_else(TaskError::not_found)?;
         let id = task_id.to_owned();
         database.after_commit(move || wake(id));
         Ok(updated)
@@ -1265,7 +1212,7 @@ pub fn answer_user_task(
 ) -> DatabaseResult<TaskRecord> {
     let answered = database.transaction(true, |database| {
         let task = repository::task_by_id(database, task_id)?
-            .ok_or_else(|| Box::new(TaskFailure::new("Not found", 404)) as Box<dyn Error>)?;
+            .ok_or_else(TaskError::not_found)?;
         companies::require_company_access(database, actor_user_id, &task.company_id)?;
         let (archived, question, limit_pause, recovery_turn): (bool, Option<String>, bool, bool) = database
             .connection()
@@ -1278,22 +1225,22 @@ pub fn answer_user_task(
             || question.as_deref() != Some(answer.question_id.as_str())
             || answer.answer.trim().is_empty()
         {
-            return Err(Box::new(TaskFailure::new(
+            return Err(TaskError::new(
                 "The question changed. Read the current question before answering",
                 409,
-            )));
+            ).into());
         }
         if limit_pause {
-            return Err(Box::new(TaskFailure::new(
+            return Err(TaskError::new(
                 "Select a task limit action before you continue",
                 409,
-            )));
+            ).into());
         }
         if recovery_turn && !answer.confirm_commands_stopped.unwrap_or(false) {
-            return Err(Box::new(TaskFailure::new(
+            return Err(TaskError::new(
                 "Confirm that the commands have stopped before you continue",
                 409,
-            )));
+            ).into());
         }
         root_session_store::answer_human(
             database,
@@ -1304,7 +1251,7 @@ pub fn answer_user_task(
             now,
         )?;
         let answered = repository::task_by_id(database, task_id)?
-            .ok_or_else(|| Box::new(TaskFailure::new("Not found", 404)) as Box<dyn Error>)?;
+            .ok_or_else(TaskError::not_found)?;
         let id = task_id.to_owned();
         database.after_commit(move || wake(id));
         Ok(answered)
@@ -1325,14 +1272,11 @@ pub fn replace_user_worker(
     wake: impl FnOnce(String) + Send + 'static,
 ) -> DatabaseResult<TaskRecord> {
     database.transaction(true, |database| {
-        let task = repository::task_by_id(database, task_id)?
-            .ok_or_else(|| Box::new(TaskFailure::new("Not found", 404)) as Box<dyn Error>)?;
+        let task = repository::task_by_id(database, task_id)?.ok_or_else(TaskError::not_found)?;
         companies::require_company_access(database, actor_user_id, &task.company_id)?;
-        root_session_store::replace_worker(database, task_id, request, now).map_err(|error| {
-            Box::new(TaskFailure::new(error.to_string(), 409)) as Box<dyn Error>
-        })?;
-        let task = repository::task_by_id(database, task_id)?
-            .ok_or_else(|| Box::new(TaskFailure::new("Not found", 404)) as Box<dyn Error>)?;
+        root_session_store::replace_worker(database, task_id, request, now)
+            .map_err(|error| TaskError::new(error.to_string(), 409))?;
+        let task = repository::task_by_id(database, task_id)?.ok_or_else(TaskError::not_found)?;
         let id = task_id.to_owned();
         database.after_commit(move || wake(id));
         Ok(task)
@@ -1350,8 +1294,7 @@ pub fn replace_user_coordinator(
     wake: impl FnOnce(String) + Send + 'static,
 ) -> DatabaseResult<TaskRecord> {
     database.transaction(true, |database| {
-        let task = repository::task_by_id(database, task_id)?
-            .ok_or_else(|| Box::new(TaskFailure::new("Not found", 404)) as Box<dyn Error>)?;
+        let task = repository::task_by_id(database, task_id)?.ok_or_else(TaskError::not_found)?;
         companies::require_company_access(database, actor_user_id, &task.company_id)?;
         let rows = root_session_store::root_observation_rows(database, task_id)?;
         let initial = root_prompts::initial_coordinator_prompt(
@@ -1359,13 +1302,10 @@ pub fn replace_user_coordinator(
             &rows.context,
             &rows.dependencies,
         )
-        .map_err(|message| Box::new(TaskFailure::new(message, 501)) as Box<dyn Error>)?;
+        .map_err(|message| TaskError::new(message, 501))?;
         root_session_store::replace_coordinator(database, task_id, request, &initial, now)
-            .map_err(|error| {
-                Box::new(TaskFailure::new(error.to_string(), 409)) as Box<dyn Error>
-            })?;
-        let task = repository::task_by_id(database, task_id)?
-            .ok_or_else(|| Box::new(TaskFailure::new("Not found", 404)) as Box<dyn Error>)?;
+            .map_err(|error| TaskError::new(error.to_string(), 409))?;
+        let task = repository::task_by_id(database, task_id)?.ok_or_else(TaskError::not_found)?;
         let id = task_id.to_owned();
         database.after_commit(move || wake(id));
         Ok(task)
@@ -1383,7 +1323,7 @@ pub fn answer_user_task_limit(
 ) -> DatabaseResult<TaskRecord> {
     let answered = database.transaction(true, |database| {
         let task = repository::task_by_id(database, task_id)?
-            .ok_or_else(|| Box::new(TaskFailure::new("Not found", 404)) as Box<dyn Error>)?;
+            .ok_or_else(TaskError::not_found)?;
         companies::require_company_access(database, actor_user_id, &task.company_id)?;
         let (archived, status, question, has_limit_pause): (bool, String, Option<String>, bool) = database
             .connection()
@@ -1397,10 +1337,10 @@ pub fn answer_user_task_limit(
             || question.as_deref() != Some(answer.question_id.as_str())
             || !has_limit_pause
         {
-            return Err(Box::new(TaskFailure::new(
+            return Err(TaskError::new(
                 "The question changed. Read the current question before answering",
                 409,
-            )));
+            ).into());
         }
         root_session_store::answer_task_limit(
             database,
@@ -1410,7 +1350,7 @@ pub fn answer_user_task_limit(
             now,
         )?;
         let answered = repository::task_by_id(database, task_id)?
-            .ok_or_else(|| Box::new(TaskFailure::new("Not found", 404)) as Box<dyn Error>)?;
+            .ok_or_else(TaskError::not_found)?;
         let id = task_id.to_owned();
         database.after_commit(move || wake(id));
         Ok(answered)
@@ -1433,12 +1373,8 @@ fn edit_profile(
     if current.get("profileId").and_then(Value::as_str) == Some(id) {
         return Ok(current.clone());
     }
-    read_profile(database, id, role)?.ok_or_else(|| {
-        Box::new(TaskFailure::new(
-            "The selected agent profile does not exist",
-            422,
-        )) as Box<dyn Error>
-    })
+    read_profile(database, id, role)?
+        .ok_or_else(|| TaskError::new("The selected agent profile does not exist", 422).into())
 }
 
 /// The UI edit resolves a full settings snapshot against the stored task.
@@ -1460,14 +1396,13 @@ pub fn update_user_task_details(
         && input.advisor_profile_ids.is_none()
     {
         // The HTTP schema accepts {}, but the TypeScript service refinement throws.
-        return Err(std::io::Error::other("Internal server error").into());
+        return Err(TaskError::internal("Internal server error").into());
     }
     database.transaction(true, |database| {
-        let scope = repository::task_by_id(database, task_id)?
-            .ok_or_else(|| Box::new(TaskFailure::new("Not found", 404)) as Box<dyn Error>)?;
+        let scope = repository::task_by_id(database, task_id)?.ok_or_else(TaskError::not_found)?;
         companies::require_company_access(database, actor_user_id, &scope.company_id)?;
-        let current = repository::edit_snapshot(database, task_id)?
-            .ok_or_else(|| Box::new(TaskFailure::new("Not found", 404)) as Box<dyn Error>)?;
+        let current =
+            repository::edit_snapshot(database, task_id)?.ok_or_else(TaskError::not_found)?;
         // The task keeps the source it was created from, so the workflow rules judge the edit against that source.
         let mut normalized = Map::new();
         normalized.insert(
@@ -1492,7 +1427,7 @@ pub fn update_user_task_details(
             normalized.insert("runProjectTests".into(), json!(tests));
         }
         crate::coordination::workflow_records::normalize_workflow_input(&mut normalized, true)
-            .map_err(|message| Box::new(TaskFailure::new(message, 422)) as Box<dyn Error>)?;
+            .map_err(|message| TaskError::new(message, 422))?;
         let workflow = normalized["workflow"].as_str().unwrap_or("standard");
         let root_id = input
             .root_profile_id
@@ -1550,10 +1485,11 @@ pub fn update_user_task_details(
             .chain(advisor_profiles.values())
             .any(|profile| !allowed_profile(policy.as_ref(), profile))
         {
-            return Err(Box::new(TaskFailure::new(
+            return Err(TaskError::new(
                 "Select agents with providers and logins allowed by this project",
                 422,
-            )));
+            )
+            .into());
         }
         let delivery_target = normalized
             .get("deliveryTarget")
@@ -1566,10 +1502,11 @@ pub fn update_user_task_details(
             == Some("bitbucket")
             && ["pull_request_ready", "merged"].contains(&delivery_target)
         {
-            return Err(Box::new(TaskFailure::new(
+            return Err(TaskError::new(
                 "Bitbucket supports draft pull requests. Select a supported delivery target.",
                 422,
-            )));
+            )
+            .into());
         }
         let stored_tests = current
             .configuration
@@ -1605,13 +1542,13 @@ pub fn update_user_task_details(
             advisor_profiles: Value::Object(advisor_profiles),
         };
         if !repository::update_details(database, task_id, &details, now)? {
-            return Err(Box::new(TaskFailure::new(
+            return Err(TaskError::new(
                 "Only tasks in the backlog can be edited. Open archived tasks before editing them.",
                 409,
-            )));
+            )
+            .into());
         }
-        repository::task_by_id(database, task_id)?
-            .ok_or_else(|| Box::new(TaskFailure::new("Not found", 404)) as Box<dyn Error>)
+        repository::task_by_id(database, task_id)?.ok_or_else(|| TaskError::not_found().into())
     })
 }
 
@@ -1623,17 +1560,13 @@ pub fn rename_user_task(
     now: DateTime<Utc>,
 ) -> DatabaseResult<TaskRecord> {
     database.transaction(true, |database| {
-        let current = repository::task_by_id(database, task_id)?
-            .ok_or_else(|| Box::new(TaskFailure::new("Not found", 404)) as Box<dyn Error>)?;
+        let current =
+            repository::task_by_id(database, task_id)?.ok_or_else(TaskError::not_found)?;
         companies::require_company_access(database, actor_user_id, &current.company_id)?;
         if !repository::rename(database, task_id, &input.title, now)? {
-            return Err(Box::new(TaskFailure::new(
-                "Open archived tasks before renaming them.",
-                409,
-            )));
+            return Err(TaskError::new("Open archived tasks before renaming them.", 409).into());
         }
-        repository::task_by_id(database, task_id)?
-            .ok_or_else(|| Box::new(TaskFailure::new("Not found", 404)) as Box<dyn Error>)
+        repository::task_by_id(database, task_id)?.ok_or_else(|| TaskError::not_found().into())
     })
 }
 
@@ -1644,6 +1577,7 @@ mod tests {
         http::contracts::typed::tasks, identity::auth, platform::database::OpenMode,
         tasks::response,
     };
+    use std::error::Error;
     use std::sync::{
         Arc,
         atomic::{AtomicUsize, Ordering},
@@ -1658,11 +1592,11 @@ mod tests {
         let user = auth::development_sign_in(&mut database, now).unwrap().user;
         database.connection().execute(
             "INSERT INTO suplex_companies (id, name, status, created_at) VALUES ('command_company', 'Command company', 'active', ?1)",
-            [timestamp(now)],
+            [rfc3339_millis(now)],
         ).unwrap();
         database.connection().execute(
             "INSERT INTO suplex_projects (id, company_id, name, repository_path, worktree_root, repository_identity, base_branch, setup_command, verification_command, root_profile_id, worker_profile_id, agent_task_policy_json, created_at, updated_at) VALUES ('command_project', 'command_company', 'Command project', '/tmp/suplex-command-project', '/tmp/suplex-command-worktrees', 'owner/repo', 'main', '', '', 'profile_native_root', 'profile_native_worker', '{}', ?1, ?1)",
-            [timestamp(now)],
+            [rfc3339_millis(now)],
         ).unwrap();
         let prepared = PreparedTask {
             id: repository::new_task_id(),
@@ -1698,8 +1632,8 @@ mod tests {
     }
 
     fn failure(error: Box<dyn Error>) -> (u16, String) {
-        let failure = error.downcast::<TaskFailure>().unwrap();
-        (failure.status_code, failure.public_message)
+        let failure = crate::shared::PublicFailure::from(*error.downcast::<TaskError>().unwrap());
+        (failure.status.as_u16(), failure.message)
     }
 
     #[test]
@@ -1975,8 +1909,7 @@ mod tests {
             "Blocker"
         );
         assert_eq!(
-            pull_request_rejection(pull_request_dependencies::Rejection::NotFound(7))
-                .public_message,
+            pull_request_rejection(pull_request_dependencies::Rejection::NotFound(7)).to_string(),
             "Pull request #7 was not found"
         );
         assert!(
@@ -2024,7 +1957,7 @@ mod tests {
         for (id, role) in [("alternate-root", "root"), ("alternate-worker", "worker")] {
             database.connection().execute(
                 "INSERT INTO suplex_profiles (id,name,role,avatar_seed,provider,model,reasoning_level,service_tier,created_at,updated_at) VALUES (?1,?1,?2,?1,'codex','test','medium','default',?3,?3)",
-                params![id, role, timestamp(now)],
+                params![id, role, rfc3339_millis(now)],
             ).unwrap();
         }
         let active = PreparedTask {
@@ -2094,15 +2027,15 @@ mod tests {
         // An unfinished Worker assignment moves to a fresh session with the new profile.
         database.connection().execute(
             "INSERT INTO suplex_profiles (id,name,role,avatar_seed,provider,model,reasoning_level,service_tier,created_at,updated_at) VALUES ('third-worker','third-worker','worker','third-worker','codex','test','medium','default',?1,?1)",
-            [timestamp(now)],
+            [rfc3339_millis(now)],
         ).unwrap();
         database.connection().execute(
             "INSERT INTO suplex_task_sessions (id,task_id,kind,generation,is_current,lifecycle,delegate_slot,created_at,updated_at) VALUES ('worker-one',?1,'worker',1,1,'live','delegate',?2,?2)",
-            params![task.id, timestamp(now)],
+            params![task.id, rfc3339_millis(now)],
         ).unwrap();
         database.connection().execute(
             "INSERT INTO suplex_task_turns (id,task_id,session_id,generation,prompt_hash,prompt_text,status,created_at,updated_at) VALUES ('worker-turn',?1,'worker-one',1,'hash','Build the feature','prompted',?2,?2)",
-            params![task.id, timestamp(now)],
+            params![task.id, rfc3339_millis(now)],
         ).unwrap();
         select(&mut database, json!({"role":"worker","expectedProfileId":"alternate-worker","expectedSessionId":"worker-one","profileId":"third-worker","direction":"Use tests","resume":false})).unwrap();
         let (replacement, prompt, old_lifecycle): (String, String, String) = database.connection().query_row(
@@ -2223,11 +2156,11 @@ mod tests {
         let user = auth::development_sign_in(&mut database, now).unwrap().user;
         database.connection().execute(
             "INSERT INTO suplex_companies (id, name, status, created_at) VALUES ('command_company', 'Command company', 'active', ?1)",
-            [timestamp(now)],
+            [rfc3339_millis(now)],
         ).unwrap();
         database.connection().execute(
             "INSERT INTO suplex_projects (id, company_id, name, repository_path, worktree_root, repository_identity, base_branch, setup_command, verification_command, root_profile_id, worker_profile_id, agent_task_policy_json, created_at, updated_at) VALUES ('command_project', 'command_company', 'Command project', '/tmp/suplex-command-project', '/tmp/suplex-command-worktrees', 'owner/repo', 'main', '', '', 'profile_native_root', 'profile_native_worker', ?1, ?2, ?2)",
-            params![json!({"workflowIds":["standard"],"defaultWorkflowId":"standard","rootProfileIds":["profile_native_root"],"workerProfileIds":["profile_native_worker"]}).to_string(), timestamp(now)],
+            params![json!({"workflowIds":["standard"],"defaultWorkflowId":"standard","rootProfileIds":["profile_native_root"],"workerProfileIds":["profile_native_worker"]}).to_string(), rfc3339_millis(now)],
         ).unwrap();
         let project = service::get(&database, &user.id, "command_project").unwrap();
         let prepared = PreparedTask {

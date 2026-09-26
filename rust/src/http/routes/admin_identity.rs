@@ -216,6 +216,7 @@ async fn list_audit(State(state): State<AppState>, headers: HeaderMap) -> Respon
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::shared::time::now_millis_rfc3339;
     use crate::{
         identity::auth as identity_auth,
         platform::database::{OpenMode, SuplexDatabase},
@@ -226,7 +227,7 @@ mod tests {
     async fn audit_http_filters_nonstring_metadata() {
         let path = std::env::temp_dir().join(format!(
             "{}.sqlite",
-            identity_auth::random_hex_id("suplex_admin_route").unwrap()
+            crate::shared::ids::random_hex_id("suplex_admin_route").unwrap()
         ));
         let mut database = SuplexDatabase::open(&path, OpenMode::Migrate).unwrap();
         let signed_in = identity_auth::development_sign_in(&mut database, Utc::now()).unwrap();
@@ -269,7 +270,7 @@ mod tests {
     async fn invitation_body_validation_precedes_csrf_and_admin_routes_preserve_raw_order() {
         let path = std::env::temp_dir().join(format!(
             "{}.sqlite",
-            identity_auth::random_hex_id("suplex_admin_route").unwrap()
+            crate::shared::ids::random_hex_id("suplex_admin_route").unwrap()
         ));
         let mut database = SuplexDatabase::open(&path, OpenMode::Migrate).unwrap();
         let signed_in = identity_auth::development_sign_in(&mut database, Utc::now()).unwrap();
@@ -346,10 +347,10 @@ mod tests {
                 .status(),
             StatusCode::OK
         );
-        let credential_id = identity_auth::random_hex_id("credential").unwrap();
+        let credential_id = crate::shared::ids::random_hex_id("credential").unwrap();
         state.with_database(|database| database.connection().execute(
             "INSERT INTO suplex_credentials (id, user_id, credential_id, public_key, counter, transports, created_at) VALUES (?1, ?2, 'route-member-passkey', X'00', 0, '[]', ?3)",
-            rusqlite::params![credential_id, user_id, Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true)],
+            rusqlite::params![credential_id, user_id, now_millis_rfc3339()],
         )).unwrap();
         assert_eq!(
             list_credentials(State(state.clone()), headers.clone())

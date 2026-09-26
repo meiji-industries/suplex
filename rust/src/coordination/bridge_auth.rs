@@ -83,28 +83,6 @@ pub fn existing_token(path: &Path) -> Option<String> {
         .filter(|token| valid_token(token))
 }
 
-pub fn atomic_write_private(path: &Path, bytes: &[u8]) -> io::Result<()> {
-    use std::io::Write;
-    let pending = path.with_extension(format!("{}.pending", uuid::Uuid::new_v4()));
-    let mut options = std::fs::OpenOptions::new();
-    options.write(true).create_new(true);
-    #[cfg(unix)]
-    {
-        use std::os::unix::fs::OpenOptionsExt;
-        options.mode(0o600);
-    }
-    let result = (|| {
-        let mut file = options.open(&pending)?;
-        file.write_all(bytes)?;
-        file.sync_all()?;
-        std::fs::rename(&pending, path)
-    })();
-    if result.is_err() {
-        let _ = std::fs::remove_file(&pending);
-    }
-    result
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

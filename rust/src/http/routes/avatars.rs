@@ -19,7 +19,6 @@ use crate::{
         validation,
     },
     identity::avatars::{self, MAX_AVATAR_IMAGE_BASE64_LENGTH},
-    platform::artifacts::ArtifactFailure,
 };
 
 use super::{auth, profiles::authorize};
@@ -36,17 +35,6 @@ pub fn router() -> Router<AppState> {
 fn with_cookies(mut response: Response, cookies: Vec<String>) -> Response {
     auth::append_cookies(&mut response, cookies);
     response
-}
-
-fn service_error(error: Box<dyn Error>) -> Response {
-    match error.downcast::<ArtifactFailure>() {
-        Ok(failure) => (
-            StatusCode::UNPROCESSABLE_ENTITY,
-            Json(json!({"error": failure.message, "code": failure.code})),
-        )
-            .into_response(),
-        Err(error) => auth::service_error(error),
-    }
 }
 
 fn owner_params(owner_id: &str) -> Result<(), Box<Response>> {
@@ -69,7 +57,7 @@ async fn list(State(state): State<AppState>, headers: axum::http::HeaderMap) -> 
     };
     let response = match state.with_database(|database| avatars::list(database, &user_id)) {
         Ok(avatars) => Json(json!({"avatars": avatars})).into_response(),
-        Err(error) => service_error(error),
+        Err(error) => auth::service_error(error),
     };
     with_cookies(response, cookies)
 }
@@ -106,7 +94,7 @@ async fn image(
     });
     let mut response = match result {
         Ok(response) => response,
-        Err(error) => service_error(error),
+        Err(error) => auth::service_error(error),
     };
     let values = response.headers_mut();
     values.insert(
@@ -148,7 +136,7 @@ async fn update(
         .with_database(|database| avatars::update(database, &user_id, &owner_id, &patch))
     {
         Ok(record) => Json(record).into_response(),
-        Err(error) => service_error(error),
+        Err(error) => auth::service_error(error),
     };
     with_cookies(response, cookies)
 }

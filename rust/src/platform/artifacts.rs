@@ -1,72 +1,61 @@
 //! Opaque artifact files and their single durable database row.
 
+use crate::shared::hash::sha256_hex;
+use crate::shared::time::rfc3339_millis;
 use std::{
-    error::Error,
-    fmt, fs,
+    fs,
     io::Write,
     os::unix::fs::{DirBuilderExt, OpenOptionsExt},
     path::{Component, Path, PathBuf},
 };
 
-use chrono::{DateTime, SecondsFormat, Utc};
+use chrono::{DateTime, Utc};
 use rusqlite::params;
-use sha2::{Digest, Sha256};
 use uuid::Uuid;
 
-use super::database::{DatabaseResult, SuplexDatabase};
+use super::{
+    PlatformError,
+    database::{DatabaseResult, SuplexDatabase},
+};
 
 pub const MAX_ARTIFACT_BYTES: usize = 8 * 1024 * 1024;
 
-#[derive(Debug)]
-pub struct ArtifactFailure {
-    pub code: &'static str,
-    pub message: &'static str,
-}
-
-impl ArtifactFailure {
+impl PlatformError {
     pub const fn invalid_image_data() -> Self {
-        Self {
+        Self::Artifact {
             code: "invalid-image-data",
             message: "Image data is invalid or too large",
         }
     }
 
     fn invalid_artifact() -> Self {
-        Self {
+        Self::Artifact {
             code: "invalid-artifact",
             message: "Artifact input is invalid",
         }
     }
 
     fn invalid_company() -> Self {
-        Self {
+        Self::Artifact {
             code: "invalid-company",
             message: "Artifact company is invalid",
         }
     }
 
     fn traversal() -> Self {
-        Self {
+        Self::Artifact {
             code: "artifact-traversal",
             message: "Artifact path is invalid",
         }
     }
 
     fn company_scope() -> Self {
-        Self {
+        Self::Artifact {
             code: "artifact-company-scope",
             message: "Artifact is outside the company root",
         }
     }
 }
-
-impl fmt::Display for ArtifactFailure {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(self.message)
-    }
-}
-
-impl Error for ArtifactFailure {}
 
 #[derive(Debug, Clone)]
 pub struct StoredArtifact {
@@ -96,11 +85,7 @@ fn valid_company_id(company_id: &str) -> bool {
         && !company_id.is_empty()
 }
 
-fn validate(
-    company_id: &str,
-    kind: &str,
-    input: &ArtifactInput<'_>,
-) -> Result<(), ArtifactFailure> {
+fn validate(company_id: &str, kind: &str, input: &ArtifactInput<'_>) -> Result<(), PlatformError> {
     if kind.trim().is_empty()
         || input.mime_type.is_empty()
         || input.mime_type.contains(['\r', '\n'])
@@ -112,15 +97,15 @@ fn validate(
             .and_then(|name| name.to_str())
             != Some(input.filename)
     {
-        return Err(ArtifactFailure::invalid_artifact());
+        return Err(PlatformError::invalid_artifact());
     }
     if !valid_company_id(company_id) {
-        return Err(ArtifactFailure::invalid_company());
+        return Err(PlatformError::invalid_company());
     }
     Ok(())
 }
 
-fn checked(root: &Path, company_id: &str, storage_path: &str) -> Result<PathBuf, ArtifactFailure> {
+fn checked(root: &Path, company_id: &str, storage_path: &str) -> Result<PathBuf, PlatformError> {
     if !valid_company_id(company_id)
         || storage_path.is_empty()
         || storage_path.contains('\\')
@@ -132,11 +117,11 @@ fn checked(root: &Path, company_id: &str, storage_path: &str) -> Result<PathBuf,
             .split('/')
             .any(|part| part.is_empty() || matches!(part, "." | ".."))
     {
-        return Err(ArtifactFailure::traversal());
+        return Err(PlatformError::traversal());
     }
     let target = root.join(storage_path);
     if !target.starts_with(root.join(company_id)) {
-        return Err(ArtifactFailure::company_scope());
+        return Err(PlatformError::company_scope());
     }
     Ok(target)
 }
@@ -153,7 +138,7 @@ pub fn put_in_transaction(
 ) -> DatabaseResult<StoredArtifact> {
     validate(company_id, kind, input)?;
     let id = format!("artifact_{}", Uuid::new_v4().simple());
-    let sha256 = format!("{:x}", Sha256::digest(input.bytes));
+    let sha256 = sha256_hex(input.bytes);
     let storage_path = format!("{company_id}/objects/{}/{}.bin", &sha256[..2], id);
     let path = checked(root, company_id, &storage_path)?;
     fs::DirBuilder::new()
@@ -178,7 +163,7 @@ pub fn put_in_transaction(
         byte_size: input.bytes.len(),
         sha256,
         storage_path,
-        created_at: now.to_rfc3339_opts(SecondsFormat::Millis, true),
+        created_at: rfc3339_millis(now),
     };
     let insert = database.connection().execute(
         "INSERT INTO suplex_artifacts (id, company_id, task_id, kind, filename, mime_type, byte_size, sha256, storage_path, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
@@ -269,7 +254,7 @@ mod tests {
             input.bytes
         );
         assert_eq!(stored.byte_size, input.bytes.len());
-        assert_eq!(stored.sha256, format!("{:x}", Sha256::digest(input.bytes)));
+        assert_eq!(stored.sha256, sha256_hex(input.bytes));
         assert!(stored.storage_path.starts_with("company/objects/"));
         let recorded_path: String = database
             .connection()

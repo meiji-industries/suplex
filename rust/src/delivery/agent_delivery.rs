@@ -3,19 +3,20 @@
 //! before it decides and records an audit event. The agent API routes (W8)
 //! resolve the principal and call these functions.
 
+use crate::shared::hash::sha256_hex;
+use crate::shared::time::{now_millis_rfc3339, rfc3339_millis};
+use crate::tasks::TaskError;
 use std::path::Path;
 
-use chrono::{Duration, SecondsFormat, Utc};
+use chrono::{Duration, Utc};
 use rusqlite::{OptionalExtension, params};
 use serde_json::{Value, json};
-use sha2::{Digest, Sha256};
 
 use super::{inspection::ReviewRange, operations::DeliveryOperations};
 use crate::{
     coordination::root_bridge::RootIdentity,
     integrations::github_delivery::Observation,
     platform::database::{DatabaseResult, OpenMode, SuplexDatabase},
-    tasks::commands::TaskFailure,
 };
 
 const APPROVAL_TTL_MINUTES: i64 = 15;
@@ -26,18 +27,6 @@ pub const HEAD_NOT_ACCEPTED: &str = "Suplex has not accepted this pull request h
 pub struct AgentPrincipal {
     pub agent_id: String,
     pub company_id: String,
-}
-
-fn failure(message: impl Into<String>, status_code: u16) -> Box<dyn std::error::Error> {
-    Box::new(TaskFailure {
-        public_message: message.into(),
-        status_code,
-        code: "task_failure",
-    })
-}
-
-fn now() -> String {
-    Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true)
 }
 
 /// TypeScript `mergeBlocker`: the single reason this pull request cannot merge now.
@@ -98,7 +87,7 @@ pub fn needs_reconciliation(observed: Option<&Observation>) -> bool {
 }
 
 fn receipt_hash(receipt: &str) -> String {
-    format!("{:x}", Sha256::digest(receipt.as_bytes()))
+    sha256_hex(receipt.as_bytes())
 }
 
 fn reconciliation_prompt(base_branch: &str, observed: &Observation) -> String {
@@ -186,7 +175,7 @@ impl AgentDelivery {
             params![task_id, principal.company_id, principal.agent_id],
             |row| Ok((row.get(0)?, row.get(1)?)),
         ).optional()?;
-        row.ok_or_else(|| failure("Not found", 404))
+        Ok(row.ok_or_else(TaskError::not_found)?)
     }
 
     fn control(&self, task_id: &str) -> DatabaseResult<Value> {
@@ -235,7 +224,7 @@ impl AgentDelivery {
         }
         self.open(OpenMode::ReadWrite)?.connection().execute(
             "INSERT INTO suplex_audit_events (id, actor_user_id, actor_agent_id, action, target_user_id, company_id, metadata_json, created_at) VALUES (?1, NULL, ?2, ?3, NULL, ?4, ?5, ?6)",
-            params![format!("audit_{}", uuid::Uuid::new_v4().simple()), principal.agent_id, action, company_id, crate::shared::js_json::stringify(&metadata), now()],
+            params![format!("audit_{}", uuid::Uuid::new_v4().simple()), principal.agent_id, action, company_id, crate::shared::js_json::stringify(&metadata), now_millis_rfc3339()],
         )?;
         Ok(())
     }
@@ -267,7 +256,7 @@ impl AgentDelivery {
         self.open(OpenMode::ReadWrite)?.connection().execute(
             "INSERT INTO suplex_delivery_provenance (id, task_id, attempt_id, agent_id, kind, pull_request_number, original_head_sha, head_sha, base_sha, checks_json, merge_json, recorded_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
             params![id, task_id, attempt_id, agent_id, kind, number.map(|n| n as i64), original, head, base,
-                checks.map(|checks| crate::shared::js_json::stringify(&checks)), merge.map(crate::shared::js_json::stringify), now()],
+                checks.map(|checks| crate::shared::js_json::stringify(&checks)), merge.map(crate::shared::js_json::stringify), now_millis_rfc3339()],
         )?;
         Ok(())
     }
@@ -280,11 +269,11 @@ impl AgentDelivery {
                 "SELECT id, generation FROM suplex_task_sessions WHERE task_id = ?1 AND kind = 'root' AND is_current = 1",
                 [task_id], |row| Ok((row.get(0)?, row.get(1)?)),
             ).optional()?;
-            let (root_id, generation) = root.ok_or_else(|| failure("Coordinator is not ready. Retry the request.", 409))?;
-            let time = now();
+            let (root_id, generation) = root.ok_or_else(|| TaskError::new("Coordinator is not ready. Retry the request.", 409))?;
+            let time = now_millis_rfc3339();
             database.connection().execute(
                 "INSERT INTO suplex_task_turns (id, task_id, session_id, generation, prompt_hash, prompt_text, status, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'pending_prompt', ?7, ?7)",
-                params![turn_id, task_id, root_id, generation, format!("{:x}", Sha256::digest(prompt.as_bytes())), prompt, time],
+                params![turn_id, task_id, root_id, generation, sha256_hex(prompt.as_bytes()), prompt, time],
             )?;
             Ok(())
         })
@@ -338,28 +327,28 @@ impl AgentDelivery {
         let (company, _) = self.task(principal, task_id)?;
         let control = self.control(task_id)?;
         if control["status"] != "active" {
-            return Err(failure(
-                "Start the task before you request delivery repair.",
-                409,
-            ));
+            return Err(
+                TaskError::new("Start the task before you request delivery repair.", 409).into(),
+            );
         }
         if let Some(blocking) = self.blocking_dependencies(task_id)?.first() {
-            return Err(failure(
+            return Err(TaskError::new(
                 format!(
                     "Task {blocking} is not delivered. Wait for its delivery instead of a delivery repair."
                 ),
                 409,
-            ));
+            ).into());
         }
         let observation = self.operations.checks_observation(task_id).await?;
         let Some(observed) = observation.filter(|o| o.exists && o.number.is_some()) else {
-            return Err(failure("The task has no pull request.", 409));
+            return Err(TaskError::new("The task has no pull request.", 409).into());
         };
         if !needs_reconciliation(Some(&observed)) {
-            return Err(failure(
+            return Err(TaskError::new(
                 "GitHub reports no delivery problem for this pull request.",
                 409,
-            ));
+            )
+            .into());
         }
         let attempt = format!("dpr_{}", uuid::Uuid::new_v4().simple());
         self.wake_root(
@@ -403,21 +392,23 @@ impl AgentDelivery {
         let (company, _) = self.task(principal, task_id)?;
         let blocking = self.blocking_dependencies(task_id)?;
         if decision == "wait_for_dependency" && blocking.is_empty() {
-            return Err(failure(
+            return Err(TaskError::new(
                 "Every dependency of this task is delivered. Resume the task.",
                 409,
-            ));
+            )
+            .into());
         }
         if decision == "resume" {
             if let Some(first) = blocking.first() {
-                return Err(failure(
+                return Err(TaskError::new(
                     format!("Task {first} is not delivered. Wait for its delivery."),
                     409,
-                ));
+                )
+                .into());
             }
             let control = self.control(task_id)?;
             if control["status"] != "active" {
-                return Err(failure("Start the task before you resume it.", 409));
+                return Err(TaskError::new("Start the task before you resume it.", 409).into());
             }
             self.wake_root(
                 task_id,
@@ -520,16 +511,15 @@ impl AgentDelivery {
             .checks_observation(task_id)
             .await?
             .ok_or_else(|| {
-                failure(
+                TaskError::new(
                     "GitHub did not return the pull request. Retry the request.",
                     409,
                 )
             })?;
         if observation.number != Some(number) {
-            return Err(failure(
-                "The pull request number does not match this task.",
-                422,
-            ));
+            return Err(
+                TaskError::new("The pull request number does not match this task.", 422).into(),
+            );
         }
         let blocking = self.blocking_dependencies(task_id)?;
         let accepted = self.accepted(task_id)?;
@@ -538,15 +528,16 @@ impl AgentDelivery {
             blocking.first().map(String::as_str),
             accepted.as_ref().map(|a| a.head_sha.as_str()),
         ) {
-            return Err(failure(blocker, 409));
+            return Err(TaskError::new(blocker, 409).into());
         }
         // A moved base is not an authorization failure: `execute` checks the
         // review against the current base.
         if observation.head_sha.as_deref() != Some(head_sha) {
-            return Err(failure(
+            return Err(TaskError::new(
                 "GitHub reports a different head. Refresh the observation before you merge.",
                 409,
-            ));
+            )
+            .into());
         }
         Ok(observation)
     }
@@ -562,19 +553,18 @@ impl AgentDelivery {
         let (company, _) = self.task(principal, task_id)?;
         let observed = self.require_eligible(task_id, number, head_sha).await?;
         let mut bytes = [0_u8; 32];
-        getrandom::fill(&mut bytes).map_err(|error| std::io::Error::other(error.to_string()))?;
+        getrandom::fill(&mut bytes)?;
         let receipt = format!(
             "fma_{}",
             base64::Engine::encode(&base64::engine::general_purpose::URL_SAFE_NO_PAD, bytes)
         );
         let created = Utc::now();
-        let expires = (created + Duration::minutes(APPROVAL_TTL_MINUTES))
-            .to_rfc3339_opts(SecondsFormat::Millis, true);
+        let expires = rfc3339_millis(created + Duration::minutes(APPROVAL_TTL_MINUTES));
         let mut database = self.open(OpenMode::ReadWrite)?;
         database.transaction(false, |database| {
             database.connection().execute(
                 "INSERT INTO suplex_merge_approvals (id, task_id, agent_id, pull_request_number, head_sha, base_sha, receipt_hash, created_at, expires_at, consumed_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, NULL)",
-                params![format!("mar_{}", uuid::Uuid::new_v4().simple()), task_id, principal.agent_id, number as i64, observed.head_sha, observed.base_sha, receipt_hash(&receipt), created.to_rfc3339_opts(SecondsFormat::Millis, true), expires],
+                params![format!("mar_{}", uuid::Uuid::new_v4().simple()), task_id, principal.agent_id, number as i64, observed.head_sha, observed.base_sha, receipt_hash(&receipt), rfc3339_millis(created), expires],
             )?;
             Ok(())
         })?;
@@ -602,21 +592,21 @@ impl AgentDelivery {
                     .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
         });
         if !valid_receipt {
-            return Err(failure("The approval receipt is not valid.", 403));
+            return Err(TaskError::new("The approval receipt is not valid.", 403).into());
         }
         if self.control(task_id)?["status"] != "active" {
-            return Err(failure("The task is not active.", 409));
+            return Err(TaskError::new("The task is not active.", 409).into());
         }
         let observation = self
             .require_eligible(task_id, number, expected_head_sha)
             .await?;
-        let time = now();
+        let time = now_millis_rfc3339();
         let consumed = self.open(OpenMode::ReadWrite)?.connection().execute(
             "UPDATE suplex_merge_approvals SET consumed_at = ?1 WHERE receipt_hash = ?2 AND task_id = ?3 AND agent_id = ?4 AND pull_request_number = ?5 AND head_sha = ?6 AND consumed_at IS NULL AND expires_at > ?1",
             params![time, receipt_hash(approval_receipt), task_id, principal.agent_id, number as i64, expected_head_sha],
         )?;
         if consumed != 1 {
-            return Err(failure("The approval receipt is not valid.", 403));
+            return Err(TaskError::new("The approval receipt is not valid.", 403).into());
         }
         let control = self.control(task_id)?;
         let root_id = control["rootSessionId"].as_str().map(str::to_owned);
@@ -624,13 +614,13 @@ impl AgentDelivery {
             "SELECT id, generation FROM suplex_task_sessions WHERE task_id = ?1 AND kind = 'root' AND is_current = 1",
             [task_id], |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
         ).optional()?.filter(|(id, _)| root_id.as_deref().is_none_or(|root| root == id));
-        let (session_id, generation) =
-            root.ok_or_else(|| failure("Coordinator is not ready. Retry the request.", 409))?;
+        let (session_id, generation) = root
+            .ok_or_else(|| TaskError::new("Coordinator is not ready. Retry the request.", 409))?;
         // The accepted range is the Coordinator's own review. Suplex never rebuilds it for the agent.
         let accepted = self
             .accepted(task_id)?
             .filter(|accepted| Some(accepted.head_sha.as_str()) == observation.head_sha.as_deref())
-            .ok_or_else(|| failure(HEAD_NOT_ACCEPTED, 409))?;
+            .ok_or_else(|| TaskError::new(HEAD_NOT_ACCEPTED, 409))?;
         let identity = RootIdentity {
             task_id: task_id.to_owned(),
             session_id,
@@ -853,8 +843,11 @@ mod tests {
             .await
             .unwrap_err();
         // Eligibility, the receipt, and the Coordinator checks fail with a
-        // TaskFailure. This one passed them; the delivery operation decides.
-        assert!(!error.is::<TaskFailure>(), "{error}");
+        // TaskError::Failure. This one passed them; the delivery operation decides.
+        assert!(
+            !matches!(error.downcast_ref(), Some(TaskError::Failure { .. })),
+            "{error}"
+        );
         let consumed: Option<String> = delivery
             .open(OpenMode::ReadOnly)
             .unwrap()

@@ -3,6 +3,10 @@
 //! Reads cover every task in the agent's current project grants. Commands,
 //! dependency writes, and duplicates stay limited to tasks the agent created.
 
+use crate::projects::ProjectError;
+use crate::shared::hash::sha256_hex;
+use crate::shared::time::rfc3339_millis;
+use crate::tasks::TaskError;
 use std::{
     collections::HashSet,
     error::Error,
@@ -12,7 +16,7 @@ use std::{
 };
 
 use base64::{Engine, engine::general_purpose::STANDARD, engine::general_purpose::URL_SAFE_NO_PAD};
-use chrono::{DateTime, SecondsFormat, Utc};
+use chrono::{DateTime, Utc};
 use rusqlite::{OptionalExtension, params, params_from_iter, types::Value as SqlValue};
 use serde_json::{Map, Value, json};
 use sha2::{Digest, Sha256};
@@ -36,68 +40,33 @@ use crate::{
     },
     projects::{
         repository as git,
-        service::{self as projects, Project, ProjectFailure},
+        service::{self as projects, Project},
     },
 };
 
 use super::{
     archive::operations as archive,
-    commands::{self, TaskFailure},
-    images, integration, pull_request_dependencies,
+    commands, images, integration, pull_request_dependencies,
     repository::{self, TaskCreator},
     response, sources,
 };
 
-/// A task failure with the runtime detail fields TypeScript spreads into the error body.
-#[derive(Debug, Clone)]
-pub struct AgentTaskFailure {
-    pub public_message: String,
-    pub status_code: u16,
-    pub code: &'static str,
-    pub details: Map<String, Value>,
+fn fail(message: &str, status: u16, code: &'static str) -> Box<dyn Error> {
+    fail_with(message, status, code, Value::Null)
 }
 
-impl fmt::Display for AgentTaskFailure {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(&self.public_message)
-    }
-}
-
-impl Error for AgentTaskFailure {}
-
-fn fail(message: &str, status_code: u16, code: &'static str) -> Box<dyn Error> {
-    Box::new(AgentTaskFailure {
-        public_message: message.to_owned(),
-        status_code,
+fn fail_with(message: &str, status: u16, code: &'static str, details: Value) -> Box<dyn Error> {
+    TaskError::Agent {
+        status,
         code,
-        details: Map::new(),
-    })
-}
-
-fn fail_with(
-    message: &str,
-    status_code: u16,
-    code: &'static str,
-    details: Value,
-) -> Box<dyn Error> {
-    Box::new(AgentTaskFailure {
-        public_message: message.to_owned(),
-        status_code,
-        code,
+        message: message.to_owned(),
         details: details.as_object().cloned().unwrap_or_default(),
-    })
+    }
+    .into()
 }
 
 fn not_found() -> Box<dyn Error> {
     fail("Not found", 404, "resource_not_found")
-}
-
-fn timestamp(now: DateTime<Utc>) -> String {
-    now.to_rfc3339_opts(SecondsFormat::Millis, true)
-}
-
-fn sha256_hex(value: &str) -> String {
-    format!("{:x}", Sha256::digest(value.as_bytes()))
 }
 
 /// HMAC-SHA256 as `createHmac("sha256", key)`, encoded as base64url.
@@ -542,8 +511,7 @@ pub fn templates(
         .collect::<rusqlite::Result<Vec<_>>>()?;
     rows.into_iter()
         .map(|(id, name, configuration)| {
-            let configuration = task_templates::parse_stored_configuration(serde_json::from_str(&configuration)?)
-                .map_err(std::io::Error::other)?;
+            let configuration = task_templates::parse_stored_configuration(serde_json::from_str(&configuration)?)?;
             let permitted = policy.template_ids.contains(&id);
             Ok(json!({"id": id, "name": name, "description": configuration.description, "permittedForAgentTaskCreation": permitted}))
         })
@@ -899,7 +867,7 @@ async fn with_integration(
     stored: Targets,
 ) -> Vec<Value> {
     let Targets { targets, pool } = stored;
-    let observed_at = timestamp(Utc::now());
+    let observed_at = crate::shared::time::now_millis_rfc3339();
     let upstreams = targets
         .iter()
         .map(|(_, task)| {
@@ -1119,9 +1087,9 @@ fn task_input(mut fields: Map<String, Value>) -> DatabaseResult<task_contracts::
     normalize_workflow(&mut fields)?;
     task_contracts::parse_task_create(Some(&Value::Object(fields))).map_err(|error| match error {
         ContractFailure::Issues(issues) => {
-            std::io::Error::other(format!("task input is invalid: {issues:?}")).into()
+            TaskError::internal(format!("task input is invalid: {issues:?}")).into()
         }
-        other => std::io::Error::other(format!("task input is invalid: {other:?}")).into(),
+        other => TaskError::internal(format!("task input is invalid: {other:?}")).into(),
     })
 }
 
@@ -1154,7 +1122,7 @@ fn request_hash(raw: &TaskCreateBody, agent_id: &str) -> DatabaseResult<String> 
         fields.remove("dryRun");
     }
     let payload = sorted(&json!({"input": input, "creator": {"kind": "agent", "id": agent_id}}));
-    Ok(sha256_hex(&crate::shared::js_json::stringify(&payload)))
+    Ok(sha256_hex(crate::shared::js_json::stringify(&payload)))
 }
 
 fn is_legacy_request(raw: &TaskCreateBody) -> bool {
@@ -1194,7 +1162,7 @@ fn legacy_hash(raw: &TaskCreateBody, agent_id: &str) -> DatabaseResult<String> {
         fields.remove(name);
     }
     let payload = json!({"input": fields, "creator": {"kind": "agent", "id": agent_id}});
-    Ok(sha256_hex(&crate::shared::js_json::stringify(&payload)))
+    Ok(sha256_hex(crate::shared::js_json::stringify(&payload)))
 }
 
 fn conflict() -> Box<dyn Error> {
@@ -1333,8 +1301,7 @@ fn resolve(
                 details("The selected template is not permitted."),
             ));
         }
-        let template = task_templates::parse_stored_configuration(serde_json::from_str(&stored)?)
-            .map_err(std::io::Error::other)?;
+        let template = task_templates::parse_stored_configuration(serde_json::from_str(&stored)?)?;
         selected = serde_json::to_value(&template)?
             .as_object()
             .cloned()
@@ -1921,11 +1888,7 @@ pub async fn create(
         git::capture_local_task_heads(&state.project_github, &repository_path, &base_branch, host)
             .await;
     let base_sha = captured.map_err(|findings| {
-        Box::new(ProjectFailure {
-            message: "Project configuration could not be captured",
-            status_code: 422,
-            findings,
-        }) as Box<dyn Error>
+        ProjectError::new("Project configuration could not be captured", 422, findings)
     })?;
     let artifact_root = state.artifact_root.clone();
     state.with_database(|database| {
@@ -1945,10 +1908,13 @@ pub async fn create(
 
 /// A rejected source names its field, value, and reason; provider outages keep their own failure.
 fn source_rejection(error: Box<dyn Error>, selector: Option<&Value>) -> Box<dyn Error> {
-    let reason = if let Some(failure) = error.downcast_ref::<sources::TaskSourceFailure>() {
-        (failure.status_code < 500).then(|| failure.message.to_owned())
-    } else if let Some(failure) = error.downcast_ref::<ProjectFailure>() {
-        (failure.status_code < 500).then(|| failure.message.to_owned())
+    let reason = if let Some(TaskError::Source {
+        status, message, ..
+    }) = error.downcast_ref()
+    {
+        (*status < 500).then(|| (*message).to_owned())
+    } else if let Some(failure) = error.downcast_ref::<ProjectError>() {
+        (failure.status() < 500).then(|| failure.to_string())
     } else {
         None
     };
@@ -1995,13 +1961,9 @@ fn replace_dependencies(
     depends_on.sort();
     depends_on.dedup();
     if depends_on.iter().any(|dependency| dependency == task_id) {
-        return Err(Box::new(TaskFailure {
-            public_message: "A task cannot depend on itself".into(),
-            status_code: 422,
-            code: "task_failure",
-        }));
+        return Err(TaskError::new("A task cannot depend on itself", 422).into());
     }
-    let time = timestamp(now);
+    let time = rfc3339_millis(now);
     database.transaction(true, |database| {
         let was_blocked: bool = database.connection().query_row(
             "SELECT EXISTS(SELECT 1 FROM suplex_task_dependencies d LEFT JOIN suplex_task_controls c ON c.task_id = d.depends_on_task_id WHERE d.task_id = ?1 AND COALESCE(c.status, 'backlog') <> 'delivered')",
@@ -2014,7 +1976,7 @@ fn replace_dependencies(
                 .query_row("SELECT company_id FROM suplex_tasks WHERE id = ?1", [dependency], |row| row.get(0))
                 .optional()?;
             if company.as_deref() != Some(company_id) {
-                return Err(Box::new(TaskFailure { public_message: "A dependency task is not available".into(), status_code: 404, code: "task_failure" }));
+                return Err(TaskError::new("A dependency task is not available", 404).into());
             }
         }
         database.connection().execute("DELETE FROM suplex_task_dependencies WHERE task_id = ?1", [task_id])?;
@@ -2028,7 +1990,7 @@ fn replace_dependencies(
         let mut queue = depends_on.clone();
         while let Some(next) = queue.pop() {
             if next == task_id {
-                return Err(Box::new(TaskFailure { public_message: "The dependency creates a cycle".into(), status_code: 422, code: "task_failure" }));
+                return Err(TaskError::new("The dependency creates a cycle", 422).into());
             }
             if !seen.insert(next.clone()) {
                 continue;
@@ -2257,7 +2219,7 @@ fn claim(
     task_id: &str,
     input: &TaskCommandBody,
 ) -> DatabaseResult<Claim> {
-    let hash = sha256_hex(&crate::shared::js_json::stringify(&serde_json::to_value(
+    let hash = sha256_hex(crate::shared::js_json::stringify(&serde_json::to_value(
         input,
     )?));
     require_owned(database, principal, task_id)?;
@@ -2338,7 +2300,7 @@ fn finish(
     database.transaction(false, |database| {
         database.connection().execute(
             "INSERT INTO suplex_hermes_task_command_receipts (agent_id, task_id, idempotency_key, request_hash, result_json, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            params![principal.agent_id, task_id, input.idempotency_key, hash, crate::shared::js_json::stringify(&result), timestamp(now)],
+            params![principal.agent_id, task_id, input.idempotency_key, hash, crate::shared::js_json::stringify(&result), rfc3339_millis(now)],
         )?;
         Ok(())
     })?;
@@ -2515,7 +2477,7 @@ fn duplicate_request(
                 .unwrap_or_default()
                 .to_owned(),
         ),
-        idempotency_key: format!("duplicate-{}", sha256_hex(&format!("{task_id}:{key}"))),
+        idempotency_key: format!("duplicate-{}", sha256_hex(format!("{task_id}:{key}"))),
         depends_on: None,
         blocked_by_pull_requests: None,
         queue: None,
@@ -2609,25 +2571,28 @@ pub async fn command(
 
 /// A failure that crosses the blocking-thread boundary keeps its domain type.
 enum Crossed {
-    Task(TaskFailure),
-    Agent(AgentTaskFailure),
+    Task(TaskError),
     Other(String),
 }
 
 fn crossed(error: Box<dyn Error>) -> Crossed {
-    if let Some(failure) = error.downcast_ref::<AgentTaskFailure>() {
-        return Crossed::Agent(failure.clone());
-    }
-    match error.downcast::<TaskFailure>() {
-        Ok(failure) => Crossed::Task(*failure),
+    match error.downcast::<TaskError>() {
+        Ok(failure)
+            if matches!(
+                *failure,
+                TaskError::Failure { .. } | TaskError::Agent { .. }
+            ) =>
+        {
+            Crossed::Task(*failure)
+        }
+        Ok(failure) => Crossed::Other(failure.to_string()),
         Err(error) => Crossed::Other(error.to_string()),
     }
 }
 
 fn uncrossed(error: Crossed) -> Box<dyn Error> {
     match error {
-        Crossed::Task(failure) => Box::new(failure),
-        Crossed::Agent(failure) => Box::new(failure),
+        Crossed::Task(failure) => failure.into(),
         // TypeScript turns any other archive failure into a 409 task failure.
         Crossed::Other(message) => fail(&message, 409, "task_failure"),
     }

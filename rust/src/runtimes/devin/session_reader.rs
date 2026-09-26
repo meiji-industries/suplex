@@ -1,3 +1,4 @@
+use crate::shared::fs::read_optional;
 use std::{
     collections::{BTreeSet, HashMap},
     fs, io,
@@ -40,14 +41,6 @@ fn created_at(file: &fs::Metadata) -> i64 {
         .ok()
         .filter(|created| *created > 0)
         .unwrap_or_else(|| modified_at(file))
-}
-
-fn read_optional(path: &Path) -> io::Result<Option<String>> {
-    match fs::read_to_string(path) {
-        Ok(text) => Ok(Some(text)),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
-        Err(error) => Err(error),
-    }
 }
 
 fn valid_id(id: &str) -> bool {

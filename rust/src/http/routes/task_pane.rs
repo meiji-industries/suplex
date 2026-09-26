@@ -2,6 +2,7 @@
 //! the task Shell is interactive. Herdr owns the panes: a missing or recreated
 //! pane closes the socket, and the browser reconnects to the current pane.
 
+use crate::shared::time::now_millis_rfc3339;
 use std::{error::Error, time::Duration};
 
 use axum::{
@@ -14,7 +15,6 @@ use axum::{
     response::Response,
     routing::get,
 };
-use chrono::{SecondsFormat, Utc};
 use rusqlite::{OptionalExtension, params};
 use serde_json::{Value, json};
 use tokio::sync::mpsc::UnboundedReceiver;
@@ -272,7 +272,7 @@ fn task_shell_pane(
             state.with_database(|database| {
                 database.connection().execute(
                     "UPDATE suplex_task_controls SET shell_pane_id = ?1, updated_at = ?2 WHERE task_id = ?3",
-                    params![pane_id, Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true), task_id],
+                    params![pane_id, now_millis_rfc3339(), task_id],
                 )
             })?;
             Ok(())
@@ -392,7 +392,7 @@ pub(crate) mod tests {
         std::fs::create_dir_all(&root).unwrap();
         let mut database =
             SuplexDatabase::open(&root.join("suplex.sqlite"), OpenMode::Migrate).unwrap();
-        let now = Utc::now();
+        let now = chrono::Utc::now();
         let admin = identity_auth::development_sign_in(&mut database, now).unwrap();
         let stamp = now.to_rfc3339();
         database.connection().execute("INSERT INTO suplex_companies (id,name,status,created_at) VALUES ('pane_company','Pane','active',?1)", [&stamp]).unwrap();

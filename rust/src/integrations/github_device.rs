@@ -1,9 +1,10 @@
 //! GitHub OAuth App device authorization. Device codes stay in process memory;
 //! only the user code and verification URL cross the HTTP boundary.
 
+use crate::shared::time::rfc3339_millis;
 use std::{collections::HashMap, error::Error, future::Future, io, sync::Arc, time::Duration};
 
-use chrono::{DateTime, SecondsFormat, Timelike, Utc};
+use chrono::{DateTime, Timelike, Utc};
 use reqwest::{Client, Url};
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
@@ -91,10 +92,6 @@ pub struct Granted {
     pub login: String,
 }
 
-fn public_time(value: DateTime<Utc>) -> String {
-    value.to_rfc3339_opts(SecondsFormat::Millis, true)
-}
-
 /// The published time has millisecond precision; keep the stored time equal to
 /// it so a client polling at exactly that time is not early.
 fn at_millis(value: DateTime<Utc>) -> DateTime<Utc> {
@@ -130,7 +127,7 @@ impl DeviceAuth {
             .send()
             .await?;
         if !response.status().is_success() {
-            return Err(io::Error::other("GitHub device authorization is unavailable").into());
+            return Err("GitHub device authorization is unavailable".into());
         }
         let code: DeviceCodeResponse = response.json().await.map_err(|_| {
             io::Error::new(
@@ -170,7 +167,7 @@ impl DeviceAuth {
             flow_id,
             user_code: code.user_code,
             verification_uri: code.verification_uri,
-            expires_at: public_time(expires_at),
+            expires_at: rfc3339_millis(expires_at),
             interval_seconds: code.interval,
         })
     }
@@ -204,7 +201,7 @@ impl DeviceAuth {
             }
             if now < flow.next_poll_at {
                 return Ok(Poll::Pending {
-                    next_poll_at: public_time(flow.next_poll_at),
+                    next_poll_at: rfc3339_millis(flow.next_poll_at),
                 });
             }
             flow.next_poll_at = at_millis(now + chrono::Duration::from_std(flow.interval)?);
@@ -221,7 +218,7 @@ impl DeviceAuth {
                 .send()
                 .await?;
             if !response.status().is_success() {
-                return Err(io::Error::other("GitHub device token request failed").into());
+                return Err("GitHub device token request failed".into());
             }
             let token: TokenResponse = response.json().await.map_err(|_| {
                 io::Error::new(
@@ -232,7 +229,7 @@ impl DeviceAuth {
             match token.error.as_deref() {
                 Some("authorization_pending") => {
                     return Ok(Poll::Pending {
-                        next_poll_at: public_time(flow.next_poll_at),
+                        next_poll_at: rfc3339_millis(flow.next_poll_at),
                     });
                 }
                 Some("slow_down") => {
@@ -245,7 +242,7 @@ impl DeviceAuth {
                     flow.next_poll_at =
                         at_millis(Utc::now() + chrono::Duration::from_std(flow.interval)?);
                     return Ok(Poll::Pending {
-                        next_poll_at: public_time(flow.next_poll_at),
+                        next_poll_at: rfc3339_millis(flow.next_poll_at),
                     });
                 }
                 Some("expired_token") => {
@@ -257,7 +254,7 @@ impl DeviceAuth {
                     return Ok(Poll::Denied);
                 }
                 Some(_) => {
-                    return Err(io::Error::other("GitHub device authorization failed").into());
+                    return Err("GitHub device authorization failed".into());
                 }
                 None => {}
             }
@@ -277,18 +274,18 @@ impl DeviceAuth {
         if let Progress::Granted(grant) = &flow.state {
             save(grant.clone())
                 .await
-                .map_err(|_| io::Error::other("GitHub credential store failed"))?;
+                .map_err(|_| "GitHub credential store failed")?;
             flow.state = Progress::Saved(grant.access_token.clone());
         }
         let Progress::Saved(access_token) = &flow.state else {
             unreachable!()
         };
         let access = Access::for_api(&self.api_base, Some(access_token.clone()))
-            .map_err(|_| io::Error::other("GitHub account validation failed"))?;
+            .map_err(|_| "GitHub account validation failed")?;
         let login = access
             .current_user_login()
             .await
-            .map_err(|_| io::Error::other("GitHub account validation failed"))?;
+            .map_err(|_| "GitHub account validation failed")?;
         let result = Poll::Connected { login };
         flow.state = Progress::Complete(result.clone());
         Ok(result)

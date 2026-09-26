@@ -1,27 +1,21 @@
 //! Project task templates: saved task configurations, per project.
 
+use crate::shared::ids::random_hex_id;
+use crate::shared::time::now_millis_rfc3339;
+use crate::tasks::TaskError;
 use std::error::Error;
 
-use chrono::{SecondsFormat, Utc};
 use rusqlite::{OptionalExtension, params};
 use serde_json::{Map, Value, json};
 
 use crate::{
     coordination::workflow_records::normalize_workflow_input,
     http::contracts::typed::task_templates::{self, TemplateConfiguration, TemplateResponse},
-    identity::{auth, companies},
+    identity::companies,
     platform::database::SuplexDatabase,
 };
 
-use super::{commands::TaskFailure, response};
-
-fn failure(message: impl Into<String>, status_code: u16) -> Box<dyn Error> {
-    Box::new(TaskFailure {
-        public_message: message.into(),
-        status_code,
-        code: "task_failure",
-    })
-}
+use super::response;
 
 fn require_project(
     database: &SuplexDatabase,
@@ -36,7 +30,7 @@ fn require_project(
             |row| row.get(0),
         )
         .optional()?;
-    let company_id = company_id.ok_or_else(|| failure("Not found", 404))?;
+    let company_id = company_id.ok_or_else(TaskError::not_found)?;
     companies::require_company_access(database, user_id, &company_id)?;
     Ok(())
 }
@@ -47,8 +41,7 @@ fn template(
     (id, project_id, configuration_json, created_at, updated_at): TemplateRow,
 ) -> Result<TemplateResponse, Box<dyn Error>> {
     let value: Value = serde_json::from_str(&configuration_json)?;
-    let configuration =
-        task_templates::parse_stored_configuration(value).map_err(std::io::Error::other)?;
+    let configuration = task_templates::parse_stored_configuration(value)?;
     Ok(TemplateResponse {
         configuration,
         id,
@@ -86,15 +79,10 @@ pub fn list(
 
 /// Apply workflow defaults, then the create schema.
 fn normalized(mut input: Map<String, Value>) -> Result<TemplateConfiguration, Box<dyn Error>> {
-    normalize_workflow_input(&mut input, false).map_err(|message| failure(message, 422))?;
-    Ok(
-        task_templates::parse_stored_configuration(Value::Object(input))
-            .map_err(std::io::Error::other)?,
-    )
-}
-
-fn now() -> String {
-    Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true)
+    normalize_workflow_input(&mut input, false).map_err(|message| TaskError::new(message, 422))?;
+    Ok(task_templates::parse_stored_configuration(Value::Object(
+        input,
+    ))?)
 }
 
 fn assert_name(
@@ -109,7 +97,7 @@ fn assert_name(
         |row| row.get(0),
     )?;
     if taken {
-        return Err(failure("This template name is already in use", 409));
+        return Err(TaskError::new("This template name is already in use", 409).into());
     }
     Ok(())
 }
@@ -122,8 +110,8 @@ pub fn create(
 ) -> Result<TemplateResponse, Box<dyn Error>> {
     require_project(database, user_id, project_id)?;
     let configuration = normalized(input)?;
-    let id = auth::random_hex_id("template")?;
-    let stamp = now();
+    let id = random_hex_id("template")?;
+    let stamp = now_millis_rfc3339();
     let configuration_json = serde_json::to_string(&configuration)?;
     database.transaction(false, |database| {
         assert_name(database, project_id, &configuration.name, "")?;
@@ -159,11 +147,10 @@ pub fn create_from_task(
     companies::require_company_access(
         database,
         user_id,
-        &company_id.ok_or_else(|| failure("Not found", 404))?,
+        &company_id.ok_or_else(TaskError::not_found)?,
     )?;
-    let task = serde_json::to_value(
-        response::get(database, task_id)?.ok_or_else(|| failure("Not found", 404))?,
-    )?;
+    let task =
+        serde_json::to_value(response::get(database, task_id)?.ok_or_else(TaskError::not_found)?)?;
     let advisor_profile_ids = task["advisorProfiles"]
         .as_object()
         .map(|profiles| {
@@ -199,7 +186,7 @@ fn get(
         .connection()
         .query_row(&format!("{COLUMNS} WHERE id = ?1"), [template_id], row)
         .optional()?
-        .ok_or_else(|| failure("Not found", 404))?;
+        .ok_or_else(TaskError::not_found)?;
     let current = template(stored)?;
     require_project(database, user_id, &current.project_id)?;
     Ok(current)
@@ -235,7 +222,7 @@ pub fn update(
         }
     }
     let configuration = normalized(values)?;
-    let updated_at = now();
+    let updated_at = now_millis_rfc3339();
     let configuration_json = serde_json::to_string(&configuration)?;
     database.transaction(false, |database| {
         assert_name(

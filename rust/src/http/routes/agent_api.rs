@@ -520,14 +520,6 @@ where
         .unwrap_or_else(|_| agent_api_runtime::failure("delivery failed".into(), false))
 }
 
-fn block_on<T>(future: impl std::future::Future<Output = T>) -> Option<T> {
-    tokio::runtime::Builder::new_current_thread()
-        .enable_all()
-        .build()
-        .ok()
-        .map(|runtime| runtime.block_on(future))
-}
-
 async fn delivery_refresh(
     State(state): State<AppState>,
     Path(id): Path<String>,
@@ -535,14 +527,13 @@ async fn delivery_refresh(
 ) -> Response {
     let (delivery, principal, id) = attempt!(delivery_task(&state, &headers, &id));
     detached(move || {
-        block_on(async {
+        crate::shared::blocking::block_on(|| async {
             respond(
                 delivery.refresh(&principal, &id).await,
                 StatusCode::OK,
                 false,
             )
         })
-        .unwrap_or_else(|| agent_api_runtime::failure("delivery failed".into(), false))
     })
     .await
 }
@@ -615,7 +606,7 @@ async fn delivery_merge(
     let request = attempt!(validated(contracts::parse_merge(body.as_ref()), false));
     let (delivery, principal, id) = attempt!(delivery_task(&state, &headers, &id));
     detached(move || {
-        block_on(async {
+        crate::shared::blocking::block_on(|| async {
             let result = delivery
                 .merge(
                     &principal,
@@ -628,7 +619,6 @@ async fn delivery_merge(
                 .await;
             respond(result, StatusCode::OK, false)
         })
-        .unwrap_or_else(|| agent_api_runtime::failure("delivery failed".into(), false))
     })
     .await
 }

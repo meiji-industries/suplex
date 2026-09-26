@@ -81,11 +81,10 @@ pub fn turn_evidence(directory: &Path, turn_id: &str) -> io::Result<Option<Vec<C
             "Invalid turn identity",
         ));
     }
-    match fs::read_to_string(directory.join(format!("turn-{turn_id}.jsonl"))) {
-        Ok(text) => Ok(Some(transcript::parse_events(&text))),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
-        Err(error) => Err(error),
-    }
+    Ok(
+        crate::shared::fs::read_optional(&directory.join(format!("turn-{turn_id}.jsonl")))?
+            .map(|text| transcript::parse_events(&text)),
+    )
 }
 
 pub fn busy(directory: &Path) -> io::Result<bool> {

@@ -2,6 +2,7 @@
 //! attachment is an observation: a missing or recreated pane is rediscovered or
 //! replaced, and a display failure never gates native work.
 
+use crate::shared::time::now_millis_rfc3339;
 use std::{
     collections::HashSet,
     error::Error,
@@ -9,7 +10,6 @@ use std::{
     time::{Duration, Instant},
 };
 
-use chrono::{SecondsFormat, Utc};
 use rusqlite::{OptionalExtension, params};
 
 use crate::{
@@ -366,7 +366,7 @@ pub fn attach_session(herdr: &Herdr, display: &SessionDisplay<'_>) -> DisplayRes
     } else {
         None
     };
-    let now = || Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
+    let now = || now_millis_rfc3339();
     let directory = display.worktree.to_string_lossy();
     attach_task_display(
         herdr,

@@ -1,7 +1,7 @@
 use std::{
     fs::{self, OpenOptions},
     io::{self, Write},
-    os::unix::fs::{OpenOptionsExt, PermissionsExt},
+    os::unix::fs::PermissionsExt,
     path::{Path, PathBuf},
     sync::Mutex,
 };
@@ -104,24 +104,8 @@ pub fn ensure(directory: &Path, suplex: &str, gh_command: Option<&str>) -> io::R
         "{}\n",
         serde_json::to_string_pretty(&next).map_err(io::Error::other)?
     );
-    let existing = match fs::read_to_string(&path) {
-        Ok(text) => Some(text),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => None,
-        Err(error) => return Err(error),
-    };
-    if existing.as_deref() != Some(serialized.as_str()) {
-        let pending = PathBuf::from(format!(
-            "{}.{}.pending",
-            path.display(),
-            uuid::Uuid::new_v4()
-        ));
-        OpenOptions::new()
-            .write(true)
-            .create_new(true)
-            .mode(0o600)
-            .open(&pending)?
-            .write_all(serialized.as_bytes())?;
-        fs::rename(pending, &path)?;
+    if crate::shared::fs::read_optional(&path)?.as_deref() != Some(serialized.as_str()) {
+        crate::shared::fs::write_private(&path, serialized.as_bytes())?;
     }
     Ok(path)
 }

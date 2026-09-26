@@ -1,5 +1,6 @@
 //! Read-only task details backed by saved intent and native observations.
 
+use crate::tasks::TaskError;
 use std::{error::Error, path::PathBuf};
 
 use axum::{
@@ -24,7 +25,7 @@ use crate::{
     integrations::github::Access,
     platform::database::SuplexDatabase,
     runtimes::{task_harness::ReaderSession, task_harness_registry},
-    tasks::{commands::TaskFailure, worktree},
+    tasks::worktree,
 };
 
 use super::auth;
@@ -127,14 +128,6 @@ fn authorize(
     }
 }
 
-fn not_found() -> Box<dyn Error> {
-    Box::new(TaskFailure {
-        public_message: "Not found".into(),
-        status_code: 404,
-        code: "task_failure",
-    })
-}
-
 fn read_task(
     database: &SuplexDatabase,
     user_id: &str,
@@ -148,7 +141,7 @@ fn read_task(
             |row| row.get(0),
         )
         .optional()?;
-    let company_id = company_id.ok_or_else(not_found)?;
+    let company_id = company_id.ok_or_else(TaskError::not_found)?;
     companies::require_company_access(database, user_id, &company_id)?;
     let rows = root_session_store::root_observation_rows(database, task_id)?;
     let database_path = PathBuf::from(
@@ -158,16 +151,6 @@ fn read_task(
             .ok_or("Task database has no file path")?,
     );
     Ok((rows, database_path))
-}
-
-fn service_error(error: Box<dyn Error>) -> Response {
-    match error.downcast::<TaskFailure>() {
-        Ok(failure) => auth::error(
-            StatusCode::from_u16(failure.status_code).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
-            &failure.public_message,
-        ),
-        Err(error) => auth::service_error(error),
-    }
 }
 
 fn respond(result: Result<Value, Box<dyn Error>>, cookies: Vec<String>) -> Response {
@@ -180,7 +163,7 @@ fn respond(result: Result<Value, Box<dyn Error>>, cookies: Vec<String>) -> Respo
             );
             response
         }
-        Err(error) => service_error(error),
+        Err(error) => auth::service_error(error),
     };
     auth::append_cookies(&mut response, cookies);
     response
@@ -484,7 +467,7 @@ async fn read_diff(
     .await;
     let value = match observed {
         Ok(Ok(value)) => value,
-        Ok(Err(error)) => return respond(Err(Box::new(std::io::Error::other(error))), cookies),
+        Ok(Err(error)) => return respond(Err(error.into()), cookies),
         Err(error) => return respond(Err(Box::new(error)), cookies),
     };
     let scope = state.with_database(|database| read_task(database, &user_id, &task_id));
@@ -500,7 +483,6 @@ mod tests {
         tasks::repository::{self, PreparedTask, TaskCreator},
     };
     use axum::{body::to_bytes, http::HeaderValue};
-    use sha2::{Digest, Sha256};
     use std::{
         fs,
         io::{BufRead, BufReader, Write},
@@ -993,10 +975,7 @@ mod tests {
                 [&task.id],
             ).unwrap();
         });
-        let member_hash = Sha256::digest(b"read_member_token")
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect::<String>();
+        let member_hash = crate::shared::hash::sha256_hex(b"read_member_token");
         state.with_database(|database| {
             let connection = database.connection();
             connection.execute(

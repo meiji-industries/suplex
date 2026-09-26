@@ -1,9 +1,13 @@
 //! OAuth 2.1 authorization server for the remote MCP resource.
 
+use crate::identity::IdentityError;
+use crate::shared::hash::sha256_hex;
+use crate::shared::ids::random_hex_id;
+use crate::shared::time::rfc3339_millis;
 use std::{error::Error, fmt};
 
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
-use chrono::{DateTime, Duration, SecondsFormat, Utc};
+use chrono::{DateTime, Duration, Utc};
 use getrandom::fill as rand_bytes;
 use rusqlite::{OptionalExtension, params};
 use serde::Serialize;
@@ -13,9 +17,9 @@ use sha2::{Digest, Sha256};
 use crate::platform::database::{DatabaseResult, SuplexDatabase};
 
 use super::{
-    auth::{self, hash_secret, js_trim, random_hex_id},
+    auth::{self, js_trim},
     companies,
-    external_agents::{self, ExternalAgentFailure, OAuthAgentInput, Principal},
+    external_agents::{self, OAuthAgentInput, Principal},
 };
 
 pub const SCOPE: &str = "suplex:mcp";
@@ -54,12 +58,11 @@ impl OAuthFailure {
         if let Some(failure) = error.downcast_ref::<OAuthFailure>() {
             return failure.clone();
         }
-        if let Some(failure) = error.downcast_ref::<ExternalAgentFailure>() {
-            return Self::new(
-                "access_denied",
-                &failure.public_message,
-                failure.status_code,
-            );
+        if let Some(IdentityError::ExternalAgent {
+            status, message, ..
+        }) = error.downcast_ref()
+        {
+            return Self::new("access_denied", message, *status);
         }
         Self::new("server_error", "OAuth request failed", 500)
     }
@@ -168,19 +171,9 @@ struct Grant {
     revoked_at: Option<String>,
 }
 
-fn timestamp(now: DateTime<Utc>) -> String {
-    now.to_rfc3339_opts(SecondsFormat::Millis, true)
-}
-
 /// `Date.parse(value) <= now`; an unparsable value is never expired, as in JavaScript.
 fn expired(value: &str, now: DateTime<Utc>) -> bool {
     DateTime::parse_from_rfc3339(value).is_ok_and(|value| value <= now)
-}
-
-fn raw_secret(prefix: &str) -> DatabaseResult<String> {
-    let mut bytes = [0_u8; 32];
-    rand_bytes(&mut bytes)?;
-    Ok(format!("{prefix}_{}", URL_SAFE_NO_PAD.encode(bytes)))
 }
 
 fn pkce_challenge(verifier: &str) -> String {
@@ -351,11 +344,11 @@ impl OAuth {
             }
         }
         let client_id = random_hex_id("oauth_client")?;
-        let now_iso = timestamp(now);
+        let now_iso = rfc3339_millis(now);
         database.transaction(false, |database| {
             database.connection().execute(
                 "DELETE FROM suplex_oauth_clients WHERE created_at < ?1 AND NOT EXISTS (SELECT 1 FROM suplex_oauth_grants g WHERE g.client_id = suplex_oauth_clients.id) AND NOT EXISTS (SELECT 1 FROM suplex_oauth_pending_authorizations p WHERE p.client_id = suplex_oauth_clients.id AND p.expires_at > ?2)",
-                params![timestamp(now - Duration::hours(24)), now_iso],
+                params![rfc3339_millis(now - Duration::hours(24)), now_iso],
             )?;
             let count: i64 = database.connection().query_row("SELECT COUNT(*) FROM suplex_oauth_clients", [], |row| row.get(0))?;
             if count >= 1_000 {
@@ -450,7 +443,7 @@ impl OAuth {
             ));
         }
         let request_id = random_hex_id("oauth_request")?;
-        let now_iso = timestamp(now);
+        let now_iso = rfc3339_millis(now);
         database.transaction(true, |database| {
             database.connection().execute(
                 "DELETE FROM suplex_oauth_pending_authorizations WHERE expires_at <= ?1",
@@ -466,7 +459,7 @@ impl OAuth {
             }
             database.connection().execute(
                 "INSERT INTO suplex_oauth_pending_authorizations (id, client_id, redirect_uri, state, scope, resource, code_challenge, code_challenge_method, expires_at, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 'S256', ?8, ?9)",
-                params![request_id, client_id, input.redirect_uri, input.state, SCOPE, self.resource, input.code_challenge, timestamp(now + Duration::minutes(AUTHORIZATION_TTL_MINUTES)), now_iso],
+                params![request_id, client_id, input.redirect_uri, input.state, SCOPE, self.resource, input.code_challenge, rfc3339_millis(now + Duration::minutes(AUTHORIZATION_TTL_MINUTES)), now_iso],
             )?;
             Ok(())
         })?;
@@ -540,8 +533,8 @@ impl OAuth {
         project_ids: &[String],
         now: DateTime<Utc>,
     ) -> DatabaseResult<String> {
-        let raw_code = raw_secret("foc")?;
-        let now_iso = timestamp(now);
+        let raw_code = crate::shared::ids::random_secret("foc")?;
+        let now_iso = rfc3339_millis(now);
         let (redirect_uri, state) = database.transaction(true, |database| {
             let pending = Self::live_pending(database, request_id, now)?;
             if !auth::public_user(database, user_id)?.is_some_and(|user| user.status == "active" && user.role == "admin") {
@@ -610,7 +603,7 @@ impl OAuth {
             }
             database.connection().execute(
                 "INSERT INTO suplex_oauth_authorization_codes (id, grant_id, code_hash, redirect_uri, resource, code_challenge, expires_at, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-                params![random_hex_id("oauth_code")?, grant_id, hash_secret(&raw_code), pending.redirect_uri, pending.resource, pending.code_challenge, timestamp(now + Duration::minutes(CODE_TTL_MINUTES)), now_iso],
+                params![random_hex_id("oauth_code")?, grant_id, sha256_hex(&raw_code), pending.redirect_uri, pending.resource, pending.code_challenge, rfc3339_millis(now + Duration::minutes(CODE_TTL_MINUTES)), now_iso],
             )?;
             Ok((pending.redirect_uri, pending.state))
         })?;
@@ -628,7 +621,7 @@ impl OAuth {
         request_id: &str,
         now: DateTime<Utc>,
     ) -> DatabaseResult<String> {
-        let now_iso = timestamp(now);
+        let now_iso = rfc3339_millis(now);
         let pending = database.transaction(true, |database| {
             let pending = Self::live_pending(database, request_id, now)?;
             if auth::public_user(database, user_id)?.is_none_or(|user| user.status != "active") {
@@ -674,14 +667,14 @@ impl OAuth {
         generation: i64,
         now: DateTime<Utc>,
     ) -> DatabaseResult<()> {
-        let now_iso = timestamp(now);
+        let now_iso = rfc3339_millis(now);
         database.connection().execute(
             "INSERT INTO suplex_oauth_access_tokens (id, family_id, token_hash, expires_at, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
-            params![random_hex_id("oauth_access")?, family_id, hash_secret(access_token), timestamp(now + Duration::seconds(ACCESS_TOKEN_TTL_SECONDS)), now_iso],
+            params![random_hex_id("oauth_access")?, family_id, sha256_hex(access_token), rfc3339_millis(now + Duration::seconds(ACCESS_TOKEN_TTL_SECONDS)), now_iso],
         )?;
         database.connection().execute(
             "INSERT INTO suplex_oauth_refresh_tokens (id, family_id, token_hash, generation, expires_at, created_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
-            params![random_hex_id("oauth_refresh")?, family_id, hash_secret(refresh_token), generation, timestamp(now + Duration::days(REFRESH_TOKEN_TTL_DAYS)), now_iso],
+            params![random_hex_id("oauth_refresh")?, family_id, sha256_hex(refresh_token), generation, rfc3339_millis(now + Duration::days(REFRESH_TOKEN_TTL_DAYS)), now_iso],
         )?;
         Ok(())
     }
@@ -710,14 +703,14 @@ impl OAuth {
         if !verifier_valid {
             return Err(invalid());
         }
-        let access_token = raw_secret("foa")?;
-        let refresh_token = raw_secret("for")?;
+        let access_token = crate::shared::ids::random_secret("foa")?;
+        let refresh_token = crate::shared::ids::random_secret("for")?;
         database.transaction(true, |database| {
             let row = database
                 .connection()
                 .query_row(
                     "SELECT c.id AS code_id, c.redirect_uri AS code_redirect_uri, c.code_challenge, c.expires_at, c.consumed_at, g.* FROM suplex_oauth_authorization_codes c JOIN suplex_oauth_grants g ON g.id = c.grant_id WHERE c.code_hash = ?1",
-                    [hash_secret(input.code)],
+                    [sha256_hex(input.code)],
                     |row| Ok((grant_row(row)?, row.get::<_, String>("code_id")?, row.get::<_, String>("code_redirect_uri")?, row.get::<_, String>("code_challenge")?, row.get::<_, String>("expires_at")?, row.get::<_, Option<String>>("consumed_at")?, row.get::<_, String>("id")?)),
                 )
                 .optional()?;
@@ -738,7 +731,7 @@ impl OAuth {
             Self::assert_grant_authority(database, &grant)?;
             if database.connection().execute(
                 "UPDATE suplex_oauth_authorization_codes SET consumed_at = ?1 WHERE id = ?2 AND consumed_at IS NULL",
-                params![timestamp(now), code_id],
+                params![rfc3339_millis(now), code_id],
             )? != 1
             {
                 return Err(invalid());
@@ -746,7 +739,7 @@ impl OAuth {
             let family_id = random_hex_id("oauth_family")?;
             database.connection().execute(
                 "INSERT INTO suplex_oauth_token_families (id, grant_id, client_id, resource, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
-                params![family_id, grant_id, grant.client_id, grant.resource, timestamp(now)],
+                params![family_id, grant_id, grant.client_id, grant.resource, rfc3339_millis(now)],
             )?;
             Self::insert_tokens(database, &family_id, &access_token, &refresh_token, 0, now)
         })?;
@@ -766,16 +759,16 @@ impl OAuth {
                 400,
             ));
         }
-        let access_token = raw_secret("foa")?;
-        let refresh_token = raw_secret("for")?;
-        let now_iso = timestamp(now);
+        let access_token = crate::shared::ids::random_secret("foa")?;
+        let refresh_token = crate::shared::ids::random_secret("for")?;
+        let now_iso = rfc3339_millis(now);
         // A reused refresh token revokes its family and commits that revocation before failing.
         let issued = database.transaction(true, |database| {
             let row = database
                 .connection()
                 .query_row(
                     "SELECT r.id AS refresh_id, r.generation, r.expires_at, r.consumed_at, f.id AS family_id, f.revoked_at AS family_revoked_at, g.* FROM suplex_oauth_refresh_tokens r JOIN suplex_oauth_token_families f ON f.id = r.family_id JOIN suplex_oauth_grants g ON g.id = f.grant_id WHERE r.token_hash = ?1",
-                    [hash_secret(input.refresh_token)],
+                    [sha256_hex(input.refresh_token)],
                     |row| Ok((grant_row(row)?, row.get::<_, String>("refresh_id")?, row.get::<_, i64>("generation")?, row.get::<_, String>("expires_at")?, row.get::<_, Option<String>>("consumed_at")?, row.get::<_, String>("family_id")?, row.get::<_, Option<String>>("family_revoked_at")?)),
                 )
                 .optional()?;
@@ -834,7 +827,7 @@ impl OAuth {
                 .connection()
                 .query_row(
                     "SELECT a.id AS token_id, a.expires_at, f.revoked_at AS family_revoked_at, g.* FROM suplex_oauth_access_tokens a JOIN suplex_oauth_token_families f ON f.id = a.family_id JOIN suplex_oauth_grants g ON g.id = f.grant_id WHERE a.token_hash = ?1 AND a.revoked_at IS NULL",
-                    [hash_secret(raw_token)],
+                    [sha256_hex(raw_token)],
                     |row| Ok((grant_row(row)?, row.get::<_, String>("token_id")?, row.get::<_, String>("expires_at")?, row.get::<_, Option<String>>("family_revoked_at")?)),
                 )
                 .optional()?;
@@ -852,7 +845,7 @@ impl OAuth {
             Self::assert_grant_authority(database, &grant)?;
             database.connection().execute(
                 "UPDATE suplex_oauth_access_tokens SET last_used_at = ?1 WHERE id = ?2",
-                params![timestamp(now), token_id],
+                params![rfc3339_millis(now), token_id],
             )?;
             Ok(grant)
         })?;
@@ -866,9 +859,9 @@ impl OAuth {
         client_id: Option<&str>,
         now: DateTime<Utc>,
     ) -> DatabaseResult<()> {
-        let now_iso = timestamp(now);
+        let now_iso = rfc3339_millis(now);
         database.transaction(true, |database| {
-            let hash = hash_secret(raw_token);
+            let hash = sha256_hex(raw_token);
             let row: Option<(String, String)> = database
                 .connection()
                 .query_row(

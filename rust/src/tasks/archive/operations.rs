@@ -1,14 +1,14 @@
 //! Archive a task only after native sessions and its live Git worktree are safe.
 //! Saved pane and worktree display fields do not decide whether cleanup may run.
 
+use crate::shared::time::now_millis_rfc3339;
+use crate::tasks::TaskError;
 use std::{
     collections::HashSet,
-    io,
     path::{Path, PathBuf},
     sync::{Mutex, OnceLock},
 };
 
-use chrono::{SecondsFormat, Utc};
 use rusqlite::params;
 use serde_json::Value;
 
@@ -23,7 +23,6 @@ use crate::{
     },
     tasks::{
         archive::displays,
-        commands::TaskFailure,
         repository::{self, TaskRecord},
         worktree::{self, TaskWorktreeIntent, WorktreeCleanup},
     },
@@ -38,7 +37,7 @@ impl ArchiveGuard {
         let mut active = ARCHIVES_IN_PROGRESS
             .get_or_init(|| Mutex::new(HashSet::new()))
             .lock()
-            .map_err(|_| io::Error::other("Archive state is unavailable"))?;
+            .map_err(|_| TaskError::internal("Archive state is unavailable"))?;
         if !active.insert(task_id.to_owned()) {
             return Err(failure("Archive cleanup is in progress", 409));
         }
@@ -68,15 +67,16 @@ fn failure(message: &str, status_code: u16) -> Box<dyn std::error::Error> {
 }
 
 fn failure_code(message: &str, status_code: u16, code: &'static str) -> Box<dyn std::error::Error> {
-    Box::new(TaskFailure {
-        public_message: message.to_owned(),
-        status_code,
+    TaskError::Failure {
+        message: message.to_owned(),
+        status: status_code,
         code,
-    })
+    }
+    .into()
 }
 
 fn cleanup_error(error: Box<dyn std::error::Error>) -> Box<dyn std::error::Error> {
-    if error.is::<TaskFailure>() {
+    if matches!(error.downcast_ref(), Some(TaskError::Failure { .. })) {
         error
     } else {
         failure(&error.to_string(), 409)
@@ -87,7 +87,7 @@ fn required_path(configuration: &Value, field: &str) -> DatabaseResult<PathBuf> 
     let value = configuration[field]
         .as_str()
         .filter(|value| !value.is_empty())
-        .ok_or_else(|| io::Error::other(format!("Task {field} is missing")))?;
+        .ok_or_else(|| TaskError::internal(format!("Task {field} is missing")))?;
     Ok(PathBuf::from(value))
 }
 
@@ -171,7 +171,7 @@ fn archive_sessions_idle(
         let directory = session_reader::session_directory(database_path, &session_id)?;
         // TypeScript `nativeSessionReader`: a session without a native identity belongs to OpenCode.
         let harness = task_harness_registry::for_session(native_session_id.as_deref())
-            .ok_or_else(|| io::Error::other("No native reader for this session"))?;
+            .ok_or_else(|| TaskError::internal("No native reader for this session"))?;
         let busy = harness.busy(&ReaderSession {
             database_path,
             session_id: &session_id,
@@ -222,7 +222,7 @@ pub fn unarchive_task(
         if ["backlog", "queued", "active", "waiting_human"].contains(&task.status.as_str()) {
             repository::assert_task_pull_requests_available(database, task_id)?;
         }
-        let now = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
+        let now = now_millis_rfc3339();
         database.connection().execute(
             "UPDATE suplex_tasks SET archived_at = NULL, updated_at = ?1 WHERE id = ?2",
             params![now, task_id],
@@ -302,7 +302,7 @@ pub fn archive_task(
         if !["backlog", "queued", "cancelled", "delivered"].contains(&current.status.as_str()) {
             return Err(failure_code("The task changed while its worktree was removed", 409, "illegal_command"));
         }
-        let now = Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true);
+        let now = now_millis_rfc3339();
         database.connection().execute(
             "UPDATE suplex_task_controls SET worktree_json = NULL WHERE task_id = ?1",
             [task_id],
@@ -324,6 +324,7 @@ pub fn archive_task(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::shared::time::rfc3339_millis;
     use crate::{
         identity::auth,
         runtimes::headless::{HeadlessTurnRecord, RecordedProcessIdentity},
@@ -352,10 +353,10 @@ mod tests {
         drop(tree);
         drop(repository);
         let database_path = base.join("suplex.sqlite");
-        let now = Utc::now();
+        let now = chrono::Utc::now();
         let mut database = SuplexDatabase::open(&database_path, OpenMode::Migrate).unwrap();
         let user = auth::development_sign_in(&mut database, now).unwrap().user;
-        let time = now.to_rfc3339_opts(SecondsFormat::Millis, true);
+        let time = rfc3339_millis(now);
         database.connection().execute("INSERT INTO suplex_companies (id,name,status,created_at) VALUES ('archive_company','Archive','active',?1)", [&time]).unwrap();
         database.connection().execute("INSERT INTO suplex_projects (id,company_id,name,repository_path,worktree_root,repository_identity,base_branch,setup_command,verification_command,root_profile_id,worker_profile_id,agent_task_policy_json,created_at,updated_at) VALUES ('archive_project','archive_company','Project',?1,?2,NULL,'main','','','root_profile','worker_profile','{}',?3,?3)", params![repository_path.to_string_lossy(),worktree_root.to_string_lossy(),time]).unwrap();
         let task_id = repository::new_task_id();

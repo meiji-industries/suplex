@@ -1,6 +1,9 @@
 //! Workflow records: named, editable presets over one built-in engine.
 
-use chrono::{SecondsFormat, Utc};
+use crate::identity::IdentityError;
+use crate::shared::ids::random_hex_id;
+use crate::shared::time::now_millis_rfc3339;
+use crate::tasks::TaskError;
 use rusqlite::{OptionalExtension, Row, params};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
@@ -8,9 +11,7 @@ use serde_json::{Map, Value, json};
 use crate::{
     coordination::workflows::{advisor_label, workflow_definition},
     http::contracts::typed::workflows as contracts,
-    identity::auth::{self, AuthFailure},
     platform::database::{DatabaseResult, SuplexDatabase},
-    tasks::commands::TaskFailure,
 };
 
 #[derive(Debug, Default, Deserialize, Serialize)]
@@ -79,14 +80,6 @@ fn record(row: &Row<'_>) -> rusqlite::Result<WorkflowRecord> {
         archived_at: row.get("archived_at")?,
         created_at: row.get("created_at")?,
         updated_at: row.get("updated_at")?,
-    })
-}
-
-fn failure(message: impl Into<String>, status_code: u16) -> Box<dyn std::error::Error> {
-    Box::new(TaskFailure {
-        public_message: message.into(),
-        status_code,
-        code: "task_failure",
     })
 }
 
@@ -174,11 +167,9 @@ fn active_role(database: &SuplexDatabase, user_id: &str) -> DatabaseResult<Optio
 
 fn require_admin(database: &SuplexDatabase, user_id: &str) -> DatabaseResult<()> {
     if active_role(database, user_id)?.as_deref() != Some("admin") {
-        return Err(Box::new(AuthFailure::new(
-            "Administrator access required",
-            403,
-            "auth_failure",
-        )));
+        return Err(
+            IdentityError::auth("Administrator access required", 403, "auth_failure").into(),
+        );
     }
     Ok(())
 }
@@ -190,11 +181,7 @@ pub fn list(
     include_archived: bool,
 ) -> DatabaseResult<Vec<WorkflowRecord>> {
     if active_role(database, user_id)?.is_none() {
-        return Err(Box::new(AuthFailure::new(
-            "Authentication required",
-            401,
-            "auth_failure",
-        )));
+        return Err(IdentityError::auth("Authentication required", 401, "auth_failure").into());
     }
     let sql = if include_archived {
         "SELECT * FROM suplex_workflows ORDER BY name COLLATE NOCASE, id"
@@ -212,10 +199,7 @@ fn read(database: &SuplexDatabase, id: &str) -> DatabaseResult<WorkflowRecord> {
         .connection()
         .query_row("SELECT * FROM suplex_workflows WHERE id = ?1", [id], record)
         .optional()?
-        .ok_or_else(|| {
-            Box::new(AuthFailure::new("Not found", 404, "auth_failure"))
-                as Box<dyn std::error::Error>
-        })
+        .ok_or_else(|| IdentityError::not_found().into())
 }
 
 fn assert_name(database: &SuplexDatabase, name: &str, id: &str) -> DatabaseResult<()> {
@@ -225,11 +209,12 @@ fn assert_name(database: &SuplexDatabase, name: &str, id: &str) -> DatabaseResul
         |row| row.get(0),
     )?;
     if taken {
-        return Err(Box::new(AuthFailure::new(
+        return Err(IdentityError::auth(
             "This workflow name is already in use",
             409,
             "auth_failure",
-        )));
+        )
+        .into());
     }
     Ok(())
 }
@@ -248,7 +233,7 @@ fn validate(database: &SuplexDatabase, values: &Map<String, Value>) -> DatabaseR
             input.insert(to.into(), value.clone());
         }
     }
-    normalize_workflow_input(&mut input, false).map_err(|message| failure(message, 422))?;
+    normalize_workflow_input(&mut input, false).map_err(|message| TaskError::new(message, 422))?;
     let engine = values["engine"].as_str().unwrap_or_default();
     let mut checks = vec![
         (values.get("rootProfileId"), "root", "Coordinator"),
@@ -270,10 +255,9 @@ fn validate(database: &SuplexDatabase, values: &Map<String, Value>) -> DatabaseR
             |row| row.get(0),
         )?;
         if !exists {
-            return Err(failure(
-                format!("The selected {label} agent does not exist"),
-                422,
-            ));
+            return Err(
+                TaskError::new(format!("The selected {label} agent does not exist"), 422).into(),
+            );
         }
     }
     Ok(())
@@ -297,10 +281,6 @@ fn audit(database: &SuplexDatabase, user_id: &str, action: &str, id: &str) -> Da
     )
 }
 
-fn now() -> String {
-    Utc::now().to_rfc3339_opts(SecondsFormat::Millis, true)
-}
-
 pub fn create(
     database: &mut SuplexDatabase,
     user_id: &str,
@@ -308,8 +288,8 @@ pub fn create(
 ) -> DatabaseResult<WorkflowRecord> {
     require_admin(database, user_id)?;
     validate(database, &values)?;
-    let id = auth::random_hex_id("workflow")?;
-    let stamp = now();
+    let id = random_hex_id("workflow")?;
+    let stamp = now_millis_rfc3339();
     database.transaction(false, |database| {
         let name = values["name"].as_str().unwrap_or_default();
         assert_name(database, name, "")?;
@@ -359,7 +339,7 @@ pub fn update(
             .map_err(|_| "Stored workflow record is not a valid workflow input")?;
         validate(database, &values)?;
         assert_name(database, values["name"].as_str().unwrap_or_default(), id)?;
-        let stamp = now();
+        let stamp = now_millis_rfc3339();
         let archived_at = match archived {
             None => current.archived_at.clone(),
             Some(true) => Some(stamp.clone()),

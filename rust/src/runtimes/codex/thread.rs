@@ -13,10 +13,8 @@ struct Session {
 }
 
 pub fn read_thread_id(directory: &Path) -> io::Result<Option<String>> {
-    let content = match fs::read_to_string(directory.join("session.json")) {
-        Ok(content) => content,
-        Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(None),
-        Err(error) => return Err(error),
+    let Some(content) = crate::shared::fs::read_optional(&directory.join("session.json"))? else {
+        return Ok(None);
     };
     Ok(serde_json::from_str::<Session>(&content)
         .ok()
@@ -33,30 +31,12 @@ fn dead_thread_ids(directory: &Path) -> HashSet<String> {
         .collect()
 }
 
-#[cfg(unix)]
-fn private_file(path: &Path) -> io::Result<std::fs::File> {
-    use std::os::unix::fs::OpenOptionsExt;
-    OpenOptions::new()
-        .write(true)
-        .create_new(true)
-        .mode(0o600)
-        .open(path)
-}
-
 pub fn persist_thread_id(directory: &Path, thread_id: &str) -> io::Result<()> {
     fs::create_dir_all(directory)?;
-    let mut suffix = [0_u8; 8];
-    getrandom::fill(&mut suffix)?;
-    let pending = directory.join(format!(
-        "session.json.{}.pending",
-        u64::from_ne_bytes(suffix)
-    ));
-    let mut file = private_file(&pending)?;
-    file.write_all(
+    crate::shared::fs::write_private(
+        &directory.join("session.json"),
         serde_json::to_string(&serde_json::json!({ "threadId": thread_id }))?.as_bytes(),
-    )?;
-    file.sync_all()?;
-    fs::rename(pending, directory.join("session.json"))
+    )
 }
 
 pub fn persist_observed_thread(directory: &Path, thread_id: &str) -> io::Result<()> {

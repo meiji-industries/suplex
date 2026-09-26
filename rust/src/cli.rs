@@ -3,6 +3,7 @@
 //! `setup`, `install`, `desktop`) belong to the Node launcher, which starts
 //! this binary as a single foreground server.
 
+use crate::shared::time::now_millis_rfc3339;
 use std::{
     io::{self, Write},
     path::{Path, PathBuf},
@@ -493,7 +494,7 @@ fn backup(command: &str, arguments: &[String]) -> CliResult {
             );
             let handoff = json!({
                 "version": 1,
-                "restoredAt": Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+                "restoredAt": now_millis_rfc3339(),
                 "archivePath": verification.archive_path,
                 "archiveBytes": std::fs::metadata(&verification.archive_path)?.len(),
                 "backupDurationMs": verification.duration_ms as u64,
@@ -503,11 +504,10 @@ fn backup(command: &str, arguments: &[String]) -> CliResult {
                 "nextSteps": ["Restore repository and worktree paths before starting Suplex", "Sign in to OpenCode and GitHub on the restored host", "Preserve OpenCode session storage to continue existing tasks", "Start Suplex and review any specific recovery question"],
             });
             let path = destination.join("suplex-backup/restore-handoff.json");
-            std::fs::write(
+            crate::shared::fs::write_private(
                 &path,
-                format!("{}\n", serde_json::to_string_pretty(&handoff)?),
+                format!("{}\n", serde_json::to_string_pretty(&handoff)?).as_bytes(),
             )?;
-            std::fs::set_permissions(&path, std::os::unix::fs::PermissionsExt::from_mode(0o600))?;
             println!(
                 "backup restored to {}; verification {} ({restore_ms}ms); see suplex-backup/restore-handoff.json",
                 destination.display(),

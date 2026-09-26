@@ -85,13 +85,10 @@ fn write_record(path: &Path, record: &HeadlessTurnRecord) -> io::Result<()> {
 }
 
 pub fn read_record(path: &Path) -> io::Result<Option<HeadlessTurnRecord>> {
-    match fs::read_to_string(path) {
-        Ok(text) => serde_json::from_str(&text)
-            .map(Some)
-            .map_err(io::Error::other),
-        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(None),
-        Err(error) => Err(error),
-    }
+    crate::shared::fs::read_optional(path)?
+        .map(|text| serde_json::from_str(&text))
+        .transpose()
+        .map_err(io::Error::other)
 }
 
 pub fn turn_file(directory: &Path, turn_id: &str, suffix: &str) -> PathBuf {

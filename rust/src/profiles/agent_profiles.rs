@@ -1,13 +1,14 @@
-use std::{error::Error, fmt};
+use crate::identity::IdentityError;
+use crate::shared::time::rfc3339_millis;
+use std::error::Error;
 
-use chrono::{DateTime, SecondsFormat, Utc};
+use chrono::{DateTime, Utc};
 use getrandom::fill;
 use rusqlite::{OptionalExtension, Row, params};
 use serde::{Deserialize, Serialize};
 
 use crate::{
     http::contracts::typed::projects,
-    identity::auth::AuthFailure,
     platform::database::{DatabaseResult, SuplexDatabase},
 };
 
@@ -64,7 +65,8 @@ fn present_nullable_string<'de, D: serde::Deserializer<'de>>(
     Ok(Some(Option::<String>::deserialize(deserializer)?))
 }
 
-#[derive(Debug)]
+#[derive(Debug, thiserror::Error)]
+#[error("{message}")]
 pub struct ProfileFailure {
     pub message: String,
     pub status_code: u16,
@@ -79,13 +81,11 @@ impl ProfileFailure {
     }
 }
 
-impl fmt::Display for ProfileFailure {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(&self.message)
+impl From<ProfileFailure> for crate::shared::PublicFailure {
+    fn from(failure: ProfileFailure) -> Self {
+        Self::new(failure.status_code, failure.message)
     }
 }
-
-impl Error for ProfileFailure {}
 
 fn profile(row: &Row<'_>) -> rusqlite::Result<AgentProfile> {
     Ok(AgentProfile {
@@ -102,22 +102,6 @@ fn profile(row: &Row<'_>) -> rusqlite::Result<AgentProfile> {
         created_at: row.get(10)?,
         updated_at: row.get(11)?,
     })
-}
-
-fn timestamp(now: DateTime<Utc>) -> String {
-    now.to_rfc3339_opts(SecondsFormat::Millis, true)
-}
-
-fn random_id(prefix: &str) -> DatabaseResult<String> {
-    let mut bytes = [0_u8; 16];
-    fill(&mut bytes)?;
-    Ok(format!(
-        "{prefix}_{}",
-        bytes
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect::<String>()
-    ))
 }
 
 fn profile_id() -> DatabaseResult<String> {
@@ -144,18 +128,12 @@ fn actor(database: &SuplexDatabase, user_id: &str, admin: bool) -> DatabaseResul
         )
         .optional()?;
     let Some(role) = role else {
-        return Err(Box::new(AuthFailure::new(
-            "Authentication required",
-            401,
-            "auth_failure",
-        )));
+        return Err(IdentityError::auth("Authentication required", 401, "auth_failure").into());
     };
     if admin && role != "admin" {
-        return Err(Box::new(AuthFailure::new(
-            "Administrator access required",
-            403,
-            "auth_failure",
-        )));
+        return Err(
+            IdentityError::auth("Administrator access required", 403, "auth_failure").into(),
+        );
     }
     Ok(())
 }
@@ -220,7 +198,7 @@ fn audit(
 ) -> DatabaseResult<()> {
     database.connection().execute(
         "INSERT INTO suplex_audit_events (id, actor_user_id, actor_agent_id, action, target_user_id, company_id, metadata_json, created_at) VALUES (?1, ?2, NULL, ?3, NULL, NULL, ?4, ?5)",
-        params![random_id("audit")?, actor_id, action, serde_json::json!({"profileId": profile_id}).to_string(), timestamp(now)],
+        params![crate::shared::ids::random_hex_id("audit")?, actor_id, action, serde_json::json!({"profileId": profile_id}).to_string(), rfc3339_millis(now)],
     )?;
     Ok(())
 }
@@ -253,7 +231,7 @@ pub fn create(
 ) -> DatabaseResult<AgentProfile> {
     actor(database, user_id, true)?;
     let id = profile_id()?;
-    let now_iso = timestamp(now);
+    let now_iso = rfc3339_millis(now);
     database.transaction(false, |database| {
         assert_name(database, &input.name, "")?;
         assert_instance(database, input)?;
@@ -299,7 +277,7 @@ pub fn update(
             }
         }
         assert_instance(database, &input)?;
-        let now_iso = timestamp(now);
+        let now_iso = rfc3339_millis(now);
         let archived_at = match changes.archived {
             None => current.archived_at,
             Some(true) => Some(now_iso.clone()),
@@ -554,7 +532,7 @@ pub fn choose_defaults(
         if !untouched || matching_defaults(&root, &worker, chosen) {
             return Ok(());
         }
-        let now_iso = timestamp(now);
+        let now_iso = rfc3339_millis(now);
         for (id, values) in [
             ("profile_native_root", chosen.root),
             ("profile_native_worker", chosen.worker),
@@ -892,12 +870,12 @@ mod tests {
         assert_eq!(audit_count, 4);
         database.connection().execute(
             "INSERT INTO suplex_users (id, display_name, username, role, status, created_at, updated_at, identity_version) VALUES ('profile_member', 'Member', 'user_v1_profile_member', 'member', 'active', ?1, ?1, 1)",
-            [timestamp(now)],
+            [rfc3339_millis(now)],
         ).unwrap();
         assert!(!list(&database, "profile_member", false).unwrap().is_empty());
         let forbidden = create(&mut database, "profile_member", &input, now).unwrap_err();
         assert_eq!(
-            forbidden.downcast_ref::<AuthFailure>().unwrap().status_code,
+            forbidden.downcast_ref::<IdentityError>().unwrap().status(),
             403
         );
         let patch: ProfilePatch =
@@ -905,11 +883,11 @@ mod tests {
         assert_eq!(patch.provider_instance_id, Some(None));
         database.connection().execute(
             "INSERT INTO suplex_companies (id, name, created_at) VALUES ('profile_test_company', 'Profile test', ?1)",
-            [timestamp(now)],
+            [rfc3339_millis(now)],
         ).unwrap();
         database.connection().execute(
             "INSERT INTO suplex_projects (id, company_id, name, repository_path, worktree_root, base_branch, setup_command, verification_command, root_profile_id, worker_profile_id, agent_task_policy_json, created_at, updated_at) VALUES ('profile_test_project', 'profile_test_company', 'Profile test', '/tmp/profile-repo', '/tmp/profile-worktrees', 'main', '', '', 'profile_native_root', 'profile_native_worker', '{broken', ?1, ?1)",
-            [timestamp(now)],
+            [rfc3339_millis(now)],
         ).unwrap();
         assert!(delete(&mut database, &admin.user.id, &created.id, now).is_err());
         assert!(

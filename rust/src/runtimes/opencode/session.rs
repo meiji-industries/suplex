@@ -1,5 +1,6 @@
 //! Prompt intent, native admission evidence, and replay fencing for OpenCode.
 
+use crate::shared::hash::sha256_hex;
 use std::{
     error::Error,
     fmt,
@@ -10,7 +11,6 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use sha2::{Digest, Sha256};
 
 use super::client::{OpenCodeClient, PromptInput};
 use super::contracts::{
@@ -102,7 +102,7 @@ pub fn create_prompt_intent(
         directory: directory.to_owned(),
         prompt: prompt.to_owned(),
         system: None,
-        prompt_hash: format!("{:x}", Sha256::digest(prompt.as_bytes())),
+        prompt_hash: sha256_hex(prompt.as_bytes()),
         model,
         agent: agent.to_owned(),
         variant: variant.to_owned(),

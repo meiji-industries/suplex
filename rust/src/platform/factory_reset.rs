@@ -12,17 +12,6 @@ use super::database::{DatabaseResult, OpenMode, SuplexDatabase};
 pub const LIVE_SESSIONS_BLOCK_RESET: &str =
     "Cancel active tasks and wait for their sessions to stop before you factory reset Suplex";
 
-#[derive(Debug)]
-pub struct LiveSessionsBlockReset;
-
-impl std::fmt::Display for LiveSessionsBlockReset {
-    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        formatter.write_str(LIVE_SESSIONS_BLOCK_RESET)
-    }
-}
-
-impl std::error::Error for LiveSessionsBlockReset {}
-
 pub fn factory_reset(
     database: &SuplexDatabase,
     database_path: &Path,
@@ -37,7 +26,7 @@ pub fn factory_reset(
         )
         .optional()?;
     if live.is_some() {
-        return Err(Box::new(LiveSessionsBlockReset));
+        return Err(super::PlatformError::LiveSessionsBlockReset.into());
     }
     let staging = std::env::temp_dir().join(format!(
         "suplex-factory-reset-{}",

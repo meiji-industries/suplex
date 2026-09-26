@@ -1,5 +1,7 @@
 //! Authenticated bytes for task-owned artifacts, including image previews.
 
+use crate::shared::hash::sha256_hex;
+use crate::tasks::TaskError;
 use std::error::Error;
 
 use axum::{
@@ -13,22 +15,15 @@ use axum::{
 use chrono::Utc;
 use rusqlite::OptionalExtension;
 use serde_json::json;
-use sha2::{Digest, Sha256};
 
 use crate::{
     coordination::root_session_store::{self, TaskArtifact},
     http::{AppState, session, validation},
     identity::companies,
     platform::artifacts,
-    tasks::commands::TaskFailure,
 };
 
 use super::auth;
-
-enum ReadFailure {
-    Artifact(artifacts::ArtifactFailure),
-    Other,
-}
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -55,14 +50,6 @@ fn params(task_id: &str, artifact_id: &str) -> Result<(), Box<Response>> {
     }
 }
 
-fn not_found() -> Box<dyn Error> {
-    Box::new(TaskFailure {
-        public_message: "Not found".into(),
-        status_code: 404,
-        code: "task_failure",
-    })
-}
-
 fn scoped_artifact(
     state: &AppState,
     user_id: &str,
@@ -78,9 +65,10 @@ fn scoped_artifact(
                 |row| row.get(0),
             )
             .optional()?;
-        let company_id = company_id.ok_or_else(not_found)?;
+        let company_id = company_id.ok_or_else(TaskError::not_found)?;
         companies::require_company_access(database, user_id, &company_id)?;
-        root_session_store::task_artifact(database, task_id, artifact_id)?.ok_or_else(not_found)
+        root_session_store::task_artifact(database, task_id, artifact_id)?
+            .ok_or_else(|| TaskError::not_found().into())
     })
 }
 
@@ -94,7 +82,11 @@ fn reauthorize(state: &AppState, user_id: &str, task_id: &str) -> Result<(), Box
                 |row| row.get(0),
             )
             .optional()?;
-        companies::require_company_access(database, user_id, &company_id.ok_or_else(not_found)?)?;
+        companies::require_company_access(
+            database,
+            user_id,
+            &company_id.ok_or_else(TaskError::not_found)?,
+        )?;
         Ok(())
     })
 }
@@ -102,16 +94,6 @@ fn reauthorize(state: &AppState, user_id: &str, task_id: &str) -> Result<(), Box
 fn with_cookies(mut response: Response, cookies: Vec<String>) -> Response {
     auth::append_cookies(&mut response, cookies);
     response
-}
-
-fn service_error(error: Box<dyn Error>) -> Response {
-    match error.downcast::<TaskFailure>() {
-        Ok(failure) => auth::error(
-            StatusCode::from_u16(failure.status_code).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
-            &failure.public_message,
-        ),
-        Err(error) => auth::service_error(error),
-    }
 }
 
 async fn read(
@@ -137,7 +119,7 @@ async fn read(
     let cookies = session.set_cookies;
     let artifact = match scoped_artifact(&state, &user.id, &task_id, &artifact_id) {
         Ok(artifact) => artifact,
-        Err(error) => return with_cookies(service_error(error), cookies),
+        Err(error) => return with_cookies(auth::service_error(error), cookies),
     };
     let Some(root) = state.artifact_root.clone() else {
         return with_cookies(
@@ -148,32 +130,12 @@ async fn read(
     let company_id = artifact.company_id.clone();
     let storage_path = artifact.storage_path.clone();
     let bytes = tokio::task::spawn_blocking(move || {
-        artifacts::read(&root, &company_id, &storage_path).map_err(|error| {
-            match error.downcast::<artifacts::ArtifactFailure>() {
-                Ok(failure) => ReadFailure::Artifact(*failure),
-                Err(_) => ReadFailure::Other,
-            }
-        })
+        artifacts::read(&root, &company_id, &storage_path).map_err(auth::public_failure)
     })
     .await;
     let bytes = match bytes {
         Ok(Ok(bytes)) => bytes,
-        Ok(Err(ReadFailure::Artifact(error))) => {
-            return with_cookies(
-                (
-                    StatusCode::UNPROCESSABLE_ENTITY,
-                    axum::Json(json!({"error":error.message,"code":error.code})),
-                )
-                    .into_response(),
-                cookies,
-            );
-        }
-        Ok(Err(ReadFailure::Other)) => {
-            return with_cookies(
-                auth::error(StatusCode::INTERNAL_SERVER_ERROR, "Internal server error"),
-                cookies,
-            );
-        }
+        Ok(Err(failure)) => return with_cookies(failure.into_response(), cookies),
         Err(_) => {
             return with_cookies(
                 auth::error(StatusCode::INTERNAL_SERVER_ERROR, "Internal server error"),
@@ -182,9 +144,9 @@ async fn read(
         }
     };
     if let Err(error) = reauthorize(&state, &user.id, &task_id) {
-        return with_cookies(service_error(error), cookies);
+        return with_cookies(auth::service_error(error), cookies);
     }
-    if format!("{:x}", Sha256::digest(&bytes)) != artifact.sha256 {
+    if sha256_hex(&bytes) != artifact.sha256 {
         return with_cookies(
             auth::error(
                 StatusCode::CONFLICT,

@@ -2,6 +2,10 @@
 //! TypeScript) always carry a stable `code`; the other agent routes use the
 //! board envelope.
 
+use crate::identity::IdentityError;
+use crate::platform::PlatformError;
+use crate::projects::ProjectError;
+use crate::tasks::TaskError;
 use std::error::Error;
 
 use axum::{
@@ -10,13 +14,7 @@ use axum::{
 };
 use serde_json::{Map, Value, json};
 
-use crate::{
-    identity::{auth::AuthFailure, external_agents::ExternalAgentFailure},
-    platform::artifacts::ArtifactFailure,
-    projects::service::ProjectFailure,
-    shared::js_json,
-    tasks::{agent_api::AgentTaskFailure, commands::TaskFailure, repository::TaskConflict},
-};
+use crate::shared::js_json;
 
 use super::routes::auth;
 
@@ -113,51 +111,46 @@ fn internal(runtime: bool) -> Response {
 
 /// `sendDomainFailure` plus the artifact and fallback branches of the TypeScript error handler.
 pub(crate) fn failure(error: Box<dyn Error>, runtime: bool) -> Response {
-    if let Some(failure) = error.downcast_ref::<ExternalAgentFailure>() {
-        return json_response(
-            status(failure.status_code),
-            json!({"error": failure.public_message, "code": failure.code}),
-        );
-    }
-    if let Some(failure) = error.downcast_ref::<AuthFailure>() {
-        let mut body = Map::new();
-        body.insert("error".into(), json!(failure.message));
-        if runtime {
-            body.insert("code".into(), json!("not_found"));
-        } else if failure.code != "auth_failure" {
-            body.insert("code".into(), json!(failure.code));
+    match error.downcast_ref::<IdentityError>() {
+        Some(IdentityError::ExternalAgent {
+            status: status_code,
+            code,
+            message,
+        }) => {
+            return json_response(
+                status(*status_code),
+                json!({"error": message, "code": code}),
+            );
         }
-        return json_response(status(failure.status_code), Value::Object(body));
-    }
-    let task = error
-        .downcast_ref::<AgentTaskFailure>()
-        .map(|failure| {
-            (
-                failure.status_code,
-                failure.code,
-                failure.public_message.clone(),
-                failure.details.clone(),
-            )
-        })
-        .or_else(|| {
-            error.downcast_ref::<TaskFailure>().map(|failure| {
-                (
-                    failure.status_code,
-                    failure.code,
-                    failure.public_message.clone(),
-                    Map::new(),
-                )
-            })
-        })
-        .or_else(|| {
-            error
-                .downcast_ref::<TaskConflict>()
-                .map(|conflict| (409, "task_failure", conflict.to_string(), Map::new()))
-        });
-    if let Some((status_code, code, message, details)) = task {
-        if code == "experimental_not_ported" {
-            return auth::not_ported();
+        Some(IdentityError::Auth {
+            status: status_code,
+            code,
+            message,
+        }) => {
+            let mut body = Map::new();
+            body.insert("error".into(), json!(message));
+            if runtime {
+                body.insert("code".into(), json!("not_found"));
+            } else if *code != "auth_failure" {
+                body.insert("code".into(), json!(code));
+            }
+            return json_response(status(*status_code), Value::Object(body));
         }
+        None => {}
+    }
+    let task = match error.downcast_ref::<TaskError>() {
+        Some(TaskError::Agent {
+            status,
+            code,
+            details,
+            ..
+        }) => Some((*status, *code, details.clone())),
+        Some(TaskError::Failure { status, code, .. }) => Some((*status, *code, Map::new())),
+        Some(TaskError::Conflict) => Some((409, "task_failure", Map::new())),
+        _ => None,
+    };
+    if let Some((status_code, code, details)) = task {
+        let message = error.to_string();
         let mut body = Map::new();
         body.insert("error".into(), json!(message));
         if runtime {
@@ -171,34 +164,31 @@ pub(crate) fn failure(error: Box<dyn Error>, runtime: bool) -> Response {
         }
         return json_response(status(status_code), Value::Object(body));
     }
-    if let Some(failure) = error.downcast_ref::<ProjectFailure>() {
+    if let Some(failure) = error.downcast_ref::<ProjectError>() {
         let body = if runtime {
-            json!({"error": failure.message, "code": if failure.status_code == 404 { "not_found" } else { "task_unavailable" }, "findings": failure.findings})
+            json!({"error": failure.to_string(), "code": if failure.status() == 404 { "not_found" } else { "task_unavailable" }, "findings": failure.findings()})
         } else {
-            json!({"error": failure.message, "findings": failure.findings})
+            json!({"error": failure.to_string(), "findings": failure.findings()})
         };
-        return json_response(status(failure.status_code), body);
+        return json_response(status(failure.status()), body);
     }
-    if let Some(failure) = error.downcast_ref::<crate::tasks::sources::TaskSourceFailure>() {
-        let code = if runtime {
-            "task_unavailable"
-        } else {
-            failure.code
-        };
+    if let Some(TaskError::Source {
+        status: status_code,
+        code,
+        message,
+    }) = error.downcast_ref()
+    {
+        let code = if runtime { "task_unavailable" } else { code };
         return json_response(
-            status(failure.status_code),
-            json!({"error": failure.message, "code": code}),
+            status(*status_code),
+            json!({"error": message, "code": code}),
         );
     }
-    if let Some(failure) = error.downcast_ref::<ArtifactFailure>() {
-        let code = if runtime {
-            "task_unavailable"
-        } else {
-            failure.code
-        };
+    if let Some(PlatformError::Artifact { code, message }) = error.downcast_ref() {
+        let code = if runtime { "task_unavailable" } else { code };
         return json_response(
             StatusCode::UNPROCESSABLE_ENTITY,
-            json!({"error": failure.message, "code": code}),
+            json!({"error": message, "code": code}),
         );
     }
     internal(runtime)

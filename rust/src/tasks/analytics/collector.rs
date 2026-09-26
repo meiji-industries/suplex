@@ -7,12 +7,11 @@ use std::{
     time::Duration,
 };
 
+use crate::shared::time::now_millis_rfc3339;
 use chrono::{DateTime, Utc};
 use tokio::sync::watch;
 
-use super::{
-    CacheTokens, TaskUsage, Tokens, failed, observe, record, session_observations, timestamp,
-};
+use super::{CacheTokens, TaskUsage, Tokens, failed, observe, record, session_observations};
 use crate::{
     platform::database::{DatabaseResult, OpenMode, SuplexDatabase},
     profiles::model_pricing::{ModelPricingCatalog, ModelsDevCatalogReader},
@@ -136,7 +135,7 @@ pub fn collect(
                 &task_id,
                 &status,
                 question.as_deref(),
-                &timestamp(Utc::now()),
+                &now_millis_rfc3339(),
             )?;
             let observations = session_observations(database, &task_id)?;
             let sessions = {
@@ -181,11 +180,11 @@ pub fn collect(
                 {
                     continue;
                 }
-                let started = timestamp(Utc::now());
+                let started = now_millis_rfc3339();
                 match read_usage(&session) {
                     Ok(usage) => record(database, &task_id, &session.id, &usage, &started)?,
                     Err(error) => {
-                        failed(database, &task_id, &session.id, &timestamp(Utc::now()))?;
+                        failed(database, &task_id, &session.id, &now_millis_rfc3339())?;
                         report(error);
                     }
                 }
@@ -436,7 +435,7 @@ mod tests {
         let path =
             std::env::temp_dir().join(format!("suplex-collector-{}.sqlite", uuid::Uuid::new_v4()));
         let database = SuplexDatabase::open(&path, OpenMode::Migrate).unwrap();
-        let time = timestamp(Utc::now());
+        let time = now_millis_rfc3339();
         let connection = database.connection();
         connection.execute("INSERT INTO suplex_companies (id,name,status,created_at) VALUES ('c','C','active',?1)", [&time]).unwrap();
         connection.execute("INSERT INTO suplex_projects (id,company_id,name,repository_path,worktree_root,repository_identity,base_branch,setup_command,verification_command,root_profile_id,worker_profile_id,agent_task_policy_json,created_at,updated_at) VALUES ('p','c','P','/tmp/r','/tmp/w',NULL,'main','','','root','worker','{}',?1,?1)", [&time]).unwrap();
@@ -463,7 +462,7 @@ mod tests {
             "t",
             "s",
             &[usage_with(10.0)],
-            &timestamp(Utc::now()),
+            &now_millis_rfc3339(),
         )
         .unwrap();
         let mut reads = 0;
@@ -494,7 +493,8 @@ mod tests {
             .connection()
             .execute("UPDATE suplex_task_controls SET status = 'active'", [])
             .unwrap();
-        let observed = timestamp(Utc::now() - chrono::Duration::minutes(10));
+        let observed =
+            crate::shared::time::rfc3339_millis(Utc::now() - chrono::Duration::minutes(10));
         record(
             &mut database,
             "t",
@@ -572,7 +572,7 @@ mod tests {
     #[test]
     fn a_session_observation_replaces_its_old_rows_without_deleting_another_session() {
         let (path, mut database) = task_database();
-        let time = timestamp(Utc::now());
+        let time = now_millis_rfc3339();
         database.connection().execute("INSERT INTO suplex_task_sessions (id,task_id,kind,generation,is_current,lifecycle,native_session_id,created_at,updated_at) VALUES ('w','t','worker',1,1,'live','codex-worker',?1,?1)", [&time]).unwrap();
         let entry = |native: &str, message: &str, cost: f64| TaskUsage {
             session_id: native.into(),

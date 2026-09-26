@@ -18,7 +18,6 @@ use crate::{
         session,
     },
     platform::database::{DatabaseResult, SuplexDatabase},
-    tasks::commands::TaskFailure,
 };
 
 use super::auth;
@@ -75,14 +74,7 @@ fn mutate(
         None => auth::error(StatusCode::UNAUTHORIZED, "Authentication required"),
         Some(user) => match state.with_database(|database| operation(database, &user.id, values)) {
             Ok(record) => (status, Json(record)).into_response(),
-            Err(error) => match error.downcast::<TaskFailure>() {
-                Ok(failure) => auth::error(
-                    StatusCode::from_u16(failure.status_code)
-                        .unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
-                    &failure.public_message,
-                ),
-                Err(error) => auth::service_error(error),
-            },
+            Err(error) => auth::service_error(error),
         },
     };
     auth::append_cookies(&mut response, session.set_cookies);
@@ -374,7 +366,7 @@ mod tests {
     async fn seeded_list_applies_archive_filter_after_query_validation_and_session() {
         let path = std::env::temp_dir().join(format!(
             "{}.sqlite",
-            identity_auth::random_hex_id("suplex_workflow_list").unwrap()
+            crate::shared::ids::random_hex_id("suplex_workflow_list").unwrap()
         ));
         let mut database = SuplexDatabase::open(&path, OpenMode::Migrate).unwrap();
         let signed_in = identity_auth::development_sign_in(&mut database, Utc::now()).unwrap();

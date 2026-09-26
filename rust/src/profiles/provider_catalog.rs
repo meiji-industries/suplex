@@ -1,5 +1,6 @@
 //! One row per agent tool (`src/profiles/provider-catalog.ts`).
 
+use crate::shared::time::rfc3339_millis;
 use std::{collections::HashMap, fs, path::Path};
 
 use chrono::Utc;
@@ -114,7 +115,7 @@ pub async fn read_providers(directory: &str, probe: bool) -> Value {
     let native = crate::runtimes::opencode::providers::read_providers(Path::new(directory), None)
         .await
         .unwrap_or_else(|_| {
-            json!({"directory": directory, "observedAt": crate::tasks::analytics::timestamp(Utc::now()), "providers": []})
+            json!({"directory": directory, "observedAt": rfc3339_millis(Utc::now()), "providers": []})
         });
     let open_code_models = native["providers"]
         .as_array()

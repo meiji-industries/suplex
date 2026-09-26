@@ -1,5 +1,6 @@
 //! The configured OpenCode vendors and models, read from a disposable server.
 
+use crate::shared::time::now_millis_rfc3339;
 use std::{cmp::Ordering, fs, path::Path};
 
 use serde_json::{Value, json};
@@ -62,7 +63,7 @@ pub async fn read_providers(
             .collect();
         Ok::<_, BoxError>(json!({
             "directory": reference.directory,
-            "observedAt": chrono::Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+            "observedAt": now_millis_rfc3339(),
             "providers": providers,
         }))
     }

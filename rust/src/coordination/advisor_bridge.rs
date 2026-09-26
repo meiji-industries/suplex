@@ -1,3 +1,4 @@
+use super::CoordinationError;
 use std::{io, path::PathBuf};
 
 use rmcp::{
@@ -97,7 +98,7 @@ pub fn write_binding(
             args: vec!["mcp".into(), "advisor".into()],
         },
     };
-    bridge_auth::atomic_write_private(
+    crate::shared::fs::write_private(
         &binding_path,
         &serde_json::to_vec(&binding).map_err(io::Error::other)?,
     )?;
@@ -506,14 +507,14 @@ pub fn advisor_role(role: &str) -> Option<AdvisorRole> {
 }
 
 fn capture(path: &std::path::Path, report: &Value) -> io::Result<()> {
-    bridge_auth::atomic_write_private(path, &serde_json::to_vec(report).map_err(io::Error::other)?)
+    crate::shared::fs::write_private(path, &serde_json::to_vec(report).map_err(io::Error::other)?)
 }
 
 pub async fn serve_from_environment() -> Result<(), Box<dyn std::error::Error>> {
     let path = bridge_auth::binding_path(ADVISOR_BINDING_ENV, "Advisor report")?;
     let binding: Binding = serde_json::from_slice(&std::fs::read(path)?)?;
     if binding.version != 1 || binding.server.command.is_empty() {
-        return Err(io::Error::other("Advisor report bridge binding is invalid").into());
+        return Err(CoordinationError::refused("Advisor report bridge binding is invalid").into());
     }
     let _ = binding.server.args;
     let token = std::env::var(ADVISOR_TOKEN_ENV).ok();

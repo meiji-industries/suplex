@@ -5,13 +5,15 @@
 //! range and fresh local facts. Bitbucket repositories deliver through the
 //! Bitbucket release port.
 
+use super::DeliveryError;
+use crate::shared::hash::sha256_hex;
+use crate::shared::time::{now_millis_rfc3339, rfc3339_millis};
 use std::{
     error::Error,
-    fmt, io,
     path::{Path, PathBuf},
 };
 
-use chrono::{Duration, SecondsFormat, Utc};
+use chrono::{Duration, Utc};
 use rusqlite::{OptionalExtension, params};
 use serde_json::{Value, json};
 use tokio::sync::OnceCell;
@@ -42,68 +44,24 @@ use crate::{
 pub const DELIVERY_WAIT_NEXT: &str =
     "End this Coordinator turn. Suplex will resume it when delivery state changes.";
 
-#[derive(Debug, Eq, PartialEq)]
-pub struct DeliveryOperationFailure {
-    pub code: &'static str,
-    pub message: String,
-}
-
-impl fmt::Display for DeliveryOperationFailure {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(&self.message)
-    }
-}
-
-impl Error for DeliveryOperationFailure {}
-
 pub fn delivery_failure(code: &'static str, message: impl Into<String>) -> Box<dyn Error> {
-    Box::new(DeliveryOperationFailure {
-        code,
-        message: message.into(),
-    })
-}
-
-fn timestamp(time: chrono::DateTime<Utc>) -> String {
-    time.to_rfc3339_opts(SecondsFormat::Millis, true)
-}
-
-/// Run one provider future to completion from synchronous code on any
-/// thread, including inside an async context. The future is built and run
-/// on its own thread; only its output crosses back.
-pub fn block_on<F, Fut>(make: F) -> Fut::Output
-where
-    F: FnOnce() -> Fut + Send,
-    Fut: Future,
-    Fut::Output: Send,
-{
-    std::thread::scope(|scope| {
-        scope
-            .spawn(|| {
-                tokio::runtime::Builder::new_current_thread()
-                    .enable_all()
-                    .build()
-                    .expect("delivery runtime")
-                    .block_on(make())
-            })
-            .join()
-            .expect("delivery thread")
-    })
+    DeliveryError::operation(code, message).into()
 }
 
 /// Check source control state before waiting for a Git observation.
-pub fn standard_local_worktree_path(control: &Value) -> Result<&str, DeliveryOperationFailure> {
+pub fn standard_local_worktree_path(control: &Value) -> Result<&str, DeliveryError> {
     if control["deliveryTarget"] != "local_worktree" {
-        return Err(DeliveryOperationFailure {
-            code: "delivery_target_mismatch",
-            message: "This task has a different delivery target".into(),
-        });
+        return Err(DeliveryError::operation(
+            "delivery_target_mismatch",
+            "This task has a different delivery target",
+        ));
     }
     control["worktree"]["path"]
         .as_str()
-        .ok_or(DeliveryOperationFailure {
-            code: "worktree_missing",
-            message: "The task has no worktree".into(),
-        })
+        .ok_or(DeliveryError::operation(
+            "worktree_missing",
+            "The task has no worktree",
+        ))
 }
 
 /// Check only the conditions in the source Standard `completeLocal` path.
@@ -112,15 +70,15 @@ pub fn check_standard_local_completion(
     control: &Value,
     expected_head: Option<&str>,
     local: &LocalRevisionObservation,
-) -> Result<(), DeliveryOperationFailure> {
+) -> Result<(), DeliveryError> {
     standard_local_worktree_path(control)?;
     if expected_head.is_none_or(|head| head != local.head_sha)
         || control["deliveryIntent"]["headBranch"] != local.branch
     {
-        return Err(DeliveryOperationFailure {
-            code: "head_diverged",
-            message: "Review the current worktree before completing the task".into(),
-        });
+        return Err(DeliveryError::operation(
+            "head_diverged",
+            "Review the current worktree before completing the task",
+        ));
     }
     Ok(())
 }
@@ -149,8 +107,7 @@ pub async fn complete_local_work(
     let local = tokio::task::spawn_blocking(move || {
         worktree::observe_local_revision(&path).map_err(|error| error.to_string())
     })
-    .await?
-    .map_err(io::Error::other)?;
+    .await??;
     check_standard_local_completion(&control, expected_head, &local)?;
 
     let mut database = SuplexDatabase::open(database_path, OpenMode::ReadWrite)?;
@@ -230,7 +187,7 @@ pub fn complete_workflow_delivery(
         state["deliveryWait"] = Value::Null;
         state["completion"] = json!({
             "kind":"workflow","reviewedHead":range.head_sha,"pullRequestNumber":pull_request_number,
-            "observedAt":Utc::now().to_rfc3339_opts(chrono::SecondsFormat::Millis, true),
+            "observedAt":now_millis_rfc3339(),
         });
         root_session_store::write_workflow_state(database, task_id, &state, Utc::now())?;
         root_session_store::mark_delivered(database, task_id, Utc::now())?;
@@ -566,11 +523,11 @@ impl DeliveryOperations {
             }
             Ok(database.connection().execute(
                 "UPDATE suplex_task_controls SET pull_request_json = ?1, updated_at = ?2 WHERE task_id = ?3 AND status IN ('active', 'waiting_human', 'delivered', 'cancelled')",
-                params![value, timestamp(Utc::now()), task_id],
+                params![value, crate::shared::time::now_millis_rfc3339(), task_id],
             )?)
         })?;
         if changed != 1 {
-            return Err(io::Error::other("task_not_active").into());
+            return Err(DeliveryError::internal("task_not_active").into());
         }
         Ok(())
     }
@@ -601,7 +558,7 @@ impl DeliveryOperations {
             mutate(&mut state);
             database.connection().execute(
                 "UPDATE suplex_task_controls SET workflow_state_json = ?1, updated_at = ?2 WHERE task_id = ?3",
-                params![crate::shared::js_json::stringify(&state), timestamp(Utc::now()), task_id],
+                params![crate::shared::js_json::stringify(&state), crate::shared::time::now_millis_rfc3339(), task_id],
             )?;
             Ok(())
         })
@@ -612,8 +569,8 @@ impl DeliveryOperations {
         self.open(OpenMode::ReadWrite)?.connection().execute(
             "UPDATE suplex_task_controls SET wake_at = ?1, updated_at = ?2 WHERE task_id = ?3",
             params![
-                timestamp(now + Duration::seconds(seconds)),
-                timestamp(now),
+                rfc3339_millis(now + Duration::seconds(seconds)),
+                rfc3339_millis(now),
                 task_id
             ],
         )?;
@@ -625,7 +582,7 @@ impl DeliveryOperations {
         let mut database = self.open(OpenMode::ReadWrite)?;
         let changed = database.connection().execute(
             "UPDATE suplex_task_controls SET status = 'waiting_human', human_question = ?1, human_question_options_json = '[]', human_question_id = ?2, limit_pause_json = NULL, wake_at = NULL, workflow_state_json = json_set(workflow_state_json, '$.deliveryWait', json('null')), updated_at = ?3 WHERE task_id = ?4 AND status = 'active'",
-            params![question.trim(), uuid::Uuid::new_v4().to_string(), timestamp(Utc::now()), task_id],
+            params![question.trim(), uuid::Uuid::new_v4().to_string(), crate::shared::time::now_millis_rfc3339(), task_id],
         )? == 1;
         if changed {
             root_session_store::observe_lifecycle(&mut database, task_id)?;
@@ -663,15 +620,14 @@ impl DeliveryOperations {
                 return Ok(false);
             }
             state["deliveryWait"] = Value::Null;
-            let time = timestamp(now);
-            use sha2::Digest;
+            let time = rfc3339_millis(now);
             database.connection().execute(
                 "UPDATE suplex_task_controls SET workflow_state_json = ?1, wake_at = ?2, updated_at = ?2 WHERE task_id = ?3",
                 params![crate::shared::js_json::stringify(&state), time, task_id],
             )?;
             database.connection().execute(
                 "INSERT INTO suplex_task_turns (id, task_id, session_id, generation, prompt_hash, prompt_text, status, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'pending_prompt', ?7, ?7)",
-                params![turn_id, task_id, root_id, generation, format!("{:x}", sha2::Sha256::digest(prompt.as_bytes())), prompt, time],
+                params![turn_id, task_id, root_id, generation, sha256_hex(prompt.as_bytes()), prompt, time],
             )?;
             Ok(true)
         })
@@ -886,13 +842,11 @@ impl DeliveryOperations {
                 .map_err(|error| error.to_string())
         })
         .await?
-        .map_err(|error| io::Error::other(error).into())
+        .map_err(|error| DeliveryError::internal(error).into())
     }
 
     fn observation_unavailable(error: &(dyn Error + 'static)) -> bool {
-        error
-            .downcast_ref::<DeliveryOperationFailure>()
-            .is_some_and(|failure| failure.code == "observation_unavailable")
+        DeliveryError::code_of(error) == Some("observation_unavailable")
             || error
                 .downcast_ref::<GithubFailure>()
                 .is_some_and(|failure| {
@@ -910,7 +864,7 @@ impl DeliveryOperations {
         evidence: &str,
     ) -> DatabaseResult<Value> {
         let task_id = control["taskId"].as_str().unwrap_or("");
-        let wait = json!({"headSha": head_sha, "fingerprint": format!("observation:{evidence}"), "since": timestamp(Utc::now()), "reason": "observation"});
+        let wait = json!({"headSha": head_sha, "fingerprint": format!("observation:{evidence}"), "since": crate::shared::time::now_millis_rfc3339(), "reason": "observation"});
         self.update_workflow_state(task_id, |state| state["deliveryWait"] = wait.clone())?;
         self.schedule_wake(task_id, 30)?;
         Ok(
@@ -1088,7 +1042,7 @@ impl DeliveryOperations {
             .filter(|latest| !latest["result"].is_null())
             .map(|latest| latest["range"]["headSha"].clone())
             .unwrap_or(Value::Null);
-        json!({"kind": "external_merge", "reviewedHead": reviewed_head, "pullRequestNumber": pull_request_number, "observedAt": timestamp(Utc::now())})
+        json!({"kind": "external_merge", "reviewedHead": reviewed_head, "pullRequestNumber": pull_request_number, "observedAt": crate::shared::time::now_millis_rfc3339()})
     }
 
     /// TypeScript `cancelledOutcome`.
@@ -1099,7 +1053,7 @@ impl DeliveryOperations {
     ) -> Value {
         match validated_range {
             Some(range) if pull["headSha"] == range.head_sha.as_str() => {
-                json!({"kind": "workflow", "reviewedHead": range.head_sha, "pullRequestNumber": pull["number"], "observedAt": timestamp(Utc::now())})
+                json!({"kind": "workflow", "reviewedHead": range.head_sha, "pullRequestNumber": pull["number"], "observedAt": crate::shared::time::now_millis_rfc3339()})
             }
             _ => Self::external_completion(current, &pull["number"]),
         }
@@ -1200,7 +1154,7 @@ impl DeliveryOperations {
         }
         if operation == "complete_local_work" {
             let Some(token) = owner_token else {
-                return Err(io::Error::other("task_tool_owner_lost").into());
+                return Err(DeliveryError::internal("task_tool_owner_lost").into());
             };
             if control["deliveryTarget"] != "local_worktree" {
                 return Err(delivery_failure(
@@ -1398,7 +1352,7 @@ impl DeliveryOperations {
                 )
                 .await
             }
-            _ => Err(io::Error::other("delivery_operation_invalid").into()),
+            _ => Err(DeliveryError::internal("delivery_operation_invalid").into()),
         }
     }
 
@@ -1852,7 +1806,7 @@ impl DeliveryOperations {
             {
                 current
             } else {
-                json!({"headSha": observed.head_sha, "fingerprint": fingerprint, "since": timestamp(Utc::now()), "reason": "checks"})
+                json!({"headSha": observed.head_sha, "fingerprint": fingerprint, "since": crate::shared::time::now_millis_rfc3339(), "reason": "checks"})
             };
             self.update_workflow_state(task_id, |state| state["deliveryWait"] = wait.clone())?;
             self.schedule_wake(task_id, 30)?;
@@ -2047,7 +2001,7 @@ impl DeliveryOperations {
                 } else {
                     "merge_queue"
                 };
-                let wait = json!({"headSha": head, "fingerprint": delivery_wait_fingerprint(&observed), "since": timestamp(Utc::now()), "reason": reason});
+                let wait = json!({"headSha": head, "fingerprint": delivery_wait_fingerprint(&observed), "since": crate::shared::time::now_millis_rfc3339(), "reason": reason});
                 self.update_workflow_state(task_id, |state| state["deliveryWait"] = wait.clone())?;
                 self.schedule_wake(task_id, 30)?;
                 return Ok(if disposition == "queued" {
@@ -2064,7 +2018,7 @@ impl DeliveryOperations {
         }
         let last = github.get_pull_request(repository, requested).await?;
         if last.state != "merged" {
-            let wait = json!({"headSha": head, "fingerprint": delivery_wait_fingerprint(&observed), "since": timestamp(Utc::now()), "reason": "merge_queue"});
+            let wait = json!({"headSha": head, "fingerprint": delivery_wait_fingerprint(&observed), "since": crate::shared::time::now_millis_rfc3339(), "reason": "merge_queue"});
             self.update_workflow_state(task_id, |state| state["deliveryWait"] = wait.clone())?;
             self.schedule_wake(task_id, 30)?;
             return Ok(
@@ -2226,7 +2180,7 @@ pub async fn host_observation(database_path: &Path, artifact_root: &Path, task_i
         task_id.to_owned(),
     );
     let observed = tokio::task::spawn_blocking(move || {
-        block_on(|| async {
+        crate::shared::blocking::block_on(|| async {
             let operations = DeliveryOperations::new(&database_path, &artifact_root);
             let control = operations
                 .get(&task_id)
@@ -2265,22 +2219,18 @@ pub fn observe_for_root(database_path: &Path, control: &Value) -> DatabaseResult
         .join("artifacts");
     let operations = DeliveryOperations::new(database_path, &artifact_root);
     let task_id = control["taskId"].as_str().unwrap_or("").to_owned();
-    let observed = block_on(|| async {
+    let observed = crate::shared::blocking::block_on(|| async {
         operations.observe(&task_id).await.map_err(|error| {
             let code = error
                 .downcast_ref::<GithubFailure>()
                 .map(|failure| failure.code)
-                .or_else(|| {
-                    error
-                        .downcast_ref::<DeliveryOperationFailure>()
-                        .map(|failure| failure.code)
-                });
+                .or_else(|| DeliveryError::code_of(error.as_ref()));
             (code, error.to_string())
         })
     });
     match observed {
         Ok(pull) => Ok((pull, json!({"available": true}))),
-        Err((None, message)) => Err(io::Error::other(message).into()),
+        Err((None, message)) => Err(DeliveryError::internal(message).into()),
         Err((Some(code), message)) => Ok((
             control["pullRequest"].clone(),
             json!({
@@ -2317,38 +2267,38 @@ pub(crate) mod tests {
         assert_eq!(
             check_standard_local_completion(&control, None, &local)
                 .unwrap_err()
-                .code,
-            "head_diverged"
+                .code(),
+            Some("head_diverged")
         );
         assert_eq!(
             check_standard_local_completion(&control, Some("old-head"), &local)
                 .unwrap_err()
-                .code,
-            "head_diverged"
+                .code(),
+            Some("head_diverged")
         );
         let mut wrong_branch = local.clone();
         wrong_branch.branch = "other".into();
         assert_eq!(
             check_standard_local_completion(&control, Some("head-one"), &wrong_branch)
                 .unwrap_err()
-                .code,
-            "head_diverged"
+                .code(),
+            Some("head_diverged")
         );
         let mut wrong_target = control.clone();
         wrong_target["deliveryTarget"] = json!("pull_request");
         assert_eq!(
             check_standard_local_completion(&wrong_target, Some("head-one"), &local)
                 .unwrap_err()
-                .code,
-            "delivery_target_mismatch"
+                .code(),
+            Some("delivery_target_mismatch")
         );
         let mut missing_worktree = control.clone();
         missing_worktree["worktree"] = Value::Null;
         assert_eq!(
             standard_local_worktree_path(&missing_worktree)
                 .unwrap_err()
-                .code,
-            "worktree_missing"
+                .code(),
+            Some("worktree_missing")
         );
     }
 
@@ -2586,8 +2536,7 @@ pub(crate) mod tests {
             .unwrap()
             .expect("the task carries a trigger policy");
         assert_eq!(policy.dispatch_id, "dispatch_1");
-        let code =
-            |error: Box<dyn Error>| error.downcast::<DeliveryOperationFailure>().unwrap().code;
+        let code = |error: Box<dyn Error>| DeliveryError::code_of(error.as_ref()).unwrap();
         let moved = operations
             .inspect_trigger_policy(&control, Some(&"c".repeat(40)), false)
             .await

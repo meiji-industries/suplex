@@ -1,6 +1,7 @@
 //! Task timeline reads saved usage and current native execution evidence.
 
-use std::{error::Error, io, path::PathBuf};
+use crate::tasks::TaskError;
+use std::{error::Error, path::PathBuf};
 
 use axum::{
     Json, Router,
@@ -21,10 +22,7 @@ use crate::{
     },
     identity::companies,
     platform::database::SuplexDatabase,
-    tasks::{
-        commands::TaskFailure,
-        timeline::{self, SavedTimeline, TimelineResponse},
-    },
+    tasks::timeline::{self, SavedTimeline, TimelineResponse},
 };
 
 use super::auth;
@@ -66,14 +64,6 @@ fn authorize(
     }
 }
 
-fn not_found() -> Box<dyn Error> {
-    Box::new(TaskFailure {
-        public_message: "Not found".into(),
-        status_code: 404,
-        code: "task_failure",
-    })
-}
-
 fn scoped(
     database: &SuplexDatabase,
     user_id: &str,
@@ -87,9 +77,9 @@ fn scoped(
             |row| row.get(0),
         )
         .optional()?;
-    let company_id = company_id.ok_or_else(not_found)?;
+    let company_id = company_id.ok_or_else(TaskError::not_found)?;
     companies::require_company_access(database, user_id, &company_id)?;
-    let saved = timeline::read_saved(database, task_id)?.ok_or_else(not_found)?;
+    let saved = timeline::read_saved(database, task_id)?.ok_or_else(TaskError::not_found)?;
     let database_path = PathBuf::from(
         database
             .connection()
@@ -108,18 +98,12 @@ fn recheck(database: &SuplexDatabase, user_id: &str, task_id: &str) -> Result<()
             |row| row.get(0),
         )
         .optional()?;
-    companies::require_company_access(database, user_id, &company_id.ok_or_else(not_found)?)?;
+    companies::require_company_access(
+        database,
+        user_id,
+        &company_id.ok_or_else(TaskError::not_found)?,
+    )?;
     Ok(())
-}
-
-fn service_error(error: Box<dyn Error>) -> Response {
-    match error.downcast::<TaskFailure>() {
-        Ok(failure) => auth::error(
-            StatusCode::from_u16(failure.status_code).unwrap_or(StatusCode::INTERNAL_SERVER_ERROR),
-            &failure.public_message,
-        ),
-        Err(error) => auth::service_error(error),
-    }
 }
 
 fn respond(result: Result<TimelineResponse, Box<dyn Error>>, cookies: Vec<String>) -> Response {
@@ -132,7 +116,7 @@ fn respond(result: Result<TimelineResponse, Box<dyn Error>>, cookies: Vec<String
             );
             response
         }
-        Err(error) => service_error(error),
+        Err(error) => auth::service_error(error),
     };
     auth::append_cookies(&mut response, cookies);
     response
@@ -161,7 +145,7 @@ async fn task_timeline(
     .await
     {
         Ok(Ok(value)) => value,
-        Ok(Err(error)) => return respond(Err(Box::new(io::Error::other(error))), cookies),
+        Ok(Err(error)) => return respond(Err(error.into()), cookies),
         Err(error) => return respond(Err(Box::new(error)), cookies),
     };
     let scope = state.with_database(|database| recheck(database, &user_id, &task_id));

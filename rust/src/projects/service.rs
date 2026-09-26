@@ -1,7 +1,10 @@
-use std::{error::Error, fmt};
+use crate::identity::IdentityError;
+use crate::projects::ProjectError;
+use crate::shared::ids::random_hex_id;
+use crate::shared::time::rfc3339_millis;
+use std::error::Error;
 
-use chrono::{DateTime, SecondsFormat, Utc};
-use getrandom::fill;
+use chrono::{DateTime, Utc};
 use rusqlite::{OptionalExtension, Row, params};
 use serde::Serialize;
 use serde_json::{Value, json};
@@ -17,27 +20,8 @@ use crate::{
 
 use super::repository::{Finding, PreparedLocalProject};
 
-#[derive(Debug)]
-pub struct ProjectFailure {
-    pub message: &'static str,
-    pub status_code: u16,
-    pub findings: Vec<Finding>,
-}
-
-impl fmt::Display for ProjectFailure {
-    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        formatter.write_str(self.message)
-    }
-}
-
-impl Error for ProjectFailure {}
-
-fn failure(message: &'static str, status_code: u16, findings: Vec<Finding>) -> Box<ProjectFailure> {
-    Box::new(ProjectFailure {
-        message,
-        status_code,
-        findings,
-    })
+fn failure(message: &'static str, status: u16, findings: Vec<Finding>) -> Box<ProjectError> {
+    ProjectError::new(message, status, findings).into()
 }
 
 fn finding(code: &str, field: &str, message: &str) -> Finding {
@@ -49,15 +33,7 @@ fn finding(code: &str, field: &str, message: &str) -> Finding {
 }
 
 fn project_id() -> DatabaseResult<String> {
-    let mut bytes = [0_u8; 12];
-    fill(&mut bytes)?;
-    Ok(format!(
-        "project_{}",
-        bytes
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect::<String>()
-    ))
+    Ok(format!("project_{}", crate::shared::ids::random_hex(12)?))
 }
 
 /// Internal database view. HTTP output still requires the full project
@@ -412,7 +388,7 @@ fn active_role(database: &SuplexDatabase, actor_user_id: &str) -> DatabaseResult
         )
         .optional()?
         .ok_or_else(|| {
-            Box::new(auth::AuthFailure::new(
+            Box::new(IdentityError::auth(
                 "Authentication required",
                 401,
                 "auth_failure",
@@ -597,8 +573,8 @@ pub fn create_local(
         ));
     }
     let id = project_id()?;
-    let audit_id = auth::random_hex_id("audit")?;
-    let stamp = options.now.to_rfc3339_opts(SecondsFormat::Millis, true);
+    let audit_id = random_hex_id("audit")?;
+    let stamp = rfc3339_millis(options.now);
     let policy_json = match &explicit_policy {
         Some(policy) => json_text(policy)?,
         None => {
@@ -781,7 +757,7 @@ fn audit_update(
 ) -> DatabaseResult<()> {
     database.connection().execute(
         "INSERT INTO suplex_audit_events (id, actor_user_id, actor_agent_id, action, target_user_id, company_id, metadata_json, created_at) VALUES (?1, ?2, NULL, 'project_updated', NULL, ?3, ?4, ?5)",
-        params![auth::random_hex_id("audit")?, actor_user_id, company_id, crate::shared::js_json::stringify(&json!({"projectId": project_id})), stamp],
+        params![random_hex_id("audit")?, actor_user_id, company_id, crate::shared::js_json::stringify(&json!({"projectId": project_id})), stamp],
     )?;
     Ok(())
 }
@@ -809,7 +785,7 @@ pub fn update_local(
 ) -> DatabaseResult<Project> {
     let root = auth::js_trim(&body.root_profile_id);
     let worker = auth::js_trim(&body.worker_profile_id);
-    let stamp = now.to_rfc3339_opts(SecondsFormat::Millis, true);
+    let stamp = rfc3339_millis(now);
     let company_id = existing.company_id.as_str();
     let project_id = existing.id.as_str();
     database
@@ -1106,7 +1082,7 @@ pub fn apply_patch(
     (repository_path, worktree_root): (&str, &str),
     now: DateTime<Utc>,
 ) -> DatabaseResult<Project> {
-    let stamp = now.to_rfc3339_opts(SecondsFormat::Millis, true);
+    let stamp = rfc3339_millis(now);
     let company_id = existing.company_id.as_str();
     let project_id = existing.id.as_str();
     database
@@ -1280,7 +1256,7 @@ mod tests {
     fn local_create_audits_once_and_reads_follow_live_membership() {
         let filename = std::env::temp_dir().join(format!(
             "{}.sqlite",
-            auth::random_hex_id("suplex_project").unwrap()
+            random_hex_id("suplex_project").unwrap()
         ));
         let mut database = SuplexDatabase::open(&filename, OpenMode::Migrate).unwrap();
         let now = DateTime::parse_from_rfc3339("2026-09-24T12:00:00Z")
@@ -1339,9 +1315,9 @@ mod tests {
         assert_eq!(
             get(&database, "project_member", &created.id)
                 .unwrap_err()
-                .downcast_ref::<ProjectFailure>()
+                .downcast_ref::<ProjectError>()
                 .unwrap()
-                .status_code,
+                .status(),
             404
         );
         database.connection().execute(
@@ -1369,9 +1345,9 @@ mod tests {
             },
         )
         .unwrap_err();
-        let rejected_instance = rejected_instance.downcast_ref::<ProjectFailure>().unwrap();
-        assert_eq!(rejected_instance.status_code, 422);
-        assert_eq!(rejected_instance.findings[0].code, "instance-ineligible");
+        let rejected_instance = rejected_instance.downcast_ref::<ProjectError>().unwrap();
+        assert_eq!(rejected_instance.status(), 422);
+        assert_eq!(rejected_instance.findings()[0].code, "instance-ineligible");
         let missing_workflow = local_configuration(
             json!({"agentTaskPolicy":{"workflowIds":["missing_workflow"],"defaultWorkflowId":"missing_workflow","rootProfileIds":["profile_native_root"],"workerProfileIds":["profile_native_worker"]}}),
         );
@@ -1388,9 +1364,9 @@ mod tests {
             },
         )
         .unwrap_err();
-        let rejected_workflow = rejected_workflow.downcast_ref::<ProjectFailure>().unwrap();
-        assert_eq!(rejected_workflow.status_code, 422);
-        assert_eq!(rejected_workflow.findings[0].code, "workflow-ineligible");
+        let rejected_workflow = rejected_workflow.downcast_ref::<ProjectError>().unwrap();
+        assert_eq!(rejected_workflow.status(), 422);
+        assert_eq!(rejected_workflow.findings()[0].code, "workflow-ineligible");
         let duplicate = create_local_default(
             &mut database,
             &admin.id,
@@ -1402,10 +1378,7 @@ mod tests {
         )
         .unwrap_err();
         assert_eq!(
-            duplicate
-                .downcast_ref::<ProjectFailure>()
-                .unwrap()
-                .status_code,
+            duplicate.downcast_ref::<ProjectError>().unwrap().status(),
             409
         );
         let rejected_profile = create_local_default(
@@ -1420,9 +1393,9 @@ mod tests {
         .unwrap_err();
         assert_eq!(
             rejected_profile
-                .downcast_ref::<ProjectFailure>()
+                .downcast_ref::<ProjectError>()
                 .unwrap()
-                .status_code,
+                .status(),
             422
         );
         let audit: String = database
@@ -1466,9 +1439,9 @@ mod tests {
                 now,
             )
             .unwrap_err()
-            .downcast_ref::<ProjectFailure>()
+            .downcast_ref::<ProjectError>()
             .unwrap()
-            .status_code,
+            .status(),
             409
         );
         database
@@ -1481,9 +1454,9 @@ mod tests {
         assert_eq!(
             get(&database, &admin.id, &created.id)
                 .unwrap_err()
-                .downcast_ref::<ProjectFailure>()
+                .downcast_ref::<ProjectError>()
                 .unwrap()
-                .status_code,
+                .status(),
             422
         );
         database
@@ -1510,9 +1483,9 @@ mod tests {
         assert_eq!(
             get(&database, "project_member", &created.id)
                 .unwrap_err()
-                .downcast_ref::<ProjectFailure>()
+                .downcast_ref::<ProjectError>()
                 .unwrap()
-                .status_code,
+                .status(),
             404
         );
         drop(database);
@@ -1525,7 +1498,7 @@ mod tests {
     fn stored_configuration_contracts_normalize_defaults_and_unknown_fields() {
         let filename = std::env::temp_dir().join(format!(
             "{}.sqlite",
-            auth::random_hex_id("suplex_project_json").unwrap()
+            random_hex_id("suplex_project_json").unwrap()
         ));
         let mut database = SuplexDatabase::open(&filename, OpenMode::Migrate).unwrap();
         let now = DateTime::parse_from_rfc3339("2026-09-24T12:00:00Z")

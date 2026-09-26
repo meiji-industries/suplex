@@ -1,4 +1,12 @@
+pub mod blocking;
+mod failure;
+pub mod fs;
+pub mod hash;
+pub mod ids;
 pub mod js_json;
+pub mod time;
+
+pub use failure::PublicFailure;
 
 /// JavaScript `encodeURIComponent`.
 pub fn encode_uri_component(value: &str) -> String {

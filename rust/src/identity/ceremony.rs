@@ -612,4 +612,5 @@ mod tests {
         drop(database);
         cleanup(&path);
     }
+    include!("../../tests/identity/ceremony.rs");
 }

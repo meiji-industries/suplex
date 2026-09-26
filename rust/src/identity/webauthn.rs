@@ -24,6 +24,12 @@ pub struct StartedCeremony {
 
 fn verifier(origin: &str, rp_id: &str) -> Result<Webauthn, String> {
     let origin = Url::parse(origin).map_err(|error| error.to_string())?;
+    if origin.scheme() != "https"
+        && !(origin.scheme() == "http"
+            && matches!(origin.host_str(), Some("localhost" | "127.0.0.1" | "[::1]")))
+    {
+        return Err("Suplex passkey authentication requires an HTTPS reachable address".into());
+    }
     WebauthnBuilder::new(rp_id, &origin)
         .map_err(|error| format!("{error:?}"))?
         .rp_name("Suplex")

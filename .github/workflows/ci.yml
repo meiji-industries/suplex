@@ -35,6 +35,8 @@ jobs:
     timeout-minutes: 20
     steps:
       - uses: actions/checkout@v5
+      - name: Install native lifecycle test dependencies
+        run: sudo apt-get update && sudo apt-get install --yes --no-install-recommends lsof
       - uses: dtolnay/rust-toolchain@master
         with:
           toolchain: 1.93.1
@@ -85,11 +87,11 @@ jobs:
           cache: pnpm
           cache-dependency-path: pnpm-lock.yaml
 
-      - name: Install shell dependency
+      - name: Install test host dependencies
         run: |
-          command -v zsh || sudo apt-get install --yes --no-install-recommends zsh || {
+          command -v zsh && command -v lsof || sudo apt-get install --yes --no-install-recommends zsh lsof || {
             sudo apt-get update
-            sudo apt-get install --yes --no-install-recommends zsh
+            sudo apt-get install --yes --no-install-recommends zsh lsof
           }
 
       - name: Install dependencies

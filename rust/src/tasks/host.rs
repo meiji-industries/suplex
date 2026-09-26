@@ -179,7 +179,7 @@ pub(crate) fn scheduled_task_ids(database_path: &Path) -> DatabaseResult<Vec<Str
 
 pub(crate) fn due_task_ids(database: &SuplexDatabase) -> DatabaseResult<Vec<String>> {
     let mut statement = database.connection().prepare(
-        "SELECT c.task_id FROM suplex_task_controls c JOIN suplex_tasks t ON t.id = c.task_id WHERE (t.archived_at IS NULL AND c.status IN ('active','waiting_human') AND (c.wake_at IS NULL OR c.wake_at <= ?1)) OR (c.status = 'delivered' AND EXISTS (SELECT 1 FROM suplex_task_sessions s WHERE s.task_id = c.task_id AND s.stopped_at IS NULL)) OR EXISTS (SELECT 1 FROM suplex_task_sessions s WHERE s.task_id = c.task_id AND s.stop_requested_at IS NOT NULL AND s.stopped_at IS NULL) ORDER BY COALESCE(c.wake_at,c.created_at)",
+        "SELECT c.task_id FROM suplex_task_controls c JOIN suplex_tasks t ON t.id = c.task_id WHERE (t.archived_at IS NULL AND c.status IN ('active','waiting_human') AND (c.wake_at IS NULL OR c.wake_at <= ?1)) OR ((c.wake_at IS NULL OR c.wake_at <= ?1) AND ((c.status = 'delivered' AND EXISTS (SELECT 1 FROM suplex_task_sessions s WHERE s.task_id = c.task_id AND s.stopped_at IS NULL)) OR EXISTS (SELECT 1 FROM suplex_task_sessions s WHERE s.task_id = c.task_id AND s.stop_requested_at IS NOT NULL AND s.stopped_at IS NULL))) ORDER BY COALESCE(c.wake_at,c.created_at)",
     )?;
     Ok(statement
         .query_map([now_millis_rfc3339()], |row| row.get::<_, String>(0))?
@@ -188,7 +188,9 @@ pub(crate) fn due_task_ids(database: &SuplexDatabase) -> DatabaseResult<Vec<Stri
 
 /// TypeScript `recoverOne`: whatever the sweep did, and even when it failed,
 /// an active or waiting task is observed again in 15 seconds (30 during a
-/// delivery wait), so a failing task cannot starve the others.
+/// delivery wait), so a failing task cannot starve the others. A finished
+/// task with a pending session stop also waits 15 seconds; its `updated_at`
+/// stays, because task lists and analytics read it as a user-visible change.
 pub async fn sweep_task(
     database_path: &Path,
     artifact_root: &Path,
@@ -211,6 +213,10 @@ pub async fn sweep_task(
     database.connection().execute(
         "UPDATE suplex_task_controls SET wake_at = CASE WHEN json_extract(workflow_state_json,'$.deliveryWait') IS NULL THEN ?1 ELSE ?2 END,updated_at = ?3 WHERE task_id = ?4 AND status IN ('active','waiting_human')",
         rusqlite::params![time(15), time(30), time(0), task_id],
+    )?;
+    database.connection().execute(
+        "UPDATE suplex_task_controls SET wake_at = ?1 WHERE task_id = ?2 AND status NOT IN ('active','waiting_human') AND EXISTS (SELECT 1 FROM suplex_task_sessions s WHERE s.task_id = ?2 AND s.stopped_at IS NULL AND (s.stop_requested_at IS NOT NULL OR suplex_task_controls.status = 'delivered'))",
+        rusqlite::params![time(15), task_id],
     )?;
     swept
 }

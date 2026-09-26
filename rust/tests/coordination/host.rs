@@ -641,6 +641,61 @@ mod host_tests {
         fs::remove_dir_all(base).unwrap();
     }
 
+    /// Four delivered tasks whose stops kept failing held every sweep slot, so
+    /// an active task behind them was never recovered.
+    #[tokio::test]
+    async fn a_delivered_task_with_a_pending_stop_waits_between_sweeps() {
+        let (base, database_path, delivered) = fixture_task();
+        {
+            let database = SuplexDatabase::open(&database_path, OpenMode::ReadWrite).unwrap();
+            let time = Utc::now().to_rfc3339();
+            database.connection().execute(
+                "UPDATE suplex_task_controls SET status = 'delivered', wake_at = NULL WHERE task_id = ?1",
+                [&delivered],
+            ).unwrap();
+            database.connection().execute(
+                "INSERT INTO suplex_task_sessions (id,task_id,kind,generation,is_current,lifecycle,native_session_id,stop_requested_at,created_at,updated_at) VALUES ('retired',?1,'root',1,0,'stopped','codex-retired',?2,?2,?2)",
+                rusqlite::params![&delivered, &time],
+            ).unwrap();
+            // An unreadable turn record makes the native stop fail on every sweep.
+            let directory =
+                crate::runtimes::native::session_directory(&database_path, "retired").unwrap();
+            fs::create_dir_all(&directory).unwrap();
+            fs::write(directory.join("turn.json"), "not a turn record").unwrap();
+        }
+        let due = || {
+            due_task_ids(&SuplexDatabase::open(&database_path, OpenMode::ReadOnly).unwrap())
+                .unwrap()
+        };
+        assert!(due().contains(&delivered));
+        assert!(
+            sweep_task(
+                &database_path,
+                &base.join("artifacts"),
+                &delivered,
+                None,
+                &HashMap::new(),
+            )
+            .await
+            .is_err()
+        );
+        let wake_at: Option<String> = SuplexDatabase::open(&database_path, OpenMode::ReadOnly)
+            .unwrap()
+            .connection()
+            .query_row(
+                "SELECT wake_at FROM suplex_task_controls WHERE task_id = ?1",
+                [&delivered],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert!(
+            wake_at.as_deref().is_some_and(|wake| wake > Utc::now().to_rfc3339().as_str()),
+            "a swept delivered task is due again at once"
+        );
+        assert!(!due().contains(&delivered));
+        fs::remove_dir_all(base).unwrap();
+    }
+
     #[tokio::test]
     async fn unidentified_execution_asks_for_command_cleanup() {
         let (base, database_path, task_id) = fixture_task();

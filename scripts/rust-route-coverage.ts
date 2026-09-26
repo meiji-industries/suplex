@@ -1,40 +1,13 @@
-// Lists every `METHOD path` pair the TypeScript server registers that the Rust
-// router does not. The TypeScript side is read from Fastify itself: the app is
-// built with stub dependencies and every route is captured through `onRoute`,
-// so API, page, public protocol (discovery, OAuth, MCP, agent pairing), asset,
-// and WebSocket routes are all included. HEAD is skipped because Axum answers
-// HEAD from each GET handler. The Rust side is read from the `router()`
-// functions in `rust/src/http`, including the 501 stubs in `unported.rs`.
+// The frozen route list comes from Fastify's onRoute hook before the TypeScript
+// engine was retired. HEAD is omitted because Axum answers it from each GET.
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
-import { createAppServer, registerAppRoutes, type AppDependencies } from "../src/app.js";
 
-// A stand-in for every service: route registration only stores it for handlers.
-const stub: any = new Proxy(function () {}, {
-  get: (_target, key) => key === "then" ? undefined
-    : key === Symbol.iterator ? function* () {}
-    : key === Symbol.toPrimitive ? () => "http://127.0.0.1:4111"
-    : stub,
-  apply: () => stub,
-  construct: () => stub,
+const expected: string[] = JSON.parse(readFileSync("tests/parity/routes.json", "utf8"));
+const routes = expected.map(route => {
+  const [method, path] = route.split(" ") as [string, string];
+  return { method, path: path.replace(/ \(WebSocket\)$/, "") };
 });
-const absent = new Set(["logger", "https", "frontendDevelopment", "fullApp", "getHealth", "healthNow", "systemEvents"]);
-const config = { reachableAddress: "http://127.0.0.1:4111", port: 4111 };
-const dependencies = new Proxy({ config } as unknown as AppDependencies, {
-  get: (target, key) => key in target ? target[key as keyof AppDependencies] : absent.has(String(key)) ? undefined : stub,
-  has: () => true,
-});
-
-const app = createAppServer(dependencies);
-const typescript = new Map<string, string>();
-app.addHook("onRoute", route => {
-  for (const method of [route.method].flat()) {
-    if (method !== "HEAD") typescript.set(`${method} ${route.url.replace(/:[A-Za-z_]\w*/g, "{x}")}`, `${method} ${route.url}${"websocket" in route && route.websocket ? " (WebSocket)" : ""}`);
-  }
-});
-registerAppRoutes(app, dependencies);
-await app.ready();
-await app.close();
 
 // Returns the text inside the parentheses that open at `start`.
 const enclosed = (text: string, start: number): string => {
@@ -87,12 +60,9 @@ for (const file of rustFiles) {
   }
 }
 
-const missing = [...typescript].filter(([pair]) => {
-  const [method, path] = pair.split(" ") as [string, string];
-  return !rust.some(route => route.method === method && route.pattern.test(path));
-}).map(([, source]) => source).sort();
+const missing = routes.filter(({ method, path }) => !rust.some(route => route.method === method && route.pattern.test(path))).map(({ method, path }) => `${method} ${path}`).sort();
 if (missing.length > 0) {
-  console.error(`${missing.length} of ${typescript.size} TypeScript route(s) have no Rust registration:\n${missing.join("\n")}`);
+  console.error(`${missing.length} of ${routes.length} frozen route(s) have no Rust registration:\n${missing.join("\n")}`);
   process.exit(1);
 }
-console.log(`All ${typescript.size} TypeScript method and path pairs have a Rust registration.`);
+console.log(`All ${routes.length} frozen method and path pairs have a Rust registration.`);

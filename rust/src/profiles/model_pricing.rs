@@ -3,7 +3,7 @@ use std::{collections::HashMap, sync::Arc, time::Duration};
 use serde_json::Value;
 use tokio::sync::{Mutex, OnceCell};
 
-use crate::runtimes::codex::usage::UsageTokens;
+use crate::runtimes::native::UsageTokens;
 
 pub const MODELS_DEV_CATALOG_URL: &str = "https://models.dev/api.json";
 

@@ -1,5 +1,6 @@
 //! TypeScript `DevinTaskRuntime` and `DevinSessionReader` behind the shared task harness seam.
 
+use crate::runtimes::native::SessionRef;
 use std::{error::Error, io, path::Path};
 
 use serde_json::Value;
@@ -11,7 +12,7 @@ use super::{
 use crate::{
     profiles::model_pricing::ModelPricingCatalog,
     runtimes::{
-        codex::tool_evidence::NativeTool,
+        native::NativeTool,
         task_harness::{
             DispatchClaim, DispatchState, NativeSessionReader, NativeTimeline, PromptObservation,
             ReaderSession, TaskHarness, TaskRole, TaskScope,
@@ -67,12 +68,13 @@ impl TaskHarness for DevinTaskRuntime {
 
     fn observe(
         &self,
-        directory: &Path,
-        native_session_id: &str,
+        session: SessionRef<'_>,
         turn_id: &str,
         dispatch: DispatchState,
         generation: Option<&str>,
     ) -> io::Result<PromptObservation> {
+        let directory = session.directory;
+        let native_session_id = session.native_session_id;
         task_runtime::observe(directory, native_session_id, turn_id, dispatch, generation)
     }
 
@@ -115,11 +117,12 @@ impl TaskHarness for DevinTaskRuntime {
 
     fn recover_dispatch(
         &self,
-        directory: &Path,
-        native_session_id: &str,
+        session: SessionRef<'_>,
         turn_id: &str,
         generation: &str,
     ) -> io::Result<PromptObservation> {
+        let directory = session.directory;
+        let native_session_id = session.native_session_id;
         task_runtime::recover_dispatch(directory, native_session_id, turn_id, generation)
     }
 

@@ -17,7 +17,7 @@ use std::{
 
 use serde_json::Value;
 
-use super::{session_reader, transcript};
+use super::transcript;
 use crate::{
     coordination::bridge_auth::{
         ADVISOR_BINDING_ENV, ADVISOR_RESULT_ENV, ADVISOR_TOKEN_ENV, ROOT_BINDING_ENV,
@@ -343,7 +343,8 @@ pub async fn serve(runtime_directory: &str) -> Result<(), Box<dyn Error>> {
 /// Dispatch shows the session in Herdr first. The display is an observation;
 /// its failure never blocks native work.
 pub fn show(database_path: &Path, session: &str, native: &str, worktree: &Path, model: &str) {
-    let Ok(runtime_directory) = session_reader::session_directory(database_path, session) else {
+    let Ok(runtime_directory) = crate::runtimes::native::session_directory(database_path, session)
+    else {
         return;
     };
     let Ok(display) = display_command(&runtime_directory) else {

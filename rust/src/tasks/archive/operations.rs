@@ -17,7 +17,7 @@ use crate::{
     identity::companies,
     platform::database::{DatabaseResult, OpenMode, SuplexDatabase},
     runtimes::{
-        codex::session_reader,
+        native as session_reader,
         process::inspect_process,
         task_harness::{ReaderSession, TaskHarness},
         task_harness_registry,

@@ -1560,9 +1560,8 @@ pub fn push_normal(
         )
     };
     let repository = Repository::open(cwd).map_err(unavailable)?;
-    let mut origin =
-        crate::projects::git::origin_remote(&repository, git2::Direction::Push, token)
-            .map_err(unavailable)?;
+    let mut origin = crate::projects::git::origin_remote(&repository, git2::Direction::Push, token)
+        .map_err(unavailable)?;
     let rejected = std::cell::RefCell::new(None::<String>);
     let mut callbacks = crate::projects::git::remote_callbacks(token);
     callbacks.push_update_reference(|_reference, status| {

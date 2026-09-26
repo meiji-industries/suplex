@@ -1,4 +1,6 @@
-//! TypeScript `CodexTaskRuntime` behind the shared task harness seam.
+use crate::runtimes::native::NativeTool;
+use crate::runtimes::native::SessionRef;
+// TypeScript `CodexTaskRuntime` behind the shared task harness seam.
 
 use std::{error::Error, io, path::Path, time::UNIX_EPOCH};
 
@@ -7,7 +9,7 @@ use serde_json::{Value, json};
 use super::{
     runtime, session_reader,
     task_runtime::{self, RootCodexLaunch, WorkerCodexLaunch},
-    tool_evidence::{NativeTool, codex_tools},
+    tool_evidence::codex_tools,
     transcript, usage,
 };
 use crate::{
@@ -107,7 +109,7 @@ impl NativeSessionReader for CodexTaskRuntime {
     }
 
     fn busy(&self, session: &ReaderSession<'_>) -> io::Result<bool> {
-        session_reader::busy(&session.runtime_directory()?)
+        crate::runtimes::headless::busy(&session.runtime_directory()?)
     }
 }
 
@@ -119,12 +121,13 @@ impl TaskHarness for CodexTaskRuntime {
 
     fn observe(
         &self,
-        directory: &Path,
-        native_session_id: &str,
+        session: SessionRef<'_>,
         turn_id: &str,
         dispatch: DispatchState,
         generation: Option<&str>,
     ) -> io::Result<PromptObservation> {
+        let directory = session.directory;
+        let native_session_id = session.native_session_id;
         runtime::observe(directory, native_session_id, turn_id, dispatch, generation)
     }
 
@@ -185,15 +188,18 @@ impl TaskHarness for CodexTaskRuntime {
 
     fn recover_dispatch(
         &self,
-        directory: &Path,
-        native_session_id: &str,
+        session: SessionRef<'_>,
         turn_id: &str,
         generation: &str,
     ) -> io::Result<PromptObservation> {
+        let directory = session.directory;
+        let native_session_id = session.native_session_id;
         recover_headless_dispatch(directory, generation)?;
         self.observe(
-            directory,
-            native_session_id,
+            SessionRef {
+                directory: directory,
+                native_session_id: native_session_id,
+            },
             turn_id,
             DispatchState::NotSubmitted,
             Some(generation),

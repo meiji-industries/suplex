@@ -1,3 +1,4 @@
+use crate::runtimes::native::{DispatchState, PromptObservation, PromptState};
 use crate::shared::fs::read_optional;
 use nix::errno::Errno;
 use nix::sys::signal::kill;
@@ -11,35 +12,6 @@ use super::invocation::{self, BridgeServer, Role};
 use super::thread;
 use super::transcript;
 use crate::runtimes::headless::{self, DispatchInput, HeadlessTurnRecord};
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DispatchState {
-    NotSubmitted,
-    Ambiguous,
-    Rejected,
-}
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum PromptState {
-    Unknown,
-    Running,
-    Completed,
-    Error,
-    Interrupted,
-}
-
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct PromptObservation {
-    pub state: PromptState,
-    pub admission_observed: bool,
-    pub retry_allowed: bool,
-    pub reason: &'static str,
-    pub unsettled_tool_ids: Vec<String>,
-    pub native_final_observed: bool,
-    pub process_running: bool,
-    /// TypeScript `executionUncertain`: a native execution Suplex cannot identify.
-    pub execution_uncertain: bool,
-}
 
 fn observation(
     state: PromptState,
@@ -59,23 +31,6 @@ fn observation(
     }
 }
 
-pub(crate) fn admitted_record(
-    directory: &Path,
-    turn_id: &str,
-    generation: Option<&str>,
-) -> io::Result<Option<HeadlessTurnRecord>> {
-    let fenced = generation
-        .map(|generation| directory.join(format!("dispatch-{generation}.json")))
-        .map(|path| headless::read_record(&path))
-        .transpose()?
-        .flatten();
-    let record = match fenced {
-        Some(record) => Some(record),
-        None => headless::read_record(&directory.join("turn.json"))?,
-    };
-    Ok(record.filter(|record| record.turn_id == turn_id))
-}
-
 pub fn observe(
     directory: &Path,
     session_id: &str,
@@ -83,44 +38,14 @@ pub fn observe(
     dispatch: DispatchState,
     generation: Option<&str>,
 ) -> io::Result<PromptObservation> {
-    let record = admitted_record(directory, turn_id, generation)?;
+    let record = headless::admitted_record(directory, turn_id, generation)?;
     let log = read_optional(&headless::turn_file(directory, turn_id, "jsonl"))?;
-    let Some(record) = record else {
-        let replayable = matches!(
-            dispatch,
-            DispatchState::NotSubmitted | DispatchState::Rejected
-        );
-        return Ok(if log.is_none() {
-            observation(
-                PromptState::Unknown,
-                false,
-                replayable,
-                if replayable {
-                    "message_not_observed"
-                } else {
-                    "admission_ambiguous"
-                },
-            )
-        } else {
-            PromptObservation {
-                execution_uncertain: true,
-                ..observation(
-                    PromptState::Unknown,
-                    false,
-                    false,
-                    "dispatch_identity_missing",
-                )
-            }
-        });
-    };
-    if record.session_id != session_id {
-        return Ok(observation(
-            PromptState::Unknown,
-            false,
-            false,
-            "session_identity_conflict",
-        ));
+    if let Some(observed) =
+        headless::observe_admission(record.as_ref(), session_id, dispatch, log.is_some())
+    {
+        return Ok(observed);
     }
+    let record = record.expect("admission checked");
     let events = transcript::parse_events(log.as_deref().unwrap_or_default());
     if let Some(thread_id) = transcript::thread_id(&events) {
         thread::persist_observed_thread(directory, thread_id)?;

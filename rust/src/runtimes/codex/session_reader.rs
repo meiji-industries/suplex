@@ -1,9 +1,7 @@
 use super::transcript::{self, CodexEvent};
-use crate::runtimes::headless;
-use crate::runtimes::process::{IdentityMatch, compare_identity, inspect_process};
 use std::fs;
 use std::io;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::SystemTime;
 
 #[derive(Debug)]
@@ -11,24 +9,6 @@ pub struct NativeTurn {
     pub id: String,
     pub events: Vec<CodexEvent>,
     pub updated_at: SystemTime,
-}
-
-pub fn session_directory(database_path: &Path, session_id: &str) -> io::Result<PathBuf> {
-    if session_id.is_empty()
-        || !session_id.as_bytes()[0].is_ascii_alphanumeric()
-        || !session_id
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || b"._:-".contains(&byte))
-    {
-        return Err(io::Error::new(
-            io::ErrorKind::InvalidInput,
-            "Invalid task session identity",
-        ));
-    }
-    let parent = database_path.parent().ok_or_else(|| {
-        io::Error::new(io::ErrorKind::InvalidInput, "Database path has no parent")
-    })?;
-    Ok(parent.join("runtime/task-sessions").join(session_id))
 }
 
 pub fn turns(directory: &Path) -> io::Result<Vec<NativeTurn>> {
@@ -85,16 +65,6 @@ pub fn turn_evidence(directory: &Path, turn_id: &str) -> io::Result<Option<Vec<C
         crate::shared::fs::read_optional(&directory.join(format!("turn-{turn_id}.jsonl")))?
             .map(|text| transcript::parse_events(&text)),
     )
-}
-
-pub fn busy(directory: &Path) -> io::Result<bool> {
-    let Some(record) = headless::read_record(&directory.join("turn.json"))? else {
-        return Ok(false);
-    };
-    Ok(compare_identity(
-        &record.owned_identity(),
-        inspect_process(record.pid).as_ref(),
-    ) == IdentityMatch::Exact)
 }
 
 #[cfg(test)]
@@ -157,3 +127,6 @@ mod tests {
         assert_eq!(record.owned_identity().owner_uid, Some(501));
     }
 }
+
+#[cfg(test)]
+use crate::runtimes::native::session_directory;

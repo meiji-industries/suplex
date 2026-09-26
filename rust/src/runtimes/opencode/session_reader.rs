@@ -14,9 +14,7 @@ use super::{
 };
 use crate::{
     profiles::model_pricing::ModelPricingCatalog,
-    runtimes::codex::{
-        session_reader::session_directory, tool_evidence::NativeTool, usage::UsageTokens,
-    },
+    runtimes::native::{NativeTool, UsageTokens, session_directory},
 };
 
 const MESSAGE_LIMIT: usize = 100;

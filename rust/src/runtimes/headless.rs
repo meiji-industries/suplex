@@ -733,3 +733,61 @@ mod tests {
         result.unwrap();
     }
 }
+
+pub fn admitted_record(
+    directory: &Path,
+    turn_id: &str,
+    generation: Option<&str>,
+) -> io::Result<Option<HeadlessTurnRecord>> {
+    let fenced = generation
+        .map(|generation| directory.join(format!("dispatch-{generation}.json")))
+        .map(|path| read_record(&path))
+        .transpose()?
+        .flatten();
+    let record = match fenced {
+        Some(record) => Some(record),
+        None => read_record(&directory.join("turn.json"))?,
+    };
+    Ok(record.filter(|record| record.turn_id == turn_id))
+}
+
+/// Shared admission evidence, before a provider interprets its native log.
+pub fn observe_admission(
+    record: Option<&HeadlessTurnRecord>,
+    session_id: &str,
+    dispatch: super::native::DispatchState,
+    log_exists: bool,
+) -> Option<super::native::PromptObservation> {
+    use super::native::{DispatchState, PromptObservation, PromptState};
+    let replayable = matches!(
+        dispatch,
+        DispatchState::NotSubmitted | DispatchState::Rejected
+    );
+    let reason = match record {
+        Some(record) if record.session_id == session_id => return None,
+        Some(_) => "session_identity_conflict",
+        None if log_exists => "dispatch_identity_missing",
+        None if replayable => "message_not_observed",
+        None => "admission_ambiguous",
+    };
+    Some(PromptObservation {
+        state: PromptState::Unknown,
+        admission_observed: false,
+        retry_allowed: record.is_none() && !log_exists && replayable,
+        reason,
+        unsettled_tool_ids: Vec::new(),
+        native_final_observed: false,
+        process_running: false,
+        execution_uncertain: record.is_none() && log_exists,
+    })
+}
+
+pub fn busy(directory: &Path) -> io::Result<bool> {
+    let Some(record) = read_record(&directory.join("turn.json"))? else {
+        return Ok(false);
+    };
+    Ok(compare_identity(
+        &record.owned_identity(),
+        inspect_process(record.pid).as_ref(),
+    ) == IdentityMatch::Exact)
+}

@@ -1,3 +1,4 @@
+use crate::runtimes::native::UsageTokens;
 use std::{
     collections::{HashMap, HashSet},
     fs, io,
@@ -57,15 +58,6 @@ impl NativeCounts {
             reasoning_output: self.reasoning_output - previous.reasoning_output,
         }
     }
-}
-
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub struct UsageTokens {
-    pub input: f64,
-    pub output: f64,
-    pub reasoning: f64,
-    pub cache_read: f64,
-    pub cache_write: f64,
 }
 
 impl From<NativeCounts> for UsageTokens {

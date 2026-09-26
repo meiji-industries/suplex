@@ -4,7 +4,7 @@ use serde_json::{Map, Value, json};
 
 use crate::{
     coordination::advisor_bridge::{self, AdvisorRole},
-    runtimes::codex::tool_evidence::NativeTool,
+    runtimes::native::NativeTool,
     shared::js_json,
 };
 

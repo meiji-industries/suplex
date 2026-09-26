@@ -1,19 +1,9 @@
-//! Tool observations projected from an immutable native Codex turn log.
+use crate::runtimes::native::NativeTool;
+// Tool observations projected from an immutable native Codex turn log.
 
-use serde::Serialize;
 use serde_json::{Map, Value, json};
 
 use super::transcript::CodexEvent;
-
-#[derive(Clone, Debug, Serialize)]
-pub struct NativeTool {
-    pub id: String,
-    pub name: String,
-    pub status: &'static str,
-    pub input: Map<String, Value>,
-    pub output: Option<String>,
-    pub error: Option<String>,
-}
 
 fn status(item: &Value, completed: bool) -> &'static str {
     if item

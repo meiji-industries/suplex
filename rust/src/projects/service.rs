@@ -1,4 +1,4 @@
-use super::{provisioning, git};
+use super::{git, provisioning};
 use crate::http::{AppState, contracts::typed::projects::RepositoryConnection};
 use crate::identity::IdentityError;
 use crate::projects::ProjectError;
@@ -1737,10 +1737,9 @@ mod tests {
             verification_command: "true",
         };
         let github = git::Github::default();
-        let prepared =
-            git::prepare_local_project(&github, &root, &root, &input, "bitbucket")
-                .await
-                .unwrap();
+        let prepared = git::prepare_local_project(&github, &root, &root, &input, "bitbucket")
+            .await
+            .unwrap();
         assert_eq!(prepared.repository, "team/repo");
         let roots = crate::http::ProjectRoots {
             repositories: root.clone(),

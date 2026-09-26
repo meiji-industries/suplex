@@ -827,8 +827,7 @@ mod tests {
             (exists.status(), exists.findings()[0].code.as_str()),
             (409, "repository-conflict")
         );
-        let organization =
-            git::repository_coordinate("https://github.com/meiji/fresh").unwrap();
+        let organization = git::repository_coordinate("https://github.com/meiji/fresh").unwrap();
         let refused = create(
             &github,
             &organization,

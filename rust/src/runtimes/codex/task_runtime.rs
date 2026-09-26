@@ -1,6 +1,6 @@
 use std::{collections::HashMap, error::Error, io, path::Path};
 
-use super::{display, executable, invocation, role_prompt, runtime, session_reader};
+use super::{display, executable, invocation, role_prompt, runtime};
 use crate::{
     coordination::{
         advisor_bridge::{self, AdvisorRole},
@@ -57,7 +57,7 @@ fn require_absent(directory: &Path, session_id: &str, turn_id: &str) -> io::Resu
         directory,
         session_id,
         turn_id,
-        runtime::DispatchState::NotSubmitted,
+        crate::runtimes::native::DispatchState::NotSubmitted,
         None,
     )?;
     if before.retry_allowed {
@@ -74,12 +74,14 @@ fn require_absent(directory: &Path, session_id: &str, turn_id: &str) -> io::Resu
 pub fn dispatch_codex_root<F>(
     input: RootCodexLaunch<'_>,
     claim: F,
-) -> Result<runtime::PromptObservation, Box<dyn Error>>
+) -> Result<crate::runtimes::native::PromptObservation, Box<dyn Error>>
 where
     F: FnOnce(&str) -> Result<bool, Box<dyn Error>>,
 {
-    let directory =
-        session_reader::session_directory(input.database_path, &input.identity.session_id)?;
+    let directory = crate::runtimes::native::session_directory(
+        input.database_path,
+        &input.identity.session_id,
+    )?;
     require_absent(&directory, input.native_session_id, input.turn_id)?;
     let codex = executable::resolve_codex_executable(input.codex_executable)?;
     let suplex = std::env::current_exe()?;
@@ -169,11 +171,12 @@ where
 pub fn dispatch_codex_worker<F>(
     input: WorkerCodexLaunch<'_>,
     claim: F,
-) -> Result<runtime::PromptObservation, Box<dyn Error>>
+) -> Result<crate::runtimes::native::PromptObservation, Box<dyn Error>>
 where
     F: FnOnce(&str) -> Result<bool, Box<dyn Error>>,
 {
-    let directory = session_reader::session_directory(input.database_path, input.session_id)?;
+    let directory =
+        crate::runtimes::native::session_directory(input.database_path, input.session_id)?;
     require_absent(&directory, input.native_session_id, input.turn_id)?;
     let codex = executable::resolve_codex_executable(input.codex_executable)?;
     let (git, gh) = git_guard::resolve_guard_binaries(input.inherited_environment)?;
@@ -334,7 +337,8 @@ mod tests {
         let claimed = AtomicBool::new(false);
         let result = dispatch_codex_root(launch, |generation| {
             assert!(!generation.is_empty());
-            let directory = session_reader::session_directory(&database, &identity.session_id)?;
+            let directory =
+                crate::runtimes::native::session_directory(&database, &identity.session_id)?;
             assert!(directory.join("root.binding.json").exists());
             assert!(!directory.join("turn.json").exists());
             claimed.store(true, Ordering::SeqCst);
@@ -343,7 +347,8 @@ mod tests {
         .unwrap();
         assert!(claimed.load(Ordering::SeqCst));
         assert!(result.admission_observed);
-        let directory = session_reader::session_directory(&database, &identity.session_id).unwrap();
+        let directory =
+            crate::runtimes::native::session_directory(&database, &identity.session_id).unwrap();
         let prompt = fs::read_to_string(crate::runtimes::headless::turn_file(
             &directory,
             "msg_first",
@@ -362,12 +367,12 @@ mod tests {
                         &directory,
                         "codex-root-1",
                         "msg_first",
-                        runtime::DispatchState::Ambiguous,
+                        crate::runtimes::native::DispatchState::Ambiguous,
                         None,
                     )
                     .unwrap()
                     .state,
-                    runtime::PromptState::Completed
+                    crate::runtimes::native::PromptState::Completed
                 );
                 fs::remove_dir_all(base).unwrap();
                 return;
@@ -418,7 +423,8 @@ mod tests {
         );
         assert!(result.is_err());
         assert!(!marker.exists());
-        let directory = session_reader::session_directory(&database, &identity.session_id).unwrap();
+        let directory =
+            crate::runtimes::native::session_directory(&database, &identity.session_id).unwrap();
         assert!(!directory.join("turn.json").exists());
         fs::remove_dir_all(base).unwrap();
     }
@@ -466,12 +472,17 @@ mod tests {
         )
         .unwrap();
         assert!(result.admission_observed);
-        let directory = session_reader::session_directory(&database, "advisor_session").unwrap();
+        let directory =
+            crate::runtimes::native::session_directory(&database, "advisor_session").unwrap();
         let exit = crate::runtimes::headless::turn_file(&directory, "msg_advisor", "exit");
         for _ in 0..60 {
             if let Ok(status) = fs::read_to_string(&exit) {
                 assert_eq!(status.trim(), "0");
-                assert_eq!(result.state, runtime::PromptState::Running, "{result:?}");
+                assert_eq!(
+                    result.state,
+                    crate::runtimes::native::PromptState::Running,
+                    "{result:?}"
+                );
                 fs::remove_dir_all(base).unwrap();
                 return;
             }
@@ -524,7 +535,8 @@ mod tests {
         )
         .unwrap();
         assert!(result.admission_observed);
-        let directory = session_reader::session_directory(&database, "worker_session").unwrap();
+        let directory =
+            crate::runtimes::native::session_directory(&database, "worker_session").unwrap();
         let exit = crate::runtimes::headless::turn_file(&directory, "msg_worker", "exit");
         for _ in 0..60 {
             if let Ok(status) = fs::read_to_string(&exit) {

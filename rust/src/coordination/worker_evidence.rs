@@ -3,7 +3,7 @@
 use serde::Deserialize;
 use serde_json::{Value, json};
 
-use crate::{runtimes::codex::tool_evidence::NativeTool, shared::js_json};
+use crate::{runtimes::native::NativeTool, shared::js_json};
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq)]
 #[serde(rename_all = "snake_case")]

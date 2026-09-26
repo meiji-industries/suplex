@@ -2,6 +2,7 @@
 //! `claude -p --resume` process whose stream-json output is the turn record;
 //! the transcript Claude Code keeps under its config directory is the session.
 
+use crate::runtimes::native::SessionRef;
 use crate::shared::fs::read_optional;
 use std::{collections::HashMap, error::Error, fs, io, os::unix::fs::PermissionsExt, path::Path};
 
@@ -15,7 +16,6 @@ use crate::{
     coordination::{advisor_bridge, bridge_auth, root_bridge},
     profiles::agent_profiles::home_directory,
     runtimes::{
-        codex::runtime as headless_observation,
         git_guard, headless,
         project_mcp::{project_mcp_servers, project_mcp_tools},
         task_harness::{
@@ -240,44 +240,21 @@ impl TaskHarness for ClaudeCodeTaskRuntime {
 
     fn observe(
         &self,
-        directory: &Path,
-        native_session_id: &str,
+        session: SessionRef<'_>,
         turn_id: &str,
         dispatch: DispatchState,
         generation: Option<&str>,
     ) -> io::Result<PromptObservation> {
-        let record = headless_observation::admitted_record(directory, turn_id, generation)?;
+        let directory = session.directory;
+        let native_session_id = session.native_session_id;
+        let record = headless::admitted_record(directory, turn_id, generation)?;
         let log = read_optional(&headless::turn_file(directory, turn_id, "jsonl"))?;
-        let Some(record) = record else {
-            let replayable = matches!(
-                dispatch,
-                DispatchState::NotSubmitted | DispatchState::Rejected
-            );
-            return Ok(if log.is_some() {
-                PromptObservation {
-                    execution_uncertain: true,
-                    ..observation(PromptState::Unknown, "dispatch_identity_missing")
-                }
-            } else {
-                PromptObservation {
-                    retry_allowed: replayable,
-                    ..observation(
-                        PromptState::Unknown,
-                        if replayable {
-                            "message_not_observed"
-                        } else {
-                            "admission_ambiguous"
-                        },
-                    )
-                }
-            });
-        };
-        if record.session_id != native_session_id {
-            return Ok(observation(
-                PromptState::Unknown,
-                "session_identity_conflict",
-            ));
+        if let Some(observed) =
+            headless::observe_admission(record.as_ref(), native_session_id, dispatch, log.is_some())
+        {
+            return Ok(observed);
         }
+        let record = record.expect("admission checked");
         let values = transcript::parse_json_lines(log.as_deref().unwrap_or_default());
         let entries = transcript::message_entries(&values);
         let result = transcript::stream_result(&values);
@@ -320,8 +297,10 @@ impl TaskHarness for ClaudeCodeTaskRuntime {
     ) -> Result<PromptObservation, Box<dyn Error>> {
         let directory = scope.runtime_directory()?;
         let before = self.observe(
-            &directory,
-            scope.native_session_id,
+            SessionRef {
+                directory: &directory,
+                native_session_id: scope.native_session_id,
+            },
             turn_id,
             DispatchState::NotSubmitted,
             None,
@@ -388,8 +367,10 @@ impl TaskHarness for ClaudeCodeTaskRuntime {
             claim,
         )?;
         Ok(self.observe(
-            &directory,
-            scope.native_session_id,
+            SessionRef {
+                directory: &directory,
+                native_session_id: scope.native_session_id,
+            },
             turn_id,
             DispatchState::Ambiguous,
             Some(&record.generation),
@@ -398,15 +379,18 @@ impl TaskHarness for ClaudeCodeTaskRuntime {
 
     fn recover_dispatch(
         &self,
-        directory: &Path,
-        native_session_id: &str,
+        session: SessionRef<'_>,
         turn_id: &str,
         generation: &str,
     ) -> io::Result<PromptObservation> {
+        let directory = session.directory;
+        let native_session_id = session.native_session_id;
         recover_headless_dispatch(directory, generation)?;
         self.observe(
-            directory,
-            native_session_id,
+            SessionRef {
+                directory: directory,
+                native_session_id: native_session_id,
+            },
             turn_id,
             DispatchState::NotSubmitted,
             Some(generation),
@@ -456,7 +440,6 @@ impl TaskHarness for ClaudeCodeTaskRuntime {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::runtimes::codex::session_reader;
     use crate::runtimes::task_harness::WorkerPurpose;
     use std::path::PathBuf;
     use std::{thread, time::Duration};
@@ -587,8 +570,10 @@ mod tests {
         for _ in 0..100 {
             let observed = ClaudeCodeTaskRuntime
                 .observe(
-                    &directory,
-                    SESSION,
+                    SessionRef {
+                        directory: &directory,
+                        native_session_id: SESSION,
+                    },
                     "msg_turn",
                     DispatchState::Ambiguous,
                     generation,
@@ -614,8 +599,10 @@ mod tests {
         assert!(uuid::Uuid::try_parse(&ClaudeCodeTaskRuntime.new_session_id()).is_ok());
         let before = ClaudeCodeTaskRuntime
             .observe(
-                &directory,
-                SESSION,
+                SessionRef {
+                    directory: &directory,
+                    native_session_id: SESSION,
+                },
                 "msg_turn",
                 DispatchState::NotSubmitted,
                 None,
@@ -687,7 +674,7 @@ mod tests {
                 .to_string()
                 .contains("replay is blocked")
         );
-        assert!(!session_reader::busy(&directory).unwrap());
+        assert!(!crate::runtimes::headless::busy(&directory).unwrap());
     }
 
     #[test]
@@ -927,8 +914,10 @@ mod tests {
             thread::sleep(Duration::from_millis(50));
             observed = ClaudeCodeTaskRuntime
                 .observe(
-                    &directory,
-                    SESSION,
+                    SessionRef {
+                        directory: &directory,
+                        native_session_id: SESSION,
+                    },
                     "msg_turn",
                     DispatchState::Ambiguous,
                     Some(&generation),
@@ -937,13 +926,20 @@ mod tests {
         }
         assert_eq!(observed.state, PromptState::Running);
         assert_eq!(observed.unsettled_tool_ids, ["toolu_1"]);
-        assert!(session_reader::busy(&directory).unwrap());
+        assert!(crate::runtimes::headless::busy(&directory).unwrap());
         ClaudeCodeTaskRuntime
             .stop(&directory, Some(SESSION))
             .unwrap();
-        assert!(!session_reader::busy(&directory).unwrap());
+        assert!(!crate::runtimes::headless::busy(&directory).unwrap());
         let recovered = ClaudeCodeTaskRuntime
-            .recover_dispatch(&directory, SESSION, "msg_turn", &generation)
+            .recover_dispatch(
+                SessionRef {
+                    directory: &directory,
+                    native_session_id: SESSION,
+                },
+                "msg_turn",
+                &generation,
+            )
             .unwrap();
         assert_eq!(recovered.state, PromptState::Unknown);
         assert!(recovered.execution_uncertain);
@@ -987,8 +983,10 @@ mod tests {
         fs::write(directory.join("turn-msg_turn.jsonl"), "").unwrap();
         let observed = ClaudeCodeTaskRuntime
             .observe(
-                &directory,
-                SESSION,
+                SessionRef {
+                    directory: &directory,
+                    native_session_id: SESSION,
+                },
                 "msg_turn",
                 DispatchState::Ambiguous,
                 Some("b775df17-718a-4cb2-8e23-6912b8aa0d39"),

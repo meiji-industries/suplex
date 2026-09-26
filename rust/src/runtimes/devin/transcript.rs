@@ -1,6 +1,6 @@
 use serde_json::{Value, json};
 
-use crate::runtimes::{codex::usage::UsageTokens, task_harness::UsageEntry};
+use crate::runtimes::{native::UsageTokens, task_harness::UsageEntry};
 
 // `devin --print` emits presentation text, not a documented event stream. Turn
 // logs are therefore authoritative only for final text; tool and token detail is unavailable.

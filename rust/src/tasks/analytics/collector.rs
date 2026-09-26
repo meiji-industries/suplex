@@ -258,11 +258,8 @@ mod tests {
 
     fn runtime(root: &Path) -> (PathBuf, PathBuf) {
         let database_path = root.join("suplex.sqlite");
-        let directory = crate::runtimes::codex::session_reader::session_directory(
-            &database_path,
-            "suplex-session",
-        )
-        .unwrap();
+        let directory =
+            crate::runtimes::native::session_directory(&database_path, "suplex-session").unwrap();
         fs::create_dir_all(&directory).unwrap();
         (database_path, directory)
     }

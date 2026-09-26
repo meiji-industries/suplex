@@ -1,4 +1,5 @@
-//! Native session recovery, dispatch, retirement, and durable result handling.
+use crate::runtimes::native::SessionRef;
+// Native session recovery, dispatch, retirement, and durable result handling.
 
 use chrono::Utc;
 use serde_json::{Value, json};
@@ -757,7 +758,7 @@ use uuid::Uuid;
 use crate::{
     coordination::{root_bridge::RootIdentity, root_session_store::TaskLimitUsage},
     runtimes::{
-        codex::session_reader,
+        native as session_reader,
         process::{ProcessOwnerObservation, inspect_process, observe_process_owner},
         task_harness::{
             DispatchState, PromptObservation, PromptState, TaskHarness, TaskRole, TaskScope,
@@ -937,8 +938,14 @@ fn observe_or_recover_fenced(
         return Ok((observed, false));
     }
     let directory = session_reader::session_directory(database_path, &session.id)?;
-    let recovered =
-        harness.recover_dispatch(&directory, native_id, &turn.id, &attempt.server_generation)?;
+    let recovered = harness.recover_dispatch(
+        SessionRef {
+            directory: &directory,
+            native_session_id: native_id,
+        },
+        &turn.id,
+        &attempt.server_generation,
+    )?;
     if recovered.retry_allowed {
         root_session_store::requeue_fenced_prompt(database, turn, attempt, owner, Utc::now())?;
     }
@@ -960,8 +967,10 @@ fn observe_turn(
         .as_ref()
         .map(|attempt: &PromptDispatchAttempt| attempt.server_generation.as_str());
     Ok(harness.observe(
-        &directory,
-        native_id,
+        SessionRef {
+            directory: &directory,
+            native_session_id: native_id,
+        },
         &turn.id,
         dispatch_state(turn),
         attempt,
@@ -1643,7 +1652,7 @@ mod host_tests {
         delivery::operations,
         identity::auth,
         profiles::model_pricing::ModelPricing,
-        runtimes::codex::usage::{self, UsageTokens},
+        runtimes::{codex::usage, native::UsageTokens},
         tasks::{
             commands,
             repository::{self, PreparedTask, TaskCreator},

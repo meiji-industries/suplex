@@ -204,7 +204,7 @@ mod tests {
         tests::{Fixture, SESSION, dispatch_turn, eventually},
     };
     use super::*;
-    use crate::runtimes::{codex::runtime::PromptState, task_harness::UsageEntry};
+    use crate::runtimes::{native::PromptState, task_harness::UsageEntry};
     use std::{fs::File, time::Duration};
 
     fn dispatch_record(directory: &Path) -> std::path::PathBuf {

@@ -1,6 +1,6 @@
 pub mod connection;
-pub mod provisioning;
 pub mod git;
+pub mod provisioning;
 pub mod service;
 
 use crate::shared::PublicFailure;

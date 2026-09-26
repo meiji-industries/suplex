@@ -22,12 +22,10 @@ use crate::{
     },
     profiles::agent_profiles::home_directory,
     runtimes::{
-        codex::{
-            runtime::{DispatchState, PromptObservation, PromptState},
-            session_reader,
-            tool_evidence::NativeTool,
-        },
         headless::{self, DispatchInput, HeadlessTurnRecord},
+        native::{
+            self as session_reader, DispatchState, NativeTool, PromptObservation, PromptState,
+        },
         process::{IdentityMatch, compare_identity, inspect_process},
         task_harness::{self, ExecutableSpec, GH_EXECUTABLE, resolve_executable},
     },
@@ -165,7 +163,7 @@ pub(super) fn turn_running(record: &HeadlessTurnRecord) -> bool {
 }
 
 pub fn session_busy(runtime_directory: &Path) -> io::Result<bool> {
-    session_reader::busy(runtime_directory)
+    crate::runtimes::headless::busy(runtime_directory)
 }
 
 /// Arguments are restricted to the documented Devin CLI flags.
@@ -301,43 +299,15 @@ pub fn observe(
     dispatch: DispatchState,
     generation: Option<&str>,
 ) -> io::Result<PromptObservation> {
-    let fenced = generation
-        .map(|generation| {
-            headless::read_record(&runtime_directory.join(format!("dispatch-{generation}.json")))
-        })
-        .transpose()?
-        .flatten();
-    let record = match fenced {
-        Some(record) => Some(record),
-        None => headless::read_record(&runtime_directory.join("turn.json"))?,
-    }
-    .filter(|record| record.turn_id == turn_id);
+    let record = headless::admitted_record(runtime_directory, turn_id, generation)?;
     let log_path = headless::turn_file(runtime_directory, turn_id, "jsonl");
-    let Some(record) = record else {
-        let log = read_optional(&log_path)?;
-        let replayable = matches!(
-            dispatch,
-            DispatchState::NotSubmitted | DispatchState::Rejected
-        );
-        return Ok(match (&log, replayable) {
-            (None, true) => observation(PromptState::Unknown, false, true, "message_not_observed"),
-            (None, false) => observation(PromptState::Unknown, false, false, "admission_ambiguous"),
-            (Some(_), _) => observation(
-                PromptState::Unknown,
-                false,
-                false,
-                "dispatch_identity_missing",
-            ),
-        });
-    };
-    if record.session_id != native_session_id {
-        return Ok(observation(
-            PromptState::Unknown,
-            false,
-            false,
-            "session_identity_conflict",
-        ));
+    let log_exists = record.is_none() && read_optional(&log_path)?.is_some();
+    if let Some(observed) =
+        headless::observe_admission(record.as_ref(), native_session_id, dispatch, log_exists)
+    {
+        return Ok(observed);
     }
+    let record = record.expect("admission checked");
     if turn_running(&record) {
         return Ok(observation(
             PromptState::Running,

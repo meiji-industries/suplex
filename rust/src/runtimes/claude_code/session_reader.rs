@@ -12,7 +12,8 @@ use super::{live_history, task_runtime::ClaudeCodeTaskRuntime, transcript};
 use crate::{
     profiles::model_pricing::ModelPricingCatalog,
     runtimes::{
-        codex::{session_reader::busy, tool_evidence::NativeTool},
+        headless::busy,
+        native::NativeTool,
         task_harness::{
             NativeSessionReader, NativeTimeline, ReaderSession, UsageEntry, modified_ms,
         },

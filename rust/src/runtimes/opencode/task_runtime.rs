@@ -5,6 +5,7 @@
 //! `opencode-…` identity and records the pairing in the session runtime
 //! directory, next to `server.json`. Native `ses…` identities are used as is.
 
+use crate::runtimes::native::SessionRef;
 use crate::shared::hash::sha256_hex;
 use std::{
     error::Error,
@@ -39,8 +40,8 @@ use crate::{
     },
     profiles::model_pricing::ModelPricingCatalog,
     runtimes::{
-        codex::{tool_evidence::NativeTool, usage::UsageTokens},
         git_guard, headless,
+        native::{NativeTool, UsageTokens},
         task_harness::{
             DispatchClaim, DispatchState, NativeSessionReader, NativeTimeline, PromptObservation,
             PromptState, ReaderSession, TaskHarness, TaskRole, TaskScope, UsageEntry,
@@ -532,8 +533,7 @@ async fn messages(
     database_path: &Path,
     native: &str,
 ) -> Result<Vec<Envelope>, BoxError> {
-    let directory =
-        crate::runtimes::codex::session_reader::session_directory(database_path, session_id)?;
+    let directory = crate::runtimes::native::session_directory(database_path, session_id)?;
     if let Some(reference) = server::read_server(&directory)?
         && let Ok(messages) = server::client(&reference)?
             .get_messages(native, Some(&reference.directory), None)
@@ -695,12 +695,13 @@ impl TaskHarness for OpenCodeTaskRuntime {
 
     fn observe(
         &self,
-        directory: &Path,
-        native_session_id: &str,
+        session: SessionRef<'_>,
         turn_id: &str,
         dispatch: DispatchState,
         generation: Option<&str>,
     ) -> io::Result<PromptObservation> {
+        let directory = session.directory;
+        let native_session_id = session.native_session_id;
         let observed = run(observe_native(
             directory,
             native_session_id,
@@ -764,11 +765,12 @@ impl TaskHarness for OpenCodeTaskRuntime {
 
     fn recover_dispatch(
         &self,
-        directory: &Path,
-        native_session_id: &str,
+        session: SessionRef<'_>,
         turn_id: &str,
         generation: &str,
     ) -> io::Result<PromptObservation> {
+        let directory = session.directory;
+        let native_session_id = session.native_session_id;
         let observed = run(async {
             match turn_context(
                 directory,
@@ -949,8 +951,10 @@ mod tests {
         assert_eq!(native_session_id(&directory, "opencode-2").unwrap(), None);
         let observed = OpenCodeTaskRuntime
             .observe(
-                &directory,
-                "opencode-2",
+                SessionRef {
+                    directory: &directory,
+                    native_session_id: "opencode-2",
+                },
                 "msg_1",
                 DispatchState::NotSubmitted,
                 None,
@@ -959,8 +963,10 @@ mod tests {
         assert!(observed.retry_allowed && !observed.admission_observed);
         let ambiguous = OpenCodeTaskRuntime
             .observe(
-                &directory,
-                "opencode-2",
+                SessionRef {
+                    directory: &directory,
+                    native_session_id: "opencode-2",
+                },
                 "msg_1",
                 DispatchState::Ambiguous,
                 None,

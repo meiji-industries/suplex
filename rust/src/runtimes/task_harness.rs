@@ -1,3 +1,4 @@
+use crate::runtimes::native::SessionRef;
 use std::collections::HashMap;
 use std::error::Error;
 use std::io;
@@ -10,14 +11,14 @@ use crate::coordination::bridge_auth::{
 };
 use crate::coordination::root_bridge::RootIdentity;
 use crate::profiles::model_pricing::ModelPricingCatalog;
-use crate::runtimes::codex::{tool_evidence::NativeTool, usage::UsageTokens};
 use crate::runtimes::headless;
+use crate::runtimes::native::{NativeTool, UsageTokens};
 
 // The prompt observation vocabulary is shared by every harness; each native
 // runtime maps its own evidence onto it.
 pub use crate::runtimes::codex::role_prompt::WorkerPurpose;
-pub use crate::runtimes::codex::runtime::{DispatchState, PromptObservation, PromptState};
-pub use crate::runtimes::codex::session_reader::session_directory as task_session_runtime_directory;
+pub use crate::runtimes::native::session_directory as task_session_runtime_directory;
+pub use crate::runtimes::native::{DispatchState, PromptObservation, PromptState};
 
 /// The Standard roles the task host runs.
 #[derive(Clone, Copy)]
@@ -201,8 +202,7 @@ pub trait TaskHarness: NativeSessionReader + Sync {
     }
     fn observe(
         &self,
-        directory: &Path,
-        native_session_id: &str,
+        session: SessionRef<'_>,
         turn_id: &str,
         dispatch: DispatchState,
         generation: Option<&str>,
@@ -218,8 +218,7 @@ pub trait TaskHarness: NativeSessionReader + Sync {
     /// Stop a fenced execution, then observe it as not submitted.
     fn recover_dispatch(
         &self,
-        directory: &Path,
-        native_session_id: &str,
+        session: SessionRef<'_>,
         turn_id: &str,
         generation: &str,
     ) -> io::Result<PromptObservation>;

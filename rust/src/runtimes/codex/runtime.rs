@@ -101,6 +101,22 @@ pub fn observe(
         result.state = PromptState::Interrupted;
         result.reason = "dispatch_process_stopped";
     } else if transcript::thread_id(&events).is_none() {
+        let arguments = if record.dispatch_arguments.is_empty() {
+            &record.process_identity.argv
+        } else {
+            &record.dispatch_arguments
+        };
+        if arguments.iter().any(|argument| argument == "resume") {
+            let stderr = read_optional(&headless::turn_file(directory, turn_id, "stderr.log"))?
+                .unwrap_or_default();
+            let unresumable = regex::Regex::new(
+                r"(?i)no rollout found|rollout .* is empty|thread .*not found|missing thread|no archived rollout",
+            )
+            .expect("Codex unresumable error pattern");
+            if unresumable.is_match(&stderr) {
+                thread::forget_unresumable_thread(directory)?;
+            }
+        }
         result.state = PromptState::Error;
         result.reason = "native_startup_failed";
     } else {
@@ -264,5 +280,83 @@ mod tests {
         );
         assert_eq!(result_text(&directory, "msg_1").unwrap(), "Done");
         fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn only_an_unresumable_resume_forgets_the_persisted_codex_thread() {
+        for (stderr, forgotten) in [
+            ("error: no rollout found for thread id thread-1", true),
+            ("Error: Not logged in", false),
+        ] {
+            let directory =
+                std::env::temp_dir().join(format!("suplex-codex-resume-{}", uuid::Uuid::new_v4()));
+            fs::create_dir(&directory).unwrap();
+            thread::persist_thread_id(&directory, "thread-1").unwrap();
+            fs::write(headless::turn_file(&directory, "msg_1", "jsonl"), "").unwrap();
+            fs::write(
+                headless::turn_file(&directory, "msg_1", "stderr.log"),
+                stderr,
+            )
+            .unwrap();
+            fs::write(headless::turn_file(&directory, "msg_1", "exit"), "1\n").unwrap();
+            let record = HeadlessTurnRecord {
+                generation: "generation-1".into(),
+                turn_id: "msg_1".into(),
+                session_id: "session-1".into(),
+                pid: 999_999,
+                process_identity: RecordedProcessIdentity {
+                    command: "/bin/sh".into(),
+                    executable: "/bin/sh".into(),
+                    argv: vec![
+                        "codex".into(),
+                        "exec".into(),
+                        "resume".into(),
+                        "thread-1".into(),
+                    ],
+                    process_group: 999_999,
+                    start_time: "gone".into(),
+                    owner_uid: 501,
+                },
+                dispatch_arguments: vec![
+                    "codex".into(),
+                    "exec".into(),
+                    "resume".into(),
+                    "thread-1".into(),
+                ],
+            };
+            fs::write(
+                directory.join("turn.json"),
+                serde_json::to_vec(&record).unwrap(),
+            )
+            .unwrap();
+            let observed = observe(
+                &directory,
+                "session-1",
+                "msg_1",
+                DispatchState::Ambiguous,
+                None,
+            )
+            .unwrap();
+            assert_eq!(observed.state, PromptState::Error);
+            assert_eq!(observed.reason, "native_startup_failed");
+            assert_eq!(
+                thread::read_thread_id(&directory).unwrap().is_none(),
+                forgotten
+            );
+            if forgotten {
+                fs::write(
+                    headless::turn_file(&directory, "msg_0", "jsonl"),
+                    "{\"type\":\"thread.started\",\"thread_id\":\"thread-1\"}\n",
+                )
+                .unwrap();
+                assert_eq!(thread::recover_thread_id(&directory).unwrap(), None);
+            } else {
+                assert_eq!(
+                    thread::recover_thread_id(&directory).unwrap().as_deref(),
+                    Some("thread-1")
+                );
+            }
+            fs::remove_dir_all(directory).unwrap();
+        }
     }
 }

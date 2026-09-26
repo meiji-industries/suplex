@@ -180,6 +180,12 @@ impl AdvisorBridge {
 }
 
 impl ServerHandler for AdvisorBridge {
+    fn supported_protocol_versions(
+        &self,
+    ) -> std::borrow::Cow<'static, [rmcp::model::ProtocolVersion]> {
+        crate::coordination::root_stdio::session_protocol_versions()
+    }
+
     fn get_info(&self) -> ServerConfig {
         let mut info = ServerConfig::default();
         info.server_info.name = "suplex-advisor-report".into();

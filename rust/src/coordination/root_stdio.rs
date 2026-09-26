@@ -567,7 +567,23 @@ impl RootBridgeServer {
     }
 }
 
+/// The TypeScript bridges spoke the `initialize` lifecycle only. Claude Code
+/// 2.1.283 drops every tool from a `server/discover` (2026-07-28) session, so
+/// the stdio bridges stop at 2025-11-25 and clients fall back to `initialize`.
+pub(crate) fn session_protocol_versions()
+-> std::borrow::Cow<'static, [rmcp::model::ProtocolVersion]> {
+    std::borrow::Cow::Borrowed(rmcp::model::ProtocolVersion::known_up_to(
+        &rmcp::model::ProtocolVersion::V_2025_11_25,
+    ))
+}
+
 impl ServerHandler for RootBridgeServer {
+    fn supported_protocol_versions(
+        &self,
+    ) -> std::borrow::Cow<'static, [rmcp::model::ProtocolVersion]> {
+        session_protocol_versions()
+    }
+
     fn get_info(&self) -> ServerConfig {
         let mut info = ServerConfig::default();
         info.server_info.name = "suplex-root-bridge".into();
@@ -645,6 +661,16 @@ pub async fn serve_from_environment() -> Result<(), Box<dyn std::error::Error>> 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn stdio_bridges_never_offer_the_discover_lifecycle() {
+        let versions = session_protocol_versions();
+        assert_eq!(
+            versions.last(),
+            Some(&rmcp::model::ProtocolVersion::V_2025_11_25)
+        );
+        assert!(!versions.contains(&rmcp::model::ProtocolVersion::V_2026_07_28));
+    }
 
     #[test]
     fn evidence_queries_and_pull_request_text_reject_invalid_combinations() {

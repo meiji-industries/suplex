@@ -885,4 +885,5 @@ mod tests {
         assert_eq!(health_check(&root, later)["status"], "warning");
         fs::remove_dir_all(root).unwrap();
     }
+    include!("../../tests/platform/backup.rs");
 }

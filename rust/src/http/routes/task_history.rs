@@ -18,7 +18,7 @@ use rusqlite::OptionalExtension;
 use serde_json::{Value, json};
 
 use crate::{
-    coordination::{advisor_bridge::AdvisorRole, root_session_store},
+    coordination::root_session_store,
     http::{AppState, contracts::typed::finding, session, validation},
     identity::companies,
     platform::database::SuplexDatabase,
@@ -132,27 +132,11 @@ fn scoped_session(
         &company.ok_or_else(TaskError::not_found)?,
     )?;
     let rows = root_session_store::root_observation_rows(database, task_id)?;
-    let session = rows
-        .sessions
-        .iter()
-        .find(|value| value["id"] == session_id)
-        .ok_or_else(TaskError::not_found)?;
-    let fallback = if session["kind"] == "root" {
-        &rows.control.root_profile
-    } else if let Some(role) = session["advisorRole"].as_str() {
-        AdvisorRole::parse(role)
-            .and_then(|role| rows.control.advisor_profiles.get(&role))
-            .unwrap_or(&rows.control.root_profile)
-    } else {
-        &rows.control.worker_profile
-    };
-    let instance_home_directory = if session["profile"].is_null() {
-        fallback.instance_home_directory().map(str::to_owned)
-    } else {
-        session["profile"]["instanceHomeDirectory"]
-            .as_str()
-            .map(str::to_owned)
-    };
+    let session = rows.session(session_id).ok_or_else(TaskError::not_found)?;
+    let instance_home_directory = rows
+        .profile_of(session)
+        .instance_home_directory()
+        .map(str::to_owned);
     Ok(ScopedSession {
         database_path: PathBuf::from(
             database
@@ -161,8 +145,8 @@ fn scoped_session(
                 .ok_or("Task database has no path")?,
         ),
         session_id: session_id.to_owned(),
-        current: session["current"] == true,
-        native_session_id: session["nativeSessionId"].as_str().map(str::to_owned),
+        current: session.current,
+        native_session_id: session.native_session_id.clone(),
         instance_home_directory,
     })
 }

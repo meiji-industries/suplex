@@ -16,7 +16,7 @@ use crate::{
     },
     runtimes::{task_harness::ReaderSession, task_harness_registry},
     tasks::{
-        control::{TaskControlRow, TaskStatus},
+        control::{SessionRow, TaskControlRow, TaskProfile, TaskStatus, TurnRow, TurnStatus},
         worktree,
     },
 };
@@ -26,7 +26,7 @@ use super::{
     advisor_evidence,
     root_bridge::RootIdentity,
     root_prompts::{self, WorkerAssignmentText},
-    root_session_store::{self, RootObservationRows, RootSession},
+    root_session_store::{self, RootObservationRows},
     worker_evidence::{self, EvidenceQuery},
     workflows::{
         ReviewRange, Workflow, advisor_label, latest_review, same_range, turn_outcome,
@@ -52,7 +52,7 @@ const REPLACED_NEXT: &str = "End this Coordinator turn. Suplex will stop the out
 
 /// Reserve an active Root and persist its first prompt once. Repeated host
 /// recovery returns the same session without replaying a completed turn.
-pub fn prepare_root(database_path: &Path, task_id: &str) -> DatabaseResult<RootSession> {
+pub fn prepare_root(database_path: &Path, task_id: &str) -> DatabaseResult<SessionRow> {
     let mut database = SuplexDatabase::open(database_path, OpenMode::ReadWrite)?;
     let root = root_session_store::reserve_root(&mut database, task_id, chrono::Utc::now())?;
     let rows = root_session_store::root_observation_rows(&database, task_id)?;
@@ -66,32 +66,30 @@ fn invalid(message: &'static str) -> Box<dyn std::error::Error> {
     CoordinationError::refused(message).into()
 }
 
-fn completed_worker_turn<'a>(turns: &'a [Value], session_id: &str) -> Option<&'a Value> {
+fn completed_worker_turn<'a>(turns: &'a [TurnRow], session_id: &str) -> Option<&'a TurnRow> {
     turns
         .iter()
         .rev()
-        .find(|turn| turn["sessionId"] == session_id && turn["status"] == "completed")
+        .find(|turn| turn.session_id == session_id && turn.status == TurnStatus::Completed)
 }
 
-fn accepted_assignment(turns: &[Value], worker: &Value) -> Option<Value> {
-    let id = worker["id"].as_str()?;
-    let generation = worker["generation"].as_i64()?;
+fn accepted_assignment(turns: &[TurnRow], worker: &SessionRow) -> Option<Value> {
     let turn = turns
         .iter()
         .rev()
-        .find(|turn| turn["sessionId"] == id && turn["generation"] == generation)?;
-    let input = turn.get("workflowInput").filter(|value| !value.is_null());
-    Some(match input {
+        .find(|turn| turn.session_id == worker.id && turn.generation == worker.generation)?;
+    Some(match &turn.workflow_input {
         Some(input) if input["kind"] == "worker" => {
             json!({"kind":"workflow_input","input":input})
         }
-        _ => json!({"kind":"saved_prompt","prompt":turn["promptText"]}),
+        _ => json!({"kind":"saved_prompt","prompt":turn.prompt_text}),
     })
 }
 
-fn worker_result(turn: &Value) -> Value {
-    let observation = turn["terminalObservation"]
-        .as_str()
+fn worker_result(turn: &TurnRow) -> Value {
+    let observation = turn
+        .terminal_observation
+        .as_deref()
         .and_then(|raw| serde_json::from_str::<Value>(raw).ok());
     let (state, text, tools_stored, limitation, verification_range) = match observation {
         Some(value) if value.is_object() => (
@@ -115,7 +113,7 @@ fn worker_result(turn: &Value) -> Value {
         _ => (Value::Null, Value::Null, false, Value::Null, Value::Null),
     };
     json!({
-        "turnId": turn["id"], "state": state, "text": text,
+        "turnId": turn.id, "state": state, "text": text,
         "evidence": {"operation":"read_worker_evidence", "toolsStored":tools_stored, "limitation":limitation},
         "verificationRange": verification_range,
     })
@@ -143,25 +141,21 @@ fn assemble_observation(
 ) -> DatabaseResult<Value> {
     let mut results = Map::new();
     for worker in &rows.workers {
-        let id = worker["id"]
-            .as_str()
-            .ok_or_else(|| invalid("worker id is missing"))?;
-        let result = completed_worker_turn(&rows.turns, id)
+        let result = completed_worker_turn(&rows.turns, &worker.id)
             .map(worker_result)
             .unwrap_or(Value::Null);
-        results.insert(id.to_owned(), result);
+        results.insert(worker.id.clone(), result);
     }
     let worker_result = rows
         .worker
         .as_ref()
-        .and_then(|worker| worker["id"].as_str())
-        .and_then(|id| results.get(id))
+        .and_then(|worker| results.get(&worker.id))
         .cloned()
         .unwrap_or(Value::Null);
     let accepted = rows
         .worker
         .as_ref()
-        .filter(|worker| worker["advisorRole"].is_null())
+        .filter(|worker| worker.advisor_role.is_none())
         .and_then(|worker| accepted_assignment(&rows.turns, worker))
         .unwrap_or(Value::Null);
     Ok(json!({
@@ -274,20 +268,19 @@ pub fn read_worker_evidence(
     let turn = rows
         .turns
         .iter()
-        .find(|turn| turn["id"] == request.turn_id)
+        .find(|turn| turn.id == request.turn_id)
         .ok_or_else(|| invalid("Worker turn does not belong to this task"))?;
     let session = rows
-        .sessions
-        .iter()
-        .find(|session| session["id"] == turn["sessionId"])
-        .filter(|session| session["kind"] == "worker" && session["advisorRole"].is_null())
+        .session(&turn.session_id)
+        .filter(|session| session.is_plain_worker())
         .ok_or_else(|| invalid("Worker turn does not belong to this task"))?;
-    let session_id = session["id"]
-        .as_str()
-        .ok_or_else(|| invalid("Worker session id is missing"))?;
-    let native_session_id = session["nativeSessionId"].as_str().unwrap_or_default();
+    let session_id = session.id.as_str();
+    let native_session_id = session.native_session_id.as_deref().unwrap_or_default();
     // An unbound session is read by its profile provider.
-    let provider = session["profile"]["provider"].as_str();
+    let provider = session
+        .profile
+        .as_ref()
+        .map(|profile| profile.provider.as_str());
     let reader = Some(native_session_id)
         .filter(|id| !id.is_empty())
         .and_then(task_harness_registry::native_session_reader)
@@ -303,8 +296,10 @@ pub fn read_worker_evidence(
                 database_path,
                 session_id,
                 native_session_id,
-                instance_home_directory: session["profile"]["instanceHomeDirectory"]
-                    .as_str()
+                instance_home_directory: session
+                    .profile
+                    .as_ref()
+                    .and_then(TaskProfile::instance_home_directory)
                     .map(Path::new),
             },
             &request.turn_id,
@@ -323,9 +318,9 @@ pub fn read_worker_evidence(
     output.insert(
         "localObservation".into(),
         json!({
-            "status":turn["status"],
-            "terminalObservationAvailable":!turn["terminalObservation"].is_null(),
-            "nativeTurnIdAvailable":!turn["nativeTurnId"].is_null(),
+            "status":turn.status,
+            "terminalObservationAvailable":turn.terminal_observation.is_some(),
+            "nativeTurnIdAvailable":turn.native_turn_id.is_some(),
         }),
     );
     output.insert("limitation".into(), limitation);
@@ -442,7 +437,7 @@ fn open_root(
 fn launched_worker(
     database: &SuplexDatabase,
     task_id: &str,
-    worker: Value,
+    worker: SessionRow,
 ) -> DatabaseResult<Value> {
     let after = root_session_store::root_observation_rows(database, task_id)?;
     let accepted = accepted_assignment(&after.turns, &worker).unwrap_or(Value::Null);
@@ -455,29 +450,26 @@ fn find_advisor_report<'a>(
     rows: &'a RootObservationRows,
     turn_id: Option<&str>,
     session_id: Option<&str>,
-) -> Option<(&'a Value, &'a Value, &'a Value)> {
-    let candidates: Vec<&Value> = match turn_id {
-        Some(id) => rows.turns.iter().filter(|turn| turn["id"] == id).collect(),
+) -> Option<(&'a SessionRow, &'a TurnRow, &'a Value)> {
+    let candidates: Vec<&TurnRow> = match turn_id {
+        Some(id) => rows.turns.iter().filter(|turn| turn.id == id).collect(),
         None => rows
             .turns
             .iter()
             .rev()
-            .filter(|turn| Some(turn["sessionId"].as_str().unwrap_or_default()) == session_id)
+            .filter(|turn| Some(turn.session_id.as_str()) == session_id)
             .collect(),
     };
     candidates.into_iter().find_map(|turn| {
-        let session = rows
-            .sessions
-            .iter()
-            .find(|session| session["id"] == turn["sessionId"])?;
-        let role = session["advisorRole"].as_str()?;
+        let session = rows.session(&turn.session_id)?;
+        let role = session.advisor_role?;
         let input = turn_workflow_input(&rows.sessions, turn)?;
-        let outcome = turn_outcome(turn["terminalObservation"].as_str()).advisor?;
-        (turn["status"] == "completed"
+        let outcome = turn_outcome(turn.terminal_observation.as_deref()).advisor?;
+        (turn.status == TurnStatus::Completed
             && input["kind"] == "advisor"
             && !outcome["result"].is_null()
-            && outcome["role"] == role)
-            .then_some((session, turn, input))
+            && outcome["role"] == role.as_str())
+        .then_some((session, turn, input))
     })
 }
 
@@ -582,17 +574,14 @@ pub async fn delegate_worker(
     let mut candidate_reports = Value::Null;
     if workflow == Workflow::CompetingPlans && purpose == "implementation" {
         let built = rows.turns.iter().any(|turn| {
-            let session = rows
-                .sessions
-                .iter()
-                .find(|session| session["id"] == turn["sessionId"]);
             let input = turn_workflow_input(&rows.sessions, turn);
-            session.is_some_and(|session| {
-                session["kind"] == "worker" && session["advisorRole"].is_null()
-            }) && input.is_some_and(|input| {
-                input["kind"] == "worker" && input["purpose"] == "implementation"
-            }) && turn["status"] == "completed"
-                && turn_outcome(turn["terminalObservation"].as_str())
+            rows.session(&turn.session_id)
+                .is_some_and(SessionRow::is_plain_worker)
+                && input.is_some_and(|input| {
+                    input["kind"] == "worker" && input["purpose"] == "implementation"
+                })
+                && turn.status == TurnStatus::Completed
+                && turn_outcome(turn.terminal_observation.as_deref())
                     .state
                     .as_deref()
                     == Some("completed")
@@ -614,16 +603,16 @@ pub async fn delegate_worker(
                 ));
             }
             let mut reports = Vec::new();
-            for (id, role) in [(a, "planner_a"), (b, "planner_b")] {
-                let label = advisor_label(role);
+            for (id, role) in [(a, AdvisorRole::PlannerA), (b, AdvisorRole::PlannerB)] {
+                let label = advisor_label(role.as_str());
                 let report = if by_turn { find_advisor_report(&rows, Some(id), None) } else { find_advisor_report(&rows, None, Some(id)) }
-                    .filter(|(session, _, input)| session["advisorRole"] == role && input["role"] == role)
+                    .filter(|(session, _, input)| session.advisor_role == Some(role) && input["role"] == role.as_str())
                     .ok_or_else(|| CoordinationError::refused(format!("{label} session {id} is not a completed valid {label} report for this task.")))?;
                 let planned = ReviewRange::from_value(&report.2["range"]).unwrap_or_default();
                 if !same_range(&planned, &range) {
                     return Err(CoordinationError::refused(format!("{label} planned against a different source range. Request new plans for the current range.")).into());
                 }
-                reports.push(json!({"sessionId":report.0["id"],"turnId":report.1["id"]}));
+                reports.push(json!({"sessionId":report.0.id,"turnId":report.1.id}));
             }
             candidate_reports = Value::Array(reports);
         }
@@ -654,13 +643,13 @@ pub async fn delegate_worker(
             .turns
             .iter()
             .find(|turn| {
-                turn["id"] == latest.turn_id.as_str()
-                    && turn["sessionId"] == latest.session_id.as_str()
-                    && turn["status"] == "completed"
+                turn.id == latest.turn_id
+                    && turn.session_id == latest.session_id
+                    && turn.status == TurnStatus::Completed
             })
             .ok_or_else(|| invalid("The latest Rater report turn is missing."))?;
         advisor_report = Some(
-            turn_outcome(report["terminalObservation"].as_str())
+            turn_outcome(report.terminal_observation.as_deref())
                 .text
                 .unwrap_or_default(),
         );
@@ -674,7 +663,7 @@ pub async fn delegate_worker(
         .ok_or_else(|| {
             invalid("The Advisor reference does not name a completed report for this task.")
         })?;
-        advisor_reference = json!({"sessionId":report.0["id"],"turnId":report.1["id"]});
+        advisor_reference = json!({"sessionId":report.0.id,"turnId":report.1.id});
     }
     let text = compose(
         Some(&range),
@@ -814,20 +803,20 @@ pub async fn delegate_advisor(
         let index = rows
             .turns
             .iter()
-            .position(|turn| turn["id"] == previous.turn_id.as_str());
+            .position(|turn| turn.id == previous.turn_id);
         advisor_evidence::completed_worker_turns(&rows)
             .into_iter()
             .filter(|(turn, _)| {
                 let position = rows
                     .turns
                     .iter()
-                    .position(|candidate| candidate["id"] == turn["id"]);
+                    .position(|candidate| candidate.id == turn.id);
                 index.is_none_or(|index| position.is_some_and(|position| position > index))
             })
             .map(|(turn, parsed)| {
                 format!(
                     "Turn {}: {}",
-                    turn["id"].as_str().unwrap_or_default(),
+                    turn.id,
                     parsed["text"].as_str().unwrap_or("(no text)")
                 )
             })
@@ -1142,12 +1131,12 @@ mod tests {
             .unwrap()
             .turns
             .into_iter()
-            .find(|value| value["sessionId"] == worker["id"])
+            .find(|value| value.session_id == worker.id)
             .unwrap();
-        let turn_id = turn["id"].as_str().unwrap().to_owned();
+        let turn_id = turn.id.as_str().to_owned();
         let native_directory = crate::runtimes::task_harness::task_session_runtime_directory(
             &database_path,
-            worker["id"].as_str().unwrap(),
+            worker.id.as_str(),
         )
         .unwrap();
         fs::create_dir_all(&native_directory).unwrap();

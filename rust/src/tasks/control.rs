@@ -228,6 +228,137 @@ impl TaskControlRow {
     }
 }
 
+/// TypeScript `TaskSession`: one Coordinator, Worker, or Advisor session row.
+/// It serializes with the field names and order of the persisted session
+/// projection that the Coordinator observes.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionRow {
+    pub profile: Option<TaskProfile>,
+    pub replacement: Option<SessionReplacement>,
+    pub id: String,
+    pub task_id: String,
+    pub kind: SessionKind,
+    pub generation: i64,
+    pub current: bool,
+    pub pane_id: Option<String>,
+    pub native_session_id: Option<String>,
+    pub lifecycle: SessionLifecycle,
+    pub assignment_hash: Option<String>,
+    pub launch_owner: Option<String>,
+    pub launch_owner_pid: Option<i64>,
+    pub launch_owner_start_time: Option<String>,
+    pub stop_requested_at: Option<String>,
+    pub stopped_at: Option<String>,
+    pub advisor_role: Option<AdvisorRole>,
+    pub delegate_slot: Option<String>,
+    pub workflow_input: Option<Value>,
+}
+
+#[cfg(test)]
+impl SessionRow {
+    /// A current reserved generation-1 session for tests to adjust.
+    pub fn fixture(id: &str, kind: SessionKind) -> Self {
+        Self {
+            profile: None,
+            replacement: None,
+            id: id.into(),
+            task_id: "task".into(),
+            kind,
+            generation: 1,
+            current: true,
+            pane_id: None,
+            native_session_id: None,
+            lifecycle: SessionLifecycle::Reserved,
+            assignment_hash: None,
+            launch_owner: None,
+            launch_owner_pid: None,
+            launch_owner_start_time: None,
+            stop_requested_at: None,
+            stopped_at: None,
+            advisor_role: None,
+            delegate_slot: None,
+            workflow_input: None,
+        }
+    }
+}
+
+#[cfg(test)]
+impl TurnRow {
+    /// A generation-1 turn of `session_id` for tests to adjust.
+    pub fn fixture(id: &str, session_id: &str, status: TurnStatus) -> Self {
+        Self {
+            id: id.into(),
+            task_id: "task".into(),
+            session_id: session_id.into(),
+            generation: 1,
+            assignment_hash: None,
+            prompt_hash: String::new(),
+            prompt_text: String::new(),
+            status,
+            prompted_at: None,
+            completed_at: None,
+            result_receipt_id: None,
+            terminal_observation: None,
+            native_turn_id: None,
+            dispatch_attempt: None,
+            workflow_input: None,
+        }
+    }
+}
+
+impl SessionRow {
+    /// A Worker with no Advisor role.
+    pub fn is_plain_worker(&self) -> bool {
+        self.kind == SessionKind::Worker && self.advisor_role.is_none()
+    }
+}
+
+/// The session a replacement session succeeded, and why.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct SessionReplacement {
+    pub session_id: String,
+    pub reason: Option<String>,
+    pub handoff: Option<String>,
+}
+
+/// TypeScript `TaskTurn`: one prompt to a session and its terminal result.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TurnRow {
+    pub id: String,
+    pub task_id: String,
+    pub session_id: String,
+    pub generation: i64,
+    pub assignment_hash: Option<String>,
+    pub prompt_hash: String,
+    pub prompt_text: String,
+    pub status: TurnStatus,
+    pub prompted_at: Option<String>,
+    pub completed_at: Option<String>,
+    pub result_receipt_id: Option<String>,
+    pub terminal_observation: Option<String>,
+    pub native_turn_id: Option<String>,
+    pub dispatch_attempt: Option<PromptDispatchAttempt>,
+    pub workflow_input: Option<Value>,
+}
+
+impl TurnStatus {
+    /// A turn that native work may still answer.
+    pub fn is_open(self) -> bool {
+        matches!(self, Self::PendingPrompt | Self::Prompted | Self::Unknown)
+    }
+}
+
+/// TypeScript `PromptDispatchAttempt`: the server generation that claimed a prompt.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PromptDispatchAttempt {
+    pub server_generation: String,
+    pub claimed_at: String,
+}
+
 /// TypeScript `PullRequestReference`: the pull request GitHub last reported.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]

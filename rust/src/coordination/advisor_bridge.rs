@@ -491,10 +491,6 @@ pub fn advisor_report_from_turn(
     }
 }
 
-pub fn advisor_role(role: &str) -> Option<AdvisorRole> {
-    serde_json::from_value(Value::String(role.to_owned())).ok()
-}
-
 fn capture(path: &std::path::Path, report: &Value) -> io::Result<()> {
     crate::shared::fs::write_private(path, &serde_json::to_vec(report).map_err(io::Error::other)?)
 }

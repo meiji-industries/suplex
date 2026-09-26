@@ -5,7 +5,8 @@ use crate::shared::hash::sha256_hex;
 use crate::shared::time::rfc3339_millis;
 use crate::tasks::TaskError;
 use crate::tasks::control::{
-    SessionLifecycle, TaskControlRow, TaskProfile, TaskStatus, TurnStatus, WorktreeReference,
+    PromptDispatchAttempt, SessionKind, SessionLifecycle, SessionReplacement, SessionRow,
+    TaskControlRow, TaskProfile, TaskStatus, TurnRow, TurnStatus, WorktreeReference,
 };
 use chrono::{DateTime, Utc};
 use rusqlite::{OptionalExtension, Row, params};
@@ -33,37 +34,6 @@ use crate::shared::js_json;
 use crate::tasks::commands::{allowed_profile, read_profile};
 use crate::tasks::repository;
 
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct RootSession {
-    pub id: String,
-    pub task_id: String,
-    pub generation: i64,
-    pub lifecycle: SessionLifecycle,
-    pub native_session_id: Option<String>,
-    pub launch_owner: Option<String>,
-    pub launch_owner_pid: Option<i64>,
-    pub launch_owner_start_time: Option<String>,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct PromptDispatchAttempt {
-    pub server_generation: String,
-    pub claimed_at: String,
-}
-
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct RootTurn {
-    pub id: String,
-    pub task_id: String,
-    pub session_id: String,
-    pub generation: i64,
-    pub prompt_text: String,
-    pub status: TurnStatus,
-    pub dispatch_attempt: Option<PromptDispatchAttempt>,
-    pub native_turn_id: Option<String>,
-}
-
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub struct TaskLimitUsage {
     pub estimated_cost_usd: Option<f64>,
@@ -74,11 +44,34 @@ pub struct RootObservationRows {
     pub control: TaskControlRow,
     pub context: Value,
     pub dependencies: Vec<Value>,
-    pub root: Option<Value>,
-    pub worker: Option<Value>,
-    pub workers: Vec<Value>,
-    pub sessions: Vec<Value>,
-    pub turns: Vec<Value>,
+    pub root: Option<SessionRow>,
+    pub worker: Option<SessionRow>,
+    pub workers: Vec<SessionRow>,
+    pub sessions: Vec<SessionRow>,
+    pub turns: Vec<TurnRow>,
+}
+
+impl RootObservationRows {
+    /// TypeScript `session.profile ?? control.<role>Profile`: an Advisor
+    /// without its own snapshot uses the Coordinator profile.
+    pub fn profile_of<'a>(&'a self, session: &'a SessionRow) -> &'a TaskProfile {
+        session.profile.as_ref().unwrap_or_else(|| {
+            if session.kind == SessionKind::Root {
+                &self.control.root_profile
+            } else if let Some(role) = session.advisor_role {
+                self.control
+                    .advisor_profiles
+                    .get(&role)
+                    .unwrap_or(&self.control.root_profile)
+            } else {
+                &self.control.worker_profile
+            }
+        })
+    }
+
+    pub fn session(&self, id: &str) -> Option<&SessionRow> {
+        self.sessions.iter().find(|session| session.id == id)
+    }
 }
 
 pub struct TaskArtifact {
@@ -167,6 +160,19 @@ pub fn task_control(
         .optional()?)
 }
 
+fn typed_rows<T>(
+    database: &SuplexDatabase,
+    sql: &str,
+    task_id: &str,
+    decode: fn(&Row<'_>) -> rusqlite::Result<T>,
+) -> DatabaseResult<Vec<T>> {
+    let mut statement = database.connection().prepare(sql)?;
+    let rows = statement
+        .query_map([task_id], decode)?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    Ok(rows)
+}
+
 fn json_rows(database: &SuplexDatabase, sql: &str, task_id: &str) -> DatabaseResult<Vec<Value>> {
     let mut statement = database.connection().prepare(sql)?;
     let rows = statement
@@ -207,45 +213,28 @@ pub fn root_observation_rows(
             WHERE d.task_id = ?1 ORDER BY t.id"#,
         task_id,
     )?;
-    let sessions = json_rows(
+    let sessions = typed_rows(
         database,
-        r#"SELECT json_object(
-            'profile',json(profile_json),
-            'replacement',CASE WHEN replaces_session_id IS NULL THEN NULL ELSE json_object(
-                'sessionId',replaces_session_id,'reason',replacement_reason,'handoff',replacement_handoff) END,
-            'id',id,'taskId',task_id,'kind',kind,'generation',generation,
-            'current',json(CASE is_current WHEN 1 THEN 'true' ELSE 'false' END),
-            'paneId',pane_id,'nativeSessionId',native_session_id,'lifecycle',lifecycle,
-            'assignmentHash',assignment_hash,'launchOwner',launch_owner,
-            'launchOwnerPid',launch_owner_pid,'launchOwnerStartTime',launch_owner_start_time,
-            'stopRequestedAt',stop_requested_at,'stoppedAt',stopped_at,
-            'advisorRole',advisor_role,'delegateSlot',delegate_slot,
-            'workflowInput',json(workflow_input_json))
-            FROM suplex_task_sessions WHERE task_id = ?1 ORDER BY created_at,id"#,
+        "SELECT * FROM suplex_task_sessions WHERE task_id = ?1 ORDER BY created_at,id",
         task_id,
+        session,
     )?;
-    let turns = json_rows(
+    let turns = typed_rows(
         database,
-        r#"SELECT json_object(
-            'id',id,'taskId',task_id,'sessionId',session_id,'generation',generation,
-            'assignmentHash',assignment_hash,'promptHash',prompt_hash,'promptText',prompt_text,
-            'status',status,'promptedAt',prompted_at,'completedAt',completed_at,
-            'resultReceiptId',result_receipt_id,'terminalObservation',terminal_observation,
-            'nativeTurnId',native_turn_id,'dispatchAttempt',json(dispatch_attempt_json),
-            'workflowInput',json(workflow_input_json))
-            FROM suplex_task_turns WHERE task_id = ?1 ORDER BY created_at,id"#,
+        "SELECT * FROM suplex_task_turns WHERE task_id = ?1 ORDER BY created_at,id",
         task_id,
+        turn,
     )?;
     let root = sessions
         .iter()
-        .find(|session| session["kind"] == "root" && session["current"] == true)
+        .find(|session| session.kind == SessionKind::Root && session.current)
         .cloned();
     let mut workers = sessions
         .iter()
-        .filter(|session| session["kind"] == "worker" && session["current"] == true)
+        .filter(|session| session.kind == SessionKind::Worker && session.current)
         .cloned()
         .collect::<Vec<_>>();
-    workers.sort_by_key(|session| match session["delegateSlot"].as_str() {
+    workers.sort_by_key(|session| match session.delegate_slot.as_deref() {
         Some("planner_a") => 0,
         Some("planner_b") => 1,
         _ => 2,
@@ -253,7 +242,7 @@ pub fn root_observation_rows(
     let pointed = control.worker_session_id.as_deref();
     let worker = workers
         .iter()
-        .find(|session| session["id"].as_str() == pointed)
+        .find(|session| Some(session.id.as_str()) == pointed)
         .or_else(|| workers.first())
         .cloned();
     Ok(RootObservationRows {
@@ -379,47 +368,65 @@ pub(crate) fn new_turn_id(now: DateTime<Utc>) -> DatabaseResult<String> {
     Ok(id)
 }
 
-fn session(row: &Row<'_>) -> rusqlite::Result<RootSession> {
-    Ok(RootSession {
+/// TypeScript `session(row)`: one `suplex_task_sessions` row by column name.
+fn session(row: &Row<'_>) -> rusqlite::Result<SessionRow> {
+    let replaces: Option<String> = row.get("replaces_session_id")?;
+    Ok(SessionRow {
+        profile: json_column(row, "profile_json")?,
+        replacement: replaces
+            .map(|session_id| -> rusqlite::Result<_> {
+                Ok(SessionReplacement {
+                    session_id,
+                    reason: row.get("replacement_reason")?,
+                    handoff: row.get("replacement_handoff")?,
+                })
+            })
+            .transpose()?,
         id: row.get("id")?,
         task_id: row.get("task_id")?,
+        kind: row.get("kind")?,
         generation: row.get("generation")?,
-        lifecycle: row.get("lifecycle")?,
+        current: row.get("is_current")?,
+        pane_id: row.get("pane_id")?,
         native_session_id: row.get("native_session_id")?,
+        lifecycle: row.get("lifecycle")?,
+        assignment_hash: row.get("assignment_hash")?,
         launch_owner: row.get("launch_owner")?,
         launch_owner_pid: row.get("launch_owner_pid")?,
         launch_owner_start_time: row.get("launch_owner_start_time")?,
+        stop_requested_at: row.get("stop_requested_at")?,
+        stopped_at: row.get("stopped_at")?,
+        advisor_role: row.get("advisor_role")?,
+        delegate_slot: row.get("delegate_slot")?,
+        workflow_input: json_column(row, "workflow_input_json")?,
     })
 }
 
-fn turn(row: &Row<'_>) -> rusqlite::Result<RootTurn> {
-    let raw: Option<String> = row.get("dispatch_attempt_json")?;
-    let dispatch_attempt = raw
-        .map(|raw| serde_json::from_str(&raw))
-        .transpose()
-        .map_err(|error| {
-            rusqlite::Error::FromSqlConversionFailure(
-                0,
-                rusqlite::types::Type::Text,
-                Box::new(error),
-            )
-        })?;
-    Ok(RootTurn {
+/// TypeScript `turn(row)`: one `suplex_task_turns` row by column name.
+fn turn(row: &Row<'_>) -> rusqlite::Result<TurnRow> {
+    Ok(TurnRow {
         id: row.get("id")?,
         task_id: row.get("task_id")?,
         session_id: row.get("session_id")?,
         generation: row.get("generation")?,
+        assignment_hash: row.get("assignment_hash")?,
+        prompt_hash: row.get("prompt_hash")?,
         prompt_text: row.get("prompt_text")?,
         status: row.get("status")?,
-        dispatch_attempt,
+        prompted_at: row.get("prompted_at")?,
+        completed_at: row.get("completed_at")?,
+        result_receipt_id: row.get("result_receipt_id")?,
+        terminal_observation: row.get("terminal_observation")?,
         native_turn_id: row.get("native_turn_id")?,
+        dispatch_attempt: json_column(row, "dispatch_attempt_json")?,
+        workflow_input: json_column(row, "workflow_input_json")?,
     })
 }
 
 pub fn current_root(
     database: &SuplexDatabase,
     task_id: &str,
-) -> DatabaseResult<Option<RootSession>> {
+) -> DatabaseResult<Option<SessionRow>> {
     Ok(database.connection().query_row(
         "SELECT * FROM suplex_task_sessions WHERE task_id = ?1 AND kind = 'root' AND is_current = 1",
         [task_id], session,
@@ -429,7 +436,7 @@ pub fn current_root(
 pub fn current_worker(
     database: &SuplexDatabase,
     task_id: &str,
-) -> DatabaseResult<Option<RootSession>> {
+) -> DatabaseResult<Option<SessionRow>> {
     current_delegate(database, task_id, "delegate")
 }
 
@@ -438,7 +445,7 @@ pub fn current_delegate(
     database: &SuplexDatabase,
     task_id: &str,
     slot: &str,
-) -> DatabaseResult<Option<RootSession>> {
+) -> DatabaseResult<Option<SessionRow>> {
     Ok(database.connection().query_row(
         "SELECT * FROM suplex_task_sessions WHERE task_id = ?1 AND kind = 'worker' AND delegate_slot = ?2 AND is_current = 1",
         params![task_id, slot], session,
@@ -887,12 +894,12 @@ pub fn answer_task_limit(
 /// serial-delegate checks. Native dispatch is a separate after-commit step.
 pub fn launch_standard_worker(
     database: &mut SuplexDatabase,
-    root: &RootSession,
+    root: &SessionRow,
     assignment_text: &str,
     prompt_text: &str,
     workflow_input: Option<&Value>,
     now: DateTime<Utc>,
-) -> DatabaseResult<Value> {
+) -> DatabaseResult<SessionRow> {
     launch_delegate(
         database,
         root,
@@ -908,12 +915,12 @@ pub fn launch_standard_worker(
 /// the Advisor uses its captured profile in its own delegate slot.
 pub fn launch_advisor(
     database: &mut SuplexDatabase,
-    root: &RootSession,
+    root: &SessionRow,
     role: &str,
     prompt: &str,
     input: &Value,
     now: DateTime<Utc>,
-) -> DatabaseResult<Value> {
+) -> DatabaseResult<SessionRow> {
     launch_delegate(database, root, Some(role), prompt, prompt, Some(input), now)
 }
 
@@ -939,13 +946,13 @@ fn delegate_profile(
 
 fn launch_delegate(
     database: &mut SuplexDatabase,
-    root: &RootSession,
+    root: &SessionRow,
     advisor_role: Option<&str>,
     assignment_text: &str,
     prompt_text: &str,
     workflow_input: Option<&Value>,
     now: DateTime<Utc>,
-) -> DatabaseResult<Value> {
+) -> DatabaseResult<SessionRow> {
     let task_id = root.task_id.as_str();
     let root_session_id = root.id.as_str();
     let root_generation = root.generation;
@@ -1038,11 +1045,11 @@ fn launch_delegate(
 /// on one pinned input, each in its own delegate slot.
 pub fn launch_planner_pair(
     database: &mut SuplexDatabase,
-    root: &RootSession,
+    root: &SessionRow,
     pair_id: &str,
     planners: [(&str, &Value); 2],
     now: DateTime<Utc>,
-) -> DatabaseResult<[Value; 2]> {
+) -> DatabaseResult<[SessionRow; 2]> {
     let task_id = root.task_id.as_str();
     let [(prompt_a, input_a), (prompt_b, input_b)] = planners;
     let same_input = |left: &Value, right: &Value| {
@@ -1118,7 +1125,7 @@ pub fn launch_planner_pair(
     let find = |id: &str| {
         sessions
             .iter()
-            .find(|session| session["id"] == id)
+            .find(|session| session.id == id)
             .cloned()
             .ok_or_else(|| Box::<dyn std::error::Error>::from("planner_session_missing"))
     };
@@ -1133,7 +1140,7 @@ pub fn replace_worker(
     task_id: &str,
     request: &TaskWorkerReplacementBody,
     now: DateTime<Utc>,
-) -> DatabaseResult<Value> {
+) -> DatabaseResult<SessionRow> {
     let time = rfc3339_millis(now);
     database.transaction(true, |database| {
         let task: Option<(TaskStatus, Option<String>, String, String)> = database.connection().query_row(
@@ -1161,7 +1168,7 @@ pub fn replace_worker(
         ).optional()?;
         if let Some(existing) = existing {
             return root_observation_rows(database, task_id)?.sessions.into_iter()
-                .find(|session| session["id"] == existing)
+                .find(|session| session.id == existing)
                 .ok_or_else(|| CoordinationError::refused("replacement_session_missing").into());
         }
         if is_current != 1 {
@@ -1332,7 +1339,7 @@ pub fn replace_coordinator(
     request: &TaskCoordinatorReplacementBody,
     initial_prompt: &str,
     now: DateTime<Utc>,
-) -> DatabaseResult<Value> {
+) -> DatabaseResult<SessionRow> {
     let time = rfc3339_millis(now);
     database.transaction(true, |database| {
         let task: Option<CoordinatorControlRow> = database.connection().query_row(
@@ -1372,7 +1379,7 @@ pub fn replace_coordinator(
                 return Err(CoordinationError::refused("The Coordinator changed. Read the current Coordinator before selecting another.").into());
             }
             return root_observation_rows(database, task_id)?.sessions.into_iter()
-                .find(|session| session["id"] == id)
+                .find(|session| session.id == id)
                 .ok_or_else(|| CoordinationError::refused("replacement_session_missing").into());
         }
         if is_current != 1 || current_root_id.as_deref() != Some(request.session_id.as_str()) {
@@ -1471,16 +1478,15 @@ pub fn replace_coordinator(
                 else { "The task is active. Reassess these questions and ask the user if a decision is still necessary." };
             format!("Questions without an accepted answer:\n{items}\nThese questions have NOT been answered. {guidance}")
         };
-        let delegates = rows.sessions.iter().filter(|session| session["kind"] == "worker" && session["current"] == true).map(|session| {
-            let id = session["id"].as_str().unwrap_or("");
-            let latest = rows.turns.iter().filter(|turn| turn["sessionId"] == id).max_by(|a,b| {
-                (a["createdAt"].as_str(),a["id"].as_str()).cmp(&(b["createdAt"].as_str(),b["id"].as_str()))
-            });
-            let assignment = latest.and_then(|turn| turn["promptText"].as_str()).unwrap_or("");
-            let result = latest.and_then(|turn| turn["terminalObservation"].as_str());
+        let delegates = rows.sessions.iter().filter(|session| session.kind == SessionKind::Worker && session.current).map(|session| {
+            let id = &session.id;
+            // TypeScript `ORDER BY created_at DESC, id DESC LIMIT 1`; the rows are in that order ascending.
+            let latest = rows.turns.iter().rfind(|turn| turn.session_id == *id);
+            let assignment = latest.map_or("", |turn| turn.prompt_text.as_str());
+            let result = latest.and_then(|turn| turn.terminal_observation.as_deref());
             format!("Session {id}, {}, {}. Latest assignment/turn {} ({}):\n{}\nLatest result: {}",
-                session["advisorRole"].as_str().unwrap_or("Worker"),session["lifecycle"].as_str().unwrap_or(""),
-                latest.and_then(|turn| turn["id"].as_str()).unwrap_or("none"),latest.and_then(|turn| turn["status"].as_str()).unwrap_or("none"),
+                session.advisor_role.map_or("Worker", AdvisorRole::as_str),session.lifecycle,
+                latest.map_or("none", |turn| turn.id.as_str()),latest.map_or("none", |turn| turn.status.as_str()),
                 js_suffix(assignment,5000),result.map(|raw| js_suffix(&outcome_text_owned(raw),4000)).unwrap_or_else(|| "pending".into()))
         }).collect::<Vec<_>>().join("\n\n");
         let outcomes = root_turns.iter().filter_map(|(id,_,observation,_,_)| observation.as_deref().map(|raw| format!("Coordinator turn {id}: {}",js_suffix(&outcome_text_owned(raw),3000)))).rev().take(4).collect::<Vec<_>>().into_iter().rev().collect::<Vec<_>>().join("\n\n");
@@ -1513,7 +1519,7 @@ pub fn reserve_root(
     database: &mut SuplexDatabase,
     task_id: &str,
     now: DateTime<Utc>,
-) -> DatabaseResult<RootSession> {
+) -> DatabaseResult<SessionRow> {
     database.transaction(true, |database| {
         let active: bool = database.connection().query_row(
             "SELECT EXISTS(SELECT 1 FROM suplex_task_controls WHERE task_id = ?1 AND status = 'active')",
@@ -1545,10 +1551,10 @@ pub fn reserve_root(
 
 pub fn ensure_initial_prompt(
     database: &mut SuplexDatabase,
-    root: &RootSession,
+    root: &SessionRow,
     prompt: &str,
     now: DateTime<Utc>,
-) -> DatabaseResult<Option<RootTurn>> {
+) -> DatabaseResult<Option<TurnRow>> {
     database.transaction(true, |database| {
         let existing: bool = database.connection().query_row(
             "SELECT EXISTS(SELECT 1 FROM suplex_task_turns WHERE session_id = ?1)",
@@ -1575,7 +1581,7 @@ pub fn send_note(
     task_id: &str,
     note: &str,
     now: DateTime<Utc>,
-) -> DatabaseResult<RootTurn> {
+) -> DatabaseResult<TurnRow> {
     send_labeled_note(database, task_id, note, "Human note", now)
 }
 
@@ -1586,7 +1592,7 @@ pub fn send_labeled_note(
     note: &str,
     label: &str,
     now: DateTime<Utc>,
-) -> DatabaseResult<RootTurn> {
+) -> DatabaseResult<TurnRow> {
     let note = js_trim(note);
     if note.is_empty() || note.encode_utf16().count() > 20_000 {
         return Err(CoordinationError::refused("note_invalid").into());
@@ -1662,7 +1668,7 @@ pub fn send_labeled_note(
     Ok(turn)
 }
 
-pub fn pending_turns(database: &SuplexDatabase, session_id: &str) -> DatabaseResult<Vec<RootTurn>> {
+pub fn pending_turns(database: &SuplexDatabase, session_id: &str) -> DatabaseResult<Vec<TurnRow>> {
     let mut statement = database.connection().prepare(
         "SELECT * FROM suplex_task_turns WHERE session_id = ?1 AND status IN ('pending_prompt', 'unknown', 'prompted') ORDER BY created_at, id",
     )?;
@@ -1674,7 +1680,7 @@ pub fn pending_turns(database: &SuplexDatabase, session_id: &str) -> DatabaseRes
 /// The caller observes the prior owner from the native process system before replacing it.
 pub fn claim_session_operation(
     database: &mut SuplexDatabase,
-    root: &RootSession,
+    root: &SessionRow,
     owner: &str,
     owner_pid: i64,
     owner_start_time: &str,
@@ -1705,7 +1711,7 @@ pub fn release_session_operation(
 
 pub fn bind_native_session(
     database: &mut SuplexDatabase,
-    root: &RootSession,
+    root: &SessionRow,
     native_id: &str,
     now: DateTime<Utc>,
 ) -> DatabaseResult<bool> {
@@ -1720,7 +1726,7 @@ pub fn bind_native_session(
 /// This CAS is the durable admission boundary used inside the harness dispatch callback.
 pub fn claim_prompt(
     database: &mut SuplexDatabase,
-    turn: &RootTurn,
+    turn: &TurnRow,
     owner: &str,
     server_generation: &str,
     usage: TaskLimitUsage,
@@ -1783,7 +1789,7 @@ pub fn claim_prompt(
 
 pub fn mark_prompted(
     database: &mut SuplexDatabase,
-    turn: &RootTurn,
+    turn: &TurnRow,
     native_turn_id: Option<&str>,
     now: DateTime<Utc>,
 ) -> DatabaseResult<bool> {
@@ -1800,7 +1806,7 @@ pub fn mark_prompted(
 /// observer cannot requeue a newer admitted prompt.
 pub fn requeue_fenced_prompt(
     database: &mut SuplexDatabase,
-    turn: &RootTurn,
+    turn: &TurnRow,
     attempt: &PromptDispatchAttempt,
     owner: &str,
     now: DateTime<Utc>,
@@ -1902,10 +1908,10 @@ pub fn write_workflow_state(
 fn insert_root_wake(
     database: &SuplexDatabase,
     task_id: &str,
-    root: &RootSession,
+    root: &SessionRow,
     prompt: &str,
     now: DateTime<Utc>,
-) -> DatabaseResult<RootTurn> {
+) -> DatabaseResult<TurnRow> {
     let time = rfc3339_millis(now);
     let wake_id = new_turn_id(now)?;
     let hash = sha256_hex(prompt.as_bytes());
@@ -1931,7 +1937,7 @@ pub fn record_standard_worker_result_and_wake(
     database: &mut SuplexDatabase,
     input: &StandardWorkerResult<'_>,
     now: DateTime<Utc>,
-) -> DatabaseResult<Option<RootTurn>> {
+) -> DatabaseResult<Option<TurnRow>> {
     let StandardWorkerResult {
         task_id,
         session_id,
@@ -2310,7 +2316,7 @@ pub fn wake_idle_root(
     task_id: &str,
     prompt: &str,
     now: DateTime<Utc>,
-) -> DatabaseResult<Option<RootTurn>> {
+) -> DatabaseResult<Option<TurnRow>> {
     database.transaction(false, |database| {
         let blocked: bool = database.connection().query_row(
             "SELECT EXISTS(SELECT 1 FROM suplex_task_dependencies d LEFT JOIN suplex_task_controls c ON c.task_id = d.depends_on_task_id WHERE d.task_id = ?1 AND COALESCE(c.status,'backlog') <> 'delivered')",
@@ -2439,7 +2445,7 @@ pub fn reconcile_task_limit_pause(
 /// whose execution Suplex cannot identify asks a human to stop its commands.
 pub fn require_execution_cleanup(
     database: &mut SuplexDatabase,
-    turn: &RootTurn,
+    turn: &TurnRow,
     now: DateTime<Utc>,
 ) -> DatabaseResult<()> {
     database.transaction(false, |database| {
@@ -2522,7 +2528,7 @@ pub fn refresh_pending_root_dependency_context(
     database: &mut SuplexDatabase,
     turn_id: &str,
     now: DateTime<Utc>,
-) -> DatabaseResult<RootTurn> {
+) -> DatabaseResult<TurnRow> {
     database.transaction(false, |database| {
         let current = database.connection().query_row(
             "SELECT t.* FROM suplex_task_turns t JOIN suplex_task_sessions s ON s.id = t.session_id WHERE t.id = ?1 AND t.status = 'pending_prompt' AND s.kind = 'root'",
@@ -2601,7 +2607,7 @@ mod tests {
             now,
         )
         .unwrap();
-        let old_id = old["id"].as_str().unwrap().to_owned();
+        let old_id = old.id.as_str().to_owned();
         database
             .connection()
             .execute(
@@ -2617,10 +2623,10 @@ mod tests {
             worker_profile_id: None,
         };
         let next = replace_worker(&mut database, &task.id, &request, now).unwrap();
-        assert_ne!(next["id"], old_id);
-        assert_eq!(next["nativeSessionId"], Value::Null);
-        assert_eq!(next["profile"], old["profile"]);
-        let next_id = next["id"].as_str().unwrap();
+        assert_ne!(next.id, old_id);
+        assert_eq!(next.native_session_id, None);
+        assert_eq!(next.profile, old.profile);
+        let next_id = next.id.as_str();
         assert!(!worker_replacement_ready(&database, next_id).unwrap());
         let saved: (String, String, String) = database.connection().query_row(
             "SELECT prompt_text,prompt_hash,assignment_hash FROM suplex_task_turns WHERE session_id = ?1", [next_id],
@@ -2631,8 +2637,10 @@ mod tests {
         assert_eq!(saved.1, sha256_hex(saved.0.as_bytes()));
         assert_eq!(saved.1, saved.2);
         assert_eq!(
-            replace_worker(&mut database, &task.id, &request, now).unwrap()["id"],
-            next["id"]
+            replace_worker(&mut database, &task.id, &request, now)
+                .unwrap()
+                .id,
+            next.id
         );
         drop(database);
         let mut database = SuplexDatabase::open(&filename, OpenMode::ReadWrite).unwrap();
@@ -2665,14 +2673,17 @@ mod tests {
             now,
         )
         .unwrap();
-        assert_eq!(second["profile"]["profileId"], "alternate-worker");
-        assert_eq!(second["profile"]["reasoningLevel"], "high");
-        assert_eq!(next["profile"], old["profile"]);
+        assert_eq!(
+            second.profile.as_ref().unwrap().profile_id,
+            "alternate-worker"
+        );
+        assert_eq!(second.profile.as_ref().unwrap().reasoning_level, "high");
+        assert_eq!(next.profile, old.profile);
         let latest: String = database
             .connection()
             .query_row(
                 "SELECT prompt_text FROM suplex_task_turns WHERE session_id = ?1",
-                [second["id"].as_str().unwrap()],
+                [second.id.as_str()],
                 |row| row.get(0),
             )
             .unwrap();
@@ -2748,10 +2759,10 @@ mod tests {
         let first =
             replace_coordinator(&mut database, &task.id, &coordinator_request, &initial, now)
                 .unwrap();
-        let first_id = first["id"].as_str().unwrap().to_owned();
+        let first_id = first.id.as_str().to_owned();
         assert_ne!(first_id, root.id);
-        assert_eq!(first["profile"]["profileId"], "alternate-root");
-        assert_eq!(first["nativeSessionId"], Value::Null);
+        assert_eq!(first.profile.as_ref().unwrap().profile_id, "alternate-root");
+        assert_eq!(first.native_session_id, None);
         let retained_profile: String = database
             .connection()
             .query_row(
@@ -2767,7 +2778,8 @@ mod tests {
         assert!(!worker_replacement_ready(&database, &first_id).unwrap());
         assert_eq!(
             replace_coordinator(&mut database, &task.id, &coordinator_request, &initial, now)
-                .unwrap()["id"],
+                .unwrap()
+                .id,
             first_id
         );
         let first_prompt: (String, String) = database
@@ -2842,14 +2854,15 @@ mod tests {
                 &initial,
                 now,
             )
-            .unwrap()["id"],
-            second_root["id"]
+            .unwrap()
+            .id,
+            second_root.id
         );
         let second_prompt: String = database
             .connection()
             .query_row(
                 "SELECT prompt_text FROM suplex_task_turns WHERE session_id = ?1",
-                [second_root["id"].as_str().unwrap()],
+                [second_root.id.as_str()],
                 |row| row.get(0),
             )
             .unwrap();
@@ -2863,7 +2876,7 @@ mod tests {
         }
         assert_eq!(
             current_worker(&database, &task.id).unwrap().unwrap().id,
-            second["id"].as_str().unwrap()
+            second.id.as_str()
         );
         drop(database);
         let _ = std::fs::remove_file(&filename);
@@ -2967,6 +2980,148 @@ mod tests {
         let _ = std::fs::remove_file(filename.with_extension("sqlite-shm"));
     }
 
+    /// The typed rows keep the JSON of the json_object projection they replaced.
+    #[test]
+    fn typed_rows_serialize_like_the_persisted_json_projection() {
+        let filename = std::env::temp_dir().join(format!("suplex_rows_{}.sqlite", Uuid::new_v4()));
+        let now = DateTime::parse_from_rfc3339("2026-09-25T12:00:00Z")
+            .unwrap()
+            .with_timezone(&Utc);
+        let mut database = SuplexDatabase::open(&filename, OpenMode::Migrate).unwrap();
+        let user = auth::development_sign_in(&mut database, now).unwrap().user;
+        database.connection().execute("INSERT INTO suplex_companies (id,name,status,created_at) VALUES ('rows_company','Rows','active',?1)", [rfc3339_millis(now)]).unwrap();
+        database.connection().execute("INSERT INTO suplex_projects (id,company_id,name,repository_path,worktree_root,repository_identity,base_branch,setup_command,verification_command,root_profile_id,worker_profile_id,agent_task_policy_json,created_at,updated_at) VALUES ('rows_project','rows_company','Rows','/tmp/rows-repo','/tmp/rows-worktrees',NULL,'main','','','root','worker','{}',?1,?1)", [rfc3339_millis(now)]).unwrap();
+        let profile = serde_json::json!({"profileId":"root","provider":"codex","model":"test","reasoningLevel":"medium","serviceTier":"default","providerInstanceId":null,"instanceHomeDirectory":"/home/rows"});
+        let prepared = PreparedTask {
+            id: repository::new_task_id(),
+            company_id: "rows_company".into(),
+            project_id: "rows_project".into(),
+            title: "Rows".into(),
+            description: "Keep \"quotes\" and é".into(),
+            configuration: serde_json::json!({"repository":"owner/repo","branch":"task-rows","baseBranch":"main","baselineSha":"head","runProjectTests":false,"visualEvidence":"off"}),
+            idempotency_key: "rows-key".into(),
+            request_hash: "rows-hash".into(),
+            creator: TaskCreator::User(user.id),
+            delivery_target: "pull_request_draft".into(),
+            delivery_intent: serde_json::from_value(serde_json::json!({"repository":"owner/repo","headBranch":"task-rows","baseBranch":"main","baselineSha":"head","pullRequestNumber":7})).unwrap(),
+            root_profile: serde_json::from_value(profile.clone()).unwrap(),
+            worker_profile: serde_json::from_value(serde_json::json!({"profileId":"worker","provider":"codex","model":"test","reasoningLevel":"medium","serviceTier":"default"})).unwrap(),
+            advisor_profiles: serde_json::from_value(serde_json::json!({"reviewer":profile})).unwrap(),
+            issue: None,
+            start_queued: true,
+            copied_from_task_id: None,
+            depends_on: vec![],
+            pull_request_dependencies: vec![],
+        };
+        let task = repository::create(&mut database, &prepared, now)
+            .unwrap()
+            .task;
+        let root = reserve_root(&mut database, &task.id, now).unwrap();
+        let worker = launch_standard_worker(
+            &mut database,
+            &root,
+            "Assignment",
+            "Worker assignment",
+            Some(&serde_json::json!({"kind":"worker","mode":"direct"})),
+            now,
+        )
+        .unwrap();
+        replace_worker(
+            &mut database,
+            &task.id,
+            &TaskWorkerReplacementBody {
+                session_id: worker.id,
+                reason: "Retry".into(),
+                handoff: None,
+                worker_profile_id: None,
+            },
+            now,
+        )
+        .unwrap();
+        database.connection().execute(
+            "UPDATE suplex_task_controls SET worktree_json = ?1, pull_request_json = ?2, limit_pause_json = '{\"kind\":\"task_limit\"}', workflow_state_json = ?3 WHERE task_id = ?4",
+            params![
+                r#"{"path":"/tmp/rows","branch":"task-rows","baseSha":"base","headSha":"head","dirty":false}"#,
+                r#"{"repository":"owner/repo","number":7,"url":"https://github.com/owner/repo/pull/7","headSha":"head","state":"open","mergedAt":null}"#,
+                r#"{"version":1,"reviews":[{"sessionId":"s","turnId":"t","role":"reviewer","range":{"baseSha":"b","headSha":"h","files":["a"],"commits":["h"],"patchDigest":"d"},"result":{"role":"reviewer","approved":true},"invalidReason":null,"recordedAt":"now"}],"acceptedDelivery":null,"deliveryWait":{"headSha":"h","fingerprint":"f","since":"now","reason":"checks"},"completion":null,"toolOwner":{"token":"x","pid":7,"processStartTime":"start"},"followUp":true}"#,
+                task.id,
+            ],
+        ).unwrap();
+        database.connection().execute(
+            "UPDATE suplex_task_turns SET dispatch_attempt_json = '{\"serverGeneration\":\"g\",\"claimedAt\":\"now\"}' WHERE session_id = ?1",
+            [&root.id],
+        ).unwrap();
+        let projected = |sql: &str| -> Vec<String> {
+            let mut statement = database.connection().prepare(sql).unwrap();
+            statement
+                .query_map([&task.id], |row| row.get(0))
+                .unwrap()
+                .collect::<rusqlite::Result<Vec<String>>>()
+                .unwrap()
+        };
+        let rows = root_observation_rows(&database, &task.id).unwrap();
+        assert_eq!(
+            vec![serde_json::to_string(&rows.control).unwrap()],
+            projected(
+                r#"SELECT json_object(
+                'taskId',task_id,'objective',objective,'deliveryTarget',delivery_target,
+                'deliveryIntent',json(delivery_intent_json),'status',status,'wakeAt',wake_at,
+                'humanQuestion',human_question,
+                'humanQuestionOptions',json(COALESCE(human_question_options_json,'[]')),
+                'humanQuestionId',human_question_id,'recoveryTurnId',recovery_turn_id,
+                'limitPause',json(limit_pause_json),'worktree',json(worktree_json),
+                'pullRequest',json(pull_request_json),'rootSessionId',root_session_id,
+                'workerSessionId',worker_session_id,'shellPaneId',shell_pane_id,
+                'rootProfile',json(root_profile_json),'workerProfile',json(worker_profile_json),
+                'workflow',workflow,'advisorProfiles',json(advisor_profiles_json),
+                'workflowState',json(workflow_state_json))
+                FROM suplex_task_controls WHERE task_id = ?1"#
+            )
+        );
+        let sessions = projected(
+            r#"SELECT json_object(
+            'profile',json(profile_json),
+            'replacement',CASE WHEN replaces_session_id IS NULL THEN NULL ELSE json_object(
+                'sessionId',replaces_session_id,'reason',replacement_reason,'handoff',replacement_handoff) END,
+            'id',id,'taskId',task_id,'kind',kind,'generation',generation,
+            'current',json(CASE is_current WHEN 1 THEN 'true' ELSE 'false' END),
+            'paneId',pane_id,'nativeSessionId',native_session_id,'lifecycle',lifecycle,
+            'assignmentHash',assignment_hash,'launchOwner',launch_owner,
+            'launchOwnerPid',launch_owner_pid,'launchOwnerStartTime',launch_owner_start_time,
+            'stopRequestedAt',stop_requested_at,'stoppedAt',stopped_at,
+            'advisorRole',advisor_role,'delegateSlot',delegate_slot,
+            'workflowInput',json(workflow_input_json))
+            FROM suplex_task_sessions WHERE task_id = ?1 ORDER BY created_at,id"#,
+        );
+        assert_eq!(sessions.len(), 3);
+        assert_eq!(
+            rows.sessions
+                .iter()
+                .map(|session| serde_json::to_string(session).unwrap())
+                .collect::<Vec<_>>(),
+            sessions
+        );
+        let turns = projected(
+            r#"SELECT json_object(
+            'id',id,'taskId',task_id,'sessionId',session_id,'generation',generation,
+            'assignmentHash',assignment_hash,'promptHash',prompt_hash,'promptText',prompt_text,
+            'status',status,'promptedAt',prompted_at,'completedAt',completed_at,
+            'resultReceiptId',result_receipt_id,'terminalObservation',terminal_observation,
+            'nativeTurnId',native_turn_id,'dispatchAttempt',json(dispatch_attempt_json),
+            'workflowInput',json(workflow_input_json))
+            FROM suplex_task_turns WHERE task_id = ?1 ORDER BY created_at,id"#,
+        );
+        assert_eq!(
+            rows.turns
+                .iter()
+                .map(|turn| serde_json::to_string(turn).unwrap())
+                .collect::<Vec<_>>(),
+            turns
+        );
+        drop(database);
+        let _ = std::fs::remove_file(filename);
+    }
+
     #[test]
     fn human_note_reuses_root_and_resumes_delivered_intent_without_replay() {
         let filename = std::env::temp_dir().join(format!("suplex_note_{}.sqlite", Uuid::new_v4()));
@@ -3060,10 +3215,10 @@ mod tests {
                 ["headSha"],
             "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
         );
-        assert_eq!(rows.root.as_ref().unwrap()["id"], root_id);
+        assert_eq!(rows.root.as_ref().unwrap().id, root_id);
         assert_eq!(
-            rows.root.as_ref().unwrap()["nativeSessionId"],
-            "codex-retained"
+            rows.root.as_ref().unwrap().native_session_id.as_deref(),
+            Some("codex-retained")
         );
         assert_eq!(pending_turns(&database, &root_id).unwrap().len(), 3);
         drop(database);
@@ -3201,7 +3356,7 @@ mod tests {
         );
         assert_eq!(serde_json::json!(observed.control)["workflow"], "standard");
         assert_eq!(observed.context["configuration"]["branch"], "task-one");
-        assert_eq!(observed.root.as_ref().unwrap()["id"], root.id);
+        assert_eq!(observed.root.as_ref().unwrap().id, root.id);
         assert!(observed.worker.is_none());
         assert!(observed.workers.is_empty());
         assert!(observed.turns.is_empty());
@@ -3232,13 +3387,12 @@ mod tests {
             now,
         )
         .unwrap();
-        assert_eq!(worker["kind"], "worker");
+        assert_eq!(worker.kind, crate::tasks::control::SessionKind::Worker);
         assert!(
             root_observation_rows(&database, &created.task.id)
                 .unwrap()
-                .turns[0]["id"]
-                .as_str()
-                .unwrap()
+                .turns[0]
+                .id
                 .starts_with("msg_")
         );
         assert!(
@@ -3256,7 +3410,7 @@ mod tests {
             .connection()
             .execute(
                 "UPDATE suplex_task_turns SET status = 'completed' WHERE session_id = ?1",
-                [worker["id"].as_str().unwrap()],
+                [worker.id.as_str()],
             )
             .unwrap();
         let next_worker = launch_standard_worker(
@@ -3268,8 +3422,8 @@ mod tests {
             now,
         )
         .unwrap();
-        assert_eq!(next_worker["id"], worker["id"]);
-        assert_eq!(next_worker["generation"], 2);
+        assert_eq!(next_worker.id, worker.id);
+        assert_eq!(next_worker.generation, 2);
         let turn = ensure_initial_prompt(&mut database, &root, "Begin", now)
             .unwrap()
             .unwrap();
@@ -3442,8 +3596,8 @@ mod tests {
             .unwrap();
         let result = StandardWorkerResult {
             task_id: &created.task.id,
-            session_id: worker["id"].as_str().unwrap(),
-            generation: next_worker["generation"].as_i64().unwrap(),
+            session_id: worker.id.as_str(),
+            generation: next_worker.generation,
             receipt_id: "native:worker:completed",
             observation: "{\"state\":\"completed\"}",
             native_turn_id: Some("native-turn"),
@@ -3626,7 +3780,7 @@ mod tests {
         .unwrap();
         let worker_turn_id: String = database.connection().query_row(
             "SELECT id FROM suplex_task_turns WHERE session_id = ?1 ORDER BY rowid DESC LIMIT 1",
-            [interrupted["id"].as_str().unwrap()], |row| row.get(0),
+            [interrupted.id.as_str()], |row| row.get(0),
         ).unwrap();
         database
             .connection()

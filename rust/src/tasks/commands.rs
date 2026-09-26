@@ -1746,9 +1746,7 @@ mod tests {
             "the initial Coordinator prompt and one continuation"
         );
         assert!(rows.turns.iter().any(|turn| {
-            turn["promptText"]
-                .as_str()
-                .unwrap()
+            turn.prompt_text
                 .contains("from pull_request_draft to merged")
         }));
         assert!(rows.root.is_some());
@@ -1985,7 +1983,7 @@ mod tests {
         assert_eq!(wakes.load(Ordering::SeqCst), 2);
         let rows = root_session_store::root_observation_rows(&database, &task.id).unwrap();
         let root_session = rows.root.unwrap();
-        assert_eq!(root_session["profile"]["profileId"], "alternate-root");
+        assert_eq!(root_session.profile.unwrap().profile_id, "alternate-root");
         assert_eq!(
             serde_json::json!(rows.control)["rootProfile"]["profileId"],
             "alternate-root"
@@ -1993,7 +1991,7 @@ mod tests {
         let prompts = rows
             .turns
             .iter()
-            .map(|turn| turn["promptText"].as_str().unwrap().to_owned())
+            .map(|turn| turn.prompt_text.clone())
             .collect::<Vec<_>>();
         assert_eq!(prompts.len(), 2);
         assert!(prompts[0].ends_with("\n\nAdditional direction from the user:\nBuild it"));
@@ -2012,7 +2010,7 @@ mod tests {
             serde_json::json!(rows.control)["workerProfile"]["profileId"],
             "alternate-worker"
         );
-        assert!(rows.turns.iter().any(|turn| turn["promptText"]
+        assert!(rows.turns.iter().any(|turn| turn.prompt_text
             == "Human note:\nThe user selected Worker profile alternate-worker.\n\nUse this selection for future assignments. Do not repeat completed work."));
         select(&mut database, worker).unwrap();
         assert_eq!(
@@ -2059,7 +2057,7 @@ mod tests {
             serde_json::json!(rows.control)["workerSessionId"],
             replacement.as_str()
         );
-        assert!(rows.turns.iter().any(|turn| turn["promptText"]
+        assert!(rows.turns.iter().any(|turn| turn.prompt_text
             == format!("Human note:\nThe user selected Worker profile third-worker.\n\nAdditional direction from the user:\nUse tests\n\nContinue with replacement session {replacement} and the preserved assignment.").as_str()));
         // A workflow Advisor defaults to the Coordinator profile and records its own selection.
         database
@@ -2075,7 +2073,7 @@ mod tests {
             serde_json::json!(rows.control)["advisorProfiles"]["reviewer"]["profileId"],
             "alternate-root"
         );
-        assert!(rows.turns.iter().any(|turn| turn["promptText"]
+        assert!(rows.turns.iter().any(|turn| turn.prompt_text
             == "Human note:\nThe user selected Reviewer profile alternate-root.\n\nUse this selection for future assignments. Do not repeat completed work."));
         assert_eq!(
             failure(select(&mut database, json!({"role":"rater","expectedProfileId":"x","expectedSessionId":null,"profileId":"x","direction":"","resume":false})).unwrap_err()),

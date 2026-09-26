@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use super::advisor_bridge::AdvisorRole;
-use crate::tasks::control::TaskControlRow;
+use crate::tasks::control::{SessionKind, SessionRow, TaskControlRow, TurnRow, TurnStatus};
 
 pub const REPAIR_RATING_TARGET: i64 = 9;
 
@@ -328,54 +328,60 @@ pub fn review_gate(
 }
 
 /// TypeScript `turnWorkflowInput`: the immutable turn input, else the session's.
-pub fn turn_workflow_input<'a>(sessions: &'a [Value], turn: &'a Value) -> Option<&'a Value> {
-    turn.get("workflowInput")
+pub fn turn_workflow_input<'a>(sessions: &'a [SessionRow], turn: &'a TurnRow) -> Option<&'a Value> {
+    turn.workflow_input
+        .as_ref()
         .filter(|input| !input.is_null())
         .or_else(|| {
             sessions
                 .iter()
-                .find(|session| session["id"] == turn["sessionId"])
-                .and_then(|session| session.get("workflowInput"))
+                .find(|session| session.id == turn.session_id)
+                .and_then(|session| session.workflow_input.as_ref())
                 .filter(|input| !input.is_null())
         })
 }
 
-fn succeeded(turn: &Value) -> bool {
-    turn["status"] == "completed"
-        && turn_outcome(turn["terminalObservation"].as_str())
+fn succeeded(turn: &TurnRow) -> bool {
+    turn.status == TurnStatus::Completed
+        && turn_outcome(turn.terminal_observation.as_deref())
             .state
             .as_deref()
             == Some("completed")
 }
 
-fn plain_worker(session: &Value) -> bool {
-    session["kind"] == "worker" && session["advisorRole"].is_null()
+/// A completed turn whose stored Advisor outcome carries a result of `role`.
+fn advisor_report(turn: &TurnRow, role: AdvisorRole) -> bool {
+    turn.status == TurnStatus::Completed
+        && advisor_has_result(
+            &turn_outcome(turn.terminal_observation.as_deref()),
+            role.as_str(),
+        )
+}
+
+fn advisor_session(session: &SessionRow, role: AdvisorRole) -> bool {
+    session.kind == SessionKind::Worker && session.advisor_role == Some(role)
 }
 
 pub fn valid_advisor_session(
-    sessions: &[Value],
-    turns: &[Value],
+    sessions: &[SessionRow],
+    turns: &[TurnRow],
     session_id: &str,
-    role: &str,
+    role: AdvisorRole,
 ) -> bool {
-    let Some(session) = sessions.iter().find(|session| session["id"] == session_id) else {
-        return false;
-    };
-    if session["kind"] != "worker" || session["advisorRole"] != role {
-        return false;
-    }
-    turns.iter().any(|turn| {
-        turn["sessionId"] == session_id
-            && turn["status"] == "completed"
-            && advisor_has_result(&turn_outcome(turn["terminalObservation"].as_str()), role)
-    })
+    sessions
+        .iter()
+        .find(|session| session.id == session_id)
+        .is_some_and(|session| advisor_session(session, role))
+        && turns
+            .iter()
+            .any(|turn| turn.session_id == session_id && advisor_report(turn, role))
 }
 
 fn valid_advisor_reference(
-    sessions: &[Value],
-    turns: &[Value],
+    sessions: &[SessionRow],
+    turns: &[TurnRow],
     reference: &Value,
-    role: &str,
+    role: AdvisorRole,
     exact: bool,
 ) -> bool {
     let Some(session_id) = reference["sessionId"].as_str() else {
@@ -384,15 +390,12 @@ fn valid_advisor_reference(
     if !exact {
         return valid_advisor_session(sessions, turns, session_id, role);
     }
-    let session = sessions.iter().find(|session| session["id"] == session_id);
+    let session = sessions.iter().find(|session| session.id == session_id);
     let turn = turns
         .iter()
-        .find(|turn| turn["id"] == reference["turnId"] && turn["sessionId"] == session_id);
-    session.is_some_and(|session| session["kind"] == "worker" && session["advisorRole"] == role)
-        && turn.is_some_and(|turn| {
-            turn["status"] == "completed"
-                && advisor_has_result(&turn_outcome(turn["terminalObservation"].as_str()), role)
-        })
+        .find(|turn| reference["turnId"] == turn.id.as_str() && turn.session_id == session_id);
+    session.is_some_and(|session| advisor_session(session, role))
+        && turn.is_some_and(|turn| advisor_report(turn, role))
 }
 
 /// TypeScript `workerCandidateReports`: version 2 references, or legacy session IDs.
@@ -413,14 +416,14 @@ pub fn worker_candidate_reports(input: &Value) -> Option<[Value; 2]> {
 pub fn workflow_ready_for_delivery(
     workflow: Workflow,
     reviews: &[ReviewRecord],
-    sessions: &[Value],
-    turns: &[Value],
+    sessions: &[SessionRow],
+    turns: &[TurnRow],
     actual: &ReviewRange,
 ) -> Result<(), String> {
-    let worker_turn = |turn: &Value| {
+    let worker_turn = |turn: &TurnRow| {
         sessions
             .iter()
-            .any(|session| session["id"] == turn["sessionId"] && plain_worker(session))
+            .any(|session| session.id == turn.session_id && session.is_plain_worker())
     };
     match workflow {
         Workflow::Standard => Ok(()),
@@ -457,14 +460,19 @@ pub fn workflow_ready_for_delivery(
                 let candidates = worker_candidate_reports(input)?;
                 let exact = input.get("version").is_some();
                 Some(
-                    valid_advisor_reference(sessions, turns, &candidates[0], "planner_a", exact)
-                        && valid_advisor_reference(
-                            sessions,
-                            turns,
-                            &candidates[1],
-                            "planner_b",
-                            exact,
-                        ),
+                    valid_advisor_reference(
+                        sessions,
+                        turns,
+                        &candidates[0],
+                        AdvisorRole::PlannerA,
+                        exact,
+                    ) && valid_advisor_reference(
+                        sessions,
+                        turns,
+                        &candidates[1],
+                        AdvisorRole::PlannerB,
+                        exact,
+                    ),
                 )
             });
             if valid == Some(true) {
@@ -514,8 +522,8 @@ pub fn fresh_review_hint(workflow: Workflow) -> String {
 /// delegate is reserved, live, or unknown, and the workflow's own obligations hold.
 pub fn delivery_decision(
     control: &TaskControlRow,
-    sessions: &[Value],
-    turns: &[Value],
+    sessions: &[SessionRow],
+    turns: &[TurnRow],
     range: &ReviewRange,
     local: &LocalSourceFacts<'_>,
     require_review: bool,
@@ -553,20 +561,16 @@ pub fn delivery_decision(
         });
     }
     let delegate = sessions.iter().find(|session| {
-        session["kind"] == "worker"
-            && session["current"] == true
-            && (session["launchOwner"]
-                .as_str()
+        session.kind == SessionKind::Worker
+            && session.current
+            && (session
+                .launch_owner
+                .as_deref()
                 .is_some_and(|owner| !owner.is_empty())
                 || turns.iter().any(|turn| {
-                    turn["sessionId"] == session["id"]
-                        && (turn["generation"].is_null()
-                            || session["generation"].is_null()
-                            || turn["generation"] == session["generation"])
-                        && matches!(
-                            turn["status"].as_str(),
-                            Some("pending_prompt" | "prompted" | "unknown")
-                        )
+                    turn.session_id == session.id
+                        && turn.generation == session.generation
+                        && turn.status.is_open()
                 }))
     });
     if let Some(delegate) = delegate {
@@ -574,9 +578,9 @@ pub fn delivery_decision(
             code: "delegate_active",
             reason: format!(
                 "{} is still active. Wait for its result before requesting delivery.",
-                delegate["advisorRole"]
-                    .as_str()
-                    .map_or("Worker", advisor_label)
+                delegate
+                    .advisor_role
+                    .map_or("Worker", |role| advisor_label(role.as_str()))
             ),
         });
     }
@@ -939,10 +943,15 @@ mod tests {
             .code,
             "worktree_dirty"
         );
-        let sessions = [
-            json!({"id":"r1","kind":"worker","current":true,"advisorRole":"reviewer","generation":2,"launchOwner":null}),
-        ];
-        let turns = [json!({"id":"t1","sessionId":"r1","generation":2,"status":"prompted"})];
+        let sessions = [SessionRow {
+            advisor_role: Some(AdvisorRole::Reviewer),
+            generation: 2,
+            ..SessionRow::fixture("r1", SessionKind::Worker)
+        }];
+        let turns = [TurnRow {
+            generation: 2,
+            ..TurnRow::fixture("t1", "r1", TurnStatus::Prompted)
+        }];
         let busy = delivery_decision(
             &control,
             &sessions,
@@ -983,9 +992,12 @@ mod tests {
     #[test]
     fn direct_and_combined_obligations_follow_worker_turn_inputs() {
         let range = range();
-        let direct_worker =
-            json!({"id":"w","kind":"worker","advisorRole":null,"workflowInput":null});
-        let completed = |id: &str, session: &str, input: Value, observation: Value| json!({"id":id,"sessionId":session,"status":"completed","workflowInput":input,"terminalObservation":observation.to_string()});
+        let direct_worker = SessionRow::fixture("w", SessionKind::Worker);
+        let completed = |id: &str, session: &str, input: Value, observation: Value| TurnRow {
+            workflow_input: Some(input).filter(|input| !input.is_null()),
+            terminal_observation: Some(observation.to_string()),
+            ..TurnRow::fixture(id, session, TurnStatus::Completed)
+        };
         let direct = completed(
             "t",
             "w",
@@ -1018,8 +1030,14 @@ mod tests {
             )
             .is_err()
         );
-        let plan_a = json!({"id":"a","kind":"worker","advisorRole":"planner_a"});
-        let plan_b = json!({"id":"b","kind":"worker","advisorRole":"planner_b"});
+        let plan_a = SessionRow {
+            advisor_role: Some(AdvisorRole::PlannerA),
+            ..SessionRow::fixture("a", SessionKind::Worker)
+        };
+        let plan_b = SessionRow {
+            advisor_role: Some(AdvisorRole::PlannerB),
+            ..SessionRow::fixture("b", SessionKind::Worker)
+        };
         let report = |role: &str| json!({"state":"completed","advisor":{"role":role,"result":{"role":role,"summary":"plan"},"invalidReason":null}});
         let a = completed("ta", "a", Value::Null, report("planner_a"));
         let b = completed("tb", "b", Value::Null, report("planner_b"));

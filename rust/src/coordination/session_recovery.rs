@@ -10,22 +10,23 @@ use serde_json::{Value, json};
 use crate::{
     platform::database::{DatabaseResult, OpenMode, SuplexDatabase},
     runtimes::{task_harness::ReaderSession, task_harness_registry},
+    tasks::control::{SessionKind, SessionRow, TaskProfile, TurnRow, TurnStatus},
 };
 
 use super::{
-    advisor_bridge::{self, AdvisorReportOutcome},
+    advisor_bridge::{self, AdvisorReportOutcome, AdvisorRole},
     root_controller,
     root_prompts::{self, WorkerResult},
-    root_session_store::{self, RootSession, RootTurn, StandardWorkerResult},
+    root_session_store::{self, StandardWorkerResult},
     workflow_evidence,
     workflows::{ReviewRange, Workflow, advisor_label, turn_workflow_input},
 };
 
 /// One terminal delegate turn as the task host observed it natively.
 pub struct TerminalDelegateTurn<'a> {
-    pub session: &'a RootSession,
+    pub session: &'a SessionRow,
     pub native_session_id: &'a str,
-    pub turn: &'a RootTurn,
+    pub turn: &'a TurnRow,
     /// `completed`, `error`, or `interrupted`.
     pub state: &'a str,
     pub reason: &'a str,
@@ -37,21 +38,23 @@ pub struct TerminalDelegateTurn<'a> {
 /// TypeScript `harness.turnEvidence` through the session's native reader.
 pub fn native_tools(
     database_path: &Path,
-    session: &Value,
+    session: &SessionRow,
     turn_id: &str,
 ) -> Result<Vec<Value>, String> {
     let read = || -> Result<Vec<Value>, Box<dyn std::error::Error>> {
-        let native_session_id = session["nativeSessionId"].as_str().unwrap_or_default();
+        let native_session_id = session.native_session_id.as_deref().unwrap_or_default();
         let reader = task_harness_registry::for_session(Some(native_session_id))
             .ok_or("No native reader for this session")?;
         let tools = reader
             .turn_evidence(
                 &ReaderSession {
                     database_path,
-                    session_id: session["id"].as_str().unwrap_or_default(),
+                    session_id: &session.id,
                     native_session_id,
-                    instance_home_directory: session["profile"]["instanceHomeDirectory"]
-                        .as_str()
+                    instance_home_directory: session
+                        .profile
+                        .as_ref()
+                        .and_then(TaskProfile::instance_home_directory)
                         .map(Path::new),
                 },
                 turn_id,
@@ -140,18 +143,14 @@ pub fn finish_delegate_turn(
     let rows = root_session_store::root_observation_rows(database, &session.task_id)?;
     let workflow = rows.control.workflow;
     let session_row = rows
-        .sessions
-        .iter()
-        .find(|row| row["id"] == session.id.as_str())
+        .session(&session.id)
         .cloned()
-        .unwrap_or(Value::Null);
-    let turn_row = rows
+        .unwrap_or_else(|| session.clone());
+    let input = rows
         .turns
         .iter()
-        .find(|row| row["id"] == turn.id.as_str())
-        .cloned()
-        .unwrap_or(Value::Null);
-    let input = turn_workflow_input(&rows.sessions, &turn_row)
+        .find(|row| row.id == turn.id)
+        .and_then(|turn_row| turn_workflow_input(&rows.sessions, turn_row))
         .cloned()
         .unwrap_or(Value::Null);
     drop(rows);
@@ -175,14 +174,13 @@ pub fn finish_delegate_turn(
             )
             .map(|wake| wake.is_some())
         };
-    if let Some(role) = session_row["advisorRole"].as_str()
+    if let Some(role) = session_row.advisor_role
         && input["kind"] == "advisor"
     {
-        let label = advisor_label(role);
-        let assigned = advisor_bridge::advisor_role(role).ok_or("Advisor role is invalid")?;
+        let label = advisor_label(role.as_str());
         let outcome = if state == "completed" {
             advisor_bridge::advisor_report_from_turn(
-                assigned,
+                role,
                 &native_tools(database_path, &session_row, &turn.id).unwrap_or_default(),
                 text,
             )
@@ -201,10 +199,10 @@ pub fn finish_delegate_turn(
         };
         base["advisor"] = json!({"role":role,"result":result,"invalidReason":invalid_reason});
         let observation = base.to_string();
-        let review = matches!(role, "reviewer" | "rater")
+        let review = matches!(role, AdvisorRole::Reviewer | AdvisorRole::Rater)
             .then(|| json!({"result":result,"invalidReason":invalid_reason}));
         let wake = root_prompts::advisor_result_wake(
-            role,
+            role.as_str(),
             &receipt,
             outcome.is_ok(),
             &advisor_summary(&outcome),
@@ -281,16 +279,12 @@ pub async fn reconcile_completed_advisor_report(
         let database = SuplexDatabase::open(database_path, OpenMode::ReadOnly)?;
         root_session_store::root_observation_rows(&database, task_id)?
     };
-    let turn = rows.turns.iter().find(|turn| turn["id"] == turn_id);
-    let session = turn.and_then(|turn| {
-        rows.sessions
-            .iter()
-            .find(|session| session["id"] == turn["sessionId"])
-    });
+    let turn = rows.turns.iter().find(|turn| turn.id == turn_id);
+    let session = turn.and_then(|turn| rows.session(&turn.session_id));
     let (Some(turn), Some(session), Some(role)) = (
-        turn.filter(|turn| turn["status"] == "completed"),
-        session.filter(|session| session["kind"] == "worker"),
-        session.and_then(|session| session["advisorRole"].as_str()),
+        turn.filter(|turn| turn.status == TurnStatus::Completed),
+        session.filter(|session| session.kind == SessionKind::Worker),
+        session.and_then(|session| session.advisor_role),
     ) else {
         return Ok(Err(
             "The retained Advisor turn does not exist or is not complete".into(),
@@ -299,13 +293,14 @@ pub async fn reconcile_completed_advisor_report(
     let input = turn_workflow_input(&rows.sessions, turn)
         .cloned()
         .unwrap_or(Value::Null);
-    if input["kind"] != "advisor" || input["role"] != role {
+    if input["kind"] != "advisor" || input["role"] != role.as_str() {
         return Ok(Err(
             "The retained Advisor turn has no matching assignment".into()
         ));
     }
-    let stored = turn["terminalObservation"]
-        .as_str()
+    let stored = turn
+        .terminal_observation
+        .as_deref()
         .and_then(|raw| serde_json::from_str::<Value>(raw).ok())
         .filter(|value| {
             value.is_object() && (value.get("text").is_none() || value["text"].is_string())
@@ -313,11 +308,10 @@ pub async fn reconcile_completed_advisor_report(
     let Some(stored) = stored else {
         return Ok(Err("The retained Advisor observation is invalid".into()));
     };
-    let session_id = session["id"].as_str().unwrap_or_default();
+    let session_id = session.id.as_str();
     let tools = native_tools(database_path, session, turn_id).unwrap_or_default();
-    let assigned = advisor_bridge::advisor_role(role).ok_or("Advisor role is invalid")?;
     let outcome = advisor_bridge::advisor_report_from_turn(
-        assigned,
+        role,
         &tools,
         stored["text"].as_str().unwrap_or_default(),
     );
@@ -375,7 +369,7 @@ mod tests {
     }
 
     /// One active task in the given workflow with a reserved Coordinator.
-    fn fixture(workflow: &str) -> (PathBuf, SuplexDatabase, RootSession) {
+    fn fixture(workflow: &str) -> (PathBuf, SuplexDatabase, SessionRow) {
         let directory =
             std::env::temp_dir().join(format!("suplex-workflow-{}", uuid::Uuid::new_v4()));
         std::fs::create_dir(&directory).unwrap();
@@ -416,17 +410,17 @@ mod tests {
 
     fn record(
         database: &mut SuplexDatabase,
-        session: &Value,
+        session: &SessionRow,
         receipt: &str,
         observation: &Value,
         review: Option<&Value>,
-    ) -> Option<RootTurn> {
+    ) -> Option<TurnRow> {
         root_session_store::record_standard_worker_result_and_wake(
             database,
             &StandardWorkerResult {
-                task_id: session["taskId"].as_str().unwrap(),
-                session_id: session["id"].as_str().unwrap(),
-                generation: session["generation"].as_i64().unwrap(),
+                task_id: &session.task_id,
+                session_id: &session.id,
+                generation: session.generation,
                 receipt_id: receipt,
                 observation: &observation.to_string(),
                 native_turn_id: None,
@@ -455,13 +449,10 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            (
-                plan_a["advisorRole"].as_str(),
-                plan_b["delegateSlot"].as_str()
-            ),
-            (Some("planner_a"), Some("planner_b"))
+            (plan_a.advisor_role, plan_b.delegate_slot.as_deref()),
+            (Some(AdvisorRole::PlannerA), Some("planner_b"))
         );
-        assert_ne!(plan_a["id"], plan_b["id"]);
+        assert_ne!(plan_a.id, plan_b.id);
         assert!(
             root_session_store::launch_advisor(
                 &mut database,
@@ -496,8 +487,8 @@ mod tests {
         .unwrap();
         assert!(wake.prompt_text.starts_with(&format!(
             "Combined planning pair {pair} completed. Plan A session {} and Plan B session {}",
-            plan_a["id"].as_str().unwrap(),
-            plan_b["id"].as_str().unwrap()
+            plan_a.id.as_str(),
+            plan_b.id.as_str()
         )));
         assert!(wake.prompt_text.contains("Both reports are valid."));
         assert!(
@@ -539,14 +530,12 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            (
-                rater["advisorRole"].as_str(),
-                rater["delegateSlot"].as_str()
-            ),
-            (Some("rater"), Some("delegate"))
+            (rater.advisor_role, rater.delegate_slot.as_deref()),
+            (Some(AdvisorRole::Rater), Some("delegate"))
         );
         assert_eq!(
-            rater["profile"]["profileId"], "profile_root",
+            rater.profile.as_ref().unwrap().profile_id,
+            "profile_root",
             "an Advisor defaults to the Coordinator profile"
         );
         let invalid = json!({"result":null,"invalidReason":"The report has no JSON object"});
@@ -572,8 +561,7 @@ mod tests {
             .is_none()
         );
         let state = serde_json::to_value(
-            root_session_store::workflow_state(&database, rater["taskId"].as_str().unwrap())
-                .unwrap(),
+            root_session_store::workflow_state(&database, rater.task_id.as_str()).unwrap(),
         )
         .unwrap();
         let reviews = state["reviews"].as_array().unwrap();
@@ -583,11 +571,11 @@ mod tests {
             (json!(range()), Value::Null)
         );
         let result = json!({"rating":9,"blockingFindings":[],"verification":"passed","verificationSummary":"ok","summary":"Ready","role":"rater"});
-        let task_id = rater["taskId"].as_str().unwrap();
+        let task_id = rater.task_id.as_str();
         root_session_store::reconcile_advisor_result(
             &mut database,
             task_id,
-            rater["id"].as_str().unwrap(),
+            rater.id.as_str(),
             reviews[0]["turnId"].as_str().unwrap(),
             &result,
             Utc::now(),
@@ -607,7 +595,7 @@ mod tests {
             root_session_store::reconcile_advisor_result(
                 &mut database,
                 task_id,
-                rater["id"].as_str().unwrap(),
+                rater.id.as_str(),
                 reviews[0]["turnId"].as_str().unwrap(),
                 &result,
                 Utc::now()
@@ -665,13 +653,16 @@ mod tests {
             .turns
             .iter()
             .rev()
-            .find(|turn| turn["sessionId"] == root.id.as_str())
+            .find(|turn| turn.session_id == root.id.as_str())
             .unwrap();
-        assert!(wake["promptText"].as_str().unwrap().starts_with(&format!(
+        assert!(wake.prompt_text.as_str().starts_with(&format!(
             "Reviewer result codex-review:{}:error. The Reviewer report was not accepted",
             turn.id
         )));
-        assert_eq!(reviewer["advisorRole"], "reviewer");
+        assert_eq!(
+            reviewer.advisor_role.map(|role| role.as_str()),
+            Some("reviewer")
+        );
         std::fs::remove_dir_all(directory).unwrap();
     }
 

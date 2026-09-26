@@ -18,6 +18,7 @@ use crate::{
     coordination::{
         advisor_bridge::AdvisorRole,
         root_session_store::{self, RootObservationRows},
+        workflows,
     },
     http::{
         AppState,
@@ -28,6 +29,7 @@ use crate::{
     integrations::github::Access,
     platform::database::SuplexDatabase,
     runtimes::{task_harness::ReaderSession, task_harness_registry},
+    tasks::control::SessionRow,
     tasks::worktree,
 };
 
@@ -175,33 +177,11 @@ fn respond(result: Result<Value, Box<dyn Error>>, cookies: Vec<String>) -> Respo
     response
 }
 
-fn role_label(session: &Value) -> &'static str {
-    if session["kind"] == "root" {
-        "Coordinator"
-    } else {
-        match session["advisorRole"].as_str() {
-            Some("reviewer") => "Reviewer",
-            Some("planner_a") => "Plan A",
-            Some("planner_b") => "Plan B",
-            Some("rater") => "Rater",
-            _ => "Worker",
-        }
-    }
-}
-
-fn session_profile(rows: &RootObservationRows, session: &Value) -> Value {
-    if !session["profile"].is_null() {
-        return session["profile"].clone();
-    }
-    json!(if session["kind"] == "root" {
-        &rows.control.root_profile
-    } else if let Some(role) = session["advisorRole"].as_str() {
-        AdvisorRole::parse(role)
-            .and_then(|role| rows.control.advisor_profiles.get(&role))
-            .unwrap_or(&rows.control.root_profile)
-    } else {
-        &rows.control.worker_profile
-    })
+fn role_label(session: &SessionRow) -> &'static str {
+    workflows::role_label(
+        session.kind.as_str(),
+        session.advisor_role.map(AdvisorRole::as_str),
+    )
 }
 
 fn activity_document(rows: &RootObservationRows) -> Value {
@@ -209,18 +189,15 @@ fn activity_document(rows: &RootObservationRows) -> Value {
         .sessions
         .iter()
         .map(|session| {
-            let profile = session_profile(rows, session);
-            let mut entry = json!({
-                "id":session["id"], "kind":session["kind"],
-                "advisorRole":session["advisorRole"], "label":role_label(session),
-                "profileId":profile["profileId"], "generation":session["generation"],
-                "nativeSessionId":session["nativeSessionId"], "paneId":session["paneId"],
-                "current":session["current"], "replacement":session["replacement"],
-            });
-            if let Some(provider) = profile.get("provider") {
-                entry["harness"] = provider.clone();
-            }
-            entry
+            let profile = rows.profile_of(session);
+            json!({
+                "id":session.id, "kind":session.kind,
+                "advisorRole":session.advisor_role, "label":role_label(session),
+                "profileId":profile.profile_id, "generation":session.generation,
+                "nativeSessionId":session.native_session_id, "paneId":session.pane_id,
+                "current":session.current, "replacement":session.replacement,
+                "harness":profile.provider,
+            })
         })
         .collect::<Vec<_>>();
     let turns = rows
@@ -228,10 +205,10 @@ fn activity_document(rows: &RootObservationRows) -> Value {
         .iter()
         .map(|turn| {
             json!({
-                "id":turn["id"], "sessionId":turn["sessionId"],
-                "prompt":turn["promptText"], "status":turn["status"],
-                "promptedAt":turn["promptedAt"], "completedAt":turn["completedAt"],
-                "result":turn["terminalObservation"],
+                "id":turn.id, "sessionId":turn.session_id,
+                "prompt":turn.prompt_text, "status":turn.status,
+                "promptedAt":turn.prompted_at, "completedAt":turn.completed_at,
+                "result":turn.terminal_observation,
             })
         })
         .collect::<Vec<_>>();
@@ -245,24 +222,25 @@ fn execution_document(rows: &RootObservationRows, database_path: &std::path::Pat
     let sessions = rows
         .sessions
         .iter()
-        .filter(|session| !session["nativeSessionId"].is_null())
+        .filter(|session| session.native_session_id.is_some())
         .map(|session| {
             let mut entry = json!({
-                "id":session["id"], "role":session["kind"],
-                "advisorRole":session["advisorRole"], "label":role_label(session),
-                "generation":session["generation"],
+                "id":session.id, "role":session.kind,
+                "advisorRole":session.advisor_role, "label":role_label(session),
+                "generation":session.generation,
             });
-            let profile = session_profile(rows, session);
-            let observed = session["nativeSessionId"]
-                .as_str()
+            let profile = rows.profile_of(session);
+            let observed = session
+                .native_session_id
+                .as_deref()
                 .and_then(|native_session_id| {
                     let reader = task_harness_registry::native_session_reader(native_session_id)?;
                     let session = ReaderSession {
                         database_path,
-                        session_id: session["id"].as_str()?,
+                        session_id: &session.id,
                         native_session_id,
-                        instance_home_directory: profile["instanceHomeDirectory"]
-                            .as_str()
+                        instance_home_directory: profile
+                            .instance_home_directory()
                             .map(std::path::Path::new),
                     };
                     reader.execution(&session).ok()

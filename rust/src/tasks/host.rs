@@ -1,10 +1,12 @@
 //! Restart-safe admission of a prepared Standard Root turn. Worktree preparation
 //! and the outer task wake loop call this after durable task/root setup.
 
-use crate::coordination::{advisor_bridge::AdvisorRole, workflows::Workflow};
+use crate::coordination::workflows::Workflow;
 use crate::shared::time::{now_millis_rfc3339, rfc3339_millis};
 use crate::tasks::TaskError;
-use crate::tasks::control::{TaskStatus, TurnStatus};
+use crate::tasks::control::{
+    PromptDispatchAttempt, SessionRow, TaskProfile, TaskStatus, TurnRow, TurnStatus,
+};
 use std::{
     collections::{HashMap, HashSet},
     io,
@@ -23,9 +25,8 @@ use uuid::Uuid;
 
 use crate::{
     coordination::{
-        advisor_bridge,
         root_bridge::RootIdentity,
-        root_session_store::{self, PromptDispatchAttempt, RootSession, RootTurn, TaskLimitUsage},
+        root_session_store::{self, TaskLimitUsage},
         session_recovery, workflows,
     },
     platform::database::{DatabaseResult, OpenMode, SuplexDatabase},
@@ -187,7 +188,7 @@ pub async fn prepare_task_worktree(
     .map_err(|error| TaskError::internal(error).into())
 }
 
-fn current_owner_still_running(session: &RootSession) -> bool {
+fn current_owner_still_running(session: &SessionRow) -> bool {
     let Some(pid) = session
         .launch_owner_pid
         .and_then(|pid| u32::try_from(pid).ok())
@@ -220,7 +221,7 @@ fn retired_owner_can_stop(saved_start: Option<&str>, observed: ProcessOwnerObser
     }
 }
 
-fn dispatch_state(turn: &RootTurn) -> DispatchState {
+fn dispatch_state(turn: &TurnRow) -> DispatchState {
     if turn.status == TurnStatus::PendingPrompt && turn.dispatch_attempt.is_none() {
         DispatchState::NotSubmitted
     } else {
@@ -232,9 +233,9 @@ fn observe_or_recover_fenced(
     database: &mut SuplexDatabase,
     database_path: &Path,
     harness: &dyn TaskHarness,
-    session: &RootSession,
+    session: &SessionRow,
     native_id: &str,
-    turn: &RootTurn,
+    turn: &TurnRow,
     owner: &str,
 ) -> DatabaseResult<(PromptObservation, bool)> {
     let observed = observe_turn(database_path, harness, session, native_id, turn)?;
@@ -270,9 +271,9 @@ fn observe_or_recover_fenced(
 fn observe_turn(
     database_path: &Path,
     harness: &dyn TaskHarness,
-    session: &RootSession,
+    session: &SessionRow,
     native_id: &str,
-    turn: &RootTurn,
+    turn: &TurnRow,
 ) -> DatabaseResult<PromptObservation> {
     let directory = session_reader::session_directory(database_path, &session.id)?;
     let attempt = turn
@@ -300,7 +301,7 @@ fn dependency_blocked(rows: &root_session_store::RootObservationRows) -> bool {
 /// (TypeScript `executionUncertain`) asks a human to stop its commands.
 fn persist_native_admission(
     database: &mut SuplexDatabase,
-    turn: &RootTurn,
+    turn: &TurnRow,
     observation: &PromptObservation,
 ) -> DatabaseResult<()> {
     if observation.admission_observed {
@@ -347,7 +348,7 @@ struct InterruptedExecution {
     stopped_server_generation: String,
 }
 
-fn stopped_generation(directory: &Path, turn: &RootTurn) -> DatabaseResult<String> {
+fn stopped_generation(directory: &Path, turn: &TurnRow) -> DatabaseResult<String> {
     let record_path = turn.dispatch_attempt.as_ref().map_or_else(
         || directory.join("turn.json"),
         |attempt| directory.join(format!("dispatch-{}.json", attempt.server_generation)),
@@ -365,7 +366,7 @@ fn terminal_observation<'a>(
     native: serde_json::Value,
     text: &'a str,
     directory: &Path,
-    turn: &RootTurn,
+    turn: &TurnRow,
 ) -> DatabaseResult<TerminalObservation<'a>> {
     let interrupted_execution = (observation.state == PromptState::Interrupted)
         .then(|| stopped_generation(directory, turn))
@@ -388,18 +389,17 @@ fn native_observation(
     directory: &Path,
     rows: &root_session_store::RootObservationRows,
     kind: &str,
-    turn: &RootTurn,
+    turn: &TurnRow,
 ) -> DatabaseResult<serde_json::Value> {
     let profile = selected_profile(rows, kind);
-    let provider =
-        task_harness_registry::profile_harness(profile["provider"].as_str().unwrap_or_default());
+    let provider = task_harness_registry::profile_harness(&profile.provider);
     let agent = format!("suplex-{kind}");
     Ok(harness.native(
         directory,
         &turn.id,
         serde_json::json!({
             "messageID":turn.id,"parentID":turn.id,"providerID":provider,
-            "modelID":profile["model"],"mode":agent,
+            "modelID":profile.model,"mode":agent,
             "agent":agent,"cwd":rows.control.worktree_path(),
             "root":rows.control.worktree_path(),
         }),
@@ -407,28 +407,26 @@ fn native_observation(
 }
 
 /// TypeScript `session.profile ?? control.<role>Profile`.
-fn selected_profile(
-    rows: &root_session_store::RootObservationRows,
+fn selected_profile<'a>(
+    rows: &'a root_session_store::RootObservationRows,
     kind: &str,
-) -> serde_json::Value {
+) -> &'a TaskProfile {
     let (session, fallback) = if kind == "root" {
         (rows.root.as_ref(), &rows.control.root_profile)
     } else {
         (rows.worker.as_ref(), &rows.control.worker_profile)
     };
     session
-        .map(|session| &session["profile"])
-        .filter(|profile| profile.is_object())
-        .cloned()
-        .unwrap_or_else(|| serde_json::json!(fallback))
+        .and_then(|session| session.profile.as_ref())
+        .unwrap_or(fallback)
 }
 
 fn complete_root_if_terminal(
     database: &mut SuplexDatabase,
     database_path: &Path,
     harness: &dyn TaskHarness,
-    session: &RootSession,
-    turn: &RootTurn,
+    session: &SessionRow,
+    turn: &TurnRow,
     observation: &PromptObservation,
 ) -> DatabaseResult<bool> {
     if !terminal(observation.state) || !observation.admission_observed {
@@ -476,9 +474,9 @@ fn complete_worker_if_terminal(
     database: &mut SuplexDatabase,
     database_path: &Path,
     harness: &dyn TaskHarness,
-    session: &RootSession,
+    session: &SessionRow,
     native_id: &str,
-    turn: &RootTurn,
+    turn: &TurnRow,
     observation: &PromptObservation,
     launch: &DelegateLaunch,
 ) -> DatabaseResult<bool> {
@@ -493,14 +491,14 @@ fn complete_worker_if_terminal(
     } else {
         "suplex-worker"
     };
-    let provider = launch.profile["provider"].as_str().unwrap_or_default();
+    let provider = launch.profile.provider.as_str();
     let native = harness.native(
         &directory,
         &turn.id,
         serde_json::json!({
             "messageID":turn.id,"parentID":turn.id,
             "providerID":task_harness_registry::profile_harness(provider),
-            "modelID":launch.profile["model"],"mode":agent,
+            "modelID":launch.profile.model,"mode":agent,
             "agent":agent,"cwd":rows.control.worktree_path(),
             "root":rows.control.worktree_path(),
         }),
@@ -763,8 +761,8 @@ fn recover_prepared_root_blocking(
         return Ok(None);
     };
     let rows = root_session_store::root_observation_rows(&database, task_id)?;
-    let profile = selected_profile(&rows, "root");
-    let provider = profile["provider"].as_str().unwrap_or_default();
+    let profile = selected_profile(&rows, "root").clone();
+    let provider = profile.provider.as_str();
     // TypeScript `HarnessRouter.forScope`.
     let harness = task_harness_registry::for_profile(provider)
         .ok_or_else(|| TaskError::internal(format!("No task harness for {provider}")))?;
@@ -799,12 +797,8 @@ fn recover_prepared_root_blocking(
             return Err(TaskError::internal("Native Root session changed before dispatch").into());
         }
         let worktree = rows.control.worktree_path();
-        let model = profile["model"]
-            .as_str()
-            .ok_or_else(|| TaskError::internal("Root model is missing"))?;
-        let reasoning = profile["reasoningLevel"]
-            .as_str()
-            .ok_or_else(|| TaskError::internal("Root reasoning level is missing"))?;
+        let model = profile.model.as_str();
+        let reasoning = profile.reasoning_level.as_str();
         let project_scope = project_launch_scope(
             &rows.context["configuration"],
             &rows.context["issueContext"],
@@ -830,7 +824,7 @@ fn recover_prepared_root_blocking(
             worktree: Path::new(worktree.unwrap_or_default()),
             model,
             reasoning_effort: reasoning,
-            instance_home_directory: profile["instanceHomeDirectory"].as_str().map(Path::new),
+            instance_home_directory: profile.instance_home_directory().map(Path::new),
             project_mcp: project_mcp(&rows),
             project_context_path: project_scope.context_path.as_deref(),
             project_environment: &project_scope.environment,
@@ -961,7 +955,7 @@ pub async fn recover_prepared_root(
 /// TypeScript `scope` for one delegate session: its captured profile, and the
 /// Advisor role or Worker mode and purpose of its pending turn.
 struct DelegateLaunch {
-    profile: serde_json::Value,
+    profile: TaskProfile,
     purpose: WorkerPurpose,
     workflow: WorkflowLaunch,
 }
@@ -971,34 +965,18 @@ fn delegate_launch(
     session_id: &str,
     turn_id: &str,
 ) -> DelegateLaunch {
-    let session = rows
-        .sessions
-        .iter()
-        .find(|session| session["id"] == session_id)
-        .cloned()
-        .unwrap_or_default();
-    let role = session["advisorRole"].as_str();
-    let profile = if session["profile"].is_object() {
-        session["profile"].clone()
-    } else if let Some(role) = role {
-        serde_json::json!(
-            AdvisorRole::parse(role)
-                .and_then(|role| rows.control.advisor_profiles.get(&role))
-                .unwrap_or(&rows.control.root_profile)
-        )
-    } else {
-        serde_json::json!(rows.control.worker_profile)
-    };
-    let turn = rows
+    let session = rows.session(session_id);
+    let profile = session.map_or(&rows.control.worker_profile, |session| {
+        rows.profile_of(session)
+    });
+    let input = rows
         .turns
         .iter()
-        .find(|turn| turn["id"] == turn_id)
-        .cloned()
-        .unwrap_or_default();
-    let input = workflows::turn_workflow_input(&rows.sessions, &turn)
+        .find(|turn| turn.id == turn_id)
+        .and_then(|turn| workflows::turn_workflow_input(&rows.sessions, turn))
         .filter(|input| input["kind"] == "worker");
     DelegateLaunch {
-        profile,
+        profile: profile.clone(),
         purpose: if input.is_some_and(|input| input["purpose"] == "verification") {
             WorkerPurpose::Verification
         } else {
@@ -1007,7 +985,7 @@ fn delegate_launch(
         workflow: WorkflowLaunch {
             workflow_root: false,
             direct: input.is_some_and(|input| input["mode"] == "direct"),
-            advisor: role.and_then(advisor_bridge::advisor_role),
+            advisor: session.and_then(|session| session.advisor_role),
         },
     }
 }
@@ -1036,7 +1014,7 @@ fn recover_prepared_worker_blocking(
     }
     let rows = root_session_store::root_observation_rows(&database, task_id)?;
     let delegate = delegate_launch(&rows, &session.id, &turn.id);
-    let provider = delegate.profile["provider"].as_str().unwrap_or_default();
+    let provider = delegate.profile.provider.as_str();
     // TypeScript `HarnessRouter.forScope`.
     let harness = task_harness_registry::for_profile(provider)
         .ok_or_else(|| TaskError::internal(format!("No task harness for {provider}")))?;
@@ -1074,12 +1052,8 @@ fn recover_prepared_worker_blocking(
         }
         let worktree = rows.control.worktree_path();
         let profile = &delegate.profile;
-        let model = profile["model"]
-            .as_str()
-            .ok_or_else(|| TaskError::internal("Worker model is missing"))?;
-        let reasoning = profile["reasoningLevel"]
-            .as_str()
-            .ok_or_else(|| TaskError::internal("Worker reasoning level is missing"))?;
+        let model = profile.model.as_str();
+        let reasoning = profile.reasoning_level.as_str();
         let project_scope = project_launch_scope(
             &rows.context["configuration"],
             &rows.context["issueContext"],
@@ -1097,7 +1071,7 @@ fn recover_prepared_worker_blocking(
             worktree: Path::new(worktree.unwrap_or_default()),
             model,
             reasoning_effort: reasoning,
-            instance_home_directory: profile["instanceHomeDirectory"].as_str().map(Path::new),
+            instance_home_directory: profile.instance_home_directory().map(Path::new),
             project_mcp: project_mcp(&rows),
             project_context_path: project_scope.context_path.as_deref(),
             project_environment: &project_scope.environment,
@@ -1573,15 +1547,10 @@ mod tests {
 
     #[test]
     fn claimed_or_prompted_turns_are_never_assumed_absent() {
-        let mut turn = RootTurn {
-            id: "msg_one".into(),
+        let mut turn = TurnRow {
             task_id: "task_one".into(),
-            session_id: "session_one".into(),
-            generation: 1,
             prompt_text: "Work".into(),
-            status: TurnStatus::PendingPrompt,
-            dispatch_attempt: None,
-            native_turn_id: None,
+            ..TurnRow::fixture("msg_one", "session_one", TurnStatus::PendingPrompt)
         };
         assert_eq!(dispatch_state(&turn), DispatchState::NotSubmitted);
         turn.dispatch_attempt = Some(PromptDispatchAttempt {
@@ -1628,18 +1597,13 @@ mod tests {
             .to_string(),
         )
         .unwrap();
-        let turn = RootTurn {
-            id: "msg-one".into(),
+        let turn = TurnRow {
             task_id: "task-one".into(),
-            session_id: "session-one".into(),
-            generation: 1,
-            prompt_text: String::new(),
-            status: TurnStatus::Prompted,
             dispatch_attempt: Some(PromptDispatchAttempt {
                 server_generation: "database-attempt".into(),
                 claimed_at: "now".into(),
             }),
-            native_turn_id: None,
+            ..TurnRow::fixture("msg-one", "session-one", TurnStatus::Prompted)
         };
         let observation = PromptObservation {
             state: PromptState::Interrupted,
@@ -2732,12 +2696,11 @@ mod tests {
         let turn = rows
             .turns
             .iter()
-            .find(|turn| turn["sessionId"] == root.id)
+            .find(|turn| turn.session_id == root.id)
             .unwrap();
-        assert!(turn["dispatchAttempt"].is_object());
+        assert!(turn.dispatch_attempt.is_some());
         let directory = session_reader::session_directory(&database_path, &root.id).unwrap();
-        let exit =
-            crate::runtimes::headless::turn_file(&directory, turn["id"].as_str().unwrap(), "exit");
+        let exit = crate::runtimes::headless::turn_file(&directory, turn.id.as_str(), "exit");
         for _ in 0..40 {
             if exit.exists() && fs::read(&marker).is_ok_and(|launches| launches == b"x") {
                 break;
@@ -2755,24 +2718,27 @@ mod tests {
         assert_eq!(
             rows.turns
                 .iter()
-                .find(|row| row["sessionId"] == root.id)
-                .unwrap()["status"],
-            "completed"
+                .find(|row| row.session_id == root.id)
+                .unwrap()
+                .status,
+            TurnStatus::Completed
         );
         assert!(
             rows.turns
                 .iter()
-                .find(|row| row["sessionId"] == root.id)
-                .unwrap()["terminalObservation"]
-                .as_str()
+                .find(|row| row.session_id == root.id)
+                .unwrap()
+                .terminal_observation
+                .as_deref()
                 .is_some_and(|raw| raw.contains("\"state\":\"completed\""))
         );
         let root_terminal = rows
             .turns
             .iter()
-            .find(|row| row["sessionId"] == root.id)
-            .unwrap()["terminalObservation"]
-            .as_str()
+            .find(|row| row.session_id == root.id)
+            .unwrap()
+            .terminal_observation
+            .as_deref()
             .unwrap();
         assert!(!root_terminal.contains("\"reason\""));
         assert!(!root_terminal.contains("\"interruptedExecution\""));
@@ -2844,23 +2810,27 @@ mod tests {
         assert_eq!(
             rows.turns
                 .iter()
-                .find(|row| row["id"] == worker_turn.id)
-                .unwrap()["status"],
-            "completed"
+                .find(|row| row.id == worker_turn.id)
+                .unwrap()
+                .status,
+            TurnStatus::Completed
         );
         assert_eq!(
             rows.turns
                 .iter()
-                .find(|row| row["id"] == worker_turn.id)
-                .unwrap()["nativeTurnId"],
-            worker_turn.id
+                .find(|row| row.id == worker_turn.id)
+                .unwrap()
+                .native_turn_id
+                .as_deref(),
+            Some(worker_turn.id.as_str())
         );
         assert!(
             rows.turns
                 .iter()
-                .find(|row| row["id"] == worker_turn.id)
-                .unwrap()["resultReceiptId"]
-                .as_str()
+                .find(|row| row.id == worker_turn.id)
+                .unwrap()
+                .result_receipt_id
+                .as_deref()
                 .unwrap()
                 .contains(&worker_turn.id)
         );
@@ -2883,7 +2853,7 @@ mod tests {
             let replacement =
                 root_session_store::replace_worker(&mut database, &task_id, &request, Utc::now())
                     .unwrap();
-            let id = replacement["id"].as_str().unwrap().to_owned();
+            let id = replacement.id.as_str().to_owned();
             assert!(!root_session_store::worker_replacement_ready(&database, &id).unwrap());
             id
         };
@@ -2917,11 +2887,9 @@ mod tests {
                 .unwrap()
                 .turns
                 .into_iter()
-                .find(|turn| turn["sessionId"] == replacement_id)
-                .unwrap()["id"]
-                .as_str()
+                .find(|turn| turn.session_id == replacement_id)
                 .unwrap()
-                .to_owned()
+                .id
         };
         let replacement_exit = crate::runtimes::headless::turn_file(
             &replacement_directory,
@@ -3316,7 +3284,7 @@ mod tests {
                 Utc::now(),
             )
             .unwrap();
-            let id = next["id"].as_str().unwrap().to_owned();
+            let id = next.id.as_str().to_owned();
             assert!(!root_session_store::worker_replacement_ready(&database, &id).unwrap());
             id
         };

@@ -2,7 +2,7 @@
 
 use crate::shared::time::rfc3339_millis;
 use crate::tasks::TaskError;
-use crate::tasks::control::TaskStatus;
+use crate::tasks::control::{SessionKind, SessionLifecycle, SessionRow, TaskProfile, TaskStatus};
 use std::{error::Error, path::PathBuf};
 
 use axum::{
@@ -17,7 +17,11 @@ use rusqlite::OptionalExtension;
 use serde_json::{Value, json};
 
 use crate::{
-    coordination::root_session_store::{self, RootObservationRows},
+    coordination::{
+        advisor_bridge::AdvisorRole,
+        root_session_store::{self, RootObservationRows},
+        workflows,
+    },
     http::{
         AppState,
         contracts::typed::{self, finding, tasks as task_contracts},
@@ -183,30 +187,28 @@ fn visible_tasks(
     Ok(tasks)
 }
 
-fn label(session: &Value) -> &'static str {
-    if session["kind"] == "root" {
-        "Coordinator"
-    } else {
-        match session["advisorRole"].as_str() {
-            Some("reviewer") => "Reviewer",
-            Some("planner_a") => "Plan A",
-            Some("planner_b") => "Plan B",
-            Some("rater") => "Rater",
-            _ => "Worker",
-        }
-    }
+fn label(session: &SessionRow) -> &'static str {
+    workflows::role_label(
+        session.kind.as_str(),
+        session.advisor_role.map(AdvisorRole::as_str),
+    )
 }
 
 /// TypeScript `observeSession`: the runtime that owns the native session reports its status.
-fn native_status(database_path: &std::path::Path, session: &Value) -> Option<(&'static str, f64)> {
-    let native_session_id = session["nativeSessionId"].as_str()?;
+fn native_status(
+    database_path: &std::path::Path,
+    session: &SessionRow,
+) -> Option<(&'static str, f64)> {
+    let native_session_id = session.native_session_id.as_deref()?;
     task_harness_registry::native_session_reader(native_session_id)?
         .status(&ReaderSession {
             database_path,
-            session_id: session["id"].as_str()?,
+            session_id: &session.id,
             native_session_id,
-            instance_home_directory: session["profile"]["instanceHomeDirectory"]
-                .as_str()
+            instance_home_directory: session
+                .profile
+                .as_ref()
+                .and_then(TaskProfile::instance_home_directory)
                 .map(std::path::Path::new),
         })
         .ok()
@@ -223,25 +225,26 @@ fn agents(task: &AgentTask, database_path: &std::path::Path) -> Vec<Value> {
     task.rows
         .sessions
         .iter()
-        .filter(|session| session["current"] == true)
+        .filter(|session| session.current)
         .map(|session| {
-            let (status, changed_at) = if session["lifecycle"] == "stopped"
-                || session["lifecycle"] == "cancelled"
-            {
-                let changed = if session["stoppedAt"].is_null() {
-                    session["stopRequestedAt"].clone()
-                } else {
-                    session["stoppedAt"].clone()
-                };
-                ("stopped", changed)
-            } else if session["nativeSessionId"].is_null() {
+            let (status, changed_at) = if matches!(
+                session.lifecycle,
+                SessionLifecycle::Stopped | SessionLifecycle::Cancelled
+            ) {
+                let changed = session
+                    .stopped_at
+                    .as_ref()
+                    .or(session.stop_requested_at.as_ref());
+                ("stopped", json!(changed))
+            } else if session.native_session_id.is_none() {
                 ("queued", Value::Null)
             } else {
                 match native_status(database_path, session) {
                     Some(("busy", _)) => ("working", Value::Null),
                     Some(("retry", _)) => ("retrying", Value::Null),
                     Some(_)
-                        if session["kind"] == "root" && task.status == TaskStatus::WaitingHuman =>
+                        if session.kind == SessionKind::Root
+                            && task.status == TaskStatus::WaitingHuman =>
                     {
                         ("waiting_human", Value::Null)
                     }
@@ -250,9 +253,9 @@ fn agents(task: &AgentTask, database_path: &std::path::Path) -> Vec<Value> {
                 }
             };
             json!({
-                "id":session["id"], "role":session["kind"],
-                "advisorRole":session["advisorRole"], "label":label(session),
-                "paneId":session["paneId"], "status":status,
+                "id":session.id, "role":session.kind,
+                "advisorRole":session.advisor_role, "label":label(session),
+                "paneId":session.pane_id, "status":status,
                 "statusChangedAt":changed_at,
             })
         })
@@ -404,9 +407,11 @@ mod tests {
                 root: None,
                 worker: None,
                 workers: Vec::new(),
-                sessions: vec![
-                    json!({"id":"session-opencode","kind":"root","current":true,"lifecycle":"live","nativeSessionId":"ses_live","paneId":null,"advisorRole":null}),
-                ],
+                sessions: vec![SessionRow {
+                    lifecycle: SessionLifecycle::Live,
+                    native_session_id: Some("ses_live".into()),
+                    ..SessionRow::fixture("session-opencode", SessionKind::Root)
+                }],
                 turns: Vec::new(),
             },
         };

@@ -2188,10 +2188,8 @@ mod tests {
                 None,
                 Utc::now(),
             )
-            .unwrap()["id"]
-                .as_str()
-                .unwrap()
-                .to_owned()
+            .unwrap()
+            .id
         });
         let invalid_replacement = replace_worker(
             State(state.clone()),

@@ -7,6 +7,7 @@ use std::path::Path;
 use serde_json::{Value, json};
 
 use crate::platform::{artifacts, database::SuplexDatabase};
+use crate::tasks::control::{SessionRow, TurnRow, TurnStatus};
 
 use super::{
     root_session_store::{self, RootObservationRows},
@@ -15,8 +16,8 @@ use super::{
 };
 
 /// TypeScript `parseObservation` fields that describe one Worker turn.
-fn parsed_observation(turn: &Value) -> Value {
-    let raw = turn["terminalObservation"].as_str();
+fn parsed_observation(turn: &TurnRow) -> Value {
+    let raw = turn.terminal_observation.as_deref();
     let outcome = turn_outcome(raw);
     let parsed = raw
         .and_then(|raw| serde_json::from_str::<Value>(raw).ok())
@@ -30,16 +31,14 @@ fn parsed_observation(turn: &Value) -> Value {
 }
 
 /// Completed plain Worker turns in task order, as `(turn, parsed observation)`.
-pub fn completed_worker_turns(rows: &RootObservationRows) -> Vec<(&Value, Value)> {
+pub fn completed_worker_turns(rows: &RootObservationRows) -> Vec<(&TurnRow, Value)> {
     rows.turns
         .iter()
         .filter(|turn| {
-            turn["status"] == "completed"
-                && rows.sessions.iter().any(|session| {
-                    session["id"] == turn["sessionId"]
-                        && session["kind"] == "worker"
-                        && session["advisorRole"].is_null()
-                })
+            turn.status == TurnStatus::Completed
+                && rows
+                    .session(&turn.session_id)
+                    .is_some_and(SessionRow::is_plain_worker)
         })
         .map(|turn| (turn, parsed_observation(turn)))
         .collect()
@@ -96,7 +95,7 @@ pub fn prepare_advisor_evidence(
             let input = turn_workflow_input(&rows.sessions, turn).filter(|input| input["kind"] == "worker");
             let verification_range = &parsed["verificationRange"];
             json!({
-                "turnId": turn["id"], "sessionId": turn["sessionId"],
+                "turnId": turn.id, "sessionId": turn.session_id,
                 "mode": input.map_or(json!("planned"), |input| input["mode"].clone()),
                 "purpose": input.map_or(json!("implementation"), |input| input["purpose"].clone()),
                 "range": input.map_or(Value::Null, |input| input["range"].clone()),
@@ -136,9 +135,6 @@ pub fn prepare_advisor_evidence(
     )?;
     Ok(AdvisorEvidence {
         evidence,
-        worker_turn_ids: workers
-            .iter()
-            .filter_map(|(turn, _)| turn["id"].as_str().map(str::to_owned))
-            .collect(),
+        worker_turn_ids: workers.iter().map(|(turn, _)| turn.id.clone()).collect(),
     })
 }

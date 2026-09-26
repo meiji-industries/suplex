@@ -367,7 +367,11 @@ mod tests {
         assert!(context.contains("Use the fixture"));
         assert!(context.contains("Configured setup exited 0"));
         // Once the Root has a native session, recovery does not rerun setup.
-        crate::coordination::root_controller::prepare_root(&database_path, &task_id).unwrap();
+        crate::coordination::root_controller::prepare_root(
+            &mut SuplexDatabase::open(&database_path, OpenMode::ReadWrite).unwrap(),
+            &task_id,
+        )
+        .unwrap();
         SuplexDatabase::open(&database_path, OpenMode::ReadWrite).unwrap().connection().execute("UPDATE suplex_task_sessions SET native_session_id = 'native-root' WHERE task_id = ?1", [&task_id]).unwrap();
         prepare_before_native_work(&database_path, &task_id)
             .await

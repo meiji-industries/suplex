@@ -52,13 +52,12 @@ const REPLACED_NEXT: &str = "End this Coordinator turn. Suplex will stop the out
 
 /// Reserve an active Root and persist its first prompt once. Repeated host
 /// recovery returns the same session without replaying a completed turn.
-pub fn prepare_root(database_path: &Path, task_id: &str) -> DatabaseResult<SessionRow> {
-    let mut database = SuplexDatabase::open(database_path, OpenMode::ReadWrite)?;
-    let root = root_session_store::reserve_root(&mut database, task_id, chrono::Utc::now())?;
-    let rows = root_session_store::root_observation_rows(&database, task_id)?;
+pub fn prepare_root(database: &mut SuplexDatabase, task_id: &str) -> DatabaseResult<SessionRow> {
+    let root = root_session_store::reserve_root(database, task_id, chrono::Utc::now())?;
+    let rows = root_session_store::root_observation_rows(database, task_id)?;
     let prompt =
         root_prompts::initial_coordinator_prompt(&rows.control, &rows.context, &rows.dependencies);
-    root_session_store::ensure_initial_prompt(&mut database, &root, &prompt, chrono::Utc::now())?;
+    root_session_store::ensure_initial_prompt(database, &root, &prompt, chrono::Utc::now())?;
     Ok(root)
 }
 
@@ -177,19 +176,14 @@ fn assemble_observation(
 
 /// Observe durable task intent and fresh local Git state for the current Root.
 /// A missing Git observation is reported as unknown; it does not gate the task.
-pub fn observe(database_path: &Path, root: &RootIdentity) -> DatabaseResult<Value> {
-    let rows = {
-        let database = SuplexDatabase::open(database_path, OpenMode::ReadOnly)?;
-        root_session_store::assert_current_root(
-            &database,
-            &root.task_id,
-            &root.session_id,
-            root.generation,
-        )?;
-        root_session_store::root_observation_rows(&database, &root.task_id)?
-    };
+pub async fn observe(
+    database: &SuplexDatabase,
+    database_path: &Path,
+    root: &RootIdentity,
+) -> DatabaseResult<Value> {
+    let rows = open_root(database, root)?;
     let (pull_request, github) =
-        crate::delivery::operations::observe_for_root(database_path, &rows.control)?;
+        crate::delivery::operations::observe_for_root(database_path, &rows.control).await?;
     let worktree = match &rows.control.worktree {
         Some(worktree) => match worktree::observe_worktree(Path::new(&worktree.path)) {
             Ok(observed) => json!({"headSha":observed.head_sha,"dirty":observed.dirty}),
@@ -206,19 +200,18 @@ pub fn observe(database_path: &Path, root: &RootIdentity) -> DatabaseResult<Valu
 /// The artifact row is scoped by both task and company; the file hash is live
 /// evidence that the opaque bytes still match that row.
 pub fn read_image(
-    database_path: &Path,
+    database: &SuplexDatabase,
     artifact_root: &Path,
     root: &RootIdentity,
     artifact_id: &str,
 ) -> DatabaseResult<Value> {
-    let database = SuplexDatabase::open(database_path, OpenMode::ReadOnly)?;
     root_session_store::assert_current_root(
-        &database,
+        database,
         &root.task_id,
         &root.session_id,
         root.generation,
     )?;
-    let artifact = root_session_store::task_artifact(&database, &root.task_id, artifact_id)?
+    let artifact = root_session_store::task_artifact(database, &root.task_id, artifact_id)?
         .ok_or_else(|| invalid("Task image is not available"))?;
     if !matches!(artifact.kind.as_str(), "task-image" | "delivery-image")
         || !matches!(
@@ -230,7 +223,7 @@ pub fn read_image(
     }
     let bytes = artifacts::read(artifact_root, &artifact.company_id, &artifact.storage_path)?;
     root_session_store::assert_current_root(
-        &database,
+        database,
         &root.task_id,
         &root.session_id,
         root.generation,
@@ -251,20 +244,12 @@ pub struct WorkerEvidenceRequest {
 /// Read an admitted Worker's native turn log. The log is the evidence source;
 /// persisted completion metadata only identifies and describes that turn.
 pub fn read_worker_evidence(
+    database: &SuplexDatabase,
     database_path: &Path,
     root: &RootIdentity,
     request: &WorkerEvidenceRequest,
 ) -> DatabaseResult<Value> {
-    let rows = {
-        let database = SuplexDatabase::open(database_path, OpenMode::ReadOnly)?;
-        root_session_store::assert_current_root(
-            &database,
-            &root.task_id,
-            &root.session_id,
-            root.generation,
-        )?;
-        root_session_store::root_observation_rows(&database, &root.task_id)?
-    };
+    let rows = open_root(database, root)?;
     let turn = rows
         .turns
         .iter()
@@ -419,19 +404,18 @@ pub async fn source_still_matches(
     Ok(observed.range)
 }
 
+/// The current Root's task rows after a fresh Root check.
 fn open_root(
-    database_path: &Path,
+    database: &SuplexDatabase,
     root: &RootIdentity,
-) -> DatabaseResult<(SuplexDatabase, RootObservationRows)> {
-    let database = SuplexDatabase::open(database_path, OpenMode::ReadWrite)?;
+) -> DatabaseResult<RootObservationRows> {
     root_session_store::assert_current_root(
-        &database,
+        database,
         &root.task_id,
         &root.session_id,
         root.generation,
     )?;
-    let rows = root_session_store::root_observation_rows(&database, &root.task_id)?;
-    Ok((database, rows))
+    root_session_store::root_observation_rows(database, &root.task_id)
 }
 
 fn launched_worker(
@@ -537,25 +521,24 @@ impl AssignmentDraft<'_> {
 
 /// Launch the standard Worker for the current Root with the saved assignment.
 fn launch_worker(
-    database_path: &Path,
+    database: &mut SuplexDatabase,
     root: &RootIdentity,
     assignment: &WorkerAssignment,
     text: &str,
     workflow_input: Option<&Value>,
 ) -> DatabaseResult<Value> {
     let prompt = root_prompts::worker_prompt(&assignment.mode, &assignment.purpose, text)?;
-    let mut database = SuplexDatabase::open(database_path, OpenMode::ReadWrite)?;
-    let current_root = root_session_store::current_root(&database, &root.task_id)?
+    let current_root = root_session_store::current_root(database, &root.task_id)?
         .ok_or_else(|| invalid("root_identity_mismatch"))?;
     let worker = root_session_store::launch_standard_worker(
-        &mut database,
+        database,
         &current_root,
         text,
         &prompt,
         workflow_input,
         chrono::Utc::now(),
     )?;
-    launched_worker(&database, &root.task_id, worker)
+    launched_worker(database, &root.task_id, worker)
 }
 
 /// A plain Worker already completed an implementation for this task.
@@ -717,12 +700,13 @@ fn advisor_references(
 /// TypeScript `delegateWorker`. Standard implementation keeps its unpinned
 /// assignment; every other assignment is pinned to the committed live range.
 pub async fn delegate_worker(
+    database: &mut SuplexDatabase,
     database_path: &Path,
     root: &RootIdentity,
     owner_token: &str,
     assignment: &WorkerAssignment,
 ) -> DatabaseResult<Value> {
-    let (_, rows) = open_root(database_path, root)?;
+    let rows = open_root(database, root)?;
     let workflow = rows.control.workflow;
     check_assignment_mode(assignment, workflow)?;
     let draft = AssignmentDraft {
@@ -734,19 +718,9 @@ pub async fn delegate_worker(
     };
     let verification = assignment.purpose == "verification";
     if workflow == Workflow::Standard && !verification {
-        return launch_worker(
-            database_path,
-            root,
-            assignment,
-            &draft.text(None, None)?,
-            None,
-        );
+        return launch_worker(database, root, assignment, &draft.text(None, None)?, None);
     }
-    recheck(
-        &SuplexDatabase::open(database_path, OpenMode::ReadOnly)?,
-        root,
-        owner_token,
-    )?;
+    recheck(database, root, owner_token)?;
     let observed = current_range(database_path, &root.task_id).await?;
     if verification {
         require_committed(&observed)?;
@@ -755,17 +729,14 @@ pub async fn delegate_worker(
     if workflow == Workflow::Standard {
         let workflow_input = draft.input(&range, Value::Null, Value::Null);
         return launch_worker(
-            database_path,
+            database,
             root,
             assignment,
             &draft.text(Some(&range), None)?,
             Some(&workflow_input),
         );
     }
-    let rows = {
-        let database = SuplexDatabase::open(database_path, OpenMode::ReadOnly)?;
-        root_session_store::root_observation_rows(&database, &root.task_id)?
-    };
+    let rows = root_session_store::root_observation_rows(database, &root.task_id)?;
     let candidate_reports = candidate_plan_reports(&rows, workflow, assignment, &range)?;
     let (advisor_report, advisor_reference) = advisor_references(&rows, workflow, assignment)?;
     let text = draft.text(
@@ -773,19 +744,14 @@ pub async fn delegate_worker(
         advisor_report.as_deref().map(|text| ("Rater", text)),
     )?;
     let workflow_input = draft.input(&range, advisor_reference, candidate_reports);
-    launch_worker(
-        database_path,
-        root,
-        assignment,
-        &text,
-        Some(&workflow_input),
-    )
+    launch_worker(database, root, assignment, &text, Some(&workflow_input))
 }
 
 const ADVISOR_NEXT: &str = "End this Coordinator turn now. Suplex will send the Advisor's native report as a new turn on this same session. Do not poll or wait inside this turn.";
 
 /// Observe the committed live range for an Advisor request and pin its evidence.
 async fn advisor_source(
+    database: &SuplexDatabase,
     database_path: &Path,
     artifact_root: &Path,
     root: &RootIdentity,
@@ -796,20 +762,18 @@ async fn advisor_source(
     RootObservationRows,
     advisor_evidence::AdvisorEvidence,
 )> {
-    let (database, rows) = open_root(database_path, root)?;
+    let rows = open_root(database, root)?;
     if rows.control.worktree.is_none() {
         return Err(invalid("The task has no worktree"));
     }
-    recheck(&database, root, owner_token)?;
-    drop(database);
+    recheck(database, root, owner_token)?;
     let observed = current_range(database_path, &root.task_id).await?;
     if !observed.clean {
         return Err(delivery_failure("worktree_dirty", dirty));
     }
-    let database = SuplexDatabase::open(database_path, OpenMode::ReadOnly)?;
-    let rows = root_session_store::root_observation_rows(&database, &root.task_id)?;
+    let rows = root_session_store::root_observation_rows(database, &root.task_id)?;
     let evidence = advisor_evidence::prepare_advisor_evidence(
-        &database,
+        database,
         database_path,
         artifact_root,
         &rows,
@@ -867,6 +831,7 @@ fn advisor_input(
 /// TypeScript `delegateAdvisor`: Suplex composes the Advisor input from the
 /// committed live range, pinned evidence, and the latest same-role review.
 pub async fn delegate_advisor(
+    database: &mut SuplexDatabase,
     database_path: &Path,
     artifact_root: &Path,
     root: &RootIdentity,
@@ -874,7 +839,7 @@ pub async fn delegate_advisor(
     role: &str,
     brief: Option<&str>,
 ) -> DatabaseResult<Value> {
-    let (_, rows) = open_root(database_path, root)?;
+    let rows = open_root(database, root)?;
     let definition = rows.control.workflow.definition();
     let label = advisor_label(role);
     let Some(advisor) =
@@ -897,7 +862,7 @@ pub async fn delegate_advisor(
             "Reviewer requires a brief with your plan and acceptance criteria.",
         ));
     }
-    let (observed, rows, evidence) = advisor_source(database_path, artifact_root, root, owner_token, "The worktree has uncommitted changes. Commit or discard them before requesting an Advisor; Advisors review committed source only.").await?;
+    let (observed, rows, evidence) = advisor_source(database, database_path, artifact_root, root, owner_token, "The worktree has uncommitted changes. Commit or discard them before requesting an Advisor; Advisors review committed source only.").await?;
     let previous = (advisor == AdvisorRole::Rater)
         .then(|| latest_review(&rows.control.workflow_state.reviews, AdvisorRole::Rater))
         .flatten();
@@ -943,11 +908,10 @@ pub async fn delegate_advisor(
         repair_evidence.as_deref(),
     );
     let input = advisor_input(role, &observed, &evidence, None);
-    let mut database = SuplexDatabase::open(database_path, OpenMode::ReadWrite)?;
-    let current_root = root_session_store::current_root(&database, &root.task_id)?
+    let current_root = root_session_store::current_root(database, &root.task_id)?
         .ok_or_else(|| invalid("root_identity_mismatch"))?;
     let advisor = root_session_store::launch_advisor(
-        &mut database,
+        database,
         &current_root,
         role,
         &prompt,
@@ -962,28 +926,28 @@ pub async fn delegate_advisor(
 /// TypeScript `delegatePlanners`: Plan A and Plan B are reserved together on
 /// the same pinned input. The task host dispatches both.
 pub async fn delegate_planners(
+    database: &mut SuplexDatabase,
     database_path: &Path,
     artifact_root: &Path,
     root: &RootIdentity,
     owner_token: &str,
 ) -> DatabaseResult<Value> {
-    let (_, rows) = open_root(database_path, root)?;
+    let rows = open_root(database, root)?;
     if rows.control.workflow != Workflow::CompetingPlans {
         return Err(invalid(
             "delegate_planners is legal only for Combined planning.",
         ));
     }
-    let (observed, rows, evidence) = advisor_source(database_path, artifact_root, root, owner_token, "The worktree has uncommitted changes. Commit or discard them before requesting planners; planners inspect committed source only.").await?;
+    let (observed, rows, evidence) = advisor_source(database, database_path, artifact_root, root, owner_token, "The worktree has uncommitted changes. Commit or discard them before requesting planners; planners inspect committed source only.").await?;
     let pair_id = uuid::Uuid::new_v4().to_string();
     let prompt = advisor_prompt(&rows, "planner_a", &observed, &evidence, None, None, None);
     let prompt_b = advisor_prompt(&rows, "planner_b", &observed, &evidence, None, None, None);
     let input_a = advisor_input("planner_a", &observed, &evidence, Some(&pair_id));
     let input_b = advisor_input("planner_b", &observed, &evidence, Some(&pair_id));
-    let mut database = SuplexDatabase::open(database_path, OpenMode::ReadWrite)?;
-    let current_root = root_session_store::current_root(&database, &root.task_id)?
+    let current_root = root_session_store::current_root(database, &root.task_id)?
         .ok_or_else(|| invalid("root_identity_mismatch"))?;
     let planners = root_session_store::launch_planner_pair(
-        &mut database,
+        database,
         &current_root,
         &pair_id,
         [(&prompt, &input_a), (&prompt_b, &input_b)],
@@ -1003,8 +967,8 @@ pub async fn complete_workflow_local_work(
     expected_head: Option<&str>,
 ) -> DatabaseResult<Value> {
     use crate::delivery::operations::{self, WorkflowCompletion};
-    let (_, rows) = open_root(database_path, root)?;
-    let control = rows.control;
+    let mut database = SuplexDatabase::open(database_path, OpenMode::ReadWrite)?;
+    let control = open_root(&database, root)?.control;
     let path = operations::standard_local_worktree_path(&control)?.to_owned();
     let local = worktree::observe_local_revision(Path::new(&path))?;
     operations::check_standard_local_completion(&control, expected_head, &local)?;
@@ -1013,7 +977,6 @@ pub async fn complete_workflow_local_work(
     let local = worktree::observe_local_revision(Path::new(&path)).map_err(|error| {
         CoordinationError::refused(format!("The local source could not be observed: {error}"))
     })?;
-    let mut database = SuplexDatabase::open(database_path, OpenMode::ReadWrite)?;
     let current = root_session_store::root_observation_rows(&database, &root.task_id)?.control;
     if current.status == TaskStatus::Active {
         let mut projected = current
@@ -1057,6 +1020,7 @@ pub async fn complete_workflow_local_work(
 /// TypeScript `requestDelivery` for `inspect_delivery_diff` outside Standard:
 /// the reviewed range also gets a pinned evidence directory.
 pub async fn inspect_workflow_delivery_diff(
+    database: &SuplexDatabase,
     database_path: &Path,
     artifact_root: &Path,
     root: &RootIdentity,
@@ -1073,7 +1037,7 @@ pub async fn inspect_workflow_delivery_diff(
             None,
         )
         .await?;
-    let (_, rows) = open_root(database_path, root)?;
+    let rows = open_root(database, root)?;
     let range = ReviewRange::from_value(&json!({
         "baseSha": result["baseSha"], "headSha": result["headSha"], "files": result["files"],
         "commits": result["commits"], "patchDigest": result["patchDigest"],
@@ -1096,12 +1060,11 @@ pub async fn inspect_workflow_delivery_diff(
 }
 
 pub fn replace_worker(
-    database_path: &Path,
+    database: &mut SuplexDatabase,
     root: &RootIdentity,
     owner_token: &str,
     request: &TaskWorkerReplacementBody,
 ) -> DatabaseResult<Value> {
-    let mut database = SuplexDatabase::open(database_path, OpenMode::ReadWrite)?;
     database.transaction(true, |database| {
         root_session_store::assert_current_root(
             database,
@@ -1127,20 +1090,19 @@ pub fn replace_worker(
 
 /// TypeScript `askHuman` checks no tool owner.
 pub fn ask_human(
-    database_path: &Path,
+    database: &mut SuplexDatabase,
     root: &RootIdentity,
     question: &str,
     options: &Value,
 ) -> DatabaseResult<Value> {
-    let mut database = SuplexDatabase::open(database_path, OpenMode::ReadWrite)?;
     root_session_store::assert_current_root(
-        &database,
+        database,
         &root.task_id,
         &root.session_id,
         root.generation,
     )?;
     if !root_session_store::ask_human_for_root(
-        &mut database,
+        database,
         &root.task_id,
         &root.session_id,
         root.generation,
@@ -1151,7 +1113,7 @@ pub fn ask_human(
         return Err(invalid("The current Root could not ask this task question"));
     }
     Ok(serde_json::to_value(
-        root_session_store::root_observation_rows(&database, &root.task_id)?.control,
+        root_session_store::root_observation_rows(database, &root.task_id)?.control,
     )?)
 }
 
@@ -1165,8 +1127,8 @@ mod tests {
     use chrono::Utc;
     use std::fs;
 
-    #[test]
-    fn absent_worktree_evidence_does_not_remove_task_context() {
+    #[tokio::test]
+    async fn absent_worktree_evidence_does_not_remove_task_context() {
         let mut control = TaskControlRow::fixture();
         control.workflow_state.tool_owner = Some(super::super::workflows::ToolOwner {
             token: "private".into(),
@@ -1185,6 +1147,7 @@ mod tests {
         };
         let pull_request =
             crate::delivery::operations::observe_for_root(Path::new(""), &rows.control)
+                .await
                 .unwrap()
                 .0;
         assert_eq!(pull_request, Value::Null);
@@ -1255,7 +1218,6 @@ mod tests {
             "{\"type\":\"item.started\",\"item\":{\"id\":\"item_0\",\"type\":\"command_execution\",\"command\":\"pnpm test\",\"status\":\"in_progress\"}}\n",
             "{\"type\":\"item.completed\",\"item\":{\"id\":\"item_0\",\"type\":\"command_execution\",\"command\":\"pnpm test\",\"aggregated_output\":\"2 passed\",\"exit_code\":0,\"status\":\"completed\"}}\n",
         )).unwrap();
-        drop(database);
         let identity = RootIdentity {
             task_id: task.id,
             session_id: root.id,
@@ -1271,13 +1233,14 @@ mod tests {
                 max_characters: 1000,
             },
         };
-        let result = read_worker_evidence(&database_path, &identity, &request).unwrap();
+        let result = read_worker_evidence(&database, &database_path, &identity, &request).unwrap();
         assert_eq!(result["turnId"], turn_id);
         assert_eq!(result["tool"]["status"], "completed");
         assert_eq!(result["evidence"]["text"], "2 passed");
         assert_eq!(result["limitation"], Value::Null);
         assert!(
             read_worker_evidence(
+                &database,
                 &database_path,
                 &RootIdentity {
                     generation: identity.generation + 1,

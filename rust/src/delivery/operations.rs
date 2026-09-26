@@ -2436,7 +2436,7 @@ pub async fn host_observation(database_path: &Path, artifact_root: &Path, task_i
 
 /// TypeScript `RootController.observe` delivery part: the observed pull
 /// request and the GitHub availability the Root sees.
-pub fn observe_for_root(
+pub async fn observe_for_root(
     database_path: &Path,
     control: &TaskControlRow,
 ) -> DatabaseResult<(Value, Value)> {
@@ -2457,16 +2457,16 @@ pub fn observe_for_root(
         .unwrap_or(Path::new(""))
         .join("artifacts");
     let operations = DeliveryOperations::new(database_path, &artifact_root);
-    let task_id = control.task_id.as_str().to_owned();
-    let observed = crate::shared::blocking::block_on(|| async {
-        operations.observe(&task_id).await.map_err(|error| {
+    let observed = operations
+        .observe(control.task_id.as_str())
+        .await
+        .map_err(|error| {
             let code = error
                 .downcast_ref::<GithubFailure>()
                 .map(|failure| failure.code)
                 .or_else(|| DeliveryError::code_of(error.as_ref()));
             (code, error.to_string())
-        })
-    });
+        });
     match observed {
         Ok(pull) => Ok((pull, json!({"available": true}))),
         Err((None, message)) => Err(DeliveryError::internal(message).into()),
@@ -2545,8 +2545,8 @@ pub(crate) mod tests {
         );
     }
 
-    #[test]
-    fn delivery_observation_keeps_finished_pull_requests_without_github() {
+    #[tokio::test]
+    async fn delivery_observation_keeps_finished_pull_requests_without_github() {
         let mut local = TaskControlRow::fixture();
         local.pull_request = Some(crate::tasks::control::PullRequestReference {
             repository: "owner/repo".into(),
@@ -2557,14 +2557,14 @@ pub(crate) mod tests {
             merged_at: None,
         });
         assert_eq!(
-            observe_for_root(Path::new(""), &local).unwrap().0,
+            observe_for_root(Path::new(""), &local).await.unwrap().0,
             Value::Null
         );
         let mut delivered = local.clone();
         delivered.status = TaskStatus::Delivered;
         delivered.delivery_target = DeliveryTarget::PullRequestDraft;
         assert_eq!(
-            observe_for_root(Path::new(""), &delivered).unwrap().0,
+            observe_for_root(Path::new(""), &delivered).await.unwrap().0,
             json!({"repository":"owner/repo","number":7,"url":"https://github.com/owner/repo/pull/7","headSha":"head","state":"open","mergedAt":null})
         );
     }

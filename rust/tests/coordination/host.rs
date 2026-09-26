@@ -440,7 +440,7 @@ mod host_tests {
     #[test]
     fn native_launch_refuses_a_missing_worktree() {
         let (base, database_path, task_id) = fixture_task();
-        root_controller::prepare_root(&database_path, &task_id).unwrap();
+        root_controller::prepare_root(&mut SuplexDatabase::open(&database_path, OpenMode::ReadWrite).unwrap(), &task_id).unwrap();
         let error = recover_session_blocking(
             &mut SuplexDatabase::open(&database_path, OpenMode::ReadWrite).unwrap(),            &database_path,
             &base,
@@ -549,7 +549,7 @@ mod host_tests {
     #[tokio::test]
     async fn unidentified_execution_asks_for_command_cleanup() {
         let (base, database_path, task_id) = fixture_task();
-        let root = root_controller::prepare_root(&database_path, &task_id).unwrap();
+        let root = root_controller::prepare_root(&mut SuplexDatabase::open(&database_path, OpenMode::ReadWrite).unwrap(), &task_id).unwrap();
         let turn_id = {
             let database = SuplexDatabase::open(&database_path, OpenMode::ReadWrite).unwrap();
             let turn = root_session_store::pending_turns(&database, &root.id)
@@ -596,7 +596,7 @@ mod host_tests {
     #[tokio::test]
     async fn dispatch_coalesces_idle_wakes_waits_for_prerequisites_and_refreshes_status() {
         let (base, database_path, task_id) = fixture_task();
-        let root = root_controller::prepare_root(&database_path, &task_id).unwrap();
+        let root = root_controller::prepare_root(&mut SuplexDatabase::open(&database_path, OpenMode::ReadWrite).unwrap(), &task_id).unwrap();
         let turn_status = |id: &str| -> (String, String) {
             let database = SuplexDatabase::open(&database_path, OpenMode::ReadOnly).unwrap();
             database
@@ -684,7 +684,7 @@ mod host_tests {
     async fn empty_native_usage_is_incomplete_and_does_not_block_dispatch() {
         let (base, database_path, task_id) = fixture_task();
         let now = Utc::now();
-        let root = root_controller::prepare_root(&database_path, &task_id).unwrap();
+        let root = root_controller::prepare_root(&mut SuplexDatabase::open(&database_path, OpenMode::ReadWrite).unwrap(), &task_id).unwrap();
         let turn_id = {
             let mut database = SuplexDatabase::open(&database_path, OpenMode::ReadWrite).unwrap();
             assert!(
@@ -750,7 +750,7 @@ mod host_tests {
     #[tokio::test]
     async fn observed_usage_matches_the_typescript_limit_observer() {
         let (base, database_path, task_id) = fixture_task();
-        let root = root_controller::prepare_root(&database_path, &task_id).unwrap();
+        let root = root_controller::prepare_root(&mut SuplexDatabase::open(&database_path, OpenMode::ReadWrite).unwrap(), &task_id).unwrap();
         let cost = |require| {
             let database_path = database_path.clone();
             let task_id = task_id.clone();
@@ -904,7 +904,7 @@ mod host_tests {
     #[tokio::test]
     async fn workflow_tasks_are_observed_and_every_provider_runs_the_workflow_coordinator() {
         let (base, database_path, task_id) = fixture_task();
-        let root = root_controller::prepare_root(&database_path, &task_id).unwrap();
+        let root = root_controller::prepare_root(&mut SuplexDatabase::open(&database_path, OpenMode::ReadWrite).unwrap(), &task_id).unwrap();
         let identity = RootIdentity {
             task_id: task_id.clone(),
             session_id: root.id.clone(),
@@ -917,7 +917,7 @@ mod host_tests {
                 [&task_id],
             ).unwrap();
         }
-        let observed = root_controller::observe(&database_path, &identity).unwrap();
+        let observed = root_controller::observe(&SuplexDatabase::open(&database_path, OpenMode::ReadOnly).unwrap(), &database_path, &identity).await.unwrap();
         assert_eq!(observed["control"]["workflow"], "competing_plans");
         let environment = HashMap::new();
         // A Devin Coordinator of a non-Standard workflow is not skipped: it proceeds to worktree preparation.
@@ -1034,7 +1034,7 @@ mod host_tests {
         let codex = base.join("codex");
         fs::write(&codex, "#!/bin/sh\ncat >/dev/null\nprintf '%s\\n' '{\"type\":\"thread.started\",\"thread_id\":\"inline-thread\"}' '{\"type\":\"turn.completed\",\"usage\":{\"input_tokens\":0,\"cached_input_tokens\":0,\"cache_write_input_tokens\":0,\"output_tokens\":0,\"reasoning_output_tokens\":0}}'\n").unwrap();
         fs::set_permissions(&codex, fs::Permissions::from_mode(0o700)).unwrap();
-        let root = root_controller::prepare_root(&database_path, &task_id).unwrap();
+        let root = root_controller::prepare_root(&mut SuplexDatabase::open(&database_path, OpenMode::ReadWrite).unwrap(), &task_id).unwrap();
         let worker_turn = {
             let mut database = SuplexDatabase::open(&database_path, OpenMode::ReadWrite).unwrap();
             database.connection().execute(
@@ -1160,7 +1160,7 @@ mod host_tests {
             database.connection().execute("UPDATE suplex_task_controls SET worktree_json = ?1 WHERE task_id = ?2", rusqlite::params![serde_json::json!({"path":worktree,"branch":"task-one","baseSha":head,"headSha":head,"dirty":false}).to_string(), task.id]).unwrap();
             task.id
         };
-        root_controller::prepare_root(&database_path, &task_id).unwrap();
+        root_controller::prepare_root(&mut SuplexDatabase::open(&database_path, OpenMode::ReadWrite).unwrap(), &task_id).unwrap();
         {
             let database = SuplexDatabase::open(&database_path, OpenMode::ReadWrite).unwrap();
             let root = root_session_store::current_root(&database, &task_id)
@@ -1651,7 +1651,7 @@ mod host_tests {
                 .task
                 .id
         };
-        let failing_root = root_controller::prepare_root(&database_path, &failing_task).unwrap();
+        let failing_root = root_controller::prepare_root(&mut SuplexDatabase::open(&database_path, OpenMode::ReadWrite).unwrap(), &failing_task).unwrap();
         let mut database = SuplexDatabase::open(&database_path, OpenMode::ReadWrite).unwrap();
         let failing_turn = root_session_store::pending_turns(&database, &failing_root.id)
             .unwrap()
@@ -1775,7 +1775,7 @@ mod host_tests {
             database.connection().execute("UPDATE suplex_task_controls SET worktree_json = ?1 WHERE task_id = ?2",rusqlite::params![serde_json::json!({"path":worktree,"branch":"task-one","baseSha":head,"headSha":head,"dirty":false}).to_string(),task.id]).unwrap();
             task.id
         };
-        root_controller::prepare_root(&database_path, &replacement_task).unwrap();
+        root_controller::prepare_root(&mut SuplexDatabase::open(&database_path, OpenMode::ReadWrite).unwrap(), &replacement_task).unwrap();
         let old_root = {
             let database = SuplexDatabase::open(&database_path, OpenMode::ReadOnly).unwrap();
             root_session_store::current_root(&database, &replacement_task)

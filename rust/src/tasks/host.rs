@@ -222,7 +222,7 @@ async fn sweep_task_once(
                 return Ok(false);
             }
             crate::tasks::preparation::prepare_before_native_work(database_path, task_id).await?;
-            crate::coordination::root_controller::prepare_root(database_path, task_id)?;
+            crate::coordination::root_controller::prepare_root(database, task_id)?;
             Ok::<_, Box<dyn std::error::Error>>(true)
         }
         .await;
@@ -230,7 +230,7 @@ async fn sweep_task_once(
             Ok(true) => {}
             Ok(false) => return Ok(()),
             Err(error) => {
-                crate::coordination::root_controller::prepare_root(database_path, task_id)?;
+                crate::coordination::root_controller::prepare_root(database, task_id)?;
                 root_session_store::ask_human(
                     database,
                     task_id,

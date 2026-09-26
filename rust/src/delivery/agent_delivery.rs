@@ -797,8 +797,11 @@ mod tests {
                 params![serde_json::to_string(&range).unwrap(), task_id],
             ).unwrap();
         }
-        crate::coordination::root_controller::prepare_root(operations.database_path(), &task_id)
-            .unwrap();
+        crate::coordination::root_controller::prepare_root(
+            &mut SuplexDatabase::open(operations.database_path(), OpenMode::ReadWrite).unwrap(),
+            &task_id,
+        )
+        .unwrap();
         // GitHub reports the accepted head on a base that moved after the review.
         let github = loopback_github(vec![(
             "/graphql",

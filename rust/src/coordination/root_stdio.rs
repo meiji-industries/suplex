@@ -515,41 +515,53 @@ impl RootBridgeServer {
             let token = root_session_store::claim_tool_owner(&mut database, &root.task_id, chrono::Utc::now())
                 .map_err(|error| error.to_string())?
                 .ok_or_else(|| "Another Suplex tool call for this task is still in progress. Retry after it finishes.".to_owned())?;
-            let result = match call {
-                RootCall::Observe => root_controller::observe(&database_path, &root)
-                    .map_err(|error| error.to_string()),
-                RootCall::ReadImage(artifact_id) => root_controller::read_image(&database_path, &artifact_root, &root, &artifact_id)
-                    .map_err(|error| error.to_string()),
-                RootCall::ReadWorkerEvidence(request) => {
-                    root_controller::read_worker_evidence(&database_path, &root, &request)
-                        .map_err(|error| error.to_string())
+            let (path, artifacts, db) = (&database_path, &artifact_root, &mut database);
+            let result = crate::shared::blocking::block_on(|| async {
+                match call {
+                    RootCall::Observe => root_controller::observe(db, path, &root).await,
+                    RootCall::ReadImage(artifact_id) => {
+                        root_controller::read_image(db, artifacts, &root, &artifact_id)
+                    }
+                    RootCall::ReadWorkerEvidence(request) => {
+                        root_controller::read_worker_evidence(db, path, &root, &request)
+                    }
+                    RootCall::DelegateWorker(assignment) => {
+                        root_controller::delegate_worker(db, path, &root, &token, &assignment).await
+                    }
+                    RootCall::DelegateAdvisor { role, brief } => {
+                        root_controller::delegate_advisor(db, path, artifacts, &root, &token, &role, brief.as_deref()).await
+                    }
+                    RootCall::DelegatePlanners => {
+                        root_controller::delegate_planners(db, path, artifacts, &root, &token).await
+                    }
+                    RootCall::RequestDelivery { operation: DeliveryOperation::InspectDeliveryDiff, .. }
+                        if root_session_store::root_observation_rows(db, &root.task_id)
+                            .is_ok_and(|rows| rows.control.workflow != Workflow::Standard) =>
+                    {
+                        root_controller::inspect_workflow_delivery_diff(db, path, artifacts, &root, &token).await
+                    }
+                    RootCall::ReplaceWorker(request) => {
+                        root_controller::replace_worker(db, &root, &token, &request)
+                    }
+                    RootCall::RequestDelivery { operation, expected_head, review, pull_request_title, pull_request_body } => {
+                        delivery::operations::DeliveryOperations::new(path, artifacts)
+                            .execute(
+                                &root,
+                                Some(&token),
+                                operation,
+                                expected_head.as_deref(),
+                                review.as_ref(),
+                                pull_request_title.as_deref(),
+                                pull_request_body.as_deref(),
+                            )
+                            .await
+                    }
+                    RootCall::AskHuman { question, options } => {
+                        root_controller::ask_human(db, &root, &question, &options)
+                    }
                 }
-                RootCall::DelegateWorker(assignment) => crate::shared::blocking::block_on(|| async { root_controller::delegate_worker(&database_path, &root, &token, &assignment).await.map_err(|error| error.to_string()) }),
-                RootCall::DelegateAdvisor { role, brief } => crate::shared::blocking::block_on(|| async { root_controller::delegate_advisor(&database_path, &artifact_root, &root, &token, &role, brief.as_deref()).await.map_err(|error| error.to_string()) }),
-                RootCall::DelegatePlanners => crate::shared::blocking::block_on(|| async { root_controller::delegate_planners(&database_path, &artifact_root, &root, &token).await.map_err(|error| error.to_string()) }),
-                RootCall::RequestDelivery { operation: DeliveryOperation::InspectDeliveryDiff, .. }
-                    if root_session_store::root_observation_rows(&database, &root.task_id)
-                        .is_ok_and(|rows| rows.control.workflow != Workflow::Standard) =>
-                {
-                    crate::shared::blocking::block_on(|| async { root_controller::inspect_workflow_delivery_diff(&database_path, &artifact_root, &root, &token).await.map_err(|error| error.to_string()) })
-                }
-                RootCall::ReplaceWorker(request) => root_controller::replace_worker(
-                    &database_path, &root, &token, &request,
-                ).map_err(|error| error.to_string()),
-                RootCall::RequestDelivery { operation, expected_head, review, pull_request_title, pull_request_body } => crate::shared::blocking::block_on(|| async { delivery::operations::DeliveryOperations::new(&database_path, &artifact_root).execute(
-                        &root,
-                        Some(&token),
-                        operation,
-                        expected_head.as_deref(),
-                        review.as_ref(),
-                        pull_request_title.as_deref(),
-                        pull_request_body.as_deref(),
-                    ).await.map_err(|error| error.to_string()) }),
-                RootCall::AskHuman { question, options } => {
-                    root_controller::ask_human(&database_path, &root, &question, &options)
-                        .map_err(|error| error.to_string())
-                }
-            };
+                .map_err(|error| error.to_string())
+            });
             root_session_store::release_tool_owner(&mut database, &root.task_id, &token)
                 .map_err(|error| error.to_string())?;
             result

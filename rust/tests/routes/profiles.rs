@@ -20,7 +20,7 @@ mod tests {
 
     #[tokio::test]
     async fn profile_response_keeps_zod_field_order() {
-        let response = profile_response(
+        let response = respond_profile(
             Ok(serde_json::from_value(json!({
                 "id": "profile_fixed", "name": "Fixed", "role": "worker",
                 "avatarSeed": "0123456789abcdef0123456789abcdef", "provider": "codex",

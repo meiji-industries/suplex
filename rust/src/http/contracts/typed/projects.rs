@@ -736,30 +736,43 @@ fn profile_fields(input: Option<&Value>, patch: bool) -> ContractResult<Fields<'
             "invalid_format",
         )
     }
-    let parsers: [(&'static str, Parse); 7] = [
-        ("provider", &one_of(HARNESSES)),
-        ("model", &|input| {
+    // `providerInstanceId` is always optional; the order is the Zod shape's.
+    let parsers: [(&'static str, bool, Parse); 8] = [
+        ("provider", patch, &one_of(HARNESSES)),
+        ("model", patch, &|input| {
             super::string(input, true, (1, 256), Some(model))
         }),
         (
             "reasoningLevel",
+            patch,
             &one_of(&["low", "medium", "high", "xhigh", "max"]),
         ),
-        ("serviceTier", &one_of(&["default", "priority"])),
-        ("name", &trimmed(1, MAX)),
-        ("role", &one_of(&["root", "worker"])),
-        ("avatarSeed", &formatted(0, MAX, avatar)),
+        ("serviceTier", patch, &one_of(&["default", "priority"])),
+        ("providerInstanceId", true, &nullable(text(1, MAX))),
+        ("name", patch, &trimmed(1, MAX)),
+        ("role", patch, &one_of(&["root", "worker"])),
+        ("avatarSeed", patch, &formatted(0, MAX, avatar)),
     ];
-    let fields = parsers
+    Ok(parsers
         .into_iter()
-        .fold(Fields::new(input)?, |fields, (name, parse)| {
-            if patch {
+        .fold(Fields::new(input)?, |fields, (name, optional, parse)| {
+            if optional {
                 fields.opt(name, parse)
             } else {
                 fields.req(name, parse)
             }
-        });
-    Ok(fields.opt("providerInstanceId", nullable(text(1, MAX))))
+        }))
+}
+
+/// `AgentProfileSchema`: a profile response keeps this shape and key order,
+/// or the response fails.
+pub fn profile_response(input: &Value) -> ContractResult<Value> {
+    profile_fields(Some(input), false)?
+        .req("id", text(0, MAX))
+        .req("archivedAt", nullable(text(0, MAX)))
+        .req("createdAt", text(0, MAX))
+        .req("updatedAt", text(0, MAX))
+        .finish()
 }
 
 impl Contract for ProfileBody {

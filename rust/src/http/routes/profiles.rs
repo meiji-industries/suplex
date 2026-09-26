@@ -9,12 +9,15 @@ use axum::{
     routing::{get, post},
 };
 use chrono::Utc;
-use serde_json::json;
+use serde_json::{Value, json};
 
 use crate::{
     http::{
         AppState,
-        contracts::typed::{agent_api::query_object, projects::IncludeArchivedQuery},
+        contracts::typed::{
+            agent_api::query_object,
+            projects::{IncludeArchivedQuery, profile_response},
+        },
         validation::{Valid, valid},
     },
     profiles::agent_profiles::{self, AgentProfile, ProfileInput, ProfilePatch},
@@ -32,48 +35,19 @@ pub fn router() -> Router<AppState> {
         .route("/api/admin/profiles/{agent_id}/duplicate", post(duplicate))
 }
 
-/// `AgentProfileSchema` output: the Zod shape's key order.
-#[derive(serde::Serialize)]
-#[serde(rename_all = "camelCase")]
-struct ProfileView<'a> {
-    provider: &'a str,
-    model: &'a str,
-    reasoning_level: &'a str,
-    service_tier: &'a str,
-    provider_instance_id: &'a Option<String>,
-    name: &'a str,
-    role: &'a str,
-    avatar_seed: &'a str,
-    id: &'a str,
-    archived_at: &'a Option<String>,
-    created_at: &'a str,
-    updated_at: &'a str,
-}
-
-fn view(profile: &AgentProfile) -> ProfileView<'_> {
-    ProfileView {
-        provider: &profile.provider,
-        model: &profile.model,
-        reasoning_level: &profile.reasoning_level,
-        service_tier: &profile.service_tier,
-        provider_instance_id: &profile.provider_instance_id,
-        name: &profile.name,
-        role: &profile.role,
-        avatar_seed: &profile.avatar_seed,
-        id: &profile.id,
-        archived_at: &profile.archived_at,
-        created_at: &profile.created_at,
-        updated_at: &profile.updated_at,
-    }
+/// `AgentProfileSchema` output in its key order; a profile that fails it is a 500.
+fn view(profile: &AgentProfile) -> Result<Value, Box<dyn std::error::Error>> {
+    profile_response(&serde_json::to_value(profile)?)
+        .map_err(|failure| format!("profile response is invalid: {failure:?}").into())
 }
 
 /// A profile response with the given status.
-fn profile_response(
+fn respond_profile(
     result: Result<AgentProfile, Box<dyn std::error::Error>>,
     status: StatusCode,
 ) -> Response {
-    match result {
-        Ok(profile) => (status, Json(view(&profile))).into_response(),
+    match result.and_then(|profile| view(&profile)) {
+        Ok(profile) => (status, Json(profile)).into_response(),
         Err(error) => ApiError::response(error),
     }
 }
@@ -95,8 +69,10 @@ async fn list(
     let response = match state
         .with_database(|database| agent_profiles::list(database, &user_id, include_archived))
     {
-        Ok(profiles) => Json(json!({ "profiles": profiles.iter().map(view).collect::<Vec<_>>() }))
-            .into_response(),
+        Ok(profiles) => match profiles.iter().map(view).collect::<Result<Vec<_>, _>>() {
+            Ok(profiles) => Json(json!({ "profiles": profiles })).into_response(),
+            Err(error) => ApiError::response(error),
+        },
         Err(error) => ApiError::response(error),
     };
     with_cookies(response, cookies)
@@ -111,7 +87,7 @@ async fn create(
         Ok(value) => value,
         Err(error) => return *error,
     };
-    let response = profile_response(
+    let response = respond_profile(
         state.with_database(|database| {
             agent_profiles::create(database, &user_id, &input, Utc::now())
         }),
@@ -130,7 +106,7 @@ async fn update(
         Ok(value) => value,
         Err(error) => return *error,
     };
-    let response = profile_response(
+    let response = respond_profile(
         state.with_database(|database| {
             agent_profiles::update(database, &user_id, &agent_id, patch, Utc::now())
         }),
@@ -148,7 +124,7 @@ async fn duplicate(
         Ok(value) => value,
         Err(error) => return *error,
     };
-    let response = profile_response(
+    let response = respond_profile(
         state.with_database(|database| {
             agent_profiles::duplicate(database, &user_id, &agent_id, Utc::now())
         }),

@@ -34,7 +34,7 @@ test("the desktop package owns only its updater runtime dependency and the serve
 
 test("the bundle builds the native runtime without deploying the TypeScript engine", () => {
   const bundle = readFileSync(join(__dirname, "..", "..", "scripts", "bundle-runtime.sh"), "utf8");
-  expect(bundle).toContain("cargo build --manifest-path rust/Cargo.toml --release --target");
+  expect(bundle).toContain("cargo build --release --target");
   expect(bundle).toContain("pnpm exec vite build");
   expect(bundle).not.toMatch(/pnpm .*deploy|better-sqlite3|node-gyp|runtime\/app|runtime\/node/);
 });

@@ -23,7 +23,9 @@ fi
 mkdir -p runtime
 node -e 'const fs = require("node:fs"); fs.writeFileSync("runtime/manifest.json", JSON.stringify({ version: require("./package.json").version }))'
 export SUPLEX_DESKTOP_RUNTIME="${SUPLEX_DESKTOP_RUNTIME:-$(pwd)/runtime}"
-export SUPLEX_DESKTOP_BINARY="${SUPLEX_DESKTOP_BINARY:-$(cd .. && pwd)/rust/target/debug/suplex}"
+target_dir="${CARGO_TARGET_DIR:-target}"
+case "$target_dir" in /*) ;; *) target_dir="$(cd .. && pwd)/rust/$target_dir" ;; esac
+export SUPLEX_DESKTOP_BINARY="${SUPLEX_DESKTOP_BINARY:-$target_dir/debug/suplex}"
 export SUPLEX_DESKTOP_USER_DATA="${SUPLEX_DESKTOP_USER_DATA:-$HOME/Library/Application Support/Suplex Dev}"
 export SUPLEX_DESKTOP_PORT="${SUPLEX_DESKTOP_PORT:-4121}"
 

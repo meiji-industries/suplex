@@ -11,9 +11,11 @@ esac
 
 pnpm exec vite build
 unset RUSTUP_TOOLCHAIN
-cargo build --manifest-path rust/Cargo.toml --release --target "$target" --bin suplex
+(cd rust && cargo build --release --target "$target" --bin suplex)
 
-binary="rust/target/$target/release/suplex"
+target_dir="${CARGO_TARGET_DIR:-target}"
+case "$target_dir" in /*) ;; *) target_dir="$PWD/rust/$target_dir" ;; esac
+binary="$target_dir/$target/release/suplex"
 file "$binary" | grep -q "$machine" || { echo "$binary is not built for $machine: $(file -b "$binary")" >&2; exit 1; }
 rm -rf desktop/runtime
 mkdir -p desktop/runtime/bin

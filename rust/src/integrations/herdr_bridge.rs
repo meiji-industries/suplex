@@ -7,6 +7,7 @@
 use std::{process::Stdio, time::Duration};
 
 use base64::Engine;
+use serde::Deserialize;
 use serde_json::{Value, json};
 use tokio::{
     io::{AsyncBufReadExt, AsyncWriteExt, BufReader},
@@ -16,7 +17,10 @@ use tokio::{
 };
 use tokio_util::sync::CancellationToken;
 
-use super::herdr::{Herdr, Viewport};
+use super::{
+    herdr::{Herdr, Viewport},
+    provider_http::{lenient, optional_metadata},
+};
 
 #[derive(Debug, Clone, PartialEq)]
 pub enum BridgeEvent {
@@ -78,27 +82,49 @@ fn clamp(value: f64, minimum: i64, maximum: i64) -> i64 {
     (value.round() as i64).clamp(minimum, maximum)
 }
 
+/// One `herdr pane bridge` JSON line.
+#[derive(Deserialize)]
+#[serde(tag = "type")]
+enum BridgeRecord {
+    #[serde(rename = "terminal.frame")]
+    Frame {
+        bytes: String,
+        #[serde(default, deserialize_with = "lenient")]
+        seq: u64,
+        #[serde(default, deserialize_with = "lenient")]
+        full: bool,
+        #[serde(default, deserialize_with = "lenient")]
+        width: u64,
+        #[serde(default, deserialize_with = "lenient")]
+        height: u64,
+    },
+    #[serde(rename = "terminal.closed")]
+    Closed {
+        #[serde(default, deserialize_with = "optional_metadata")]
+        reason: Option<String>,
+    },
+}
+
 pub fn parse_bridge_record(line: &str) -> Option<BridgeEvent> {
-    let value = serde_json::from_str::<Value>(line).ok()?;
-    match value["type"].as_str()? {
-        "terminal.frame" => {
-            let bytes = base64::engine::general_purpose::STANDARD
-                .decode(value["bytes"].as_str()?)
-                .ok()?;
-            Some(BridgeEvent::Frame {
-                seq: value["seq"].as_u64().unwrap_or(0),
-                full: value["full"].as_bool().unwrap_or(false),
-                width: value["width"].as_u64().unwrap_or(0) as u32,
-                height: value["height"].as_u64().unwrap_or(0) as u32,
-                bytes,
-            })
-        }
-        "terminal.closed" => Some(BridgeEvent::Closed(
-            value["reason"]
-                .as_str()
-                .map_or_else(|| "closed".to_owned(), str::to_owned),
+    match serde_json::from_str(line).ok()? {
+        BridgeRecord::Frame {
+            bytes,
+            seq,
+            full,
+            width,
+            height,
+        } => Some(BridgeEvent::Frame {
+            seq,
+            full,
+            width: width as u32,
+            height: height as u32,
+            bytes: base64::engine::general_purpose::STANDARD
+                .decode(bytes)
+                .ok()?,
+        }),
+        BridgeRecord::Closed { reason } => Some(BridgeEvent::Closed(
+            reason.unwrap_or_else(|| "closed".to_owned()),
         )),
-        _ => None,
     }
 }
 

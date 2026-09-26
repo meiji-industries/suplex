@@ -1,6 +1,6 @@
 // Real-environment verification of the Rust backend with real provider CLIs and the real GitHub account.
 // It is not part of any default suite: it spends model tokens and, in the github phase, creates a real repository.
-// Set SUPLEX_BROWSER_BACKEND=rust, SUPLEX_RUST_BIN, SUPLEX_RUST_ASSETS_DIR, and TMPDIR to an isolated directory.
+// Set SUPLEX_RUST_BIN, SUPLEX_RUST_ASSETS_DIR, and TMPDIR to an isolated directory.
 // SUPLEX_REAL_PHASE=providers: for each provider in SUPLEX_REAL_PROVIDERS, create a Standard task in the UI,
 //   restart Rust during the Worker turn, and cancel the task in the UI.
 // SUPLEX_REAL_PHASE=github: create the private repository SUPLEX_REAL_GITHUB_NEW_REPOSITORY through the Rust
@@ -17,8 +17,8 @@ import { setTimeout } from "node:timers/promises";
 import { dirname, join, resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { nativeBrowser } from "../helpers/native-browser.js";
-import { runCommand } from "../../src/platform/command-runner.js";
-import { TaskSchema, type Task } from "../../src/tasks/contracts.js";
+import { runCommand } from "../helpers/run-command.js";
+import { TaskSchema, type Task } from "../../src/frontend/contracts/tasks.js";
 
 type Provider = "codex" | "claude-code" | "opencode" | "devin";
 const phase = process.env.SUPLEX_REAL_PHASE ?? "providers";
@@ -89,12 +89,12 @@ const api = async (method: "GET" | "POST", path: string, data?: unknown) => {
 const readTask = async (id: string) => TaskSchema.parse((await api("GET", `/api/tasks/${id}`)).body);
 const setProfiles = (provider: Provider) => {
   for (const id of ["profile_native_root", "profile_native_worker"]) {
-    const profile = fixture.profiles.update(fixture.userId, id, { provider, model: modelFor(provider), reasoningLevel: "medium", serviceTier: "default" });
-    equal(profile.provider, provider);
+    fixture.database.prepare("UPDATE suplex_profiles SET provider = ?, model = ?, reasoning_level = 'medium', service_tier = 'default' WHERE id = ?").run(provider, modelFor(provider), id);
+    equal((fixture.database.prepare("SELECT provider FROM suplex_profiles WHERE id = ?").get(id) as { provider: string }).provider, provider);
   }
 };
-const workerTurn = (taskId: string) => fixture.database.authQuery(db => db.prepare("SELECT s.id AS sessionId, s.native_session_id AS nativeSessionId, t.id AS turnId, t.status AS status, (SELECT count(*) FROM suplex_task_turns x WHERE x.session_id = s.id) AS turns FROM suplex_task_sessions s JOIN suplex_task_turns t ON t.session_id = s.id AND t.generation = s.generation WHERE s.task_id = ? AND s.kind = 'worker' AND s.is_current = 1 ORDER BY t.created_at DESC LIMIT 1").get(taskId)) as { sessionId: string; nativeSessionId: string | null; turnId: string; status: string; turns: number } | undefined;
-const sessionsOf = (taskId: string) => fixture.database.authQuery(db => db.prepare("SELECT id, kind, lifecycle, stopped_at AS stoppedAt, native_session_id AS nativeSessionId FROM suplex_task_sessions WHERE task_id = ? ORDER BY kind, id").all(taskId)) as Array<{ id: string; kind: string; lifecycle: string; stoppedAt: string | null; nativeSessionId: string | null }>;
+const workerTurn = (taskId: string) => fixture.database.prepare("SELECT s.id AS sessionId, s.native_session_id AS nativeSessionId, t.id AS turnId, t.status AS status, (SELECT count(*) FROM suplex_task_turns x WHERE x.session_id = s.id) AS turns FROM suplex_task_sessions s JOIN suplex_task_turns t ON t.session_id = s.id AND t.generation = s.generation WHERE s.task_id = ? AND s.kind = 'worker' AND s.is_current = 1 ORDER BY t.created_at DESC LIMIT 1").get(taskId) as { sessionId: string; nativeSessionId: string | null; turnId: string; status: string; turns: number } | undefined;
+const sessionsOf = (taskId: string) => fixture.database.prepare("SELECT id, kind, lifecycle, stopped_at AS stoppedAt, native_session_id AS nativeSessionId FROM suplex_task_sessions WHERE task_id = ? ORDER BY kind, id").all(taskId) as Array<{ id: string; kind: string; lifecycle: string; stoppedAt: string | null; nativeSessionId: string | null }>;
 async function turnProcess(sessionId: string) {
   const path = join(dirname(fixture.config.databasePath), "runtime", "task-sessions", sessionId, "turn.json");
   if (!await access(path).then(() => true, () => false)) return null;
@@ -147,7 +147,7 @@ async function waitForStopped(taskId: string) {
 }
 
 try {
-  log(`${fixture.backend} on ${fixture.base}; installation ${fixture.directory}`);
+  log(`Rust on ${fixture.base}; installation ${fixture.directory}`);
   const health = await api("GET", "/api/health");
   const github = await api("GET", "/api/github/auth");
   const catalog = await api("GET", "/api/admin/providers");

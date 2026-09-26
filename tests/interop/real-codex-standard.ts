@@ -1,4 +1,4 @@
-// Set SUPLEX_BROWSER_BACKEND=rust and SUPLEX_REAL_CODEX_ORIGIN to a disposable bare Git repository.
+// Set SUPLEX_REAL_CODEX_ORIGIN to a disposable bare Git repository.
 // Deterministic runs create a seeded origin when SUPLEX_REAL_CODEX_ORIGIN is unset.
 // The default run checks the form only. Set SUPLEX_REAL_CODEX_RUN=1 to execute one real task;
 // SUPLEX_REAL_CODEX_MODEL selects an explicitly authorized test model. Set
@@ -13,8 +13,8 @@ import { createServer, type Server } from "node:http";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { nativeBrowser } from "../helpers/native-browser.js";
-import { runCommand } from "../../src/platform/command-runner.js";
-import { TaskSchema } from "../../src/tasks/contracts.js";
+import { runCommand } from "../helpers/run-command.js";
+import { TaskSchema } from "../../src/frontend/contracts/tasks.js";
 
 const model = process.env.SUPLEX_REAL_CODEX_MODEL ?? "gpt-6-sol";
 const deterministic = process.env.SUPLEX_DETERMINISTIC_CODEX_RUN === "1";
@@ -192,7 +192,7 @@ closeOnTimeout = async () => {
   await fixture.close({ preserveData: true });
   console.error(`Fixture data preserved for native recovery: ${fixture.directory}`);
 };
-progress(`${fixture.backend} listening on port ${fixture.config.port}`);
+progress(`Rust listening on port ${fixture.config.port}`);
 let preserveData = false;
 try {
   await git("clone", origin, fixture.project.repositoryPath);
@@ -208,7 +208,8 @@ try {
   for (const id of ["profile_native_root", "profile_native_worker"]) {
     const provider = claude ? "claude-code" : "codex";
     const profileModel = claude ? "haiku" : model;
-    const profile = fixture.profiles.update(fixture.userId, id, { provider, model: profileModel, reasoningLevel: "medium", serviceTier: "default" });
+    fixture.database.prepare("UPDATE suplex_profiles SET provider = ?, model = ?, reasoning_level = 'medium', service_tier = 'default' WHERE id = ?").run(provider, profileModel, id);
+    const profile = fixture.database.prepare("SELECT provider, model, reasoning_level AS reasoningLevel FROM suplex_profiles WHERE id = ?").get(id) as { provider: string; model: string; reasoningLevel: string };
     equal(profile.provider, provider);
     equal(profile.model, profileModel);
     equal(profile.reasoningLevel, "medium");
@@ -236,7 +237,7 @@ try {
   equal(await dialog.getByRole("button", { name: "New task", exact: true }).isEnabled(), true);
   equal(fixture.errors.length, 0, fixture.errors.join("; "));
   if (process.env.SUPLEX_REAL_CODEX_RUN !== "1" && !deterministic) {
-    console.log(JSON.stringify({ backend: fixture.backend, taskPage: response?.status(), dialog: "ready", project: fixture.project.id, revision }));
+    console.log(JSON.stringify({ backend: "rust", taskPage: response?.status(), dialog: "ready", project: fixture.project.id, revision }));
   } else {
     preserveData = true;
     const proof = resolve(deterministic ? phase === "deliver" ? ".context/deterministic-codex-standard" : claude ? ".context/deterministic-claude-standard" : `.context/deterministic-codex-${phase}` : ".context/real-codex-standard");
@@ -285,7 +286,7 @@ try {
       progress("waiting for the paused Worker");
       await waitForFile(join(controlDirectory, "paused"));
       const snapshot = async () => {
-        const row = fixture.database.authQuery(db => db.prepare("SELECT s.id AS sessionId,t.id AS turnId FROM suplex_task_sessions s JOIN suplex_task_turns t ON t.session_id = s.id AND t.generation = s.generation WHERE s.task_id = ? AND s.kind = 'worker' AND s.is_current = 1 ORDER BY t.created_at DESC LIMIT 1").get(task.id)) as { sessionId: string; turnId: string } | undefined;
+        const row = fixture.database.prepare("SELECT s.id AS sessionId,t.id AS turnId FROM suplex_task_sessions s JOIN suplex_task_turns t ON t.session_id = s.id AND t.generation = s.generation WHERE s.task_id = ? AND s.kind = 'worker' AND s.is_current = 1 ORDER BY t.created_at DESC LIMIT 1").get(task.id) as { sessionId: string; turnId: string } | undefined;
         ok(row, "The paused Worker has a durable turn");
         const directory = join(dirname(fixture.config.databasePath), "runtime", "task-sessions", row.sessionId);
         const record = JSON.parse(await readFile(join(directory, "turn.json"), "utf8")) as { pid?: number; processIdentity?: { startTime?: string } };
@@ -351,11 +352,11 @@ try {
       equal(delivered.pullRequest?.number, 1);
       progress("draft pull request created at the reviewed head");
     }
-    const sessions = fixture.database.authQuery(db => db.prepare("SELECT id,kind,lifecycle,stopped_at AS stoppedAt,native_session_id AS nativeSessionId FROM suplex_task_sessions WHERE task_id = ? ORDER BY kind,id").all(task.id)) as Array<{ id: string; kind: string; lifecycle: string; stoppedAt: string | null; nativeSessionId: string | null }>;
+    const sessions = fixture.database.prepare("SELECT id,kind,lifecycle,stopped_at AS stoppedAt,native_session_id AS nativeSessionId FROM suplex_task_sessions WHERE task_id = ? ORDER BY kind,id").all(task.id) as Array<{ id: string; kind: string; lifecycle: string; stoppedAt: string | null; nativeSessionId: string | null }>;
     ok(sessions.some(session => session.kind === "root" && session.nativeSessionId));
     ok(sessions.some(session => session.kind === "worker" && session.nativeSessionId));
     if (workflowPhase) {
-      const roles = fixture.database.authQuery(db => db.prepare("SELECT advisor_role AS role FROM suplex_task_sessions WHERE task_id = ? AND advisor_role IS NOT NULL ORDER BY advisor_role").all(task.id)) as Array<{ role: string }>;
+      const roles = fixture.database.prepare("SELECT advisor_role AS role FROM suplex_task_sessions WHERE task_id = ? AND advisor_role IS NOT NULL ORDER BY advisor_role").all(task.id) as Array<{ role: string }>;
       deepStrictEqual(roles.map(({ role }) => role), phase === "independent_review" ? ["reviewer"] : phase === "competing_plans" ? ["planner_a", "planner_b"] : repair ? ["rater"] : []);
       equal(delivered.workflowState.completion?.kind, "workflow");
       if (phase === "independent_review") equal(delivered.workflowState.reviews.at(-1)?.result?.role, "reviewer");
@@ -374,13 +375,13 @@ try {
     const stopDeadline = Date.now() + 30_000;
     while (Date.now() < stopDeadline && sessions.some(session => !session.stoppedAt)) {
       await setTimeout(1_000);
-      sessions.splice(0, sessions.length, ...fixture.database.authQuery(db => db.prepare("SELECT id,kind,lifecycle,stopped_at AS stoppedAt,native_session_id AS nativeSessionId FROM suplex_task_sessions WHERE task_id = ? ORDER BY kind,id").all(task.id)) as typeof sessions);
+      sessions.splice(0, sessions.length, ...fixture.database.prepare("SELECT id,kind,lifecycle,stopped_at AS stoppedAt,native_session_id AS nativeSessionId FROM suplex_task_sessions WHERE task_id = ? ORDER BY kind,id").all(task.id) as typeof sessions);
     }
     ok(sessions.every(session => session.stoppedAt), "Host has not confirmed native session stop; preserving fixture data");
     ok(await nativeGroupsAbsent(fixture.config.databasePath, sessions.map(session => session.id)), "A native process group is active or cannot be identified; preserving fixture data");
     if (phase === "restart") {
       ok(pausedWorker);
-      const after = fixture.database.authQuery(db => db.prepare("SELECT s.id AS sessionId,t.id AS turnId FROM suplex_task_sessions s JOIN suplex_task_turns t ON t.session_id = s.id AND t.generation = s.generation WHERE s.task_id = ? AND s.kind = 'worker' ORDER BY t.created_at DESC LIMIT 1").get(task.id)) as { sessionId: string; turnId: string } | undefined;
+      const after = fixture.database.prepare("SELECT s.id AS sessionId,t.id AS turnId FROM suplex_task_sessions s JOIN suplex_task_turns t ON t.session_id = s.id AND t.generation = s.generation WHERE s.task_id = ? AND s.kind = 'worker' ORDER BY t.created_at DESC LIMIT 1").get(task.id) as { sessionId: string; turnId: string } | undefined;
       ok(after);
       const directory = join(dirname(fixture.config.databasePath), "runtime", "task-sessions", after.sessionId);
       const record = JSON.parse(await readFile(join(directory, "turn.json"), "utf8")) as { pid?: number; processIdentity?: { startTime?: string } };

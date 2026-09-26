@@ -216,8 +216,7 @@ struct Retained {
     sha256: String,
 }
 
-fn retained(database_path: &Path, task_id: &str, name: &str) -> DatabaseResult<Vec<Retained>> {
-    let database = SuplexDatabase::open(database_path, OpenMode::ReadOnly)?;
+fn retained(database: &SuplexDatabase, task_id: &str, name: &str) -> DatabaseResult<Vec<Retained>> {
     let mut statement = database.connection().prepare(
         "SELECT company_id, storage_path, sha256 FROM suplex_artifacts WHERE task_id = ?1 AND filename = ?2 AND kind LIKE 'delivery-%' ORDER BY created_at DESC",
     )?;
@@ -234,25 +233,24 @@ fn retained(database_path: &Path, task_id: &str, name: &str) -> DatabaseResult<V
 }
 
 fn retain(
-    operations: &DeliveryOperations,
+    database: &mut SuplexDatabase,
+    root: &Path,
     task_id: &str,
     name: &str,
     mime_type: &str,
     bytes: &[u8],
 ) -> DatabaseResult<()> {
-    if retained(operations.database_path(), task_id, name)?
+    if retained(database, task_id, name)?
         .iter()
         .any(|item| item.sha256 == hash(bytes))
     {
         return Ok(());
     }
-    let mut database = SuplexDatabase::open(operations.database_path(), OpenMode::ReadWrite)?;
     let kind = if mime_type.starts_with("image/") {
         "delivery-image"
     } else {
         "delivery-evidence"
     };
-    let root = operations.artifact_root().to_owned();
     database.transaction(false, |database| {
         let company: String = database.connection().query_row(
             "SELECT company_id FROM suplex_tasks WHERE id = ?1",
@@ -261,7 +259,7 @@ fn retain(
         )?;
         artifacts::put_in_transaction(
             database,
-            &root,
+            root,
             &company,
             kind,
             &ArtifactInput {
@@ -291,6 +289,7 @@ fn retained_bytes(operations: &DeliveryOperations, item: &Retained) -> Result<Ve
 
 fn manifest(
     operations: &DeliveryOperations,
+    database: &mut SuplexDatabase,
     task_id: &str,
     head_sha: &str,
 ) -> Result<Value, Failure> {
@@ -302,9 +301,7 @@ fn manifest(
     ) {
         Ok(bytes) => bytes,
         Err(error) => {
-            for item in
-                retained(operations.database_path(), task_id, &name).map_err(|e| e.to_string())?
-            {
+            for item in retained(database, task_id, &name).map_err(|e| e.to_string())? {
                 let parsed = parse_evidence(&retained_bytes(operations, &item)?)?;
                 if parsed["headSha"] == head_sha {
                     return Ok(parsed);
@@ -317,8 +314,15 @@ fn manifest(
     if value["headSha"] != head_sha {
         return Err("Delivery evidence is not for the reviewed source".into());
     }
-    retain(operations, task_id, &name, "application/json", &bytes)
-        .map_err(|error| error.to_string())?;
+    retain(
+        database,
+        operations.artifact_root(),
+        task_id,
+        &name,
+        "application/json",
+        &bytes,
+    )
+    .map_err(|error| error.to_string())?;
     Ok(value)
 }
 
@@ -365,20 +369,14 @@ struct Publication {
     comment_id: Option<String>,
 }
 
-fn save(
-    operations: &DeliveryOperations,
-    task_id: &str,
-    publication: &Publication,
-) -> DatabaseResult<()> {
-    SuplexDatabase::open(operations.database_path(), OpenMode::ReadWrite)?
-        .connection()
-        .execute(
-            "UPDATE suplex_tasks SET issue_publication_json = ?1 WHERE id = ?2",
-            params![
-                crate::shared::js_json::stringify(&serde_json::to_value(publication)?),
-                task_id
-            ],
-        )?;
+fn save(database: &SuplexDatabase, task_id: &str, publication: &Publication) -> DatabaseResult<()> {
+    database.connection().execute(
+        "UPDATE suplex_tasks SET issue_publication_json = ?1 WHERE id = ?2",
+        params![
+            crate::shared::js_json::stringify(&serde_json::to_value(publication)?),
+            task_id
+        ],
+    )?;
     Ok(())
 }
 
@@ -396,12 +394,12 @@ fn recheck_now(
 /// configuration. None when the task has no issue or is not an issue-backed
 /// draft delivery.
 fn pending_publication(
-    operations: &DeliveryOperations,
+    database: &SuplexDatabase,
     task_id: &str,
     head_sha: &str,
 ) -> DatabaseResult<Option<(Publication, Value)>> {
     let (issue_json, publication_json, configuration): (Option<String>, Option<String>, String) =
-        SuplexDatabase::open(operations.database_path(), OpenMode::ReadOnly)?
+        database
             .connection()
             .query_row(
                 "SELECT issue_json, issue_publication_json, configuration_json FROM suplex_tasks WHERE id = ?1",
@@ -413,7 +411,7 @@ fn pending_publication(
     }
     let configuration: Value = serde_json::from_str(&configuration)?;
     // Issue-backed draft delivery is opt-in; ready and merge targets keep their completion semantics.
-    if control_now(operations, task_id)?.delivery_target != DeliveryTarget::PullRequestDraft {
+    if control_now(database, task_id)?.delivery_target != DeliveryTarget::PullRequestDraft {
         return Ok(None);
     }
     let publication = match publication_json {
@@ -496,9 +494,17 @@ struct Publisher<'a> {
     repository: String,
     configuration: Value,
     github: ReleasePort<'a>,
+    /// The publication's one connection; locked only between awaits.
+    database: Mutex<SuplexDatabase>,
 }
 
 impl Publisher<'_> {
+    fn database(&self) -> std::sync::MutexGuard<'_, SuplexDatabase> {
+        self.database
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
     fn recheck_now(&self) -> Result<(), String> {
         recheck_now(self.operations, self.recheck).map_err(|error| error.to_string())
     }
@@ -508,7 +514,7 @@ impl Publisher<'_> {
     async fn inspect_before_write(&self) -> Result<PullRequest, String> {
         let text = |error: Box<dyn Error>| error.to_string();
         let (task_id, head_sha, repository) = (self.task_id, self.head_sha, &self.repository);
-        let control = control_now(self.operations, task_id).map_err(text)?;
+        let control = control_now(&self.database(), task_id).map_err(text)?;
         let path = control
             .worktree_path()
             .ok_or("The task worktree is unavailable")?
@@ -526,7 +532,7 @@ impl Publisher<'_> {
         {
             return Err("The pull request changed before evidence publication".into());
         }
-        let latest = control_now(self.operations, task_id).map_err(text)?;
+        let latest = control_now(&self.database(), task_id).map_err(text)?;
         if latest.status != TaskStatus::Active || !accepted_head(&latest, head_sha) {
             return Err("Task authorization changed before evidence publication".into());
         }
@@ -546,7 +552,7 @@ impl Publisher<'_> {
         match read_generated(database_path, self.task_id, filename) {
             Ok(bytes) => Ok(bytes),
             Err(error) => {
-                let item = retained(database_path, self.task_id, retained_name)
+                let item = retained(&self.database(), self.task_id, retained_name)
                     .map_err(|error| error.to_string())?
                     .into_iter()
                     .next()
@@ -572,8 +578,15 @@ impl Publisher<'_> {
         let mime = screenshot_mime(&extension)?;
         let retained_name = format!("{head_sha}-{filename}");
         let bytes = self.screenshot_bytes(filename, &retained_name)?;
-        retain(self.operations, task_id, &retained_name, mime, &bytes)
-            .map_err(|error| error.to_string())?;
+        retain(
+            &mut self.database(),
+            self.operations.artifact_root(),
+            task_id,
+            &retained_name,
+            mime,
+            &bytes,
+        )
+        .map_err(|error| error.to_string())?;
         let name = format!("suplex-{task_id}-{}.{extension}", hash(&bytes));
         self.recheck_now()?;
         let phase = screenshot["phase"].as_str().unwrap_or("");
@@ -612,7 +625,12 @@ impl Publisher<'_> {
         if let Some(rendered) = &publication.evidence_body {
             return Ok(rendered.clone());
         }
-        let evidence = manifest(self.operations, self.task_id, self.head_sha)?;
+        let evidence = manifest(
+            self.operations,
+            &mut self.database(),
+            self.task_id,
+            self.head_sha,
+        )?;
         let mut links = Vec::new();
         for screenshot in evidence["screenshots"].as_array().into_iter().flatten() {
             links.extend(
@@ -662,7 +680,7 @@ impl Publisher<'_> {
         before_write: BeforeWrite<'_>,
     ) -> Result<(), Failure> {
         let save_now = |publication: &Publication| {
-            save(self.operations, self.task_id, publication).map_err(|error| error.to_string())
+            save(&self.database(), self.task_id, publication).map_err(|error| error.to_string())
         };
         let comment = format!("{rendered}\n\nPull request: {pull_request_url}");
         publication.evidence_body = Some(rendered);
@@ -716,13 +734,13 @@ async fn publish(
     head_sha: &str,
     recheck: Option<&Recheck<'_>>,
 ) -> DatabaseResult<()> {
-    let Some((mut publication, configuration)) =
-        pending_publication(operations, task_id, head_sha)?
+    let database = SuplexDatabase::open(operations.database_path(), OpenMode::ReadWrite)?;
+    let Some((mut publication, configuration)) = pending_publication(&database, task_id, head_sha)?
     else {
         return Ok(());
     };
     recheck_now(operations, recheck)?;
-    require_authorized(&control_now(operations, task_id)?, head_sha)?;
+    require_authorized(&control_now(&database, task_id)?, head_sha)?;
     let publisher = Publisher {
         operations,
         task_id,
@@ -735,8 +753,9 @@ async fn publish(
             .to_owned(),
         github: operations.for_task(task_id).await?,
         configuration,
+        database: Mutex::new(database),
     };
-    save(operations, task_id, &publication)?;
+    save(&publisher.database(), task_id, &publication)?;
     publisher.attempt(&mut publication).await.map_err(|error| {
         let file = evidence_root(operations.database_path())
             .join(task_id)
@@ -761,9 +780,8 @@ fn accepted_head(control: &TaskControlRow, head_sha: &str) -> bool {
         .is_some_and(|accepted| accepted.head_sha == head_sha)
 }
 
-fn control_now(operations: &DeliveryOperations, task_id: &str) -> DatabaseResult<TaskControlRow> {
-    let database = SuplexDatabase::open(operations.database_path(), OpenMode::ReadOnly)?;
-    Ok(crate::coordination::root_session_store::root_observation_rows(&database, task_id)?.control)
+fn control_now(database: &SuplexDatabase, task_id: &str) -> DatabaseResult<TaskControlRow> {
+    Ok(crate::coordination::root_session_store::root_observation_rows(database, task_id)?.control)
 }
 
 #[cfg(test)]

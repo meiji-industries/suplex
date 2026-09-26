@@ -1,6 +1,4 @@
-//! `suplex logs`: the merged tail of the system log. TypeScript reads its pino
-//! `api.log` and `worker.log`; the Rust binary writes only the rotated system
-//! log, so this viewer reads `system-*.log` segments and `system.log`.
+//! `suplex logs`: the merged tail of `system-*.log` segments and `system.log`.
 
 use std::{
     fs,
@@ -21,6 +19,7 @@ pub struct Options {
     pub errors: bool,
     pub since: Option<String>,
     pub follow: bool,
+    pub all: bool,
 }
 
 pub fn parse_since(value: &str) -> Result<i64, String> {
@@ -51,6 +50,9 @@ fn timestamp(record: &Value) -> i64 {
 }
 
 fn matches(record: &Value, options: &Options, since: Option<i64>, now: i64) -> bool {
+    if !options.all && record["level"].as_u64().is_some_and(|level| level < 30) {
+        return false;
+    }
     if options.errors
         && record["state"] != "error"
         && record["level"].as_f64().is_none_or(|level| level < 40.0)
@@ -88,6 +90,10 @@ pub fn format(record: &Value) -> String {
     let line_start = line.trim_end().len();
     line.truncate(line_start);
     let fields = [
+        "method",
+        "url",
+        "requestId",
+        "durationMs",
         "taskId",
         "sessionId",
         "turnId",
@@ -215,6 +221,27 @@ mod tests {
             "2026-08-22T12:00:04.000Z  recovery error  taskId=task-b result=bad\n"
         );
         fs::remove_dir_all(directory).unwrap();
+    }
+
+    #[test]
+    fn debug_requests_are_hidden_unless_requested_and_keep_diagnostic_fields() {
+        let record = serde_json::json!({"type":"http","level":20,"method":"GET","url":"/api/tasks/task-a","status":200,"requestId":"request-a","durationMs":4});
+        let mut options = Options::default();
+        assert!(!matches(&record, &options, None, 0));
+        options.all = true;
+        assert!(matches(&record, &options, None, 0));
+        options.task_id = Some("task-a".into());
+        assert!(matches(&record, &options, None, 0));
+        let line = format(&record);
+        for value in [
+            "method=GET",
+            "url=/api/tasks/task-a",
+            "status=200",
+            "requestId=request-a",
+            "durationMs=4",
+        ] {
+            assert!(line.contains(value), "{line}");
+        }
     }
 
     #[test]

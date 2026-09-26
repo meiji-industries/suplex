@@ -31,6 +31,10 @@ enum Sink {
 
 static SINK: OnceLock<Sink> = OnceLock::new();
 
+tokio::task_local! {
+    pub(crate) static REQUEST_ID: String;
+}
+
 pub fn install(directory: PathBuf) {
     let _ = SINK.set(Sink::File(Mutex::new(Writer::new(directory))));
 }
@@ -58,7 +62,10 @@ pub fn emit(event: Value) {
     emit_with_context(event, Map::new());
 }
 
-pub fn emit_with_context(event: Value, context: Map<String, Value>) -> Option<String> {
+pub fn emit_with_context(event: Value, mut context: Map<String, Value>) -> Option<String> {
+    if let Ok(request_id) = REQUEST_ID.try_with(Clone::clone) {
+        context.insert("requestId".into(), json!(request_id));
+    }
     match SINK.get()? {
         Sink::File(writer) => writer.lock().ok()?.write(event, context, None, Utc::now()),
         Sink::Socket(producer) => producer.send(event, &context),

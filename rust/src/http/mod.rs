@@ -21,6 +21,7 @@ pub mod access;
 pub mod agent_api_runtime;
 pub mod contracts;
 pub mod error;
+mod logging;
 pub mod routes {
     pub mod admin_identity;
     pub mod admin_platform;
@@ -192,6 +193,7 @@ pub fn router(state: AppState) -> Router {
         .method_not_allowed_fallback(not_found)
         .fallback(not_found)
         .layer(axum::middleware::from_fn(access::cookie_refresh))
+        .layer(axum::middleware::from_fn(logging::request))
         .with_state(state)
 }
 

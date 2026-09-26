@@ -134,6 +134,7 @@ fn logs(arguments: &[String]) -> CliResult {
     let installation = Installation::load()?;
     let mut options = log_viewer::Options {
         directory: installation.logs.clone(),
+        all: std::env::var("SUPLEX_LOG_REQUESTS").is_ok_and(|value| value == "1"),
         ..log_viewer::Options::default()
     };
     let mut index = 0;

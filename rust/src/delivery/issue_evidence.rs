@@ -21,7 +21,11 @@ use serde_json::{Value, json};
 
 use super::operations::{DeliveryOperations, Recheck, delivery_failure};
 use crate::{
-    integrations::{bitbucket::ReleasePort, github_delivery, issue_tracker::IssueTracker},
+    integrations::{
+        bitbucket::ReleasePort,
+        github_delivery::{self, PullRequest},
+        issue_tracker::{BeforeWrite, IssueTracker},
+    },
     platform::{
         artifacts::{self, ArtifactInput},
         database::{DatabaseResult, OpenMode, SuplexDatabase},
@@ -378,13 +382,24 @@ fn save(
     Ok(())
 }
 
-async fn publish(
+fn recheck_now(
     operations: &DeliveryOperations,
-    task_id: &str,
-    number: u64,
-    head_sha: &str,
     recheck: Option<&Recheck<'_>>,
 ) -> DatabaseResult<()> {
+    match recheck {
+        Some(recheck) => operations.recheck(recheck),
+        None => Ok(()),
+    }
+}
+
+/// The publication this delivery resumes or starts, with the task
+/// configuration. None when the task has no issue or is not an issue-backed
+/// draft delivery.
+fn pending_publication(
+    operations: &DeliveryOperations,
+    task_id: &str,
+    head_sha: &str,
+) -> DatabaseResult<Option<(Publication, Value)>> {
     let (issue_json, publication_json, configuration): (Option<String>, Option<String>, String) =
         SuplexDatabase::open(operations.database_path(), OpenMode::ReadOnly)?
             .connection()
@@ -394,14 +409,14 @@ async fn publish(
                 |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
             )?;
     if issue_json.is_none() && publication_json.is_none() {
-        return Ok(());
+        return Ok(None);
     }
     let configuration: Value = serde_json::from_str(&configuration)?;
     // Issue-backed draft delivery is opt-in; ready and merge targets keep their completion semantics.
     if control_now(operations, task_id)?.delivery_target != DeliveryTarget::PullRequestDraft {
-        return Ok(());
+        return Ok(None);
     }
-    let mut publication = match publication_json {
+    let publication = match publication_json {
         Some(raw) => serde_json::from_str::<Publication>(&raw)?,
         None => Publication {
             issue: serde_json::from_str(issue_json.as_deref().unwrap_or("null"))?,
@@ -412,58 +427,106 @@ async fn publish(
             comment_id: None,
         },
     };
-    if publication.head_sha != head_sha {
-        // A new reviewed head renders new evidence; the issue comment is edited in place.
-        publication = Publication {
-            head_sha: head_sha.to_owned(),
-            evidence_body: None,
-            body: None,
-            ..publication
-        };
+    if publication.head_sha == head_sha {
+        return Ok(Some((publication, configuration)));
     }
-    let recheck_now = || -> DatabaseResult<()> {
-        match recheck {
-            Some(recheck) => operations.recheck(recheck),
-            None => Ok(()),
-        }
+    // A new reviewed head renders new evidence; the issue comment is edited in place.
+    let publication = Publication {
+        head_sha: head_sha.to_owned(),
+        evidence_body: None,
+        body: None,
+        ..publication
     };
-    recheck_now()?;
-    let current = control_now(operations, task_id)?;
+    Ok(Some((publication, configuration)))
+}
+
+/// The task is active and its workflow accepted delivery of this head.
+fn require_authorized(current: &TaskControlRow, head_sha: &str) -> DatabaseResult<()> {
     if current.status != TaskStatus::Active {
         return Err(delivery_failure(
             "workflow_review_required",
             "Resume the task before publishing issue evidence.",
         ));
     }
-    if !accepted_head(&current, head_sha) {
+    if !accepted_head(current, head_sha) {
         return Err(delivery_failure(
             "delivery_review_required",
             "Review the current source before publishing issue evidence.",
         ));
     }
-    let repository = configuration["repository"]
-        .as_str()
-        .unwrap_or("")
-        .to_owned();
-    let github = operations.for_task(task_id).await?;
-    let text = |error: Box<dyn Error>| error.to_string();
-    let inspect_before_write = || async {
-        let control = control_now(operations, task_id).map_err(text)?;
+    Ok(())
+}
+
+fn screenshot_mime(extension: &str) -> Result<&'static str, Failure> {
+    match extension {
+        "png" => Ok("image/png"),
+        "jpg" | "jpeg" => Ok("image/jpeg"),
+        "webp" => Ok("image/webp"),
+        _ => Err("Evidence screenshots must be PNG, JPEG or WebP".into()),
+    }
+}
+
+/// Replace this task's marked evidence block in the pull request body, or
+/// append one.
+fn splice_evidence(existing: &str, task_id: &str, rendered: &str) -> String {
+    let marker = format!("<!-- suplex-evidence:{task_id} -->");
+    let end_marker = format!("<!-- /suplex-evidence:{task_id} -->");
+    let block = format!("{marker}\n{rendered}\n{end_marker}");
+    match existing.find(&marker).and_then(|start| {
+        existing[start + marker.len()..]
+            .find(&end_marker)
+            .map(|end| (start, start + marker.len() + end))
+    }) {
+        Some((start, end)) => format!(
+            "{}{block}{}",
+            &existing[..start],
+            &existing[end + end_marker.len()..]
+        ),
+        None => format!("{}\n\n{block}", crate::identity::auth::js_trim(existing)),
+    }
+}
+
+/// One evidence publication for an authorized, reviewed pull request head.
+struct Publisher<'a> {
+    operations: &'a DeliveryOperations,
+    task_id: &'a str,
+    number: u64,
+    head_sha: &'a str,
+    recheck: Option<&'a Recheck<'a>>,
+    repository: String,
+    configuration: Value,
+    github: ReleasePort<'a>,
+}
+
+impl Publisher<'_> {
+    fn recheck_now(&self) -> Result<(), String> {
+        recheck_now(self.operations, self.recheck).map_err(|error| error.to_string())
+    }
+
+    /// Observe the pull request, the clean local branch, and the task
+    /// authorization again before each write.
+    async fn inspect_before_write(&self) -> Result<PullRequest, String> {
+        let text = |error: Box<dyn Error>| error.to_string();
+        let (task_id, head_sha, repository) = (self.task_id, self.head_sha, &self.repository);
+        let control = control_now(self.operations, task_id).map_err(text)?;
         let path = control
             .worktree_path()
             .ok_or("The task worktree is unavailable")?
             .to_owned();
         let local = github_delivery::inspect_local_revision(Path::new(&path))
             .map_err(|error| error.to_string())?;
-        let remote = github
-            .get_pull_request(&repository, number)
+        let remote = self
+            .github
+            .get_pull_request(repository, self.number)
             .await
             .map_err(|error| error.to_string())?;
-        if remote.head_sha != head_sha || remote.repository != repository || remote.number != number
+        if remote.head_sha != head_sha
+            || remote.repository != *repository
+            || remote.number != self.number
         {
-            return Err::<_, String>("The pull request changed before evidence publication".into());
+            return Err("The pull request changed before evidence publication".into());
         }
-        let latest = control_now(operations, task_id).map_err(text)?;
+        let latest = control_now(self.operations, task_id).map_err(text)?;
         if latest.status != TaskStatus::Active || !accepted_head(&latest, head_sha) {
             return Err("Task authorization changed before evidence publication".into());
         }
@@ -473,133 +536,208 @@ async fn publish(
         {
             return Err("Review the clean task branch before publishing evidence".into());
         }
-        recheck_now().map_err(text)?;
+        self.recheck_now()?;
         Ok(remote)
-    };
-    let before_write = || -> Pin<Box<dyn Future<Output = Result<(), Failure>> + Send + '_>> {
-        Box::pin(async { inspect_before_write().await.map(|_| ()).map_err(Into::into) })
-    };
-    save(operations, task_id, &publication)?;
-    let attempt = async {
-        let tracker = IssueTracker::new(&publication.tracker).await?;
-        let rendered = match &publication.evidence_body {
-            Some(rendered) => rendered.clone(),
+    }
+
+    /// Worker screenshot bytes, or the copy retained for this head.
+    fn screenshot_bytes(&self, filename: &str, retained_name: &str) -> Result<Vec<u8>, Failure> {
+        let database_path = self.operations.database_path();
+        match read_generated(database_path, self.task_id, filename) {
+            Ok(bytes) => Ok(bytes),
+            Err(error) => {
+                let item = retained(database_path, self.task_id, retained_name)
+                    .map_err(|error| error.to_string())?
+                    .into_iter()
+                    .next()
+                    .ok_or(error)?;
+                Ok(retained_bytes(self.operations, &item)
+                    .map_err(|_| "Stored screenshot is corrupt")?)
+            }
+        }
+    }
+
+    /// Upload one screenshot to the repository host or issue tracker and
+    /// return its evidence links.
+    async fn upload_screenshot(
+        &self,
+        tracker: &IssueTracker,
+        issue: &Value,
+        screenshot: &Value,
+        before_write: BeforeWrite<'_>,
+    ) -> Result<Vec<String>, Failure> {
+        let (task_id, head_sha) = (self.task_id, self.head_sha);
+        let filename = screenshot["filename"].as_str().unwrap_or("");
+        let extension = filename.rsplit('.').next().unwrap_or("").to_lowercase();
+        let mime = screenshot_mime(&extension)?;
+        let retained_name = format!("{head_sha}-{filename}");
+        let bytes = self.screenshot_bytes(filename, &retained_name)?;
+        retain(self.operations, task_id, &retained_name, mime, &bytes)
+            .map_err(|error| error.to_string())?;
+        let name = format!("suplex-{task_id}-{}.{extension}", hash(&bytes));
+        self.recheck_now()?;
+        let phase = screenshot["phase"].as_str().unwrap_or("");
+        let connection = &self.configuration["integration"]["repository"];
+        let url = match ReleasePort::bitbucket(connection) {
+            Some(client) => {
+                client
+                    .upload(&self.repository, &name, &bytes, mime, before_write)
+                    .await?
+            }
             None => {
-                let evidence = manifest(operations, task_id, head_sha)?;
-                let mut links = Vec::new();
-                for screenshot in evidence["screenshots"].as_array().into_iter().flatten() {
-                    let filename = screenshot["filename"].as_str().unwrap_or("");
-                    let extension = filename.rsplit('.').next().unwrap_or("").to_lowercase();
-                    let mime = match extension.as_str() {
-                        "png" => "image/png",
-                        "jpg" | "jpeg" => "image/jpeg",
-                        "webp" => "image/webp",
-                        _ => {
-                            return Err::<(), Failure>(
-                                "Evidence screenshots must be PNG, JPEG or WebP".into(),
-                            );
-                        }
-                    };
-                    let retained_name = format!("{head_sha}-{filename}");
-                    let bytes = match read_generated(operations.database_path(), task_id, filename)
-                    {
-                        Ok(bytes) => bytes,
-                        Err(error) => {
-                            let item =
-                                retained(operations.database_path(), task_id, &retained_name)
-                                    .map_err(|error| error.to_string())?
-                                    .into_iter()
-                                    .next()
-                                    .ok_or(error)?;
-                            retained_bytes(operations, &item)
-                                .map_err(|_| "Stored screenshot is corrupt")?
-                        }
-                    };
-                    retain(operations, task_id, &retained_name, mime, &bytes)
-                        .map_err(|error| error.to_string())?;
-                    let name = format!("suplex-{task_id}-{}.{extension}", hash(&bytes));
-                    recheck_now().map_err(|error| error.to_string())?;
-                    let phase = screenshot["phase"].as_str().unwrap_or("");
-                    let connection = &configuration["integration"]["repository"];
-                    let url = match ReleasePort::bitbucket(connection) {
-                        Some(client) => {
-                            client
-                                .upload(&repository, &name, &bytes, mime, &before_write)
-                                .await?
-                        }
-                        None => {
-                            tracker
-                                .upload(&publication.issue, &name, &bytes, mime, &before_write)
-                                .await?
-                        }
-                    };
-                    links.push(format!("[{phase}: {filename}]({url})"));
-                    if connection["kind"] == "bitbucket" && publication.issue["kind"] == "jira" {
-                        recheck_now().map_err(|error| error.to_string())?;
-                        let issue_url = tracker
-                            .upload(&publication.issue, &name, &bytes, mime, &before_write)
-                            .await?;
-                        links.push(format!("[{phase}: {filename} (Jira)]({issue_url})"));
-                    }
-                }
-                render_delivery_evidence(&evidence, &links)
+                tracker
+                    .upload(issue, &name, &bytes, mime, before_write)
+                    .await?
             }
         };
-        let pull = inspect_before_write().await?;
+        let mut links = vec![format!("[{phase}: {filename}]({url})")];
+        if connection["kind"] == "bitbucket" && issue["kind"] == "jira" {
+            self.recheck_now()?;
+            let issue_url = tracker
+                .upload(issue, &name, &bytes, mime, before_write)
+                .await?;
+            links.push(format!("[{phase}: {filename} (Jira)]({issue_url})"));
+        }
+        Ok(links)
+    }
+
+    /// Render the evidence for this head, uploading its screenshots, unless a
+    /// retry already rendered it.
+    async fn write_evidence(
+        &self,
+        tracker: &IssueTracker,
+        publication: &Publication,
+        before_write: BeforeWrite<'_>,
+    ) -> Result<String, Failure> {
+        if let Some(rendered) = &publication.evidence_body {
+            return Ok(rendered.clone());
+        }
+        let evidence = manifest(self.operations, self.task_id, self.head_sha)?;
+        let mut links = Vec::new();
+        for screenshot in evidence["screenshots"].as_array().into_iter().flatten() {
+            links.extend(
+                self.upload_screenshot(tracker, &publication.issue, screenshot, before_write)
+                    .await?,
+            );
+        }
+        Ok(render_delivery_evidence(&evidence, &links))
+    }
+
+    /// Write the evidence block into the pull request body and return the
+    /// pull request once the repository confirms body and head.
+    async fn splice_pull_request(&self, rendered: &str) -> Result<PullRequest, Failure> {
+        let (repository, number, head_sha) = (&self.repository, self.number, self.head_sha);
+        let pull = self.inspect_before_write().await?;
         if pull.head_sha != head_sha {
             return Err("The pull request source changed before evidence publication".into());
         }
-        let marker = format!("<!-- suplex-evidence:{task_id} -->");
-        let end_marker = format!("<!-- /suplex-evidence:{task_id} -->");
         let (Some(title), Some(existing)) = (&pull.title, &pull.body) else {
             return Err("The repository did not return the pull request title and body".into());
         };
-        let block = format!("{marker}\n{rendered}\n{end_marker}");
-        let body = match existing.find(&marker).and_then(|start| {
-            existing[start + marker.len()..]
-                .find(&end_marker)
-                .map(|end| (start, start + marker.len() + end))
-        }) {
-            Some((start, end)) => format!(
-                "{}{block}{}",
-                &existing[..start],
-                &existing[end + end_marker.len()..]
-            ),
-            None => format!("{}\n\n{block}", crate::identity::auth::js_trim(existing)),
-        };
+        let body = splice_evidence(existing, self.task_id, rendered);
         if *existing != body {
-            github
-                .update_draft_pull_request(&repository, number, title, &body)
+            self.github
+                .update_draft_pull_request(repository, number, title, &body)
                 .await
                 .map_err(|error| error.to_string())?;
         }
-        let observed = github
-            .get_pull_request(&repository, number)
+        let observed = self
+            .github
+            .get_pull_request(repository, number)
             .await
             .map_err(|error| error.to_string())?;
         if observed.head_sha != head_sha || observed.body.as_deref() != Some(body.as_str()) {
             return Err("The repository has not confirmed the evidence and reviewed source".into());
         }
-        let comment = format!("{rendered}\n\nPull request: {}", observed.url);
+        Ok(observed)
+    }
+
+    /// Save the rendered evidence, publish the issue comment, and record its id.
+    async fn record(
+        &self,
+        tracker: &IssueTracker,
+        publication: &mut Publication,
+        rendered: String,
+        pull_request_url: &str,
+        before_write: BeforeWrite<'_>,
+    ) -> Result<(), Failure> {
+        let save_now = |publication: &Publication| {
+            save(self.operations, self.task_id, publication).map_err(|error| error.to_string())
+        };
+        let comment = format!("{rendered}\n\nPull request: {pull_request_url}");
         publication.evidence_body = Some(rendered);
         publication.body = Some(comment.clone());
-        save(operations, task_id, &publication).map_err(|error| error.to_string())?;
-        recheck_now().map_err(|error| error.to_string())?;
+        save_now(publication)?;
+        self.recheck_now()?;
         let comment_id = tracker
             .publish(
                 &publication.issue,
-                task_id,
+                self.task_id,
                 &comment,
-                &before_write,
+                before_write,
                 publication.comment_id.as_deref(),
             )
             .await?;
         publication.comment_id = Some(comment_id);
-        save(operations, task_id, &publication).map_err(|error| error.to_string())?;
-        inspect_before_write().await?;
+        save_now(publication)?;
+        self.inspect_before_write().await?;
         Ok(())
+    }
+
+    async fn attempt(&self, publication: &mut Publication) -> Result<(), Failure> {
+        let before_write = || -> Pin<Box<dyn Future<Output = Result<(), Failure>> + Send + '_>> {
+            Box::pin(async {
+                self.inspect_before_write()
+                    .await
+                    .map(|_| ())
+                    .map_err(Into::into)
+            })
+        };
+        let tracker = IssueTracker::new(&publication.tracker).await?;
+        let rendered = self
+            .write_evidence(&tracker, publication, &before_write)
+            .await?;
+        let observed = self.splice_pull_request(&rendered).await?;
+        self.record(
+            &tracker,
+            publication,
+            rendered,
+            &observed.url,
+            &before_write,
+        )
+        .await
+    }
+}
+
+async fn publish(
+    operations: &DeliveryOperations,
+    task_id: &str,
+    number: u64,
+    head_sha: &str,
+    recheck: Option<&Recheck<'_>>,
+) -> DatabaseResult<()> {
+    let Some((mut publication, configuration)) =
+        pending_publication(operations, task_id, head_sha)?
+    else {
+        return Ok(());
     };
-    attempt.await.map_err(|error| {
+    recheck_now(operations, recheck)?;
+    require_authorized(&control_now(operations, task_id)?, head_sha)?;
+    let publisher = Publisher {
+        operations,
+        task_id,
+        number,
+        head_sha,
+        recheck,
+        repository: configuration["repository"]
+            .as_str()
+            .unwrap_or("")
+            .to_owned(),
+        github: operations.for_task(task_id).await?,
+        configuration,
+    };
+    save(operations, task_id, &publication)?;
+    publisher.attempt(&mut publication).await.map_err(|error| {
         let file = evidence_root(operations.database_path())
             .join(task_id)
             .join("generated")
@@ -659,6 +797,20 @@ mod tests {
                 .is_err()
         );
         assert!(!MUTATIONS.lock().unwrap().contains_key(&key));
+    }
+
+    #[test]
+    fn evidence_block_replaces_its_marked_block_or_appends_one() {
+        let block = "<!-- suplex-evidence:t -->\nnew\n<!-- /suplex-evidence:t -->";
+        assert_eq!(
+            splice_evidence(" Body \n", "t", "new"),
+            format!("Body\n\n{block}")
+        );
+        let existing = "Intro\n<!-- suplex-evidence:t -->\nold\n<!-- /suplex-evidence:t -->\nTail";
+        assert_eq!(
+            splice_evidence(existing, "t", "new"),
+            format!("Intro\n{block}\nTail")
+        );
     }
 
     #[test]

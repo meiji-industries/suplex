@@ -789,6 +789,28 @@ mod tests {
     use super::*;
 
     #[test]
+    fn generated_evidence_reads_current_bytes_but_never_follows_a_replaced_symlink() {
+        let root =
+            std::env::temp_dir().join(format!("suplex-evidence-read-{}", uuid::Uuid::new_v4()));
+        let database = root.join("suplex.sqlite");
+        let generated = evidence_root(&database).join("task_one/generated");
+        fs::create_dir_all(&generated).unwrap();
+        fs::write(generated.join("manifest.json"), b"retained source").unwrap();
+        assert_eq!(
+            read_generated(&database, "task_one", "manifest.json").unwrap(),
+            b"retained source"
+        );
+
+        let outside = root.join("outside.json");
+        fs::write(&outside, b"changed source").unwrap();
+        fs::remove_file(generated.join("manifest.json")).unwrap();
+        std::os::unix::fs::symlink(&outside, generated.join("manifest.json")).unwrap();
+        assert!(read_generated(&database, "task_one", "manifest.json").is_err());
+        assert!(read_generated(&database, "task_one", "../outside.json").is_err());
+        fs::remove_dir_all(&root).unwrap();
+    }
+
+    #[test]
     fn a_saved_publication_round_trips_unchanged() {
         let saved = r#"{"issue":{"kind":"github","number":3},"tracker":{"kind":"github"},"headSha":"h","evidenceBody":"e","body":"b","commentId":"c"}"#;
         let publication: Publication = serde_json::from_str(saved).unwrap();

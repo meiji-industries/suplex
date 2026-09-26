@@ -1279,4 +1279,117 @@ mod tests {
         );
         server.abort();
     }
+
+    #[tokio::test]
+    async fn jira_evidence_upload_recovers_a_lost_response_only_after_hash_verification() {
+        use axum::http::{Method, StatusCode, Uri};
+        use std::sync::{
+            Arc,
+            atomic::{AtomicBool, AtomicUsize, Ordering},
+        };
+
+        // SAFETY: these names are private to this fixture.
+        unsafe {
+            std::env::set_var("SUPLEX_TEST_JIRA_UPLOAD_EMAIL", "me@example.com");
+            std::env::set_var("SUPLEX_TEST_JIRA_UPLOAD_TOKEN", "secret");
+        }
+        let bytes = b"fixture-image";
+        let filename = format!("suplex-task_one-{}.png", sha256_hex(bytes));
+        let uploaded = Arc::new(AtomicBool::new(false));
+        let uploads = Arc::new(AtomicUsize::new(0));
+        let altered = Arc::new(AtomicBool::new(false));
+        let app = axum::Router::new().fallback({
+            let uploaded = uploaded.clone();
+            let uploads = uploads.clone();
+            let altered = altered.clone();
+            let filename = filename.clone();
+            move |method: Method, uri: Uri| {
+                let uploaded = uploaded.clone();
+                let uploads = uploads.clone();
+                let altered = altered.clone();
+                let filename = filename.clone();
+                async move {
+                    let path = uri.path_and_query().map_or("", |part| part.as_str());
+                    if path == "/rest/api/3/myself" {
+                        return (StatusCode::OK, json!({"accountId":"me"}).to_string());
+                    }
+                    if path == "/rest/api/3/issue/42?fields=summary" {
+                        return (StatusCode::OK, json!({"id":"42","key":"APP-42","fields":{"summary":"Fix"}}).to_string());
+                    }
+                    if path == "/rest/api/3/issue/42?fields=attachment" {
+                        let rows = if uploaded.load(Ordering::SeqCst) {
+                            json!([{"id":"7","filename":filename,"size":13,"author":{"accountId":"me"}}])
+                        } else { json!([]) };
+                        return (StatusCode::OK, json!({"fields":{"attachment":rows}}).to_string());
+                    }
+                    if path == "/rest/api/3/attachment/content/7?redirect=false" {
+                        let body = if altered.load(Ordering::SeqCst) { "fixture-imago" } else { "fixture-image" };
+                        return (StatusCode::OK, body.into());
+                    }
+                    if method == Method::POST && path == "/rest/api/3/issue/42/attachments" {
+                        uploads.fetch_add(1, Ordering::SeqCst);
+                        uploaded.store(true, Ordering::SeqCst);
+                        return (StatusCode::INTERNAL_SERVER_ERROR, "response lost".into());
+                    }
+                    (StatusCode::NOT_FOUND, String::new())
+                }
+            }
+        });
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let tracker = IssueTracker::with_github(
+            &json!({
+                "kind":"jira", "site":base, "project":"APP",
+                "emailEnvironment":"SUPLEX_TEST_JIRA_UPLOAD_EMAIL",
+                "tokenEnvironment":"SUPLEX_TEST_JIRA_UPLOAD_TOKEN"
+            }),
+            None,
+        );
+        let issue = json!({"kind":"jira","site":base,"id":"42","key":"APP-42"});
+        let allow = || Box::pin(async { Ok(()) }) as _;
+        let deny = || Box::pin(async { Err("cancelled".into()) }) as _;
+        assert_eq!(
+            tracker
+                .upload(&issue, &filename, bytes, "image/png", &deny)
+                .await
+                .unwrap_err()
+                .to_string(),
+            "cancelled"
+        );
+        assert_eq!(uploads.load(Ordering::SeqCst), 0);
+        assert!(
+            tracker
+                .upload(&issue, &filename, bytes, "image/png", &allow)
+                .await
+                .is_err()
+        );
+        assert_eq!(uploads.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            tracker
+                .upload(&issue, &filename, bytes, "image/png", &allow)
+                .await
+                .unwrap(),
+            format!("{base}/secure/attachment/7/{filename}")
+        );
+        assert_eq!(uploads.load(Ordering::SeqCst), 1);
+        altered.store(true, Ordering::SeqCst);
+        assert!(
+            tracker
+                .upload(&issue, &filename, bytes, "image/png", &allow)
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("does not match")
+        );
+        let foreign = json!({"kind":"jira","site":base,"id":"42","key":"OTHER-42"});
+        assert!(
+            tracker
+                .upload(&foreign, &filename, bytes, "image/png", &allow)
+                .await
+                .unwrap_err()
+                .is::<IssueTrackerScopeFailure>()
+        );
+        server.abort();
+    }
 }

@@ -54,8 +54,9 @@ const SESSION_BINDING: &str = "opencode-session.json";
 
 pub struct OpenCodeTaskRuntime;
 
+/// Keeps the native error as the source so callers can classify it (such as `SessionNotFound`).
 fn io_error(error: BoxError) -> io::Error {
-    io::Error::other(error.to_string())
+    io::Error::other(error)
 }
 
 fn run<T: Send, F: Future<Output = Result<T, BoxError>> + Send>(future: F) -> io::Result<T> {
@@ -868,6 +869,19 @@ mod tests {
         Arc,
         atomic::{AtomicUsize, Ordering},
     };
+
+    #[test]
+    fn run_keeps_the_native_error_for_callers_that_classify_it() {
+        let error = run(async {
+            Err::<(), BoxError>(Box::new(
+                crate::runtimes::opencode::session_history::SessionNotFound,
+            ))
+        })
+        .unwrap_err();
+        assert!(error.get_ref().is_some_and(|source| {
+            source.is::<crate::runtimes::opencode::session_history::SessionNotFound>()
+        }));
+    }
 
     #[test]
     fn display_attachment_matches_only_this_server_session_and_directory() {

@@ -179,7 +179,9 @@ pub fn collect(
                     Ok(usage) => record(database, &task_id, &session.id, &usage, &started)?,
                     Err(error) => {
                         failed(database, &task_id, &session.id, &now_millis_rfc3339())?;
-                        report(error);
+                        if !missing_opencode_session(error.as_ref()) {
+                            report(error);
+                        }
                     }
                 }
             }
@@ -190,6 +192,16 @@ pub fn collect(
         }
     }
     Ok(())
+}
+
+/// TypeScript skips `OpenCodeFailure` `not_found`: a session OpenCode no longer has is stale, not an error.
+fn missing_opencode_session(error: &(dyn Error + 'static)) -> bool {
+    use crate::runtimes::opencode::session_history::SessionNotFound;
+    error.is::<SessionNotFound>()
+        || error
+            .downcast_ref::<std::io::Error>()
+            .and_then(std::io::Error::get_ref)
+            .is_some_and(|source| source.is::<SessionNotFound>())
 }
 
 /// Collect now, then every 30 seconds until shutdown.
@@ -693,6 +705,31 @@ mod tests {
                 recovered.sessions[0].error_at.as_deref()
             ),
             (2, 2.0, None)
+        );
+        let _ = fs::remove_file(path);
+    }
+
+    #[test]
+    fn a_session_opencode_no_longer_has_is_marked_stale_without_an_error_report() {
+        let (path, mut database) = task_database();
+        database
+            .connection()
+            .execute("UPDATE suplex_task_controls SET status = 'active'", [])
+            .unwrap();
+        let mut errors = 0;
+        let mut read = |_: &Session| -> Result<Vec<TaskUsage>, Box<dyn Error>> {
+            // As the OpenCode runtime returns it: the typed error inside an io::Error.
+            Err(Box::new(std::io::Error::other(
+                crate::runtimes::opencode::session_history::SessionNotFound,
+            )))
+        };
+        let mut report = |_: Box<dyn Error>| errors += 1;
+        collect(&mut database, false, Utc::now(), &mut read, &mut report).unwrap();
+        assert_eq!(errors, 0);
+        assert!(
+            analytics::read(&database, "t").unwrap().sessions[0]
+                .error_at
+                .is_some()
         );
         let _ = fs::remove_file(path);
     }

@@ -6,19 +6,39 @@ use serde_json::Value;
 
 use super::{contracts::Envelope, server::resolve_executable, session::BoxError};
 
-async fn export(session_id: &str, executable: Option<&Path>) -> Option<Vec<u8>> {
-    let executable = resolve_executable(executable).ok()?;
+/// TypeScript `OpenCodeFailure` with code `not_found`: OpenCode no longer has the session.
+#[derive(Debug)]
+pub struct SessionNotFound;
+
+impl std::fmt::Display for SessionNotFound {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("OpenCode session history is not available")
+    }
+}
+
+impl std::error::Error for SessionNotFound {}
+
+async fn export(session_id: &str, executable: Option<&Path>) -> Result<Vec<u8>, BoxError> {
+    let unavailable = || -> BoxError { "OpenCode session history is not available".into() };
+    let executable = resolve_executable(executable).map_err(|_| unavailable())?;
     let output = tokio::process::Command::new(executable)
         .args(["export", "--pure", session_id])
         .stdin(Stdio::null())
-        .stderr(Stdio::null())
+        .stderr(Stdio::piped())
         .kill_on_drop(true)
         .output();
     let output = tokio::time::timeout(Duration::from_secs(30), output)
         .await
-        .ok()?
-        .ok()?;
-    output.status.success().then_some(output.stdout)
+        .map_err(|_| unavailable())?
+        .map_err(|_| unavailable())?;
+    if output.status.success() {
+        return Ok(output.stdout);
+    }
+    // `opencode export` reports a deleted or unknown session only on stderr.
+    if String::from_utf8_lossy(&output.stderr).contains("Session not found") {
+        return Err(Box::new(SessionNotFound));
+    }
+    Err(unavailable())
 }
 
 pub async fn read_history(
@@ -31,9 +51,7 @@ pub async fn read_history(
     if !valid {
         return Err("Invalid OpenCode session identity".into());
     }
-    let stdout = export(session_id, executable)
-        .await
-        .ok_or("OpenCode session history is not available")?;
+    let stdout = export(session_id, executable).await?;
     let mut exported: Value = serde_json::from_slice(&stdout)?;
     let id = exported["info"]["id"]
         .as_str()
@@ -73,6 +91,36 @@ pub(crate) mod tests {
 
     pub(crate) fn retired_message() -> Value {
         serde_json::json!({"info":{"id":"msg_result","sessionID":"ses_old","role":"assistant","time":{"created":100,"completed":200},"parentID":"msg_user","modelID":"model","providerID":"openai","mode":"primary","agent":"suplex-worker","path":{"cwd":"/repo","root":"/repo"},"cost":3,"tokens":{"input":10,"output":20,"reasoning":30,"cache":{"read":40,"write":50}}},"parts":[]})
+    }
+
+    #[tokio::test]
+    async fn a_session_opencode_no_longer_has_is_not_found_and_other_failures_are_not() {
+        let directory = crate::runtimes::opencode::server::tests::temporary("opencode-missing");
+        let executable = directory.join("opencode");
+        fs::write(
+            &executable,
+            "#!/bin/sh\necho 'Exporting session: ses_gone' >&2\necho 'Error: Session not found: ses_gone' >&2\nexit 1\n",
+        )
+        .unwrap();
+        fs::set_permissions(&executable, fs::Permissions::from_mode(0o700)).unwrap();
+        let missing = read_history("ses_gone", Some(&executable))
+            .await
+            .unwrap_err();
+        assert!(missing.is::<SessionNotFound>());
+        assert_eq!(
+            missing.to_string(),
+            "OpenCode session history is not available"
+        );
+        fs::write(
+            &executable,
+            "#!/bin/sh\necho 'Error: database is locked' >&2\nexit 1\n",
+        )
+        .unwrap();
+        let failed = read_history("ses_gone", Some(&executable))
+            .await
+            .unwrap_err();
+        assert!(!failed.is::<SessionNotFound>());
+        fs::remove_dir_all(directory).unwrap();
     }
 
     #[tokio::test]

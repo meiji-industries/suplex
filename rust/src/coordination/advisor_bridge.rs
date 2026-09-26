@@ -1,3 +1,4 @@
+use super::CoordinationError;
 use std::{io, path::PathBuf};
 
 use rmcp::{
@@ -513,7 +514,7 @@ pub async fn serve_from_environment() -> Result<(), Box<dyn std::error::Error>> 
     let path = bridge_auth::binding_path(ADVISOR_BINDING_ENV, "Advisor report")?;
     let binding: Binding = serde_json::from_slice(&std::fs::read(path)?)?;
     if binding.version != 1 || binding.server.command.is_empty() {
-        return Err(io::Error::other("Advisor report bridge binding is invalid").into());
+        return Err(CoordinationError::refused("Advisor report bridge binding is invalid").into());
     }
     let _ = binding.server.args;
     let token = std::env::var(ADVISOR_TOKEN_ENV).ok();

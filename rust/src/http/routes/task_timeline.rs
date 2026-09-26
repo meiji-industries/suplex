@@ -1,7 +1,7 @@
 //! Task timeline reads saved usage and current native execution evidence.
 
 use crate::tasks::TaskError;
-use std::{error::Error, io, path::PathBuf};
+use std::{error::Error, path::PathBuf};
 
 use axum::{
     Json, Router,
@@ -145,7 +145,7 @@ async fn task_timeline(
     .await
     {
         Ok(Ok(value)) => value,
-        Ok(Err(error)) => return respond(Err(Box::new(io::Error::other(error))), cookies),
+        Ok(Err(error)) => return respond(Err(error.into()), cookies),
         Err(error) => return respond(Err(Box::new(error)), cookies),
     };
     let scope = state.with_database(|database| recheck(database, &user_id, &task_id));

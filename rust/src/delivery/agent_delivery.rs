@@ -555,7 +555,7 @@ impl AgentDelivery {
         let (company, _) = self.task(principal, task_id)?;
         let observed = self.require_eligible(task_id, number, head_sha).await?;
         let mut bytes = [0_u8; 32];
-        getrandom::fill(&mut bytes).map_err(|error| std::io::Error::other(error.to_string()))?;
+        getrandom::fill(&mut bytes)?;
         let receipt = format!(
             "fma_{}",
             base64::Engine::encode(&base64::engine::general_purpose::URL_SAFE_NO_PAD, bytes)
@@ -845,8 +845,11 @@ mod tests {
             .await
             .unwrap_err();
         // Eligibility, the receipt, and the Coordinator checks fail with a
-        // TaskError. This one passed them; the delivery operation decides.
-        assert!(!error.is::<TaskError>(), "{error}");
+        // TaskError::Failure. This one passed them; the delivery operation decides.
+        assert!(
+            !matches!(error.downcast_ref(), Some(TaskError::Failure { .. })),
+            "{error}"
+        );
         let consumed: Option<String> = delivery
             .open(OpenMode::ReadOnly)
             .unwrap()

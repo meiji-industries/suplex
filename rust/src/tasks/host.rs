@@ -2,6 +2,7 @@
 //! and the outer task wake loop call this after durable task/root setup.
 
 use crate::shared::time::{now_millis_rfc3339, rfc3339_millis};
+use crate::tasks::TaskError;
 use std::{
     collections::{HashMap, HashSet},
     io,
@@ -146,7 +147,7 @@ fn required_path(value: &serde_json::Value, name: &str) -> DatabaseResult<PathBu
     let raw = value[name]
         .as_str()
         .filter(|raw| !raw.is_empty())
-        .ok_or_else(|| io::Error::other(format!("Task {name} is missing")))?;
+        .ok_or_else(|| TaskError::internal(format!("Task {name} is missing")))?;
     Ok(PathBuf::from(raw))
 }
 
@@ -165,11 +166,11 @@ pub async fn prepare_task_worktree(
         worktree_root: required_path(configuration, "worktreeRoot")?,
         branch: configuration["branch"]
             .as_str()
-            .ok_or_else(|| io::Error::other("Task branch is missing"))?
+            .ok_or_else(|| TaskError::internal("Task branch is missing"))?
             .to_owned(),
         starting_sha: configuration["startingSha"]
             .as_str()
-            .ok_or_else(|| io::Error::other("Task starting SHA is missing"))?
+            .ok_or_else(|| TaskError::internal("Task starting SHA is missing"))?
             .to_owned(),
     };
     let token = crate::integrations::github::Access::load()
@@ -181,7 +182,7 @@ pub async fn prepare_task_worktree(
             .map_err(|error| error.to_string())
     })
     .await?
-    .map_err(|error| io::Error::other(error).into())
+    .map_err(|error| TaskError::internal(error).into())
 }
 
 fn current_owner_still_running(session: &RootSession) -> bool {
@@ -350,9 +351,9 @@ fn stopped_generation(directory: &Path, turn: &RootTurn) -> DatabaseResult<Strin
         |attempt| directory.join(format!("dispatch-{}.json", attempt.server_generation)),
     );
     let record = crate::runtimes::headless::read_record(&record_path)?
-        .ok_or_else(|| io::Error::other("Interrupted native dispatch record is missing"))?;
+        .ok_or_else(|| TaskError::internal("Interrupted native dispatch record is missing"))?;
     if record.turn_id != turn.id {
-        return Err(io::Error::other("Interrupted native dispatch record changed").into());
+        return Err(TaskError::internal("Interrupted native dispatch record changed").into());
     }
     Ok(record.generation)
 }
@@ -593,8 +594,7 @@ async fn observed_usage(
             Ok(observed)
         },
     )
-    .await?
-    .map_err(io::Error::other)?;
+    .await??;
     // TypeScript `observeTaskLimitUsage`: a session without usage leaves the
     // observation incomplete; dispatch continues with the partial cost.
     static PRICING: OnceLock<Result<ModelsDevCatalogReader, String>> = OnceLock::new();
@@ -714,7 +714,7 @@ fn replace_observed_usage(
                 "SELECT EXISTS(SELECT 1 FROM suplex_task_sessions WHERE task_id = ?1 AND native_session_id = ?2)",
                 rusqlite::params![task_id, session_id], |row| row.get(0),
             )?;
-            if !belongs { return Err(io::Error::other("Native usage does not match a task session").into()); }
+            if !belongs { return Err(TaskError::internal("Native usage does not match a task session").into()); }
         }
         database.connection().execute("DELETE FROM suplex_task_usage WHERE task_id = ?1", [task_id])?;
         let time = now_millis_rfc3339();
@@ -764,7 +764,7 @@ fn recover_prepared_root_blocking(
     let provider = profile["provider"].as_str().unwrap_or_default();
     // TypeScript `HarnessRouter.forScope`.
     let harness = task_harness_registry::for_profile(provider)
-        .ok_or_else(|| std::io::Error::other(format!("No task harness for {provider}")))?;
+        .ok_or_else(|| TaskError::internal(format!("No task harness for {provider}")))?;
     if current_owner_still_running(&session) {
         return Ok(None);
     }
@@ -793,15 +793,15 @@ fn recover_prepared_root_blocking(
             &native_id,
             Utc::now(),
         )? {
-            return Err(io::Error::other("Native Root session changed before dispatch").into());
+            return Err(TaskError::internal("Native Root session changed before dispatch").into());
         }
         let worktree = rows.control["worktree"]["path"].as_str();
         let model = profile["model"]
             .as_str()
-            .ok_or_else(|| io::Error::other("Root model is missing"))?;
+            .ok_or_else(|| TaskError::internal("Root model is missing"))?;
         let reasoning = profile["reasoningLevel"]
             .as_str()
-            .ok_or_else(|| io::Error::other("Root reasoning level is missing"))?;
+            .ok_or_else(|| TaskError::internal("Root reasoning level is missing"))?;
         let project_scope = project_launch_scope(
             &rows.context["configuration"],
             &rows.context["issueContext"],
@@ -886,7 +886,7 @@ fn recover_prepared_root_blocking(
             Utc::now(),
         )?;
         if worktree.is_none() {
-            return Err(io::Error::other("Task worktree is not prepared").into());
+            return Err(TaskError::internal("Task worktree is not prepared").into());
         }
         let prompt = task_context_prompt(
             &turn.prompt_text,
@@ -952,7 +952,7 @@ pub async fn recover_prepared_root(
         .map_err(|error| error.to_string())
     })
     .await?
-    .map_err(|error| io::Error::other(error).into())
+    .map_err(|error| TaskError::internal(error).into())
 }
 
 /// TypeScript `scope` for one delegate session: its captured profile, and the
@@ -1035,7 +1035,7 @@ fn recover_prepared_worker_blocking(
     let provider = delegate.profile["provider"].as_str().unwrap_or_default();
     // TypeScript `HarnessRouter.forScope`.
     let harness = task_harness_registry::for_profile(provider)
-        .ok_or_else(|| std::io::Error::other(format!("No task harness for {provider}")))?;
+        .ok_or_else(|| TaskError::internal(format!("No task harness for {provider}")))?;
     if current_owner_still_running(&session) {
         return Ok(None);
     }
@@ -1064,16 +1064,18 @@ fn recover_prepared_worker_blocking(
             &native_id,
             Utc::now(),
         )? {
-            return Err(io::Error::other("Native Worker session changed before dispatch").into());
+            return Err(
+                TaskError::internal("Native Worker session changed before dispatch").into(),
+            );
         }
         let worktree = rows.control["worktree"]["path"].as_str();
         let profile = &delegate.profile;
         let model = profile["model"]
             .as_str()
-            .ok_or_else(|| io::Error::other("Worker model is missing"))?;
+            .ok_or_else(|| TaskError::internal("Worker model is missing"))?;
         let reasoning = profile["reasoningLevel"]
             .as_str()
-            .ok_or_else(|| io::Error::other("Worker reasoning level is missing"))?;
+            .ok_or_else(|| TaskError::internal("Worker reasoning level is missing"))?;
         let project_scope = project_launch_scope(
             &rows.context["configuration"],
             &rows.context["issueContext"],
@@ -1129,7 +1131,7 @@ fn recover_prepared_worker_blocking(
             return Ok(before);
         }
         if worktree.is_none() {
-            return Err(io::Error::other("Task worktree is not prepared").into());
+            return Err(TaskError::internal("Task worktree is not prepared").into());
         }
         let prompt = task_context_prompt(
             &turn.prompt_text,
@@ -1203,7 +1205,7 @@ pub async fn recover_prepared_worker(
         Ok::<_, String>(first)
     })
     .await?
-    .map_err(|error| io::Error::other(error).into())
+    .map_err(|error| TaskError::internal(error).into())
 }
 
 #[derive(Clone)]
@@ -1413,7 +1415,7 @@ async fn stop_retired_sessions(database_path: &Path, task_id: &str) -> DatabaseR
         )?;
     }
     if !failures.is_empty() && ["cancelled", "delivered"].contains(&status.as_str()) {
-        return Err(io::Error::other(format!(
+        return Err(TaskError::internal(format!(
             "Some agent sessions could not be stopped: {}",
             failures.join("; ")
         ))

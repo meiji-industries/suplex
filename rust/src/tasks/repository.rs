@@ -292,7 +292,7 @@ fn create_inner(
                 "SELECT EXISTS(SELECT 1 FROM suplex_tasks WHERE id = ?1 AND company_id = ?2)",
                 params![dependency, input.company_id], |row| row.get(0),
             )?;
-            if !available { return Err(std::io::Error::other("A dependency task is not available").into()); }
+            if !available { return Err(TaskError::internal("A dependency task is not available").into()); }
             database.connection().execute(
                 "INSERT INTO suplex_task_dependencies (task_id, depends_on_task_id, created_at) VALUES (?1, ?2, ?3)",
                 params![id, dependency, time],
@@ -307,7 +307,7 @@ fn create_inner(
             root_session_store::observe_lifecycle(database, id)?;
             root_session_store::observe_admission(database, id, "scheduler sweep", None);
         }
-        let created = task_by_id(database, id)?.ok_or_else(|| std::io::Error::other("Task insert did not persist"))?;
+        let created = task_by_id(database, id)?.ok_or_else(|| TaskError::internal("Task insert did not persist"))?;
         let resulting_state = serde_json::json!({"status": created.status, "archived": false}).to_string();
         database.connection().execute(
             "INSERT INTO suplex_audit_events (id, actor_user_id, actor_agent_id, action, target_user_id, company_id, metadata_json, created_at) VALUES (?1, ?2, ?3, 'task_created', NULL, ?4, ?5, ?6)",

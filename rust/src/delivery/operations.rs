@@ -10,7 +10,6 @@ use crate::shared::hash::sha256_hex;
 use crate::shared::time::{now_millis_rfc3339, rfc3339_millis};
 use std::{
     error::Error,
-    io,
     path::{Path, PathBuf},
 };
 
@@ -108,8 +107,7 @@ pub async fn complete_local_work(
     let local = tokio::task::spawn_blocking(move || {
         worktree::observe_local_revision(&path).map_err(|error| error.to_string())
     })
-    .await?
-    .map_err(io::Error::other)?;
+    .await??;
     check_standard_local_completion(&control, expected_head, &local)?;
 
     let mut database = SuplexDatabase::open(database_path, OpenMode::ReadWrite)?;
@@ -529,7 +527,7 @@ impl DeliveryOperations {
             )?)
         })?;
         if changed != 1 {
-            return Err(io::Error::other("task_not_active").into());
+            return Err(DeliveryError::internal("task_not_active").into());
         }
         Ok(())
     }
@@ -844,7 +842,7 @@ impl DeliveryOperations {
                 .map_err(|error| error.to_string())
         })
         .await?
-        .map_err(|error| io::Error::other(error).into())
+        .map_err(|error| DeliveryError::internal(error).into())
     }
 
     fn observation_unavailable(error: &(dyn Error + 'static)) -> bool {
@@ -1156,7 +1154,7 @@ impl DeliveryOperations {
         }
         if operation == "complete_local_work" {
             let Some(token) = owner_token else {
-                return Err(io::Error::other("task_tool_owner_lost").into());
+                return Err(DeliveryError::internal("task_tool_owner_lost").into());
             };
             if control["deliveryTarget"] != "local_worktree" {
                 return Err(delivery_failure(
@@ -1346,7 +1344,7 @@ impl DeliveryOperations {
                 )
                 .await
             }
-            _ => Err(io::Error::other("delivery_operation_invalid").into()),
+            _ => Err(DeliveryError::internal("delivery_operation_invalid").into()),
         }
     }
 
@@ -2224,7 +2222,7 @@ pub fn observe_for_root(database_path: &Path, control: &Value) -> DatabaseResult
     });
     match observed {
         Ok(pull) => Ok((pull, json!({"available": true}))),
-        Err((None, message)) => Err(io::Error::other(message).into()),
+        Err((None, message)) => Err(DeliveryError::internal(message).into()),
         Err((Some(code), message)) => Ok((
             control["pullRequest"].clone(),
             json!({

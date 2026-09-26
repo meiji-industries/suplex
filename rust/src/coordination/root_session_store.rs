@@ -1,5 +1,6 @@
 //! Durable Root session and prompt intent. Native runtime evidence stays with the harness.
 
+use super::CoordinationError;
 use crate::shared::hash::sha256_hex;
 use crate::shared::time::rfc3339_millis;
 use crate::tasks::TaskError;
@@ -314,7 +315,7 @@ pub(crate) fn new_turn_id(now: DateTime<Utc>) -> DatabaseResult<String> {
     let counter = {
         let mut state = COUNTER
             .lock()
-            .map_err(|_| std::io::Error::other("turn ID counter poisoned"))?;
+            .map_err(|_| CoordinationError::refused("turn ID counter poisoned"))?;
         if state.0 != millis {
             *state = (millis, 0);
         }
@@ -328,7 +329,7 @@ pub(crate) fn new_turn_id(now: DateTime<Utc>) -> DatabaseResult<String> {
         id.push_str(&format!("{byte:02x}"));
     }
     let mut random = [0u8; 14];
-    getrandom::fill(&mut random).map_err(|error| std::io::Error::other(error.to_string()))?;
+    getrandom::fill(&mut random)?;
     for byte in random {
         id.push(BASE62[usize::from(byte % 62)] as char);
     }
@@ -418,7 +419,7 @@ pub fn assert_current_root(
             root.id == session_id && root.generation == generation && root.lifecycle != "cancelled"
         })
     {
-        return Err(std::io::Error::other("root_identity_mismatch").into());
+        return Err(CoordinationError::refused("root_identity_mismatch").into());
     }
     Ok(())
 }
@@ -500,7 +501,7 @@ pub fn assert_tool_owner(
         |row| row.get(0),
     ).optional()?.flatten();
     if actual.as_deref() != Some(token) {
-        return Err(std::io::Error::other("task_tool_owner_lost").into());
+        return Err(CoordinationError::refused("task_tool_owner_lost").into());
     }
     Ok(())
 }
@@ -516,7 +517,7 @@ pub fn ask_human_for_root(
 ) -> DatabaseResult<bool> {
     let question = question.trim();
     if question.is_empty() {
-        return Err(std::io::Error::other("question_is_empty").into());
+        return Err(CoordinationError::refused("question_is_empty").into());
     }
     let options = serde_json::to_string(options)?;
     let changed = database.transaction(true, |database| {
@@ -674,7 +675,7 @@ pub fn answer_human(
     let answer =
         answer.trim_matches(|character: char| character.is_whitespace() || character == '\u{feff}');
     if answer.is_empty() {
-        return Err(std::io::Error::other("answer_is_empty").into());
+        return Err(CoordinationError::refused("answer_is_empty").into());
     }
     database.transaction(true, |database| {
         let control: Option<(Option<String>, Option<String>, Option<String>)> = database
@@ -686,10 +687,10 @@ pub fn answer_human(
             )
             .optional()?;
         let Some((question, limit_pause, recovery_turn_id)) = control else {
-            return Err(std::io::Error::other("question_identity_mismatch").into());
+            return Err(CoordinationError::refused("question_identity_mismatch").into());
         };
         if limit_pause.is_some() {
-            return Err(std::io::Error::other("task_limit_decision_required").into());
+            return Err(CoordinationError::refused("task_limit_decision_required").into());
         }
         let root = database
             .connection()
@@ -699,9 +700,9 @@ pub fn answer_human(
                 session,
             )
             .optional()?
-            .ok_or_else(|| std::io::Error::other("root_notification_unavailable"))?;
+            .ok_or_else(|| CoordinationError::refused("root_notification_unavailable"))?;
         if recovery_turn_id.is_some() && !confirm_commands_stopped {
-            return Err(std::io::Error::other("command_cleanup_confirmation_required").into());
+            return Err(CoordinationError::refused("command_cleanup_confirmation_required").into());
         }
         if let Some(recovery_turn_id) = recovery_turn_id {
             let recovered: (String, i64, String) = database.connection().query_row(
@@ -771,7 +772,7 @@ pub fn answer_task_limit(
             )
             .optional()?;
         let Some((question, Some(raw_pause), root_id)) = row else {
-            return Err(std::io::Error::other("question_identity_mismatch").into());
+            return Err(CoordinationError::refused("question_identity_mismatch").into());
         };
         let pause: PersistedLimitPause = serde_json::from_str(&raw_pause)?;
         if pause.kind != "task_limit"
@@ -785,7 +786,7 @@ pub fn answer_task_limit(
             || pause.proposed_limits.budget_usd < 0.0
             || pause.proposed_limits.max_turns < 0
         {
-            return Err(std::io::Error::other("invalid_task_limit_pause").into());
+            return Err(CoordinationError::refused("invalid_task_limit_pause").into());
         }
         let time = rfc3339_millis(now);
         if matches!(decision, TaskLimitDecision::CancelTask) {
@@ -803,7 +804,7 @@ pub fn answer_task_limit(
             )?;
             return Ok(());
         }
-        let root_id = root_id.ok_or_else(|| std::io::Error::other("root_notification_unavailable"))?;
+        let root_id = root_id.ok_or_else(|| CoordinationError::refused("root_notification_unavailable"))?;
         let root = database
             .connection()
             .query_row(
@@ -812,7 +813,7 @@ pub fn answer_task_limit(
                 session,
             )
             .optional()?
-            .ok_or_else(|| std::io::Error::other("root_notification_unavailable"))?;
+            .ok_or_else(|| CoordinationError::refused("root_notification_unavailable"))?;
         let limits = match decision {
             TaskLimitDecision::AddAllowance => pause.proposed_limits,
             TaskLimitDecision::ChangeLimits { limits } => TaskLimits {
@@ -918,7 +919,7 @@ fn launch_delegate(
             |row| row.get(0),
         )?;
         if active_turn {
-            return Err(std::io::Error::other("worker_already_assigned").into());
+            return Err(CoordinationError::refused("worker_already_assigned").into());
         }
         let current: Option<(String, i64, bool, bool)> = database.connection().query_row(
             "SELECT id,generation,stop_requested_at IS NOT NULL AND stopped_at IS NULL,launch_owner IS NOT NULL AND stopped_at IS NULL FROM suplex_task_sessions WHERE task_id = ?1 AND kind = 'worker' AND delegate_slot = ?2 AND is_current = 1",
@@ -926,7 +927,7 @@ fn launch_delegate(
             |row| Ok((row.get(0)?,row.get(1)?,row.get(2)?,row.get(3)?)),
         ).optional()?;
         if current.as_ref().is_some_and(|(_, _, stopping, launching)| *stopping || *launching) {
-            return Err(std::io::Error::other("worker_already_assigned").into());
+            return Err(CoordinationError::refused("worker_already_assigned").into());
         }
         let generation: i64 = database.connection().query_row(
             "SELECT COALESCE(MAX(generation),0)+1 FROM suplex_task_sessions WHERE task_id = ?1 AND kind = 'worker'",
@@ -939,7 +940,7 @@ fn launch_delegate(
             |row| Ok((row.get(0)?,row.get(1)?)),
         ).optional()?;
         if compatible.as_ref().is_some_and(|(_, stopping)| *stopping) {
-            return Err(std::io::Error::other("worker_already_assigned").into());
+            return Err(CoordinationError::refused("worker_already_assigned").into());
         }
         let id = compatible
             .as_ref()
@@ -959,7 +960,7 @@ fn launch_delegate(
                 params![generation, assignment_hash, profile, time, id],
             )?;
             if changed != 1 {
-                return Err(std::io::Error::other("worker_already_assigned").into());
+                return Err(CoordinationError::refused("worker_already_assigned").into());
             }
         } else {
             if let Some((current_id, current_generation, _, _)) = &current {
@@ -985,7 +986,7 @@ fn launch_delegate(
     })?;
     root_observation_rows(database, task_id)?
         .worker
-        .ok_or_else(|| std::io::Error::other("worker_session_missing").into())
+        .ok_or_else(|| CoordinationError::refused("worker_session_missing").into())
 }
 
 /// TypeScript `launchPlannerPair`: Plan A and Plan B are reserved together
@@ -1016,7 +1017,7 @@ pub fn launch_planner_pair(
         || input_b["plannerPairId"] != pair_id
         || !same_input(input_a, input_b)
     {
-        return Err(std::io::Error::other("invalid_planner_pair").into());
+        return Err(CoordinationError::refused("invalid_planner_pair").into());
     }
     let time = rfc3339_millis(now);
     let ids = database.transaction(true, |database| {
@@ -1027,7 +1028,7 @@ pub fn launch_planner_pair(
             |row| row.get(0),
         )?;
         if workflow != "competing_plans" {
-            return Err(std::io::Error::other("planner_pair_requires_combined_workflow").into());
+            return Err(CoordinationError::refused("planner_pair_requires_combined_workflow").into());
         }
         let busy: bool = database.connection().query_row(
             "SELECT EXISTS(SELECT 1 FROM suplex_task_sessions s WHERE s.task_id = ?1 AND s.kind = 'worker' AND s.is_current = 1 AND (s.launch_owner IS NOT NULL AND s.stopped_at IS NULL OR s.stop_requested_at IS NOT NULL AND s.stopped_at IS NULL OR EXISTS (SELECT 1 FROM suplex_task_turns t WHERE t.session_id = s.id AND t.generation = s.generation AND t.status IN ('pending_prompt','prompted','unknown'))))",
@@ -1035,7 +1036,7 @@ pub fn launch_planner_pair(
             |row| row.get(0),
         )?;
         if busy {
-            return Err(std::io::Error::other("worker_already_assigned").into());
+            return Err(CoordinationError::refused("worker_already_assigned").into());
         }
         database.connection().execute(
             "UPDATE suplex_task_sessions SET is_current = 0,updated_at = ?1 WHERE task_id = ?2 AND kind = 'worker' AND is_current = 1 AND delegate_slot IN ('planner_a','planner_b')",
@@ -1096,10 +1097,10 @@ pub fn replace_worker(
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
         ).optional()?;
         let Some((status, archived_at, configuration_json, control_profile)) = task else {
-            return Err(std::io::Error::other("Only active or paused tasks can replace a Worker.").into());
+            return Err(CoordinationError::refused("Only active or paused tasks can replace a Worker.").into());
         };
         if archived_at.is_some() || !matches!(status.as_str(), "active" | "waiting_human") {
-            return Err(std::io::Error::other("Only active or paused tasks can replace a Worker.").into());
+            return Err(CoordinationError::refused("Only active or paused tasks can replace a Worker.").into());
         }
         let previous: Option<(i64, Option<String>, Option<String>)> = database.connection().query_row(
             "SELECT is_current,profile_json,replacement_handoff FROM suplex_task_sessions WHERE task_id = ?1 AND id = ?2 AND kind = 'worker' AND advisor_role IS NULL",
@@ -1107,7 +1108,7 @@ pub fn replace_worker(
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         ).optional()?;
         let Some((is_current, previous_profile_json, previous_handoff)) = previous else {
-            return Err(std::io::Error::other("The Worker does not belong to this task.").into());
+            return Err(CoordinationError::refused("The Worker does not belong to this task.").into());
         };
         let existing: Option<String> = database.connection().query_row(
             "SELECT id FROM suplex_task_sessions WHERE replaces_session_id = ?1",
@@ -1116,10 +1117,10 @@ pub fn replace_worker(
         if let Some(existing) = existing {
             return root_observation_rows(database, task_id)?.sessions.into_iter()
                 .find(|session| session["id"] == existing)
-                .ok_or_else(|| std::io::Error::other("replacement_session_missing").into());
+                .ok_or_else(|| CoordinationError::refused("replacement_session_missing").into());
         }
         if is_current != 1 {
-            return Err(std::io::Error::other("The Worker changed. Read the current Worker before replacing it.").into());
+            return Err(CoordinationError::refused("The Worker changed. Read the current Worker before replacing it.").into());
         }
         let assignment: Option<(String, Option<String>, Option<String>)> = database.connection().query_row(
             "SELECT prompt_text,workflow_input_json,terminal_observation FROM suplex_task_turns WHERE session_id = ?1 ORDER BY created_at DESC,id DESC LIMIT 1",
@@ -1127,19 +1128,19 @@ pub fn replace_worker(
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         ).optional()?;
         let Some((assignment_prompt, workflow_input, _)) = assignment else {
-            return Err(std::io::Error::other("The Worker has no saved assignment.").into());
+            return Err(CoordinationError::refused("The Worker has no saved assignment.").into());
         };
         let previous_profile_json = previous_profile_json.unwrap_or(control_profile);
         let previous_profile: Value = serde_json::from_str(&previous_profile_json)?;
         let profile = match request.worker_profile_id.as_deref() {
             Some(id) => read_profile(database, id, "worker")?
-                .ok_or_else(|| std::io::Error::other("The selected Worker profile does not exist."))?,
+                .ok_or_else(|| CoordinationError::refused("The selected Worker profile does not exist."))?,
             None => previous_profile.clone(),
         };
         let configuration: Value = serde_json::from_str(&configuration_json)?;
         let policy: Option<ProjectProviderPolicy> = serde_json::from_value(configuration["providerPolicy"].clone())?;
         if !allowed_profile(policy.as_ref(), &profile) {
-            return Err(std::io::Error::other("Select an agent with a provider and login allowed by this project").into());
+            return Err(CoordinationError::refused("Select an agent with a provider and login allowed by this project").into());
         }
         let latest_result: Option<String> = database.connection().query_row(
             "SELECT terminal_observation FROM suplex_task_turns WHERE session_id = ?1 AND terminal_observation IS NOT NULL ORDER BY created_at DESC,id DESC LIMIT 1",
@@ -1193,7 +1194,7 @@ pub fn replace_worker(
             params![id, serde_json::to_string(&profile)?, time, task_id],
         )?;
         root_observation_rows(database, task_id)?.worker
-            .ok_or_else(|| std::io::Error::other("replacement_session_missing").into())
+            .ok_or_else(|| CoordinationError::refused("replacement_session_missing").into())
     })
 }
 
@@ -1278,17 +1279,17 @@ pub fn replace_coordinator(
             }),
         ).optional()?;
         let Some(CoordinatorControlRow {status,archived_at,configuration_json,current_root_id,question_id,question,question_options,limit_pause,recovery_turn,control_profile,worktree,pull_request,workflow_state}) = task else {
-            return Err(std::io::Error::other("Only active or paused tasks can select a Coordinator.").into());
+            return Err(CoordinationError::refused("Only active or paused tasks can select a Coordinator.").into());
         };
         if archived_at.is_some() || !matches!(status.as_str(), "active" | "waiting_human") {
-            return Err(std::io::Error::other("Only active or paused tasks can select a Coordinator.").into());
+            return Err(CoordinationError::refused("Only active or paused tasks can select a Coordinator.").into());
         }
         let previous: Option<(i64, Option<String>)> = database.connection().query_row(
             "SELECT is_current,profile_json FROM suplex_task_sessions WHERE task_id = ?1 AND id = ?2 AND kind = 'root' AND advisor_role IS NULL",
             params![task_id, request.session_id], |row| Ok((row.get(0)?,row.get(1)?)),
         ).optional()?;
         let Some((is_current, old_profile_json)) = previous else {
-            return Err(std::io::Error::other("The Coordinator does not belong to this task.").into());
+            return Err(CoordinationError::refused("The Coordinator does not belong to this task.").into());
         };
         let handoff = request.handoff.as_deref().unwrap_or("");
         // The saved intent keeps a question only when it resumes the task.
@@ -1302,29 +1303,29 @@ pub fn replace_coordinator(
             if saved["rootProfileId"] != request.root_profile_id || saved["handoff"] != handoff
                 || saved["resume"] != request.resume || saved["questionId"].as_str() != question_intent
                 || current_root_id.as_deref() != Some(id.as_str()) {
-                return Err(std::io::Error::other("The Coordinator changed. Read the current Coordinator before selecting another.").into());
+                return Err(CoordinationError::refused("The Coordinator changed. Read the current Coordinator before selecting another.").into());
             }
             return root_observation_rows(database, task_id)?.sessions.into_iter()
                 .find(|session| session["id"] == id)
-                .ok_or_else(|| std::io::Error::other("replacement_session_missing").into());
+                .ok_or_else(|| CoordinationError::refused("replacement_session_missing").into());
         }
         if is_current != 1 || current_root_id.as_deref() != Some(request.session_id.as_str()) {
-            return Err(std::io::Error::other("The Coordinator changed. Read the current Coordinator before selecting another.").into());
+            return Err(CoordinationError::refused("The Coordinator changed. Read the current Coordinator before selecting another.").into());
         }
         if request.resume {
             if status != "waiting_human" || question_id != request.question_id {
-                return Err(std::io::Error::other("The current question changed. Read it before resuming.").into());
+                return Err(CoordinationError::refused("The current question changed. Read it before resuming.").into());
             }
             if limit_pause.is_some() || recovery_turn.is_some() {
-                return Err(std::io::Error::other("Answer the current task decision before resuming.").into());
+                return Err(CoordinationError::refused("Answer the current task decision before resuming.").into());
             }
         }
         let profile = read_profile(database, &request.root_profile_id, "root")?
-            .ok_or_else(|| std::io::Error::other("The selected Coordinator profile does not exist."))?;
+            .ok_or_else(|| CoordinationError::refused("The selected Coordinator profile does not exist."))?;
         let configuration: Value = serde_json::from_str(&configuration_json)?;
         let policy: Option<ProjectProviderPolicy> = serde_json::from_value(configuration["providerPolicy"].clone())?;
         if !allowed_profile(policy.as_ref(), &profile) {
-            return Err(std::io::Error::other("Select an agent with a provider and login allowed by this project").into());
+            return Err(CoordinationError::refused("Select an agent with a provider and login allowed by this project").into());
         }
         let rows = root_observation_rows(database, task_id)?;
         let old_profile_json = old_profile_json.unwrap_or(control_profile);
@@ -1436,7 +1437,7 @@ pub fn replace_coordinator(
         database.connection().execute("INSERT INTO suplex_task_sessions (id,task_id,kind,generation,is_current,lifecycle,profile_json,replaces_session_id,replacement_reason,replacement_handoff,created_at,updated_at) VALUES (?1,?2,'root',?3,1,'reserved',?4,?5,?6,?7,?8,?8)",params![id,task_id,generation,js_json::stringify(&profile),request.session_id,reason,handoff_text,time])?;
         database.connection().execute("INSERT INTO suplex_task_turns (id,task_id,session_id,generation,prompt_hash,prompt_text,status,created_at,updated_at) VALUES (?1,?2,?3,?4,?5,?6,'pending_prompt',?7,?7)",params![new_turn_id(now)?,task_id,id,generation,prompt_hash,prompt,time])?;
         database.connection().execute("UPDATE suplex_task_controls SET root_session_id = ?1,root_profile_json = ?2,status = CASE WHEN ?3 THEN 'active' ELSE status END,status_changed_at = CASE WHEN ?3 THEN ?4 ELSE status_changed_at END,human_question = CASE WHEN ?3 THEN NULL ELSE human_question END,human_question_id = CASE WHEN ?3 THEN NULL ELSE human_question_id END,human_question_options_json = CASE WHEN ?3 THEN '[]' ELSE human_question_options_json END,wake_at = CASE WHEN status = 'active' OR ?3 THEN ?4 ELSE wake_at END,updated_at = ?4 WHERE task_id = ?5",params![id,js_json::stringify(&profile),request.resume,time,task_id])?;
-        root_observation_rows(database, task_id)?.root.ok_or_else(|| std::io::Error::other("replacement_session_missing").into())
+        root_observation_rows(database, task_id)?.root.ok_or_else(|| CoordinationError::refused("replacement_session_missing").into())
     })
 }
 
@@ -1452,7 +1453,7 @@ pub fn reserve_root(
             [task_id], |row| row.get(0),
         )?;
         if !active {
-            return Err(std::io::Error::other("task_not_active").into());
+            return Err(CoordinationError::refused("task_not_active").into());
         }
         if let Some(existing) = current_root(database, task_id)? {
             return Ok(existing);
@@ -1471,7 +1472,7 @@ pub fn reserve_root(
             "UPDATE suplex_task_controls SET root_session_id = ?1, updated_at = ?2 WHERE task_id = ?3",
             params![id, time, task_id],
         )?;
-        current_root(database, task_id)?.ok_or_else(|| std::io::Error::other("root_session_missing").into())
+        current_root(database, task_id)?.ok_or_else(|| CoordinationError::refused("root_session_missing").into())
     })
 }
 
@@ -1521,7 +1522,7 @@ pub fn send_labeled_note(
 ) -> DatabaseResult<RootTurn> {
     let note = js_trim(note);
     if note.is_empty() || note.encode_utf16().count() > 20_000 {
-        return Err(std::io::Error::other("note_invalid").into());
+        return Err(CoordinationError::refused("note_invalid").into());
     }
     let turn = database.transaction(true, |database| {
         let (status, archived, root_session_id, workflow_state): (String, bool, Option<String>, String) = database.connection().query_row(
@@ -1530,7 +1531,7 @@ pub fn send_labeled_note(
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
         )?;
         if archived || !matches!(status.as_str(), "active" | "delivered") {
-            return Err(std::io::Error::other("task_note_unavailable").into());
+            return Err(CoordinationError::refused("task_note_unavailable").into());
         }
         let resuming = status == "delivered";
         let time = rfc3339_millis(now);
@@ -1568,8 +1569,7 @@ pub fn send_labeled_note(
             None => {
                 let root = reserve_root(database, task_id, now)?;
                 let rows = root_observation_rows(database, task_id)?;
-                let initial = root_prompts::initial_coordinator_prompt(&rows.control, &rows.context, &[])
-                    .map_err(std::io::Error::other)?;
+                let initial = root_prompts::initial_coordinator_prompt(&rows.control, &rows.context, &[])?;
                 ensure_initial_prompt(database, &root, &initial, now)?;
                 root
             }
@@ -1885,7 +1885,7 @@ pub fn record_standard_worker_result_and_wake(
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
         ).optional()?;
         let Some((worker_turn_id, status, prior_receipt, turn_input)) = worker_turn else {
-            return Err(std::io::Error::other("stale_generation").into());
+            return Err(CoordinationError::refused("stale_generation").into());
         };
         let current: Option<(Option<String>, Option<String>)> = database.connection().query_row(
             "SELECT advisor_role,workflow_input_json FROM suplex_task_sessions WHERE id = ?1 AND task_id = ?2 AND kind = 'worker' AND is_current = 1 AND generation = ?3 AND lifecycle <> 'cancelled'",
@@ -1893,16 +1893,16 @@ pub fn record_standard_worker_result_and_wake(
             |row| Ok((row.get(0)?, row.get(1)?)),
         ).optional()?;
         let Some((advisor_role, session_input)) = current.filter(|_| status != "cancelled") else {
-            return Err(std::io::Error::other("stale_generation").into());
+            return Err(CoordinationError::refused("stale_generation").into());
         };
         if status == "completed" {
             if prior_receipt.as_deref() == Some(receipt_id) {
                 return Ok(None);
             }
-            return Err(std::io::Error::other("stale_receipt").into());
+            return Err(CoordinationError::refused("stale_receipt").into());
         }
         let root = current_root(database, task_id)?
-            .ok_or_else(|| std::io::Error::other("root_notification_unavailable"))?;
+            .ok_or_else(|| CoordinationError::refused("root_notification_unavailable"))?;
         let time = rfc3339_millis(now);
         database.connection().execute(
             "UPDATE suplex_task_turns SET status = 'completed', result_receipt_id = ?1, terminal_observation = ?2, native_turn_id = ?3, completed_at = ?4, updated_at = ?4 WHERE id = ?5",
@@ -1988,22 +1988,22 @@ pub fn reconcile_advisor_result(
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         ).optional()?;
         let Some((role, input, observation)) = row else {
-            return Err(std::io::Error::other("advisor_turn_not_found").into());
+            return Err(CoordinationError::refused("advisor_turn_not_found").into());
         };
         let input = input
             .and_then(|raw| serde_json::from_str::<Value>(&raw).ok())
             .unwrap_or(Value::Null);
         let Some(role) = role.filter(|role| input["kind"] == "advisor" && input["role"] == role.as_str() && result["role"] == role.as_str()) else {
-            return Err(std::io::Error::other("advisor_role_mismatch").into());
+            return Err(CoordinationError::refused("advisor_role_mismatch").into());
         };
         if super::workflows::turn_outcome(observation.as_deref())
             .advisor
             .is_some_and(|advisor| !advisor["result"].is_null())
         {
-            return Err(std::io::Error::other("advisor_result_already_valid").into());
+            return Err(CoordinationError::refused("advisor_result_already_valid").into());
         }
         let Some(Value::Object(mut base)) = observation.and_then(|raw| serde_json::from_str::<Value>(&raw).ok()) else {
-            return Err(std::io::Error::other("advisor_observation_invalid").into());
+            return Err(CoordinationError::refused("advisor_observation_invalid").into());
         };
         base.insert("advisor".into(), json!({"role":role,"result":result,"invalidReason":null}));
         database.connection().execute(
@@ -2018,7 +2018,7 @@ pub fn reconcile_advisor_result(
                 .iter_mut()
                 .find(|review| review["sessionId"] == session_id && review["turnId"] == turn_id && review["role"] == role.as_str())
                 .filter(|review| review["result"].is_null())
-                .ok_or_else(|| std::io::Error::other("advisor_review_not_reconcilable"))?;
+                .ok_or_else(|| CoordinationError::refused("advisor_review_not_reconcilable"))?;
             review["result"] = result.clone();
             review["invalidReason"] = Value::Null;
             write_workflow_state(database, task_id, &state, now)?;
@@ -2139,7 +2139,7 @@ pub fn fail_delivery_wait(
 ) -> DatabaseResult<bool> {
     let question = question.trim();
     if question.is_empty() {
-        return Err(std::io::Error::other("question_is_empty").into());
+        return Err(CoordinationError::refused("question_is_empty").into());
     }
     let asked = database.transaction(true, |database| {
         let state = workflow_state(database, task_id)?;
@@ -2167,7 +2167,7 @@ pub fn set_worktree(
 ) -> DatabaseResult<()> {
     let fields = worktree
         .as_object()
-        .ok_or_else(|| std::io::Error::other("Invalid task worktree"))?;
+        .ok_or_else(|| CoordinationError::refused("Invalid task worktree"))?;
     if fields.len() != 5
         || ["path", "branch", "baseSha", "headSha"].iter().any(|key| {
             fields
@@ -2177,14 +2177,14 @@ pub fn set_worktree(
         })
         || fields.get("dirty").and_then(Value::as_bool).is_none()
     {
-        return Err(std::io::Error::other("Invalid task worktree").into());
+        return Err(CoordinationError::refused("Invalid task worktree").into());
     }
     database.transaction(false, |database| {
         let changed = database.connection().execute(
             "UPDATE suplex_task_controls SET worktree_json = ?1, updated_at = ?2 WHERE task_id = ?3 AND status = 'active'",
             params![worktree.to_string(), rfc3339_millis(now), task_id],
         )?;
-        if changed != 1 { return Err(std::io::Error::other("task_not_active").into()); }
+        if changed != 1 { return Err(CoordinationError::refused("task_not_active").into()); }
         Ok(())
     })
 }
@@ -2206,7 +2206,7 @@ pub fn mark_delivered(
             "UPDATE suplex_task_controls SET workflow_state_json = json_set(workflow_state_json, '$.followUp', json('false')), status = 'delivered', wake_at = NULL, human_question = NULL, human_question_id = NULL, limit_pause_json = NULL, updated_at = ?1 WHERE task_id = ?2 AND status IN ('active','waiting_human','delivered')",
             params![time, task_id],
         )?;
-        if changed != 1 { return Err(std::io::Error::other("task_not_active").into()); }
+        if changed != 1 { return Err(CoordinationError::refused("task_not_active").into()); }
         let was_delivered = previous.as_deref() == Some("delivered");
         let mut statement = database.connection().prepare(
             "SELECT d.task_id FROM suplex_task_dependencies d WHERE d.depends_on_task_id = ?1 ORDER BY d.task_id"
@@ -2400,7 +2400,7 @@ pub fn require_execution_cleanup(
             "UPDATE suplex_task_controls SET status = 'waiting_human', human_question = ?1, human_question_options_json = '[]', human_question_id = ?2, limit_pause_json = NULL, wake_at = NULL, workflow_state_json = json_set(workflow_state_json, '$.deliveryWait', json('null')), updated_at = ?3 WHERE task_id = ?4 AND status = 'active'",
             params!["The agent stopped during a tool call. A command can still be active in the worktree. Stop those commands before you continue. Describe what you checked, then confirm that all commands from this session have stopped.", Uuid::new_v4().to_string(), rfc3339_millis(now), turn.task_id],
         )?;
-        if changed != 1 { return Err(std::io::Error::other("task_not_active").into()); }
+        if changed != 1 { return Err(CoordinationError::refused("task_not_active").into()); }
         database.connection().execute(
             "UPDATE suplex_task_controls SET recovery_turn_id = ?1 WHERE task_id = ?2",
             params![turn.id, turn.task_id],

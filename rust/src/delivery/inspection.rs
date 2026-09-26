@@ -1,7 +1,8 @@
 //! Read the published-base-to-local-head range for a Standard task.
 
+use crate::delivery::DeliveryError;
 use crate::shared::hash::sha256_hex;
-use std::{error::Error, io, path::Path};
+use std::{error::Error, path::Path};
 
 use git2::{DiffFormat, DiffOptions, Repository, Sort};
 use serde::Serialize;
@@ -80,7 +81,7 @@ pub fn inspect_revisions(
     let head = git2::Oid::from_str(head_sha)?;
     let repository = Repository::open(path)?;
     worktree::published_base_commit(&repository, head, github_token).map_err(|_| {
-        io::Error::other(format!(
+        DeliveryError::internal(format!(
             "Git could not obtain reviewed revision {}",
             &head_sha[..12]
         ))
@@ -184,7 +185,7 @@ pub struct DeliveryDiff {
 }
 
 fn unavailable(message: &'static str) -> Box<dyn Error> {
-    io::Error::other(message).into()
+    DeliveryError::internal(message).into()
 }
 
 fn patch_display(patch: &str) -> (String, bool) {

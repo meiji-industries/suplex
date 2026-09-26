@@ -51,7 +51,7 @@ fn credential_lock_path() -> AccessResult<PathBuf> {
             return Err(io::Error::from_raw_os_error(status).into());
         }
         if result.is_null() {
-            return Err(io::Error::other("OS account home is unavailable").into());
+            return Err("OS account home is unavailable".into());
         }
         let bytes = unsafe { CStr::from_ptr((*result).pw_dir) }.to_bytes();
         PathBuf::from(std::ffi::OsStr::from_bytes(bytes))
@@ -119,9 +119,7 @@ pub async fn save_device_grant(grant: &super::github_device::Granted) -> AccessR
     )
     .await??;
     if !output.status.success() {
-        return Err(
-            io::Error::other(String::from_utf8_lossy(&output.stderr).trim().to_owned()).into(),
-        );
+        return Err(String::from_utf8_lossy(&output.stderr).trim().into());
     }
     Ok(())
 }
@@ -130,7 +128,7 @@ pub async fn save_device_grant(grant: &super::github_device::Granted) -> AccessR
 pub fn store_device_credential_from_stdin() -> AccessResult<()> {
     use std::io::Read;
     let stored: StoredCredential = serde_json::from_reader(std::io::stdin().take(65_536))
-        .map_err(|_| io::Error::other("Invalid credential input"))?;
+        .map_err(|_| "Invalid credential input")?;
     write_own_credential(&stored)
 }
 
@@ -185,7 +183,7 @@ fn read_credential(
     if raw.starts_with('{') {
         return serde_json::from_str(&raw)
             .map(Some)
-            .map_err(|_| io::Error::other("Stored GitHub credential is invalid").into());
+            .map_err(|_| "Stored GitHub credential is invalid".into());
     }
     Ok(Some(StoredCredential {
         access_token: raw,
@@ -319,7 +317,7 @@ where
         .send()
         .await?;
     if !response.status().is_success() {
-        return Err(io::Error::other("GitHub credential refresh failed").into());
+        return Err("GitHub credential refresh failed".into());
     }
     let refreshed: RefreshedToken = response.json().await.map_err(|_| {
         io::Error::new(
@@ -334,7 +332,7 @@ where
         return Ok(None);
     }
     if refreshed.error.is_some() {
-        return Err(io::Error::other("GitHub credential refresh failed").into());
+        return Err("GitHub credential refresh failed".into());
     }
     valid_expiry_pair(
         refreshed.expires_in,
@@ -442,7 +440,7 @@ pub fn disable_keychain_interaction() -> AccessResult<()> {
     if status == 0 {
         Ok(())
     } else {
-        Err(io::Error::other(format!("Keychain interaction policy failed: {status}")).into())
+        Err(format!("Keychain interaction policy failed: {status}").into())
     }
 }
 
@@ -483,7 +481,7 @@ async fn read_gh_token(mut command: tokio::process::Command) -> AccessResult<Opt
         return Ok(None);
     }
     let token = String::from_utf8(output.stdout)
-        .map_err(|_| io::Error::other("GitHub CLI returned an invalid credential"))?;
+        .map_err(|_| "GitHub CLI returned an invalid credential")?;
     Ok((!token.trim().is_empty()).then(|| token.trim().to_owned()))
 }
 
@@ -546,7 +544,7 @@ impl Access {
                 return Err(error);
             }
             if refresh_failed && token.is_none() {
-                return Err(io::Error::other("GitHub credential refresh failed").into());
+                return Err("GitHub credential refresh failed".into());
             }
             let source = if token.is_some() {
                 CredentialSource::Gh

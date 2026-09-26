@@ -1396,7 +1396,7 @@ pub fn update_user_task_details(
         && input.advisor_profile_ids.is_none()
     {
         // The HTTP schema accepts {}, but the TypeScript service refinement throws.
-        return Err(std::io::Error::other("Internal server error").into());
+        return Err(TaskError::internal("Internal server error").into());
     }
     database.transaction(true, |database| {
         let scope = repository::task_by_id(database, task_id)?.ok_or_else(TaskError::not_found)?;

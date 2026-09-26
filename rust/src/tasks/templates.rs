@@ -45,8 +45,7 @@ fn template(
     (id, project_id, configuration_json, created_at, updated_at): TemplateRow,
 ) -> Result<TemplateResponse, Box<dyn Error>> {
     let value: Value = serde_json::from_str(&configuration_json)?;
-    let configuration =
-        task_templates::parse_stored_configuration(value).map_err(std::io::Error::other)?;
+    let configuration = task_templates::parse_stored_configuration(value)?;
     Ok(TemplateResponse {
         configuration,
         id,
@@ -85,10 +84,9 @@ pub fn list(
 /// Apply workflow defaults, then the create schema.
 fn normalized(mut input: Map<String, Value>) -> Result<TemplateConfiguration, Box<dyn Error>> {
     normalize_workflow_input(&mut input, false).map_err(|message| failure(message, 422))?;
-    Ok(
-        task_templates::parse_stored_configuration(Value::Object(input))
-            .map_err(std::io::Error::other)?,
-    )
+    Ok(task_templates::parse_stored_configuration(Value::Object(
+        input,
+    ))?)
 }
 
 fn assert_name(

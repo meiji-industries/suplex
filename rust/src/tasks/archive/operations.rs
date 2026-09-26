@@ -5,7 +5,6 @@ use crate::shared::time::now_millis_rfc3339;
 use crate::tasks::TaskError;
 use std::{
     collections::HashSet,
-    io,
     path::{Path, PathBuf},
     sync::{Mutex, OnceLock},
 };
@@ -38,7 +37,7 @@ impl ArchiveGuard {
         let mut active = ARCHIVES_IN_PROGRESS
             .get_or_init(|| Mutex::new(HashSet::new()))
             .lock()
-            .map_err(|_| io::Error::other("Archive state is unavailable"))?;
+            .map_err(|_| TaskError::internal("Archive state is unavailable"))?;
         if !active.insert(task_id.to_owned()) {
             return Err(failure("Archive cleanup is in progress", 409));
         }
@@ -77,7 +76,7 @@ fn failure_code(message: &str, status_code: u16, code: &'static str) -> Box<dyn 
 }
 
 fn cleanup_error(error: Box<dyn std::error::Error>) -> Box<dyn std::error::Error> {
-    if error.is::<TaskError>() {
+    if matches!(error.downcast_ref(), Some(TaskError::Failure { .. })) {
         error
     } else {
         failure(&error.to_string(), 409)
@@ -88,7 +87,7 @@ fn required_path(configuration: &Value, field: &str) -> DatabaseResult<PathBuf> 
     let value = configuration[field]
         .as_str()
         .filter(|value| !value.is_empty())
-        .ok_or_else(|| io::Error::other(format!("Task {field} is missing")))?;
+        .ok_or_else(|| TaskError::internal(format!("Task {field} is missing")))?;
     Ok(PathBuf::from(value))
 }
 
@@ -172,7 +171,7 @@ fn archive_sessions_idle(
         let directory = session_reader::session_directory(database_path, &session_id)?;
         // TypeScript `nativeSessionReader`: a session without a native identity belongs to OpenCode.
         let harness = task_harness_registry::for_session(native_session_id.as_deref())
-            .ok_or_else(|| io::Error::other("No native reader for this session"))?;
+            .ok_or_else(|| TaskError::internal("No native reader for this session"))?;
         let busy = harness.busy(&ReaderSession {
             database_path,
             session_id: &session_id,

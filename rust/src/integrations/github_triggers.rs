@@ -9,7 +9,6 @@ use crate::shared::ids::random_hex_id;
 use crate::tasks::TaskError;
 use std::{
     error::Error,
-    io,
     path::{Path, PathBuf},
     sync::Mutex,
     time::Duration,
@@ -47,7 +46,7 @@ use crate::{
 
 pub type Failure = Box<dyn Error + Send + Sync>;
 
-/// A public trigger rejection (`IdentityError` and `PreviewFailure` in TypeScript).
+/// A public trigger rejection (`AuthFailure` and `PreviewFailure` in TypeScript).
 #[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 #[error("{message}")]
 pub struct TriggerFailure {
@@ -97,8 +96,15 @@ pub fn send(error: Box<dyn Error>) -> Failure {
         Ok(task) => task,
         Err(error) => error,
     };
-    keep!(error, TriggerFailure, GithubFailure, PlatformError);
-    Box::new(io::Error::other(error.to_string()))
+    keep!(
+        error,
+        TriggerFailure,
+        IdentityError,
+        ProjectError,
+        GithubFailure,
+        PlatformError
+    );
+    error.to_string().into()
 }
 
 /// Database access for the HTTP state and the host poller.

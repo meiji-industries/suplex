@@ -326,7 +326,11 @@ pub fn create(
         Ok(())
     });
     if let Err(error) = result {
-        if error.is::<IdentityError>() || !is_constraint(error.as_ref()) {
+        if matches!(
+            error.downcast_ref(),
+            Some(IdentityError::ExternalAgent { .. })
+        ) || !is_constraint(error.as_ref())
+        {
             return Err(error);
         }
         return Err(invalid_configuration(
@@ -648,7 +652,14 @@ pub fn exchange(
     });
     let agent_id = match result {
         Ok(agent_id) => agent_id,
-        Err(error) if error.is::<IdentityError>() => return Err(error),
+        Err(error)
+            if matches!(
+                error.downcast_ref(),
+                Some(IdentityError::ExternalAgent { .. })
+            ) =>
+        {
+            return Err(error);
+        }
         Err(_) => return Err(pairing_failure()),
     };
     Ok(Exchanged {

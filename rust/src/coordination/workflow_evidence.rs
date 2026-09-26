@@ -2,6 +2,7 @@
 //! directories outside the Git worktree:
 //! `<root>/<taskId>/<evidence-id>/{manifest.json,patch.diff,verification.json,attachments/}`.
 
+use super::CoordinationError;
 use crate::shared::time::now_millis_rfc3339;
 use std::{
     error::Error,
@@ -149,7 +150,7 @@ pub fn write_task_evidence(
     verification: &Value,
 ) -> Result<WrittenEvidence, Box<dyn Error>> {
     if !valid_id(task_id) {
-        return Err(io::Error::other("Invalid task evidence identity").into());
+        return Err(CoordinationError::refused("Invalid task evidence identity").into());
     }
     let task_root = root.join(task_id);
     fs::create_dir_all(&task_root)?;

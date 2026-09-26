@@ -332,8 +332,7 @@ pub async fn reconcile_completed_advisor_report(
             verify_advisor_outcome(&database_path, &task_id, &input, outcome)
                 .map_err(|error| error.to_string())
         })
-        .await?
-        .map_err(std::io::Error::other)?
+        .await??
     };
     if let Ok(result) = &outcome {
         let mut database = SuplexDatabase::open(database_path, OpenMode::ReadWrite)?;

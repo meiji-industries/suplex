@@ -471,7 +471,7 @@ async fn read_diff(
     .await;
     let value = match observed {
         Ok(Ok(value)) => value,
-        Ok(Err(error)) => return respond(Err(Box::new(std::io::Error::other(error))), cookies),
+        Ok(Err(error)) => return respond(Err(error.into()), cookies),
         Err(error) => return respond(Err(Box::new(error)), cookies),
     };
     let scope = state.with_database(|database| read_task(database, &user_id, &task_id));

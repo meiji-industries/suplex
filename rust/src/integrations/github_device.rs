@@ -119,7 +119,7 @@ impl DeviceAuth {
             .send()
             .await?;
         if !response.status().is_success() {
-            return Err(io::Error::other("GitHub device authorization is unavailable").into());
+            return Err("GitHub device authorization is unavailable".into());
         }
         let code: DeviceCodeResponse = response.json().await.map_err(|_| {
             io::Error::new(
@@ -203,7 +203,7 @@ impl DeviceAuth {
                 .send()
                 .await?;
             if !response.status().is_success() {
-                return Err(io::Error::other("GitHub device token request failed").into());
+                return Err("GitHub device token request failed".into());
             }
             let token: TokenResponse = response.json().await.map_err(|_| {
                 io::Error::new(
@@ -238,7 +238,7 @@ impl DeviceAuth {
                     return Ok(Poll::Denied);
                 }
                 Some(_) => {
-                    return Err(io::Error::other("GitHub device authorization failed").into());
+                    return Err("GitHub device authorization failed".into());
                 }
                 None => {}
             }
@@ -258,18 +258,18 @@ impl DeviceAuth {
         if let Progress::Granted(grant) = &flow.state {
             save(grant.clone())
                 .await
-                .map_err(|_| io::Error::other("GitHub credential store failed"))?;
+                .map_err(|_| "GitHub credential store failed")?;
             flow.state = Progress::Saved(grant.access_token.clone());
         }
         let Progress::Saved(access_token) = &flow.state else {
             unreachable!()
         };
         let access = Access::for_api(&self.api_base, Some(access_token.clone()))
-            .map_err(|_| io::Error::other("GitHub account validation failed"))?;
+            .map_err(|_| "GitHub account validation failed")?;
         let login = access
             .current_user_login()
             .await
-            .map_err(|_| io::Error::other("GitHub account validation failed"))?;
+            .map_err(|_| "GitHub account validation failed")?;
         let result = Poll::Connected { login };
         flow.state = Progress::Complete(result.clone());
         Ok(result)

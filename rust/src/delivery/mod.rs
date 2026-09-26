@@ -25,6 +25,10 @@ impl DeliveryError {
         }
     }
 
+    pub fn internal(message: impl Into<String>) -> Self {
+        Self::Internal(message.into())
+    }
+
     pub fn code(&self) -> Option<&'static str> {
         match self {
             Self::Operation { code, .. } => Some(code),

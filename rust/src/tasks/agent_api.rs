@@ -511,8 +511,7 @@ pub fn templates(
         .collect::<rusqlite::Result<Vec<_>>>()?;
     rows.into_iter()
         .map(|(id, name, configuration)| {
-            let configuration = task_templates::parse_stored_configuration(serde_json::from_str(&configuration)?)
-                .map_err(std::io::Error::other)?;
+            let configuration = task_templates::parse_stored_configuration(serde_json::from_str(&configuration)?)?;
             let permitted = policy.template_ids.contains(&id);
             Ok(json!({"id": id, "name": name, "description": configuration.description, "permittedForAgentTaskCreation": permitted}))
         })
@@ -1088,9 +1087,9 @@ fn task_input(mut fields: Map<String, Value>) -> DatabaseResult<task_contracts::
     normalize_workflow(&mut fields)?;
     task_contracts::parse_task_create(Some(&Value::Object(fields))).map_err(|error| match error {
         ContractFailure::Issues(issues) => {
-            std::io::Error::other(format!("task input is invalid: {issues:?}")).into()
+            TaskError::internal(format!("task input is invalid: {issues:?}")).into()
         }
-        other => std::io::Error::other(format!("task input is invalid: {other:?}")).into(),
+        other => TaskError::internal(format!("task input is invalid: {other:?}")).into(),
     })
 }
 
@@ -1302,8 +1301,7 @@ fn resolve(
                 details("The selected template is not permitted."),
             ));
         }
-        let template = task_templates::parse_stored_configuration(serde_json::from_str(&stored)?)
-            .map_err(std::io::Error::other)?;
+        let template = task_templates::parse_stored_configuration(serde_json::from_str(&stored)?)?;
         selected = serde_json::to_value(&template)?
             .as_object()
             .cloned()

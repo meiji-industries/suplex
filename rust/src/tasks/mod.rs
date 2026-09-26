@@ -70,6 +70,10 @@ impl TaskError {
         Self::new("Not found", 404)
     }
 
+    pub fn internal(message: impl Into<String>) -> Self {
+        Self::Internal(message.into())
+    }
+
     pub fn is_pull_request_owned(error: &(dyn std::error::Error + 'static)) -> bool {
         matches!(error.downcast_ref(), Some(Self::PullRequestOwned))
     }

@@ -47,7 +47,7 @@ pub(crate) mod tests {
                 project_id: "pane_project".into(),
                 title: "Terminal".into(),
                 description: "Observe only".into(),
-                configuration: json!({"branch":"task-pane","baseBranch":"main"}),
+                configuration: json!({"repository":"owner/repo","repositoryPath":"/tmp/repo","worktreeRoot":"/tmp/worktrees","baselineSha":"head","startingSha":"head","capturedAt":stamp,"branch":"task-pane","baseBranch":"main"}),
                 idempotency_key: "pane-1".into(),
                 request_hash: "pane-hash".into(),
                 creator: TaskCreator::User(admin.user.id.clone()),

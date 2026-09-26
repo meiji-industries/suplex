@@ -4,6 +4,7 @@ pub(crate) use crate::tasks::control::trimmed;
 use garde::Validate;
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Value, json};
+use ts_rs::TS;
 
 use super::{
     Contract, ContractFailure, ContractResult, Fields, MAX, advisors, choice, flag, formatted,
@@ -101,7 +102,7 @@ pub struct TaskImage {
     pub base64: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum TaskSource {
     Issue {
@@ -183,7 +184,7 @@ pub struct PullRequestDependency {
     pub number: u64,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum IssueAssociation {
     Github {

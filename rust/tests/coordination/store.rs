@@ -1033,7 +1033,7 @@ mod tests {
                 &turn,
                 "owner-one",
                 generation,
-                TaskLimitUsage {
+                ObservedTaskLimitUsage {
                     estimated_cost_usd: None,
                 },
                 now,
@@ -1047,7 +1047,7 @@ mod tests {
                     &turn,
                     "owner-one",
                     generation,
-                    TaskLimitUsage {
+                    ObservedTaskLimitUsage {
                         estimated_cost_usd: None,
                     },
                     now,
@@ -1110,7 +1110,7 @@ mod tests {
                 &second,
                 "owner-one",
                 "dependency-regressed",
-                TaskLimitUsage {
+                ObservedTaskLimitUsage {
                     estimated_cost_usd: None
                 },
                 now,
@@ -1143,7 +1143,7 @@ mod tests {
                 &second,
                 "owner-one",
                 "runtime-generation-three",
-                TaskLimitUsage {
+                ObservedTaskLimitUsage {
                     estimated_cost_usd: Some(1.0)
                 },
                 now

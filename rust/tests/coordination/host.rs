@@ -533,7 +533,7 @@ mod host_tests {
             task_id: &task_id,
             executable: None,
             inherited_environment: &inherited_environment,
-            usage: TaskLimitUsage {
+            usage: ObservedTaskLimitUsage {
                 estimated_cost_usd: Some(0.0),
             },
         };
@@ -862,7 +862,7 @@ mod host_tests {
         }
     }
 
-    /// TypeScript `observeTaskLimitUsage` cases from
+    /// TypeScript `observeObservedTaskLimitUsage` cases from
     /// `tests/root-controller-limits.test.ts`.
     #[tokio::test]
     async fn observed_usage_matches_the_typescript_limit_observer() {

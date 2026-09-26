@@ -263,7 +263,7 @@ pub(crate) fn observe_queue_wait(database: &mut SuplexDatabase, task_id: &str) {
     };
     let mut waits = waiting_on
         .iter()
-        .map(|wait| json!({"id": wait["id"], "reason": wait["reason"]}))
+        .map(|wait| json!({"id": wait.id, "reason": wait.reason}))
         .collect::<Vec<_>>();
     waits.sort_by(|left, right| left["id"].as_str().cmp(&right["id"].as_str()));
     let signature = Value::from(waits.clone()).to_string();
@@ -926,12 +926,12 @@ pub fn bind_native_session(
 }
 
 /// This CAS is the durable admission boundary used inside the harness dispatch callback.
-pub fn claim_prompt(
+pub(crate) fn claim_prompt(
     database: &mut SuplexDatabase,
     turn: &TurnRow,
     owner: &str,
     server_generation: &str,
-    usage: TaskLimitUsage,
+    usage: ObservedTaskLimitUsage,
     now: DateTime<Utc>,
 ) -> DatabaseResult<bool> {
     database.transaction(true, |database| {
@@ -2253,7 +2253,9 @@ use super::persistence::{session, turn};
 pub use super::replacement::{replace_coordinator, replace_worker, worker_replacement_ready};
 use super::root_prompts::without_current_dependency_status;
 pub use super::root_prompts::{IDLE_ROOT_PROMPT, with_current_dependency_status};
-pub use crate::tasks::limits::{TaskLimitUsage, answer_task_limit, reconcile_task_limit_pause};
+pub(crate) use crate::tasks::limits::{
+    ObservedTaskLimitUsage, answer_task_limit, reconcile_task_limit_pause,
+};
 
 #[cfg(test)]
 include!("../../tests/coordination/store.rs");

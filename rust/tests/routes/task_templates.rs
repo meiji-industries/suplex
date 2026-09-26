@@ -148,7 +148,7 @@ mod tests {
                 project_id: project.id.clone(),
                 title: "Saved task".into(),
                 description: "Saved description".into(),
-                configuration: json!({"repository":"owner/repo","branch":"task-saved","baseBranch":"main","baselineSha":"head","runProjectTests":false,"visualEvidence":"capture"}),
+                configuration: json!({"repositoryPath":project.repository_path,"worktreeRoot":project.worktree_root,"startingSha":"head","capturedAt":now.to_rfc3339(),"repository":"owner/repo","branch":"task-saved","baseBranch":"main","baselineSha":"head","runProjectTests":false,"visualEvidence":"capture"}),
                 idempotency_key: "saved-task-key".into(),
                 request_hash: "saved-task-hash".into(),
                 creator: crate::tasks::repository::TaskCreator::User(admin.user.id.clone()),

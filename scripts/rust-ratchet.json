@@ -2,7 +2,7 @@
   "serde_json_value": 172,
   "io_error_other": 102,
   "sql_outside_storage": 814,
-  "json_field_index": 1805,
+  "json_field_index": 1784,
   "empty_string_default": 51,
   "block_on_outside_shared": 7,
   "database_open": 101

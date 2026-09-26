@@ -12,34 +12,35 @@ use crate::{
 use chrono::{DateTime, Utc};
 use rusqlite::{OptionalExtension, params};
 use serde::{Deserialize, Serialize};
+use ts_rs::TS;
 use uuid::Uuid;
 #[derive(Clone, Copy, Debug, PartialEq)]
-pub struct TaskLimitUsage {
+pub(crate) struct ObservedTaskLimitUsage {
     pub estimated_cost_usd: Option<f64>,
 }
 
-#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct TaskLimits {
-    budget_usd: f64,
-    max_turns: i64,
+pub(crate) struct TaskLimits {
+    pub(crate) budget_usd: f64,
+    pub(crate) max_turns: i64,
 }
 
-#[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct PersistedLimitUsage {
-    estimated_cost_usd: Option<f64>,
-    admitted_turns: i64,
+pub(crate) struct TaskLimitUsage {
+    pub(crate) estimated_cost_usd: Option<f64>,
+    pub(crate) admitted_turns: i64,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Serialize, TS)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct PersistedLimitPause {
-    kind: String,
-    reason: String,
-    limits: TaskLimits,
-    usage: PersistedLimitUsage,
-    proposed_limits: TaskLimits,
+pub(crate) struct TaskLimitPause {
+    pub(crate) kind: String,
+    pub(crate) reason: String,
+    pub(crate) limits: TaskLimits,
+    pub(crate) usage: TaskLimitUsage,
+    pub(crate) proposed_limits: TaskLimits,
 }
 
 pub(crate) fn suggested_budget(proposed: f64, spent: f64) -> f64 {
@@ -53,7 +54,7 @@ fn task_limit_question(
     reason: &str,
     limits: TaskLimits,
     proposed: TaskLimits,
-    usage: PersistedLimitUsage,
+    usage: TaskLimitUsage,
 ) -> String {
     let reached = match reason {
         "budget" => "estimated spend budget",
@@ -102,7 +103,7 @@ fn task_limit_question(
 }
 
 /// The saved pause is a well-formed task-limit pause.
-fn valid_pause(pause: &PersistedLimitPause) -> bool {
+fn valid_pause(pause: &TaskLimitPause) -> bool {
     let valid_limits = |limits: &TaskLimits| {
         limits.budget_usd.is_finite() && limits.budget_usd >= 0.0 && limits.max_turns >= 0
     };
@@ -172,7 +173,7 @@ pub fn answer_task_limit(
         let Some((question, Some(raw_pause), root_id)) = row else {
             return Err(CoordinationError::refused("question_identity_mismatch").into());
         };
-        let pause: PersistedLimitPause = serde_json::from_str(&raw_pause)?;
+        let pause: TaskLimitPause = serde_json::from_str(&raw_pause)?;
         if !valid_pause(&pause) {
             return Err(CoordinationError::refused("invalid_task_limit_pause").into());
         }
@@ -221,7 +222,7 @@ struct LimitPause {
     kind: &'static str,
     reason: &'static str,
     limits: TaskLimits,
-    usage: PersistedLimitUsage,
+    usage: TaskLimitUsage,
     proposed_limits: TaskLimits,
 }
 
@@ -230,7 +231,7 @@ struct LimitHit {
     reason: &'static str,
     limits: TaskLimits,
     proposed: TaskLimits,
-    observed: PersistedLimitUsage,
+    observed: TaskLimitUsage,
 }
 
 impl LimitHit {
@@ -239,7 +240,7 @@ impl LimitHit {
     fn evaluate(
         limits: TaskLimits,
         defaults: TaskLimits,
-        usage: TaskLimitUsage,
+        usage: ObservedTaskLimitUsage,
         admitted_turns: i64,
     ) -> Option<Self> {
         let hit_budget = limits.budget_usd > 0.0
@@ -276,7 +277,7 @@ impl LimitHit {
                 limits.max_turns
             },
         };
-        let observed = PersistedLimitUsage {
+        let observed = TaskLimitUsage {
             estimated_cost_usd: usage.estimated_cost_usd,
             admitted_turns,
         };
@@ -305,11 +306,11 @@ impl LimitHit {
 
 /// TypeScript `TaskLimitStore.reconcilePause`: resume a limit-paused task
 /// when observed usage is within its current limits, or refresh the pause.
-pub fn reconcile_task_limit_pause(
+pub(crate) fn reconcile_task_limit_pause(
     database: &mut SuplexDatabase,
     task_id: &str,
     question_id: &str,
-    usage: TaskLimitUsage,
+    usage: ObservedTaskLimitUsage,
     now: DateTime<Utc>,
 ) -> DatabaseResult<bool> {
     database.transaction(true, |database| {
@@ -319,7 +320,7 @@ pub fn reconcile_task_limit_pause(
             |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
         ).optional()?;
         let Some((budget_usd, max_turns, raw_pause)) = row else { return Ok(false); };
-        let _: PersistedLimitPause = serde_json::from_str(&raw_pause)?;
+        let _: TaskLimitPause = serde_json::from_str(&raw_pause)?;
         let defaults = default_limits(database)?;
         let limits = TaskLimits { budget_usd: budget_usd.unwrap_or(defaults.budget_usd), max_turns: max_turns.unwrap_or(defaults.max_turns) };
         if limits.budget_usd > 0.0 && usage.estimated_cost_usd.is_none() { return Ok(false); }
@@ -373,7 +374,7 @@ fn admission_control(
 pub(crate) fn check_admission(
     database: &SuplexDatabase,
     task_id: &str,
-    usage: TaskLimitUsage,
+    usage: ObservedTaskLimitUsage,
     now: DateTime<Utc>,
 ) -> DatabaseResult<Admission> {
     let Some((status, budget_usd, max_turns)) = admission_control(database, task_id)? else {
@@ -482,15 +483,15 @@ pub(crate) async fn observed_usage(
     database_path: &Path,
     task_id: &str,
     require_complete: bool,
-) -> DatabaseResult<TaskLimitUsage> {
+) -> DatabaseResult<ObservedTaskLimitUsage> {
     let (sessions, budget, max_turns, admitted_turns) = usage_scope(database, task_id)?;
     if (max_turns > 0 && admitted_turns >= max_turns) || budget == 0.0 {
-        return Ok(TaskLimitUsage {
+        return Ok(ObservedTaskLimitUsage {
             estimated_cost_usd: None,
         });
     }
     if sessions.is_empty() {
-        return Ok(TaskLimitUsage {
+        return Ok(ObservedTaskLimitUsage {
             estimated_cost_usd: (!require_complete).then_some(0.0),
         });
     }
@@ -537,7 +538,7 @@ pub(crate) fn settle_usage(
     mut observed: Vec<(String, String, NativeTimeline)>,
     pricing: Option<&crate::profiles::model_pricing::ModelPricingCatalog>,
     require_complete: bool,
-) -> DatabaseResult<TaskLimitUsage> {
+) -> DatabaseResult<ObservedTaskLimitUsage> {
     if let Some(pricing) = pricing {
         for (_, _, timeline) in &mut observed {
             estimate_unpriced_usage(&mut timeline.usage, pricing);
@@ -552,11 +553,11 @@ pub(crate) fn settle_usage(
                 })
         })
     {
-        return Ok(TaskLimitUsage {
+        return Ok(ObservedTaskLimitUsage {
             estimated_cost_usd: None,
         });
     }
-    Ok(TaskLimitUsage {
+    Ok(ObservedTaskLimitUsage {
         estimated_cost_usd: replace_observed_usage(database, task_id, observed)?,
     })
 }
@@ -699,7 +700,7 @@ mod tests {
             LimitHit::evaluate(
                 current,
                 limits(15.0, 40),
-                TaskLimitUsage {
+                ObservedTaskLimitUsage {
                     estimated_cost_usd: cost,
                 },
                 turns,

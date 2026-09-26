@@ -2,8 +2,10 @@
 //! `providers.ts`, and the stored project schemas).
 
 use crate::tasks::control::DeliveryTarget;
+use indexmap::IndexMap;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value, json};
+use ts_rs::TS;
 
 pub use super::ContractResult;
 use super::{
@@ -18,7 +20,7 @@ pub use crate::profiles::agent_profiles::{
 const HARNESSES: &[&str] = &["opencode", "claude-code", "devin", "codex"];
 const ADVISOR_ROLES: [&str; 4] = ["reviewer", "planner_a", "planner_b", "rater"];
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum RepositoryConnection {
     Github,
@@ -29,10 +31,11 @@ pub enum RepositoryConnection {
             rename = "usernameEnvironment",
             skip_serializing_if = "Option::is_none"
         )]
+        #[ts(optional)]
         username_environment: Option<String>,
     },
 }
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum TrackerConnection {
     Github {
@@ -47,7 +50,7 @@ pub enum TrackerConnection {
         token_environment: String,
     },
 }
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[serde(deny_unknown_fields)]
 pub struct ProjectIntegration {
     #[serde(default = "github_repository")]
@@ -58,7 +61,7 @@ pub struct ProjectIntegration {
 fn github_repository() -> RepositoryConnection {
     RepositoryConnection::Github
 }
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[serde(tag = "type", rename_all = "snake_case")]
 pub enum McpTransport {
     Stdio {
@@ -66,27 +69,27 @@ pub enum McpTransport {
         #[serde(default)]
         args: Vec<String>,
         #[serde(default)]
-        env: Map<String, Value>,
+        env: IndexMap<String, String>,
     },
     Http {
         url: String,
         #[serde(default)]
-        headers: Map<String, Value>,
+        headers: IndexMap<String, String>,
     },
 }
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct McpGrants {
     pub root: Vec<String>,
     pub advisor: Vec<String>,
     pub worker: Vec<String>,
 }
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 pub struct McpServer {
     pub name: String,
     pub transport: McpTransport,
     pub grants: McpGrants,
 }
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ProjectExecution {
     #[serde(default)]
@@ -94,7 +97,7 @@ pub struct ProjectExecution {
     #[serde(default)]
     pub skill_directories: Vec<String>,
     #[serde(default)]
-    pub environment: Map<String, Value>,
+    pub environment: IndexMap<String, String>,
     #[serde(default)]
     pub mcp: Vec<McpServer>,
 }

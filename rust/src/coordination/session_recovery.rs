@@ -284,7 +284,7 @@ use serde::Serialize;
 use uuid::Uuid;
 
 use crate::{
-    coordination::{root_bridge::RootIdentity, root_session_store::TaskLimitUsage},
+    coordination::{root_bridge::RootIdentity, root_session_store::ObservedTaskLimitUsage},
     runtimes::{
         native as session_reader,
         process::{ProcessOwnerObservation, inspect_process, observe_process_owner},
@@ -749,7 +749,7 @@ struct RecoveryHost<'a> {
     task_id: &'a str,
     executable: Option<&'a Path>,
     inherited_environment: &'a HashMap<String, String>,
-    usage: TaskLimitUsage,
+    usage: ObservedTaskLimitUsage,
 }
 
 /// One session whose operation this host claimed, with its launch profile.
@@ -1077,7 +1077,7 @@ pub async fn recover_prepared_root(
     let usage = if needs_admission_usage(&database, task_id, "root")? {
         observed_usage(&mut database, database_path, task_id, false).await?
     } else {
-        TaskLimitUsage {
+        ObservedTaskLimitUsage {
             estimated_cost_usd: None,
         }
     };
@@ -1151,7 +1151,7 @@ pub async fn recover_prepared_worker(
     let usage = if needs_admission_usage(&database, task_id, "worker")? {
         observed_usage(&mut database, database_path, task_id, false).await?
     } else {
-        TaskLimitUsage {
+        ObservedTaskLimitUsage {
             estimated_cost_usd: None,
         }
     };

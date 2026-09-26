@@ -3,6 +3,7 @@
 use crate::delivery::DeliveryError;
 use crate::shared::hash::sha256_hex;
 use std::{error::Error, path::Path};
+use ts_rs::TS;
 
 use git2::{DiffFormat, DiffOptions, Repository, Sort};
 use serde::Serialize;
@@ -12,7 +13,7 @@ use crate::{integrations::github_delivery::valid_sha, platform::redaction, tasks
 const PATCH_DISPLAY_UNITS: usize = 64_000;
 
 /// TypeScript `ReviewRange`: the reviewed or observed delivery range.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, serde::Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct ReviewRange {
     pub base_sha: String,
@@ -20,6 +21,7 @@ pub struct ReviewRange {
     pub files: Vec<String>,
     pub commits: Vec<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[ts(optional)]
     pub patch_digest: Option<String>,
 }
 

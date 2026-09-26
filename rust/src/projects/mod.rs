@@ -1,3 +1,4 @@
+use ts_rs::TS;
 pub mod connection;
 pub mod git;
 pub mod provisioning;
@@ -47,7 +48,7 @@ impl From<ProjectError> for PublicFailure {
 
 use garde::Validate;
 use serde::{Deserialize, Serialize};
-#[derive(Debug, Clone, Serialize, Deserialize, Validate)]
+#[derive(Debug, Clone, Serialize, Deserialize, Validate, TS)]
 #[garde(allow_unvalidated)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ProjectProviderPolicy {

@@ -1,6 +1,7 @@
 //! TypeScript `tasks/control-contracts.ts`: the persisted task control vocabulary.
 
 use garde::Validate;
+use ts_rs::TS;
 
 use std::collections::BTreeMap;
 
@@ -98,7 +99,7 @@ where
 /// TypeScript `TaskProfile`: the agent profile a task or session captured.
 /// The instance fields are optional in older snapshots, and a snapshot
 /// serializes with exactly the fields it was saved with.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct TaskProfile {
     pub profile_id: String,
@@ -111,12 +112,14 @@ pub struct TaskProfile {
         skip_serializing_if = "Option::is_none",
         deserialize_with = "present"
     )]
+    #[ts(optional, type = "string | null")]
     pub provider_instance_id: Option<Option<String>>,
     #[serde(
         default,
         skip_serializing_if = "Option::is_none",
         deserialize_with = "present"
     )]
+    #[ts(optional, type = "string | null")]
     pub instance_home_directory: Option<Option<String>>,
 }
 
@@ -377,7 +380,7 @@ pub struct PromptDispatchAttempt {
 }
 
 /// TypeScript `PullRequestReference`: the pull request GitHub last reported.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct PullRequestReference {
     pub repository: String,

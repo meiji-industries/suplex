@@ -3,11 +3,12 @@
 //! Reads cover every task in the agent's current project grants. Commands,
 //! dependency writes, and duplicates stay limited to tasks the agent created.
 
+use crate::coordination::workflows::{Completion, DeliveryWait};
 use crate::projects::ProjectError;
 use crate::shared::hash::sha256_hex;
 use crate::shared::time::rfc3339_millis;
 use crate::tasks::TaskError;
-use crate::tasks::control::TaskProfile;
+use crate::tasks::control::{PullRequestReference, TaskProfile, TaskStatus};
 use std::{
     collections::HashSet,
     error::Error,
@@ -222,39 +223,43 @@ fn permitted_commands(task: &response::TaskResponse, creator: bool) -> Vec<&'sta
         return Vec::new();
     }
     let archived = task.archived_at.is_some();
-    let status = task.status.as_str();
-    let mut commands: Vec<&'static str> = if archived {
+    let mut commands = if archived {
         vec!["unarchive_task"]
     } else {
-        match status {
-            "backlog" => vec![
+        match task.status {
+            TaskStatus::Backlog => vec![
                 "start_task",
                 "cancel_task",
                 "archive_task",
                 "duplicate_task",
             ],
-            "queued" => vec![
+            TaskStatus::Queued => vec![
                 "disarm_task",
                 "cancel_task",
                 "archive_task",
                 "duplicate_task",
             ],
-            "active" => vec!["cancel_task", "duplicate_task", "send_task_note"],
-            "waiting_human" => vec!["cancel_task", "duplicate_task"],
-            "cancelled" | "delivered" => vec!["archive_task", "duplicate_task"],
-            _ => vec!["duplicate_task"],
+            TaskStatus::Active => vec!["cancel_task", "duplicate_task", "send_task_note"],
+            TaskStatus::WaitingHuman => vec!["cancel_task", "duplicate_task"],
+            TaskStatus::Cancelled | TaskStatus::Delivered => vec!["archive_task", "duplicate_task"],
         }
     };
-    if !archived && !task.workflow_state.delivery_wait.is_null() && status == "active" {
+    if !archived && task.workflow_state.delivery_wait.is_some() && task.status == TaskStatus::Active
+    {
         commands.push("recheck_delivery_wait");
     }
     commands
 }
 
-fn selection(task: &response::TaskResponse) -> (Value, Value, Value) {
-    let selection = &task.configuration["hermesSelection"];
-    let pick = |name: &str| selection.get(name).cloned().unwrap_or(Value::Null);
-    (pick("workflowId"), pick("workflowName"), pick("templateId"))
+fn selection(task: &response::TaskResponse) -> (Option<&str>, Option<&str>, Option<&str>) {
+    match &task.configuration.hermes_selection {
+        Some(selection) => (
+            selection.workflow_id.as_deref(),
+            selection.workflow_name.as_deref(),
+            selection.template_id.as_deref(),
+        ),
+        None => (None, None, None),
+    }
 }
 
 /// Response order for a pull request prerequisite follows the agent schema, which puts `url` before `state`.
@@ -288,7 +293,7 @@ struct AgentTaskProjection<'a> {
     project_id: &'a str,
     project: Value,
     title: &'a str,
-    source: Value,
+    source: &'a Option<task_contracts::TaskSource>,
     status: &'a str,
     queue: &'a response::TaskQueue,
     depends_on: &'a [String],
@@ -301,42 +306,51 @@ struct AgentTaskProjection<'a> {
     blocker: Value,
     workflow_stage: String,
     workflow: Value,
-    template_id: Value,
+    template_id: Option<&'a str>,
     delivery_target: &'a str,
-    run_project_tests: &'a Value,
-    visual_evidence: &'a Value,
+    run_project_tests: bool,
+    visual_evidence: &'a str,
     delivery: Value,
     created_at: &'a str,
     updated_at: &'a str,
 }
 
 /// The agent API workflow stage of a task.
-fn workflow_stage(status: &str, completion: &Value, question: bool, wait: &Value) -> String {
-    if status == "cancelled" {
+fn workflow_stage(
+    status: TaskStatus,
+    completion: &Option<Completion>,
+    question: bool,
+    wait: &Option<DeliveryWait>,
+) -> String {
+    if status == TaskStatus::Cancelled {
         "cancelled".to_owned()
-    } else if !completion.is_null() || status == "delivered" {
+    } else if completion.is_some() || status == TaskStatus::Delivered {
         "completed".to_owned()
     } else if question {
         "waiting_human".to_owned()
-    } else if !wait.is_null() {
+    } else if wait.is_some() {
         "waiting_delivery".to_owned()
-    } else if status == "active" {
+    } else if status == TaskStatus::Active {
         "working".to_owned()
     } else {
-        status.to_owned()
+        status.as_str().to_owned()
     }
 }
 
 /// The pull request, delivery wait, and completion, or null when there is none.
-fn delivery_summary(pull: &Value, wait: &Value, completion: &Value) -> Value {
-    if pull.is_null() && wait.is_null() && completion.is_null() {
+fn delivery_summary(
+    pull: &Option<PullRequestReference>,
+    wait: &Option<DeliveryWait>,
+    completion: &Option<Completion>,
+) -> Value {
+    if pull.is_none() && wait.is_none() && completion.is_none() {
         return Value::Null;
     }
     json!({
-        "pullRequest": if pull.is_null() { Value::Null } else { json!({"number": pull["number"], "url": pull["url"], "state": pull["state"], "mergedAt": pull.get("mergedAt").cloned().unwrap_or(Value::Null)}) },
+        "pullRequest": pull.as_ref().map(|pull| json!({"number": pull.number, "url": pull.url, "state": pull.state, "mergedAt": pull.merged_at})),
         "checks": null,
-        "waiting": if wait.is_null() { Value::Null } else { json!({"reason": wait["reason"], "since": wait["since"]}) },
-        "completion": if completion.is_null() { Value::Null } else { json!({"kind": completion["kind"], "pullRequestNumber": completion["pullRequestNumber"], "observedAt": completion["observedAt"]}) },
+        "waiting": wait.as_ref().map(|wait| json!({"reason": wait.reason, "since": wait.since})),
+        "completion": completion.as_ref().map(|completion| json!({"kind": completion.kind, "pullRequestNumber": completion.pull_request_number, "observedAt": completion.observed_at})),
     })
 }
 
@@ -357,26 +371,25 @@ fn projection_of(
         .optional()?;
     let (project_id, project_name) =
         project.ok_or_else(|| fail("Not found", 404, "task_failure"))?;
-    let question = task.human_question["text"].as_str().map(str::to_owned);
+    let question = task.human_question.as_ref().map(|question| match question {
+        response::TaskHumanQuestion::Question { text, .. }
+        | response::TaskHumanQuestion::TaskLimit { text, .. } => text.clone(),
+    });
     let wait = &task.workflow_state.delivery_wait;
     let completion = &task.workflow_state.completion;
-    let status = task.status.clone();
+    let status = task.status;
     let blocker = if question.is_some() {
         json!({"kind": "human_question"})
-    } else if !wait.is_null() {
-        json!({"kind": "delivery_wait", "reason": wait["reason"]})
+    } else if let Some(wait) = wait {
+        json!({"kind": "delivery_wait", "reason": wait.reason})
     } else {
         Value::Null
     };
-    let stage = workflow_stage(&status, completion, question.is_some(), wait);
+    let stage = workflow_stage(status, completion, question.is_some(), wait);
     let delivery = delivery_summary(&task.pull_request, wait, completion);
     let creator = row.creator_agent_id.as_deref() == Some(principal.agent_id.as_str());
     let (workflow_id, workflow_name, template_id) = selection(&task);
-    let source = task
-        .configuration
-        .get("source")
-        .cloned()
-        .unwrap_or(Value::Null);
+    let source = &task.configuration.source;
     let archived = task.archived_at.is_some();
     let permitted = permitted_commands(&task, creator);
     let mut value = AgentTaskProjection {
@@ -386,10 +399,14 @@ fn projection_of(
         project: json!({"id": project_id, "name": project_name}),
         title: &task.title,
         source,
-        status: &status,
+        status: status.as_str(),
         queue: &task.queue,
         depends_on: &task.depends_on,
-        blocked_by: task.blocked_by.clone(),
+        blocked_by: task
+            .blocked_by
+            .iter()
+            .map(serde_json::to_value)
+            .collect::<Result<_, _>>()?,
         archived,
         revision: None,
         permitted_commands: permitted,
@@ -398,9 +415,9 @@ fn projection_of(
         workflow_stage: stage,
         workflow: json!({"id": workflow_id, "engine": task.workflow, "name": workflow_name}),
         template_id,
-        delivery_target: &task.delivery_target,
-        run_project_tests: &task.configuration["runProjectTests"],
-        visual_evidence: &task.configuration["visualEvidence"],
+        delivery_target: task.delivery_target.as_str(),
+        run_project_tests: task.configuration.run_project_tests,
+        visual_evidence: &task.configuration.visual_evidence,
         delivery,
         created_at: &task.created_at,
         updated_at: &task.updated_at,

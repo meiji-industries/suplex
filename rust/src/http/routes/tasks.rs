@@ -194,9 +194,11 @@ async fn unarchive_pending(
     })
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, ts_rs::TS)]
 #[serde(rename_all = "camelCase")]
+#[ts(export)]
 struct ArchiveConfirmation {
+    #[ts(type = "\"confirmation_required\"")]
     status: &'static str,
     dirty_file_count: usize,
     dirty_file_paths: Vec<String>,

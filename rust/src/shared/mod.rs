@@ -15,7 +15,7 @@ macro_rules! wire_enum {
         $(#[$meta])*
         #[derive(
             Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord,
-            serde::Serialize, serde::Deserialize,
+            serde::Serialize, serde::Deserialize, ts_rs::TS,
         )]
         pub enum $name {
             $(#[serde(rename = $text)] $variant),+

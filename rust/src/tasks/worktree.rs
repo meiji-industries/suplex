@@ -8,6 +8,7 @@ use std::fs;
 use std::io;
 use std::os::unix::ffi::OsStrExt;
 use std::path::{Path, PathBuf};
+use ts_rs::TS;
 
 use git2::{
     AutotagOption, BranchType, Diff, DiffFindOptions, DiffFormat, DiffOptions, FetchOptions,
@@ -26,7 +27,7 @@ pub struct TaskWorktreeIntent {
 }
 
 /// TypeScript `WorktreeReference`: the worktree Git last reported.
-#[derive(Debug, Clone, Eq, PartialEq, serde::Serialize, serde::Deserialize)]
+#[derive(Debug, Clone, Eq, PartialEq, serde::Serialize, serde::Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct WorktreeReference {
     pub path: PathBuf,

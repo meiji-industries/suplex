@@ -3,6 +3,7 @@
 //! and review records use their persisted JSON shapes.
 
 use std::collections::BTreeMap;
+use ts_rs::TS;
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -144,20 +145,21 @@ impl Default for WorkflowState {
 }
 
 /// One Reviewer or Rater outcome, pinned to the range it assessed.
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct ReviewRecord {
     pub session_id: String,
     pub turn_id: String,
     pub role: AdvisorRole,
     pub range: ReviewRange,
+    #[ts(type = "unknown")]
     pub result: Option<Value>,
     pub invalid_reason: Option<String>,
     pub recorded_at: String,
 }
 
 /// TypeScript `DeliveryWait`: one persisted wait on GitHub delivery state.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct DeliveryWait {
     pub head_sha: String,
@@ -167,7 +169,7 @@ pub struct DeliveryWait {
 }
 
 /// TypeScript `WorkflowCompletion`: the recorded end of delivery.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize, TS)]
 #[serde(rename_all = "camelCase")]
 pub struct Completion {
     pub kind: String,

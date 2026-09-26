@@ -3168,6 +3168,7 @@ dependencies = [
  "garde",
  "getrandom 0.4.3",
  "git2",
+ "indexmap",
  "keyring",
  "libc",
  "nix",
@@ -3552,6 +3553,7 @@ version = "12.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "756050066659291d47a554a9f558125db17428b073c5ffce1daf5dcb0f7231d8"
 dependencies = [
+ "indexmap",
  "thiserror 2.0.21",
  "ts-rs-macros",
 ]

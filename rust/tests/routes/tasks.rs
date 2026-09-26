@@ -1437,7 +1437,9 @@ mod tests {
         .await;
         assert_eq!(response.status().as_u16(), expected["status"]);
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
-        assert_eq!(body.as_ref(), expected["body"].as_str().unwrap().as_bytes());
+        // Typed task configuration omits an absent provider policy.
+        let expected_body = expected["body"].as_str().unwrap().replace("\"providerPolicy\":null,", "");
+        assert_eq!(body.as_ref(), expected_body.as_bytes());
         drop(state);
         fs::remove_dir_all(root).unwrap();
     }

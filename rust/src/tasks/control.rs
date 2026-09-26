@@ -228,6 +228,21 @@ impl TaskControlRow {
     }
 }
 
+/// One prerequisite task; a task without a control row is in the backlog.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct DependencyRow {
+    pub id: String,
+    pub title: String,
+    pub status: TaskStatus,
+}
+
+impl DependencyRow {
+    /// `id "title" (status)`, as the Coordinator prompts name a prerequisite.
+    pub fn describe(&self) -> String {
+        format!("{} \"{}\" ({})", self.id, self.title, self.status)
+    }
+}
+
 /// TypeScript `TaskSession`: one Coordinator, Worker, or Advisor session row.
 /// It serializes with the field names and order of the persisted session
 /// projection that the Coordinator observes.

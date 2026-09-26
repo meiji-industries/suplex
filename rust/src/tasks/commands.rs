@@ -3,7 +3,7 @@
 use crate::shared::hash::sha256_hex;
 use crate::shared::time::rfc3339_millis;
 use crate::tasks::TaskError;
-use crate::tasks::control::{DeliveryIntent, DeliveryTarget, TaskProfile, TaskStatus};
+use crate::tasks::control::{DeliveryIntent, DeliveryTarget, TaskProfile, TaskStatus, TurnStatus};
 use std::{collections::BTreeMap, path::Path};
 
 use chrono::{DateTime, Utc};
@@ -701,8 +701,7 @@ pub fn continue_user_delivery(
             None => {
                 let root = root_session_store::reserve_root(database, task_id, Utc::now())?;
                 let rows = root_session_store::root_observation_rows(database, task_id)?;
-                let initial = root_prompts::initial_coordinator_prompt(&rows.control, &rows.context, &rows.dependencies)
-                    .map_err(|message| TaskError::new(message, 409))?;
+                let initial = root_prompts::initial_coordinator_prompt(&rows.control, &rows.context, &rows.dependencies);
                 root_session_store::ensure_initial_prompt(database, &root, &initial, Utc::now())?;
                 root
             }
@@ -763,8 +762,7 @@ pub fn select_user_task_agent(
     }
     let rows = root_session_store::root_observation_rows(database, task_id)?;
     let initial =
-        root_prompts::initial_coordinator_prompt(&rows.control, &rows.context, &rows.dependencies)
-            .map_err(|message| TaskError::new(message, 501))?;
+        root_prompts::initial_coordinator_prompt(&rows.control, &rows.context, &rows.dependencies);
     let hash = |text: &str| sha256_hex(text.as_bytes());
     let time = rfc3339_millis(now);
     database.transaction(true, |database| {
@@ -894,11 +892,11 @@ pub fn select_user_task_agent(
                 let latest = database.connection().query_row(
                     "SELECT status, terminal_observation, prompt_text, workflow_input_json FROM suplex_task_turns WHERE session_id = ?1 AND generation = ?2 ORDER BY created_at DESC, id DESC LIMIT 1",
                     params![current_id, current_generation],
-                    |row| Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?, row.get::<_, String>(2)?, row.get::<_, Option<String>>(3)?)),
+                    |row| Ok((row.get::<_, TurnStatus>(0)?, row.get::<_, Option<String>>(1)?, row.get::<_, String>(2)?, row.get::<_, Option<String>>(3)?)),
                 ).optional()?;
                 if let Some((turn_status, observation, assignment, turn_input)) = latest {
                     let outcome = observation.as_deref().and_then(|raw| serde_json::from_str::<Value>(raw).ok());
-                    let successful = turn_status == "completed" && outcome.as_ref().is_some_and(|outcome| {
+                    let successful = turn_status == TurnStatus::Completed && outcome.as_ref().is_some_and(|outcome| {
                         outcome["state"] == "completed"
                             && advisor_role.is_none_or(|role| outcome["advisor"]["role"] == role && !outcome["advisor"]["result"].is_null())
                     });
@@ -1303,8 +1301,7 @@ pub fn replace_user_coordinator(
             &rows.control,
             &rows.context,
             &rows.dependencies,
-        )
-        .map_err(|message| TaskError::new(message, 501))?;
+        );
         root_session_store::replace_coordinator(database, task_id, request, &initial, now)
             .map_err(|error| TaskError::new(error.to_string(), 409))?;
         let task = repository::task_by_id(database, task_id)?.ok_or_else(TaskError::not_found)?;

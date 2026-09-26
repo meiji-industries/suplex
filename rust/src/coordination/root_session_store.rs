@@ -5,8 +5,8 @@ use crate::shared::hash::sha256_hex;
 use crate::shared::time::rfc3339_millis;
 use crate::tasks::TaskError;
 use crate::tasks::control::{
-    PromptDispatchAttempt, SessionKind, SessionLifecycle, SessionReplacement, SessionRow,
-    TaskControlRow, TaskProfile, TaskStatus, TurnRow, TurnStatus, WorktreeReference,
+    DependencyRow, PromptDispatchAttempt, SessionKind, SessionLifecycle, SessionReplacement,
+    SessionRow, TaskControlRow, TaskProfile, TaskStatus, TurnRow, TurnStatus, WorktreeReference,
 };
 use chrono::{DateTime, Utc};
 use rusqlite::{OptionalExtension, Row, params};
@@ -43,7 +43,7 @@ pub struct TaskLimitUsage {
 pub struct RootObservationRows {
     pub control: TaskControlRow,
     pub context: Value,
-    pub dependencies: Vec<Value>,
+    pub dependencies: Vec<DependencyRow>,
     pub root: Option<SessionRow>,
     pub worker: Option<SessionRow>,
     pub workers: Vec<SessionRow>,
@@ -205,13 +205,20 @@ pub fn root_observation_rows(
     .into_iter()
     .next()
     .ok_or("task_context_missing")?;
-    let dependencies = json_rows(
+    let dependencies = typed_rows(
         database,
-        r#"SELECT json_object('id',t.id,'title',t.title,'status',COALESCE(c.status,'backlog'))
+        "SELECT t.id, t.title, COALESCE(c.status,'backlog') AS status
             FROM suplex_task_dependencies d JOIN suplex_tasks t ON t.id = d.depends_on_task_id
             LEFT JOIN suplex_task_controls c ON c.task_id = t.id
-            WHERE d.task_id = ?1 ORDER BY t.id"#,
+            WHERE d.task_id = ?1 ORDER BY t.id",
         task_id,
+        |row| {
+            Ok(DependencyRow {
+                id: row.get("id")?,
+                title: row.get("title")?,
+                status: row.get("status")?,
+            })
+        },
     )?;
     let sessions = typed_rows(
         database,
@@ -757,7 +764,7 @@ pub fn answer_human(
             return Err(CoordinationError::refused("command_cleanup_confirmation_required").into());
         }
         if let Some(recovery_turn_id) = recovery_turn_id {
-            let recovered: (String, i64, String) = database.connection().query_row(
+            let recovered: (String, i64, SessionKind) = database.connection().query_row(
                 "SELECT t.session_id,t.generation,s.kind FROM suplex_task_turns t JOIN suplex_task_sessions s ON s.id = t.session_id WHERE t.id = ?1 AND t.task_id = ?2",
                 params![recovery_turn_id, task_id],
                 |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
@@ -766,7 +773,7 @@ pub fn answer_human(
                 "state":"interrupted", "reason":"operator_confirmed_commands_stopped",
                 "questionId":question_id, "answer":answer, "turnId":recovery_turn_id
             }));
-            if recovered.2 == "worker" {
+            if recovered.2 == SessionKind::Worker {
                 let receipt = format!("cleanup:{question_id}");
                 let wake_prompt = format!(
                     "Worker result receipt {receipt}. {STANDARD_WORKER_RESULT_WAKE}\n\n{evidence}"
@@ -1642,7 +1649,7 @@ pub fn send_labeled_note(
             None => {
                 let root = reserve_root(database, task_id, now)?;
                 let rows = root_observation_rows(database, task_id)?;
-                let initial = root_prompts::initial_coordinator_prompt(&rows.control, &rows.context, &[])?;
+                let initial = root_prompts::initial_coordinator_prompt(&rows.control, &rows.context, &[]);
                 ensure_initial_prompt(database, &root, &initial, now)?;
                 root
             }
@@ -2255,7 +2262,7 @@ pub fn mark_delivered(
     now: DateTime<Utc>,
 ) -> DatabaseResult<Vec<String>> {
     let admitted = database.transaction(false, |database| {
-        let previous: Option<String> = database.connection().query_row(
+        let previous: Option<TaskStatus> = database.connection().query_row(
             "SELECT status FROM suplex_task_controls WHERE task_id = ?1",
             [task_id], |row| row.get(0),
         ).optional()?;
@@ -2265,7 +2272,7 @@ pub fn mark_delivered(
             params![time, task_id],
         )?;
         if changed != 1 { return Err(CoordinationError::refused("task_not_active").into()); }
-        let was_delivered = previous.as_deref() == Some("delivered");
+        let was_delivered = previous == Some(TaskStatus::Delivered);
         let mut statement = database.connection().prepare(
             "SELECT d.task_id FROM suplex_task_dependencies d WHERE d.depends_on_task_id = ?1 ORDER BY d.task_id"
         )?;
@@ -2470,21 +2477,14 @@ pub fn require_execution_cleanup(
 pub const IDLE_ROOT_PROMPT: &str = "Observe the current task, worktree, and GitHub state and continue toward the delivery target. Adopt out-of-band progress. If checks or another external operation are pending, report what you are waiting for. Ask a specific human question only if a necessary decision or external failure requires it.";
 
 /// TypeScript `withCurrentDependencyStatus`.
-pub fn with_current_dependency_status(prompt: &str, dependencies: &[Value]) -> String {
+pub fn with_current_dependency_status(prompt: &str, dependencies: &[DependencyRow]) -> String {
     let base = without_current_dependency_status(prompt);
     if dependencies.is_empty() {
         return base.to_owned();
     }
     let list = dependencies
         .iter()
-        .map(|dependency| {
-            format!(
-                "{} \"{}\" ({})",
-                dependency["id"].as_str().unwrap_or_default(),
-                dependency["title"].as_str().unwrap_or_default(),
-                dependency["status"].as_str().unwrap_or_default()
-            )
-        })
+        .map(DependencyRow::describe)
         .collect::<Vec<_>>()
         .join(", ");
     format!(
@@ -2697,8 +2697,7 @@ mod tests {
             &rows.control,
             &rows.context,
             &rows.dependencies,
-        )
-        .unwrap();
+        );
         ensure_initial_prompt(&mut database, &root, &initial, now).unwrap();
         for prompt in [
             "Human note:\nKeep the release notes intact.".to_owned(),

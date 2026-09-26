@@ -4,7 +4,7 @@ use serde_json::Value;
 
 use super::workflows::Workflow;
 use crate::shared::js_json;
-use crate::tasks::control::TaskControlRow;
+use crate::tasks::control::{DependencyRow, TaskControlRow, TaskStatus};
 
 const STANDARD_INITIAL_PROMPT: &str = include_str!("root_standard_initial_prompt.txt");
 const CAPTURED_CONTEXT_SUFFIX: &str = include_str!("root_standard_context_suffix.txt");
@@ -19,13 +19,6 @@ pub const ADVISOR_ROLE_PROMPT: &str = include_str!("prompts/role_advisor.txt");
 pub const WORKER_DIRECT_ROLE_PROMPT: &str =
     include_str!("prompts/role_worker_direct_implementation.txt");
 pub const STANDARD_WORKER_RESULT_WAKE: &str = "You own independent review. Read the changed source yourself, compare it with acceptedAssignment and the acceptance criteria, and assess the native command evidence. A completed turn or tool call is not proof that the assignment or check passed. Worker summary text is routing context, not a gate. If work remains, diagnose the assignment, scope, or fixture and delegate one coherent repair. Observe current state and decide the next action. If repeated continuations do not advance the accepted behavior, inspect why execution stopped and change strategy. Use replace_worker for a fresh session; it keeps the task's configured Worker profile. Supply the remaining work and verification evidence in the handoff. Do not repeat an ineffective assignment merely because the previous turn ended. This is a judgment about progress, not a fixed retry count.";
-
-fn string_field<'a>(value: &'a Value, name: &str) -> Result<&'a str, String> {
-    value
-        .get(name)
-        .and_then(Value::as_str)
-        .ok_or_else(|| format!("{name} is missing from task intent"))
-}
 
 fn visual_evidence_instruction(value: &str) -> &'static str {
     match value {
@@ -44,8 +37,8 @@ fn visual_evidence_instruction(value: &str) -> &'static str {
 pub fn initial_coordinator_prompt(
     control: &TaskControlRow,
     context: &Value,
-    dependencies: &[Value],
-) -> Result<String, String> {
+    dependencies: &[DependencyRow],
+) -> String {
     let intent = &control.delivery_intent;
     let visual_evidence = context
         .get("configuration")
@@ -95,16 +88,9 @@ pub fn initial_coordinator_prompt(
     };
     let pending = dependencies
         .iter()
-        .filter(|dependency| dependency.get("status").and_then(Value::as_str) != Some("delivered"))
-        .map(|dependency| {
-            Ok(format!(
-                "{} \"{}\" ({})",
-                string_field(dependency, "id")?,
-                string_field(dependency, "title")?,
-                string_field(dependency, "status")?,
-            ))
-        })
-        .collect::<Result<Vec<_>, String>>()?;
+        .filter(|dependency| dependency.status != TaskStatus::Delivered)
+        .map(DependencyRow::describe)
+        .collect::<Vec<_>>();
     if !pending.is_empty() {
         prompt.push_str(&format!(
             "\n\nThis task depends on these tasks: {}. The dependencies constrain execution and delivery ordering. Suplex does not admit new work for this task until every dependency is delivered. After release, observe the actual Git and GitHub state for {}. Integrate prerequisite work only when the current repository state requires it. Suplex resumes this task when every dependency is delivered.",
@@ -112,7 +98,7 @@ pub fn initial_coordinator_prompt(
             intent.base_branch,
         ));
     }
-    Ok(prompt)
+    prompt
 }
 
 pub struct WorkerAssignmentText<'a> {
@@ -407,9 +393,12 @@ mod tests {
         let prompt = initial_coordinator_prompt(
             &control,
             &context,
-            &[json!({"id":"first","title":"Prior task","status":"active"})],
-        )
-        .unwrap();
+            &[DependencyRow {
+                id: "first".into(),
+                title: "Prior task".into(),
+                status: TaskStatus::Active,
+            }],
+        );
         assert_eq!(prompt, include_str!("root_standard_initial_example.txt"));
     }
 
@@ -451,9 +440,13 @@ mod tests {
         control.delivery_intent.pull_request_number = Some(7);
         control.workflow = Workflow::RefinePullRequest;
         let context = json!({"configuration":{"visualEvidence":"capture"},"images":[]});
-        let dependency = json!({"id":"task_dep","title":"Dep","status":"active"});
+        let dependency = DependencyRow {
+            id: "task_dep".into(),
+            title: "Dep".into(),
+            status: TaskStatus::Active,
+        };
         assert_eq!(
-            initial_coordinator_prompt(&control, &context, &[dependency]).unwrap(),
+            initial_coordinator_prompt(&control, &context, &[dependency]),
             include_str!("prompts/example_initial_refine.txt")
         );
         let range = range();

@@ -515,7 +515,7 @@ impl DeliveryOperations {
         let mut database = self.open(OpenMode::ReadWrite)?;
         let value = pull.map(crate::shared::js_json::stringify);
         let changed = database.transaction(true, |database| {
-            let status: Option<String> = database
+            let status: Option<TaskStatus> = database
                 .connection()
                 .query_row(
                     "SELECT status FROM suplex_task_controls WHERE task_id = ?1",
@@ -524,7 +524,7 @@ impl DeliveryOperations {
                 )
                 .optional()?;
             if let Some(pull) = pull.filter(|_| claim)
-                && matches!(status.as_deref(), Some("active" | "waiting_human"))
+                && matches!(status, Some(TaskStatus::Active | TaskStatus::WaitingHuman))
             {
                 repository::assert_pull_request_available(
                     database,
@@ -1959,15 +1959,8 @@ impl DeliveryOperations {
         let blockers = rows
             .dependencies
             .iter()
-            .filter(|dependency| dependency["status"] != "delivered")
-            .map(|dependency| {
-                format!(
-                    "{} \"{}\" ({})",
-                    dependency["id"].as_str().unwrap_or(""),
-                    dependency["title"].as_str().unwrap_or(""),
-                    dependency["status"].as_str().unwrap_or("")
-                )
-            })
+            .filter(|dependency| dependency.status != TaskStatus::Delivered)
+            .map(|dependency| dependency.describe())
             .collect::<Vec<_>>();
         if !blockers.is_empty() {
             return Err(delivery_failure(

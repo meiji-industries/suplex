@@ -294,7 +294,7 @@ fn observe_turn(
 fn dependency_blocked(rows: &root_session_store::RootObservationRows) -> bool {
     rows.dependencies
         .iter()
-        .any(|dependency| dependency["status"] != "delivered")
+        .any(|dependency| dependency.status != TaskStatus::Delivered)
 }
 
 /// Record native admission. An execution Suplex cannot identify
@@ -3267,8 +3267,7 @@ mod tests {
                 &rows.control,
                 &rows.context,
                 &rows.dependencies,
-            )
-            .unwrap();
+            );
             let request = crate::http::contracts::typed::tasks::TaskCoordinatorReplacementBody {
                 session_id: old_root.id.clone(),
                 root_profile_id: "new-root-host".into(),

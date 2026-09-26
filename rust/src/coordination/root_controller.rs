@@ -57,7 +57,7 @@ pub fn prepare_root(database_path: &Path, task_id: &str) -> DatabaseResult<Sessi
     let root = root_session_store::reserve_root(&mut database, task_id, chrono::Utc::now())?;
     let rows = root_session_store::root_observation_rows(&database, task_id)?;
     let prompt =
-        root_prompts::initial_coordinator_prompt(&rows.control, &rows.context, &rows.dependencies)?;
+        root_prompts::initial_coordinator_prompt(&rows.control, &rows.context, &rows.dependencies);
     root_session_store::ensure_initial_prompt(&mut database, &root, &prompt, chrono::Utc::now())?;
     Ok(root)
 }
@@ -768,26 +768,28 @@ pub async fn delegate_advisor(
     let (_, rows) = open_root(database_path, root)?;
     let definition = rows.control.workflow.definition();
     let label = advisor_label(role);
-    if !definition.advisor_roles.contains(&role) {
+    let Some(advisor) =
+        AdvisorRole::parse(role).filter(|_| definition.advisor_roles.contains(&role))
+    else {
         return Err(CoordinationError::refused(format!(
             "The {} workflow has no {label} Advisor.",
             definition.name
         ))
         .into());
-    }
-    if brief.is_some() && role != "reviewer" {
+    };
+    if brief.is_some() && advisor != AdvisorRole::Reviewer {
         return Err(CoordinationError::refused(format!(
             "Suplex composes the {label} input; a brief is accepted only for Reviewer."
         ))
         .into());
     }
-    if role == "reviewer" && brief.is_none() {
+    if advisor == AdvisorRole::Reviewer && brief.is_none() {
         return Err(invalid(
             "Reviewer requires a brief with your plan and acceptance criteria.",
         ));
     }
     let (observed, rows, evidence) = advisor_source(database_path, artifact_root, root, owner_token, "The worktree has uncommitted changes. Commit or discard them before requesting an Advisor; Advisors review committed source only.").await?;
-    let previous = (role == "rater")
+    let previous = (advisor == AdvisorRole::Rater)
         .then(|| latest_review(&rows.control.workflow_state.reviews, AdvisorRole::Rater))
         .flatten();
     let prior_findings = previous

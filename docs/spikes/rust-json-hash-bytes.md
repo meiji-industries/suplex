@@ -42,7 +42,6 @@ strip calls, two super-refinements, and one transform. Of those, 78 are in the
 HTTP files themselves. This is an inventory, not proof that every branch has
 a parity case yet.
 
-Run `pnpm exec tsx tests/parity/generate.ts --check`,
-`pnpm exec tsx tests/parity/hash-bytes/generate.ts --check`,
-`cargo +1.93.1 test --manifest-path rust/Cargo.toml --test contract_parity`,
-and `cargo +1.93.1 test --manifest-path rust/Cargo.toml --test hash_bytes`.
+The TypeScript generators were retired with the engine. Their frozen outputs
+remain checked by `cargo test --manifest-path rust/Cargo.toml --test contract_parity`
+and `cargo test --manifest-path rust/Cargo.toml --test hash_bytes`.

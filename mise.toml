@@ -41,7 +41,7 @@ run = "pnpm run build"
 run = '''
 cd rust
 unset RUSTUP_TOOLCHAIN
-cargo test --all-targets
+RUST_TEST_THREADS=4 cargo test --all-targets
 '''
 
 [tasks."test:parity"]

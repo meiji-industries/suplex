@@ -215,7 +215,7 @@ backup alone cannot restore missing native sessions or repository contents.
 
 ## Verify changes
 
-Run the TypeScript unit and Git-backed integration tests with:
+Run the frontend, desktop and protocol tests, then the native engine tests:
 
 ```sh
 pnpm test
@@ -225,7 +225,6 @@ pnpm run test:rust
 Use the narrower projects when you need them:
 
 ```sh
-pnpm test:integration
 pnpm test:real
 pnpm desktop:dist
 pnpm test:packaged
@@ -240,7 +239,7 @@ guard and confirms that the guard remains active after the suite exits.
 pnpm verify
 ```
 
-Verification runs typecheck, lint, TypeScript and Rust tests, a production build, and Playwright
+Verification runs typecheck, lint, TypeScript and Rust tests, a production frontend build, a native test build, and Playwright
 browser smoke tests for session setup, project creation, and the task lifecycle.
 Task creation and start run at desktop and narrow widths. Follow the
 [browser test budget](AGENTS.md#browser-test-budget) when adding coverage or

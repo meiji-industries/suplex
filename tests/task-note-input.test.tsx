@@ -4,7 +4,7 @@ import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
-import type { Task } from "../src/tasks/contracts.js";
+import type { Task } from "../src/frontend/contracts/tasks.js";
 
 const api = vi.hoisted(() => ({ readJson: vi.fn() }));
 vi.mock("../src/frontend/lib/api.js", () => api);

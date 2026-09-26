@@ -81,7 +81,7 @@ async function restart(): Promise<void> {
   }
 }
 
-const watchers = process.argv.includes("--watch") ? ["rust/src", "drizzle"].map(path => watch(resolve(root, path), { recursive: true }, () => { void restart(); })) : [];
+const watchers = process.argv.includes("--watch") ? ["rust/src", "migrations"].map(path => watch(resolve(root, path), { recursive: true }, () => { void restart(); })) : [];
 async function close(code: number): Promise<void> {
   if (closing) return;
   closing = true;

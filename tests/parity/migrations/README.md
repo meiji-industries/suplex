@@ -2,7 +2,7 @@
 
 Captured from the TypeScript engine at revision `6bb0a43f` on 2026-09-26.
 These are synthetic test databases, not user data. Keep the inputs immutable;
-native tests copy them before migrating. The source SQL in `drizzle/` is unchanged.
+native tests copy them before migrating. The source SQL in `migrations/` is unchanged.
 
 `rust/tests/platform/migrations.rs` preserves the runner and data guarantees from
 `tests/migrations.test.ts`, `tests/native-cutover-migration.test.ts`, and

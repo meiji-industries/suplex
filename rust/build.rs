@@ -55,7 +55,7 @@ fn git(manifest: &Path, args: &[&str]) -> Option<String> {
 
 fn main() {
     let manifest = PathBuf::from(env::var("CARGO_MANIFEST_DIR").expect("Cargo manifest directory"));
-    let migrations = embedded_files(&manifest.join("../drizzle"), Some("sql"));
+    let migrations = embedded_files(&manifest.join("../migrations"), Some("sql"));
     let frontend = embedded_files(&manifest.join("../dist/web"), None);
     if env::var("PROFILE").as_deref() == Ok("release") {
         for asset in ["suplex-ui.js", "suplex-ui.css"] {

@@ -4,7 +4,7 @@ import { DatabaseSync as Database } from "node:sqlite";
 import { expect, test } from "vitest";
 
 test("tracks task status changes without treating control writes as status changes", () => {
-    const folder = resolve(process.cwd(), "drizzle");
+    const folder = resolve(process.cwd(), "migrations");
     const database = new Database(":memory:", { enableForeignKeyConstraints: false });
     try {
       const migration = readdirSync(folder).find((candidate) => candidate.includes("task_status_change_timestamp"))!;
@@ -25,7 +25,7 @@ test("tracks task status changes without treating control writes as status chang
   });
 
 test("gives internal agents that share a profile independent settings rows", () => {
-    const folder = resolve(process.cwd(), "drizzle");
+    const folder = resolve(process.cwd(), "migrations");
     const database = new Database(":memory:", { enableForeignKeyConstraints: false });
     try {
       const migration = readdirSync(folder).find((candidate) => candidate.includes("collapse_profiles_into_agents"))!;
@@ -50,7 +50,7 @@ test("gives internal agents that share a profile independent settings rows", () 
   });
 
 test("qualifies OpenCode model ids and keeps the seeds of an installation with history", () => {
-    const folder = resolve(process.cwd(), "drizzle");
+    const folder = resolve(process.cwd(), "migrations");
     const database = new Database(":memory:", { enableForeignKeyConstraints: false });
     try {
       const migration = readdirSync(folder).find((candidate) => candidate.includes("providers_are_harnesses"))!;
@@ -72,7 +72,7 @@ test("qualifies OpenCode model ids and keeps the seeds of an installation with h
   });
 
 test("renames the default native agents and keeps a name you chose", () => {
-    const folder = resolve(process.cwd(), "drizzle");
+    const folder = resolve(process.cwd(), "migrations");
     const database = new Database(":memory:", { enableForeignKeyConstraints: false });
     try {
       const migration = readdirSync(folder).find((candidate) => candidate.includes("rename_default_native_agents"))!;
@@ -92,7 +92,7 @@ test("renames the default native agents and keeps a name you chose", () => {
   });
 
 test("backfills nullable projection steps from legacy phases", () => {
-    const folder = resolve(process.cwd(), "drizzle");
+    const folder = resolve(process.cwd(), "migrations");
     const database = new Database(":memory:", { enableForeignKeyConstraints: false });
     try {
       const migration = readdirSync(folder).find((candidate) => candidate.includes("backfill_projection_steps"))!;
@@ -115,7 +115,7 @@ test("backfills nullable projection steps from legacy phases", () => {
   });
 
 test("generalizes external-agent identity without losing pairing, credential, or grant data", () => {
-    const folder = resolve(process.cwd(), "drizzle");
+    const folder = resolve(process.cwd(), "migrations");
     const database = new Database(":memory:", { enableForeignKeyConstraints: false });
     try {
       database.exec(`

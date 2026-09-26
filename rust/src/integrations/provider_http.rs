@@ -2,6 +2,7 @@
 
 use std::{error::Error, time::Duration};
 
+use serde::{Deserialize, Deserializer, de::DeserializeOwned};
 use serde_json::Value;
 
 pub use super::issue_tracker::ProviderHttpFailure;
@@ -85,6 +86,42 @@ pub async fn provider_json(
     } else {
         serde_json::from_slice(&bytes)?
     })
+}
+
+/// Optional provider metadata: a value of the wrong type reads as absent.
+pub fn optional_metadata<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
+where
+    D: Deserializer<'de>,
+    T: DeserializeOwned,
+{
+    Ok(serde_json::from_value(Value::deserialize(deserializer)?).ok())
+}
+
+/// A provider field that reads as its default when absent or of the wrong type.
+pub fn lenient<'de, D, T>(deserializer: D) -> Result<T, D::Error>
+where
+    D: Deserializer<'de>,
+    T: DeserializeOwned + Default,
+{
+    optional_metadata(deserializer).map(Option::unwrap_or_default)
+}
+
+/// A provider id as text: a string as is, other JSON as its literal.
+pub fn id_text<'de, D: Deserializer<'de>>(deserializer: D) -> Result<String, D::Error> {
+    Ok(match Value::deserialize(deserializer)? {
+        Value::String(id) => id,
+        other => other.to_string(),
+    })
+}
+
+/// The `id_text` of an absent id.
+pub fn missing_id() -> String {
+    "null".into()
+}
+
+/// True when the field is present, whatever its value.
+pub fn present<'de, D: Deserializer<'de>>(deserializer: D) -> Result<bool, D::Error> {
+    serde::de::IgnoredAny::deserialize(deserializer).map(|_| true)
 }
 
 #[cfg(test)]

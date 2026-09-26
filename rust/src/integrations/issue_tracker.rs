@@ -8,9 +8,13 @@ use std::{error::Error, fmt, sync::LazyLock};
 
 use base64::{Engine, engine::general_purpose::STANDARD};
 use regex::Regex;
-use serde_json::{Value, json};
+use serde::{Deserialize, Serialize, de::DeserializeOwned};
+use serde_json::{Map, Value, json};
 
-use super::github_delivery::Github;
+use super::{
+    github_delivery::Github,
+    provider_http::{self, id_text, lenient, missing_id, optional_metadata, present},
+};
 use crate::tasks::images::MAX_TASK_IMAGE_BYTES;
 
 pub type TrackerResult<T> = Result<T, Box<dyn Error + Send + Sync>>;
@@ -143,8 +147,209 @@ fn origin(site: &str) -> TrackerResult<String> {
     Ok(url.origin().ascii_serialization())
 }
 
+/// The tracker connection of a task or project configuration.
+#[derive(Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct Connection {
+    #[serde(default, deserialize_with = "lenient")]
+    kind: String,
+    #[serde(default, deserialize_with = "lenient")]
+    repository: String,
+    #[serde(default, deserialize_with = "lenient")]
+    site: String,
+    #[serde(default, deserialize_with = "lenient")]
+    project: String,
+    #[serde(default, deserialize_with = "lenient")]
+    email_environment: String,
+    #[serde(default, deserialize_with = "lenient")]
+    token_environment: String,
+}
+
+/// The identity fields of a stored issue association.
+#[derive(Debug, Default, Deserialize)]
+struct IssueRef {
+    #[serde(default, deserialize_with = "lenient")]
+    kind: String,
+    #[serde(default, deserialize_with = "lenient")]
+    repository: String,
+    #[serde(default, deserialize_with = "lenient")]
+    site: String,
+    #[serde(default, deserialize_with = "lenient")]
+    key: String,
+    #[serde(default, deserialize_with = "lenient")]
+    id: String,
+    /// The JSON literal of the number, as the GitHub REST path takes it.
+    #[serde(default = "missing_id", deserialize_with = "id_text")]
+    number: String,
+}
+
+impl IssueRef {
+    fn github(&self) -> bool {
+        self.kind == "github"
+    }
+}
+
+/// TypeScript `reference`: a validated Jira issue association.
+#[derive(Serialize)]
+struct JiraReference {
+    kind: &'static str,
+    site: String,
+    id: String,
+    key: String,
+    title: String,
+    url: String,
+}
+
+impl From<&JiraReference> for IssueRef {
+    fn from(reference: &JiraReference) -> Self {
+        Self {
+            kind: reference.kind.into(),
+            site: reference.site.clone(),
+            key: reference.key.clone(),
+            id: reference.id.clone(),
+            ..Self::default()
+        }
+    }
+}
+
+/// A Jira issue. `fields` keeps every field in provider order for the text snapshot.
+#[derive(Default, Deserialize)]
+struct JiraIssue {
+    #[serde(default, deserialize_with = "optional_metadata")]
+    id: Option<String>,
+    #[serde(default, deserialize_with = "optional_metadata")]
+    key: Option<String>,
+    #[serde(default, deserialize_with = "lenient")]
+    fields: Map<String, Value>,
+    #[serde(default, deserialize_with = "lenient")]
+    names: Map<String, Value>,
+}
+
+impl JiraIssue {
+    fn text(&self, field: &str) -> String {
+        issue_text(self.fields.get(field).unwrap_or(&Value::Null))
+    }
+
+    fn field<T: DeserializeOwned + Default>(&self, field: &str) -> T {
+        self.fields
+            .get(field)
+            .and_then(|value| T::deserialize(value).ok())
+            .unwrap_or_default()
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct Attachment {
+    #[serde(default = "missing_id", deserialize_with = "id_text")]
+    id: String,
+    #[serde(default, deserialize_with = "lenient")]
+    filename: String,
+    #[serde(default, deserialize_with = "lenient")]
+    size: u64,
+    #[serde(default, deserialize_with = "lenient")]
+    mime_type: String,
+    #[serde(default, deserialize_with = "optional_metadata")]
+    author: Option<JiraAccount>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct IssueLink {
+    #[serde(default, deserialize_with = "optional_metadata")]
+    inward_issue: Option<LinkedIssue>,
+    #[serde(default, deserialize_with = "optional_metadata")]
+    outward_issue: Option<LinkedIssue>,
+}
+
+#[derive(Deserialize)]
+struct LinkedIssue {
+    #[serde(default, deserialize_with = "optional_metadata")]
+    id: Option<String>,
+    #[serde(default, deserialize_with = "optional_metadata")]
+    key: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct JiraAccount {
+    #[serde(default, deserialize_with = "optional_metadata")]
+    account_id: Option<String>,
+}
+
+#[derive(Deserialize)]
+struct GithubAccount {
+    #[serde(default, deserialize_with = "optional_metadata")]
+    id: Option<u64>,
+}
+
+/// A GitHub or Jira issue comment.
+#[derive(Deserialize)]
+struct Comment {
+    #[serde(default = "missing_id", deserialize_with = "id_text")]
+    id: String,
+    #[serde(default)]
+    body: Value,
+    #[serde(default, deserialize_with = "optional_metadata")]
+    author: Option<JiraAccount>,
+    #[serde(default, deserialize_with = "optional_metadata")]
+    user: Option<GithubAccount>,
+}
+
+impl Comment {
+    fn owned(&self, actor: &str) -> bool {
+        self.author
+            .as_ref()
+            .and_then(|author| author.account_id.as_deref())
+            == Some(actor)
+            || self
+                .user
+                .as_ref()
+                .and_then(|user| user.id)
+                .is_some_and(|id| id.to_string() == actor)
+    }
+}
+
+#[derive(Deserialize)]
+struct JiraComments {
+    comments: Vec<Comment>,
+    total: u64,
+}
+
+#[derive(Deserialize)]
+struct CommentId {
+    #[serde(default = "missing_id", deserialize_with = "id_text")]
+    id: String,
+}
+
+#[derive(Deserialize)]
+struct GithubSearch {
+    items: Vec<GithubIssue>,
+}
+
+#[derive(Deserialize)]
+struct JiraSearch {
+    issues: Vec<JiraIssue>,
+}
+
+#[derive(Default, Deserialize)]
+struct GithubIssue {
+    #[serde(default, deserialize_with = "optional_metadata")]
+    id: Option<u64>,
+    #[serde(default, deserialize_with = "optional_metadata")]
+    number: Option<u64>,
+    #[serde(default, deserialize_with = "optional_metadata")]
+    title: Option<String>,
+    #[serde(default, deserialize_with = "optional_metadata")]
+    html_url: Option<String>,
+    #[serde(default, deserialize_with = "lenient")]
+    body: String,
+    #[serde(default, deserialize_with = "present")]
+    pull_request: bool,
+}
+
 pub struct IssueTracker {
-    connection: Value,
+    connection: Connection,
     github: Option<Github>,
     http: reqwest::Client,
 }
@@ -166,30 +371,24 @@ impl IssueTracker {
 
     pub fn with_github(connection: &Value, github: Option<Github>) -> Self {
         Self {
-            connection: connection.clone(),
+            connection: Connection::deserialize(connection).unwrap_or_default(),
             github,
-            http: reqwest::Client::builder()
-                .redirect(reqwest::redirect::Policy::none())
-                .timeout(std::time::Duration::from_secs(30))
-                .build()
-                .expect("HTTP client"),
+            http: provider_http::client(),
         }
     }
 
     fn jira(&self) -> bool {
-        self.connection["kind"] == "jira"
+        self.connection.kind == "jira"
     }
 
     fn jira_credentials(&self) -> TrackerResult<(String, String)> {
         if !self.jira() {
             return Err(fail("The project does not use Jira"));
         }
-        let email =
-            environment_credential(self.connection["emailEnvironment"].as_str().unwrap_or(""))?;
-        let token =
-            environment_credential(self.connection["tokenEnvironment"].as_str().unwrap_or(""))?;
+        let email = environment_credential(&self.connection.email_environment)?;
+        let token = environment_credential(&self.connection.token_environment)?;
         Ok((
-            origin(self.connection["site"].as_str().unwrap_or(""))?,
+            origin(&self.connection.site)?,
             format!("Basic {}", STANDARD.encode(format!("{email}:{token}"))),
         ))
     }
@@ -222,27 +421,18 @@ impl IssueTracker {
         if let Some(body) = body {
             request = request.body(body);
         }
-        let mut response = request.send().await?;
-        if !response.status().is_success() {
-            return Err(ProviderHttpFailure {
-                status: response.status().as_u16(),
-            }
-            .into());
-        }
-        if response
-            .content_length()
-            .is_some_and(|length| length as usize > maximum)
-        {
-            return Err(fail("The provider response is too large"));
-        }
-        let mut bytes = Vec::new();
-        while let Some(chunk) = response.chunk().await? {
-            bytes.extend_from_slice(&chunk);
-            if bytes.len() > maximum {
-                return Err(fail("The provider response is too large"));
-            }
-        }
-        Ok(bytes)
+        provider_http::bounded_response(request.send().await?, maximum).await
+    }
+
+    async fn attachment(&self, id: &str, maximum: usize) -> TrackerResult<Vec<u8>> {
+        self.provider_bytes(
+            &format!("/rest/api/3/attachment/content/{id}?redirect=false"),
+            reqwest::Method::GET,
+            None,
+            &[],
+            maximum,
+        )
+        .await
     }
 
     async fn jira_json(&self, path: &str, body: Option<(&str, &Value)>) -> TrackerResult<Value> {
@@ -266,6 +456,28 @@ impl IssueTracker {
         } else {
             serde_json::from_slice(&bytes)?
         })
+    }
+
+    /// One Jira read decoded as `T`; a response of another shape is `malformed`.
+    async fn jira_read<T: DeserializeOwned>(
+        &self,
+        path: &str,
+        malformed: &str,
+    ) -> TrackerResult<T> {
+        serde_json::from_value(self.jira_json(path, None).await?).map_err(|_| fail(malformed))
+    }
+
+    /// One Jira issue read, validated as a reference in the configured tracker.
+    async fn jira_issue(&self, id: &str, query: &str) -> TrackerResult<(JiraIssue, JiraReference)> {
+        let row: JiraIssue = self
+            .jira_read(
+                &format!("/rest/api/3/issue/{id}?{query}"),
+                "Jira issue is malformed",
+            )
+            .await?;
+        let current = self.reference(&row)?;
+        self.in_scope(&IssueRef::from(&current))?;
+        Ok((row, current))
     }
 
     /// TypeScript `gh api <path>` for the GitHub tracker.
@@ -293,35 +505,39 @@ impl IssueTracker {
         serde_json::from_str(&text).map_err(|_| fail("GitHub could not complete the issue request"))
     }
 
+    /// One GitHub read decoded as `T`; a response of another shape is `malformed`.
+    async fn github_read<T: DeserializeOwned>(
+        &self,
+        path: &str,
+        malformed: &str,
+    ) -> TrackerResult<T> {
+        serde_json::from_value(self.github_json(path, None).await?).map_err(|_| fail(malformed))
+    }
+
     async fn actor(&self) -> TrackerResult<String> {
         if self.jira() {
-            let myself = self.jira_json("/rest/api/3/myself", None).await?;
-            return myself["accountId"]
-                .as_str()
-                .map(str::to_owned)
+            let myself: JiraAccount = self
+                .jira_read("/rest/api/3/myself", "Jira account is malformed")
+                .await?;
+            return myself
+                .account_id
                 .ok_or_else(|| fail("Jira account is malformed"));
         }
-        let user = self.github_json("user", None).await?;
-        user["id"]
-            .as_u64()
+        let user: GithubAccount = self
+            .github_read("user", "GitHub account is malformed")
+            .await?;
+        user.id
             .map(|id| id.to_string())
             .ok_or_else(|| fail("GitHub account is malformed"))
     }
 
-    fn owned(row: &Value, actor: &str) -> bool {
-        row["author"]["accountId"].as_str() == Some(actor)
-            || row["user"]["id"]
-                .as_u64()
-                .is_some_and(|id| id.to_string() == actor)
-    }
-
     /// TypeScript `reference`: a validated Jira issue association.
-    fn reference(&self, row: &Value) -> TrackerResult<Value> {
+    fn reference(&self, row: &JiraIssue) -> TrackerResult<JiraReference> {
         if !self.jira() {
             return Err(fail("The project does not use Jira"));
         }
-        let site = origin(self.connection["site"].as_str().unwrap_or(""))?;
-        let (Some(id), Some(key)) = (row["id"].as_str(), row["key"].as_str()) else {
+        let site = origin(&self.connection.site)?;
+        let (Some(id), Some(key)) = (&row.id, &row.key) else {
             return Err(fail("Jira issue is malformed"));
         };
         let valid_key = key.split_once('-').is_some_and(|(project, number)| {
@@ -336,30 +552,32 @@ impl IssueTracker {
             return Err(fail("Jira issue is malformed"));
         }
         let encoded = url::form_urlencoded::byte_serialize(key.as_bytes()).collect::<String>();
-        Ok(json!({
-            "kind": "jira", "site": site, "id": id, "key": key,
-            "title": issue_text(&row["fields"]["summary"]), "url": format!("{site}/browse/{encoded}"),
-        }))
+        Ok(JiraReference {
+            kind: "jira",
+            url: format!("{site}/browse/{encoded}"),
+            site,
+            id: id.clone(),
+            key: key.clone(),
+            title: row.text("summary"),
+        })
     }
 
     /// TypeScript `check`: the issue must belong to the configured tracker.
-    fn check(&self, issue: &Value) -> TrackerResult<()> {
-        let same_github = issue["kind"] == "github"
-            && self.connection["kind"] == "github"
-            && issue["repository"].as_str().map(str::to_lowercase)
-                == self.connection["repository"]
-                    .as_str()
-                    .map(str::to_lowercase);
-        let same_jira = issue["kind"] == "jira"
+    fn check(&self, issue: &Value) -> TrackerResult<IssueRef> {
+        let issue = IssueRef::deserialize(issue).unwrap_or_default();
+        self.in_scope(&issue)?;
+        Ok(issue)
+    }
+
+    fn in_scope(&self, issue: &IssueRef) -> TrackerResult<()> {
+        let connection = &self.connection;
+        let same_github = issue.github()
+            && connection.kind == "github"
+            && issue.repository.to_lowercase() == connection.repository.to_lowercase();
+        let same_jira = issue.kind == "jira"
             && self.jira()
-            && origin(issue["site"].as_str().unwrap_or("")).ok()
-                == origin(self.connection["site"].as_str().unwrap_or("")).ok()
-            && issue["key"].as_str().is_some_and(|key| {
-                key.starts_with(&format!(
-                    "{}-",
-                    self.connection["project"].as_str().unwrap_or("")
-                ))
-            });
+            && origin(&issue.site).ok() == origin(&connection.site).ok()
+            && issue.key.starts_with(&format!("{}-", connection.project));
         if same_github || same_jira {
             Ok(())
         } else {
@@ -370,41 +588,45 @@ impl IssueTracker {
     pub async fn search(&self, query: &str) -> TrackerResult<Vec<Value>> {
         let text = query.trim().chars().take(200).collect::<String>();
         if !self.jira() {
-            let repository = self.connection["repository"].as_str().unwrap_or("");
+            let repository = &self.connection.repository;
             let q = url::form_urlencoded::byte_serialize(
                 format!("repo:{repository} is:issue {text}").as_bytes(),
             )
             .collect::<String>();
-            let result = self
-                .github_json(&format!("search/issues?q={q}&per_page=30"), None)
+            let result: GithubSearch = self
+                .github_read(
+                    &format!("search/issues?q={q}&per_page=30"),
+                    "GitHub search is malformed",
+                )
                 .await?;
-            let items = result["items"]
-                .as_array()
-                .ok_or_else(|| fail("GitHub search is malformed"))?;
-            return Ok(items
-                .iter()
-                .filter(|row| row.get("pull_request").is_none())
+            return Ok(result
+                .items
+                .into_iter()
+                .filter(|row| !row.pull_request)
                 .filter_map(|row| {
-                    let number = row["number"].as_u64()?;
+                    let number = row.number?;
                     Some(json!({
-                        "kind": "github", "repository": repository, "id": row["id"].as_u64()?.to_string(),
-                        "number": number, "key": format!("#{number}"), "title": row["title"].as_str()?,
-                        "url": row["html_url"].as_str()?,
+                        "kind": "github", "repository": repository, "id": row.id?.to_string(),
+                        "number": number, "key": format!("#{number}"), "title": row.title?,
+                        "url": row.html_url?,
                     }))
                 })
                 .collect());
         }
-        let project = self.connection["project"].as_str().unwrap_or("");
+        let project = &self.connection.project;
         let is_key = text
             .to_uppercase()
             .strip_prefix(&format!("{project}-"))
             .is_some_and(|number| !number.is_empty() && number.bytes().all(|b| b.is_ascii_digit()));
         if is_key {
             let encoded = url::form_urlencoded::byte_serialize(text.as_bytes()).collect::<String>();
-            let row = self
-                .jira_json(&format!("/rest/api/3/issue/{encoded}?fields=summary"), None)
+            let row: JiraIssue = self
+                .jira_read(
+                    &format!("/rest/api/3/issue/{encoded}?fields=summary"),
+                    "Jira issue is malformed",
+                )
                 .await?;
-            return Ok(vec![self.reference(&row)?]);
+            return Ok(vec![json!(self.reference(&row)?)]);
         }
         let escaped = text.replace('\\', "\\\\").replace('"', "\\\"");
         let jql = format!(
@@ -420,61 +642,55 @@ impl IssueTracker {
             .append_pair("fields", "summary")
             .append_pair("maxResults", "30")
             .finish();
-        let page = self
-            .jira_json(&format!("/rest/api/3/search/jql?{query}"), None)
+        let page: JiraSearch = self
+            .jira_read(
+                &format!("/rest/api/3/search/jql?{query}"),
+                "Jira search is malformed",
+            )
             .await?;
-        page["issues"]
-            .as_array()
-            .ok_or_else(|| fail("Jira search is malformed"))?
+        page.issues
             .iter()
-            .map(|row| self.reference(row))
+            .map(|row| Ok(json!(self.reference(row)?)))
             .collect()
     }
 
-    async fn comments(&self, issue: &Value) -> TrackerResult<Vec<Value>> {
-        self.check(issue)?;
+    async fn comments(&self, issue: &IssueRef) -> TrackerResult<Vec<Comment>> {
         let mut result = Vec::new();
         for page in 0..100 {
-            if issue["kind"] == "github" {
-                let rows = self
-                    .github_json(
+            if issue.github() {
+                let rows: Vec<Comment> = self
+                    .github_read(
                         &format!(
                             "repos/{}/issues/{}/comments?per_page=100&page={}",
-                            issue["repository"].as_str().unwrap_or(""),
-                            issue["number"],
+                            issue.repository,
+                            issue.number,
                             page + 1
                         ),
-                        None,
+                        "GitHub comments are malformed",
                     )
                     .await?;
-                let rows = rows
-                    .as_array()
-                    .ok_or_else(|| fail("GitHub comments are malformed"))?;
-                result.extend(rows.iter().cloned());
-                if rows.len() < 100 {
+                let last = rows.len() < 100;
+                result.extend(rows);
+                if last {
                     return Ok(result);
                 }
             } else {
-                let rows = self
-                    .jira_json(
+                let rows: JiraComments = self
+                    .jira_read(
                         &format!(
                             "/rest/api/3/issue/{}/comment?maxResults=100&startAt={}",
-                            issue["id"].as_str().unwrap_or(""),
+                            issue.id,
                             result.len()
                         ),
-                        None,
+                        "Jira comments are malformed",
                     )
                     .await?;
-                let (Some(comments), Some(total)) =
-                    (rows["comments"].as_array(), rows["total"].as_u64())
-                else {
-                    return Err(fail("Jira comments are malformed"));
-                };
-                result.extend(comments.iter().cloned());
-                if result.len() as u64 >= total {
+                let empty = rows.comments.is_empty();
+                result.extend(rows.comments);
+                if result.len() as u64 >= rows.total {
                     return Ok(result);
                 }
-                if comments.is_empty() {
+                if empty {
                     return Err(fail("Jira returned an incomplete comment page"));
                 }
             }
@@ -484,39 +700,41 @@ impl IssueTracker {
 
     /// TypeScript `read`: the current issue identity and a bounded text snapshot.
     pub async fn read(&self, issue: &Value) -> TrackerResult<Value> {
-        self.check(issue)?;
-        let comments = self.comments(issue).await?;
-        let (current, detail) = if issue["kind"] == "github" {
-            let row = self
-                .github_json(
-                    &format!(
-                        "repos/{}/issues/{}",
-                        issue["repository"].as_str().unwrap_or(""),
-                        issue["number"]
-                    ),
+        let reference = self.check(issue)?;
+        let comments = self.comments(&reference).await?;
+        let (current, heading, detail) = if reference.github() {
+            let row: GithubIssue = serde_json::from_value(
+                self.github_json(
+                    &format!("repos/{}/issues/{}", reference.repository, reference.number),
                     None,
                 )
-                .await?;
-            if row.get("pull_request").is_some() {
+                .await?,
+            )
+            .unwrap_or_default();
+            if row.pull_request {
                 return Err(fail("Select an issue, not a pull request"));
             }
+            let heading = format!(
+                "{}: {}\n{}",
+                reference.key,
+                row.title.as_deref().unwrap_or_default(),
+                row.html_url.as_deref().unwrap_or_default()
+            );
             let mut current = issue.clone();
-            current["id"] = json!(row["id"].as_u64().map(|id| id.to_string()));
-            current["title"] = row["title"].clone();
-            current["url"] = row["html_url"].clone();
-            (current, row["body"].as_str().unwrap_or("").to_owned())
+            current["id"] = json!(row.id.map(|id| id.to_string()));
+            current["title"] = json!(row.title);
+            current["url"] = json!(row.html_url);
+            (current, heading, row.body)
         } else {
-            self.read_jira(issue).await?
+            let (current, detail) = self.read_jira(&reference).await?;
+            let heading = format!("{}: {}\n{}", current.key, current.title, current.url);
+            (json!(current), heading, detail)
         };
         let text = format!(
-            "{}: {}\n{}\n\n{}\n\nComments\n{}",
-            current["key"].as_str().unwrap_or(""),
-            current["title"].as_str().unwrap_or(""),
-            current["url"].as_str().unwrap_or(""),
-            detail,
+            "{heading}\n\n{detail}\n\nComments\n{}",
             comments
                 .iter()
-                .map(|row| issue_text(&row["body"]))
+                .map(|row| issue_text(&row.body))
                 .collect::<Vec<_>>()
                 .join("\n\n")
         );
@@ -536,44 +754,35 @@ impl IssueTracker {
         }))
     }
 
-    async fn read_jira(&self, issue: &Value) -> TrackerResult<(Value, String)> {
-        let row = self
-            .jira_json(
-                &format!(
-                    "/rest/api/3/issue/{}?expand=names,schema",
-                    issue["id"].as_str().unwrap_or("")
-                ),
-                None,
-            )
-            .await?;
-        let current = self.reference(&row)?;
-        self.check(&current)?;
-        let fields = row["fields"].as_object().cloned().unwrap_or_default();
-        let mut detail = fields
+    async fn read_jira(&self, issue: &IssueRef) -> TrackerResult<(JiraReference, String)> {
+        let (row, current) = self.jira_issue(&issue.id, "expand=names,schema").await?;
+        let mut detail = row
+            .fields
             .iter()
             .filter(|(key, value)| {
                 !matches!(key.as_str(), "comment" | "attachment" | "issuelinks") && !value.is_null()
             })
             .map(|(key, value)| {
-                format!(
-                    "{}: {}",
-                    row["names"][key].as_str().unwrap_or(key),
-                    issue_text(value)
-                )
+                let name = row.names.get(key).and_then(Value::as_str).unwrap_or(key);
+                format!("{name}: {}", issue_text(value))
             })
             .collect::<Vec<_>>()
             .join("\n\n");
         let (site, _) = self.jira_credentials()?;
-        let attachments = row["fields"]["attachment"]
-            .as_array()
-            .cloned()
-            .unwrap_or_default();
+        detail += &self
+            .attachment_text(&site, &row.field::<Vec<_>>("attachment"))
+            .await;
+        detail += &self.linked_text(&row.field::<Vec<_>>("issuelinks")).await;
+        Ok((current, detail))
+    }
+
+    /// The text of up to ten Jira attachments.
+    async fn attachment_text(&self, site: &str, attachments: &[Attachment]) -> String {
+        let mut detail = String::new();
         for file in attachments.iter().take(10) {
-            let id = attachment_id(file);
-            let name = file["filename"].as_str().unwrap_or("");
-            let size = file["size"].as_u64().unwrap_or(0);
+            let (id, name, size) = (&file.id, &file.filename, file.size);
             detail += &format!("\n\nAttachment: {name} ({size} bytes)");
-            let mime = file["mimeType"].as_str().unwrap_or("");
+            let mime = file.mime_type.as_str();
             if size > 256 * 1024 || !(mime.starts_with("text/") || mime == "application/json") {
                 let encoded =
                     url::form_urlencoded::byte_serialize(name.as_bytes()).collect::<String>();
@@ -582,16 +791,7 @@ impl IssueTracker {
                 );
                 continue;
             }
-            match self
-                .provider_bytes(
-                    &format!("/rest/api/3/attachment/content/{id}?redirect=false"),
-                    reqwest::Method::GET,
-                    None,
-                    &[],
-                    256 * 1024,
-                )
-                .await
-            {
+            match self.attachment(id, 256 * 1024).await {
                 Ok(bytes) => detail += &format!("\n{}", String::from_utf8_lossy(&bytes)),
                 Err(_) => detail += "\nContent could not be read with this tracker connection.",
             }
@@ -602,20 +802,19 @@ impl IssueTracker {
                 attachments.len() - 10
             );
         }
-        let linked = row["fields"]["issuelinks"]
-            .as_array()
-            .into_iter()
-            .flatten()
+        detail
+    }
+
+    /// The summary and description of up to five linked Jira issues.
+    async fn linked_text(&self, links: &[IssueLink]) -> String {
+        let linked = links
+            .iter()
             .filter_map(|link| {
-                let other = link
-                    .get("inwardIssue")
-                    .or_else(|| link.get("outwardIssue"))?;
-                Some((
-                    other["id"].as_str()?.to_owned(),
-                    other["key"].as_str()?.to_owned(),
-                ))
+                let other = link.inward_issue.as_ref().or(link.outward_issue.as_ref())?;
+                Some((other.id.as_deref()?, other.key.as_deref()?))
             })
             .collect::<Vec<_>>();
+        let mut detail = String::new();
         for (id, key) in linked.iter().take(5) {
             let encoded = url::form_urlencoded::byte_serialize(id.as_bytes()).collect::<String>();
             match self
@@ -626,12 +825,13 @@ impl IssueTracker {
                 .await
             {
                 Ok(related) => {
-                    let description = issue_text(&related["fields"]["description"]);
+                    let related: JiraIssue = serde_json::from_value(related).unwrap_or_default();
+                    let description = related.text("description");
                     let limited = description.encode_utf16().take(20_000).collect::<Vec<_>>();
                     detail += &format!(
                         "\n\nLinked issue {}: {}\n{}",
-                        related["key"].as_str().unwrap_or(key),
-                        issue_text(&related["fields"]["summary"]),
+                        related.key.as_deref().unwrap_or(key),
+                        related.text("summary"),
                         String::from_utf16_lossy(&limited)
                     );
                     if description.encode_utf16().count() > 20_000 {
@@ -651,59 +851,41 @@ impl IssueTracker {
                 linked.len() - 5
             );
         }
-        Ok((current, detail))
+        detail
     }
 
     /// TypeScript `images`: up to eight Jira image attachments for task intake.
     pub async fn images(&self, issue: &Value, limit: usize) -> TrackerResult<IssueImages> {
-        self.check(issue)?;
+        let issue = self.check(issue)?;
         let mut result = IssueImages {
             images: Vec::new(),
             notes: Vec::new(),
         };
-        if issue["kind"] != "jira" {
+        if issue.kind != "jira" {
             return Ok(result);
         }
-        let current = self
-            .jira_json(
-                &format!(
-                    "/rest/api/3/issue/{}?fields=summary,attachment",
-                    issue["id"].as_str().unwrap_or("")
-                ),
-                None,
-            )
+        let (current, _) = self
+            .jira_issue(&issue.id, "fields=summary,attachment")
             .await?;
-        self.check(&self.reference(&current)?)?;
-        let rows = current["fields"]["attachment"]
-            .as_array()
-            .cloned()
-            .unwrap_or_default();
+        let rows: Vec<Attachment> = current.field("attachment");
         for file in rows.iter().take(10) {
-            let mime = file["mimeType"].as_str().unwrap_or("");
+            let mime = file.mime_type.as_str();
             if !matches!(
                 mime,
                 "image/png" | "image/jpeg" | "image/webp" | "image/gif"
             ) {
                 continue;
             }
-            let name = file["filename"].as_str().unwrap_or("");
-            if result.images.len() >= limit.min(8)
-                || file["size"].as_u64().unwrap_or(0) as usize > MAX_TASK_IMAGE_BYTES
-            {
+            let name = &file.filename;
+            if result.images.len() >= limit.min(8) || file.size as usize > MAX_TASK_IMAGE_BYTES {
                 result.notes.push(format!(
                     "Image {name} was not loaded: task image count or 8 MiB limit reached."
                 ));
                 continue;
             }
-            let id = attachment_id(file);
+            let id = &file.id;
             let loaded = self
-                .provider_bytes(
-                    &format!("/rest/api/3/attachment/content/{id}?redirect=false"),
-                    reqwest::Method::GET,
-                    None,
-                    &[],
-                    MAX_TASK_IMAGE_BYTES,
-                )
+                .attachment(id, MAX_TASK_IMAGE_BYTES)
                 .await
                 .ok()
                 .filter(|bytes| {
@@ -750,100 +932,42 @@ impl IssueTracker {
         mime_type: &str,
         before_write: BeforeWrite<'_>,
     ) -> TrackerResult<String> {
-        self.check(issue)?;
+        let issue = self.check(issue)?;
         let hash = sha256_hex(bytes);
-        let valid_name = filename
-            .strip_prefix("suplex-")
-            .and_then(|rest| rest.rsplit_once('.'))
-            .is_some_and(|(stem, extension)| {
-                stem.ends_with(&format!("-{hash}"))
-                    && stem.len() > hash.len() + 1
-                    && stem[..stem.len() - hash.len() - 1]
-                        .bytes()
-                        .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
-                    && !extension.is_empty()
-                    && extension
-                        .bytes()
-                        .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit())
-            });
-        if !valid_name || bytes.is_empty() || bytes.len() > MAX_TASK_IMAGE_BYTES {
+        if !valid_evidence_name(filename, &hash)
+            || bytes.is_empty()
+            || bytes.len() > MAX_TASK_IMAGE_BYTES
+        {
             return Err(fail("Invalid task evidence attachment"));
         }
         let actor = self.actor().await?;
-        if issue["kind"] != "jira" {
+        if issue.kind != "jira" {
             // A response lost after an earlier upload is recovered from the
             // owned marker comment. A new GitHub media upload needs the CLI.
             let marker = format!("[Suplex attachment {filename}]");
-            let existing =
-                self.comments(issue).await?.into_iter().find(|row| {
-                    Self::owned(row, &actor) && issue_text(&row["body"]).contains(&marker)
-                });
+            let existing = self
+                .comments(&issue)
+                .await?
+                .into_iter()
+                .find(|row| row.owned(&actor) && issue_text(&row.body).contains(&marker));
             let Some(existing) = existing else {
                 return Err(fail(
                     "Update GitHub CLI to a version supporting issue comment --attach",
                 ));
             };
-            return github_image_reference(&issue_text(&existing["body"]))
+            return github_image_reference(&issue_text(&existing.body))
                 .ok_or_else(|| fail("GitHub has not confirmed the uploaded evidence reference"));
         }
         let (site, _) = self.jira_credentials()?;
-        let attachments_path = format!(
-            "/rest/api/3/issue/{}?fields=attachment",
-            issue["id"].as_str().unwrap_or("")
-        );
-        let find = |value: &Value| {
-            value["fields"]["attachment"]
-                .as_array()
-                .into_iter()
-                .flatten()
-                .find(|row| {
-                    row["filename"] == filename && row["author"]["accountId"] == actor.as_str()
-                })
-                .map(attachment_id)
-        };
-        let mut existing = find(&self.jira_json(&attachments_path, None).await?);
+        let mut existing = self.owned_attachment(&issue, filename, &actor).await?;
         if existing.is_none() {
-            // The file name was validated above, so it needs no quoting.
-            let boundary = format!("suplex-{}", uuid::Uuid::new_v4().simple());
-            let mut form = format!("--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"{filename}\"\r\nContent-Type: {mime_type}\r\n\r\n").into_bytes();
-            form.extend_from_slice(bytes);
-            form.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
-            self.before_mutation(issue, before_write).await?;
-            let (origin, authorization) = self.jira_credentials()?;
-            let response = self
-                .http
-                .post(url::Url::parse(&origin)?.join(&format!(
-                    "/rest/api/3/issue/{}/attachments",
-                    issue["id"].as_str().unwrap_or("")
-                ))?)
-                .header("Accept", "application/json")
-                .header("Authorization", authorization)
-                .header("X-Atlassian-Token", "no-check")
-                .header(
-                    "Content-Type",
-                    format!("multipart/form-data; boundary={boundary}"),
-                )
-                .body(form)
-                .send()
+            self.before_mutation(&issue, before_write).await?;
+            self.post_attachment(&issue, filename, bytes, mime_type)
                 .await?;
-            if !response.status().is_success() {
-                return Err(ProviderHttpFailure {
-                    status: response.status().as_u16(),
-                }
-                .into());
-            }
-            existing = find(&self.jira_json(&attachments_path, None).await?);
+            existing = self.owned_attachment(&issue, filename, &actor).await?;
         }
         let id = existing.ok_or_else(|| fail("Jira has not confirmed the evidence attachment"))?;
-        let uploaded = self
-            .provider_bytes(
-                &format!("/rest/api/3/attachment/content/{id}?redirect=false"),
-                reqwest::Method::GET,
-                None,
-                &[],
-                MAX_TASK_IMAGE_BYTES,
-            )
-            .await?;
+        let uploaded = self.attachment(&id, MAX_TASK_IMAGE_BYTES).await?;
         if sha256_hex(&uploaded) != hash {
             return Err(fail("The Jira attachment does not match the task evidence"));
         }
@@ -851,22 +975,80 @@ impl IssueTracker {
         Ok(format!("{site}/secure/attachment/{id}/{encoded}"))
     }
 
+    /// The id of the actor's Jira attachment with this file name.
+    async fn owned_attachment(
+        &self,
+        issue: &IssueRef,
+        filename: &str,
+        actor: &str,
+    ) -> TrackerResult<Option<String>> {
+        let row: JiraIssue = serde_json::from_value(
+            self.jira_json(
+                &format!("/rest/api/3/issue/{}?fields=attachment", issue.id),
+                None,
+            )
+            .await?,
+        )
+        .unwrap_or_default();
+        Ok(row
+            .field::<Vec<Attachment>>("attachment")
+            .into_iter()
+            .find(|row| {
+                row.filename == filename
+                    && row
+                        .author
+                        .as_ref()
+                        .and_then(|author| author.account_id.as_deref())
+                        == Some(actor)
+            })
+            .map(|row| row.id))
+    }
+
+    async fn post_attachment(
+        &self,
+        issue: &IssueRef,
+        filename: &str,
+        bytes: &[u8],
+        mime_type: &str,
+    ) -> TrackerResult<()> {
+        // The file name was validated by the caller, so it needs no quoting.
+        let boundary = format!("suplex-{}", uuid::Uuid::new_v4().simple());
+        let mut form = format!("--{boundary}\r\nContent-Disposition: form-data; name=\"file\"; filename=\"{filename}\"\r\nContent-Type: {mime_type}\r\n\r\n").into_bytes();
+        form.extend_from_slice(bytes);
+        form.extend_from_slice(format!("\r\n--{boundary}--\r\n").as_bytes());
+        let (origin, authorization) = self.jira_credentials()?;
+        let response = self
+            .http
+            .post(
+                url::Url::parse(&origin)?
+                    .join(&format!("/rest/api/3/issue/{}/attachments", issue.id))?,
+            )
+            .header("Accept", "application/json")
+            .header("Authorization", authorization)
+            .header("X-Atlassian-Token", "no-check")
+            .header(
+                "Content-Type",
+                format!("multipart/form-data; boundary={boundary}"),
+            )
+            .body(form)
+            .send()
+            .await?;
+        if !response.status().is_success() {
+            return Err(ProviderHttpFailure {
+                status: response.status().as_u16(),
+            }
+            .into());
+        }
+        Ok(())
+    }
+
     async fn before_mutation(
         &self,
-        issue: &Value,
+        issue: &IssueRef,
         before_write: BeforeWrite<'_>,
     ) -> TrackerResult<()> {
-        if issue["kind"] == "jira" {
-            let current = self
-                .jira_json(
-                    &format!(
-                        "/rest/api/3/issue/{}?fields=summary",
-                        issue["id"].as_str().unwrap_or("")
-                    ),
-                    None,
-                )
-                .await?;
-            self.check(&self.reference(&current)?)?;
+        if issue.kind == "jira" {
+            self.jira_issue(&issue.id, "fields=summary").await?;
         }
         before_write().await
     }
@@ -880,26 +1062,22 @@ impl IssueTracker {
         before_write: BeforeWrite<'_>,
         known_comment_id: Option<&str>,
     ) -> TrackerResult<String> {
-        self.check(issue)?;
+        let issue = self.check(issue)?;
         let marker = format!("[Suplex task {task_id}]");
         let actor = self.actor().await?;
         let text = format!("{body}\n\n{marker}");
-        let id_text = |row: &Value| match &row["id"] {
-            Value::String(id) => id.clone(),
-            other => other.to_string(),
-        };
         let owned = self
-            .comments(issue)
+            .comments(&issue)
             .await?
             .into_iter()
-            .filter(|row| Self::owned(row, &actor))
+            .filter(|row| row.owned(&actor))
             .collect::<Vec<_>>();
         let existing = owned
             .iter()
-            .find(|row| Some(id_text(row).as_str()) == known_comment_id)
+            .find(|row| Some(row.id.as_str()) == known_comment_id)
             .or_else(|| {
                 owned.iter().find(|row| {
-                    let value = issue_text(&row["body"]);
+                    let value = issue_text(&row.body);
                     value == text
                         || (value.starts_with("## What changed\n\n")
                             && value.ends_with(&format!("\n\n{marker}"))
@@ -907,53 +1085,43 @@ impl IssueTracker {
                 })
             });
         if let Some(existing) = existing
-            && issue_text(&existing["body"]) == text
+            && issue_text(&existing.body) == text
         {
-            return Ok(id_text(existing));
+            return Ok(existing.id.clone());
         }
-        let id = if issue["kind"] == "github" {
-            let repository = issue["repository"].as_str().unwrap_or("");
+        let existing = existing.map(|row| row.id.as_str());
+        self.before_mutation(&issue, before_write).await?;
+        let written = if issue.github() {
+            let repository = &issue.repository;
             let (path, method) = match existing {
-                Some(existing) => (
-                    format!("repos/{repository}/issues/comments/{}", id_text(existing)),
-                    "PATCH",
-                ),
+                Some(id) => (format!("repos/{repository}/issues/comments/{id}"), "PATCH"),
                 None => (
-                    format!("repos/{repository}/issues/{}/comments", issue["number"]),
+                    format!("repos/{repository}/issues/{}/comments", issue.number),
                     "POST",
                 ),
             };
-            self.before_mutation(issue, before_write).await?;
-            id_text(
-                &self
-                    .github_json(&path, Some((method, &json!({"body": text}))))
-                    .await?,
-            )
+            self.github_json(&path, Some((method, &json!({"body": text}))))
+                .await?
         } else {
             let path = format!(
                 "/rest/api/3/issue/{}/comment{}",
-                issue["id"].as_str().unwrap_or(""),
-                existing
-                    .map(|row| format!("/{}", id_text(row)))
-                    .unwrap_or_default()
+                issue.id,
+                existing.map(|id| format!("/{id}")).unwrap_or_default()
             );
-            self.before_mutation(issue, before_write).await?;
             let method = if existing.is_some() { "PUT" } else { "POST" };
-            id_text(
-                &self
-                    .jira_json(
-                        &path,
-                        Some((method, &json!({"body": jira_evidence_document(&text)}))),
-                    )
-                    .await?,
+            self.jira_json(
+                &path,
+                Some((method, &json!({"body": jira_evidence_document(&text)}))),
             )
+            .await?
         };
+        let id = CommentId::deserialize(&written).map_or_else(|_| missing_id(), |row| row.id);
         let observed = self
-            .comments(issue)
+            .comments(&issue)
             .await?
             .into_iter()
-            .find(|row| id_text(row) == id && Self::owned(row, &actor));
-        if observed.is_none_or(|row| issue_text(&row["body"]) != text) {
+            .find(|row| row.id == id && row.owned(&actor));
+        if observed.is_none_or(|row| issue_text(&row.body) != text) {
             return Err(fail(
                 "The tracker has not confirmed the issue evidence comment",
             ));
@@ -962,11 +1130,22 @@ impl IssueTracker {
     }
 }
 
-fn attachment_id(file: &Value) -> String {
-    match &file["id"] {
-        Value::String(id) => id.clone(),
-        other => other.to_string(),
-    }
+/// `suplex-<name>-<sha256>.<ext>`: the evidence file name for these bytes.
+fn valid_evidence_name(filename: &str, hash: &str) -> bool {
+    filename
+        .strip_prefix("suplex-")
+        .and_then(|rest| rest.rsplit_once('.'))
+        .is_some_and(|(stem, extension)| {
+            stem.ends_with(&format!("-{hash}"))
+                && stem.len() > hash.len() + 1
+                && stem[..stem.len() - hash.len() - 1]
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
+                && !extension.is_empty()
+                && extension
+                    .bytes()
+                    .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit())
+        })
 }
 
 /// GitHub evidence image references must stay on GitHub hosts.
@@ -1029,5 +1208,76 @@ mod tests {
             github_image_reference("![a](https://evil.example/x.png)"),
             None
         );
+    }
+
+    /// A loopback Jira answering each path and query from `replies`.
+    async fn fake_jira(
+        replies: Vec<(&'static str, String)>,
+    ) -> (String, tokio::task::JoinHandle<()>) {
+        let replies = std::sync::Arc::new(replies);
+        let app = axum::Router::new().fallback(move |uri: axum::http::Uri| {
+            let replies = replies.clone();
+            async move {
+                let key = uri.path_and_query().map_or("", |value| value.as_str());
+                match replies.iter().find(|(path, _)| *path == key) {
+                    Some((_, body)) => (axum::http::StatusCode::OK, body.clone()),
+                    None => (axum::http::StatusCode::NOT_FOUND, String::new()),
+                }
+            }
+        });
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base = format!("http://{}", listener.local_addr().unwrap());
+        let server = tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        (base, server)
+    }
+
+    #[tokio::test]
+    async fn jira_read_snapshots_fields_attachments_links_and_comments() {
+        // SAFETY: the variables are unique to this test.
+        unsafe {
+            std::env::set_var("SUPLEX_TEST_JIRA_READ_EMAIL", "me@example.com");
+            std::env::set_var("SUPLEX_TEST_JIRA_READ_TOKEN", "secret");
+        }
+        let (base, server) = fake_jira(vec![
+            (
+                "/rest/api/3/issue/10001/comment?maxResults=100&startAt=0",
+                json!({"comments": [{"id": "5", "body": "First", "author": {"accountId": "me"}}], "total": 1}).to_string(),
+            ),
+            (
+                "/rest/api/3/issue/10001?expand=names,schema",
+                json!({"id": "10001", "key": "ABC-1", "names": {"summary": "Summary", "description": "Description"},
+                    "fields": {"summary": "Title", "priority": null,
+                        "description": {"type": "doc", "content": [{"type": "paragraph", "content": [{"text": "Body"}]}]},
+                        "attachment": [{"id": 7, "filename": "notes.txt", "size": 5, "mimeType": "text/plain"},
+                            {"id": "8", "filename": "shot.png", "size": 9, "mimeType": "image/png"}],
+                        "issuelinks": [{"outwardIssue": {"id": "10002", "key": "ABC-2"}}]}}).to_string(),
+            ),
+            ("/rest/api/3/attachment/content/7?redirect=false", "hello".into()),
+            (
+                "/rest/api/3/issue/10002?fields=summary,description",
+                json!({"key": "ABC-2", "fields": {"summary": "Other", "description": "Linked body"}}).to_string(),
+            ),
+        ])
+        .await;
+        let tracker = IssueTracker::with_github(
+            &json!({"kind": "jira", "site": base, "project": "ABC",
+                "emailEnvironment": "SUPLEX_TEST_JIRA_READ_EMAIL", "tokenEnvironment": "SUPLEX_TEST_JIRA_READ_TOKEN"}),
+            None,
+        );
+        let snapshot = tracker
+            .read(&json!({"kind": "jira", "site": base, "id": "10001", "key": "ABC-1"}))
+            .await
+            .unwrap();
+        assert_eq!(
+            snapshot["issue"].to_string(),
+            json!({"kind": "jira", "site": base, "id": "10001", "key": "ABC-1", "title": "Title", "url": format!("{base}/browse/ABC-1")}).to_string()
+        );
+        assert_eq!(
+            snapshot["text"],
+            format!(
+                "ABC-1: Title\n{base}/browse/ABC-1\n\nSummary: Title\n\nDescription: Body\n\nAttachment: notes.txt (5 bytes)\nhello\n\nAttachment: shot.png (9 bytes)\nContent not loaded: binary or larger than 256 KiB. Review through {base}/secure/attachment/8/shot.png.\n\nLinked issue ABC-2: Other\nLinked body\n\nComments\nFirst"
+            )
+        );
+        server.abort();
     }
 }

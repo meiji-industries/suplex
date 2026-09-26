@@ -11,7 +11,7 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
-use super::github::Access;
+use super::{github::Access, provider_http::optional_metadata};
 use crate::{
     platform::redaction,
     tasks::worktree::{self, LocalRevisionObservation},
@@ -207,15 +207,6 @@ fn iso_datetime(value: &Value, key: &str) -> Option<Option<String>> {
         }
         _ => None,
     }
-}
-
-// Optional provider metadata used to ignore values of the wrong type.
-fn optional_metadata<'de, D, T>(deserializer: D) -> Result<Option<T>, D::Error>
-where
-    D: serde::Deserializer<'de>,
-    T: serde::de::DeserializeOwned,
-{
-    Ok(serde_json::from_value(Value::deserialize(deserializer)?).ok())
 }
 
 fn present_body<'de, D: serde::Deserializer<'de>>(

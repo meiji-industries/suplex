@@ -343,13 +343,16 @@ pub fn update_profile(
             if changed {
                 crate::identity::audit::record(
                     database,
-                    &random_hex_id("audit")?,
-                    (Some(actor_user_id), None),
-                    action,
-                    Some(actor_user_id),
-                    None,
-                    "{}",
-                    &now_iso,
+                    &crate::identity::audit::AuditEvent {
+                        id: &random_hex_id("audit")?,
+                        actor_user_id: Some(actor_user_id),
+                        actor_agent_id: None,
+                        action,
+                        target_user_id: Some(actor_user_id),
+                        company_id: None,
+                        metadata_json: "{}",
+                        created_at: &now_iso,
+                    },
                 )?;
             }
         }

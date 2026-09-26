@@ -139,13 +139,16 @@ fn audit(
 ) -> DatabaseResult<()> {
     crate::identity::audit::record(
         database,
-        &random_hex_id("audit")?,
-        (Some(actor_user_id), None),
-        action,
-        target_user_id,
-        Some(company_id),
-        metadata_json,
-        &rfc3339_millis(now),
+        &crate::identity::audit::AuditEvent {
+            id: &random_hex_id("audit")?,
+            actor_user_id: Some(actor_user_id),
+            actor_agent_id: None,
+            action,
+            target_user_id,
+            company_id: Some(company_id),
+            metadata_json,
+            created_at: &rfc3339_millis(now),
+        },
     )?;
     Ok(())
 }

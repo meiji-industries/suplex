@@ -231,13 +231,16 @@ impl AgentDelivery {
         }
         crate::identity::audit::record(
             &self.open(OpenMode::ReadWrite)?,
-            &format!("audit_{}", uuid::Uuid::new_v4().simple()),
-            (None, Some(&principal.agent_id)),
-            action,
-            None,
-            Some(company_id),
-            &crate::shared::js_json::stringify(&metadata),
-            &now_millis_rfc3339(),
+            &crate::identity::audit::AuditEvent {
+                id: &format!("audit_{}", uuid::Uuid::new_v4().simple()),
+                actor_user_id: None,
+                actor_agent_id: Some(&principal.agent_id),
+                action,
+                target_user_id: None,
+                company_id: Some(company_id),
+                metadata_json: &crate::shared::js_json::stringify(&metadata),
+                created_at: &now_millis_rfc3339(),
+            },
         )?;
         Ok(())
     }

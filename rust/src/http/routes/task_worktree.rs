@@ -184,13 +184,16 @@ pub(crate) async fn open_with(
             let recorded = state.with_database(|database| {
                 crate::identity::audit::record(
                     database,
-                    &uuid::Uuid::new_v4().to_string(),
-                    (Some(&user_id), None),
-                    "worktree_opened",
-                    None,
-                    Some(&company_id),
-                    &json!({"taskId": task_id, "app": launcher.id}).to_string(),
-                    &now_millis_rfc3339(),
+                    &crate::identity::audit::AuditEvent {
+                        id: &uuid::Uuid::new_v4().to_string(),
+                        actor_user_id: Some(&user_id),
+                        actor_agent_id: None,
+                        action: "worktree_opened",
+                        target_user_id: None,
+                        company_id: Some(&company_id),
+                        metadata_json: &json!({"taskId": task_id, "app": launcher.id}).to_string(),
+                        created_at: &now_millis_rfc3339(),
+                    },
                 )
             });
             match recorded {

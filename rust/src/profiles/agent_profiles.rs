@@ -198,13 +198,16 @@ fn audit(
 ) -> DatabaseResult<()> {
     crate::identity::audit::record(
         database,
-        &crate::shared::ids::random_hex_id("audit")?,
-        (Some(actor_id), None),
-        action,
-        None,
-        None,
-        &serde_json::json!({"profileId": profile_id}).to_string(),
-        &rfc3339_millis(now),
+        &crate::identity::audit::AuditEvent {
+            id: &crate::shared::ids::random_hex_id("audit")?,
+            actor_user_id: Some(actor_id),
+            actor_agent_id: None,
+            action,
+            target_user_id: None,
+            company_id: None,
+            metadata_json: &serde_json::json!({"profileId": profile_id}).to_string(),
+            created_at: &rfc3339_millis(now),
+        },
     )?;
     Ok(())
 }

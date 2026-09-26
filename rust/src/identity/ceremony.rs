@@ -334,9 +334,7 @@ pub fn finish_registration(
         let metadata = if kind == "recovery" {
             auth::metadata_with_string(&invitation.metadata_json, "invitationId", &invitation.id)
         } else { "{}".to_owned() };
-        crate::identity::audit::record(
-database, &random_hex_id("audit")?, (None, None), action, Some(&user_id), None, &metadata, &now_iso
-)?;
+        crate::identity::audit::record(database, &crate::identity::audit::AuditEvent { id: &random_hex_id("audit")?, actor_user_id: None, actor_agent_id: None, action, target_user_id: Some(&user_id), company_id: None, metadata_json: &metadata, created_at: &now_iso })?;
         let user = auth::public_user(database, &user_id)?.ok_or_else(passkey_failure)?;
         if user.status != "active" { return Err(passkey_failure()); }
         let session_token = auth::create_session(database, &user_id, now)?;

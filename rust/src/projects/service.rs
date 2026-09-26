@@ -619,9 +619,7 @@ pub fn create_local(
             "UPDATE suplex_projects SET integration_json = ?1, execution_json = ?2 WHERE id = ?3",
             params![integration_json, execution_json, id],
         )?;
-        crate::identity::audit::record(
-database, &audit_id, (Some(actor_user_id), None), "project_created", None, Some(company_id), &crate::shared::js_json::stringify(&json!({"projectId": id})), &stamp
-)?;
+        crate::identity::audit::record(database, &crate::identity::audit::AuditEvent { id: &audit_id, actor_user_id: Some(actor_user_id), actor_agent_id: None, action: "project_created", target_user_id: None, company_id: Some(company_id), metadata_json: &crate::shared::js_json::stringify(&json!({"projectId": id})), created_at: &stamp })?;
         database.connection().execute(
             "UPDATE suplex_projects SET provider_policy_json = ?1 WHERE id = ?2",
             params![provider_policy_json, id],
@@ -758,13 +756,16 @@ fn audit_update(
 ) -> DatabaseResult<()> {
     crate::identity::audit::record(
         database,
-        &random_hex_id("audit")?,
-        (Some(actor_user_id), None),
-        "project_updated",
-        None,
-        Some(company_id),
-        &crate::shared::js_json::stringify(&json!({"projectId": project_id})),
-        stamp,
+        &crate::identity::audit::AuditEvent {
+            id: &random_hex_id("audit")?,
+            actor_user_id: Some(actor_user_id),
+            actor_agent_id: None,
+            action: "project_updated",
+            target_user_id: None,
+            company_id: Some(company_id),
+            metadata_json: &crate::shared::js_json::stringify(&json!({"projectId": project_id})),
+            created_at: stamp,
+        },
     )?;
     Ok(())
 }

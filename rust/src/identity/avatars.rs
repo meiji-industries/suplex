@@ -225,9 +225,7 @@ pub fn update(
                 params![owner_id, shape, mime_type, image, updated_at],
             )?;
         }
-        crate::identity::audit::record(
-database, &random_hex_id("audit")?, (Some(user_id), None), "avatar_updated", (kind == "user").then_some(owner_id), None, &json!({"ownerId": owner_id}).to_string(), &updated_at
-)?;
+        crate::identity::audit::record(database, &crate::identity::audit::AuditEvent { id: &random_hex_id("audit")?, actor_user_id: Some(user_id), actor_agent_id: None, action: "avatar_updated", target_user_id: (kind == "user").then_some(owner_id), company_id: None, metadata_json: &json!({"ownerId": owner_id}).to_string(), created_at: &updated_at })?;
         Ok(AvatarRecord {
             shape,
             image_version: image.is_some().then_some(updated_at),

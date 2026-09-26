@@ -389,13 +389,17 @@ fn audit(
     let resulting_state = json!({"status": task.status, "archived": archived}).to_string();
     crate::identity::audit::record(
         database,
-        &format!("audit_{}", Uuid::new_v4().simple()),
-        (Some(actor_user_id), None),
-        action,
-        None,
-        Some(&task.company_id),
-        &json!({"taskId": task.id, "resultingState": resulting_state}).to_string(),
-        &rfc3339_millis(now),
+        &crate::identity::audit::AuditEvent {
+            id: &format!("audit_{}", Uuid::new_v4().simple()),
+            actor_user_id: Some(actor_user_id),
+            actor_agent_id: None,
+            action,
+            target_user_id: None,
+            company_id: Some(&task.company_id),
+            metadata_json: &json!({"taskId": task.id, "resultingState": resulting_state})
+                .to_string(),
+            created_at: &rfc3339_millis(now),
+        },
     )?;
     Ok(())
 }

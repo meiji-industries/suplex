@@ -134,13 +134,16 @@ pub(crate) fn record_audit(
 ) -> Result<(), Box<dyn std::error::Error>> {
     crate::identity::audit::record(
         database,
-        &crate::shared::ids::random_hex_id("audit")?,
-        (actor_user_id, None),
-        action,
-        None,
-        None,
-        &metadata.to_string(),
-        &now_millis_rfc3339(),
+        &crate::identity::audit::AuditEvent {
+            id: &crate::shared::ids::random_hex_id("audit")?,
+            actor_user_id,
+            actor_agent_id: None,
+            action,
+            target_user_id: None,
+            company_id: None,
+            metadata_json: &metadata.to_string(),
+            created_at: &now_millis_rfc3339(),
+        },
     )?;
     Ok(())
 }

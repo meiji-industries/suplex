@@ -312,9 +312,7 @@ fn create_inner(
         }
         let created = task_by_id(database, id)?.ok_or_else(|| TaskError::internal("Task insert did not persist"))?;
         let resulting_state = serde_json::json!({"status": created.status, "archived": false}).to_string();
-        crate::identity::audit::record(
-database, &format!("audit_{}", Uuid::new_v4().simple()), (creator_user_id, creator_agent_id), "task_created", None, Some(&input.company_id), &serde_json::json!({"taskId": id, "resultingState": resulting_state}).to_string(), &time
-)?;
+        crate::identity::audit::record(database, &crate::identity::audit::AuditEvent { id: &format!("audit_{}", Uuid::new_v4().simple()), actor_user_id: creator_user_id, actor_agent_id: creator_agent_id, action: "task_created", target_user_id: None, company_id: Some(&input.company_id), metadata_json: &serde_json::json!({"taskId": id, "resultingState": resulting_state}).to_string(), created_at: &time })?;
         Ok(TaskWrite { task: created, created: true })
     });
     if result.is_err()

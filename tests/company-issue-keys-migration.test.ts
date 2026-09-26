@@ -1,6 +1,6 @@
 import { readFile } from "node:fs/promises";
 
-import Database from "better-sqlite3";
+import { DatabaseSync as Database } from "node:sqlite";
 import { expect, test } from "vitest";
 
 async function migrationSql(): Promise<string[]> {
@@ -9,7 +9,7 @@ async function migrationSql(): Promise<string[]> {
 }
 
 test("company issue numbers backfill deterministically and allocate without reuse", async () => {
-  const database = new Database(":memory:");
+  const database = new Database(":memory:", { enableForeignKeyConstraints: false });
   try {
     database.exec(`
       CREATE TABLE suplex_companies (id TEXT PRIMARY KEY, name TEXT NOT NULL, status TEXT NOT NULL, created_at TEXT NOT NULL);

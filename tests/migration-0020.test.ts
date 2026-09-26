@@ -1,11 +1,11 @@
 import { readFile } from "node:fs/promises";
 
-import Database from "better-sqlite3";
+import { DatabaseSync as Database } from "node:sqlite";
 import { expect, test } from "vitest";
 
 test("migration 0020 accepts an interrupted intent whose reserved task was never inserted", async () => {
-  const database = new Database(":memory:");
-  database.pragma("foreign_keys = ON");
+  const database = new Database(":memory:", { enableForeignKeyConstraints: false });
+  database.exec("PRAGMA foreign_keys = ON");
   try {
     database.exec(`
       CREATE TABLE suplex_companies (id TEXT PRIMARY KEY);

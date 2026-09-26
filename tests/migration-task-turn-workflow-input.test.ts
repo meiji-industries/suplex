@@ -1,9 +1,9 @@
 import { readFile } from "node:fs/promises";
-import Database from "better-sqlite3";
+import { DatabaseSync as Database } from "node:sqlite";
 import { expect, test } from "vitest";
 
 test("task turn workflow input migration backfills each turn from its session", async () => {
-  const database = new Database(":memory:");
+  const database = new Database(":memory:", { enableForeignKeyConstraints: false });
   try {
     database.exec("CREATE TABLE suplex_task_sessions (id text PRIMARY KEY, workflow_input_json text); CREATE TABLE suplex_task_turns (id text PRIMARY KEY, session_id text NOT NULL)");
     const first = JSON.stringify({ kind: "advisor", role: "planner_a", evidenceDirectory: "/first" });

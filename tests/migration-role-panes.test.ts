@@ -1,11 +1,11 @@
 import { readFile } from "node:fs/promises";
 
-import Database from "better-sqlite3";
+import { DatabaseSync as Database } from "node:sqlite";
 import { expect, test } from "vitest";
 
 test("role panes migration maps legacy roles and keeps one current reviewer", async () => {
-  const database = new Database(":memory:");
-  database.pragma("foreign_keys = ON");
+  const database = new Database(":memory:", { enableForeignKeyConstraints: false });
+  database.exec("PRAGMA foreign_keys = ON");
   try {
     database.exec(`
       CREATE TABLE suplex_tasks (id TEXT PRIMARY KEY);

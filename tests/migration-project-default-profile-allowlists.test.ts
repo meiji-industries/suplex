@@ -1,9 +1,9 @@
 import { readFile } from "node:fs/promises";
-import Database from "better-sqlite3";
+import { DatabaseSync as Database } from "node:sqlite";
 import { expect, test } from "vitest";
 
 test("default profile allowlist repair adds each project's own defaults without disturbing the rest", async () => {
-  const database = new Database(":memory:");
+  const database = new Database(":memory:", { enableForeignKeyConstraints: false });
   try {
     database.exec("CREATE TABLE suplex_projects (id TEXT PRIMARY KEY, root_profile_id TEXT, worker_profile_id TEXT, agent_task_policy_json TEXT)");
     const insert = database.prepare("INSERT INTO suplex_projects VALUES (?, ?, ?, ?)");

@@ -1,9 +1,9 @@
 import { readFile } from "node:fs/promises";
-import Database from "better-sqlite3";
+import { DatabaseSync as Database } from "node:sqlite";
 import { expect, test } from "vitest";
 
 test("legacy issue associations use captured repository coordinates without changing authored content", async () => {
-  const database = new Database(":memory:");
+  const database = new Database(":memory:", { enableForeignKeyConstraints: false });
   try {
     database.exec("CREATE TABLE suplex_tasks (id TEXT PRIMARY KEY, title TEXT, configuration_json TEXT, issue_json TEXT)");
     const insert = database.prepare("INSERT INTO suplex_tasks VALUES (?, ?, ?, ?)");

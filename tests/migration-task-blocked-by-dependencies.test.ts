@@ -1,11 +1,11 @@
 import { readFile } from "node:fs/promises";
-import Database from "better-sqlite3";
+import { DatabaseSync as Database } from "node:sqlite";
 import { expect, test } from "vitest";
 
 test("Blocked by references become dependency edges without losing or duplicating an edge", async () => {
-  const database = new Database(":memory:");
+  const database = new Database(":memory:", { enableForeignKeyConstraints: false });
   try {
-    database.pragma("foreign_keys = ON");
+    database.exec("PRAGMA foreign_keys = ON");
     database.exec(`CREATE TABLE suplex_tasks (id TEXT PRIMARY KEY, start_when_blocked_by_delivered INTEGER NOT NULL DEFAULT 0);
       ALTER TABLE suplex_tasks ADD COLUMN blocked_by_task_id TEXT REFERENCES suplex_tasks(id);
       CREATE INDEX suplex_tasks_blocked_by_task_id_idx ON suplex_tasks (blocked_by_task_id);
@@ -36,6 +36,6 @@ test("Blocked by references become dependency edges without losing or duplicatin
     expect(database.prepare("SELECT created_at AS createdAt FROM suplex_task_dependencies WHERE task_id = 'overlap'").get()).toEqual({ createdAt: "before" });
     expect(database.prepare("SELECT name FROM pragma_table_info('suplex_tasks') ORDER BY cid").all()).toEqual([{ name: "id" }, { name: "start_when_blocked_by_delivered" }]);
     expect(database.prepare("SELECT start_when_blocked_by_delivered AS waiting FROM suplex_tasks WHERE id = 'legacy_only'").get()).toEqual({ waiting: 1 });
-    expect(database.pragma("foreign_key_check")).toEqual([]);
+    expect(database.prepare("PRAGMA foreign_key_check").all()).toEqual([]);
   } finally { database.close(); }
 });

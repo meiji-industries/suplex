@@ -1,9 +1,9 @@
 import { readFile } from "node:fs/promises";
-import Database from "better-sqlite3";
+import { DatabaseSync as Database } from "node:sqlite";
 import { expect, test } from "vitest";
 
 test("task limit pause migration preserves controls and starts without authorization", async () => {
-  const database = new Database(":memory:");
+  const database = new Database(":memory:", { enableForeignKeyConstraints: false });
   try {
     database.exec("CREATE TABLE suplex_task_controls (task_id TEXT PRIMARY KEY); INSERT INTO suplex_task_controls VALUES ('task')");
     const migration = await readFile(new URL("../drizzle/20260908133108006_task_limit_pause.sql", import.meta.url), "utf8");

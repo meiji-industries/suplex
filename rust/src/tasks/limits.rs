@@ -577,6 +577,7 @@ pub(crate) fn estimate_unpriced_usage(
     for entry in usage.iter_mut().filter(|entry| unpriced(entry)) {
         if let Some(price) = pricing.get(&format!("{}/{}", entry.provider, entry.model)) {
             entry.cost_usd = price.estimate(entry.tokens);
+            entry.subsidized = entry.cost_usd > 0.0;
         }
     }
 }
@@ -602,11 +603,11 @@ pub(crate) fn replace_observed_usage(
                     "sessionId":native_id,"messageId":entry.message_id,"turnId":entry.turn_id,
                     "role":role,"provider":entry.provider,"model":entry.model,
                     "startedAt":entry.started_at_ms,"completedAt":entry.completed_at_ms,
-                    "failed":entry.failed,"summary":false,"steps":1,"cost":entry.cost_usd,
-                    "subsidized":entry.cost_usd > 0.0,
+                    "failed":entry.failed,"summary":entry.summary,"steps":entry.steps,"cost":entry.cost_usd,
+                    "subsidized":entry.subsidized,
                     "tokens":{"input":entry.tokens.input,"output":entry.tokens.output,
                         "reasoning":entry.tokens.reasoning,"cache":{"read":entry.tokens.cache_read,
-                            "write":entry.tokens.cache_write}},"source":"message",
+                            "write":entry.tokens.cache_write}},"source":entry.source,
                 }),
             ));
         }
@@ -690,12 +691,17 @@ mod tests {
 
     #[test]
     fn budget_and_turn_limits_match_frozen_typescript_cases() {
-        let limits = |budget_usd, max_turns| TaskLimits { budget_usd, max_turns };
+        let limits = |budget_usd, max_turns| TaskLimits {
+            budget_usd,
+            max_turns,
+        };
         let evaluate = |current, cost, turns| {
             LimitHit::evaluate(
                 current,
                 limits(15.0, 40),
-                TaskLimitUsage { estimated_cost_usd: cost },
+                TaskLimitUsage {
+                    estimated_cost_usd: cost,
+                },
                 turns,
             )
         };

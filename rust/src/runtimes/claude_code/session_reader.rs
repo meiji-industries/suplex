@@ -133,6 +133,10 @@ impl NativeSessionReader for ClaudeCodeTaskRuntime {
                 failed: record.failed,
                 tokens: record.tokens,
                 cost_usd: record.cost_usd,
+                subsidized: record.cost_usd > 0.0,
+                summary: false,
+                steps: 1.0,
+                source: "message",
             })
             .collect::<Vec<_>>();
         let mut live_message_id = None;

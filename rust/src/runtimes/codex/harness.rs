@@ -102,6 +102,10 @@ impl NativeSessionReader for CodexTaskRuntime {
                     failed: turn.failed,
                     tokens: turn.tokens,
                     cost_usd: turn.cost_usd,
+                    subsidized: turn.cost_usd > 0.0,
+                    summary: false,
+                    steps: 1.0,
+                    source: "message",
                 })
                 .collect(),
             live_message_id: live,

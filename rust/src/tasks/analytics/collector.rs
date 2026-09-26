@@ -60,7 +60,6 @@ pub fn read_native_usage(
         },
         pricing,
     )?;
-    let opencode = task_harness_registry::session_harness(native) == "opencode";
     Ok(observed
         .usage
         .into_iter()
@@ -70,11 +69,7 @@ pub fn read_native_usage(
                 .completed_at_ms
                 .filter(|_| observed.live_message_id.as_deref() != Some(entry.message_id.as_str()))
                 .map(|value| value as f64),
-            steps: if entry.completed_at_ms.is_some() || !opencode {
-                1.0
-            } else {
-                0.0
-            },
+            steps: entry.steps,
             message_id: entry.message_id,
             turn_id: entry.turn_id,
             role: session.kind.clone(),
@@ -82,10 +77,9 @@ pub fn read_native_usage(
             model: entry.model,
             started_at: entry.started_at_ms as f64,
             failed: entry.failed,
-            summary: false,
+            summary: entry.summary,
             cost: entry.cost_usd,
-            // ponytail: the shared usage entry has no estimate flag; OpenCode's native cost is billed, the other runtimes estimate from listed prices.
-            subsidized: !opencode && entry.cost_usd > 0.0,
+            subsidized: entry.subsidized,
             tokens: Tokens {
                 input: entry.tokens.input,
                 output: entry.tokens.output,
@@ -95,7 +89,7 @@ pub fn read_native_usage(
                     write: entry.tokens.cache_write,
                 },
             },
-            source: "message".into(),
+            source: entry.source.into(),
         })
         .collect())
 }
@@ -265,6 +259,137 @@ mod tests {
 
     fn lines(values: &[serde_json::Value]) -> String {
         values.iter().map(|value| format!("{value}\n")).collect()
+    }
+
+    #[tokio::test]
+    async fn opencode_usage_keeps_estimates_steps_and_summary_through_both_stores() {
+        use serde_json::json;
+        let (seed, database) = task_database();
+        drop(database);
+        let root =
+            std::env::temp_dir().join(format!("suplex-usage-parity-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&root).unwrap();
+        let path = root.join("suplex.sqlite");
+        fs::rename(seed, &path).unwrap();
+        let (url, _) = crate::runtimes::opencode::client::fake::serve(|request| match request.path.as_str() {
+            "/session/status" => (200, json!({"ses_live":{"type":"idle"}}).to_string()),
+            "/session/ses_live/message" => {
+                let tokens = json!({"input":100,"output":0,"reasoning":0,"cache":{"read":0,"write":0}});
+                let message = |id, cost, parts, time, summary, model| json!({"info":{"id":id,"sessionID":"ses_live","role":"assistant","time":time,"parentID":"msg_user","modelID":model,"providerID":"openai","mode":"primary","agent":"suplex-root","path":{"cwd":"/repo","root":"/repo"},"cost":cost,"tokens":tokens,"summary":summary},"parts":parts});
+                let step = |id| json!({"type":"step-finish","id":id,"cost":0,"tokens":tokens});
+                (200, json!([
+                    message("msg_steps", 99, json!([step("one"),step("one"),step("two")]), json!({"created":100,"completed":200}), true, "model"),
+                    message("msg_billed", 3, json!([]), json!({"created":300,"completed":400}), false, "model"),
+                    message("msg_unfinished", 0, json!([]), json!({"created":500}), false, "unknown")
+                ]).to_string())
+            },
+            _ => (404, "{}".into()),
+        }).await;
+        let runtime =
+            crate::runtimes::task_harness::task_session_runtime_directory(&path, "s").unwrap();
+        fs::create_dir_all(&runtime).unwrap();
+        fs::write(runtime.join("server.json"), json!({"pid":4321,"baseUrl":url,"password":"a".repeat(64),"directory":"/repo","executable":"/bin/opencode","generation":"b775df17-718a-4cb2-8e23-6912b8aa0d39","configHash":"a".repeat(64),"processIdentity":{"command":"opencode serve","executable":"/bin/opencode","argv":["opencode","serve"],"processGroup":4321,"startTime":"start","ownerUid":501}}).to_string()).unwrap();
+        let path_for_read = path.clone();
+        tokio::task::spawn_blocking(move || {
+            let pricing = ModelPricingCatalog::from([("openai/model".into(), ModelPricing { input:2.0, output:5.0, cache_read:0.5, cache_write:1.0 })]);
+            let mut database = SuplexDatabase::open(&path_for_read, OpenMode::ReadWrite).unwrap();
+            database.connection().execute("UPDATE suplex_task_sessions SET native_session_id='ses_live' WHERE id='s'", []).unwrap();
+            let usage = read_native_usage(&path_for_read, &Session { id:"s".into(), native_session_id:"ses_live".into(), kind:"root".into() }, None, Some(&pricing)).unwrap();
+            let by_id = |id: &str| usage.iter().find(|entry| entry.message_id == id).unwrap();
+            let steps = by_id("msg_steps");
+            assert_eq!((steps.steps, steps.source.as_str(), steps.summary, steps.subsidized), (2.0,"steps",true,true));
+            assert!((steps.cost - 0.0004).abs() < 1e-12);
+            assert_eq!((by_id("msg_billed").cost, by_id("msg_billed").subsidized), (3.0,false));
+            assert_eq!((by_id("msg_unfinished").steps, by_id("msg_unfinished").completed_at, by_id("msg_unfinished").cost), (0.0,None,0.0));
+            record(&mut database, "t", "s", &usage, &now_millis_rfc3339()).unwrap();
+            let saved = analytics::read(&database, "t").unwrap().usage;
+            for entry in &usage {
+                assert_eq!(serde_json::to_value(saved.iter().find(|saved| saved.message_id == entry.message_id).unwrap()).unwrap(), serde_json::to_value(entry).unwrap());
+            }
+            let timeline = task_harness_registry::native_session_reader("ses_live").unwrap().timeline(&ReaderSession { database_path:&path_for_read, session_id:"s", native_session_id:"ses_live", instance_home_directory:None }, Some(&pricing)).unwrap();
+            crate::tasks::limits::replace_observed_usage(&mut database, "t", vec![("ses_live".into(),"root".into(),timeline)]).unwrap();
+            for entry in &usage {
+                let raw: String = database.connection().query_row("SELECT snapshot FROM suplex_task_usage WHERE task_id='t' AND message_id=?1", [&entry.message_id], |row| row.get(0)).unwrap();
+                assert_eq!(serde_json::to_value(serde_json::from_str::<TaskUsage>(&raw).unwrap()).unwrap(), serde_json::to_value(entry).unwrap());
+            }
+        }).await.unwrap();
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn collector_refreshes_devin_and_final_timing_without_coupling_delivery_to_storage() {
+        for native in ["devin-old", "ses_finished"] {
+            let (path, mut database) = task_database();
+            database
+                .connection()
+                .execute(
+                    "UPDATE suplex_task_sessions SET native_session_id=?1 WHERE id='s'",
+                    [native],
+                )
+                .unwrap();
+            let old = TaskUsage {
+                session_id: native.into(),
+                started_at: 200.0,
+                completed_at: None,
+                ..usage_with(0.0)
+            };
+            let observed =
+                crate::shared::time::rfc3339_millis(Utc::now() - chrono::Duration::seconds(1));
+            record(&mut database, "t", "s", &[old.clone()], &observed).unwrap();
+            let refreshed = TaskUsage {
+                started_at: 100.0,
+                completed_at: Some(300.0),
+                ..old
+            };
+            let mut reads = 0;
+            let mut read = |_: &Session| -> Result<Vec<TaskUsage>, Box<dyn Error>> {
+                reads += 1;
+                Ok(vec![refreshed.clone()])
+            };
+            let mut report = |error: Box<dyn Error>| panic!("{error}");
+            collect(
+                &mut database,
+                native == "devin-old",
+                Utc::now(),
+                &mut read,
+                &mut report,
+            )
+            .unwrap();
+            collect(&mut database, false, Utc::now(), &mut read, &mut report).unwrap();
+            assert_eq!(reads, 1);
+            let saved = analytics::read(&database, "t").unwrap();
+            assert_eq!(
+                (saved.usage[0].started_at, saved.usage[0].completed_at),
+                (100.0, Some(300.0))
+            );
+            database
+                .connection()
+                .execute("DROP TABLE suplex_task_analytics_sessions", [])
+                .unwrap();
+            let mut errors = 0;
+            collect(
+                &mut database,
+                false,
+                Utc::now(),
+                &mut |_| Ok(vec![refreshed.clone()]),
+                &mut |_| errors += 1,
+            )
+            .unwrap();
+            assert_eq!(errors, 1);
+            assert_eq!(
+                database
+                    .connection()
+                    .query_row(
+                        "SELECT status FROM suplex_task_controls WHERE task_id='t'",
+                        [],
+                        |row| row.get::<_, String>(0)
+                    )
+                    .unwrap(),
+                "delivered"
+            );
+            drop(database);
+            fs::remove_file(path).unwrap();
+        }
     }
 
     #[test]

@@ -140,6 +140,10 @@ pub struct UsageEntry {
     pub failed: bool,
     pub tokens: UsageTokens,
     pub cost_usd: f64,
+    pub subsidized: bool,
+    pub summary: bool,
+    pub steps: f64,
+    pub source: &'static str,
 }
 
 /// TypeScript `NativeSessionReader.timeline`.

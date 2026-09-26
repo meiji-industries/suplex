@@ -648,6 +648,14 @@ impl NativeSessionReader for OpenCodeTaskRuntime {
                         cache_write: number(&entry["tokens"]["cache"]["write"]),
                     },
                     cost_usd: number(&entry["cost"]),
+                    subsidized: entry["subsidized"] == true,
+                    summary: entry["summary"] == true,
+                    steps: number(&entry["steps"]),
+                    source: if entry["source"] == "steps" {
+                        "steps"
+                    } else {
+                        "message"
+                    },
                 })
                 .collect(),
             live_message_id: timeline.live_message_id,

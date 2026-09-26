@@ -55,7 +55,7 @@ pub fn binary_name(kind: &str) -> &'static str {
     spec(kind).map_or("", |(_, binary, _, _)| binary)
 }
 
-/// Resolves a provider CLI like the TypeScript executable resolver: a pinned
+/// Resolves a provider CLI: a pinned
 /// absolute path, then PATH, then the standard home install paths.
 pub fn resolve_executable(kind: &str) -> io::Result<PathBuf> {
     let (label, binary, variable, home_paths) = spec(kind)

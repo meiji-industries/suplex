@@ -13,14 +13,12 @@ use crate::shared::PublicFailure;
 /// Identity and access refusals.
 #[derive(Clone, Debug, thiserror::Error)]
 pub enum IdentityError {
-    /// TypeScript `AuthFailure`.
     #[error("{message}")]
     Auth {
         status: u16,
         code: &'static str,
         message: &'static str,
     },
-    /// TypeScript `ExternalAgentFailure`.
     #[error("{message}")]
     ExternalAgent {
         status: u16,

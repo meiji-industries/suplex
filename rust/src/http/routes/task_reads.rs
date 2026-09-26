@@ -39,7 +39,7 @@ pub fn router() -> Router<AppState> {
         .route("/api/tasks/{task_id}/checks", get(checks))
 }
 
-/// TypeScript `readTaskChecks`: live check runs of the task's pull request.
+/// Live check runs of the task's pull request.
 async fn checks(
     State(state): State<AppState>,
     ValidPath(TaskIdParams { task_id }): ValidPath<TaskIdParams>,
@@ -74,7 +74,7 @@ async fn checks(
         Ok(None) => return respond(Ok(json!({"available":false,"runs":[]})), cookies),
         Err(error) => return respond(Err(error.into()), cookies),
     };
-    // TypeScript `readTaskChecks` reads GitHub for every repository connection.
+    // Check observations use GitHub for every repository connection.
     let observed = async {
         let github = crate::integrations::github_delivery::Github::load().await?;
         github
@@ -315,7 +315,7 @@ async fn read_diff(
             return Ok(DiffIntent::NoWorktree);
         };
         let configuration = &rows.context["configuration"];
-        // TypeScript `resolveTaskDiffBase`: a pull request diff uses its current base branch.
+        // A pull request diff uses its current base branch.
         let pull_request = rows
             .control
             .pull_request

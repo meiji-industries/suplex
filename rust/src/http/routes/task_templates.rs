@@ -50,7 +50,7 @@ pub fn router() -> Router<AppState> {
 }
 
 /// After body validation, check the request origin and the session, in the
-/// TypeScript hook order.
+/// Validate before checking origin and session.
 fn admitted(
     state: &AppState,
     headers: &HeaderMap,
@@ -103,7 +103,7 @@ async fn create(
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
-    // The TypeScript preValidation hook applies workflow defaults to the raw body.
+    // Apply workflow defaults before validating the request.
     let mut raw = match parsed_body(&headers, &body) {
         Ok(value) => value,
         Err(response) => return *response,

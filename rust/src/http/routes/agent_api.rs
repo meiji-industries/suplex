@@ -47,7 +47,7 @@ static OPENAPI: LazyLock<String> = LazyLock::new(|| {
     )
 });
 
-/// Agent delivery runs where the host has an artifact store, as the TypeScript server always does.
+/// Agent delivery uses the host artifact store.
 pub(crate) fn delivery(state: &AppState) -> Option<AgentDelivery> {
     let root = state.artifact_root.clone()?;
     let path = state.with_database(|database| database.connection().path().map(PathBuf::from))?;

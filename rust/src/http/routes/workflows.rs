@@ -44,7 +44,7 @@ pub fn router() -> Router<AppState> {
 }
 
 /// After body validation, check the request origin and the session, and run
-/// the service operation, in the TypeScript hook order.
+/// the service operation, in that order.
 fn mutate(
     state: &AppState,
     headers: &HeaderMap,

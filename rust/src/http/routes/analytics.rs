@@ -1,4 +1,4 @@
-//! Company analytics, task costs, and timeline (`src/http/routes/tasks.ts`).
+//! Company analytics, task costs, and timeline.
 
 use crate::http::error::ApiError;
 use crate::tasks::TaskError;

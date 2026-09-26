@@ -1,4 +1,4 @@
-//! GitHub trigger rule routes (`src/http/routes/github-triggers.ts`).
+//! GitHub trigger rule routes.
 
 use crate::http::error::ApiError;
 use axum::{

@@ -119,7 +119,7 @@ fn label(session: &SessionRow) -> &'static str {
     )
 }
 
-/// TypeScript `observeSession`: the runtime that owns the native session reports its status.
+/// The runtime that owns the native session reports its status.
 fn native_status(
     database_path: &std::path::Path,
     session: &SessionRow,
@@ -139,7 +139,7 @@ fn native_status(
         .ok()
 }
 
-/// TypeScript `isoTimestamp`: null when the native time is not a valid date.
+/// Null when the native time is not a valid date.
 fn iso_timestamp(value: f64) -> Value {
     DateTime::<Utc>::from_timestamp_millis(value as i64)
         .filter(|_| value.is_finite())

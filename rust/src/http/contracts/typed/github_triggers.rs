@@ -1,4 +1,4 @@
-//! GitHub trigger request contracts (`src/http/contracts/github-triggers.ts`).
+//! GitHub trigger request contracts.
 
 use crate::tasks::control::DeliveryTarget;
 use serde::{Deserialize, Serialize};

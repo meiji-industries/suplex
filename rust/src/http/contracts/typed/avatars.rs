@@ -1,4 +1,4 @@
-//! Avatar request contracts (`src/http/contracts/avatars.ts`).
+//! Avatar request contracts.
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;

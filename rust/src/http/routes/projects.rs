@@ -116,7 +116,7 @@ fn query_object(uri: &axum::http::Uri) -> Value {
     )
 }
 
-/// TypeScript `searchIssues`: the configured tracker, else the project's GitHub Issues.
+/// The configured tracker, else the project's GitHub Issues.
 async fn issues(
     State(state): State<AppState>,
     ValidPath(ProjectIdParams { project_id }): ValidPath<ProjectIdParams>,
@@ -161,7 +161,6 @@ async fn issues(
     with_cookies(response, cookies)
 }
 
-/// TypeScript `discoverTaskSources`.
 async fn task_sources(
     State(state): State<AppState>,
     ValidPath(ProjectIdParams { project_id }): ValidPath<ProjectIdParams>,

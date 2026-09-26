@@ -1,4 +1,4 @@
-//! Agent API request contracts (`src/http/contracts/agent-api.ts`).
+//! Agent API request contracts.
 
 use crate::tasks::control::{DeliveryTarget, TaskStatus};
 

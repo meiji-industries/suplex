@@ -1,5 +1,4 @@
-//! Host health uses the installation's live resources. Contextual provider
-//! selection is authorized even while provider-specific probes are unported.
+//! Host health observes live resources and authorizes contextual provider selection.
 
 use crate::http::access::with_cookies;
 use crate::http::error::ApiError;
@@ -87,7 +86,7 @@ fn escape_html(value: &str) -> String {
         .replace('\'', "&#39;")
 }
 
-/// `renderHealthPage` from `platform/ui.ts`: the application shell with the
+/// The application shell with the
 /// snapshot inlined and a no-script summary.
 pub fn health_page(snapshot: &Value) -> String {
     let text = |value: &Value| escape_html(value.as_str().unwrap_or_default());

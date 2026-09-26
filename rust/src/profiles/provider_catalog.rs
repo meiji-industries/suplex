@@ -1,4 +1,4 @@
-//! One row per agent tool (`src/profiles/provider-catalog.ts`).
+//! One row per agent tool.
 
 use crate::shared::time::rfc3339_millis;
 use std::{collections::HashMap, fs, path::Path};
@@ -38,7 +38,7 @@ const CODEX: ExecutableSpec = ExecutableSpec {
     fallback_paths: &[],
 };
 
-// TypeScript `task-harness.ts` model lists.
+// Supported models for each native runtime.
 const CLAUDE_CODE_MODELS: &[(&str, &str)] = &[
     ("fable", "Fable (latest)"),
     ("opus", "Opus (latest)"),

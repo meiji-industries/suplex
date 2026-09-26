@@ -1,4 +1,4 @@
-//! Avatar directory, image, and update routes (`src/http/routes/avatars.ts`).
+//! Avatar directory, image, and update routes.
 
 use crate::http::access::with_cookies;
 use crate::http::error::ApiError;

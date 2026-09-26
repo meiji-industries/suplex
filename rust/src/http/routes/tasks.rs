@@ -114,7 +114,7 @@ pub fn router() -> Router<AppState> {
         .route("/api/tasks/{task_id}/refresh", axum::routing::post(refresh))
 }
 
-/// The request origin, then the session: the TypeScript hook order after validation.
+/// Validate first, then check the request origin and session.
 fn admit(
     state: &AppState,
     headers: &HeaderMap,
@@ -293,7 +293,7 @@ async fn create(
         Ok(value) => value,
         Err(response) => return *response,
     };
-    // The TypeScript preValidation hook applies workflow defaults to the raw body.
+    // Apply workflow defaults before validating the request.
     if let Some(Value::Object(fields)) = parsed.as_mut()
         && let Err(message) = normalize_workflow_input(fields, true)
     {
@@ -449,7 +449,7 @@ async fn set_dependencies(
         Ok(value) => value,
         Err(response) => return *response,
     };
-    // TypeScript `applyDependencies`: GitHub observes each pull request prerequisite before any write.
+    // GitHub observes each pull request prerequisite before any write.
     let repository = match state.with_database(|database| -> Result<String, Box<dyn Error>> {
         for dependency in &request.depends_on {
             commands::user_task_configuration(database, &user_id, dependency)?;

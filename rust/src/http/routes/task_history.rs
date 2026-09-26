@@ -85,7 +85,6 @@ fn scoped_session(
     })
 }
 
-/// TypeScript `nativeSessionReader(session).history(session)`.
 fn native_history(scoped: &ScopedSession) -> io::Result<Vec<Value>> {
     let Some(native_session_id) = scoped.native_session_id.as_deref() else {
         return Ok(Vec::new());

@@ -21,7 +21,6 @@ use crate::shared::PublicFailure;
 /// Platform refusals.
 #[derive(Debug, thiserror::Error)]
 pub enum PlatformError {
-    /// TypeScript `ArtifactFailure`.
     #[error("{message}")]
     Artifact {
         code: &'static str,

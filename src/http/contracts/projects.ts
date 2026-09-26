@@ -83,5 +83,6 @@ export const ProjectRepositoryStatusSchema = z.object({
   message: z.string(),
   method: z.enum(["device", "cli"]),
   originRepository: z.string().nullable(),
+  login: z.string().nullable().optional(),
 });
 export type ProjectRepositoryStatus = z.infer<typeof ProjectRepositoryStatusSchema>;

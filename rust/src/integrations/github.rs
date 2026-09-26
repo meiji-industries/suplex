@@ -125,6 +125,9 @@ pub async fn save_device_grant(grant: &super::github_device::Granted) -> AccessR
             io::Error::other(String::from_utf8_lossy(&output.stderr).trim().to_owned()).into(),
         );
     }
+    if CREDENTIAL_FILE.get().is_some() {
+        remove_if_present(&disconnected_path()?)?;
+    }
     Ok(())
 }
 
@@ -165,6 +168,39 @@ pub fn use_installation(database_path: &Path) {
         .and_then(Path::parent)
         .unwrap_or(Path::new("."));
     let _ = CREDENTIAL_FILE.set(root.join("credentials/github-hosts.yml"));
+}
+
+fn disconnected_path() -> AccessResult<PathBuf> {
+    Ok(CREDENTIAL_FILE
+        .get()
+        .ok_or("GitHub installation is not configured")?
+        .with_extension("disconnected"))
+}
+
+pub async fn disconnect() -> AccessResult<()> {
+    let _lock = credential_lock(&credential_lock_path()?).await?;
+    let path = disconnected_path()?;
+    fs::create_dir_all(path.parent().ok_or("Invalid credential directory")?)?;
+    fs::write(path, b"disconnected\n")?;
+    if let Some(file) = CREDENTIAL_FILE.get() {
+        remove_if_present(file)?;
+    }
+    disable_keychain_interaction()?;
+    match keyring::Entry::new(SUPLEX_SERVICE, SUPLEX_ACCOUNT)?.delete_credential() {
+        Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
+        Err(error) => {
+            // The persisted sign-out intent still blocks use of an inaccessible item.
+            eprintln!("GitHub disconnected; Keychain item could not be removed: {error}");
+            Ok(())
+        }
+    }
+}
+
+fn remove_if_present(path: &Path) -> io::Result<()> {
+    match fs::remove_file(path) {
+        Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(()),
+        result => result,
+    }
 }
 
 fn read_own_credential() -> AccessResult<Option<StoredCredential>> {
@@ -516,6 +552,9 @@ impl Access {
                 .into());
             }
             return Self::for_api(&base_uri, None);
+        }
+        if CREDENTIAL_FILE.get().is_some() && disconnected_path()?.try_exists()? {
+            return Self::for_api("https://api.github.com", None);
         }
         disable_keychain_interaction()?;
         let (stored, read_error) = match read_own_credential() {
@@ -1049,6 +1088,39 @@ mod tests {
                 .is_err()
         );
         assert!(!server.await.unwrap());
+    }
+
+    #[tokio::test]
+    async fn explicit_disconnect_survives_a_fresh_process() {
+        const FLAG: &str = "SUPLEX_DISCONNECT_TEST_ROOT";
+        if let Ok(root) = std::env::var(FLAG) {
+            use_installation(&PathBuf::from(root).join("data/suplex.sqlite"));
+            assert!(Access::load().await.unwrap().token().is_none());
+            return;
+        }
+        let root = std::env::temp_dir().join(format!("suplex-disconnect-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(root.join("credentials")).unwrap();
+        fs::write(
+            root.join("credentials/github-hosts.disconnected"),
+            "disconnected",
+        )
+        .unwrap();
+        for _ in 0..2 {
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "integrations::github::tests::explicit_disconnect_survives_a_fresh_process",
+                ])
+                .env(FLAG, &root)
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        }
+        fs::remove_dir_all(root).unwrap();
     }
 
     #[cfg(unix)]

@@ -25,6 +25,7 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/api/github/auth", get(status))
         .route("/api/github/device/start", post(start))
+        .route("/api/github/disconnect", post(disconnect))
         .route("/api/github/device/poll", post(poll))
 }
 
@@ -71,6 +72,22 @@ async fn status(State(state): State<AppState>, headers: HeaderMap) -> Response {
             "method": "device", "source": "none", "status": "unavailable",
         }))
         .into_response(),
+    };
+    no_store(response, cookies)
+}
+
+async fn disconnect(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    let (_, cookies) = match profiles::authorize(&state, &headers, "POST", true) {
+        Ok(value) => value,
+        Err(response) => return *response,
+    };
+    state.github_device.cancel_all().await;
+    let response = match github::disconnect().await {
+        Ok(()) => Json(json!({"status": "sign_in_required"})).into_response(),
+        Err(_) => auth::error(
+            StatusCode::INTERNAL_SERVER_ERROR,
+            "Suplex could not disconnect GitHub.",
+        ),
     };
     no_store(response, cookies)
 }

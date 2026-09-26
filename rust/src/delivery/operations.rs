@@ -1247,7 +1247,15 @@ impl DeliveryOperations {
             .to_owned();
         let github = self.for_task(task_id).await?;
         let remote = github.remote_repository(&path).map_err(Box::new)?;
-        if remote != repository {
+        let same_repository = remote == repository
+            || match github.github() {
+                Some(client) => client
+                    .same_repository(&remote, &repository)
+                    .await
+                    .map_err(Box::new)?,
+                None => false,
+            };
+        if !same_repository {
             return Err(delivery_failure(
                 "head_diverged",
                 "The worktree remote does not match this task intent",

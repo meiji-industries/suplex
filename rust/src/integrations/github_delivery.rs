@@ -578,6 +578,12 @@ impl Github {
         Ok(Self::new(access))
     }
 
+    pub async fn same_repository(&self, left: &str, right: &str) -> GithubResult<bool> {
+        crate::projects::connection::same_repository(&self.access, left, right)
+            .await
+            .map_err(|error| failure("provider-unavailable", redact_summary(&error.to_string())))
+    }
+
     pub fn token(&self) -> Option<&str> {
         self.access.token()
     }

@@ -175,6 +175,13 @@ impl DeviceAuth {
         })
     }
 
+    pub async fn cancel_all(&self) {
+        let flows = self.pending.lock().await;
+        for flow in flows.values() {
+            flow.lock().await.state = Progress::Complete(Poll::Denied);
+        }
+    }
+
     pub async fn poll<F, Fut>(&self, flow_id: Uuid, save: F) -> DeviceResult<Poll>
     where
         F: FnOnce(Granted) -> Fut,
@@ -397,6 +404,16 @@ mod tests {
         assert!(matches!(repeated.unwrap(), Poll::Connected { .. }));
         assert_eq!(polls.load(Ordering::SeqCst), 2);
         assert!(matches!(&public, Poll::Connected { login } if login == "fixture-account"));
+        device.cancel_all().await;
+        assert!(matches!(
+            device
+                .poll(started.flow_id, |_| async {
+                    panic!("Cancelled sign-in must not save")
+                })
+                .await
+                .unwrap(),
+            Poll::Denied
+        ));
         let grant = saved.lock().unwrap();
         let grant = grant.as_ref().unwrap();
         assert_eq!(grant.refresh_token.as_deref(), Some("fixture-refresh"));

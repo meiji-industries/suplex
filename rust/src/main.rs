@@ -13,6 +13,7 @@ use tokio::net::TcpListener;
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let command = std::env::args().skip(1).collect::<Vec<_>>();
     if command == ["github-store-credential"] {
+        suplex::integrations::github::use_installation(&Installation::load()?.database);
         if let Err(error) = suplex::integrations::github::store_device_credential_from_stdin() {
             eprintln!("GitHub credential storage failed: {error}");
             std::process::exit(1);

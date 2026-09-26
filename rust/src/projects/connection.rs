@@ -10,6 +10,7 @@ pub struct ConnectionStatus {
     pub message: &'static str,
     pub method: &'static str,
     pub origin_repository: Option<String>,
+    pub login: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -44,6 +45,7 @@ pub async fn check(
         message: "Set a GitHub repository in owner/name format.",
         method: "device",
         origin_repository: None,
+        login: None,
     };
     let Some(identity) = identity.filter(|value| valid_repository(value)) else {
         return result;
@@ -122,6 +124,15 @@ pub async fn check(
             "GitHub could not check the base branch. Try again.",
         ),
     };
+    if result.status == "connected" {
+        match access.current_user_login().await {
+            Ok(login) => result.login = Some(login),
+            Err(_) => {
+                result.status = "unavailable";
+                result.message = "GitHub could not check the account. Try again.";
+            }
+        }
+    }
     result
 }
 
@@ -140,6 +151,10 @@ mod tests {
             .unwrap();
         let base = github_api(
             Router::new()
+                .route(
+                    "/user",
+                    get(|| async { Json(json!({"login": "fixture-account"})) }),
+                )
                 .route(
                     "/repos/acme/{name}",
                     get(|Path(name): Path<String>| async move {
@@ -171,12 +186,9 @@ mod tests {
             git: None,
         };
         let path = root.to_str().unwrap();
-        assert_eq!(
-            check(&github, path, Some("acme/renamed"), "main")
-                .await
-                .status,
-            "connected"
-        );
+        let connected = check(&github, path, Some("acme/renamed"), "main").await;
+        assert_eq!(connected.status, "connected");
+        assert_eq!(connected.login.as_deref(), Some("fixture-account"));
         assert_eq!(
             check(&github, path, Some("acme/different"), "main")
                 .await
@@ -217,12 +229,9 @@ mod tests {
         );
         repo.remote("origin", "git@github.com:acme/renamed.git")
             .unwrap();
-        assert_eq!(
-            check(&github, path, Some("acme/renamed"), "main")
-                .await
-                .status,
-            "connected"
-        );
+        let connected = check(&github, path, Some("acme/renamed"), "main").await;
+        assert_eq!(connected.status, "connected");
+        assert_eq!(connected.login.as_deref(), Some("fixture-account"));
         std::fs::remove_dir_all(root).unwrap();
     }
 }

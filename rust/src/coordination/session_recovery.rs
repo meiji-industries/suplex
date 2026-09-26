@@ -1267,48 +1267,82 @@ pub async fn recover_prepared_worker(
     .map_err(|error| TaskError::internal(error).into())
 }
 
+/// A session whose stop was requested and not yet observed: id, native id,
+/// and launch owner process id and start time.
+type RetiredSession = (String, Option<String>, Option<i64>, Option<String>);
+
+fn retired_sessions(
+    database: &SuplexDatabase,
+    task_id: &str,
+) -> DatabaseResult<Vec<RetiredSession>> {
+    Ok(database
+        .connection()
+        .prepare(
+            "SELECT id,native_session_id,launch_owner_pid,launch_owner_start_time FROM suplex_task_sessions WHERE task_id = ?1 AND stop_requested_at IS NOT NULL AND stopped_at IS NULL",
+        )?
+        .query_map([task_id], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, Option<String>>(1)?,
+                row.get::<_, Option<i64>>(2)?,
+                row.get::<_, Option<String>>(3)?,
+            ))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?)
+}
+
+/// Stop one retired session's native process. None when its launch owner may
+/// still own it; otherwise the native stop result.
+async fn stop_retired_session(
+    database_path: &Path,
+    session: RetiredSession,
+) -> DatabaseResult<Option<io::Result<()>>> {
+    let (session_id, native_id, owner_pid, owner_start) = session;
+    if let Some(pid) = owner_pid.and_then(|pid| u32::try_from(pid).ok())
+        && !retired_owner_can_stop(owner_start.as_deref(), observe_process_owner(pid))
+    {
+        return Ok(None);
+    }
+    let directory = session_reader::session_directory(database_path, &session_id)?;
+    let stopped = tokio::task::spawn_blocking(move || {
+        match task_harness_registry::for_session(native_id.as_deref()) {
+            Some(harness) => harness.stop(&directory, native_id.as_deref()),
+            // An unbound session never started a native process.
+            None if native_id.is_none() => Ok(()),
+            None => Err(io::Error::other("No task harness for session")),
+        }
+    })
+    .await?;
+    Ok(Some(stopped))
+}
+
+/// Record every session whose native stop Suplex observed.
+fn mark_sessions_stopped(database: &SuplexDatabase, stopped: Vec<String>) -> DatabaseResult<()> {
+    for session_id in stopped {
+        let time = now_millis_rfc3339();
+        database.connection().execute(
+            "UPDATE suplex_task_sessions SET stopped_at = ?1, launch_owner = NULL, launch_owner_pid = NULL, launch_owner_start_time = NULL, launch_claimed_at = NULL, updated_at = ?1 WHERE id = ?2 AND stop_requested_at IS NOT NULL AND stopped_at IS NULL",
+            rusqlite::params![time, session_id],
+        )?;
+    }
+    Ok(())
+}
+
 pub(crate) async fn stop_retired_sessions(
     database: &mut SuplexDatabase,
     database_path: &Path,
     task_id: &str,
 ) -> DatabaseResult<()> {
-    let sessions = {
-        let mut statement = database.connection().prepare(
-            "SELECT id,native_session_id,launch_owner_pid,launch_owner_start_time FROM suplex_task_sessions WHERE task_id = ?1 AND stop_requested_at IS NOT NULL AND stopped_at IS NULL",
-        )?;
-        statement
-            .query_map([task_id], |row| {
-                Ok((
-                    row.get::<_, String>(0)?,
-                    row.get::<_, Option<String>>(1)?,
-                    row.get::<_, Option<i64>>(2)?,
-                    row.get::<_, Option<String>>(3)?,
-                ))
-            })?
-            .collect::<rusqlite::Result<Vec<_>>>()?
-    };
+    let sessions = retired_sessions(database, task_id)?;
     let outstanding_count = sessions.len();
     let mut stopped = Vec::new();
     let mut failures = Vec::new();
-    for (session_id, native_id, owner_pid, owner_start) in sessions {
-        if let Some(pid) = owner_pid.and_then(|pid| u32::try_from(pid).ok())
-            && !retired_owner_can_stop(owner_start.as_deref(), observe_process_owner(pid))
-        {
-            continue;
-        }
-        let directory = session_reader::session_directory(database_path, &session_id)?;
-        match tokio::task::spawn_blocking(move || {
-            match task_harness_registry::for_session(native_id.as_deref()) {
-                Some(harness) => harness.stop(&directory, native_id.as_deref()),
-                // An unbound session never started a native process.
-                None if native_id.is_none() => Ok(()),
-                None => Err(io::Error::other("No task harness for session")),
-            }
-        })
-        .await?
-        {
-            Ok(()) => stopped.push(session_id),
-            Err(error) => failures.push(error.to_string()),
+    for session in sessions {
+        let session_id = session.0.clone();
+        match stop_retired_session(database_path, session).await? {
+            Some(Ok(())) => stopped.push(session_id),
+            Some(Err(error)) => failures.push(error.to_string()),
+            None => {}
         }
     }
     let (status, worktree): (TaskStatus, Option<String>) = {
@@ -1326,13 +1360,7 @@ pub(crate) async fn stop_retired_sessions(
         tokio::task::spawn_blocking(move || processes::stop_worktree_processes(Path::new(&path)))
             .await??;
     }
-    for session_id in stopped {
-        let time = now_millis_rfc3339();
-        database.connection().execute(
-            "UPDATE suplex_task_sessions SET stopped_at = ?1, launch_owner = NULL, launch_owner_pid = NULL, launch_owner_start_time = NULL, launch_claimed_at = NULL, updated_at = ?1 WHERE id = ?2 AND stop_requested_at IS NOT NULL AND stopped_at IS NULL",
-            rusqlite::params![time, session_id],
-        )?;
-    }
+    mark_sessions_stopped(database, stopped)?;
     if !failures.is_empty() && matches!(status, TaskStatus::Cancelled | TaskStatus::Delivered) {
         return Err(TaskError::internal(format!(
             "Some agent sessions could not be stopped: {}",

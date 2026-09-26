@@ -1,45 +1,24 @@
-// Run with a tested Rust binary in SUPLEX_RUST_BIN. The two task stores share
-// one SQLite schema; TypeScript supplies the source prompt/hash oracle.
-import { createHash } from "node:crypto";
+// Run with a tested Rust binary in SUPLEX_RUST_BIN.
+import { createHash, randomUUID } from "node:crypto";
 import { deepStrictEqual, equal, match, notEqual } from "node:assert/strict";
-import { join, resolve } from "node:path";
-import { nativeApp } from "../helpers/native-app.js";
-import { RootController } from "../../src/coordination/root-controller.js";
-import { FakeTaskHarness } from "../helpers/fake-task-harness.js";
-import { writeRootBridgeBinding } from "../../src/runtimes/task-harness.js";
+import { nativeFixture } from "../helpers/native-browser.js";
+import { nativeRootBridge } from "../helpers/native-root-bridge.js";
 import { initializeAndList, runMcpProcess } from "../helpers/mcp-process.js";
 
-const fixture = await nativeApp();
+const fixture = await nativeFixture();
 try {
-  const store = fixture.tasks.repository.controls;
-  const source = new RootController(store, new FakeTaskHarness());
-  const create = async (key: string) => {
-    const { task } = await fixture.tasks.createTask(fixture.userId, fixture.company.id, {
-      projectId: fixture.project.id,
-      title: "Replace an ineffective Worker",
-      idempotencyKey: key,
-      startImmediately: true,
-      deliveryTarget: "local_worktree",
-    });
-    const root = source.prepareRoot(task.id);
-    const worker = store.launchWorker({ taskId: task.id, rootSessionId: root.id, rootGeneration: root.generation, instruction: "Finish the behavior and test it." });
-    fixture.database.authTransaction(db => db.prepare("UPDATE suplex_task_turns SET status = 'completed', terminal_observation = ? WHERE session_id = ?").run(JSON.stringify({ state: "completed", text: "Partial change" }), worker.id));
-    return { task, root, worker };
-  };
-  const rust = await create("rust-replacement");
-  const typescript = await create("typescript-replacement");
-  const request = { sessionId: rust.worker.id, reason: "  Change strategy  ", handoff: "  Finish checks  " };
-  const sourceResult = store.replaceWorker(typescript.task.id, { ...request, sessionId: typescript.worker.id });
-  const sourceTurn = store.turns(typescript.task.id).find(turn => turn.sessionId === sourceResult.id)!;
-
-  const identity = { taskId: rust.task.id, sessionId: rust.root.id, generation: rust.root.generation };
-  const binding = await writeRootBridgeBinding({
-    runtimeDirectory: join(fixture.directory, "root-replacement-bridge"), identity,
-    databasePath: fixture.config.databasePath, artifactRoot: fixture.config.artifactRoot,
-  });
-  const server = { ...binding, command: resolve(process.env.SUPLEX_RUST_BIN ?? "rust/target/debug/suplex"), args: ["mcp", "root"] };
+  const task = await fixture.createTask({ title: "Replace an ineffective Worker", idempotencyKey: "rust-replacement", startImmediately: false, deliveryTarget: "local_worktree" });
+  const { server } = await nativeRootBridge(fixture, task.id);
+  const oldWorker = `worker_${randomUUID()}`;
+  const now = new Date().toISOString();
+  const profile = fixture.database.prepare("SELECT worker_profile_json FROM suplex_task_controls WHERE task_id = ?").get(task.id) as { worker_profile_json: string };
+  fixture.database.prepare("UPDATE suplex_task_controls SET worker_session_id = ? WHERE task_id = ?").run(oldWorker, task.id);
+  fixture.database.prepare("INSERT INTO suplex_task_sessions (id,task_id,kind,generation,is_current,lifecycle,profile_json,delegate_slot,created_at,updated_at) VALUES (?,?,'worker',1,1,'live',?,'delegate',?,?)")
+    .run(oldWorker, task.id, profile.worker_profile_json, now, now);
+  fixture.database.prepare("INSERT INTO suplex_task_turns (id,task_id,session_id,generation,prompt_hash,prompt_text,status,terminal_observation,created_at,updated_at) VALUES (?,?,?,1,'original-hash','Worker assignment: build','completed',?,?,?)")
+    .run(`msg_${randomUUID()}`, task.id, oldWorker, JSON.stringify({ state: "completed", text: "Partial change" }), now, now);
   const call = async (args: Record<string, unknown>) => {
-    const result = await runMcpProcess(server, { ...process.env, ...binding.environment }, [
+    const result = await runMcpProcess(server, { ...process.env, ...server.environment }, [
       ...initializeAndList,
       { jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "suplex_root", arguments: args } },
     ]);
@@ -47,25 +26,27 @@ try {
     equal(response?.result?.isError, false, result.stderr);
     return response!.result!.structuredContent!;
   };
-  const replaced = await call({ kind: "replace_worker", ...request });
+  const request = { kind: "replace_worker", sessionId: oldWorker, reason: "  Change strategy  ", handoff: "  Finish checks  " };
+  const replaced = await call(request);
   const worker = replaced.worker as { id: string; nativeSessionId: string | null; profile: unknown };
-  notEqual(worker.id, rust.worker.id);
+  notEqual(worker.id, oldWorker);
   equal(worker.nativeSessionId, null);
-  deepStrictEqual(worker.profile, rust.worker.profile);
+  deepStrictEqual(worker.profile, JSON.parse(profile.worker_profile_json));
   equal((replaced.acceptedAssignment as { kind: string }).kind, "saved_prompt");
   match(String(replaced.next), /stop the outgoing execution/);
-  const rustTurn = store.turns(rust.task.id).find(turn => turn.sessionId === worker.id)!;
-  equal(rustTurn.promptText, sourceTurn.promptText);
-  equal(rustTurn.promptHash, sourceTurn.promptHash);
-  equal(rustTurn.promptHash, createHash("sha256").update(rustTurn.promptText).digest("hex"));
-  equal(store.workerReplacementReady(worker.id), false);
-  const repeated = await call({ kind: "replace_worker", ...request });
+  const saved = fixture.database.prepare("SELECT prompt_text,prompt_hash FROM suplex_task_turns WHERE session_id = ?").get(worker.id) as { prompt_text: string; prompt_hash: string };
+  match(saved.prompt_text, /Reason for replacement: Change strategy/);
+  match(saved.prompt_text, /Additional direction:\nFinish checks/);
+  match(saved.prompt_text, /Partial change/);
+  equal(saved.prompt_hash, createHash("sha256").update(saved.prompt_text).digest("hex"));
+  const repeated = await call(request);
   equal((repeated.worker as { id: string }).id, worker.id);
-  fixture.database.authTransaction(db => db.prepare("UPDATE suplex_task_sessions SET stopped_at = ? WHERE id = ?").run(new Date().toISOString(), rust.worker.id));
-  equal(store.workerReplacementReady(worker.id), true);
-  equal(store.currentSession(rust.task.id, "worker")!.id, worker.id);
-  equal(store.currentSession(rust.task.id, "worker")!.replacement?.sessionId, rust.worker.id);
-  console.log("Rust Root MCP Worker replacement matches TypeScript prompt/hash and waits for retired native shutdown.");
-} finally {
-  await fixture.close();
-}
+  const stopped = fixture.database.prepare("SELECT stop_requested_at, stopped_at FROM suplex_task_sessions WHERE id = ?").get(oldWorker) as { stop_requested_at: string | null; stopped_at: string | null };
+  notEqual(stopped.stop_requested_at, null);
+  equal(stopped.stopped_at, null);
+  fixture.database.prepare("UPDATE suplex_task_sessions SET stopped_at = ? WHERE id = ?").run(new Date().toISOString(), oldWorker);
+  const current = fixture.database.prepare("SELECT id,replaces_session_id FROM suplex_task_sessions WHERE task_id = ? AND kind = 'worker' AND is_current = 1").get(task.id) as { id: string; replaces_session_id: string };
+  equal(current.id, worker.id);
+  equal(current.replaces_session_id, oldWorker);
+  console.log("Rust Root MCP Worker replacement preserves profile, handoff, prompt hash, idempotency, and retired-session fencing.");
+} finally { await fixture.close(); }

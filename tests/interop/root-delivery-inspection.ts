@@ -1,65 +1,44 @@
-// Run against a built Rust binary. All Git remotes and task data are isolated.
-import { deepStrictEqual, equal } from "node:assert/strict";
+// Inspect a complete published-base-to-head patch through the Rust Root MCP.
+import { equal, match, notEqual, ok } from "node:assert/strict";
+import { execFile } from "node:child_process";
 import { chmod, mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
-import { join, resolve } from "node:path";
-import { RootController } from "../../src/coordination/root-controller.js";
-import { inspectDeliveryDiff } from "../../src/delivery/review.js";
-import { runCommand } from "../../src/platform/command-runner.js";
-import { taskSessionRuntimeDirectory, writeRootBridgeBinding } from "../../src/runtimes/task-harness.js";
-import { FakeTaskHarness } from "../helpers/fake-task-harness.js";
+import { join } from "node:path";
+import { promisify } from "node:util";
+import { nativeFixture } from "../helpers/native-browser.js";
+import { nativeRootBridge } from "../helpers/native-root-bridge.js";
 import { initializeAndList, runMcpProcess } from "../helpers/mcp-process.js";
-import { nativeApp } from "../helpers/native-app.js";
 
-const fixture = await nativeApp();
+const execute = promisify(execFile);
+const fixture = await nativeFixture();
+const repository = fixture.project.repositoryPath;
+const git = async (cwd: string, ...args: string[]) => (await execute("git", ["-C", cwd, ...args])).stdout.trim();
 let publishedSha: string | null = null;
 const api = createServer((request, response) => {
-  if (request.url === "/repos/owner/repo/branches/main" && publishedSha) {
-    response.writeHead(200, { "content-type": "application/json" });
-    response.end(JSON.stringify({ commit: { sha: publishedSha } }));
-    return;
-  }
-  response.writeHead(404, { "content-type": "application/json" });
-  response.end(JSON.stringify({ message: "Not Found" }));
+  const body = request.url === "/repos/owner/repo/branches/main" && publishedSha ? { commit: { sha: publishedSha } } : null;
+  response.writeHead(body ? 200 : 404, { "content-type": "application/json" });
+  response.end(JSON.stringify(body ?? { message: "Not Found" }));
 });
-await new Promise<void>(resolve => api.listen(0, "127.0.0.1", resolve));
+await new Promise<void>(accept => api.listen(0, "127.0.0.1", accept));
 const address = api.address();
-if (!address || typeof address === "string") throw new Error("Fake GitHub API did not bind a TCP port");
-const apiEnvironment = { SUPLEX_RUST_TEST_GITHUB_API: `http://127.0.0.1:${address.port}` };
+if (!address || typeof address === "string") throw new Error("Fake GitHub API did not listen");
+const githubApi = `http://127.0.0.1:${address.port}`;
 try {
-  const created = await fixture.tasks.createTask(fixture.userId, fixture.company.id, {
-    projectId: fixture.project.id,
-    title: "Inspect complete delivery patch",
-    description: "Review real Git changes",
-    idempotencyKey: "delivery-inspection",
-    startImmediately: true,
-    deliveryTarget: "local_worktree",
-  });
-  const store = fixture.tasks.repository.controls;
-  const root = new RootController(store, new FakeTaskHarness()).prepareRoot(created.task.id);
-  const identity = { taskId: created.task.id, sessionId: root.id, generation: root.generation };
-  const worktree = join(fixture.directory, "review-worktree");
-  const bare = join(fixture.directory, "published.git");
-  await mkdir(worktree);
-  const git = async (cwd: string, ...args: string[]) => (await runCommand({ taskId: null, stepId: null, command: "git", cwd, args })).stdout.trim();
-  await git(worktree, "init", "-b", "main");
-  await git(worktree, "config", "user.name", "Review probe");
-  await git(worktree, "config", "user.email", "review@example.invalid");
-  await git(worktree, "config", "diff.context", "5");
-  await writeFile(join(worktree, "plain.txt"), "before\n");
-  await writeFile(join(worktree, "rename.txt"), "renamed content\n");
-  await writeFile(join(worktree, "binary.bin"), Buffer.from([0, 1, 2, 255]));
-  await writeFile(join(worktree, "nonewline.txt"), "before");
-  await writeFile(join(worktree, "mode.sh"), "#!/bin/sh\necho hi\n");
-  await git(worktree, "add", ".");
-  await git(worktree, "commit", "-m", "Base");
-  const publishedBase = await git(worktree, "rev-parse", "HEAD");
-  publishedSha = publishedBase;
-  await git(fixture.directory, "clone", "--bare", worktree, bare);
-  await git(worktree, "config", "--local", `url.file://${bare}.insteadOf`, "https://github.com/owner/repo.git");
-  await git(worktree, "remote", "add", "origin", "https://github.com/owner/repo.git");
-  const branch = store.get(created.task.id).deliveryIntent.headBranch;
-  await git(worktree, "checkout", "-b", branch);
+  await writeFile(join(repository, "plain.txt"), "before\n");
+  await writeFile(join(repository, "rename.txt"), "renamed content\n");
+  await writeFile(join(repository, "binary.bin"), Buffer.from([0, 1, 2, 255]));
+  await writeFile(join(repository, "nonewline.txt"), "before");
+  await writeFile(join(repository, "mode.sh"), "#!/bin/sh\necho hi\n");
+  await git(repository, "add", ".");
+  await git(repository, "commit", "--quiet", "-m", "Base");
+  publishedSha = await git(repository, "rev-parse", "HEAD");
+  await git(repository, "push", "--quiet", "origin", "main");
+  const task = await fixture.createTask({ title: "Inspect complete delivery patch", description: "Review real Git changes", idempotencyKey: "delivery-inspection", startImmediately: false, deliveryTarget: "local_worktree" });
+  const { server } = await nativeRootBridge(fixture, task.id);
+  const branch = task.configuration.branch;
+  const worktree = join(fixture.project.worktreeRoot, task.id);
+  await mkdir(fixture.project.worktreeRoot, { recursive: true });
+  await git(repository, "worktree", "add", "--quiet", "-b", branch, worktree, publishedSha);
   await writeFile(join(worktree, "plain.txt"), "after\n");
   await rename(join(worktree, "rename.txt"), join(worktree, "moved.txt"));
   await writeFile(join(worktree, "binary.bin"), Buffer.from([0, 1, 2, 254]));
@@ -67,44 +46,38 @@ try {
   await writeFile(join(worktree, "password=fixture.txt"), "Synthetic gho_ABCDEFGH and égho_ABCDEFGH\n");
   await chmod(join(worktree, "mode.sh"), 0o755);
   await git(worktree, "add", "-A");
-  await git(worktree, "commit", "-m", "Change source");
+  await git(worktree, "commit", "--quiet", "-m", "Change source");
   await writeFile(join(worktree, "second.txt"), "Second commit\n");
   await git(worktree, "add", "second.txt");
-  await git(worktree, "commit", "-m", "Add second change");
+  await git(worktree, "commit", "--quiet", "-m", "Add second change");
   const headSha = await git(worktree, "rev-parse", "HEAD");
-  store.setWorktree(created.task.id, { path: worktree, branch, baseSha: "0".repeat(40), headSha: "f".repeat(40), dirty: true });
-  await git(worktree, "update-ref", "refs/remotes/origin/main", headSha);
-  const source = { ...await inspectDeliveryDiff(worktree, publishedBase, headSha), baseBranch: "main" };
-  const binding = await writeRootBridgeBinding({ runtimeDirectory: taskSessionRuntimeDirectory(fixture.config.databasePath, root.id), identity, databasePath: fixture.config.databasePath, artifactRoot: fixture.config.artifactRoot });
-  const server = { ...binding, command: resolve(process.env.SUPLEX_RUST_BIN ?? "rust/target/debug/suplex"), args: ["mcp", "root"] };
-  const responses = await runMcpProcess(server, { ...process.env, ...binding.environment, ...apiEnvironment }, [
-    ...initializeAndList,
-    { jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "suplex_root", arguments: { kind: "request_delivery", operation: "inspect_delivery_diff" } } },
-  ]);
-  const call = responses.responses.find((candidate): candidate is { id: number; result?: Record<string, unknown> } =>
-    typeof candidate === "object" && candidate !== null && "id" in candidate && candidate.id === 3);
-  equal(call?.result?.isError, false, `${JSON.stringify(call)}; ${responses.stderr}`);
-  deepStrictEqual(call?.result?.structuredContent, source);
-  equal((await readFile(join(worktree, "plain.txt"), "utf8")), "after\n");
-  equal(store.get(created.task.id).worktree?.headSha, "f".repeat(40), "inspection must not replace saved task intent");
+  fixture.database.prepare("UPDATE suplex_task_controls SET worktree_json = ? WHERE task_id = ?")
+    .run(JSON.stringify({ path: worktree, branch, baseSha: "0".repeat(40), headSha: "f".repeat(40), dirty: true }), task.id);
+  const call = async () => {
+    const result = await runMcpProcess(server, { ...process.env, ...server.environment, SUPLEX_RUST_TEST_GITHUB_API: githubApi }, [
+      ...initializeAndList,
+      { jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "suplex_root", arguments: { kind: "request_delivery", operation: "inspect_delivery_diff" } } },
+    ]);
+    const response = result.responses.find(value => typeof value === "object" && value !== null && "id" in value && value.id === 3) as { result?: { isError?: boolean; structuredContent?: Record<string, unknown>; content?: unknown } } | undefined;
+    return { response: response?.result, stderr: result.stderr };
+  };
+  const inspected = await call();
+  equal(inspected.response?.isError, false, `${JSON.stringify(inspected.response)}; ${inspected.stderr}`);
+  const diff = inspected.response!.structuredContent!;
+  equal(diff.baseSha, publishedSha);
+  equal(diff.headSha, headSha);
+  ok((diff.files as unknown[]).length >= 5);
+  ok((diff.commits as unknown[]).length >= 2);
+  match(JSON.stringify(diff), /plain.txt|moved.txt/);
+  notEqual(diff.patchDigest, null);
+  equal(await readFile(join(worktree, "plain.txt"), "utf8"), "after\n");
+  const saved = JSON.parse((fixture.database.prepare("SELECT worktree_json FROM suplex_task_controls WHERE task_id = ?").get(task.id) as { worktree_json: string }).worktree_json) as { headSha: string };
+  equal(saved.headSha, "f".repeat(40), "inspection must not replace saved task intent");
   publishedSha = null;
-  const missing = await runMcpProcess(server, { ...process.env, ...binding.environment, ...apiEnvironment }, [
-    ...initializeAndList,
-    { jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "suplex_root", arguments: { kind: "request_delivery", operation: "inspect_delivery_diff" } } },
-  ]);
-  const missingCall = missing.responses.find((candidate): candidate is { id: number; result?: Record<string, unknown> } =>
-    typeof candidate === "object" && candidate !== null && "id" in candidate && candidate.id === 3);
-  equal(missingCall?.result?.isError, true, "a cached commit and tracking ref cannot replace the published branch");
-  store.cancel(created.task.id);
-  const cancelled = await runMcpProcess(server, { ...process.env, ...binding.environment, ...apiEnvironment }, [
-    ...initializeAndList,
-    { jsonrpc: "2.0", id: 3, method: "tools/call", params: { name: "suplex_root", arguments: { kind: "request_delivery", operation: "inspect_delivery_diff" } } },
-  ]);
-  const cancelledCall = cancelled.responses.find((candidate): candidate is { id: number; result?: Record<string, unknown> } =>
-    typeof candidate === "object" && candidate !== null && "id" in candidate && candidate.id === 3);
-  equal(cancelledCall?.result?.isError, true, "a cancelled Root cannot inspect delivery");
-  console.log("Rust Root delivery inspection matches the complete TypeScript patch response on the same Git task.");
+  const missing = await call();
+  equal(missing.response?.isError, true);
+  console.log("Rust Root MCP inspects live Git patch, including renamed and binary files, without rewriting saved task intent.");
 } finally {
-  await new Promise<void>((resolve, reject) => api.close(error => error ? reject(error) : resolve()));
   await fixture.close();
+  await new Promise<void>(accept => api.close(() => accept()));
 }

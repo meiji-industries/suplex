@@ -254,7 +254,7 @@ pub fn running(record: &HeadlessTurnRecord) -> io::Result<bool> {
         inspect_process(record.pid).as_ref(),
     ) {
         IdentityMatch::Exact => Ok(true),
-        IdentityMatch::NotRunning => group_alive(record),
+        IdentityMatch::OwnerUncertain | IdentityMatch::NotRunning => group_alive(record),
         other => Err(io::Error::other(format!(
             "Recorded process ownership is {other:?}"
         ))),

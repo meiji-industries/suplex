@@ -255,9 +255,19 @@ impl TaskHarness for ClaudeCodeTaskRuntime {
             return Ok(observed);
         }
         let record = record.expect("admission checked");
-        let values = transcript::parse_json_lines(log.as_deref().unwrap_or_default());
+        let mut values = transcript::parse_json_lines(log.as_deref().unwrap_or_default());
+        let mut result = transcript::stream_result(&values);
+        let process_running = if result.is_none() {
+            let running = headless::running(&record)?;
+            if !running {
+                values = turn_values(directory, turn_id)?;
+                result = transcript::stream_result(&values);
+            }
+            running
+        } else {
+            false
+        };
         let entries = transcript::message_entries(&values);
-        let result = transcript::stream_result(&values);
         let mut observed = PromptObservation {
             admission_observed: true,
             unsettled_tool_ids: transcript::unsettled_tool_ids(&entries)
@@ -273,7 +283,7 @@ impl TaskHarness for ClaudeCodeTaskRuntime {
             } else {
                 (PromptState::Completed, "native_turn_completed")
             };
-        } else if headless::running(&record)? {
+        } else if process_running {
             observed.process_running = true;
         } else if transcript::stream_init(&values).is_none() {
             (observed.state, observed.reason) = (PromptState::Error, "native_startup_failed");

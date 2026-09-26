@@ -13,7 +13,7 @@ use serde_json::{Value, json};
 
 use super::{
     github::Access,
-    provider_http::{lenient, optional_metadata},
+    provider_http::{lenient, optional_metadata, present_string},
 };
 use crate::{
     platform::redaction,
@@ -61,7 +61,7 @@ pub fn failure(code: &'static str, summary: impl Into<String>) -> GithubFailure 
 }
 
 fn redact_summary(summary: &str) -> String {
-    let line = summary.lines().next().unwrap_or("");
+    let line = summary.lines().next().unwrap_or_default();
     let line = line.chars().take(200).collect::<String>();
     PROVIDER_TOKEN
         .replace_all(&redaction::command_output(&line), "[redacted]")
@@ -196,12 +196,6 @@ fn present_body<'de, D: serde::Deserializer<'de>>(
     Option::<String>::deserialize(deserializer).map(Some)
 }
 
-fn present_title<'de, D: serde::Deserializer<'de>>(
-    deserializer: D,
-) -> Result<Option<String>, D::Error> {
-    String::deserialize(deserializer).map(Some)
-}
-
 fn object_present<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<bool, D::Error> {
     Ok(Value::deserialize(deserializer)?.is_object())
 }
@@ -217,7 +211,7 @@ struct RestPullRequest {
     base: RestPullSide,
     #[serde(default, deserialize_with = "object_present")]
     auto_merge: bool,
-    #[serde(default, deserialize_with = "present_title")]
+    #[serde(default, deserialize_with = "present_string")]
     title: Option<String>,
     #[serde(default, deserialize_with = "present_body")]
     body: Option<Option<String>>,
@@ -1112,7 +1106,10 @@ impl Github {
         {
             return Err(failure(
                 "provider-unavailable",
-                redact_summary(errors[0]["message"].as_str().unwrap_or(operation)),
+                redact_summary(
+                    &Diagnostic::deserialize(&errors[0])
+                        .map_or_else(|_| operation.to_owned(), |error| error.message),
+                ),
             ));
         }
         decode_response(&response, &format!("GitHub {operation} is malformed"))

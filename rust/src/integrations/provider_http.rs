@@ -119,6 +119,13 @@ pub fn missing_id() -> String {
     "null".into()
 }
 
+/// A field that may be absent but, when present, is a string (not `null`).
+pub fn present_string<'de, D: Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<String>, D::Error> {
+    String::deserialize(deserializer).map(Some)
+}
+
 /// True when the field is present, whatever its value.
 pub fn present<'de, D: Deserializer<'de>>(deserializer: D) -> Result<bool, D::Error> {
     serde::de::IgnoredAny::deserialize(deserializer).map(|_| true)

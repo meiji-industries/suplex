@@ -93,8 +93,8 @@ pub fn issue_text(value: &Value) -> String {
                 Some("paragraph" | "heading") => "",
                 _ => "\n",
             };
-            node["content"]
-                .as_array()
+            node.get("content")
+                .and_then(Value::as_array)
                 .into_iter()
                 .flatten()
                 .map(issue_text)
@@ -361,12 +361,11 @@ pub struct IssueImages {
 
 impl IssueTracker {
     pub async fn new(connection: &Value) -> TrackerResult<Self> {
-        let github = if connection["kind"] == "github" {
-            Some(Github::load().await?)
-        } else {
-            None
-        };
-        Ok(Self::with_github(connection, github))
+        let mut tracker = Self::with_github(connection, None);
+        if tracker.connection.kind == "github" {
+            tracker.github = Some(Github::load().await?);
+        }
+        Ok(tracker)
     }
 
     pub fn with_github(connection: &Value, github: Option<Github>) -> Self {

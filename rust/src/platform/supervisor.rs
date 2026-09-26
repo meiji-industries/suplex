@@ -106,7 +106,6 @@ fn read(path: &Path) -> io::Result<Option<Registry>> {
     }
 }
 fn discover(installation: &Installation) -> Option<Registry> {
-    let executable = std::env::current_exe().ok()?;
     let output = Command::new("lsof")
         .args([
             "-nP",
@@ -126,12 +125,10 @@ fn discover(installation: &Installation) -> Option<Registry> {
         let Some(child) = inspect(child_pid) else {
             continue;
         };
-        if !child
-            .command
-            .starts_with(executable.to_string_lossy().as_ref())
-            || !child.command.contains("serve")
-            || !database_open_by(child_pid, installation)
-        {
+        let Some(executable) = child.command.strip_suffix(" serve") else {
+            continue;
+        };
+        if !database_open_by(child_pid, installation) {
             continue;
         }
         let parent = Command::new("ps")
@@ -142,10 +139,8 @@ fn discover(installation: &Installation) -> Option<Registry> {
             .and_then(|value| value.trim().parse::<u32>().ok())
             .and_then(inspect);
         if let Some(parent) = parent
-            && parent.command.contains("start --foreground")
-            && parent
-                .command
-                .starts_with(executable.to_string_lossy().as_ref())
+            && parent.command.strip_suffix(" start --foreground") == Some(executable)
+            && parent.executable == child.executable
         {
             return Some(Registry {
                 version: 1,

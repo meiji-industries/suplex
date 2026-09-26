@@ -420,8 +420,13 @@ pub fn apply() -> Result<(), Box<dyn std::error::Error>> {
         applying(&installation, "install", "Suplex installs dependencies.")?;
         run(&root, "pnpm", &["install", "--frozen-lockfile"])?;
         let current_binary = std::env::current_exe()?;
-        fs::copy(&current_binary, &rollback)?;
-        fs::set_permissions(&rollback, fs::metadata(&current_binary)?.permissions())?;
+        let staged_rollback = rollback.with_extension("staging");
+        fs::copy(&current_binary, &staged_rollback)?;
+        fs::set_permissions(
+            &staged_rollback,
+            fs::metadata(&current_binary)?.permissions(),
+        )?;
+        fs::rename(staged_rollback, &rollback)?;
         applying(&installation, "build", "Suplex builds production assets.")?;
         run(&root, "mise", &["run", "build"])?;
         let target = std::env::var_os("CARGO_TARGET_DIR")
@@ -471,7 +476,7 @@ pub fn apply() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
         let _ = write_state(&installation, failure("apply", &message));
-        let _ = fs::remove_file(&rollback);
+        // A recovered supervisor still needs this executable when its API restarts.
         return Err(message.into());
     }
     let _ = fs::remove_file(&rollback);

@@ -102,7 +102,11 @@ impl Fixture {
     }
 
     fn command_builder(&self, args: &[&str]) -> Command {
-        let mut command = Command::new(env!("CARGO_BIN_EXE_suplex"));
+        self.command_builder_for(Path::new(env!("CARGO_BIN_EXE_suplex")), args)
+    }
+
+    fn command_builder_for(&self, binary: &Path, args: &[&str]) -> Command {
+        let mut command = Command::new(binary);
         command
             .args(args)
             .current_dir(&self.checkout)
@@ -153,6 +157,32 @@ impl Fixture {
                 Instant::now() < deadline,
                 "native host did not become ready"
             );
+            thread::sleep(Duration::from_millis(50));
+        }
+    }
+
+    fn restart_api(&self) {
+        let registry_path = self.root.join("data/runtime/owned-processes.json");
+        let before: serde_json::Value =
+            serde_json::from_slice(&fs::read(&registry_path).unwrap()).unwrap();
+        let child = before["child"]["pid"].as_i64().unwrap();
+        nix::sys::signal::kill(
+            nix::unistd::Pid::from_raw(child as i32),
+            nix::sys::signal::Signal::SIGKILL,
+        )
+        .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            let after: serde_json::Value =
+                serde_json::from_slice(&fs::read(&registry_path).unwrap()).unwrap();
+            if after["child"]["pid"]
+                .as_i64()
+                .is_some_and(|pid| pid != child)
+                && after["ready"] == true
+            {
+                break;
+            }
+            assert!(Instant::now() < deadline, "host did not restart");
             thread::sleep(Duration::from_millis(50));
         }
     }
@@ -284,8 +314,31 @@ fn replacement_without_readiness_restores_previous_host_and_failed_status() {
     assert!(String::from_utf8_lossy(&failed.stderr).contains("did not report readiness"));
     fixture.ready();
     assert_eq!(fixture.status()["kind"], "failed");
-    thread::sleep(Duration::from_millis(300));
+    fixture.restart_api();
     assert_eq!(fixture.status()["kind"], "failed");
+
+    // A retry can originate in the recovered executable itself.
+    let rollback = fixture.root.join("data/runtime/update-rollback-suplex");
+    assert!(rollback.is_file());
+    let retry = fixture
+        .command_builder_for(&rollback, &["update-apply"])
+        .output()
+        .unwrap();
+    assert!(!retry.status.success());
+    fixture.ready();
+    fixture.restart_api();
+
+    // The normal CLI must rediscover this host even though it uses another executable.
+    fs::remove_file(fixture.root.join("data/runtime/owned-processes.json")).unwrap();
+    fs::remove_file(fixture.root.join("fail-ready")).unwrap();
+    let succeeded = fixture.command(&["update-apply"]);
+    assert!(
+        succeeded.status.success(),
+        "{}",
+        String::from_utf8_lossy(&succeeded.stderr)
+    );
+    fixture.ready();
+    assert!(!rollback.exists());
 }
 
 #[test]
@@ -294,29 +347,7 @@ fn stale_apply_is_recoverable_and_running_revision_survives_checkout_advance() {
     let remote_revision = fixture.publish("remote.txt", "after\n");
     fixture.start();
     assert_eq!(fixture.update(true)["availableRevision"], remote_revision);
-    let registry_path = fixture.root.join("data/runtime/owned-processes.json");
-    let before: serde_json::Value =
-        serde_json::from_slice(&fs::read(&registry_path).unwrap()).unwrap();
-    let child = before["child"]["pid"].as_i64().unwrap();
-    nix::sys::signal::kill(
-        nix::unistd::Pid::from_raw(child as i32),
-        nix::sys::signal::Signal::SIGKILL,
-    )
-    .unwrap();
-    let deadline = Instant::now() + Duration::from_secs(10);
-    loop {
-        let after: serde_json::Value =
-            serde_json::from_slice(&fs::read(&registry_path).unwrap()).unwrap();
-        if after["child"]["pid"]
-            .as_i64()
-            .is_some_and(|pid| pid != child)
-            && after["ready"] == true
-        {
-            break;
-        }
-        assert!(Instant::now() < deadline, "host did not restart");
-        thread::sleep(Duration::from_millis(50));
-    }
+    fixture.restart_api();
     assert_eq!(fixture.update(false)["availableRevision"], remote_revision);
     let applied = fixture.command(&["update-apply"]);
     assert!(

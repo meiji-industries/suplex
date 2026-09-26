@@ -144,6 +144,21 @@ pub fn create_git_command_guard(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::os::unix::fs::MetadataExt;
+
+    fn checked_git(directory: &Path, args: &[&str]) -> String {
+        let output = Command::new("git")
+            .current_dir(directory)
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "git {args:?}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8(output.stdout).unwrap().trim().to_owned()
+    }
 
     #[test]
     fn guarded_git_allows_observation_and_blocks_destructive_operations() {
@@ -219,5 +234,146 @@ mod tests {
         ]);
         let (git, _) = resolve_guard_binaries(&inherited).unwrap();
         assert_eq!(git, Path::new("/custom/git"));
+    }
+
+    #[test]
+    fn guard_refresh_atomically_replaces_executable_files() {
+        let root =
+            std::env::temp_dir().join(format!("suplex-guard-refresh-{}", uuid::Uuid::new_v4()));
+        fs::create_dir_all(&root).unwrap();
+        let inherited = std::env::vars().collect::<HashMap<_, _>>();
+        let git = which("git", &inherited).unwrap();
+        let first = create_git_command_guard(&root, &git, None, &inherited).unwrap();
+        let executable = first.directory.join("git");
+        let before = fs::metadata(&executable).unwrap();
+        let refreshed = create_git_command_guard(&root, &git, None, &inherited).unwrap();
+        let after = fs::metadata(&executable).unwrap();
+        assert_ne!(before.ino(), after.ino());
+        assert_eq!(after.permissions().mode() & 0o700, 0o700);
+        assert!(
+            Command::new(executable)
+                .arg("--version")
+                .env_clear()
+                .envs(&refreshed.environment)
+                .status()
+                .unwrap()
+                .success()
+        );
+        refreshed.cleanup().unwrap();
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn guarded_worker_can_rebase_and_abort_conflicts_but_cannot_push() {
+        let root =
+            std::env::temp_dir().join(format!("suplex-guard-rebase-{}", uuid::Uuid::new_v4()));
+        let remote = root.join("origin.git");
+        let publisher = root.join("publisher");
+        let task = root.join("task");
+        fs::create_dir_all(&publisher).unwrap();
+        checked_git(
+            &root,
+            &["init", "--quiet", "--bare", remote.to_str().unwrap()],
+        );
+        checked_git(
+            &root,
+            &[
+                "--git-dir",
+                remote.to_str().unwrap(),
+                "symbolic-ref",
+                "HEAD",
+                "refs/heads/main",
+            ],
+        );
+        checked_git(&publisher, &["init", "--quiet", "-b", "main"]);
+        checked_git(&publisher, &["config", "user.name", "Suplex Publisher"]);
+        checked_git(
+            &publisher,
+            &["config", "user.email", "publisher@example.invalid"],
+        );
+        fs::write(publisher.join("shared.txt"), "base\n").unwrap();
+        checked_git(&publisher, &["add", "."]);
+        checked_git(&publisher, &["commit", "--quiet", "-m", "base"]);
+        checked_git(
+            &publisher,
+            &["remote", "add", "origin", remote.to_str().unwrap()],
+        );
+        checked_git(&publisher, &["push", "--quiet", "-u", "origin", "main"]);
+        checked_git(
+            &root,
+            &[
+                "clone",
+                "--quiet",
+                remote.to_str().unwrap(),
+                task.to_str().unwrap(),
+            ],
+        );
+        checked_git(&task, &["config", "user.name", "Suplex Worker"]);
+        checked_git(&task, &["config", "user.email", "worker@example.invalid"]);
+        checked_git(&task, &["switch", "--quiet", "-c", "task"]);
+        fs::write(task.join("task.txt"), "task change\n").unwrap();
+        checked_git(&task, &["add", "."]);
+        checked_git(&task, &["commit", "--quiet", "-m", "task change"]);
+        fs::write(publisher.join("main.txt"), "published change\n").unwrap();
+        checked_git(&publisher, &["add", "."]);
+        checked_git(&publisher, &["commit", "--quiet", "-m", "published change"]);
+        checked_git(&publisher, &["push", "--quiet", "origin", "main"]);
+
+        let inherited = std::env::vars().collect::<HashMap<_, _>>();
+        let git = which("git", &inherited).unwrap();
+        let guard = create_git_command_guard(&root, &git, None, &inherited).unwrap();
+        let guarded = |args: &[&str]| {
+            Command::new(guard.directory.join("git"))
+                .current_dir(&task)
+                .args(args)
+                .env_clear()
+                .envs(&guard.environment)
+                .output()
+                .unwrap()
+        };
+        assert!(guarded(&["fetch", "origin", "main"]).status.success());
+        assert!(guarded(&["rebase", "origin/main"]).status.success());
+        assert_eq!(
+            checked_git(&task, &["show", "HEAD:task.txt"]),
+            "task change"
+        );
+        assert_eq!(
+            checked_git(&task, &["show", "HEAD:main.txt"]),
+            "published change"
+        );
+
+        fs::write(task.join("shared.txt"), "task conflict\n").unwrap();
+        checked_git(&task, &["add", "."]);
+        checked_git(&task, &["commit", "--quiet", "-m", "task conflict"]);
+        let task_head = checked_git(&task, &["rev-parse", "HEAD"]);
+        fs::write(publisher.join("shared.txt"), "published conflict\n").unwrap();
+        checked_git(&publisher, &["add", "."]);
+        checked_git(
+            &publisher,
+            &["commit", "--quiet", "-m", "published conflict"],
+        );
+        checked_git(&publisher, &["push", "--quiet", "origin", "main"]);
+        let published_head = checked_git(&publisher, &["rev-parse", "HEAD"]);
+        assert!(guarded(&["fetch", "origin", "main"]).status.success());
+        assert_eq!(guarded(&["rebase", "origin/main"]).status.code(), Some(1));
+        assert!(guarded(&["rebase", "--abort"]).status.success());
+        assert_eq!(checked_git(&task, &["rev-parse", "HEAD"]), task_head);
+        for args in [
+            vec!["push"],
+            vec!["-C", task.to_str().unwrap(), "push"],
+            vec!["push", "origin", "HEAD:main"],
+            vec!["push", "--force", "origin", "HEAD:main"],
+            vec!["push", "-f", "origin", "HEAD:main"],
+            vec!["push", "--force-with-lease", "origin", "HEAD:main"],
+            vec!["push", "origin", "+HEAD:main"],
+        ] {
+            assert_eq!(guarded(&args).status.code(), Some(125));
+        }
+        assert_eq!(
+            checked_git(&publisher, &["rev-parse", "HEAD"]),
+            published_head
+        );
+        guard.cleanup().unwrap();
+        fs::remove_dir_all(root).unwrap();
     }
 }

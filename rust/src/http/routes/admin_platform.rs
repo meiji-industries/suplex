@@ -132,15 +132,15 @@ pub(crate) fn record_audit(
     action: &str,
     metadata: Value,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    database.connection().execute(
-        "INSERT INTO suplex_audit_events (id, actor_user_id, actor_agent_id, action, target_user_id, company_id, metadata_json, created_at) VALUES (?1, ?2, NULL, ?3, NULL, NULL, ?4, ?5)",
-        rusqlite::params![
-            crate::shared::ids::random_hex_id("audit")?,
-            actor_user_id,
-            action,
-            metadata.to_string(),
-            now_millis_rfc3339()
-        ],
+    crate::identity::audit::record(
+        database,
+        &crate::shared::ids::random_hex_id("audit")?,
+        (actor_user_id, None),
+        action,
+        None,
+        None,
+        &metadata.to_string(),
+        &now_millis_rfc3339(),
     )?;
     Ok(())
 }

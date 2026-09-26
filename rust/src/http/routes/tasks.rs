@@ -17,7 +17,6 @@ use axum::{
     routing::get,
 };
 use chrono::Utc;
-use rusqlite::OptionalExtension;
 use serde::Serialize;
 use serde_json::{Value, json};
 
@@ -520,16 +519,7 @@ async fn get_one(
         Err(response) => return *response,
     };
     let result = state.with_database(|database| -> Result<_, Box<dyn Error>> {
-        let company: Option<String> = database
-            .connection()
-            .query_row(
-                "SELECT company_id FROM suplex_tasks WHERE id = ?1",
-                [&id],
-                |row| row.get(0),
-            )
-            .optional()?;
-        let company = company.ok_or_else(TaskError::not_found)?;
-        companies::require_company_access(database, &user_id, &company)?;
+        crate::tasks::authorize_task(database, &user_id, &id)?;
         task_response::get(database, &id)?.ok_or_else(|| TaskError::not_found().into())
     });
     let mut response = match result {
@@ -624,16 +614,7 @@ async fn start_pending(
         Err(response) => return *response,
     };
     let access = state.with_database(|database| -> Result<(), Box<dyn Error>> {
-        let company: Option<String> = database
-            .connection()
-            .query_row(
-                "SELECT company_id FROM suplex_tasks WHERE id = ?1",
-                [&id],
-                |row| row.get(0),
-            )
-            .optional()?;
-        let company = company.ok_or_else(TaskError::not_found)?;
-        companies::require_company_access(database, &user_id, &company)?;
+        crate::tasks::authorize_task(database, &user_id, &id)?;
         Ok(())
     });
     if let Err(error) = access {

@@ -3,7 +3,6 @@
 use crate::http::error::ApiError;
 
 use crate::http::access::authorize;
-use crate::tasks::TaskError;
 use std::{error::Error, path::PathBuf};
 
 use axum::{
@@ -13,7 +12,6 @@ use axum::{
     response::{IntoResponse, Response},
     routing::get,
 };
-use rusqlite::OptionalExtension;
 use serde_json::{Value, json};
 
 use crate::{
@@ -27,7 +25,6 @@ use crate::{
         contracts::typed::{self, tasks as task_contracts},
         validation,
     },
-    identity::companies,
     integrations::github::Access,
     platform::database::SuplexDatabase,
     runtimes::{task_harness::ReaderSession, task_harness_registry},
@@ -123,16 +120,7 @@ fn read_task(
     user_id: &str,
     task_id: &str,
 ) -> Result<(RootObservationRows, PathBuf), Box<dyn Error>> {
-    let company_id: Option<String> = database
-        .connection()
-        .query_row(
-            "SELECT company_id FROM suplex_tasks WHERE id = ?1",
-            [task_id],
-            |row| row.get(0),
-        )
-        .optional()?;
-    let company_id = company_id.ok_or_else(TaskError::not_found)?;
-    companies::require_company_access(database, user_id, &company_id)?;
+    crate::tasks::authorize_task(database, user_id, task_id)?;
     let rows = root_session_store::root_observation_rows(database, task_id)?;
     let database_path = PathBuf::from(
         database

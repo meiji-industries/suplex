@@ -1,6 +1,6 @@
 //! Request body for answering the current task question.
 
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use super::{ContractFailure, ContractResult, finding, tasks::trimmed};
@@ -31,41 +31,7 @@ pub struct LimitDecisionBody {
     pub limit_decision: TaskLimitDecision,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
-pub enum TaskLimitDecision {
-    AddAllowance,
-    ChangeLimits { limits: TaskLimits },
-    CancelTask,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct TaskLimits {
-    #[serde(serialize_with = "serialize_js_number")]
-    pub budget_usd: f64,
-    #[serde(deserialize_with = "nonnegative_integer")]
-    pub max_turns: u64,
-}
-
-fn serialize_js_number<S: Serializer>(value: &f64, serializer: S) -> Result<S::Ok, S::Error> {
-    if value.is_finite() && value.fract() == 0.0 && value.abs() <= MAX_SAFE_INTEGER as f64 {
-        serializer.serialize_i64(*value as i64)
-    } else {
-        serializer.serialize_f64(*value)
-    }
-}
-
-fn nonnegative_integer<'de, D: Deserializer<'de>>(deserializer: D) -> Result<u64, D::Error> {
-    let value = Value::deserialize(deserializer)?;
-    value
-        .as_number()
-        .and_then(|number| number.as_f64())
-        .filter(|number| number.is_finite() && *number >= 0.0 && number.fract() == 0.0)
-        .filter(|number| *number <= u64::MAX as f64)
-        .map(|number| number as u64)
-        .ok_or_else(|| serde::de::Error::custom("expected nonnegative integer"))
-}
+pub use crate::tasks::control::{TaskLimitDecision, TaskLimits};
 
 pub fn parse_task_answer(input: Option<&Value>) -> ContractResult<TaskAnswerBody> {
     // Serde's internally tagged unit variants ignore extra keys even with

@@ -1,5 +1,7 @@
 //! GitHub trigger request contracts (`src/http/contracts/github-triggers.ts`).
 
+use crate::tasks::control::DeliveryTarget;
+
 use serde::Serialize;
 use serde_json::{Map, Value, json};
 
@@ -13,7 +15,7 @@ pub struct GithubTriggerCreate {
     pub name: String,
     pub label: String,
     pub workflow_id: String,
-    pub delivery_target: String,
+    pub delivery_target: DeliveryTarget,
     pub protected_paths: Vec<String>,
 }
 
@@ -29,7 +31,7 @@ pub struct GithubTriggerPatch {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub workflow_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub delivery_target: Option<String>,
+    pub delivery_target: Option<DeliveryTarget>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub protected_paths: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -171,7 +173,7 @@ pub fn parse_create(input: Option<&Value>) -> ContractResult<GithubTriggerCreate
             name: name?,
             label: label?,
             workflow_id: workflow_id?,
-            delivery_target: target?,
+            delivery_target: DeliveryTarget::parse(&target?).expect("validated target"),
             protected_paths: paths?,
         })
     })();
@@ -190,7 +192,9 @@ pub fn parse_patch(input: Option<&Value>) -> ContractResult<GithubTriggerPatch> 
         workflow_id: fields.optional("workflowId", |fields| {
             fields.string("workflowId", false, 128)
         }),
-        delivery_target: fields.optional("deliveryTarget", Fields::target),
+        delivery_target: fields
+            .optional("deliveryTarget", Fields::target)
+            .map(|target| DeliveryTarget::parse(&target).expect("validated target")),
         protected_paths: fields.optional("protectedPaths", Fields::paths),
         enabled: fields.boolean("enabled"),
         archived: fields.boolean("archived"),

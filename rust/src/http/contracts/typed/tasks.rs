@@ -1,11 +1,13 @@
+use crate::coordination::workflows::Workflow;
+use crate::tasks::control::DeliveryTarget;
+pub(crate) use crate::tasks::control::{optional_trimmed, trimmed};
 use garde::Validate;
 use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Map, Value};
 
 use super::{
-    ContractFailure, ContractResult, delivery_target as check_delivery_target, finding,
-    garde_findings, id_1_256 as check_task_id, object, optional_nonnull, present_nullable,
-    visual_evidence as check_visual_evidence,
+    ContractFailure, ContractResult, finding, garde_findings, id_1_256 as check_task_id, object,
+    optional_nonnull, present_nullable, visual_evidence as check_visual_evidence,
 };
 
 const MAX_TASK_IMAGES: usize = 8;
@@ -46,8 +48,8 @@ pub struct TaskCreateBody {
     #[garde(skip)]
     pub start_immediately: bool,
     #[serde(default = "default_delivery_target")]
-    #[garde(custom(check_delivery_target))]
-    pub delivery_target: String,
+    #[garde(skip)]
+    pub delivery_target: DeliveryTarget,
     #[serde(default = "default_run_project_tests")]
     #[garde(skip)]
     pub run_project_tests: bool,
@@ -69,8 +71,8 @@ pub struct TaskCreateBody {
     #[garde(skip)]
     pub issue: Option<Option<IssueAssociation>>,
     #[serde(default = "default_workflow")]
-    #[garde(custom(check_workflow))]
-    pub workflow: String,
+    #[garde(skip)]
+    pub workflow: Workflow,
     #[serde(default)]
     #[garde(dive)]
     pub advisor_profile_ids: AdvisorProfileIds,
@@ -239,8 +241,8 @@ pub struct TaskDetailsBody {
         deserialize_with = "optional_nonnull",
         skip_serializing_if = "Option::is_none"
     )]
-    #[garde(inner(custom(check_delivery_target)))]
-    pub delivery_target: Option<String>,
+    #[garde(skip)]
+    pub delivery_target: Option<DeliveryTarget>,
     #[serde(
         default,
         deserialize_with = "optional_nonnull",
@@ -260,8 +262,8 @@ pub struct TaskDetailsBody {
         deserialize_with = "optional_nonnull",
         skip_serializing_if = "Option::is_none"
     )]
-    #[garde(inner(custom(check_workflow)))]
-    pub workflow: Option<String>,
+    #[garde(skip)]
+    pub workflow: Option<Workflow>,
     #[serde(
         default,
         deserialize_with = "optional_nonnull",
@@ -277,13 +279,6 @@ pub struct TaskRenameBody {
     #[serde(deserialize_with = "trimmed")]
     #[garde(length(utf16, min = 1))]
     pub title: String,
-}
-
-fn optional_trimmed<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    trimmed(deserializer).map(Some)
 }
 
 fn safe_positive_integer(number: &serde_json::Number) -> Option<u64> {
@@ -306,16 +301,6 @@ where
         .and_then(safe_positive_integer)
         .filter(|value| *value > 0)
         .ok_or_else(|| serde::de::Error::custom("expected positive safe integer"))
-}
-
-pub(crate) fn trimmed<'de, D>(deserializer: D) -> Result<String, D::Error>
-where
-    D: Deserializer<'de>,
-{
-    let value = String::deserialize(deserializer)?;
-    Ok(value
-        .trim_matches(|c: char| c.is_whitespace() || c == '\u{feff}')
-        .to_owned())
 }
 
 fn check_idempotency_key(value: &str, _: &()) -> garde::Result {
@@ -351,23 +336,8 @@ fn positive_safe_integer(value: &u64, _: &()) -> garde::Result {
         Err(garde::Error::new("invalid_number"))
     }
 }
-pub(crate) fn check_workflow(value: &str, _: &()) -> garde::Result {
-    if [
-        "standard",
-        "direct_build",
-        "independent_review",
-        "competing_plans",
-        "refine_pull_request",
-    ]
-    .contains(&value)
-    {
-        Ok(())
-    } else {
-        Err(garde::Error::new("invalid_value"))
-    }
-}
-pub(crate) fn default_delivery_target() -> String {
-    "pull_request_draft".into()
+pub(crate) fn default_delivery_target() -> DeliveryTarget {
+    DeliveryTarget::PullRequestDraft
 }
 pub(crate) fn default_run_project_tests() -> bool {
     true
@@ -375,8 +345,46 @@ pub(crate) fn default_run_project_tests() -> bool {
 pub(crate) fn default_visual_evidence() -> String {
     "off".into()
 }
-pub(crate) fn default_workflow() -> String {
-    "standard".into()
+pub(crate) fn default_workflow() -> Workflow {
+    Workflow::Standard
+}
+
+// Collect enum findings before serde so one unknown variant does not hide other fields.
+fn task_enums(fields: &Map<String, Value>) -> (Map<String, Value>, Vec<Value>) {
+    let mut fields = fields.clone();
+    let mut findings = Vec::new();
+    for (name, valid, fallback) in [
+        (
+            "deliveryTarget",
+            fields
+                .get("deliveryTarget")
+                .and_then(Value::as_str)
+                .is_none_or(|value| DeliveryTarget::parse(value).is_some()),
+            "pull_request_draft",
+        ),
+        (
+            "visualEvidence",
+            fields
+                .get("visualEvidence")
+                .and_then(Value::as_str)
+                .is_none_or(|value| check_visual_evidence(value, &()).is_ok()),
+            "off",
+        ),
+        (
+            "workflow",
+            fields
+                .get("workflow")
+                .and_then(Value::as_str)
+                .is_none_or(|value| Workflow::parse(value).is_some()),
+            "standard",
+        ),
+    ] {
+        if !valid {
+            findings.push(issue("invalid_value", &format!(".{name}")));
+            fields.insert(name.into(), Value::String(fallback.into()));
+        }
+    }
+    (fields, findings)
 }
 
 pub fn parse_task_create(input: Option<&Value>) -> ContractResult<TaskCreateBody> {
@@ -385,17 +393,22 @@ pub fn parse_task_create(input: Option<&Value>) -> ContractResult<TaskCreateBody
     if !shape.is_empty() {
         return Err(ContractFailure::Issues(shape));
     }
-    let parsed: TaskCreateBody = serde_path_to_error::deserialize(Value::Object(fields.clone()))
+    let (normalized, mut findings) = task_enums(fields);
+    let parsed: TaskCreateBody = serde_path_to_error::deserialize(Value::Object(normalized))
         .map_err(|error| {
             ContractFailure::Issues(vec![finding(
                 "invalid_type",
                 &[Value::String(error.path().to_string())],
             )])
         })?;
-    parsed
-        .validate()
-        .map_err(|report| ContractFailure::Issues(garde_findings(&report, &parsed)))?;
-    Ok(parsed)
+    if let Err(report) = parsed.validate() {
+        findings.extend(garde_findings(&report, &parsed));
+    }
+    if findings.is_empty() {
+        Ok(parsed)
+    } else {
+        Err(ContractFailure::Issues(findings))
+    }
 }
 
 fn issue(code: &str, field: &str) -> Value {
@@ -847,17 +860,22 @@ pub fn parse_task_details(input: Option<&Value>) -> ContractResult<TaskDetailsBo
     if !shape.is_empty() {
         return Err(ContractFailure::Issues(shape));
     }
-    let parsed: TaskDetailsBody = serde_path_to_error::deserialize(Value::Object(fields.clone()))
+    let (normalized, mut findings) = task_enums(fields);
+    let parsed: TaskDetailsBody = serde_path_to_error::deserialize(Value::Object(normalized))
         .map_err(|error| {
-        ContractFailure::Issues(vec![finding(
-            "invalid_type",
-            &[Value::String(error.path().to_string())],
-        )])
-    })?;
-    parsed
-        .validate()
-        .map_err(|report| ContractFailure::Issues(garde_findings(&report, &parsed)))?;
-    Ok(parsed)
+            ContractFailure::Issues(vec![finding(
+                "invalid_type",
+                &[Value::String(error.path().to_string())],
+            )])
+        })?;
+    if let Err(report) = parsed.validate() {
+        findings.extend(garde_findings(&report, &parsed));
+    }
+    if findings.is_empty() {
+        Ok(parsed)
+    } else {
+        Err(ContractFailure::Issues(findings))
+    }
 }
 
 pub fn parse_task_rename(input: Option<&Value>) -> ContractResult<TaskRenameBody> {
@@ -927,50 +945,7 @@ pub struct TaskNoteBody {
     pub note: String,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Validate)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct TaskWorkerReplacementBody {
-    #[garde(length(utf16, min = 1))]
-    pub session_id: String,
-    #[serde(deserialize_with = "trimmed")]
-    #[garde(length(utf16, min = 1))]
-    pub reason: String,
-    #[serde(
-        default,
-        deserialize_with = "optional_trimmed",
-        skip_serializing_if = "Option::is_none"
-    )]
-    #[garde(skip)]
-    pub handoff: Option<String>,
-    #[serde(
-        default,
-        deserialize_with = "optional_nonnull",
-        skip_serializing_if = "Option::is_none"
-    )]
-    #[garde(inner(length(utf16, min = 1)))]
-    pub worker_profile_id: Option<String>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize, Validate)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct TaskCoordinatorReplacementBody {
-    #[garde(length(utf16, min = 1))]
-    pub session_id: String,
-    #[garde(length(utf16, min = 1))]
-    pub root_profile_id: String,
-    #[serde(
-        default,
-        deserialize_with = "optional_trimmed",
-        skip_serializing_if = "Option::is_none"
-    )]
-    #[garde(skip)]
-    pub handoff: Option<String>,
-    #[garde(skip)]
-    pub resume: bool,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    #[garde(inner(length(utf16, min = 1)))]
-    pub question_id: Option<String>,
-}
+pub use crate::tasks::control::{TaskCoordinatorReplacementBody, TaskWorkerReplacementBody};
 
 pub fn parse_task_coordinator_replacement(
     input: Option<&Value>,
@@ -1220,7 +1195,7 @@ pub fn parse_task_issue(input: Option<&Value>) -> ContractResult<TaskIssueBody> 
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TaskContinueDeliveryBody {
-    pub delivery_target: String,
+    pub delivery_target: DeliveryTarget,
 }
 
 /// Delivery can continue only to a ready pull request or a merge.
@@ -1244,7 +1219,7 @@ pub fn parse_task_continue_delivery(
     }
     match target {
         Some(target) if issues.is_empty() => Ok(TaskContinueDeliveryBody {
-            delivery_target: target.to_owned(),
+            delivery_target: DeliveryTarget::parse(target).expect("validated target"),
         }),
         _ => Err(ContractFailure::Issues(issues)),
     }

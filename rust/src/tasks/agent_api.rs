@@ -7,7 +7,7 @@ use crate::projects::ProjectError;
 use crate::shared::hash::sha256_hex;
 use crate::shared::time::rfc3339_millis;
 use crate::tasks::TaskError;
-use crate::tasks::control::{DeliveryTarget, TaskProfile};
+use crate::tasks::control::TaskProfile;
 use std::{
     collections::HashSet,
     error::Error,
@@ -726,7 +726,7 @@ fn list_page(
         principal,
         RowFilter {
             project_id: query.project_id.as_deref(),
-            status: query.status.as_deref(),
+            status: query.status.map(|status| status.as_str()),
             pull_request_number: query.pull_request_number,
             source_branch: query.source_branch.as_deref(),
             title_contains: query.title_contains.as_deref(),
@@ -1220,7 +1220,7 @@ fn profile_not_available(profile_id: &str, role: &str, field: &str) -> Box<dyn E
 }
 
 fn profile(database: &SuplexDatabase, profile_id: &str, role: &str) -> DatabaseResult<TaskProfile> {
-    commands::read_profile(database, profile_id, role)?.ok_or_else(|| {
+    crate::profiles::agent_profiles::read_profile(database, profile_id, role)?.ok_or_else(|| {
         fail(
             "The selected agent profile does not exist",
             422,
@@ -1241,7 +1241,10 @@ fn project_profile(
         return profile(database, explicit, role);
     }
     let preferred = profile(database, default_id, role)?;
-    if commands::allowed_profile(project.provider_policy.as_ref(), &preferred) {
+    if crate::profiles::agent_profiles::allowed_profile(
+        project.provider_policy.as_ref(),
+        &preferred,
+    ) {
         return Ok(preferred);
     }
     let mut statement = database
@@ -1252,7 +1255,10 @@ fn project_profile(
         .collect::<rusqlite::Result<Vec<_>>>()?;
     for id in ids {
         let candidate = profile(database, &id, role)?;
-        if commands::allowed_profile(project.provider_policy.as_ref(), &candidate) {
+        if crate::profiles::agent_profiles::allowed_profile(
+            project.provider_policy.as_ref(),
+            &candidate,
+        ) {
             return Ok(candidate);
         }
     }
@@ -1436,11 +1442,11 @@ fn resolve(
         ));
     }
     if let Some(id) = &raw.root_profile_id {
-        commands::read_profile(database, id, "root")?
+        crate::profiles::agent_profiles::read_profile(database, id, "root")?
             .ok_or_else(|| profile_not_available(id, "root", "rootProfileId"))?;
     }
     if let Some(id) = &raw.worker_profile_id {
-        commands::read_profile(database, id, "worker")?
+        crate::profiles::agent_profiles::read_profile(database, id, "worker")?
             .ok_or_else(|| profile_not_available(id, "worker", "workerProfileId"))?;
     }
     let root = project_profile(
@@ -1484,14 +1490,14 @@ fn resolve(
     }
     let requested_advisors = serde_json::to_value(&request.advisor_profile_ids)?;
     let permitted_advisors = serde_json::to_value(&policy.advisor_profile_ids)?;
-    for role in advisor_roles(&request.workflow) {
+    for role in advisor_roles(request.workflow.as_str()) {
         let profile_id = requested_advisors[*role]
             .as_str()
             .unwrap_or(&root_id)
             .to_owned();
         let field = format!("advisorProfileIds.{role}");
         if raw_advisors.get(*role).is_some() {
-            commands::read_profile(database, &profile_id, "root")?
+            crate::profiles::agent_profiles::read_profile(database, &profile_id, "root")?
                 .ok_or_else(|| profile_not_available(&profile_id, "root", &field))?;
         }
         if !permitted_advisors[*role]
@@ -1681,10 +1687,7 @@ fn admit(
             .map(|integration| &integration.repository),
         Some(crate::http::contracts::typed::projects::RepositoryConnection::Bitbucket { .. })
     );
-    if bitbucket
-        && DeliveryTarget::parse(&request.delivery_target)
-            .is_some_and(|target| !target.bitbucket_supports())
-    {
+    if bitbucket && !request.delivery_target.bitbucket_supports() {
         return Err(fail(
             "Bitbucket supports draft pull requests. Select a supported delivery target.",
             422,
@@ -1771,7 +1774,7 @@ fn write(
         }
         prepared.root_profile = profile(database, current.request.root_profile_id.as_deref().unwrap_or_default(), "root")?;
         prepared.worker_profile = profile(database, current.request.worker_profile_id.as_deref().unwrap_or_default(), "worker")?;
-        if [&prepared.root_profile, &prepared.worker_profile].iter().any(|profile| !commands::allowed_profile(project.provider_policy.as_ref(), profile)) {
+        if [&prepared.root_profile, &prepared.worker_profile].iter().any(|profile| !crate::profiles::agent_profiles::allowed_profile(project.provider_policy.as_ref(), profile)) {
             return Err(fail("Select agents with providers and logins allowed by this project", 422, "task_failure"));
         }
         for dependency in &request.depends_on {
@@ -1784,7 +1787,7 @@ fn write(
             None if !dry_run && !pending.images.is_empty() => return Err("Artifact root is not configured".into()),
             _ => repository::create(database, &prepared, now)?,
         };
-        if result.created && request.workflow != "standard" {
+        if result.created && request.workflow != crate::coordination::workflows::Workflow::Standard {
             database.connection().execute(
                 "UPDATE suplex_task_controls SET workflow = ?1 WHERE task_id = ?2",
                 params![request.workflow, result.task.id],
@@ -1913,65 +1916,6 @@ fn source_rejection(error: Box<dyn Error>, selector: Option<&Value>) -> Box<dyn 
 
 // Dependencies.
 
-/// `replaceTaskDependencies`: company scope and acyclicity proven in the writing transaction.
-fn replace_dependencies(
-    database: &mut SuplexDatabase,
-    task_id: &str,
-    company_id: &str,
-    depends_on: &[String],
-    now: DateTime<Utc>,
-    reconcile_if_blocked: bool,
-) -> DatabaseResult<()> {
-    let mut depends_on = depends_on.to_vec();
-    depends_on.sort();
-    depends_on.dedup();
-    if depends_on.iter().any(|dependency| dependency == task_id) {
-        return Err(TaskError::new("A task cannot depend on itself", 422).into());
-    }
-    let time = rfc3339_millis(now);
-    database.transaction(true, |database| {
-        let was_blocked: bool = database.connection().query_row(
-            "SELECT EXISTS(SELECT 1 FROM suplex_task_dependencies d LEFT JOIN suplex_task_controls c ON c.task_id = d.depends_on_task_id WHERE d.task_id = ?1 AND COALESCE(c.status, 'backlog') <> 'delivered')",
-            [task_id],
-            |row| row.get(0),
-        )?;
-        for dependency in &depends_on {
-            let company: Option<String> = database
-                .connection()
-                .query_row("SELECT company_id FROM suplex_tasks WHERE id = ?1", [dependency], |row| row.get(0))
-                .optional()?;
-            if company.as_deref() != Some(company_id) {
-                return Err(TaskError::new("A dependency task is not available", 404).into());
-            }
-        }
-        database.connection().execute("DELETE FROM suplex_task_dependencies WHERE task_id = ?1", [task_id])?;
-        for dependency in &depends_on {
-            database.connection().execute(
-                "INSERT INTO suplex_task_dependencies (task_id, depends_on_task_id, created_at) VALUES (?1, ?2, ?3)",
-                params![task_id, dependency, time],
-            )?;
-        }
-        let mut seen = HashSet::new();
-        let mut queue = depends_on.clone();
-        while let Some(next) = queue.pop() {
-            if next == task_id {
-                return Err(TaskError::new("The dependency creates a cycle", 422).into());
-            }
-            if !seen.insert(next.clone()) {
-                continue;
-            }
-            let mut statement = database.connection().prepare("SELECT depends_on_task_id FROM suplex_task_dependencies WHERE task_id = ?1")?;
-            for edge in statement.query_map([&next], |row| row.get::<_, String>(0))? {
-                queue.push(edge?);
-            }
-        }
-        if reconcile_if_blocked && was_blocked {
-            repository::reconcile_dependency_release(database, task_id, now)?;
-        }
-        Ok(())
-    })
-}
-
 fn audit(
     database: &SuplexDatabase,
     principal: &Principal,
@@ -2014,7 +1958,7 @@ fn set_dependency_ids(
     for dependency in depends_on {
         require_readable(database, principal, dependency)?;
     }
-    replace_dependencies(database, task_id, &row.company_id, depends_on, now, true)?;
+    super::dependencies::replace(database, task_id, &row.company_id, depends_on, now, true)?;
     audit(
         database,
         principal,
@@ -2083,7 +2027,7 @@ pub fn set_dependencies(
         require_readable(database, principal, dependency)
             .map_err(|_| dependency_unavailable(dependency))?;
     }
-    replace_dependencies(
+    super::dependencies::replace(
         database,
         task_id,
         &row.company_id,

@@ -302,7 +302,7 @@ pub fn prepare(database: &mut SuplexDatabase, input: DispatchPrepare) -> Databas
                 return Err(fail("GitHub trigger dispatch does not match preset"));
             }
         }
-        let mut roles = workflow_definition(&body.workflow)
+        let mut roles = workflow_definition(body.workflow.as_str())
             .map_or(&[][..], |definition| definition.advisor_roles)
             .iter()
             .map(|role| (*role).to_owned())

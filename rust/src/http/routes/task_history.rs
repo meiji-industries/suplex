@@ -16,13 +16,11 @@ use axum::{
     response::{IntoResponse, Response},
     routing::get,
 };
-use rusqlite::OptionalExtension;
 use serde_json::{Value, json};
 
 use crate::{
     coordination::root_session_store,
     http::{AppState, contracts::typed::finding, validation},
-    identity::companies,
     platform::database::SuplexDatabase,
     runtimes::{task_harness::ReaderSession, task_harness_registry},
 };
@@ -100,19 +98,7 @@ fn scoped_session(
     task_id: &str,
     session_id: &str,
 ) -> Result<ScopedSession, Box<dyn Error>> {
-    let company: Option<String> = database
-        .connection()
-        .query_row(
-            "SELECT company_id FROM suplex_tasks WHERE id = ?1",
-            [task_id],
-            |row| row.get(0),
-        )
-        .optional()?;
-    companies::require_company_access(
-        database,
-        user_id,
-        &company.ok_or_else(TaskError::not_found)?,
-    )?;
+    crate::tasks::authorize_task(database, user_id, task_id)?;
     let rows = root_session_store::root_observation_rows(database, task_id)?;
     let session = rows.session(session_id).ok_or_else(TaskError::not_found)?;
     let instance_home_directory = rows

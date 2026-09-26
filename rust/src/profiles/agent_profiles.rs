@@ -196,9 +196,15 @@ fn audit(
     profile_id: &str,
     now: DateTime<Utc>,
 ) -> DatabaseResult<()> {
-    database.connection().execute(
-        "INSERT INTO suplex_audit_events (id, actor_user_id, actor_agent_id, action, target_user_id, company_id, metadata_json, created_at) VALUES (?1, ?2, NULL, ?3, NULL, NULL, ?4, ?5)",
-        params![crate::shared::ids::random_hex_id("audit")?, actor_id, action, serde_json::json!({"profileId": profile_id}).to_string(), rfc3339_millis(now)],
+    crate::identity::audit::record(
+        database,
+        &crate::shared::ids::random_hex_id("audit")?,
+        (Some(actor_id), None),
+        action,
+        None,
+        None,
+        &serde_json::json!({"profileId": profile_id}).to_string(),
+        &rfc3339_millis(now),
     )?;
     Ok(())
 }
@@ -642,6 +648,45 @@ fn provider_installed_with(
             .iter()
             .any(|relative| executable(&home.join(relative)))
     })
+}
+
+use crate::projects::ProjectProviderPolicy;
+use crate::tasks::control::TaskProfile;
+pub(crate) fn allowed_profile(
+    policy: Option<&ProjectProviderPolicy>,
+    profile: &TaskProfile,
+) -> bool {
+    let Some(policy) = policy else {
+        return true;
+    };
+    match profile.provider_instance_id().filter(|id| !id.is_empty()) {
+        Some(instance) => policy.allowed_instance_ids.iter().any(|id| id == instance),
+        None => policy
+            .allowed_providers
+            .iter()
+            .any(|allowed| allowed == &profile.provider),
+    }
+}
+
+pub(crate) fn read_profile(
+    database: &SuplexDatabase,
+    id: &str,
+    role: &str,
+) -> DatabaseResult<Option<TaskProfile>> {
+    let profile = database.connection().query_row(
+            "SELECT p.id, p.provider, p.model, p.reasoning_level, p.service_tier, p.provider_instance_id, i.home_directory FROM suplex_profiles p LEFT JOIN suplex_provider_instances i ON i.id = p.provider_instance_id WHERE p.id = ?1 AND p.role = ?2 AND p.archived_at IS NULL",
+            params![id, role],
+            |row| Ok(TaskProfile {
+                profile_id: row.get(0)?,
+                provider: row.get(1)?,
+                model: row.get(2)?,
+                reasoning_level: row.get(3)?,
+                service_tier: row.get(4)?,
+                provider_instance_id: Some(row.get(5)?),
+                instance_home_directory: Some(row.get(6)?),
+            }),
+        ).optional()?;
+    Ok(profile)
 }
 
 #[cfg(test)]

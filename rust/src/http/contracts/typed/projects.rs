@@ -1,3 +1,4 @@
+use crate::tasks::control::DeliveryTarget;
 use garde::Validate;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -127,16 +128,16 @@ pub struct ProjectAgentTaskPolicy {
     #[garde(dive)]
     pub advisor_profile_ids: AdvisorProfilePolicy,
     #[serde(default = "default_delivery_target")]
-    #[garde(custom(valid_delivery_target))]
-    pub delivery_target: String,
+    #[garde(skip)]
+    pub delivery_target: DeliveryTarget,
     #[serde(default = "default_run_project_tests")]
     pub run_project_tests: bool,
     #[serde(default = "default_visual_evidence")]
     #[garde(custom(valid_visual_evidence))]
     pub visual_evidence: String,
 }
-fn default_delivery_target() -> String {
-    "pull_request_draft".into()
+fn default_delivery_target() -> DeliveryTarget {
+    DeliveryTarget::PullRequestDraft
 }
 fn default_run_project_tests() -> bool {
     true
@@ -144,22 +145,7 @@ fn default_run_project_tests() -> bool {
 fn default_visual_evidence() -> String {
     "off".into()
 }
-#[derive(Debug, Clone, Serialize, Deserialize, Validate)]
-#[garde(allow_unvalidated)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct ProjectProviderPolicy {
-    #[garde(inner(custom(provider)))]
-    pub allowed_providers: Vec<String>,
-    #[garde(inner(length(min = 1)))]
-    pub allowed_instance_ids: Vec<String>,
-}
-fn provider(value: &str, _: &()) -> garde::Result {
-    if ["opencode", "claude-code", "devin", "codex"].contains(&value) {
-        Ok(())
-    } else {
-        Err(garde::Error::new("invalid_value"))
-    }
-}
+pub use crate::projects::ProjectProviderPolicy;
 #[derive(Debug, Clone, Serialize, Deserialize, Validate)]
 #[garde(allow_unvalidated)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]

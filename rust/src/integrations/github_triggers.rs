@@ -293,9 +293,15 @@ fn audit(
     action: &str,
     rule: &Rule,
 ) -> DatabaseResult<()> {
-    database.connection().execute(
-        "INSERT INTO suplex_audit_events (id, actor_user_id, actor_agent_id, action, target_user_id, company_id, metadata_json, created_at) VALUES (?1, ?2, NULL, ?3, NULL, ?4, ?5, ?6)",
-        params![random_hex_id("audit")?, user_id, action, rule.company_id, json!({"ruleId": rule.id}).to_string(), now_millis_rfc3339()],
+    crate::identity::audit::record(
+        database,
+        &random_hex_id("audit")?,
+        (Some(user_id), None),
+        action,
+        None,
+        Some(&rule.company_id),
+        &json!({"ruleId": rule.id}).to_string(),
+        &now_millis_rfc3339(),
     )?;
     Ok(())
 }
@@ -682,7 +688,7 @@ pub async fn create<D: Db>(
         name: input.name,
         label: input.label,
         workflow_id: input.workflow_id,
-        delivery_target: input.delivery_target,
+        delivery_target: input.delivery_target.to_string(),
         protected_paths: input.protected_paths,
         authority_user_id: user_id.to_owned(),
     };
@@ -843,6 +849,7 @@ pub async fn update<D: Db>(
             .unwrap_or_else(|| current.workflow_id.clone()),
         delivery_target: patch
             .delivery_target
+            .map(|target| target.to_string())
             .unwrap_or_else(|| current.delivery_target.clone()),
         protected_paths: patch
             .protected_paths
@@ -1460,7 +1467,7 @@ fn require_admission(database: &SuplexDatabase, dispatch: &Dispatch) -> Database
     .into_iter()
     .chain(advisors.values().map(|profile| (profile, "root")))
     {
-        if commands::read_profile(
+        if crate::profiles::agent_profiles::read_profile(
             database,
             profile["profileId"].as_str().unwrap_or_default(),
             role,
@@ -1622,7 +1629,7 @@ fn create_captured(
                 root: Path::new(""),
                 images: &[],
             },
-            &body.workflow,
+            body.workflow.as_str(),
             now,
             move |id| {
                 let _ = sender.send(id);
@@ -1917,7 +1924,7 @@ mod tests {
             name: "Ready".into(),
             label: "ready".into(),
             workflow_id: "workflow_native_standard".into(),
-            delivery_target: "pull_request_draft".into(),
+            delivery_target: crate::tasks::control::DeliveryTarget::PullRequestDraft,
             protected_paths: paths.iter().map(|path| (*path).to_owned()).collect(),
         }
     }

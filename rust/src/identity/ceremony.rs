@@ -334,7 +334,9 @@ pub fn finish_registration(
         let metadata = if kind == "recovery" {
             auth::metadata_with_string(&invitation.metadata_json, "invitationId", &invitation.id)
         } else { "{}".to_owned() };
-        database.connection().execute("INSERT INTO suplex_audit_events (id, actor_user_id, actor_agent_id, action, target_user_id, company_id, metadata_json, created_at) VALUES (?1, NULL, NULL, ?2, ?3, NULL, ?4, ?5)", params![random_hex_id("audit")?, action, user_id, metadata, now_iso])?;
+        crate::identity::audit::record(
+database, &random_hex_id("audit")?, (None, None), action, Some(&user_id), None, &metadata, &now_iso
+)?;
         let user = auth::public_user(database, &user_id)?.ok_or_else(passkey_failure)?;
         if user.status != "active" { return Err(passkey_failure()); }
         let session_token = auth::create_session(database, &user_id, now)?;

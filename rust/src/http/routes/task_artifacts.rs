@@ -15,13 +15,11 @@ use axum::{
     routing::get,
 };
 use chrono::Utc;
-use rusqlite::OptionalExtension;
 use serde_json::json;
 
 use crate::{
     coordination::root_session_store::{self, TaskArtifact},
     http::{AppState, session, validation},
-    identity::companies,
     platform::artifacts,
 };
 
@@ -59,16 +57,7 @@ fn scoped_artifact(
     artifact_id: &str,
 ) -> Result<TaskArtifact, Box<dyn Error>> {
     state.with_database(|database| {
-        let company_id: Option<String> = database
-            .connection()
-            .query_row(
-                "SELECT company_id FROM suplex_tasks WHERE id = ?1",
-                [task_id],
-                |row| row.get(0),
-            )
-            .optional()?;
-        let company_id = company_id.ok_or_else(TaskError::not_found)?;
-        companies::require_company_access(database, user_id, &company_id)?;
+        crate::tasks::authorize_task(database, user_id, task_id)?;
         root_session_store::task_artifact(database, task_id, artifact_id)?
             .ok_or_else(|| TaskError::not_found().into())
     })
@@ -76,19 +65,7 @@ fn scoped_artifact(
 
 fn reauthorize(state: &AppState, user_id: &str, task_id: &str) -> Result<(), Box<dyn Error>> {
     state.with_database(|database| {
-        let company_id: Option<String> = database
-            .connection()
-            .query_row(
-                "SELECT company_id FROM suplex_tasks WHERE id = ?1",
-                [task_id],
-                |row| row.get(0),
-            )
-            .optional()?;
-        companies::require_company_access(
-            database,
-            user_id,
-            &company_id.ok_or_else(TaskError::not_found)?,
-        )?;
+        crate::tasks::authorize_task(database, user_id, task_id)?;
         Ok(())
     })
 }

@@ -4,6 +4,7 @@ pub mod archive;
 pub mod commands;
 pub mod control;
 pub mod creation;
+pub mod dependencies;
 pub mod duplicate_title;
 pub mod host;
 pub mod images;
@@ -101,4 +102,24 @@ impl From<TaskError> for PublicFailure {
             TaskError::PullRequestOwned | TaskError::Internal(_) => PublicFailure::internal(),
         }
     }
+}
+
+/// Check task existence and the user's current company access.
+pub fn authorize_task(
+    database: &crate::platform::database::SuplexDatabase,
+    user_id: &str,
+    task_id: &str,
+) -> crate::platform::database::DatabaseResult<String> {
+    use rusqlite::OptionalExtension;
+    let company: Option<String> = database
+        .connection()
+        .query_row(
+            "SELECT company_id FROM suplex_tasks WHERE id = ?1",
+            [task_id],
+            |row| row.get(0),
+        )
+        .optional()?;
+    let company = company.ok_or_else(TaskError::not_found)?;
+    crate::identity::companies::require_company_access(database, user_id, &company)?;
+    Ok(company)
 }

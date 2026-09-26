@@ -14,7 +14,6 @@ use axum::{
     response::{IntoResponse, Response},
     routing::{get, post},
 };
-use rusqlite::params;
 use serde_json::{Value, json};
 
 use crate::{
@@ -214,15 +213,15 @@ pub(crate) async fn open_with(
         }
         Ok(_) => {
             let recorded = state.with_database(|database| {
-                database.connection().execute(
-                    "INSERT INTO suplex_audit_events (id, actor_user_id, action, company_id, metadata_json, created_at) VALUES (?1, ?2, 'worktree_opened', ?3, ?4, ?5)",
-                    params![
-                        uuid::Uuid::new_v4().to_string(),
-                        user_id,
-                        company_id,
-                        json!({"taskId": task_id, "app": launcher.id}).to_string(),
-                        now_millis_rfc3339(),
-                    ],
+                crate::identity::audit::record(
+                    database,
+                    &uuid::Uuid::new_v4().to_string(),
+                    (Some(&user_id), None),
+                    "worktree_opened",
+                    None,
+                    Some(&company_id),
+                    &json!({"taskId": task_id, "app": launcher.id}).to_string(),
+                    &now_millis_rfc3339(),
                 )
             });
             match recorded {

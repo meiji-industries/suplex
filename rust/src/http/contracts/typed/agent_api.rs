@@ -3,6 +3,8 @@
 //! Zod reports issues in schema-shape order. Type and enum mismatches abort
 //! an object's refinements; length and format checks do not.
 
+use crate::tasks::control::{DeliveryTarget, TaskStatus};
+
 use serde::Serialize;
 use serde_json::{Map, Value, json};
 
@@ -774,7 +776,7 @@ pub struct TaskCreateBody {
     pub worker_profile_id: Option<String>,
     pub advisor_profile_ids: AdvisorProfileIds,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub delivery_target: Option<String>,
+    pub delivery_target: Option<DeliveryTarget>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub run_project_tests: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -902,7 +904,8 @@ pub(crate) fn task_create_fields(
             root_profile_id: root_profile_id?,
             worker_profile_id: worker_profile_id?,
             advisor_profile_ids: advisors?,
-            delivery_target: delivery_target?,
+            delivery_target: delivery_target?
+                .map(|target| DeliveryTarget::parse(&target).expect("validated target")),
             run_project_tests: run_project_tests?,
             visual_evidence: visual_evidence?,
             dry_run: dry_run?,
@@ -974,7 +977,7 @@ pub struct TaskListQuery {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub project_id: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub status: Option<String>,
+    pub status: Option<TaskStatus>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub pull_request_number: Option<u64>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -1164,7 +1167,7 @@ pub(crate) fn task_list_fields(
     let query = (|| {
         Some(TaskListQuery {
             project_id: project_id?,
-            status: status?,
+            status: status?.map(|status| TaskStatus::parse(&status).expect("validated status")),
             pull_request_number: pull_request_number?,
             source_branch: source_branch?,
             title_contains: title_contains?,

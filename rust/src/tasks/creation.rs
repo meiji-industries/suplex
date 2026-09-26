@@ -177,7 +177,7 @@ async fn finish_admitted_create(
                 root: artifact_root,
                 images: &decoded_images,
             },
-            &request.workflow,
+            request.workflow.as_str(),
             now,
             move |id| {
                 if let Some(host) = host {

@@ -137,9 +137,15 @@ fn audit(
     metadata_json: &str,
     now: DateTime<Utc>,
 ) -> DatabaseResult<()> {
-    database.connection().execute(
-        "INSERT INTO suplex_audit_events (id, actor_user_id, actor_agent_id, action, target_user_id, company_id, metadata_json, created_at) VALUES (?1, ?2, NULL, ?3, ?4, ?5, ?6, ?7)",
-        params![random_hex_id("audit")?, actor_user_id, action, target_user_id, company_id, metadata_json, rfc3339_millis(now)],
+    crate::identity::audit::record(
+        database,
+        &random_hex_id("audit")?,
+        (Some(actor_user_id), None),
+        action,
+        target_user_id,
+        Some(company_id),
+        metadata_json,
+        &rfc3339_millis(now),
     )?;
     Ok(())
 }

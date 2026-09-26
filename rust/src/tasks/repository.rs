@@ -312,10 +312,9 @@ fn create_inner(
         }
         let created = task_by_id(database, id)?.ok_or_else(|| TaskError::internal("Task insert did not persist"))?;
         let resulting_state = serde_json::json!({"status": created.status, "archived": false}).to_string();
-        database.connection().execute(
-            "INSERT INTO suplex_audit_events (id, actor_user_id, actor_agent_id, action, target_user_id, company_id, metadata_json, created_at) VALUES (?1, ?2, ?3, 'task_created', NULL, ?4, ?5, ?6)",
-            params![format!("audit_{}", Uuid::new_v4().simple()), creator_user_id, creator_agent_id, input.company_id, serde_json::json!({"taskId": id, "resultingState": resulting_state}).to_string(), time],
-        )?;
+        crate::identity::audit::record(
+database, &format!("audit_{}", Uuid::new_v4().simple()), (creator_user_id, creator_agent_id), "task_created", None, Some(&input.company_id), &serde_json::json!({"taskId": id, "resultingState": resulting_state}).to_string(), &time
+)?;
         Ok(TaskWrite { task: created, created: true })
     });
     if result.is_err()
@@ -406,10 +405,7 @@ pub(crate) fn reconcile_dependency_release(
     task_id: &str,
     now: DateTime<Utc>,
 ) -> DatabaseResult<bool> {
-    let blocked: bool = database.connection().query_row(
-        "SELECT EXISTS(SELECT 1 FROM suplex_task_dependencies d LEFT JOIN suplex_task_controls c ON c.task_id = d.depends_on_task_id WHERE d.task_id = ?1 AND COALESCE(c.status,'backlog') <> 'delivered')",
-        [task_id], |row| row.get(0),
-    )?;
+    let blocked: bool = crate::tasks::dependencies::blocked(database, task_id)?;
     if blocked {
         return Ok(false);
     }
@@ -551,7 +547,7 @@ pub(crate) fn task_worktree(
     user_id: &str,
     task_id: &str,
 ) -> Result<(String, Option<String>), Box<dyn std::error::Error>> {
-    let company_id = authorized_company(database, user_id, task_id)?;
+    let company_id = super::authorize_task(database, user_id, task_id)?;
     let path = database
         .connection()
         .query_row(
@@ -564,32 +560,13 @@ pub(crate) fn task_worktree(
     Ok((company_id, path))
 }
 
-/// The company of a task the user may access.
-pub(crate) fn authorized_company(
-    database: &SuplexDatabase,
-    user_id: &str,
-    task_id: &str,
-) -> Result<String, Box<dyn std::error::Error>> {
-    let company_id: String = database
-        .connection()
-        .query_row(
-            "SELECT company_id FROM suplex_tasks WHERE id = ?1",
-            [task_id],
-            |row| row.get(0),
-        )
-        .optional()?
-        .ok_or_else(TaskError::not_found)?;
-    crate::identity::companies::require_company_access(database, user_id, &company_id)?;
-    Ok(company_id)
-}
-
 pub(crate) fn bound_pane(
     database: &SuplexDatabase,
     user_id: &str,
     task_id: &str,
     role: &str,
 ) -> DatabaseResult<Option<String>> {
-    authorized_company(database, user_id, task_id)?;
+    super::authorize_task(database, user_id, task_id)?;
     let pane = if role == "shell" {
         database
             .connection()

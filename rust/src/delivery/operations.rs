@@ -6,7 +6,6 @@
 //! Bitbucket release port.
 
 use super::{DeliveryError, DeliveryOperation};
-use crate::shared::hash::sha256_hex;
 use crate::shared::time::{now_millis_rfc3339, rfc3339_millis};
 use std::{
     error::Error,
@@ -39,9 +38,7 @@ use crate::{
     },
     platform::database::{DatabaseResult, OpenMode, SuplexDatabase},
     tasks::{
-        control::{
-            DeliveryTarget, SessionLifecycle, TaskControlRow, TaskStatus, WorktreeReference,
-        },
+        control::{DeliveryTarget, TaskControlRow, TaskStatus, WorktreeReference},
         repository,
         worktree::{self, LocalRevisionObservation},
     },
@@ -559,21 +556,13 @@ impl DeliveryOperations {
         task_id: &str,
         mutate: impl FnOnce(&mut WorkflowState),
     ) -> DatabaseResult<()> {
-        let mut database = self.open(OpenMode::ReadWrite)?;
-        database.transaction(false, |database| {
-            let raw: String = database.connection().query_row(
-                "SELECT workflow_state_json FROM suplex_task_controls WHERE task_id = ?1",
-                [task_id],
-                |row| row.get(0),
-            )?;
-            let mut state: WorkflowState = serde_json::from_str(&raw)?;
-            mutate(&mut state);
-            database.connection().execute(
-                "UPDATE suplex_task_controls SET workflow_state_json = ?1, updated_at = ?2 WHERE task_id = ?3",
-                params![crate::shared::js_json::stringify(&serde_json::to_value(&state)?), crate::shared::time::now_millis_rfc3339(), task_id],
-            )?;
-            Ok(())
-        })
+        root_session_store::update_workflow_state(
+            &mut self.open(OpenMode::ReadWrite)?,
+            task_id,
+            Utc::now(),
+            mutate,
+        )?;
+        Ok(())
     }
 
     fn schedule_wake(&self, task_id: &str, seconds: i64) -> DatabaseResult<()> {
@@ -591,62 +580,37 @@ impl DeliveryOperations {
 
     /// TypeScript `askHuman` without a Root binding; the delivery wait is cleared with it.
     fn ask_human(&self, task_id: &str, question: &str) -> DatabaseResult<bool> {
-        let mut database = self.open(OpenMode::ReadWrite)?;
-        let changed = database.connection().execute(
-            "UPDATE suplex_task_controls SET status = 'waiting_human', human_question = ?1, human_question_options_json = '[]', human_question_id = ?2, limit_pause_json = NULL, wake_at = NULL, workflow_state_json = json_set(workflow_state_json, '$.deliveryWait', json('null')), updated_at = ?3 WHERE task_id = ?4 AND status = 'active'",
-            params![question.trim(), uuid::Uuid::new_v4().to_string(), crate::shared::time::now_millis_rfc3339(), task_id],
-        )? == 1;
-        if changed {
-            root_session_store::observe_lifecycle(&mut database, task_id)?;
-        }
-        Ok(changed)
+        root_session_store::ask_human(
+            &mut self.open(OpenMode::ReadWrite)?,
+            task_id,
+            question,
+            &json!([]),
+            Utc::now(),
+        )
     }
 
-    /// TypeScript `resumeDeliveryWait`: clear exactly the expected wait and wake the Root once.
     fn resume_delivery_wait(
         &self,
         task_id: &str,
         expected: &DeliveryWait,
         prompt: &str,
     ) -> DatabaseResult<bool> {
-        let mut database = self.open(OpenMode::ReadWrite)?;
-        let now = Utc::now();
-        let turn_id = root_session_store::new_turn_id(now)?;
-        database.transaction(true, |database| {
-            let row = database.connection().query_row(
-                "SELECT c.status, c.workflow_state_json, s.id, s.generation, s.lifecycle FROM suplex_task_controls c LEFT JOIN suplex_task_sessions s ON s.task_id = c.task_id AND s.kind = 'root' AND s.is_current = 1 WHERE c.task_id = ?1",
-                [task_id],
-                |row| Ok((row.get::<_, TaskStatus>(0)?, row.get::<_, String>(1)?, row.get::<_, Option<String>>(2)?, row.get::<_, Option<i64>>(3)?, row.get::<_, Option<SessionLifecycle>>(4)?)),
-            )?;
-            let (status, state, root_id, generation, lifecycle) = row;
-            let mut state: WorkflowState = serde_json::from_str(&state)?;
-            let (Some(root_id), Some(generation)) = (root_id, generation) else { return Ok(false) };
-            if status != TaskStatus::Active || lifecycle == Some(SessionLifecycle::Cancelled) || state.delivery_wait.as_ref() != Some(expected) {
-                return Ok(false);
-            }
-            state.delivery_wait = None;
-            let time = rfc3339_millis(now);
-            database.connection().execute(
-                "UPDATE suplex_task_controls SET workflow_state_json = ?1, wake_at = ?2, updated_at = ?2 WHERE task_id = ?3",
-                params![crate::shared::js_json::stringify(&serde_json::to_value(&state)?), time, task_id],
-            )?;
-            database.connection().execute(
-                "INSERT INTO suplex_task_turns (id, task_id, session_id, generation, prompt_hash, prompt_text, status, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'pending_prompt', ?7, ?7)",
-                params![turn_id, task_id, root_id, generation, sha256_hex(prompt.as_bytes()), prompt, time],
-            )?;
-            Ok(true)
-        })
+        root_session_store::resume_delivery_wait(
+            &mut self.open(OpenMode::ReadWrite)?,
+            task_id,
+            expected,
+            prompt,
+            Utc::now(),
+        )
     }
 
     fn clear_delivery_wait(&self, task_id: &str, expected: &DeliveryWait) -> DatabaseResult<bool> {
-        let mut cleared = false;
-        self.update_workflow_state(task_id, |state| {
-            if state.delivery_wait.as_ref() == Some(expected) {
-                state.delivery_wait = None;
-                cleared = true;
-            }
-        })?;
-        Ok(cleared)
+        root_session_store::clear_delivery_wait(
+            &mut self.open(OpenMode::ReadWrite)?,
+            task_id,
+            expected,
+            Utc::now(),
+        )
     }
 
     fn fail_delivery_wait(
@@ -655,13 +619,14 @@ impl DeliveryOperations {
         expected: &DeliveryWait,
         question: &str,
     ) -> DatabaseResult<bool> {
-        let control = self.get(task_id)?;
-        if control.status != TaskStatus::Active
-            || control.workflow_state.delivery_wait.as_ref() != Some(expected)
-        {
-            return Ok(false);
-        }
-        self.ask_human(task_id, question)
+        root_session_store::fail_delivery_wait(
+            &mut self.open(OpenMode::ReadWrite)?,
+            task_id,
+            expected,
+            question,
+            &json!([]),
+            Utc::now(),
+        )
     }
 
     /// TypeScript `observe`: a finished task keeps its recorded pull request.

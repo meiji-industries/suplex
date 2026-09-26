@@ -268,18 +268,10 @@ pub fn update_profile(
     }
     database.transaction(false, |database| {
         let Some(user) = public_user(database, actor_user_id)? else {
-            return Err(IdentityError::auth(
-                "Authentication required",
-                401,
-                "auth_failure",
-            ).into());
+            return Err(IdentityError::auth("Authentication required", 401, "auth_failure").into());
         };
         if user.status != "active" {
-            return Err(IdentityError::auth(
-                "Authentication required",
-                401,
-                "auth_failure",
-            ).into());
+            return Err(IdentityError::auth("Authentication required", 401, "auth_failure").into());
         }
         let raw_avatar_seed: String = database.connection().query_row(
             "SELECT avatar_seed FROM suplex_users WHERE id = ?1",
@@ -315,11 +307,9 @@ pub fn update_profile(
                 )
                 .is_err()
         {
-            return Err(IdentityError::auth(
-                "Username is already in use",
-                409,
-                "username_taken",
-            ).into());
+            return Err(
+                IdentityError::auth("Username is already in use", 409, "username_taken").into(),
+            );
         }
         for (changed, column, value) in [
             (
@@ -335,20 +325,31 @@ pub fn update_profile(
         ] {
             if changed {
                 database.connection().execute(
-                    &format!("UPDATE suplex_users SET {column} = ?2, updated_at = ?3 WHERE id = ?1"),
+                    &format!(
+                        "UPDATE suplex_users SET {column} = ?2, updated_at = ?3 WHERE id = ?1"
+                    ),
                     params![actor_user_id, value, now_iso],
                 )?;
             }
         }
         for (changed, action) in [
-            (user.display_name != next_display_name, "display_name_updated"),
+            (
+                user.display_name != next_display_name,
+                "display_name_updated",
+            ),
             (user.username != next_username, "username_updated"),
             (previous_avatar_seed != next_avatar_seed, "avatar_updated"),
         ] {
             if changed {
-                database.connection().execute(
-                    "INSERT INTO suplex_audit_events (id, actor_user_id, actor_agent_id, action, target_user_id, company_id, metadata_json, created_at) VALUES (?1, ?2, NULL, ?3, ?2, NULL, '{}', ?4)",
-                    params![random_hex_id("audit")?, actor_user_id, action, now_iso],
+                crate::identity::audit::record(
+                    database,
+                    &random_hex_id("audit")?,
+                    (Some(actor_user_id), None),
+                    action,
+                    Some(actor_user_id),
+                    None,
+                    "{}",
+                    &now_iso,
                 )?;
             }
         }

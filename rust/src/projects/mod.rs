@@ -44,3 +44,22 @@ impl From<ProjectError> for PublicFailure {
             .with_findings(serde_json::json!(error.findings()))
     }
 }
+
+use garde::Validate;
+use serde::{Deserialize, Serialize};
+#[derive(Debug, Clone, Serialize, Deserialize, Validate)]
+#[garde(allow_unvalidated)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ProjectProviderPolicy {
+    #[garde(inner(custom(provider)))]
+    pub allowed_providers: Vec<String>,
+    #[garde(inner(length(min = 1)))]
+    pub allowed_instance_ids: Vec<String>,
+}
+fn provider(value: &str, _: &()) -> garde::Result {
+    if ["opencode", "claude-code", "devin", "codex"].contains(&value) {
+        Ok(())
+    } else {
+        Err(garde::Error::new("invalid_value"))
+    }
+}

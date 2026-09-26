@@ -225,10 +225,9 @@ pub fn update(
                 params![owner_id, shape, mime_type, image, updated_at],
             )?;
         }
-        database.connection().execute(
-            "INSERT INTO suplex_audit_events (id, actor_user_id, actor_agent_id, action, target_user_id, company_id, metadata_json, created_at) VALUES (?1, ?2, NULL, 'avatar_updated', ?3, NULL, ?4, ?5)",
-            params![random_hex_id("audit")?, user_id, (kind == "user").then_some(owner_id), json!({"ownerId": owner_id}).to_string(), updated_at],
-        )?;
+        crate::identity::audit::record(
+database, &random_hex_id("audit")?, (Some(user_id), None), "avatar_updated", (kind == "user").then_some(owner_id), None, &json!({"ownerId": owner_id}).to_string(), &updated_at
+)?;
         Ok(AvatarRecord {
             shape,
             image_version: image.is_some().then_some(updated_at),

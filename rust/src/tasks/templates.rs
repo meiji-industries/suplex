@@ -205,12 +205,13 @@ pub fn update(
     let workflow = changes.get("workflow").and_then(Value::as_str);
     // Switching to repair replaces inherited target/tests with the repair defaults; explicit contradictions still fail.
     if workflow == Some("refine_pull_request")
-        && current.configuration.workflow != "refine_pull_request"
+        && current.configuration.workflow
+            != crate::coordination::workflows::Workflow::RefinePullRequest
     {
         values.insert("deliveryTarget".into(), json!("merged"));
         values.insert("runProjectTests".into(), json!(true));
     }
-    if workflow.is_some_and(|workflow| workflow != current.configuration.workflow)
+    if workflow.is_some_and(|workflow| workflow != current.configuration.workflow.as_str())
         && !changes.contains_key("advisorProfileIds")
     {
         values.insert("advisorProfileIds".into(), json!({}));

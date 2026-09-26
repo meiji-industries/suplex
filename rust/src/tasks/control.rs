@@ -1,8 +1,10 @@
 //! TypeScript `tasks/control-contracts.ts`: the persisted task control vocabulary.
 
+use garde::Validate;
+
 use std::collections::BTreeMap;
 
-use serde::{Deserialize, Deserializer, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::Value;
 
 use crate::coordination::{
@@ -430,4 +432,109 @@ mod tests {
         }
         assert!(serde_json::from_str::<TaskProfile>(r#"{"profileId":"p"}"#).is_err());
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Validate)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TaskWorkerReplacementBody {
+    #[garde(length(utf16, min = 1))]
+    pub session_id: String,
+    #[serde(deserialize_with = "trimmed")]
+    #[garde(length(utf16, min = 1))]
+    pub reason: String,
+    #[serde(
+        default,
+        deserialize_with = "optional_trimmed",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[garde(skip)]
+    pub handoff: Option<String>,
+    #[serde(
+        default,
+        deserialize_with = "optional_nonnull",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[garde(inner(length(utf16, min = 1)))]
+    pub worker_profile_id: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, Validate)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TaskCoordinatorReplacementBody {
+    #[garde(length(utf16, min = 1))]
+    pub session_id: String,
+    #[garde(length(utf16, min = 1))]
+    pub root_profile_id: String,
+    #[serde(
+        default,
+        deserialize_with = "optional_trimmed",
+        skip_serializing_if = "Option::is_none"
+    )]
+    #[garde(skip)]
+    pub handoff: Option<String>,
+    #[garde(skip)]
+    pub resume: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    #[garde(inner(length(utf16, min = 1)))]
+    pub question_id: Option<String>,
+}
+
+pub(crate) fn optional_trimmed<'de, D>(deserializer: D) -> Result<Option<String>, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    trimmed(deserializer).map(Some)
+}
+
+pub(crate) fn trimmed<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    let value = String::deserialize(deserializer)?;
+    Ok(value
+        .trim_matches(|c: char| c.is_whitespace() || c == '\u{feff}')
+        .to_owned())
+}
+
+fn optional_nonnull<'de, D: Deserializer<'de>, T: Deserialize<'de>>(
+    deserializer: D,
+) -> Result<Option<T>, D::Error> {
+    T::deserialize(deserializer).map(Some)
+}
+
+const MAX_SAFE_INTEGER: u64 = 9_007_199_254_740_991;
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum TaskLimitDecision {
+    AddAllowance,
+    ChangeLimits { limits: TaskLimits },
+    CancelTask,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TaskLimits {
+    #[serde(serialize_with = "serialize_js_number")]
+    pub budget_usd: f64,
+    #[serde(deserialize_with = "nonnegative_integer")]
+    pub max_turns: u64,
+}
+
+fn serialize_js_number<S: Serializer>(value: &f64, serializer: S) -> Result<S::Ok, S::Error> {
+    if value.is_finite() && value.fract() == 0.0 && value.abs() <= MAX_SAFE_INTEGER as f64 {
+        serializer.serialize_i64(*value as i64)
+    } else {
+        serializer.serialize_f64(*value)
+    }
+}
+
+fn nonnegative_integer<'de, D: Deserializer<'de>>(deserializer: D) -> Result<u64, D::Error> {
+    let value = Value::deserialize(deserializer)?;
+    value
+        .as_number()
+        .and_then(|number| number.as_f64())
+        .filter(|number| number.is_finite() && *number >= 0.0 && number.fract() == 0.0)
+        .filter(|number| *number <= u64::MAX as f64)
+        .map(|number| number as u64)
+        .ok_or_else(|| serde::de::Error::custom("expected nonnegative integer"))
 }

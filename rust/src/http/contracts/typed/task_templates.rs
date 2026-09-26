@@ -6,8 +6,8 @@ use serde_json::{Map, Value};
 
 use super::{
     ContractFailure, ContractResult, DELIVERY_TARGETS, Field, ID, Rule, TRIMMED_NAME,
-    VISUAL_EVIDENCE, WORKFLOW_IDS, delivery_target as check_delivery_target, id_1_256, optional,
-    parse_object, serialized, tasks, visual_evidence as check_visual_evidence,
+    VISUAL_EVIDENCE, WORKFLOW_IDS, id_1_256, optional, parse_object, serialized, tasks,
+    visual_evidence as check_visual_evidence,
 };
 
 #[derive(Debug, Clone, Serialize, Deserialize, Validate)]
@@ -34,8 +34,8 @@ pub struct TemplateConfiguration {
     #[garde(inner(custom(id_1_256)))]
     pub worker_profile_id: Option<String>,
     #[serde(default = "tasks::default_delivery_target")]
-    #[garde(custom(check_delivery_target))]
-    pub delivery_target: String,
+    #[garde(skip)]
+    pub delivery_target: crate::tasks::control::DeliveryTarget,
     #[serde(default = "tasks::default_run_project_tests")]
     #[garde(skip)]
     pub run_project_tests: bool,
@@ -43,8 +43,8 @@ pub struct TemplateConfiguration {
     #[garde(custom(check_visual_evidence))]
     pub visual_evidence: String,
     #[serde(default = "tasks::default_workflow")]
-    #[garde(custom(tasks::check_workflow))]
-    pub workflow: String,
+    #[garde(skip)]
+    pub workflow: crate::coordination::workflows::Workflow,
     #[serde(default)]
     #[garde(dive)]
     pub advisor_profile_ids: tasks::AdvisorProfileIds,

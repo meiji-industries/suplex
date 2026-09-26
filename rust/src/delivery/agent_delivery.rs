@@ -218,9 +218,15 @@ impl AgentDelivery {
             ordered.extend(metadata.as_object().cloned().unwrap_or_default());
             metadata = Value::Object(ordered);
         }
-        self.open(OpenMode::ReadWrite)?.connection().execute(
-            "INSERT INTO suplex_audit_events (id, actor_user_id, actor_agent_id, action, target_user_id, company_id, metadata_json, created_at) VALUES (?1, NULL, ?2, ?3, NULL, ?4, ?5, ?6)",
-            params![format!("audit_{}", uuid::Uuid::new_v4().simple()), principal.agent_id, action, company_id, crate::shared::js_json::stringify(&metadata), now_millis_rfc3339()],
+        crate::identity::audit::record(
+            &self.open(OpenMode::ReadWrite)?,
+            &format!("audit_{}", uuid::Uuid::new_v4().simple()),
+            (None, Some(&principal.agent_id)),
+            action,
+            None,
+            Some(company_id),
+            &crate::shared::js_json::stringify(&metadata),
+            &now_millis_rfc3339(),
         )?;
         Ok(())
     }
@@ -266,10 +272,7 @@ impl AgentDelivery {
             ).optional()?;
             let (root_id, generation) = root.ok_or_else(|| TaskError::new("Coordinator is not ready. Retry the request.", 409))?;
             let time = now_millis_rfc3339();
-            database.connection().execute(
-                "INSERT INTO suplex_task_turns (id, task_id, session_id, generation, prompt_hash, prompt_text, status, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'pending_prompt', ?7, ?7)",
-                params![turn_id, task_id, root_id, generation, sha256_hex(prompt.as_bytes()), prompt, time],
-            )?;
+            crate::coordination::root_session_store::insert_pending_turn(database, &turn_id, task_id, &root_id, generation, None, prompt, None, &time)?;
             Ok(())
         })
     }

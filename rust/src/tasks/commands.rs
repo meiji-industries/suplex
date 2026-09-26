@@ -1,9 +1,11 @@
 //! User task commands keep authorization, intent, audit, and wake admission together.
 
+use crate::profiles::agent_profiles::{allowed_profile, read_profile};
+
 use crate::shared::hash::sha256_hex;
 use crate::shared::time::rfc3339_millis;
 use crate::tasks::TaskError;
-use crate::tasks::control::{DeliveryIntent, DeliveryTarget, TaskProfile, TaskStatus, TurnStatus};
+use crate::tasks::control::{DeliveryIntent, DeliveryTarget, TaskProfile, TaskStatus};
 use std::{collections::BTreeMap, path::Path};
 
 use chrono::{DateTime, Utc};
@@ -15,7 +17,7 @@ use crate::{
     coordination::{
         advisor_bridge::AdvisorRole,
         root_prompts, root_session_store,
-        workflows::{self, AgentSelection, DeliveryHistoryEntry, WorkflowState},
+        workflows::{self, AgentSelection},
     },
     http::contracts::typed::{
         projects::ProjectProviderPolicy,
@@ -146,43 +148,6 @@ pub fn existing_user_task(
         );
     }
     repository::task_by_id(database, &task_id)
-}
-
-pub(crate) fn allowed_profile(
-    policy: Option<&ProjectProviderPolicy>,
-    profile: &TaskProfile,
-) -> bool {
-    let Some(policy) = policy else {
-        return true;
-    };
-    match profile.provider_instance_id().filter(|id| !id.is_empty()) {
-        Some(instance) => policy.allowed_instance_ids.iter().any(|id| id == instance),
-        None => policy
-            .allowed_providers
-            .iter()
-            .any(|allowed| allowed == &profile.provider),
-    }
-}
-
-pub(crate) fn read_profile(
-    database: &SuplexDatabase,
-    id: &str,
-    role: &str,
-) -> DatabaseResult<Option<TaskProfile>> {
-    let profile = database.connection().query_row(
-            "SELECT p.id, p.provider, p.model, p.reasoning_level, p.service_tier, p.provider_instance_id, i.home_directory FROM suplex_profiles p LEFT JOIN suplex_provider_instances i ON i.id = p.provider_instance_id WHERE p.id = ?1 AND p.role = ?2 AND p.archived_at IS NULL",
-            params![id, role],
-            |row| Ok(TaskProfile {
-                profile_id: row.get(0)?,
-                provider: row.get(1)?,
-                model: row.get(2)?,
-                reasoning_level: row.get(3)?,
-                service_tier: row.get(4)?,
-                provider_instance_id: Some(row.get(5)?),
-                instance_home_directory: Some(row.get(6)?),
-            }),
-        ).optional()?;
-    Ok(profile)
 }
 
 fn selected_profile(
@@ -322,7 +287,7 @@ pub fn select_local_profiles(
     // TypeScript `create`: each workflow Advisor defaults to the Coordinator profile.
     let mut advisors = BTreeMap::new();
     let selected = serde_json::to_value(&input.advisor_profile_ids)?;
-    for role in workflows::advisor_roles(&input.workflow) {
+    for role in workflows::advisor_roles(input.workflow.as_str()) {
         let id = selected[role.as_str()].as_str().unwrap_or(&root.profile_id);
         let profile = selected_profile(database, project, Some(id), id, "root")?;
         advisors.insert(role, profile);
@@ -390,7 +355,7 @@ pub fn prepare_local_user_task(
         idempotency_key: input.idempotency_key.clone(),
         request_hash: task_request_hash(input, actor_user_id)?,
         creator: TaskCreator::User(actor_user_id.to_owned()),
-        delivery_target: input.delivery_target.clone(),
+        delivery_target: input.delivery_target.to_string(),
         delivery_intent: DeliveryIntent {
             repository: repository.to_owned(),
             head_branch: branch,
@@ -422,9 +387,15 @@ fn audit(
         |row| row.get(0),
     )?;
     let resulting_state = json!({"status": task.status, "archived": archived}).to_string();
-    database.connection().execute(
-        "INSERT INTO suplex_audit_events (id, actor_user_id, actor_agent_id, action, target_user_id, company_id, metadata_json, created_at) VALUES (?1, ?2, NULL, ?3, NULL, ?4, ?5, ?6)",
-        params![format!("audit_{}", Uuid::new_v4().simple()), actor_user_id, action, task.company_id, json!({"taskId": task.id, "resultingState": resulting_state}).to_string(), rfc3339_millis(now)],
+    crate::identity::audit::record(
+        database,
+        &format!("audit_{}", Uuid::new_v4().simple()),
+        (Some(actor_user_id), None),
+        action,
+        None,
+        Some(&task.company_id),
+        &json!({"taskId": task.id, "resultingState": resulting_state}).to_string(),
+        &rfc3339_millis(now),
     )?;
     Ok(())
 }
@@ -616,8 +587,7 @@ pub fn disarm_user_task(
     Ok(task)
 }
 
-/// Move a delivered pull request task toward a later target. Resuming the
-/// pull request delivery itself needs GitHub delivery, which is not ported.
+/// Move a delivered pull request task toward a later target.
 pub fn continue_user_delivery(
     database: &mut SuplexDatabase,
     actor_user_id: &str,
@@ -628,94 +598,15 @@ pub fn continue_user_delivery(
     database.transaction(true, |database| {
         let task = require_user_task(database, actor_user_id, task_id)?;
         if archive::in_progress(task_id) {
-            return Err(TaskError::new(
-                "Archive cleanup is in progress",
-                409,
-            ).into());
+            return Err(TaskError::new("Archive cleanup is in progress", 409).into());
         }
-        let (archived, repository_kind, previous_target): (bool, Option<String>, String) =
-            database.connection().query_row(
-                "SELECT t.archived_at IS NOT NULL, json_extract(t.configuration_json, '$.integration.repository.kind'), c.delivery_target FROM suplex_tasks t JOIN suplex_task_controls c ON c.task_id = t.id WHERE t.id = ?1",
-                [task_id],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
-            )?;
-        let conflict = |message: &str| TaskError::new(message, 409).into();
-        if archived {
-            return Err(conflict(
-                "Open the archived task before you continue delivery.",
-            ));
+        root_session_store::continue_delivery(database, task_id, request.delivery_target)?;
+        let task = repository::task_by_id(database, task_id)?.unwrap_or(task);
+        if task.status == TaskStatus::Active {
+            let id = task_id.to_owned();
+            database.after_commit(move || wake(id));
         }
-        if repository_kind.as_deref() == Some("bitbucket") {
-            return Err(TaskError::new(
-                "Bitbucket supports draft pull requests. Select a supported delivery target.",
-                422,
-            ).into());
-        }
-        let order = |target: &str| {
-            DeliveryTarget::parse(target).ok_or_else(|| conflict("Invalid delivery target"))
-        };
-        let (next, previous) = (order(&request.delivery_target)?, order(&previous_target)?);
-        if next < previous {
-            return Err(conflict("The delivery target cannot move backward."));
-        }
-        if next == previous && matches!(task.status, TaskStatus::Active | TaskStatus::Delivered) {
-            if task.status == TaskStatus::Active {
-                let id = task.id.clone();
-                database.after_commit(move || wake(id));
-            }
-            return Ok(task);
-        }
-        if task.status != TaskStatus::Delivered || !previous.uses_pull_request() {
-            return Err(conflict(
-                "Only delivered pull request tasks can continue delivery.",
-            ));
-        }
-        repository::assert_task_pull_requests_available(database, task_id)
-            .map_err(|error| conflict(&error.to_string()))?;
-        let time = crate::shared::time::now_millis_rfc3339();
-        let rows = root_session_store::root_observation_rows(database, task_id)?;
-        let mut state = rows.control.workflow_state.clone();
-        let resumed = DeliveryHistoryEntry {
-            resumed_at: time.clone(),
-            accepted_delivery: state.accepted_delivery.take(),
-            completion: state.completion.take(),
-        };
-        state.delivery_wait = None;
-        state.follow_up = Some(true);
-        state.delivery_history.get_or_insert_default().push(resumed);
-        database.connection().execute(
-            "UPDATE suplex_task_controls SET workflow_state_json = ?1, delivery_target = ?2, status = 'active', wake_at = ?3, updated_at = ?3 WHERE task_id = ?4 AND status = 'delivered'",
-            params![crate::shared::js_json::stringify(&serde_json::to_value(&state)?), request.delivery_target, time, task_id],
-        )?;
-        if let Some(root_id) = &rows.control.root_session_id {
-            database.connection().execute(
-                "UPDATE suplex_task_sessions SET is_current = 1, lifecycle = 'reserved', stop_requested_at = NULL, stopped_at = NULL, updated_at = ?1 WHERE id = ?2 AND task_id = ?3 AND kind = 'root'",
-                params![time, root_id, task_id],
-            )?;
-        }
-        let existing = root_session_store::current_root(database, task_id)?;
-        let root = match existing {
-            Some(root) => root,
-            None => {
-                let root = root_session_store::reserve_root(database, task_id, Utc::now())?;
-                let rows = root_session_store::root_observation_rows(database, task_id)?;
-                let initial = root_prompts::initial_coordinator_prompt(&rows.control, &rows.context, &rows.dependencies);
-                root_session_store::ensure_initial_prompt(database, &root, &initial, Utc::now())?;
-                root
-            }
-        };
-        let prompt = crate::shared::js_json::stringify(&json!({
-            "question": format!("The user changed the delivery target from {previous_target} to {}. Continue this task toward the NEW target {}. Preserve the existing branch, pull request, sessions, and useful review evidence. Inspect current Git and GitHub facts, repair conflicts and failing checks, and request delivery explicitly when the new target is satisfied. Earlier completion is history.", request.delivery_target, request.delivery_target),
-            "answer": format!("Continue delivery to {}.", request.delivery_target),
-        }));
-        database.connection().execute(
-            "INSERT INTO suplex_task_turns (id, task_id, session_id, generation, prompt_hash, prompt_text, status, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'pending_prompt', ?7, ?7)",
-            params![root_session_store::new_turn_id(Utc::now())?, task_id, root.id, root.generation, sha256_hex(prompt.as_bytes()), prompt, time],
-        )?;
-        root_session_store::observe_lifecycle(database, task_id)?;
-        let id = task_id.to_owned();
-        database.after_commit(move || wake(id));
-        Ok(repository::task_by_id(database, task_id)?.unwrap_or(task))
+        Ok(task)
     })
 }
 
@@ -758,234 +649,20 @@ pub fn select_user_task_agent(
         };
         return replace_user_coordinator(database, actor_user_id, task_id, &replacement, now, wake);
     }
-    let rows = root_session_store::root_observation_rows(database, task_id)?;
-    let initial =
-        root_prompts::initial_coordinator_prompt(&rows.control, &rows.context, &rows.dependencies);
-    let hash = |text: &str| sha256_hex(text.as_bytes());
-    let time = rfc3339_millis(now);
-    database.transaction(true, |database| {
-        let row = database.connection().query_row(
-            "SELECT c.status, t.archived_at IS NOT NULL, c.workflow, c.delivery_target, c.workflow_state_json, c.root_session_id, c.root_profile_json, c.worker_profile_json, t.configuration_json, c.human_question_id, c.human_question, c.human_question_options_json, c.limit_pause_json IS NOT NULL OR c.recovery_turn_id IS NOT NULL, c.advisor_profiles_json, c.worker_session_id FROM suplex_task_controls c JOIN suplex_tasks t ON t.id = c.task_id WHERE c.task_id = ?1",
-            [task_id],
-            |row| Ok((
-                row.get::<_, TaskStatus>(0)?, row.get::<_, bool>(1)?, row.get::<_, String>(2)?,
-                row.get::<_, String>(3)?, row.get::<_, String>(4)?, row.get::<_, Option<String>>(5)?,
-                row.get::<_, String>(6)?, row.get::<_, String>(7)?, row.get::<_, String>(8)?,
-                row.get::<_, Option<String>>(9)?, row.get::<_, Option<String>>(10)?,
-                row.get::<_, Option<String>>(11)?, row.get::<_, bool>(12)?,
-                row.get::<_, String>(13)?, row.get::<_, Option<String>>(14)?,
-            )),
-        ).optional()?;
-        let root = request.role == "root";
-        let Some((status, _archived, workflow, _delivery_target, state, root_session_id, root_profile, worker_profile, configuration, question_id, question, question_options, pending_decision, advisor_profiles, worker_session_id)) = row
-            .filter(|row| !row.1 && matches!(row.0, TaskStatus::Active | TaskStatus::WaitingHuman))
-        else {
-            return Err(conflict(if root { coordinator_changed } else { "Only active or paused tasks can select an agent." }));
-        };
-        let advisor_role = (!root && request.role != "worker").then_some(request.role.as_str());
-        if advisor_role.is_some_and(|role| {
-            !workflows::workflow_definition(&workflow)
-                .is_some_and(|definition| definition.advisor_roles.contains(&role))
-        }) {
-            return Err(conflict("The selected role is not in this workflow."));
-        }
-        let mut state: WorkflowState = serde_json::from_str(&state)?;
-        let intent = AgentSelection {
-            role: request.role.clone(),
-            expected_profile_id: request.expected_profile_id.clone(),
-            expected_session_id: request.expected_session_id.clone(),
-            profile_id: request.profile_id.clone(),
-            direction: request.direction.clone(),
-            resume: request.resume,
-            question_id: request.question_id.clone().filter(|_| request.resume),
-        };
-        let mut advisors: Value = serde_json::from_str(&advisor_profiles)?;
-        let previous_profile: TaskProfile = match advisor_role {
-            Some(role) if !advisors[role].is_null() => serde_json::from_value(advisors[role].clone())?,
-            Some(_) => serde_json::from_str(&root_profile)?,
-            None => serde_json::from_str(if root { &root_profile } else { &worker_profile })?,
-        };
-        let current = if root {
-            None
-        } else {
-            database.connection().query_row(
-                "SELECT id, generation, delegate_slot, workflow_input_json, replacement_handoff FROM suplex_task_sessions WHERE task_id = ?1 AND kind = 'worker' AND advisor_role IS ?2 AND is_current = 1 ORDER BY generation DESC LIMIT 1",
-                params![task_id, advisor_role],
-                |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?, row.get::<_, Option<String>>(2)?, row.get::<_, Option<String>>(3)?, row.get::<_, Option<String>>(4)?)),
-            ).optional()?
-        };
-        let repeated = state.agent_selections.as_ref().and_then(|selections| selections.get(&request.role)) == Some(&intent);
-        if root && repeated && root_session_id.is_some() && state.initial_root_selection_session_id == root_session_id {
-            return Ok(());
-        }
-        if !root && repeated && previous_profile.profile_id == request.profile_id {
-            return Ok(());
-        }
-        if root && (root_session_id.is_some() || previous_profile.profile_id != request.expected_profile_id) {
-            return Err(conflict(coordinator_changed));
-        }
-        if !root && (previous_profile.profile_id != request.expected_profile_id || current.as_ref().map(|current| &current.0) != request.expected_session_id.as_ref()) {
-            return Err(conflict("The agent changed. Read the current agent before selecting another."));
-        }
-        if request.resume && (status != TaskStatus::WaitingHuman || question_id != request.question_id || pending_decision) {
-            return Err(conflict("Answer the current task decision before resuming."));
-        }
-        let profile = read_profile(database, &request.profile_id, if request.role == "worker" { "worker" } else { "root" })?
-            .ok_or_else(|| conflict(if root { "The selected Coordinator profile does not exist." } else { "The selected agent profile does not exist." }))?;
-        let configuration: Value = serde_json::from_str(&configuration)?;
-        let policy: Option<ProjectProviderPolicy> = serde_json::from_value(configuration["providerPolicy"].clone())?;
-        if !allowed_profile(policy.as_ref(), &profile) {
-            return Err(conflict("Select an agent with a provider and login allowed by this project"));
-        }
-        let profile_json = serde_json::to_string(&profile)?;
-        let insert_turn = |database: &SuplexDatabase, session_id: &str, generation: i64, prompt: &str| -> DatabaseResult<()> {
-            database.connection().execute(
-                "INSERT INTO suplex_task_turns (id, task_id, session_id, generation, prompt_hash, prompt_text, status, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'pending_prompt', ?7, ?7)",
-                params![root_session_store::new_turn_id(now)?, task_id, session_id, generation, hash(prompt), prompt, time],
-            )?;
-            Ok(())
-        };
-        let next_generation = |database: &SuplexDatabase, kind: &str| -> DatabaseResult<i64> {
-            Ok(database.connection().query_row(
-                "SELECT COALESCE(MAX(generation), 0) + 1 FROM suplex_task_sessions WHERE task_id = ?1 AND kind = ?2",
-                params![task_id, kind],
-                |row| row.get(0),
-            )?)
-        };
-        let pending_question = question.as_ref().map(|text| format!(
-            "Question {} remains unanswered: {text}\nOptions: {}",
-            question_id.as_deref().unwrap_or(""),
-            question_options.as_deref().unwrap_or("[]"),
-        ));
-        let direction = (!request.direction.is_empty())
-            .then(|| format!("Additional direction from the user:\n{}", request.direction));
-        let mut replacement = None;
-        if root {
-            let id = Uuid::new_v4().to_string();
-            let generation = next_generation(database, "root")?;
-            database.connection().execute(
-                "INSERT INTO suplex_task_sessions (id, task_id, kind, generation, is_current, lifecycle, profile_json, created_at, updated_at) VALUES (?1, ?2, 'root', ?3, 1, 'reserved', ?4, ?5, ?5)",
-                params![id, task_id, generation, profile_json, time],
-            )?;
-            database.connection().execute(
-                "UPDATE suplex_task_controls SET root_session_id = ?1, root_profile_json = ?2 WHERE task_id = ?3",
-                params![id, profile_json, task_id],
-            )?;
-            state.initial_root_selection_session_id = Some(id.clone());
-            let prompt = match &direction {
-                Some(direction) => format!("{initial}\n\n{direction}"),
-                None => initial.clone(),
-            };
-            insert_turn(database, &id, generation, &prompt)?;
-            if direction.is_some() || pending_question.is_some() {
-                let note = format!("Human note:\n{}", [direction.clone(), pending_question.clone()].into_iter().flatten().collect::<Vec<_>>().join("\n\n"));
-                insert_turn(database, &id, generation, &note)?;
-            }
-        } else {
-            database.connection().execute(
-                "UPDATE suplex_task_sessions SET profile_json = ?1 WHERE task_id = ?2 AND kind = 'worker' AND advisor_role IS ?3 AND profile_json IS NULL",
-                params![serde_json::to_string(&previous_profile)?, task_id, advisor_role],
-            )?;
-            if let Some((current_id, current_generation, slot, session_input, inherited)) = &current {
-                let latest = database.connection().query_row(
-                    "SELECT status, terminal_observation, prompt_text, workflow_input_json FROM suplex_task_turns WHERE session_id = ?1 AND generation = ?2 ORDER BY created_at DESC, id DESC LIMIT 1",
-                    params![current_id, current_generation],
-                    |row| Ok((row.get::<_, TurnStatus>(0)?, row.get::<_, Option<String>>(1)?, row.get::<_, String>(2)?, row.get::<_, Option<String>>(3)?)),
-                ).optional()?;
-                if let Some((turn_status, observation, assignment, turn_input)) = latest {
-                    let outcome = observation.as_deref().and_then(|raw| serde_json::from_str::<Value>(raw).ok());
-                    let successful = turn_status == TurnStatus::Completed && outcome.as_ref().is_some_and(|outcome| {
-                        outcome["state"] == "completed"
-                            && advisor_role.is_none_or(|role| outcome["advisor"]["role"] == role && !outcome["advisor"]["result"].is_null())
-                    });
-                    if !successful {
-                        let inherited = inherited.clone().unwrap_or_default();
-                        let suffix = format!("\n\nFresh Worker handoff:\n{inherited}");
-                        let base = if !inherited.is_empty() { assignment.strip_suffix(&suffix).unwrap_or(&assignment) } else { &assignment };
-                        let handoff = [Some(inherited.clone()).filter(|text| !text.is_empty()), direction.clone(), Some("Continue the preserved assignment. Inspect current work and evidence before changing it.".to_owned())].into_iter().flatten().collect::<Vec<_>>().join("\n\n");
-                        let prompt = format!("{base}\n\nFresh Worker handoff:\n{handoff}");
-                        let id = Uuid::new_v4().to_string();
-                        let generation = next_generation(database, "worker")?;
-                        let input = turn_input.or_else(|| session_input.clone());
-                        database.connection().execute(
-                            "UPDATE suplex_task_sessions SET is_current = 0, lifecycle = 'cancelled', stop_requested_at = ?1, stopped_at = NULL, updated_at = ?1 WHERE id = ?2",
-                            params![time, current_id],
-                        )?;
-                        database.connection().execute(
-                            "UPDATE suplex_task_turns SET status = 'cancelled', updated_at = ?1 WHERE session_id = ?2 AND status IN ('pending_prompt', 'prompted', 'unknown')",
-                            params![time, current_id],
-                        )?;
-                        database.connection().execute(
-                            "INSERT INTO suplex_task_sessions (id, task_id, kind, generation, is_current, lifecycle, assignment_hash, advisor_role, delegate_slot, workflow_input_json, profile_json, replaces_session_id, replacement_reason, replacement_handoff, created_at, updated_at) VALUES (?1, ?2, 'worker', ?3, 1, 'reserved', ?4, ?11, ?5, ?6, ?7, ?8, 'User selected a new agent', ?9, ?10, ?10)",
-                            params![id, task_id, generation, hash(&prompt), slot.as_deref().unwrap_or("delegate"), input, profile_json, current_id, handoff, time, advisor_role],
-                        )?;
-                        database.connection().execute(
-                            "INSERT INTO suplex_task_turns (id, task_id, session_id, generation, assignment_hash, prompt_hash, prompt_text, status, workflow_input_json, created_at, updated_at) VALUES (?1, ?2, ?3, ?4, ?5, ?5, ?6, 'pending_prompt', ?7, ?8, ?8)",
-                            params![root_session_store::new_turn_id(now)?, task_id, id, generation, hash(&prompt), prompt, input, time],
-                        )?;
-                        if advisor_role.is_none() || worker_session_id.as_ref() == Some(current_id) {
-                            database.connection().execute(
-                                "UPDATE suplex_task_controls SET worker_session_id = ?1 WHERE task_id = ?2",
-                                params![id, task_id],
-                            )?;
-                        }
-                        replacement = Some(id);
-                    }
-                }
-            }
-            match advisor_role {
-                None => database.connection().execute(
-                    "UPDATE suplex_task_controls SET worker_profile_json = ?1 WHERE task_id = ?2",
-                    params![profile_json, task_id],
-                )?,
-                Some(role) => {
-                    advisors[role] = serde_json::to_value(&profile)?;
-                    database.connection().execute(
-                        "UPDATE suplex_task_controls SET advisor_profiles_json = ?1 WHERE task_id = ?2",
-                        params![crate::shared::js_json::stringify(&advisors), task_id],
-                    )?
-                }
-            };
-            let live_root = database.connection().query_row(
-                "SELECT id, generation FROM suplex_task_sessions WHERE id = ?1 AND task_id = ?2 AND kind = 'root' AND is_current = 1",
-                params![root_session_id, task_id],
-                |row| Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?)),
-            ).optional()?;
-            let (root_id, root_generation) = match live_root {
-                Some(root) => root,
-                None => {
-                    let id = Uuid::new_v4().to_string();
-                    let generation = next_generation(database, "root")?;
-                    database.connection().execute(
-                        "INSERT INTO suplex_task_sessions (id, task_id, kind, generation, is_current, lifecycle, profile_json, created_at, updated_at) VALUES (?1, ?2, 'root', ?3, 1, 'reserved', ?4, ?5, ?5)",
-                        params![id, task_id, generation, root_profile, time],
-                    )?;
-                    database.connection().execute(
-                        "UPDATE suplex_task_controls SET root_session_id = ?1 WHERE task_id = ?2",
-                        params![id, task_id],
-                    )?;
-                    insert_turn(database, &id, generation, &initial)?;
-                    (id, generation)
-                }
-            };
-            let note = [
-                Some(format!("The user selected {} profile {}.", advisor_role.map_or("Worker", workflows::advisor_label), request.profile_id)),
-                direction.clone(),
-                pending_question.clone(),
-                Some(match &replacement {
-                    Some(id) => format!("Continue with replacement session {id} and the preserved assignment."),
-                    None => "Use this selection for future assignments. Do not repeat completed work.".to_owned(),
-                }),
-            ].into_iter().flatten().collect::<Vec<_>>().join("\n\n");
-            insert_turn(database, &root_id, root_generation, &format!("Human note:\n{note}"))?;
-        }
-        state.agent_selections.get_or_insert_default().insert(request.role.clone(), intent);
-        database.connection().execute(
-            "UPDATE suplex_task_controls SET workflow_state_json = ?1, status = CASE WHEN ?2 THEN 'active' ELSE status END, status_changed_at = CASE WHEN ?2 THEN ?3 ELSE status_changed_at END, human_question = CASE WHEN ?2 THEN NULL ELSE human_question END, human_question_id = CASE WHEN ?2 THEN NULL ELSE human_question_id END, human_question_options_json = CASE WHEN ?2 THEN '[]' ELSE human_question_options_json END, wake_at = CASE WHEN ?2 OR status = 'active' THEN ?3 ELSE wake_at END, updated_at = ?3 WHERE task_id = ?4",
-            params![crate::shared::js_json::stringify(&serde_json::to_value(&state)?), request.resume, time, task_id],
-        )?;
-        Ok(())
-    })?;
+    let intent = AgentSelection {
+        role: request.role.clone(),
+        expected_profile_id: request.expected_profile_id.clone(),
+        expected_session_id: request.expected_session_id.clone(),
+        profile_id: request.profile_id.clone(),
+        direction: request.direction.clone(),
+        resume: request.resume,
+        question_id: request.question_id.clone().filter(|_| request.resume),
+    };
+    if request.role == "root" {
+        root_session_store::select_initial_root(database, task_id, &intent, now)?;
+    } else {
+        root_session_store::select_delegate(database, task_id, &intent, now)?;
+    }
     let id = task_id.to_owned();
     database.after_commit(move || wake(id));
     require_user_task(database, actor_user_id, task_id)
@@ -1020,62 +697,14 @@ pub fn set_user_task_dependencies(
     for dependency in &request.depends_on {
         require_user_task(database, actor_user_id, dependency)?;
     }
-    let mut depends_on = request.depends_on.clone();
-    depends_on.sort();
-    depends_on.dedup();
-    if depends_on.iter().any(|dependency| dependency == task_id) {
-        return Err(TaskError::new("A task cannot depend on itself", 422).into());
-    }
-    let time = rfc3339_millis(now);
-    database.transaction(true, |database| {
-        for dependency in &depends_on {
-            let company: Option<String> = database
-                .connection()
-                .query_row(
-                    "SELECT company_id FROM suplex_tasks WHERE id = ?1",
-                    [dependency],
-                    |row| row.get(0),
-                )
-                .optional()?;
-            if company.as_deref() != Some(task.company_id.as_str()) {
-                return Err(TaskError::new(
-                    "A dependency task is not available",
-                    404,
-                ).into());
-            }
-        }
-        database.connection().execute(
-            "DELETE FROM suplex_task_dependencies WHERE task_id = ?1",
-            [task_id],
-        )?;
-        for dependency in &depends_on {
-            database.connection().execute(
-                "INSERT INTO suplex_task_dependencies (task_id, depends_on_task_id, created_at) VALUES (?1, ?2, ?3)",
-                params![task_id, dependency, time],
-            )?;
-        }
-        // Walking the edges from this task back to itself proves a cycle.
-        let mut seen = std::collections::HashSet::new();
-        let mut queue = depends_on.clone();
-        while let Some(next) = queue.pop() {
-            if next == task_id {
-                return Err(TaskError::new(
-                    "The dependency creates a cycle",
-                    422,
-                ).into());
-            }
-            if !seen.insert(next.clone()) {
-                continue;
-            }
-            let mut statement = database.connection().prepare(
-                "SELECT depends_on_task_id FROM suplex_task_dependencies WHERE task_id = ?1",
-            )?;
-            for edge in statement.query_map([&next], |row| row.get::<_, String>(0))? {
-                queue.push(edge?);
-            }
-        }
-        Ok(())
-    })?;
+    super::dependencies::replace(
+        database,
+        task_id,
+        &task.company_id,
+        &request.depends_on,
+        now,
+        false,
+    )?;
     // Replace every prerequisite before a queued task is considered for admission.
     database.transaction(true, |database| {
         pull_request_dependencies::replace(database, task_id, pull_requests)?;
@@ -1404,7 +1033,12 @@ pub fn update_user_task_details(
         let mut normalized = Map::new();
         normalized.insert(
             "workflow".into(),
-            json!(input.workflow.as_deref().unwrap_or(&current.workflow)),
+            json!(
+                input
+                    .workflow
+                    .map(|workflow| workflow.as_str())
+                    .unwrap_or(&current.workflow)
+            ),
         );
         normalized.insert(
             "advisorProfileIds".into(),
@@ -1676,7 +1310,7 @@ mod tests {
             .unwrap()
             .task;
         let target = |delivery_target: &str| TaskContinueDeliveryBody {
-            delivery_target: delivery_target.into(),
+            delivery_target: DeliveryTarget::parse(delivery_target).unwrap(),
         };
         let wakes = Arc::new(AtomicUsize::new(0));
         let run = |database: &mut SuplexDatabase, delivery_target: &str| {
@@ -2007,7 +1641,16 @@ mod tests {
         );
         assert!(rows.turns.iter().any(|turn| turn.prompt_text
             == "Human note:\nThe user selected Worker profile alternate-worker.\n\nUse this selection for future assignments. Do not repeat completed work."));
-        select(&mut database, worker).unwrap();
+        for pane in [Some("obsolete-pane"), None, Some("recreated-pane")] {
+            database
+                .connection()
+                .execute(
+                    "UPDATE suplex_task_sessions SET pane_id = ?1 WHERE task_id = ?2",
+                    params![pane, task.id],
+                )
+                .unwrap();
+            select(&mut database, worker.clone()).unwrap();
+        }
         assert_eq!(
             root_session_store::root_observation_rows(&database, &task.id)
                 .unwrap()

@@ -13,7 +13,6 @@ use axum::{
     response::{IntoResponse, Response},
     routing::get,
 };
-use rusqlite::OptionalExtension;
 use serde_json::json;
 
 use crate::{
@@ -22,7 +21,6 @@ use crate::{
         contracts::typed::{self, tasks as task_contracts},
         validation,
     },
-    identity::companies,
     platform::database::SuplexDatabase,
     tasks::timeline::{self, SavedTimeline, TimelineResponse},
 };
@@ -51,16 +49,7 @@ fn scoped(
     user_id: &str,
     task_id: &str,
 ) -> Result<(SavedTimeline, PathBuf), Box<dyn Error>> {
-    let company_id: Option<String> = database
-        .connection()
-        .query_row(
-            "SELECT company_id FROM suplex_tasks WHERE id = ?1",
-            [task_id],
-            |row| row.get(0),
-        )
-        .optional()?;
-    let company_id = company_id.ok_or_else(TaskError::not_found)?;
-    companies::require_company_access(database, user_id, &company_id)?;
+    crate::tasks::authorize_task(database, user_id, task_id)?;
     let saved = timeline::read_saved(database, task_id)?.ok_or_else(TaskError::not_found)?;
     let database_path = PathBuf::from(
         database
@@ -72,19 +61,7 @@ fn scoped(
 }
 
 fn recheck(database: &SuplexDatabase, user_id: &str, task_id: &str) -> Result<(), Box<dyn Error>> {
-    let company_id: Option<String> = database
-        .connection()
-        .query_row(
-            "SELECT company_id FROM suplex_tasks WHERE id = ?1",
-            [task_id],
-            |row| row.get(0),
-        )
-        .optional()?;
-    companies::require_company_access(
-        database,
-        user_id,
-        &company_id.ok_or_else(TaskError::not_found)?,
-    )?;
+    crate::tasks::authorize_task(database, user_id, task_id)?;
     Ok(())
 }
 

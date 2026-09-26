@@ -1,7 +1,7 @@
 import { expect, test } from "vitest";
 
-import type { HealthCheck } from "../src/platform/health.js";
-import type { ProviderSummary } from "../src/http/contracts/providers.js";
+import type { HealthCheck } from "../src/frontend/contracts/health.js";
+import type { ProviderSummary } from "../src/frontend/contracts/providers.js";
 import type { ApiProfile, OnboardingState } from "../src/frontend/features/onboarding/onboarding.js";
 import { connectedProviders, stepComplete } from "../src/frontend/features/onboarding/onboarding.js";
 

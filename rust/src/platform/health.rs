@@ -418,3 +418,35 @@ pub fn provider_context(
     }
     Ok(providers)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn malformed_tailnet_observations_and_unreadable_storage_are_not_healthy() {
+        for raw in [
+            "not-json",
+            r#"{"Self":{"DNSName":4}}"#,
+            r#"{"Self":{"DNSName":"private-host.example.com"}}"#,
+            "{}",
+        ] {
+            assert_eq!(tailscale_hostname(raw.as_bytes()), None);
+        }
+        assert_eq!(disk_check(None, None, Some(1.0))["status"], "warning");
+        let directory = std::env::temp_dir();
+        assert_eq!(
+            disk_check(Some(&directory), Some(&directory), None)["status"],
+            "warning"
+        );
+        let unavailable = DatabaseHealth {
+            wal_mode: true,
+            schema_state: SchemaState::Locked,
+            expected_migrations: 1,
+            applied_migrations: 1,
+            readable: true,
+            writable: false,
+        };
+        assert_eq!(database_check(unavailable)["status"], "unhealthy");
+    }
+}

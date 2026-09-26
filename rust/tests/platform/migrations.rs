@@ -45,6 +45,126 @@ mod migration_regressions {
     }
 
     #[test]
+    fn health_preserves_schema_evidence_across_ledger_and_write_failures() {
+        let filename =
+            std::env::temp_dir().join(format!("suplex-db-health-{}.sqlite", uuid::Uuid::new_v4()));
+        let database = SuplexDatabase::open(&filename, OpenMode::Migrate).unwrap();
+        let baseline = database.schema_status().unwrap().applied;
+        let restore = || {
+            database
+                .connection
+                .execute("DELETE FROM __drizzle_migrations", [])
+                .unwrap();
+            for migration in &baseline {
+                database
+                    .connection
+                    .execute(
+                        "INSERT INTO __drizzle_migrations (hash,created_at) VALUES (?1,?2)",
+                        params![migration.hash, migration.created_at],
+                    )
+                    .unwrap();
+            }
+        };
+        for (sql, state, count) in [
+            ("DELETE FROM __drizzle_migrations", SchemaState::Behind, 0),
+            (
+                "DELETE FROM __drizzle_migrations WHERE created_at = (SELECT max(created_at) FROM __drizzle_migrations)",
+                SchemaState::Behind,
+                baseline.len() - 1,
+            ),
+            (
+                "INSERT INTO __drizzle_migrations (hash,created_at) SELECT 'future',max(created_at)+1 FROM __drizzle_migrations",
+                SchemaState::Ahead,
+                baseline.len() + 1,
+            ),
+            (
+                "DELETE FROM __drizzle_migrations WHERE created_at = (SELECT created_at FROM __drizzle_migrations ORDER BY created_at LIMIT 1 OFFSET 1)",
+                SchemaState::Partial,
+                baseline.len() - 1,
+            ),
+            (
+                "UPDATE __drizzle_migrations SET hash='corrupt' WHERE created_at = (SELECT min(created_at) FROM __drizzle_migrations)",
+                SchemaState::Corrupt,
+                baseline.len(),
+            ),
+        ] {
+            restore();
+            database.connection.execute_batch(sql).unwrap();
+            let health = database.health();
+            assert_eq!(health.schema_state, state, "{sql}");
+            assert_eq!(health.expected_migrations, baseline.len());
+            assert_eq!(health.applied_migrations, count);
+            assert!(health.readable && health.writable);
+        }
+        restore();
+        database
+            .connection
+            .execute_batch("PRAGMA journal_mode=DELETE")
+            .unwrap();
+        let health = database.health();
+        assert_eq!(health.schema_state, SchemaState::Current);
+        assert!(!health.wal_mode);
+        database
+            .connection
+            .execute_batch("PRAGMA journal_mode=WAL; PRAGMA busy_timeout=1")
+            .unwrap();
+        let lock = Connection::open(&filename).unwrap();
+        lock.execute_batch("BEGIN IMMEDIATE").unwrap();
+        let health = database.health();
+        assert_eq!(health.schema_state, SchemaState::Locked);
+        assert_eq!(health.applied_migrations, baseline.len());
+        assert!(health.readable && !health.writable);
+        lock.execute_batch("ROLLBACK").unwrap();
+        drop(lock);
+        database
+            .connection
+            .execute_batch("PRAGMA query_only=ON")
+            .unwrap();
+        let health = database.health();
+        assert_eq!(health.schema_state, SchemaState::Current);
+        assert!(health.readable && !health.writable);
+        drop(database);
+        fs::remove_file(filename).unwrap();
+    }
+
+    #[test]
+    fn read_only_diagnostics_never_create_or_migrate_a_database() {
+        let filename =
+            std::env::temp_dir().join(format!("suplex-db-health-{}.sqlite", uuid::Uuid::new_v4()));
+        assert!(SuplexDatabase::open(&filename, OpenMode::ReadOnly).is_err());
+        assert!(!filename.exists());
+        Connection::open(&filename)
+            .unwrap()
+            .execute_batch("CREATE TABLE existing_data (id INTEGER PRIMARY KEY)")
+            .unwrap();
+        let database = SuplexDatabase::open(&filename, OpenMode::ReadOnly).unwrap();
+        assert_eq!(database.schema_status().unwrap().state, SchemaState::Behind);
+        assert_eq!(
+            rows(
+                &database,
+                "SELECT name FROM sqlite_master WHERE type='table' ORDER BY name"
+            ),
+            json!([{"name":"existing_data"}])
+        );
+        assert!(database.health().readable && !database.health().writable);
+        drop(database);
+        let database = SuplexDatabase::open(&filename, OpenMode::Migrate).unwrap();
+        database.connection.execute("DELETE FROM __drizzle_migrations WHERE created_at=(SELECT max(created_at) FROM __drizzle_migrations)", []).unwrap();
+        drop(database);
+        let database = SuplexDatabase::open(&filename, OpenMode::ReadOnly).unwrap();
+        let status = database.schema_status().unwrap();
+        assert_eq!(status.state, SchemaState::Behind);
+        assert_eq!(status.applied.len(), status.expected.len() - 1);
+        assert!(database.health().readable && !database.health().writable);
+        assert_eq!(
+            database.schema_status().unwrap().applied.len(),
+            status.applied.len()
+        );
+        drop(database);
+        fs::remove_file(filename).unwrap();
+    }
+
+    #[test]
     fn accepts_legacy_journal_and_applies_missing_older_migrations() {
         let older = EmbeddedFile {
             name: "20260812120000000_older.sql",

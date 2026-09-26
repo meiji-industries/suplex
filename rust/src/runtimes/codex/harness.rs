@@ -197,8 +197,8 @@ impl TaskHarness for CodexTaskRuntime {
         recover_headless_dispatch(directory, generation)?;
         self.observe(
             SessionRef {
-                directory: directory,
-                native_session_id: native_session_id,
+                directory,
+                native_session_id,
             },
             turn_id,
             DispatchState::NotSubmitted,

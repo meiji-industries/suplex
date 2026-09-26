@@ -379,6 +379,200 @@ pub fn advisor_result_wake(
     .replacen("  ", " ", 1)
 }
 
+pub(crate) fn without_current_dependency_status(prompt: &str) -> &str {
+    const PREFIX: &str = "\n\n[Suplex prerequisite status]\nCurrent prerequisites: ";
+    const SUFFIX: &str = ". Prerequisites constrain delivery ordering. Suplex resumes native work when all are delivered. Observe actual Git and GitHub state before integration.\n[/Suplex prerequisite status]";
+    let Some(start) = prompt.rfind(PREFIX) else {
+        return prompt;
+    };
+    let generated = &prompt[start + PREFIX.len()..];
+    if generated.len() > SUFFIX.len() && generated.ends_with(SUFFIX) {
+        &prompt[..start]
+    } else {
+        prompt
+    }
+}
+
+pub const IDLE_ROOT_PROMPT: &str = "Observe the current task, worktree, and GitHub state and continue toward the delivery target. Adopt out-of-band progress. If checks or another external operation are pending, report what you are waiting for. Ask a specific human question only if a necessary decision or external failure requires it.";
+
+/// TypeScript `withCurrentDependencyStatus`.
+pub fn with_current_dependency_status(prompt: &str, dependencies: &[DependencyRow]) -> String {
+    let base = without_current_dependency_status(prompt);
+    if dependencies.is_empty() {
+        return base.to_owned();
+    }
+    let list = dependencies
+        .iter()
+        .map(DependencyRow::describe)
+        .collect::<Vec<_>>()
+        .join(", ");
+    format!(
+        "{base}\n\n[Suplex prerequisite status]\nCurrent prerequisites: {list}. Prerequisites constrain delivery ordering. Suplex resumes native work when all are delivered. Observe actual Git and GitHub state before integration.\n[/Suplex prerequisite status]"
+    )
+}
+
+use super::advisor_bridge::AdvisorRole;
+pub(crate) fn worker_replacement_prompt(
+    reason: &str,
+    handoff: Option<&String>,
+    latest_result: Option<&str>,
+    previous_handoff: Option<&str>,
+    assignment_prompt: &str,
+) -> (String, String) {
+    let result = latest_result
+        .and_then(|raw| serde_json::from_str::<Value>(raw).ok())
+        .and_then(|value| value["text"].as_str().map(ToOwned::to_owned))
+        .unwrap_or_else(|| {
+            if latest_result.is_some() {
+                String::new()
+            } else {
+                "No completed Worker result exists.".into()
+            }
+        });
+    let result_units = result.encode_utf16().collect::<Vec<_>>();
+    let excerpt =
+        String::from_utf16_lossy(&result_units[result_units.len().saturating_sub(12_000)..]);
+    let handoff = [
+            format!("Reason for replacement: {}", reason),
+            handoff.filter(|text| !text.is_empty()).map(|text| format!("Additional direction:\n{text}")).unwrap_or_default(),
+            format!("Latest Worker result (verify its claims against source and command evidence):\n{excerpt}"),
+            "Inspect the preserved worktree, branch, and current Git status. Preserve existing commits and uncommitted work. Finish the remaining assignment and its checks. Report exact verification and the resulting commit. Use a different approach if the previous attempts did not advance the assignment.".into(),
+        ].into_iter().filter(|text| !text.is_empty()).collect::<Vec<_>>().join("\n\n");
+    let previous_suffix = previous_handoff.map(|text| format!("\n\nFresh Worker handoff:\n{text}"));
+    let saved_assignment = previous_suffix
+        .as_deref()
+        .and_then(|suffix| assignment_prompt.strip_suffix(suffix))
+        .unwrap_or(assignment_prompt);
+    let prompt = format!("{saved_assignment}\n\nFresh Worker handoff:\n{handoff}");
+    (handoff, prompt)
+}
+fn js_suffix(text: &str, size: usize) -> String {
+    let units = text.encode_utf16().collect::<Vec<_>>();
+    String::from_utf16_lossy(&units[units.len().saturating_sub(size)..])
+}
+
+fn outcome_text_owned(observation: &str) -> String {
+    serde_json::from_str::<Value>(observation)
+        .ok()
+        .and_then(|value| {
+            value
+                .get("text")
+                .and_then(Value::as_str)
+                .map(ToOwned::to_owned)
+        })
+        .unwrap_or_else(|| observation.to_owned())
+}
+
+pub(crate) fn replacement_delegates(rows: &super::persistence::RootObservationRows) -> String {
+    rows.sessions
+        .iter()
+        .filter(|session| session.kind == SessionKind::Worker && session.current)
+        .map(|session| {
+            let id = &session.id;
+            // TypeScript `ORDER BY created_at DESC, id DESC LIMIT 1`; the rows are in that order ascending.
+            let latest = rows.turns.iter().rfind(|turn| turn.session_id == *id);
+            let assignment = latest.map_or("", |turn| turn.prompt_text.as_str());
+            let result = latest.and_then(|turn| turn.terminal_observation.as_deref());
+            format!(
+                "Session {id}, {}, {}. Latest assignment/turn {} ({}):\n{}\nLatest result: {}",
+                session.advisor_role.map_or("Worker", AdvisorRole::as_str),
+                session.lifecycle,
+                latest.map_or("none", |turn| turn.id.as_str()),
+                latest.map_or("none", |turn| turn.status.as_str()),
+                js_suffix(assignment, 5000),
+                result
+                    .map(|raw| js_suffix(&outcome_text_owned(raw), 4000))
+                    .unwrap_or_else(|| "pending".into())
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n\n")
+}
+pub(crate) fn replacement_outcome(raw: &str) -> String {
+    js_suffix(&outcome_text_owned(raw), 3000)
+}
+pub(crate) struct CoordinatorHandoff<'a> {
+    pub status: TaskStatus,
+    pub worktree: Option<&'a str>,
+    pub pull_request: Option<&'a str>,
+    pub workflow_state: &'a str,
+    pub pending_question: String,
+    pub messages: &'a [String],
+    pub earlier_directions: String,
+    pub delegates: String,
+    pub outcomes: String,
+    pub handoff: &'a str,
+}
+pub(crate) fn coordinator_replacement_prompt(
+    initial_prompt: &str,
+    input: CoordinatorHandoff<'_>,
+) -> (String, String) {
+    let CoordinatorHandoff {
+        status,
+        worktree,
+        pull_request,
+        workflow_state,
+        pending_question,
+        messages,
+        earlier_directions,
+        delegates,
+        outcomes,
+        handoff,
+    } = input;
+    let handoff_text = [
+            "Fresh Coordinator handoff. Continue this task from current authoritative Git, GitHub, native session, and task state. Do not replay an admitted old turn. Continue existing delegates and do not repeat completed assignments.".into(),
+            format!("Current task state: {status}. Worktree: {}. Pull request: {}. Workflow state: {}.",worktree.unwrap_or("none"),pull_request.unwrap_or("none"),workflow_state),
+            pending_question,
+            format!("Previously accepted human answers and notes, in order:\n{}",if messages.is_empty() { "None recorded.".into() } else { messages.join("\n\n") }),
+            format!("Earlier additional directions from the user, in order:\n{}",if earlier_directions.is_empty() { "None recorded.".into() } else { earlier_directions }),
+            format!("Current delegate assignments and results:\n{}",if delegates.is_empty() { "No current delegates.".into() } else { delegates }),
+            format!("Recent Coordinator outcomes:\n{}",if outcomes.is_empty() { "None recorded.".into() } else { outcomes }),
+            if handoff.is_empty() { String::new() } else { format!("Additional direction from the user:\n{handoff}") },
+        ].into_iter().filter(|part| !part.is_empty()).collect::<Vec<_>>().join("\n\n");
+    let prompt = format!("{initial_prompt}\n\n{handoff_text}");
+    (handoff_text, prompt)
+}
+
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub(crate) struct PendingQuestion {
+    pub id: String,
+    pub text: String,
+    pub options: Value,
+}
+
+pub(crate) fn pending_replacement_questions(
+    unanswered: &[PendingQuestion],
+    resume: bool,
+    status: TaskStatus,
+) -> String {
+    if unanswered.is_empty() {
+        String::new()
+    } else {
+        let items = unanswered
+            .iter()
+            .map(|pending| {
+                format!(
+                    "Question {}:\n{}\nOptions: {}",
+                    pending.id,
+                    pending.text,
+                    js_json::stringify(&pending.options)
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("\n\n");
+        let guidance = if resume {
+            "The user authorized resuming with a new Coordinator. Resolve a provider failure if possible; ask the user if a real decision is still necessary."
+        } else if status == TaskStatus::WaitingHuman {
+            "The task stays paused until the user answers its current decision."
+        } else {
+            "The task is active. Reassess these questions and ask the user if a decision is still necessary."
+        };
+        format!(
+            "Questions without an accepted answer:\n{items}\nThese questions have NOT been answered. {guidance}"
+        )
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -617,201 +811,4 @@ mod tests {
             assert_eq!(actual, expected);
         }
     }
-}
-
-pub(crate) fn without_current_dependency_status(prompt: &str) -> &str {
-    const PREFIX: &str = "\n\n[Suplex prerequisite status]\nCurrent prerequisites: ";
-    const SUFFIX: &str = ". Prerequisites constrain delivery ordering. Suplex resumes native work when all are delivered. Observe actual Git and GitHub state before integration.\n[/Suplex prerequisite status]";
-    let Some(start) = prompt.rfind(PREFIX) else {
-        return prompt;
-    };
-    let generated = &prompt[start + PREFIX.len()..];
-    if generated.len() > SUFFIX.len() && generated.ends_with(SUFFIX) {
-        &prompt[..start]
-    } else {
-        prompt
-    }
-}
-
-pub const IDLE_ROOT_PROMPT: &str = "Observe the current task, worktree, and GitHub state and continue toward the delivery target. Adopt out-of-band progress. If checks or another external operation are pending, report what you are waiting for. Ask a specific human question only if a necessary decision or external failure requires it.";
-
-/// TypeScript `withCurrentDependencyStatus`.
-pub fn with_current_dependency_status(prompt: &str, dependencies: &[DependencyRow]) -> String {
-    let base = without_current_dependency_status(prompt);
-    if dependencies.is_empty() {
-        return base.to_owned();
-    }
-    let list = dependencies
-        .iter()
-        .map(DependencyRow::describe)
-        .collect::<Vec<_>>()
-        .join(", ");
-    format!(
-        "{base}\n\n[Suplex prerequisite status]\nCurrent prerequisites: {list}. Prerequisites constrain delivery ordering. Suplex resumes native work when all are delivered. Observe actual Git and GitHub state before integration.\n[/Suplex prerequisite status]"
-    )
-}
-
-use super::advisor_bridge::AdvisorRole;
-pub(crate) fn worker_replacement_prompt(
-    reason: &str,
-    handoff: Option<&String>,
-    latest_result: Option<&str>,
-    previous_handoff: Option<&str>,
-    assignment_prompt: &str,
-) -> (String, String) {
-    let result = latest_result
-        .and_then(|raw| serde_json::from_str::<Value>(raw).ok())
-        .and_then(|value| value["text"].as_str().map(ToOwned::to_owned))
-        .unwrap_or_else(|| {
-            if latest_result.is_some() {
-                String::new()
-            } else {
-                "No completed Worker result exists.".into()
-            }
-        });
-    let result_units = result.encode_utf16().collect::<Vec<_>>();
-    let excerpt =
-        String::from_utf16_lossy(&result_units[result_units.len().saturating_sub(12_000)..]);
-    let handoff = [
-            format!("Reason for replacement: {}", reason),
-            handoff.filter(|text| !text.is_empty()).map(|text| format!("Additional direction:\n{text}")).unwrap_or_default(),
-            format!("Latest Worker result (verify its claims against source and command evidence):\n{excerpt}"),
-            "Inspect the preserved worktree, branch, and current Git status. Preserve existing commits and uncommitted work. Finish the remaining assignment and its checks. Report exact verification and the resulting commit. Use a different approach if the previous attempts did not advance the assignment.".into(),
-        ].into_iter().filter(|text| !text.is_empty()).collect::<Vec<_>>().join("\n\n");
-    let previous_suffix = previous_handoff.map(|text| format!("\n\nFresh Worker handoff:\n{text}"));
-    let saved_assignment = previous_suffix
-        .as_deref()
-        .and_then(|suffix| assignment_prompt.strip_suffix(suffix))
-        .unwrap_or(assignment_prompt);
-    let prompt = format!("{saved_assignment}\n\nFresh Worker handoff:\n{handoff}");
-    (handoff, prompt)
-}
-fn js_suffix(text: &str, size: usize) -> String {
-    let units = text.encode_utf16().collect::<Vec<_>>();
-    String::from_utf16_lossy(&units[units.len().saturating_sub(size)..])
-}
-
-fn outcome_text_owned(observation: &str) -> String {
-    serde_json::from_str::<Value>(observation)
-        .ok()
-        .and_then(|value| {
-            value
-                .get("text")
-                .and_then(Value::as_str)
-                .map(ToOwned::to_owned)
-        })
-        .unwrap_or_else(|| observation.to_owned())
-}
-
-pub(crate) fn replacement_delegates(rows: &super::persistence::RootObservationRows) -> String {
-    let text = rows
-        .sessions
-        .iter()
-        .filter(|session| session.kind == SessionKind::Worker && session.current)
-        .map(|session| {
-            let id = &session.id;
-            // TypeScript `ORDER BY created_at DESC, id DESC LIMIT 1`; the rows are in that order ascending.
-            let latest = rows.turns.iter().rfind(|turn| turn.session_id == *id);
-            let assignment = latest.map_or("", |turn| turn.prompt_text.as_str());
-            let result = latest.and_then(|turn| turn.terminal_observation.as_deref());
-            format!(
-                "Session {id}, {}, {}. Latest assignment/turn {} ({}):\n{}\nLatest result: {}",
-                session.advisor_role.map_or("Worker", AdvisorRole::as_str),
-                session.lifecycle,
-                latest.map_or("none", |turn| turn.id.as_str()),
-                latest.map_or("none", |turn| turn.status.as_str()),
-                js_suffix(assignment, 5000),
-                result
-                    .map(|raw| js_suffix(&outcome_text_owned(raw), 4000))
-                    .unwrap_or_else(|| "pending".into())
-            )
-        })
-        .collect::<Vec<_>>()
-        .join("\n\n");
-    text
-}
-pub(crate) fn replacement_outcome(raw: &str) -> String {
-    js_suffix(&outcome_text_owned(raw), 3000)
-}
-pub(crate) struct CoordinatorHandoff<'a> {
-    pub status: TaskStatus,
-    pub worktree: Option<&'a str>,
-    pub pull_request: Option<&'a str>,
-    pub workflow_state: &'a str,
-    pub pending_question: String,
-    pub messages: &'a [String],
-    pub earlier_directions: String,
-    pub delegates: String,
-    pub outcomes: String,
-    pub handoff: &'a str,
-}
-pub(crate) fn coordinator_replacement_prompt(
-    initial_prompt: &str,
-    input: CoordinatorHandoff<'_>,
-) -> (String, String) {
-    let CoordinatorHandoff {
-        status,
-        worktree,
-        pull_request,
-        workflow_state,
-        pending_question,
-        messages,
-        earlier_directions,
-        delegates,
-        outcomes,
-        handoff,
-    } = input;
-    let handoff_text = [
-            "Fresh Coordinator handoff. Continue this task from current authoritative Git, GitHub, native session, and task state. Do not replay an admitted old turn. Continue existing delegates and do not repeat completed assignments.".into(),
-            format!("Current task state: {status}. Worktree: {}. Pull request: {}. Workflow state: {}.",worktree.unwrap_or("none"),pull_request.unwrap_or("none"),workflow_state),
-            pending_question,
-            format!("Previously accepted human answers and notes, in order:\n{}",if messages.is_empty() { "None recorded.".into() } else { messages.join("\n\n") }),
-            format!("Earlier additional directions from the user, in order:\n{}",if earlier_directions.is_empty() { "None recorded.".into() } else { earlier_directions }),
-            format!("Current delegate assignments and results:\n{}",if delegates.is_empty() { "No current delegates.".into() } else { delegates }),
-            format!("Recent Coordinator outcomes:\n{}",if outcomes.is_empty() { "None recorded.".into() } else { outcomes }),
-            if handoff.is_empty() { String::new() } else { format!("Additional direction from the user:\n{handoff}") },
-        ].into_iter().filter(|part| !part.is_empty()).collect::<Vec<_>>().join("\n\n");
-    let prompt = format!("{initial_prompt}\n\n{handoff_text}");
-    (handoff_text, prompt)
-}
-
-#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
-pub(crate) struct PendingQuestion {
-    pub id: String,
-    pub text: String,
-    pub options: Value,
-}
-
-pub(crate) fn pending_replacement_questions(
-    unanswered: &[PendingQuestion],
-    resume: bool,
-    status: TaskStatus,
-) -> String {
-    let text = if unanswered.is_empty() {
-        String::new()
-    } else {
-        let items = unanswered
-            .iter()
-            .map(|pending| {
-                format!(
-                    "Question {}:\n{}\nOptions: {}",
-                    pending.id,
-                    pending.text,
-                    js_json::stringify(&pending.options)
-                )
-            })
-            .collect::<Vec<_>>()
-            .join("\n\n");
-        let guidance = if resume {
-            "The user authorized resuming with a new Coordinator. Resolve a provider failure if possible; ask the user if a real decision is still necessary."
-        } else if status == TaskStatus::WaitingHuman {
-            "The task stays paused until the user answers its current decision."
-        } else {
-            "The task is active. Reassess these questions and ask the user if a decision is still necessary."
-        };
-        format!(
-            "Questions without an accepted answer:\n{items}\nThese questions have NOT been answered. {guidance}"
-        )
-    };
-    text
 }

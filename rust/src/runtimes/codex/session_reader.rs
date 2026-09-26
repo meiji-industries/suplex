@@ -71,6 +71,7 @@ pub fn turn_evidence(directory: &Path, turn_id: &str) -> io::Result<Option<Vec<C
 mod tests {
     use super::*;
     use crate::runtimes::headless::HeadlessTurnRecord;
+    use crate::runtimes::native::session_directory;
 
     #[test]
     fn session_path_rejects_traversal_and_uses_database_installation() {
@@ -127,6 +128,3 @@ mod tests {
         assert_eq!(record.owned_identity().owner_uid, Some(501));
     }
 }
-
-#[cfg(test)]
-use crate::runtimes::native::session_directory;

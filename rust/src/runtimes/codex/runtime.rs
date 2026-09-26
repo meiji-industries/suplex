@@ -11,7 +11,7 @@ use std::path::Path;
 use super::invocation::{self, BridgeServer, Role};
 use super::thread;
 use super::transcript;
-use crate::runtimes::headless::{self, DispatchInput, HeadlessTurnRecord};
+use crate::runtimes::headless::{self, DispatchInput};
 
 fn observation(
     state: PromptState,
@@ -196,7 +196,7 @@ pub fn result_text(directory: &Path, turn_id: &str) -> io::Result<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::runtimes::headless::RecordedProcessIdentity;
+    use crate::runtimes::headless::{HeadlessTurnRecord, RecordedProcessIdentity};
     use std::fs;
 
     #[test]

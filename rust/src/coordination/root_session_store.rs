@@ -1942,8 +1942,7 @@ pub fn reopen_delivered(
     Ok(())
 }
 
-#[cfg(test)]
-include!("../../tests/coordination/store.rs");
+pub(crate) use super::persistence::new_turn_id;
 
 pub use super::persistence::{
     RootObservationRows, TaskArtifact, cancel_open_turns, insert_pending_turn,
@@ -1954,3 +1953,6 @@ pub use super::replacement::{replace_coordinator, replace_worker, worker_replace
 use super::root_prompts::without_current_dependency_status;
 pub use super::root_prompts::{IDLE_ROOT_PROMPT, with_current_dependency_status};
 pub use crate::tasks::limits::{TaskLimitUsage, answer_task_limit, reconcile_task_limit_pause};
+
+#[cfg(test)]
+include!("../../tests/coordination/store.rs");

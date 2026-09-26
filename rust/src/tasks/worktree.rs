@@ -561,6 +561,53 @@ fn has_populated_submodules(path: &Path) -> WorktreeResult<bool> {
     Ok(false)
 }
 
+fn required_path(
+    value: &serde_json::Value,
+    name: &str,
+) -> crate::platform::database::DatabaseResult<PathBuf> {
+    let raw = value[name]
+        .as_str()
+        .filter(|raw| !raw.is_empty())
+        .ok_or_else(|| crate::tasks::TaskError::internal(format!("Task {name} is missing")))?;
+    Ok(PathBuf::from(raw))
+}
+
+/// Reobserve the source Git repository and prepare the task worktree. The
+/// caller persists the returned worktree only while the task remains active.
+pub async fn prepare_task_worktree(
+    database_path: &Path,
+    task_id: &str,
+) -> crate::platform::database::DatabaseResult<WorktreeReference> {
+    let database = crate::platform::database::SuplexDatabase::open(
+        database_path,
+        crate::platform::database::OpenMode::ReadOnly,
+    )?;
+    let rows = crate::coordination::root_session_store::root_observation_rows(&database, task_id)?;
+    let configuration = &rows.context["configuration"];
+    let intent = TaskWorktreeIntent {
+        task_id: task_id.to_owned(),
+        repository_path: required_path(configuration, "repositoryPath")?,
+        worktree_root: required_path(configuration, "worktreeRoot")?,
+        branch: configuration["branch"]
+            .as_str()
+            .ok_or_else(|| crate::tasks::TaskError::internal("Task branch is missing"))?
+            .to_owned(),
+        starting_sha: configuration["startingSha"]
+            .as_str()
+            .ok_or_else(|| crate::tasks::TaskError::internal("Task starting SHA is missing"))?
+            .to_owned(),
+    };
+    let token = crate::integrations::github::Access::load()
+        .await
+        .ok()
+        .and_then(|access| access.token().map(str::to_owned));
+    tokio::task::spawn_blocking(move || {
+        prepare_local_task_worktree(&intent, token.as_deref()).map_err(|error| error.to_string())
+    })
+    .await?
+    .map_err(|error| crate::tasks::TaskError::internal(error).into())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -875,51 +922,4 @@ mod tests {
         drop(local);
         fs::remove_dir_all(root).unwrap();
     }
-}
-
-fn required_path(
-    value: &serde_json::Value,
-    name: &str,
-) -> crate::platform::database::DatabaseResult<PathBuf> {
-    let raw = value[name]
-        .as_str()
-        .filter(|raw| !raw.is_empty())
-        .ok_or_else(|| crate::tasks::TaskError::internal(format!("Task {name} is missing")))?;
-    Ok(PathBuf::from(raw))
-}
-
-/// Reobserve the source Git repository and prepare the task worktree. The
-/// caller persists the returned worktree only while the task remains active.
-pub async fn prepare_task_worktree(
-    database_path: &Path,
-    task_id: &str,
-) -> crate::platform::database::DatabaseResult<WorktreeReference> {
-    let database = crate::platform::database::SuplexDatabase::open(
-        database_path,
-        crate::platform::database::OpenMode::ReadOnly,
-    )?;
-    let rows = crate::coordination::root_session_store::root_observation_rows(&database, task_id)?;
-    let configuration = &rows.context["configuration"];
-    let intent = TaskWorktreeIntent {
-        task_id: task_id.to_owned(),
-        repository_path: required_path(configuration, "repositoryPath")?,
-        worktree_root: required_path(configuration, "worktreeRoot")?,
-        branch: configuration["branch"]
-            .as_str()
-            .ok_or_else(|| crate::tasks::TaskError::internal("Task branch is missing"))?
-            .to_owned(),
-        starting_sha: configuration["startingSha"]
-            .as_str()
-            .ok_or_else(|| crate::tasks::TaskError::internal("Task starting SHA is missing"))?
-            .to_owned(),
-    };
-    let token = crate::integrations::github::Access::load()
-        .await
-        .ok()
-        .and_then(|access| access.token().map(str::to_owned));
-    tokio::task::spawn_blocking(move || {
-        prepare_local_task_worktree(&intent, token.as_deref()).map_err(|error| error.to_string())
-    })
-    .await?
-    .map_err(|error| crate::tasks::TaskError::internal(error).into())
 }

@@ -120,12 +120,11 @@ fn task_scope(
 }
 
 fn reauthorize(
-    database_path: &Path,
+    database: &SuplexDatabase,
     authority: Authority<'_>,
     task_id: &str,
 ) -> DatabaseResult<()> {
-    let database = SuplexDatabase::open(database_path, OpenMode::ReadOnly)?;
-    task_scope(&database, authority, task_id)?;
+    task_scope(database, authority, task_id)?;
     Ok(())
 }
 
@@ -260,7 +259,8 @@ pub fn archive_task(
     task_id: &str,
     confirm_discard_dirty: bool,
 ) -> DatabaseResult<ArchiveOutcome> {
-    let database = SuplexDatabase::open(database_path, OpenMode::ReadOnly)?;
+    // No transaction stays open while native processes or Git are inspected.
+    let mut database = SuplexDatabase::open(database_path, OpenMode::ReadWrite)?;
     let (task, configuration) = task_scope(&database, authority, task_id)?;
     if in_progress(task_id) {
         return Err(failure("Archive cleanup is in progress", 409));
@@ -271,7 +271,6 @@ pub fn archive_task(
     let _guard = ArchiveGuard::acquire(task_id)?;
     let idle = archive_sessions_idle(&database, database_path, task_id).map_err(cleanup_error)?;
     let displays = displays::prepare_task_displays(&database, task_id).map_err(cleanup_error)?;
-    drop(database);
     // An idle OpenCode server still runs until its harness stops it.
     for session in &idle {
         session
@@ -279,7 +278,7 @@ pub fn archive_task(
             .stop(&session.directory, session.native_session_id.as_deref())
             .map_err(|error| cleanup_error(error.into()))?;
     }
-    reauthorize(database_path, authority, task_id)?;
+    reauthorize(&database, authority, task_id)?;
 
     let intent = TaskWorktreeIntent {
         task_id: task_id.to_owned(),
@@ -295,15 +294,14 @@ pub fn archive_task(
             .to_owned(),
     };
     let cleanup = worktree::remove_local_task_worktree(&intent, confirm_discard_dirty, || {
-        reauthorize(database_path, authority, task_id)
+        reauthorize(&database, authority, task_id)
     })
     .map_err(cleanup_error)?;
     if let WorktreeCleanup::ConfirmationRequired { dirty_file_paths } = cleanup {
         return Ok(ArchiveOutcome::ConfirmationRequired(dirty_file_paths));
     }
-    reauthorize(database_path, authority, task_id)?;
+    reauthorize(&database, authority, task_id)?;
     displays.close().map_err(cleanup_error)?;
-    let mut database = SuplexDatabase::open(database_path, OpenMode::ReadWrite)?;
     database.transaction(true, |database| {
         let (current, _) = task_scope(database, authority, task_id)?;
         if !current.status.archivable() {

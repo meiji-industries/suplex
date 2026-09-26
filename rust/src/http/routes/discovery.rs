@@ -1,6 +1,6 @@
 //! Public machine-discovery artifacts. They describe how to reach the paired-agent
-//! runtime and never carry task data, credentials, or company state. The text and
-//! catalogs are generated from TypeScript by `scripts/rust-agent-artifacts.ts`.
+//! runtime and never carry task data, credentials, or company state. The public text and
+//! catalogs live beside this module and are checked with the discovery routes.
 
 use std::sync::LazyLock;
 
@@ -18,7 +18,7 @@ use crate::{http::AppState, identity::oauth::OAuth, shared::js_json};
 const LLMS: &str = include_str!("discovery/llms.txt");
 
 fn compact(raw: &str) -> String {
-    js_json::stringify(&serde_json::from_str::<Value>(raw).expect("generated artifact is JSON"))
+    js_json::stringify(&serde_json::from_str::<Value>(raw).expect("discovery artifact is JSON"))
 }
 
 static CATALOG: LazyLock<String> =

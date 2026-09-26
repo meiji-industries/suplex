@@ -14,9 +14,9 @@ use crate::http::contracts::typed::{
     agent_api::{self, GetTaskTool, TaskCommandBody, TaskDependenciesBody, TaskTool},
 };
 
-/// Tool names, descriptions, and input schemas generated from TypeScript by `scripts/rust-agent-artifacts.ts`.
+/// Canonical tool names, descriptions, and input schemas for both transports.
 pub static TOOLS: LazyLock<Vec<Tool>> = LazyLock::new(|| {
-    serde_json::from_str(include_str!("tools.json")).expect("generated MCP tools are valid")
+    serde_json::from_str(include_str!("tools.json")).expect("MCP tools are valid")
 });
 
 pub fn tool(name: &str) -> Option<Tool> {

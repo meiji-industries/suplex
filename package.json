@@ -12,7 +12,6 @@
     "build": "sh scripts/build.sh",
     "dev": "tsx scripts/dev.ts",
     "migration:new": "tsx scripts/create-migration.ts",
-    "smoke": "tsx scripts/probe-opencode-delivery.ts",
     "typecheck": "tsc --noEmit",
     "lint": "eslint .",
     "check": "pnpm run typecheck && pnpm run lint && pnpm run test && pnpm run test:rust",

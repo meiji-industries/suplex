@@ -435,6 +435,7 @@ pub(crate) fn from_row(row: &Row<'_>) -> DatabaseResult<TaskResponse> {
 
 /// One selectable answer to a human question.
 #[derive(Debug, Clone, Serialize, Deserialize, TS)]
+#[serde(deny_unknown_fields)]
 pub struct HumanQuestionOption {
     pub label: String,
     pub description: String,

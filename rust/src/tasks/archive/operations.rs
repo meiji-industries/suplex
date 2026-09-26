@@ -10,8 +10,8 @@ use std::{
     sync::{Mutex, OnceLock},
 };
 
+use crate::tasks::response::TaskConfiguration;
 use rusqlite::params;
-use serde_json::Value;
 
 use crate::{
     identity::companies,
@@ -84,14 +84,6 @@ fn cleanup_error(error: Box<dyn std::error::Error>) -> Box<dyn std::error::Error
     }
 }
 
-fn required_path(configuration: &Value, field: &str) -> DatabaseResult<PathBuf> {
-    let value = configuration[field]
-        .as_str()
-        .filter(|value| !value.is_empty())
-        .ok_or_else(|| TaskError::internal(format!("Task {field} is missing")))?;
-    Ok(PathBuf::from(value))
-}
-
 /// Live authority over one task: a board user's company access or a paired agent's grant.
 pub type Authority<'a> = &'a (dyn Fn(&SuplexDatabase, &TaskRecord) -> DatabaseResult<()> + Sync);
 
@@ -107,7 +99,7 @@ fn task_scope(
     database: &SuplexDatabase,
     authority: Authority<'_>,
     task_id: &str,
-) -> DatabaseResult<(TaskRecord, Value)> {
+) -> DatabaseResult<(TaskRecord, TaskConfiguration)> {
     let task =
         repository::task_by_id(database, task_id)?.ok_or_else(|| failure("Not found", 404))?;
     authority(database, &task)?;
@@ -116,7 +108,10 @@ fn task_scope(
         [task_id],
         |row| row.get(0),
     )?;
-    Ok((task, serde_json::from_str(&configuration)?))
+    Ok((
+        task,
+        serde_json::from_str::<TaskConfiguration>(&configuration)?,
+    ))
 }
 
 fn reauthorize(
@@ -280,18 +275,18 @@ pub fn archive_task(
     }
     reauthorize(&database, authority, task_id)?;
 
+    if configuration.repository_path.is_empty() {
+        return Err(TaskError::internal("Task repositoryPath is missing").into());
+    }
+    if configuration.worktree_root.is_empty() {
+        return Err(TaskError::internal("Task worktreeRoot is missing").into());
+    }
     let intent = TaskWorktreeIntent {
         task_id: task_id.to_owned(),
-        repository_path: required_path(&configuration, "repositoryPath")?,
-        worktree_root: required_path(&configuration, "worktreeRoot")?,
-        branch: configuration["branch"]
-            .as_str()
-            .unwrap_or_default()
-            .to_owned(),
-        starting_sha: configuration["startingSha"]
-            .as_str()
-            .unwrap_or_default()
-            .to_owned(),
+        repository_path: PathBuf::from(&configuration.repository_path),
+        worktree_root: PathBuf::from(&configuration.worktree_root),
+        branch: configuration.branch.clone(),
+        starting_sha: configuration.starting_sha.clone(),
     };
     let cleanup = worktree::remove_local_task_worktree(&intent, confirm_discard_dirty, || {
         reauthorize(&database, authority, task_id)
@@ -376,7 +371,7 @@ mod tests {
         let task = repository::create(&mut database, &PreparedTask {
             id: task_id.clone(), company_id: "archive_company".into(), project_id: "archive_project".into(),
             title: "Archive task".into(), description: "".into(),
-            configuration: json!({"repositoryPath":repository_path,"worktreeRoot":worktree_root,"branch":"task-archive","startingSha":sha}),
+            configuration: json!({"repository":"owner/repo","baseBranch":"main","baselineSha":sha,"capturedAt":time,"repositoryPath":repository_path,"worktreeRoot":worktree_root,"branch":"task-archive","startingSha":sha}),
             idempotency_key: "archive-key".into(), request_hash: "archive-hash".into(), creator: TaskCreator::User(user.id.clone()),
             delivery_target: "pull_request_draft".into(), delivery_intent: serde_json::from_value(json!({"repository":"owner/repo","headBranch":"task","baseBranch":"main","baselineSha":"head","pullRequestNumber":null})).unwrap(), root_profile: serde_json::from_value(json!({"profileId":"profile_root","provider":"codex","model":"gpt-6-sol","reasoningLevel":"medium","serviceTier":"default"})).unwrap(), worker_profile: serde_json::from_value(json!({"profileId":"profile_root","provider":"codex","model":"gpt-6-sol","reasoningLevel":"medium","serviceTier":"default"})).unwrap(), advisor_profiles: serde_json::from_value(json!({})).unwrap(), issue: None, start_queued: false, copied_from_task_id: None, depends_on: vec![], pull_request_dependencies: vec![], workflow: crate::coordination::workflows::Workflow::Standard,
         }, now).unwrap().task;

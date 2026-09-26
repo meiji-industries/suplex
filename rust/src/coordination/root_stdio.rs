@@ -20,6 +20,8 @@ use crate::{
     platform::database::{OpenMode, SuplexDatabase},
 };
 
+use crate::tasks::response::HumanQuestionOption;
+
 use super::{
     root_bridge::{self, RootIdentity},
     root_controller::{self, WorkerAssignment, WorkerEvidenceRequest},
@@ -84,7 +86,7 @@ enum WireCall {
     RequestDelivery(DeliveryInput),
     AskHuman {
         question: String,
-        options: Vec<HumanOption>,
+        options: Vec<HumanQuestionOption>,
     },
 }
 
@@ -153,14 +155,6 @@ struct DeliveryReview {
     commits: Vec<String>,
     #[serde(default, deserialize_with = "present")]
     patch_digest: Option<String>,
-}
-
-#[derive(Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-struct HumanOption {
-    label: String,
-    description: String,
-    recommended: bool,
 }
 
 fn planned() -> String {

@@ -10,7 +10,20 @@ mod tests {
         runtimes::headless::{self, DispatchInput},
         tasks::repository::{self, PreparedTask, TaskCreator},
     };
-    use std::{collections::HashMap, path::Path, process::Command};
+    use std::{collections::HashMap, path::Path};
+
+    fn normalize_generated_ids(prompt: &str) -> String {
+        let ids = regex::Regex::new(r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|msg_[A-Za-z0-9]+|task_[A-Za-z0-9]+").unwrap();
+        let mut seen = HashMap::<String, String>::new();
+        ids.replace_all(prompt, |captures: &regex::Captures<'_>| {
+            let value = captures.get(0).unwrap().as_str();
+            let next = seen.len() + 1;
+            seen.entry(value.to_owned())
+                .or_insert_with(|| format!("<ID_{next}>"))
+                .clone()
+        })
+        .into_owned()
+    }
 
     #[test]
     fn worker_and_coordinator_replacement_preserve_handoffs_and_native_readiness() {
@@ -171,33 +184,16 @@ mod tests {
             "UPDATE suplex_task_controls SET status = 'waiting_human',human_question = 'Resolve provider failure?',human_question_id = 'question-current',human_question_options_json = '[]' WHERE task_id = ?1",
             [&task.id],
         ).unwrap();
-        let source_oracle = if std::env::var_os("SUPLEX_COORDINATOR_TS_ORACLE").is_some() {
-            let snapshot = filename.with_extension("oracle.sqlite");
-            database
-                .connection()
-                .execute("VACUUM INTO ?1", [snapshot.to_string_lossy().as_ref()])
-                .unwrap();
-            let output = Command::new("node")
-                .args([
-                    "node_modules/tsx/dist/cli.mjs",
-                    "tests/support/coordinator-replacement-interop.ts",
-                ])
-                .arg(&snapshot)
-                .arg(&task.id)
-                .arg(&root.id)
-                .current_dir(Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap())
-                .output()
-                .unwrap();
-            assert!(
-                output.status.success(),
-                "{}",
-                String::from_utf8_lossy(&output.stderr)
+        let source: Value = serde_json::from_str(include_str!(
+            "../../../tests/parity/coordinator-replacement-native/expected.json"
+        ))
+        .unwrap();
+        for (prompt, hash) in [("firstPrompt", "firstHash"), ("secondPrompt", "secondHash")] {
+            assert_eq!(
+                sha256_hex(source[prompt].as_str().unwrap().as_bytes()),
+                source[hash]
             );
-            let _ = std::fs::remove_file(snapshot);
-            Some(serde_json::from_slice::<Value>(&output.stdout).unwrap())
-        } else {
-            None
-        };
+        }
         let coordinator_request = TaskCoordinatorReplacementBody {
             session_id: root.id.clone(),
             root_profile_id: "alternate-root".into(),
@@ -262,10 +258,11 @@ mod tests {
                 .contains("Additional direction from the user:\nCheck the failed provider.")
         );
         assert_eq!(first_prompt.1, sha256_hex(first_prompt.0.as_bytes()));
-        if let Some(source) = &source_oracle {
-            assert_eq!(first_prompt.0, source["firstPrompt"]);
-            assert_eq!(first_prompt.1, source["firstHash"]);
-        }
+        assert_eq!(
+            normalize_generated_ids(&first_prompt.0),
+            normalize_generated_ids(source["firstPrompt"].as_str().unwrap())
+        );
+        assert_eq!(first_prompt.1, sha256_hex(first_prompt.0.as_bytes()));
         database
             .connection()
             .execute(
@@ -319,10 +316,19 @@ mod tests {
             "Earlier additional directions from the user, in order:\nCheck the failed provider."
         ));
         assert!(second_prompt.contains("The task is active. Reassess these questions"));
-        if let Some(source) = &source_oracle {
-            assert_eq!(second_prompt, source["secondPrompt"]);
-            assert_eq!(sha256_hex(second_prompt.as_bytes()), source["secondHash"]);
-        }
+        assert_eq!(
+            normalize_generated_ids(&second_prompt),
+            normalize_generated_ids(source["secondPrompt"].as_str().unwrap())
+        );
+        let second_hash: String = database
+            .connection()
+            .query_row(
+                "SELECT prompt_hash FROM suplex_task_turns WHERE session_id = ?1",
+                [second_root.id.as_str()],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(second_hash, sha256_hex(second_prompt.as_bytes()));
         assert_eq!(
             current_worker(&database, &task.id).unwrap().unwrap().id,
             second.id.as_str()
@@ -1400,4 +1406,3 @@ mod tests {
         let _ = std::fs::remove_dir_all(&session_directory);
     }
 }
-

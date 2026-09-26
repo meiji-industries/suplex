@@ -42,7 +42,9 @@ export function GithubDeviceSignIn({ onConnected, label, primary = false }: { on
         }
         if (result.status === "pending") {
           setMessage("");
-          setNextPollAt(result.nextPollAt);
+          // A poll that lands a moment early gets the same time back. Schedule strictly later so the effect re-runs.
+          const later = Math.max(Date.parse(result.nextPollAt) || 0, Date.now() + 500);
+          setNextPollAt(new Date(later).toISOString());
         }
         else if (result.status === "connected") {
           setOpen(false);

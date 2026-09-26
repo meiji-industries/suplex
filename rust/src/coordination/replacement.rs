@@ -272,9 +272,17 @@ impl CoordinatorControlRow {
         }))
     }
 
-    /// A resume answers the current question, so the question must still be current
-    /// and no other task decision may be outstanding.
-    fn check_resume(&self, request: &TaskCoordinatorReplacementBody) -> DatabaseResult<()> {
+    /// The replaced session is still the current Root. A resume answers the
+    /// current question, so the question must still be current and no other
+    /// task decision may be outstanding.
+    fn check_replaceable(
+        &self,
+        request: &TaskCoordinatorReplacementBody,
+        is_current: bool,
+    ) -> DatabaseResult<()> {
+        if !is_current || self.current_root_id.as_deref() != Some(request.session_id.as_str()) {
+            return refuse(COORDINATOR_CHANGED);
+        }
         if !request.resume {
             return Ok(());
         }
@@ -534,17 +542,47 @@ fn retire_coordinator(
     cancel_open_turns(database, task_id, Some(session_id), time)
 }
 
-/// Make the successor the current Root. A resume also clears the answered
-/// question and wakes the task.
+/// The new Coordinator session a replacement installs.
+struct Successor {
+    id: String,
+    generation: i64,
+    profile_json: String,
+    reason: String,
+    handoff: String,
+    prompt: String,
+}
+
+/// Insert the successor session and its first turn, and make it the current
+/// Root. A resume also clears the answered question and wakes the task.
 fn install_coordinator(
     database: &SuplexDatabase,
     task_id: &str,
-    id: &str,
-    profile_json: &str,
-    resume: bool,
-    time: &str,
+    request: &TaskCoordinatorReplacementBody,
+    successor: &Successor,
+    now: DateTime<Utc>,
 ) -> DatabaseResult<()> {
-    database.connection().execute("UPDATE suplex_task_controls SET root_session_id = ?1,root_profile_json = ?2,status = CASE WHEN ?3 THEN 'active' ELSE status END,status_changed_at = CASE WHEN ?3 THEN ?4 ELSE status_changed_at END,human_question = CASE WHEN ?3 THEN NULL ELSE human_question END,human_question_id = CASE WHEN ?3 THEN NULL ELSE human_question_id END,human_question_options_json = CASE WHEN ?3 THEN '[]' ELSE human_question_options_json END,wake_at = CASE WHEN status = 'active' OR ?3 THEN ?4 ELSE wake_at END,updated_at = ?4 WHERE task_id = ?5",params![id,profile_json,resume,time,task_id])?;
+    let time = rfc3339_millis(now);
+    let Successor {
+        id,
+        generation,
+        profile_json,
+        reason,
+        handoff,
+        prompt,
+    } = successor;
+    database.connection().execute("INSERT INTO suplex_task_sessions (id,task_id,kind,generation,is_current,lifecycle,profile_json,replaces_session_id,replacement_reason,replacement_handoff,created_at,updated_at) VALUES (?1,?2,'root',?3,1,'reserved',?4,?5,?6,?7,?8,?8)",params![id,task_id,generation,profile_json,request.session_id,reason,handoff,time])?;
+    insert_pending_turn(
+        database,
+        &new_turn_id(now)?,
+        task_id,
+        id,
+        *generation,
+        None,
+        prompt,
+        None,
+        &time,
+    )?;
+    database.connection().execute("UPDATE suplex_task_controls SET root_session_id = ?1,root_profile_json = ?2,status = CASE WHEN ?3 THEN 'active' ELSE status END,status_changed_at = CASE WHEN ?3 THEN ?4 ELSE status_changed_at END,human_question = CASE WHEN ?3 THEN NULL ELSE human_question END,human_question_id = CASE WHEN ?3 THEN NULL ELSE human_question_id END,human_question_options_json = CASE WHEN ?3 THEN '[]' ELSE human_question_options_json END,wake_at = CASE WHEN status = 'active' OR ?3 THEN ?4 ELSE wake_at END,updated_at = ?4 WHERE task_id = ?5",params![id,profile_json,request.resume,time,task_id])?;
     Ok(())
 }
 
@@ -561,7 +599,8 @@ pub fn replace_coordinator(
     let time = rfc3339_millis(now);
     database.transaction(true, |database| {
         let control = CoordinatorControlRow::read(database, task_id)?;
-        let (is_current, old_profile_json) = previous_coordinator(database, task_id, &request.session_id)?;
+        let (is_current, old_profile_json) =
+            previous_coordinator(database, task_id, &request.session_id)?;
         let mut intent = ReplacementIntent {
             root_profile_id: request.root_profile_id.clone(),
             handoff: request.handoff.clone().unwrap_or_default(),
@@ -570,27 +609,37 @@ pub fn replace_coordinator(
             question_id: request.question_id.clone().filter(|_| request.resume),
             pending_question: None,
         };
-        if let Some(session) = retried_coordinator(database, task_id, &control, &intent, &request.session_id)? {
+        if let Some(session) =
+            retried_coordinator(database, task_id, &control, &intent, &request.session_id)?
+        {
             return Ok(session);
         }
-        if is_current != 1 || control.current_root_id.as_deref() != Some(request.session_id.as_str()) {
-            return refuse(COORDINATOR_CHANGED);
-        }
-        control.check_resume(request)?;
+        control.check_replaceable(request, is_current == 1)?;
         let profile = coordinator_profile(database, request, &control.configuration_json)?;
         let rows = root_observation_rows(database, task_id)?;
         let old_profile_json = old_profile_json.unwrap_or_else(|| control.control_profile.clone());
         pin_advisor_profiles(database, task_id, &rows.control, &old_profile_json)?;
         intent.pending_question = control.current_question()?;
-        let (handoff_text, prompt) = coordinator_handoff(database, task_id, &control, &rows, &intent, initial_prompt)?;
-        let reason = js_json::stringify(&serde_json::to_value(&intent)?);
-        let generation = next_generation(database, task_id, "root")?;
-        let id = Uuid::new_v4().to_string();
-        let profile_json = serde_json::to_string(&profile)?;
-        retire_coordinator(database, task_id, &request.session_id, &old_profile_json, &time)?;
-        database.connection().execute("INSERT INTO suplex_task_sessions (id,task_id,kind,generation,is_current,lifecycle,profile_json,replaces_session_id,replacement_reason,replacement_handoff,created_at,updated_at) VALUES (?1,?2,'root',?3,1,'reserved',?4,?5,?6,?7,?8,?8)",params![id,task_id,generation,profile_json,request.session_id,reason,handoff_text,time])?;
-        insert_pending_turn(database, &new_turn_id(now)?, task_id, &id, generation, None, &prompt, None, &time)?;
-        install_coordinator(database, task_id, &id, &profile_json, request.resume, &time)?;
-        root_observation_rows(database, task_id)?.root.ok_or_else(|| CoordinationError::refused("replacement_session_missing").into())
+        let (handoff_text, prompt) =
+            coordinator_handoff(database, task_id, &control, &rows, &intent, initial_prompt)?;
+        let successor = Successor {
+            id: Uuid::new_v4().to_string(),
+            generation: next_generation(database, task_id, "root")?,
+            profile_json: serde_json::to_string(&profile)?,
+            reason: js_json::stringify(&serde_json::to_value(&intent)?),
+            handoff: handoff_text,
+            prompt,
+        };
+        retire_coordinator(
+            database,
+            task_id,
+            &request.session_id,
+            &old_profile_json,
+            &time,
+        )?;
+        install_coordinator(database, task_id, request, &successor, now)?;
+        root_observation_rows(database, task_id)?
+            .root
+            .ok_or_else(|| CoordinationError::refused("replacement_session_missing").into())
     })
 }

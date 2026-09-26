@@ -4,7 +4,8 @@ Date: 2026-08-12
 
 ## Status
 
-Accepted
+Superseded by [ADR 0012](0012-providers-are-harnesses.md). The TypeScript
+paths and single-provider implementation below record the original decision.
 
 ## Context
 

@@ -16,6 +16,7 @@ use std::{
 
 use chrono::Utc;
 use rusqlite::params;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use super::operations::{DeliveryOperations, Recheck, delivery_failure};
@@ -344,12 +345,35 @@ pub async fn complete(
     published
 }
 
-fn save(operations: &DeliveryOperations, task_id: &str, publication: &Value) -> DatabaseResult<()> {
+/// TypeScript `publicationSchema`: the evidence one delivery publishes on its
+/// issue, kept so a retry resumes instead of posting twice.
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct Publication {
+    issue: Value,
+    tracker: Value,
+    head_sha: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    evidence_body: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    body: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    comment_id: Option<String>,
+}
+
+fn save(
+    operations: &DeliveryOperations,
+    task_id: &str,
+    publication: &Publication,
+) -> DatabaseResult<()> {
     SuplexDatabase::open(operations.database_path(), OpenMode::ReadWrite)?
         .connection()
         .execute(
             "UPDATE suplex_tasks SET issue_publication_json = ?1 WHERE id = ?2",
-            params![crate::shared::js_json::stringify(publication), task_id],
+            params![
+                crate::shared::js_json::stringify(&serde_json::to_value(publication)?),
+                task_id
+            ],
         )?;
     Ok(())
 }
@@ -378,19 +402,24 @@ async fn publish(
         return Ok(());
     }
     let mut publication = match publication_json {
-        Some(raw) => serde_json::from_str::<Value>(&raw)?,
-        None => json!({
-            "issue": serde_json::from_str::<Value>(issue_json.as_deref().unwrap_or("null"))?,
-            "tracker": issue_context::task_tracker(&configuration)?,
-            "headSha": head_sha,
-        }),
+        Some(raw) => serde_json::from_str::<Publication>(&raw)?,
+        None => Publication {
+            issue: serde_json::from_str(issue_json.as_deref().unwrap_or("null"))?,
+            tracker: issue_context::task_tracker(&configuration)?,
+            head_sha: head_sha.to_owned(),
+            evidence_body: None,
+            body: None,
+            comment_id: None,
+        },
     };
-    if publication["headSha"] != head_sha {
-        let mut fresh = json!({"issue": publication["issue"], "tracker": publication["tracker"], "headSha": head_sha});
-        if publication["commentId"].is_string() {
-            fresh["commentId"] = publication["commentId"].clone();
-        }
-        publication = fresh;
+    if publication.head_sha != head_sha {
+        // A new reviewed head renders new evidence; the issue comment is edited in place.
+        publication = Publication {
+            head_sha: head_sha.to_owned(),
+            evidence_body: None,
+            body: None,
+            ..publication
+        };
     }
     let recheck_now = || -> DatabaseResult<()> {
         match recheck {
@@ -452,9 +481,9 @@ async fn publish(
     };
     save(operations, task_id, &publication)?;
     let attempt = async {
-        let tracker = IssueTracker::new(&publication["tracker"]).await?;
-        let rendered = match publication["evidenceBody"].as_str() {
-            Some(rendered) => rendered.to_owned(),
+        let tracker = IssueTracker::new(&publication.tracker).await?;
+        let rendered = match &publication.evidence_body {
+            Some(rendered) => rendered.clone(),
             None => {
                 let evidence = manifest(operations, task_id, head_sha)?;
                 let mut links = Vec::new();
@@ -500,15 +529,15 @@ async fn publish(
                         }
                         None => {
                             tracker
-                                .upload(&publication["issue"], &name, &bytes, mime, &before_write)
+                                .upload(&publication.issue, &name, &bytes, mime, &before_write)
                                 .await?
                         }
                     };
                     links.push(format!("[{phase}: {filename}]({url})"));
-                    if connection["kind"] == "bitbucket" && publication["issue"]["kind"] == "jira" {
+                    if connection["kind"] == "bitbucket" && publication.issue["kind"] == "jira" {
                         recheck_now().map_err(|error| error.to_string())?;
                         let issue_url = tracker
-                            .upload(&publication["issue"], &name, &bytes, mime, &before_write)
+                            .upload(&publication.issue, &name, &bytes, mime, &before_write)
                             .await?;
                         links.push(format!("[{phase}: {filename} (Jira)]({issue_url})"));
                     }
@@ -551,20 +580,21 @@ async fn publish(
         if observed.head_sha != head_sha || observed.body.as_deref() != Some(body.as_str()) {
             return Err("The repository has not confirmed the evidence and reviewed source".into());
         }
-        publication["evidenceBody"] = json!(rendered);
-        publication["body"] = json!(format!("{rendered}\n\nPull request: {}", observed.url));
+        let comment = format!("{rendered}\n\nPull request: {}", observed.url);
+        publication.evidence_body = Some(rendered);
+        publication.body = Some(comment.clone());
         save(operations, task_id, &publication).map_err(|error| error.to_string())?;
         recheck_now().map_err(|error| error.to_string())?;
         let comment_id = tracker
             .publish(
-                &publication["issue"],
+                &publication.issue,
                 task_id,
-                publication["body"].as_str().unwrap_or(""),
+                &comment,
                 &before_write,
-                publication["commentId"].as_str(),
+                publication.comment_id.as_deref(),
             )
             .await?;
-        publication["commentId"] = json!(comment_id);
+        publication.comment_id = Some(comment_id);
         save(operations, task_id, &publication).map_err(|error| error.to_string())?;
         inspect_before_write().await?;
         Ok(())
@@ -601,6 +631,17 @@ fn control_now(operations: &DeliveryOperations, task_id: &str) -> DatabaseResult
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_saved_publication_round_trips_unchanged() {
+        let saved = r#"{"issue":{"kind":"github","number":3},"tracker":{"kind":"github"},"headSha":"h","evidenceBody":"e","body":"b","commentId":"c"}"#;
+        let publication: Publication = serde_json::from_str(saved).unwrap();
+        assert_eq!(
+            crate::shared::js_json::stringify(&serde_json::to_value(&publication).unwrap()),
+            saved
+        );
+        assert!(serde_json::from_str::<Publication>(r#"{"issue":{},"tracker":{}}"#).is_err());
+    }
 
     #[tokio::test]
     async fn a_finished_publication_releases_its_task_lock() {

@@ -1521,7 +1521,19 @@ exit 1
                 .unwrap(),
             "9"
         );
+        assert_eq!(
+            tracker
+                .publish(&issue, "task_one", "Evidence", allow, Some("missing"))
+                .await
+                .unwrap(),
+            "9"
+        );
         assert_eq!(writes.load(Ordering::SeqCst), 1);
+        comments.lock().unwrap().insert(2, json!({
+            "id":6,
+            "body":"## What changed\n\nOlder evidence\n\n## Before\n\nold\n\n## After\n\nold\n\n## How to verify\n\nold\n\n[Suplex task task_one]",
+            "user":{"id":4}
+        }));
         assert!(
             tracker
                 .publish(&issue, "task_one", "New evidence", allow, Some("9"))
@@ -1538,6 +1550,7 @@ exit 1
         assert_eq!(writes.load(Ordering::SeqCst), 2);
         assert_eq!(comments.lock().unwrap()[0]["id"], 8);
         assert_eq!(comments.lock().unwrap()[1]["id"], 7);
+        assert_eq!(comments.lock().unwrap()[2]["id"], 6);
         server.abort();
     }
 
@@ -1784,14 +1797,17 @@ exit 1
             std::env::set_var("SUPLEX_TEST_JIRA_PUBLISH_TOKEN", "secret");
         }
         let moved = Arc::new(AtomicBool::new(false));
+        let tampered_readback = Arc::new(AtomicBool::new(false));
         let writes = Arc::new(AtomicUsize::new(0));
         let comment = Arc::new(Mutex::new(None::<Value>));
         let app = axum::Router::new().fallback({
             let moved = moved.clone();
+            let tampered_readback = tampered_readback.clone();
             let writes = writes.clone();
             let comment = comment.clone();
             move |method: Method, uri: Uri, body: Bytes| {
                 let moved = moved.clone();
+                let tampered_readback = tampered_readback.clone();
                 let writes = writes.clone();
                 let comment = comment.clone();
                 async move {
@@ -1800,12 +1816,15 @@ exit 1
                         return (StatusCode::OK, json!({"accountId":"me"}).to_string());
                     }
                     if path == "/rest/api/3/issue/42/comment?maxResults=100&startAt=0" {
-                        let rows = comment
+                        let mut rows = comment
                             .lock()
                             .unwrap()
                             .clone()
                             .into_iter()
                             .collect::<Vec<_>>();
+                        if tampered_readback.load(Ordering::SeqCst) && !rows.is_empty() {
+                            rows[0]["body"] = json!("wrong remote text");
+                        }
                         return (
                             StatusCode::OK,
                             json!({"comments":rows,"total":rows.len(),"startAt":0}).to_string(),
@@ -1892,6 +1911,16 @@ exit 1
             "9"
         );
         assert_eq!(writes.load(Ordering::SeqCst), 2);
+        tampered_readback.store(true, Ordering::SeqCst);
+        assert!(
+            tracker
+                .publish(&issue, "task_one", "Third evidence", allow, Some("9"))
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("has not confirmed")
+        );
+        assert_eq!(writes.load(Ordering::SeqCst), 3);
         server.abort();
     }
 

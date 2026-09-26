@@ -6,7 +6,7 @@ import { StatusLight } from "../../components/app/status-light.js";
 import { Spinner } from "../../components/ui/spinner.js";
 import { Button } from "../../components/ui/button.js";
 import { AlertDialog, AlertDialogContent, AlertDialogHeader, AlertDialogTitle, AlertDialogDescription, AlertDialogFooter, AlertDialogCancel } from "../../components/ui/alert-dialog.js";
-import { readJson } from "../../lib/api.js";
+import { readJsonUnchecked } from "../../lib/api.js";
 
 type State = { kind: "checking" } | { kind: "failed" } | { kind: "ready"; result: ProjectRepositoryStatus };
 
@@ -20,7 +20,7 @@ export function ProjectRepositoryConnection({ projectId }: { projectId: string }
     const token = ++generation.current;
     setState({ kind: "checking" });
     try {
-      const result = ProjectRepositoryStatusSchema.parse(await readJson<unknown>(`/api/projects/${encodeURIComponent(projectId)}/repository-status`));
+      const result = ProjectRepositoryStatusSchema.parse(await readJsonUnchecked<unknown>(`/api/projects/${encodeURIComponent(projectId)}/repository-status`));
       if (token === generation.current) setState({ kind: "ready", result });
     } catch {
       if (token === generation.current) setState({ kind: "failed" });
@@ -33,7 +33,7 @@ export function ProjectRepositoryConnection({ projectId }: { projectId: string }
     setDisconnecting(true);
     setDisconnectError(undefined);
     try {
-      await readJson("/api/github/disconnect", { method: "POST" });
+      await readJsonUnchecked("/api/github/disconnect", { method: "POST" });
       setConfirmDisconnect(false);
       await check();
     } catch { setDisconnectError("Suplex could not disconnect GitHub."); }

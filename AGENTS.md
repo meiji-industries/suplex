@@ -136,6 +136,9 @@ Need a change? Create a new migration.
 - `rust/src/delivery/operations.rs` observes Git and GitHub before delivery operations. Native and external evidence must not depend on a second progress receipt.
 - Keep backend code in its Rust domain module. Keep domain-neutral utilities in `rust/src/shared`. Keep browser wire contracts in `src/frontend/contracts`, feature-owned frontend code under `src/frontend/features`, and global application behavior under `src/frontend/shell`.
 - There is no phase engine or Temporal. Preserve admitted native messages across restart instead of replaying them. Delete dead code when you find it.
+- HTTP response structs use concrete Rust types. Use `serde_json::Value` only for a payload Suplex stores without interpreting it, such as raw Advisor output, and mark that field `#[ts(type = "unknown")]`. Model every fixed string vocabulary with `wire_enum!` from `rust/src/shared/mod.rs`. Deserialize stored JSON into its Rust type before reading it.
+- Browser types for a server response come from `src/frontend/contracts/generated`, written by `ts-rs` when `cargo test` runs. Add `#[derive(ts_rs::TS)]` to a response type and `#[ts(export)]` to the root type. Dependencies export automatically. Commit the generated files. CI fails on drift. Never edit a generated file. Zod schemas under `src/frontend/contracts` validate requests and serve as test-side checks of server output. Do not hand-write a response type.
+- Each endpoint's fetch lives in a feature `*-api.ts` module, such as `src/frontend/features/tasks/lib/task-api.ts`, as one function typed to the generated response. `readJsonUnchecked<T>()` in `src/frontend/lib/api.ts` casts JSON to `T` without checking it. Call it only inside such a module. Do not add new direct calls from components. `scripts/rust-ratchet.ts` counts these calls and fails when the count rises.
 
 ## Agent skills
 

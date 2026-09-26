@@ -6,7 +6,7 @@ import { afterEach, beforeEach, expect, test, vi } from "vitest";
 
 import type { Task } from "../src/frontend/contracts/tasks.js";
 
-const api = vi.hoisted(() => ({ readJson: vi.fn() }));
+const api = vi.hoisted(() => ({ readJsonUnchecked: vi.fn() }));
 vi.mock("../src/frontend/lib/api.js", () => api);
 
 import { TaskNoteInput } from "../src/frontend/features/tasks/task-work.js";
@@ -66,10 +66,10 @@ afterEach(async () => {
   await act(async () => { document.body.replaceChildren(); });
 });
 
-beforeEach(() => api.readJson.mockReset());
+beforeEach(() => api.readJsonUnchecked.mockReset());
 
 test("Shift+Enter keeps a multiline draft and Enter sends it once", async () => {
-  api.readJson.mockResolvedValue(task);
+  api.readJsonUnchecked.mockResolvedValue(task);
   const view = mount();
   await render(view.render);
   const field = textarea(view.container);
@@ -79,12 +79,12 @@ test("Shift+Enter keeps a multiline draft and Enter sends it once", async () => 
     expect(pressEnter(field, { shiftKey: true }).defaultPrevented).toBe(false);
     setText(field, "First line\nSecond line");
   });
-  expect(api.readJson).not.toHaveBeenCalled();
+  expect(api.readJsonUnchecked).not.toHaveBeenCalled();
   expect(field.value).toBe("First line\nSecond line");
 
   await act(async () => { expect(pressEnter(field).defaultPrevented).toBe(true); await Promise.resolve(); });
-  expect(api.readJson).toHaveBeenCalledTimes(1);
-  expect(api.readJson).toHaveBeenCalledWith("/api/tasks/task-1/note", { method: "POST", body: JSON.stringify({ note: "First line\nSecond line" }) });
+  expect(api.readJsonUnchecked).toHaveBeenCalledTimes(1);
+  expect(api.readJsonUnchecked).toHaveBeenCalledWith("/api/tasks/task-1/note", { method: "POST", body: JSON.stringify({ note: "First line\nSecond line" }) });
 });
 
 test("composition Enter does not submit the task note", async () => {
@@ -96,19 +96,19 @@ test("composition Enter does not submit the task note", async () => {
     setText(field, "Composing");
     expect(pressEnter(field, {}, true).defaultPrevented).toBe(false);
   });
-  expect(api.readJson).not.toHaveBeenCalled();
+  expect(api.readJsonUnchecked).not.toHaveBeenCalled();
 });
 
 test("official PromptInput keeps an edit made during a delayed successful note submission", async () => {
   const accepted = deferred<Task>();
-  api.readJson.mockReturnValueOnce(accepted.promise);
+  api.readJsonUnchecked.mockReturnValueOnce(accepted.promise);
   const view = mount({ strict: true });
   await render(view.render);
   const field = textarea(view.container);
 
   await act(async () => { setText(field, "First draft"); });
   await act(async () => { submit(field); await Promise.resolve(); });
-  expect(api.readJson).toHaveBeenCalledTimes(1);
+  expect(api.readJsonUnchecked).toHaveBeenCalledTimes(1);
   expect(field.value).toBe("First draft");
 
   await act(async () => { setText(field, "Edited while Coordinator works"); });
@@ -119,14 +119,14 @@ test("official PromptInput keeps an edit made during a delayed successful note s
 
 test("two form submissions before React rerenders send once, retain a failed draft, and allow retry", async () => {
   const rejected = deferred<Task>();
-  api.readJson.mockReturnValueOnce(rejected.promise).mockResolvedValueOnce(task);
+  api.readJsonUnchecked.mockReturnValueOnce(rejected.promise).mockResolvedValueOnce(task);
   const view = mount();
   await render(view.render);
   const field = textarea(view.container);
 
   await act(async () => { setText(field, "Retry this message"); });
   await act(async () => { submit(field); submit(field); await Promise.resolve(); });
-  expect(api.readJson).toHaveBeenCalledTimes(1);
+  expect(api.readJsonUnchecked).toHaveBeenCalledTimes(1);
   expect(field.value).toBe("Retry this message");
 
   await act(async () => { rejected.reject(new Error("Coordinator is not ready")); await Promise.resolve(); });
@@ -134,14 +134,14 @@ test("two form submissions before React rerenders send once, retain a failed dra
   expect(field.value).toBe("Retry this message");
 
   await act(async () => { submit(field); await Promise.resolve(); });
-  expect(api.readJson).toHaveBeenCalledTimes(2);
+  expect(api.readJsonUnchecked).toHaveBeenCalledTimes(2);
   expect(view.onChange).toHaveBeenCalledWith(task);
   expect(field.value).toBe("");
 });
 
 test("a response for a task replaced during submission does not update the current task", async () => {
   const accepted = deferred<Task>();
-  api.readJson.mockReturnValueOnce(accepted.promise);
+  api.readJsonUnchecked.mockReturnValueOnce(accepted.promise);
   const view = mount();
   await render(view.render);
   const field = textarea(view.container);
@@ -154,7 +154,7 @@ test("a response for a task replaced during submission does not update the curre
 
 test("an unmounted composer does not apply a late accepted response", async () => {
   const accepted = deferred<Task>();
-  api.readJson.mockReturnValueOnce(accepted.promise);
+  api.readJsonUnchecked.mockReturnValueOnce(accepted.promise);
   const view = mount();
   await render(view.render);
   const field = textarea(view.container);
@@ -166,12 +166,12 @@ test("an unmounted composer does not apply a late accepted response", async () =
 });
 
  test("a delivered task accepts a follow-up message and explains that it resumes work", async () => {
-  api.readJson.mockResolvedValueOnce(task);
+  api.readJsonUnchecked.mockResolvedValueOnce(task);
   const view = mount({ task: { ...task, status: "delivered" } });
   await render(view.render);
   expect(view.container.textContent).toContain("Send a message to resume this task.");
   const field = textarea(view.container);
   await act(async () => { setText(field, "Fix the failing checks"); submit(field); });
-  expect(api.readJson).toHaveBeenCalledWith("/api/tasks/task-1/note", expect.objectContaining({ method: "POST", body: JSON.stringify({ note: "Fix the failing checks" }) }));
+  expect(api.readJsonUnchecked).toHaveBeenCalledWith("/api/tasks/task-1/note", expect.objectContaining({ method: "POST", body: JSON.stringify({ note: "Fix the failing checks" }) }));
   expect(view.onChange).toHaveBeenCalledWith(task);
 });

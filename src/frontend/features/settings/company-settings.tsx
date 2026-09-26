@@ -6,7 +6,7 @@ import { ApplicationFrame } from "../../shell/application-frame.js";
 import { useCompanyContext } from "../../shell/company-context.js";
 import { AvatarEditor } from "../../components/app/entity-avatar.js";
 import { SettingsContent, SettingsLayout, SettingsSection, SettingRow } from "./settings-layout.js";
-import { companySettingsPath, readJson, withCompany, type CompanyStatus } from "../../lib/api.js";
+import { companySettingsPath, readJsonUnchecked, withCompany, type CompanyStatus } from "../../lib/api.js";
 import { Archive, Building2, RotateCcw, Save, Pause, Trash2 } from "lucide-react";
 import { EmptyState } from "../../components/app/empty-state.js";
 import { useEffect, useMemo, useState, type ReactElement } from "react";
@@ -58,7 +58,7 @@ export function CompanySettingsView(): ReactElement {
   };
   const clearAccount = async (): Promise<void> => {
     setBusy("clear"); setError("");
-    try { await readJson("/api/admin/factory-reset", { method: "POST", body: "{}" }); }
+    try { await readJsonUnchecked("/api/admin/factory-reset", { method: "POST", body: "{}" }); }
     catch (reason) { setError(reason instanceof Error ? reason.message : "Unable to factory reset"); setBusy(""); setClearOpen(false); return; }
     window.localStorage.clear();
     window.sessionStorage.clear();

@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import type { z } from "zod";
 import { TaskChecksResponseSchema } from "../../../contracts/task-responses.js";
-import { readJson } from "../../../lib/api.js";
+import { readJsonUnchecked } from "../../../lib/api.js";
 
 export type TaskChecks = z.infer<typeof TaskChecksResponseSchema>;
 export type CheckRun = TaskChecks["runs"][number];
@@ -107,7 +107,7 @@ class ChecksPoll {
     const revision = this.revision;
     void (async () => {
       try {
-        const checks = TaskChecksResponseSchema.parse(await readJson(`/api/tasks/${this.taskId}/checks`));
+        const checks = TaskChecksResponseSchema.parse(await readJsonUnchecked(`/api/tasks/${this.taskId}/checks`));
         if (!this.disposed && revision === this.revision) this.publish({ checks, error: "" });
       } catch (cause) {
         if (!this.disposed && revision === this.revision) this.publish({ checks: this.observation.checks, error: cause instanceof Error ? cause.message : "Checks are not available" });

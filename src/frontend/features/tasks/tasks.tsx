@@ -11,7 +11,7 @@ import { Kbd } from "../../components/ui/kbd.js";
 import { Spinner } from "../../components/ui/spinner.js";
 import { Alert, AlertDescription } from "../../components/ui/alert.js";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../components/ui/select.js";
-import { readJson, withCompany } from "../../lib/api.js";
+import { readJsonUnchecked, withCompany } from "../../lib/api.js";
 import type { Task } from "../../contracts/tasks.js";
 import { TaskControlStatusSchema, type TaskControlStatus } from "../../contracts/task-control.js";
 import { requestNewTask } from "../../shell/global-new-task-dialog.js";
@@ -63,7 +63,7 @@ export function TasksView({ mode = "list" }: { mode?: "list" | "board" }): React
     const [result, task, projectResult] = await Promise.all([
       archived ? listTasks(companyId, { archived: true }) : Promise.resolve(null),
       selectedId ? getTask(selectedId) : Promise.resolve(null),
-      readJson<{ projects: ApiProject[] }>(`/api/companies/${encodeURIComponent(companyId)}/projects`),
+      readJsonUnchecked<{ projects: ApiProject[] }>(`/api/companies/${encodeURIComponent(companyId)}/projects`),
     ]);
     if (currentScope.current !== scope) return;
     if (task && task.companyId !== companyId) throw new Error("This task is not in the selected company");

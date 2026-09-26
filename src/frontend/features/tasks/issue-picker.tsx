@@ -1,6 +1,6 @@
 import { useEffect, useState, type ReactElement } from "react";
 import type { IssueAssociation } from "../../contracts/issues.js";
-import { readJson } from "../../lib/api.js";
+import { readJsonUnchecked } from "../../lib/api.js";
 import { Button } from "../../components/ui/button.js";
 import { Dialog, DialogContent, DialogHeader, DialogTitle } from "../../components/ui/dialog.js";
 import { Input } from "../../components/ui/input.js";
@@ -17,7 +17,7 @@ export function IssuePicker({ projectId, issue, onChange, disabled = false }: { 
     let cancelled = false;
     setLoading(true); setError("");
     const timer = setTimeout(() => {
-      void readJson<{ issues: IssueAssociation[] }>(`/api/projects/${encodeURIComponent(projectId)}/issues?query=${encodeURIComponent(query)}`).then(result => { if (!cancelled) setIssues(result.issues); }).catch(reason => { if (!cancelled) { setIssues([]); setError(reason instanceof Error ? reason.message : "Issues are not available"); } }).finally(() => { if (!cancelled) setLoading(false); });
+      void readJsonUnchecked<{ issues: IssueAssociation[] }>(`/api/projects/${encodeURIComponent(projectId)}/issues?query=${encodeURIComponent(query)}`).then(result => { if (!cancelled) setIssues(result.issues); }).catch(reason => { if (!cancelled) { setIssues([]); setError(reason instanceof Error ? reason.message : "Issues are not available"); } }).finally(() => { if (!cancelled) setLoading(false); });
     }, 200);
     return () => { cancelled = true; clearTimeout(timer); };
   }, [open, projectId, query]);

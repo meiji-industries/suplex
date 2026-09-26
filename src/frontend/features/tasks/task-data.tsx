@@ -2,7 +2,7 @@ import { skipToken, useQuery, useQueryClient, type QueryClient, type UseQueryRes
 import { createContext, useCallback, useContext, type ReactNode } from "react";
 import type { Task } from "../../contracts/tasks.js";
 import { TaskAgentsBatchResponseSchema } from "../../contracts/task-responses.js";
-import { readJson } from "../../lib/api.js";
+import { readJsonUnchecked } from "../../lib/api.js";
 import { useCompanyContext } from "../../shell/company-context.js";
 import { readTaskList, showRecentTasks } from "./lib/task-list.js";
 
@@ -34,7 +34,7 @@ export function useTaskAgents(taskIds: string[]) {
   const ids = [...new Set(taskIds)].sort();
   return useQuery({
     queryKey: ["task-agents", user?.id, companyId, ids],
-    queryFn: companyId ? async ({ signal }) => TaskAgentsBatchResponseSchema.parse(await readJson(
+    queryFn: companyId ? async ({ signal }) => TaskAgentsBatchResponseSchema.parse(await readJsonUnchecked(
       `/api/companies/${encodeURIComponent(companyId)}/task-agents?${new URLSearchParams(ids.map(id => ["taskId", id]))}`, { signal },
     )).tasks : skipToken,
     placeholderData: (previous, previousQuery) =>

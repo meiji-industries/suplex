@@ -7,7 +7,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuRadioGroup, DropdownMenu
 import { InputGroup, InputGroupAddon, InputGroupButton, InputGroupInput, InputGroupText } from "../../components/ui/input-group.js";
 import { RadioGroup, RadioGroupItem } from "../../components/ui/radio-group.js";
 import { NewButton } from "../../components/ui/new-button.js";
-import { readJson, type CompanyStatus } from "../../lib/api.js";
+import { readJsonUnchecked, type CompanyStatus } from "../../lib/api.js";
 import { reconcileScopedNotFound, type ApiProject } from "../../shell/view-shared.js";
 import { ChevronDown } from "lucide-react";
 import { useEffect, useState, type FormEvent, type ReactElement } from "react";
@@ -66,7 +66,7 @@ export function CreateProjectDialog({
   useEffect(() => {
     if (!github || owners !== null || !companyId) return;
     setOwners([]);
-    readJson<{ owners: string[] }>(`/api/companies/${encodeURIComponent(companyId)}/repository-owners`)
+    readJsonUnchecked<{ owners: string[] }>(`/api/companies/${encodeURIComponent(companyId)}/repository-owners`)
       .then(result => { setOwners(result.owners); setOwner(result.owners[0] ?? ""); })
       .catch(() => undefined);
   }, [github, owners, companyId]);
@@ -76,7 +76,7 @@ export function CreateProjectDialog({
   useEffect(() => {
     if (!repositoryPicker || repositories?.owner === owner) return;
     setRepositories({ owner, list: null });
-    void readJson<{ repositories: Array<{ name: string; defaultBranch: string }> }>(`/api/companies/${encodeURIComponent(companyId)}/repository-owners/${encodeURIComponent(owner)}/repositories`)
+    void readJsonUnchecked<{ repositories: Array<{ name: string; defaultBranch: string }> }>(`/api/companies/${encodeURIComponent(companyId)}/repository-owners/${encodeURIComponent(owner)}/repositories`)
       .catch(() => ({ repositories: [] }))
       .then(result => setRepositories(current => current?.owner === owner ? { owner, list: result.repositories } : current));
   }, [repositoryPicker, repositories, owner, companyId]);
@@ -96,7 +96,7 @@ export function CreateProjectDialog({
     setError("");
     setFindings([]);
     try {
-      await readJson<ApiProject>(`/api/companies/${companyId}/projects`, {
+      await readJsonUnchecked<ApiProject>(`/api/companies/${companyId}/projects`, {
         method: "POST",
         body: JSON.stringify({ ...(source === "create" ? { repositoryName: ownerPicker && !repository.includes("/") ? `${owner}/${repository.trim()}` : repository.trim() } : { repositoryUrl: cloneUrl }), baseBranch, integration: ProjectIntegrationSchema.parse(integration) }),
       });

@@ -23,7 +23,7 @@ import { Field, FieldGroup, FieldLabel, FieldLegend, FieldSet } from "../../comp
 import { Input } from "../../components/ui/input.js";
 import { Textarea } from "../../components/ui/textarea.js";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../components/ui/select.js";
-import { readJson, withCompany } from "../../lib/api.js";
+import { readJsonUnchecked, withCompany } from "../../lib/api.js";
 import type { ApiProfile, ApiWorkflow } from "../../shell/view-shared.js";
 
 const columns: SettingsTableColumn[] = [
@@ -67,8 +67,8 @@ export function WorkflowSettingsView(): ReactElement {
 
   const reload = async (): Promise<void> => {
     const [workflowResult, profileResult] = await Promise.all([
-      readJson<{ workflows: ApiWorkflow[] }>("/api/workflows?includeArchived=true"),
-      readJson<{ profiles: ApiProfile[] }>("/api/profiles"),
+      readJsonUnchecked<{ workflows: ApiWorkflow[] }>("/api/workflows?includeArchived=true"),
+      readJsonUnchecked<{ profiles: ApiProfile[] }>("/api/profiles"),
     ]);
     setWorkflows(workflowResult.workflows);
     setProfiles(profileResult.profiles);
@@ -105,13 +105,13 @@ export function WorkflowSettingsView(): ReactElement {
   };
   const patch = async (workflow: ApiWorkflow, body: Record<string, unknown>, failure: string): Promise<void> => {
     setBusy(true); setError("");
-    try { await readJson(`/api/admin/workflows/${workflow.id}`, { method: "PATCH", body: JSON.stringify(body) }); await reload(); }
+    try { await readJsonUnchecked(`/api/admin/workflows/${workflow.id}`, { method: "PATCH", body: JSON.stringify(body) }); await reload(); }
     catch (reason) { setError(reason instanceof Error ? reason.message : failure); }
     finally { setBusy(false); }
   };
   const duplicate = async (workflow: ApiWorkflow): Promise<void> => {
     setBusy(true); setError("");
-    try { await readJson(`/api/admin/workflows/${workflow.id}/duplicate`, { method: "POST", body: "{}" }); await reload(); }
+    try { await readJsonUnchecked(`/api/admin/workflows/${workflow.id}/duplicate`, { method: "POST", body: "{}" }); await reload(); }
     catch (reason) { setError(reason instanceof Error ? reason.message : "Unable to duplicate workflow"); }
     finally { setBusy(false); }
   };
@@ -125,7 +125,7 @@ export function WorkflowSettingsView(): ReactElement {
       const body = editing
         ? { ...draft, rootProfileId: draft.rootProfileId ?? null, workerProfileId: draft.workerProfileId ?? null, deliveryTarget: draft.deliveryTarget ?? null, runProjectTests: draft.runProjectTests ?? null, visualEvidence: draft.visualEvidence ?? null }
         : draft;
-      await readJson(editing ? `/api/admin/workflows/${editor.workflowId}` : "/api/admin/workflows", { method: editing ? "PATCH" : "POST", body: JSON.stringify(body) });
+      await readJsonUnchecked(editing ? `/api/admin/workflows/${editor.workflowId}` : "/api/admin/workflows", { method: editing ? "PATCH" : "POST", body: JSON.stringify(body) });
       await reload();
       setEditor({ kind: "closed" });
     } catch (reason) { setError(String(reason)); }

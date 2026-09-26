@@ -7,7 +7,7 @@ import { ADVISOR_LABELS, workflowDefinition } from "./workflow-presentation.js";
 import type { AdvisorProfileIds, WorkflowId } from "../../contracts/workflows.js";
 import type { AdvisorRole } from "../../contracts/advisor-reports.js";
 import type { ApiProfile, ApiProject, ApiTaskTemplate, ApiWorkflow } from "../../shell/view-shared.js";
-import { ApiError, readJson, withCompany } from "../../lib/api.js";
+import { ApiError, readJsonUnchecked, withCompany } from "../../lib/api.js";
 import { useTaskCache } from "./task-data.js";
 import { Button } from "../../components/ui/button.js";
 import { NewButton } from "../../components/ui/new-button.js";
@@ -126,7 +126,7 @@ export function NewTaskDialog({ open, onOpenChange, companyId, onCreated, initia
       setRunProjectTests(saved.runProjectTests ?? true);
     }
     let cancelled = false;
-    void Promise.all([readJson<{ projects: ApiProject[] }>(`/api/companies/${companyId}/projects`), readJson<{ profiles: ApiProfile[] }>("/api/profiles"), readJson<{ workflows: ApiWorkflow[] }>("/api/workflows?includeArchived=true")]).then(([projectResult, profileResult, workflowResult]) => {
+    void Promise.all([readJsonUnchecked<{ projects: ApiProject[] }>(`/api/companies/${companyId}/projects`), readJsonUnchecked<{ profiles: ApiProfile[] }>("/api/profiles"), readJsonUnchecked<{ workflows: ApiWorkflow[] }>("/api/workflows?includeArchived=true")]).then(([projectResult, profileResult, workflowResult]) => {
       if (cancelled) return;
       setProjects(projectResult.projects); setProfiles(profileResult.profiles); setWorkflows(workflowResult.workflows);
       // The workflow record supplies its engine and defaults once it is known; explicit draft fields still win.
@@ -144,7 +144,7 @@ export function NewTaskDialog({ open, onOpenChange, companyId, onCreated, initia
     setTemplates([]);
     if (!projectId || !open) return;
     let cancelled = false;
-    void readJson<{ templates: ApiTaskTemplate[] }>(`/api/projects/${projectId}/task-templates`).then(result => { if (!cancelled) setTemplates(result.templates); }).catch(error => { if (!cancelled) setError(String(error)); });
+    void readJsonUnchecked<{ templates: ApiTaskTemplate[] }>(`/api/projects/${projectId}/task-templates`).then(result => { if (!cancelled) setTemplates(result.templates); }).catch(error => { if (!cancelled) setError(String(error)); });
     return () => { cancelled = true; };
   }, [projectId, open]);
   useEffect(() => {

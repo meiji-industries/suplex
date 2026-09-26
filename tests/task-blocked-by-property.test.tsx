@@ -4,8 +4,8 @@ import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import type { Task } from "../src/frontend/contracts/tasks.js";
 
-const api = vi.hoisted(() => ({ readJson: vi.fn() }));
-vi.mock("../src/frontend/lib/api.js", async importOriginal => ({ ...(await importOriginal<Record<string, unknown>>()), readJson: api.readJson }));
+const api = vi.hoisted(() => ({ readJsonUnchecked: vi.fn() }));
+vi.mock("../src/frontend/lib/api.js", async importOriginal => ({ ...(await importOriginal<Record<string, unknown>>()), readJsonUnchecked: api.readJsonUnchecked }));
 
 vi.mock("../src/frontend/components/ui/dialog.js", async () => {
   const React = await import("react");
@@ -44,7 +44,7 @@ function mount(task = activeTask) {
   document.body.append(container);
   const root = createRoot(container);
   const onChange = vi.fn<(task: Task) => void>();
-  const saves = () => api.readJson.mock.calls.filter(([url]) => url === "/api/tasks/task-self/dependencies").map(([, init]) => { expect(init.method).toBe("PUT"); return JSON.parse(init.body).dependsOn as string[]; });
+  const saves = () => api.readJsonUnchecked.mock.calls.filter(([url]) => url === "/api/tasks/task-self/dependencies").map(([, init]) => { expect(init.method).toBe("PUT"); return JSON.parse(init.body).dependsOn as string[]; });
   return { container, root, onChange, saves, render: async () => { await act(async () => { root.render(<dl><TaskBlockedByProperty task={task} onChange={onChange} /></dl>); }); } };
 }
 
@@ -60,8 +60,8 @@ async function flush() {
 
 beforeEach(() => {
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
-  api.readJson.mockReset();
-  api.readJson.mockImplementation(async (url: string) => {
+  api.readJsonUnchecked.mockReset();
+  api.readJsonUnchecked.mockImplementation(async (url: string) => {
     if (url === "/api/tasks/task-self/dependencies") return saved;
     if (url === "/api/companies/company-1/tasks") return { tasks: [self, active, backlog, queued, delivered, otherProject, { ...first, projectId: "project-1", archivedAt: null, queue: { state: "backlog" } }] };
     throw new Error(`Unexpected request: ${url}`);
@@ -139,8 +139,8 @@ test("closing the picker leaves the prerequisites unchanged", async () => {
 
 test("a failed save shows the error message", async () => {
   const view = mount();
-  const listed = api.readJson.getMockImplementation()!;
-  api.readJson.mockImplementation(async (url: string, init?: RequestInit) => { if (url === "/api/tasks/task-self/dependencies") throw new Error("The dependency creates a cycle"); return listed(url, init); });
+  const listed = api.readJsonUnchecked.getMockImplementation()!;
+  api.readJsonUnchecked.mockImplementation(async (url: string, init?: RequestInit) => { if (url === "/api/tasks/task-self/dependencies") throw new Error("The dependency creates a cycle"); return listed(url, init); });
   await view.render();
   await act(async () => { button(view.container, "None").click(); });
   await flush();

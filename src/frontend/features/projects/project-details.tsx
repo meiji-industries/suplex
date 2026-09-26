@@ -15,7 +15,7 @@ import { Spinner } from "../../components/ui/spinner.js";
 import { Textarea } from "../../components/ui/textarea.js";
 import { AvatarEditor, EntityAvatar } from "../../components/app/entity-avatar.js";
 import { useCompanyContext } from "../../shell/company-context.js";
-import { ApiError, readJson, withCompany } from "../../lib/api.js";
+import { ApiError, readJsonUnchecked, withCompany } from "../../lib/api.js";
 import type { ApiProfile, ApiProject } from "../../shell/view-shared.js";
 import { ProjectRepositoryConnection } from "./project-repository-connection.js";
 import { ProjectConnections } from "./project-connections.js";
@@ -92,7 +92,7 @@ export function ProjectDetails({ projectId }: { projectId: string }): ReactEleme
     setProfilesLoading(true);
     setProfileError("");
     try {
-      const result = await readJson<{ profiles: ApiProfile[] }>("/api/profiles");
+      const result = await readJsonUnchecked<{ profiles: ApiProfile[] }>("/api/profiles");
       if (generation === loadToken.current) setAgents(result.profiles);
     } catch {
       if (generation === loadToken.current) setProfileError("Unable to load agents");
@@ -105,7 +105,7 @@ export function ProjectDetails({ projectId }: { projectId: string }): ReactEleme
     setProviderInstancesLoading(true);
     setProviderInstanceError("");
     try {
-      const result = await readJson<{ instances: ProjectProviderInstance[] }>(`/api/projects/${encodeURIComponent(projectId)}/provider-instances`);
+      const result = await readJsonUnchecked<{ instances: ProjectProviderInstance[] }>(`/api/projects/${encodeURIComponent(projectId)}/provider-instances`);
       if (generation === loadToken.current) setProviderInstances(result.instances);
     } catch {
       if (generation === loadToken.current) setProviderInstanceError("Unable to load named provider logins");
@@ -130,7 +130,7 @@ export function ProjectDetails({ projectId }: { projectId: string }): ReactEleme
     if (!companyId || companyLoading) return invalidate;
     void loadProfiles(token);
     void loadProviderInstances(token);
-    void readJson<ApiProject>(`/api/projects/${encodeURIComponent(projectId)}`).then((result) => {
+    void readJsonUnchecked<ApiProject>(`/api/projects/${encodeURIComponent(projectId)}`).then((result) => {
       if (token !== loadToken.current) return;
       if (result.companyId !== companyId) {
         setLoadError("Project not found");
@@ -156,7 +156,7 @@ export function ProjectDetails({ projectId }: { projectId: string }): ReactEleme
     window.history.replaceState({}, "", `${url.pathname}${url.search}${url.hash}`);
   }, []);
 
-  const patch = async (body: ProjectPatchBody): Promise<ApiProject> => readJson<ApiProject>(`/api/projects/${encodeURIComponent(projectId)}`, { method: "PATCH", body: JSON.stringify(body) });
+  const patch = async (body: ProjectPatchBody): Promise<ApiProject> => readJsonUnchecked<ApiProject>(`/api/projects/${encodeURIComponent(projectId)}`, { method: "PATCH", body: JSON.stringify(body) });
 
   const saveGeneral = async (): Promise<void> => {
     if (!general) return;

@@ -2,7 +2,7 @@ import { useEffect, useState, type ReactElement } from "react";
 import type { ApiProfile, ApiModel } from "../../shell/view-shared.js";
 import type { ProviderInstanceSchema } from "../../contracts/providers.js";
 import type { z } from "zod";
-import { readJson } from "../../lib/api.js";
+import { readJsonUnchecked } from "../../lib/api.js";
 import { Alert, AlertDescription } from "../../components/ui/alert.js";
 import { InternalAgentsSection } from "./internal-agents-section.js";
 import {
@@ -51,8 +51,8 @@ export function InternalAgentsManager({ agents, onSaved }: { agents: readonly Ap
     const controller = new AbortController();
     const options = { signal: controller.signal };
     void Promise.all([
-      readJson<{ models: ApiModel[] }>("/api/admin/models", options),
-      readJson<{ instances: z.infer<typeof ProviderInstanceSchema>[] }>("/api/admin/provider-instances", options),
+      readJsonUnchecked<{ models: ApiModel[] }>("/api/admin/models", options),
+      readJsonUnchecked<{ instances: z.infer<typeof ProviderInstanceSchema>[] }>("/api/admin/provider-instances", options),
     ]).then(([modelList, instanceList]) => {
       if (controller.signal.aborted) return;
       setModels(modelList.models);
@@ -89,7 +89,7 @@ export function InternalAgentsManager({ agents, onSaved }: { agents: readonly Ap
   const saveAgent = async (): Promise<void> => {
     const editing = editingAgentId !== null;
     try {
-      await readJson(
+      await readJsonUnchecked(
         editing
           ? `/api/admin/profiles/${encodeURIComponent(editingAgentId)}`
           : "/api/admin/profiles",
@@ -120,7 +120,7 @@ export function InternalAgentsManager({ agents, onSaved }: { agents: readonly Ap
     fallback: string,
   ): Promise<void> => {
     try {
-      await readJson(`/api/admin/profiles/${encodeURIComponent(agent.id)}`, {
+      await readJsonUnchecked(`/api/admin/profiles/${encodeURIComponent(agent.id)}`, {
         method: "PATCH",
         body: JSON.stringify(body),
       });
@@ -132,7 +132,7 @@ export function InternalAgentsManager({ agents, onSaved }: { agents: readonly Ap
   };
   const duplicateAgent = async (agent: ApiProfile): Promise<void> => {
     try {
-      await readJson(
+      await readJsonUnchecked(
         `/api/admin/profiles/${encodeURIComponent(agent.id)}/duplicate`,
         { method: "POST", body: "{}" },
       );
@@ -146,7 +146,7 @@ export function InternalAgentsManager({ agents, onSaved }: { agents: readonly Ap
   };
   const deleteAgent = async (agent: ApiProfile): Promise<void> => {
     try {
-      await readJson(`/api/admin/profiles/${encodeURIComponent(agent.id)}`, {
+      await readJsonUnchecked(`/api/admin/profiles/${encodeURIComponent(agent.id)}`, {
         method: "DELETE",
       });
       setError("");

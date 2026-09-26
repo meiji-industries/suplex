@@ -1,7 +1,7 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactElement, type ReactNode } from "react";
 
 import { UpdateRestartResponseSchema, UpdateResponseSchema, type UpdateResponse } from "../../contracts/updates.js";
-import { readJson } from "../../lib/api.js";
+import { readJsonUnchecked } from "../../lib/api.js";
 import { useOptionalCompanyContext } from "../../shell/company-context.js";
 import { observeRestart, selectUpdateNotice, type RestartAttempt, type UpdateNoticeState } from "./update-notice-state.js";
 
@@ -30,7 +30,7 @@ export function UpdateProvider({ children }: { children: ReactNode }): ReactElem
   const refresh = useCallback((check = false): Promise<void> => {
     if (!userId) return Promise.resolve();
     if (refreshInFlight.current?.userId === userId) return refreshInFlight.current.promise;
-    const request = readJson<UpdateResponse>(`/api/update${check ? "?check=1" : ""}`, { signal: AbortSignal.timeout(check ? 35_000 : 2_000) })
+    const request = readJsonUnchecked<UpdateResponse>(`/api/update${check ? "?check=1" : ""}`, { signal: AbortSignal.timeout(check ? 35_000 : 2_000) })
       .then((body) => {
         const next = UpdateResponseSchema.parse(body);
         if (activeUserId.current !== userId) return;
@@ -73,7 +73,7 @@ export function UpdateProvider({ children }: { children: ReactNode }): ReactElem
     const attempt = { userId, ...(update.instanceId ? { instanceId: update.instanceId } : {}) };
     restartAttempt.current = attempt;
     try {
-      const accepted = UpdateRestartResponseSchema.parse(await readJson("/api/update/restart", { method: "POST", signal: AbortSignal.timeout(5_000) }));
+      const accepted = UpdateRestartResponseSchema.parse(await readJsonUnchecked("/api/update/restart", { method: "POST", signal: AbortSignal.timeout(5_000) }));
       if (activeUserId.current !== userId || restartAttempt.current !== attempt) return;
       setUpdate((current) => current ? { ...current, status: accepted.status } : current);
     } catch {

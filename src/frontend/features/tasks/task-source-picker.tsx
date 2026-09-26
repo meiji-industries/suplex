@@ -6,7 +6,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 import { Input } from "../../components/ui/input.js";
 import { Spinner } from "../../components/ui/spinner.js";
 import { Tabs, TabsList, TabsTrigger } from "../../components/ui/tabs.js";
-import { readJson } from "../../lib/api.js";
+import { readJsonUnchecked } from "../../lib/api.js";
 import type { IssueAssociation } from "../../contracts/issues.js";
 
 export type TaskSourceSummary =
@@ -56,11 +56,11 @@ export function TaskSourcePicker({ projectId, value, disabled, pullRequestsOnly 
     setLoading(true);
     try {
       if (nextKind === "issue") {
-        const result = await readJson<{ issues: IssueAssociation[] }>(`/api/projects/${encodeURIComponent(projectId)}/issues?query=${encodeURIComponent(issueQuery)}`);
+        const result = await readJsonUnchecked<{ issues: IssueAssociation[] }>(`/api/projects/${encodeURIComponent(projectId)}/issues?query=${encodeURIComponent(issueQuery)}`);
         if (generation !== requestGeneration.current) return;
         setAvailable(true); setRows(result.issues.map(issueTaskSource));
       } else {
-        const result = await readJson<{ available: boolean; sources: TaskSourceSummary[] }>(`/api/projects/${encodeURIComponent(projectId)}/task-sources?kind=${nextKind}`);
+        const result = await readJsonUnchecked<{ available: boolean; sources: TaskSourceSummary[] }>(`/api/projects/${encodeURIComponent(projectId)}/task-sources?kind=${nextKind}`);
         if (generation !== requestGeneration.current) return;
         setAvailable(result.available); setRows(result.sources);
       }

@@ -2,14 +2,14 @@
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { expect, test, vi } from "vitest";
-const api = vi.hoisted(() => ({ readJson: vi.fn() }));
+const api = vi.hoisted(() => ({ readJsonUnchecked: vi.fn() }));
 vi.mock("../src/frontend/lib/api.js", () => api);
 import { IssuePicker } from "../src/frontend/features/tasks/issue-picker.js";
 
 test("issue autocomplete queries the tracker and selects a qualified issue", async () => {
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true });
   const issue = { kind: "github", repository: "client/repo", number: 420, id: "500", key: "#420", title: "Remote search result", url: "https://github.com/client/repo/issues/420" };
-  api.readJson.mockResolvedValue({ issues: [issue] });
+  api.readJsonUnchecked.mockResolvedValue({ issues: [issue] });
   const container = document.createElement("div");
   document.body.append(container);
   const root = createRoot(container);
@@ -24,7 +24,7 @@ test("issue autocomplete queries the tracker and selects a qualified issue", asy
       input.dispatchEvent(new Event("input", { bubbles: true }));
     });
     await act(async () => { await new Promise(resolve => setTimeout(resolve, 250)); });
-    expect(api.readJson).toHaveBeenLastCalledWith("/api/projects/project/issues?query=420");
+    expect(api.readJsonUnchecked).toHaveBeenLastCalledWith("/api/projects/project/issues?query=420");
     const result = Array.from(document.querySelectorAll<HTMLButtonElement>("button")).find(button => button.textContent?.includes("Remote search result"))!;
     await act(async () => { result.click(); });
     expect(onChange).toHaveBeenCalledWith(issue);

@@ -6,7 +6,7 @@ import { CircleDashed } from "lucide-react";
 import type { Task } from "../../contracts/tasks.js";
 import { type TaskActivityResponseSchema, TaskDiffResponseSchema, TaskDiffSummaryResponseSchema } from "../../contracts/task-responses.js";
 import { useTaskChecks } from "./lib/task-checks.js";
-import { readJson } from "../../lib/api.js";
+import { readJsonUnchecked } from "../../lib/api.js";
 import { Alert, AlertDescription } from "../../components/ui/alert.js";
 import { Spinner } from "../../components/ui/spinner.js";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "../../components/ui/tabs.js";
@@ -135,7 +135,7 @@ function useTaskDiffSummary(task: Task) {
     const read = async () => {
       if (closed || reading) return;
       reading = true;
-      try { const value = TaskDiffSummaryResponseSchema.parse(await readJson(`/api/tasks/${task.id}/diff/summary`)); if (!closed) setSummary(value); }
+      try { const value = TaskDiffSummaryResponseSchema.parse(await readJsonUnchecked(`/api/tasks/${task.id}/diff/summary`)); if (!closed) setSummary(value); }
       catch { if (!closed) setSummary(null); }
       finally { reading = false; }
     };
@@ -155,7 +155,7 @@ function TaskDiff({ task }: { task: Task }) {
     const read = async () => {
       if (closed || reading) return;
       reading = true;
-      try { const value = TaskDiffResponseSchema.parse(await readJson(`/api/tasks/${task.id}/diff`)); if (!closed) { setDiff(value); setError(""); } }
+      try { const value = TaskDiffResponseSchema.parse(await readJsonUnchecked(`/api/tasks/${task.id}/diff`)); if (!closed) { setDiff(value); setError(""); } }
       catch (error) { if (!closed) setError(error instanceof Error ? error.message : "Changes are not available"); }
       finally { reading = false; }
     };

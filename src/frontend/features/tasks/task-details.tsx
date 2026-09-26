@@ -4,7 +4,7 @@ import { ChevronRight, ClipboardCopy, X } from "lucide-react";
 import { Collapsible } from "../../components/ui/collapsible.js";
 import type { Task } from "../../contracts/tasks.js";
 import { TaskActivityResponseSchema } from "../../contracts/task-responses.js";
-import { readJson } from "../../lib/api.js";
+import { readJsonUnchecked } from "../../lib/api.js";
 import { adminDate, type ApiProject } from "../../shell/view-shared.js";
 import { Button } from "../../components/ui/button.js";
 import { BlockedByPickerDialog } from "./blocked-by-picker.js";
@@ -83,7 +83,7 @@ export function TaskDetailsPage({ task, project, onChange }: { task: Task; proje
   const editable = ["backlog", "queued"].includes(task.status) && !task.archivedAt;
   useEffect(() => {
     let closed = false;
-    const load = async () => { try { const result = TaskActivityResponseSchema.parse(await readJson(`/api/tasks/${task.id}/activity`)); if (!closed) setActivity(result); } catch (error) { if (!closed) setError(error instanceof Error ? error.message : "Task activity is not available"); } };
+    const load = async () => { try { const result = TaskActivityResponseSchema.parse(await readJsonUnchecked(`/api/tasks/${task.id}/activity`)); if (!closed) setActivity(result); } catch (error) { if (!closed) setError(error instanceof Error ? error.message : "Task activity is not available"); } };
     void load();
     const timer = setInterval(() => void load(), 3000);
     return () => { closed = true; clearInterval(timer); };

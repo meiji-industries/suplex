@@ -12,7 +12,7 @@ import { Button } from "../../components/ui/button.js";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "../../components/ui/select.js";
 import { Spinner } from "../../components/ui/spinner.js";
 import { Timeline, TimelineContent, TimelineHeader, TimelineIndicator, TimelineItem, TimelineSeparator, TimelineTitle } from "../../components/ui/timeline.js";
-import { readJson } from "../../lib/api.js";
+import { readJsonUnchecked } from "../../lib/api.js";
 
 function repairTitle(check: HealthCheck): string {
   if (check.status === "healthy") return `${check.label} is ready`;
@@ -75,11 +75,11 @@ export function SetupView(): ReactElement {
   const [selectedProfileId, setSelectedProfileId] = useState<string>();
 
   useEffect(() => {
-    void readJson<{ profiles: ProfileResponse[] }>("/api/profiles").then((result) => setProfiles(result.profiles)).catch(() => setProfiles([]));
+    void readJsonUnchecked<{ profiles: ProfileResponse[] }>("/api/profiles").then((result) => setProfiles(result.profiles)).catch(() => setProfiles([]));
   }, []);
   useEffect(() => {
     if (projectId === undefined) return;
-    void readJson<ProjectResponse>(`/api/projects/${encodeURIComponent(projectId)}`).then(setProject).catch(() => setProject(null));
+    void readJsonUnchecked<ProjectResponse>(`/api/projects/${encodeURIComponent(projectId)}`).then(setProject).catch(() => setProject(null));
   }, [projectId]);
 
   const activeProfileId = selectedProfileId ?? profiles?.[0]?.id;

@@ -2,7 +2,7 @@ import { listTasks } from "./task-api.js";
 import { duplicateTitle } from "./duplicate-title.js";
 import { TaskImageInputSchema, type Task, type TaskInput } from "../../../contracts/tasks.js";
 import { issueTaskSource, type TaskSourceSummary } from "../task-source-picker.js";
-import { readJson } from "../../../lib/api.js";
+import { readJsonUnchecked } from "../../../lib/api.js";
 
 /** workflowId names a workflow record whose engine and defaults the dialog applies; workflow alone names an engine. */
 export type NewTaskDraft = Omit<TaskInput, "idempotencyKey"> & { sourceSummary?: TaskSourceSummary; workflowId?: string };
@@ -24,7 +24,7 @@ export async function duplicateTaskDraft(task: Task): Promise<NewTaskDraft> {
   const source = task.configuration.source;
   let sourceSummary = task.issue ? issueTaskSource(task.issue) : undefined;
   if (source && source.kind !== "issue") {
-    const result = await readJson<{ sources: TaskSourceSummary[] }>(`/api/projects/${task.projectId}/task-sources?kind=${source.kind}`);
+    const result = await readJsonUnchecked<{ sources: TaskSourceSummary[] }>(`/api/projects/${task.projectId}/task-sources?kind=${source.kind}`);
     sourceSummary = result.sources.find(item => source.kind === "branch" ? item.kind === "branch" && item.branch === source.branch : item.kind === source.kind && item.number === source.number);
     if (!sourceSummary) throw new Error("The original task source is not available. Select a source in a new task.");
   }

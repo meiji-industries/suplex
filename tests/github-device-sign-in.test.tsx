@@ -2,11 +2,11 @@
 import { act } from "react";
 import { createRoot } from "react-dom/client";
 import { expect, test, vi } from "vitest";
-import { readJson } from "../src/frontend/lib/api.js";
+import { readJsonUnchecked } from "../src/frontend/lib/api.js";
 import { GithubDeviceSignIn } from "../src/frontend/components/app/github-device-sign-in.js";
 
 vi.mock("../src/frontend/lib/api.js", () => ({
-  readJson: vi.fn().mockResolvedValue({
+  readJsonUnchecked: vi.fn().mockResolvedValue({
     flowId: "00000000-0000-4000-8000-000000000001",
     userCode: "1CFE-18E1",
     verificationUri: "https://github.com/login/device",
@@ -58,7 +58,7 @@ test("keeps polling when the server repeats the same next poll time", async () =
   document.body.append(container);
   const root = createRoot(container);
   const connected = vi.fn().mockResolvedValue(undefined);
-  const api = vi.mocked(readJson);
+  const api = vi.mocked(readJsonUnchecked);
   api.mockReset();
   // A client that polls a moment early gets the identical time back; it must not stop polling.
   const repeated = new Date(Date.now() + 5000).toISOString();
@@ -99,7 +99,7 @@ test("retries a failed poll automatically and refreshes after connection", async
   document.body.append(container);
   const root = createRoot(container);
   const connected = vi.fn().mockResolvedValue(undefined);
-  const api = vi.mocked(readJson);
+  const api = vi.mocked(readJsonUnchecked);
   api.mockReset();
   api.mockResolvedValueOnce({
     flowId: "00000000-0000-4000-8000-000000000001", userCode: "ABCD-1234",

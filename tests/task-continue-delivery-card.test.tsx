@@ -4,9 +4,9 @@ import { createRoot } from "react-dom/client";
 import { afterEach, beforeEach, expect, test, vi } from "vitest";
 import type { Task } from "../src/frontend/contracts/tasks.js";
 
-const state = vi.hoisted(() => ({ checks: { available: true, pullRequestState: "draft", runs: [] } as { available: boolean; pullRequestState: "draft" | "ready" | "merged"; runs: [] }, readJson: vi.fn() }));
+const state = vi.hoisted(() => ({ checks: { available: true, pullRequestState: "draft", runs: [] } as { available: boolean; pullRequestState: "draft" | "ready" | "merged"; runs: [] }, readJsonUnchecked: vi.fn() }));
 vi.mock("../src/frontend/features/tasks/lib/task-checks.js", () => ({ useTaskChecks: () => ({ checks: state.checks }) }));
-vi.mock("../src/frontend/lib/api.js", () => ({ readJson: state.readJson }));
+vi.mock("../src/frontend/lib/api.js", () => ({ readJsonUnchecked: state.readJsonUnchecked }));
 import { TaskPullRequestCard } from "../src/frontend/features/tasks/pull-request-card.js";
 
 const profile = { profileId: "profile", provider: "opencode", model: "model", reasoningLevel: "medium", serviceTier: "default" } as const;
@@ -19,18 +19,18 @@ const task = {
 
 const mounts: Array<{ unmount(): void }> = [];
 afterEach(async () => { await act(async () => { mounts.splice(0).forEach(root => root.unmount()); document.body.replaceChildren(); }); });
-beforeEach(() => { state.checks = { available: true, pullRequestState: "draft", runs: [] }; state.readJson.mockReset(); });
+beforeEach(() => { state.checks = { available: true, pullRequestState: "draft", runs: [] }; state.readJsonUnchecked.mockReset(); });
 
 test("fresh draft and ready observations override a stale merged cache and wire continuation", async () => {
   const container = document.createElement("div"); document.body.append(container);
   const root = createRoot(container); mounts.push(root);
   const onChange = vi.fn();
-  state.readJson.mockResolvedValue({ ...task, status: "active", deliveryTarget: "pull_request_ready" });
+  state.readJsonUnchecked.mockResolvedValue({ ...task, status: "active", deliveryTarget: "pull_request_ready" });
   await act(async () => { root.render(<TaskPullRequestCard task={task} onChange={onChange} />); });
   expect(container.textContent).toContain("Publish for review");
   expect(container.textContent).toContain("Continue to merge");
   await act(async () => { container.querySelector<HTMLButtonElement>("button")?.click(); });
-  expect(state.readJson).toHaveBeenCalledWith("/api/tasks/task-1/continue-delivery", { method: "POST", body: JSON.stringify({ deliveryTarget: "pull_request_ready" }) });
+  expect(state.readJsonUnchecked).toHaveBeenCalledWith("/api/tasks/task-1/continue-delivery", { method: "POST", body: JSON.stringify({ deliveryTarget: "pull_request_ready" }) });
   expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ status: "active", deliveryTarget: "pull_request_ready" }));
 
   state.checks = { available: true, pullRequestState: "ready", runs: [] };
@@ -54,7 +54,7 @@ test("missing pull request and checks still allow continuation, and a failed req
   const onChange = vi.fn();
   const missing = { ...task, pullRequest: null };
   state.checks = { available: false, pullRequestState: "merged", runs: [] };
-  state.readJson.mockRejectedValueOnce(new Error("GitHub did not answer")).mockResolvedValueOnce({ ...missing, status: "active", deliveryTarget: "merged" });
+  state.readJsonUnchecked.mockRejectedValueOnce(new Error("GitHub did not answer")).mockResolvedValueOnce({ ...missing, status: "active", deliveryTarget: "merged" });
   await act(async () => { root.render(<TaskPullRequestCard task={missing} onChange={onChange} />); });
   expect(container.textContent).toContain("Publish for review");
   expect(container.textContent).toContain("Continue to merge");
@@ -63,8 +63,8 @@ test("missing pull request and checks still allow continuation, and a failed req
   expect(container.querySelector('[role="alert"]')?.textContent).toBe("GitHub did not answer");
   expect(onChange).not.toHaveBeenCalled();
   await act(async () => { merge()?.click(); });
-  expect(state.readJson).toHaveBeenCalledTimes(2);
-  expect(state.readJson).toHaveBeenLastCalledWith("/api/tasks/task-1/continue-delivery", { method: "POST", body: JSON.stringify({ deliveryTarget: "merged" }) });
+  expect(state.readJsonUnchecked).toHaveBeenCalledTimes(2);
+  expect(state.readJsonUnchecked).toHaveBeenLastCalledWith("/api/tasks/task-1/continue-delivery", { method: "POST", body: JSON.stringify({ deliveryTarget: "merged" }) });
   expect(onChange).toHaveBeenCalledWith(expect.objectContaining({ status: "active", deliveryTarget: "merged" }));
   expect(container.querySelector('[role="alert"]')).toBeNull();
 

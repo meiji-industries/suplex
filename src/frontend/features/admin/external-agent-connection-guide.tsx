@@ -2,7 +2,7 @@ import { Check, Copy, ExternalLink } from "lucide-react";
 import { useEffect, useState, type ReactElement } from "react";
 
 import { Button } from "../../components/ui/button.js";
-import { readJson } from "../../lib/api.js";
+import { readJsonUnchecked } from "../../lib/api.js";
 import { SettingRow, SettingsSection } from "../settings/settings-layout.js";
 
 function CodeBlock({ children }: { children: string }): ReactElement {
@@ -26,7 +26,7 @@ export function ExternalAgentConnectionGuide(): ReactElement {
   const baseUrl = window.location.origin;
   const [mcpUrl, setMcpUrl] = useState<string>();
   useEffect(() => {
-    void readJson<{ resource?: unknown }>("/.well-known/oauth-protected-resource/mcp").then((metadata) => {
+    void readJsonUnchecked<{ resource?: unknown }>("/.well-known/oauth-protected-resource/mcp").then((metadata) => {
       const resource = canonicalMcpResource(metadata);
       if (resource) setMcpUrl(resource);
     }).catch(() => undefined);

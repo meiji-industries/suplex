@@ -4,7 +4,7 @@ import { createRoot } from "react-dom/client";
 import { afterEach, beforeAll, expect, test, vi } from "vitest";
 import type { Task } from "../src/frontend/contracts/tasks.js";
 
-vi.mock("../src/frontend/lib/api.js", async importOriginal => ({ ...(await importOriginal<Record<string, unknown>>()), readJson: () => new Promise(() => undefined) }));
+vi.mock("../src/frontend/lib/api.js", async importOriginal => ({ ...(await importOriginal<Record<string, unknown>>()), readJsonUnchecked: () => new Promise(() => undefined) }));
 vi.mock("../src/frontend/features/analytics/lib/analytics.js", () => ({ useTaskCosts: () => new Map() }));
 vi.mock("../src/frontend/features/tasks/task-work.js", () => ({ TaskWork: () => null }));
 vi.mock("../src/frontend/features/tasks/task-agent.js", () => ({ TaskAgent: () => null }));

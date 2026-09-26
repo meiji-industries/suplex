@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, useState } from "react";
 import { ArrowDown } from "lucide-react";
 import { SessionHistoryLiveEventSchema, SessionHistoryPageSchema, type NativeHistoryMessage, type SessionHistoryLiveEvent } from "../../../contracts/history.js";
-import { readJson } from "../../../lib/api.js";
+import { readJsonUnchecked } from "../../../lib/api.js";
 import { clientTabId } from "../../../shell/client-lifecycle.js";
 import { Alert, AlertDescription } from "../../../components/ui/alert.js";
 import { Button } from "../../../components/ui/button.js";
@@ -72,7 +72,7 @@ export function SessionHistory({ taskId, sessionId }: { taskId: string; sessionI
   const loadPage = useCallback(async (before: string | undefined, signal: AbortSignal) => {
     const query = before ? `?before=${encodeURIComponent(before)}` : "";
     const path = `/api/tasks/${encodeURIComponent(taskId)}/sessions/${encodeURIComponent(sessionId)}/history${query}`;
-    return SessionHistoryPageSchema.parse(await readJson(path, { signal }));
+    return SessionHistoryPageSchema.parse(await readJsonUnchecked(path, { signal }));
   }, [sessionId, taskId]);
 
   useEffect(() => {

@@ -1,7 +1,7 @@
 import { useEffect, useState, type ReactElement } from "react";
 
 import { GitHubAuthStatusResponseSchema, GitHubDevicePollResponseSchema, GitHubDeviceStartResponseSchema, type GitHubDevicePollResponse, type GitHubDeviceStartResponse } from "../../contracts/github-auth.js";
-import { readJson } from "../../lib/api.js";
+import { readJsonUnchecked } from "../../lib/api.js";
 import { Button } from "../ui/button.js";
 import { Spinner } from "../ui/spinner.js";
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from "../ui/dialog.js";
@@ -26,13 +26,13 @@ export function GithubDeviceSignIn({ onConnected, label, primary = false }: { on
       const poll = async (): Promise<void> => {
         let result: GitHubDevicePollResponse | undefined;
         try {
-          result = GitHubDevicePollResponseSchema.parse(await readJson<unknown>("/api/github/device/poll", {
+          result = GitHubDevicePollResponseSchema.parse(await readJsonUnchecked<unknown>("/api/github/device/poll", {
             method: "POST",
             body: JSON.stringify({ flowId: flow.flowId }),
           }));
         } catch {
           try {
-            const status = GitHubAuthStatusResponseSchema.parse(await readJson<unknown>("/api/github/auth"));
+            const status = GitHubAuthStatusResponseSchema.parse(await readJsonUnchecked<unknown>("/api/github/auth"));
             if (status.status === "connected") result = { status: "connected", login: status.login };
           } catch { /* The status check may fail with the same network error. */ }
         }
@@ -67,7 +67,7 @@ export function GithubDeviceSignIn({ onConnected, label, primary = false }: { on
     setBusy(true);
     setMessage("");
     try {
-      const started = GitHubDeviceStartResponseSchema.parse(await readJson<unknown>("/api/github/device/start", { method: "POST" }));
+      const started = GitHubDeviceStartResponseSchema.parse(await readJsonUnchecked<unknown>("/api/github/device/start", { method: "POST" }));
       setFlow(started);
       setNextPollAt(new Date(Date.now() + started.intervalSeconds * 1000).toISOString());
       setCopied(false);

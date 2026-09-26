@@ -2,7 +2,7 @@ import { useEffect, useState, type ReactElement } from "react";
 
 import { PaneTerminal } from "../tasks/task-chat/live-pane-terminal.js";
 import { Button } from "../../components/ui/button.js";
-import { readJson } from "../../lib/api.js";
+import { readJsonUnchecked } from "../../lib/api.js";
 
 export type ProviderLoginSession = { paneId: string; label: string };
 
@@ -24,7 +24,7 @@ export function useProviderLogin({ reload }: { reload: (silent?: boolean) => Pro
   const startLogin = async (key: string, label: string, url: string): Promise<void> => {
     setLoginPending(key);
     try {
-      const session = await readJson<{ paneId: string }>(url, { method: "POST" });
+      const session = await readJsonUnchecked<{ paneId: string }>(url, { method: "POST" });
       setLogin({ paneId: session.paneId, label });
     } finally {
       setLoginPending(null);
@@ -34,7 +34,7 @@ export function useProviderLogin({ reload }: { reload: (silent?: boolean) => Pro
   const closeLogin = async (): Promise<void> => {
     const session = login;
     setLogin(null);
-    if (session) await readJson(`/api/admin/provider-login/${encodeURIComponent(session.paneId)}`, { method: "DELETE" }).catch(() => undefined);
+    if (session) await readJsonUnchecked(`/api/admin/provider-login/${encodeURIComponent(session.paneId)}`, { method: "DELETE" }).catch(() => undefined);
     await reload(true);
   };
 

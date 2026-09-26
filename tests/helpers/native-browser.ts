@@ -63,13 +63,12 @@ async function startRustServer(root: string, port: number): Promise<() => Promis
   } catch (error) { await stop(); throw error; }
 }
 
-export async function nativeBrowser(width = 1280, host = "127.0.0.1", reachableAddress?: string) {
+export async function nativeFixture(host = "127.0.0.1", reachableAddress?: string) {
   if (host !== "127.0.0.1") throw new Error("Rust browser fixtures require loopback");
   const directory = await mkdtemp(join(tmpdir(), "suplex-rust-browser-"));
   const port = reachableAddress ? Number(new URL(reachableAddress).port) : await loopbackPort();
   const base = `http://127.0.0.1:${port}`;
   let stopRust: (() => Promise<void>) | undefined;
-  let browser: Awaited<ReturnType<typeof chromium.launch>> | undefined;
   let database: DatabaseSync | undefined;
   try {
     stopRust = await startRustServer(directory, port);
@@ -108,16 +107,28 @@ export async function nativeBrowser(width = 1280, host = "127.0.0.1", reachableA
     const now = new Date().toISOString();
     database.prepare("INSERT INTO suplex_projects (id,company_id,name,repository_path,worktree_root,repository_identity,base_branch,setup_command,verification_command,root_profile_id,worker_profile_id,agent_task_policy_json,created_at,updated_at) VALUES (?,?,?,?,?,?,'main','','',?,?,'{}',?,?)")
       .run(project.id, company.id, project.name, repositoryPath, worktreeRoot, project.repository, project.rootProfileId, project.workerProfileId, now, now);
+    const openedDatabase = database;
+    return { directory, config: { port, databasePath, artifactRoot: join(directory, "data", "artifacts") }, database, userId: user.id, company, project, headers, api, createTask, base,
+      async restartRust() { await stopRust?.(); stopRust = await startRustServer(directory, port); },
+      async close(options: { preserveData?: boolean } = {}) { openedDatabase.close(); await stopRust?.(); if (!options.preserveData) await rm(directory, { recursive: true, force: true }); },
+    };
+  } catch (error) { database?.close(); await stopRust?.(); await rm(directory, { recursive: true, force: true }); throw error; }
+}
+
+export async function nativeBrowser(width = 1280, host = "127.0.0.1", reachableAddress?: string) {
+  const fixture = await nativeFixture(host, reachableAddress);
+  let browser: Awaited<ReturnType<typeof chromium.launch>> | undefined;
+  try {
     browser = await chromium.launch({ headless: true });
     const context = await browser.newContext({ viewport: { width, height: 844 } });
-    await context.addCookies(cookies.map(pair => { const index = pair.indexOf("="); return { name: pair.slice(0, index), value: pair.slice(index + 1), domain: host, path: "/" }; }));
+    await context.addCookies(fixture.headers.cookie.split("; ").map(pair => { const index = pair.indexOf("="); return { name: pair.slice(0, index), value: pair.slice(index + 1), domain: host, path: "/" }; }));
     const page = await context.newPage();
     const errors: string[] = [];
     page.on("pageerror", error => errors.push(error.message));
-    const openedBrowser = browser, openedDatabase = database;
-    return { directory, config: { port, databasePath, artifactRoot: join(directory, "data", "artifacts") }, database, userId: user.id, company, project, headers, api, createTask, browser, page, base, errors,
-      async restartRust() { await stopRust?.(); stopRust = await startRustServer(directory, port); },
-      async close(options: { preserveData?: boolean } = {}) { try { await openedBrowser.close(); } finally { openedDatabase.close(); await stopRust?.(); if (!options.preserveData) await rm(directory, { recursive: true, force: true }); } },
+    const openedBrowser = browser;
+    return { ...fixture, browser, page, errors,
+      async close(options: { preserveData?: boolean } = {}) { try { await openedBrowser.close(); } finally { await fixture.close(options); } },
     };
-  } catch (error) { await browser?.close(); database?.close(); await stopRust?.(); await rm(directory, { recursive: true, force: true }); throw error; }
+  } catch (error) { await browser?.close(); await fixture.close(); throw error; }
 }
+

@@ -256,3 +256,10 @@ The four one-shot TypeScript service oracle programs under `tests/support/task-{
 | `providers-api.test.ts` | `profiles::provider_catalog::tests::provider_routes_require_an_administrator_and_models_any_session` checks auth, private no-store response, model listing, and removed OpenRouter routes; `routes::provider_login::tests::provider_login_and_instance_routes_create_reuse_and_close_sign_in_panes` checks login reuse, instance creation, validation, and cleanup. Native provider enumeration reads local state and returns per-provider availability instead of an injected all-provider observation failure. |
 | `models-dev-catalog.test.ts` | `profiles::model_pricing::tests::parses_valid_prices_and_uses_source_cost_formula` and `catalog_read_shares_inflight_request_and_retries_failure` cover parsing, caching, invalid/unavailable data, and retry. |
 | `environment-settings-api.test.ts` | `routes::admin_platform::tests::environment_settings_default_and_persist_partial_administrator_updates` checks defaults, partial persistence, and administrator authority. |
+
+## Retired issue evidence TypeScript tests
+
+| Removed TS test | Retained native assertion |
+| --- | --- |
+| `bitbucket-evidence-upload.test.ts` | `integrations::bitbucket::tests::evidence_upload_recovers_lost_response_and_rejects_altered_or_redirected_bytes` checks retry without another write, exact byte hash, and refusal of an untrusted redirect. |
+| `issue-evidence-write-guards.test.ts` | `integrations::issue_tracker::tests::jira_evidence_upload_recovers_a_lost_response_only_after_hash_verification` and `jira_evidence_publication_rechecks_scope_and_confirms_owned_remote_text` check cancellation and current Jira scope before a write; the Bitbucket evidence test checks cancellation after discovery. |

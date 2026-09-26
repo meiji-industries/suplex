@@ -2,6 +2,8 @@ use super::{config::Installation, setup};
 use serde::{Deserialize, Serialize};
 use std::{
     fs, io,
+    io::{BufRead, Read, Write},
+    net::ToSocketAddrs,
     path::Path,
     process::{Command, Stdio},
     thread,
@@ -32,6 +34,7 @@ fn inspect(pid: u32) -> Option<OwnedProcess> {
     let field = |name: &str| -> Option<String> {
         let output = Command::new("ps")
             .args(["-p", &pid.to_string(), "-o", name])
+            .env("LC_ALL", "C")
             .output()
             .ok()?;
         output
@@ -92,9 +95,39 @@ pub fn host_running(installation: &Installation) -> bool {
                 })
         })
         .or_else(|| discover(installation));
-    current.is_some()
-        && std::net::TcpStream::connect((installation.bind_address.as_str(), installation.port))
-            .is_ok()
+    current.is_some() && http_ready(&installation.bind_address, installation.port)
+}
+
+// The public page proves HTTP readiness without waiting on optional provider probes.
+fn http_ready(host: &str, port: u16) -> bool {
+    let timeout = Duration::from_millis(500);
+    let Some(mut stream) = (host, port).to_socket_addrs().ok().and_then(|addresses| {
+        addresses
+            .into_iter()
+            .find_map(|address| std::net::TcpStream::connect_timeout(&address, timeout).ok())
+    }) else {
+        return false;
+    };
+    let host = if host.contains(':') {
+        format!("[{host}]")
+    } else {
+        host.to_owned()
+    };
+    if stream.set_read_timeout(Some(timeout)).is_err()
+        || stream.set_write_timeout(Some(timeout)).is_err()
+        || write!(
+            stream,
+            "GET /auth HTTP/1.1\r\nHost: {host}:{port}\r\nConnection: close\r\n\r\n"
+        )
+        .is_err()
+    {
+        return false;
+    }
+    let mut status = String::new();
+    io::BufReader::new(stream.take(64))
+        .read_line(&mut status)
+        .is_ok()
+        && (status.starts_with("HTTP/1.1 200 ") || status.starts_with("HTTP/1.0 200 "))
 }
 fn read(path: &Path) -> io::Result<Option<Registry>> {
     match fs::read(path) {
@@ -346,9 +379,7 @@ async fn supervise(installation: &Installation) -> Result<(), Box<dyn std::error
             }
             #[cfg(not(unix))]
             tokio::time::sleep(Duration::from_millis(100)).await;
-            if std::net::TcpStream::connect((installation.bind_address.as_str(), installation.port))
-                .is_ok()
-            {
+            if http_ready(&installation.bind_address, installation.port) {
                 break;
             }
             if Instant::now() >= ready_deadline {
@@ -425,10 +456,7 @@ pub fn start(installation: &Installation) -> Result<u32, Box<dyn std::error::Err
             .is_some_and(|registry| {
                 registry.process.pid == pid && matches(&registry.process) && registry.ready
             });
-        if registered
-            && std::net::TcpStream::connect((installation.bind_address.as_str(), installation.port))
-                .is_ok()
-        {
+        if registered && http_ready(&installation.bind_address, installation.port) {
             return Ok(pid);
         }
         thread::sleep(Duration::from_millis(100));
@@ -504,6 +532,25 @@ pub fn stop(installation: &Installation) -> Result<serde_json::Value, Box<dyn st
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn readiness_requires_an_http_response_from_the_application() {
+        for (status, expected) in [("500 Broken", false), ("200 OK", true)] {
+            let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+            let port = listener.local_addr().unwrap().port();
+            let server = thread::spawn(move || {
+                let (mut stream, _) = listener.accept().unwrap();
+                let mut reader = io::BufReader::new(&mut stream);
+                let mut request = String::new();
+                while !request.ends_with("\r\n\r\n") {
+                    assert!(reader.read_line(&mut request).unwrap() > 0);
+                }
+                assert!(request.starts_with("GET /auth HTTP/1.1\r\n"));
+                write!(stream, "HTTP/1.1 {status}\r\nContent-Length: 0\r\n\r\n").unwrap();
+            });
+            assert_eq!(http_ready("127.0.0.1", port), expected);
+            server.join().unwrap();
+        }
+    }
     #[test]
     fn stale_identity_cannot_signal_reused_pid() {
         let actual = inspect(std::process::id()).unwrap();

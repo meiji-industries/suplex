@@ -30,16 +30,17 @@ fn read_state(installation: &Installation) -> Value {
         .unwrap_or(json!({"kind":"idle"}))
 }
 fn update_running(installation: &Installation) -> io::Result<bool> {
-    if let Ok(mut active) = ACTIVE_CHILD.lock() {
-        if let Some(child) = active.as_mut() {
-            if child.try_wait()?.is_none() {
-                return Ok(true);
-            }
-            *active = None;
+    if let Ok(mut active) = ACTIVE_CHILD.lock()
+        && let Some(child) = active.as_mut()
+    {
+        if child.try_wait()?.is_none() {
+            return Ok(true);
         }
+        *active = None;
     }
     let lock = fs::OpenOptions::new()
         .create(true)
+        .truncate(false)
         .write(true)
         .open(installation.runtime.join("update.lock"))?;
     #[cfg(unix)]
@@ -56,7 +57,7 @@ fn update_running(installation: &Installation) -> io::Result<bool> {
         {
             return Ok(true);
         }
-        return Err(error);
+        Err(error)
     }
     #[cfg(not(unix))]
     {
@@ -86,13 +87,15 @@ fn run(root: &Path, name: &str, args: &[&str]) -> Result<String, Box<dyn std::er
     let mut child = command.spawn()?;
     let mut stdout = child.stdout.take().ok_or("Missing command stdout")?;
     let mut stderr = child.stderr.take().ok_or("Missing command stderr")?;
-    let read_out = thread::spawn(move || {
+    let (send_out, read_out) = std::sync::mpsc::sync_channel(1);
+    thread::spawn(move || {
         let mut bytes = Vec::new();
-        stdout.read_to_end(&mut bytes).map(|_| bytes)
+        let _ = send_out.send(stdout.read_to_end(&mut bytes).map(|_| bytes));
     });
-    let read_err = thread::spawn(move || {
+    let (send_err, read_err) = std::sync::mpsc::sync_channel(1);
+    thread::spawn(move || {
         let mut bytes = Vec::new();
-        stderr.read_to_end(&mut bytes).map(|_| bytes)
+        let _ = send_err.send(stderr.read_to_end(&mut bytes).map(|_| bytes));
     });
     let deadline = Instant::now() + Duration::from_secs(300);
     let mut cancelled = None;
@@ -121,15 +124,15 @@ fn run(root: &Path, name: &str, args: &[&str]) -> Result<String, Box<dyn std::er
         }
         thread::sleep(Duration::from_millis(100));
     };
-    let stdout = read_out
-        .join()
-        .map_err(|_| "Could not read command stdout")??;
-    let stderr = read_err
-        .join()
-        .map_err(|_| "Could not read command stderr")??;
     if let Some(reason) = cancelled {
         return Err(reason.into());
     }
+    let stdout = read_out
+        .recv_timeout(Duration::from_secs(1))
+        .map_err(|_| "Command stdout remained open after its process stopped")??;
+    let stderr = read_err
+        .recv_timeout(Duration::from_secs(1))
+        .map_err(|_| "Command stderr remained open after its process stopped")??;
     if !status.success() {
         return Err(format!(
             "{name} {} failed: {}",
@@ -151,9 +154,7 @@ fn canonical_remote(raw: &str) -> bool {
         let Ok(url) = url::Url::parse(raw) else {
             return false;
         };
-        if url.host_str() != Some("github.com")
-            || !url.query().is_none()
-            || !url.fragment().is_none()
+        if url.host_str() != Some("github.com") || url.query().is_some() || url.fragment().is_some()
         {
             return false;
         }
@@ -397,6 +398,7 @@ pub fn apply() -> Result<(), Box<dyn std::error::Error>> {
     fs::create_dir_all(&installation.runtime)?;
     let lock = fs::OpenOptions::new()
         .create(true)
+        .truncate(false)
         .write(true)
         .open(installation.runtime.join("update.lock"))?;
     #[cfg(unix)]
@@ -486,6 +488,15 @@ pub fn apply() -> Result<(), Box<dyn std::error::Error>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[cfg(unix)]
+    fn descendant_output_cannot_keep_a_finished_update_command_pending() {
+        let started = Instant::now();
+        let error = run(Path::new("/tmp"), "sh", &["-c", "sleep 3 & printf done"]).unwrap_err();
+        assert!(error.to_string().contains("remained open"), "{error}");
+        assert!(started.elapsed() < Duration::from_secs(2));
+    }
     #[test]
     fn remote_identity_accepts_only_canonical_suplex() {
         assert!(canonical_remote(

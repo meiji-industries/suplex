@@ -121,9 +121,9 @@ impl Installation {
                     "SUPLEX_TAILSCALE_ADDRESS is required for Tailscale-only startup".into(),
                 );
             }
-            if !(tailscale_exposure == "serve"
-                && matches!(bind_address.as_str(), "127.0.0.1" | "::1"))
-                && !is_tailscale_address(&bind_address)
+            if !(is_tailscale_address(&bind_address)
+                || tailscale_exposure == "serve"
+                    && matches!(bind_address.as_str(), "127.0.0.1" | "::1"))
             {
                 return Err(format!("Refusing non-Tailscale bind address: {bind_address}").into());
             }

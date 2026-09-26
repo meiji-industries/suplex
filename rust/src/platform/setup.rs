@@ -79,7 +79,7 @@ pub fn serve_route_matches(installation: &Installation, raw: &[u8]) -> bool {
         .split("//")
         .nth(1)
         .unwrap_or_default();
-    let route = format!("{host}");
+    let route = host.to_owned();
     value["Web"][route]["Handlers"]["/"]["Proxy"].as_str()
         == Some(serve_proxy(installation).as_str())
 }
@@ -207,4 +207,31 @@ pub fn run(local: bool) -> Result<(), Box<dyn std::error::Error>> {
         installation.reachable_address
     );
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn environment_updates_preserve_unrelated_settings_and_private_permissions() {
+        use std::os::unix::fs::PermissionsExt;
+        let root = std::env::temp_dir().join(format!("suplex-setup-{}", uuid::Uuid::new_v4()));
+        let path = root.join("suplex.env");
+        upsert_environment(&path, &[("SUPLEX_PORT", "4111"), ("UNRELATED", "keep")]).unwrap();
+        upsert_environment(
+            &path,
+            &[("SUPLEX_PORT", "4222"), ("SUPLEX_ACCESS_MODE", "local")],
+        )
+        .unwrap();
+        assert_eq!(
+            fs::read_to_string(&path).unwrap(),
+            "SUPLEX_PORT=4222\nUNRELATED=keep\nSUPLEX_ACCESS_MODE=local\n"
+        );
+        assert_eq!(
+            fs::metadata(&path).unwrap().permissions().mode() & 0o777,
+            0o600
+        );
+        fs::remove_dir_all(root).unwrap();
+    }
 }

@@ -332,9 +332,13 @@ pub fn prepare_task_displays(
 
 #[cfg(test)]
 mod tests {
-    use std::sync::{
-        Arc, Mutex,
-        atomic::{AtomicBool, AtomicUsize, Ordering},
+    use std::{
+        fs,
+        path::PathBuf,
+        sync::{
+            Arc, Mutex,
+            atomic::{AtomicBool, AtomicUsize, Ordering},
+        },
     };
 
     use serde_json::{Value, json};
@@ -568,6 +572,183 @@ mod tests {
             .unwrap();
         assert_eq!(SIGNALS.load(Ordering::SeqCst), 1);
         assert!(ids(&state).is_empty());
+    }
+
+    #[test]
+    fn archive_escalates_an_owned_command_that_ignores_term() {
+        static RUNNING: AtomicBool = AtomicBool::new(true);
+        static TERM: AtomicUsize = AtomicUsize::new(0);
+        static KILL: AtomicUsize = AtomicUsize::new(0);
+        fn signal(pid: i32, signal: Signal) -> nix::Result<()> {
+            assert_eq!(pid, -2);
+            match signal {
+                Signal::SIGTERM => {
+                    TERM.fetch_add(1, Ordering::SeqCst);
+                }
+                Signal::SIGKILL => {
+                    KILL.fetch_add(1, Ordering::SeqCst);
+                    RUNNING.store(false, Ordering::SeqCst);
+                }
+                other => panic!("unexpected signal {other:?}"),
+            }
+            Ok(())
+        }
+        RUNNING.store(true, Ordering::SeqCst);
+        TERM.store(0, Ordering::SeqCst);
+        KILL.store(0, Ordering::SeqCst);
+        let state = fixture(false);
+        state.lock().unwrap().running = Some(&RUNNING);
+        prepare_archive_displays(&herdr(state.clone()), &sessions(), signal)
+            .unwrap()
+            .close()
+            .unwrap();
+        assert_eq!(TERM.load(Ordering::SeqCst), 1);
+        assert_eq!(KILL.load(Ordering::SeqCst), 1);
+        assert!(ids(&state).is_empty());
+    }
+
+    #[test]
+    fn archive_never_signals_a_command_in_an_unowned_pane() {
+        static RUNNING: AtomicBool = AtomicBool::new(true);
+        RUNNING.store(true, Ordering::SeqCst);
+        let state = fixture(false);
+        {
+            let mut state = state.lock().unwrap();
+            state.panes[0] = foreign_pane("w1:p1");
+            state.running = Some(&RUNNING);
+        }
+        archive(&state, &sessions()).unwrap();
+        assert!(RUNNING.load(Ordering::SeqCst));
+        assert_eq!(ids(&state), ["w1:p1"]);
+    }
+
+    #[test]
+    #[ignore = "requires HERDR_ENV=1 and a live Herdr installation"]
+    fn archive_closes_a_real_owned_herdr_workspace_and_its_process() {
+        use crate::integrations::herdr::MetadataReport;
+
+        assert_eq!(std::env::var("HERDR_ENV").ok().as_deref(), Some("1"));
+        let directory = std::env::temp_dir().join(format!(
+            "suplex-archive-display-proof-{}",
+            uuid::Uuid::new_v4()
+        ));
+        fs::create_dir_all(&directory).unwrap();
+        let task_id = format!("task_archive_proof_{}", uuid::Uuid::new_v4());
+        let herdr = Herdr::default();
+        let (workspace, root) = herdr
+            .create_workspace(&format!("suplex-{task_id}"), directory.to_str().unwrap())
+            .unwrap();
+        struct Cleanup<'a> {
+            herdr: &'a Herdr,
+            workspace: String,
+            directory: PathBuf,
+        }
+        impl Drop for Cleanup<'_> {
+            fn drop(&mut self) {
+                if self
+                    .herdr
+                    .get_workspace(&self.workspace)
+                    .ok()
+                    .flatten()
+                    .is_some()
+                {
+                    let _ = self.herdr.close_workspace(&self.workspace);
+                }
+                let _ = fs::remove_dir_all(&self.directory);
+            }
+        }
+        let _cleanup = Cleanup {
+            herdr: &herdr,
+            workspace: workspace.workspace_id.clone(),
+            directory,
+        };
+        let worker = herdr
+            .split_pane(
+                &root.pane_id,
+                "right",
+                None,
+                _cleanup.directory.to_str().unwrap(),
+            )
+            .unwrap();
+        for pane in [&root, &worker] {
+            herdr
+                .report_pane_metadata(&MetadataReport {
+                    pane_id: pane.pane_id.clone(),
+                    source: "suplex".into(),
+                    title: Some("Archive cleanup proof".into()),
+                    tokens: vec![
+                        ("suplex_task_id".into(), task_id.clone()),
+                        ("suplex_binding_id".into(), "proof-session".into()),
+                    ],
+                    ..MetadataReport::default()
+                })
+                .unwrap();
+            herdr
+                .run_pane_command(&pane.pane_id, "exec /bin/zsh -f")
+                .unwrap();
+            let deadline = Instant::now() + Duration::from_secs(10);
+            loop {
+                let info = herdr.get_pane_process_info(&pane.pane_id).unwrap();
+                if !info.foreground_processes.is_empty()
+                    && info.foreground_processes.iter().all(|process| {
+                        Some(process.pid) == info.shell_pid
+                            && process.name == "zsh"
+                            && process
+                                .argv
+                                .as_ref()
+                                .is_some_and(|argv| argv.iter().any(|arg| arg == "-f"))
+                    })
+                {
+                    break;
+                }
+                assert!(
+                    Instant::now() < deadline,
+                    "pane did not reach a clean shell"
+                );
+                std::thread::sleep(Duration::from_millis(100));
+            }
+        }
+        herdr
+            .run_pane_command(&worker.pane_id, "sleep 300")
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let sleep_pid = loop {
+            let info = herdr.get_pane_process_info(&worker.pane_id).unwrap();
+            if let Some(pid) = info
+                .foreground_processes
+                .iter()
+                .find(|process| process.name == "sleep")
+                .map(|process| process.pid)
+            {
+                break pid;
+            }
+            assert!(Instant::now() < deadline, "sleep process was not found");
+            std::thread::sleep(Duration::from_millis(100));
+        };
+        let close = prepare_archive_displays(
+            &herdr,
+            &[ArchiveSession {
+                id: "proof-session".into(),
+                task_id,
+                pane_id: Some(root.pane_id.clone()),
+            }],
+            system_kill,
+        )
+        .unwrap();
+        close.close().unwrap();
+        assert!(
+            herdr
+                .get_workspace(&workspace.workspace_id)
+                .unwrap()
+                .is_none()
+        );
+        assert!(herdr.get_pane(&root.pane_id).unwrap().is_none());
+        assert!(herdr.get_pane(&worker.pane_id).unwrap().is_none());
+        assert_eq!(
+            nix::sys::signal::kill(nix::unistd::Pid::from_raw(sleep_pid as i32), None),
+            Err(nix::errno::Errno::ESRCH)
+        );
+        close.close().unwrap();
     }
 
     #[test]

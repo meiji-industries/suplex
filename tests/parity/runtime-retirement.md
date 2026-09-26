@@ -24,6 +24,8 @@ Source comparison revision: `6bb0a43f`. `cargo test --lib` runs the embedded Rus
 | `worker-turn-evidence.test.ts` | `coordination/worker_evidence.rs`: selected native tool IDs, head/tail cursors, UTF-16 budget and failure text | direct |
 | `task-archive-sessions.test.ts` | `tasks/archive/operations.rs`: incomplete/stale launch identity, missing server, native busy versus stale database state, idle native server stop, and active operation ownership | direct |
 | `worker-environment.test.ts` | `runtimes/git_guard.rs`: read and mutation policy, atomic executable refresh, real task rebase and conflict abort, all blocked push forms against an unchanged remote | rebase and refresh ported |
+| `task-archive-displays.test.ts` | `tasks/archive/displays.rs`: workspace and pane discovery, live ownership, missing observations, shell cleanup, command termination and escalation, group refusal fallback and retry | direct; escalation and unowned process ported |
+| `task-archive-displays.real.test.ts` | Ignored `tasks/archive/displays.rs::archive_closes_a_real_owned_herdr_workspace_and_its_process`: isolated live workspace, two metadata-bound panes, real sleep process, workspace/pane closure, process death, idempotent close | native real proof ported; unrun here |
 
 The five Claude files above are retired. `cargo test --lib runtimes::claude_code` passed 25/25 on this checkout. The old live-history test also asserted the identity of a cached JavaScript array; Rust returns an owned value, while the observable completed-line behavior remains covered.
 
@@ -33,6 +35,8 @@ The archive-session file is retired. `cargo test --lib archive_uses_live_native_
 
 The Worker Git guard file is retired. `cargo test --lib runtimes::git_guard` passed 4/4, including the new filesystem replacement and local-remote rebase regressions.
 
+The deterministic and real Herdr archive-display files are retired. `cargo test --lib tasks::archive::displays` passed 12 tests with one ignored live test. The live test compiles but was not run: `HERDR_ENV` is absent, and `HERDR.md` permits Herdr control only from a managed pane. Run its ignored Rust test from a Herdr-managed pane to renew the external proof.
+
 ## Remaining assigned files under review
 
-`codex-runtime.test.ts`, `delivery-operations.test.ts`, `github-delivery.test.ts`, `root-bridge.test.ts`, `root-controller-delegation.test.ts`, `root-controller-lifecycle.test.ts`, `root-controller-limits.test.ts`, `root-controller-recovery.test.ts`, `task-archive-displays.real.test.ts`, `task-archive-displays.test.ts`, `task-host.test.ts`, `worker-replacement-api.test.ts`, `worker-replacement.test.ts`, `workflows-delegation.test.ts`, `workflows-delivery-repairs.test.ts`, `workflows-delivery.test.ts`, and `workflows-intake.test.ts`. These need a file-by-file coverage decision before deletion. The real Herdr test requires a separate native real-environment equivalent; fake Rust tests do not claim it.
+`codex-runtime.test.ts`, `delivery-operations.test.ts`, `github-delivery.test.ts`, `root-bridge.test.ts`, `root-controller-delegation.test.ts`, `root-controller-lifecycle.test.ts`, `root-controller-limits.test.ts`, `root-controller-recovery.test.ts`, `task-host.test.ts`, `worker-replacement-api.test.ts`, `worker-replacement.test.ts`, `workflows-delegation.test.ts`, `workflows-delivery-repairs.test.ts`, `workflows-delivery.test.ts`, and `workflows-intake.test.ts`. These need a file-by-file coverage decision before deletion.

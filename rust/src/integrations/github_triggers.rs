@@ -329,16 +329,17 @@ fn update_rule(
 }
 
 /// `GithubTriggerRepository.record`: append activity and the check outcome.
+/// A check without an error succeeded.
 fn record(
     database: &mut SuplexDatabase,
     rule: &Rule,
     activity: &[Activity],
-    success: bool,
     error: Option<&str>,
     next_retry_at: Option<&str>,
     disable: bool,
     verify: impl FnOnce(&SuplexDatabase) -> DatabaseResult<()>,
 ) -> DatabaseResult<bool> {
+    let success = error.is_none();
     database.transaction(true, |database| {
         verify(database)?;
         let mut all = stored_activity(database, &rule.company_id, &rule.id)?;
@@ -973,7 +974,6 @@ pub async fn check<D: Db>(
                 database,
                 &rule,
                 &activity,
-                false,
                 Some(&text),
                 Some(&retry_at),
                 false,
@@ -1013,7 +1013,6 @@ async fn preview<D: Db>(
                 database,
                 rule,
                 &[],
-                false,
                 Some("Repository binding changed. The rule was disabled."),
                 Some(&retry),
                 true,
@@ -1067,16 +1066,9 @@ async fn preview<D: Db>(
         }));
     }
     let recorded = db(database, |database| {
-        record(
-            database,
-            rule,
-            activity,
-            true,
-            None,
-            None,
-            false,
-            |database| same_local(database, user_id, company_id, config, &expected),
-        )
+        record(database, rule, activity, None, None, false, |database| {
+            same_local(database, user_id, company_id, config, &expected)
+        })
     })?;
     if !recorded {
         return Err(public(CHANGED, 409));
@@ -1244,7 +1236,6 @@ fn record_failure<D: Db>(
             database,
             rule,
             activity,
-            false,
             Some(&text),
             Some(&retry),
             false,
@@ -1295,7 +1286,6 @@ async fn admit<D: Db>(
                 database,
                 rule,
                 &[],
-                false,
                 Some("Repository binding changed. The rule was disabled."),
                 Some(&retry),
                 true,
@@ -1570,7 +1560,6 @@ impl<D: Db> Pass<'_, D> {
                     database,
                     rule,
                     activity,
-                    false,
                     Some(UNAVAILABLE),
                     Some(&retry),
                     false,
@@ -1578,24 +1567,15 @@ impl<D: Db> Pass<'_, D> {
                 )
             })?;
         } else if !db(database, |database| {
-            record(
-                database,
-                rule,
-                activity,
-                true,
-                None,
-                None,
-                false,
-                |database| {
-                    same_local(
-                        database,
-                        &rule.authority_user_id,
-                        &rule.company_id,
-                        &self.config,
-                        &self.expected,
-                    )
-                },
-            )
+            record(database, rule, activity, None, None, false, |database| {
+                same_local(
+                    database,
+                    &rule.authority_user_id,
+                    &rule.company_id,
+                    &self.config,
+                    &self.expected,
+                )
+            })
         })? {
             return Err(public(CHANGED, 409));
         }
@@ -1788,7 +1768,6 @@ fn create_captured(
                 root: Path::new(""),
                 images: &[],
             },
-            body.workflow.as_str(),
             now,
             move |id| {
                 let _ = sender.send(id);

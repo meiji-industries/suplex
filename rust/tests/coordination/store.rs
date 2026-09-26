@@ -42,7 +42,7 @@ mod tests {
             start_queued: true,
             copied_from_task_id: None,
             depends_on: vec![],
-            pull_request_dependencies: vec![],
+            pull_request_dependencies: vec![], workflow: crate::coordination::workflows::Workflow::Standard,
         };
         let task = repository::create(&mut database, &prepared, now)
             .unwrap()
@@ -364,7 +364,7 @@ mod tests {
             start_queued: true,
             copied_from_task_id: None,
             depends_on: vec![],
-            pull_request_dependencies: vec![],
+            pull_request_dependencies: vec![], workflow: crate::coordination::workflows::Workflow::Standard,
         };
         let a = repository::create(&mut database, &first, now)
             .unwrap()
@@ -460,7 +460,7 @@ mod tests {
             start_queued: true,
             copied_from_task_id: None,
             depends_on: vec![],
-            pull_request_dependencies: vec![],
+            pull_request_dependencies: vec![], workflow: crate::coordination::workflows::Workflow::Standard,
         };
         let task = repository::create(&mut database, &prepared, now)
             .unwrap()
@@ -600,7 +600,7 @@ mod tests {
             start_queued: true,
             copied_from_task_id: None,
             depends_on: vec![],
-            pull_request_dependencies: vec![],
+            pull_request_dependencies: vec![], workflow: crate::coordination::workflows::Workflow::Standard,
         };
         let task = repository::create(&mut database, &prepared, now)
             .unwrap()
@@ -720,7 +720,7 @@ mod tests {
             start_queued: true,
             copied_from_task_id: None,
             depends_on: vec![],
-            pull_request_dependencies: vec![],
+            pull_request_dependencies: vec![], workflow: crate::coordination::workflows::Workflow::Standard,
         };
         let created = repository::create(&mut database, &prepared, now).unwrap();
         assert!(created.created);

@@ -300,7 +300,7 @@ fn fixture(target: &str) -> Fixture {
         start_queued: true,
         copied_from_task_id: None,
         depends_on: vec![],
-        pull_request_dependencies: vec![],
+        pull_request_dependencies: vec![], workflow: crate::coordination::workflows::Workflow::Standard,
     };
     let task_id = repository::create(&mut database, &prepared, now)
         .unwrap()
@@ -745,7 +745,7 @@ async fn observing_a_pull_request_another_task_names_records_the_observation() {
             start_queued: true,
             copied_from_task_id: None,
             depends_on: vec![],
-            pull_request_dependencies: vec![],
+            pull_request_dependencies: vec![], workflow: crate::coordination::workflows::Workflow::Standard,
         },
         Utc::now(),
     )

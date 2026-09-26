@@ -214,7 +214,7 @@ mod host_tests {
                 start_queued: true,
                 copied_from_task_id: None,
                 depends_on: vec![],
-                pull_request_dependencies: vec![],
+                pull_request_dependencies: vec![], workflow: crate::coordination::workflows::Workflow::Standard,
             };
             repository::create(&mut database, &prepared, now)
                 .unwrap()
@@ -300,7 +300,7 @@ mod host_tests {
                 start_queued: false,
                 copied_from_task_id: None,
                 depends_on: vec![],
-                pull_request_dependencies: vec![],
+                pull_request_dependencies: vec![], workflow: crate::coordination::workflows::Workflow::Standard,
             };
             let waiting = repository::create(&mut database, &prepared, Utc::now())
                 .unwrap()
@@ -495,7 +495,7 @@ mod host_tests {
                 start_queued: false,
                 copied_from_task_id: None,
                 depends_on: vec![],
-                pull_request_dependencies: vec![],
+                pull_request_dependencies: vec![], workflow: crate::coordination::workflows::Workflow::Standard,
             };
             let other = repository::create(&mut database, &prepared, Utc::now())
                 .unwrap()
@@ -1157,7 +1157,7 @@ mod host_tests {
                 start_queued: true,
                 copied_from_task_id: None,
                 depends_on: vec![],
-                pull_request_dependencies: vec![],
+                pull_request_dependencies: vec![], workflow: crate::coordination::workflows::Workflow::Standard,
             };
             let task = repository::create(&mut database, &prepared, now)
                 .unwrap()
@@ -1649,7 +1649,7 @@ mod host_tests {
                 start_queued: true,
                 copied_from_task_id: None,
                 depends_on: vec![],
-                pull_request_dependencies: vec![],
+                pull_request_dependencies: vec![], workflow: crate::coordination::workflows::Workflow::Standard,
             };
             repository::create(&mut database, &prepared, Utc::now())
                 .unwrap()
@@ -1772,7 +1772,7 @@ mod host_tests {
                 start_queued: true,
                 copied_from_task_id: None,
                 depends_on: vec![],
-                pull_request_dependencies: vec![],
+                pull_request_dependencies: vec![], workflow: crate::coordination::workflows::Workflow::Standard,
             };
             let task = repository::create(&mut database, &prepared, Utc::now())
                 .unwrap()

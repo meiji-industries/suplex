@@ -50,7 +50,7 @@ mod tests {
             root_profile: serde_json::from_value(json!({"profileId":"root_profile","provider":"codex","model":"gpt-6-sol","reasoningLevel":"medium","serviceTier":"default"})).unwrap(),
             worker_profile: serde_json::from_value(json!({"profileId":"worker_profile","provider":"codex","model":"gpt-6-sol","reasoningLevel":"medium","serviceTier":"default"})).unwrap(),
             advisor_profiles: serde_json::from_value(json!({})).unwrap(), issue: None, start_queued: false,
-            copied_from_task_id: None, depends_on: vec![], pull_request_dependencies: vec![],
+            copied_from_task_id: None, depends_on: vec![], pull_request_dependencies: vec![], workflow: crate::coordination::workflows::Workflow::Standard,
         }, now).unwrap().task;
         database.connection().execute("INSERT INTO suplex_users (id,display_name,username,role,status,created_at,updated_at,identity_version) VALUES ('timeline_member','Member','user_v1_timeline_member','member','active',?1,?1,1)", [&stamp]).unwrap();
         database.connection().execute("INSERT INTO suplex_memberships (user_id,company_id,created_at) VALUES ('timeline_member','timeline_company',?1)", [&stamp]).unwrap();

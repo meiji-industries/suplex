@@ -47,6 +47,8 @@ pub struct PreparedTask {
     pub depends_on: Vec<String>,
     /// Observed `blockedByPullRequests`, written before a queued task is admitted.
     pub pull_request_dependencies: Vec<Value>,
+    /// The workflow the task runs; a non-Standard workflow is written after creation.
+    pub workflow: crate::coordination::workflows::Workflow,
 }
 
 #[derive(Clone, Debug, Eq, PartialEq)]

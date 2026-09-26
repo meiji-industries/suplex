@@ -343,7 +343,7 @@ mod tests {
                 start_queued: true,
                 copied_from_task_id: None,
                 depends_on: vec![],
-                pull_request_dependencies: vec![],
+                pull_request_dependencies: vec![], workflow: crate::coordination::workflows::Workflow::Standard,
             };
             let task = repository::create(&mut database, &prepared, now)
                 .unwrap()

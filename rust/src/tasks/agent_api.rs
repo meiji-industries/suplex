@@ -1990,19 +1990,19 @@ fn write(
     principal: &Principal,
     raw: &TaskCreateBody,
     pending: &Pending,
-    base_sha: &str,
-    source: sources::CreationSource,
+    captured: (sources::CreationSource, String),
     copied_from: Option<&str>,
     artifact_root: Option<&std::path::Path>,
-    now: DateTime<Utc>,
 ) -> DatabaseResult<Creation> {
+    let (source, base_sha) = captured;
+    let now = Utc::now();
     let dry_run = raw.dry_run == Some(true);
     let request = &pending.resolved.request;
     let mut prepared = prepare_agent_task(
         database,
         principal,
         pending,
-        base_sha,
+        &base_sha,
         source,
         copied_from,
         now,
@@ -2085,7 +2085,7 @@ pub async fn create(
     pending.pull_requests = pull_request_dependencies::observe(&repository, &numbers)
         .await
         .map_err(pull_request_unavailable)?;
-    let (source, base_sha) = super::creation::capture(
+    let captured = super::creation::capture(
         state,
         &pending.project,
         &pending.resolved.request,
@@ -2099,11 +2099,9 @@ pub async fn create(
             principal,
             raw,
             &pending,
-            &base_sha,
-            source,
+            captured,
             copied_from,
             artifact_root.as_deref(),
-            Utc::now(),
         )
     })
 }

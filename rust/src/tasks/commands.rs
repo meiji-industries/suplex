@@ -17,7 +17,7 @@ use crate::{
     coordination::{
         advisor_bridge::AdvisorRole,
         root_prompts, root_session_store,
-        workflows::{self, AgentSelection},
+        workflows::{self, AgentSelection, Workflow},
     },
     http::contracts::typed::{
         projects::ProjectProviderPolicy,
@@ -371,6 +371,7 @@ pub fn prepare_local_user_task(
         copied_from_task_id: None,
         depends_on: input.depends_on.clone(),
         pull_request_dependencies: vec![],
+        workflow: input.workflow,
     })
 }
 
@@ -419,7 +420,6 @@ pub fn create_user_task(
         expected_project,
         prepared,
         None,
-        "standard",
         now,
         wake,
     )
@@ -431,7 +431,6 @@ pub fn create_user_task_with_images(
     expected_project: &Project,
     prepared: &PreparedTask,
     files: ImageFiles<'_>,
-    workflow: &str,
     now: DateTime<Utc>,
     wake: impl FnOnce(String) + Send + 'static,
 ) -> DatabaseResult<TaskWrite> {
@@ -441,7 +440,6 @@ pub fn create_user_task_with_images(
         expected_project,
         prepared,
         Some((files.root, files.images)),
-        workflow,
         now,
         wake,
     )
@@ -491,7 +489,6 @@ fn create_user_task_inner(
     expected_project: &Project,
     prepared: &PreparedTask,
     images: Option<(&Path, &[DecodedTaskImage])>,
-    workflow: &str,
     now: DateTime<Utc>,
     wake: impl FnOnce(String) + Send + 'static,
 ) -> DatabaseResult<TaskWrite> {
@@ -520,10 +517,10 @@ fn create_user_task_inner(
             )?,
             None => repository::create(database, prepared, now)?,
         };
-        if result.created && workflow != "standard" {
+        if result.created && prepared.workflow != Workflow::Standard {
             database.connection().execute(
                 "UPDATE suplex_task_controls SET workflow = ?1 WHERE task_id = ?2",
-                params![workflow, result.task.id],
+                params![prepared.workflow, result.task.id],
             )?;
         }
         if result.task.status == TaskStatus::Active {
@@ -1317,7 +1314,7 @@ mod tests {
             start_queued: false,
             copied_from_task_id: None,
             depends_on: vec![],
-            pull_request_dependencies: vec![],
+            pull_request_dependencies: vec![], workflow: crate::coordination::workflows::Workflow::Standard,
         };
         (filename, database, user.id, prepared)
     }
@@ -1908,7 +1905,7 @@ mod tests {
             start_queued: false,
             copied_from_task_id: None,
             depends_on: vec![],
-            pull_request_dependencies: vec![],
+            pull_request_dependencies: vec![], workflow: crate::coordination::workflows::Workflow::Standard,
         };
         let artifact_root = filename.with_extension("artifacts");
         let image = DecodedTaskImage {
@@ -1927,7 +1924,6 @@ mod tests {
                 root: &artifact_root,
                 images: std::slice::from_ref(&image),
             },
-            "standard",
             now,
             move |_| {
                 count.fetch_add(1, Ordering::SeqCst);
@@ -1994,7 +1990,6 @@ mod tests {
                 root: &artifact_root,
                 images: std::slice::from_ref(&image),
             },
-            "standard",
             now,
             move |_| {
                 count.fetch_add(1, Ordering::SeqCst);
@@ -2027,7 +2022,6 @@ mod tests {
                     root: &artifact_root,
                     images: std::slice::from_ref(&image)
                 },
-                "standard",
                 now,
                 |_| {},
             )

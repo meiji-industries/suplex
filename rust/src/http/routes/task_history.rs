@@ -20,7 +20,14 @@ use serde_json::{Value, json};
 
 use crate::{
     coordination::root_session_store,
-    http::{AppState, contracts::typed::finding, validation},
+    http::{
+        AppState,
+        contracts::typed::{
+            agent_api::query_object,
+            tasks::{TaskHistoryQuery, TaskSessionParams},
+        },
+        validation::{ValidPath, valid},
+    },
     platform::database::SuplexDatabase,
     runtimes::{task_harness::ReaderSession, task_harness_registry},
 };
@@ -40,47 +47,6 @@ pub fn router() -> Router<AppState> {
             "/api/tasks/{task_id}/sessions/{session_id}/history/live",
             get(live),
         )
-}
-
-fn validate_params(task_id: &str, session_id: &str) -> Result<(), Box<Response>> {
-    let mut findings = Vec::new();
-    if task_id.is_empty() {
-        findings.push(finding("too_small", &[json!("taskId")]));
-    }
-    if session_id.is_empty() {
-        findings.push(finding("too_small", &[json!("sessionId")]));
-    }
-    if findings.is_empty() {
-        Ok(())
-    } else {
-        Err(Box::new(validation::validation_error_public(findings)))
-    }
-}
-
-fn before_query(query: Option<&str>) -> Result<Option<String>, Box<Response>> {
-    let before = query
-        .into_iter()
-        .flat_map(|query| url::form_urlencoded::parse(query.as_bytes()))
-        .filter(|(name, _)| name == "before")
-        .map(|(_, value)| value.into_owned())
-        .collect::<Vec<_>>();
-    let code = if before.len() > 1 {
-        Some("invalid_type")
-    } else {
-        before
-            .first()
-            .and_then(|value| match value.encode_utf16().count() {
-                0 => Some("too_small"),
-                1..=512 => None,
-                _ => Some("too_big"),
-            })
-    };
-    if let Some(code) = code {
-        return Err(Box::new(validation::validation_error_public(vec![
-            finding(code, &[json!("before")]),
-        ])));
-    }
-    Ok(before.into_iter().next())
 }
 
 #[derive(Clone)]
@@ -158,15 +124,15 @@ fn page(messages: &[Value], before: Option<&str>) -> Result<Value, TaskError> {
 
 async fn history(
     State(state): State<AppState>,
-    Path((task_id, session_id)): Path<(String, String)>,
+    ValidPath(TaskSessionParams {
+        task_id,
+        session_id,
+    }): ValidPath<TaskSessionParams>,
     RawQuery(query): RawQuery,
     headers: HeaderMap,
 ) -> Response {
-    if let Err(response) = validate_params(&task_id, &session_id) {
-        return *response;
-    }
-    let before = match before_query(query.as_deref()) {
-        Ok(value) => value,
+    let before = match valid::<TaskHistoryQuery>(query_object(query.as_deref())) {
+        Ok(query) => query.before,
         Err(response) => return *response,
     };
     let (user_id, cookies) = match authorize(&state, &headers) {
@@ -421,7 +387,10 @@ async fn live(
     headers: HeaderMap,
     upgrade: WebSocketUpgrade,
 ) -> Response {
-    if let Err(response) = validate_params(&task_id, &session_id) {
+    // The WebSocket upgrade check runs before the params, as an extractor.
+    if let Err(response) =
+        valid::<TaskSessionParams>(json!({"taskId": task_id, "sessionId": session_id}))
+    {
         return *response;
     }
     let (user_id, cookies) = match authorize(&state, &headers) {

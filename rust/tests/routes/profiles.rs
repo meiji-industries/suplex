@@ -1,6 +1,16 @@
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::http::validation::test_body;
+    use axum::body::Bytes;
+    use serde_json::Value;
+
+    async fn create(state: State<AppState>, headers: HeaderMap, body: Bytes) -> Response {
+        match test_body(&headers, &body) {
+            Ok(body) => super::create(state, headers, body).await,
+            Err(response) => *response,
+        }
+    }
     use crate::http::session;
     use crate::platform::database::{OpenMode, SuplexDatabase};
     use axum::{
@@ -10,15 +20,15 @@ mod tests {
 
     #[tokio::test]
     async fn profile_response_keeps_zod_field_order() {
-        let response = validated_response(
-            "projects.ProfileResponseSchema",
-            json!({
+        let response = profile_response(
+            Ok(serde_json::from_value(json!({
                 "id": "profile_fixed", "name": "Fixed", "role": "worker",
                 "avatarSeed": "0123456789abcdef0123456789abcdef", "provider": "codex",
                 "model": "gpt-6-sol", "reasoningLevel": "medium", "serviceTier": "priority",
                 "providerInstanceId": null, "archivedAt": null,
                 "createdAt": "2026-09-24T00:00:00.000Z", "updatedAt": "2026-09-24T00:00:00.000Z"
-            }),
+            }))
+            .unwrap()),
             StatusCode::OK,
         );
         assert_eq!(response.status(), StatusCode::OK);

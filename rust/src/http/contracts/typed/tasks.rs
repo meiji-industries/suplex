@@ -1,18 +1,24 @@
 use crate::coordination::workflows::Workflow;
 use crate::tasks::control::DeliveryTarget;
-pub(crate) use crate::tasks::control::{optional_trimmed, trimmed};
+pub(crate) use crate::tasks::control::trimmed;
 use garde::Validate;
 use serde::{Deserialize, Deserializer, Serialize};
-use serde_json::{Map, Value};
+use serde_json::{Value, json};
 
 use super::{
-    ContractFailure, ContractResult, finding, garde_findings, id_1_256 as check_task_id, object,
-    optional_nonnull, present_nullable, visual_evidence as check_visual_evidence,
+    Contract, ContractFailure, ContractResult, Fields, MAX, advisors, choice, flag, formatted,
+    id_1_256 as check_task_id, int, list, nullable, one_of, optional_nonnull, params, present,
+    present_nullable, rule, tagged, text, trimmed as trimmed_text, union, url,
+    visual_evidence as check_visual_evidence,
 };
 
 const MAX_TASK_IMAGES: usize = 8;
 const MAX_TASK_IMAGE_BASE64_LENGTH: usize = 11_184_812;
 const MAX_TASK_DEPENDENCIES: usize = 50;
+pub(crate) const MAX_SAFE: f64 = 9_007_199_254_740_991.0;
+pub(crate) const VISUAL_EVIDENCE: &[&str] = &["off", "capture", "required"];
+const IMAGE_TYPES: &[&str] = &["image/png", "image/jpeg", "image/webp", "image/gif"];
+pub const WORKTREE_APPS: &[&str] = &["finder", "cursor", "vscode", "ghostty", "terminal"];
 
 #[derive(Debug, Clone, Serialize, Deserialize, Validate)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -198,143 +204,152 @@ pub enum IssueAssociation {
     },
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Validate)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TaskIdParams {
-    #[garde(custom(check_task_id))]
     pub task_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TaskArtifactParams {
+    pub task_id: String,
+    pub artifact_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TaskSessionParams {
+    pub task_id: String,
+    pub session_id: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TaskHistoryQuery {
+    pub before: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TaskAgentsBatchQuery {
+    pub task_id: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct TaskDetailsBody {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub title: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub description: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub root_profile_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worker_profile_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub delivery_target: Option<DeliveryTarget>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run_project_tests: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub visual_evidence: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workflow: Option<Workflow>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub advisor_profile_ids: Option<AdvisorProfileIds>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct TaskRenameBody {
+    pub title: String,
+}
+
+#[derive(Debug, Clone, Copy, Default, Eq, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TaskArchiveBody {
+    #[serde(default)]
+    pub confirm_discard_dirty: bool,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TaskNoteBody {
+    pub note: String,
+}
+
+pub use crate::tasks::control::{TaskCoordinatorReplacementBody, TaskWorkerReplacementBody};
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TaskAgentSelectionBody {
+    pub role: String,
+    pub expected_profile_id: String,
+    pub expected_session_id: Option<String>,
+    pub profile_id: String,
+    pub direction: String,
+    pub resume: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub question_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, Validate)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct TaskDetailsBody {
-    #[serde(
-        default,
-        deserialize_with = "optional_trimmed",
-        skip_serializing_if = "Option::is_none"
-    )]
-    #[garde(inner(length(utf16, min = 1)))]
-    pub title: Option<String>,
-    #[serde(
-        default,
-        deserialize_with = "optional_trimmed",
-        skip_serializing_if = "Option::is_none"
-    )]
-    #[garde(skip)]
-    pub description: Option<String>,
-    #[serde(
-        default,
-        deserialize_with = "optional_nonnull",
-        skip_serializing_if = "Option::is_none"
-    )]
-    #[garde(inner(custom(check_task_id)))]
-    pub root_profile_id: Option<String>,
-    #[serde(
-        default,
-        deserialize_with = "optional_nonnull",
-        skip_serializing_if = "Option::is_none"
-    )]
-    #[garde(inner(custom(check_task_id)))]
-    pub worker_profile_id: Option<String>,
-    #[serde(
-        default,
-        deserialize_with = "optional_nonnull",
-        skip_serializing_if = "Option::is_none"
-    )]
-    #[garde(skip)]
-    pub delivery_target: Option<DeliveryTarget>,
-    #[serde(
-        default,
-        deserialize_with = "optional_nonnull",
-        skip_serializing_if = "Option::is_none"
-    )]
-    #[garde(skip)]
-    pub run_project_tests: Option<bool>,
-    #[serde(
-        default,
-        deserialize_with = "optional_nonnull",
-        skip_serializing_if = "Option::is_none"
-    )]
-    #[garde(inner(custom(check_visual_evidence)))]
-    pub visual_evidence: Option<String>,
-    #[serde(
-        default,
-        deserialize_with = "optional_nonnull",
-        skip_serializing_if = "Option::is_none"
-    )]
-    #[garde(skip)]
-    pub workflow: Option<Workflow>,
-    #[serde(
-        default,
-        deserialize_with = "optional_nonnull",
-        skip_serializing_if = "Option::is_none"
-    )]
-    #[garde(dive)]
-    pub advisor_profile_ids: Option<AdvisorProfileIds>,
+pub struct TaskDependenciesBody {
+    #[serde(default)]
+    #[garde(length(max = MAX_TASK_DEPENDENCIES), inner(custom(check_task_id)))]
+    pub depends_on: Vec<String>,
+    #[serde(default)]
+    #[garde(length(max = MAX_TASK_DEPENDENCIES), dive)]
+    pub blocked_by_pull_requests: Vec<PullRequestDependency>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Validate)]
-#[serde(deny_unknown_fields)]
-pub struct TaskRenameBody {
-    #[serde(deserialize_with = "trimmed")]
-    #[garde(length(utf16, min = 1))]
-    pub title: String,
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TaskIssueBody {
+    pub issue: Option<IssueAssociation>,
 }
 
-fn safe_positive_integer(number: &serde_json::Number) -> Option<u64> {
-    let value = number.as_f64()?;
-    if value.is_finite() && value.fract() == 0.0 && (0.0..=9_007_199_254_740_991.0).contains(&value)
-    {
-        Some(value as u64)
-    } else {
-        None
-    }
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TaskContinueDeliveryBody {
+    pub delivery_target: DeliveryTarget,
 }
 
 fn js_u64<'de, D>(deserializer: D) -> Result<u64, D::Error>
 where
     D: Deserializer<'de>,
 {
-    let value = Value::deserialize(deserializer)?;
-    value
-        .as_number()
-        .and_then(safe_positive_integer)
-        .filter(|value| *value > 0)
-        .ok_or_else(|| serde::de::Error::custom("expected positive safe integer"))
+    let value = f64::deserialize(deserializer)?;
+    if value.fract() == 0.0 && (1.0..=MAX_SAFE).contains(&value) {
+        Ok(value as u64)
+    } else {
+        Err(serde::de::Error::custom("expected positive safe integer"))
+    }
 }
 
 fn check_idempotency_key(value: &str, _: &()) -> garde::Result {
     let bytes = value.as_bytes();
-    if (8..=128).contains(&bytes.len())
-        && bytes[0].is_ascii_alphanumeric()
-        && bytes[1..]
-            .iter()
-            .all(|byte| byte.is_ascii_alphanumeric() || matches!(*byte, b'.' | b'_' | b':' | b'-'))
-    {
-        Ok(())
-    } else {
-        Err(garde::Error::new("invalid_format"))
-    }
+    rule(
+        (8..=128).contains(&bytes.len())
+            && bytes[0].is_ascii_alphanumeric()
+            && bytes[1..].iter().all(|byte| {
+                byte.is_ascii_alphanumeric() || matches!(*byte, b'.' | b'_' | b':' | b'-')
+            }),
+        "invalid_format",
+    )
 }
 fn image_filename(value: &str, _: &()) -> garde::Result {
-    if value.contains(['/', '\\']) || value.contains("..") {
-        return Err(garde::Error::new("custom"));
-    }
-    Ok(())
+    rule(
+        !value.contains(['/', '\\']) && !value.contains(".."),
+        "custom",
+    )
 }
 fn image_mime(value: &str, _: &()) -> garde::Result {
-    if ["image/png", "image/jpeg", "image/webp", "image/gif"].contains(&value) {
-        Ok(())
-    } else {
-        Err(garde::Error::new("invalid_value"))
-    }
+    rule(IMAGE_TYPES.contains(&value), "invalid_value")
 }
 fn positive_safe_integer(value: &u64, _: &()) -> garde::Result {
-    if (1..=9_007_199_254_740_991).contains(value) {
-        Ok(())
-    } else {
-        Err(garde::Error::new("invalid_number"))
-    }
+    rule(
+        (1..=9_007_199_254_740_991).contains(value),
+        "invalid_number",
+    )
 }
 pub(crate) fn default_delivery_target() -> DeliveryTarget {
     DeliveryTarget::PullRequestDraft
@@ -349,911 +364,460 @@ pub(crate) fn default_workflow() -> Workflow {
     Workflow::Standard
 }
 
-// Collect enum findings before serde so one unknown variant does not hide other fields.
-fn task_enums(fields: &Map<String, Value>) -> (Map<String, Value>, Vec<Value>) {
-    let mut fields = fields.clone();
-    let mut findings = Vec::new();
-    for (name, valid, fallback) in [
-        (
-            "deliveryTarget",
-            fields
-                .get("deliveryTarget")
-                .and_then(Value::as_str)
-                .is_none_or(|value| DeliveryTarget::parse(value).is_some()),
-            "pull_request_draft",
-        ),
-        (
-            "visualEvidence",
-            fields
-                .get("visualEvidence")
-                .and_then(Value::as_str)
-                .is_none_or(|value| check_visual_evidence(value, &()).is_ok()),
-            "off",
-        ),
-        (
-            "workflow",
-            fields
-                .get("workflow")
-                .and_then(Value::as_str)
-                .is_none_or(|value| Workflow::parse(value).is_some()),
-            "standard",
-        ),
-    ] {
-        if !valid {
-            findings.push(issue("invalid_value", &format!(".{name}")));
-            fields.insert(name.into(), Value::String(fallback.into()));
-        }
+pub(crate) fn id() -> impl Fn(Option<&Value>) -> ContractResult<Value> + Copy {
+    text(1, 256)
+}
+
+/// `TaskImageInputSchema`.
+pub(crate) fn image(input: Option<&Value>) -> ContractResult<Value> {
+    Fields::new(input)?
+        .req("filename", formatted(1, 255, image_filename))
+        .req("mimeType", one_of(IMAGE_TYPES))
+        .req("base64", text(1, MAX_TASK_IMAGE_BASE64_LENGTH))
+        .strict()
+}
+
+/// `PullRequestDependencyInputSchema`.
+pub(crate) fn pull_request(input: Option<&Value>) -> ContractResult<Value> {
+    Fields::new(input)?
+        .req("number", int(1.0, MAX_SAFE))
+        .strict()
+}
+
+/// `TaskSourceInputSchema`.
+pub(crate) fn source(input: Option<&Value>) -> ContractResult<Value> {
+    tagged(input, "kind", |kind| {
+        let fields = Fields::new(input).ok()?.req("kind", present);
+        Some(match kind.as_str()? {
+            "issue" | "pull_request" => fields.req("number", int(1.0, MAX_SAFE)).strict(),
+            "branch" => fields.req("branch", text(1, MAX)).strict(),
+            _ => return None,
+        })
+    })
+}
+
+fn github_repository(value: &str, _: &()) -> garde::Result {
+    let parts = value.split('/').collect::<Vec<_>>();
+    rule(
+        parts.len() == 2
+            && parts.iter().all(|part| {
+                !part.is_empty()
+                    && part.bytes().all(|byte| {
+                        byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'.' | b'-')
+                    })
+            }),
+        "invalid_format",
+    )
+}
+
+fn digits(value: &str, _: &()) -> garde::Result {
+    rule(
+        !value.is_empty() && value.bytes().all(|byte| byte.is_ascii_digit()),
+        "invalid_format",
+    )
+}
+
+fn jira_key(value: &str, _: &()) -> garde::Result {
+    let (prefix, number) = value.rsplit_once('-').unwrap_or_default();
+    let mut prefix = prefix.bytes();
+    rule(
+        digits(number, &()).is_ok()
+            && prefix.next().is_some_and(|byte| byte.is_ascii_uppercase())
+            && prefix
+                .all(|byte| byte.is_ascii_uppercase() || byte.is_ascii_digit() || byte == b'_'),
+        "invalid_format",
+    )
+}
+
+fn parsed_url(value: Option<&Value>) -> ContractResult<url::Url> {
+    url::Url::parse(value.and_then(Value::as_str).unwrap_or_default())
+        .map_err(|_| ContractFailure::Unhandled)
+}
+
+/// The issue URL's own refinement: a GitHub URL. `new URL` throws on a bad one.
+fn github_url(input: Option<&Value>) -> ContractResult<Value> {
+    let value = formatted(0, MAX, url)(input)?;
+    if parsed_url(Some(&value))?.origin().ascii_serialization() == "https://github.com" {
+        Ok(value)
+    } else {
+        super::fail("custom")
     }
-    (fields, findings)
+}
+
+/// `IssueAssociationSchema`, with its URL refinement.
+pub(crate) fn issue_association(input: Option<&Value>) -> ContractResult<Value> {
+    tagged(input, "kind", |kind| {
+        let fields = Fields::new(input).ok()?.req("kind", present);
+        let mut fields = match kind.as_str()? {
+            "github" => fields
+                .req("repository", formatted(0, MAX, github_repository))
+                .req("number", int(1.0, MAX_SAFE))
+                .req("id", text(0, MAX))
+                .req("key", text(0, MAX))
+                .req("title", text(0, MAX))
+                .req("url", github_url),
+            "jira" => fields
+                .req("site", formatted(0, MAX, url))
+                .req("id", formatted(0, MAX, digits))
+                .req("key", formatted(0, MAX, jira_key))
+                .req("title", text(0, MAX))
+                .req("url", formatted(0, MAX, url)),
+            _ => return None,
+        };
+        fields.strict_keys();
+        if fields.refinable() {
+            Some(refine_issue(&mut fields, kind).and_then(|()| fields.finish()))
+        } else {
+            Some(fields.finish())
+        }
+    })
+}
+
+fn refine_issue(fields: &mut Fields, kind: &Value) -> ContractResult<()> {
+    let url = parsed_url(fields.raw("url"))?;
+    let raw = |name| fields.raw(name).and_then(Value::as_str).unwrap_or_default();
+    let matches = if kind == "github" {
+        let number = fields
+            .raw("number")
+            .and_then(Value::as_f64)
+            .unwrap_or_default();
+        let expected = format!(
+            "https://github.com/{}/issues/{}",
+            raw("repository"),
+            js_number(number)
+        );
+        url.as_str().eq_ignore_ascii_case(&expected)
+    } else {
+        let site = parsed_url(fields.raw("site"))?;
+        let expected = format!(
+            "{}/browse/{}",
+            site.origin().ascii_serialization(),
+            raw("key")
+        );
+        if site.scheme() != "https"
+            || !site
+                .host_str()
+                .is_some_and(|host| host.ends_with(".atlassian.net"))
+            || !site.username().is_empty()
+            || site.password().is_some()
+            || site.query().is_some()
+            || site.fragment().is_some()
+            || site.path() != "/"
+        {
+            fields.fail("custom", ".site");
+        }
+        url.as_str() == expected
+    };
+    if !matches || !url.username().is_empty() || url.password().is_some() {
+        fields.fail("custom", ".url");
+    }
+    Ok(())
+}
+
+/// JavaScript's rendering of a finite number in a template string.
+fn js_number(value: f64) -> String {
+    if value.fract() == 0.0 && value.abs() < 1e21 {
+        format!("{}", value as i64)
+    } else {
+        value.to_string()
+    }
+}
+
+fn dependencies(fields: Fields) -> Fields {
+    fields
+        .or("dependsOn", json!([]), list(id(), 0, MAX_TASK_DEPENDENCIES))
+        .or(
+            "blockedByPullRequests",
+            json!([]),
+            list(pull_request, 0, MAX_TASK_DEPENDENCIES),
+        )
+}
+
+/// `TaskInputSchema`.
+impl Contract for TaskCreateBody {
+    fn schema(input: Option<&Value>) -> ContractResult<Value> {
+        let fields = Fields::new(input)?
+            .req("projectId", id())
+            .req("title", trimmed_text(1, MAX))
+            .or("description", json!(""), trimmed_text(0, MAX))
+            .req("idempotencyKey", formatted(0, MAX, check_idempotency_key))
+            .or("images", json!([]), list(image, 0, MAX_TASK_IMAGES))
+            .opt("rootProfileId", id())
+            .opt("workerProfileId", id())
+            .or("startImmediately", json!(false), flag)
+            .or(
+                "deliveryTarget",
+                json!("pull_request_draft"),
+                choice::<DeliveryTarget>,
+            )
+            .or("runProjectTests", json!(true), flag)
+            .or("visualEvidence", json!("off"), one_of(VISUAL_EVIDENCE))
+            .opt("source", source)
+            .opt("issue", nullable(issue_association))
+            .or("workflow", json!("standard"), choice::<Workflow>)
+            .or("advisorProfileIds", json!({}), advisors);
+        dependencies(fields).strict()
+    }
 }
 
 pub fn parse_task_create(input: Option<&Value>) -> ContractResult<TaskCreateBody> {
-    let fields = object(input)?;
-    let shape = task_shape_findings(fields)?;
-    if !shape.is_empty() {
-        return Err(ContractFailure::Issues(shape));
-    }
-    let (normalized, mut findings) = task_enums(fields);
-    let parsed: TaskCreateBody = serde_path_to_error::deserialize(Value::Object(normalized))
-        .map_err(|error| {
-            ContractFailure::Issues(vec![finding(
-                "invalid_type",
-                &[Value::String(error.path().to_string())],
-            )])
-        })?;
-    if let Err(report) = parsed.validate() {
-        findings.extend(garde_findings(&report, &parsed));
-    }
-    if findings.is_empty() {
-        Ok(parsed)
-    } else {
-        Err(ContractFailure::Issues(findings))
-    }
+    TaskCreateBody::parse(input)
 }
 
-fn issue(code: &str, field: &str) -> Value {
-    serde_json::json!({"code": format!("invalid-{code}"), "field": field, "message": "Request value is invalid"})
+pub fn parse_task_dependencies(input: Option<&Value>) -> ContractResult<TaskDependenciesBody> {
+    TaskDependenciesBody::parse(input)
 }
 
-fn integer_finding(value: Option<&Value>, field: &str) -> Option<Value> {
-    let Some(Value::Number(number)) = value else {
-        return Some(issue("invalid_type", field));
-    };
-    if number.as_f64().is_some_and(|value| value <= 0.0) {
-        return Some(issue("too_small", field));
-    }
-    if number
-        .as_f64()
-        .is_some_and(|value| value > 9_007_199_254_740_991.0)
-    {
-        return Some(issue("too_big", field));
-    }
-    if safe_positive_integer(number).is_some_and(|value| value > 0) {
-        None
-    } else {
-        Some(issue("invalid_type", field))
-    }
-}
-
-fn task_shape_findings(fields: &Map<String, Value>) -> ContractResult<Vec<Value>> {
-    let mut errors = Vec::new();
-    for name in ["projectId", "title", "idempotencyKey"] {
-        if !fields.get(name).is_some_and(Value::is_string) {
-            errors.push(issue("invalid_type", &format!(".{name}")));
-        }
-    }
-    for name in ["description", "rootProfileId", "workerProfileId"] {
-        if fields.get(name).is_some_and(|value| !value.is_string()) {
-            errors.push(issue("invalid_type", &format!(".{name}")));
-        }
-    }
-    if let Some(images) = fields.get("images") {
-        if let Some(images) = images.as_array() {
-            for (index, image) in images.iter().enumerate() {
-                let prefix = format!(".images.{index}");
-                if let Some(image) = image.as_object() {
-                    if let Some(filename) = image.get("filename").and_then(Value::as_str) {
-                        let size = filename.encode_utf16().count();
-                        if size == 0 {
-                            errors.push(issue("too_small", &format!("{prefix}.filename")));
-                        }
-                        if size > 255 {
-                            errors.push(issue("too_big", &format!("{prefix}.filename")));
-                        }
-                        if filename.contains(['/', '\\']) || filename.contains("..") {
-                            errors.push(issue("custom", &format!("{prefix}.filename")));
-                        }
-                    } else {
-                        errors.push(issue("invalid_type", &format!("{prefix}.filename")));
-                    }
-                    if !image
-                        .get("mimeType")
-                        .and_then(Value::as_str)
-                        .is_some_and(|value| {
-                            ["image/png", "image/jpeg", "image/webp", "image/gif"].contains(&value)
-                        })
-                    {
-                        errors.push(issue("invalid_value", &format!("{prefix}.mimeType")));
-                    }
-                    if !image.get("base64").is_some_and(Value::is_string) {
-                        errors.push(issue("invalid_type", &format!("{prefix}.base64")));
-                    }
-                    if image
-                        .keys()
-                        .any(|name| !["filename", "mimeType", "base64"].contains(&name.as_str()))
-                    {
-                        errors.push(issue("unrecognized_keys", &prefix));
-                    }
-                } else {
-                    errors.push(issue("invalid_type", &prefix));
-                }
-            }
-        } else {
-            errors.push(issue("invalid_type", ".images"));
-        }
-    }
-    for name in ["startImmediately", "runProjectTests"] {
-        if fields.get(name).is_some_and(|value| !value.is_boolean()) {
-            errors.push(issue("invalid_type", &format!(".{name}")));
-        }
-    }
-    if let Some(source) = fields.get("source") {
-        errors.extend(source_findings(source));
-    }
-    if let Some(issue) = fields.get("issue").filter(|issue| !issue.is_null()) {
-        errors.extend(issue_findings(issue)?);
-    }
-    if let Some(advisors) = fields.get("advisorProfileIds") {
-        if let Some(advisors) = advisors.as_object() {
-            for role in ["reviewer", "planner_a", "planner_b", "rater"] {
-                if let Some(value) = advisors.get(role) {
-                    if let Some(value) = value.as_str() {
-                        let size = value.encode_utf16().count();
-                        if size == 0 {
-                            errors.push(issue("too_small", &format!(".advisorProfileIds.{role}")));
-                        }
-                        if size > 256 {
-                            errors.push(issue("too_big", &format!(".advisorProfileIds.{role}")));
-                        }
-                    } else {
-                        errors.push(issue("invalid_type", &format!(".advisorProfileIds.{role}")));
-                    }
-                }
-            }
-            if advisors.keys().any(|name| {
-                !["reviewer", "planner_a", "planner_b", "rater"].contains(&name.as_str())
-            }) {
-                errors.push(issue("unrecognized_keys", ".advisorProfileIds"));
-            }
-        } else {
-            errors.push(issue("invalid_type", ".advisorProfileIds"));
-        }
-    }
-    dependency_findings(fields, &mut errors);
-    if fields.keys().any(|name| {
-        ![
-            "projectId",
-            "title",
-            "description",
-            "idempotencyKey",
-            "images",
-            "rootProfileId",
-            "workerProfileId",
-            "startImmediately",
-            "deliveryTarget",
-            "runProjectTests",
-            "visualEvidence",
-            "source",
-            "issue",
-            "workflow",
-            "advisorProfileIds",
-            "dependsOn",
-            "blockedByPullRequests",
-        ]
-        .contains(&name.as_str())
-    }) {
-        errors.push(issue("unrecognized_keys", "."));
-    }
-    Ok(errors)
-}
-
-fn dependency_findings(fields: &Map<String, Value>, errors: &mut Vec<Value>) {
-    if let Some(dependencies) = fields.get("dependsOn") {
-        if let Some(dependencies) = dependencies.as_array() {
-            for (index, dependency) in dependencies.iter().enumerate() {
-                if let Some(dependency) = dependency.as_str() {
-                    let size = dependency.encode_utf16().count();
-                    if size == 0 {
-                        errors.push(issue("too_small", &format!(".dependsOn.{index}")));
-                    }
-                    if size > 256 {
-                        errors.push(issue("too_big", &format!(".dependsOn.{index}")));
-                    }
-                } else {
-                    errors.push(issue("invalid_type", &format!(".dependsOn.{index}")));
-                }
-            }
-        } else {
-            errors.push(issue("invalid_type", ".dependsOn"));
-        }
-    }
-    if let Some(dependencies) = fields.get("blockedByPullRequests") {
-        if let Some(dependencies) = dependencies.as_array() {
-            for (index, dependency) in dependencies.iter().enumerate() {
-                let prefix = format!(".blockedByPullRequests.{index}");
-                if let Some(dependency) = dependency.as_object() {
-                    if let Some(finding) =
-                        integer_finding(dependency.get("number"), &format!("{prefix}.number"))
-                    {
-                        errors.push(finding);
-                    }
-                    if dependency.keys().any(|name| name != "number") {
-                        errors.push(issue("unrecognized_keys", &prefix));
-                    }
-                } else {
-                    errors.push(issue("invalid_type", &prefix));
-                }
-            }
-        } else {
-            errors.push(issue("invalid_type", ".blockedByPullRequests"));
-        }
-    }
-}
-
-fn source_findings(source: &Value) -> Vec<Value> {
-    let Some(fields) = source.as_object() else {
-        return vec![issue("invalid_type", ".source")];
-    };
-    let Some(kind) = fields.get("kind").and_then(Value::as_str) else {
-        return vec![issue("invalid_union", ".source.kind")];
-    };
-    let mut errors = Vec::new();
-    match kind {
-        "issue" | "pull_request" => {
-            if let Some(finding) = integer_finding(fields.get("number"), ".source.number") {
-                errors.push(finding);
-            }
-        }
-        "branch" => match fields.get("branch").and_then(Value::as_str) {
-            Some("") => errors.push(issue("too_small", ".source.branch")),
-            Some(_) => {}
-            None => errors.push(issue("invalid_type", ".source.branch")),
-        },
-        _ => return vec![issue("invalid_union", ".source.kind")],
-    }
-    if fields
-        .keys()
-        .any(|name| name != "kind" && name != if kind == "branch" { "branch" } else { "number" })
-    {
-        errors.push(issue("unrecognized_keys", ".source"));
-    }
-    errors
-}
-
-fn issue_findings(value: &Value) -> ContractResult<Vec<Value>> {
-    let Some(fields) = value.as_object() else {
-        return Ok(vec![issue("invalid_type", ".issue")]);
-    };
-    let Some(kind) = fields.get("kind").and_then(Value::as_str) else {
-        return Ok(vec![issue("invalid_union", ".issue.kind")]);
-    };
-    if kind != "github" && kind != "jira" {
-        return Ok(vec![issue("invalid_union", ".issue.kind")]);
-    }
-    let mut errors = Vec::new();
-    if kind == "github" {
-        if let Some(repository) = fields.get("repository").and_then(Value::as_str) {
-            let parts: Vec<_> = repository.split('/').collect();
-            if parts.len() != 2
-                || parts.iter().any(|part| {
-                    part.is_empty()
-                        || !part.bytes().all(|byte| {
-                            byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'.' | b'-')
-                        })
-                })
-            {
-                errors.push(issue("invalid_format", ".issue.repository"));
-            }
-        } else {
-            errors.push(issue("invalid_type", ".issue.repository"));
-        }
-        if let Some(finding) = integer_finding(fields.get("number"), ".issue.number") {
-            errors.push(finding);
-        }
-    } else {
-        for name in ["site", "id", "key"] {
-            if !fields.get(name).is_some_and(Value::is_string) {
-                errors.push(issue("invalid_type", &format!(".issue.{name}")));
-            }
-        }
-        if let Some(id) = fields.get("id").and_then(Value::as_str)
-            && (id.is_empty() || !id.bytes().all(|byte| byte.is_ascii_digit()))
-        {
-            errors.push(issue("invalid_format", ".issue.id"));
-        }
-        if let Some(key) = fields.get("key").and_then(Value::as_str) {
-            let mut parts = key.rsplitn(2, '-');
-            let number = parts.next();
-            let prefix = parts.next();
-            if !number.is_some_and(|number| {
-                !number.is_empty() && number.bytes().all(|byte| byte.is_ascii_digit())
-            }) || !prefix.is_some_and(|prefix| {
-                let mut bytes = prefix.bytes();
-                bytes.next().is_some_and(|byte| byte.is_ascii_uppercase())
-                    && bytes.all(|byte| {
-                        byte.is_ascii_uppercase() || byte.is_ascii_digit() || byte == b'_'
-                    })
-            }) {
-                errors.push(issue("invalid_format", ".issue.key"));
-            }
-        }
-    }
-    for name in ["id", "key", "title", "url"] {
-        if !fields.get(name).is_some_and(Value::is_string)
-            && (kind == "github" || !["id", "key"].contains(&name))
-        {
-            errors.push(issue("invalid_type", &format!(".issue.{name}")));
-        }
-    }
-    let url = fields
-        .get("url")
-        .and_then(Value::as_str)
-        .and_then(|value| url::Url::parse(value).ok());
-    if fields.get("url").and_then(Value::as_str).is_some() && url.is_none() {
-        return Err(ContractFailure::Unhandled);
-    }
-    if kind == "github" {
-        if let Some(url) = &url {
-            if url.origin().ascii_serialization() != "https://github.com" {
-                errors.push(issue("custom", ".issue.url"));
-            }
-            if let (Some(repository), Some(number)) = (
-                fields.get("repository").and_then(Value::as_str),
-                fields
-                    .get("number")
-                    .and_then(Value::as_number)
-                    .and_then(safe_positive_integer),
-            ) {
-                let expected = format!("https://github.com/{repository}/issues/{number}");
-                if !url.as_str().eq_ignore_ascii_case(&expected)
-                    || !url.username().is_empty()
-                    || url.password().is_some()
-                {
-                    errors.push(issue("custom", ".issue.url"));
-                }
-            }
-        }
-    } else {
-        let site = fields
-            .get("site")
-            .and_then(Value::as_str)
-            .and_then(|value| url::Url::parse(value).ok());
-        if fields.get("site").and_then(Value::as_str).is_some() && site.is_none() {
-            return Err(ContractFailure::Unhandled);
-        }
-        if let (Some(url), Some(site), Some(key)) =
-            (&url, &site, fields.get("key").and_then(Value::as_str))
-        {
-            let expected = format!("{}/browse/{key}", site.origin().ascii_serialization());
-            if url.as_str() != expected || !url.username().is_empty() || url.password().is_some() {
-                errors.push(issue("custom", ".issue.url"));
-            }
-        }
-        if let Some(site) = &site
-            && (site.scheme() != "https"
-                || !site
-                    .host_str()
-                    .is_some_and(|host| host.ends_with(".atlassian.net"))
-                || !site.username().is_empty()
-                || site.password().is_some()
-                || site.query().is_some()
-                || site.fragment().is_some()
-                || site.path() != "/")
-        {
-            errors.push(issue("custom", ".issue.site"));
-        }
-    }
-    let allowed: &[&str] = if kind == "github" {
-        &["kind", "repository", "number", "id", "key", "title", "url"]
-    } else {
-        &["kind", "site", "id", "key", "title", "url"]
-    };
-    if fields.keys().any(|name| !allowed.contains(&name.as_str())) {
-        errors.push(issue("unrecognized_keys", ".issue"));
-    }
-    Ok(errors)
-}
-
-pub fn parse_task_id_params(input: Option<&Value>) -> ContractResult<TaskIdParams> {
-    let fields = object(input)?;
-    let parsed: TaskIdParams =
-        serde_json::from_value(Value::Object(fields.clone())).map_err(|_| {
-            ContractFailure::Issues(vec![finding(
-                "invalid_type",
-                &[Value::String("taskId".into())],
-            )])
-        })?;
-    parsed
-        .validate()
-        .map_err(|report| ContractFailure::Issues(garde_findings(&report, &parsed)))?;
-    Ok(parsed)
-}
-
-fn edit_shape_findings(fields: &Map<String, Value>) -> Vec<Value> {
-    let mut issues = Vec::new();
-    for name in [
-        "title",
-        "description",
-        "rootProfileId",
-        "workerProfileId",
-        "deliveryTarget",
-    ] {
-        if let Some(value) = fields.get(name).filter(|value| !value.is_string()) {
-            issues.push(issue("invalid_type", &format!(".{name}")));
-            if matches!(name, "rootProfileId" | "workerProfileId")
-                && value.as_array().is_some_and(Vec::is_empty)
-            {
-                issues.push(issue("too_small", &format!(".{name}")));
-            }
-        }
-    }
-    if fields
-        .get("runProjectTests")
-        .is_some_and(|value| !value.is_boolean())
-    {
-        issues.push(issue("invalid_type", ".runProjectTests"));
-    }
-    for name in ["visualEvidence", "workflow"] {
-        if fields.get(name).is_some_and(|value| !value.is_string()) {
-            issues.push(issue("invalid_type", &format!(".{name}")));
-        }
-    }
-    if let Some(advisors) = fields.get("advisorProfileIds") {
-        if let Some(advisors) = advisors.as_object() {
-            for role in ["reviewer", "planner_a", "planner_b", "rater"] {
-                if let Some(value) = advisors.get(role) {
-                    if let Some(value) = value.as_str() {
-                        match value.encode_utf16().count() {
-                            0 => issues
-                                .push(issue("too_small", &format!(".advisorProfileIds.{role}"))),
-                            257.. => {
-                                issues.push(issue("too_big", &format!(".advisorProfileIds.{role}")))
-                            }
-                            _ => {}
-                        }
-                    } else {
-                        issues.push(issue("invalid_type", &format!(".advisorProfileIds.{role}")));
-                    }
-                }
-            }
-            if advisors.keys().any(|name| {
-                !["reviewer", "planner_a", "planner_b", "rater"].contains(&name.as_str())
-            }) {
-                issues.push(issue("unrecognized_keys", ".advisorProfileIds"));
-            }
-        } else {
-            issues.push(issue("invalid_type", ".advisorProfileIds"));
-        }
-    }
-    if fields.keys().any(|name| {
-        ![
-            "title",
-            "description",
-            "rootProfileId",
-            "workerProfileId",
-            "deliveryTarget",
-            "runProjectTests",
-            "visualEvidence",
-            "workflow",
-            "advisorProfileIds",
-        ]
-        .contains(&name.as_str())
-    }) {
-        issues.push(issue("unrecognized_keys", "."));
-    }
-    issues
-}
-
-pub fn parse_task_details(input: Option<&Value>) -> ContractResult<TaskDetailsBody> {
-    let fields = object(input)?;
-    let shape = edit_shape_findings(fields);
-    if !shape.is_empty() {
-        return Err(ContractFailure::Issues(shape));
-    }
-    let (normalized, mut findings) = task_enums(fields);
-    let parsed: TaskDetailsBody = serde_path_to_error::deserialize(Value::Object(normalized))
-        .map_err(|error| {
-            ContractFailure::Issues(vec![finding(
-                "invalid_type",
-                &[Value::String(error.path().to_string())],
-            )])
-        })?;
-    if let Err(report) = parsed.validate() {
-        findings.extend(garde_findings(&report, &parsed));
-    }
-    if findings.is_empty() {
-        Ok(parsed)
-    } else {
-        Err(ContractFailure::Issues(findings))
-    }
-}
-
-pub fn parse_task_rename(input: Option<&Value>) -> ContractResult<TaskRenameBody> {
-    let fields = object(input)?;
-    let mut issues = Vec::new();
-    if let Some(title) = fields.get("title").filter(|value| !value.is_string()) {
-        issues.push(issue("invalid_type", ".title"));
-        if title.as_array().is_some_and(Vec::is_empty) {
-            issues.push(issue("too_small", ".title"));
-        }
-    } else if !fields.contains_key("title") {
-        issues.push(issue("invalid_type", ".title"));
-    }
-    if fields.keys().any(|name| name != "title") {
-        issues.push(issue("unrecognized_keys", "."));
-    }
-    if !issues.is_empty() {
-        return Err(ContractFailure::Issues(issues));
-    }
-    let parsed: TaskRenameBody = serde_json::from_value(Value::Object(fields.clone()))
-        .map_err(|_| ContractFailure::Unhandled)?;
-    parsed
-        .validate()
-        .map_err(|report| ContractFailure::Issues(garde_findings(&report, &parsed)))?;
-    Ok(parsed)
-}
-
-#[derive(Debug, Clone, Copy, Eq, PartialEq)]
-pub struct TaskArchiveBody {
-    pub confirm_discard_dirty: bool,
-}
-
-/// The archive body is optional, while a supplied body remains a strict object.
-pub fn parse_task_archive(input: Option<&Value>) -> ContractResult<TaskArchiveBody> {
-    let Some(input) = input else {
-        return Ok(TaskArchiveBody {
-            confirm_discard_dirty: false,
-        });
-    };
-    let fields = object(Some(input))?;
-    let mut issues = Vec::new();
-    let confirm_discard_dirty = match fields.get("confirmDiscardDirty") {
-        Some(Value::Bool(value)) => *value,
-        Some(_) => {
-            issues.push(finding(
-                "invalid_type",
-                &[Value::String("confirmDiscardDirty".into())],
-            ));
-            false
-        }
-        None => false,
-    };
-    if fields.keys().any(|key| key != "confirmDiscardDirty") {
-        issues.push(finding("unrecognized_keys", &[]));
-    }
-    if issues.is_empty() {
-        Ok(TaskArchiveBody {
-            confirm_discard_dirty,
-        })
-    } else {
-        Err(ContractFailure::Issues(issues))
-    }
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct TaskNoteBody {
-    pub note: String,
-}
-
-pub use crate::tasks::control::{TaskCoordinatorReplacementBody, TaskWorkerReplacementBody};
-
-pub fn parse_task_coordinator_replacement(
-    input: Option<&Value>,
-) -> ContractResult<TaskCoordinatorReplacementBody> {
-    let fields = object(input)?;
-    let Some(resume) = fields.get("resume").and_then(Value::as_bool) else {
-        return Err(ContractFailure::Issues(vec![finding(
-            "invalid_union",
-            &[Value::String("resume".into())],
-        )]));
-    };
-    let mut issues = Vec::new();
-    for name in ["sessionId", "rootProfileId", "handoff", "questionId"] {
-        if name == "questionId" && !resume {
-            continue;
-        }
-        match fields.get(name) {
-            Some(Value::String(value)) => {
-                if value.is_empty() && name != "handoff" {
-                    issues.push(finding("too_small", &[Value::String(name.into())]));
-                }
-            }
-            None if name == "handoff" => {}
-            None if name == "questionId" && !resume => {}
-            _ => issues.push(finding("invalid_type", &[Value::String(name.into())])),
-        }
-    }
-    if fields.keys().any(|key| {
-        !(matches!(
-            key.as_str(),
-            "sessionId" | "rootProfileId" | "handoff" | "resume"
-        ) || (resume && key == "questionId"))
-    }) {
-        issues.push(finding("unrecognized_keys", &[]));
-    }
-    if !issues.is_empty() {
-        return Err(ContractFailure::Issues(issues));
-    }
-    let parsed: TaskCoordinatorReplacementBody =
-        serde_json::from_value(Value::Object(fields.clone()))
-            .map_err(|_| ContractFailure::Unhandled)?;
-    parsed
-        .validate()
-        .map_err(|report| ContractFailure::Issues(garde_findings(&report, &parsed)))?;
-    Ok(parsed)
-}
-
-/// A user may select another allowed Worker profile; the Root MCP contract
-/// deliberately omits that field and preserves the outgoing profile.
-pub fn parse_task_worker_replacement(
-    input: Option<&Value>,
-) -> ContractResult<TaskWorkerReplacementBody> {
-    let fields = object(input)?;
-    let mut issues = Vec::new();
-    for (name, trim) in [
-        ("sessionId", false),
-        ("reason", true),
-        ("handoff", false),
-        ("workerProfileId", false),
-    ] {
-        match fields.get(name) {
-            Some(Value::String(value)) => {
-                let value = if trim {
-                    crate::identity::auth::js_trim(value)
-                } else {
-                    value
-                };
-                if value.is_empty() && name != "handoff" {
-                    issues.push(finding("too_small", &[Value::String(name.into())]));
-                }
-            }
-            None if name == "handoff" || name == "workerProfileId" => {}
-            _ => {
-                issues.push(finding("invalid_type", &[Value::String(name.into())]));
-            }
-        }
-    }
-    if fields.keys().any(|key| {
-        !matches!(
-            key.as_str(),
-            "sessionId" | "reason" | "handoff" | "workerProfileId"
-        )
-    }) {
-        issues.push(finding("unrecognized_keys", &[]));
-    }
-    if !issues.is_empty() {
-        return Err(ContractFailure::Issues(issues));
-    }
-    let parsed: TaskWorkerReplacementBody = serde_json::from_value(Value::Object(fields.clone()))
-        .map_err(|_| ContractFailure::Unhandled)?;
-    parsed
-        .validate()
-        .map_err(|report| ContractFailure::Issues(garde_findings(&report, &parsed)))?;
-    Ok(parsed)
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct TaskAgentSelectionBody {
-    pub role: String,
-    pub expected_profile_id: String,
-    pub expected_session_id: Option<String>,
-    pub profile_id: String,
-    pub direction: String,
-    pub resume: bool,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub question_id: Option<String>,
-}
-
-/// `resume` selects the union branch; only a resumed selection names its question.
 pub fn parse_task_agent_selection(input: Option<&Value>) -> ContractResult<TaskAgentSelectionBody> {
-    let fields = object(input)?;
-    let Some(resume) = fields.get("resume").and_then(Value::as_bool) else {
-        return Err(ContractFailure::Issues(vec![finding(
-            "invalid_union",
-            &[Value::String("resume".into())],
-        )]));
-    };
-    let mut issues = Vec::new();
-    let role = fields.get("role").and_then(Value::as_str).filter(|role| {
-        matches!(
-            *role,
-            "root" | "worker" | "reviewer" | "planner_a" | "planner_b" | "rater"
-        )
-    });
-    if role.is_none() {
-        issues.push(finding("invalid_value", &[Value::String("role".into())]));
-    }
-    let mut text = |name: &str, nullable: bool| -> Option<String> {
-        match fields.get(name) {
-            Some(Value::String(value)) if name == "direction" => {
-                Some(crate::identity::auth::js_trim(value).to_owned())
-            }
-            Some(Value::String(value)) if value.is_empty() => {
-                issues.push(finding("too_small", &[Value::String(name.into())]));
-                None
-            }
-            Some(Value::String(value)) => Some(value.clone()),
-            Some(Value::Null) if nullable => None,
-            _ => {
-                issues.push(finding("invalid_type", &[Value::String(name.into())]));
-                None
-            }
-        }
-    };
-    let expected_profile_id = text("expectedProfileId", false);
-    let expected_session_id = text("expectedSessionId", true);
-    let profile_id = text("profileId", false);
-    let direction = text("direction", false);
-    let question_id = if resume {
-        text("questionId", false)
-    } else {
-        None
-    };
-    if fields.keys().any(|key| {
-        !(matches!(
-            key.as_str(),
-            "role"
-                | "expectedProfileId"
-                | "expectedSessionId"
-                | "profileId"
-                | "direction"
-                | "resume"
-        ) || (resume && key == "questionId"))
-    }) {
-        issues.push(finding("unrecognized_keys", &[]));
-    }
-    match (role, expected_profile_id, profile_id, direction) {
-        (Some(role), Some(expected_profile_id), Some(profile_id), Some(direction))
-            if issues.is_empty() =>
-        {
-            Ok(TaskAgentSelectionBody {
-                role: role.to_owned(),
-                expected_profile_id,
-                expected_session_id,
-                profile_id,
-                direction,
-                resume,
-                question_id,
-            })
-        }
-        _ => Err(ContractFailure::Issues(issues)),
+    TaskAgentSelectionBody::parse(input)
+}
+
+impl Contract for TaskIdParams {
+    fn schema(input: Option<&Value>) -> ContractResult<Value> {
+        params(input, &["taskId"], (1, 256))
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, Validate)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct TaskDependenciesBody {
-    #[serde(default)]
-    #[garde(length(max = MAX_TASK_DEPENDENCIES), inner(custom(check_task_id)))]
-    pub depends_on: Vec<String>,
-    #[serde(default)]
-    #[garde(length(max = MAX_TASK_DEPENDENCIES), dive)]
-    pub blocked_by_pull_requests: Vec<PullRequestDependency>,
+impl Contract for TaskArtifactParams {
+    fn schema(input: Option<&Value>) -> ContractResult<Value> {
+        params(input, &["taskId", "artifactId"], (1, 256))
+    }
+}
+
+impl Contract for TaskSessionParams {
+    fn schema(input: Option<&Value>) -> ContractResult<Value> {
+        params(input, &["taskId", "sessionId"], (1, MAX))
+    }
+}
+
+impl Contract for TaskHistoryQuery {
+    fn schema(input: Option<&Value>) -> ContractResult<Value> {
+        Fields::new(input)?.opt("before", text(1, 512)).finish()
+    }
+}
+
+/// One task id or up to ten, sorted by UTF-16 code units without duplicates.
+impl Contract for TaskAgentsBatchQuery {
+    fn schema(input: Option<&Value>) -> ContractResult<Value> {
+        Fields::new(input)?
+            .or("taskId", json!([]), |input| {
+                let ids = union(
+                    input,
+                    &[
+                        &|input| id()(input).map(|id| json!([id])),
+                        &list(id(), 0, 10),
+                    ],
+                )?;
+                let mut ids = ids.as_array().cloned().unwrap_or_default();
+                ids.sort_by(|left, right| {
+                    let text = |value: &Value| {
+                        value
+                            .as_str()
+                            .unwrap_or_default()
+                            .encode_utf16()
+                            .collect::<Vec<_>>()
+                    };
+                    text(left).cmp(&text(right))
+                });
+                ids.dedup();
+                Ok(Value::Array(ids))
+            })
+            .finish()
+    }
+}
+
+/// The task list query: `archived=true` lists archived tasks.
+#[derive(Debug, Clone, Deserialize)]
+pub struct ArchivedQuery {
+    pub archived: Option<String>,
+}
+
+impl Contract for ArchivedQuery {
+    fn schema(input: Option<&Value>) -> ContractResult<Value> {
+        Fields::new(input)?
+            .opt("archived", one_of(&["true", "false"]))
+            .finish()
+    }
+}
+
+pub fn worktree_app(input: Option<&Value>) -> ContractResult<Value> {
+    one_of(WORKTREE_APPS)(input)
+}
+
+/// `{ app }`: a desktop application or the configured editor.
+#[derive(Debug, Clone, Deserialize)]
+pub struct WorktreeOpenBody {
+    pub app: String,
+}
+
+impl Contract for WorktreeOpenBody {
+    fn schema(input: Option<&Value>) -> ContractResult<Value> {
+        Fields::new(input)?
+            .req("app", |input| {
+                union(input, &[&worktree_app, &one_of(&["editor"])])
+            })
+            .finish()
+    }
+}
+
+/// A task pane: the task and the Coordinator, Worker, or shell pane.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct TaskPaneParams {
+    pub task_id: String,
+    pub role: String,
+}
+
+impl Contract for TaskPaneParams {
+    fn schema(input: Option<&Value>) -> ContractResult<Value> {
+        Fields::new(input)?
+            .req("taskId", id())
+            .req("role", |input| {
+                union(input, &[&one_of(&["root", "worker"]), &one_of(&["shell"])])
+            })
+            .finish()
+    }
+}
+
+/// Terminal dimensions from the query, coerced like `z.coerce.number()`.
+#[derive(Debug, Clone, Deserialize)]
+pub struct TerminalSize {
+    pub cols: i64,
+    pub rows: i64,
+}
+
+impl Contract for TerminalSize {
+    fn schema(input: Option<&Value>) -> ContractResult<Value> {
+        Fields::new(input)?
+            .or("cols", json!(80), super::coerced(20.0, 300.0))
+            .or("rows", json!(24), super::coerced(5.0, 150.0))
+            .finish()
+    }
+}
+
+/// Every field is optional and carries no default.
+impl Contract for TaskDetailsBody {
+    fn schema(input: Option<&Value>) -> ContractResult<Value> {
+        Fields::new(input)?
+            .opt("title", trimmed_text(1, MAX))
+            .opt("description", trimmed_text(0, MAX))
+            .opt("rootProfileId", id())
+            .opt("workerProfileId", id())
+            .opt("deliveryTarget", choice::<DeliveryTarget>)
+            .opt("runProjectTests", flag)
+            .opt("visualEvidence", one_of(VISUAL_EVIDENCE))
+            .opt("workflow", choice::<Workflow>)
+            .opt("advisorProfileIds", advisors)
+            .strict()
+    }
+}
+
+impl Contract for TaskRenameBody {
+    fn schema(input: Option<&Value>) -> ContractResult<Value> {
+        Fields::new(input)?
+            .req("title", trimmed_text(1, MAX))
+            .strict()
+    }
+}
+
+/// The route accepts no body as `Option<TaskArchiveBody>`.
+impl Contract for TaskArchiveBody {
+    fn schema(input: Option<&Value>) -> ContractResult<Value> {
+        Fields::new(input)?
+            .opt("confirmDiscardDirty", flag)
+            .strict()
+    }
+}
+
+impl Contract for TaskNoteBody {
+    fn schema(input: Option<&Value>) -> ContractResult<Value> {
+        Fields::new(input)?
+            .req("note", trimmed_text(1, 20_000))
+            .strict()
+    }
+}
+
+/// `resume` selects the union branch; only a resumed replacement names its question.
+impl Contract for TaskCoordinatorReplacementBody {
+    fn schema(input: Option<&Value>) -> ContractResult<Value> {
+        resumable(input, |fields| {
+            fields
+                .req("sessionId", text(1, MAX))
+                .req("rootProfileId", text(1, MAX))
+                .opt("handoff", trimmed_text(0, MAX))
+        })
+    }
+}
+
+fn resumable(
+    input: Option<&Value>,
+    fields: impl FnOnce(Fields) -> Fields,
+) -> ContractResult<Value> {
+    tagged(input, "resume", |resume| {
+        let parsed = fields(Fields::new(input).ok()?).req("resume", present);
+        Some(match resume.as_bool()? {
+            true => parsed.req("questionId", text(1, MAX)).strict(),
+            false => parsed.strict(),
+        })
+    })
+}
+
+impl Contract for TaskWorkerReplacementBody {
+    fn schema(input: Option<&Value>) -> ContractResult<Value> {
+        Fields::new(input)?
+            .req("sessionId", text(1, MAX))
+            .req("reason", trimmed_text(1, MAX))
+            .opt("handoff", trimmed_text(0, MAX))
+            .opt("workerProfileId", text(1, MAX))
+            .strict()
+    }
+}
+
+impl Contract for TaskAgentSelectionBody {
+    fn schema(input: Option<&Value>) -> ContractResult<Value> {
+        resumable(input, |fields| {
+            fields
+                .req(
+                    "role",
+                    one_of(&[
+                        "root",
+                        "worker",
+                        "reviewer",
+                        "planner_a",
+                        "planner_b",
+                        "rater",
+                    ]),
+                )
+                .req("expectedProfileId", text(1, MAX))
+                .req("expectedSessionId", nullable(text(1, MAX)))
+                .req("profileId", text(1, MAX))
+                .req("direction", trimmed_text(0, MAX))
+        })
+    }
 }
 
 /// Both prerequisite lists default to empty; a supplied list replaces the old one.
-pub fn parse_task_dependencies(input: Option<&Value>) -> ContractResult<TaskDependenciesBody> {
-    let fields = object(input)?;
-    let mut findings = Vec::new();
-    dependency_findings(fields, &mut findings);
-    if fields
-        .keys()
-        .any(|key| key != "dependsOn" && key != "blockedByPullRequests")
-    {
-        findings.push(issue("unrecognized_keys", "."));
+impl Contract for TaskDependenciesBody {
+    fn schema(input: Option<&Value>) -> ContractResult<Value> {
+        dependencies(Fields::new(input)?).strict()
     }
-    if !findings.is_empty() {
-        return Err(ContractFailure::Issues(findings));
-    }
-    let parsed: TaskDependenciesBody = serde_json::from_value(Value::Object(fields.clone()))
-        .map_err(|_| ContractFailure::Unhandled)?;
-    parsed
-        .validate()
-        .map_err(|report| ContractFailure::Issues(garde_findings(&report, &parsed)))?;
-    Ok(parsed)
-}
-
-#[derive(Debug, Clone, Serialize)]
-pub struct TaskIssueBody {
-    pub issue: Option<IssueAssociation>,
 }
 
 /// The issue link body is strict; `null` clears the link.
-pub fn parse_task_issue(input: Option<&Value>) -> ContractResult<TaskIssueBody> {
-    let fields = object(input)?;
-    let mut findings = match fields.get("issue") {
-        Some(Value::Null) => Vec::new(),
-        Some(value) => issue_findings(value)?,
-        None => vec![issue("invalid_type", ".issue")],
-    };
-    if fields.keys().any(|key| key != "issue") {
-        findings.push(issue("unrecognized_keys", "."));
+impl Contract for TaskIssueBody {
+    fn schema(input: Option<&Value>) -> ContractResult<Value> {
+        Fields::new(input)?
+            .req("issue", nullable(issue_association))
+            .strict()
     }
-    if !findings.is_empty() {
-        return Err(ContractFailure::Issues(findings));
-    }
-    let issue = match fields.get("issue") {
-        Some(Value::Null) | None => None,
-        Some(value) => {
-            Some(serde_json::from_value(value.clone()).map_err(|_| ContractFailure::Unhandled)?)
-        }
-    };
-    Ok(TaskIssueBody { issue })
-}
-
-#[derive(Debug, Clone, Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct TaskContinueDeliveryBody {
-    pub delivery_target: DeliveryTarget,
 }
 
 /// Delivery can continue only to a ready pull request or a merge.
-pub fn parse_task_continue_delivery(
-    input: Option<&Value>,
-) -> ContractResult<TaskContinueDeliveryBody> {
-    let fields = object(input)?;
-    let mut issues = Vec::new();
-    let target = fields
-        .get("deliveryTarget")
-        .and_then(Value::as_str)
-        .filter(|target| matches!(*target, "pull_request_ready" | "merged"));
-    if target.is_none() {
-        issues.push(finding(
-            "invalid_value",
-            &[Value::String("deliveryTarget".into())],
-        ));
-    }
-    if fields.keys().any(|key| key != "deliveryTarget") {
-        issues.push(finding("unrecognized_keys", &[]));
-    }
-    match target {
-        Some(target) if issues.is_empty() => Ok(TaskContinueDeliveryBody {
-            delivery_target: DeliveryTarget::parse(target).expect("validated target"),
-        }),
-        _ => Err(ContractFailure::Issues(issues)),
-    }
-}
-
-/// The user note body is a strict object; Zod trims before checking UTF-16 length.
-pub fn parse_task_note(input: Option<&Value>) -> ContractResult<TaskNoteBody> {
-    let fields = object(input)?;
-    let mut issues = Vec::new();
-    let note = match fields.get("note") {
-        Some(Value::String(note)) => {
-            let note = crate::identity::auth::js_trim(note);
-            match note.encode_utf16().count() {
-                0 => issues.push(finding("too_small", &[Value::String("note".into())])),
-                20_001.. => issues.push(finding("too_big", &[Value::String("note".into())])),
-                _ => {}
-            }
-            note.to_owned()
-        }
-        other => {
-            issues.push(finding("invalid_type", &[Value::String("note".into())]));
-            if other.is_some_and(|value| value.as_array().is_some_and(Vec::is_empty)) {
-                issues.push(finding("too_small", &[Value::String("note".into())]));
-            }
-            String::new()
-        }
-    };
-    if fields.keys().any(|key| key != "note") {
-        issues.push(finding("unrecognized_keys", &[]));
-    }
-    if issues.is_empty() {
-        Ok(TaskNoteBody { note })
-    } else {
-        Err(ContractFailure::Issues(issues))
+impl Contract for TaskContinueDeliveryBody {
+    fn schema(input: Option<&Value>) -> ContractResult<Value> {
+        Fields::new(input)?
+            .req("deliveryTarget", one_of(&["pull_request_ready", "merged"]))
+            .strict()
     }
 }
 
@@ -1262,190 +826,31 @@ mod tests {
     use super::*;
 
     #[test]
-    fn task_worker_replacement_matches_public_zod_contract() {
-        assert_request_fixtures(
-            "tasks.TaskWorkerReplacementBodySchema",
-            13,
-            parse_task_worker_replacement,
-        );
-    }
-
-    #[test]
-    fn task_coordinator_replacement_matches_public_zod_contract() {
-        assert_request_fixtures(
-            "tasks.TaskCoordinatorReplacementBodySchema",
-            15,
-            parse_task_coordinator_replacement,
-        );
-    }
-
-    fn assert_request_fixtures<T: Serialize>(
-        name: &str,
-        count: usize,
-        parse: fn(Option<&Value>) -> ContractResult<T>,
-    ) {
-        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .parent()
-            .unwrap()
-            .join("tests/parity")
-            .join(name);
-        let mut tested = 0;
-        for entry in std::fs::read_dir(root).unwrap() {
-            let path = entry.unwrap().path();
-            if path.extension().is_none_or(|extension| extension != "json") {
-                continue;
-            }
-            let fixture: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
-            let actual = match parse(fixture.get("input")) {
-                Ok(value) => serde_json::json!({"accepted":true,"value":value}),
-                Err(ContractFailure::Issues(issues)) => {
-                    serde_json::json!({"accepted":false,"error":issues})
-                }
-                Err(ContractFailure::Unhandled) => {
-                    serde_json::json!({"accepted":false,"error":{"kind":"thrown"}})
-                }
-                Err(ContractFailure::Internal(error)) => panic!("{}: {error}", path.display()),
-            };
-            assert_eq!(actual, fixture["expected"], "{}", path.display());
-            tested += 1;
-        }
-        assert_eq!(tested, count);
-    }
-
-    #[test]
-    fn task_edit_request_fixtures_match_public_zod_contracts() {
-        assert_request_fixtures("tasks.TaskDetailsBodySchema", 16, parse_task_details);
-        assert_request_fixtures("tasks.TaskRenameBodySchema", 13, parse_task_rename);
-    }
-
-    #[test]
-    fn task_continue_delivery_request_fixtures_match_public_zod_contract() {
-        assert_request_fixtures(
-            "tasks.TaskContinueDeliveryBodySchema",
-            12,
-            parse_task_continue_delivery,
-        );
-    }
-
-    #[test]
-    fn task_agent_selection_request_fixtures_match_public_zod_contract() {
-        assert_request_fixtures(
-            "tasks.TaskAgentSelectionBodySchema",
-            15,
-            parse_task_agent_selection,
-        );
-    }
-
-    #[test]
-    fn task_dependencies_request_fixtures_match_public_zod_contract() {
-        assert_request_fixtures(
-            "tasks.TaskDependenciesBodySchema",
-            14,
-            parse_task_dependencies,
-        );
-    }
-
-    #[test]
-    fn task_issue_request_fixtures_match_public_zod_contract() {
-        assert_request_fixtures("tasks.TaskIssueBodySchema", 17, parse_task_issue);
-    }
-
-    #[test]
-    fn task_note_request_fixtures_match_public_zod_contract() {
-        assert_request_fixtures("tasks.TaskNoteBodySchema", 15, parse_task_note);
-    }
-
-    #[test]
     fn optional_archive_body_is_strict_and_preserves_public_findings() {
-        assert!(!parse_task_archive(None).unwrap().confirm_discard_dirty);
+        fn parse(input: Option<&Value>) -> ContractResult<TaskArchiveBody> {
+            Option::<TaskArchiveBody>::parse(input).map(Option::unwrap_or_default)
+        }
+        assert!(!parse(None).unwrap().confirm_discard_dirty);
+        assert!(!parse(Some(&json!({}))).unwrap().confirm_discard_dirty);
         assert!(
-            !parse_task_archive(Some(&serde_json::json!({})))
+            parse(Some(&json!({"confirmDiscardDirty":true})))
                 .unwrap()
                 .confirm_discard_dirty
         );
-        assert!(
-            parse_task_archive(Some(&serde_json::json!({"confirmDiscardDirty":true})))
-                .unwrap()
-                .confirm_discard_dirty
-        );
-        assert!(matches!(
-            parse_task_archive(Some(&Value::Null)),
-            Err(ContractFailure::Issues(issues)) if issues == vec![finding("invalid_type", &[])]
-        ));
-        assert!(matches!(
-            parse_task_archive(Some(&serde_json::json!({"confirmDiscardDirty":"yes"}))),
-            Err(ContractFailure::Issues(issues)) if issues == vec![finding("invalid_type", &[Value::String("confirmDiscardDirty".into())])]
-        ));
-        assert!(matches!(
-            parse_task_archive(Some(&serde_json::json!({"other":true}))),
-            Err(ContractFailure::Issues(issues)) if issues == vec![finding("unrecognized_keys", &[])]
-        ));
-    }
-
-    #[test]
-    fn task_create_request_fixtures_match_public_zod_contract() {
-        let root = concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../tests/parity/tasks.TaskBodySchema"
-        );
-        let mut failed = Vec::new();
-        let mut tested = 0;
-        for entry in std::fs::read_dir(root).unwrap() {
-            let path = entry.unwrap().path();
-            if path.extension().is_none_or(|extension| extension != "json") {
-                continue;
-            }
-            let fixture: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
-            let expected = &fixture["expected"];
-            let actual = match parse_task_create(fixture.get("input")) {
-                Ok(value) => serde_json::json!({"accepted":true,"value":value}),
-                Err(ContractFailure::Issues(issues)) => {
-                    serde_json::json!({"accepted":false,"error":issues})
-                }
-                Err(ContractFailure::Unhandled) => {
-                    serde_json::json!({"accepted":false,"error":{"kind":"thrown"}})
-                }
-                Err(ContractFailure::Internal(error)) => serde_json::json!({"internal":error}),
-            };
-            if &actual != expected {
-                if failed.len() < 5 {
-                    eprintln!("{} expected={expected} actual={actual}", path.display());
-                }
-                failed.push(path.file_name().unwrap().to_string_lossy().into_owned());
-            }
-            tested += 1;
+        for (input, code, field) in [
+            (Value::Null, "invalid_type", "."),
+            (
+                json!({"confirmDiscardDirty":"yes"}),
+                "invalid_type",
+                ".confirmDiscardDirty",
+            ),
+            (json!({"other":true}), "unrecognized_keys", "."),
+        ] {
+            assert!(matches!(
+                parse(Some(&input)),
+                Err(ContractFailure::Issues(issues)) if issues == vec![super::super::issue(code, field)]
+            ));
         }
-        assert_eq!(tested, 60);
-        assert!(
-            failed.is_empty(),
-            "mismatched task request fixtures: {failed:?}"
-        );
-    }
-
-    #[test]
-    fn task_id_params_match_public_zod_contract() {
-        let root = concat!(
-            env!("CARGO_MANIFEST_DIR"),
-            "/../tests/parity/common.TaskIdParamsSchema"
-        );
-        let mut tested = 0;
-        for entry in std::fs::read_dir(root).unwrap() {
-            let path = entry.unwrap().path();
-            if path.extension().is_none_or(|extension| extension != "json") {
-                continue;
-            }
-            let fixture: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
-            let actual = match parse_task_id_params(fixture.get("input")) {
-                Ok(value) => serde_json::json!({"accepted":true,"value":value}),
-                Err(ContractFailure::Issues(issues)) => {
-                    serde_json::json!({"accepted":false,"error":issues})
-                }
-                Err(other) => panic!("{}: {other:?}", path.display()),
-            };
-            assert_eq!(actual, fixture["expected"], "{}", path.display());
-            tested += 1;
-        }
-        assert_eq!(tested, 9);
     }
 
     #[test]
@@ -1468,7 +873,28 @@ mod tests {
         ));
         let fraction: Value = serde_json::from_str(r#"{"projectId":"p","title":"Build","idempotencyKey":"sample-001","source":{"kind":"issue","number":1.5}}"#).unwrap();
         assert!(
-            matches!(parse_task_create(Some(&fraction)), Err(ContractFailure::Issues(findings)) if findings == vec![issue("invalid_type", ".source.number")])
+            matches!(parse_task_create(Some(&fraction)), Err(ContractFailure::Issues(findings)) if findings == vec![super::super::issue("invalid_type", ".source.number")])
+        );
+    }
+
+    #[test]
+    fn garde_paths_use_request_field_names() {
+        let body: TaskCreateBody = serde_json::from_value(json!({
+            "projectId": "", "title": "Build", "idempotencyKey": "sample-001",
+            "advisorProfileIds": {"planner_a": ""},
+            "images": [{"filename": "image.png", "mimeType": "text/plain", "base64": "YQ=="}],
+            "blockedByPullRequests": [{"number": 1}]
+        }))
+        .unwrap();
+        let findings = super::super::garde_findings(&body.validate().unwrap_err(), &body);
+        let issue = super::super::issue;
+        assert_eq!(
+            findings,
+            vec![
+                issue("too_small", ".advisorProfileIds.planner_a"),
+                issue("invalid_value", ".images.0.mimeType"),
+                issue("too_small", ".projectId"),
+            ]
         );
     }
 }

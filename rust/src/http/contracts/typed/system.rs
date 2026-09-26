@@ -4,9 +4,12 @@ use std::sync::LazyLock;
 
 use regex::Regex;
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::Value;
 
-use super::{ContractFailure, ContractResult, finding, object, serialized};
+use super::{
+    Contract, ContractResult, Fields, MAX, flag, formatted, int, number, one_of, rule, text,
+};
+use crate::platform::environment_settings::MAX_MIN_FREE_DISK_GB;
 
 pub const CLIENT_STATES: &[&str] = &[
     "startup",
@@ -40,50 +43,25 @@ pub struct ClientLifecycle {
     pub online: bool,
 }
 
-pub fn parse_client_lifecycle(input: Option<&Value>) -> ContractResult<ClientLifecycle> {
-    let fields = object(input)?;
-    let mut issues = Vec::new();
-    if !fields
-        .get("state")
-        .and_then(Value::as_str)
-        .is_some_and(|state| CLIENT_STATES.contains(&state))
-    {
-        issues.push(finding("invalid_value", &[json!("state")]));
+fn uuid(value: &str, _: &()) -> garde::Result {
+    rule(UUID.is_match(value), "invalid_format")
+}
+
+fn datetime(value: &str, _: &()) -> garde::Result {
+    rule(DATETIME.is_match(value), "invalid_format")
+}
+
+impl Contract for ClientLifecycle {
+    fn schema(input: Option<&Value>) -> ContractResult<Value> {
+        Fields::new(input)?
+            .req("state", one_of(CLIENT_STATES))
+            .req("tabId", formatted(0, MAX, uuid))
+            .req("documentId", formatted(0, MAX, uuid))
+            .req("clientTime", formatted(0, MAX, datetime))
+            .req("visible", flag)
+            .req("online", flag)
+            .strict()
     }
-    for (name, pattern) in [
-        ("tabId", &*UUID),
-        ("documentId", &*UUID),
-        ("clientTime", &*DATETIME),
-    ] {
-        match fields.get(name) {
-            Some(Value::String(text)) if pattern.is_match(text) => {}
-            Some(Value::String(_)) => issues.push(finding("invalid_format", &[json!(name)])),
-            _ => issues.push(finding("invalid_type", &[json!(name)])),
-        }
-    }
-    for name in ["visible", "online"] {
-        if !fields.get(name).is_some_and(Value::is_boolean) {
-            issues.push(finding("invalid_type", &[json!(name)]));
-        }
-    }
-    if fields.keys().any(|key| {
-        ![
-            "state",
-            "tabId",
-            "documentId",
-            "clientTime",
-            "visible",
-            "online",
-        ]
-        .contains(&key.as_str())
-    }) {
-        issues.push(finding("unrecognized_keys", &[]));
-    }
-    if !issues.is_empty() {
-        return Err(ContractFailure::Issues(issues));
-    }
-    serde_json::from_value(Value::Object(fields.clone()))
-        .map_err(|error| ContractFailure::Internal(error.to_string()))
 }
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize, PartialEq)]
@@ -93,84 +71,73 @@ pub struct UpdateQuery {
     pub check: Option<String>,
 }
 
-pub fn parse_update_query(input: Option<&Value>) -> ContractResult<UpdateQuery> {
-    let fields = object(input)?;
-    let mut issues = Vec::new();
-    match fields.get("check") {
-        None => {}
-        Some(Value::String(check)) if check == "1" => {}
-        Some(_) => issues.push(finding("invalid_value", &[json!("check")])),
+impl Contract for UpdateQuery {
+    fn schema(input: Option<&Value>) -> ContractResult<Value> {
+        Fields::new(input)?.opt("check", one_of(&["1"])).strict()
     }
-    if fields.keys().any(|key| key != "check") {
-        issues.push(finding("unrecognized_keys", &[]));
-    }
-    if !issues.is_empty() {
-        return Err(ContractFailure::Issues(issues));
-    }
-    Ok(UpdateQuery {
-        check: fields
-            .get("check")
-            .and_then(Value::as_str)
-            .map(str::to_owned),
-    })
 }
 
-pub fn validate(contract: &str, input: Option<&Value>) -> Option<ContractResult<Value>> {
-    Some(match contract {
-        "system-events.ClientLifecycleSchema" => serialized(parse_client_lifecycle(input)),
-        "update.UpdateQuerySchema" => serialized(parse_update_query(input)),
-        _ => return None,
-    })
+/// `HealthQuerySchema`: the project and profiles whose providers to check.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct HealthQuery {
+    pub project_id: Option<String>,
+    pub profile_ids: Option<String>,
+}
+
+impl Contract for HealthQuery {
+    fn schema(input: Option<&Value>) -> ContractResult<Value> {
+        Fields::new(input)?
+            .opt("projectId", text(1, MAX))
+            .opt("profileIds", text(1, MAX))
+            .strict()
+    }
+}
+
+/// `EnvironmentSettingsBodySchema`: at least one bounded setting.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct EnvironmentPatch {
+    pub min_free_disk_gb: Option<f64>,
+    pub default_budget_usd: Option<f64>,
+    pub default_max_turns: Option<i64>,
+}
+
+impl Contract for EnvironmentPatch {
+    fn schema(input: Option<&Value>) -> ContractResult<Value> {
+        let mut fields = Fields::new(input)?
+            .opt("minFreeDiskGb", number(0.0, MAX_MIN_FREE_DISK_GB))
+            .opt("defaultBudgetUsd", number(0.0, f64::MAX))
+            .opt("defaultMaxTurns", int(0.0, f64::MAX));
+        if fields.refinable()
+            && ["minFreeDiskGb", "defaultBudgetUsd", "defaultMaxTurns"]
+                .iter()
+                .all(|name| fields.raw(name).is_none())
+        {
+            fields.fail("custom", ".");
+        }
+        fields.finish()
+    }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::{fs, path::Path};
+    use serde_json::json;
 
     use super::*;
-
-    #[test]
-    fn system_contracts_match_zod_request_fixtures() {
-        let mut count = 0;
-        for contract in [
-            "system-events.ClientLifecycleSchema",
-            "update.UpdateQuerySchema",
-        ] {
-            let root = Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("../tests/parity")
-                .join(contract);
-            for entry in fs::read_dir(root).unwrap() {
-                let fixture: Value =
-                    serde_json::from_slice(&fs::read(entry.unwrap().path()).unwrap()).unwrap();
-                let actual = match validate(contract, fixture.get("input")).unwrap() {
-                    Ok(value) => json!({"accepted": true, "value": value}),
-                    Err(ContractFailure::Issues(error)) => {
-                        json!({"accepted": false, "error": error})
-                    }
-                    Err(other) => panic!("unexpected parser failure: {other:?}"),
-                };
-                assert_eq!(
-                    actual, fixture["expected"],
-                    "{contract} {}",
-                    fixture["case"]
-                );
-                count += 1;
-            }
-        }
-        assert_eq!(count, 16);
-    }
+    use crate::http::contracts::typed::{ContractFailure, issue};
 
     #[test]
     fn client_lifecycle_rejects_malformed_identity_and_time() {
         let body = json!({"state":"startup","tabId":"not-a-uuid","documentId":"11111111-1111-4111-8111-111111111111","clientTime":"2026-09-22T12:00:00+01:00","visible":true,"online":false});
-        let Err(ContractFailure::Issues(issues)) = parse_client_lifecycle(Some(&body)) else {
+        let Err(ContractFailure::Issues(issues)) = ClientLifecycle::parse(Some(&body)) else {
             panic!("malformed lifecycle accepted");
         };
         assert_eq!(
             issues,
             [
-                finding("invalid_format", &[json!("tabId")]),
-                finding("invalid_format", &[json!("clientTime")])
+                issue("invalid_format", ".tabId"),
+                issue("invalid_format", ".clientTime")
             ]
         );
     }

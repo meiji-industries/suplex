@@ -9,6 +9,7 @@ mod tests {
         body::to_bytes,
         http::{HeaderValue, StatusCode},
     };
+    use serde_json::json;
 
     #[tokio::test]
     async fn workflow_api_edits_default_agents_validates_them_and_archives() {

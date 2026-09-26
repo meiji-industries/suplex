@@ -1,6 +1,14 @@
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::http::validation::test_path;
+
+    async fn list(state: State<AppState>, Path(id): Path<String>, headers: HeaderMap) -> Response {
+        match test_path(json!({"projectId": id})) {
+            Ok(path) => super::list(state, path, headers).await,
+            Err(response) => *response,
+        }
+    }
     use crate::platform::database::{OpenMode, SuplexDatabase};
     use axum::{body::to_bytes, http::HeaderValue};
     use serde_json::Value;

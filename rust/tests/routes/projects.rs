@@ -18,6 +18,79 @@ mod tests {
     use chrono::DateTime;
 
     use super::*;
+    use crate::http::validation::{test_body, test_path};
+    use axum::extract::{OriginalUri, Path};
+
+    // The handlers validate their params and body in extractors; these
+    // adapters run that validation for direct calls.
+    macro_rules! with_path {
+        ($field:literal: $($name:ident),*) => {$(
+            async fn $name(state: State<AppState>, Path(id): Path<String>, headers: HeaderMap) -> Response {
+                match test_path(json!({ $field: id })) {
+                    Ok(path) => super::$name(state, path, headers).await,
+                    Err(response) => *response,
+                }
+            }
+        )*};
+    }
+    with_path!("projectId": get_one, repository_defaults, provider_instances);
+    with_path!("companyId": list_company, repository_owners);
+
+    macro_rules! with_query {
+        ($($name:ident),*) => {$(
+            async fn $name(
+                state: State<AppState>,
+                Path(id): Path<String>,
+                uri: OriginalUri,
+                headers: HeaderMap,
+            ) -> Response {
+                match test_path(json!({"projectId": id})) {
+                    Ok(path) => super::$name(state, path, uri, headers).await,
+                    Err(response) => *response,
+                }
+            }
+        )*};
+    }
+    with_query!(issues, task_sources);
+
+    async fn create(
+        state: State<AppState>,
+        Path(id): Path<String>,
+        headers: HeaderMap,
+        body: Bytes,
+    ) -> Response {
+        let path = match test_path(json!({"companyId": id})) {
+            Ok(path) => path,
+            Err(response) => return *response,
+        };
+        match test_body(&headers, &body) {
+            Ok(body) => super::create(state, path, headers, body).await,
+            Err(response) => *response,
+        }
+    }
+
+    async fn update(
+        state: State<AppState>,
+        Path(id): Path<String>,
+        headers: HeaderMap,
+        body: Bytes,
+    ) -> Response {
+        match test_path(json!({"projectId": id})) {
+            Ok(path) => super::update(state, path, headers, body).await,
+            Err(response) => *response,
+        }
+    }
+
+    async fn owner_repositories(
+        state: State<AppState>,
+        Path((company_id, owner)): Path<(String, String)>,
+        headers: HeaderMap,
+    ) -> Response {
+        match test_path(json!({"companyId": company_id, "owner": owner})) {
+            Ok(path) => super::owner_repositories(state, path, headers).await,
+            Err(response) => *response,
+        }
+    }
     use crate::{
         identity::{auth as identity_auth, companies},
         platform::database::{OpenMode, SuplexDatabase},

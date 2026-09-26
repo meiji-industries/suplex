@@ -4,7 +4,27 @@ pub(crate) mod tests {
     use std::sync::atomic::{AtomicU64, Ordering};
 
     use super::*;
-    use axum::http::HeaderValue;
+    use crate::http::validation::test_body;
+    use axum::{
+        body::Bytes,
+        http::{HeaderValue, header},
+    };
+
+    // The handlers validate their body in an extractor; these adapters run
+    // that validation for direct calls.
+    async fn invitation_options(state: State<AppState>, headers: HeaderMap, body: Bytes) -> Response {
+        match test_body(&headers, &body) {
+            Ok(body) => super::invitation_options(state, headers, body).await,
+            Err(response) => *response,
+        }
+    }
+
+    async fn update_me(state: State<AppState>, headers: HeaderMap, body: Bytes) -> Response {
+        match test_body(&headers, &body) {
+            Ok(body) => super::update_me(state, headers, body).await,
+            Err(response) => *response,
+        }
+    }
 
     async fn request_me(State(state): State<AppState>, headers: HeaderMap) -> Response {
         use axum::extract::FromRequestParts;

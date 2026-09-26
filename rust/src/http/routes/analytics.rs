@@ -6,7 +6,7 @@ use std::{error::Error, path::PathBuf};
 
 use axum::{
     Router,
-    extract::{Path, State},
+    extract::State,
     http::{HeaderMap, HeaderValue, StatusCode, header},
     response::{IntoResponse, Response},
     routing::get,
@@ -15,7 +15,7 @@ use chrono::Utc;
 use serde_json::{Value, json};
 
 use crate::{
-    http::{AppState, contracts::typed::finding, validation},
+    http::{AppState, contracts::typed::auth::CompanyIdParams, validation::ValidPath},
     identity::companies,
     platform::database::SuplexDatabase,
     shared::js_json,
@@ -35,18 +35,6 @@ pub fn router() -> Router<AppState> {
             "/api/companies/{company_id}/timeline",
             get(company_timeline),
         )
-}
-
-fn company_id_valid(company_id: &str) -> Result<(), Box<Response>> {
-    match company_id.encode_utf16().count() {
-        0 => Err(Box::new(validation::validation_error_public(vec![
-            finding("too_small", &[json!("companyId")]),
-        ]))),
-        257.. => Err(Box::new(validation::validation_error_public(vec![
-            finding("too_big", &[json!("companyId")]),
-        ]))),
-        _ => Ok(()),
-    }
 }
 
 fn respond(result: Result<Value, Box<dyn Error>>, cookies: Vec<String>) -> Response {
@@ -71,9 +59,6 @@ fn read(
     company_id: &str,
     project: fn(Value) -> Value,
 ) -> Response {
-    if let Err(response) = company_id_valid(company_id) {
-        return *response;
-    }
     let (user_id, cookies) = match authorize(state, headers, "GET", false) {
         Ok(value) => value,
         Err(response) => return *response,
@@ -85,7 +70,7 @@ fn read(
 
 async fn company_analytics(
     State(state): State<AppState>,
-    Path(company_id): Path<String>,
+    ValidPath(CompanyIdParams { company_id }): ValidPath<CompanyIdParams>,
     headers: HeaderMap,
 ) -> Response {
     read(&state, &headers, &company_id, |value| value)
@@ -93,7 +78,7 @@ async fn company_analytics(
 
 async fn task_costs(
     State(state): State<AppState>,
-    Path(company_id): Path<String>,
+    ValidPath(CompanyIdParams { company_id }): ValidPath<CompanyIdParams>,
     headers: HeaderMap,
 ) -> Response {
     read(&state, &headers, &company_id, |value| {
@@ -124,12 +109,9 @@ fn saved_timelines(
 
 async fn company_timeline(
     State(state): State<AppState>,
-    Path(company_id): Path<String>,
+    ValidPath(CompanyIdParams { company_id }): ValidPath<CompanyIdParams>,
     headers: HeaderMap,
 ) -> Response {
-    if let Err(response) = company_id_valid(&company_id) {
-        return *response;
-    }
     let (user_id, cookies) = match authorize(&state, &headers, "GET", false) {
         Ok(value) => value,
         Err(response) => return *response,

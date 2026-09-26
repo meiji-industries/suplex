@@ -7,6 +7,7 @@ mod tests {
         platform::database::{OpenMode, SuplexDatabase},
     };
     use axum::body::to_bytes;
+    use serde_json::json;
 
     #[tokio::test]
     async fn health_query_keeps_public_field_order_for_empty_duplicate_and_unknown_keys() {

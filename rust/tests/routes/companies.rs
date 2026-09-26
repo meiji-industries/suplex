@@ -1,6 +1,69 @@
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::http::validation::{test_body, test_path};
+    use axum::{body::Bytes, extract::Path};
+    use serde_json::json;
+
+    // The handlers validate their params and body in extractors; these
+    // adapters run that validation for direct calls.
+    async fn get_company(state: State<AppState>, headers: HeaderMap, Path(id): Path<String>) -> Response {
+        match test_path(json!({"companyId": id})) {
+            Ok(path) => super::get_company(state, headers, path).await,
+            Err(response) => *response,
+        }
+    }
+
+    async fn create(state: State<AppState>, headers: HeaderMap, body: Bytes) -> Response {
+        match test_body(&headers, &body) {
+            Ok(body) => super::create(state, headers, body).await,
+            Err(response) => *response,
+        }
+    }
+
+    async fn status(
+        state: State<AppState>,
+        headers: HeaderMap,
+        Path((company_id, status)): Path<(String, String)>,
+    ) -> Response {
+        match test_path(json!({"companyId": company_id, "status": status})) {
+            Ok(path) => super::status(state, headers, path).await,
+            Err(response) => *response,
+        }
+    }
+
+    async fn remove_membership(
+        state: State<AppState>,
+        headers: HeaderMap,
+        Path((company_id, user_id)): Path<(String, String)>,
+    ) -> Response {
+        match test_path(json!({"companyId": company_id, "userId": user_id})) {
+            Ok(path) => super::remove_membership(state, headers, path).await,
+            Err(response) => *response,
+        }
+    }
+
+    macro_rules! company_body {
+        ($($name:ident),*) => {$(
+            async fn $name(
+                state: State<AppState>,
+                headers: HeaderMap,
+                Path(id): Path<String>,
+                body: Bytes,
+            ) -> Response {
+                let path = match test_path(json!({"companyId": id})) {
+                    Ok(path) => path,
+                    Err(response) => return *response,
+                };
+                match test_body(&headers, &body) {
+                    Ok(body) => super::$name(state, headers, path, body).await,
+                    Err(response) => *response,
+                }
+            }
+        )*};
+    }
+
+    company_body!(rename, issue_code, add_membership);
     use crate::shared::time::{now_millis_rfc3339, rfc3339_millis};
     use crate::{
         identity::auth,

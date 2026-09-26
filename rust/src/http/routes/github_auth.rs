@@ -2,7 +2,6 @@ use std::{future::Future, sync::Arc};
 
 use axum::{
     Json, Router,
-    body::Bytes,
     extract::State,
     http::{HeaderMap, StatusCode, header},
     response::{IntoResponse, Response},
@@ -12,7 +11,7 @@ use serde_json::json;
 use uuid::Uuid;
 
 use crate::{
-    http::{AppState, contracts::typed::github_auth::parse_device_poll},
+    http::{AppState, contracts::typed::github_auth::DevicePollBody, validation::Valid},
     integrations::{
         github,
         github_device::{DeviceAuth, Granted, Poll},
@@ -106,11 +105,11 @@ async fn start(State(state): State<AppState>, headers: HeaderMap) -> Response {
     no_store(response, cookies)
 }
 
-async fn poll(State(state): State<AppState>, headers: HeaderMap, body: Bytes) -> Response {
-    let request = match auth::validated_typed_body(&headers, &body, parse_device_poll) {
-        Ok(request) => request,
-        Err(response) => return *response,
-    };
+async fn poll(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Valid(request): Valid<DevicePollBody>,
+) -> Response {
     let (_, cookies) = match profiles::authorize(&state, &headers, "POST", true) {
         Ok(value) => value,
         Err(response) => return *response,

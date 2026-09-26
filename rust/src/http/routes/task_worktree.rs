@@ -14,15 +14,16 @@ use axum::{
     response::{IntoResponse, Response},
     routing::{get, post},
 };
-use serde_json::{Value, json};
+use serde_json::json;
 
 use crate::{
     http::{
         AppState,
-        contracts::typed::{self, finding, tasks as task_contracts},
-        session, validation,
+        contracts::typed::tasks::{TaskIdParams, WorktreeOpenBody},
+        session,
+        validation::{ValidPath, body_contract, valid},
     },
-    tasks::worktree_open::{self, Launcher, WORKTREE_APP_IDS},
+    tasks::worktree_open::{self, Launcher},
 };
 
 use super::{auth, profiles::authorize};
@@ -31,19 +32,6 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/api/tasks/{task_id}/worktree/apps", get(apps))
         .route("/api/tasks/{task_id}/worktree/open", post(open))
-}
-
-pub(crate) fn validated_task_id(id: &str) -> Result<(), Box<Response>> {
-    match task_contracts::parse_task_id_params(Some(&json!({"taskId": id}))) {
-        Ok(_) => Ok(()),
-        Err(typed::ContractFailure::Issues(findings)) => {
-            Err(Box::new(validation::validation_error_public(findings)))
-        }
-        Err(_) => Err(Box::new(auth::error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "Internal server error",
-        ))),
-    }
 }
 
 pub(crate) use crate::tasks::repository::task_worktree;
@@ -76,13 +64,10 @@ fn direct_loopback_request(state: &AppState, headers: &HeaderMap, extensions: &E
 
 async fn apps(
     State(state): State<AppState>,
-    Path(task_id): Path<String>,
+    ValidPath(TaskIdParams { task_id }): ValidPath<TaskIdParams>,
     headers: HeaderMap,
     extensions: Extensions,
 ) -> Response {
-    if let Err(response) = validated_task_id(&task_id) {
-        return *response;
-    }
     let (user_id, cookies) = match authorize(&state, &headers, "GET", false) {
         Ok(value) => value,
         Err(response) => return *response,
@@ -105,21 +90,6 @@ async fn apps(
         }
     };
     with_cookies(response, cookies)
-}
-
-fn parse_open_body(headers: &HeaderMap, body: &Bytes) -> Result<String, Box<Response>> {
-    let body = auth::parsed_body(headers, body)?;
-    let Some(Value::Object(fields)) = body else {
-        return Err(Box::new(validation::validation_error_public(vec![
-            finding("invalid_type", &[]),
-        ])));
-    };
-    match fields.get("app").and_then(Value::as_str) {
-        Some(app) if app == "editor" || WORKTREE_APP_IDS.contains(&app) => Ok(app.to_owned()),
-        _ => Err(Box::new(validation::validation_error_public(vec![
-            finding("invalid_union", &[json!("app")]),
-        ]))),
-    }
 }
 
 async fn open(
@@ -146,11 +116,10 @@ pub(crate) async fn open_with(
     body: Bytes,
     discover: fn() -> (Vec<Launcher>, Option<Launcher>),
 ) -> Response {
-    if let Err(response) = validated_task_id(&task_id) {
-        return *response;
-    }
-    let app = match parse_open_body(&headers, &body) {
-        Ok(app) => app,
+    let app = match valid::<TaskIdParams>(json!({"taskId": task_id}))
+        .and_then(|_| body_contract::<WorktreeOpenBody>(&headers, &body))
+    {
+        Ok(body) => body.app,
         Err(response) => return *response,
     };
     let (user_id, cookies) = match authorize(&state, &headers, "POST", false) {

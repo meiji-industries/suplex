@@ -6,7 +6,6 @@ use std::collections::HashMap;
 
 use axum::{
     Json, Router,
-    body::Bytes,
     extract::{Path, RawQuery, State, ws::WebSocketUpgrade},
     http::{HeaderMap, StatusCode, header::CACHE_CONTROL},
     response::{IntoResponse, Response},
@@ -16,7 +15,11 @@ use rusqlite::OptionalExtension;
 use serde_json::json;
 
 use crate::{
-    http::{AppState, contracts::typed::finding, validation},
+    http::{
+        AppState,
+        contracts::typed::projects::{ProviderInstanceCreateBody, ProviderParams},
+        validation::{Valid, valid},
+    },
     integrations::herdr_bridge::{self, Mode},
     profiles::{
         provider_connection::connection_from_health, provider_instances, provider_login,
@@ -29,8 +32,6 @@ use super::{
     profiles::authorize,
     task_pane::{TerminalSession, origin_allowed, run_terminal, terminal_size},
 };
-
-const HARNESS_KINDS: [&str; 4] = ["opencode", "claude-code", "devin", "codex"];
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -92,28 +93,15 @@ async fn list_instances(State(state): State<AppState>, headers: HeaderMap) -> Re
 async fn create_instance(
     State(state): State<AppState>,
     headers: HeaderMap,
-    body: Bytes,
+    Valid(input): Valid<ProviderInstanceCreateBody>,
 ) -> Response {
-    let input = match auth::validated_body(
-        &headers,
-        &body,
-        "providers.ProviderInstanceCreateBodySchema",
-    ) {
-        Ok(input) => input,
-        Err(response) => return *response,
-    };
     let (user_id, cookies) = match authorize(&state, &headers, "POST", false) {
         Ok(value) => value,
         Err(response) => return *response,
     };
     let created = state.with_database(|database| {
-        provider_instances::create(
-            database,
-            &user_id,
-            input["provider"].as_str().unwrap_or_default(),
-            input["label"].as_str().unwrap_or_default(),
-        )
-        .map_err(ApiError::response)
+        provider_instances::create(database, &user_id, &input.provider, &input.label)
+            .map_err(ApiError::response)
     });
     let response = match created {
         Ok(instance) => (StatusCode::CREATED, Json(instance)).into_response(),
@@ -179,11 +167,8 @@ async fn provider_login(
     Path(provider_id): Path<String>,
     headers: HeaderMap,
 ) -> Response {
-    if !HARNESS_KINDS.contains(&provider_id.as_str()) {
-        return validation::validation_error_public(vec![finding(
-            "invalid_value",
-            &[json!("providerId")],
-        )]);
+    if let Err(response) = valid::<ProviderParams>(json!({"providerId": provider_id})) {
+        return *response;
     }
     let (_, cookies) = match authorize(&state, &headers, "POST", true) {
         Ok(value) => value,

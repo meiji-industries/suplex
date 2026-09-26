@@ -3,21 +3,22 @@ use crate::http::access::with_cookies;
 use crate::http::error::ApiError;
 use axum::{
     Json, Router,
-    body::Bytes,
     extract::{Path, RawQuery, State},
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     routing::{get, post},
 };
 use chrono::Utc;
-use serde_json::{Map, Value, json};
+use serde_json::json;
 
 use crate::{
-    http::{AppState, contracts},
-    profiles::agent_profiles::{self, ProfileInput, ProfilePatch},
+    http::{
+        AppState,
+        contracts::typed::{agent_api::query_object, projects::IncludeArchivedQuery},
+        validation::{Valid, valid},
+    },
+    profiles::agent_profiles::{self, AgentProfile, ProfileInput, ProfilePatch},
 };
-
-use super::auth;
 
 pub fn router() -> Router<AppState> {
     Router::new()
@@ -31,10 +32,49 @@ pub fn router() -> Router<AppState> {
         .route("/api/admin/profiles/{agent_id}/duplicate", post(duplicate))
 }
 
-fn validated_response(contract: &str, value: Value, status: StatusCode) -> Response {
-    match contracts::validate(contract, Some(&value)) {
-        Some(Ok(value)) => (status, Json(value)).into_response(),
-        _ => auth::error(StatusCode::INTERNAL_SERVER_ERROR, "Internal server error"),
+/// `AgentProfileSchema` output: the Zod shape's key order.
+#[derive(serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ProfileView<'a> {
+    provider: &'a str,
+    model: &'a str,
+    reasoning_level: &'a str,
+    service_tier: &'a str,
+    provider_instance_id: &'a Option<String>,
+    name: &'a str,
+    role: &'a str,
+    avatar_seed: &'a str,
+    id: &'a str,
+    archived_at: &'a Option<String>,
+    created_at: &'a str,
+    updated_at: &'a str,
+}
+
+fn view(profile: &AgentProfile) -> ProfileView<'_> {
+    ProfileView {
+        provider: &profile.provider,
+        model: &profile.model,
+        reasoning_level: &profile.reasoning_level,
+        service_tier: &profile.service_tier,
+        provider_instance_id: &profile.provider_instance_id,
+        name: &profile.name,
+        role: &profile.role,
+        avatar_seed: &profile.avatar_seed,
+        id: &profile.id,
+        archived_at: &profile.archived_at,
+        created_at: &profile.created_at,
+        updated_at: &profile.updated_at,
+    }
+}
+
+/// A profile response with the given status.
+fn profile_response(
+    result: Result<AgentProfile, Box<dyn std::error::Error>>,
+    status: StatusCode,
+) -> Response {
+    match result {
+        Ok(profile) => (status, Json(view(&profile))).into_response(),
+        Err(error) => ApiError::response(error),
     }
 }
 
@@ -43,72 +83,40 @@ async fn list(
     headers: HeaderMap,
     RawQuery(query): RawQuery,
 ) -> Response {
-    let mut input = Map::new();
-    if let Some(query) = query {
-        for (name, value) in url::form_urlencoded::parse(query.as_bytes()) {
-            let value = json!(value.into_owned());
-            if let Some(previous) = input.get_mut(name.as_ref()) {
-                if let Value::Array(values) = previous {
-                    values.push(value);
-                } else {
-                    *previous = Value::Array(vec![previous.clone(), value]);
-                }
-            } else {
-                input.insert(name.into_owned(), value);
-            }
-        }
-    }
-    let Some(validation) = contracts::validate(
-        "projects.ProfileListQuerySchema",
-        Some(&Value::Object(input)),
-    ) else {
-        return auth::error(StatusCode::INTERNAL_SERVER_ERROR, "Internal server error");
-    };
-    let query = match validation {
-        Ok(value) => value,
-        Err(issues) => return auth::validation_error(issues),
+    let query = match valid::<IncludeArchivedQuery>(query_object(query.as_deref())) {
+        Ok(query) => query,
+        Err(response) => return *response,
     };
     let (user_id, cookies) = match authorize(&state, &headers, "GET", false) {
         Ok(value) => value,
         Err(error) => return *error,
     };
-    let include_archived = query.get("includeArchived").and_then(Value::as_str) == Some("true");
+    let include_archived = query.include_archived.is_some();
     let response = match state
         .with_database(|database| agent_profiles::list(database, &user_id, include_archived))
     {
-        Ok(profiles) => validated_response(
-            "projects.ProfileListResponseSchema",
-            json!({ "profiles": profiles }),
-            StatusCode::OK,
-        ),
+        Ok(profiles) => Json(json!({ "profiles": profiles.iter().map(view).collect::<Vec<_>>() }))
+            .into_response(),
         Err(error) => ApiError::response(error),
     };
     with_cookies(response, cookies)
 }
 
-async fn create(State(state): State<AppState>, headers: HeaderMap, body: Bytes) -> Response {
-    let input = match auth::validated_body(&headers, &body, "projects.ProfileBodySchema") {
-        Ok(input) => input,
-        Err(error) => return *error,
-    };
+async fn create(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Valid(input): Valid<ProfileInput>,
+) -> Response {
     let (user_id, cookies) = match authorize(&state, &headers, "POST", true) {
         Ok(value) => value,
         Err(error) => return *error,
     };
-    let input: ProfileInput = match serde_json::from_value(input) {
-        Ok(input) => input,
-        Err(_) => return auth::error(StatusCode::INTERNAL_SERVER_ERROR, "Internal server error"),
-    };
-    let response = match state
-        .with_database(|database| agent_profiles::create(database, &user_id, &input, Utc::now()))
-    {
-        Ok(profile) => validated_response(
-            "projects.ProfileResponseSchema",
-            json!(profile),
-            StatusCode::CREATED,
-        ),
-        Err(error) => ApiError::response(error),
-    };
+    let response = profile_response(
+        state.with_database(|database| {
+            agent_profiles::create(database, &user_id, &input, Utc::now())
+        }),
+        StatusCode::CREATED,
+    );
     with_cookies(response, cookies)
 }
 
@@ -116,30 +124,18 @@ async fn update(
     State(state): State<AppState>,
     headers: HeaderMap,
     Path(agent_id): Path<String>,
-    body: Bytes,
+    Valid(patch): Valid<ProfilePatch>,
 ) -> Response {
-    let input = match auth::validated_body(&headers, &body, "projects.ProfilePatchBodySchema") {
-        Ok(input) => input,
-        Err(error) => return *error,
-    };
     let (user_id, cookies) = match authorize(&state, &headers, "PATCH", true) {
         Ok(value) => value,
         Err(error) => return *error,
     };
-    let patch: ProfilePatch = match serde_json::from_value(input) {
-        Ok(patch) => patch,
-        Err(_) => return auth::error(StatusCode::INTERNAL_SERVER_ERROR, "Internal server error"),
-    };
-    let response = match state.with_database(|database| {
-        agent_profiles::update(database, &user_id, &agent_id, patch, Utc::now())
-    }) {
-        Ok(profile) => validated_response(
-            "projects.ProfileResponseSchema",
-            json!(profile),
-            StatusCode::OK,
-        ),
-        Err(error) => ApiError::response(error),
-    };
+    let response = profile_response(
+        state.with_database(|database| {
+            agent_profiles::update(database, &user_id, &agent_id, patch, Utc::now())
+        }),
+        StatusCode::OK,
+    );
     with_cookies(response, cookies)
 }
 
@@ -152,16 +148,12 @@ async fn duplicate(
         Ok(value) => value,
         Err(error) => return *error,
     };
-    let response = match state.with_database(|database| {
-        agent_profiles::duplicate(database, &user_id, &agent_id, Utc::now())
-    }) {
-        Ok(profile) => validated_response(
-            "projects.ProfileResponseSchema",
-            json!(profile),
-            StatusCode::CREATED,
-        ),
-        Err(error) => ApiError::response(error),
-    };
+    let response = profile_response(
+        state.with_database(|database| {
+            agent_profiles::duplicate(database, &user_id, &agent_id, Utc::now())
+        }),
+        StatusCode::CREATED,
+    );
     with_cookies(response, cookies)
 }
 

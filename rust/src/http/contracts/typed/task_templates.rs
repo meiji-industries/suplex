@@ -1,52 +1,42 @@
 //! Task-template request contracts and stored configuration.
 
-use garde::Validate;
 use serde::{Deserialize, Serialize};
-use serde_json::{Map, Value};
+use serde_json::{Map, Value, json};
 
 use super::{
-    ContractFailure, ContractResult, DELIVERY_TARGETS, Field, ID, Rule, TRIMMED_NAME,
-    VISUAL_EVIDENCE, WORKFLOW_IDS, id_1_256, optional, parse_object, serialized, tasks,
-    visual_evidence as check_visual_evidence,
+    Contract, ContractResult, Fields, MAX, advisors, choice, flag, nullable, one_of,
+    tasks::{self, VISUAL_EVIDENCE, id},
+    text, trimmed,
 };
+use crate::{coordination::workflows::Workflow, tasks::control::DeliveryTarget};
 
-#[derive(Debug, Clone, Serialize, Deserialize, Validate)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct TemplateConfiguration {
-    #[serde(deserialize_with = "tasks::trimmed")]
-    #[garde(length(min = 1))]
     pub name: String,
-    #[serde(default, deserialize_with = "tasks::trimmed")]
-    #[garde(skip)]
+    #[serde(default)]
     pub description: String,
     #[serde(
         default,
         deserialize_with = "super::optional_nonnull",
         skip_serializing_if = "Option::is_none"
     )]
-    #[garde(inner(custom(id_1_256)))]
     pub root_profile_id: Option<String>,
     #[serde(
         default,
         deserialize_with = "super::optional_nonnull",
         skip_serializing_if = "Option::is_none"
     )]
-    #[garde(inner(custom(id_1_256)))]
     pub worker_profile_id: Option<String>,
     #[serde(default = "tasks::default_delivery_target")]
-    #[garde(skip)]
-    pub delivery_target: crate::tasks::control::DeliveryTarget,
+    pub delivery_target: DeliveryTarget,
     #[serde(default = "tasks::default_run_project_tests")]
-    #[garde(skip)]
     pub run_project_tests: bool,
     #[serde(default = "tasks::default_visual_evidence")]
-    #[garde(custom(check_visual_evidence))]
     pub visual_evidence: String,
     #[serde(default = "tasks::default_workflow")]
-    #[garde(skip)]
-    pub workflow: crate::coordination::workflows::Workflow,
+    pub workflow: Workflow,
     #[serde(default)]
-    #[garde(dive)]
     pub advisor_profile_ids: tasks::AdvisorProfileIds,
 }
 
@@ -61,111 +51,74 @@ pub struct TemplateResponse {
     pub updated_at: String,
 }
 
-/// The stored create schema is strict and applies its request defaults again.
+/// `UpdateTaskTemplateBodySchema` output: only the present fields.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(transparent)]
+pub struct TemplatePatch(pub Map<String, Value>);
+
+#[derive(Debug, Clone, Deserialize)]
+pub struct SaveBody {
+    pub name: String,
+}
+
+/// `CreateTaskTemplateBodySchema`: strict, with its request defaults.
+impl Contract for TemplateConfiguration {
+    fn schema(input: Option<&Value>) -> ContractResult<Value> {
+        Fields::new(input)?
+            .or("description", json!(""), trimmed(0, MAX))
+            .opt("rootProfileId", id())
+            .opt("workerProfileId", id())
+            .or(
+                "deliveryTarget",
+                json!("pull_request_draft"),
+                choice::<DeliveryTarget>,
+            )
+            .or("runProjectTests", json!(true), flag)
+            .or("visualEvidence", json!("off"), one_of(VISUAL_EVIDENCE))
+            .or("workflow", json!("standard"), choice::<Workflow>)
+            .or("advisorProfileIds", json!({}), advisors)
+            .req("name", trimmed(1, MAX))
+            .strict()
+    }
+}
+
+/// A stored configuration passes the create schema again.
 pub fn parse_stored_configuration(value: Value) -> Result<TemplateConfiguration, String> {
-    let configuration: TemplateConfiguration =
-        serde_json::from_value(value).map_err(|error| error.to_string())?;
-    configuration
-        .validate()
-        .map_err(|error| error.to_string())?;
-    Ok(configuration)
+    TemplateConfiguration::parse(Some(&value)).map_err(|failure| format!("{failure:?}"))
 }
 
-const DESCRIPTION: Rule = Rule::Text {
-    trim: true,
-    min: 0,
-    max: None,
-};
-const PATCH_PROFILE_ID: Rule = Rule::Text {
-    trim: false,
-    min: 1,
-    max: None,
-};
-
-const CREATE: &[Field] = &[
-    Field {
-        default: Some("\"\""),
-        ..optional("description", DESCRIPTION)
-    },
-    optional("rootProfileId", ID),
-    optional("workerProfileId", ID),
-    Field {
-        default: Some("\"pull_request_draft\""),
-        ..optional("deliveryTarget", DELIVERY_TARGETS)
-    },
-    Field {
-        default: Some("true"),
-        ..optional("runProjectTests", Rule::Flag)
-    },
-    Field {
-        default: Some("\"off\""),
-        ..optional("visualEvidence", VISUAL_EVIDENCE)
-    },
-    Field {
-        default: Some("\"standard\""),
-        ..optional("workflow", WORKFLOW_IDS)
-    },
-    Field {
-        default: Some("{}"),
-        ..optional("advisorProfileIds", Rule::Advisors)
-    },
-    Field {
-        required: true,
-        ..optional("name", TRIMMED_NAME)
-    },
-];
-
-// A patch carries no defaults: the service merges it with the stored template first.
-const UPDATE: &[Field] = &[
-    optional("name", TRIMMED_NAME),
-    optional("description", TRIMMED_NAME),
-    Field {
-        nullable: true,
-        ..optional("rootProfileId", PATCH_PROFILE_ID)
-    },
-    Field {
-        nullable: true,
-        ..optional("workerProfileId", PATCH_PROFILE_ID)
-    },
-    optional("deliveryTarget", DELIVERY_TARGETS),
-    optional("runProjectTests", Rule::Flag),
-    optional("visualEvidence", VISUAL_EVIDENCE),
-    optional("workflow", WORKFLOW_IDS),
-    optional("advisorProfileIds", Rule::Advisors),
-];
-
-const SAVE: &[Field] = &[Field {
-    required: true,
-    ..optional("name", TRIMMED_NAME)
-}];
-
-/// `CreateTaskTemplateBodySchema`.
-pub fn parse_create(input: Option<&Value>) -> ContractResult<TemplateConfiguration> {
-    let value = parse_object(input, CREATE, true)?;
-    parse_stored_configuration(Value::Object(value)).map_err(ContractFailure::Internal)
+/// A patch carries no defaults: the service merges it with the stored template first.
+impl Contract for TemplatePatch {
+    fn schema(input: Option<&Value>) -> ContractResult<Value> {
+        Fields::new(input)?
+            .opt("name", trimmed(1, MAX))
+            .opt("description", trimmed(1, MAX))
+            .opt("rootProfileId", nullable(text(1, MAX)))
+            .opt("workerProfileId", nullable(text(1, MAX)))
+            .opt("deliveryTarget", choice::<DeliveryTarget>)
+            .opt("runProjectTests", flag)
+            .opt("visualEvidence", one_of(VISUAL_EVIDENCE))
+            .opt("workflow", choice::<Workflow>)
+            .opt("advisorProfileIds", advisors)
+            .strict()
+    }
 }
 
-/// `UpdateTaskTemplateBodySchema`: only the present fields.
-pub fn parse_update(input: Option<&Value>) -> ContractResult<Map<String, Value>> {
-    parse_object(input, UPDATE, true)
+/// `ProjectTaskTemplatesParamsSchema`.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectTemplatesParams {
+    pub project_id: String,
 }
 
-/// `SaveTaskAsTemplateBodySchema`: the trimmed template name.
-pub fn parse_save(input: Option<&Value>) -> ContractResult<String> {
-    let mut value = parse_object(input, SAVE, true)?;
-    Ok(value
-        .remove("name")
-        .and_then(|name| name.as_str().map(str::to_owned))
-        .unwrap_or_default())
+impl Contract for ProjectTemplatesParams {
+    fn schema(input: Option<&Value>) -> ContractResult<Value> {
+        super::params(input, &["projectId"], (1, MAX))
+    }
 }
 
-pub fn validate(contract: &str, input: Option<&Value>) -> Option<ContractResult<Value>> {
-    Some(match contract {
-        "task-templates.CreateTaskTemplateBodySchema" => serialized(parse_create(input)),
-        "task-templates.UpdateTaskTemplateBodySchema" => parse_update(input).map(Value::Object),
-        "task-templates.SaveTaskAsTemplateBodySchema" => {
-            parse_save(input).map(|name| serde_json::json!({ "name": name }))
-        }
-        _ => return None,
-    })
+impl Contract for SaveBody {
+    fn schema(input: Option<&Value>) -> ContractResult<Value> {
+        Fields::new(input)?.req("name", trimmed(1, MAX)).strict()
+    }
 }

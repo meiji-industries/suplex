@@ -6,7 +6,7 @@ use std::path::PathBuf;
 
 use axum::{
     Json, Router,
-    body::{Body, Bytes, HttpBody},
+    body::{Body, HttpBody},
     extract::{Path, State},
     http::{HeaderMap, Method, StatusCode, header},
     response::{IntoResponse, Response},
@@ -17,14 +17,14 @@ use serde_json::{Map, Value, json};
 use tokio::io::AsyncWriteExt;
 
 use crate::{
-    http::{AppState, contracts::typed::finding, session, validation},
+    http::{AppState, contracts::typed::system::EnvironmentPatch, session, validation::Valid},
     identity::auth::AuthUser,
     platform::{
         PlatformError,
         backup::{BackupFailure, BackupService},
         database::SuplexDatabase,
         development,
-        environment_settings::{self, EnvironmentSettings, MAX_MIN_FREE_DISK_GB, js_number},
+        environment_settings::{self, EnvironmentSettings, js_number},
         factory_reset,
     },
 };
@@ -157,67 +157,11 @@ async fn read_environment(State(state): State<AppState>, headers: HeaderMap) -> 
     finish(response, cookies)
 }
 
-struct EnvironmentPatch {
-    min_free_disk_gb: Option<f64>,
-    default_budget_usd: Option<f64>,
-    default_max_turns: Option<i64>,
-}
-
-/// `EnvironmentSettingsBodySchema`: optional bounded numbers and at least one
-/// known field. Unknown fields are stripped, as Zod does for a plain object.
-fn environment_patch(input: Option<&Value>) -> Result<EnvironmentPatch, Vec<Value>> {
-    let Some(Value::Object(fields)) = input else {
-        return Err(vec![finding("invalid_type", &[])]);
-    };
-    let mut issues = Vec::new();
-    let mut number = |name: &str, maximum: Option<f64>, integer: bool| -> Option<f64> {
-        let value = fields.get(name)?;
-        let Some(number) = value.as_f64() else {
-            issues.push(finding("invalid_type", &[json!(name)]));
-            return None;
-        };
-        if integer && number.fract() != 0.0 {
-            issues.push(finding("invalid_type", &[json!(name)]));
-            return None;
-        }
-        if number < 0.0 {
-            issues.push(finding("too_small", &[json!(name)]));
-            return None;
-        }
-        if maximum.is_some_and(|maximum| number > maximum) {
-            issues.push(finding("too_big", &[json!(name)]));
-            return None;
-        }
-        Some(number)
-    };
-    let patch = EnvironmentPatch {
-        min_free_disk_gb: number("minFreeDiskGb", Some(MAX_MIN_FREE_DISK_GB), false),
-        default_budget_usd: number("defaultBudgetUsd", None, false),
-        default_max_turns: number("defaultMaxTurns", None, true).map(|value| value as i64),
-    };
-    if !issues.is_empty() {
-        return Err(issues);
-    }
-    if patch.min_free_disk_gb.is_none()
-        && patch.default_budget_usd.is_none()
-        && patch.default_max_turns.is_none()
-    {
-        return Err(vec![finding("custom", &[])]);
-    }
-    Ok(patch)
-}
-
 async fn update_environment(
     State(state): State<AppState>,
     headers: HeaderMap,
-    body: Bytes,
+    Valid(patch): Valid<EnvironmentPatch>,
 ) -> Response {
-    let patch =
-        match auth::parsed_body(&headers, &body).map(|value| environment_patch(value.as_ref())) {
-            Ok(Ok(patch)) => patch,
-            Ok(Err(findings)) => return validation::validation_error_public(findings),
-            Err(response) => return *response,
-        };
     let (user, cookies) = match administrator(&state, &headers, &Method::PATCH, ADMIN_REQUIRED) {
         Ok(value) => value,
         Err(response) => return *response,

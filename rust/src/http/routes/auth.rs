@@ -3,9 +3,8 @@ use std::error::Error;
 
 use axum::{
     Json, Router,
-    body::Bytes,
     extract::State,
-    http::{HeaderMap, StatusCode, header},
+    http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     routing::{get, post},
 };
@@ -14,14 +13,19 @@ use serde::Serialize;
 use serde_json::json;
 
 use crate::{
-    http::contracts::{self, typed},
+    http::{
+        contracts::typed::auth::{
+            AuthenticationVerificationBody, ProfileBody, RegistrationVerificationBody, TokenBody,
+        },
+        validation::Valid,
+    },
     identity::{
         auth::{self, AuthUser, ProfileUpdate},
         ceremony::{self, PreparedCredential, WebAuthnSite},
     },
 };
 
-use super::super::{AppState, session, validation};
+use super::super::{AppState, session};
 
 #[derive(Serialize)]
 struct AuthEnvelope {
@@ -67,13 +71,9 @@ fn site(config: &session::SessionConfig) -> Result<url::Url, Box<Response>> {
 async fn registration_options(
     state: AppState,
     headers: HeaderMap,
-    body: Bytes,
+    parsed: TokenBody,
     kind: &'static str,
 ) -> Response {
-    let parsed = match validated_typed_body(&headers, &body, typed::auth::parse_token) {
-        Ok(parsed) => parsed,
-        Err(response) => return *response,
-    };
     if !session::csrf_allowed(&state.session_config, &headers, "POST", false) {
         return error(StatusCode::FORBIDDEN, "request_origin_invalid");
     }
@@ -104,17 +104,9 @@ async fn registration_options(
 async fn registration_verify(
     state: AppState,
     headers: HeaderMap,
-    body: Bytes,
+    parsed: RegistrationVerificationBody,
     kind: &'static str,
 ) -> Response {
-    let parsed = match validated_typed_body(
-        &headers,
-        &body,
-        typed::auth::parse_registration_verification,
-    ) {
-        Ok(parsed) => parsed,
-        Err(response) => return *response,
-    };
     if !session::csrf_allowed(&state.session_config, &headers, "POST", false) {
         return error(StatusCode::FORBIDDEN, "request_origin_invalid");
     }
@@ -216,7 +208,7 @@ fn auth_result(state: &AppState, result: Result<auth::AuthResult, Box<dyn Error>
 async fn bootstrap_options(
     State(state): State<AppState>,
     headers: HeaderMap,
-    body: Bytes,
+    Valid(body): Valid<TokenBody>,
 ) -> Response {
     registration_options(state, headers, body, "bootstrap").await
 }
@@ -224,7 +216,7 @@ async fn bootstrap_options(
 async fn invitation_options(
     State(state): State<AppState>,
     headers: HeaderMap,
-    body: Bytes,
+    Valid(body): Valid<TokenBody>,
 ) -> Response {
     registration_options(state, headers, body, "user").await
 }
@@ -232,7 +224,7 @@ async fn invitation_options(
 async fn recovery_options(
     State(state): State<AppState>,
     headers: HeaderMap,
-    body: Bytes,
+    Valid(body): Valid<TokenBody>,
 ) -> Response {
     registration_options(state, headers, body, "recovery").await
 }
@@ -240,7 +232,7 @@ async fn recovery_options(
 async fn bootstrap_verify(
     State(state): State<AppState>,
     headers: HeaderMap,
-    body: Bytes,
+    Valid(body): Valid<RegistrationVerificationBody>,
 ) -> Response {
     registration_verify(state, headers, body, "bootstrap").await
 }
@@ -248,7 +240,7 @@ async fn bootstrap_verify(
 async fn invitation_verify(
     State(state): State<AppState>,
     headers: HeaderMap,
-    body: Bytes,
+    Valid(body): Valid<RegistrationVerificationBody>,
 ) -> Response {
     registration_verify(state, headers, body, "user").await
 }
@@ -256,7 +248,7 @@ async fn invitation_verify(
 async fn recovery_verify(
     State(state): State<AppState>,
     headers: HeaderMap,
-    body: Bytes,
+    Valid(body): Valid<RegistrationVerificationBody>,
 ) -> Response {
     registration_verify(state, headers, body, "recovery").await
 }
@@ -286,16 +278,8 @@ async fn authentication_options(State(state): State<AppState>) -> Response {
 async fn authentication_verify(
     State(state): State<AppState>,
     headers: HeaderMap,
-    body: Bytes,
+    Valid(parsed): Valid<AuthenticationVerificationBody>,
 ) -> Response {
-    let parsed = match validated_typed_body(
-        &headers,
-        &body,
-        typed::auth::parse_authentication_verification,
-    ) {
-        Ok(parsed) => parsed,
-        Err(response) => return *response,
-    };
     if !session::csrf_allowed(&state.session_config, &headers, "POST", false) {
         return error(StatusCode::FORBIDDEN, "request_origin_invalid");
     }
@@ -325,75 +309,7 @@ pub(crate) fn error(status: StatusCode, message: &str) -> Response {
 
 pub(crate) use crate::http::access::append_cookies;
 
-pub(crate) fn validation_error(issues: Vec<serde_json::Value>) -> Response {
-    validation::validation_error(issues)
-}
-
-pub(crate) fn parsed_body(
-    headers: &HeaderMap,
-    body: &Bytes,
-) -> Result<Option<serde_json::Value>, Box<Response>> {
-    let content_type = headers
-        .get(header::CONTENT_TYPE)
-        .and_then(|value| value.to_str().ok())
-        .and_then(|value| value.split(';').next())
-        .unwrap_or_default();
-    let parsed = if body.is_empty() {
-        None
-    } else if content_type == "text/plain" {
-        Some(serde_json::Value::String(
-            String::from_utf8_lossy(body).into_owned(),
-        ))
-    } else if content_type == "application/json" {
-        match serde_json::from_slice::<serde_json::Value>(body) {
-            Ok(value) => Some(value),
-            Err(_) => return Err(Box::new(error(StatusCode::BAD_REQUEST, "Invalid request"))),
-        }
-    } else {
-        return Err(Box::new(error(
-            StatusCode::UNSUPPORTED_MEDIA_TYPE,
-            "Unsupported media type",
-        )));
-    };
-    Ok(parsed)
-}
-
-pub(crate) fn validated_typed_body<T>(
-    headers: &HeaderMap,
-    body: &Bytes,
-    parse: fn(Option<&serde_json::Value>) -> contracts::typed::ContractResult<T>,
-) -> Result<T, Box<Response>> {
-    let parsed = parsed_body(headers, body)?;
-    match parse(parsed.as_ref()) {
-        Ok(value) => Ok(value),
-        Err(contracts::typed::ContractFailure::Issues(findings)) => {
-            Err(Box::new(validation::validation_error_public(findings)))
-        }
-        Err(
-            contracts::typed::ContractFailure::Unhandled
-            | contracts::typed::ContractFailure::Internal(_),
-        ) => Err(Box::new(error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "Internal server error",
-        ))),
-    }
-}
-
-pub(crate) fn validated_body(
-    headers: &HeaderMap,
-    body: &Bytes,
-    contract: &str,
-) -> Result<serde_json::Value, Box<Response>> {
-    let parsed = parsed_body(headers, body)?;
-    match contracts::validate(contract, parsed.as_ref()) {
-        Some(Ok(value)) => Ok(value),
-        Some(Err(issues)) => Err(Box::new(validation_error(issues))),
-        None => Err(Box::new(error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "Internal server error",
-        ))),
-    }
-}
+pub(crate) use crate::http::validation::parsed_body;
 
 fn prepared_response(response: serde_json::Value) -> PreparedCredential {
     let shape_valid = response
@@ -432,11 +348,11 @@ async fn me(crate::http::access::SessionUser(user): crate::http::access::Session
     Json(AuthEnvelope { user }).into_response()
 }
 
-async fn update_me(State(state): State<AppState>, headers: HeaderMap, body: Bytes) -> Response {
-    let parsed = match validated_typed_body(&headers, &body, typed::auth::parse_profile) {
-        Ok(parsed) => parsed,
-        Err(response) => return *response,
-    };
+async fn update_me(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Valid(parsed): Valid<ProfileBody>,
+) -> Response {
     if !session::csrf_allowed(&state.session_config, &headers, "PATCH", false) {
         return error(StatusCode::FORBIDDEN, "request_origin_invalid");
     }

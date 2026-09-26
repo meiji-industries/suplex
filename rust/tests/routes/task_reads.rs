@@ -1,6 +1,24 @@
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::http::validation::test_path;
+    use axum::{extract::Path, http::StatusCode};
+    use serde_json::json;
+
+    // The handlers validate the task id in an extractor; these adapters run
+    // that validation for direct calls.
+    macro_rules! task_path {
+        ($($name:ident),*) => {$(
+            async fn $name(state: State<AppState>, Path(id): Path<String>, headers: HeaderMap) -> Response {
+                match test_path(json!({"taskId": id})) {
+                    Ok(path) => super::$name(state, path, headers).await,
+                    Err(response) => *response,
+                }
+            }
+        )*};
+    }
+
+    task_path!(activity, execution, diff_summary, diff);
     use crate::http::session;
     use crate::{
         identity::auth as identity_auth,

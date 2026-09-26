@@ -17,8 +17,8 @@ use serde_json::json;
 use crate::{
     http::{
         AppState,
-        contracts::typed::{self, avatars as contracts},
-        validation,
+        contracts::typed::avatars::{AvatarOwnerParams, AvatarUpdateBody},
+        validation::{ValidPath, body_contract, valid},
     },
     identity::avatars::{self, MAX_AVATAR_IMAGE_BASE64_LENGTH},
 };
@@ -32,19 +32,6 @@ pub fn router() -> Router<AppState> {
             MAX_AVATAR_IMAGE_BASE64_LENGTH + 64 * 1024,
         )),
     )
-}
-
-fn owner_params(owner_id: &str) -> Result<(), Box<Response>> {
-    match contracts::parse_owner_params(Some(&json!({"ownerId": owner_id}))) {
-        Ok(_) => Ok(()),
-        Err(typed::ContractFailure::Issues(findings)) => {
-            Err(Box::new(validation::validation_error_public(findings)))
-        }
-        Err(_) => Err(Box::new(auth::error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "Internal server error",
-        ))),
-    }
 }
 
 async fn list(State(state): State<AppState>, headers: axum::http::HeaderMap) -> Response {
@@ -61,12 +48,9 @@ async fn list(State(state): State<AppState>, headers: axum::http::HeaderMap) -> 
 
 async fn image(
     State(state): State<AppState>,
-    Path(owner_id): Path<String>,
+    ValidPath(AvatarOwnerParams { owner_id }): ValidPath<AvatarOwnerParams>,
     headers: axum::http::HeaderMap,
 ) -> Response {
-    if let Err(response) = owner_params(&owner_id) {
-        return *response;
-    }
     let (user_id, cookies) = match authorize(&state, &headers, "GET", false) {
         Ok(value) => value,
         Err(response) => return *response,
@@ -118,10 +102,10 @@ async fn update(
         }
         Err(_) => return auth::error(StatusCode::BAD_REQUEST, "Invalid request"),
     };
-    if let Err(response) = owner_params(&owner_id) {
-        return *response;
-    }
-    let patch = match auth::validated_typed_body(&headers, &body, contracts::parse_update) {
+    // The body limit answers before the owner id is checked.
+    let patch = match valid::<AvatarOwnerParams>(json!({"ownerId": owner_id}))
+        .and_then(|_| body_contract::<AvatarUpdateBody>(&headers, &body))
+    {
         Ok(value) => value,
         Err(response) => return *response,
     };

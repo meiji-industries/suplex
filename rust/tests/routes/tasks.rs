@@ -3,14 +3,76 @@ mod tests {
     use super::*;
     use crate::projects::git as git;
 
+    use crate::http::validation::{test_body, test_path};
+    use axum::extract::Path;
+
+    // The handlers validate their params and body in extractors; these
+    // adapters run that validation for direct calls.
     async fn create(
         state: State<AppState>,
-        company_id: Path<String>,
+        Path(company_id): Path<String>,
         headers: HeaderMap,
         body: Bytes,
     ) -> Response {
-        super::create(state, company_id, headers, Ok(body)).await
+        match test_path(json!({"companyId": company_id})) {
+            Ok(path) => super::create(state, path, headers, Ok(body)).await,
+            Err(response) => *response,
+        }
     }
+
+    async fn list_company(
+        state: State<AppState>,
+        Path(company_id): Path<String>,
+        uri: OriginalUri,
+        headers: HeaderMap,
+    ) -> Response {
+        match test_path(json!({"companyId": company_id})) {
+            Ok(path) => super::list_company(state, path, uri, headers).await,
+            Err(response) => *response,
+        }
+    }
+
+    macro_rules! task_path {
+        ($($name:ident),*) => {$(
+            async fn $name(state: State<AppState>, Path(id): Path<String>, headers: HeaderMap) -> Response {
+                match test_path(json!({"taskId": id})) {
+                    Ok(path) => super::$name(state, path, headers).await,
+                    Err(response) => *response,
+                }
+            }
+        )*};
+    }
+
+    macro_rules! task_body {
+        ($($name:ident),*) => {$(
+            async fn $name(
+                state: State<AppState>,
+                Path(id): Path<String>,
+                headers: HeaderMap,
+                body: Bytes,
+            ) -> Response {
+                let path = match test_path(json!({"taskId": id})) {
+                    Ok(path) => path,
+                    Err(response) => return *response,
+                };
+                match test_body(&headers, &body) {
+                    Ok(body) => super::$name(state, path, headers, body).await,
+                    Err(response) => *response,
+                }
+            }
+        )*};
+    }
+
+    task_path!(get_one, cancel_pending, start_pending, unarchive_pending);
+    task_body!(
+        answer_pending,
+        archive_pending,
+        rename,
+        replace_coordinator,
+        replace_worker,
+        send_note,
+        update_details
+    );
     use crate::{
         identity::auth as identity_auth,
         platform::database::{OpenMode, SuplexDatabase},

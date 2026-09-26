@@ -6,7 +6,7 @@ use std::error::Error;
 use axum::{
     Router,
     body::Bytes,
-    extract::{Path, State},
+    extract::State,
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     routing::get,
@@ -16,11 +16,16 @@ use serde_json::{Value, json};
 use crate::{
     http::{
         AppState,
-        contracts::{
-            self,
-            typed::projects::{self as project_contracts},
+        contracts::typed::{
+            Contract,
+            auth::CompanyIdParams,
+            projects::{
+                IssueSearchQuery, LocalProjectCreate, OwnerParams, ProjectCreateBody,
+                ProjectIdParams, ProjectPatch, TaskSourceQuery,
+            },
         },
         session,
+        validation::{Valid, ValidPath, checked, valid},
     },
     projects::{provisioning, service},
 };
@@ -61,13 +66,9 @@ pub fn router() -> Router<AppState> {
 
 async fn repository_status(
     State(state): State<AppState>,
-    Path(project_id): Path<String>,
+    ValidPath(ProjectIdParams { project_id }): ValidPath<ProjectIdParams>,
     headers: HeaderMap,
 ) -> Response {
-    if let Err(response) = validated_path("common.ProjectIdParamsSchema", "projectId", &project_id)
-    {
-        return *response;
-    }
     let (user_id, cookies) = match authorize(&state, &headers) {
         Ok(value) => value,
         Err(response) => return *response,
@@ -118,21 +119,14 @@ fn query_object(uri: &axum::http::Uri) -> Value {
 /// TypeScript `searchIssues`: the configured tracker, else the project's GitHub Issues.
 async fn issues(
     State(state): State<AppState>,
-    Path(project_id): Path<String>,
+    ValidPath(ProjectIdParams { project_id }): ValidPath<ProjectIdParams>,
     axum::extract::OriginalUri(uri): axum::extract::OriginalUri,
     headers: HeaderMap,
 ) -> Response {
-    if let Err(response) = validated_path("common.ProjectIdParamsSchema", "projectId", &project_id)
-    {
-        return *response;
-    }
-    let query = query_object(&uri)["query"]
-        .as_str()
-        .unwrap_or("")
-        .to_owned();
-    if query.encode_utf16().count() > 200 {
-        return auth::validation_error(vec![json!({"code": "too_big", "path": ["query"]})]);
-    }
+    let query = match valid::<IssueSearchQuery>(query_object(&uri)) {
+        Ok(search) => search.query,
+        Err(response) => return *response,
+    };
     let (user_id, cookies) = match authorize(&state, &headers) {
         Ok(value) => value,
         Err(response) => return *response,
@@ -170,21 +164,14 @@ async fn issues(
 /// TypeScript `discoverTaskSources`.
 async fn task_sources(
     State(state): State<AppState>,
-    Path(project_id): Path<String>,
+    ValidPath(ProjectIdParams { project_id }): ValidPath<ProjectIdParams>,
     axum::extract::OriginalUri(uri): axum::extract::OriginalUri,
     headers: HeaderMap,
 ) -> Response {
-    if let Err(response) = validated_path("common.ProjectIdParamsSchema", "projectId", &project_id)
-    {
-        return *response;
-    }
-    let query = query_object(&uri);
-    match contracts::validate("projects.TaskSourceQuerySchema", Some(&query)) {
-        Some(Ok(_)) => {}
-        Some(Err(issues)) => return auth::validation_error(issues),
-        None => return auth::error(StatusCode::INTERNAL_SERVER_ERROR, "Internal server error"),
-    }
-    let kind = query["kind"].as_str().unwrap_or("").to_owned();
+    let kind = match valid::<TaskSourceQuery>(query_object(&uri)) {
+        Ok(query) => query.kind,
+        Err(response) => return *response,
+    };
     let (user_id, cookies) = match authorize(&state, &headers) {
         Ok(value) => value,
         Err(response) => return *response,
@@ -203,33 +190,12 @@ async fn task_sources(
     with_cookies(response, cookies)
 }
 
-fn validated_path(contract: &str, name: &str, value: &str) -> Result<(), Box<Response>> {
-    let mut path = serde_json::Map::new();
-    path.insert(name.to_owned(), json!(value));
-    match contracts::validate(contract, Some(&Value::Object(path))) {
-        Some(Ok(_)) => Ok(()),
-        Some(Err(issues)) => Err(Box::new(auth::validation_error(issues))),
-        None => Err(Box::new(auth::error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "Internal server error",
-        ))),
-    }
-}
-
 async fn create(
     State(state): State<AppState>,
-    Path(company_id): Path<String>,
+    ValidPath(CompanyIdParams { company_id }): ValidPath<CompanyIdParams>,
     headers: HeaderMap,
-    body: Bytes,
+    Valid(body): Valid<ProjectCreateBody>,
 ) -> Response {
-    if let Err(response) = validated_path("common.CompanyIdParamsSchema", "companyId", &company_id)
-    {
-        return *response;
-    }
-    let body = match auth::validated_typed_body(&headers, &body, project_contracts::parse_create) {
-        Ok(value) => value,
-        Err(response) => return *response,
-    };
     if !session::csrf_allowed(&state.session_config, &headers, "POST", false) {
         return auth::error(StatusCode::FORBIDDEN, "request_origin_invalid");
     }
@@ -282,25 +248,17 @@ async fn list_all(State(state): State<AppState>, headers: HeaderMap) -> Response
 
 async fn list_company(
     State(state): State<AppState>,
-    Path(company_id): Path<String>,
+    ValidPath(CompanyIdParams { company_id }): ValidPath<CompanyIdParams>,
     headers: HeaderMap,
 ) -> Response {
-    if let Err(response) = validated_path("common.CompanyIdParamsSchema", "companyId", &company_id)
-    {
-        return *response;
-    }
     list_for(state, headers, Some(company_id))
 }
 
 async fn get_one(
     State(state): State<AppState>,
-    Path(project_id): Path<String>,
+    ValidPath(ProjectIdParams { project_id }): ValidPath<ProjectIdParams>,
     headers: HeaderMap,
 ) -> Response {
-    if let Err(response) = validated_path("common.ProjectIdParamsSchema", "projectId", &project_id)
-    {
-        return *response;
-    }
     let (user_id, cookies) = match authorize(&state, &headers) {
         Ok(value) => value,
         Err(response) => return *response,
@@ -317,24 +275,17 @@ async fn get_one(
 /// fields it names.
 async fn update(
     State(state): State<AppState>,
-    Path(project_id): Path<String>,
+    ValidPath(ProjectIdParams { project_id }): ValidPath<ProjectIdParams>,
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
-    if let Err(response) = validated_path("common.ProjectIdParamsSchema", "projectId", &project_id)
-    {
-        return *response;
-    }
     let parsed = match auth::parsed_body(&headers, &body) {
         Ok(value) => value,
         Err(response) => return *response,
     };
-    let patch = match project_contracts::parse_patch(parsed.as_ref()) {
+    let patch = match checked(ProjectPatch::parse(parsed.as_ref())) {
         Ok(value) => value,
-        Err(contracts::typed::ContractFailure::Issues(findings)) => {
-            return crate::http::validation::validation_error_public(findings);
-        }
-        Err(_) => return auth::error(StatusCode::INTERNAL_SERVER_ERROR, "Internal server error"),
+        Err(response) => return *response,
     };
     if !session::csrf_allowed(&state.session_config, &headers, "PATCH", false) {
         return auth::error(StatusCode::FORBIDDEN, "request_origin_invalid");
@@ -359,7 +310,7 @@ async fn update(
             return with_cookies(ApiError::response(error), cookies);
         }
     };
-    let response = if let Ok(full) = project_contracts::parse_body(parsed.as_ref()) {
+    let response = if let Ok(full) = LocalProjectCreate::parse(parsed.as_ref()) {
         service::replace_project(&state, &roots, &user_id, &existing, &full).await
     } else {
         service::patch_project(&state, &roots, &user_id, &existing, &patch).await
@@ -373,13 +324,9 @@ async fn update(
 
 async fn repository_defaults(
     State(state): State<AppState>,
-    Path(project_id): Path<String>,
+    ValidPath(ProjectIdParams { project_id }): ValidPath<ProjectIdParams>,
     headers: HeaderMap,
 ) -> Response {
-    if let Err(response) = validated_path("common.ProjectIdParamsSchema", "projectId", &project_id)
-    {
-        return *response;
-    }
     let (user_id, cookies) = match authorize(&state, &headers) {
         Ok(value) => value,
         Err(response) => return *response,
@@ -402,13 +349,9 @@ async fn repository_defaults(
 
 async fn provider_instances(
     State(state): State<AppState>,
-    Path(project_id): Path<String>,
+    ValidPath(ProjectIdParams { project_id }): ValidPath<ProjectIdParams>,
     headers: HeaderMap,
 ) -> Response {
-    if let Err(response) = validated_path("common.ProjectIdParamsSchema", "projectId", &project_id)
-    {
-        return *response;
-    }
     let (user_id, cookies) = match authorize(&state, &headers) {
         Ok(value) => value,
         Err(response) => return *response,
@@ -424,13 +367,9 @@ async fn provider_instances(
 
 async fn repository_owners(
     State(state): State<AppState>,
-    Path(company_id): Path<String>,
+    ValidPath(CompanyIdParams { company_id }): ValidPath<CompanyIdParams>,
     headers: HeaderMap,
 ) -> Response {
-    if let Err(response) = validated_path("common.CompanyIdParamsSchema", "companyId", &company_id)
-    {
-        return *response;
-    }
     let (user_id, cookies) = match authorize(&state, &headers) {
         Ok(value) => value,
         Err(response) => return *response,
@@ -454,36 +393,9 @@ async fn repository_owners(
 
 async fn owner_repositories(
     State(state): State<AppState>,
-    Path((company_id, owner)): Path<(String, String)>,
+    ValidPath(OwnerParams { company_id, owner }): ValidPath<OwnerParams>,
     headers: HeaderMap,
 ) -> Response {
-    let mut issues = match contracts::validate(
-        "common.CompanyIdParamsSchema",
-        Some(&json!({"companyId": company_id})),
-    ) {
-        Some(Ok(_)) => Vec::new(),
-        Some(Err(issues)) => issues,
-        None => return auth::error(StatusCode::INTERNAL_SERVER_ERROR, "Internal server error"),
-    };
-    let valid_owner = owner.len() <= 39
-        && owner
-            .as_bytes()
-            .first()
-            .is_some_and(u8::is_ascii_alphanumeric)
-        && owner
-            .bytes()
-            .skip(1)
-            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-');
-    if !valid_owner {
-        let pattern = "/^[A-Za-z0-9][A-Za-z0-9-]{0,38}$/";
-        issues.push(json!({
-            "origin": "string", "code": "invalid_format", "format": "regex", "pattern": pattern,
-            "path": ["owner"], "message": format!("Invalid string: must match pattern {pattern}")
-        }));
-    }
-    if !issues.is_empty() {
-        return auth::validation_error(issues);
-    }
     let (user_id, cookies) = match authorize(&state, &headers) {
         Ok(value) => value,
         Err(response) => return *response,

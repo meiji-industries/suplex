@@ -1,19 +1,23 @@
 use crate::http::error::ApiError;
 use axum::{
     Json, Router,
-    body::Bytes,
-    extract::{Path, State},
+    extract::State,
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     routing::{get, post},
 };
 use chrono::Utc;
 use serde::Serialize;
-use serde_json::{Value, json};
 
 use crate::{
-    http::contracts::{self, typed},
-    identity::companies,
+    http::{
+        contracts::typed::auth::{
+            CompanyIdParams, CompanyIssueCodeBody, CompanyNameBody, CompanyStatusParams,
+            MembershipBody, MembershipParams,
+        },
+        validation::{Valid, ValidPath},
+    },
+    identity::{auth::AuthUser, companies},
 };
 
 use super::{
@@ -24,17 +28,6 @@ use super::{
 #[derive(Serialize)]
 struct CompanyList {
     companies: Vec<companies::Company>,
-}
-
-fn validated_params(contract: &str, params: Value) -> Result<Value, Box<Response>> {
-    match contracts::validate(contract, Some(&params)) {
-        Some(Ok(value)) => Ok(value),
-        Some(Err(issues)) => Err(Box::new(auth_routes::validation_error(issues))),
-        None => Err(Box::new(auth_routes::error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "Internal server error",
-        ))),
-    }
 }
 
 pub fn router() -> Router<AppState> {
@@ -68,237 +61,155 @@ use crate::http::access::authenticated;
 
 use crate::http::access::with_cookies as respond_with_cookies;
 
-fn csrf_failure(state: &AppState, headers: &HeaderMap, method: &str) -> Option<Response> {
-    (!session::csrf_allowed(&state.session_config, headers, method, false))
-        .then(|| auth_routes::error(StatusCode::FORBIDDEN, "request_origin_invalid"))
-}
-
-async fn list(State(state): State<AppState>, headers: HeaderMap) -> Response {
-    let (user, cookies) = match authenticated(&state, &headers) {
+/// The request origin (for writes), then the session; `operation` runs as that user.
+fn respond<T: Serialize>(
+    state: &AppState,
+    headers: &HeaderMap,
+    method: Option<&str>,
+    status: StatusCode,
+    operation: impl FnOnce(
+        &mut crate::platform::database::SuplexDatabase,
+        &AuthUser,
+    ) -> Result<T, Box<dyn std::error::Error>>,
+) -> Response {
+    if let Some(method) = method
+        && !session::csrf_allowed(&state.session_config, headers, method, false)
+    {
+        return auth_routes::error(StatusCode::FORBIDDEN, "request_origin_invalid");
+    }
+    let (user, cookies) = match authenticated(state, headers) {
         Ok(value) => value,
         Err(error) => return *error,
     };
-    let response = match state
-        .with_database(|database| companies::list_visible_companies(database, &user.id))
-    {
-        Ok(companies) => Json(CompanyList { companies }).into_response(),
+    let response = match state.with_database(|database| operation(database, &user)) {
+        Ok(_) if status == StatusCode::NO_CONTENT => status.into_response(),
+        Ok(value) => (status, Json(value)).into_response(),
         Err(error) => ApiError::response(error),
     };
     respond_with_cookies(response, cookies)
+}
+
+async fn list(State(state): State<AppState>, headers: HeaderMap) -> Response {
+    respond(&state, &headers, None, StatusCode::OK, |database, user| {
+        companies::list_visible_companies(database, &user.id)
+            .map(|companies| CompanyList { companies })
+    })
 }
 
 async fn get_company(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Path(company_id): Path<String>,
+    ValidPath(CompanyIdParams { company_id }): ValidPath<CompanyIdParams>,
 ) -> Response {
-    if let Err(response) = validated_params(
-        "common.CompanyIdParamsSchema",
-        json!({ "companyId": company_id }),
-    ) {
-        return *response;
-    }
-    let (user, cookies) = match authenticated(&state, &headers) {
-        Ok(value) => value,
-        Err(error) => return *error,
-    };
-    let response = match state.with_database(|database| {
+    respond(&state, &headers, None, StatusCode::OK, |database, user| {
         companies::require_company_access(database, &user.id, &company_id)
-    }) {
-        Ok(company) => Json(company).into_response(),
-        Err(error) => ApiError::response(error),
-    };
-    respond_with_cookies(response, cookies)
+    })
 }
 
-async fn create(State(state): State<AppState>, headers: HeaderMap, body: Bytes) -> Response {
-    let parsed =
-        match auth_routes::validated_typed_body(&headers, &body, typed::auth::parse_company_name) {
-            Ok(value) => value,
-            Err(response) => return *response,
-        };
-    if let Some(error) = csrf_failure(&state, &headers, "POST") {
-        return error;
-    }
-    let (user, cookies) = match authenticated(&state, &headers) {
-        Ok(value) => value,
-        Err(error) => return *error,
-    };
-    let name = &parsed.name;
-    let response = match state
-        .with_database(|database| companies::create_company(database, &user.id, name, Utc::now()))
-    {
-        Ok(company) => (StatusCode::CREATED, Json(company)).into_response(),
-        Err(error) => ApiError::response(error),
-    };
-    respond_with_cookies(response, cookies)
+async fn create(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Valid(parsed): Valid<CompanyNameBody>,
+) -> Response {
+    respond(
+        &state,
+        &headers,
+        Some("POST"),
+        StatusCode::CREATED,
+        |database, user| companies::create_company(database, &user.id, &parsed.name, Utc::now()),
+    )
 }
 
 async fn rename(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Path(company_id): Path<String>,
-    body: Bytes,
+    ValidPath(CompanyIdParams { company_id }): ValidPath<CompanyIdParams>,
+    Valid(parsed): Valid<CompanyNameBody>,
 ) -> Response {
-    if let Err(response) = validated_params(
-        "common.CompanyIdParamsSchema",
-        json!({ "companyId": company_id }),
-    ) {
-        return *response;
-    }
-    let parsed =
-        match auth_routes::validated_typed_body(&headers, &body, typed::auth::parse_company_name) {
-            Ok(value) => value,
-            Err(response) => return *response,
-        };
-    if let Some(error) = csrf_failure(&state, &headers, "PATCH") {
-        return error;
-    }
-    let (user, cookies) = match authenticated(&state, &headers) {
-        Ok(value) => value,
-        Err(error) => return *error,
-    };
-    let response = match state.with_database(|database| {
-        companies::rename_company(database, &user.id, &company_id, &parsed.name, Utc::now())
-    }) {
-        Ok(company) => Json(company).into_response(),
-        Err(error) => ApiError::response(error),
-    };
-    respond_with_cookies(response, cookies)
+    respond(
+        &state,
+        &headers,
+        Some("PATCH"),
+        StatusCode::OK,
+        |database, user| {
+            companies::rename_company(database, &user.id, &company_id, &parsed.name, Utc::now())
+        },
+    )
 }
 
 async fn issue_code(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Path(company_id): Path<String>,
-    body: Bytes,
+    ValidPath(CompanyIdParams { company_id }): ValidPath<CompanyIdParams>,
+    Valid(parsed): Valid<CompanyIssueCodeBody>,
 ) -> Response {
-    if let Err(response) = validated_params(
-        "common.CompanyIdParamsSchema",
-        json!({ "companyId": company_id }),
-    ) {
-        return *response;
-    }
-    let parsed = match auth_routes::validated_typed_body(
+    respond(
+        &state,
         &headers,
-        &body,
-        typed::auth::parse_company_issue_code,
-    ) {
-        Ok(value) => value,
-        Err(response) => return *response,
-    };
-    if let Some(error) = csrf_failure(&state, &headers, "PATCH") {
-        return error;
-    }
-    let (user, cookies) = match authenticated(&state, &headers) {
-        Ok(value) => value,
-        Err(error) => return *error,
-    };
-    let response = match state.with_database(|database| {
-        companies::set_company_issue_code(
-            database,
-            &user.id,
-            &company_id,
-            parsed.issue_code.as_deref(),
-            Utc::now(),
-        )
-    }) {
-        Ok(company) => Json(company).into_response(),
-        Err(error) => ApiError::response(error),
-    };
-    respond_with_cookies(response, cookies)
+        Some("PATCH"),
+        StatusCode::OK,
+        |database, user| {
+            companies::set_company_issue_code(
+                database,
+                &user.id,
+                &company_id,
+                parsed.issue_code.as_deref(),
+                Utc::now(),
+            )
+        },
+    )
 }
 
 async fn status(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Path((company_id, status)): Path<(String, String)>,
+    ValidPath(CompanyStatusParams { company_id, status }): ValidPath<CompanyStatusParams>,
 ) -> Response {
-    if let Err(response) = validated_params(
-        "common.CompanyStatusParamsSchema",
-        json!({ "companyId": company_id, "status": status }),
-    ) {
-        return *response;
-    }
-    if let Some(error) = csrf_failure(&state, &headers, "POST") {
-        return error;
-    }
-    let (user, cookies) = match authenticated(&state, &headers) {
-        Ok(value) => value,
-        Err(error) => return *error,
-    };
-    let response = match state.with_database(|database| {
-        companies::set_company_status(database, &user.id, &company_id, &status, Utc::now())
-    }) {
-        Ok(company) => Json(company).into_response(),
-        Err(error) => ApiError::response(error),
-    };
-    respond_with_cookies(response, cookies)
+    respond(
+        &state,
+        &headers,
+        Some("POST"),
+        StatusCode::OK,
+        |database, user| {
+            companies::set_company_status(database, &user.id, &company_id, &status, Utc::now())
+        },
+    )
 }
 
 async fn add_membership(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Path(company_id): Path<String>,
-    body: Bytes,
+    ValidPath(CompanyIdParams { company_id }): ValidPath<CompanyIdParams>,
+    Valid(parsed): Valid<MembershipBody>,
 ) -> Response {
-    if let Err(response) = validated_params(
-        "common.CompanyIdParamsSchema",
-        json!({ "companyId": company_id }),
-    ) {
-        return *response;
-    }
-    let parsed =
-        match auth_routes::validated_typed_body(&headers, &body, typed::auth::parse_membership) {
-            Ok(value) => value,
-            Err(response) => return *response,
-        };
-    if let Some(error) = csrf_failure(&state, &headers, "POST") {
-        return error;
-    }
-    let (user, cookies) = match authenticated(&state, &headers) {
-        Ok(value) => value,
-        Err(error) => return *error,
-    };
-    let response = match state.with_database(|database| {
-        companies::add_membership(database, &user.id, &parsed.user_id, &company_id, Utc::now())
-    }) {
-        Ok(()) => StatusCode::NO_CONTENT.into_response(),
-        Err(error) => ApiError::response(error),
-    };
-    respond_with_cookies(response, cookies)
+    respond(
+        &state,
+        &headers,
+        Some("POST"),
+        StatusCode::NO_CONTENT,
+        |database, user| {
+            companies::add_membership(database, &user.id, &parsed.user_id, &company_id, Utc::now())
+        },
+    )
 }
 
 async fn remove_membership(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Path((company_id, user_id)): Path<(String, String)>,
+    ValidPath(MembershipParams {
+        company_id,
+        user_id,
+    }): ValidPath<MembershipParams>,
 ) -> Response {
-    if let Err(response) = validated_params(
-        "common.CompanyIdParamsSchema",
-        json!({ "companyId": company_id }),
-    ) {
-        return *response;
-    }
-    if let Err(response) =
-        validated_params("common.UserIdParamsSchema", json!({ "userId": user_id }))
-    {
-        return *response;
-    }
-    if let Some(error) = csrf_failure(&state, &headers, "DELETE") {
-        return error;
-    }
-    let (user, cookies) = match authenticated(&state, &headers) {
-        Ok(value) => value,
-        Err(error) => return *error,
-    };
-    let response = match state.with_database(|database| {
-        companies::remove_membership(database, &user.id, &user_id, &company_id, Utc::now())
-    }) {
-        Ok(()) => StatusCode::NO_CONTENT.into_response(),
-        Err(error) => ApiError::response(error),
-    };
-    respond_with_cookies(response, cookies)
+    respond(
+        &state,
+        &headers,
+        Some("DELETE"),
+        StatusCode::NO_CONTENT,
+        |database, user| {
+            companies::remove_membership(database, &user.id, &user_id, &company_id, Utc::now())
+        },
+    )
 }
 
 #[cfg(test)]

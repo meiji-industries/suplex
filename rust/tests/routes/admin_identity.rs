@@ -1,6 +1,32 @@
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::http::validation::{test_body, test_path};
+    use axum::{body::Bytes, extract::Path};
+    use serde_json::{Value, json};
+
+    // The handlers validate their params and body in extractors; these
+    // adapters run that validation for direct calls.
+    async fn invite_user(state: State<AppState>, headers: HeaderMap, body: Bytes) -> Response {
+        match test_body(&headers, &body) {
+            Ok(body) => super::invite_user(state, headers, body).await,
+            Err(response) => *response,
+        }
+    }
+
+    async fn revoke_credential(state: State<AppState>, headers: HeaderMap, Path(id): Path<String>) -> Response {
+        match test_path(json!({"credentialId": id})) {
+            Ok(path) => super::revoke_credential(state, headers, path).await,
+            Err(response) => *response,
+        }
+    }
+
+    async fn revoke_user(state: State<AppState>, headers: HeaderMap, Path(id): Path<String>) -> Response {
+        match test_path(json!({"userId": id})) {
+            Ok(path) => super::revoke_user(state, headers, path).await,
+            Err(response) => *response,
+        }
+    }
     use crate::http::session;
     use crate::shared::time::now_millis_rfc3339;
     use crate::{

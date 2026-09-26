@@ -11,11 +11,14 @@ use axum::{
     routing::get,
 };
 use chrono::Utc;
-use garde::Validate;
-use serde::Deserialize;
-use serde_json::{Value, json};
+use serde_json::Value;
 
-use crate::http::{AppState, contracts::typed::finding, session, validation};
+use crate::http::{
+    AppState,
+    contracts::typed::{agent_api::query_object, system::HealthQuery},
+    session,
+    validation::valid,
+};
 
 use super::auth;
 
@@ -25,70 +28,8 @@ pub fn router() -> Router<AppState> {
     Router::new().route("/api/health", get(health))
 }
 
-#[derive(Default, Deserialize, Validate)]
-#[serde(rename_all = "camelCase")]
-struct HealthQuery {
-    #[garde(inner(length(min = 1)))]
-    project_id: Option<String>,
-    #[garde(inner(length(min = 1)))]
-    profile_ids: Option<String>,
-    #[serde(flatten)]
-    #[garde(skip)]
-    unknown: serde_json::Map<String, Value>,
-}
-
 fn query(raw: Option<&str>) -> Result<HealthQuery, Box<Response>> {
-    let mut values = serde_json::Map::new();
-    let mut duplicate_project = false;
-    let mut duplicate_profiles = false;
-    for (name, value) in url::form_urlencoded::parse(raw.unwrap_or_default().as_bytes()) {
-        match values.entry(name.into_owned()) {
-            serde_json::map::Entry::Vacant(entry) => {
-                entry.insert(Value::String(value.into_owned()));
-            }
-            serde_json::map::Entry::Occupied(entry) => match entry.key().as_str() {
-                "projectId" => duplicate_project = true,
-                "profileIds" => duplicate_profiles = true,
-                _ => (),
-            },
-        }
-    }
-    if duplicate_project {
-        values.remove("projectId");
-    }
-    if duplicate_profiles {
-        values.remove("profileIds");
-    }
-    let parsed: HealthQuery = serde_json::from_value(Value::Object(values)).map_err(|_| {
-        Box::new(validation::validation_error_public(vec![finding(
-            "invalid_type",
-            &[],
-        )]))
-    })?;
-    let mut findings = Vec::new();
-    if duplicate_project {
-        findings.push(finding("invalid_type", &[json!("projectId")]));
-    }
-    if duplicate_profiles {
-        findings.push(finding("invalid_type", &[json!("profileIds")]));
-    }
-    if let Err(report) = parsed.validate() {
-        for (path, _) in report.iter() {
-            let field = match path.to_string().as_str() {
-                "project_id" | ".project_id" => "projectId",
-                "profile_ids" | ".profile_ids" => "profileIds",
-                _ => continue,
-            };
-            findings.push(finding("too_small", &[json!(field)]));
-        }
-    }
-    if !parsed.unknown.is_empty() {
-        findings.push(finding("unrecognized_keys", &[]));
-    }
-    if !findings.is_empty() {
-        return Err(Box::new(validation::validation_error_public(findings)));
-    }
-    Ok(parsed)
+    valid(query_object(raw))
 }
 
 async fn health(

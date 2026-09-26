@@ -19,8 +19,12 @@ use serde_json::{Map, Value, json};
 use crate::{
     http::{
         AppState,
-        contracts::typed::{ContractFailure, system},
-        session, validation,
+        contracts::typed::{
+            agent_api::query_object,
+            system::{ClientLifecycle, UpdateQuery},
+        },
+        session,
+        validation::{body_contract, valid},
     },
     identity::auth::AuthUser,
     platform::system_events,
@@ -68,13 +72,6 @@ fn finish(mut response: Response, cookies: Vec<String>) -> Response {
     response
 }
 
-fn issues(failure: ContractFailure) -> Response {
-    match failure {
-        ContractFailure::Issues(findings) => validation::validation_error_public(findings),
-        _ => auth::error(StatusCode::INTERNAL_SERVER_ERROR, "Internal server error"),
-    }
-}
-
 pub fn current_revision() -> Option<&'static str> {
     let revision = env!("SUPLEX_RUST_REVISION");
     (revision.len() == 40
@@ -89,19 +86,8 @@ async fn read_update(
     headers: HeaderMap,
     RawQuery(query): RawQuery,
 ) -> Response {
-    let mut input = Map::new();
-    for (name, value) in url::form_urlencoded::parse(query.unwrap_or_default().as_bytes()) {
-        let value = json!(value.into_owned());
-        match input.get_mut(name.as_ref()) {
-            Some(Value::Array(values)) => values.push(value),
-            Some(previous) => *previous = Value::Array(vec![previous.clone(), value]),
-            None => {
-                input.insert(name.into_owned(), value);
-            }
-        }
-    }
-    if let Err(failure) = system::parse_update_query(Some(&Value::Object(input))) {
-        return issues(failure);
+    if let Err(response) = valid::<UpdateQuery>(query_object(query.as_deref())) {
+        return *response;
     }
     let (_, cookies) = match user(&state, &headers, &Method::GET) {
         Ok(value) => value,
@@ -145,11 +131,8 @@ async fn client_lifecycle(
     if body.len() > 1024 {
         return auth::error(StatusCode::PAYLOAD_TOO_LARGE, "Request body is too large");
     }
-    let parsed = match auth::parsed_body(&headers, &body)
-        .map(|value| system::parse_client_lifecycle(value.as_ref()))
-    {
-        Ok(Ok(parsed)) => parsed,
-        Ok(Err(failure)) => return issues(failure),
+    let parsed = match body_contract::<ClientLifecycle>(&headers, &body) {
+        Ok(parsed) => parsed,
         Err(response) => return *response,
     };
     let (_, cookies) = match user(&state, &headers, &Method::POST) {

@@ -1,10 +1,9 @@
-use serde::{Deserialize, Serialize, de::DeserializeOwned};
-use serde_json::{Map, Value};
+//! Account, company, and common id contracts (`auth.ts`, `common.ts`).
 
-use super::{
-    ContractFailure, ContractResult, deserialize, field_path, finding, invalid_type, object,
-    serialized,
-};
+use serde::{Deserialize, Serialize};
+use serde_json::{Map, Value, json};
+
+use super::{Contract, ContractResult, Fields, MAX, nullable, one_of, params, present, text};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CompanyNameBody {
@@ -64,126 +63,137 @@ pub struct EmptyBody {
     #[serde(flatten)]
     pub fields: Map<String, Value>,
 }
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CompanyIdParams {
+    pub company_id: String,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CompanyStatusParams {
+    pub company_id: String,
+    pub status: String,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct UserIdParams {
+    pub user_id: String,
+}
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct CredentialIdParams {
+    pub credential_id: String,
+}
 
-fn string_fields(fields: &Map<String, Value>, names: &[&str]) -> ContractResult<()> {
-    let errors = names
+/// An object of strings that default to empty.
+fn defaulted(input: Option<&Value>, names: &[&'static str]) -> ContractResult<Value> {
+    names
         .iter()
-        .filter_map(|name| {
-            fields
-                .get(*name)
-                .filter(|value| !value.is_string())
-                .map(|value| invalid_type("string", Some(value), &field_path(name)))
+        .fold(Fields::new(input)?, |fields, name| {
+            fields.or(name, json!(""), text(0, MAX))
         })
-        .collect::<Vec<_>>();
-    if errors.is_empty() {
-        Ok(())
-    } else {
-        Err(ContractFailure::Issues(errors))
-    }
+        .finish()
 }
 
-fn parsed<T: DeserializeOwned>(input: Option<&Value>, string_names: &[&str]) -> ContractResult<T> {
-    let fields = object(input)?;
-    string_fields(fields, string_names)?;
-    deserialize(Value::Object(fields.clone()))
-}
-
-pub fn parse_company_name(input: Option<&Value>) -> ContractResult<CompanyNameBody> {
-    parsed(input, &["name"])
-}
-pub fn parse_display_name(input: Option<&Value>) -> ContractResult<DisplayNameBody> {
-    parsed(input, &["displayName"])
-}
-pub fn parse_membership(input: Option<&Value>) -> ContractResult<MembershipBody> {
-    parsed(input, &["userId"])
-}
-pub fn parse_company_issue_code(input: Option<&Value>) -> ContractResult<CompanyIssueCodeBody> {
-    let fields = object(input)?;
-    match fields.get("issueCode") {
-        None => Err(ContractFailure::Issues(vec![invalid_type(
-            "string",
-            None,
-            &field_path("issueCode"),
-        )])),
-        Some(Value::Null | Value::String(_)) => deserialize(Value::Object(fields.clone())),
-        Some(value) => Err(ContractFailure::Issues(vec![invalid_type(
-            "string",
-            Some(value),
-            &field_path("issueCode"),
-        )])),
+impl Contract for CompanyNameBody {
+    fn schema(input: Option<&Value>) -> ContractResult<Value> {
+        defaulted(input, &["name"])
     }
 }
-pub fn parse_profile(input: Option<&Value>) -> ContractResult<ProfileBody> {
-    let fields = object(input)?;
-    string_fields(fields, &["displayName", "username", "avatarSeed"])?;
-    if ["displayName", "username", "avatarSeed"]
-        .iter()
-        .all(|name| !fields.contains_key(*name))
-    {
-        return Err(ContractFailure::Issues(vec![finding("custom", &[])]));
+impl Contract for DisplayNameBody {
+    fn schema(input: Option<&Value>) -> ContractResult<Value> {
+        defaulted(input, &["displayName"])
     }
-    deserialize(Value::Object(fields.clone()))
 }
-pub fn parse_token(input: Option<&Value>) -> ContractResult<TokenBody> {
-    parsed(input, &["token"])
+impl Contract for MembershipBody {
+    fn schema(input: Option<&Value>) -> ContractResult<Value> {
+        defaulted(input, &["userId"])
+    }
 }
-pub fn parse_registration_verification(
-    input: Option<&Value>,
-) -> ContractResult<RegistrationVerificationBody> {
-    let fields = object(input)?;
-    let mut errors = Vec::new();
-    for name in ["token", "challengeId"] {
-        if let Some(value) = fields.get(name).filter(|value| !value.is_string()) {
-            errors.push(invalid_type("string", Some(value), &field_path(name)));
+impl Contract for TokenBody {
+    fn schema(input: Option<&Value>) -> ContractResult<Value> {
+        defaulted(input, &["token"])
+    }
+}
+impl Contract for CompanyIssueCodeBody {
+    fn schema(input: Option<&Value>) -> ContractResult<Value> {
+        Fields::new(input)?
+            .req("issueCode", nullable(text(0, MAX)))
+            .finish()
+    }
+}
+/// At least one profile field.
+impl Contract for ProfileBody {
+    fn schema(input: Option<&Value>) -> ContractResult<Value> {
+        let mut fields = ["displayName", "username", "avatarSeed"]
+            .iter()
+            .fold(Fields::new(input)?, |fields, name| {
+                fields.opt(name, text(0, MAX))
+            });
+        if fields.refinable()
+            && ["displayName", "username", "avatarSeed"]
+                .iter()
+                .all(|name| fields.raw(name).is_none())
+        {
+            fields.fail("custom", ".");
         }
+        fields.finish()
     }
-    if !fields.contains_key("response") {
-        errors.push(invalid_type("nonoptional", None, &field_path("response")));
-    }
-    if !errors.is_empty() {
-        return Err(ContractFailure::Issues(errors));
-    }
-    deserialize(Value::Object(fields.clone()))
 }
-pub fn parse_authentication_verification(
-    input: Option<&Value>,
-) -> ContractResult<AuthenticationVerificationBody> {
-    let fields = object(input)?;
-    let mut errors = Vec::new();
-    if let Some(value) = fields.get("challengeId").filter(|value| !value.is_string()) {
-        errors.push(invalid_type(
-            "string",
-            Some(value),
-            &field_path("challengeId"),
-        ));
+impl Contract for RegistrationVerificationBody {
+    fn schema(input: Option<&Value>) -> ContractResult<Value> {
+        Fields::new(input)?
+            .or("token", json!(""), text(0, MAX))
+            .or("challengeId", json!(""), text(0, MAX))
+            .req("response", present)
+            .finish()
     }
-    if !fields.contains_key("response") {
-        errors.push(invalid_type("nonoptional", None, &field_path("response")));
-    }
-    if !errors.is_empty() {
-        return Err(ContractFailure::Issues(errors));
-    }
-    deserialize(Value::Object(fields.clone()))
 }
-pub fn parse_empty(input: Option<&Value>) -> ContractResult<EmptyBody> {
-    deserialize(Value::Object(object(input)?.clone()))
+impl Contract for AuthenticationVerificationBody {
+    fn schema(input: Option<&Value>) -> ContractResult<Value> {
+        Fields::new(input)?
+            .or("challengeId", json!(""), text(0, MAX))
+            .req("response", present)
+            .finish()
+    }
 }
-
-pub fn validate(contract: &str, input: Option<&Value>) -> Option<ContractResult<Value>> {
-    Some(match contract {
-        "auth.CompanyNameBodySchema" => serialized(parse_company_name(input)),
-        "auth.CompanyIssueCodeBodySchema" => serialized(parse_company_issue_code(input)),
-        "auth.DisplayNameBodySchema" => serialized(parse_display_name(input)),
-        "auth.ProfileBodySchema" => serialized(parse_profile(input)),
-        "auth.MembershipBodySchema" => serialized(parse_membership(input)),
-        "common.EmptyBodySchema" => serialized(parse_empty(input)),
-        "common.TokenBodySchema" => serialized(parse_token(input)),
-        "common.RegistrationVerificationBodySchema" => {
-            serialized(parse_registration_verification(input))
-        }
-        "common.AuthenticationVerificationBodySchema" => {
-            serialized(parse_authentication_verification(input))
-        }
-        _ => return None,
-    })
+impl Contract for EmptyBody {
+    fn schema(input: Option<&Value>) -> ContractResult<Value> {
+        Fields::new(input)?.passthrough()
+    }
+}
+impl Contract for CompanyIdParams {
+    fn schema(input: Option<&Value>) -> ContractResult<Value> {
+        params(input, &["companyId"], (1, 256))
+    }
+}
+impl Contract for CompanyStatusParams {
+    fn schema(input: Option<&Value>) -> ContractResult<Value> {
+        Fields::new(input)?
+            .req("companyId", text(1, 256))
+            .req("status", one_of(&["active", "paused", "archived"]))
+            .finish()
+    }
+}
+/// `CompanyIdParamsSchema.merge(UserIdParamsSchema)`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct MembershipParams {
+    pub company_id: String,
+    pub user_id: String,
+}
+impl Contract for MembershipParams {
+    fn schema(input: Option<&Value>) -> ContractResult<Value> {
+        params(input, &["companyId", "userId"], (1, 256))
+    }
+}
+impl Contract for UserIdParams {
+    fn schema(input: Option<&Value>) -> ContractResult<Value> {
+        params(input, &["userId"], (1, 256))
+    }
+}
+impl Contract for CredentialIdParams {
+    fn schema(input: Option<&Value>) -> ContractResult<Value> {
+        params(input, &["credentialId"], (1, 256))
+    }
 }

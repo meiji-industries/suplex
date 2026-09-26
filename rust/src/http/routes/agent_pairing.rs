@@ -11,7 +11,11 @@ use axum::{
 use chrono::Utc;
 
 use crate::{
-    http::{AppState, agent_api_runtime, contracts::typed, session},
+    http::{
+        AppState, agent_api_runtime,
+        contracts::typed::{self, Contract, agent_api::PairingExchangeBody},
+        session,
+    },
     identity::external_agents,
 };
 
@@ -32,7 +36,7 @@ pub fn router() -> Router<AppState> {
 
 async fn exchange(State(state): State<AppState>, headers: HeaderMap, bytes: Bytes) -> Response {
     let request = match auth::parsed_body(&headers, &bytes)
-        .map(|value| typed::agent_api::parse_pairing_exchange(value.as_ref()))
+        .map(|value| PairingExchangeBody::parse(value.as_ref()))
     {
         Ok(Ok(request)) => request,
         Ok(Err(typed::ContractFailure::Issues(findings))) => {

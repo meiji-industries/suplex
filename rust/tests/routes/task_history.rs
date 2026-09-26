@@ -1,6 +1,28 @@
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::http::{
+        contracts::typed::{agent_api::query_object, tasks::TaskHistoryQuery},
+        validation::test_path,
+    };
+
+    fn before_query(query: Option<&str>) -> Result<Option<String>, Box<Response>> {
+        valid::<TaskHistoryQuery>(query_object(query)).map(|query| query.before)
+    }
+
+    // The handler validates its params in an extractor; this adapter runs
+    // that validation for direct calls.
+    async fn history(
+        state: State<AppState>,
+        Path((task_id, session_id)): Path<(String, String)>,
+        query: RawQuery,
+        headers: HeaderMap,
+    ) -> Response {
+        match test_path(json!({"taskId": task_id, "sessionId": session_id})) {
+            Ok(path) => super::history(state, path, query, headers).await,
+            Err(response) => *response,
+        }
+    }
     use crate::http::session;
     use crate::platform::database::{OpenMode, SuplexDatabase};
     use axum::{body::to_bytes, http::HeaderValue};

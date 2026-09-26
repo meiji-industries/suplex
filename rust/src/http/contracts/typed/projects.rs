@@ -1,14 +1,22 @@
+//! Project, profile, and provider request contracts (`projects.ts`,
+//! `providers.ts`, and the stored project schemas).
+
 use crate::tasks::control::DeliveryTarget;
-use garde::Validate;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{Map, Value, json};
 
 pub use super::ContractResult;
 use super::{
-    ContractFailure, Field, Rule, delivery_target as valid_delivery_target, finding,
-    garde_findings, id_1_256 as profile_id, object, optional, optional_nonnull, parse_object,
-    present_nullable, serialized, visual_evidence as valid_visual_evidence,
+    Contract, ContractFailure, Fields, MAX, Parse, choice, fail, flag, formatted, list, nested,
+    nullable, one_of, params, present, rule, tagged, tasks::VISUAL_EVIDENCE, text, trimmed, union,
+    url,
 };
+pub use crate::profiles::agent_profiles::{
+    ProfileInput as ProfileBody, ProfilePatch as ProfilePatchBody,
+};
+
+const HARNESSES: &[&str] = &["opencode", "claude-code", "devin", "codex"];
+const ADVISOR_ROLES: [&str; 4] = ["reviewer", "planner_a", "planner_b", "rater"];
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
@@ -39,8 +47,7 @@ pub enum TrackerConnection {
         token_environment: String,
     },
 }
-#[derive(Debug, Clone, Serialize, Deserialize, Validate)]
-#[garde(allow_unvalidated)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProjectIntegration {
     #[serde(default = "github_repository")]
@@ -59,12 +66,12 @@ pub enum McpTransport {
         #[serde(default)]
         args: Vec<String>,
         #[serde(default)]
-        env: serde_json::Map<String, Value>,
+        env: Map<String, Value>,
     },
     Http {
         url: String,
         #[serde(default)]
-        headers: serde_json::Map<String, Value>,
+        headers: Map<String, Value>,
     },
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -79,8 +86,7 @@ pub struct McpServer {
     pub transport: McpTransport,
     pub grants: McpGrants,
 }
-#[derive(Debug, Clone, Serialize, Deserialize, Validate)]
-#[garde(allow_unvalidated)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ProjectExecution {
     #[serde(default)]
@@ -88,52 +94,38 @@ pub struct ProjectExecution {
     #[serde(default)]
     pub skill_directories: Vec<String>,
     #[serde(default)]
-    pub environment: serde_json::Map<String, Value>,
+    pub environment: Map<String, Value>,
     #[serde(default)]
     pub mcp: Vec<McpServer>,
 }
-#[derive(Debug, Clone, Default, Serialize, Deserialize, Validate)]
-#[garde(allow_unvalidated)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct AdvisorProfilePolicy {
     #[serde(default)]
-    #[garde(inner(custom(profile_id)))]
     pub reviewer: Vec<String>,
     #[serde(default, rename = "planner_a")]
-    #[garde(inner(custom(profile_id)))]
     pub planner_a: Vec<String>,
     #[serde(default, rename = "planner_b")]
-    #[garde(inner(custom(profile_id)))]
     pub planner_b: Vec<String>,
     #[serde(default)]
-    #[garde(inner(custom(profile_id)))]
     pub rater: Vec<String>,
 }
-#[derive(Debug, Clone, Serialize, Deserialize, Validate)]
-#[garde(allow_unvalidated)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ProjectAgentTaskPolicy {
-    #[garde(length(min = 1), inner(custom(profile_id)))]
     pub workflow_ids: Vec<String>,
-    #[garde(custom(profile_id))]
     pub default_workflow_id: String,
     #[serde(default)]
-    #[garde(inner(custom(profile_id)))]
     pub template_ids: Vec<String>,
-    #[garde(length(min = 1), inner(custom(profile_id)))]
     pub root_profile_ids: Vec<String>,
-    #[garde(length(min = 1), inner(custom(profile_id)))]
     pub worker_profile_ids: Vec<String>,
     #[serde(default)]
-    #[garde(dive)]
     pub advisor_profile_ids: AdvisorProfilePolicy,
     #[serde(default = "default_delivery_target")]
-    #[garde(skip)]
     pub delivery_target: DeliveryTarget,
     #[serde(default = "default_run_project_tests")]
     pub run_project_tests: bool,
     #[serde(default = "default_visual_evidence")]
-    #[garde(custom(valid_visual_evidence))]
     pub visual_evidence: String,
 }
 fn default_delivery_target() -> DeliveryTarget {
@@ -146,102 +138,45 @@ fn default_visual_evidence() -> String {
     "off".into()
 }
 pub use crate::projects::ProjectProviderPolicy;
-#[derive(Debug, Clone, Serialize, Deserialize, Validate)]
-#[garde(allow_unvalidated)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ExistingRepositoryCreate {
-    #[garde(length(min = 1))]
     pub repository_url: String,
-    #[serde(
-        default,
-        deserialize_with = "optional_nonnull",
-        skip_serializing_if = "Option::is_none"
-    )]
-    #[garde(dive)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub integration: Option<ProjectIntegration>,
-    #[serde(
-        default,
-        deserialize_with = "optional_nonnull",
-        skip_serializing_if = "Option::is_none"
-    )]
-    #[garde(length(min = 1))]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub base_branch: Option<String>,
 }
-#[derive(Debug, Clone, Serialize, Deserialize, Validate)]
-#[garde(allow_unvalidated)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct NewRepositoryCreate {
-    #[garde(custom(valid_repository_name))]
     pub repository_name: String,
-    #[serde(
-        default,
-        deserialize_with = "optional_nonnull",
-        skip_serializing_if = "Option::is_none"
-    )]
-    #[garde(dive)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub integration: Option<ProjectIntegration>,
-    #[serde(
-        default,
-        deserialize_with = "optional_nonnull",
-        skip_serializing_if = "Option::is_none"
-    )]
-    #[garde(length(min = 1))]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub base_branch: Option<String>,
 }
-fn valid_repository_name(value: &str, _: &()) -> garde::Result {
-    let length = value.encode_utf16().count();
-    if length == 0 {
-        Err(garde::Error::new("too_small"))
-    } else if length > 200 {
-        Err(garde::Error::new("too_big"))
-    } else {
-        Ok(())
-    }
-}
-#[derive(Debug, Clone, Serialize, Deserialize, Validate)]
-#[garde(allow_unvalidated)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct LocalProjectCreate {
-    #[serde(
-        default,
-        deserialize_with = "optional_nonnull",
-        skip_serializing_if = "Option::is_none"
-    )]
-    #[garde(dive)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub integration: Option<ProjectIntegration>,
-    #[serde(
-        default,
-        deserialize_with = "optional_nonnull",
-        skip_serializing_if = "Option::is_none"
-    )]
-    #[garde(dive)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub execution: Option<ProjectExecution>,
-    #[garde(length(min = 1))]
     pub name: String,
-    #[garde(length(min = 1))]
     pub repository_path: String,
-    #[garde(length(min = 1))]
     pub worktree_root: String,
-    #[garde(length(min = 1))]
     pub repository: String,
-    #[garde(length(min = 1))]
     pub base_branch: String,
     pub setup_command: String,
     pub verification_command: String,
-    #[garde(length(min = 1))]
     pub root_profile_id: String,
-    #[garde(length(min = 1))]
     pub worker_profile_id: String,
-    #[serde(
-        default,
-        deserialize_with = "optional_nonnull",
-        skip_serializing_if = "Option::is_none"
-    )]
-    #[garde(dive)]
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub agent_task_policy: Option<ProjectAgentTaskPolicy>,
     #[serde(
         default,
-        deserialize_with = "present_nullable",
+        deserialize_with = "super::present_nullable",
         skip_serializing_if = "Option::is_none"
     )]
     pub provider_policy: Option<Option<ProjectProviderPolicy>>,
@@ -278,588 +213,13 @@ pub struct ProjectResponse {
     pub updated_at: String,
 }
 
-fn issue(code: &str, path: &str) -> Value {
-    serde_json::json!({"code": format!("invalid-{code}"), "field": path, "message": "Request value is invalid"})
-}
-
-fn strict_fields(
-    fields: &serde_json::Map<String, Value>,
-    allowed: &[&str],
-    path: &str,
-) -> Vec<Value> {
-    if fields.keys().any(|name| !allowed.contains(&name.as_str())) {
-        vec![issue(
-            "unrecognized_keys",
-            if path.is_empty() { "." } else { path },
-        )]
-    } else {
-        Vec::new()
-    }
-}
-
-fn typed_string(
-    fields: &serde_json::Map<String, Value>,
-    name: &str,
-    path: &str,
-    required: bool,
-) -> Vec<Value> {
-    match fields.get(name) {
-        Some(Value::String(_)) => Vec::new(),
-        None if !required => Vec::new(),
-        _ => vec![issue("invalid_type", path)],
-    }
-}
-
-fn typed_array(
-    fields: &serde_json::Map<String, Value>,
-    name: &str,
-    path: &str,
-    required: bool,
-) -> Vec<Value> {
-    match fields.get(name) {
-        Some(Value::Array(_)) => Vec::new(),
-        None if !required => Vec::new(),
-        _ => vec![issue("invalid_type", path)],
-    }
-}
-
-fn profile_array_errors(value: &Value, path: &str) -> Vec<Value> {
-    let Value::Array(values) = value else {
-        return vec![issue("invalid_type", path)];
-    };
-    let mut errors = Vec::new();
-    for (index, value) in values.iter().enumerate() {
-        if !value.is_string() {
-            let item_path = format!("{path}.{index}");
-            errors.push(issue("invalid_type", &item_path));
-            if value.as_array().is_some_and(Vec::is_empty) {
-                errors.push(issue("too_small", &item_path));
-            }
-        }
-    }
-    errors
-}
-
-fn checked<T: serde::de::DeserializeOwned + Serialize + Validate<Context = ()>>(
-    input: &Value,
-    errors: Vec<Value>,
-) -> ContractResult<T> {
-    if !errors.is_empty() {
-        return Err(ContractFailure::Issues(errors));
-    }
-    let value: T = serde_json::from_value(input.clone())
-        .map_err(|_| ContractFailure::Issues(vec![issue("invalid_type", ".")]))?;
-    value
-        .validate()
-        .map_err(|report| ContractFailure::Issues(garde_findings(&report, &value)))?;
-    Ok(value)
-}
-
-fn valid_env_reference(value: &str) -> bool {
-    let mut chars = value.chars();
-    matches!(chars.next(), Some('A'..='Z'))
-        && chars.count() <= 127
-        && value
-            .chars()
-            .skip(1)
-            .all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_')
-}
-
-fn valid_mcp_name(value: &str) -> bool {
-    !value.is_empty()
-        && value
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-')
-}
-
-fn mcp_errors(value: &Value) -> Vec<Value> {
-    let Value::Array(servers) = value else {
-        return vec![issue("invalid_type", ".mcp")];
-    };
-    let mut errors = Vec::new();
-    let mut names = std::collections::HashSet::new();
-    for (index, server) in servers.iter().enumerate() {
-        let Some(server) = server.as_object() else {
-            errors.push(issue("invalid_type", &format!(".mcp.{index}")));
-            continue;
-        };
-        let prefix = format!(".mcp.{index}");
-        if let Some(name) = server.get("name").and_then(Value::as_str) {
-            if !valid_mcp_name(name) {
-                errors.push(issue("invalid_format", &format!("{prefix}.name")));
-            } else if name.starts_with("suplex_") {
-                errors.push(issue("custom", &format!("{prefix}.name")));
-            }
-            names.insert(name);
-        } else {
-            errors.push(issue("invalid_type", &format!("{prefix}.name")));
-        }
-        if let Some(transport) = server.get("transport").and_then(Value::as_object) {
-            let transport_prefix = format!("{prefix}.transport");
-            match transport.get("type").and_then(Value::as_str) {
-                Some("stdio") => {
-                    match transport.get("command").and_then(Value::as_str) {
-                        Some("") => {
-                            errors.push(issue("too_small", &format!("{transport_prefix}.command")))
-                        }
-                        None => errors.push(issue(
-                            "invalid_type",
-                            &format!("{transport_prefix}.command"),
-                        )),
-                        _ => {}
-                    }
-                    if let Some(env) = transport.get("env").and_then(Value::as_object) {
-                        for (key, value) in env {
-                            let path = format!("{transport_prefix}.env.{key}");
-                            if !value.is_string() {
-                                errors.push(issue("invalid_type", &path));
-                            } else if !value.as_str().is_some_and(|value| {
-                                let mut chars = value.chars();
-                                chars
-                                    .next()
-                                    .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
-                                    && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
-                            }) {
-                                errors.push(issue("invalid_format", &path));
-                            }
-                        }
-                    }
-                }
-                Some("http") => {
-                    match transport.get("url").and_then(Value::as_str) {
-                        Some(url) if url::Url::parse(url).is_err() => {
-                            errors.push(issue("invalid_format", &format!("{transport_prefix}.url")))
-                        }
-                        None => {
-                            errors.push(issue("invalid_type", &format!("{transport_prefix}.url")))
-                        }
-                        _ => {}
-                    }
-                    if let Some(headers) = transport.get("headers").and_then(Value::as_object) {
-                        for (key, value) in headers {
-                            let path = format!("{transport_prefix}.headers.{key}");
-                            if !value.is_string() {
-                                errors.push(issue("invalid_type", &path));
-                            } else if !value.as_str().is_some_and(|value| {
-                                let mut chars = value.chars();
-                                chars
-                                    .next()
-                                    .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
-                                    && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
-                            }) {
-                                errors.push(issue("invalid_format", &path));
-                            }
-                        }
-                    }
-                }
-                _ => {}
-            }
-        } else {
-            errors.push(issue("invalid_type", &format!("{prefix}.transport")));
-        }
-        if let Some(grants) = server.get("grants").and_then(Value::as_object) {
-            for role in ["root", "advisor", "worker"] {
-                if let Some(values) = grants.get(role).and_then(Value::as_array) {
-                    for (item, value) in values.iter().enumerate() {
-                        if !value.is_string() {
-                            errors.push(issue(
-                                "invalid_type",
-                                &format!("{prefix}.grants.{role}.{item}"),
-                            ));
-                        } else if value.as_str().is_some_and(|value| !valid_mcp_name(value)) {
-                            errors.push(issue(
-                                "invalid_format",
-                                &format!("{prefix}.grants.{role}.{item}"),
-                            ));
-                        }
-                    }
-                } else {
-                    errors.push(issue("invalid_type", &format!("{prefix}.grants.{role}")));
-                }
-            }
-        } else {
-            errors.push(issue("invalid_type", &format!("{prefix}.grants")));
-        }
-    }
-    if errors.is_empty() && names.len() != servers.len() {
-        errors.push(issue("custom", ".mcp"));
-    }
-    errors
-}
-
-fn integration_errors(
-    fields: &serde_json::Map<String, Value>,
-    prefix: &str,
-) -> ContractResult<Vec<Value>> {
-    let mut errors = Vec::new();
-    if let Some(repository) = fields.get("repository") {
-        let Value::Object(repository) = repository else {
-            return Ok(vec![issue("invalid_type", &format!("{prefix}.repository"))]);
-        };
-        let allowed = match repository.get("kind").and_then(Value::as_str) {
-            Some("github") => &["kind"][..],
-            Some("bitbucket") => &["kind", "tokenEnvironment", "usernameEnvironment"][..],
-            _ => {
-                return Ok(vec![issue(
-                    "invalid_union",
-                    &format!("{prefix}.repository"),
-                )]);
-            }
-        };
-        if allowed.len() > 1 {
-            for name in ["tokenEnvironment", "usernameEnvironment"] {
-                if let Some(value) = repository.get(name) {
-                    let path = format!("{prefix}.repository.{name}");
-                    if let Some(value) = value.as_str() {
-                        if !valid_env_reference(value) {
-                            errors.push(issue("invalid_format", &path));
-                        }
-                    } else {
-                        errors.push(issue("invalid_type", &path));
-                    }
-                } else if name == "tokenEnvironment" {
-                    errors.push(issue(
-                        "invalid_type",
-                        &format!("{prefix}.repository.{name}"),
-                    ));
-                }
-            }
-        }
-        errors.extend(strict_fields(
-            repository,
-            allowed,
-            &format!("{prefix}.repository"),
-        ));
-    }
-    if let Some(tracker) = fields.get("tracker").filter(|value| !value.is_null()) {
-        let Value::Object(tracker) = tracker else {
-            return Ok(vec![issue("invalid_type", &format!("{prefix}.tracker"))]);
-        };
-        match tracker.get("kind").and_then(Value::as_str) {
-            Some("github") => {
-                let path = format!("{prefix}.tracker.repository");
-                errors.extend(typed_string(tracker, "repository", &path, true));
-                if let Some(value) = tracker.get("repository").and_then(Value::as_str) {
-                    let parts = value.split('/').collect::<Vec<_>>();
-                    if parts.len() != 2
-                        || parts.iter().any(|part| {
-                            part.is_empty()
-                                || !part.chars().all(|c| {
-                                    c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '-')
-                                })
-                        })
-                    {
-                        errors.push(issue("invalid_format", &path));
-                    }
-                }
-                errors.extend(strict_fields(
-                    tracker,
-                    &["kind", "repository"],
-                    &format!("{prefix}.tracker"),
-                ));
-            }
-            Some("jira") => {
-                for name in ["site", "project", "emailEnvironment", "tokenEnvironment"] {
-                    let path = format!("{prefix}.tracker.{name}");
-                    errors.extend(typed_string(tracker, name, &path, true));
-                    if let Some(value) = tracker.get(name).and_then(Value::as_str) {
-                        if name == "site" {
-                            let url =
-                                url::Url::parse(value).map_err(|_| ContractFailure::Unhandled)?;
-                            if url.scheme() != "https"
-                                || !url.host_str().is_some_and(|host| {
-                                    host.ends_with(".atlassian.net")
-                                        && host.trim_end_matches(".atlassian.net").chars().all(
-                                            |c| {
-                                                c.is_ascii_lowercase()
-                                                    || c.is_ascii_digit()
-                                                    || c == '-'
-                                            },
-                                        )
-                                        && host.len() > ".atlassian.net".len()
-                                })
-                                || !url.username().is_empty()
-                                || url.password().is_some()
-                                || url.path() != "/"
-                                || url.query().is_some()
-                                || url.fragment().is_some()
-                            {
-                                errors.push(issue("custom", &path));
-                            }
-                        } else if name == "project" {
-                            let mut chars = value.chars();
-                            if !matches!(chars.next(), Some('A'..='Z'))
-                                || !chars.all(|c| {
-                                    c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_'
-                                })
-                            {
-                                errors.push(issue("invalid_format", &path));
-                            }
-                        } else if !valid_env_reference(value) {
-                            errors.push(issue("invalid_format", &path));
-                        }
-                    }
-                }
-                errors.extend(strict_fields(
-                    tracker,
-                    &[
-                        "kind",
-                        "site",
-                        "project",
-                        "emailEnvironment",
-                        "tokenEnvironment",
-                    ],
-                    &format!("{prefix}.tracker"),
-                ));
-            }
-            _ => errors.push(issue("invalid_union", &format!("{prefix}.tracker"))),
-        }
-    }
-    errors.extend(strict_fields(fields, &["repository", "tracker"], prefix));
-    Ok(errors)
-}
-pub fn parse_create(input: Option<&Value>) -> ContractResult<ProjectCreateBody> {
-    let Some(input) = input else {
-        return Err(ContractFailure::Issues(vec![finding("invalid_union", &[])]));
-    };
-    let nested = || -> ContractResult<()> {
-        let Some(fields) = input.as_object() else {
-            return Ok(());
-        };
-        if let Some(value) = fields.get("integration") {
-            parse_integration(Some(value))?;
-        }
-        if let Some(value) = fields.get("execution") {
-            parse_execution(Some(value))?;
-        }
-        if let Some(value) = fields.get("agentTaskPolicy") {
-            parse_agent_policy(Some(value))?;
-        }
-        if let Some(value) = fields
-            .get("providerPolicy")
-            .filter(|value| !value.is_null())
-        {
-            parse_provider_policy(Some(value))?;
-        }
-        Ok(())
-    };
-    if let Ok(value) = serde_json::from_value::<ExistingRepositoryCreate>(input.clone())
-        && value.validate().is_ok()
-    {
-        match nested() {
-            Ok(()) => return Ok(ProjectCreateBody::ExistingRepository(value)),
-            Err(ContractFailure::Unhandled) => return Err(ContractFailure::Unhandled),
-            Err(_) => {}
-        }
-    }
-    if let Ok(value) = serde_json::from_value::<NewRepositoryCreate>(input.clone())
-        && value.validate().is_ok()
-    {
-        match nested() {
-            Ok(()) => return Ok(ProjectCreateBody::NewRepository(value)),
-            Err(ContractFailure::Unhandled) => return Err(ContractFailure::Unhandled),
-            Err(_) => {}
-        }
-    }
-    if let Ok(value) = serde_json::from_value::<LocalProjectCreate>(input.clone())
-        && value.validate().is_ok()
-    {
-        match nested() {
-            Ok(()) => return Ok(ProjectCreateBody::Local(Box::new(value))),
-            Err(ContractFailure::Unhandled) => return Err(ContractFailure::Unhandled),
-            Err(_) => {}
-        }
-    }
-    Err(ContractFailure::Issues(vec![finding("invalid_union", &[])]))
-}
-pub fn parse_integration(input: Option<&Value>) -> ContractResult<ProjectIntegration> {
-    let fields = object(input)?;
-    checked(
-        &Value::Object(fields.clone()),
-        integration_errors(fields, "")?,
-    )
-}
-pub fn parse_execution(input: Option<&Value>) -> ContractResult<ProjectExecution> {
-    let fields = object(input)?;
-    let mut errors = Vec::new();
-    errors.extend(typed_string(fields, "instructions", ".instructions", false));
-    if let Some(directories) = fields.get("skillDirectories") {
-        if let Value::Array(directories) = directories {
-            for (index, directory) in directories.iter().enumerate() {
-                let path = format!(".skillDirectories.{index}");
-                match directory.as_str() {
-                    Some("") => errors.push(issue("too_small", &path)),
-                    None => errors.push(issue("invalid_type", &path)),
-                    _ => {}
-                }
-            }
-            if directories.len() > 50 {
-                errors.push(issue("too_big", ".skillDirectories"));
-            }
-        } else {
-            errors.push(issue("invalid_type", ".skillDirectories"));
-        }
-    }
-    if let Some(environment) = fields.get("environment") {
-        if let Value::Object(environment) = environment {
-            for (key, value) in environment {
-                let path = format!(".environment.{key}");
-                let mut chars = key.chars();
-                let valid_key = chars
-                    .next()
-                    .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
-                    && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
-                    && ![
-                        "HOME",
-                        "PATH",
-                        "CLAUDE",
-                        "ANTHROPIC",
-                        "AWS",
-                        "GOOGLE",
-                        "AZURE",
-                        "SUPLEX",
-                    ]
-                    .iter()
-                    .any(|prefix| key.starts_with(prefix));
-                if !valid_key {
-                    errors.push(issue("invalid_key", &path));
-                }
-                if !value.is_string() {
-                    errors.push(issue("invalid_type", &path));
-                }
-            }
-        } else {
-            errors.push(issue("invalid_type", ".environment"));
-        }
-    }
-    if let Some(mcp) = fields.get("mcp") {
-        errors.extend(mcp_errors(mcp));
-    }
-    errors.extend(strict_fields(
-        fields,
-        &["instructions", "skillDirectories", "environment", "mcp"],
-        ".",
-    ));
-    checked(&Value::Object(fields.clone()), errors)
-}
-pub fn parse_agent_policy(input: Option<&Value>) -> ContractResult<ProjectAgentTaskPolicy> {
-    let fields = object(input)?;
-    let mut errors = Vec::new();
-    for name in ["workflowIds"] {
-        if let Some(value) = fields.get(name) {
-            errors.extend(profile_array_errors(value, &format!(".{name}")));
-        } else {
-            errors.push(issue("invalid_type", &format!(".{name}")));
-        }
-    }
-    errors.extend(typed_string(
-        fields,
-        "defaultWorkflowId",
-        ".defaultWorkflowId",
-        true,
-    ));
-    for name in ["rootProfileIds", "workerProfileIds"] {
-        if let Some(value) = fields.get(name) {
-            errors.extend(profile_array_errors(value, &format!(".{name}")));
-        } else {
-            errors.push(issue("invalid_type", &format!(".{name}")));
-        }
-    }
-    if let Some(value) = fields.get("advisorProfileIds") {
-        if let Some(advisors) = value.as_object() {
-            for name in ["reviewer", "planner_a", "planner_b", "rater"] {
-                if let Some(value) = advisors.get(name) {
-                    errors.extend(profile_array_errors(
-                        value,
-                        &format!(".advisorProfileIds.{name}"),
-                    ));
-                }
-            }
-        } else {
-            errors.push(issue("invalid_type", ".advisorProfileIds"));
-        }
-    }
-    for (name, valid) in [
-        (
-            "deliveryTarget",
-            valid_delivery_target as fn(&str, &()) -> garde::Result,
-        ),
-        ("visualEvidence", valid_visual_evidence),
-    ] {
-        if let Some(value) = fields.get(name).and_then(Value::as_str)
-            && valid(value, &()).is_err()
-        {
-            errors.push(issue("invalid_value", &format!(".{name}")));
-        }
-    }
-    errors.extend(strict_fields(
-        fields,
-        &[
-            "workflowIds",
-            "defaultWorkflowId",
-            "templateIds",
-            "rootProfileIds",
-            "workerProfileIds",
-            "advisorProfileIds",
-            "deliveryTarget",
-            "runProjectTests",
-            "visualEvidence",
-        ],
-        ".",
-    ));
-    checked(&Value::Object(fields.clone()), errors).map_err(|failure| match failure {
-        ContractFailure::Issues(mut findings) => {
-            findings.sort_by_key(|finding| {
-                let field = finding["field"].as_str().unwrap_or("");
-                [
-                    ".workflowIds",
-                    ".defaultWorkflowId",
-                    ".templateIds",
-                    ".rootProfileIds",
-                    ".workerProfileIds",
-                    ".advisorProfileIds",
-                    ".deliveryTarget",
-                    ".runProjectTests",
-                    ".visualEvidence",
-                    ".",
-                ]
-                .iter()
-                .position(|prefix| {
-                    field == *prefix
-                        || (field.starts_with(prefix)
-                            && field.as_bytes().get(prefix.len()) == Some(&b'.'))
-                })
-                .unwrap_or(10)
-            });
-            ContractFailure::Issues(findings)
-        }
-        other => other,
-    })
-}
-pub fn parse_provider_policy(input: Option<&Value>) -> ContractResult<ProjectProviderPolicy> {
-    let fields = object(input)?;
-    let mut errors = typed_array(fields, "allowedProviders", ".allowedProviders", true);
-    errors.extend(typed_array(
-        fields,
-        "allowedInstanceIds",
-        ".allowedInstanceIds",
-        true,
-    ));
-    errors.extend(strict_fields(
-        fields,
-        &["allowedProviders", "allowedInstanceIds"],
-        ".",
-    ));
-    checked(&Value::Object(fields.clone()), errors)
-}
-
 /// `ProjectPatchBodySchema` output: only the fields the caller sent.
 #[derive(Debug, Clone, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct ProjectPatch {
     pub integration: Option<ProjectIntegration>,
     /// Present execution fields without defaults; the service merges them.
-    pub execution: Option<serde_json::Map<String, Value>>,
+    pub execution: Option<Map<String, Value>>,
     pub name: Option<String>,
     pub repository_path: Option<String>,
     pub worktree_root: Option<String>,
@@ -870,120 +230,548 @@ pub struct ProjectPatch {
     pub root_profile_id: Option<String>,
     pub worker_profile_id: Option<String>,
     pub agent_task_policy: Option<ProjectAgentTaskPolicy>,
-    #[serde(default, deserialize_with = "present_nullable")]
+    #[serde(default, deserialize_with = "super::present_nullable")]
     pub provider_policy: Option<Option<ProjectProviderPolicy>>,
 }
 
-fn nested_integration(input: Option<&Value>) -> ContractResult<Value> {
-    serialized(parse_integration(input))
-}
-fn nested_execution(input: Option<&Value>) -> ContractResult<Value> {
-    serialized(parse_execution(input))
-}
-/// The patch execution schema has no defaults: keep only the sent fields.
-fn nested_execution_patch(input: Option<&Value>) -> ContractResult<Value> {
-    let Value::Object(mut parsed) = nested_execution(input)? else {
-        return Err(ContractFailure::Unhandled);
-    };
-    let sent = input.and_then(Value::as_object);
-    parsed.retain(|name, _| sent.is_some_and(|sent| sent.contains_key(name)));
-    Ok(Value::Object(parsed))
-}
-fn nested_agent_policy(input: Option<&Value>) -> ContractResult<Value> {
-    serialized(parse_agent_policy(input))
-}
-/// Garde reports the policy fields out of shape order; Zod reports providers first.
-fn nested_provider_policy(input: Option<&Value>) -> ContractResult<Value> {
-    serialized(parse_provider_policy(input)).map_err(|failure| match failure {
-        ContractFailure::Issues(mut findings) => {
-            findings.sort_by_key(|finding| {
-                finding["field"]
-                    .as_str()
-                    .is_some_and(|field| field.starts_with(".allowedInstanceIds"))
-            });
-            ContractFailure::Issues(findings)
-        }
-        other => other,
-    })
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProjectIdParams {
+    pub project_id: String,
 }
 
-const REQUIRED_TEXT: Rule = Rule::Text {
-    trim: false,
-    min: 1,
-    max: None,
-};
-const COMMAND: Rule = Rule::Text {
-    trim: false,
-    min: 0,
-    max: None,
-};
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TaskSourceQuery {
+    pub kind: String,
+}
 
-const fn text(name: &'static str, rule: Rule, required: bool) -> Field {
-    Field {
-        required,
-        ..optional(name, rule)
+/// `includeArchived=true` for the profile and workflow lists.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct IncludeArchivedQuery {
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub include_archived: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct ProviderInstanceCreateBody {
+    pub provider: String,
+    pub label: String,
+}
+
+fn environment_reference(value: &str, _: &()) -> garde::Result {
+    let mut chars = value.chars();
+    rule(
+        chars.next().is_some_and(|c| c.is_ascii_uppercase())
+            && value.len() <= 128
+            && chars.all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_'),
+        "invalid_format",
+    )
+}
+
+fn identifier(value: &str) -> bool {
+    let mut chars = value.chars();
+    chars
+        .next()
+        .is_some_and(|c| c.is_ascii_alphabetic() || c == '_')
+        && chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
+}
+
+fn environment_value(value: &str, _: &()) -> garde::Result {
+    rule(identifier(value), "invalid_format")
+}
+
+fn tool_name(value: &str, _: &()) -> garde::Result {
+    rule(
+        !value.is_empty()
+            && value
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-'),
+        "invalid_format",
+    )
+}
+
+fn server_name(value: &str, _: &()) -> garde::Result {
+    tool_name(value, &())?;
+    rule(!value.starts_with("suplex_"), "custom")
+}
+
+fn tracker_repository(value: &str, _: &()) -> garde::Result {
+    let parts = value.split('/').collect::<Vec<_>>();
+    rule(
+        parts.len() == 2
+            && parts.iter().all(|part| {
+                !part.is_empty()
+                    && part
+                        .chars()
+                        .all(|c| c.is_ascii_alphanumeric() || matches!(c, '_' | '.' | '-'))
+            }),
+        "invalid_format",
+    )
+}
+
+fn jira_project(value: &str, _: &()) -> garde::Result {
+    let mut chars = value.chars();
+    rule(
+        chars.next().is_some_and(|c| c.is_ascii_uppercase())
+            && chars.all(|c| c.is_ascii_uppercase() || c.is_ascii_digit() || c == '_'),
+        "invalid_format",
+    )
+}
+
+/// A Jira Cloud site; `new URL` in the refinement throws on a malformed one.
+fn jira_site(input: Option<&Value>) -> ContractResult<Value> {
+    let site = text(0, MAX)(input)?;
+    let parsed = url::Url::parse(site.as_str().unwrap_or_default())
+        .map_err(|_| ContractFailure::Unhandled)?;
+    let host = parsed.host_str().unwrap_or_default();
+    let tenant = host.strip_suffix(".atlassian.net").unwrap_or_default();
+    if parsed.scheme() == "https"
+        && !tenant.is_empty()
+        && tenant
+            .chars()
+            .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
+        && parsed.username().is_empty()
+        && parsed.password().is_none()
+        && parsed.path() == "/"
+        && parsed.query().is_none()
+        && parsed.fragment().is_none()
+    {
+        Ok(site)
+    } else {
+        fail("custom")
     }
 }
 
-const fn project_fields(execution: Rule, required: bool) -> [Field; 13] {
-    [
-        optional("integration", Rule::Nested(nested_integration)),
-        optional("execution", execution),
-        text("name", REQUIRED_TEXT, required),
-        text("repositoryPath", REQUIRED_TEXT, required),
-        text("worktreeRoot", REQUIRED_TEXT, required),
-        text("repository", REQUIRED_TEXT, required),
-        text("baseBranch", REQUIRED_TEXT, required),
-        text("setupCommand", COMMAND, required),
-        text("verificationCommand", COMMAND, required),
-        text("rootProfileId", REQUIRED_TEXT, required),
-        text("workerProfileId", REQUIRED_TEXT, required),
-        optional("agentTaskPolicy", Rule::Nested(nested_agent_policy)),
-        Field {
-            nullable: true,
-            ..optional("providerPolicy", Rule::Nested(nested_provider_policy))
+/// `ProjectIntegrationSchema`.
+impl Contract for ProjectIntegration {
+    fn schema(input: Option<&Value>) -> ContractResult<Value> {
+        Fields::new(input)?
+            .or("repository", json!({"kind": "github"}), |input| {
+                tagged(input, "kind", |kind| {
+                    let fields = Fields::new(input).ok()?.req("kind", present);
+                    Some(match kind.as_str()? {
+                        "github" => fields.strict(),
+                        "bitbucket" => fields
+                            .req("tokenEnvironment", formatted(0, MAX, environment_reference))
+                            .opt(
+                                "usernameEnvironment",
+                                formatted(0, MAX, environment_reference),
+                            )
+                            .strict(),
+                        _ => return None,
+                    })
+                })
+            })
+            .or("tracker", Value::Null, nullable(tracker))
+            .strict()
+    }
+}
+
+fn tracker(input: Option<&Value>) -> ContractResult<Value> {
+    tagged(input, "kind", |kind| {
+        let fields = Fields::new(input).ok()?.req("kind", present);
+        let reference = formatted(0, MAX, environment_reference);
+        Some(match kind.as_str()? {
+            "github" => fields
+                .req("repository", formatted(0, MAX, tracker_repository))
+                .strict(),
+            "jira" => fields
+                .req("site", jira_site)
+                .req("project", formatted(0, MAX, jira_project))
+                .req("emailEnvironment", reference)
+                .req("tokenEnvironment", reference)
+                .strict(),
+            _ => return None,
+        })
+    })
+}
+
+fn environment_key(key: &str) -> bool {
+    identifier(key)
+        && ![
+            "HOME",
+            "PATH",
+            "CLAUDE",
+            "ANTHROPIC",
+            "AWS",
+            "GOOGLE",
+            "AZURE",
+            "SUPLEX",
+        ]
+        .iter()
+        .any(|prefix| key.starts_with(prefix))
+}
+
+/// `ProjectMcpSchema`: loose server objects with unique names.
+fn mcp(input: Option<&Value>) -> ContractResult<Value> {
+    let tools = list(formatted(0, MAX, tool_name), 0, MAX);
+    let references = super::record(
+        |_| true,
+        "invalid_key",
+        formatted(0, MAX, environment_value),
+    );
+    let servers = list(
+        |input| {
+            Fields::new(input)?
+                .req("name", formatted(0, MAX, server_name))
+                .req("transport", |input| {
+                    tagged(input, "type", |kind| {
+                        let fields = Fields::new(input).ok()?.req("type", present);
+                        Some(match kind.as_str()? {
+                            "stdio" => fields
+                                .req("command", text(1, MAX))
+                                .or("args", json!([]), list(text(0, MAX), 0, MAX))
+                                .or("env", json!({}), references)
+                                .finish(),
+                            "http" => fields
+                                .req("url", formatted(0, MAX, url))
+                                .or("headers", json!({}), references)
+                                .finish(),
+                            _ => return None,
+                        })
+                    })
+                })
+                .req("grants", |input| {
+                    Fields::new(input)?
+                        .req("root", tools)
+                        .req("advisor", tools)
+                        .req("worker", tools)
+                        .finish()
+                })
+                .finish()
         },
-    ]
-}
-const BODY: [Field; 13] = project_fields(Rule::Nested(nested_execution), true);
-const PATCH: [Field; 13] = project_fields(Rule::Nested(nested_execution_patch), false);
-
-fn patch_value(input: Option<&Value>) -> ContractResult<serde_json::Map<String, Value>> {
-    let value = parse_object(input, &PATCH, true)?;
-    if value.is_empty() {
-        return Err(ContractFailure::Issues(vec![issue("custom", ".")]));
+        0,
+        MAX,
+    )(input)?;
+    let names = servers
+        .as_array()
+        .into_iter()
+        .flatten()
+        .map(|server| &server["name"])
+        .collect::<std::collections::HashSet<_>>();
+    if names.len() == servers.as_array().map_or(0, Vec::len) {
+        Ok(servers)
+    } else {
+        fail("custom")
     }
-    Ok(value)
 }
 
-fn typed<T: serde::de::DeserializeOwned>(
-    value: serde_json::Map<String, Value>,
-) -> ContractResult<T> {
-    serde_json::from_value(Value::Object(value))
-        .map_err(|error| ContractFailure::Internal(error.to_string()))
+fn execution_fields(input: Option<&Value>, defaults: bool) -> ContractResult<Value> {
+    let parsers: [(&'static str, Value, Parse); 4] = [
+        ("instructions", json!(""), &text(0, MAX)),
+        ("skillDirectories", json!([]), &list(text(1, MAX), 0, 50)),
+        (
+            "environment",
+            json!({}),
+            &super::record(environment_key, "invalid_key", text(0, MAX)),
+        ),
+        ("mcp", json!([]), &mcp),
+    ];
+    parsers
+        .into_iter()
+        .fold(Fields::new(input)?, |fields, (name, default, parse)| {
+            if defaults {
+                fields.or(name, default, parse)
+            } else {
+                fields.opt(name, parse)
+            }
+        })
+        .strict()
 }
 
-/// `ProjectBodySchema`: the full project configuration.
-pub fn parse_body(input: Option<&Value>) -> ContractResult<LocalProjectCreate> {
-    typed(parse_object(input, &BODY, true)?)
+/// `ProjectExecutionSchema`.
+impl Contract for ProjectExecution {
+    fn schema(input: Option<&Value>) -> ContractResult<Value> {
+        execution_fields(input, true)
+    }
 }
 
-/// `ProjectPatchBodySchema`: at least one project field.
-pub fn parse_patch(input: Option<&Value>) -> ContractResult<ProjectPatch> {
-    typed(patch_value(input)?)
+fn profile_ids(min: usize) -> impl Fn(Option<&Value>) -> ContractResult<Value> + Copy {
+    list(text(1, 256), min, MAX)
 }
 
-pub fn validate(contract: &str, input: Option<&Value>) -> Option<ContractResult<Value>> {
-    Some(match contract {
-        "projects.ProjectBodySchema" => parse_object(input, &BODY, true).map(Value::Object),
-        "projects.ProjectPatchBodySchema" => patch_value(input).map(Value::Object),
-        "projects.ProjectCreateBodySchema" => serialized(parse_create(input)),
-        "projects.ProjectIntegrationSchema" => serialized(parse_integration(input)),
-        "projects.ProjectExecutionSchema" => serialized(parse_execution(input)),
-        "projects.ProjectAgentTaskPolicySchema" => serialized(parse_agent_policy(input)),
-        "projects.ProjectProviderPolicySchema" => serialized(parse_provider_policy(input)),
-        _ => return None,
-    })
+/// `ProjectAgentTaskPolicySchema`.
+impl Contract for ProjectAgentTaskPolicy {
+    fn schema(input: Option<&Value>) -> ContractResult<Value> {
+        let advisors = |input: Option<&Value>| {
+            ADVISOR_ROLES
+                .into_iter()
+                .fold(Fields::new(input)?, |fields, role| {
+                    fields.or(role, json!([]), profile_ids(0))
+                })
+                .finish()
+        };
+        Fields::new(input)?
+            .req("workflowIds", profile_ids(1))
+            .req("defaultWorkflowId", text(1, 256))
+            .or("templateIds", json!([]), profile_ids(0))
+            .req("rootProfileIds", profile_ids(1))
+            .req("workerProfileIds", profile_ids(1))
+            .or(
+                "advisorProfileIds",
+                json!({"reviewer": [], "planner_a": [], "planner_b": [], "rater": []}),
+                advisors,
+            )
+            .or(
+                "deliveryTarget",
+                json!("pull_request_draft"),
+                choice::<DeliveryTarget>,
+            )
+            .or("runProjectTests", json!(true), flag)
+            .or("visualEvidence", json!("off"), one_of(VISUAL_EVIDENCE))
+            .strict()
+    }
+}
+
+/// `ProjectProviderPolicySchema`.
+impl Contract for ProjectProviderPolicy {
+    fn schema(input: Option<&Value>) -> ContractResult<Value> {
+        Fields::new(input)?
+            .req("allowedProviders", list(one_of(HARNESSES), 0, MAX))
+            .req("allowedInstanceIds", list(text(1, MAX), 0, MAX))
+            .strict()
+    }
+}
+
+pub fn parse_integration(input: Option<&Value>) -> ContractResult<ProjectIntegration> {
+    ProjectIntegration::parse(input)
+}
+pub fn parse_execution(input: Option<&Value>) -> ContractResult<ProjectExecution> {
+    ProjectExecution::parse(input)
+}
+pub fn parse_agent_policy(input: Option<&Value>) -> ContractResult<ProjectAgentTaskPolicy> {
+    ProjectAgentTaskPolicy::parse(input)
+}
+pub fn parse_provider_policy(input: Option<&Value>) -> ContractResult<ProjectProviderPolicy> {
+    ProjectProviderPolicy::parse(input)
+}
+
+/// `ProjectBodySchema` or, without defaults and required fields, the patch.
+fn project_fields(input: Option<&Value>, patch: bool) -> ContractResult<Fields<'_>> {
+    let required = !patch;
+    let mut fields = Fields::new(input)?
+        .opt("integration", nested::<ProjectIntegration>)
+        .opt("execution", |input| execution_fields(input, required));
+    for (name, min) in [
+        ("name", 1),
+        ("repositoryPath", 1),
+        ("worktreeRoot", 1),
+        ("repository", 1),
+        ("baseBranch", 1),
+        ("setupCommand", 0),
+        ("verificationCommand", 0),
+        ("rootProfileId", 1),
+        ("workerProfileId", 1),
+    ] {
+        fields = if required {
+            fields.req(name, text(min, MAX))
+        } else {
+            fields.opt(name, text(min, MAX))
+        };
+    }
+    Ok(fields
+        .opt("agentTaskPolicy", nested::<ProjectAgentTaskPolicy>)
+        .opt("providerPolicy", nullable(nested::<ProjectProviderPolicy>)))
+}
+
+impl Contract for LocalProjectCreate {
+    fn schema(input: Option<&Value>) -> ContractResult<Value> {
+        project_fields(input, false)?.strict()
+    }
+}
+
+/// At least one project field.
+impl Contract for ProjectPatch {
+    fn schema(input: Option<&Value>) -> ContractResult<Value> {
+        let mut fields = project_fields(input, true)?;
+        fields.strict_keys();
+        if fields.refinable() && input.and_then(Value::as_object).is_some_and(Map::is_empty) {
+            fields.fail("custom", ".");
+        }
+        fields.finish()
+    }
+}
+
+fn repository_fields(fields: Fields) -> ContractResult<Value> {
+    fields
+        .opt("integration", nested::<ProjectIntegration>)
+        .opt("baseBranch", text(1, MAX))
+        .strict()
+}
+
+impl Contract for ExistingRepositoryCreate {
+    fn schema(input: Option<&Value>) -> ContractResult<Value> {
+        repository_fields(Fields::new(input)?.req("repositoryUrl", text(1, MAX)))
+    }
+}
+
+impl Contract for NewRepositoryCreate {
+    fn schema(input: Option<&Value>) -> ContractResult<Value> {
+        repository_fields(Fields::new(input)?.req("repositoryName", text(1, 200)))
+    }
+}
+
+impl Contract for ProjectCreateBody {
+    fn schema(input: Option<&Value>) -> ContractResult<Value> {
+        union(
+            input,
+            &[
+                &nested::<ExistingRepositoryCreate>,
+                &nested::<NewRepositoryCreate>,
+                &nested::<LocalProjectCreate>,
+            ],
+        )
+    }
+}
+
+impl Contract for ProjectIdParams {
+    fn schema(input: Option<&Value>) -> ContractResult<Value> {
+        params(input, &["projectId"], (1, 256))
+    }
+}
+
+/// The issue search query, at most 200 UTF-16 units.
+#[derive(Debug, Clone, Deserialize)]
+pub struct IssueSearchQuery {
+    pub query: String,
+}
+
+impl Contract for IssueSearchQuery {
+    fn schema(input: Option<&Value>) -> ContractResult<Value> {
+        Fields::new(input)?
+            .or("query", json!(""), text(0, 200))
+            .finish()
+    }
+}
+
+/// A company id and a GitHub owner login.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct OwnerParams {
+    pub company_id: String,
+    pub owner: String,
+}
+
+fn github_owner(value: &str, _: &()) -> garde::Result {
+    rule(
+        value.len() <= 39
+            && value
+                .as_bytes()
+                .first()
+                .is_some_and(u8::is_ascii_alphanumeric)
+            && value
+                .bytes()
+                .skip(1)
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-'),
+        "invalid_format",
+    )
+}
+
+impl Contract for OwnerParams {
+    fn schema(input: Option<&Value>) -> ContractResult<Value> {
+        Fields::new(input)?
+            .req("companyId", text(1, 256))
+            .req("owner", formatted(0, MAX, github_owner))
+            .finish()
+    }
+}
+
+impl Contract for TaskSourceQuery {
+    fn schema(input: Option<&Value>) -> ContractResult<Value> {
+        Fields::new(input)?
+            .req("kind", one_of(&["pull_request", "issue", "branch"]))
+            .finish()
+    }
+}
+
+impl Contract for IncludeArchivedQuery {
+    fn schema(input: Option<&Value>) -> ContractResult<Value> {
+        Fields::new(input)?
+            .opt("includeArchived", one_of(&["true"]))
+            .strict()
+    }
+}
+
+/// A native provider: `{ providerId }`.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct ProviderParams {
+    pub provider_id: String,
+}
+
+impl Contract for ProviderParams {
+    fn schema(input: Option<&Value>) -> ContractResult<Value> {
+        Fields::new(input)?
+            .req("providerId", one_of(HARNESSES))
+            .finish()
+    }
+}
+
+impl Contract for ProviderInstanceCreateBody {
+    fn schema(input: Option<&Value>) -> ContractResult<Value> {
+        Fields::new(input)?
+            .req("provider", one_of(HARNESSES))
+            .req("label", trimmed(1, 128))
+            .finish()
+    }
+}
+
+fn profile_fields(input: Option<&Value>, patch: bool) -> ContractResult<Fields<'_>> {
+    fn model(value: &str, _: &()) -> garde::Result {
+        let mut chars = value.chars();
+        rule(
+            chars.next().is_some_and(|c| c.is_ascii_alphanumeric())
+                && chars
+                    .all(|c| c.is_ascii_alphanumeric() || matches!(c, '.' | '_' | ':' | '/' | '-')),
+            "invalid_format",
+        )
+    }
+    fn avatar(value: &str, _: &()) -> garde::Result {
+        rule(
+            value.len() == 32
+                && value
+                    .bytes()
+                    .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte)),
+            "invalid_format",
+        )
+    }
+    let parsers: [(&'static str, Parse); 7] = [
+        ("provider", &one_of(HARNESSES)),
+        ("model", &|input| {
+            super::string(input, true, (1, 256), Some(model))
+        }),
+        (
+            "reasoningLevel",
+            &one_of(&["low", "medium", "high", "xhigh", "max"]),
+        ),
+        ("serviceTier", &one_of(&["default", "priority"])),
+        ("name", &trimmed(1, MAX)),
+        ("role", &one_of(&["root", "worker"])),
+        ("avatarSeed", &formatted(0, MAX, avatar)),
+    ];
+    let fields = parsers
+        .into_iter()
+        .fold(Fields::new(input)?, |fields, (name, parse)| {
+            if patch {
+                fields.opt(name, parse)
+            } else {
+                fields.req(name, parse)
+            }
+        });
+    Ok(fields.opt("providerInstanceId", nullable(text(1, MAX))))
+}
+
+impl Contract for ProfileBody {
+    fn schema(input: Option<&Value>) -> ContractResult<Value> {
+        profile_fields(input, false)?.strict()
+    }
+}
+
+impl Contract for ProfilePatchBody {
+    fn schema(input: Option<&Value>) -> ContractResult<Value> {
+        profile_fields(input, true)?.opt("archived", flag).strict()
+    }
 }
 
 #[cfg(test)]
@@ -1009,9 +797,9 @@ mod tests {
         ] {
             let mut input = base;
             input[field] = Value::Null;
-            match parse_create(Some(&input)) {
+            match ProjectCreateBody::parse(Some(&input)) {
                 Err(ContractFailure::Issues(findings)) => {
-                    assert_eq!(findings, vec![issue("invalid_union", ".")]);
+                    assert_eq!(findings, vec![super::super::issue("invalid_union", ".")]);
                 }
                 other => panic!("{field} null was accepted: {other:?}"),
             }

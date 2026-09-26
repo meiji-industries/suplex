@@ -13,7 +13,7 @@ use std::{
 use axum::{
     Router,
     body::Bytes,
-    extract::{ConnectInfo, Path, RawQuery, Request, State},
+    extract::{ConnectInfo, RawQuery, Request, State},
     http::{HeaderMap, HeaderValue, StatusCode, header},
     response::{IntoResponse, Response},
     routing::{get, post},
@@ -23,9 +23,13 @@ use serde_json::{Map, Value, json};
 
 use crate::{
     http::{
-        AppState, agent_api_runtime,
-        contracts::typed::{self, ContractResult, oauth as contracts},
+        AppState,
+        contracts::typed::{
+            self, Contract,
+            oauth::{ClientRegistration, ConsentApproval, ConsentParams},
+        },
         session,
+        validation::{Valid, ValidPath},
     },
     identity::oauth::{self, OAuth, OAuthFailure},
     projects::service as projects,
@@ -192,7 +196,7 @@ async fn register(State(state): State<AppState>, request: Request) -> Response {
         } else {
             None
         };
-        let metadata = contracts::parse_client_registration(value.as_ref())
+        let metadata = ClientRegistration::parse(value.as_ref())
             .map_err(|_| failure("invalid_client_metadata", "Client metadata is invalid", 400))?;
         let registered = state.with_database(|database| {
             oauth.register_client(
@@ -305,36 +309,12 @@ fn js_encode_uri_component(value: &str) -> String {
         .collect()
 }
 
-fn request_id(id: &str) -> Result<String, Box<Response>> {
-    validated(contracts::parse_consent_params(Some(
-        &json!({"requestId": id}),
-    )))
-    .map(|params| params.request_id)
-}
-
-fn validated<T>(result: ContractResult<T>) -> Result<T, Box<Response>> {
-    match result {
-        Ok(value) => Ok(value),
-        Err(typed::ContractFailure::Issues(findings)) => {
-            Err(Box::new(agent_api_runtime::validation(findings, false)))
-        }
-        Err(_) => Err(Box::new(auth::error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "Internal server error",
-        ))),
-    }
-}
-
 async fn consent(
     State(state): State<AppState>,
-    Path(id): Path<String>,
+    ValidPath(ConsentParams { request_id: id }): ValidPath<ConsentParams>,
     headers: HeaderMap,
 ) -> Response {
     let oauth = OAuth::new(&state.session_config.reachable_address);
-    let id = match request_id(&id) {
-        Ok(id) => id,
-        Err(response) => return *response,
-    };
     let (user, cookies) = match session_user(&state, &headers) {
         Ok(value) => value,
         Err(error) => return oauth_error(error.as_ref(), &oauth),
@@ -387,7 +367,7 @@ fn require_csrf(headers: &HeaderMap) -> Result<(), Box<dyn std::error::Error>> {
 }
 
 enum Decision {
-    Approve(contracts::ConsentApproval),
+    Approve(ConsentApproval),
     Deny,
 }
 
@@ -430,33 +410,19 @@ async fn decide(state: AppState, id: String, headers: HeaderMap, decision: Decis
 
 async fn approve(
     State(state): State<AppState>,
-    Path(id): Path<String>,
+    ValidPath(ConsentParams { request_id: id }): ValidPath<ConsentParams>,
     headers: HeaderMap,
-    body: Bytes,
+    Valid(approval): Valid<ConsentApproval>,
 ) -> Response {
-    let id = match request_id(&id) {
-        Ok(id) => id,
-        Err(response) => return *response,
-    };
-    let approval = match auth::parsed_body(&headers, &body)
-        .and_then(|value| validated(contracts::parse_consent_approval(value.as_ref())))
-    {
-        Ok(approval) => approval,
-        Err(response) => return *response,
-    };
     decide(state, id, headers, Decision::Approve(approval)).await
 }
 
 async fn deny(
     State(state): State<AppState>,
-    Path(id): Path<String>,
+    ValidPath(ConsentParams { request_id: id }): ValidPath<ConsentParams>,
     headers: HeaderMap,
     body: Bytes,
 ) -> Response {
-    let id = match request_id(&id) {
-        Ok(id) => id,
-        Err(response) => return *response,
-    };
     if let Err(response) = auth::parsed_body(&headers, &body) {
         return *response;
     }

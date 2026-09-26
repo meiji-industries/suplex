@@ -1,6 +1,34 @@
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::http::validation::test_path;
+    use axum::extract::Path;
+
+    // The handlers validate their params in an extractor; these adapters run
+    // that validation for direct calls.
+    fn task_ids(query: Option<&str>) -> Result<Vec<String>, Box<Response>> {
+        crate::http::validation::valid::<TaskAgentsBatchQuery>(query_object(query))
+            .map(|query| query.task_id)
+    }
+
+    async fn task_agents(state: State<AppState>, Path(id): Path<String>, headers: HeaderMap) -> Response {
+        match test_path(json!({"taskId": id})) {
+            Ok(path) => super::task_agents(state, path, headers).await,
+            Err(response) => *response,
+        }
+    }
+
+    async fn company_task_agents(
+        state: State<AppState>,
+        Path(id): Path<String>,
+        query: RawQuery,
+        headers: HeaderMap,
+    ) -> Response {
+        match test_path(json!({"companyId": id})) {
+            Ok(path) => super::company_task_agents(state, path, query, headers).await,
+            Err(response) => *response,
+        }
+    }
     use crate::http::session;
     use crate::platform::database::OpenMode;
     use axum::{body::to_bytes, http::HeaderValue};

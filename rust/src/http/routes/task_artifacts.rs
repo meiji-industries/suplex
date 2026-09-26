@@ -9,17 +9,16 @@ use std::error::Error;
 use axum::{
     Router,
     body::Body,
-    extract::{Path, State},
+    extract::State,
     http::{HeaderMap, StatusCode, header},
     response::{IntoResponse, Response},
     routing::get,
 };
 use chrono::Utc;
-use serde_json::json;
 
 use crate::{
     coordination::root_session_store::{self, TaskArtifact},
-    http::{AppState, session, validation},
+    http::{AppState, contracts::typed::tasks::TaskArtifactParams, session, validation::ValidPath},
     platform::artifacts,
 };
 
@@ -29,25 +28,6 @@ pub fn router() -> Router<AppState> {
     Router::new()
         .route("/api/tasks/{task_id}/artifacts/{artifact_id}", get(read))
         .route("/api/tasks/{task_id}/images/{artifact_id}", get(read))
-}
-
-fn params(task_id: &str, artifact_id: &str) -> Result<(), Box<Response>> {
-    let mut findings = Vec::new();
-    for (name, value) in [("taskId", task_id), ("artifactId", artifact_id)] {
-        let code = match value.encode_utf16().count() {
-            0 => Some("too_small"),
-            1..=256 => None,
-            _ => Some("too_big"),
-        };
-        if let Some(code) = code {
-            findings.push(json!({"code":format!("invalid-{code}"),"field":format!(".{name}"),"message":"Request value is invalid"}));
-        }
-    }
-    if findings.is_empty() {
-        Ok(())
-    } else {
-        Err(Box::new(validation::validation_error_public(findings)))
-    }
 }
 
 fn scoped_artifact(
@@ -72,12 +52,12 @@ fn reauthorize(state: &AppState, user_id: &str, task_id: &str) -> Result<(), Box
 
 async fn read(
     State(state): State<AppState>,
-    Path((task_id, artifact_id)): Path<(String, String)>,
+    ValidPath(TaskArtifactParams {
+        task_id,
+        artifact_id,
+    }): ValidPath<TaskArtifactParams>,
     headers: HeaderMap,
 ) -> Response {
-    if let Err(response) = params(&task_id, &artifact_id) {
-        return *response;
-    }
     let session = match state.with_database(|database| {
         session::session_user(database, &headers, Some(&state.session_config), Utc::now())
     }) {

@@ -18,11 +18,18 @@ use serde_json::{Value, json};
 use tokio::sync::mpsc::UnboundedReceiver;
 
 use crate::{
-    http::{AppState, contracts::typed::finding, validation},
+    http::{
+        AppState,
+        contracts::typed::{
+            agent_api::query_object,
+            tasks::{TaskPaneParams, TerminalSize},
+        },
+        validation::valid,
+    },
     integrations::herdr_bridge::{self, Bridge, BridgeEvent, Mode},
 };
 
-use super::{auth, profiles::authorize, task_worktree::validated_task_id};
+use super::{auth, profiles::authorize};
 
 /// Close code for a terminal control bridge displaced by a newer controller.
 pub const TERMINAL_TAKEOVER_CLOSE_CODE: u16 = 4498;
@@ -53,39 +60,7 @@ pub(crate) fn origin_allowed(headers: &HeaderMap, reachable_address: &str) -> bo
 
 /// `cols` and `rows` coerced like `z.coerce.number().int().min().max().default()`.
 pub(crate) fn terminal_size(query: Option<&str>) -> Result<(i64, i64), Box<Response>> {
-    let values = url::form_urlencoded::parse(query.unwrap_or_default().as_bytes())
-        .map(|(name, value)| (name.into_owned(), value.into_owned()))
-        .collect::<Vec<_>>();
-    let mut findings = Vec::new();
-    let mut read = |name: &str, default: f64, minimum: f64, maximum: f64| {
-        let Some((_, raw)) = values.iter().find(|(key, _)| key == name) else {
-            return default;
-        };
-        let trimmed = raw.trim();
-        let number = if trimmed.is_empty() {
-            Some(0.0)
-        } else {
-            trimmed.parse::<f64>().ok()
-        };
-        let code = match number {
-            None => Some("invalid_type"),
-            Some(value) if !value.is_finite() || value.fract() != 0.0 => Some("invalid_type"),
-            Some(value) if value < minimum => Some("too_small"),
-            Some(value) if value > maximum => Some("too_big"),
-            Some(_) => None,
-        };
-        if let Some(code) = code {
-            findings.push(finding(code, &[json!(name)]));
-        }
-        number.unwrap_or(default)
-    };
-    let cols = read("cols", 80.0, 20.0, 300.0);
-    let rows = read("rows", 24.0, 5.0, 150.0);
-    if findings.is_empty() {
-        Ok((cols as i64, rows as i64))
-    } else {
-        Err(Box::new(validation::validation_error_public(findings)))
-    }
+    valid::<TerminalSize>(query_object(query)).map(|size| (size.cols, size.rows))
 }
 
 async fn close(socket: &mut WebSocket, code: u16, reason: &str) {
@@ -201,14 +176,9 @@ async fn terminal(
     headers: HeaderMap,
     upgrade: WebSocketUpgrade,
 ) -> Response {
-    if let Err(response) = validated_task_id(&task_id) {
+    // The WebSocket upgrade check runs before the params, as an extractor.
+    if let Err(response) = valid::<TaskPaneParams>(json!({"taskId": task_id, "role": role})) {
         return *response;
-    }
-    if !["root", "worker", "shell"].contains(&role.as_str()) {
-        return validation::validation_error_public(vec![finding(
-            "invalid_union",
-            &[json!("role")],
-        )]);
     }
     let (cols, rows) = match terminal_size(query.as_deref()) {
         Ok(size) => size,

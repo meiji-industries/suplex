@@ -7,8 +7,8 @@ use std::{error::Error, path::PathBuf};
 
 use axum::{
     Json, Router,
-    extract::{Path, State},
-    http::{HeaderMap, StatusCode, header::CACHE_CONTROL},
+    extract::State,
+    http::{HeaderMap, header::CACHE_CONTROL},
     response::{IntoResponse, Response},
     routing::get,
 };
@@ -20,11 +20,7 @@ use crate::{
         root_session_store::{self, RootObservationRows},
         workflows,
     },
-    http::{
-        AppState,
-        contracts::typed::{self, tasks as task_contracts},
-        validation,
-    },
+    http::{AppState, contracts::typed::tasks::TaskIdParams, validation::ValidPath},
     integrations::github::Access,
     platform::database::SuplexDatabase,
     runtimes::{task_harness::ReaderSession, task_harness_registry},
@@ -46,12 +42,9 @@ pub fn router() -> Router<AppState> {
 /// TypeScript `readTaskChecks`: live check runs of the task's pull request.
 async fn checks(
     State(state): State<AppState>,
-    Path(task_id): Path<String>,
+    ValidPath(TaskIdParams { task_id }): ValidPath<TaskIdParams>,
     headers: HeaderMap,
 ) -> Response {
-    if let Err(response) = validated_task_id(&task_id) {
-        return *response;
-    }
     let (user_id, cookies) = match authorize(&state, &headers) {
         Ok(value) => value,
         Err(response) => return *response,
@@ -100,19 +93,6 @@ async fn checks(
     let value = json!({"available": observation.exists, "runs": observation.checks.runs, "pullRequestState": pull_request_state});
     let scope = state.with_database(|database| read_task(database, &user_id, &task_id));
     respond(scope.map(|_| value), cookies)
-}
-
-fn validated_task_id(id: &str) -> Result<(), Box<Response>> {
-    match task_contracts::parse_task_id_params(Some(&json!({"taskId": id}))) {
-        Ok(_) => Ok(()),
-        Err(typed::ContractFailure::Issues(findings)) => {
-            Err(Box::new(validation::validation_error_public(findings)))
-        }
-        Err(_) => Err(Box::new(auth::error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "Internal server error",
-        ))),
-    }
 }
 
 fn read_task(
@@ -237,12 +217,9 @@ fn execution_document(rows: &RootObservationRows, database_path: &std::path::Pat
 
 async fn activity(
     State(state): State<AppState>,
-    Path(task_id): Path<String>,
+    ValidPath(TaskIdParams { task_id }): ValidPath<TaskIdParams>,
     headers: HeaderMap,
 ) -> Response {
-    if let Err(response) = validated_task_id(&task_id) {
-        return *response;
-    }
     let (user_id, cookies) = match authorize(&state, &headers) {
         Ok(value) => value,
         Err(response) => return *response,
@@ -256,12 +233,9 @@ async fn activity(
 
 async fn execution(
     State(state): State<AppState>,
-    Path(task_id): Path<String>,
+    ValidPath(TaskIdParams { task_id }): ValidPath<TaskIdParams>,
     headers: HeaderMap,
 ) -> Response {
-    if let Err(response) = validated_task_id(&task_id) {
-        return *response;
-    }
     let (user_id, cookies) = match authorize(&state, &headers) {
         Ok(value) => value,
         Err(response) => return *response,
@@ -286,7 +260,7 @@ async fn execution(
 
 async fn diff_summary(
     State(state): State<AppState>,
-    Path(task_id): Path<String>,
+    ValidPath(TaskIdParams { task_id }): ValidPath<TaskIdParams>,
     headers: HeaderMap,
 ) -> Response {
     diff_summary_with_access(state, task_id, headers, None).await
@@ -294,7 +268,7 @@ async fn diff_summary(
 
 async fn diff(
     State(state): State<AppState>,
-    Path(task_id): Path<String>,
+    ValidPath(TaskIdParams { task_id }): ValidPath<TaskIdParams>,
     headers: HeaderMap,
 ) -> Response {
     read_diff(state, task_id, headers, None, DiffKind::Patch).await
@@ -322,9 +296,6 @@ async fn read_diff(
     access_override: Option<Access>,
     kind: DiffKind,
 ) -> Response {
-    if let Err(response) = validated_task_id(&task_id) {
-        return *response;
-    }
     let (user_id, cookies) = match authorize(&state, &headers) {
         Ok(value) => value,
         Err(response) => return *response,

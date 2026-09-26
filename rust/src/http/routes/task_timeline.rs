@@ -8,19 +8,14 @@ use std::{error::Error, path::PathBuf};
 
 use axum::{
     Json, Router,
-    extract::{Path, State},
-    http::{HeaderMap, StatusCode, header::CACHE_CONTROL},
+    extract::State,
+    http::{HeaderMap, header::CACHE_CONTROL},
     response::{IntoResponse, Response},
     routing::get,
 };
-use serde_json::json;
 
 use crate::{
-    http::{
-        AppState,
-        contracts::typed::{self, tasks as task_contracts},
-        validation,
-    },
+    http::{AppState, contracts::typed::tasks::TaskIdParams, validation::ValidPath},
     platform::database::SuplexDatabase,
     tasks::timeline::{self, SavedTimeline, TimelineResponse},
 };
@@ -29,19 +24,6 @@ use super::auth;
 
 pub fn router() -> Router<AppState> {
     Router::new().route("/api/tasks/{task_id}/timeline", get(task_timeline))
-}
-
-fn validate_task_id(task_id: &str) -> Result<(), Box<Response>> {
-    match task_contracts::parse_task_id_params(Some(&json!({"taskId":task_id}))) {
-        Ok(_) => Ok(()),
-        Err(typed::ContractFailure::Issues(findings)) => {
-            Err(Box::new(validation::validation_error_public(findings)))
-        }
-        Err(_) => Err(Box::new(auth::error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "Internal server error",
-        ))),
-    }
 }
 
 fn scoped(
@@ -83,12 +65,9 @@ fn respond(result: Result<TimelineResponse, Box<dyn Error>>, cookies: Vec<String
 
 async fn task_timeline(
     State(state): State<AppState>,
-    Path(task_id): Path<String>,
+    ValidPath(TaskIdParams { task_id }): ValidPath<TaskIdParams>,
     headers: HeaderMap,
 ) -> Response {
-    if let Err(response) = validate_task_id(&task_id) {
-        return *response;
-    }
     let (user_id, cookies) = match authorize(&state, &headers) {
         Ok(value) => value,
         Err(response) => return *response,

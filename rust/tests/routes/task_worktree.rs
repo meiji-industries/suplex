@@ -1,5 +1,6 @@
 #[cfg(test)]
 mod tests {
+    use serde_json::Value;
     use std::sync::Arc;
 
     use super::*;

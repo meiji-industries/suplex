@@ -2,22 +2,23 @@ use crate::http::access::with_cookies;
 use crate::http::error::ApiError;
 use axum::{
     Json, Router,
-    body::Bytes,
-    extract::{Path, State},
+    extract::State,
     http::{HeaderMap, StatusCode, header},
     response::{IntoResponse, Response},
     routing::{get, post},
 };
 use chrono::Utc;
 use serde::Serialize;
-use serde_json::{Value, json};
 
 use crate::{
-    http::contracts::{self, typed},
+    http::{
+        contracts::typed::auth::{CredentialIdParams, DisplayNameBody, UserIdParams},
+        validation::{Valid, ValidPath},
+    },
     identity::admin,
 };
 
-use super::{super::AppState, auth};
+use super::super::AppState;
 
 #[derive(Serialize)]
 struct Invitations {
@@ -35,17 +36,6 @@ struct Credentials {
 struct AuditEvents {
     events: Vec<admin::AuditEvent>,
 }
-fn validation_params(contract: &str, params: Value) -> Result<(), Box<Response>> {
-    match contracts::validate(contract, Some(&params)) {
-        Some(Ok(_)) => Ok(()),
-        Some(Err(issues)) => Err(Box::new(auth::validation_error(issues))),
-        None => Err(Box::new(auth::error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "Internal server error",
-        ))),
-    }
-}
-
 use crate::http::access::authorize_method as authenticated;
 
 pub fn router() -> Router<AppState> {
@@ -64,12 +54,11 @@ pub fn router() -> Router<AppState> {
         .route("/api/admin/audit", get(list_audit))
 }
 
-async fn invite_user(State(state): State<AppState>, headers: HeaderMap, body: Bytes) -> Response {
-    let parsed = match auth::validated_typed_body(&headers, &body, typed::auth::parse_display_name)
-    {
-        Ok(value) => value,
-        Err(error) => return *error,
-    };
+async fn invite_user(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Valid(parsed): Valid<DisplayNameBody>,
+) -> Response {
     let (actor, cookies) = match authenticated(&state, &headers, "POST") {
         Ok(value) => value,
         Err(error) => return *error,
@@ -124,14 +113,8 @@ async fn list_credentials(State(state): State<AppState>, headers: HeaderMap) -> 
 async fn revoke_credential(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Path(credential_id): Path<String>,
+    ValidPath(CredentialIdParams { credential_id }): ValidPath<CredentialIdParams>,
 ) -> Response {
-    if let Err(error) = validation_params(
-        "common.CredentialIdParamsSchema",
-        json!({"credentialId": credential_id}),
-    ) {
-        return *error;
-    }
     let (actor, cookies) = match authenticated(&state, &headers, "POST") {
         Ok(value) => value,
         Err(error) => return *error,
@@ -148,11 +131,8 @@ async fn revoke_credential(
 async fn revoke_user(
     State(state): State<AppState>,
     headers: HeaderMap,
-    Path(user_id): Path<String>,
+    ValidPath(UserIdParams { user_id }): ValidPath<UserIdParams>,
 ) -> Response {
-    if let Err(error) = validation_params("common.UserIdParamsSchema", json!({"userId": user_id})) {
-        return *error;
-    }
     let (actor, cookies) = match authenticated(&state, &headers, "POST") {
         Ok(value) => value,
         Err(error) => return *error,

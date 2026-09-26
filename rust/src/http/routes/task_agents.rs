@@ -10,8 +10,8 @@ use std::{error::Error, path::PathBuf};
 
 use axum::{
     Json, Router,
-    extract::{Path, RawQuery, State},
-    http::{HeaderMap, StatusCode, header::CACHE_CONTROL},
+    extract::{RawQuery, State},
+    http::{HeaderMap, header::CACHE_CONTROL},
     response::{IntoResponse, Response},
     routing::get,
 };
@@ -27,8 +27,12 @@ use crate::{
     },
     http::{
         AppState,
-        contracts::typed::{self, finding, tasks as task_contracts},
-        validation,
+        contracts::typed::{
+            agent_api::query_object,
+            auth::CompanyIdParams,
+            tasks::{TaskAgentsBatchQuery, TaskIdParams},
+        },
+        validation::{ValidPath, valid},
     },
     identity::companies,
     platform::database::SuplexDatabase,
@@ -45,68 +49,6 @@ pub fn router() -> Router<AppState> {
             "/api/companies/{company_id}/task-agents",
             get(company_task_agents),
         )
-}
-
-fn validate_task_id(task_id: &str) -> Result<(), Box<Response>> {
-    match task_contracts::parse_task_id_params(Some(&json!({"taskId":task_id}))) {
-        Ok(_) => Ok(()),
-        Err(typed::ContractFailure::Issues(findings)) => {
-            Err(Box::new(validation::validation_error_public(findings)))
-        }
-        Err(_) => Err(Box::new(auth::error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "Internal server error",
-        ))),
-    }
-}
-
-fn validate_company_id(company_id: &str) -> Result<(), Box<Response>> {
-    let code = match company_id.encode_utf16().count() {
-        0 => Some("too_small"),
-        1..=256 => None,
-        _ => Some("too_big"),
-    };
-    match code {
-        Some(code) => Err(Box::new(validation::validation_error_public(vec![
-            finding(code, &[json!("companyId")]),
-        ]))),
-        None => Ok(()),
-    }
-}
-
-fn task_ids(query: Option<&str>) -> Result<Vec<String>, Box<Response>> {
-    let values = query
-        .into_iter()
-        .flat_map(|query| url::form_urlencoded::parse(query.as_bytes()))
-        .filter(|(name, _)| name == "taskId")
-        .map(|(_, value)| value.into_owned())
-        .collect::<Vec<_>>();
-    let mut findings = Vec::new();
-    for (index, value) in values.iter().enumerate() {
-        let code = match value.encode_utf16().count() {
-            0 => Some("too_small"),
-            1..=256 => None,
-            _ => Some("too_big"),
-        };
-        if let Some(code) = code {
-            let path = if values.len() == 1 {
-                vec![json!("taskId")]
-            } else {
-                vec![json!("taskId"), json!(index)]
-            };
-            findings.push(finding(code, &path));
-        }
-    }
-    if values.len() > 10 {
-        findings.push(finding("too_big", &[json!("taskId")]));
-    }
-    if !findings.is_empty() {
-        return Err(Box::new(validation::validation_error_public(findings)));
-    }
-    let mut ids = values;
-    ids.sort();
-    ids.dedup();
-    Ok(ids)
 }
 
 fn respond(result: Result<Value, Box<dyn Error>>, cookies: Vec<String>) -> Response {
@@ -256,12 +198,9 @@ fn database_path(database: &SuplexDatabase) -> Result<PathBuf, Box<dyn Error>> {
 
 async fn task_agents(
     State(state): State<AppState>,
-    Path(task_id): Path<String>,
+    ValidPath(TaskIdParams { task_id }): ValidPath<TaskIdParams>,
     headers: HeaderMap,
 ) -> Response {
-    if let Err(response) = validate_task_id(&task_id) {
-        return *response;
-    }
     let (user_id, cookies) = match authorize(&state, &headers) {
         Ok(value) => value,
         Err(response) => return *response,
@@ -290,15 +229,12 @@ async fn task_agents(
 
 async fn company_task_agents(
     State(state): State<AppState>,
-    Path(company_id): Path<String>,
+    ValidPath(CompanyIdParams { company_id }): ValidPath<CompanyIdParams>,
     RawQuery(query): RawQuery,
     headers: HeaderMap,
 ) -> Response {
-    if let Err(response) = validate_company_id(&company_id) {
-        return *response;
-    }
-    let ids = match task_ids(query.as_deref()) {
-        Ok(ids) => ids,
+    let ids = match valid::<TaskAgentsBatchQuery>(query_object(query.as_deref())) {
+        Ok(query) => query.task_id,
         Err(response) => return *response,
     };
     let (user_id, cookies) = match authorize(&state, &headers) {

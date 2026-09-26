@@ -1,6 +1,15 @@
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::http::validation::test_body;
+    use axum::body::Bytes;
+
+    async fn poll(state: State<AppState>, headers: HeaderMap, body: Bytes) -> Response {
+        match test_body(&headers, &body) {
+            Ok(body) => super::poll(state, headers, body).await,
+            Err(response) => *response,
+        }
+    }
     use crate::{
         http::session,
         identity::auth::development_sign_in,

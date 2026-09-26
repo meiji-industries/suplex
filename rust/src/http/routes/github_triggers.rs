@@ -3,8 +3,7 @@
 use crate::http::error::ApiError;
 use axum::{
     Json, Router,
-    body::Bytes,
-    extract::{Path, State},
+    extract::State,
     http::{HeaderMap, StatusCode},
     response::{IntoResponse, Response},
     routing::{get, post},
@@ -14,8 +13,11 @@ use serde_json::{Value, json};
 use crate::{
     http::{
         AppState,
-        contracts::typed::{self, github_triggers as contracts},
-        validation,
+        contracts::typed::github_triggers::{
+            GithubTriggerCompanyParams, GithubTriggerCreate, GithubTriggerParams,
+            GithubTriggerPatch,
+        },
+        validation::{Valid, ValidPath},
     },
     integrations::{
         github_delivery::Github,
@@ -58,27 +60,6 @@ async fn github() -> Result<Github, Failure> {
     Ok(Github::load().await?)
 }
 
-fn params(company_id: &str, rule_id: Option<&str>) -> Result<(), Box<Response>> {
-    let input = match rule_id {
-        Some(rule_id) => json!({"companyId": company_id, "ruleId": rule_id}),
-        None => json!({"companyId": company_id}),
-    };
-    let parsed = match rule_id {
-        Some(_) => contracts::parse_params(Some(&input)),
-        None => contracts::parse_company_params(Some(&input)),
-    };
-    match parsed {
-        Ok(_) => Ok(()),
-        Err(typed::ContractFailure::Issues(findings)) => {
-            Err(Box::new(validation::validation_error_public(findings)))
-        }
-        Err(_) => Err(Box::new(auth::error(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "Internal server error",
-        ))),
-    }
-}
-
 fn respond(result: Result<Value, Failure>, status: StatusCode, cookies: Vec<String>) -> Response {
     let mut response = match result {
         Ok(value) => (status, Json(value)).into_response(),
@@ -90,12 +71,9 @@ fn respond(result: Result<Value, Failure>, status: StatusCode, cookies: Vec<Stri
 
 async fn list(
     State(state): State<AppState>,
-    Path(company_id): Path<String>,
+    ValidPath(GithubTriggerCompanyParams { company_id }): ValidPath<GithubTriggerCompanyParams>,
     headers: HeaderMap,
 ) -> Response {
-    if let Err(response) = params(&company_id, None) {
-        return *response;
-    }
     let (user_id, cookies) = match authorize(&state, &headers, "GET", false) {
         Ok(value) => value,
         Err(response) => return *response,
@@ -106,17 +84,10 @@ async fn list(
 
 async fn create(
     State(state): State<AppState>,
-    Path(company_id): Path<String>,
+    ValidPath(GithubTriggerCompanyParams { company_id }): ValidPath<GithubTriggerCompanyParams>,
     headers: HeaderMap,
-    body: Bytes,
+    Valid(input): Valid<GithubTriggerCreate>,
 ) -> Response {
-    if let Err(response) = params(&company_id, None) {
-        return *response;
-    }
-    let input = match auth::validated_typed_body(&headers, &body, contracts::parse_create) {
-        Ok(value) => value,
-        Err(response) => return *response,
-    };
     let (user_id, cookies) = match authorize(&state, &headers, "POST", false) {
         Ok(value) => value,
         Err(response) => return *response,
@@ -132,17 +103,13 @@ async fn create(
 
 async fn update(
     State(state): State<AppState>,
-    Path((company_id, rule_id)): Path<(String, String)>,
+    ValidPath(GithubTriggerParams {
+        company_id,
+        rule_id,
+    }): ValidPath<GithubTriggerParams>,
     headers: HeaderMap,
-    body: Bytes,
+    Valid(patch): Valid<GithubTriggerPatch>,
 ) -> Response {
-    if let Err(response) = params(&company_id, Some(&rule_id)) {
-        return *response;
-    }
-    let patch = match auth::validated_typed_body(&headers, &body, contracts::parse_patch) {
-        Ok(value) => value,
-        Err(response) => return *response,
-    };
     let (user_id, cookies) = match authorize(&state, &headers, "PATCH", false) {
         Ok(value) => value,
         Err(response) => return *response,
@@ -159,12 +126,12 @@ async fn update(
 
 async fn check(
     State(state): State<AppState>,
-    Path((company_id, rule_id)): Path<(String, String)>,
+    ValidPath(GithubTriggerParams {
+        company_id,
+        rule_id,
+    }): ValidPath<GithubTriggerParams>,
     headers: HeaderMap,
 ) -> Response {
-    if let Err(response) = params(&company_id, Some(&rule_id)) {
-        return *response;
-    }
     let (user_id, cookies) = match authorize(&state, &headers, "POST", false) {
         Ok(value) => value,
         Err(response) => return *response,
@@ -180,12 +147,12 @@ async fn check(
 
 async fn activity(
     State(state): State<AppState>,
-    Path((company_id, rule_id)): Path<(String, String)>,
+    ValidPath(GithubTriggerParams {
+        company_id,
+        rule_id,
+    }): ValidPath<GithubTriggerParams>,
     headers: HeaderMap,
 ) -> Response {
-    if let Err(response) = params(&company_id, Some(&rule_id)) {
-        return *response;
-    }
     let (user_id, cookies) = match authorize(&state, &headers, "GET", false) {
         Ok(value) => value,
         Err(response) => return *response,

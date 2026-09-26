@@ -21,7 +21,7 @@ use crate::{
     delivery::agent_delivery::{AgentDelivery, AgentPrincipal},
     http::{
         AppState, agent_api_runtime,
-        contracts::typed::{self, ContractResult, agent_api as contracts},
+        contracts::typed::{self, Contract, ContractResult, agent_api as contracts},
     },
     identity::external_agents::{self, Principal},
     shared::js_json,
@@ -192,7 +192,7 @@ fn task_id(id: &str, runtime: bool) -> Result<String, Rejection> {
         ));
     }
     validated(
-        contracts::parse_task_id_params(Some(&json!({"taskId": id}))),
+        contracts::TaskIdParams::parse(Some(&json!({"taskId": id}))),
         runtime,
     )
     .map(|params| params.task_id)
@@ -266,7 +266,7 @@ async fn workflows(
 ) -> Response {
     let principal = attempt!(bearer(&state, &headers, true));
     let query = attempt!(validated(
-        contracts::parse_project_discovery(Some(&contracts::query_object(query.as_deref()))),
+        contracts::ProjectDiscoveryQuery::parse(Some(&contracts::query_object(query.as_deref()))),
         true
     ));
     let result = state
@@ -285,7 +285,7 @@ async fn templates(
 ) -> Response {
     let principal = attempt!(bearer(&state, &headers, true));
     let query = attempt!(validated(
-        contracts::parse_project_discovery(Some(&contracts::query_object(query.as_deref()))),
+        contracts::ProjectDiscoveryQuery::parse(Some(&contracts::query_object(query.as_deref()))),
         true
     ));
     let result = state
@@ -304,7 +304,10 @@ async fn create(
 ) -> Response {
     let body = attempt!(parsed_body(&headers, body, true));
     let principal = attempt!(bearer(&state, &headers, true));
-    let request = attempt!(validated(contracts::parse_task_create(body.as_ref()), true));
+    let request = attempt!(validated(
+        contracts::TaskCreateBody::parse(body.as_ref()),
+        true
+    ));
     // Admission keeps running when the HTTP waiter disconnects, as board creation does.
     let task = tokio::spawn(async move {
         let creation = match agent_api::create(&state, &principal, &request, None).await {
@@ -383,7 +386,7 @@ async fn command(
     let principal = attempt!(bearer(&state, &headers, true));
     let id = attempt!(task_id(&id, true));
     let request = attempt!(validated(
-        contracts::parse_task_command(body.as_ref()),
+        contracts::TaskCommandBody::parse(body.as_ref()),
         true
     ));
     let result = agent_api::command(&state, &principal, &id, &request).await;
@@ -399,7 +402,7 @@ async fn list(
     RawQuery(query): RawQuery,
 ) -> Response {
     let query = attempt!(validated(
-        contracts::parse_task_list(Some(&contracts::query_object(query.as_deref()))),
+        contracts::TaskListQuery::parse(Some(&contracts::query_object(query.as_deref()))),
         false
     ));
     let principal = attempt!(bearer(&state, &headers, false));
@@ -421,7 +424,7 @@ async fn dependencies(
     let principal = attempt!(bearer(&state, &headers, true));
     let id = attempt!(task_id(&id, true));
     let request = attempt!(validated(
-        contracts::parse_task_dependencies(body.as_ref()),
+        contracts::TaskDependenciesBody::parse(body.as_ref()),
         true
     ));
     if request.dry_run == Some(true) {
@@ -482,7 +485,7 @@ async fn merge_train(
         return (StatusCode::NOT_FOUND, Json(json!({"error": "Not found"}))).into_response();
     }
     let query = attempt!(validated(
-        contracts::parse_merge_train(Some(&contracts::query_object(query.as_deref()))),
+        contracts::MergeTrainQuery::parse(Some(&contracts::query_object(query.as_deref()))),
         false
     ));
     let (delivery, principal) = attempt!(delivery_principal(&state, &headers));
@@ -559,7 +562,7 @@ async fn delivery_decision(
 ) -> Response {
     let body = attempt!(parsed_body(&headers, body, false));
     let request = attempt!(validated(
-        contracts::parse_delivery_decision(body.as_ref()),
+        contracts::DeliveryDecisionBody::parse(body.as_ref()),
         false
     ));
     let (delivery, principal, id) = attempt!(delivery_task(&state, &headers, &id));
@@ -578,7 +581,7 @@ async fn delivery_approval(
 ) -> Response {
     let body = attempt!(parsed_body(&headers, body, false));
     let request = attempt!(validated(
-        contracts::parse_merge_approval(body.as_ref()),
+        contracts::MergeApprovalBody::parse(body.as_ref()),
         false
     ));
     let (delivery, principal, id) = attempt!(delivery_task(&state, &headers, &id));
@@ -603,7 +606,7 @@ async fn delivery_merge(
     body: Result<Bytes, BytesRejection>,
 ) -> Response {
     let body = attempt!(parsed_body(&headers, body, false));
-    let request = attempt!(validated(contracts::parse_merge(body.as_ref()), false));
+    let request = attempt!(validated(contracts::MergeBody::parse(body.as_ref()), false));
     let (delivery, principal, id) = attempt!(delivery_task(&state, &headers, &id));
     detached(move || {
         crate::shared::blocking::block_on(|| async {

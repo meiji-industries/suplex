@@ -1,100 +1,66 @@
 //! Workflow record request contracts from `http/contracts/workflows.ts`.
 
-use serde_json::{Map, Value};
+use serde::Deserialize;
+use serde_json::{Map, Value, json};
 
 use super::{
-    ContractResult, DELIVERY_TARGETS, Field, Rule, VISUAL_EVIDENCE, WORKFLOW_IDS, optional,
-    parse_object,
+    Contract, ContractResult, Fields, MAX, advisors, choice, flag, nullable, one_of,
+    tasks::VISUAL_EVIDENCE, text, trimmed,
 };
+use crate::{coordination::workflows::Workflow, tasks::control::DeliveryTarget};
 
-const NAME: Rule = Rule::Text {
-    trim: true,
-    min: 1,
-    max: Some(80),
-};
-const DESCRIPTION: Rule = Rule::Text {
-    trim: true,
-    min: 0,
-    max: None,
-};
-const PROFILE_ID: Rule = Rule::Text {
-    trim: false,
-    min: 1,
-    max: None,
-};
+/// `WorkflowRecordInputSchema` output with its defaults applied.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(transparent)]
+pub struct WorkflowInput(pub Map<String, Value>);
 
-const INPUT: &[Field] = &[
-    Field {
-        required: true,
-        ..optional("name", NAME)
-    },
-    Field {
-        default: Some("\"\""),
-        ..optional("description", DESCRIPTION)
-    },
-    Field {
-        required: true,
-        ..optional("engine", WORKFLOW_IDS)
-    },
-    optional("rootProfileId", PROFILE_ID),
-    optional("workerProfileId", PROFILE_ID),
-    Field {
-        default: Some("{}"),
-        ..optional("advisorProfileIds", Rule::Advisors)
-    },
-    optional("deliveryTarget", DELIVERY_TARGETS),
-    optional("runProjectTests", Rule::Flag),
-    optional("visualEvidence", VISUAL_EVIDENCE),
-];
+/// `WorkflowRecordPatchSchema` output: only the present fields.
+#[derive(Debug, Clone, Default, Deserialize)]
+#[serde(transparent)]
+pub struct WorkflowPatch(pub Map<String, Value>);
 
-// A patch carries no defaults; null clears an optional setting.
-const PATCH: &[Field] = &[
-    optional("name", NAME),
-    optional("description", DESCRIPTION),
-    optional("engine", WORKFLOW_IDS),
-    Field {
-        nullable: true,
-        ..optional("rootProfileId", PROFILE_ID)
-    },
-    Field {
-        nullable: true,
-        ..optional("workerProfileId", PROFILE_ID)
-    },
-    optional("advisorProfileIds", Rule::Advisors),
-    Field {
-        nullable: true,
-        ..optional("deliveryTarget", DELIVERY_TARGETS)
-    },
-    Field {
-        nullable: true,
-        ..optional("runProjectTests", Rule::Flag)
-    },
-    Field {
-        nullable: true,
-        ..optional("visualEvidence", VISUAL_EVIDENCE)
-    },
-    optional("archived", Rule::Flag),
-];
-
-/// `WorkflowRecordInputSchema` with its defaults applied.
-pub fn parse_input(input: Option<&Value>) -> ContractResult<Map<String, Value>> {
-    parse_object(input, INPUT, true)
+fn input_fields(input: Option<&Value>) -> ContractResult<Fields<'_>> {
+    Ok(Fields::new(input)?
+        .req("name", trimmed(1, 80))
+        .or("description", json!(""), trimmed(0, MAX))
+        .req("engine", choice::<Workflow>)
+        .opt("rootProfileId", text(1, MAX))
+        .opt("workerProfileId", text(1, MAX))
+        .or("advisorProfileIds", json!({}), advisors)
+        .opt("deliveryTarget", choice::<DeliveryTarget>)
+        .opt("runProjectTests", flag)
+        .opt("visualEvidence", one_of(VISUAL_EVIDENCE)))
 }
 
-/// `WorkflowRecordPatchSchema`: only the present fields.
-pub fn parse_patch(input: Option<&Value>) -> ContractResult<Map<String, Value>> {
-    parse_object(input, PATCH, true)
+impl Contract for WorkflowInput {
+    fn schema(input: Option<&Value>) -> ContractResult<Value> {
+        input_fields(input)?.strict()
+    }
+}
+
+/// A patch carries no defaults; null clears an optional setting.
+impl Contract for WorkflowPatch {
+    fn schema(input: Option<&Value>) -> ContractResult<Value> {
+        Fields::new(input)?
+            .opt("name", trimmed(1, 80))
+            .opt("description", trimmed(0, MAX))
+            .opt("engine", choice::<Workflow>)
+            .opt("rootProfileId", nullable(text(1, MAX)))
+            .opt("workerProfileId", nullable(text(1, MAX)))
+            .opt("advisorProfileIds", advisors)
+            .opt("deliveryTarget", nullable(choice::<DeliveryTarget>))
+            .opt("runProjectTests", nullable(flag))
+            .opt("visualEvidence", nullable(one_of(VISUAL_EVIDENCE)))
+            .opt("archived", flag)
+            .strict()
+    }
 }
 
 /// `WorkflowRecordInputSchema.strip()`: drop fields the input schema lacks.
 pub fn strip_input(input: &Map<String, Value>) -> ContractResult<Map<String, Value>> {
-    parse_object(Some(&Value::Object(input.clone())), INPUT, false)
-}
-
-pub fn validate(contract: &str, input: Option<&Value>) -> Option<ContractResult<Value>> {
-    Some(match contract {
-        "workflows.WorkflowRecordInputSchema" => parse_input(input).map(Value::Object),
-        "workflows.WorkflowRecordPatchSchema" => parse_patch(input).map(Value::Object),
-        _ => return None,
-    })
+    let input = Value::Object(input.clone());
+    match input_fields(Some(&input))?.finish()? {
+        Value::Object(fields) => Ok(fields),
+        _ => Err(super::ContractFailure::Unhandled),
+    }
 }

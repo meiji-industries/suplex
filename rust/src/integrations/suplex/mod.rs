@@ -10,8 +10,8 @@ use rmcp::model::{CallToolResult, Tool};
 use serde_json::{Map, Value, json};
 
 use crate::http::contracts::typed::{
-    ContractFailure, ContractResult,
-    agent_api::{self, Check, TaskCommandBody, TaskDependenciesBody, path},
+    Contract, ContractFailure, ContractResult,
+    agent_api::{self, GetTaskTool, TaskCommandBody, TaskDependenciesBody, TaskTool},
 };
 
 /// Tool names, descriptions, and input schemas generated from TypeScript by `scripts/rust-agent-artifacts.ts`.
@@ -57,96 +57,48 @@ fn arguments<T>(result: ContractResult<T>) -> Result<T, InvalidArguments> {
     }
 }
 
-fn task_id(check: &mut Check, fields: &Map<String, Value>) -> Option<String> {
-    check.string(fields.get("taskId"), &path(&["taskId"]), false, 1, 100)
+fn parsed<T: Contract>(fields: &Map<String, Value>) -> Result<T, InvalidArguments> {
+    arguments(T::parse(Some(&Value::Object(fields.clone()))))
 }
 
 /// `{ taskId, knownRevision? }`, strict.
 pub fn get_task_arguments(
     fields: &Map<String, Value>,
 ) -> Result<(String, Option<String>), InvalidArguments> {
-    let mut check = Check::default();
-    let id = task_id(&mut check, fields);
-    let known = check.optional_string(fields, "knownRevision", false, 1, 256);
-    check.unknown_keys(fields, &[], &["taskId", "knownRevision"]);
-    arguments(check.finish(id.zip(known)))
+    parsed::<GetTaskTool>(fields).map(|tool| (tool.task_id, tool.known_revision))
 }
 
 /// `{ taskId }`, strict.
 pub fn task_only_arguments(fields: &Map<String, Value>) -> Result<String, InvalidArguments> {
-    let mut check = Check::default();
-    let id = task_id(&mut check, fields);
-    check.unknown_keys(fields, &[], &["taskId"]);
-    arguments(check.finish(id))
+    arguments(agent_api::task_tool(Some(&Value::Object(fields.clone()))))
 }
 
 pub fn command_arguments(
     fields: &Map<String, Value>,
 ) -> Result<(String, TaskCommandBody), InvalidArguments> {
-    let mut check = Check::default();
-    let id = task_id(&mut check, fields);
-    let command = agent_api::task_command_fields(
-        fields,
-        &["command", "revision", "idempotencyKey", "note", "taskId"],
-    );
-    match (check.finish(id), command) {
-        (Ok(id), Ok(command)) => Ok((id, command)),
-        (id, command) => {
-            let mut issues = Vec::new();
-            for failure in [id.err(), command.err()].into_iter().flatten() {
-                if let ContractFailure::Issues(found) = failure {
-                    issues.extend(found);
-                }
-            }
-            Err(InvalidArguments(issues))
-        }
-    }
+    parsed::<TaskTool<TaskCommandBody>>(fields).map(|tool| (tool.task_id, tool.body))
 }
 
 pub fn dependencies_arguments(
     fields: &Map<String, Value>,
 ) -> Result<(String, TaskDependenciesBody), InvalidArguments> {
-    let mut check = Check::default();
-    let id = task_id(&mut check, fields);
-    let body = agent_api::task_dependencies_fields(
-        fields,
-        &["dependsOn", "blockedByPullRequests", "dryRun", "taskId"],
-    );
-    match (check.finish(id), body) {
-        (Ok(id), Ok(body)) => Ok((id, body)),
-        (id, body) => {
-            let mut issues = Vec::new();
-            for failure in [id.err(), body.err()].into_iter().flatten() {
-                if let ContractFailure::Issues(found) = failure {
-                    issues.extend(found);
-                }
-            }
-            Err(InvalidArguments(issues))
-        }
-    }
+    parsed::<TaskTool<TaskDependenciesBody>>(fields).map(|tool| (tool.task_id, tool.body))
 }
 
 pub fn list_arguments(
     fields: &Map<String, Value>,
 ) -> Result<agent_api::TaskListQuery, InvalidArguments> {
-    arguments(agent_api::parse_task_list(Some(&Value::Object(
-        fields.clone(),
-    ))))
+    parsed(fields)
 }
 
 pub fn project_arguments(fields: &Map<String, Value>) -> Result<String, InvalidArguments> {
-    arguments(agent_api::parse_project_discovery(Some(&Value::Object(
-        fields.clone(),
-    ))))
-    .map(|query| query.project_id)
+    parsed::<agent_api::ProjectDiscoveryQuery>(fields).map(|query| query.project_id)
 }
 
 pub fn create_arguments(
     fields: &Map<String, Value>,
 ) -> Result<agent_api::TaskCreateBody, InvalidArguments> {
-    arguments(agent_api::parse_task_create(Some(&Value::Object(
-        fields.clone(),
-    ))))
+    parsed(fields)
 }
 
 #[cfg(test)]

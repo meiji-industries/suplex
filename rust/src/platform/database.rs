@@ -790,15 +790,29 @@ mod tests {
     }
 
     #[test]
-    fn opens_typescript_database_and_creates_reverse_fixture_when_requested() {
-        let Ok(from_typescript) = std::env::var("SUPLEX_TS_TEST_DATABASE_PATH") else {
-            return;
-        };
-        let to_typescript = std::env::var("SUPLEX_RUST_TEST_DATABASE_PATH").unwrap();
-        let source = SuplexDatabase::open(Path::new(&from_typescript), OpenMode::ReadOnly).unwrap();
+    fn migrates_frozen_typescript_database_without_changing_its_history() {
+        let from_typescript = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../tests/parity/typescript-database.sqlite");
+        let to_rust = temporary_database();
+        let source = SuplexDatabase::open(&from_typescript, OpenMode::ReadOnly).unwrap();
         let status = source.schema_status().unwrap();
-        assert_eq!(status.state, SchemaState::Current);
-        assert_eq!(status.applied.len(), MIGRATIONS.len());
+        assert!(matches!(
+            status.state,
+            SchemaState::Current | SchemaState::Behind
+        ));
+        assert_eq!(status.applied.len(), 149);
+        assert!(
+            status
+                .applied
+                .iter()
+                .zip(&status.expected)
+                .all(|(applied, expected)| applied.hash == expected.hash
+                    && applied.created_at == expected.created_at)
+        );
+        assert_eq!(
+            status.applied.last().unwrap().hash,
+            "42f932612da85a15e838cdf315cd04fbbce08dfaf9602d18565b0522353c0078"
+        );
         assert!(status.wal_mode);
         let name: String = source
             .connection()
@@ -820,9 +834,18 @@ mod tests {
                 .unwrap();
             assert_eq!(actual, expected, "{pragma}");
         }
-        let target = SuplexDatabase::open(Path::new(&to_typescript), OpenMode::Migrate).unwrap();
+        fs::copy(&from_typescript, &to_rust).unwrap();
+        let target = SuplexDatabase::open(&to_rust, OpenMode::Migrate).unwrap();
         assert_eq!(target.schema_status().unwrap().state, SchemaState::Current);
-        target.connection().execute("INSERT INTO suplex_companies (id, name, status, created_at) VALUES ('rust-interop', 'Rust fixture', 'active', '2026-09-24T00:00:00.000Z')", []).unwrap();
+        let preserved: String = target
+            .connection()
+            .query_row(
+                "SELECT name FROM suplex_companies WHERE id = 'ts-interop'",
+                [],
+                |row| row.get(0),
+            )
+            .unwrap();
+        assert_eq!(preserved, "TypeScript fixture");
         for (pragma, expected) in [
             ("foreign_keys", 1),
             ("recursive_triggers", 1),
@@ -834,5 +857,7 @@ mod tests {
                 .unwrap();
             assert_eq!(actual, expected, "{pragma}");
         }
+        drop(target);
+        let _ = fs::remove_file(to_rust);
     }
 }
